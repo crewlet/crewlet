@@ -519,6 +519,23 @@ func (r Reason) FromGate() bool {
 	return false
 }
 
+// RefusesTheWrite reports whether r refuses a write for WHAT THE WRITE IS OR
+// NAMES, which every node and every attempt meets alike and only a different
+// write gets past: record_too_large, deleted, op_reused or superseded. False
+// for every refusal of the node, the log or the broker the write was sent
+// through, which another node, a later attempt or an operator gets past, and
+// for a reason this build does not name. It decides whose failure a refusal is
+// (the work's, or the node's), declared per reason beside [Reason.BlamesWriter]
+// and held for every reason by TestOnlyARefusalOfTheWriteItselfIsTheWorks (the
+// package doc's "Whose failure a refusal is").
+func (r Reason) RefusesTheWrite() bool {
+	switch r {
+	case ReasonRecordTooLarge, ReasonDeleted, ReasonOpReused, ReasonSuperseded:
+		return true
+	}
+	return false
+}
+
 // RetryAfter is how long a caller should wait before bringing the request err
 // refused back to THIS node: ZERO when waiting cannot change the answer, the
 // refusal's own derived hint where it has one, and otherwise when it is

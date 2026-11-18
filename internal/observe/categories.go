@@ -23,6 +23,43 @@
 // history is not this package's — it is asked of every live data node at query
 // time by internal/eventfan, and a read of one node's store alone is a third
 // of a three-node fleet (ADR-0021).
+//
+// # A custody batch sent back is this node's failure, not the batch's
+//
+// A data node's [Keeper] that could not write or settle a custody batch sends
+// it back for a retry ([sendBack]): as the batch's own failure ([queue.Nak])
+// where the store refused it ([store.ErrCustodyRefused]), and as THIS NODE'S
+// OWN ([queue.NakNode]) otherwise. Both come back on the same backoff and
+// spend the same budget; what differs is where a batch whose budget is spent
+// is kept ([queue.RetiredTo]). Counted as the batch's, an outage, this node's
+// leaving or its own store failing put a stateless node's healthy events with
+// the custody group's poison; as the node's, they are kept with its unhandled
+// deliveries, as a batch no member handled.
+//
+// THE BATCH'S IS THE ONE FAILURE A BATCH CAN CAUSE, so it is the one told by a
+// mark: a batch no node can write, one naming no id or origin or holding a
+// record that cannot be stored, which the store refuses before it writes
+// anything. Everything else the keeper meets names nothing of a batch but its
+// id, and is this node's:
+//
+//   - what the queue tells as its node's ([queue.NodeFault]: a broker that did
+//     not answer, a queue no longer live, a delivery whose context ended,
+//     which the keeper's leaving the group does to a batch in hand), the test
+//     internal/notify's wakes and internal/engine's seat mailbox and control
+//     topic ask too, and which wins over the mark: a refusal met as the keeper
+//     left is the leaving's;
+//   - a claim that named no keeper: every error a claim answers is UNKNOWN by
+//     its contract ([coord.Custody]), the store could not say, save one
+//     wrapping [coord.ErrCustodyUndecidable], the store's definite answer that
+//     the record cannot be read, which the keeper acknowledges before anything
+//     is sent back; told by the step that met it and never by what a backend
+//     wrapped it in, since [coord.ErrUnavailable] is the KV backend's wrapping
+//     and an error a backend left unwrapped is no less unknown;
+//   - this node's own store failing: the write's transaction after every
+//     record validated, and the settle, which takes only the batch's id and
+//     the claim's answer, whether the store was closed under the keeper or
+//     failed with an error it left unmarked. A full disk or a busy store fails
+//     a healthy batch that a peer, or this node a moment later, writes whole.
 package observe
 
 import "github.com/crewlet/crewlet/internal/events"

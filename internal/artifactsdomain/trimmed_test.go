@@ -10,17 +10,14 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE TRIM'S TRIMMED RECORD ON THE ARTIFACTS LOG (ADR-0080): every artifact,
-// asset, reader and source subject the log carries writes an anchor on every
-// data node, and this record is what removes them once the log no longer holds
-// what they name. The certification drives it end to end
-// (statelogtest's trimmed-anchors case); these hold its shape at the encoder
-// the engine hands the trim.
+// THE TRIM'S TRIMMED RECORD ON THE ARTIFACTS LOG (ADR-0080) removes the
+// anchors of subjects the log no longer holds. statelogtest's trimmed-anchors
+// case drives it end to end; these hold its shape at the encoder the engine
+// hands the trim.
 
-// TestATrimmedRecordIntersectsNothing, for the barrier's reason: it writes no
-// row of this domain's anywhere, so a scope that intersected an artifact would
-// make every read and write of it wait behind a record that changed none of its
-// rows.
+// TestATrimmedRecordIntersectsNothing: it writes no row of this domain's, so a
+// scope intersecting an artifact would make every read and write of it wait
+// behind a record that changed none of its rows.
 func TestATrimmedRecordIntersectsNothing(t *testing.T) {
 	t.Parallel()
 	body, err := artifactsdomain.EncodeTrimmed(statelog.TrimmedEnvelope(statelog.Position{
@@ -38,10 +35,9 @@ func TestATrimmedRecordIntersectsNothing(t *testing.T) {
 	}
 }
 
-// TestTheTrimmedRecordIsItsLiteral: through the encoder the trim calls, so what
-// is pinned is what is appended — the base version whatever this build reads,
-// the writer the eviction gate reads, the floor in the subject, no operation —
-// and the framework's own check of it passes.
+// TestTheTrimmedRecordIsItsLiteral, through the encoder the trim calls: the
+// base version whatever this build reads, the writer the eviction gate reads,
+// the floor in the subject, no operation id, and the framework's check passes.
 func TestTheTrimmedRecordIsItsLiteral(t *testing.T) {
 	t.Parallel()
 	body, err := artifactsdomain.EncodeTrimmed(statelog.TrimmedEnvelope(statelog.Position{
@@ -88,10 +84,8 @@ func TestEncodeTrimmedRefusesWhatTheFrameworkWouldNotRecognise(t *testing.T) {
 	}
 }
 
-// TestEveryKindButTheTwoFrameworkRecordsArbitrates: the barrier shares one
-// subject across the domain, and a trimmed record removes anchors, so
-// arbitrated it would write one of its own and refuse every identical record
-// after the first. The stream's declaration is derived from the same rule.
+// TestEveryKindButTheTwoFrameworkRecordsArbitrates, for the reasons
+// [artifactsdomain.ObjectKind.Arbitrated] gives, and the stream declares the same.
 func TestEveryKindButTheTwoFrameworkRecordsArbitrates(t *testing.T) {
 	t.Parallel()
 	declared := artifactsdomain.Domain{}.Stream().ArbitratedKinds

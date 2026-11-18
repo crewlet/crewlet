@@ -399,7 +399,7 @@ func (p *pipeline) held() streamHeld {
 			h.stageText = max(h.stageText, st.in.held())
 			h.entries += 16 * len(st.prior)
 			if st.raw != nil {
-				h.entries += 32*len(st.raw.edits) + 16*len(st.src.tokens) + 24*len(st.src.words)
+				h.entries += 32*len(st.raw.edits) + 16*len(st.src.tokens) + 40*len(st.src.words)
 				h.stageEdits = max(h.stageEdits, len(st.raw.edits))
 			}
 			if st.to != nil {
@@ -416,7 +416,7 @@ func (p *pipeline) held() streamHeld {
 	if p.keys != nil {
 		walk(p.claims)
 		h.text += p.keys.in.held()
-		h.entries += 16*(len(p.keys.pending)+len(p.keys.forward)) + 8*len(p.keys.closed) + 32*len(p.keys.early)
+		h.entries += 16*(len(p.keys.pending)+len(p.keys.forward)) + 8*len(p.keys.closed) + 32*(len(p.keys.early)+len(p.keys.beginsEarly))
 	}
 	return h
 }
@@ -441,17 +441,17 @@ func longestMarker() int {
 // text they hold and as the entries they keep beside it (values, edits,
 // claims, blocks), derived from the code: the piece the stream carries short
 // of the next of the text's offsets it hands its stages at ([pipeline.feed]),
-// less than [pieceBytes]; every rule's stage over the keys'
-// stage, every claims stage and every reader holds [streamWindow]; the keys'
-// stage holds what lies behind where it reads (four blocks' reach at most) and
-// a step's text past it, and while it waits on the claims, the text every
-// claims stage holds past where it resumes, in turn; an edit a claims stage or
-// a reader keeps stands for a marker, fifteen bytes of its input at least (a
-// JSON Web Token's and one byte), at 32 bytes; a value the password's stage
-// and reader keep, six bytes (a key, its operator, a byte and a space), at 16,
-// as many again while it trims them; a claim the keys' stage may still ask
-// of, five bytes of what it holds (`pwd:` and a break), at 24; and the
-// windows it decided early that wait on their claims, [earlyWindows] at 32.
+// less than [pieceBytes]; every rule's stage over the keys' stage, every
+// claims stage and every reader holds [streamWindow]; the keys' stage holds
+// what lies behind where it reads (four blocks' reach at most) and a step's
+// text past it, and while it waits on the claims, the text every claims stage
+// holds past where it resumes, in turn; an edit a claims stage or a reader
+// keeps stands for a marker, fifteen bytes of its input at least (a JSON Web
+// Token's and one byte), at 32 bytes; a value the password's stage and reader
+// keep, six bytes (a key, its operator, a byte and a space), at 16, as many
+// again while it trims them; a claim the keys' stage may still ask of, five
+// bytes of what it holds (`pwd:` and a break), at 40; and the windows it
+// decided early, [earlyWindows] at 32 in each of its two lists.
 func streamBound() (text, entries int) {
 	table := len(rules())
 	readers := 1
@@ -464,7 +464,7 @@ func streamBound() (text, entries int) {
 	keys := pieceBytes + 4*keyReach + stageAdvance + keyAhead
 	lag := (table - 1 + 1) * (stageStep + pieceBytes + longestMarker())
 	text = (table+tracking)*streamWindow + keys + lag + pieceBytes
-	entries = tracking*streamWindow*32/15 + 2*2*16*((stageReach+8)/6+1) + (keys+stageStep)*24/5 + 32*earlyWindows
+	entries = tracking*streamWindow*32/15 + 2*2*16*((stageReach+8)/6+1) + (keys+stageStep)*40/5 + 2*32*earlyWindows
 	return text, entries
 }
 

@@ -260,8 +260,7 @@ func (a *Applier) applyClear(ctx context.Context, tx *sql.Tx, c applyContext, _ 
 
 // pruneBrandFiles removes the file rows of every adoption but the current one
 // (current, empty after a clear) that no retained version still names, so
-// their objects become the collector's. A version naming a stylesheet keeps
-// every file of that adoption served for as long as it is retained.
+// their objects become the collector's.
 func pruneBrandFiles(ctx context.Context, tx *sql.Tx, current string) (int, error) {
 	res, err := tx.ExecContext(ctx, `
 		DELETE FROM artifact_brand_files

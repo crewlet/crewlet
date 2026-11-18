@@ -20,12 +20,10 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE ATLAS WRITE PATH: one record per claim a person or an agent makes, per
-// integration's read of an entry, per purge and per expired hour, decided
-// inside one snapshot of this node's rows. EVERY VALUE IS
-// JUDGED HERE, by the vocabulary's own grammar, before it is published: the
-// applier judges none, so a rule a newer build learns cannot make two nodes
-// disagree about a row.
+// The atlas write path: one record per claim, integration read, purge and
+// expired hour, decided inside one snapshot of this node's rows. Every value is
+// judged here before it is published, never by the applier (package doc, "The
+// applier judges no text").
 
 // Call is one write's caller: who is writing and under which operation.
 type Call struct {
@@ -51,9 +49,9 @@ func (c Call) validate() error {
 	return nil
 }
 
-// person refuses a call that is not a person's. An agent's claim is a record of
-// its own, backed by the evidence of its turn; what the engine itself knows is
-// computed when the atlas is read and never recorded.
+// person refuses a call that is not a person's: an agent's claim is recorded
+// with its turn's evidence ([Writer.Observe]), and what the engine knows is
+// computed at read time, never recorded.
 func (c Call) person() error {
 	switch c.By.Kind {
 	case iam.ActorHuman, iam.ActorOperator:
@@ -69,13 +67,13 @@ func (c Call) person() error {
 const NoIfMatch uint64 = 0
 
 // IfNoRecord is a person's write conditioned on its entry holding no record
-// yet: decided from a read that found none, so a write somebody made since
-// refuses it as [ErrStaleVersion] rather than landing beside it unseen. No
-// version is this value: a version is a log position, which stays far below.
+// yet, so a write somebody made since refuses it as [ErrStaleVersion] rather
+// than landing beside it unseen. No version is this value: a version is a log
+// position, far below it.
 const IfNoRecord uint64 = 1<<64 - 1
 
-// claimNamespace is the name space a claim's id is derived in. Fixed for good:
-// a different namespace is a different id for every claim a retry recorded.
+// claimNamespace is the namespace a claim's id is derived in. Fixed for good:
+// a different one gives every claim a retry recorded a different id.
 var claimNamespace = uuid.MustParse("5d0e3b8a-7c41-4f2e-9a63-1b8f2c7d4e90")
 
 // ClaimID is the id of the claim operation opID records: one claim an
@@ -188,17 +186,15 @@ func versionOf(ctx context.Context, tx *sql.Tx, entry string) (int64, error) {
 
 // ---- a person's claim --------------------------------------------------- //
 
-// Record writes one person's claim on its entry: an entry they add, retire or
-// restore, a fact they set, correct or deny, a relation they draw or remove, an
-// owner they name, or two entries they join or keep apart. The claim's source
-// is the caller, whatever the claim says; its value is judged by the
-// vocabulary's grammar, and its value and every key it names are refused if
-// shaped like a credential.
+// Record writes one person's claim on its entry. The claim's source is the
+// caller, whatever the claim says; its value is judged by the vocabulary's
+// grammar, and its value and every key it names are refused if shaped like a
+// credential.
 //
 // ifMatch is the entry's version the person decided from ([EntryRow.Version]),
-// [IfNoRecord] for a decision made where the entry held none, or [NoIfMatch]:
-// an edit over a record they did not see answers [ErrStaleVersion]. A claim on, naming or carrying anything purged answers
-// [ErrPurged].
+// [IfNoRecord] for a decision made where the entry held none, or [NoIfMatch];
+// an edit over a record they did not see answers [ErrStaleVersion]. A claim
+// on, naming or carrying anything purged answers [ErrPurged].
 func (w *Writer) Record(ctx context.Context, c Call, claim atlas.Claim, ifMatch uint64) (statelog.Result, error) {
 	if err := c.validate(); err != nil {
 		return statelog.Result{}, err
@@ -225,18 +221,16 @@ type Observation struct {
 	Tool string
 }
 
-// Observe writes one agent's claim on its entry (ADR-0132): an entry, a fact
-// or a relation a call of its own turn showed it, or its dispute of one the
-// atlas holds. The claim's source is the calling seat, in the turn and with
-// the evidence seen names, whatever the claim says. The vocabulary refuses
-// what an agent never records (a fact of meaning, an owner, "the same" and
-// "not the same"), and its value and every key it names are refused if shaped
-// like a credential. An agent's claim is conditioned on no version: it
-// replaces only the seat's own earlier claim on the slot, and outranks nobody.
+// Observe writes one agent's claim on its entry (ADR-0132): what a call of its
+// own turn showed it, or its dispute of a claim the atlas holds. The claim's
+// source is the calling seat, with seen's turn and evidence, whatever the claim
+// says. The vocabulary refuses what an agent never records (a fact of meaning,
+// an owner, "the same" and "not the same"), and credential-shaped values and
+// keys are refused. It is conditioned on no version: it replaces only the
+// seat's own earlier claim on the slot, and outranks nobody.
 //
-// WHETHER THE CITED CALL SHOWED THE VALUE is the calling node's to check,
-// since only the node that ran the turn holds what its calls answered; this
-// writer holds the claim to everything a record can be held to.
+// Whether the cited call showed the value is the calling node's to check: only
+// the node that ran the turn holds what its calls answered.
 func (w *Writer) Observe(ctx context.Context, c Call, claim atlas.Claim, seen Observation) (statelog.Result, error) {
 	if err := c.validate(); err != nil {
 		return statelog.Result{}, err
@@ -262,8 +256,8 @@ func (w *Writer) claim(ctx context.Context, c Call, claim atlas.Claim, src atlas
 	ifMatch uint64) (statelog.Result, error) {
 
 	claim.Source, claim.Position, claim.ObservedAt = src, 0, w.now()
-	// THE KEYS FIRST: a refusal of the claim's grammar names its entry, and a
-	// key shaped like a credential is refused before anything repeats it.
+	// Recordable first: a key shaped like a credential is refused before a
+	// grammar refusal repeats it.
 	if err := claim.Recordable(); err != nil {
 		return statelog.Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
@@ -311,10 +305,10 @@ func purgedOr(err error, format string, args ...any) error {
 // value the vocabulary admits.
 const MaxPurgedValueBytes = atlas.MaxKeyBytes
 
-// PurgeEntry erases an entry everywhere, every claim on it and every claim
-// naming it, its history included, and marks it so nothing records it again.
-// Whether the caller may is the caller's to decide: a purge is an
-// administrator's, after a fresh sign-in, and never an agent's.
+// PurgeEntry erases an entry, every claim on or naming it and their history,
+// and marks it so nothing records it again. Whether the caller may is the
+// caller's to decide: a purge is an administrator's, after a fresh sign-in,
+// never an agent's.
 func (w *Writer) PurgeEntry(ctx context.Context, c Call, ref atlas.Ref) (statelog.Result, error) {
 	canonical, err := atlas.NewRef(ref.Kind, ref.Key)
 	if err != nil {
@@ -326,11 +320,11 @@ func (w *Writer) PurgeEntry(ctx context.Context, c Call, ref atlas.Ref) (statelo
 	return w.purge(ctx, c, EntrySubject(ref))
 }
 
-// PurgeValue erases a value everywhere: every claim carrying it, every entry it
-// is the key of with everything recorded about it, and every claim naming such
-// an entry, history included, and marks it so nothing records it again. text
-// is the value as the atlas holds it, its canonical text; the record names its
-// digest and never the text.
+// PurgeValue erases a value: every claim carrying it, every entry it keys with
+// everything recorded about it, and every claim naming such an entry, history
+// included, and marks it so nothing records it again. text is the value's
+// canonical text as the atlas holds it; the record names its digest, never the
+// text.
 func (w *Writer) PurgeValue(ctx context.Context, c Call, text string) (statelog.Result, error) {
 	switch {
 	case text == "" || strings.TrimSpace(text) != text:
@@ -376,10 +370,10 @@ func (w *Writer) purge(ctx context.Context, c Call, subject Subject) (statelog.R
 // ---- retention ---------------------------------------------------------- //
 
 // Expire removes the history of the hour starting at hour, and everything
-// older, that is past the retention cutoff: the claims a newer claim of the
-// same voice replaced, and the entries a person retired that nothing was
-// recorded about since. Decided again in the write's own snapshot: an hour
-// with nothing left answers [ErrNotDue].
+// older, that is past the retention cutoff: claims a newer claim of the same
+// voice replaced, and retired entries nothing was recorded about since. It is
+// decided again in the write's own snapshot: an hour with nothing left answers
+// [ErrNotDue].
 func (w *Writer) Expire(ctx context.Context, c Call, hour, cutoff time.Time) (statelog.Result, error) {
 	if err := c.validate(); err != nil {
 		return statelog.Result{}, err
@@ -438,11 +432,10 @@ func expirableBefore(ctx context.Context, tx *sql.Tx, before int64) (bool, error
 
 // ---- an integration's read ---------------------------------------------- //
 
-// ReadInput is one integration's read of one entry, as the collect duty hands
-// it to the log (ADR-0129), or one repository's files' as the code scan does
-// (ADR-0133): the voice it speaks in, the entry, the claims the read holds on
-// it that are new or changed, the slots of the voice's earlier claims it no
-// longer holds, and when the read saw it.
+// ReadInput is one integration's read of one entry from the collect duty
+// (ADR-0129), or a repository's files' from the code scan (ADR-0133): its
+// voice, the entry, its new or changed claims on it, the slots of the voice's
+// earlier claims it no longer holds, and when it saw the entry.
 type ReadInput struct {
 	Source     atlas.Source
 	Entry      atlas.Ref
@@ -453,11 +446,10 @@ type ReadInput struct {
 
 // Read writes one read of one entry. The caller is the engine's own duty,
 // never a person or an agent; the source is an integration's or a
-// repository's files'; every
-// claim is on the entry, in the read's voice, judged by the vocabulary's
-// grammar with credentials refused in its value and in every key it names;
-// and a slot is withdrawn or claimed, never both. A read on, naming or
-// carrying anything purged answers [ErrPurged], and is recorded nowhere.
+// repository's files'; every claim is on the entry, in the read's voice,
+// judged by the vocabulary's grammar with credential-shaped values and keys
+// refused; and a slot is withdrawn or claimed, never both. A read on, naming
+// or carrying anything purged answers [ErrPurged] and is recorded nowhere.
 func (w *Writer) Read(ctx context.Context, c Call, in ReadInput) (statelog.Result, error) {
 	if err := c.validate(); err != nil {
 		return statelog.Result{}, err

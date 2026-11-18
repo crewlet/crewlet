@@ -330,11 +330,12 @@ func TestNoReadingIsAskedOfACaptureWhoseHarnessEndedItsOwnRun(t *testing.T) {
 	}
 }
 
-// AN OPENCODE RELAUNCH IS ASKED NO READING AND TOLD AS BEFORE. This build does
-// not judge an OpenCode session's first request, so it asks no reading, and
-// its brief is byte for byte the one this build tells without one, for a round
-// where nothing is listed again, marked, or left unlisted (ADR-0073, a told
-// call is kept apart).
+// AN OPENCODE RELAUNCH IS ASKED NO READING AND TOLD AS BEFORE. No reader of an
+// OpenCode session's holdings exists, so it asks none, and where its count has
+// a bound and no restart in its job, its held brief (the one its launch judges
+// in its box) is byte for byte the one this build tells without a reading, for
+// a round where nothing is listed again, marked, or left unlisted (ADR-0073, a
+// told call is kept apart).
 //
 // Mutation: ask a reading under every verdict but the brief's, and this goes
 // red.
@@ -345,11 +346,12 @@ func TestAnOpenCodeRelaunchIsAskedNoReadingAndToldAsBefore(t *testing.T) {
 	basis := openCodeKept
 	basis.Release, basis.Window, basis.Count = "1.2.3", standard200k, far
 	reads := &reading{held: []string{"toolu_02"}}
-	req := lostRelaunchWith(t, buildOpts{reads: reads}, basis, nil, runner.Resume{Bridged: []runner.BridgedCall{
-		digested(numbered("slack_post", map[string]any{"channel": "C1", "text": "the held post"}, 1, 1)),
-		digested(numbered("slack_post", map[string]any{"channel": "C1", "text": "a later post"}, 2, 2)),
-		late,
-	}})
+	req := lostRelaunchWith(t, buildOpts{reads: reads}, basis, nil, runner.Resume{BasisRestart: new(""),
+		Bridged: []runner.BridgedCall{
+			digested(numbered("slack_post", map[string]any{"channel": "C1", "text": "the held post"}, 1, 1)),
+			digested(numbered("slack_post", map[string]any{"channel": "C1", "text": "a later post"}, 2, 2)),
+			late,
+		}})
 	if n := len(reads.asked()); n != 0 || req.Session.Exact != nil {
 		t.Errorf("an OpenCode relaunch was read %d times, its brief told by a reading %+v", n, req.Session.Exact)
 	}

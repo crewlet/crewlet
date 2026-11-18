@@ -14,12 +14,12 @@ import (
 // the text's DECODED characters in pieces, in order, holds a bounded state, and
 // answers exactly as its whole-text rule at any length ([textSays],
 // [textNotice], [textHandback], [textResult], [textUnits]; held to those rules
-// by TestATextsFactsAreReadAsItsWholeTextReadsThem).
+// by TestATextsFactsAreReadAsItsWholeTextReadsThem), and which asked take
+// tokens it names ([textTakes]).
 //
 // A piece never ends inside a UTF-8 sequence, as jsonscan's Scanner.Read never
 // does: [textSays] and [textUnits] read characters, the others bytes. A whole
-// text already held is handed over through [textCut], one fixed buffer, never a
-// copy of it.
+// text already held is handed over through [textCut], one fixed buffer.
 
 // textPieceBytes is the most one piece of [textCut] holds: 4 KiB, a page, so a
 // cut costs one fixed buffer however long the text; at least [utf8.UTFMax], so
@@ -328,3 +328,51 @@ func (u *textUnits) write(p []byte) {
 // units is the text's length in UTF-16 code units, or one more than
 // [skillListingMaxNameUnits] where it is longer than that.
 func (u *textUnits) units() int { return min(u.n, skillListingMaxNameUnits+1) }
+
+// textTakes reads which of the asked take tokens ([claudeTakeToken]) a text
+// names, each WHOLE AND EXACTLY: its prefix, the 36 bytes of its take and its
+// closing bracket, equal to an asked token byte for byte. Bit i of bits is
+// asked[i]; at most 64 are asked ([maxAskedTakes]). It holds the last bytes of
+// the text, one fewer than a token, so a token a cut splits is met, and once
+// every asked token is met the rest is passed over.
+type textTakes struct {
+	asked []string
+	carry [claudeTakeTokenLen - 1]byte
+	held  int // how much of carry the text has filled
+	bits  uint64
+}
+
+// write reads the text's next piece.
+func (k *textTakes) write(p []byte) {
+	if len(p) == 0 || k.bits == ^uint64(0)>>(64-len(k.asked)) {
+		return
+	}
+	// A token that starts in the carry ends within p's first len(carry) bytes.
+	var joined [2 * len(k.carry)]byte
+	n := copy(joined[:], k.carry[:k.held])
+	n += copy(joined[n:], p)
+	k.find(joined[:n])
+	k.find(p)
+	if len(p) >= len(k.carry) {
+		k.held = copy(k.carry[:], p[len(p)-len(k.carry):])
+		return
+	}
+	// p is shorter than the carry, so joined holds the carry and all of p.
+	k.held = copy(k.carry[:], joined[max(0, n-len(k.carry)):n])
+}
+
+// find sets the bit of every asked token text holds whole.
+func (k *textTakes) find(text []byte) {
+	for at := 0; ; at++ {
+		i := bytes.Index(text[at:], []byte(claudeTakePrefix))
+		if i < 0 || at+i+claudeTakeTokenLen > len(text) {
+			return
+		}
+		at += i
+		for j, token := range k.asked {
+			if string(text[at:at+claudeTakeTokenLen]) == token {
+				k.bits |= 1 << j
+			}
+		}
+	}
+}

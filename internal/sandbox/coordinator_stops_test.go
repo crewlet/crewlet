@@ -371,6 +371,27 @@ var coordinatorEntries = map[string][]entryDrive{
 		name: "the busy half of it",
 		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.SeatHeldBySandbox("swe") },
 	}},
+	"ResumesBlocked": {
+		// IT ENDS NOTHING: it reads this node's memory of the runs whose
+		// last resume failed on a condition only an operator clears, asks
+		// the lease seam whether this node still holds each one's seat
+		// under the lease its attempt was taken with, and forgets, in that
+		// memory alone, one it no longer does. It asks the store nothing
+		// and writes nothing to it, so whatever becomes of the run is the
+		// next completion's or recovery's to say. Driven with the run
+		// remembered both ways, so the count and the letting go are each
+		// reached.
+		{
+			name:    "the alarm's reading of a run waiting for the operator, its seat held",
+			arrange: blockedUnder(rigLease),
+			call:    readsBlocked,
+		},
+		{
+			name:    "the alarm's reading of a run remembered under a lease this node no longer holds",
+			arrange: blockedUnder(Fence{Owner: "node-a:1", Epoch: rigLease.Epoch - 1}),
+			call:    readsBlocked,
+		},
+	},
 	"LaunchStopped": {{
 		// IT ENDS NOTHING: it hands the frame launching a run the stop
 		// decided on it — already ended by the stop's own ending — and
@@ -387,6 +408,24 @@ var coordinatorEntries = map[string][]entryDrive{
 		call: func(_ *testing.T, rig *coordRig) {
 			rig.coordinator.Readmit("paused", "swe")
 			rig.fireRetries()
+		},
+	}},
+	"SaveRunning": {{
+		// IT ENDS NOTHING: a save's stamp is a place on the row its license
+		// grants only a running job, and what came of it moves no status; what
+		// becomes of the run is its poll's to say.
+		name: "a running box the poll offers for a save of its session",
+		call: func(t *testing.T, rig *coordRig) {
+			run, _, _ := rig.pending.Get(t.Context(), "t1")
+			rig.coordinator.SaveRunning(t.Context(), run, rig.runner)
+		},
+	}},
+	"SaveHosted": {{
+		// IT ENDS NOTHING: a drain's save is a save as an offered one is, of a
+		// job the drain leaves running.
+		name: "a draining node saving its Direct jobs' sessions",
+		call: func(t *testing.T, rig *coordRig) {
+			rig.coordinator.SaveHosted(t.Context())
 		},
 	}},
 	"Manager": {{
@@ -680,6 +719,29 @@ func judgedUnresumable(_ *testing.T, rig *coordRig) {
 	}
 }
 
+// blockedUnder is this node remembering that t1's last resume failed on a
+// condition only an operator clears, under fence, its hand-back landed: the
+// state [Coordinator.ResumesBlocked] reads. Written into the memory itself,
+// because what puts it there is a completion's resume failing, which is
+// OnCompleted's drive and not this one's.
+func blockedUnder(fence Fence) func(*testing.T, *coordRig) {
+	return func(_ *testing.T, rig *coordRig) {
+		rig.coordinator.mu.Lock()
+		defer rig.coordinator.mu.Unlock()
+		if rig.coordinator.blocked == nil {
+			rig.coordinator.blocked = map[string]blockedResume{}
+		}
+		rig.coordinator.blocked["t1"] = blockedResume{agent: "swe", kind: "disk_full", since: rig.now,
+			fence: fence, counted: true}
+	}
+}
+
+// readsBlocked is the reading the engine takes into the executor_resume_blocked
+// alarm on every evaluation.
+func readsBlocked(t *testing.T, rig *coordRig) {
+	t.Logf("ResumesBlocked: %+v", rig.coordinator.ResumesBlocked())
+}
+
 // recovers takes the seat under a fresh lease, as a node claiming it does.
 func recovers(t *testing.T, rig *coordRig) {
 	t.Helper()
@@ -971,6 +1033,15 @@ func (s *refusingStore) MarkLost(ctx context.Context, turnID, launch string, los
 	return s.inner.MarkLost(ctx, turnID, launch, loss)
 }
 
+func (s *refusingStore) MarkClaimLost(ctx context.Context, turnID, launch string, loss JobLoss,
+	fence Fence,
+) (bool, error) {
+	if s.called("MarkClaimLost") {
+		return false, errRefusedCall
+	}
+	return s.inner.MarkClaimLost(ctx, turnID, launch, loss, fence)
+}
+
 func (s *refusingStore) AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) error {
 	if s.called("AttachSandbox") {
 		return errRefusedCall
@@ -1225,6 +1296,20 @@ func (s *refusingStore) SettleTake(ctx context.Context, turnID string, settle No
 	return s.inner.SettleTake(ctx, turnID, settle)
 }
 
+func (s *refusingStore) ServeHook(ctx context.Context, turnID string, serve HookServe) ([]RunNote, error) {
+	if s.called("ServeHook") {
+		return nil, errRefusedCall
+	}
+	return s.inner.ServeHook(ctx, turnID, serve)
+}
+
+func (s *refusingStore) SettleHook(ctx context.Context, turnID string, settle HookSettle) ([]RunNote, error) {
+	if s.called("SettleHook") {
+		return nil, errRefusedCall
+	}
+	return s.inner.SettleHook(ctx, turnID, settle)
+}
+
 func (s *refusingStore) MarkPulled(ctx context.Context, turnID, launch string) (bool, error) {
 	if s.called("MarkPulled") {
 		return false, errRefusedCall
@@ -1237,6 +1322,15 @@ func (s *refusingStore) MarkSessionStart(ctx context.Context, turnID, launch str
 		return false, errRefusedCall
 	}
 	return s.inner.MarkSessionStart(ctx, turnID, launch, start)
+}
+
+func (s *refusingStore) OweRefusal(ctx context.Context, turnID, launch string, owed OwedRefusal,
+	fence Fence,
+) (bool, error) {
+	if s.called("OweRefusal") {
+		return false, errRefusedCall
+	}
+	return s.inner.OweRefusal(ctx, turnID, launch, owed, fence)
 }
 
 func (s *refusingStore) MarkEndedAtDeadline(ctx context.Context, turnID, launch string) (bool, error) {
@@ -1281,6 +1375,13 @@ func (s *refusingStore) SettleBegun(ctx context.Context, turnID string, capture 
 		return false, errRefusedCall
 	}
 	return s.inner.SettleBegun(ctx, turnID, capture)
+}
+
+func (s *refusingStore) ReserveSave(ctx context.Context, turnID string, save SessionCapture) (bool, error) {
+	if s.called("ReserveSave") {
+		return false, errRefusedCall
+	}
+	return s.inner.ReserveSave(ctx, turnID, save)
 }
 
 func (s *refusingStore) StandBy(ctx context.Context, turnID string, capture SessionCapture) (bool, error) {

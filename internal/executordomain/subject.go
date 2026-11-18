@@ -12,31 +12,21 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE EXECUTOR LOG'S SUBJECTS: what a record arbitrates over.
+// THE EXECUTOR LOG'S SUBJECTS (package doc, "Subjects, scopes and the five
+// records"): a CONVERSATION's subject orders every record about it, so the rules
+// over a whole conversation are decided from one snapshot and ordered by the
+// broker; a SEAT's carries the one record that removes all the seat holds here
+// once the company removed the seat.
 //
-//   - A CONVERSATION's subject orders every record about it: each turn's
-//     captures, its end and its retention delete. The rules over a whole
-//     conversation (its head, its absorption, its work-key dedupe) are then
-//     decided from one snapshot of it and ordered by the broker, whichever node
-//     decides them.
-//   - A SEAT's subject carries the one record that removes everything the seat
-//     holds here, after the company removed the seat.
-//
-// THE CONVERSATION'S ID IS THE SEAT'S HANDLE, A DOT AND A DIGEST of the
-// conversation's key ([ConversationID]). A key is a surface's own identity for
-// a thread, an issue or a channel, opaque here and free to hold anything a
-// subject or a scope path may not (a dot, a slash, a space), so it never
-// appears in either; the row keeps it whole. A turn with no conversation is a
-// conversation of its own, digested from its turn id, so its records are
-// ordered alone. A seat's handle holds no dot ([iam.ValidSeatHandle]), so the
-// first dot of the id is always where the seat ends.
+// A conversation's id is the seat's handle, a dot and [ConversationID] of its
+// key. The key, a surface's opaque identity for a thread, issue or channel, may
+// hold what a subject or scope path may not (a dot, a slash, a space), so only
+// the row keeps it. A seat's handle holds no dot ([iam.ValidSeatHandle]), so
+// the id's first dot ends the seat.
 
-// ObjectKind is what an object on the executor log is.
-//
-// A NAMED STRING TYPE whose Valid is false for a kind this build has never
-// heard of, and the literal is RETAINED either way: a newer peer publishes a
-// kind this build does not know, and the deferral this build files it under
-// forms a scope term out of that literal.
+// ObjectKind is what an object on the executor log is. Valid is false for a
+// kind this build has never heard of, but the literal is RETAINED: a newer
+// peer's kind is deferred under a scope term formed from it.
 type ObjectKind string
 
 const (
@@ -59,20 +49,16 @@ const (
 	KindBarrier ObjectKind = "barrier"
 
 	// KindTrimmed is the trim's record that removes the arbitration anchors
-	// below what the log no longer holds ([statelog.TrimmedKind], ADR-0080),
-	// on one subject per floor, which the subject's id names. The framework
-	// removes the anchors in the transaction that applies it; this domain
-	// writes nothing for it, and has the case that says so.
+	// below what the log no longer holds ([statelog.TrimmedKind], ADR-0080), on one
+	// subject per floor, which the id names. The framework removes the anchors as
+	// it applies it; this domain's case for it writes nothing.
 	KindTrimmed ObjectKind = statelog.TrimmedKind
 )
 
-// ObjectKinds are the six, and THE ORDER IS LOAD-BEARING.
-//
-// The framework's conformance suite publishes the FIRST THREE a domain
-// declares, twice each, in order, so the declaration decides what the suite
-// certifies. These three are a real sequence: a turn's capture (which writes a
-// row), its seat's removal (which deletes it and tombstones the live turn) and
-// a node's eviction.
+// ObjectKinds are the six, and THE ORDER IS LOAD-BEARING: the framework's
+// conformance suite publishes a domain's FIRST THREE, twice each, in order, so
+// they are a real sequence: a turn's capture (writes a row), its seat's removal
+// (deletes it, tombstones the live turn) and a node's eviction.
 var ObjectKinds = []ObjectKind{
 	KindConversation, KindSeat, KindEviction, KindGeneration, KindBarrier,
 	KindTrimmed,
@@ -84,14 +70,13 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation, and so whether the framework keeps an anchor for it.
 //
-// EVERY KIND BUT THE TWO FRAMEWORK RECORDS DOES: every record here decides
-// from what the conversation or the seat held when it was decided, so two
-// writers deciding from one state contend and one re-decides — which is also
-// why every conversation ever written keeps an anchor until a trimmed record
-// removes it. The barrier shares one subject across the whole domain, so an
-// expectation there would serialise every linearizable read behind every
-// other; the trimmed record REMOVES anchors, and its identical copies are each
-// meant to land, so an expectation would refuse every one after the first.
+// Every kind but the two framework records does: each record decides from what
+// its conversation or seat held, so two writers deciding from one state contend
+// and one re-decides (which is why every conversation keeps an anchor until a
+// trimmed record removes it). On the barrier's one domain-wide subject an
+// expectation would serialise every linearizable read behind every other; the
+// trimmed record's identical copies are each meant to land, so one would refuse
+// all but the first.
 func (k ObjectKind) Arbitrated() bool {
 	return k.Valid() && k != KindBarrier && k != KindTrimmed
 }
@@ -110,12 +95,11 @@ type Subject struct {
 // the first 128 bits of SHA-256 over its key, or over the turn's own id for a
 // turn with no conversation, in lowercase hex.
 //
-// A DIGEST, so a key holding what a subject or a path may not is still one
-// token; 128 BITS, so two conversations of one seat share one by chance with a
-// probability no fleet reaches; and the two inputs are DOMAIN-SEPARATED by a
-// tag byte, so no key spells the digest of a turn's own conversation. Two that
-// did collide would only arbitrate together and share a scope: every row keeps
-// its whole key, and every rule over a conversation reads the key.
+// A DIGEST, so a key holding what a subject or a path may not is one token; 128
+// BITS, so no fleet sees two of one seat's conversations collide; and a TAG BYTE
+// separates the two inputs, so no key spells a turn's own digest. A collision
+// would only arbitrate two together and share a scope: every row keeps its
+// whole key, and every rule over a conversation reads the key.
 func ConversationID(conversationKey, turn string) string {
 	h := sha256.New()
 	if conversationKey == "" {
@@ -177,9 +161,9 @@ func (s Subject) framework() statelog.Subject {
 
 // Validate refuses a subject that cannot address an object.
 //
-// A KIND THIS BUILD DOES NOT KNOW IS NOT REFUSED HERE. It is refused where a
-// record is WRITTEN ([Subject.writable]) and accepted where one is READ, which
-// is the asymmetry the two-pass decode exists for.
+// A kind this build does not know is not refused here: it is refused where a
+// record is WRITTEN ([Subject.writable]) and accepted where one is READ, the
+// asymmetry the two-pass decode exists for.
 func (s Subject) Validate() error {
 	if s.Kind == "" {
 		return fmt.Errorf("executordomain: a subject with no kind addresses the " +

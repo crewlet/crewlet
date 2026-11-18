@@ -88,9 +88,8 @@ func (f *files) collector(t *testing.T, now time.Time) *collect.Collector {
 }
 
 // pinnedEstate is the domain's estate pinned at whatever this node holds: the
-// harness's read authority has no read index, so the linearizable barrier a
-// running node takes is the engine's to prove, and every record here applied
-// before its write answered.
+// harness has no read index for the linearizable barrier (the engine's to
+// prove), and every record here applied before its write answered.
 type pinnedEstate struct{ assistantdomain.ObjectEstate }
 
 func (pinnedEstate) Barrier(context.Context) (statelog.Position, error) {
@@ -212,8 +211,7 @@ func TestAFilesBytesAreSealedInTheObjectStore(t *testing.T) {
 			return err
 		}
 		// MARKERS NO ENVELOPE HOLDS BY CHANCE: each carries a byte base64 never
-		// emits, a '-' or the PNG signature's 0x89. A bare "PNG" is three
-		// base64 characters, which sealed bytes spelled out now and then.
+		// emits, a '-' or 0x89; a bare "PNG" is base64 and turns up by chance.
 		for _, clear := range []string{"PAYROLL-", "\x89PNG"} {
 			if bytes.Contains(raw.Bytes(), []byte(clear)) {
 				t.Errorf("object %s holds the file in the clear: %q", info.Name, clear)

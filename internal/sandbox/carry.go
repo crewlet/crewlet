@@ -129,6 +129,12 @@ type CarryCheck struct {
 	// was read for ([ExactTelling.Resumer]).
 	Version string
 
+	// ResumeRead says Version is a release whose resume this build read
+	// (internal/sandbox/executor's claudeResumeRead): only its resume
+	// rebuilds a hook's note as the job's session showed it, so only it is
+	// handed a brief that counts such a read held ([UnheldTelling]).
+	ResumeRead bool
+
 	// Continues says the session can be continued here.
 	Continues bool
 
@@ -166,9 +172,10 @@ func ValidMessageID(id string) bool {
 // outsideIDCharset reports whether r is outside the characters an id a box
 // hands the engine is held to — letters, digits, `-` and `_` — which a
 // session's id ([ValidSessionID]), a call's ([ValidCallID]) and a message's
-// ([ValidMessageID]) are each held to, at bounds of their own: each is the
-// box's word, and each written as itself by the store's encoder, so none
-// costs more than its length.
+// ([ValidMessageID]) are each held to, at bounds of their own, and the call a
+// hook's serve answered as well ([keptCallOf]): each is the box's word, and
+// each written as itself by the store's encoder, so none costs more than its
+// length but for a string id's own two quotes.
 func outsideIDCharset(r rune) bool {
 	return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_'
 }
@@ -326,13 +333,26 @@ type TakenSession struct {
 	// taker that measures nothing.
 	Context func() int64
 
-	// Count is what Claude Code counts the session at before its next
-	// request, as the archive's own main thread bounds it read whole
-	// ([ResumedCount]), once Body has been read to its end: a bound, or a mark
-	// saying why there is none ([CountUnread] where Body was not read whole).
-	// Nil from a taker that counts nothing, as one of another harness is, and
-	// a nil count from it is none.
+	// Next is the harness's own estimate of the session's next request
+	// ([NextRequest]), off the same read of the archive's main thread as
+	// Count, once Body has been read to its end: zero where the thread was
+	// not read whole ([SessionCapture.NextRequestTokens]). Nil from a taker
+	// that estimates nothing, as one of another harness is.
+	Next func() NextRequest
+
+	// Count is what the harness counts the session at before its next
+	// request, as the archive bounds it read whole ([ResumedCount]): Claude
+	// Code's main thread, OpenCode's export. Once Body has been read to its
+	// end: a bound, or a mark saying why there is none ([CountUnread] where
+	// Body was not read whole). Nil from a taker that counts nothing, and a
+	// nil count from it is none.
 	Count func() *ResumedCount
+
+	// CountProvider is the provider of the reply an OpenCode count is
+	// anchored on, off the same read, once Body has been read to its end
+	// ([SessionCapture.CountProvider]): "" for a Claude Code count and where
+	// no reply anchored one. Nil from a taker that names none.
+	CountProvider func() string
 }
 
 // SessionPackWait bounds a runner's on-demand pack of a session in its box

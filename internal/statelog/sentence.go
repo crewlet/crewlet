@@ -9,26 +9,16 @@ import (
 
 // THREE REFUSALS AS A PERSON READS THEM.
 //
-// Three of this framework's refusals mean one thing whatever the domain and
-// whatever the object, and say what to do next on their own: a write that lost
-// its compare-and-set rounds ([ErrConflict]), a create of what is already there
+// A lost compare-and-set ([ErrConflict]), a create of what is already there
 // ([ErrExists]) and a write about what a deletion marker keeps deleted
-// ([ReasonDeleted]). What the error itself says about each is the subject it
-// met, a broker path nobody can act on, so every surface that tells one of
-// them tells it in the words below: the agent's tools, to a model, and every
-// surface that answers a person in words of its own, the identity directory
-// first among them. A person's act route and the human write surface answer
-// each in its code's own sentence instead (ADR-0060).
-//
-// HERE, BESIDE THE SENTINELS, because this is the one package every surface
-// that meets them already imports. The words lived in internal/agent/builtin,
-// which the API's surfaces outside the operator's do not import, so the
-// identity directory answered a lost race with the framework's own text, the
-// subject it met included. A second copy there would have been the same
-// sentence kept in step by nothing.
-//
-// Every other refusal of this package is a CONDITION of the node that met it,
-// told in [ConditionSentence]'s words; this function answers none of them.
+// ([ReasonDeleted]) mean one thing in every domain and say what to do on their
+// own. The error names the subject it met, a broker path nobody can act on, so
+// every surface answering in words of its own (the agent's tools to a model,
+// the identity directory) tells them in the words below; a person's act route
+// and the human write surface answer each in its code's own sentence
+// (ADR-0060). They live here because every such surface imports this package.
+// Every other refusal is a CONDITION of the node, told in [ConditionSentence]'s
+// words.
 
 // LostRace is a write that lost its compare-and-set rounds ([ErrConflict]): what
 // happened, that nothing was written, and that the same change may be made
@@ -72,54 +62,35 @@ func Sentence(err error) (string, bool) {
 
 // A CONDITION AS A PERSON READS IT.
 //
-// Every other refusal this package makes is a condition of the node that met
-// it: a write's [Reason] or a read's [ReadRefusal]. Each carries a detail
-// written for whoever runs the node ([Unavailable.Detail], [Refused.Detail]),
-// which names positions, settings, record versions and the broker's own
-// words, and that detail is the node's log's, never a screen's: a person
-// reading "statelog: unavailable (behind): the write needs this node to have
-// applied 3:4182" learns nothing they can act on, and the framework's own
-// words in front of it are a Go error's. So a surface that tells a person
-// about a condition tells it in the words below, one sentence per code, and
-// logs the detail.
+// Every other refusal is a condition of the node that met it (a write's
+// [Reason], a read's [ReadRefusal]), whose detail ([Unavailable.Detail],
+// [Refused.Detail]) names positions, settings and the broker's words: the
+// node's log's, never a screen's. A surface tells a person the code's sentence
+// below and logs the detail.
 //
-// EACH SENTENCE SAYS WHAT HAPPENED AND WHAT TO DO, and the second half agrees
-// with whether the answer carries a Retry-After ([RetryAfter]): a code that
-// clears on its own asks the person to try again in a moment ([TryAgainSoon]),
-// or in a few minutes where what clears it is the log's duplicate window
-// ([TryAgainLater]), and one that does not never does, because a person told
-// to try again in a moment where no wait changes the answer tries again in a
-// moment, for ever.
-// [TestEveryConditionIsToldInWordsForAPerson] walks every [Reason] and every
-// [ReadRefusal] this build names and holds each to that, so a code added
-// without a sentence fails the build rather than reaching a screen as the
-// framework's text.
+// EACH SAYS WHAT HAPPENED AND WHAT TO DO, agreeing with [RetryAfter]:
+// [TryAgainSoon] where it clears on its own, [TryAgainLater] where the log's
+// duplicate window clears it, neither where no wait does, or a person retries
+// for ever ([TestEveryConditionIsToldInWordsForAPerson]).
 
 // TryAgainSoon is what a person is told to do about a condition that clears
 // on its own: every one whose answer carries a Retry-After.
 const TryAgainSoon = "Try again in a moment."
 
 // TryAgainLater is what a person is told to do about a condition that clears
-// on its own but not soon, whose hint is a minute or more: here, another
-// node's copy of their change under a gate that blames its writer
-// ([Unavailable.CopyWriter]), which the node that refused takes itself once
-// the log's duplicate window lets go of the operation — minutes, not a moment
-// ([Unavailable.RetryAfter]); beyond the state log, a coding sandbox's account
-// limit.
+// on its own but not soon, its hint a minute or more: another node's copy of
+// their change under a gate that blames its writer ([Unavailable.CopyWriter]),
+// which the refusing node takes once the log's duplicate window lets go of the
+// operation ([Unavailable.RetryAfter]); beyond the state log, a coding
+// sandbox's account limit.
 const TryAgainLater = "Try again in a few minutes."
 
-// WHO A CONDITION IS ABOUT is never "this node". A person's request reaches one
-// node and the state log that refuses it may be another's: the estate router
-// hands a data node's refusal back as its answer whenever the asking node's
-// own copy does not serve — always, on a node without `data`. So each sentence
-// names the node by what it is doing — handling the change, answering the
-// question — which is true of either, and an administrator is sent to "the one
-// that refused", which the asking node's log names where it was a data node it
-// asked (`estate_peer_refused`).
-//
-// AND "AN ADMINISTRATOR NEEDS TO", never "ask an administrator": the identity
-// directory's surfaces answer these too, and their reader is the
-// administrator.
+// WHO A CONDITION IS ABOUT is never "this node": the estate router hands a
+// data node's refusal back as the asking node's answer, so each sentence names
+// the node by what it is doing (handling the change, answering the question),
+// and an administrator is sent to "the one that refused", which the asking
+// node's log names (`estate_peer_refused`). And "an administrator needs to",
+// never "ask an administrator": the identity directory's reader is one.
 const (
 	// handling and answering are who a write's and a read's condition is
 	// about.
@@ -175,15 +146,12 @@ func (c conditionWords) sentence() string {
 
 // writeConditions is every write [Reason] as a person is told it.
 //
-// NONE SAYS WHETHER ANYTHING WAS WRITTEN, a deletion's excepted
-// ([Deleted]): a refusal is of one record, and the gesture it stopped may
-// have written others before it — a direct message's open, the steps of an
-// identity edit — which the surface answering it says (`landed`, a tool's own
-// sentence). "So nothing was written" here would contradict them.
+// NONE SAYS WHETHER ANYTHING WAS WRITTEN, a deletion's excepted ([Deleted]):
+// a refusal is of one record, and the gesture may have written others before
+// it, which the answering surface says (`landed`, a tool's own sentence).
 //
-// A FULL LOG IS ONE AREA'S: every domain's log has a ceiling of its own, so
-// changes of every other kind still save, and "the company's records are
-// full" told a person nothing could be.
+// A FULL LOG IS ONE AREA'S: every domain's log has its own ceiling, so the
+// words never say the company's records are full.
 var writeConditions = map[Reason]conditionWords{
 	ReasonEvicted: {handling + " has been evicted from the fleet", readmit},
 	ReasonEvictionUnknown: {handling + " couldn't check whether it's been " +
@@ -221,11 +189,10 @@ var writeConditions = map[Reason]conditionWords{
 }
 
 // copyConditions is a write refused for ANOTHER node's copy of it under a gate
-// that blames that copy's writer ([Unavailable.CopyWriter]): the node that
-// refused passed its own fences and takes the change itself once the log's
-// duplicate window has let go of the operation, so its advice is to send it
-// again then — never to readmit a node the fleet evicted on purpose, nor to
-// remake a change that will land as it is.
+// that blames that copy's writer ([Unavailable.CopyWriter]): the refusing node
+// passed its own fences and takes the change itself once the log's duplicate
+// window lets go of the operation, so the advice is to send it again then,
+// never to readmit an evicted node nor to remake a change that will land.
 var copyConditions = map[Reason]conditionWords{
 	ReasonEvicted: {"another node took this change and has since been " +
 		"evicted from the fleet, so it hasn't taken effect yet", TryAgainLater},
@@ -255,13 +222,11 @@ var readConditions = map[ReadRefusal]conditionWords{
 		"fleet", TryAgainSoon},
 	RefuseNoQuorum: {"the fleet couldn't agree on the latest changes",
 		TryAgainSoon},
-	// A STALL OF THE ONE MEMBER that stores the log: its own write of the
-	// check did not complete in a barrier budget, which the answer's
-	// Retry-After waits out ([StalledRetryHint]). It clears when that write
-	// completes, so a person tries again in a moment, and is never sent to
-	// an administrator, which is the advice for a condition no wait clears.
-	// A stall that persists is the operator's to read in the refusal's
-	// detail, which the surface answering it logs.
+	// A STALL OF THE ONE MEMBER that stores the log: its write of the check
+	// missed a barrier budget, which the Retry-After waits out
+	// ([StalledRetryHint]). It clears when that write completes, so it is
+	// never sent to an administrator; a stall that persists is in the logged
+	// detail.
 	RefuseBrokerStalled: {"the company's storage took too long to confirm " +
 		"a check this answer needs", TryAgainSoon},
 	RefuseLogFull: {"there's no room left to save this kind of change, so " +
@@ -341,18 +306,16 @@ func ConditionWords(err error) (what, next string, ok bool) {
 	return words.what, words.next, ok
 }
 
-// ConditionLevel is the level a surface logs a condition's error at, where the
-// detail a person is never shown goes: WARN where no wait clears it
-// ([RetryAfter] is zero), since an administrator is the only one who can act
-// on it, and cleared where one does, which the caller names because it turns
-// on who asks again — INFO for a gesture somebody made once, DEBUG for a
-// question a screen asks again after every hint for as long as a node is
-// catching up, where a line per ask is noise beside the alarm that names it.
+// ConditionLevel is the level a surface logs a condition's error (and its
+// detail) at: WARN where no wait clears it ([RetryAfter] is zero), since only
+// an administrator can act, and cleared where one does, which the caller names
+// by who asks again: INFO for a gesture made once, DEBUG for a screen that
+// re-asks after every hint while a node catches up, where a line per ask is
+// noise beside the alarm.
 //
-// ONE RULE FOR EVERY SURFACE, the estate router's line about a data node's
-// refusal among them, because a level chosen at each put a log at its ceiling
-// at INFO on one surface and WARN on the next. Each surface logs under its own
-// component and with its own fields; only the level is decided here.
+// ONE RULE FOR EVERY SURFACE (the estate router's line included), so one
+// condition is never INFO on one surface and WARN on the next; each surface
+// keeps its own component and fields.
 func ConditionLevel(err error, cleared slog.Level) slog.Level {
 	if RetryAfter(err, time.Second) == 0 {
 		return slog.LevelWarn

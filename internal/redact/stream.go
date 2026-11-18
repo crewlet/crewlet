@@ -551,7 +551,12 @@ type claimSource struct {
 	// end is too, or lies at it or past it where it is -1.
 	frontier int
 	tokens   [][2]int
-	words    [][3]int
+	// words are each password's or AWS secret's key, its separator's end,
+	// and its value's start and end, -1 while to come, and where the gutter
+	// of the key's line it was read under ends, or 0 ([claims]). A start of
+	// -1 stays so: only a word that names no value is claimed without one,
+	// and the window reads it past its end, as none ([keyStage.claimsIn]).
+	words [][5]int
 	// keys is the keys' stage that reads the claims: a claim that ends at
 	// or before where its next window begins ([keyStage.floor]) is asked
 	// of no window, and is not kept.
@@ -567,14 +572,28 @@ func (c *claimSource) token(t [2]int) {
 }
 
 // word claims w, a key, its separator's end and its value's end, the last -1
-// while to come.
+// while to come: a key and separator with no value, or an AWS secret's, whose
+// value is claimed as a token is.
 func (c *claimSource) word(w [3]int) {
-	end := max(w[1], w[2])
-	if w[1] < 0 || w[2] < 0 {
+	c.valued(w, w[1], 0)
+}
+
+// valued claims k as [claimSource.word] does, its value beginning at start, -1
+// while to come, and claimed apart from its key ([claims]): the keys' stage
+// reads every line between the two as the whole text's keys read it.
+//
+// THE CHECK OF A WINDOW DECIDED EARLY READS IT AS ONE STRETCH, from its key to
+// its value's end ([keyStage.handed]), which holds every part of it an answer
+// can read: a claim that comes late over a window's footprint is a miss
+// whichever part the answers read.
+func (c *claimSource) valued(k [3]int, start, gutter int) {
+	w := [5]int{k[0], k[1], start, k[2], gutter}
+	end := max(w[1], w[3])
+	if w[1] < 0 || w[3] < 0 {
 		end = -1
 	}
-	c.keys.handed(c, w[0], end, true, w[2])
-	if w[2] < 0 || w[2] > c.keys.floor {
+	c.keys.handed(c, w[0], end, true, w[3])
+	if w[3] < 0 || w[3] > c.keys.floor {
 		c.words = append(c.words, w)
 	}
 }
@@ -593,14 +612,14 @@ func (c *claimSource) endWord(sep, end int) {
 	if sep >= 0 {
 		w[1] = sep
 	}
-	w[2] = end
+	w[3] = end
 	c.keys.ended(c, end)
 }
 
 // prune lets go of the claims that end at or before lo.
 func (c *claimSource) prune(lo int) {
 	c.tokens = slices.DeleteFunc(c.tokens, func(t [2]int) bool { return t[1] >= 0 && t[1] <= lo })
-	c.words = slices.DeleteFunc(c.words, func(w [3]int) bool { return w[2] >= 0 && w[2] <= lo })
+	c.words = slices.DeleteFunc(c.words, func(w [5]int) bool { return w[3] >= 0 && w[3] <= lo })
 }
 
 // stageMode is what a rule's stage does with what it decides.
@@ -887,6 +906,16 @@ func (s *ruleStage) flush() {
 // empty where the key names nothing.
 type event struct {
 	key, v [2]int
+	gutter int
+}
+
+// gutterAt is where, in the text as written, the gutter of the key's line ev's
+// value was read under ends, or 0 ([aValue]).
+func (s *ruleStage) gutterAt(lo int, ev event) int {
+	if ev.gutter <= 0 {
+		return 0
+	}
+	return s.raw.at(lo + ev.gutter)
 }
 
 // decide is the stage's rule's first decision at or after at.
@@ -895,8 +924,8 @@ func (s *ruleStage) decide(text string, at int, prior [][2]int) (event, bool) {
 		start, end, found := s.r.find(text, at)
 		return event{key: [2]int{start, end}, v: [2]int{end, end}}, found
 	}
-	key, v, found := s.r.decide(text, at, prior)
-	return event{key: key, v: v}, found
+	key, v, gutter, found := s.r.decideRead(text, at, prior)
+	return event{key: key, v: v, gutter: gutter}, found
 }
 
 // scan decides the window from at, limit being where the decisions it can
@@ -1031,11 +1060,11 @@ func (s *ruleStage) apply(text string, lo, done int, ev event, prior *[][2]int) 
 		return ev.key[1], ev.key[1]
 	case reads:
 		if ev.v[1] > ev.v[0] {
-			s.src.word([3]int{s.raw.at(lo + ev.key[0]), s.raw.at(lo + ev.key[1]), s.raw.at(lo + ev.v[1])})
+			s.src.valued([3]int{s.raw.at(lo + ev.key[0]), s.raw.at(lo + ev.key[1]), s.raw.at(lo + ev.v[1])}, s.raw.at(lo+ev.v[0]), s.gutterAt(lo, ev))
 			*prior = priorWith(*prior, ev.v)
 			return ev.v[1], ev.v[1]
 		}
-		s.src.word([3]int{s.raw.at(lo + ev.key[0]), s.raw.at(lo + ev.key[1]), s.raw.at(lo + ev.key[1])})
+		s.src.valued([3]int{s.raw.at(lo + ev.key[0]), s.raw.at(lo + ev.key[1]), s.raw.at(lo + ev.key[1])}, s.raw.at(lo+ev.key[1]), s.gutterAt(lo, ev))
 		return done, beyond(text, ev.key[0])
 	}
 	if ev.v[1] <= ev.v[0] {
@@ -1154,7 +1183,7 @@ func (s *ruleStage) open(text string, lo, at int, ev event, limit int) (int, boo
 	s.run = openRun{on: true, start: lo + start, key: [2]int{lo + ev.key[0], lo + ev.key[1]}, held: held, w: valueWriter{with: s.r.with}}
 	switch s.mode {
 	case reads:
-		s.src.word([3]int{s.raw.at(lo + ev.key[0]), s.raw.at(lo + ev.key[1]), -1})
+		s.src.valued([3]int{s.raw.at(lo + ev.key[0]), s.raw.at(lo + ev.key[1]), -1}, s.raw.at(lo+start), s.gutterAt(lo, ev))
 	default:
 		s.pass(text, lo, at, start)
 		if s.r.value != nil {
@@ -1493,9 +1522,10 @@ type keyStage struct {
 	// pos is where the text is written to, and read where the armours are
 	// read to: every armour that begins before it.
 	pos, read int
-	// pending is the blocks read and not yet written, in order and apart;
-	// forward every block read forward from a BEGIN that a later read may
-	// ask of; closed where each END such a block reached begins.
+	// pending is the blocks read and not yet written, in order and apart,
+	// as read: each is cut once it is whole, as it is written; forward every
+	// block read forward from a BEGIN that a later read may ask of; closed
+	// where each END such a block reached begins.
 	pending [][2]int
 	forward [][2]int
 	closed  []int
@@ -1517,9 +1547,19 @@ type keyStage struct {
 	// ([keyStage.handed]).
 	hold  int
 	early [][4]int
+	// beginsEarly are the windows decided early whose answers read where
+	// claims begin, each its start and end and the hull of where it asked
+	// ([claims.askedBegins]): a claim handed late that begins there is a
+	// miss ([keyStage.handed]); an end set late is not, moving no claim's
+	// beginning ([keyStage.ended]). Apart from early, so that an end set
+	// late beside the line a block ends on is read against what the window
+	// read of what claims cover alone.
+	beginsEarly [][4]int
 	// forgot is the furthest end of a block read forward that the stage
-	// let go ([keyStage.write]).
+	// let go ([keyStage.write]), and wrote the last block it wrote, as read:
+	// the cut of the next block reads where it ends ([claims.opensAlike]).
 	forgot int
+	wrote  [2]int
 	// missed is the miss the stage found, after which it decides nothing.
 	missed *decidedEarly
 	// observe is told what the stage and its claims do, where a test sets
@@ -1568,17 +1608,19 @@ func (k *keyStage) handed(c *claimSource, a, end int, word bool, value int) {
 		k.miss(a)
 		return
 	}
-	for _, w := range k.early {
-		if a > w[1] {
-			continue
-		}
-		to := w[1] + 1
-		if end >= 0 {
-			to = min(end, to)
-		}
-		if a < w[3] && w[2] < to {
-			k.miss(w[0])
-			return
+	for _, windows := range [2][][4]int{k.early, k.beginsEarly} {
+		for _, w := range windows {
+			if a > w[1] {
+				continue
+			}
+			to := w[1] + 1
+			if end >= 0 {
+				to = min(end, to)
+			}
+			if a < w[3] && w[2] < to {
+				k.miss(w[0])
+				return
+			}
 		}
 	}
 }
@@ -1612,8 +1654,8 @@ func (k *keyStage) handed(c *claimSource, a, end int, word bool, value int) {
 //     the stretch it covers: a block read forward from a BEGIN that holds its
 //     key takes a value that runs past the block, keeping the key and
 //     separator alone, so a value read open is cut to them, and one ending at
-//     e inside the block is kept whole. The two differ from the separator's
-//     end to e, before e. But the window that read that block forward asked
+//     e inside the block is kept whole. The two differ from where the value
+//     begins to e, before e. But the window that read that block forward asked
 //     of the claims at the block's end ([claims.shortOfNames]), at or past e,
 //     so its own footprint meets [e, hi+1): it was decided early, since the
 //     value's end was not known; it waits still, since the reader's frontier
@@ -1661,24 +1703,34 @@ func (k *keyStage) miss(at int) {
 	for _, w := range k.early {
 		at = min(at, w[0])
 	}
+	for _, w := range k.beginsEarly {
+		at = min(at, w[0])
+	}
 	k.missed = &decidedEarly{at: at}
 }
 
 // wait keeps a window decided early, w, until the claims over it are known:
 // the oldest two merged where [earlyWindows] wait already.
 func (k *keyStage) wait(w [4]int) {
-	if len(k.early) == earlyWindows {
-		a, b := k.early[0], k.early[1]
-		k.early[1] = [4]int{min(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), max(a[3], b[3])}
-		k.early = slices.Delete(k.early, 0, 1)
+	k.early = waitIn(k.early, w)
+}
+
+// waitIn is windows with w kept too, the oldest two merged where
+// [earlyWindows] wait already.
+func waitIn(windows [][4]int, w [4]int) [][4]int {
+	if len(windows) == earlyWindows {
+		a, b := windows[0], windows[1]
+		windows[1] = [4]int{min(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), max(a[3], b[3])}
+		windows = slices.Delete(windows, 0, 1)
 	}
-	k.early = append(k.early, w)
+	return append(windows, w)
 }
 
 // settle lets go of the windows decided early whose claims are all known.
 func (k *keyStage) settle() {
 	f := k.frontier()
 	k.early = slices.DeleteFunc(k.early, func(w [4]int) bool { return w[1] < f })
+	k.beginsEarly = slices.DeleteFunc(k.beginsEarly, func(w [4]int) bool { return w[1] < f })
 }
 
 // take hands the stage the next stretch of the text.
@@ -1708,9 +1760,12 @@ func (k *keyStage) frontier() int {
 	return f
 }
 
-// step reads the armours of one window, if the stage holds one and the claims
-// in it are decided, and writes the text up to where no block read later can
-// reach.
+// step reads the armours of one window, if the stage holds one, and writes the
+// text up to where no block read later can reach, each block it writes cut
+// apart from the gutter of a password key's line ([keyStage.write]). Either
+// reads the claims over the window, so a step that reads an armour, or writes
+// a block, waits for them, or decides early once the text has run the hold
+// past the window ([keyStage.handed]).
 func (k *keyStage) step() bool {
 	end := k.in.end
 	hi := k.read + stageAdvance + keyAhead
@@ -1721,34 +1776,55 @@ func (k *keyStage) step() bool {
 	if eof {
 		hi = end
 	}
-	lo := max(k.in.base, min(k.pos, k.read-keyBehind))
+	lo := max(k.in.base, min(k.pos, k.read-keyBehind, k.opening()))
 	readTo := hi - keyAhead
 	if eof {
 		readTo = hi
 	}
-	text := k.in.window(lo, hi)
-	if strings.Contains(text[k.read-lo:min(len(text), readTo-lo+len(keyArmour)+64)], keyArmour) {
-		early := k.frontier() <= hi
-		if early && k.arrived-k.hold <= hi {
-			return false
-		}
-		k.readArmours(text, lo, readTo, early)
-		if k.missed != nil {
-			return false
-		}
-	}
-	k.read = readTo
 	writeTo := readTo - keyReach
 	if eof {
 		writeTo = hi
 	}
-	k.write(text, lo, writeTo)
+	text := k.in.window(lo, hi)
+	armour := strings.Contains(text[k.read-lo:min(len(text), readTo-lo+len(keyArmour)+64)], keyArmour)
+	var c *claims
+	early := false
+	foot, starts := [2]int{len(text) + 1, -1}, [2]int{len(text) + 1, -1}
+	if _, n := k.final(writeTo); armour || n > 0 {
+		early = k.frontier() <= hi
+		if early && k.arrived-k.hold <= hi {
+			return false
+		}
+		c = k.claimsIn(text, lo)
+		if early {
+			c.footprint, c.begins = &foot, &starts
+			if o := k.observe; o != nil && o.decided != nil {
+				o.decided(lo, lo+len(text))
+			}
+		}
+		if !armour {
+			c.take(k.forwardIn(lo))
+		} else {
+			k.readArmours(text, lo, readTo, c, early)
+			if k.missed != nil {
+				return false
+			}
+		}
+	}
+	k.read = readTo
+	k.write(text, lo, writeTo, c)
+	if early && foot[0] < foot[1] {
+		k.wait([4]int{lo, lo + len(text), lo + foot[0], lo + foot[1]})
+	}
+	if early && starts[0] < starts[1] {
+		k.beginsEarly = waitIn(k.beginsEarly, [4]int{lo, lo + len(text), lo + starts[0], lo + starts[1]})
+	}
 	k.done = eof
 	return true
 }
 
-// readArmours reads the blocks of the armours that begin in [k.read, readTo),
-// early where the claims over the window are still to be known.
+// readArmours reads the blocks of the armours that begin in [k.read, readTo)
+// beside c, early where it is still to be known, and keeps them as read.
 //
 // A SPAN AN EARLY WINDOW READS ENDING AT OR BEFORE ITS START, or beginning
 // before what the stage has written, is a reading of claims the whole text
@@ -1765,19 +1841,8 @@ func (k *keyStage) step() bool {
 // claims the whole text does not have is written, since a span that began
 // before what is written would panic the stage, and with it the goroutine the
 // stream runs in.
-func (k *keyStage) readArmours(text string, lo, readTo int, early bool) {
-	c := k.claimsIn(text, lo)
-	foot := [2]int{len(text) + 1, -1}
-	if early {
-		c.footprint = &foot
-		if o := k.observe; o != nil && o.decided != nil {
-			o.decided(lo, lo+len(text))
-		}
-	}
-	r := keyReading{open: -1}
-	for _, f := range k.forward {
-		r.forward = append(r.forward, [2]int{f[0] - lo, f[1] - lo})
-	}
+func (k *keyStage) readArmours(text string, lo, readTo int, c *claims, early bool) {
+	r := keyReading{open: -1, forward: k.forwardIn(lo)}
 	for _, e := range k.closed {
 		r.closed = append(r.closed, e-lo)
 	}
@@ -1799,9 +1864,6 @@ func (k *keyStage) readArmours(text string, lo, readTo int, early bool) {
 		k.pending = append(k.pending, [2]int{s[0] + lo, s[1] + lo})
 	}
 	k.pending = mergeSpans(k.pending)
-	if early && foot[0] < foot[1] {
-		k.wait([4]int{lo, lo + len(text), lo + foot[0], lo + foot[1]})
-	}
 	for _, f := range r.forward[carried:] {
 		k.forward = append(k.forward, [2]int{f[0] + lo, f[1] + lo})
 	}
@@ -1813,9 +1875,20 @@ func (k *keyStage) readArmours(text string, lo, readTo int, early bool) {
 	}
 }
 
+// forwardIn is the blocks read forward the stage keeps, placed in the window
+// that begins at lo.
+func (k *keyStage) forwardIn(lo int) [][2]int {
+	var out [][2]int
+	for _, f := range k.forward {
+		out = append(out, [2]int{f[0] - lo, f[1] - lo})
+	}
+	return out
+}
+
 // claimsIn is what the rules claim in the window text, which begins at lo:
 // every claim that reaches into it, placed in it, its end at most one past the
-// window's where it is still to come.
+// window's where it is still to come, and a value that begins past the window
+// beginning at its end, so that it reads as a value, not as none.
 func (k *keyStage) claimsIn(text string, lo int) *claims {
 	hi := lo + len(text)
 	clip := func(end int) int {
@@ -1832,8 +1905,15 @@ func (k *keyStage) claimsIn(text string, lo int) *claims {
 			}
 		}
 		for _, w := range s.words {
-			if (w[2] < 0 || w[2] > lo) && w[0] <= hi {
-				c.passwords = append(c.passwords, [3]int{w[0] - lo, clip(w[1]), clip(w[2])})
+			if (w[3] < 0 || w[3] > lo) && w[0] <= hi {
+				start, gutter := clip(w[2]), 0
+				if w[2] > hi && w[3] != w[2] {
+					start = len(text)
+				}
+				if w[4] > lo && w[4] <= hi {
+					gutter = w[4] - lo
+				}
+				c.passwords = append(c.passwords, [5]int{w[0] - lo, clip(w[1]), start, clip(w[3]), gutter})
 			}
 		}
 	}
@@ -1842,14 +1922,55 @@ func (k *keyStage) claimsIn(text string, lo int) *claims {
 	return c
 }
 
-// write writes the text from k.pos to writeTo, moved back to where a block that
-// runs across it begins, each block in it replaced by [keyMarker], a piece at a
-// time ([pieceBytes]).
-func (k *keyStage) write(text string, lo, writeTo int) {
+// opening is where the line the first block still to be written begins on can
+// begin at the furthest ([segmentStart]): the stage holds the text and the
+// claims from there, which the cut of that block reads ([claims.opensAlike]).
+func (k *keyStage) opening() int {
+	if len(k.pending) == 0 {
+		return math.MaxInt
+	}
+	return max(0, k.pending[0][0]-MaxKeyBlockBytes)
+}
+
+// final is writeTo, moved back to where a block that runs across it begins, and
+// how many of the blocks still to be written end at or before it: those it
+// writes, each whole now, since no block read later reaches before writeTo.
+func (k *keyStage) final(writeTo int) (int, int) {
 	for _, s := range k.pending {
 		if s[0] < writeTo && writeTo < s[1] {
 			writeTo = s[0]
 		}
+	}
+	n := 0
+	for n < len(k.pending) && k.pending[n][1] <= writeTo {
+		n++
+	}
+	return writeTo, n
+}
+
+// write writes the text from k.pos to writeTo, moved back to where a block that
+// runs across it begins, each block in it cut apart from the gutter of a
+// password key's line as the whole text's are ([claims.apartIn]), beside c,
+// the claims over the window, and every block read so far, and each piece
+// replaced by [keyMarker], a piece of the text at a time ([pieceBytes]).
+func (k *keyStage) write(text string, lo, writeTo int, c *claims) {
+	writeTo, whole := k.final(writeTo)
+	var cut [][2]int
+	if whole > 0 {
+		var final, known [][2]int
+		if k.wrote[1] > lo {
+			known = append(known, [2]int{max(k.wrote[0], lo) - lo, k.wrote[1] - lo})
+		}
+		for i, s := range k.pending {
+			known = append(known, [2]int{s[0] - lo, s[1] - lo})
+			if i < whole {
+				final = append(final, [2]int{s[0] - lo, s[1] - lo})
+			}
+		}
+		for _, s := range c.apartIn(final, known) {
+			cut = append(cut, [2]int{s[0] + lo, s[1] + lo})
+		}
+		k.wrote = k.pending[whole-1]
 	}
 	var b strings.Builder
 	piece := func(s string) {
@@ -1863,9 +1984,8 @@ func (k *keyStage) write(text string, lo, writeTo int) {
 			}
 		}
 	}
-	at, n := k.pos, 0
-	for ; n < len(k.pending) && k.pending[n][1] <= writeTo; n++ {
-		s := k.pending[n]
+	at := k.pos
+	for _, s := range cut {
 		if o := k.observe; o != nil && o.wrote != nil {
 			o.wrote(s)
 		}
@@ -1880,12 +2000,13 @@ func (k *keyStage) write(text string, lo, writeTo int) {
 	if b.Len() > 0 {
 		k.to.take(b.String(), nil)
 	}
-	k.pending = slices.Delete(k.pending, 0, n)
+	k.pending = slices.Delete(k.pending, 0, whole)
 	k.pos = max(k.pos, at)
 	// Let go of what no later read asks of: the text and the claims behind
-	// the next window, and the blocks read forward behind it but the last,
-	// and any that holds a password's key whose claim reaches into it.
-	k.floor = min(k.pos, k.read-keyBehind)
+	// the next window and the opening of the next block's line, and the
+	// blocks read forward behind it but the last, and any that holds a
+	// password's key whose claim reaches into it.
+	k.floor = min(k.pos, k.read-keyBehind, k.opening())
 	k.in.release(k.floor)
 	keepFrom := k.floor
 	for _, s := range k.sources {

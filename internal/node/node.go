@@ -10,7 +10,13 @@
 // consuming work it no longer owns.
 //
 // That ordering is the whole point, and it is why the fleet suite exercises
-// this package rather than the seat host directly.
+// this package rather than the seat host directly. Every HOLD of the mailbox
+// is taken for the attachment this acquisition makes: the attachment
+// ([queue.Attachment]) is read FIRST and handed to the seat's preparation
+// ([Config.SeatReady]), which takes whatever hold the mailbox must be attached
+// under (a person's pause), and this node's own turn holds name it too, so a
+// hold asked after the release's detach is refused rather than carried onto
+// the next attachment.
 //
 // The second thing that belongs here for the same reason is that every seat in
 // the COMPANY has a mailbox, whether or not this node will ever run it — the
@@ -105,7 +111,13 @@ type Config struct {
 	Turn TurnFunc
 
 	// SeatReady runs as this node takes a seat, BEFORE its mailbox is
-	// attached, and a failure refuses the seat.
+	// attached, and a failure refuses the seat. inbox is the attachment of
+	// the seat's mailbox this acquisition makes ([queue.Attachment]), which
+	// every hold of it is to be taken for until the seat's release: a hold
+	// SeatReady takes for it is in force when the mailbox is attached, which
+	// is how a seat a person paused is attached already held. A hold is taken
+	// FOR an attachment, the span from one detach to the next whether or not
+	// a consumer is attached yet, and that is what lets it be taken first.
 	//
 	// Before, because of the ordering OnAcquire exists to enforce: whatever
 	// the first turn will need must be ready before the first event can
@@ -113,25 +125,7 @@ type Config struct {
 	// its runs have to be recovered and its mail parked before anything
 	// can deliver, or the first message starts a second turn beside an
 	// executor that is still going.
-	SeatReady func(ctx context.Context, seat placement.Seat, lease coord.Lease) error
-
-	// AttachHolds names the pause holds a seat's mailbox must already carry
-	// when it is attached — the reasons [queue.EventQueue.PauseTopic] is
-	// given for it, taken after SeatReady and BEFORE the attach. Nil takes
-	// none.
-	//
-	// BEFORE, for the reason the attach is last: a hold taken after the
-	// consumer starts is taken after the first delivery can arrive. A seat
-	// a person paused that placement moves here is the case — the node
-	// that released it held its mail, the release dropped that hold with
-	// the attachment, and the mail waiting on the inbox would be the first
-	// thing this node's consumer ran. A hold is keyed on the subscription
-	// rather than on an attachment, which is what lets it be taken first.
-	//
-	// ASKED BY THE SEAT'S ID, the name the held mailbox is built from and
-	// the key every hold is kept under: the agent id derived from the
-	// seat's handle (ADR-0013).
-	AttachHolds func(seat uuid.UUID) []string
+	SeatReady func(ctx context.Context, seat placement.Seat, lease coord.Lease, inbox queue.Attachment) error
 
 	// SeatsAdmitted reports whether this node may take on NEW seats right
 	// now. Nil always admits. It gates the CLAIM only — see
@@ -273,6 +267,11 @@ type Node struct {
 	// handle beside it for the diagnostics.
 	mu       sync.Mutex
 	attached map[uuid.UUID]string
+	// inboxes is the attachment of each seat's mailbox this node is taking
+	// or holds, from the start of its acquisition to its release's detach:
+	// what this node's own holds on the mailbox are taken for
+	// ([Node.holdInbox]). Under mu.
+	inboxes map[uuid.UUID]queue.Attachment
 
 	// mail is what this node knows about the company's mailboxes, and the
 	// convergence loop's own lifetime. See mailboxes.go.
@@ -299,6 +298,7 @@ func New(cfg Config) (*Node, error) {
 		cfg:      cfg,
 		log:      logging.Get("node").With("node_id", cfg.NodeID),
 		attached: map[uuid.UUID]string{},
+		inboxes:  map[uuid.UUID]queue.Attachment{},
 		running:  map[string]*admission{},
 		mail:     newMailboxes(),
 		turns:    newGate(cfg.MaxConcurrent),
@@ -641,8 +641,21 @@ func (n *Node) OnAcquire(ctx context.Context, s placement.Seat, lease coord.Leas
 			"seat id, and a mailbox is named by the id", handle)
 	}
 
+	// THE ATTACHMENT THIS ACQUISITION MAKES, read first: every hold of the
+	// mailbox from here, the seat's preparation's included, is taken for it,
+	// so the queue refuses one that was decided while this node held the
+	// seat before and asked after that holding's release, rather than carry
+	// it onto this attachment.
+	at, err := n.cfg.Queue.Attachment(ctx, inbox, group)
+	if err != nil {
+		return fmt.Errorf("node: read the attachment seat %q's mailbox is taken under: %w", handle, err)
+	}
+	n.mu.Lock()
+	n.inboxes[s.ID] = at
+	n.mu.Unlock()
+
 	if n.cfg.SeatReady != nil {
-		if err := n.cfg.SeatReady(ctx, s, lease); err != nil {
+		if err = n.cfg.SeatReady(ctx, s, lease, at); err != nil {
 			// The seat is REFUSED rather than attached anyway: a seat
 			// whose in-flight runs could not be recovered would take new
 			// work beside an executor nothing is tracking.
@@ -650,23 +663,11 @@ func (n *Node) OnAcquire(ctx context.Context, s placement.Seat, lease coord.Leas
 		}
 	}
 
-	if n.cfg.AttachHolds != nil {
-		for _, hold := range n.cfg.AttachHolds(s.ID) {
-			if err := n.cfg.Queue.PauseTopic(ctx, inbox, group, hold); err != nil {
-				// REFUSED rather than attached without it: a seat whose
-				// hold could not be taken would run the mail it exists to
-				// keep. A pause fails only on a client that has stopped.
-				return fmt.Errorf("node: hold seat %q under %q before attaching it: %w",
-					handle, hold, err)
-			}
-		}
-	}
-
 	opts := n.cfg.BatchOptions
 	if opts == nil {
 		opts = queue.DefaultBatchOptions()
 	}
-	err := n.cfg.Queue.SubscribeBatch(ctx, inbox, group,
+	err = n.cfg.Queue.SubscribeBatch(ctx, inbox, group,
 		func(ctx context.Context, evs []*events.Event) queue.Result {
 			return n.runTurn(ctx, handle, evs)
 		},
@@ -737,6 +738,7 @@ func (n *Node) OnRelease(ctx context.Context, s placement.Seat, _ coord.Lease, r
 
 	n.mu.Lock()
 	delete(n.attached, s.ID)
+	delete(n.inboxes, s.ID)
 	n.mu.Unlock()
 	if n.cfg.SeatDone != nil {
 		n.cfg.SeatDone(ctx, s)

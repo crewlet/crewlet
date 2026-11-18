@@ -589,7 +589,9 @@ const sandboxLaterWait = time.Minute
 // chain — a read refused ([statelog.Refused]), a write ([statelog.Unavailable])
 // or a bare sentinel somebody wrapped — in the state log's own words for it
 // ([statelog.ConditionWords]), and never its error or its detail, which are
-// the log's.
+// the log's. Its kind is [KindStateLogWriteRefused] for a write refused for
+// what it is ([statelog.Reason.RefusesTheWrite]) and [KindStateLogUnavailable]
+// for every other refusal.
 //
 // THE REFUSAL ITSELF, never the chain's whole message: a wrapper is free to
 // join an error of its own beside it (`%w: %w`), and that one may be a
@@ -597,8 +599,13 @@ const sandboxLaterWait = time.Minute
 func stateLogSaid(err error) conditionSaid {
 	what, _, _ := statelog.ConditionWords(err)
 	person, _ := statelog.ConditionSentence(err)
+	kind := KindStateLogUnavailable
+	var refused *statelog.Unavailable
+	if errors.As(err, &refused) && refused.Reason.RefusesTheWrite() {
+		kind = KindStateLogWriteRefused
+	}
 	return conditionSaid{clause: what, person: person,
-		stuck: statelog.RetryAfter(err, time.Second) == 0, kind: KindStateLogUnavailable}
+		stuck: statelog.RetryAfter(err, time.Second) == 0, kind: kind}
 }
 
 // What a model is told about a condition no wait clears, in place of a tool's

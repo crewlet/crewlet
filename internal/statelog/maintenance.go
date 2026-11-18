@@ -10,86 +10,21 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE CAPACITY OPERATION'S STATE MACHINE, and it is the ONLY place its phases,
-// its evidence, its transitions and its ordering are stated.
-//
-// # Why that sentence is a rule rather than a preference
-//
-// This procedure was written four times in prose beside the mechanism it
-// describes, and each time a later change amended the mechanism and left the
-// prose. The copies then disagreed about which set of nodes had to
-// acknowledge, when the baseline was recorded, whether the exit was one
-// restart or two, and whether an applied operation could be confirmed without
-// a seal — and the prose is the thing an implementer follows.
-//
-// So: every other site says what an OPERATOR does — the verb, its arguments,
-// the refusals they will see, what it costs — and points here. A CLI help
-// string that restates a transition is a second state machine.
-//
-// # The shape, in one paragraph
-//
-// A resize is unsafe while anything publishes, so the fleet restarts into a
-// mode with every broker and no publisher. The operation's record IS the
-// exclusion ([coord.MaintenanceOperation]). It opens, records who is running
-// BEFORE issuing anything, applies, and is then SEALED once every
-// participant's process has been replaced by one booted into seal mode —
-// because what retires a request the broker has already queued is the broker
-// process restarting, not a client closing. Only a sealed operation may be
-// verified, and only a verified one is confirmed and deleted.
-//
-// # What each piece of evidence proves, and no more
-//
-// The seal stands on four records, and each proves one thing:
-//
-//   - AN ACKNOWLEDGEMENT ([coord.MaintenanceAck]) is written by a process as it
-//     boots into a maintenance mode, once for each log: which process it is,
-//     the mode it booted into, and the window and attempt open on that log when
-//     it read them, or none. Each log keeps its own ([acksOf]), so it is
-//     evidence about that log's window and no other, and two windows open at
-//     once are each answered by the same boot. The boot writes it after its
-//     broker has started, so it says the process was running by then and
-//     never that it started after anything. No record a process writes bounds
-//     its own start from below; only a later process of the same node does,
-//     by replacing it.
-//   - THE RECORD OF WHO IS RUNNING ([coord.MaintenanceOperation.WriteIncarnations])
-//     names, for each participant, the process its newest acknowledgement
-//     named when a request's journal record was written, by the process
-//     sending that request, in the same write, immediately before it leaves.
-//     Every request records it again, so it is always the newest request's.
-//   - THE SEAL'S INEQUALITY ([SealRestarts]): a seal-mode acknowledgement from
-//     another process than the recorded one proves the recorded process is
-//     gone. That retires a request only because the recorded process is the
-//     one that was running as the request left. Recorded once at the baseline,
-//     a request a resumed window sent later was retired by restarts made
-//     before it left, a node restarted into seal mode in between among them.
-//   - A JOURNAL RECORD ([coord.JournalRecord]) is one request, written by its
-//     sender before it leaves. Only that request's own read-back completes it;
-//     otherwise the barrier retires it ([Retire]), and a value never does.
-//
-// WHAT NONE OF THEM CAN SEE is a node restarting while a request is leaving:
-// its broker up before the request, its acknowledgement written after the
-// record. That is why the procedure restarts the fleet into seal mode only once
-// the verb has answered, and why a node restarted before a request leaves is
-// simply asked to restart again after it.
-//
-// # What the arithmetic here does NOT do
-//
-// It performs no I/O and holds no state. Every function is a decision over
-// values, so every phase, every crash point and every illegal transition is
-// reachable in a table test with no broker, no fleet and no coordinator — see
-// [PermitPhase], [SealHolds] and [Retire].
+// The capacity operation's state machine: its phases, evidence, transitions
+// and ordering are stated in this package and nowhere else (package doc, "The
+// capacity operation's state machine"). Every other site says what an operator
+// does and points here; a CLI help string that restates a transition is a
+// second state machine. Nothing here does I/O or holds state, so every phase,
+// crash point and illegal transition is reachable in a table test
+// ([PermitPhase], [SealHolds], [Retire]).
 
 // ControlRaiseAttempts is how many write-then-seal cycles one operation gets.
 //
-// THREE, and it is carried ON THE RECORD rather than in the coordinator, so a
-// coordinator failure cannot silently reset the budget: a takeover resumes the
-// same operation, and a count held in the process that failed would start
-// again at one on every takeover — which is an unbounded number of restarts
-// advertised as three.
-//
-// Three because each attempt costs the fleet two restarts and a mismatch after
-// three identical attempts is a broker that is not applying what it accepts,
-// which is a person's problem rather than a retry's.
+// It is carried on the record, not in the coordinator, so a takeover resumes
+// the count: held in the process that failed, it would restart at one on every
+// takeover, unbounded restarts advertised as three. Three because each attempt
+// costs two fleet restarts, and a mismatch after three identical attempts is a
+// broker not applying what it accepts: a person's problem, not a retry's.
 const ControlRaiseAttempts = 3
 
 // MaintenanceMode is what a node started for.
@@ -100,15 +35,14 @@ const (
 	ModeNormal MaintenanceMode = "normal"
 
 	// ModeMaintenance starts the broker, its cluster routes, the
-	// coordination estate and a read-only store — and NO publisher: no
-	// seats, no duties, no scheduler, no applier write side, no change
-	// feed, no API write routes, and no barrier, so a linearizable read is
-	// refused [RefuseMaintenance] ([ReaderDeps.Mode]).
+	// coordination estate and a read-only store, and NO publisher (no
+	// seats, duties, scheduler, applier write side, change feed, API write
+	// routes or barrier), so a linearizable read is refused
+	// [RefuseMaintenance] ([ReaderDeps.Mode]).
 	//
-	// FLEET-WIDE. One node of three has no majority, so a single
-	// maintenance node can commit neither the configuration update nor
-	// its own coordination record — and it is every BROKER restarting
-	// that retires what the brokers had queued.
+	// Fleet-wide: one node of three has no majority to commit the
+	// configuration update or its own coordination record, and it is every
+	// broker restarting that retires what the brokers had queued.
 	ModeMaintenance MaintenanceMode = "maintenance"
 
 	// ModeSeal is ModeMaintenance with configuration writes refused too.
@@ -131,11 +65,9 @@ func (m MaintenanceMode) Publishes() bool { return m == ModeNormal }
 // evidence rather than a claim.
 func (m MaintenanceMode) WritesConfiguration() bool { return m == ModeMaintenance }
 
-// PhaseEvidence is what a caller has established, offered to [PermitPhase].
-//
-// A STRUCT OF FACTS rather than a caller naming the phase it wants: the
-// transition table is what decides, and a caller that could name its own next
-// phase would be a second state machine.
+// PhaseEvidence is what a caller has established, offered to [PermitPhase]:
+// facts, never a requested phase, since a caller naming its own next phase
+// would be a second state machine.
 type PhaseEvidence struct {
 	// Now is the deciding instant.
 	Now time.Time
@@ -145,8 +77,8 @@ type PhaseEvidence struct {
 	BaselineWritten bool
 
 	// ObservedMaxBytes is what a read-back saw, and Observed whether one
-	// happened at all. Zero-with-Observed is a real answer — a log with no
-	// ceiling — and the two are separate for that reason.
+	// happened at all: zero with Observed is a real answer, a log with no
+	// ceiling.
 	ObservedMaxBytes uint64
 	Observed         bool
 
@@ -166,19 +98,13 @@ type PhaseEvidence struct {
 }
 
 // PermitPhase is the transition table: what this operation may advance to
-// from where it is, given what has been established.
+// from where it is, given what has been established. It answers the same
+// phase when nothing new is established, which is how a resume works: a
+// returning coordinator offers what it can establish and is told where it
+// stands rather than reconstructing it.
 //
-// It answers the SAME phase when nothing has been established, which is how a
-// resume works — a coordinator that crashed and came back re-reads the record,
-// offers what it can establish, and is told where it stands rather than having
-// to reconstruct it.
-//
-// # No branch reaches confirmed without seal evidence
-//
-// That is the property the whole table exists for, and the failure it replaces
-// is a recovery paragraph that read "applied leads to confirm and clear" —
-// written before the seal existed and left in place after, so a recovery
-// following it would bypass the protection and never know.
+// No branch reaches confirmed without seal evidence: that is the property the
+// table exists for (TestNoPhaseReachesConfirmedWithoutSealEvidence).
 func PermitPhase(op coord.MaintenanceOperation, ev PhaseEvidence) (coord.MaintenancePhase, error) {
 	if !op.Phase.Valid() {
 		return "", &Telling{Say: fmt.Sprintf("the capacity operation on %s is in "+
@@ -193,22 +119,18 @@ func PermitPhase(op coord.MaintenanceOperation, ev PhaseEvidence) (coord.Mainten
 			return coord.PhaseBaselined, nil
 		}
 	case coord.PhaseBaselined:
-		// A READ-BACK EQUAL TO THE TARGET, and nothing else. A request
-		// that was accepted is not an applied one: what this phase
-		// establishes is that the ceiling IS the target, which is a
-		// value the broker reports rather than an acknowledgement it
-		// sent.
+		// Only a read-back equal to the target: an accepted request is
+		// not an applied one.
 		if ev.Observed && ev.ObservedMaxBytes == op.TargetMaxBytes {
 			return coord.PhaseApplied, nil
 		}
-		// A REQUEST MAY BE IN FLIGHT FROM HERE, and the only thing that
-		// retires one is the barrier, so the seal always follows. Before
-		// it, a coordinator in maintenance mode may resume the window: it
-		// records who is running again and sends its own request, with
-		// its own journal record, and this phase answers it unchanged
-		// (BaselineWritten). Reaching the seal from here is what breaks
-		// the cycle an earlier draft closed, where the unresolved journal
-		// record blocked the very seal that clears it.
+		// A request may be in flight from here and only the barrier
+		// retires one, so the seal always follows. Before it, a
+		// coordinator in maintenance mode may resume the window (record
+		// who is running again, send its own request with its own journal
+		// record), and this phase answers it unchanged (BaselineWritten).
+		// Reaching the seal from here keeps an unresolved journal record
+		// from blocking the seal that clears it.
 		if ev.Stopped {
 			return coord.PhaseSealing, nil
 		}
@@ -233,28 +155,20 @@ func PermitPhase(op coord.MaintenanceOperation, ev PhaseEvidence) (coord.Mainten
 // SealHolds reports whether the barrier is established, and names what is
 // missing when it is not.
 //
-// TWO CONDITIONS AND NO COMPARISON.
+// Two conditions, and no comparison:
 //
-//  1. Every participant that is not excluded has an acknowledgement the seal
-//     takes ([SealRestarts]): this operation, this attempt, from seal mode,
-//     with an incarnation that is not the one recorded as the newest request
-//     left. Inequality is the evidence: an incarnation is minted per process,
-//     so a different one means the process holding any outstanding request is
-//     gone.
-//  2. Every journal record for this operation is completed or retired.
-//
-// The second used to be written as "no record from an attempt earlier than
-// this one is unresolved", which exempted the same-attempt record the journal
-// exists to catch: two coordinators working one attempt of one operation is
-// the schedule the mechanism was built for, and a strictly-earlier comparison
-// passes straight over it. There is nothing to compare now.
+//  1. Every participant not excluded has an acknowledgement the seal takes
+//     ([SealRestarts]).
+//  2. Every journal record for this operation is completed or retired, the
+//     same attempt's included: two coordinators on one attempt is the schedule
+//     the journal exists to catch, and an earlier-attempt test passes over it.
 func SealHolds(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) (bool, string) {
 	_, missing := SealRestarts(op, acks)
 	for _, record := range op.Journal {
 		if record.State == coord.JournalIssued {
-			// NAMED BY WHEN IT WAS SENT as well: an attempt can send more
-			// than one request, a resumed window's among them, so its
-			// number and its sender alone can name two records alike.
+			// Named by when it was sent too: one attempt can send several
+			// requests (a resumed window's), so attempt and sender alone
+			// can name two records alike.
 			missing = append(missing, fmt.Sprintf(
 				"attempt %d's request sent at %s by %s is unresolved",
 				record.Attempt, record.At.UTC().Format(time.RFC3339), record.By))
@@ -267,20 +181,17 @@ func SealHolds(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) (bool
 }
 
 // SealRestarts reads the acknowledgements as the barrier does: whether every
-// participant that is not excluded has one the seal takes, and which process
-// each names.
-//
-// THE ONE STATEMENT OF WHICH ACKNOWLEDGEMENT A SEAL TAKES. The barrier retires
-// the journal on it and [SealHolds] holds on it, and a retirement read from
-// another rule than the seal's would retire a record the seal then refuses, or
-// the reverse. The coordinator kept a copy of this rule of its own, so a
-// change to one had to be found in the other.
+// participant not excluded has one the seal takes (this operation and attempt,
+// seal mode, and an incarnation other than the one recorded as the newest
+// request left: one is minted per process, so a different one proves that
+// process gone), and which process each names. It is the one statement of that
+// rule: the barrier retires the journal on it and [SealHolds] holds on it, and
+// two rules would retire a record the seal then refuses, or the reverse.
 //
 // Restarted is each participant's acknowledging process when every one is
-// taken, and nil when any is not. Missing says what is wrong with each one that
-// is not, in participant order.
-//
-// ONLY THIS LOG'S ACKNOWLEDGEMENTS ARE READ ([acksOf]).
+// taken, and nil when any is not. Missing says what is wrong with each one
+// that is not, in participant order. Only this log's acknowledgements are read
+// ([acksOf]).
 func SealRestarts(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) (
 	restarted map[string]string, missing []string) {
 
@@ -292,16 +203,12 @@ func SealRestarts(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) (
 }
 
 // SealOutstanding is every participant the seal still waits on, by
-// [SealRestarts]' rule: each one not excluded whose acknowledgement the seal
-// does not take. Sorted. It is what a window past `opened` waits on, and so
-// what a page shows there, where [BaselineMissing] is what one at `opened`
-// waits on.
+// [SealRestarts]' rule, sorted: what a window past `opened` waits on, and so
+// what a page shows there ([BaselineMissing] is the list at `opened`).
 //
-// THE SEAL'S OWN RULE, and never a looser one beside it. The report counted any
-// acknowledgement of this attempt, so a node that had restarted into
-// maintenance mode after the window opened, or one still the process recorded
-// as the request left, read as nothing outstanding while the seal waited on it,
-// and a window waiting on nodes said it was waiting on its operator.
+// The seal's own rule, never a looser one: counting any acknowledgement of this
+// attempt shows a node restarted into maintenance mode, or still the recorded
+// process, as owing nothing while the seal waits on it.
 func SealOutstanding(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) []string {
 	_, gaps := sealGaps(op, acks)
 	out := make([]string, 0, len(gaps))
@@ -327,11 +234,10 @@ func sealGaps(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) (
 	var gaps []sealGap
 	for _, node := range op.Participants {
 		if slices.Contains(op.Excluded, node) {
-			// AN OPERATOR'S ASSERTION that this participant's process
-			// is stopped and holds no outstanding request. It is the
-			// only thing that waives an acknowledgement — an eviction
-			// does not, because eviction is about whose records
-			// apply and this is about whose process is running.
+			// An operator's assertion that this participant's process
+			// is stopped and holds no outstanding request: the only
+			// waiver. An eviction is not one; it is about whose records
+			// apply, not whose process runs.
 			continue
 		}
 		ack, acked := byNode[node]
@@ -340,8 +246,8 @@ func sealGaps(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) (
 		case !acked:
 			says = node + " has not acknowledged"
 		case ack.Windowless():
-			// A RESTART MADE WHILE NO WINDOW WAS OPEN binds nothing: it
-			// is what a baseline reads, never what a seal takes.
+			// A restart made while no window was open binds nothing: a
+			// baseline reads it, a seal never takes it.
 			says = node + " restarted before this operation opened and has " +
 				"not acknowledged it"
 		case ack.OperationID != op.OperationID:
@@ -381,19 +287,11 @@ type BarrierEvidence struct {
 // Retire marks every journal record resolved by a barrier, and returns the
 // operation with the journal advanced.
 //
-// # It runs BEFORE the seal predicate is evaluated
-//
-// That ordering is the clause that breaks the cycle. The journal is not a gate
-// on the mechanism that clears it: the barrier needs nothing from the journal,
-// it runs, it retires what it covered, and only then is the seal tested
-// against a journal with no unresolved entries left.
-//
-// # And retirement is never established by a value
-//
-// Observing the ceiling equal to the target retires nothing — another request
-// may have set it while an older one is still in flight. What retires a record
-// is that every participant restarted, which is a fact about processes, so the
-// evidence recorded is the incarnations rather than the number.
+// It runs before the seal predicate is evaluated, so the journal never gates
+// the barrier that clears it. A value never retires a record: a ceiling equal
+// to the target may be another request's while an older one is still in
+// flight. What retires one is every participant restarting, a fact about
+// processes, so the evidence recorded is the incarnations.
 func Retire(op coord.MaintenanceOperation, ev BarrierEvidence) coord.MaintenanceOperation {
 	out := op
 	out.Journal = slices.Clone(op.Journal)
@@ -421,14 +319,10 @@ func describeBarrier(ev BarrierEvidence) string {
 
 // Verifies reports whether the verify after the seal confirms op at the
 // ceiling observed: the target exactly, or, for an operation an operator
-// abandoned ([coord.BlockAbandoned]), whatever the seal found.
-//
-// AN ABANDONED OPERATION NO LONGER TRIES TO REACH ITS TARGET, which is what
-// abandoning it means. It crosses the seal only because a request it sent may
-// still be in flight, and once the seal has retired that, the ceiling the log
-// has is the outcome. Verified against the target like any other, it started
-// another attempt at the target the operator had given up on, and the next
-// step it named was sending the request again.
+// abandoned ([coord.BlockAbandoned]), whatever the seal found. An abandoned
+// operation no longer tries to reach its target; it crosses the seal only
+// because a request it sent may still be in flight, and after that the ceiling
+// the log has is the outcome, not a reason for another attempt.
 func Verifies(op coord.MaintenanceOperation, observed uint64) bool {
 	return observed == op.TargetMaxBytes || op.Blocked == coord.BlockAbandoned
 }
@@ -436,19 +330,13 @@ func Verifies(op coord.MaintenanceOperation, observed uint64) bool {
 // NextAttempt is what a failed verify produces: the SAME immutable target
 // under a new attempt number.
 //
-// # Why a new attempt rather than a re-apply
-//
-// Every node is in seal mode, which refuses configuration writes, and phases
-// advance only forwards — so there is no legal transition from a mismatch back
-// to applying. An earlier draft promised a retry its own rules could not
-// execute.
-//
-// A numbered attempt is what makes it legal: maintenance stays active
-// throughout, the fleet restarts into the WRITABLE maintenance mode (never a
-// write from seal-only mode, which is the rule the barrier depends on), a
-// fresh baseline is persisted, the unchanged target is applied, and a fresh
-// seal follows. Prior acknowledgements are invalidated by the attempt number
-// rather than deleted.
+// Not a re-apply: every node is in seal mode, which refuses configuration
+// writes, and phases only advance, so nothing leads from a mismatch back to
+// applying. In a new attempt maintenance stays active, the fleet restarts into
+// the writable maintenance mode (never a write from seal mode, which the
+// barrier depends on), a fresh baseline is persisted, the unchanged target is
+// applied and a fresh seal follows. The attempt number invalidates prior
+// acknowledgements rather than deleting them.
 func NextAttempt(op coord.MaintenanceOperation, observed uint64,
 	now time.Time) (coord.MaintenanceOperation, error) {
 
@@ -456,63 +344,35 @@ func NextAttempt(op coord.MaintenanceOperation, observed uint64,
 		out := op
 		out.ObservedMaxBytes = observed
 		out.Blocked = coord.BlockUnsealed
-		// THE SAME SENTENCE EVERY SURFACE SHOWS FOR THE BLOCK
-		// ([BlockedDetail]): the verb's refusal sent the reader to the
-		// status page for every participant that didn't acknowledge, which
-		// is nobody at a window that has sealed, while the page beside it
-		// gave other advice.
+		// The same sentence every surface shows for the block
+		// ([BlockedDetail]), so the refusal and the page agree.
 		return out, &Telling{Say: BlockedDetail(out, nil, nil)}
 	}
 	out := op
 	out.Attempt++
 	out.Phase = coord.PhaseOpened
 	out.ObservedMaxBytes = observed
-	// THE BASELINE IS DROPPED WITH THE ATTEMPT, so the next one records
-	// its own: an incarnation from the previous attempt compared against
-	// an ack from this one would be satisfied by a restart that already
-	// happened.
+	// The baseline is dropped with the attempt so the next records its
+	// own: a previous attempt's incarnation would be satisfied by a
+	// restart that already happened.
 	out.WriteIncarnations = nil
 	out.Journal = slices.Clone(op.Journal)
 	_ = now
 	return out, nil
 }
 
-// BlockedDetail is why op can't go on without a person, in the words a person
-// reads: what blocked it and what clears it, with every command as the CLI
-// takes it. Empty while it isn't blocked. acks and acksErr are the window's
-// acknowledgements as the caller read them, or why they couldn't be read.
+// BlockedDetail is why op can't go on without a person, in a person's words:
+// what blocked it and what clears it, each command as the CLI takes it. Empty
+// while unblocked. acks and acksErr are the window's acknowledgements as the
+// caller read them, or why they couldn't be read. Every surface showing a
+// block shows this beside the code (kept for scripts), held to
+// [coord.MaintenanceBlocks] by a test; who abandoned it is printed beside it,
+// never in it.
 //
-// EVERY SURFACE THAT SHOWS A BLOCK SHOWS THIS, never the code: the report
-// carries it beside the code (the dashboard's banner and `crewlet retention
-// status` read it from there), and so does every API answer that carries an
-// operation (`crewlet retention maintenance status` and the gestures), and the
-// verb's own refusal says it ([NextAttempt]). The code stays on the record and
-// the answers for scripts. ONE SENTENCE PER BLOCK, written here because the
-// block's meaning is this package's, and held to [coord.MaintenanceBlocks] by a
-// test, so a block a later change adds reaches nobody raw. A block this build
-// doesn't know is a newer peer's, and says so rather than guessing.
-//
-// WHO ABANDONED A WINDOW IS NOT SAID HERE: every surface prints the abandoning
-// party beside this sentence with the credential they used, and said in both,
-// one banner named them twice.
-//
-// # What closes an abandoned window is the seal's to say
-//
-// Abandoning puts a window back at `sealing` from wherever it was
-// ([AbandonPhase]), one already sealed included, so the phase can't say whether
-// the fleet still has to restart: decided by it, a window abandoned out of
-// attempts, whose fleet was already in seal mode with its acknowledgements
-// recorded, sent the operator into a fleet-wide restart that changed nothing.
-// The seal's own rule over the acknowledgements ([SealOutstanding]) says which
-// nodes it still waits on, and none means set-capacity closes it now.
-//
-// # Out of attempts
-//
-// Nothing sends the target again once the last attempt's verify has failed
-// ([NextAttempt] blocks it again on every run), so "run set-capacity again" was
-// advice that could not work. What closes the window is abandoning it, and the
-// seal its acknowledgements already hold then lets set-capacity close it at the
-// ceiling the log has.
+// An abandoned window returns to `sealing` from anywhere ([AbandonPhase]), so
+// [SealOutstanding], not its phase, says whether the fleet must still restart;
+// none outstanding means set-capacity closes it now. Out of attempts
+// ([NextAttempt]), nothing sends the target again: abandoning closes it.
 func BlockedDetail(op coord.MaintenanceOperation, acks []coord.MaintenanceAck,
 	acksErr error) string {
 
@@ -565,14 +425,10 @@ func BlockedDetail(op coord.MaintenanceOperation, acks []coord.MaintenanceAck,
 
 // AbandonPhase is where an operator's abandonment goes from here.
 //
-// FROM `opened` IT CLEARS OUTRIGHT, because the seal retires configuration
-// writes and no request has been issued — there is nothing to retire.
-//
-// FROM EVERYWHERE ELSE IT SEALS. Abandoning changes what the operation is
-// trying to reach; it never changes the barrier it must cross. Reading a
-// status page retires nobody's outstanding request, and an earlier draft that
-// cleared "deliberately, after the operator has read it" was treating a person
-// looking as a process stopping.
+// From `opened` it clears outright: no request has been issued, so there is
+// nothing to retire. From anywhere else it seals: abandoning changes what the
+// operation is trying to reach, never the barrier it must cross, and a person
+// reading a status page retires nobody's outstanding request.
 func AbandonPhase(op coord.MaintenanceOperation) (coord.MaintenancePhase, bool, error) {
 	if !op.Phase.Valid() {
 		return "", false, &Telling{Say: fmt.Sprintf("the capacity operation on %s "+
@@ -603,14 +459,10 @@ const (
 	DeleteNotMine DeleteOutcome = "not_mine"
 )
 
-// ResolveDelete is what an interrupted delete concluded, READ rather than
-// assumed.
-//
-// A conditional delete whose response was lost may have committed, so "the
-// record is unchanged" is not a safe assumption — and neither is its opposite.
-// Reading "absent, or a different id" as "my delete failed, retry" is worse
-// than either: it deletes the NEXT operation's record and silently releases a
-// fleet that is still in maintenance.
+// ResolveDelete is what an interrupted delete concluded, read rather than
+// assumed: a conditional delete whose response was lost may have committed, or
+// not. Reading "absent, or a different id" as "retry" would delete the next
+// operation's record and release a fleet still in maintenance.
 func ResolveDelete(operationID string, current coord.MaintenanceOperation, found bool) DeleteOutcome {
 	switch {
 	case !found:
@@ -627,11 +479,9 @@ func ResolveDelete(operationID string, current coord.MaintenanceOperation, found
 // none: the nodes a baseline refuses, since it baselines each participant at
 // the process its acknowledgement names. Sorted.
 //
-// IT IS WHAT A WINDOW AT `opened` WAITS ON, beside the admissions
-// ([AdmissionBlocks]), and so what a page shows there. The seal's own list
-// ([SealHolds]) is the wrong one before the baseline: it names restarts into
-// seal mode the procedure has not asked for yet, so every node read as owing
-// something while the next step was just to run the verb again.
+// It is what a window at `opened` waits on, beside the admissions
+// ([AdmissionBlocks]), and so what a page shows there. The seal's list is wrong
+// before the baseline: it names restarts into seal mode not yet asked for.
 func BaselineMissing(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) []string {
 	restarted := acksOf(op, acks)
 	var missing []string
@@ -647,10 +497,9 @@ func BaselineMissing(op coord.MaintenanceOperation, acks []coord.MaintenanceAck)
 
 // acksOf is the acknowledgements of op's own log, by node.
 //
-// A WINDOW IS PER LOG, and two can be open at once, so an acknowledgement of
-// another log's window is no evidence for this one: not a restart its baseline
-// reads, since that log's boot may have read this log's window or failed to,
-// and never a seal.
+// A window is per log and two can be open at once, so another log's
+// acknowledgement is no evidence for this one: neither a restart its baseline
+// reads (that boot may have failed to read this window) nor a seal.
 func acksOf(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) map[string]coord.MaintenanceAck {
 	byNode := make(map[string]coord.MaintenanceAck, len(acks))
 	for _, ack := range acks {
@@ -664,23 +513,15 @@ func acksOf(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) map[stri
 // AdmissionBlocks names every node whose admission stands in the way of an
 // operation's first request: every admission but an excluded node's.
 //
-// A POSITIVE RECORD FROM EACH SIDE, EACH WRITTEN BEFORE THE OTHER IS READ. A
-// node writes its admission and then reads the operation; a coordinator's
-// operation exists before it reads the admissions. Whichever record lands
-// second, its writer's read sees the first: either the node sees the operation
-// and does not publish, or the coordinator sees the admission and sends no
-// request. A coordinator that merely
-// checked for the ABSENCE of a publisher would be back to the check-then-act it
-// replaced, and so would one that read the admissions BEFORE writing its
-// operation: a node admitted just after that read finds no operation just
-// before the create.
-//
-// A window can therefore be open while an admission blocks it: one whose
-// process the fleet's presence shows is not running (the coordinator closes
-// the window again at its open over one that is). That is what lets an
-// EXCLUDED node's admission stop counting: the exclusion is an operator's word
-// that the process is stopped, recorded on the operation, and an operation is
-// the only place it can be recorded.
+// A positive record from each side, each written before the other is read (a
+// node writes its admission then reads the operation; a coordinator the
+// reverse), so whichever lands second sees the first and either the node does
+// not publish or no request is sent. Checking for an absent publisher, or
+// reading admissions before writing the operation, is check-then-act. A window
+// can be open while an admission blocks it (its process shown not running by
+// presence; the coordinator closes a window opened over a running one); an
+// excluded node's stops counting: the exclusion, an operator's word that the
+// process is stopped, is recorded on the operation.
 func AdmissionBlocks(admissions []coord.Admission, excluded []string) []string {
 	var blocking []string
 	for _, a := range admissions {

@@ -217,9 +217,8 @@ type Command struct {
 	// one that never connected.
 	CertificateSerial uint64 `json:"certificate_serial,omitempty"`
 
-	// Failure is why the command did not run or did not finish, empty for one
-	// that ran to its exit: a closed word, never the command, its output or
-	// an error's text, which a log carries redacted instead.
+	// Failure is empty for a command that ran to its exit; an error's text goes
+	// to a log, redacted, never here ([CommandFailure]).
 	Failure CommandFailure `json:"failure,omitempty"`
 }
 
@@ -260,9 +259,8 @@ var VerdictPaths = []VerdictThrough{VerdictThroughDelegation, VerdictThroughDeci
 func (t VerdictThrough) Valid() bool { return slices.Contains(VerdictPaths, t) }
 
 // Verdict is one decision on a delegated request, by one giver. The request
-// in clear (SubjectSealed) and the giver's reason and findings (WordsSealed)
-// are sealed by the writer like a command's text, since both are words a
-// model or a person wrote that may quote the request; the rest is closed
+// (SubjectSealed) and the giver's reason and findings (WordsSealed), which may
+// quote it, are sealed by the writer like a command's text; the rest is closed
 // words, ids, sizes and digests.
 type Verdict struct {
 	V int `json:"v"`

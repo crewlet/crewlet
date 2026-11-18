@@ -29,6 +29,11 @@
  * Sort is `CHANGE_SORTS`, chosen only where the walk can order by it (a live
  * state that no reviewer or need leads), and said in place everywhere else.
  *
+ * # The query bar and Readiness
+ *
+ * Qualifier chips, words searched in titles and descriptions (`text=`), and the open changes by
+ * where their merge stands (`readiness=`, `needs=person`); a node that ignored a key is said.
+ *
  * # Waiting on you
  *
  * Above the list, the engine's `needs=me` with why each change waits; a reader
@@ -36,7 +41,7 @@
  */
 
 import { useId, useMemo } from "react";
-import { EyeGlyph, ListGlyph, PlusGlyph, Rows2Glyph } from "@crewlethq/icons/glyphs";
+import { EyeGlyph, InfoGlyph, ListGlyph, PlusGlyph, Rows2Glyph } from "@crewlethq/icons/glyphs";
 import {
   Button,
   ButtonLink,
@@ -46,17 +51,15 @@ import {
   Select,
   Skeleton,
   StatusDot,
-  Tag,
   type SegmentedOption,
 } from "@crewlethq/ui";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
+import { AgoTime } from "~/components/AgoTime.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { CHANGE_SORTS } from "~/contract/code.ts";
+import { CHANGE_SORTS, READINESS_BUCKETS } from "~/contract/code.ts";
 import {
-  CHANGE_NEED_FILTERS,
-  CHANGE_WINDOW_FILTERS,
   EVERY_STATE,
   changePath,
   changeStateWord,
@@ -77,6 +80,7 @@ import type {
   CodeChangeState,
   CodeChangeSummary,
   CodeChangesAnswer,
+  CodeChangesText,
 } from "~/protocol/index.ts";
 import {
   ChangeRows,
@@ -89,7 +93,16 @@ import {
 } from "./ChangeRow.tsx";
 import { CodeList, useListSort } from "./CodeList.tsx";
 import { REPO_PARAM, changeDiffHref, changeObject, compareHref } from "./paths.ts";
+import {
+  DEFAULT_STATE,
+  READINESS_WORDS,
+  isReadinessBucket,
+  type Filters,
+  type ReadinessBucket,
+} from "./changeQuery.ts";
+import { QueryBar } from "./QueryBar.tsx";
 import { RepoPicker } from "./RepoPicker.tsx";
+import { useGitletSectionCounts } from "./sectionCounts.ts";
 import { Face } from "./ui.tsx";
 import "~/styles/gitlet.css";
 import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
@@ -100,29 +113,15 @@ const CHANGES_POLL_MS = 60_000;
 /** How many changes Waiting on you lists: five, a glance above the list on a laptop's screen. */
 export const WAITING_ROWS = 5;
 
-/** The state the section lists until it is told otherwise. */
-const DEFAULT_STATE = "open";
-
 /** A page's changes, each change's id, and the cursor to the page after. */
 const changesOf = (a: CodeChangesAnswer) => a.changes ?? [];
 const changeIdOf = (c: CodeChangeSummary) => c.id;
 const changesAfter = (a: CodeChangesAnswer) => a.next ?? "";
 
-/** The filters the address names, as the section reads them. */
-interface Filters {
-  state: string;
-  needs: string;
-  repo: string;
-  owner: string;
-  reviewer: string;
-  work: string;
-  window: string;
-}
-
 /**
- * Whether something beside the state narrows the engine's walk — a
- * repository, a work item, a reviewer, a need or a window — which is what
- * lets a listing name no state.
+ * Whether something beside the state narrows the engine's walk (a
+ * repository, a work item, a reviewer, a need, a window or words), which is
+ * what lets a listing name no state.
  */
 export function narrowsTheWalk(f: Filters): boolean {
   return (
@@ -130,7 +129,8 @@ export function narrowsTheWalk(f: Filters): boolean {
     f.work !== "" ||
     f.reviewer !== "" ||
     isChangeNeed(f.needs) ||
-    isChangeWindow(f.window)
+    isChangeWindow(f.window) ||
+    f.text !== ""
   );
 }
 
@@ -148,6 +148,12 @@ export function changesParams(f: Filters): { params: CodeParams } | { unasked: s
   }
   if (f.window !== "" && !isChangeWindow(f.window)) {
     return { unasked: `“${f.window}” is not a window the changes are listed by.` };
+  }
+  if (f.readiness !== "" && !isReadinessBucket(f.readiness)) {
+    return { unasked: `“${f.readiness}” is not where a change's merge stands.` };
+  }
+  if (f.readiness !== "" && f.state !== "open") {
+    return { unasked: "Readiness lists open changes: pick Open, or clear Readiness." };
   }
   if (f.needs !== "" && (f.state === "merged" || f.state === "closed")) {
     return {
@@ -174,14 +180,23 @@ export function changesParams(f: Filters): { params: CodeParams } | { unasked: s
   if (f.state === EVERY_STATE && !narrowsTheWalk(f)) {
     return {
       unasked:
-        "Every state is listed for one repository, one work item, one reviewer, what the changes wait on or a window they moved in: choose one.",
+        "Every state is listed for one repository, one work item, one reviewer, what the changes wait on, a window they moved in or words they hold: choose one.",
     };
   }
   const params: Record<string, string> = {};
   if (f.state !== EVERY_STATE) params.state = f.state;
-  for (const key of ["needs", "repo", "owner", "reviewer", "work", "window"] as const) {
+  for (const key of [
+    "needs",
+    "repo",
+    "owner",
+    "reviewer",
+    "work",
+    "window",
+    "readiness",
+  ] as const) {
     if (f[key] !== "") params[key] = f[key];
   }
+  if (f.text !== "") params.text = f.text;
   return { params };
 }
 
@@ -235,6 +250,14 @@ export function changeOrder(f: Filters, chosen: string): ChangeOrder {
       why: "Most recently moved first: a window lists its changes by when they last moved",
     };
   }
+  if (f.text !== "" && f.state === EVERY_STATE) {
+    return {
+      send: undefined,
+      choosable: false,
+      shown: "Newest opened",
+      why: "Newest opened first: a search of every state lists its changes by when each was opened",
+    };
+  }
   return {
     send: undefined,
     choosable: false,
@@ -249,11 +272,6 @@ export function changeOrder(f: Filters, chosen: string): ChangeOrder {
 /** The state tabs, in the order a reader looks: what is live, then what ended. */
 const STATE_TABS: readonly KnownChangeState[] = ["open", "draft", "merged", "closed"];
 
-/** The question the state totals ask: the scope's alone, the company or the picked repository. */
-function countParams(repo: string): CodeParams {
-  return repo !== "" && isRepoName(repo) ? { parts: "changes", repo } : { parts: "changes" };
-}
-
 /** What the foot says it shows, of the scope's total where only the scope narrows. */
 export function footWords(
   f: Filters,
@@ -265,8 +283,18 @@ export function footWords(
   const word =
     f.state === EVERY_STATE ? "" : `${changeStateWord(f.state as CodeChangeState).toLowerCase()} `;
   const filtered =
-    f.owner !== "" || f.reviewer !== "" || f.needs !== "" || f.window !== "" || f.work !== "";
-  if (filtered) return `Showing ${plural(shown, `${word}change`)} that match the filters`;
+    f.owner !== "" ||
+    f.reviewer !== "" ||
+    f.needs !== "" ||
+    f.window !== "" ||
+    f.work !== "" ||
+    f.readiness !== "";
+  const searched = f.text !== "";
+  const match = shown === 1 ? "matches" : "match";
+  const what =
+    searched && filtered ? "the search and filters" : searched ? "the search" : "the filters";
+  if (filtered || searched)
+    return `Showing ${plural(shown, `${word}change`)} that ${match} ${what}`;
   if (total !== undefined && (more || total >= shown) && f.state !== EVERY_STATE) {
     return `Showing ${fmtCount(shown)} of ${plural(total, `${word}change`)}`;
   }
@@ -275,19 +303,22 @@ export function footWords(
 
 export function Changes() {
   const [state, setState] = useParam("state", DEFAULT_STATE, "filter");
-  const [needs, setNeeds] = useParam("needs", "", "filter");
+  const [needs] = useParam("needs", "", "filter");
   const [repo, setRepo] = useParam(REPO_PARAM, "", "filter");
   const [owner, setOwner] = useParam("owner", "", "filter");
   const [reviewer, setReviewer] = useParam("reviewer", "", "filter");
-  const [work, setWork] = useParam("work", "", "filter");
-  const [movedIn, setMovedIn] = useParam("window", "", "filter");
+  const [work] = useParam("work", "", "filter");
+  const [movedIn] = useParam("window", "", "filter");
+  const [readiness] = useParam("readiness", "", "filter");
+  const [q] = useParam("q", "", "filter");
+  const text = q.trim();
   const [sort, setSort] = useListSort();
   const [density, setDensity] = useParam("density", "", "filter");
   const nav = useNavigator();
   const viewer = useViewer();
   const filters = useMemo(
-    () => ({ state, needs, repo, owner, reviewer, work, window: movedIn }),
-    [state, needs, repo, owner, reviewer, work, movedIn],
+    () => ({ state, needs, repo, owner, reviewer, work, window: movedIn, readiness, text }),
+    [state, needs, repo, owner, reviewer, work, movedIn, readiness, text],
   );
   const order = changeOrder(filters, sort);
   const asked = useMemo(() => changesParams(filters), [filters]);
@@ -312,8 +343,17 @@ export function Changes() {
     changeIdOf,
     changesAfter,
   );
-  const counts = useCodeQuery("code_counts", countParams(repo), { pollMs: CHANGES_POLL_MS });
-  const rows = paged.items;
+  // THE STATE TOTALS: the section figures' answer for the company, a picked repository's its own.
+  const section = useGitletSectionCounts({ pollMs: CHANGES_POLL_MS });
+  const picked = repo !== "" && isRepoName(repo);
+  const own = useCodeQuery(
+    "code_counts",
+    { parts: "changes", repo },
+    { pollMs: CHANGES_POLL_MS, enabled: picked },
+  );
+  const counts = picked ? own : section;
+  const unread = "params" in asked ? ignoredKey(asked.params, first.data) : undefined;
+  const rows = unread ? [] : paged.items;
   const narrowed = narrowsTheWalk(filters);
   // A READER BOUND TO NO SEAT is asked nothing of: what waits on a person stands in.
   const boxNeed = viewer.handle === "" ? "person" : "me";
@@ -323,6 +363,8 @@ export function Changes() {
   const placeholder =
     "unasked" in asked ? (
       <EmptyState title="Nothing to list" description={asked.unasked} />
+    ) : unread ? (
+      <EmptyState title={unread.title} description={unread.description} />
     ) : (
       <>
         {paged.loading && <Skeleton variant="text" rows={6} label="Loading changes" />}
@@ -339,25 +381,7 @@ export function Changes() {
   return (
     <>
       <PageToolbar>
-        <Select
-          size="sm"
-          width="auto"
-          value={needs}
-          onChange={(value) => setNeeds(String(value))}
-          options={CHANGE_NEED_FILTERS.map((f) => ({ value: f.value, label: f.label }))}
-          ariaLabel="Waiting on"
-          active={needs !== ""}
-        />
-        <Select
-          size="sm"
-          width="auto"
-          value={movedIn}
-          onChange={(value) => setMovedIn(String(value))}
-          options={CHANGE_WINDOW_FILTERS.map((f) => ({ value: f.value, label: f.label }))}
-          ariaLabel="Moved"
-          active={movedIn !== ""}
-        />
-        <Narrowing label="Work item" value={work} clear={() => setWork("")} />
+        <QueryBar filters={filters} me={viewer.handle} />
       </PageToolbar>
       <PageActions>
         <NewChange repo={repo} />
@@ -388,6 +412,7 @@ export function Changes() {
               <RepoPicker size="sm" repo={repo} onChoose={setRepo} every="Every repository" />
               <SeatPicker label="Owner" value={owner} onChange={setOwner} />
               <SeatPicker label="Reviewer" value={reviewer} onChange={setReviewer} />
+              <ReadinessPicker readiness={readiness} needs={needs} />
               <SortPicker order={order} setSort={setSort} />
               <SegmentedControl
                 semantics="radio"
@@ -412,11 +437,12 @@ export function Changes() {
                 ]}
               />
             </div>
+            {!unread && <SearchNote text={first.data?.changes_text} />}
           </div>
         }
         placeholder={rows.length === 0 ? placeholder : undefined}
-        paged={paged}
-        foot={footWords(filters, rows.length, total, paged.more)}
+        paged={unread ? undefined : paged}
+        foot={unread ? undefined : footWords(filters, rows.length, total, paged.more)}
       />
     </>
   );
@@ -508,6 +534,7 @@ function SeatPicker({
     <Select
       size="sm"
       width="auto"
+      appearance="quiet"
       searchable
       value={value}
       onChange={(next) => onChange(String(next))}
@@ -518,6 +545,83 @@ function SeatPicker({
   );
 }
 
+/** The Readiness picker's one choice beside the buckets: what waits on a person (`needs=person`). */
+const PERSON = "person";
+
+/** Readiness: a bucket of the open changes, or what waits on a person; each choice lists the open state. */
+function ReadinessPicker({ readiness, needs }: { readiness: string; needs: string }) {
+  const nav = useNavigator();
+  const value = readiness !== "" ? readiness : needs === PERSON ? PERSON : "";
+  const choose = (next: string) => {
+    const person = needs === PERSON ? null : needs;
+    if (next === "") nav.filter({ readiness: null, needs: person });
+    else if (next === PERSON) nav.filter({ needs: PERSON, readiness: null, state: null });
+    else nav.filter({ readiness: next, needs: person, state: null });
+  };
+  return (
+    <Select
+      size="sm"
+      width="auto"
+      appearance="quiet"
+      value={value}
+      onChange={(next) => choose(String(next))}
+      options={[
+        { value: "", label: "Readiness" },
+        ...READINESS_BUCKETS.map((b: ReadinessBucket) => ({ value: b, label: READINESS_WORDS[b] })),
+        { value: PERSON, label: "Waits on a person" },
+      ]}
+      ariaLabel="Readiness"
+      active={value !== ""}
+    />
+  );
+}
+
+/**
+ * A key the listing sent that its answer does not echo, from a node that ignored it and
+ * listed the changes unnarrowed: said in the rows' place, never drawn as a result.
+ */
+function ignoredKey(
+  params: CodeParams,
+  answer: CodeChangesAnswer | null,
+): { title: string; description: string } | undefined {
+  if (answer === null) return undefined;
+  if (params.text !== undefined && answer.changes_text === undefined) {
+    return {
+      title: "Not searched",
+      description: "Searching changes by their words is unavailable on this fleet yet.",
+    };
+  }
+  if (params.readiness !== undefined && answer.narrowed_to === undefined) {
+    return {
+      title: "Not narrowed",
+      description: "Filtering by readiness is unavailable on this fleet yet.",
+    };
+  }
+  return undefined;
+}
+
+/** How whole a search of words was, one sentence a flag; nothing where it was whole (`{}`). */
+function SearchNote({ text }: { text: CodeChangesText | undefined }) {
+  if (!text || !(text.indexed_back_to || text.building || text.truncated)) return null;
+  return (
+    <p className="code-changes-head__note">
+      <InfoGlyph size="sm" />
+      <span>
+        {text.indexed_back_to && (
+          <>
+            Searched back to changes opened <AgoTime value={text.indexed_back_to} />: older ones are
+            still being indexed, so one of them may be missing.{" "}
+          </>
+        )}
+        {text.building &&
+          "The search is catching up with the newest changes, so one that holds these words may be missing. "}
+        {text.truncated &&
+          "More changes may hold these words than one search reads: these are the newest. Add a word, or narrow by repository, author or state."}
+      </span>
+    </p>
+  );
+}
+
 /** Sort: the engine's `CHANGE_SORTS` where the walk takes one, else its own order, held and said. */
 function SortPicker({ order, setSort }: { order: ChangeOrder; setSort: (sort: string) => void }) {
   if (!order.choosable) {
@@ -525,6 +629,7 @@ function SortPicker({ order, setSort }: { order: ChangeOrder; setSort: (sort: st
       <Select
         size="sm"
         width="auto"
+        appearance="quiet"
         value="walk"
         options={[{ value: "walk", label: `Sort: ${order.shown}` }]}
         ariaLabel="Sort"
@@ -537,6 +642,7 @@ function SortPicker({ order, setSort }: { order: ChangeOrder; setSort: (sort: st
     <Select
       size="sm"
       width="auto"
+      appearance="quiet"
       value={order.shown}
       onChange={(next) => setSort(next === order.byDefault ? "" : String(next))}
       options={CHANGE_SORTS.map((s: ChangeSort) => ({ value: s, label: `Sort: ${SORT_WORDS[s]}` }))}
@@ -659,8 +765,14 @@ function WaitingBox({
               </span>
             )}
             {!refused && (
-              <Button size="small" variant="ghost" className="code-wait__all" onClick={showAll}>
-                Show them all in the list
+              <Button
+                size="small"
+                variant="ghost"
+                className="code-wait__all"
+                onClick={showAll}
+                aria-label={`Filter the list by waiting-on:${need}`}
+              >
+                Filter the list by <span className="code-wait__filter mono">waiting-on:{need}</span>
               </Button>
             )}
           </div>
@@ -732,31 +844,22 @@ function WaitAction({ change, me, one }: { change: CodeChangeSummary; me: string
   );
 }
 
-/**
- * A filter the address names that the bar has no picker for (a work item,
- * arriving from a link), said as what it is, with the press that lifts it.
- */
-function Narrowing({ label, value, clear }: { label: string; value: string; clear: () => void }) {
-  if (value === "") return null;
-  return (
-    <span className="row gap-1 nowrap">
-      <Tag appearance="outline">
-        {label}: <span className="mono">{value}</span>
-      </Tag>
-      <Button
-        size="small"
-        variant="ghost"
-        onClick={clear}
-        aria-label={`Stop narrowing by ${label}`}
-      >
-        Clear
-      </Button>
-    </span>
-  );
-}
+/** What an empty listing of each bucket says. */
+const READINESS_EMPTY: Readonly<Record<ReadinessBucket, string>> = {
+  ready: "No open change is ready to merge",
+  approval: "No open change waits on review",
+  checks: "No open change waits on checks",
+  blockers: "No open change is blocked by findings",
+};
 
 /** What an empty listing says it found none of. */
 function emptyTitle(f: Filters): string {
+  if (f.text !== "") {
+    return f.state === EVERY_STATE
+      ? "No change holds these words"
+      : `No ${changeStateWord(f.state as CodeChangeState).toLowerCase()} change holds these words`;
+  }
+  if (isReadinessBucket(f.readiness)) return READINESS_EMPTY[f.readiness];
   switch (f.needs) {
     case "me":
       return "Nothing waits on you";
@@ -773,13 +876,15 @@ function emptyTitle(f: Filters): string {
 
 /** Where an empty listing sends the reader next. */
 function emptyHint(f: Filters): string {
+  if (f.text !== "") return "Try fewer words, or another state.";
   if (
     f.needs !== "" ||
     f.repo !== "" ||
     f.owner !== "" ||
     f.reviewer !== "" ||
     f.work !== "" ||
-    f.window !== ""
+    f.window !== "" ||
+    f.readiness !== ""
   ) {
     return "Widen the filters to see more.";
   }

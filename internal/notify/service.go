@@ -709,18 +709,17 @@ func (s *Service) handle(ctx context.Context, ev *events.Event, replaying bool) 
 }
 
 // nodeFault reports whether every one of errs, a delivery's failed wakes, is
-// a failure of THIS NODE's rather than of the delivery: a publish the broker
-// did not answer ([queue.ErrUnavailable]), one refused by a queue that is no
-// longer live ([queue.ErrNotLive]), a paced wake the rate valve still refused
-// ([errValveRefused]), or any failure under a context that has ended — a stop
-// cancelling the handler. One wake that failed for anything else — a wake too
-// large to publish, which no node's retry changes — makes the delivery's
-// failure its own.
+// a failure of THIS NODE's rather than of the delivery: one the queue tells as
+// its node's ([queue.NodeFault]: a publish the broker did not answer, one
+// refused by a queue that is no longer live, or any failure under a context
+// that has ended, a stop cancelling the handler), or a paced wake the rate
+// valve still refused ([errValveRefused]). One wake that failed for anything
+// else, a wake too large to publish, which no node's retry changes, makes the
+// delivery's failure its own.
 func nodeFault(ctx context.Context, errs []error) bool {
 	for _, err := range errs {
 		switch {
-		case ctx.Err() != nil, errors.Is(err, queue.ErrUnavailable), errors.Is(err, queue.ErrNotLive),
-			errors.Is(err, errValveRefused):
+		case queue.NodeFault(ctx, err), errors.Is(err, errValveRefused):
 		default:
 			return false
 		}

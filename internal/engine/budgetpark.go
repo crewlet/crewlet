@@ -451,8 +451,8 @@ func starvedReason(r refusal, floor launchFloor) string {
 		floor.tokens())
 	switch {
 	case floor.context > 0:
-		need = fmt.Sprintf("the %d an executor launch that continues its session needs (its last "+
-			"request carried %d tokens and its brief about %d; turn_engine.executor_min_budget_tokens "+
+		need = fmt.Sprintf("the %d an executor launch that continues its session needs (its session "+
+			"sends %d tokens before its brief, which is about %d; turn_engine.executor_min_budget_tokens "+
 			"is %d)", floor.tokens(), floor.context, floor.brief, floor.static)
 	case floor.held():
 		need = fmt.Sprintf("the %d an executor launch needs (its brief about %d beside "+
@@ -496,14 +496,9 @@ func (e *Engine) reconcileBudgetParks(ctx context.Context, next *Company) {
 // ([seatParks.forget]), and what its parks recorded of a launch's floor for its
 // deliveries' next launches here ([floorWaits]): the record is the park's, and
 // the seat's next holder decides its own.
-//
-// THE RECORD FIRST, before the park's hold is lifted: a lifted hold may hand
-// the seat's mail to a handler at once (the in-memory queue drains into it
-// synchronously), and a launch there would read the record the release is
-// dropping.
-func (e *Engine) forgetBudgetPark(ctx context.Context, seat uuid.UUID) {
+func (e *Engine) forgetBudgetPark(seat uuid.UUID) {
 	e.floorWaits.forget(seat)
-	e.budgetParks.forget(ctx, e, budgetParkSpec, seat)
+	e.budgetParks.forget(seat)
 }
 
 // budgetDeliveryGone drops what handle's seat's parks recorded of a launch

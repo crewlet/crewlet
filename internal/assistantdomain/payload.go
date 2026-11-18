@@ -12,19 +12,16 @@ import (
 
 // THE TYPED PAYLOADS, one per (kind, op).
 //
-// A record carries its COMPLETE new values, never a rule for computing them: a
-// turn's number, a proposal's expiry and every sealed value are decided by the
-// writer. That is what makes a replay from zero produce the rows the original
-// apply did, and it is what lets the applier stay a pure function of the
-// record and the rows.
+// A record carries its COMPLETE new values (a turn's number, a proposal's
+// expiry, every sealed value), decided by the writer, never a rule for
+// computing them: so a replay from zero produces the original rows and the
+// applier stays a pure function of the record and the rows.
 //
-// IDS TRAVEL AS TEXT, not as uuid.UUID: a payload is decoded on every node,
-// and an id refused by a decoder would be a record that stalls the log rather
-// than one the applier drops deterministically. The applier parses them.
+// IDS TRAVEL AS TEXT, not uuid.UUID: an id a decoder refused would stall the
+// log on every node; the applier parses them and drops a bad one.
 //
 // EVERY `*Sealed` FIELD IS A KEYRING ENVELOPE the writer sealed ([Sealer]), or
-// the empty string for an empty value. The applier writes it through and never
-// opens it.
+// "" for an empty value; the applier writes it through unopened.
 
 // PurgeReason is why a conversation was purged.
 type PurgeReason string
@@ -71,8 +68,8 @@ type ConversationSummarized struct {
 
 // ConversationPurged removes a conversation. A retention purge names the
 // instant the conversation had to be untouched since, and the apply refuses it
-// when activity landed after the writer decided: the activity is on the turn's
-// own subject, so the conversation's arbitration does not see it.
+// when activity landed after the writer decided: that activity is on a turn's
+// subject, which the conversation's arbitration does not see.
 type ConversationPurged struct {
 	V      int         `json:"v"`
 	Reason PurgeReason `json:"reason"`
@@ -138,9 +135,8 @@ type TurnParked struct {
 	V              int    `json:"v"`
 	MessagesSealed string `json:"messages_sealed"`
 	// Steps is how many steps the turn has taken so far: what its `done` and
-	// `status` frames say whenever the turn is told from its record rather
-	// than its frame log. A record without it (an older writer's) parks the
-	// turn at zero, as every turn was parked before it was counted.
+	// `status` frames say when the turn is told from its record rather than
+	// its frame log.
 	Steps int `json:"steps,omitempty"`
 }
 
@@ -323,9 +319,8 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 	case k == KindGeneration && op == OpGeneration:
 		return decodePayload[Generation](rec)
 	case k == KindBarrier && op == OpBarrier, k == KindTrimmed && op == OpTrimmed:
-		// THE TWO PAYLOAD-FREE RECORDS, and nil is their value rather than
-		// an absence: the applier has a case for each that writes nothing
-		// of this domain's.
+		// THE TWO PAYLOAD-FREE RECORDS: nil is their value, not an absence;
+		// the applier's case for each writes nothing of this domain's.
 		return nil, nil
 	}
 	return nil, fmt.Errorf("assistantdomain: no payload shape for (%s, %s): a "+
@@ -348,12 +343,11 @@ func decodePayload[T any](rec MutationRecord) (T, error) {
 }
 
 // EncodeBarrier renders the read index's payload-free append: the framework
-// owns when a barrier goes out, the domain owns what a record on its log looks
-// like.
+// owns when a barrier goes out, the domain what a record on its log looks like.
 //
-// AN OP ID IS REFUSED: it would become the broker's message id, and a repeat
-// inside the duplicate window is answered from the dedupe cache with no quorum
-// round trip, which is the one claim a barrier must never fake.
+// AN OP ID IS REFUSED: it becomes the broker's message id, and a repeat inside
+// the duplicate window is answered from the dedupe cache with no quorum round
+// trip, the one claim a barrier must never fake.
 func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 	if env.Kind != statelog.BarrierKind {
 		return nil, fmt.Errorf("assistantdomain: %q is not a barrier envelope", env.Kind)
@@ -373,15 +367,14 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 
 // EncodeTrimmed renders the trim's trimmed record ([statelog.TrimmedEnvelope],
 // ADR-0080) as a record this domain's applier decodes: the framework owns when
-// one is appended, what it removes and the floor its subject names, and the
-// domain owns what a record on its log looks like.
+// one is appended, what it removes and its floor; the domain, the record's shape.
 //
-// THE WRITER TRAVELS, unlike a barrier's: a trimmed record removes rows, so the
-// eviction gate must be able to drop an evicted node's. NO OP ID, asserted: one
-// becomes a message id and a ledger row nothing resolves. And the floor is
-// CHECKED here, at the write, rather than in [Subject.Validate], which the read
-// path runs too: a refusal there would turn one malformed record into an
-// applier that stops on every node, where the framework's apply faults instead.
+// THE WRITER TRAVELS, unlike a barrier's: the record removes rows, so the
+// eviction gate must be able to drop an evicted node's. NO OP ID: one becomes
+// a message id and a ledger row nothing resolves. The floor is CHECKED here, at
+// the write, not in [Subject.Validate], which the read path runs too: a refusal
+// there would stop the applier on every node over one malformed record,
+// where the framework's apply faults instead.
 func EncodeTrimmed(env statelog.Envelope) ([]byte, error) {
 	if env.Kind != statelog.TrimmedKind || env.Subject.Kind != statelog.TrimmedKind {
 		return nil, fmt.Errorf("assistantdomain: a %q envelope on %q is not a trimmed record",
@@ -398,9 +391,8 @@ func EncodeTrimmed(env statelog.Envelope) ([]byte, error) {
 	}
 	return Encode(MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			// PINNED at the base version for ever: an older node retains
-			// a record it cannot read, and with it every anchor the
-			// record names.
+			// PINNED at the base version for ever: an older node retains a
+			// record it cannot read, and with it every anchor it names.
 			V:       baseRecordVersion,
 			Subject: TrimmedSubject(floor), Op: OpTrimmed,
 			Scope: ScopeSet{Subject: true}, Gen: env.Gen, Writer: env.Writer,

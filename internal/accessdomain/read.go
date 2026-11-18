@@ -17,12 +17,9 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// Reader answers questions about what seats were told, about the SSH audit and
-// about the verdicts on delegated requests from this node's own applied rows,
-// through the domain's read authority, at the level each caller asks: a turn's
-// dispatch reads its seat's baseline at `linearizable`, since the seat's
-// previous turn may have been told on another node; an audit page reads at the
-// caller's level.
+// Reader answers what seats were told, the SSH audit and the verdicts on
+// delegated requests from this node's applied rows, through the domain's read
+// authority at the level each caller asks (package doc, "Reads").
 type Reader struct {
 	db  store.ReplicatedReader
 	log *statelog.Reader
@@ -273,8 +270,7 @@ func (q AuditQuery) validate() error {
 // window is the query's instants as stored, the widest where unset.
 func (q AuditQuery) window() (since, until int64) { return window(q.Since, q.Until) }
 
-// window is a page's bounds on the broker instant as stored, the widest where
-// unset.
+// window is a page's bounds on the broker instant as stored, the widest where unset.
 func window(from, to time.Time) (since, until int64) {
 	since, until = 0, int64(1<<63-1)
 	if !from.IsZero() {
@@ -406,8 +402,8 @@ type CommandRow struct {
 	User     string
 	Level    CommandLevel
 
-	// CommandSealed is the command's text, sealed: opened by [CommandRow.Open]
-	// for an administrator's audit read, and never shown as it is.
+	// CommandSealed is the command's text, sealed: opened only by
+	// [CommandRow.Open] for an administrator's audit, never shown as it is.
 	CommandSealed string
 	ContentKey    string
 
@@ -616,9 +612,8 @@ type VerdictRow struct {
 	Item     string
 
 	// SubjectSealed and WordsSealed are what was decided and the giver's
-	// reason and findings, sealed under ContentKey: opened by
-	// [VerdictRow.Open] for an administrator's audit read, never shown as
-	// they are.
+	// reason and findings, sealed under ContentKey: opened only by
+	// [VerdictRow.Open] for an administrator's audit, never shown as they are.
 	SubjectSealed string
 	WordsSealed   string
 	ContentKey    string
@@ -862,8 +857,7 @@ type HostUse struct {
 // HostUse is every seat's use of every server since month, the commands since
 // week counted apart: what the atlas shows as a server's use. Counted in the
 // store over the retention index, one row per server and seat, so a busy month
-// costs one range scan and never a page of commands per row. Only commands
-// that ran count: a denied one used nothing.
+// costs one range scan, not a page of commands per row. Only commands that ran count.
 func (r *Reader) HostUse(ctx context.Context, week, month time.Time, fresh statelog.Freshness) ([]HostUse, error) {
 	if week.Before(month) {
 		return nil, invalid("the week a server's use counts starts inside the month")

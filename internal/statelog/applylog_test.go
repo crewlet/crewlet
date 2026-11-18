@@ -20,13 +20,10 @@ import (
 
 // A STOP IS WRITTEN ONCE, AND THE LINE SAYS WHAT RESUMES IT.
 //
-// The runner's line went to a discarding logger, so the engine wrote its own
-// `statelog_applier_stopped` when the loop returned, carrying the one sentence
-// saying what the stop costs and what ends it. With the runner's line reaching
-// the log, one stop read as two — so the runner's is the only one, and it
-// carries that sentence beside the stream and the position it froze at. The
-// engine's half of the same invariant is its own test, since only a booted
-// engine can show which lines it adds.
+// The runner's `statelog_applier_stopped` is a stop's only line, and it says
+// what the stop costs and what ends it beside the stream and the position it
+// froze at. The engine's half of the invariant is its own test, since only a
+// booted engine shows which lines it adds.
 func TestAStopIsWrittenOnceSayingWhatResumesIt(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, gatingDomain{})
@@ -125,17 +122,11 @@ func gatedLine(t *testing.T, offer func(h *applyHarness)) map[string]any {
 // THE REPLICATION GUIDE SAYS WHAT THE RECORD-GATED LINE CARRIES, UNDER EVERY
 // GATE.
 //
-// The line is a dropped record's only witness, and the guide's row is what an
-// operator reads it by — the row the `statelog_write_gated` row and the
-// records-gated alarm both send them to. It named only the framework's own
-// gates, so an operator following an `evicted` refusal to the drop behind it
-// read that the line never carries that gate; and it named none of the line's
-// keys, so nothing said the line names the node that wrote the record, the one
-// fact the alarm's remedy says to read it for.
-//
-// So the row is held to the line itself — every key a gate puts on it — and to
-// every reason that is a gate's ([reasonDecisions]), since the line is logged
-// under whichever one dropped the record.
+// The line is a dropped record's only witness, and the guide's row (where the
+// `statelog_write_gated` row and the records-gated alarm send an operator) is
+// how it is read. So the row is held to every key a gate puts on the line, and
+// to every reason that is a gate's ([reasonDecisions]), since the line is
+// logged under whichever one dropped the record.
 func TestTheReplicationGuideSaysWhatTheRecordGatedLineCarries(t *testing.T) {
 	t.Parallel()
 	line := gatedLine(t, func(h *applyHarness) {
@@ -222,13 +213,10 @@ func logRecords(t *testing.T, written []byte, msg string) []map[string]any {
 
 // THE RECORDS-GATED ALARM POINTS AT FIELDS ITS LOG LINE CARRIES.
 //
-// A dropped record is recoverable by nothing, and the alarm's remedy is what
-// sends an operator to the one witness there is: the applier's
-// `statelog_record_gated` line. It told them the line named "the operator",
-// which no line carries — the node that wrote the record is its `writer` —
-// so the fact the remedy exists to hand over was the one it misnamed. So every
-// name the remedy puts in backticks is held to the line itself: the first is
-// the line's own message, and every other is a key on it.
+// The alarm's remedy sends an operator to a dropped record's one witness, the
+// applier's `statelog_record_gated` line, for the node that wrote the record
+// (its `writer`). So every name the remedy puts in backticks is held to the
+// line: the first is its message, every other a key on it.
 func TestTheRecordsGatedRemedyNamesWhatItsLineCarries(t *testing.T) {
 	t.Parallel()
 	line := gatedLine(t, func(h *applyHarness) {

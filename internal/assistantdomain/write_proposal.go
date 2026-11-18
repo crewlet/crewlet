@@ -289,8 +289,7 @@ func (w *Writer) MoveProposal(ctx context.Context, c Call, proposal uuid.UUID,
 }
 
 // Approve records the owner's approval of a proposed proposal, refused
-// [AlreadyDecided] when the proposal has left `proposed`: the arbitrated record
-// two approvals on two nodes resolve to one of.
+// [AlreadyDecided] when the proposal has left `proposed` ([Writer.MoveProposal]).
 func (w *Writer) Approve(ctx context.Context, c Call, proposal uuid.UUID) (statelog.Result, error) {
 	return w.MoveProposal(ctx, c, proposal, ProposalMove{
 		From: wire.ProposalProposed, To: wire.ProposalApproved,

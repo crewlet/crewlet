@@ -1200,6 +1200,12 @@ asks the same question and refuses on the same answer.
 | `objects_missing` | the collector's last audit to run to its end found files whose object the store does not hold, holds at the wrong size, under the wrong digest or as nothing it can read, or would not answer for twice while it answered for the rest — on the node holding the collector's duty, since one node's audit of a shared store is the fleet's |
 | `clock_skew` | a clock stands more than an hour from the fleet's — the median of the data nodes' clocks, as each node's position heartbeat reads them off the position register: on the node whose own clock moved, naming it, and on every node when the clock of the broker member leading the register did. The collector's grace and a retired pack's both rest on every clock keeping within that hour ([Why a deletion needs no lock](#why-a-deletion-needs-no-lock)) |
 
+Once the bucket is full every upload is refused, a seat's session and the
+company's files alike. A company of twenty seats or more can fill the default
+bucket with its seats' sessions and their saves alone: move it to an S3 bucket
+([Moving the files to a bucket](#moving-the-files-to-a-bucket)) rather than
+raise the reservation again.
+
 A missing or damaged object is a store that lost or changed bytes it
 acknowledged, and an unanswered one a store that will not serve them: check
 the store's own health (the `OBJ_crewlet_files` stream on the data nodes, or
@@ -1231,6 +1237,11 @@ Take **`s3`** when:
   makes a consumer, which a cluster decides on together, and one read in a
   few hundred waits a second for a request the cluster dropped; on `s3` a
   read is one request;
+- the company has twenty seats or more: a seat's executor sessions and the
+  saves of its running ones it replaced reach up to twice its
+  [`max_bytes_per_seat`](conversation-sessions.md#configuration), so at the
+  64 MiB default five seats take a quarter of the 2.6 GiB bucket the smallest
+  data volume crewlet-operator admits gives, and twenty fill it;
 - the company will keep well past a million files — on `nats` the daily
   audit lists the whole bucket once per hundred thousand of them, so its
   cost grows with the square of the count ([How far it

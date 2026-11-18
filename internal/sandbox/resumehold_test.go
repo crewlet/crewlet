@@ -140,7 +140,9 @@ func TestARelaunchRefusedBelowItsFloorLeavesItsWindowForTheNext(t *testing.T) {
 }
 
 // A SIGNAL FOR THE CONDITION LIFTS THE HOLD AT ONCE: a revision raising the
-// seat's ceiling need not wait out the window it would have waited for.
+// seat's ceiling need not wait out the window it would have waited for. And the
+// completion the node kept for the hold is carried once the lift has landed,
+// without waiting for the poll's next announcement of the job.
 func TestReadmittingTheBudgetLiftsAHeldResume(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -153,9 +155,13 @@ func TestReadmittingTheBudgetLiftsAHeldResume(t *testing.T) {
 	}
 	rig.resumer.failWith(nil)
 	rig.coordinator.Readmit("budget", "swe")
-	eventually(t, func() bool { return rig.get("t1").HeldFor == "" }, "the hold to lift")
-	if fired := rig.tick(); fired != 1 {
-		t.Fatalf("the poll announced %d completions after the hold lifted, want the job's", fired)
+	rig.coordinator.inflight.Wait()
+	if calls := rig.resumer.calls(); len(calls) != 1 || !calls[0].Success {
+		t.Fatalf("the turn resumed %d times (%+v) once the hold was lifted, want it carried once", len(calls),
+			calls)
+	}
+	if fired := rig.tick(); fired != 0 {
+		t.Fatalf("the poll announced %d completions of a job already carried, want none", fired)
 	}
 }
 
@@ -208,10 +214,13 @@ func TestAResumedRunKeepsItsSeatHeldThroughTheTurn(t *testing.T) {
 
 // A RESUMED TURN THAT LAUNCHES THE NEXT JOB HOLDS THE SEAT ONCE, not twice:
 // the claim's count and the relaunch's are one row, and a seat whose count
-// stayed at two after the first of them settled would be held for good.
+// stayed at two after the first of them settled would be held for good. The
+// relaunch counts its row as the claim it opens the job on
+// ([TestALaunchMovesItsSeatsCountOnce]), and the turn's frame recounts the
+// seat as it returns besides.
 //
-// Mutation: drop the recount from the relaunch branch, and the seat is still
-// held after the relaunched job settles.
+// Mutation: count the relaunch as opening a row nothing counted, and drop the
+// recount from the relaunch branch, and the seat counts the one run twice.
 func TestAResumedTurnThatRelaunchesHoldsTheSeatOnce(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -250,8 +259,9 @@ func TestAResumedTurnThatRelaunchesHoldsTheSeatOnce(t *testing.T) {
 // gave its claim back, one its seat's budget held, and a panic on its way up.
 //
 // Mutation: drop the recount from any of those exits, and its case leaves the
-// seat held on a run that no longer holds it; drop the held exit's uncount, and
-// its case counts the one run twice.
+// seat held on a run that no longer holds it; count the run where a hand-back's
+// release lands instead of moving the claim's count there, and the cases that
+// give their claim back count the one run twice.
 func TestEveryResumeExitLetsGoOfTheSeat(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -457,15 +467,10 @@ func TestACompletionRefusedForALimitIsHeldHereUntilItsInstant(t *testing.T) {
 }
 
 // A JOB READ BACK AND HANDED BACK KEEPS ITS BOX ASLEEP UNTIL IT IS COLLECTED
-// AGAIN. The collection read the job and paused its box, and the resume then
-// gave the claim back to running: held by its node for a model's limit, or
-// handed back for a retry. The waiter goes on announcing the job at every poll,
-// and the job is over, so it leaves the box as the collection left it: neither
-// woken nor kept alive, until the collection that next claims the job wakes it
-// to read it. Woken by the poll, a job its node held for a limit had its box
-// resumed and kept alive at every poll for as long as the hold lasted, up to
-// the hour a vendor's window is benched for: a running E2B sandbox, or an
-// unpaused container, for work that was already done.
+// AGAIN: the job is over, so the waiter announcing it leaves the box paused as
+// the collection left it, neither woken nor kept alive, until the next claim
+// wakes it to read it. Woken by the poll, a held job's box would run for the
+// whole hold, up to the hour a vendor's window is benched for.
 //
 // Mutation: drop the read-back case from the waiter's reach, and the box is
 // woken and kept alive at the first poll.
@@ -533,8 +538,8 @@ func TestAReadBackJobsBoxSleepsUntilItIsCollectedAgain(t *testing.T) {
 // the entry is sat out, and one held for the budget until its window turns
 // over, and until then the turn stayed open and its job neither resumed nor
 // ended. So the stop ends the wait: a completion its node held is re-fired at
-// once, and a hold on the row is lifted for the waiter's next poll. The turn
-// resumes now, inside the window, for its fence to close.
+// once, and a hold on the row is lifted for the waiter's next announcement.
+// The turn resumes now, inside the window, for its fence to close.
 //
 // Mutation: leave the wait to the condition in StopSeat, and the held job is
 // not resumed before its instant.

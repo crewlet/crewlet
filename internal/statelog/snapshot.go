@@ -19,95 +19,67 @@ import (
 
 // The snapshot repository's own constants.
 const (
-	// SnapshotsKept is how many snapshots a node retains.
-	//
-	// ONE, because the fleet is the redundancy: a snapshot is a recovery
-	// artefact for a peer, and a second copy on the same disk protects
-	// against nothing the first does not. What DOES protect against losing
-	// a donor is that every data node takes its own — which is why the
-	// trim's snapshot term is the k-th highest rather than the newest.
+	// SnapshotsKept is how many snapshots a node retains: one, because a
+	// second copy on the same disk protects against nothing the first does
+	// not. Every data node taking its own is what survives losing a donor,
+	// which is why the trim's snapshot term is the k-th highest.
 	SnapshotsKept = 1
 
 	// SnapshotLagSlack is how far behind the log a node may be and still
-	// donate. A snapshot's whole value is the replay it saves a joiner, and
-	// one taken far behind saves less than it costs to transfer.
+	// donate: a copy taken further behind saves a joiner less replay than
+	// it costs to transfer.
 	SnapshotLagSlack = 1_000
 
 	// SnapshotDonorsRequired is how many verified snapshots the fleet must
-	// hold before the trim may pass them.
-	//
-	// TWO. The minimum over the counted set blocks for ever on any node
-	// that has not snapshotted yet; the maximum makes one donor's disk the
-	// whole fleet's recovery plan. Two means losing any single donor still
-	// leaves a usable artefact. Over the log's own counted set, so a fleet
-	// that counts one node is satisfied by construction — its recovery
-	// artefact is a backup.
+	// hold before the trim may pass them: two, so losing any one donor
+	// leaves a usable artefact. The minimum over the counted set would
+	// block on any node not yet snapshotted; the maximum makes one disk the
+	// fleet's recovery plan. A fleet whose log counts one node is satisfied
+	// by construction: its recovery artefact is a backup.
 	SnapshotDonorsRequired = 2
 
-	// SnapshotFreeSpaceFactor is how much free space the snapshot volume
-	// must hold for the copy, as a multiple of the size of the replicated
-	// estate's file, which is what a take copies.
+	// SnapshotFreeSpaceFactor is the free space the snapshot volume must
+	// hold for a take, as a multiple of the replicated estate's file. By
+	// default the copy shares the live database's volume, so filling it
+	// would stop the applier committing; the margin makes the loop refuse.
 	//
-	// The default puts a full copy on the SAME VOLUME as the live
-	// database, so a snapshot write that filled the disk would become a
-	// disk-full condition on the volume the applier is committing to —
-	// where the rows and the checkpoint commit together. The margin is
-	// what makes the loop refuse instead.
-	//
-	// THE LOG THE COPY HOLDS BACK IS ADDED to it, not left to the margin.
-	// A copy stops every checkpoint at its moment for its whole run, so the
-	// live file's write-ahead log grows by what the node writes meanwhile,
-	// on the file's own volume: by its write rate times the copy's run,
-	// which is the file's size over the rate the copy reads it. A tenth of
-	// the file covers that only while the node writes its log at under a
-	// tenth of the copy's rate — about 10 MB/s at the ~104 MB/s measured
-	// on the pinned driver — so the gate wants this multiple of the file
-	// PLUS what the last copy measured a copy holding back
-	// ([store.DB.CopyHoldsBack]), and the file's own volume, where the
-	// snapshots live elsewhere, room for that log alone. Before any copy
-	// has measured it, the tenth is what stands for it.
+	// The write-ahead log a copy holds back ([store.DB.CopyHoldsBack], as
+	// the last copy measured it) is added on top, and the live file's own
+	// volume must hold that log alone: a copy pins every checkpoint for its
+	// run. The tenth covers it only while the node writes under a tenth of
+	// the copy's read rate (~10 MB/s at the ~104 MB/s measured on the
+	// pinned driver), and stands for it until a copy has measured it.
 	SnapshotFreeSpaceFactor = 1.1
 
-	// SnapshotChunkBytes and SnapshotTransferWindow size the transfer.
-	//
-	// TUNED FOR A NETWORK, and deliberately not the values this tree's
-	// backup transfer uses: that one is strict stop-and-wait at 128 KiB
-	// because it runs between two halves of one process over an in-memory
-	// connection, and its own doc says so. Across two broker hops that is
-	// 128 KiB per round trip. A 32 MiB credit window keeps a 100 MB/s pipe
-	// full at any round-trip time under 335 ms, which is every realistic
-	// deployment, at 32 MiB of buffer per side.
+	// SnapshotChunkBytes and SnapshotTransferWindow size the transfer for a
+	// network, unlike the backup transfer's in-process stop-and-wait at
+	// 128 KiB, which across two broker hops is 128 KiB per round trip. A
+	// 32 MiB credit window keeps a 100 MB/s pipe full at any round trip
+	// under 335 ms, at 32 MiB of buffer per side.
 	SnapshotChunkBytes     = 1 << 20
 	SnapshotTransferWindow = 32
 )
 
-// SkipReason is why a snapshot was not taken, and every one is PUBLISHED
-// rather than logged and forgotten.
-//
-// A fleet that has silently stopped snapshotting is invisible until a node
-// needs one — and three of these are routine rather than exotic: a rolling
-// upgrade produces `deferred`, a full snapshot volume produces
-// `insufficient_space`, and a two-node fleet after one eviction produces
-// `sole_node`, where the loop does not run at all.
+// SkipReason is why a snapshot was not taken. Every one is PUBLISHED, not
+// just logged: a fleet that silently stopped snapshotting is invisible until
+// a node needs one, and `deferred` (a rolling upgrade), `insufficient_space`
+// and `sole_node` (a two-node fleet after an eviction) are routine.
 type SkipReason string
 
 const (
-	// SkipLagging — this node is too far behind the log for its copy to
-	// save a joiner the replay it would cost to transfer.
+	// SkipLagging — this node is further behind the log than
+	// [SnapshotLagSlack].
 	SkipLagging SkipReason = "lagging"
 
-	// SkipUnhydrated — this node cannot vouch for a whole copy: it has
-	// not drained the log since its applier started, or its rows have
-	// stopped moving since it did. Either way what it holds is a prefix
-	// rather than a state. It is [Health.Drained], and the DISTANCE a
-	// drained node has since fallen behind is `lagging` instead.
+	// SkipUnhydrated — this node has not drained the log since its applier
+	// started, or has stalled since ([Health.Drained]), so it holds a prefix
+	// rather than a state. A drained node's later distance is `lagging`.
 	SkipUnhydrated SkipReason = "unhydrated"
 
-	// SkipSoleNode — there is nobody to donate to: the fleet counts no
-	// node on the estate's logs but this one. The recovery artefact
-	// for a single node is a backup, which the trim's backup term already
-	// gates, and saying so here stops a reader concluding the trim's
-	// snapshot term deadlocks a solo fleet.
+	// SkipSoleNode — the fleet counts no other node on the estate's logs,
+	// so there is nobody to donate to. A single node's recovery artefact is
+	// a backup, which the trim's backup term gates, so the snapshot term
+	// does not deadlock a solo fleet.
 	SkipSoleNode SkipReason = "sole_node"
 
 	// SkipInsufficientSpace — the snapshot volume has less than the
@@ -116,67 +88,45 @@ const (
 
 	// SkipDeferred — this node holds a record it cannot decode.
 	//
-	// THE PRECONDITION THAT MAKES THE SCRUB SAFE. The deferred table is
-	// this node's own and is scrubbed out of every artefact, so a donor
-	// whose checkpoint sits above a record it RETAINED would hand an
-	// adopter a resume point above bytes the adopter never received — a
-	// silent hole with no repairer. Stated as an invariant: inside a
-	// verified snapshot, what this node has applied through equals its
-	// checkpoint, for every domain.
+	// The precondition that makes the scrub safe: the deferred table is
+	// scrubbed out of every artefact, so a checkpoint above a RETAINED
+	// record would hand an adopter a resume point above bytes it never
+	// received, a silent hole. Invariant: inside a verified snapshot, every
+	// domain's applied-through equals its checkpoint.
 	SkipDeferred SkipReason = "deferred"
 
-	// SkipRecent — the newest local snapshot is younger than the
-	// interval, and still names every domain at the generation this node
-	// stands at. One from a generation a domain has since left is not a
-	// recent snapshot of anything a joiner can adopt, whatever its age —
-	// nor is one short of a domain this node runs, taken by the build
-	// before a domain was added: every joiner that runs it refuses it
-	// wholesale, so it suppresses nothing, and the
-	// node logs `statelog_snapshot_recent_but_short` as it takes a
-	// complete one rather than resting on an artefact nobody can adopt.
+	// SkipRecent — the newest local snapshot is younger than the interval
+	// AND names every domain this node runs at the generation it stands
+	// at. One that does not is refused wholesale by every joiner, whatever
+	// its age, so the node takes a complete one and logs
+	// `statelog_snapshot_recent_but_short`.
 	SkipRecent SkipReason = "recent"
 
 	// SkipAheadOfLog — this node's checkpoint sits PAST the log's last
-	// sequence, so what it holds is a different stream's history.
-	//
-	// IT IS NOT COVERED BY THE LAGGING TERM, and that is the whole
-	// reason it is a reason of its own: lag is clamped at zero, so a node
-	// past the end reports itself zero records behind and CAUGHT UP, and
-	// both terms above wave it through. What it would copy is rows keyed
-	// to a sequence space the live stream no longer has — the signature of
-	// a stream that was deleted and recreated — and the artefact would
-	// name a position no recipient can ever replay from. The same state
-	// refuses reads and readiness through [Health.AheadOfLog] and writes
-	// through [Runner.ObserveEnd] and [ZeroFence]; a donor is the one place
-	// it was still allowed.
+	// sequence, so it holds another stream's history (a deleted and
+	// recreated stream), and an artefact would name a position nobody can
+	// replay from. Its own reason because lag is clamped at zero, so such a
+	// node reads as caught up and passes the lag terms. Reads and readiness
+	// refuse the same state through [Health.AheadOfLog], writes through
+	// [Runner.ObserveEnd] and [ZeroFence].
 	SkipAheadOfLog SkipReason = "ahead_of_log"
 
 	// SkipLogDiverged — the log holds, at this node's checkpoint, another
-	// record than the one it consumed there ([ErrLogDiverged]), so what it
-	// holds is a history the log does not continue.
-	//
-	// ITS OWN REASON beside [SkipAheadOfLog] because it is the state that one
-	// stops seeing: once a restored log has been written past the checkpoint
-	// nothing about the end is wrong, the caught-up term is true, and an
-	// artefact taken here would hand a recipient rows that disagree with the
-	// log at the very position it resumes from.
+	// record than the one it consumed there ([ErrLogDiverged]), so its rows
+	// are a history the log does not continue. Its own reason beside
+	// [SkipAheadOfLog] because once a restored log is written past the
+	// checkpoint the end looks ordinary and the caught-up term is true.
 	SkipLogDiverged SkipReason = "log_diverged"
 
-	// SkipFailed — the attempt RAN and errored, which is the one reason
-	// here that is not a declined precondition.
-	//
-	// It belongs in this vocabulary because the register carries exactly
-	// one field for "why can this node not donate", and a node whose copy
-	// fails every interval — a disk that went read-only, a scrub that
-	// could not open the file — would otherwise publish an empty reason
-	// and no position, which reads as a loop that has simply not run yet.
-	// The error itself is logged; what travels to the fleet is that there
-	// was one.
+	// SkipFailed — the attempt ran and errored, the one reason that is not
+	// a declined precondition. Without it a node whose copy fails every
+	// interval (a read-only disk, a scrub that cannot open the file) would
+	// publish an empty reason, which reads as a loop that has not run yet.
+	// The error is logged; the fleet learns only that there was one.
 	SkipFailed SkipReason = "failed"
 )
 
-// SkipReasons are every reason, so an operator surface can enumerate them
-// rather than discovering them one production incident at a time.
+// SkipReasons are every reason, so an operator surface can enumerate them.
 var SkipReasons = []SkipReason{
 	SkipLagging, SkipUnhydrated, SkipSoleNode,
 	SkipInsufficientSpace, SkipDeferred, SkipRecent, SkipAheadOfLog, SkipLogDiverged,
@@ -191,45 +141,35 @@ func (s SkipReason) Valid() bool { return slices.Contains(SkipReasons, s) }
 // added within a version, so a later build reads what this one took.
 const ManifestVersion = 2
 
-// DomainPosition is what a manifest says about one registered domain.
-//
-// EVERY FIELD IS A REFUSAL A RECIPIENT CAN MAKE, which is why they are here
-// rather than derived: an artefact is adopted wholesale, so anything a
-// recipient cannot check before installing it, it cannot check at all.
+// DomainPosition is what a manifest says about one registered domain. Every
+// field is a refusal a recipient can make: an artefact is adopted wholesale,
+// so what it cannot check before installing, it cannot check at all.
 type DomainPosition struct {
 	// Stream is the domain's stream name.
 	Stream string `json:"stream"`
 
-	// Generation and StreamCreatedAt are the pair that detects a recreated
-	// stream: the instant NOTICES and the generation is the RESPONSE. An
-	// artefact whose generation differs from the live stream's is refused
-	// rather than adopted, because its sequences name a different history.
+	// Generation and StreamCreatedAt detect a recreated stream: the instant
+	// notices and the generation responds. A generation other than the live
+	// stream's is refused, since its sequences name a different history.
 	Generation      uint32    `json:"generation"`
 	StreamCreatedAt time.Time `json:"stream_created_at"`
 
-	// Seq is the position committed IN THE FILE, read from the verified
-	// copy rather than from the live database — the checkpoint commits
-	// with the rows, so the position inside the file is the only one that
-	// describes the file. A metadata claim the file does not keep is a
-	// corrupt snapshot.
+	// Seq is the position committed IN THE FILE, read from the verified copy
+	// (package doc, "The checkpoint commits with the rows"). A claim the
+	// file does not keep is a corrupt snapshot.
 	Seq uint64 `json:"seq"`
 
-	// RecordVersion is the highest record version the artefact's rows were
-	// APPLIED from, as the copy's own checkpoint row records it ([FileCursor]).
-	// A recipient whose build reads less refuses: its rows would sit past a
-	// record it could never apply, defer or reprocess — and once those
-	// sequences are trimmed it never can.
-	//
-	// WHAT THE ROWS HOLD, never what the donor's build could read. A build
-	// that reads a new version publishes nothing at it until something needs
-	// it, so the build's version refused every upgraded donor for the whole of
-	// a rolling upgrade over records that did not exist.
+	// RecordVersion is the highest record version the rows were APPLIED
+	// from, as the copy's checkpoint row records it ([FileCursor]). A
+	// recipient whose build reads less refuses: its rows would sit past a
+	// record it could never apply, defer or reprocess once trimmed. Never
+	// the donor build's readable version, which would refuse every upgraded
+	// donor through a rolling upgrade over records that do not exist.
 	RecordVersion int `json:"record_version"`
 
-	// Replay is the protocol the donor's build declares. A recipient whose
-	// build declares a different one refuses: adopting a compacted
-	// position into a strict loop is a permanent stall arriving through a
-	// file instead of a configuration.
+	// Replay is the protocol the donor's build declares. A recipient
+	// declaring another refuses: a compacted position adopted into a strict
+	// loop is a permanent stall.
 	Replay ReplayProtocol `json:"replay"`
 
 	// FirstSeqAtTake and LastSeqAtTake are what the stream looked like when
@@ -239,9 +179,8 @@ type DomainPosition struct {
 }
 
 // Manifest is the artefact's claim about itself, written LAST and atomically
-// through a rename — so its presence IS the claim, and a directory without
-// one holds the debris of a run that did not finish rather than a partial
-// snapshot.
+// through a rename, so its presence IS the claim: a copy without one is debris
+// of an unfinished run.
 type Manifest struct {
 	V             int                       `json:"v"`
 	TakenAt       time.Time                 `json:"taken_at"`
@@ -254,23 +193,12 @@ type Manifest struct {
 	SHA256        string                    `json:"sha256"`
 
 	// Artifact is the name of the database file this manifest describes,
-	// in the same directory as the manifest.
-	//
-	// # Why the manifest names its file instead of the name being derived
-	//
-	// Because the derivation was the bug. The pair was called
-	// `snapshot-<highest sequence>`, computed in three places that had to
-	// agree, and nothing required that sequence to have MOVED since the
-	// last take — so a second snapshot on a quiet company resolved to the
-	// previous pair's name and published over it. That made publication
-	// destructive: the old manifest was removed, the old database was
-	// renamed over, and a failure writing the new manifest removed the
-	// replacement, leaving a node with no artefact at all where it had
-	// had a perfectly good one.
-	//
-	// A name the manifest CARRIES can be unique per take, which is what
-	// lets the new pair be written beside the old one and the old one be
-	// rotated away only once the new manifest is durable.
+	// beside it. Carried, not derived from the position: the position need
+	// not move between takes, and a name derived from it lets a take on a
+	// quiet company publish over the previous pair, so a failed manifest
+	// write leaves no artefact at all. A carried name is unique per take,
+	// so the new pair lands beside the old, which is rotated away only once
+	// the new manifest is durable.
 	Artifact string `json:"artifact"`
 }
 
@@ -287,17 +215,13 @@ type Registered struct {
 	// Spec is the domain's stream as this node runs it.
 	Spec StreamSpec
 
-	// Health is this node's readiness for that domain, which is what the
-	// snapshot gate reads: how far behind, whether it has ever drained,
-	// and whether it holds anything it cannot decode.
+	// Health is this node's readiness for that domain, which the snapshot
+	// gate reads.
 	Health func() Health
 
-	// NO CREATION INSTANT. One was carried here, read by nothing: a
-	// manifest names the instant the copied FILE's checkpoint was committed
-	// under ([CursorsInFile]), because an instant from the donor's live
-	// handle describes another stream the moment one is recreated — and a
-	// value nobody reads is one that goes stale without anybody noticing,
-	// which is exactly what a reanchor under a running node did to it.
+	// No creation instant: a manifest names the one the copied FILE's
+	// checkpoint was committed under ([CursorsInFile]); the donor's live
+	// handle describes another stream once one is recreated.
 }
 
 // Check refuses a registration whose domain and stream are not one log.
@@ -321,15 +245,13 @@ func checkRegistered[K comparable](regs map[K]Registered) error {
 
 // SnapshotDeps is everything the snapshot loop needs that it does not own.
 type SnapshotDeps struct {
-	// Domains are every log this build registers. An artefact names ALL of
-	// them or a recipient refuses it, so a snapshot taken with one missing
-	// is one nobody can use.
+	// Domains are every log this build registers. A recipient refuses an
+	// artefact that does not name all of them.
 	Domains []Registered
 
 	// File is the replicated estate's file, which the artefact copies
-	// alone. The node's own estate holds the audit log and the secret
-	// bootstrap, which is exactly what a peer must not inherit and what
-	// would otherwise dominate the transfer.
+	// alone: the node's own estate holds the audit log and the secret
+	// bootstrap, which a peer must not inherit.
 	File store.ReplicatedHandle
 
 	// Dir is where this node keeps its snapshots.
@@ -340,23 +262,18 @@ type SnapshotDeps struct {
 	EngineVersion string
 
 	// Recipients is how many nodes OTHER THAN THIS ONE the fleet counts on
-	// the estate's logs — the live data nodes, and every node whose row
-	// names one of them — which decides whether there is anybody to donate
-	// to at all.
-	//
-	// OTHERS, NOT A HEAD COUNT, because this node need not be one of them.
-	// A machine an eviction barred, back with its files, keeps a copy the
-	// logs its eviction gates stop counting it on once the fence window
-	// has passed, and that copy may be the fleet's only one: judged as
-	// "fewer than two counted", one joiner beside it read as nobody to
-	// donate to, so the artefact the joiner needed was never taken.
+	// the estate's logs (the live data nodes and every node whose row names
+	// one), which decides whether anybody can be donated to. Others, not a
+	// head count, because this node need not be counted: an evicted machine
+	// back with its files stops being counted once the fence window passes,
+	// yet its copy may be the only one a joiner beside it can adopt.
 	Recipients func(ctx context.Context) (int, error)
 
 	// Interval is how stale the newest local snapshot may be.
 	Interval time.Duration
 
 	// Logger is where this writes. Nil is the package's own component
-	// logger, never silence: see loggerOr for what silence cost.
+	// logger, never silence (see loggerOr).
 	Logger *slog.Logger
 	Now    func() time.Time
 }
@@ -423,30 +340,14 @@ func Skipped(err error) (SkipReason, bool) {
 	return "", false
 }
 
-// Take makes one snapshot, or reports why it did not.
-//
-// # Five preconditions, each published
-//
-// Caught up on every domain, not too far behind, more than one node in the
-// fleet, room on the volume, and NOTHING DEFERRED anywhere. The last is the
-// one that looks like tidiness and is not: the deferred table is scrubbed out
-// of the artefact, so a donor whose checkpoint sits above a record it retained
-// hands an adopter a resume point above bytes the adopter never received.
+// Take makes one snapshot, or reports why it did not with an [ErrSkipped]
+// whose reason is published (see [Snapshotter.gate] and [SkipReason]).
 func (s *Snapshotter) Take(ctx context.Context) (Manifest, error) {
 	if err := s.gate(ctx); err != nil {
-		// A SKIP IS RETURNED, NOT LOGGED. The error is an [ErrSkipped]
-		// carrying the reason AND the detail, so the caller already has
-		// everything a line here could say — and it is the caller that
-		// knows what the skip MEANS: the loop retries for as long as the
-		// reason holds — every thirty seconds once its retry has settled
-		// — so a line written here is one per attempt, for ever, on a
-		// `sole_node` skip that is the steady state of a healthy
-		// single-node company.
-		//
-		// Logging in both places is how that survived being fixed once:
-		// the loop learned to report a skip only when the reason
-		// CHANGED, and this line went on writing every thirty seconds
-		// underneath it. One event, one reporting path.
+		// Returned, not logged: the caller retries while the reason holds
+		// and reports only a change, so a line here would repeat every
+		// retry on `sole_node`, a healthy single node's steady state. One
+		// event, one reporting path.
 		return Manifest{}, err
 	}
 
@@ -454,13 +355,10 @@ func (s *Snapshotter) Take(ctx context.Context) (Manifest, error) {
 	if err := os.MkdirAll(s.deps.Dir, 0o700); err != nil {
 		return Manifest{}, fmt.Errorf("statelog: create %s: %w", s.deps.Dir, err)
 	}
-	// THE COPY IS WRITTEN UNDER A PART NAME, because its final name is its
-	// own position and that is not known until the copy exists: the
-	// checkpoint commits with the rows, so the position inside the file is
-	// the only one that describes it, and the applier is committing while
-	// the copy is taken. A PART FILE FROM A CRASHED ATTEMPT IS DEBRIS, not
-	// data, and so are its sidecars — a stale -wal beside a fresh copy is
-	// applied to it on the next open.
+	// Written under a part name, since its final name carries the position
+	// inside the file, unknown until the copy exists. A crashed attempt's
+	// part file is debris, sidecars included: a stale -wal beside a fresh
+	// copy is applied to it on the next open.
 	part := filepath.Join(s.deps.Dir, snapshotPartName)
 	if err := store.RemoveCopy(part); err != nil {
 		return Manifest{}, fmt.Errorf("statelog: clear the previous attempt: %w", err)
@@ -476,41 +374,29 @@ func (s *Snapshotter) Take(ctx context.Context) (Manifest, error) {
 		return Manifest{}, fmt.Errorf("statelog: copy the replicated estate: %w", err)
 	}
 
-	// THE DONOR SCRUBS, on a list DERIVED from what every domain declares
-	// about its own tables rather than written out here. A hardcoded list
-	// would silently omit whatever a deployment actually has.
+	// The donor scrubs, on the list the domains declare ([Snapshotter.scrubList]).
 	scrubbed, err := store.ScrubFile(ctx, part, s.scrubList())
 	if err != nil {
 		discard()
 		return Manifest{}, err
 	}
 
-	// THE POSITIONS ARE READ FROM THE COPY, never from the live node.
-	//
-	// A recipient verifies the manifest against the checkpoint the file
-	// keeps and refuses one that differs, because a metadata claim the
-	// file does not keep is a corrupt snapshot. This node's live health
-	// was read before the copy started and the applier committed in
-	// between — so a manifest stamped from health described the file
-	// only on an idle fleet, and every snapshot taken under write load
-	// was refused by the very node that needed it. The same read serves
-	// the backup manifest, for the same reason.
+	// Positions come from the copy, never the live node: a recipient refuses
+	// a manifest the file's checkpoint disagrees with, and the applier
+	// commits while the copy is taken. The backup manifest reads the same.
 	positions, err := s.positionsIn(ctx, part)
 	if err != nil {
 		discard()
 		return Manifest{}, err
 	}
-	// AND THE COPY IS MADE SELF-CONTAINED AGAIN before it is measured:
-	// reading it opened it, which grows a -wal and a -shm beside it, and
-	// what is digested and offered is one file.
+	// Reading the copy grew a -wal and -shm beside it; what is digested and
+	// offered is one file.
 	if err = store.QuiesceCopy(ctx, part); err != nil {
 		discard()
 		return Manifest{}, err
 	}
 
-	// THE CHECKSUM COVERS THE SCRUBBED BYTES, which is the second reason
-	// the scrub is the donor's: a checksum taken before it would certify
-	// a file nobody sends.
+	// The checksum covers the scrubbed bytes, the file actually sent.
 	digest, err := store.FileDigest(ctx, part)
 	if err != nil {
 		discard()
@@ -533,19 +419,9 @@ func (s *Snapshotter) Take(ctx context.Context) (Manifest, error) {
 		Bytes:         size.Size(),
 		SHA256:        digest,
 	}
-	// A NAME OF ITS OWN, so this pair never lands on the last one's.
-	//
-	// The position alone is not one: nothing requires it to have moved
-	// since the last take, so a second snapshot on a quiet company
-	// resolved to the previous pair's name and published THROUGH it —
-	// removing the old manifest, renaming over the old database, and, if
-	// writing the new manifest then failed, removing the replacement too.
-	// A disk that filled between the copy and the manifest therefore
-	// destroyed the last usable artefact, which is the one moment a node
-	// most needs to still have one.
-	//
-	// The take's own instant disambiguates, and the sequence stays in the
-	// name because an operator reading the directory wants it.
+	// A name of its own, so this pair never lands on the last one's (see
+	// [Manifest.Artifact]): the take's instant disambiguates, and the
+	// sequence is there for an operator reading the directory.
 	base := filepath.Join(s.deps.Dir, fmt.Sprintf("snapshot-%d-%d",
 		newestSeq(positions), taken.UnixNano()))
 	m.Artifact = filepath.Base(base) + ".db"
@@ -556,17 +432,14 @@ func (s *Snapshotter) Take(ctx context.Context) (Manifest, error) {
 		return Manifest{}, fmt.Errorf("statelog: place %s: %w", copyPath, err)
 	}
 	if err := writeManifest(manifestPath, m); err != nil {
-		// ONLY WHAT THIS ATTEMPT PUT THERE. The previous pair is
-		// untouched and still complete, which is the whole point of
-		// publishing under a new name.
+		// Only this attempt's file: the previous pair stays complete.
 		_ = os.Remove(copyPath)
 		return Manifest{}, err
 	}
 
-	// THE PREVIOUS SNAPSHOT GOES LAST, transiently costing twice the
-	// store: deleting first leaves a window in which this node can donate
-	// nothing at all — and doing it before the manifest above is durable
-	// leaves one in which it can donate nothing EVER AGAIN.
+	// The previous snapshot goes last, transiently costing twice the store:
+	// deleting it first leaves a window with nothing to donate, and before
+	// the new manifest is durable, possibly for good.
 	s.rotate(ctx, base)
 
 	s.log.InfoContext(ctx, "statelog_snapshot_taken",
@@ -583,11 +456,9 @@ const snapshotPartName = "snapshot.part.db"
 
 // positionsIn is every registered domain's position AS THE COPY KEEPS IT.
 //
-// A domain with no checkpoint row in the file is at the ZERO position: it has
-// applied nothing, which is a real state of a domain whose log nobody has
-// written to yet, and the artefact covers it exactly as a node at zero would.
-// The recipient reads an absent row the same way, so a fleet's newest domain
-// does not leave every snapshot unadoptable until its first record.
+// A domain with no checkpoint row in the file is at the ZERO position, as the
+// recipient reads it too, so a domain whose log is still empty does not leave
+// every snapshot unadoptable until its first record.
 func (s *Snapshotter) positionsIn(ctx context.Context, path string) (map[string]DomainPosition, error) {
 	cursors, err := CursorsInFile(ctx, path)
 	if err != nil {
@@ -597,20 +468,11 @@ func (s *Snapshotter) positionsIn(ctx context.Context, path string) (map[string]
 	for _, reg := range s.deps.Domains {
 		h := reg.Health()
 		spec := reg.Spec
-		// EVERY CHECKPOINT FIELD OUT OF THE FILE, the identity included.
-		//
-		// The generation and the sequence were read from the copy and the
-		// creation instant from this donor's live registration, which are
-		// the same stream only until one is recreated. A donor that had
-		// been restarted onto a rebuilt stream therefore stamped OLD rows
-		// with the NEW stream's identity, and the artefact passed every
-		// check a recipient could make: its generation and sequence
-		// matched the file, its identity matched the recipient's live
-		// stream, and what it carried was a dead history.
+		// Every checkpoint field comes out of the file, the identity and
+		// applied version included: an identity from the live registration
+		// would stamp old rows with a recreated stream's identity, and the
+		// artefact would pass every check a recipient can make.
 		at := cursors[spec.Name]
-		// WHAT THE ROWS WERE APPLIED FROM, as the file records it. A
-		// domain with no row at all has applied nothing, which is the
-		// zero the missing entry reads as.
 		pos := DomainPosition{
 			Stream:          spec.Name,
 			Generation:      at.Position.Generation,
@@ -619,9 +481,8 @@ func (s *Snapshotter) positionsIn(ctx context.Context, path string) (map[string]
 			RecordVersion:   at.AppliedVersion,
 			Replay:          spec.Replay,
 		}
-		// The stream's own bounds at the take are ADVISORY, for the
-		// operator reading why an offer was refused, and they come
-		// from the live health because the file cannot know them.
+		// The stream's bounds are advisory, from live health because the
+		// file cannot know them.
 		if h.FirstSeq != nil {
 			pos.FirstSeqAtTake = *h.FirstSeq
 		}
@@ -633,7 +494,7 @@ func (s *Snapshotter) positionsIn(ctx context.Context, path string) (map[string]
 	return positions, nil
 }
 
-// gate is the five preconditions, in the order that answers cheapest first.
+// gate is the preconditions of a take, cheapest first.
 func (s *Snapshotter) gate(ctx context.Context) error {
 	recipients, err := s.deps.Recipients(ctx)
 	if err != nil {
@@ -657,11 +518,8 @@ func (s *Snapshotter) gate(ctx context.Context) error {
 					"an adopter a resume point above bytes it never received",
 				h.Deferred, name, h.DeferredFrom)}
 		}
-		// BEFORE THE CAUGHT-UP TERM, because in this state that term is
-		// TRUE: the lag is clamped at zero, so a checkpoint past the
-		// log's end reads as caught up through it and every other
-		// precondition here is satisfied by a node holding a dead
-		// sequence space.
+		// Before the caught-up terms, which a checkpoint past the log's
+		// end passes: lag is clamped at zero.
 		if h.AheadOfLog() {
 			return &ErrSkipped{Reason: SkipAheadOfLog, Detail: fmt.Sprintf(
 				"this node's %s checkpoint is at %d and the log ends at %d, so "+
@@ -669,9 +527,7 @@ func (s *Snapshotter) gate(ctx context.Context) error {
 					"longer has — a copy would name a position no recipient "+
 					"could replay from", name, h.Position.Seq, *h.LastSeq)}
 		}
-		// AND FOR THE SAME REASON a log that diverged from these rows: the
-		// end is an ordinary end again and every term below is satisfied,
-		// while the rows hold a history the log does not continue.
+		// Likewise a diverged log, whose end looks ordinary.
 		if h.LogDiverged {
 			return &ErrSkipped{Reason: SkipLogDiverged, Detail: fmt.Sprintf(
 				"the log's record at this node's %s checkpoint %d is not the one "+
@@ -680,12 +536,9 @@ func (s *Snapshotter) gate(ctx context.Context) error {
 					"with the log at the position it resumes from",
 				name, h.Position.Seq)}
 		}
-		// THE HISTORY, and the term below is the DISTANCE. They were one
-		// bool once — assigned from the instantaneous lag — and this arm
-		// then fired at a lag of one, which made the slack below
-		// unreachable: no node ever skipped for `lagging`, because a node
-		// a hundred records behind was already reported as one that had
-		// never drained at all.
+		// The history; the term below is the distance. Kept apart: a
+		// drained flag read from the instantaneous lag would fire at a lag
+		// of one and leave [SnapshotLagSlack] unreachable.
 		if !h.Drained {
 			return &ErrSkipped{Reason: SkipUnhydrated, Detail: fmt.Sprintf(
 				"this node has not drained %s since its applier started, or has "+
@@ -704,13 +557,10 @@ func (s *Snapshotter) gate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// RECENT MEANS ADOPTABLE, not merely young. A joiner asks for an
-	// artefact at the generation each domain is on and refuses any other, so
-	// once a reanchor or an adoption has moved one of this node's domains —
-	// or the build that took it ran a domain fewer — the artefact it holds is
-	// a snapshot nobody can use, and the interval would have kept it the
-	// node's only one for up to a day, leaving every peer with no donor to
-	// adopt from.
+	// Recent means adoptable, not merely young ([Snapshotter.current]): once
+	// a reanchor or adoption moved a domain's generation, or the taking build
+	// ran a domain fewer, no joiner can use the artefact, and the interval
+	// would keep it the node's only one.
 	if found && s.now().Sub(newest.TakenAt) < s.deps.Interval {
 		if s.current(newest) {
 			return &ErrSkipped{Reason: SkipRecent, Detail: fmt.Sprintf(
@@ -732,11 +582,8 @@ func (s *Snapshotter) gate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// THE LOG THE COPY HOLDS BACK IS COUNTED WHERE THE COPY LANDS as well as
-	// on the live file's own volume: the default puts the two on one volume,
-	// and nothing tells two volumes of one pool apart for certain, so the
-	// snapshots' volume keeps room for it whether or not it is the live one.
-	// Where it is not, that asks no more of it than the log beyond the copy.
+	// The held-back log counts on the snapshot volume as well as the live
+	// file's: nothing tells two volumes of one pool apart for certain.
 	if want := int64(float64(room.size)*SnapshotFreeSpaceFactor) + room.held; room.free < want {
 		held := ""
 		if room.held > 0 {
@@ -759,12 +606,10 @@ func (s *Snapshotter) gate(ctx context.Context) error {
 	return nil
 }
 
-// scrubList is every table the artefact must not carry, DERIVED from what the
-// domains declare.
-//
-// It is the same declaration doing a third job — after the identity claim's
-// membership and the local sweep — which is what keeps the three from drifting
-// apart.
+// scrubList is every table the artefact must not carry, derived from the
+// domains' [Local] declarations rather than hardcoded: the same declaration
+// serves the identity claim's membership and the local sweep, so the three
+// cannot drift apart.
 func (s *Snapshotter) scrubList() []string {
 	var out []string
 	for _, reg := range s.deps.Domains {
@@ -778,17 +623,9 @@ func (s *Snapshotter) scrubList() []string {
 	return slices.Compact(out)
 }
 
-// newest is when this node's newest complete snapshot was taken, and which
-// domains it names.
-//
-// COMPLETE, which is what the manifest means: a copy with no manifest beside
-// it is the debris of a run that did not finish, and treating it as a snapshot
-// would let one crashed attempt suppress every later one.
-//
-// THE MANIFEST COMES BACK WHOLE, because "recent" is not a fact about time
-// alone: whether the artefact names every domain this node runs, at the
-// generation each stands at, is what decides whether any joiner could adopt
-// it — see [Snapshotter.current].
+// newest is this node's newest complete snapshot's manifest. Only a manifest
+// counts, so a crashed attempt's debris suppresses no later take; it comes
+// back whole because "recent" also asks [Snapshotter.current].
 func (s *Snapshotter) newest() (Manifest, bool, error) {
 	entries, err := os.ReadDir(s.deps.Dir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -872,9 +709,9 @@ func (s *Snapshotter) rotate(ctx context.Context, keep string) {
 }
 
 // snapshotRoom is what the gate weighs a take against: the snapshot volume's
-// free bytes, the replicated estate's file — which is what the copy writes, at
-// most — the write-ahead log a copy of it is expected to hold back on the
-// file's own volume ([store.DB.CopyHoldsBack]), and that volume's free bytes.
+// free bytes, the replicated estate's file size (the most a copy writes), the
+// write-ahead log a copy holds back on the file's own volume
+// ([store.DB.CopyHoldsBack]), and that volume's free bytes.
 type snapshotRoom struct {
 	free, size, held int64
 	liveFree         int64
@@ -885,12 +722,10 @@ type snapshotRoom struct {
 func (s *Snapshotter) space() (snapshotRoom, error) {
 	dir := s.deps.Dir
 	if _, statErr := os.Stat(dir); errors.Is(statErr, os.ErrNotExist) {
-		// The directory is created on the first take, so the volume to
-		// measure is its parent's.
+		// Created on the first take, so measure the parent's volume.
 		dir = filepath.Dir(dir)
 	}
-	// FREE IS WHAT AN UNPRIVILEGED PROCESS MAY USE ([store.VolumeFree]),
-	// which is what this loop is.
+	// Free to an unprivileged process ([store.VolumeFree]), which this is.
 	free, err := s.volumeFree(dir)
 	if err != nil {
 		return snapshotRoom{}, fmt.Errorf("statelog: %w", err)

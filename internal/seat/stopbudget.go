@@ -75,11 +75,11 @@ import (
 // budget instead of a keeper and a usage flush. The settles' window adds
 // nothing to any of them: it opens as the teardown begins, before the
 // engine's auxiliary-spend flush, and is over by the end of that flush's five
-// seconds wherever the flush spends them. docs/guides/deployment.md therefore
-// has every pod given a grace of at least its longest turn plus 150 s, plus
-// any preStop sleep (Kubernetes counts the hook inside the grace): the
-// drain's share, this stop's 140 s at most, and room for the process to exit
-// — a pod that runs no seats its longest turn plus 60 s.
+// seconds wherever the flush spends them. So docs/guides/deployment.md gives
+// every pod at least the longer of its longest turn and the drain's 30 s save
+// of its Direct runs' sessions (sandbox's SaveHosted), plus 150 s and any
+// preStop sleep: the drain's share, this stop's 140 s at most, and room to
+// exit — a pod that runs no seats its longest turn plus 60 s.
 //
 // # Only what lapses
 //

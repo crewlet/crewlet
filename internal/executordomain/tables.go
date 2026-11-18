@@ -2,19 +2,17 @@ package executordomain
 
 import "slices"
 
-// THE TABLE INVENTORIES. Three readers derive from these and none of them can
-// see the others: the domain's own Tables() map, which the framework turns into
-// a scrub list, an identity claim and a local sweep; the replay cases, which
-// assert a replay from zero reproduces every one of them; and the applier,
-// which is the only writer of any of them.
+// THE TABLE INVENTORIES, which three readers derive from without seeing each
+// other: the domain's Tables() map (the framework's scrub list, identity claim
+// and local sweep), the replay cases, and the applier, their only writer.
 
-// ReproducibleTables is every table a record's payload must be able to
-// rebuild: what a replay from zero into an empty database has to end up with,
-// byte for byte, on every node.
+// ReproducibleTables is every table a record's payload must rebuild: what a
+// replay from zero into an empty database ends up with, byte for byte, on every
+// node.
 var ReproducibleTables = []string{
-	// The sessions, the tombstones that keep an ended or removed turn from
-	// being captured again, and the removals that keep a removed seat's
-	// turns from being recreated by a record decided before the removal.
+	// The sessions; the tombstones that keep an ended or removed turn from
+	// being captured again; the removals that keep a record decided before a
+	// seat's removal from recreating its turns.
 	"executor_sessions", "executor_session_tombs", "executor_seat_removals",
 
 	// The node gate's table and the reanchor's audit row.

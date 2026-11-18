@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"math/rand/v2"
@@ -67,6 +68,21 @@ func enclosed(line, opening, closing string) (string, bool) {
 	return strings.CutSuffix(inner, closing)
 }
 
+// ltAsked is the take tokens the automata are asked of every text.
+var ltAsked = []string{claudeTakeToken(ctProbeBatchTake), claudeTakeToken(ctProbeStopTake)}
+
+// takesNamed is which of asked text names, bit i for asked[i], each anywhere
+// in it: [textTakes]'s rule.
+func takesNamed(text string, asked []string) uint64 {
+	var bits uint64
+	for i, token := range asked {
+		if strings.Contains(text, token) {
+			bits |= 1 << i
+		}
+	}
+	return bits
+}
+
 // utf16Units is text's length in UTF-16 code units, as JavaScript counts it:
 // [textUnits]'s rule.
 func utf16Units(text []byte) int {
@@ -90,6 +106,7 @@ type ltFacts struct {
 	Handback   bool
 	Result     threadResultText
 	Units      int
+	Takes      uint64
 }
 
 // ltWhole is what the oracles read of text, held whole.
@@ -98,6 +115,7 @@ func ltWhole(text string) ltFacts {
 		Says:     strings.ContainsFunc(text, jsTrimKeeps),
 		Handback: handbackNotice(text),
 		Units:    min(utf16Units([]byte(text)), skillListingMaxNameUnits+1),
+		Takes:    takesNamed(text, ltAsked),
 	}
 	f.Agent, f.Leg, f.Notice = taskNotification(text)
 	f.Result.size = int64(len(text)) + 1
@@ -116,6 +134,7 @@ func ltStreamed(pieces [][]byte) ltFacts {
 		handback textHandback
 		result   textResult
 		units    textUnits
+		takes    = textTakes{asked: ltAsked}
 	)
 	for _, p := range pieces {
 		says.write(p)
@@ -123,9 +142,11 @@ func ltStreamed(pieces [][]byte) ltFacts {
 		handback.write(p)
 		result.write(p)
 		units.write(p)
+		takes.write(p)
 	}
 	notice.end()
-	f := ltFacts{Says: says.any, Handback: handback.named, Result: result.sum(), Units: units.units()}
+	f := ltFacts{Says: says.any, Handback: handback.named, Result: result.sum(), Units: units.units(),
+		Takes: takes.bits}
 	f.Agent, f.Leg, f.Notice = notice.notice()
 	return f
 }
@@ -175,7 +196,8 @@ func ltNotification(leg string, files []string, status, tail string) string {
 // ltSeeds are the texts every automaton is held to its rule on: the shapes a
 // task notification's reading turns on, a handback's name, the characters
 // trim() keeps and drops, the bounds of a result's digests and of a skill's
-// name, and texts a cut ends inside a character of.
+// name, take tokens and texts that nearly are, and texts a cut ends inside a
+// character of.
 func ltSeeds() []string {
 	const leg = "toolu_test_leg"
 	done := claudeNotificationCompleted
@@ -226,6 +248,10 @@ func ltSeeds() []string {
 		strings.Repeat("\U0001f600", skillListingMaxNameUnits/2) + "a",
 		strings.Repeat("a", skillListingMaxNameUnits-1) + "\U0001f600",
 		strings.Repeat("\u00e9", skillListingMaxNameUnits),
+		ltAsked[0], "a note " + ltAsked[0] + " reached the run", ltAsked[1] + ltAsked[0] + ltAsked[1],
+		ltAsked[0][:len(ltAsked[0])-1], ltAsked[0][:len(ltAsked[0])-1] + "0]", claudeTakePrefix,
+		claudeTakePrefix + ltAsked[0], claudeTakePrefix + ctProbeBatchTake, claudeTakeToken(ctProbeUntakenOne),
+		strings.Repeat("a", textPieceBytes-20) + ltAsked[1], strings.Repeat("\u00e9", 7) + ltAsked[0] + "\xff",
 	}
 	for _, n := range []int{255, 256, 257, 4095, 4096, 4097, 9 << 20} {
 		seeds = append(seeds, strings.Repeat("r", n), strings.Repeat("\u00e9", n/2)+strings.Repeat("r", n%2))
@@ -437,4 +463,93 @@ func FuzzATextsFactsAreReadAsItsWholeTextReadsThem(f *testing.F) {
 	f.Fuzz(func(t *testing.T, text string, seed uint64) {
 		ltCheck(t, "the text", text, rand.New(rand.NewPCG(seed, seed)))
 	})
+}
+
+// A TAKE'S TOKEN IS MATCHED WHOLE AND EXACTLY ([textTakes]): its prefix, the 36
+// bytes of its take and its closing bracket, equal to an asked token, wherever
+// it sits (inside a longer bracketed run, after a prefix it does not complete,
+// beside bytes that are no UTF-8), and in whatever pieces it arrives: whole,
+// cut anywhere in two, or a byte at a time. A token one byte short or one
+// past, its take alone or under another prefix names nothing; a token twice is
+// named once; and all 64 a reading may ask are told apart, a 65th refused.
+//
+// Mutation: match the take alone (a strings.Contains of its 36 bytes), and the
+// take with no prefix is named; end the match one byte before the closing
+// bracket, and a token one byte past is named.
+func TestATakesTokenIsMatchedWholeAndExactly(t *testing.T) {
+	t.Parallel()
+	take := func(i int) string { return fmt.Sprintf("00000000-0000-4000-8000-%012d", i) }
+	a, b := take(1), take(2)
+	asked := []string{claudeTakeToken(a), claudeTakeToken(b)}
+	read := func(text string, asked []string) []uint64 {
+		var got []uint64
+		feed := func(pieces ...string) {
+			takes := textTakes{asked: asked}
+			for _, p := range pieces {
+				takes.write([]byte(p))
+			}
+			got = append(got, takes.bits)
+		}
+		feed(text)
+		for cut := 1; cut < len(text); cut++ {
+			feed(text[:cut], text[cut:])
+		}
+		feed(strings.Split(text, "")...)
+		return got
+	}
+	for name, tc := range map[string]struct {
+		text string
+		want uint64
+	}{
+		"the token":                      {"a note " + asked[0] + " reached the run", 1},
+		"one byte short":                 {claudeTakePrefix + a[:35] + "]", 0},
+		"one byte past":                  {claudeTakePrefix + a + "0]", 0},
+		"its take alone":                 {"a note " + a + " reached the run", 0},
+		"under another prefix":           {"[crewlet note " + a + "]", 0},
+		"with no closing bracket":        {claudeTakePrefix + a + " ", 0},
+		"inside a longer bracketed run":  {"[a note " + asked[0] + " reached the run]", 1},
+		"after a prefix it holds":        {claudeTakePrefix + asked[0], 1},
+		"twice":                          {asked[0] + asked[0], 1},
+		"both, the second first":         {asked[1] + " and " + asked[0], 3},
+		"beside bytes that are no UTF-8": {"\xff\xfe" + asked[1] + "\xc3", 2},
+		"a take no reader asked":         {claudeTakeToken(take(3)), 0},
+	} {
+		for i, got := range read(tc.text, asked) {
+			if got != tc.want {
+				t.Errorf("%s, read in its %dth way, names the takes %b; want %b", name, i, got, tc.want)
+				break
+			}
+		}
+	}
+	all := make([]string, maxAskedTakes)
+	for i := range all {
+		all[i] = claudeTakeToken(take(100 + i))
+	}
+	for name, tc := range map[string]struct {
+		text string
+		want uint64
+	}{
+		"the first, the 32nd and the last": {all[63] + all[31] + all[0], 1 | 1<<31 | 1<<63},
+		"every one":                        {strings.Join(all, " "), ^uint64(0)},
+		"none":                             {asked[0], 0},
+	} {
+		for i, got := range read(tc.text, all) {
+			if got != tc.want {
+				t.Errorf("of %d asked, %s, read in its %dth way, names the takes %b; want %b", len(all), name, i,
+					got, tc.want)
+				break
+			}
+		}
+	}
+	if got := read(asked[0], nil); slices.ContainsFunc(got, func(bits uint64) bool { return bits != 0 }) {
+		t.Errorf("a text read with nothing asked names the takes %b", got)
+	}
+	reader := newThreadReader(strings.NewReader(""), 0)
+	if err := reader.Asking(asked); err != nil {
+		t.Fatalf("a reading asking %d takes is refused: %v", len(asked), err)
+	}
+	if err := reader.Asking(append(all, asked[0])); !errors.Is(err, errAskedPastMasks) || reader.asked != nil {
+		t.Errorf("a reading asking %d takes answers %v and asks %d; want %v and none", maxAskedTakes+1, err,
+			len(reader.asked), errAskedPastMasks)
+	}
 }

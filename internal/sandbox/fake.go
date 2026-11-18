@@ -682,6 +682,10 @@ type FakeRunner struct {
 	// [CarryCheck.Version]), "" for an answer this build cannot read. Set it
 	// before the launch that asks.
 	CarryVersion string
+	// CarryResumeUnread makes every box's harness answer a release whose
+	// resume this build did not read ([CarryCheck.ResumeRead]); unset, it
+	// answers one it did. Set it before the launch that asks.
+	CarryResumeUnread bool
 	// carried is every archive a job was started with, read whole as a
 	// runner writes it into its box.
 	carried []FakeCarried
@@ -693,6 +697,43 @@ type FakeRunner struct {
 	Holdings func(SessionArchive, HoldingsAsk) (SessionHoldings, error)
 	// holdingsAsks is every ask a reading was handed, in order.
 	holdingsAsks []HoldingsAsk
+
+	// SavesSessions is what [FakeRunner.Saves] answers: whether the harness
+	// this fake stands in for has its session saved while its run still
+	// works, as Claude Code's runner does and OpenCode's does not. A save
+	// packs [FakeRunner.Session] as it stands then. Set it before the first
+	// poll that may offer a save.
+	SavesSessions bool
+	// PackSaveErr, when set, fails every [FakeRunner.PackSave], as a pack
+	// that a file rewritten under it refused fails. Packing, when set, runs
+	// as each save is packed, before the pack is made, handed the pack's
+	// context and the box, and is called without the runner's lock: so a
+	// case can hold a pack, record a renewal while one is made, or spend its
+	// time. A pack whose context is done once Packing returns fails with
+	// the context's error, as a box's pack cut off by its caller does.
+	PackSaveErr error
+	Packing     func(ctx context.Context, box Sandbox)
+	// StreamedErr, when set, fails every [FakeRunner.Streamed].
+	StreamedErr error
+	// streamed is how far the stream of each box's job has run, by the
+	// box's id ([FakeRunner.Stream]), and streamedReads how many times it
+	// was read.
+	streamed      map[string]int64
+	streamedReads int
+	// saves are the saves packed and neither taken nor released yet, by
+	// path; packedIn is the box every save was packed in, by path, taken or
+	// not; released is every save released, in order; and packs numbers
+	// the saves, so each has a path of its own.
+	saves    map[string]fakeSave
+	packedIn map[string]string
+	released []string
+	packs    int
+	// Point, when set, is what a read of a box's OpenCode point answers
+	// ([FakeRunner.ReadOpenCodePoint]); unset, every read is an error, a box
+	// that could not be asked. Set it before the launch that reads.
+	Point func(PointAsk) (OpenCodePoint, error)
+	// pointAsks is every ask a read of a point was handed, in order.
+	pointAsks []PointAsk
 
 	// The job's live account: what it has said, under which origin and
 	// from which source. See [FakeRunner.Say].
@@ -732,7 +773,8 @@ func (p *fakePlay) played() bool { return p.finished.Load() }
 // NewFakeRunner returns a runner under the given name.
 func NewFakeRunner(name string) *FakeRunner {
 	return &FakeRunner{name: name, installed: map[string]bool{}, plays: map[string]*fakePlay{},
-		ended: map[string]bool{}}
+		ended: map[string]bool{}, streamed: map[string]int64{}, saves: map[string]fakeSave{},
+		packedIn: map[string]string{}}
 }
 
 // fakeScriptPID is the pid a [FakeRunner]'s job's script answers an end request
@@ -1115,6 +1157,14 @@ type FakeSession struct {
 	// nil for a take that counts nothing.
 	Count *ResumedCount
 
+	// NextRequest is what the take estimates the session's next request at
+	// ([TakenSession.Next]), zero for none.
+	NextRequest NextRequest
+
+	// CountProvider is the provider the take names beside its count
+	// ([TakenSession.CountProvider]), "" for none.
+	CountProvider string
+
 	// Taking, where set, runs with the take's context as a take reads the
 	// box, after the capture placed the session from the run's log and before
 	// the archive is handed over: a case lands a call between the two there,
@@ -1123,7 +1173,8 @@ type FakeSession struct {
 
 	// Streaming, where set, runs with the take's context as the archive is
 	// first read (its place reserved, spooling), so a case can spend the
-	// take's time where a stream at its bound does.
+	// take's time where a stream at its bound does. Held until that context
+	// ends, the read fails, as a stalled stream's does.
 	Streaming func(ctx context.Context)
 
 	// Keeping, where set, runs with the digest's context just before the
@@ -1139,7 +1190,11 @@ type FakeSession struct {
 func (s *FakeSession) Kept() int { return int(s.kept.Load()) }
 
 // TakeSession hands a capture the runner's [FakeRunner.Session], recording what
-// it was asked ([FakeRunner.Takes]); a runner with none holds no session.
+// it was asked ([FakeRunner.Takes]); a runner with none holds no session. A
+// take that names a save ([SessionTake.Save]) is handed that save as
+// [FakeRunner.PackSave] packed it, once, and the save is gone after: nothing
+// where it was already taken or released, and an error where the path names
+// no save packed in the box.
 //
 // A BOX THAT IS PAUSED OR RECLAIMED IS NOT READ, as no real one is: a capture
 // made after the pause or reclaim it must precede is refused here as there.
@@ -1154,8 +1209,26 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 		return TakenSession{}, fmt.Errorf("fake: box %s is paused or reclaimed, and its session cannot be "+
 			"read", fake.ID())
 	}
-	if session == nil {
+	var (
+		archive SessionArchive
+		raw     []byte
+	)
+	switch {
+	case take.Save != "" && take.Pack:
+		return TakenSession{}, errors.New("fake: a take of a save packs nothing")
+	case take.Save != "":
+		save, there, err := r.takeSave(box, take.Save)
+		if err != nil || !there {
+			return TakenSession{}, err
+		}
+		archive, raw = save.archive, save.body
+		if session == nil {
+			session = &FakeSession{}
+		}
+	case session == nil:
 		return TakenSession{}, nil
+	default:
+		archive, raw = session.Archive, session.Body
 	}
 	if session.TakeErr != nil {
 		return TakenSession{}, session.TakeErr
@@ -1167,15 +1240,19 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 	if session.Count != nil {
 		count = func() *ResumedCount { counted := *session.Count; return &counted }
 	}
-	body := io.Reader(bytes.NewReader(session.Body))
+	body := &takenFake{Reader: bytes.NewReader(raw), take: ctx}
 	if session.Streaming != nil {
-		body = &firstRead{Reader: body, first: func() { session.Streaming(ctx) }}
+		body.stall = func() { session.Streaming(ctx) }
 	}
 	return TakenSession{
-		Archive: session.Archive,
-		Body:    io.NopCloser(body),
+		Archive: archive,
+		Body:    body,
 		Context: func() int64 { return session.ContextTokens },
+		Next:    func() NextRequest { return session.NextRequest },
 		Count:   count,
+		CountProvider: func() string {
+			return session.CountProvider
+		},
 		Keep: func(ctx context.Context) error {
 			if session.Keeping != nil {
 				session.Keeping(ctx)
@@ -1189,16 +1266,34 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 	}, nil
 }
 
-// firstRead is a reader that runs first once, as it is first read.
-type firstRead struct {
+// takenFake is a fake take's body. Its reads fail once it is closed, as the
+// executor's do, so a spool its context cut keeps nothing; and a first read
+// stall (Streaming) held until the take's context ended fails, as the box's
+// stream the spool closes at that same end does ([Coordinator.spool]).
+type takenFake struct {
 	io.Reader
-	first func()
-	once  sync.Once
+	take   context.Context
+	stall  func()
+	once   sync.Once
+	closed atomic.Bool
 }
 
-func (r *firstRead) Read(p []byte) (int, error) {
-	r.once.Do(r.first)
-	return r.Reader.Read(p)
+func (b *takenFake) Read(p []byte) (int, error) {
+	if b.stall != nil {
+		b.once.Do(b.stall)
+		if err := b.take.Err(); err != nil {
+			return 0, fmt.Errorf("fake: the take's stream stalled past its context: %w", err)
+		}
+	}
+	if b.closed.Load() {
+		return 0, io.ErrClosedPipe
+	}
+	return b.Reader.Read(p)
+}
+
+func (b *takenFake) Close() error {
+	b.closed.Store(true)
+	return nil
 }
 
 // Takes is every capture asked of this runner, in order.
@@ -1206,6 +1301,142 @@ func (r *FakeRunner) Takes() []SessionTake {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return slices.Clone(r.takes)
+}
+
+// fakeSave is a save a [FakeRunner] packed: the box it was packed in, by its
+// id, and the session as it stood then.
+type fakeSave struct {
+	box     string
+	archive SessionArchive
+	body    []byte
+}
+
+// Saves is [FakeRunner.SavesSessions].
+func (r *FakeRunner) Saves() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.SavesSessions
+}
+
+// Streamed is how far the stream of the job in box has run, as
+// [FakeRunner.Stream] moved it: zero for a box whose stream never moved.
+func (r *FakeRunner) Streamed(_ context.Context, box Sandbox) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.streamedReads++
+	if r.StreamedErr != nil {
+		return 0, r.StreamedErr
+	}
+	return r.streamed[box.ID()], nil
+}
+
+// Stream moves the stream of the job in box on by n bytes, as its harness
+// printing a step of its work does.
+func (r *FakeRunner) Stream(box Sandbox, n int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.streamed[box.ID()] += n
+}
+
+// StreamedReads is how many times [FakeRunner.Streamed] was asked.
+func (r *FakeRunner) StreamedReads() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.streamedReads
+}
+
+// PackSave packs a save of [FakeRunner.Session] as it stands, for taker, at a
+// path of that save's own in box, which a take naming it streams once
+// ([SessionTake.Save]) and a release removes ([FakeRunner.ReleaseSave]). As a
+// real runner's: a zero description where nothing is saved (a fake that saves
+// no sessions, or holds none), and an error for a taker that names nobody or
+// a box that is paused or reclaimed. [FakeRunner.Packing] runs first, and
+// [FakeRunner.PackSaveErr] fails it.
+func (r *FakeRunner) PackSave(ctx context.Context, box Sandbox, taker string) (SessionArchive, error) {
+	r.mu.Lock()
+	saves, packing, failed := r.SavesSessions, r.Packing, r.PackSaveErr
+	r.mu.Unlock()
+	switch {
+	case !saves:
+		return SessionArchive{}, nil
+	case taker == "":
+		return SessionArchive{}, errors.New("fake: a save names no taker")
+	}
+	if fake, ok := box.(*FakeSandbox); ok && fake.unreadable() {
+		return SessionArchive{}, fmt.Errorf("fake: box %s is paused or reclaimed, and its session cannot be "+
+			"saved", fake.ID())
+	}
+	if packing != nil {
+		packing(ctx, box)
+	}
+	if err := ctx.Err(); err != nil {
+		return SessionArchive{}, fmt.Errorf("fake: the save was cut off as it was packed: %w", err)
+	}
+	if failed != nil {
+		return SessionArchive{}, failed
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.Session == nil {
+		return SessionArchive{}, nil
+	}
+	r.packs++
+	archive := r.Session.Archive
+	archive.Path = path.Join(box.Home(), "session-save."+taker+"."+strconv.Itoa(r.packs))
+	r.saves[archive.Path] = fakeSave{box: box.ID(), archive: archive, body: bytes.Clone(r.Session.Body)}
+	r.packedIn[archive.Path] = box.ID()
+	return archive, nil
+}
+
+// takeSave hands over, and removes, the save at p in box: not there, with no
+// error, where it was already taken or released, and an error where p names
+// no save this fake packed in box, as a real take refuses one.
+func (r *FakeRunner) takeSave(box Sandbox, p string) (fakeSave, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if in, packed := r.packedIn[p]; !packed || in != box.ID() {
+		return fakeSave{}, false, fmt.Errorf("fake: %q is no save packed in box %s", p, box.ID())
+	}
+	save, there := r.saves[p]
+	delete(r.saves, p)
+	return save, there, nil
+}
+
+// ReleaseSave removes the save at p from box, recording that it was asked
+// ([FakeRunner.Released]); a path that is no save this fake packed in box is
+// refused, as a real runner refuses one.
+func (r *FakeRunner) ReleaseSave(_ context.Context, box Sandbox, p string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if in, packed := r.packedIn[p]; !packed || in != box.ID() {
+		return fmt.Errorf("fake: %q is no save packed in box %s, and a release removes a save and nothing else",
+			p, box.ID())
+	}
+	r.released = append(r.released, p)
+	delete(r.saves, p)
+	return nil
+}
+
+// Released is every save released, by path, in order.
+func (r *FakeRunner) Released() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.released)
+}
+
+// SavesLeft is every save of box's packed and neither taken nor released, by
+// path, sorted.
+func (r *FakeRunner) SavesLeft(box Sandbox) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var left []string
+	for p, save := range r.saves {
+		if save.box == box.ID() {
+			left = append(left, p)
+		}
+	}
+	slices.Sort(left)
+	return left
 }
 
 // FakeArchiveFormat is the one archive format a [FakeRunner] that carries
@@ -1228,6 +1459,8 @@ func (r *FakeRunner) Carried() []FakeCarried {
 }
 
 var _ SessionRestorer = (*FakeRunner)(nil)
+
+var _ SessionSaver = (*FakeRunner)(nil)
 
 // Restores answers as a runner of a harness that packs and restores does where
 // [FakeRunner.Carries] is set — a session its own harness wrote, in
@@ -1257,11 +1490,11 @@ func (r *FakeRunner) CheckCarry(_ context.Context, _ Sandbox, archive SessionArc
 	defer r.mu.Unlock()
 	switch {
 	case !ok:
-		return CarryCheck{Version: r.CarryVersion, Why: why}, nil
+		return CarryCheck{Version: r.CarryVersion, ResumeRead: !r.CarryResumeUnread, Why: why}, nil
 	case r.CarryWhy != "":
-		return CarryCheck{Version: r.CarryVersion, Why: r.CarryWhy}, nil
+		return CarryCheck{Version: r.CarryVersion, ResumeRead: !r.CarryResumeUnread, Why: r.CarryWhy}, nil
 	}
-	return CarryCheck{Version: r.CarryVersion, Continues: true}, nil
+	return CarryCheck{Version: r.CarryVersion, ResumeRead: !r.CarryResumeUnread, Continues: true}, nil
 }
 
 var _ HoldingsReader = (*FakeRunner)(nil)
@@ -1315,6 +1548,29 @@ func (r *FakeRunner) Started() []RunRequest {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return slices.Clone(r.started)
+}
+
+var _ PointReader = (*FakeRunner)(nil)
+
+// ReadOpenCodePoint records ask and answers [FakeRunner.Point] of it, an error
+// where it is unset.
+func (r *FakeRunner) ReadOpenCodePoint(_ context.Context, _ Sandbox, ask PointAsk) (OpenCodePoint, error) {
+	r.mu.Lock()
+	r.pointAsks = append(r.pointAsks, ask)
+	point := r.Point
+	r.mu.Unlock()
+	if point == nil {
+		return OpenCodePoint{}, errors.New("fake: this runner reads no OpenCode point")
+	}
+	return point(ask)
+}
+
+// PointAsks is every ask a read of a box's OpenCode point was handed, in
+// order.
+func (r *FakeRunner) PointAsks() []PointAsk {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.pointAsks)
 }
 
 var _ mainThreadReader = (*FakeRunner)(nil)

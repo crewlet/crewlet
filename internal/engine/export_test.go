@@ -51,7 +51,7 @@ func TransferWindows(e *Engine) (link, objects, memory *jsapi.Window) {
 
 // ControlOutcome is what a seat's control-topic delivery leaves with the broker,
 // for a test outside the package that drives the coordinator behind it.
-func ControlOutcome(err error) queue.Result { return controlOutcome(err) }
+func ControlOutcome(ctx context.Context, err error) queue.Result { return controlOutcome(ctx, err) }
 
 // Reflects reports whether e has built its reflect dispatcher, for a test
 // outside the package that drives an engine through its public surface.

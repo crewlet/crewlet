@@ -9,20 +9,15 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A TRACKER HANDS ON EVERY TRANSITION ONCE.
+// A TRACKER HANDS ON EVERY TRANSITION ONCE: `fired` when an instance is raised
+// and `cleared` when it goes, once however many evaluations it stands through,
+// and one per log for a per-log alarm. Each carries the node, alarm, log,
+// measurement, raise and change instants under the id statelog.TransitionID
+// derives from them, so ids are unique and stable. A tracker nobody asked to
+// be told hands on nothing and observes as before.
 //
-// An instance raised is `fired` and one gone is `cleared`, each ONCE however
-// many evaluations it stands through. A per-log alarm is one
-// transition per log, as its log lines are: a log joining a kind already up is
-// a fire of its own and one leaving it a clear of its own. Each carries the
-// node, the alarm, the log, the measurement, when the instance was raised and
-// when it changed, under the id statelog.TransitionID derives from them, so no
-// two transitions share an id and the same transition is the same id however
-// often it is derived. A tracker nobody asked to be told hands on nothing and
-// observes as it always did.
-//
-// Mutation: hand on the firing set of every evaluation rather than its
-// changes, or derive an id that leaves out the change, and the case is red.
+// Mutation: hand on every evaluation's firing set rather than its changes, or
+// derive an id that leaves out the change, and the case is red.
 func TestATrackerHandsOnEveryTransitionOnce(t *testing.T) {
 	t.Parallel()
 	start := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
@@ -128,10 +123,9 @@ func TestATrackerHandsOnEveryTransitionOnce(t *testing.T) {
 }
 
 // TWO ENTRIES OF ONE PER-ENTRY KIND THAT RISE TOGETHER ARE TWO TRANSITIONS,
-// each naming its entry under an id of its own, because a wake is keyed on the
-// id and two servers raised in one evaluation share the node, the kind, the
-// change and the instant. Their clears are told apart the same way, so one
-// server recovering while the other stays down is not the alarm clearing.
+// each naming its entry under an id of its own: a wake is keyed on the id, and
+// the two share everything else. One server recovering while the other stays
+// down is its own clear, not the alarm clearing.
 //
 // Mutation: leave the entry out of the transition or out of [TransitionID], and
 // the two carry no entry, or one id.

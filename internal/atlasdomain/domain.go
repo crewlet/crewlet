@@ -11,8 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// Domain is the atlas log as the state-log framework sees it: the THIRTEENTH
-// domain and the ELEVENTH strict, identity-claiming one.
+// Domain is the atlas log as the state-log framework sees it: a strict,
+// identity-claiming domain.
 type Domain struct{}
 
 // Name is the register key, the manifest key and the operator's column. Never
@@ -21,16 +21,14 @@ func (Domain) Name() string { return "atlas" }
 
 // AtlasLogMaxBytes is the ceiling this domain declares for its log, which the
 // framework's own suites provision the stream with; a node sizes it from Tier A.
-// At the reference company the log takes well under a mebibyte a day (a
-// person's claim is under a kilobyte), so 128 MiB is months of a trim blocked
-// outright, the access log's horizon.
+// The reference company's log takes well under a mebibyte a day, so 128 MiB
+// holds months of a blocked trim, the access log's horizon.
 const AtlasLogMaxBytes = 128 << 20
 
-// MaxRecordBytes is the largest record this domain publishes. A person's claim
-// is a few hundred bytes; 256 KiB is the access log's bound, kept so a later
-// record kind (an integration's read of a page of changes) fits the same
-// reserve. The gate reserve this sizes is about 2.7 MiB, under a sixteenth of
-// the 64 MiB floor.
+// MaxRecordBytes is the largest record this domain publishes. A claim is a few
+// hundred bytes; 256 KiB is the access log's bound, so an integration's read of
+// a page of changes fits too. The gate reserve it sizes, about 2.7 MiB, stays
+// under a sixteenth of the 64 MiB floor.
 const MaxRecordBytes = 256 << 10
 
 // AtlasLogDuplicates is the broker's duplicate window: every strict log's two
@@ -39,14 +37,11 @@ const AtlasLogDuplicates = 2 * time.Minute
 
 // LinearizableReadsPerSeatDay is this log's read model: one barrier for each
 // turn that reads the atlas, at the reference company's thirty turns a seat a
-// day. A person's edit decides from the entry's version in its own snapshot,
-// where the broker arbitrates what a stale copy decided, and the dashboard reads
-// at its own level, `session` by default ([DefaultRead]); but an AGENT's atlas
-// tools, and the operator's, read at the seat surface's `linearizable`
-// (statelog.SurfaceSeat), as every seat tool does, so each turn that consults
-// the atlas takes a barrier on this log. Declared as none, the census-drift
-// alarm fired on the first such read and never cleared, on a company doing
-// exactly the work the log was sized for.
+// day. A person's edit is arbitrated on the entry's version and the dashboard
+// reads at `session` ([DefaultRead]), but an agent's and the operator's atlas
+// tools read at the seat surface's `linearizable` (statelog.SurfaceSeat).
+// Declared as none, the census-drift alarm fires on the first such read and
+// never clears.
 const LinearizableReadsPerSeatDay = 30
 
 // Stream is the atlas log, at the domain's whole budget.

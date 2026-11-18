@@ -9,16 +9,14 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A REANCHOR'S RECORD NAMES ITS AUTHOR BY THE ONE RULE EVERY LOG READS IT BY.
+// A REANCHOR'S RECORD NAMES ITS AUTHOR BY THE ONE RULE EVERY LOG READS IT BY,
+// [statelog.GenerationFacts.Author], since the audit feed reads every log's
+// generation records side by side: the party that rule names, in this log's
+// actor kinds, or this node when the facts name nobody; its Generation
+// payload's By, which the audit row is written from, is the same name.
 //
-// [statelog.GenerationFacts.Author] states the rule once, and the audit feed
-// reads every log's generation records side by side. The record names exactly
-// the party that rule names, in the actor kinds this log's columns hold, and
-// this node when the facts name nobody; its Generation payload's By, which the
-// audit row is written from, is the same name.
-//
-// Mutation: put a private reading back that maps a principal's word to an actor
-// kind of its own, or reads a name of spaces as a party, and its case says so.
+// Mutation: read the facts privately, mapping a principal's word to an actor
+// kind of its own or a name of spaces to a party, and its case goes red.
 func TestAGenerationRecordNamesItsAuthorByTheOneRule(t *testing.T) {
 	t.Parallel()
 	for name, f := range map[string]statelog.GenerationFacts{

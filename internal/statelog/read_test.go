@@ -19,12 +19,10 @@ import (
 
 // stubStore counts the transactions a read opens over a real, empty estate.
 //
-// REAL rather than a nil transaction, because every read that is SERVED opens
-// one and its first statement is the coverage probe: a stub that handed the
-// reader nothing could only stand in for a read that is refused before it gets
-// there, and a case that thought it was one of those and was not would panic
-// rather than say so. The local refusals still never reach it, which is what
-// the counter shows.
+// REAL, because every SERVED read opens one and its first statement is the
+// coverage probe: a stub handing the reader nothing would panic in a case that
+// wrongly thought its read was refused first. The local refusals never reach
+// it, which the counter shows.
 type stubStore struct {
 	inner interface {
 		Read(context.Context, func(*sql.Tx) error) error
@@ -33,10 +31,9 @@ type stubStore struct {
 	err   error
 }
 
-// newStubStore is a whole estate of its own — a migrated store and the probe
-// domain's tables — so a case builds ONE and hands it to every reader it
-// makes: the rows are read and never written here, and what a case counts is
-// a fresh wrapper's ([stubStore.again]), never the estate's.
+// newStubStore is a whole estate (a migrated store and the probe domain's
+// tables), so a case builds ONE for every reader it makes: the rows are only
+// read, and a case counts a fresh wrapper's reads ([stubStore.again]).
 func newStubStore(t *testing.T) *stubStore {
 	t.Helper()
 	return &stubStore{inner: newApplyHarness(t, probeDomain{}).estate}
@@ -123,19 +120,18 @@ func pointQuery(level statelog.ReadLevel) statelog.Query {
 
 // A DOOMED READ NEVER APPENDS, and the refusals run cheapest first.
 //
-// Each of these is answered from what this node already knows, for nothing —
-// and each says this node's rows are WRONG rather than old, so no amount of
-// freshness would make the answer serveable. Appending a barrier to discover
-// that spends a quorum round trip on a read that could never be certified.
+// Each is answered from what this node already knows and says its rows are
+// WRONG rather than old, so no freshness makes the answer serveable: a barrier
+// would spend a quorum round trip on a read that can never be certified.
 func TestADoomedReadRefusesBeforeItAppends(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		health func() statelog.Health
 		want   statelog.ReadRefusal
 
-		// absent is what the refusal must NOT say: a refusal's detail
-		// reaches every caller, and an applier's own error is a
-		// driver's message or a database path.
+		// absent is what the refusal must NOT say: its detail reaches
+		// every caller, and an applier's error holds a driver's message
+		// or a database path.
 		absent string
 	}{
 		"an evicted node": {
@@ -224,12 +220,11 @@ func TestADoomedReadRefusesBeforeItAppends(t *testing.T) {
 
 // A NODE REPLAYING UP TO THE FLOOR TELLS A READER TO COME BACK, and when.
 //
-// The floor is published before the purge it licenses, so a node can sit
-// below it while the log still holds every record it lacks. That is a wait,
-// not a fault: the answer is `behind`, which a caller retries here, with a
-// hint from this node's own drain and a detail naming the floor — never
-// `below_floor`, which sends a caller elsewhere and an operator to a restore
-// the node does not need. And it is still decided locally, before a barrier.
+// The floor is published before the purge it licenses, so a node below it may
+// still find every record it lacks in the log: a wait, not a fault. So
+// `behind`, retried here with a hint from this node's drain and a detail
+// naming the floor, never `below_floor` (which sends a caller elsewhere and an
+// operator to a needless restore), and decided locally, before a barrier.
 func TestANodeReplayingUpToTheFloorIsTheOneToComeBackTo(t *testing.T) {
 	t.Parallel()
 	var appends atomic.Int64
@@ -280,13 +275,10 @@ func TestANodeReplayingUpToTheFloorIsTheOneToComeBackTo(t *testing.T) {
 // A STALL BELOW THE FLOOR SERVES NOTHING, not even the one read a stall
 // otherwise survives.
 //
-// A consistent-prefix read asks only for a coherent point in the log's order,
-// so a frozen prefix still answers it — at or above the floor. Below it, a
-// stall outranks the replay ([statelog.Health.Refusal] reports `stalled`,
-// since a replay that is not moving is not one to wait on), and that order
-// alone let the stall exemption serve rows below the floor every node must
-// hold before it answers — while the same node with a first sequence one lower
-// reported `below_floor` and served nothing.
+// A frozen prefix still answers a consistent-prefix read at or above the
+// floor. Below it [statelog.Health.Refusal] reports `stalled` ahead of the
+// replay (a replay not moving is not one to wait on), and the stall exemption
+// must not then serve rows below the floor every node must hold to answer.
 func TestAStallBelowTheFloorServesNoRead(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -345,18 +337,14 @@ func (c *countingAppends) LastSeq(ctx context.Context, subject string) (uint64, 
 
 // A STALE READ SURVIVES A FULL LOG, and a linearizable one does not.
 //
-// A full log refuses appends rather than dropping records, so the barrier a
-// linearizable read rests on cannot be written — but a level that takes no
-// broker call at all is unaffected. That asymmetry is worth stating, because
-// the tempting reading is that a full log stops reads.
+// A full log refuses appends, so a linearizable read's barrier cannot be
+// written, but a level taking no broker call is unaffected: a full log does
+// not stop reads.
 //
-// THE REFUSAL IS WHAT A BROKER SENDS. This case used to hand the read index an
-// appender that returned a ready-made `log_full`, which no broker does — a
-// real one answers its own store failure — and the read index passed that
-// answer up unclassified, so on a real full log the read was refused
-// `no_quorum`: retryable, with an election's four-second hint, from a node
-// that refuses the next barrier identically. So the fake now answers what the
-// broker answers, and a second case fills a REAL log to its ceiling.
+// THE REFUSAL IS WHAT A BROKER SENDS, its own store failure, which the read
+// index must classify as `log_full`, not `no_quorum` (retryable, with an
+// election's hint, from a node refusing the next barrier identically). So the
+// fake answers as a broker does, and a second case fills a REAL log.
 func TestAFullLogCostsTheLevelsThatAppendAndNoOthers(t *testing.T) {
 	t.Parallel()
 
@@ -383,11 +371,9 @@ func TestAFullLogCostsTheLevelsThatAppendAndNoOthers(t *testing.T) {
 				written++
 			}
 		}
-		// THROUGH THE LOG'S OWN RESERVE, as every append on it is in
-		// production: the publisher's writes stop at the ordinary ceiling,
-		// so a barrier admitted past the reserve would land in the room
-		// kept for gate records — and the read would be served from a log
-		// every ordinary write is refused on.
+		// THROUGH THE LOG'S OWN RESERVE, as in production: a barrier
+		// admitted past it would land in the room kept for gate records,
+		// serving the read from a log refusing every ordinary write.
 		assertFullLogRead(t, h, h.log, h.reserve)
 	})
 }
@@ -434,28 +420,22 @@ func assertFullLogRead(t *testing.T, h *harness, log statelog.Appender,
 
 // A BARRIER THE BROKER REFUSED FOR A REASON OF ITS OWN IS NOT A MISSED QUORUM.
 //
-// A sealed stream, a JetStream store out of resources: the broker answered,
-// and it will answer the same to the next barrier. Read as `no_quorum` — which
-// is where every refusal the read index did not recognise went — it carried an
-// election's retry hint to a caller the node will refuse identically. And a
-// barrier nobody answered IS the missed quorum — on a log several members
-// store, which the control holds.
+// A sealed stream, a JetStream store out of resources: the broker answered and
+// will answer the next barrier the same, so `no_quorum`'s election hint would
+// be false. A barrier nobody answered IS the missed quorum, on a log several
+// members store, which the control holds.
 func TestABarrierTheBrokerRefusedIsNotAMissedQuorum(t *testing.T) {
 	t.Parallel()
+	// AND THE WORDS: a refusal the broker NAMED carries them, as the
+	// remedy; an unconfirmed barrier is told in this package's words naming
+	// its subject, since the transport's own error would reach the caller.
+	// `words` is what the detail must say, `absent` what it must not.
 	//
-	// AND THE WORDS: a refusal the broker NAMED carries them, because they
-	// are the remedy; a barrier nobody confirmed is told in this package's
-	// words, naming the barrier's subject, because the error behind it is
-	// the transport's own and every surface sends a refusal's detail to the
-	// caller. `words` is what the detail must say and `absent` what it must
-	// not.
-	//
-	// AND THE MEMBERS: what an unconfirmed barrier is turns on how many store
-	// the log. On three it is a majority that did not agree, or no leader
-	// that answered; on one there is no majority, so it is never `no_quorum`
-	// — a broker that did not answer, or, where its time ran out, the
-	// member's own write that stalled. What the broker NAMED is the same
-	// refusal at any count.
+	// AND THE MEMBERS: on three, an unconfirmed barrier is a majority that
+	// did not agree or no leader answering; on one there is no majority, so
+	// never `no_quorum` but a broker that did not answer or, when its time
+	// ran out, the member's own stalled write. What the broker NAMED is the
+	// same at any count.
 	timedOut := fmt.Errorf("append: %w", context.DeadlineExceeded)
 	for _, c := range []struct {
 		name    string
@@ -533,10 +513,10 @@ func TestABarrierTheBrokerRefusedIsNotAMissedQuorum(t *testing.T) {
 
 // A BARRIER WHOSE LOG'S USAGE CANNOT BE READ IS NEVER APPENDED, AND SAYS SO.
 //
-// Its admission reads the log's usage first, and a broker whose meta group has
-// no leader answers that read 503, err_code 10008. The read is refused as a
-// barrier nobody confirmed, by the log's member count, in this package's words:
-// never the sentence about an append nobody confirmed, which was not made.
+// Admission reads the log's usage first; a broker whose meta group has no
+// leader answers 503, err_code 10008. The read is refused as an unconfirmed
+// barrier, by member count, in this package's words, never claiming an append
+// that was not made.
 //
 // Mutation: drop barrierRefusal's usage_unknown arm and the detail goes red.
 func TestABarrierWhoseLogUsageCannotBeReadIsNeverAppended(t *testing.T) {
@@ -587,14 +567,11 @@ func TestABarrierWhoseLogUsageCannotBeReadIsNeverAppended(t *testing.T) {
 
 // A CALLER THAT GAVE UP IS NOT A REFUSAL.
 //
-// The read index answers a caller's own cancellation or deadline with that
-// context's error, and the coverage probe's store read fails the same way —
-// and each was mapped onto a refusal: `no_quorum`, counted in the refusal
-// metric and handed an election's four-second hint, and
-// `deferred_scope_unknown`, logged as a store this node could not read. On a
-// deadline the CALLER set, a caller still listening was told the broker's
-// members had not agreed. The read answers the context's own error instead,
-// exactly as the wait for a floor already did.
+// The read index answers a caller's cancellation or deadline with the
+// context's error, as does the coverage probe's store read. A refusal there
+// would be a false `no_quorum` (counted, with an election's hint) or
+// `deferred_scope_unknown` (logged as an unreadable store), so the read
+// answers the context's own error, as the floor wait does.
 func TestACallerThatGaveUpIsNotARefusal(t *testing.T) {
 	t.Parallel()
 	gone, cancel := context.WithCancel(t.Context())
@@ -680,9 +657,8 @@ func (refusingAppender) LastSeq(context.Context, string) (uint64, bool, error) {
 
 // A SESSION READ WITH NOTHING TO WAIT FOR TAKES NO BROKER CALL.
 //
-// It is what makes the level free in the common case: a caller that has
-// written nothing has nothing to be behind, and appending a barrier for it
-// would make the cheap level cost the same as the expensive one.
+// A caller that has written nothing has nothing to be behind; a barrier for it
+// would make the cheap level cost what the expensive one does.
 func TestASessionReadWithNoHighWaterMarkWaitsForNothing(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -723,12 +699,12 @@ func TestASessionReadWithNoHighWaterMarkWaitsForNothing(t *testing.T) {
 	}
 }
 
-// A LINEARIZABLE READ WAITS FOR THE RECORD BEFORE ITS BARRIER, never for the
-// barrier itself: a barrier writes no row on any node, so its own commit is a
-// checkpoint and an fsync that change nothing the read reads. A read handed the
-// barrier by a node asked before it waits for that same record and appends
-// nothing, and a refusal still carries the BARRIER as what the read paid for —
-// so every node a walk asks derives the one position from the one index.
+// A LINEARIZABLE READ WAITS FOR THE RECORD BEFORE ITS BARRIER, never the
+// barrier: a barrier writes no row, so its commit is a checkpoint and an fsync
+// changing nothing the read reads. A read handed the barrier by a node asked
+// before waits for that same record and appends nothing, and a refusal still
+// carries the BARRIER as what the read paid for, so every node a walk asks
+// derives one position from one index.
 func TestALinearizableReadWaitsForTheRecordBeforeItsBarrier(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -811,12 +787,10 @@ func TestALinearizableReadWaitsForTheRecordBeforeItsBarrier(t *testing.T) {
 }
 
 // A BARRIER AT THE START OF A LOG STILL TAKES THE WAIT'S PATH. The code log's
-// first record is @0:1, so a read whose barrier lands there has the zero
-// position before it — and the path after the wait is where an answer is
-// stamped from this node's applier and its staleness bound held to a health read
-// AFTER the wait, whatever the barrier's sequence. Keyed on the target being
-// non-zero, that read was stamped from the health read before it and never
-// bounded at all.
+// first record is @0:1, so a read whose barrier lands there waits for the zero
+// position. The path after the wait, which stamps the answer from this node's
+// applier and holds its staleness bound to a health read AFTER the wait, runs
+// whatever the barrier's sequence, never only for a non-zero target.
 func TestALinearizableReadAtTheStartOfALogIsStampedAndBounded(t *testing.T) {
 	t.Parallel()
 	// The waiter's position, which the health's is not, so an answer stamped
@@ -936,9 +910,8 @@ func TestOnlyARefusalWaitingCanClearCarriesAHint(t *testing.T) {
 				"clear it", code, hint)
 		}
 	}
-	// AND THE COUNT IS DERIVED FROM THE SET. A number in a comment and a
-	// set in code are two lists, and the comment is the one nobody
-	// updates.
+	// AND THE SET ITSELF IS CHECKED, never a count in a comment, which
+	// nobody updates.
 	seen := map[statelog.ReadRefusal]struct{}{}
 	for _, code := range statelog.ReadRefusals {
 		if !code.Valid() {
@@ -954,15 +927,13 @@ func TestOnlyARefusalWaitingCanClearCarriesAHint(t *testing.T) {
 	}
 }
 
-// EVERY REFUSAL ABOUT THIS NODE IS ONE ANOTHER NODE MAY SERVE, and only the
-// four that are facts about the whole fleet are not: a full log refuses every
-// node's barrier, and so does a broker that refused to store one for a reason
-// of its own (a sealed stream, a store out of resources), since every node
-// appends to the one stream; a log one member stores takes every node's
-// barrier through that member's one write, so its stall holds every node; and
-// a capacity window holds every node. Each code
-// is named here, so a code added to the set is a decision this table has to make —
-// and a code from a newer build, which nobody here can judge, is final.
+// EVERY REFUSAL ABOUT THIS NODE IS ONE ANOTHER NODE MAY SERVE; only the four
+// facts about the whole fleet are not. Every node appends to the one stream, so
+// a full log and a broker's own refusal (a sealed stream, a store out of
+// resources) refuse every node's barrier; a log one member stores takes every
+// barrier through that member's write, so its stall holds every node; and a
+// capacity window holds every node. Each code is named, so a new code is a
+// decision this table must make, and a newer build's code is final.
 func TestOnlyAFleetWideRefusalIsFinalForEveryNode(t *testing.T) {
 	t.Parallel()
 	want := map[statelog.ReadRefusal]bool{
@@ -1000,11 +971,9 @@ func TestOnlyAFleetWideRefusalIsFinalForEveryNode(t *testing.T) {
 // A REFUSAL WAITING CANNOT CLEAR IS NEVER TOLD TO COME BACK, on the read side
 // or the write side, and one that can is told when.
 //
-// [statelog.RetryAfter] is the one rule every surface answering a refusal in a
-// status code reads its Retry-After from. Each surface wrote its own, and two
-// of them both turned a node holding a record it cannot decode —
-// or an evicted one — into "retry in two seconds", which a client obeys for as
-// long as nobody upgrades or readmits the node.
+// [statelog.RetryAfter] is the one rule every surface reads its Retry-After
+// from, so none tells a client to retry a node holding a record it cannot
+// decode, or an evicted one, which only an upgrade or a readmission clears.
 func TestARefusalWaitingCannotClearIsNeverToldToComeBack(t *testing.T) {
 	t.Parallel()
 	const otherwise = 2 * time.Second
@@ -1094,13 +1063,9 @@ func TestARefusalWaitingCannotClearIsNeverToldToComeBack(t *testing.T) {
 // A WRITE REFUSAL AND ITS READ TWIN AGREE ON WHETHER WAITING HELPS.
 //
 // A [statelog.Reason] spelled like a [statelog.ReadRefusal] names the same
-// state of the same node — behind, below the floor, a floor nobody could read,
-// evicted, a record it cannot decode, a full log, a broker's own refusal — so
-// the two answers are one
-// fact said twice. They disagreed: `floor_unknown` and `below_floor` told a
-// writer to come back and a reader, on the same node at the same instant, that
-// waiting could not clear it. Both clear on their own — the floor is read
-// again, and a below-floor node rejoins by itself.
+// state of the same node, so the two answers are one fact said twice: e.g.
+// `floor_unknown` and `below_floor` clear on their own (the floor is read
+// again, a below-floor node rejoins by itself), for a writer and a reader alike.
 func TestAWriteRefusalAndItsReadTwinAgreeOnWaiting(t *testing.T) {
 	t.Parallel()
 	// THE PAIRS ARE DERIVED from the two vocabularies rather than listed, so
@@ -1136,13 +1101,11 @@ func TestAWriteRefusalAndItsReadTwinAgreeOnWaiting(t *testing.T) {
 // A DEFERRED SCOPE THIS NODE COULD NOT READ IS REFUSED IN THIS PACKAGE'S
 // WORDS, NEVER THE STORE'S.
 //
-// Every surface that answers a refusal sends its detail to the caller (the
-// query registry in a REST body and a socket frame, `/worklet` in its own), so a
-// detail built from the probe's error handed a driver's message or a database
-// path to anybody holding the question's grant. The refusal says what could
-// not be read and where the reason is; the reason goes to the log. The
-// control is the read that declares no scope, whose words ARE this package's
-// and are told as they are.
+// Every surface sends a refusal's detail to the caller (the query registry's
+// REST body and socket frame, `/worklet`'s own), so the probe's error in it
+// would hand a driver's message or a database path to anyone holding the
+// question's grant. The refusal says what could not be read; the reason goes to
+// the log. The control, a read declaring no scope, is told in its own words.
 func TestAnUnreadableDeferredScopeIsRefusedInThisPackagesWords(t *testing.T) {
 	t.Parallel()
 	deferredHealth := func() statelog.Health {
@@ -1297,10 +1260,9 @@ func TestAStaleReadRefusesPastTheBoundItAsksFor(t *testing.T) {
 		t.Fatalf("Read = %v, want a too_stale refusal", err)
 	}
 
-	// AND THE SAME BOUND IN RECORDS, which is the reading the broker
-	// actually gives: the duration above is DERIVED from it through this
-	// node's drain rate, and a bound stated in records that was validated
-	// and then ignored is a bound that never bounded anything.
+	// AND THE SAME BOUND IN RECORDS, the broker's own reading, from which
+	// the duration above is derived through this node's drain rate: a
+	// record bound validated and then ignored bounds nothing.
 	byRecords := pointQuery(statelog.ReadStale)
 	byRecords.MaxLagSeq = 100
 	_, err = r.Read(t.Context(), byRecords, func(*sql.Tx) error { return nil })
@@ -1333,15 +1295,13 @@ func TestAStaleReadRefusesPastTheBoundItAsksFor(t *testing.T) {
 	}
 }
 
-// A READINESS NOBODY COULD READ REFUSES `broker_unreachable`, NAMING WHY — at
+// A READINESS NOBODY COULD READ REFUSES `broker_unreachable`, NAMING WHY, at
 // every level, and after a wait as well as before one.
 //
-// The provider's failure is its own return rather than a sentence in
+// The provider's failure is its own return, not a sentence in
 // [statelog.Health.Err]: folded into a zero health, the zero floor beside it
-// was refused first, and a stream leader that stopped answering the log's ends
-// reached a caller as "the published trim floor has never been read on this
-// node" — the wrong code and a false sentence, sending an operator to
-// coordination.
+// would be refused first as a floor never read, sending an operator to
+// coordination for a stream leader that stopped answering.
 func TestAnUnreadableReadinessRefusesBrokerUnreachable(t *testing.T) {
 	t.Parallel()
 	const why = "the stream's leader does not answer"
@@ -1484,13 +1444,10 @@ func (l *landsBetween) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 
 // THE CALLER'S FLOOR IS HONOURED AT EVERY LEVEL, not only at `session`.
 //
-// A write answers with the position its record landed at, and a caller that
-// hands it back as [statelog.Query.Floors] is served nothing from before
-// it — whatever else it asked for. It used to reach the reader at `session`
-// only: a `stale` read carrying a floor waited for nothing and served rows
-// from before the write the caller had just been told about, and a
-// `linearizable` one waited for its own barrier, which on the honest path is
-// past the floor and on the pasted-position path is not.
+// A write answers with the position its record landed at, and a caller handing
+// it back as [statelog.Query.Floors] is served nothing from before it at any
+// level: a `stale` read waits for it, and a `linearizable` one too, since its
+// own barrier is past the floor only when the position is honest.
 func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -1548,29 +1505,17 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 }
 
 // A FLOOR ON ANOTHER STREAM IS REFUSED AT EVERY LEVEL, INCLUDING WHEN IT
-// SORTS LOW — AND AS THE REQUEST'S MISTAKE, NOT AS A STATE OF THE NODE.
+// SORTS LOW, AND AS THE REQUEST'S MISTAKE, NOT AS A STATE OF THE NODE.
 //
-// [statelog.Position.Packed] deliberately carries the generation and the
-// sequence and NOT the stream, so a foreign floor compared against a local
-// target is two coordinates from two number spaces. Selecting the maximum
-// first therefore discarded a foreign floor whenever it happened to sort below
-// the level's own target — and the guard that names `wrong_stream` then
-// inspected a purely local position and waved it through. The read was served
-// as though no floor had been named, under the level the caller asked for.
+// [statelog.Position.Packed] carries no stream, so taking the maximum of a
+// foreign floor and a local target first would drop a foreign floor sorting
+// below it before the stream check saw it; the two floors sit either side of
+// the barrier and must answer alike.
 //
-// The two floors here are the two sides of that comparison: a foreign floor
-// BELOW the barrier (silently dropped before) and one above it (refused
-// before). They must answer the same way, because which side of a local
-// barrier a foreign sequence happens to fall on says nothing about anything.
-//
-// AND THE ANSWER IS [statelog.ErrForeignPosition], NEVER A [statelog.Refused]. It
-// was `wrong_stream`, the refusal a node on a recreated stream gives, so every
-// surface answered a pasted position from another log as "this node cannot
-// answer here" — a 503 with no Retry-After that sent a client to another node
-// which refused it identically. The two healths are the rest of that: a
-// request every node refuses the same is refused before this node's own state
-// is consulted, so an EVICTED node answers the request's mistake too rather
-// than a refusal about itself.
+// The answer is [statelog.ErrForeignPosition], never a [statelog.Refused] such
+// as `wrong_stream`, which sends a client to another node refusing it alike.
+// Every node refuses it, so before this node's own state is consulted: an
+// EVICTED node answers the request's mistake too.
 func TestAFloorOnAnotherStreamIsRefusedAtEveryLevel(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -1636,11 +1581,10 @@ func TestAFloorOnAnotherStreamIsRefusedAtEveryLevel(t *testing.T) {
 // THE STALENESS BOUND IS ENFORCED AGAINST THE ANSWER'S OWN MOMENT, NOT A
 // SNAPSHOT FROM BEFORE THE WAIT.
 //
-// A read may now wait for the caller's own floor for up to the read budget,
-// and what ends that wait is this node reaching a position — which says
-// nothing about how far the log ran on meanwhile. Checking the bound only
-// before the wait served answers past it and printed the pre-wait lag beside
-// the post-wait rows, so the number and the rows described different moments.
+// A read may wait up to the read budget for the caller's floor, and reaching a
+// position says nothing about how far the log ran on meanwhile, so the bound
+// is checked, and the lag reported, after the wait: the figure and the rows
+// describe one moment.
 func TestAStalenessBoundIsRecheckedAfterTheFloorWait(t *testing.T) {
 	t.Parallel()
 	// The node is close behind when the read arrives and far behind by
@@ -1706,13 +1650,11 @@ func (w *landingWaiter) WaitReached(ctx context.Context, p statelog.Position) er
 // A DEFERRAL LANDING DURING THE WAIT IS CAUGHT EVEN WHEN NOTHING WAS DEFERRED
 // WHEN THE READ BEGAN.
 //
-// The wait is where such a record arrives: the applier has to cross it to reach
-// the position the read is waiting for. The answer's own transaction probed only
-// when the health read BEFORE the wait already reported a deferral, so on a node
-// holding none when the read began — every healthy node, which is the only kind
-// that meets a newer peer's record for the first time — the probe was skipped on
-// the one path it exists for, and a point read certified rows the record had
-// already made wrong.
+// The applier crosses such a record to reach the position the read waits for,
+// and a healthy node, holding no deferral when the read began, is the only kind
+// that meets a newer peer's record first. So the answer's own transaction
+// probes whatever the health read before the wait said, or a point read
+// certifies rows the record already made wrong.
 func TestADeferralLandingDuringTheWaitIsCaughtWhenNoneWasDeferredBefore(t *testing.T) {
 	t.Parallel()
 	for _, set := range []bool{false, true} {
@@ -1764,10 +1706,10 @@ func TestADeferralLandingDuringTheWaitIsCaughtWhenNoneWasDeferredBefore(t *testi
 
 // A POINT READ NAMED BY REFERENCE IS PROBED ON WHERE THE REFERENCE RESOLVES.
 //
-// A path formed from the reference itself — a key read as though it were an
-// id, an object with no container — is filed under nothing, so the probe
-// passed on every deferral there is. The resolver reads the rows, in the
-// answer's own transaction, and the probe asks about what it found.
+// A path formed from the reference itself (a key read as an id, an object with
+// no container) is filed under nothing, so the probe would pass every
+// deferral. The resolver reads the rows in the answer's own transaction, and
+// the probe asks about what it found.
 func TestAPointReadNamedByReferenceIsProbedWhereItResolves(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -1834,15 +1776,13 @@ func TestAPointReadNamedByReferenceIsProbedWhereItResolves(t *testing.T) {
 
 // A NODE THAT PUBLISHES NOTHING APPENDS NO BARRIER.
 //
-// A barrier is a record on the log — admitted, stored and replicated like any
-// other — and a node in a maintenance or seal mode exists so the fleet's logs
-// hold still while a capacity window measures them: a seal-mode
-// acknowledgement is evidence precisely because nothing on that node writes.
+// A barrier is a record on the log, and a node in maintenance or seal mode
+// exists so the logs hold still while a capacity window measures them (a
+// seal-mode acknowledgement is evidence because nothing on that node writes).
 // So a linearizable read there is refused `maintenance`, which neither a wait
-// nor another node clears (every node of the fleet is in the window), while
-// every level that appends nothing is answered as ever. And the reader cannot
-// be built with a read index to append through, nor without saying which mode
-// its node runs in.
+// nor another node clears (every node is in the window), while every level
+// appending nothing is answered.
+// The reader cannot be built with a read index, nor without naming its mode.
 func TestANodeThatPublishesNothingAppendsNoBarrier(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)

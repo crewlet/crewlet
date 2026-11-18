@@ -1,195 +1,3 @@
-// Package sandbox is the executor runtime: every agent seat's executor is its
-// harness's own run, inside a box placed in one of the catalogue's cells.
-//
-// The shape that matters is that a run is DETACHED. The launch starts it, the
-// turn SUSPENDS, and the engine RESUMES the same turn with the run's report
-// when the run completes — possibly minutes later, possibly in a different
-// process after a restart, possibly on a different node. Nothing
-// here parks a goroutine on a running job: a goroutine cannot survive a
-// restart, and a harness legitimately runs for longer than a deployment
-// window.
-//
-// A run that stops to ask a person something is that same shape one step
-// further: the seat goes FREE while the question waits, and the answer is
-// matched back to the run by the CONVERSATION it was asked in rather than by
-// the inbox batch the question arrived in. A person answers where they are
-// talking, and the engine's own chat prompt routinely puts their reply in a
-// finer partition than the question was asked from — so a match on the batch
-// lost the answer outright. The rule is [ConversationRef.Answers], and
-// [ConversationRef.Best] chooses between the runs it admits.
-//
-// AND BY WHEN IT WAS WRITTEN, against when the question was asked
-// ([PendingRun.AskedAt]): the first reply posted after the question is the
-// answer, and it is RECORDED on the run ([StatusAnswered]) before anything is
-// done with it. Resuming with it is then this package's job, retried on its
-// own schedule with the seat's inbox held behind it, never the inbox's — a
-// person's message handed back to the broker returns behind their next one,
-// which then took the question. See answerowed.go.
-//
-// AND IT REACHES THE SEAT ONCE, whatever becomes of the run. A recorded reply
-// is either TAKEN by a resumed turn — written on the row at the last moment
-// before the turn runs ([RecordedAnswer.TakenAt], [ResumeRequest.Begin]) — or
-// LET GO back to the seat the way it came, through an outbox on the row
-// ([PendingRun.HandBack]) — a chat reply to the seat's inbox, an answer by turn
-// to its control topic ([handBackSubject]): after its attempts are spent, by an
-// ending no turn reached, or by the seat's next holder reaping a claim whose
-// node stopped before its turn took it ([Coordinator.RecoverSeat]) once the claims of that
-// answer have died too often or for too long. Short of that, such a claim is
-// REVIVED — the answer given back to the run and the run resumed with it
-// ([PendingStore.ReviveAnswer], [Coordinator.revivable]) — because a claim that
-// never reached its turn used nothing. The take is exclusive with both, in the
-// store's own compare-and-set: an ending is DECIDED on the row before any of
-// it is done ([RecordedEnding]), no turn takes an answer from a row whose
-// ending is decided ([ErrRunEnding]) or from a revived run, which holds no
-// claim, and a take that landed first is seen by the decision or the revival
-// and the reply goes with the run as used — whichever lands first wins,
-// whatever any lease says. And no ending deletes a row still
-// holding a reply it owes the seat ([ErrAnswerOwed]). The reply's delivery is
-// recorded as worked when the reply leaves the run, either way
-// ([CoordinatorOptions.Spent]) — but a refused reply's only once a turn that
-// took its refusal keeps it, since the delivery itself is what goes back to the
-// seat when the refusal is let go of ([AnswerRefused]).
-//
-// AND A LOST RUN IS ANNOUNCED ONCE: the announcement goes out before the record
-// is deleted, under the identity its decided ending recorded, so whichever node
-// finishes the ending publishes the same event ([Coordinator.announceEnding]).
-// So is a STOPPED one — a person's pause with `stop_running` ends the seat's
-// launching and running runs at once ([Coordinator.StopSeat]) — as a stop and
-// never as a loss, with who stopped it recorded in the deciding write
-// ([PendingRun.Stop]), its job ENDED and its spend read off the box and charged
-// before the box goes, and the turn parked on it closed as stopped
-// ([CoordinatorOptions.CloseStopped]).
-//
-// AND A STOPPED OR LOST JOB IS ENDED BEFORE ITS SESSION IS TAKEN, and so is
-// one still working when its turn's cap has passed, since the cap is an end:
-// the read sends its script a request to end it — SIGUSR1 to the pid the script
-// recorded in its box ([Sandbox.EndJob], [JobEnder]) — which stops its harness
-// and packs its session as its own end does, and kills what is left past the
-// wait ([Sandbox.KillJob]), so what is taken is final wherever the job ended.
-// See endjob.go.
-//
-// The reap fences the row to its lease before it revives or lets go of
-// anything — and the revival stamps that lease on the row itself — and a take
-// under an older lease — or under none — is refused, which holds because every
-// claim stamps the CLAIMANT's lease on the row ([PendingStore.ClaimForResume])
-// and every launch the lease that launched it ([CoordinatorOptions.Lease]).
-//
-// EVERY SUBJECT A RUN IS REACHED ON IS NAMED BY THE ROW'S SEAT ID — its
-// completion and start on the seat's control subject, an answer by turn and a
-// reply handed back on its inbox — through one parse of the id the row carries
-// as text ([controlSubject], [inboxSubject]), because a seat's mailbox is named
-// by its id, derived from its immutable handle (ADR-0013). The handle the row
-// carries beside it is a label and this node's bookkeeping key, never an
-// address: the coordinator's per-seat counts, holds and retries are keyed by it,
-// and whatever maps one of them onto a lease or a mailbox maps the handle to
-// the id first. An answer by turn is stamped with that same id
-// ([AnswerDesk.Deliver]) and dropped by any seat whose run does not carry it
-// ([Coordinator.AnswerByTurn]).
-//
-// WHO ANSWERED is recorded as iam.ActorFor makes it of a principal — the
-// author, its kind and the credential it came through ([AnswerWords]) —
-// on the row and on every announcement of what became of the answer, never as a
-// seat beside an actor.
-//
-// AND THE ANSWER IS SEALED: its words and who gave them are on the row only
-// inside a seal under the fleet keyring, bound to the run's turn, the question
-// it answers and its deliveries, like every other instruction channel
-// (ADR-0031), and every reader opens it before anything of it is used. An answer
-// whose seal does not open is never handed to a turn or attributed to anybody.
-// See answerseal.go.
-//
-// AND A REPLY TOO LARGE TO BE THE ANSWER IS THE QUESTION'S REFUSAL (ADR-0114):
-// past what the row carries as an answer ([MaxAnswerBytes]), decided against the
-// run as the store finds it still waiting on the question
-// ([PendingRun.takesAnswer]), a chat reply is not taken; what the row records as
-// the question's outcome instead is its refusal — its deliveries by id, when it
-// was posted and the figures, sealed, and none of its words
-// ([PendingStore.RecordRefusal], [PendingRun.AnswerRefusal]) — and announced
-// as `executor_answered` too_large under one identity per run, question and
-// delivery ([tooLargeRecord]). The refusal is then resumed exactly as an
-// answer is: the run is told, in the engine's words and through the same
-// channel an answer reaches it ([AskedRun.Refused]), that the person replied
-// and the reply was too large to hand it, and either asks again with a question
-// of its own, whose own [PendingRun.AskedAt] leaves everything written before
-// it the ordinary message it is, or carries on without it. While the refusal
-// is the run's the question waits no more, so nothing the person writes
-// meanwhile is taken for its answer. The reply itself stays where it was: in
-// the conversation, and in its delivery, kept on the seat's inbox until the
-// refusal leaves the run ([AnswerRefused]) — spent once a turn that took the
-// refusal keeps it ([Coordinator.spendRefused]), and back to the seat as the
-// ordinary message it is when the refusal is let go of. A refusal let go of —
-// declined after its attempts, or a seal that does not open — puts the
-// question back to waiting under the anchor it was asked at, as an answer let
-// go of does, and the next qualifying reply answers it; the let-go is announced
-// as `executor_answered` declined ([Coordinator.announceRefusalLetGo]). A
-// reply within the share is the run's answer word for word, and an answer by
-// turn is held to [MaxAnswerTextBytes] at both its ends, on one string.
-//
-// AND A CALL TO A TOOL AT NEEDS APPROVAL PARKS ITS RUN IN THE SHAPE A RUN'S ASK
-// DOES (ADR-0077): the job's question is the call ([PendingRun.HeldCall]), its
-// arguments sealed beside it ([CallSeal]); only its approval route answers it,
-// never a chat reply ([ConversationRef.Answers]) or an answer by turn that does
-// not name it ([Coordinator.AnswerByTurn]); and the resume that makes the call
-// marks it first, so no attempt at the same answer makes it twice
-// ([PendingStore.MarkHeldCall]). See heldcall.go.
-//
-// AND A RUN'S VALUES ARE HELD TO A BYTE BUDGET: one value in the coordination
-// store is held to what a key holds, so the run's row and the log beside it are
-// each held to [RowBytes], in the bytes their encoder writes, and every field
-// has a share of its value's. The log's calls have theirs ([BridgeLogBytes]),
-// each call held to its own and the calls it counts without listing kept as
-// identities ([ElidedCall]); on the row, the parked state has its own
-// ([ExecuteStateBytes]), which its park condenses to fit and the store refuses
-// past, and the rest is every other field held by the write that puts it there
-// — a person's reply, a held call's sealed arguments and a box's word on its
-// session included — with room stated for what a later build adds. Every call
-// carries the identity its run's call log admitted it under
-// ([BridgeCall.Digest]), but for one whose arguments are withheld
-// ([BridgeCall.Withheld]), so neither a cut argument nor a dropped call moves an
-// operation id a resumed segment derives; and the id its harness gave it, where
-// the box sent one the log keeps whole ([BridgeCall.CallID]), which is no part
-// of that identity. See rowbytes.go.
-//
-// AND A BOX IN A `direct` OR `container` CELL IS TOUCHED ONLY ON ITS LAUNCHING
-// NODE'S HOST ([PendingRun.LaunchNode], ADR-0065): that node's own waiter polls,
-// keeps alive, reaps and reclaims it, a seat's holder elsewhere asks the host to
-// read it ([BoxReader]), and a launching node whose presence stays lapsed for
-// the box timeout has its running jobs lost with it. See boxhost.go.
-//
-// AND A LAUNCH THAT FAILS ONCE ITS ROW IS WRITTEN ENDS ITS RUN, its log's
-// opening included: a row left launching is polled and claimed by nothing and
-// holds its seat until the seat moves. A write the store did not answer may
-// have landed, so the launch ends the job it named and nothing else
-// ([UnopenedLaunchError]); a row that names another job is left to its holder.
-// See launch.go.
-//
-// AND A JOB LOST WITH ITS HOST IS CARRIED ON, NEVER COLLECTED: one its
-// engine's restart killed — which the box tells from one that crashed by the
-// engine process that last saw it running ([JobLost], local_witness.go) — one
-// whose box is gone, and one whose node left. The waiter that drives the box
-// records the loss on the row ([PendingRun.Lost]), and the seat's holder reads
-// what the job spent where its box is left and resumes the turn to relaunch the
-// same round, at most [MaxRoundLosses] times a round. See lost.go.
-//
-// AND WHAT A RUN PUSHED TO GITLET is the push record's
-// account, never the run's: a collection of a run given a repository there to
-// push to reads the rows Gitlet wrote under its launch ([RunPushes],
-// [Result.Pushed]) and the run's report states what each ref became, the run
-// having been told its own report need not name them. A record that cannot be
-// read is SAID to be unknown rather than retried — a collection held until
-// Gitlet answers holds a finished run's seat for as long as the host is
-// down — and never left out, since silence reads as "nothing pushed".
-//
-// AND A RUN'S HARNESS SESSION CAN LEAVE ITS BOX: a run names its session before
-// its harness starts ([RunHandle.SessionID]), says whether it continued the one it
-// was asked to, and why not where it did not ([Result.Continued],
-// [Result.FellBack]), and packs it when the harness exits
-// ([Result.Captured]); a run handed a session packed in another box
-// ([RunRequest.Carried]) restores it before its harness takes it up, and a box
-// takes the archive streamed rather than whole ([Sandbox.WriteStream]). See
-// carry.go.
-//
-// See docs/concepts/code-sandbox.md.
 package sandbox
 
 import (
@@ -752,16 +560,34 @@ type Result struct {
 	// runner's collection, beside its result.
 	ReportedWindow int64
 
-	// ResumedCount is what Claude Code counts the copy of the session the
+	// ResumedCount is what its harness counts the copy of the session the
 	// job's box holds at before its next request, as the read that collected
 	// this result found it in one read of the job's main thread
 	// ([Coordinator.readMainThread]), with ReportedWindow beside it: recorded
 	// on the job's record with HarnessEnd, in that read's one write
 	// ([LaunchRecord.ResumedCount]), and carried back for the claim it
 	// collects for. Set by the coordinator, never by a runner; nil where the
-	// read asked nothing (a stop's, a loss's, another harness's job), and from
-	// a host of an older build, which reads as a copy that may compact.
+	// read asked no count (a stop's, a loss's, a job of neither Claude Code
+	// nor OpenCode, [asksMainThread]), and from a host of an older build,
+	// which reads as a copy that may compact.
 	ResumedCount *ResumedCount
+
+	// CountProvider is the provider of the reply an OpenCode ResumedCount is
+	// anchored on, off the same read: recorded beside the count on the job's
+	// record ([LaunchRecord.CountProvider]) and carried back with it. "" for a
+	// Claude Code count, where no reply anchored one, and from a host of an
+	// older build.
+	CountProvider string
+
+	// NextRequest is the harness's own estimate of the next request of the
+	// copy the job's box holds, as the read that collected this result found
+	// it in the same read of the job's main thread as ResumedCount: recorded
+	// on the job's record with HarnessEnd, in that read's one write
+	// ([LaunchRecord.NextRequestTokens]), and carried back for the claim it
+	// collects for. Set by the coordinator, never by a runner; zero where the
+	// read made none, and from a host of an older build, which leaves the
+	// record what it held.
+	NextRequest NextRequest
 
 	// Turns is how many model turns the run's harness says its own loop took —
 	// each one a provider call the engine neither made nor saw — and zero

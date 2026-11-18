@@ -19,13 +19,11 @@ import (
 // THE DIRECTORY SAYS WHO HOLDS EACH SEAT, AT WHAT STAGE — and who held one
 // until they were removed.
 //
-// It is the read contact routing withdraws a suspended person's identities
-// from, so each arm is a routing decision somebody downstream makes: an active
-// holder routes, a suspended one must not, and a removal must not route MORE
-// than the suspension before it. The removal arm is the one that needs the
-// tombstone — the removal released the seat with every other claim, so without
-// it the seat reads as held by nobody and falls back to the chart's contact
-// map, which still names the leaver's own accounts.
+// Contact routing reads it: an active holder routes, a suspended one must
+// not, and a removal must not route MORE than the suspension before it. The
+// removal arm needs the tombstone: without it the released seat reads as
+// nobody's and falls back to the chart's contact map, which still names the
+// leaver's own accounts.
 func TestSeatHoldersNamesWhoHoldsEachSeatAndAtWhatStage(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -55,20 +53,16 @@ func TestSeatHoldersNamesWhoHoldsEachSeatAndAtWhatStage(t *testing.T) {
 	assertHolders(t, holders, want)
 
 	// A NEW HOLDER IS THE SEAT'S LAST WORD, and the tombstone stops being
-	// read: without that a seat somebody was removed from could never route
-	// again, whoever was hired into it.
+	// read, or the seat could never route again.
 	successor := bindNew(t, rig, "lena.fischer", "ops-lead")
 	want["ops-lead"] = iamdomain.SeatHolder{
 		Seat: "ops-lead", Person: successor, Stage: iam.StageActive}
 	assertHolders(t, holdersBySeat(t, reader), want)
 
 	// AND MOVING THAT SUCCESSOR OFF IT DOES NOT BRING THE LEAVER BACK. The
-	// tombstone spoke for the binding the removal released; the successor's
-	// was a later binding with a standing of its own, and moving them to
-	// another seat hands this one to the chart like any other seat nobody
-	// holds. Read from the seat's current rows alone, the removal became
-	// the seat's last word again here and withheld it indefinitely —
-	// whatever its contact map had since been pointed at.
+	// tombstone spoke only for the binding the removal released; read from
+	// the seat's current rows alone, it would withhold the seat again,
+	// indefinitely, whatever its contact map now names.
 	if _, err := rig.writer.SetIdentity(t.Context(), iamdomain.IdentityEdit{
 		PersonID: successor, Seat: seatRef(rig.vacantSeat("support-lead")),
 		OpID: "op-move", Reason: "moved teams"}); err != nil {
@@ -80,9 +74,8 @@ func TestSeatHoldersNamesWhoHoldsEachSeatAndAtWhatStage(t *testing.T) {
 		Seat: "support-lead", Person: successor, Stage: iam.StageActive}
 	assertHolders(t, holdersBySeat(t, reader), want)
 
-	// AND A SUCCESSOR WHO IS THEMSELVES REMOVED WHILE HOLDING IT leaves a
-	// tombstone of their own, which speaks for THEIR binding: the rule is
-	// per removal, not a seat that stopped being withheld for ever.
+	// AND A SUCCESSOR REMOVED WHILE HOLDING IT leaves a tombstone for THEIR
+	// binding: the rule is per removal, not per seat.
 	second := bindNew(t, rig, "noor.aziz", "ops-lead")
 	if _, err := rig.writer.Remove(t.Context(), second, "op-remove-second",
 		"left the company"); err != nil {
@@ -95,15 +88,11 @@ func TestSeatHoldersNamesWhoHoldsEachSeatAndAtWhatStage(t *testing.T) {
 
 // ONE SEAT'S HOLDER IS THE DIRECTORY'S ANSWER FOR THAT SEAT, read by itself.
 //
-// [iamdomain.Reader.Requester] is what a seat's turn composes the person it
-// acts for from, on every tool call, so it must answer exactly what
-// [iamdomain.Reader.SeatHolders] answers for the seat — the holder at their
-// stage, a removal no bind has stamped, and nobody — through every step that
-// moves a seat's standing: a suspension, a removal, a successor's bind, the
-// successor moving off (which must not bring the leaver back), and a second
-// removal. Where two rows name one seat, the lowest id answers, the one the
-// whole listing names first. A seat named by no handle is refused, because
-// every unbound row holds the empty seat.
+// [iamdomain.Reader.Requester], read on every tool call of a seat's turn,
+// must answer what [iamdomain.Reader.SeatHolders] answers for the seat
+// through every step that moves its standing. Two rows on one seat: the
+// lowest id answers, as the listing names it first. An empty seat is refused,
+// since every unbound row holds it.
 //
 // Mutation: read the removals without the unstamped guard on
 // `seat_rebound_by` and the seat the successor left reads as the leaver's;
@@ -171,8 +160,8 @@ func TestOneSeatsHolderIsTheDirectorysAnswerForThatSeat(t *testing.T) {
 	want["ops-lead"] = iamdomain.SeatHolder{Seat: "ops-lead", Person: second, Removed: true}
 	assertEach("a second removal", want)
 
-	// TWO ROWS ON ONE SEAT, as a retained record's residue leaves them: the
-	// lowest id answers, as it is the first the whole listing names.
+	// TWO ROWS ON ONE SEAT, a retained record's residue: the lowest id
+	// answers.
 	plant(t, rig, `UPDATE iam_people SET seat_id = 'sarah-chen' WHERE id = ?`, suspended)
 	delete(want, "platform-lead")
 	assertEach("two rows on one seat", want)
@@ -188,14 +177,11 @@ func TestOneSeatsHolderIsTheDirectorysAnswerForThatSeat(t *testing.T) {
 	}
 }
 
-// THE REQUESTER IS THE SEAT'S HOLDER WITH THEIR GRANTS, as their document
-// holds them, admin among them, since the node that asked composes the apps
-// from them — and a suspended holder's too, whose stage is the asker's to
-// weigh. A removal carries none: its row went with every grant. It is what a
-// seat's turn holds every app verb to for whoever woke it (internal/engine's
-// turnRequesters), so a holder answered without their grants would read as
-// somebody who uses no app, and a removal answered with what it held would
-// keep it.
+// THE REQUESTER IS THE SEAT'S HOLDER WITH THEIR GRANTS, admin among them,
+// suspended holders included (their stage is the asker's to weigh); a
+// removal carries none. A seat's turn holds every app verb to them
+// (internal/engine's turnRequesters), so a holder without grants would use no
+// app and a removal with them would keep its access.
 //
 // Mutation: answer the holder without opening the document (Grants left
 // nil) — every holder reads as using nothing.
@@ -260,14 +246,12 @@ func holdersBySeatAll(t *testing.T, reader *iamdomain.Reader) map[string][]iamdo
 // THE APPLIER RE-DERIVES A REMOVAL'S SEAT whenever the checkpoint's rule set
 // differs from this build's.
 //
-// A removal tombstone's `seat_id` (replicated migration 0122) is a DERIVED
-// column ([statelog.Deriver]): the removal's apply writes it from the
-// identifiers its record released, and [iamdomain.Applier.Rederive] recomputes
-// it from the same identifiers in the row's claims when a node holds rows
-// derived under another rule set — a reanchor's checkpoint, or rows a build
-// before the column wrote, which hold its default. Unrepaired, such a node's
-// seat would read as nobody's where the leaver's tombstone should withhold it.
-// It writes only rows that differ, so a second run writes nothing.
+// A removal tombstone's `seat_id` (replicated migration 0122) is DERIVED
+// ([statelog.Deriver]); [iamdomain.Applier.Rederive] recomputes it from the
+// row's claims for rows derived under another rule set (a reanchor's
+// checkpoint, or the column's default), else the seat reads as nobody's where
+// the tombstone should withhold it. It writes only rows that differ, so a
+// second run writes nothing.
 //
 // Mutation: leave the tombstones alone in Rederive and the planted rows keep
 // the default; derive every tombstone's seat as empty and both lose theirs.
@@ -339,12 +323,10 @@ func TestTheApplierRederivesARemovalsSeat(t *testing.T) {
 
 // THE APPLIER TELLS THIS NODE ONLY WHEN A SEAT'S STANDING MAY HAVE MOVED.
 //
-// Its listener rebuilds the whole notify registry, so the signal is worth
-// exactly what it saves: a sign-in is the bulk of this log's traffic and moves
-// no seat's standing, and a rebuild per login would be a registry rebuilt per
-// login for nothing — while a suspension, a move between seats, a service
-// account's unbind and a removal each must reach it, or contact routing waits
-// for the periodic safety net.
+// Its listener rebuilds the whole notify registry, so a sign-in (the bulk of
+// this log's traffic) must not signal; a suspension, a seat move, a service
+// account's unbind and a removal must, or contact routing waits for the
+// periodic safety net.
 func TestTheApplierSignalsTheDirectoryOnlyWhenAStandingMoved(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -411,8 +393,8 @@ func TestTheApplierSignalsTheDirectoryOnlyWhenAStandingMoved(t *testing.T) {
 	}
 }
 
-// bindNew creates one active person ON a seat — the one record a person
-// arrives in their seat by — answering their id.
+// bindNew creates one active person on a seat, in one record, answering
+// their id.
 func bindNew(t *testing.T, rig *writeRig, login, seat string) string {
 	t.Helper()
 	return bindNewWith(t, rig, login, seat, nil)
@@ -471,11 +453,9 @@ func assertHolders(t *testing.T, got, want map[string]iamdomain.SeatHolder) {
 // with what a seat listing needs of each and the same values a directory page
 // and the invitation listing carry.
 //
-// It is what the seat listing and a company write that takes a seat away read
-// instead of walking the whole directory, so it must neither miss a binding
-// the page walk would have found nor answer for somebody bound to nothing —
-// nor miss an invitation that holds a seat, nor answer one that holds none: a
-// redeemed one, an aged-out one, a cancelled one.
+// The seat listing and a seat-removing company write read it instead of
+// walking the directory, so it must match the walk: every binding and open
+// invitation, and nobody unbound, redeemed, aged out or cancelled.
 //
 // Mutation: drop the open predicate from the invitations' half and the aged
 // out and redeemed ones are claims; drop the invitations' half and the open
@@ -627,16 +607,13 @@ func issueOnto(t *testing.T, rig *writeRig, address, seat string,
 
 // ONE CLAIM PER SEAT: WHOEVER IS BOUND TO IT, AND WHOEVER IS ON THEIR WAY.
 //
-// It is the question a company write asks before it removes a human seat, and
-// the one the seat listing renders, so a suspended person still holds theirs —
-// suspending somebody is not giving their seat away — while a removed one and
-// one moved elsewhere do not; and an open invitation holds the seat it names.
+// Read before removing a human seat and by the seat listing: a suspended
+// holder keeps theirs, a removed or moved one does not, an open invitation
+// holds its seat.
 //
-// TWO RESIDUES ANSWER DIFFERENTLY, and on purpose. Two rows bound to one seat
-// are the unknown arm — this node cannot say which of them holds it. Two OPEN
-// INVITATIONS on one seat, which a build before invitations held their seats
-// could issue, are answered by the newer: refusing would take the listing
-// down for a week over a residue nothing this build writes.
+// TWO RESIDUES ANSWER DIFFERENTLY: two rows on a seat are the unknown arm
+// (which holds it is unknowable); of two OPEN INVITATIONS the newer answers,
+// as refusing would down the listing a week over what this build never writes.
 //
 // Mutation: answer the first of two rows and the duplicate is a holder; refuse
 // two invitations and the second residue is the unknown arm.
@@ -702,8 +679,8 @@ func TestClaimsBySeatAnswersOneClaimPerSeat(t *testing.T) {
 			c, invited.ID)
 	}
 
-	// TWO OPEN INVITATIONS ON ONE SEAT, as a build before invitations held
-	// their seats could leave them: the newer answers, never the unknown arm.
+	// TWO OPEN INVITATIONS ON ONE SEAT: the newer answers, never the
+	// unknown arm.
 	older := issueOnto(t, rig, "kai@example.com", "infra-lead",
 		brokerAt.Add(168*time.Hour))
 	plant(t, rig, `UPDATE iam_invites SET seat_id = 'data-lead',
@@ -727,9 +704,8 @@ func TestClaimsBySeatAnswersOneClaimPerSeat(t *testing.T) {
 	}
 }
 
-// plant writes a residue straight into the estate — a state the writer no
-// longer produces, which a retained record, a restore or an older build can
-// still leave behind.
+// plant writes a residue straight into the estate: a state the writer does
+// not produce but a retained record or a restore can leave behind.
 func plant(t *testing.T, rig *writeRig, query string, args ...any) {
 	t.Helper()
 	if err := rig.db.Tx(t.Context(), func(tx *sql.Tx) error {
@@ -742,9 +718,8 @@ func plant(t *testing.T, rig *writeRig, query string, args ...any) {
 
 // A REMOVAL'S SAY ENDS AT THE NEXT BIND.
 //
-// Omar holds the ops seat and is removed, which leaves a tombstone naming it;
-// Lena is then bound to the seat. Unstamped, Omar's tombstone would go on
-// withholding the seat's contact identities for ever while Lena held it.
+// Unstamped by Lena's bind, Omar's tombstone would withhold the seat's
+// contact identities for ever while she held it.
 func TestARemovalsSayEndsAtTheNextBind(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -783,11 +758,9 @@ func TestARemovalsSayEndsAtTheNextBind(t *testing.T) {
 // A SEAT THE RUNNING COMPANY DOES NOT HOLD IS A VALUE THE CALLER TYPED, NOT A
 // FAULT.
 //
-// The refusal is what an administrator reads when they mistype a handle, and
-// it used to be an unclassified error every surface turned into a 500 — "the
-// engine is broken" for a typo. A seat an applied revision removed is the
-// same answer as one nobody ever created: the running company is the only
-// organisation there is.
+// An administrator who mistypes a handle reads this refusal, so it must not
+// surface as a 500. A seat an applied revision removed answers as one never
+// created: the running company is the only organisation there is.
 //
 // The control is the bind to a human seat the company holds: it lands.
 func TestBindingASeatTheRunningCompanyDoesNotHoldIsRefused(t *testing.T) {
@@ -812,10 +785,9 @@ func TestBindingASeatTheRunningCompanyDoesNotHoldIsRefused(t *testing.T) {
 // A WRITER HANDED NO ORGANISATION REFUSES EVERY SEAT BIND AS UNAVAILABLE —
 // here a move from the seat a person holds to another.
 //
-// The check is advisory, but a writer with nothing to ask must not decide it
-// as "no such seat" — an administrator would be told a real seat is a typo —
-// nor bind unchecked. Unavailable is the answer a retry on a node that runs a
-// company clears.
+// The check is advisory, but a writer with nothing to ask must neither call
+// a real seat a typo nor bind unchecked: unavailable is cleared by a retry on
+// a node that runs a company.
 //
 // The control is the same bind through the rig's own writer, which holds the
 // organisation: it lands.
@@ -847,13 +819,11 @@ func TestABindWithNoSeatLookupIsUnavailable(t *testing.T) {
 
 // A SEAT BINDING CARRIES ITS HOLDER'S SEALED NAME.
 //
-// The seat listing names who holds each human seat to everybody — the org
-// chart is everybody's overview — and a holder shown by login alone would hand
-// every colleague a sign-in name the overview has no business disclosing. So
-// the binding carries the holder's DISPLAY name, sealed as their row seals it
-// (the same column), for the surface to open on its own keyring; and a
-// principal whose row carries no name carries none here. Mutation: drop the
-// column from the claims read and the name never opens.
+// The seat listing shows every holder to everybody; shown by login, it would
+// disclose sign-in names. So the binding carries the DISPLAY name, sealed as
+// the row seals it, for the surface to open; a row with no name carries none.
+//
+// Mutation: drop the column from the claims read and the name never opens.
 func TestASeatBindingCarriesTheHoldersSealedName(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -891,9 +861,8 @@ func TestASeatBindingCarriesTheHoldersSealedName(t *testing.T) {
 		string(sealed)); err != nil || opened != "Sarah Chen" {
 		t.Errorf("the binding's name opens to %q (%v), want the holder's", opened, err)
 	}
-	// A principal with no name still carries its column as the writer sealed
-	// it — an empty name sealed like any other, so the seats listing opens it
-	// the one way it opens every row — and it opens to nothing.
+	// A principal with no name carries the column as sealed, so the listing
+	// opens every row one way, and it opens to nothing.
 	if opened, err := rig.sealer.Open(machine, iamdomain.FieldName,
 		string(named[machine])); err != nil || opened != "" {
 		t.Errorf("a principal with no name opens to %q (%v), want nothing", opened, err)

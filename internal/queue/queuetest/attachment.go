@@ -2,6 +2,7 @@ package queuetest
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -122,12 +123,12 @@ func (s *suite) runAttachment(t *testing.T) {
 		// one's handler gives the seat up. Publishing them without the
 		// hold would let the first be delivered and acked before the
 		// second was even accepted, and the case would assert nothing.
-		if err := q.PauseTopic(ctx, "topic.detach1", "grp", "queuetest-fill"); err != nil {
+		if err := q.PauseTopic(ctx, "topic.detach1", "grp", attachmentOf(ctx, t, q, "topic.detach1", "grp"), "queuetest-fill"); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
 		publish(ctx, t, q, "topic.detach1", newEvent("e1"))
 		publish(ctx, t, q, "topic.detach1", newEvent("e2"))
-		if err := q.ResumeTopic(ctx, "topic.detach1", "grp", "queuetest-fill"); err != nil {
+		if err := q.ResumeTopic(ctx, "topic.detach1", "grp", attachmentOf(ctx, t, q, "topic.detach1", "grp"), "queuetest-fill"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
 
@@ -172,7 +173,7 @@ func (s *suite) runAttachment(t *testing.T) {
 		q := s.start(ctx, t)
 		j := newJournal()
 		subscribe(ctx, t, q, "seat.inbox", "grp", recordingHandler(j))
-		if err := q.PauseTopic(ctx, "seat.inbox", "grp", holdReason); err != nil {
+		if err := q.PauseTopic(ctx, "seat.inbox", "grp", attachmentOf(ctx, t, q, "seat.inbox", "grp"), holdReason); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
 		if _, err := q.Detach(ctx, "seat.inbox", "grp"); err != nil {
@@ -187,6 +188,64 @@ func (s *suite) runAttachment(t *testing.T) {
 		subscribe(ctx, t, q, "seat.inbox", "grp", recordingHandler(j))
 		publish(ctx, t, q, "seat.inbox", newEvent("after-reattach"))
 		j.awaitLabels(t, "a re-attached seat to receive again", "after-reattach")
+	})
+
+	t.Run("a_hold_taken_for_a_detached_attachment_does_not_pause_the_next", func(t *testing.T) {
+		t.Parallel()
+		// A HOLD IS TAKEN FOR ONE ATTACHMENT. A seat's release detaches its
+		// inbox, and a hold decided while the seat was held can still be
+		// asked after that detach. Keyed by the pair alone it was taken,
+		// and the next attachment of the inbox on this client started
+		// under it: the seat came back here and consumed nothing, with
+		// nothing that knew of the hold left to lift it.
+		q := s.start(ctx, t)
+		j := newJournal()
+		gone := attachmentOf(ctx, t, q, "seat.inbox", "grp")
+		subscribe(ctx, t, q, "seat.inbox", "grp", recordingHandler(j))
+		if _, err := q.Detach(ctx, "seat.inbox", "grp"); err != nil {
+			t.Fatalf("Detach: %v", err)
+		}
+
+		err := q.PauseTopic(ctx, "seat.inbox", "grp", gone, holdReason)
+		if !errors.Is(err, queue.ErrAttachmentGone) {
+			t.Fatalf("PauseTopic for the detached attachment = %v, want queue.ErrAttachmentGone: "+
+				"a hold its release already ended was taken anyway", err)
+		}
+		if err := q.PauseTopic(ctx, "seat.inbox", "grp", 0, holdReason); !errors.Is(err, queue.ErrAttachmentGone) {
+			t.Fatalf("PauseTopic for the zero attachment = %v, want queue.ErrAttachmentGone", err)
+		}
+		if holds := s.caps.PauseHolds; holds != nil {
+			if got := holds(q, "seat.inbox", "grp"); len(got) != 0 {
+				t.Fatalf("a hold refused for a detached attachment is held: %v", got)
+			}
+		}
+
+		// THE NEXT ATTACHMENT IS ANOTHER ONE, and a hold taken for it before
+		// it attaches gates it, as a holder that knows its seat is busy
+		// holds before attaching.
+		next := attachmentOf(ctx, t, q, "seat.inbox", "grp")
+		if next == gone || next == 0 {
+			t.Fatalf("the attachment after a Detach is %d, beside the detached %d: "+
+				"a hold asked for the one could not be told from the other", next, gone)
+		}
+		if err := q.PauseTopic(ctx, "seat.inbox", "grp", next, holdReason); err != nil {
+			t.Fatalf("PauseTopic for the next attachment before it attaches: %v", err)
+		}
+		subscribe(ctx, t, q, "seat.inbox", "grp", recordingHandler(j))
+		publish(ctx, t, q, "seat.inbox", newEvent("held"))
+		j.staysAt(ctx, t, 0, "a hold taken for an attachment before it attached did not gate it")
+
+		// AND A RESUME FOR THE DETACHED ONE LIFTS NOTHING: the reason is the
+		// same, the hold is the next attachment's.
+		if err := q.ResumeTopic(ctx, "seat.inbox", "grp", gone, holdReason); err != nil {
+			t.Fatalf("ResumeTopic for the detached attachment = %v, want nil: the "+
+				"detach already dropped every hold it carried", err)
+		}
+		j.staysAt(ctx, t, 0, "a resume for a detached attachment lifted the next one's hold")
+		if err := q.ResumeTopic(ctx, "seat.inbox", "grp", next, holdReason); err != nil {
+			t.Fatalf("ResumeTopic for the current attachment: %v", err)
+		}
+		j.awaitLabels(t, "the held mail once the current attachment's hold lifted", "held")
 	})
 
 	t.Run("quiesce_reports_whether_an_attachment_existed", func(t *testing.T) {
@@ -248,7 +307,7 @@ func (s *suite) runAttachment(t *testing.T) {
 		q := s.start(ctx, t)
 		j := newJournal()
 		subscribe(ctx, t, q, "seat.inbox", "grp", recordingHandler(j))
-		if err := q.PauseTopic(ctx, "seat.inbox", "grp", holdReason); err != nil {
+		if err := q.PauseTopic(ctx, "seat.inbox", "grp", attachmentOf(ctx, t, q, "seat.inbox", "grp"), holdReason); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
 		if _, err := q.Quiesce(ctx, "seat.inbox", "grp"); err != nil {
@@ -411,7 +470,7 @@ func (s *suite) runFleet(t *testing.T) {
 			return queue.Ack()
 		})
 		subscribe(ctx, t, b, "seat.inbox", "grp", recordingHandler(gotB))
-		if err := a.PauseTopic(ctx, "seat.inbox", "grp", holdReason); err != nil {
+		if err := a.PauseTopic(ctx, "seat.inbox", "grp", attachmentOf(ctx, t, a, "seat.inbox", "grp"), holdReason); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
 

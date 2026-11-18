@@ -11,20 +11,10 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// TestAnOversizedRecordRefusesAtRoundOne.
-//
-// nats.ErrMaxPayload is raised CLIENT-SIDE, before the append reaches the
-// broker, so it is not an APIError and fell through to the unknown answer —
-// which is the one the publisher must retry, because an unanswered append may
-// or may not be on the stream. So a record too large for the broker was
-// re-decided for all sixteen rounds and then reported as "the rows kept
-// changing under this write": a sentence about contention, which sends whoever
-// reads it looking for a peer that is not there.
-//
-// Nothing about the record changes between rounds. It is too big now and it
-// will be too big in a millisecond — and it is TOO LARGE rather than FULL,
-// which it was classified as next: that sent an operator to raise a ceiling
-// the log was nowhere near.
+// TestAnOversizedRecordRefusesAtRoundOne: nats.ErrMaxPayload is raised
+// CLIENT-SIDE, so it is no APIError, and read as the unknown answer it would be
+// retried every round, though no retry makes a record smaller. And it is TOO
+// LARGE, not FULL: a full log sends an operator to a ceiling the log is not near.
 func TestAnOversizedRecordRefusesAtRoundOne(t *testing.T) {
 	t.Parallel()
 	f, detail := classify(fmt.Errorf("append: %w", nats.ErrMaxPayload))
@@ -51,14 +41,13 @@ func TestAnOversizedRecordRefusesAtRoundOne(t *testing.T) {
 
 // EVERY REFUSAL THE BROKER NAMES IS CLASSIFIED BY WHAT FIXES IT.
 //
-// The server's one store-failure code, 10077, covers a log at its byte
-// ceiling and a message too large for the file store alike, and carries which
-// only as the text of its own store error. And a record too large meets one
-// of three limits, each moved by a different hand, so its detail names the
-// limit and that limit's remedy and never another's. The rows are the server's own
-// errors, built by the vendored server's own constructors, so what is
-// classified is exactly what a broker sends — and a wording this build does
-// not know is a refusal carrying its words, never a full log.
+// The server's one store-failure code, 10077, covers a log at its byte ceiling
+// and a message too large for the file store alike, told apart only by its
+// store error's text. A record too large meets one of three limits, each moved
+// by a different hand, so its detail names that limit and its remedy, never
+// another's. The rows are built by the vendored server's own constructors, so
+// they are what a broker sends; a wording this build does not know is a refusal
+// carrying its words, never a full log.
 func TestEveryBrokerRefusalIsClassifiedByWhatFixesIt(t *testing.T) {
 	t.Parallel()
 	wire := func(e *server.ApiError) error {
@@ -72,9 +61,8 @@ func TestEveryBrokerRefusalIsClassifiedByWhatFixesIt(t *testing.T) {
 		err  error
 		want fault
 
-		// says and never are what a record too large's detail must and
-		// must not name: the limit that refused it and what moves THAT
-		// limit, and never another limit's knob.
+		// says: what a record too large's detail must name (the limit that
+		// refused it and what moves it); never: another limit's knob.
 		says, never []string
 	}{
 		{"the log at its byte ceiling",
@@ -86,10 +74,10 @@ func TestEveryBrokerRefusalIsClassifiedByWhatFixesIt(t *testing.T) {
 			[]string{"max_payload refused it", "raise max_payload",
 				"every server of the cluster", "refused at boot",
 				"reconnected to since", "restarted with a smaller limit",
-				// A LIVE RELOAD ONLY ACROSS A RECONNECT: the client is
-				// told of no limit but on one, and since nats.go 1.55.0
-				// a write the server refused part way through ends in
-				// one, so a reloaded limit can reach this refusal.
+				// A LIVE RELOAD ONLY ACROSS A RECONNECT: the client learns
+				// a limit only on one, and since nats.go 1.55.0 a write
+				// refused part way through ends in one, so a reloaded
+				// limit can reach this refusal.
 				"live reload that this node's connection reconnected across",
 				"the account it signs in to",
 				"split the change", "8388608-byte limit"},
@@ -154,11 +142,9 @@ func TestEveryBrokerRefusalIsClassifiedByWhatFixesIt(t *testing.T) {
 	}
 }
 
-// THE SERVER'S OWN WORDS ARE PINNED, because the classification above
-// compares them whole and a reworded server would otherwise move a full log —
-// or a record that may yet land — to an unnamed refusal with nothing going
-// red. The codes are pinned for the same reason: the client exports none of
-// them.
+// THE SERVER'S OWN WORDS ARE PINNED: classify compares them whole, so a
+// reworded server would move a full log, or a record that may yet land, to an
+// unnamed refusal with nothing red. The codes too: the client exports none.
 func TestTheStoreRefusalsMatchTheServersOwn(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct{ name, ours, theirs string }{
@@ -190,14 +176,9 @@ func TestTheStoreRefusalsMatchTheServersOwn(t *testing.T) {
 }
 
 // EVERY BROKER ANSWER IS READ AS THE FACT IT IS, AND ONLY A FULL LOG AS A FULL
-// LOG.
-//
-// Two answers were read as something they were not. Every API error the
-// framework had no case for was a full log, so a stream deleted under the node
-// or a cluster without a leader told the caller to raise a byte ceiling. And
-// the client's own refusal of an oversized record — a plain error, sent
-// nowhere — was "no answer", which sent the write round its ambiguous path
-// sixteen times and reported a colleague editing the object.
+// LOG: a deleted stream or a leaderless cluster is a refusal, not a byte
+// ceiling to raise, and the client's own refusal of an oversized record, sent
+// nowhere, is too large, not an unknown answer to retry.
 func TestEveryBrokerAnswerIsClassifiedAsWhatItIs(t *testing.T) {
 	t.Parallel()
 	api := func(code jetstream.ErrorCode, words string) error {
@@ -225,12 +206,9 @@ func TestEveryBrokerAnswerIsClassifiedAsWhatItIs(t *testing.T) {
 	}
 }
 
-// A LINEARIZABLE READ ON A FULL LOG IS REFUSED `log_full`, NOT `no_quorum`.
-//
-// The barrier handed its append's error on raw, and the read path knows a full
-// log only by its refusal reason — so a full log's reads were refused as a
-// majority that did not agree, which is worth coming back for, when the truth
-// was a ceiling somebody has to raise.
+// A LINEARIZABLE READ ON A FULL LOG IS REFUSED `log_full`, NOT `no_quorum`:
+// the read path knows a full log only by its refusal reason, and a full log is
+// a ceiling somebody has to raise, not a majority worth coming back for.
 func TestABarrierOnAFullLogRefusesReadsAsAFullLog(t *testing.T) {
 	t.Parallel()
 	full := &jetstream.APIError{ErrorCode: codeStreamStoreFailed,

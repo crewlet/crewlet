@@ -35,10 +35,9 @@ func TestTheAssistantDomainIsACertifiedDomain(t *testing.T) {
 			Rows:       assistantdomain.NewRows,
 			Write:      suiteWrite,
 			EncodeGate: encodeSuiteGate,
-			// THE PRODUCTION ENCODER of the read index's barrier, which the
-			// suite holds to writing no row.
+			// The read index's production barrier encoder, held to writing no row.
 			EncodeBarrier: assistantdomain.EncodeBarrier,
-			// THE PRODUCTION ENCODER the engine hands the trim (ADR-0080).
+			// The production encoder the engine hands the trim (ADR-0080).
 			EncodeTrimmed: assistantdomain.EncodeTrimmed,
 		}
 	})
@@ -97,19 +96,16 @@ func kindNames() []string {
 	return out
 }
 
-// suiteOwner is the owner every suite record is about. The applier reads ids
-// as opaque keys, so the suite's plain ids are used as given: the gate family
-// asks the reader about the very ids it handed out.
+// suiteOwner is the owner every suite record is about. Ids are opaque to the
+// applier, so the gate family asks the reader about the very ids it handed out.
 const suiteOwner = "suite-owner"
 
 // suiteStamped is the instant every suite record is stamped at.
 var suiteStamped = time.Unix(1_700_000_000, 0).UTC()
 
 // encodeSuiteRecord builds one valid record of each kind about id at any
-// version.
-//
-// THE FIRST THREE KINDS ARE A REAL SEQUENCE: a conversation's create, a
-// message recorded on a turn of it, and a proposal made in it.
+// version. The first three kinds are a real sequence: a conversation's create,
+// a message on a turn of it, and a proposal made in it.
 func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 	subject, op, payload := suitePayload(assistantdomain.ObjectKind(kind), id)
 	body, err := json.Marshal(payload)
@@ -210,8 +206,8 @@ func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
 		assistantdomain.OpEviction, evictionOf(node, readmit))
 }
 
-// suiteWrite is one write through the domain's own production writer, which is
-// where the framework's stamp is kept or lost.
+// suiteWrite is one write through the production writer, where the
+// framework's stamp is kept or lost.
 func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error {
 	sealer, err := assistantdomain.NewSealer(staticCipher())
 	if err != nil {

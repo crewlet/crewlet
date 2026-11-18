@@ -559,6 +559,11 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
+    name: "crewlet-tag__label",
+    why: "uilet's Tag writes it on a chip's words, and ChipField draws its chips as Tags with no monospace option. styles/frame.css sets Gitlet › Changes' query bar chips (`.code-query__field`) in the mono face, since each is a qualifier the reader types; the shell's sheet, since a lazy one may carry no kit rule. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-popover",
     why: "uilet's Popover writes it on its panel, and caps the panel at 360px with a scroll. styles/screens.css raises that cap for Company › Budgets' ceiling editor (`.ceiling-pop`, the Popover's `className`), whose check can answer a paragraph of the engine's own warning, under the kit's cap it scrolled Save anyway below the fold of the panel. Paired with the kit's class so it wins whichever stylesheet a lazy chunk loads last. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",

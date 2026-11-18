@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/config"
@@ -130,6 +131,30 @@ func (e *Engine) reportFleet(ctx context.Context) (issuereport.Fleet, error) {
 	}
 	fleet.Moving = fleet.Moving || len(builds) > 1
 	return fleet, nil
+}
+
+// anotherBuildLive reports whether a live node other than this one runs
+// another build than this one: one whose heartbeat names another, or names
+// none, which may run another one, as [Engine.reportFleet] reads them. An
+// unreadable lease table is an error, never a fleet of one build.
+func (e *Engine) anotherBuildLive(ctx context.Context) (bool, error) {
+	if e.backends == nil || e.backends.Coord == nil {
+		return false, nil
+	}
+	nodes, err := e.backends.Coord.ListLive(ctx, coord.ClassNode)
+	if err != nil {
+		return false, fmt.Errorf("engine: reading the live nodes' builds: %w", err)
+	}
+	self, own := e.selfNode(), version.String()
+	for _, lease := range nodes {
+		if node, _ := coord.ClassNode.Name(lease.Resource); self != "" && node == self {
+			continue
+		}
+		if status, ok := coord.StatusFromMeta(lease.Meta); !ok || status.Build != own {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // reportTopology reads how this engine runs, for a report being built.

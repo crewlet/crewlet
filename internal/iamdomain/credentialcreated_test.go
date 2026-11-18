@@ -9,12 +9,11 @@ import (
 
 // A CREDENTIAL KEEPS THE INSTANT IT WAS CREATED THROUGH LATER CHANGES.
 //
-// Every record about a person restates all of their credentials, and the
-// applier replaced their rows stamping each with the record's own instant, so
-// revoking a token read as having created it — after its own revocation — and
-// a password set a year ago read as set a moment ago beside it. The CONTROL is
-// the credential the later record adds, which is created then. Mutation:
-// stamp every row with the record's instant again and the kept token moves.
+// Every record about a person restates all of their credentials; an applier
+// stamping each row with the record's instant would make revoking a token read
+// as creating it, after its own revocation. The CONTROL is the credential the later record
+// adds, which is created then. Mutation: stamp every row with the record's
+// instant and the kept token moves.
 func TestACredentialKeepsTheInstantItWasCreatedThroughLaterChanges(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -58,8 +57,8 @@ func TestACredentialKeepsTheInstantItWasCreatedThroughLaterChanges(t *testing.T)
 
 	add("first", "")
 	before := created()["first"]
-	// The broker stamps a record with its own clock, to the millisecond, so
-	// the second record is held a few past the first's.
+	// The broker stamps a record with its own millisecond clock: hold the
+	// second record a few past the first's.
 	time.Sleep(5 * time.Millisecond)
 	add("second", "first")
 	after := created()

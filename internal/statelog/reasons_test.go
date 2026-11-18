@@ -14,13 +14,9 @@ import (
 )
 
 // TestEveryRefusalReasonIsInTheMetricsReference holds the refusal counter's
-// reference text to the values the counter can carry.
-//
-// The counter labels every refused write with its [statelog.Reason], or with
-// `conflict`, `exists` or `error` beside them ([statelog.Publisher]'s observe),
-// and each value has its own remedy. The reference an operator writes collector
-// rules from read as a complete list and left out the two reasons the same
-// series added, so a rule written from it had no row for either.
+// reference text to every value its label carries: each [statelog.Reason], and
+// `conflict`, `exists` and `error` ([statelog.Publisher]'s observe). Each has its
+// own remedy, and an operator writes collector rules from that reference.
 func TestEveryRefusalReasonIsInTheMetricsReference(t *testing.T) {
 	var shows string
 	for _, inst := range metrics.Catalogue() {
@@ -129,14 +125,11 @@ func declaredConstants(t *testing.T, file, typ string) []string {
 	return out
 }
 
-// A REMEDY THAT IS DONE FIRST STILL FINISHES THE SAME GESTURE.
-//
-// A log refused `log_full` or `wrong_stream` cannot be finished by sending the
-// gesture again straight away — and advising no operation id at all sent an
-// operator who had raised the ceiling to run the eviction AFRESH, which wrote
-// every log that already held the first record again and re-dated its
-// eviction. The gesture's own id is how each of these is finished; only a new
-// gesture's is not.
+// A REMEDY THAT IS DONE FIRST STILL FINISHES THE SAME GESTURE, under its own
+// operation id. A log refused `log_full` or `wrong_stream` is not finished by
+// resending at once; but once the remedy is done, an eviction run afresh under a
+// new id rewrites every log that already held the first record and re-dates its
+// eviction.
 func TestAGateActionSaysWhetherTheGesturesOwnIDFinishesIt(t *testing.T) {
 	keeps := map[statelog.GateAction]bool{
 		statelog.GateRetrySameOp: true,

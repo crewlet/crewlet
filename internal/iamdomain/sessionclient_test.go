@@ -11,13 +11,10 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
 
-// A SESSION IS LISTED WITH THE BROWSER AND THE ADDRESS THAT OPENED IT.
-//
-// A person's list of sessions said only when each began and when it ends, so
-// "Sign out" could not be aimed at the laptop they lost. The sign-in names its
-// browser and address on the start record, and the listing reads them back. A
-// User-Agent anybody can make arbitrarily long is kept to its bound, cut on a
-// rune, so a header does not ride every session row every data node keeps.
+// A SESSION IS LISTED WITH THE BROWSER AND THE ADDRESS THAT OPENED IT, so
+// "Sign out" can be aimed at a lost laptop. The sign-in names them on the
+// start record and the listing reads them back; a User-Agent is kept to its
+// bound, cut on a rune, since every data node keeps every session row.
 //
 // Mutation: drop the two fields from the start record or from the listing's
 // read, and the session lists no device.

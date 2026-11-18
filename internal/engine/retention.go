@@ -199,6 +199,11 @@ type retention struct {
 	// nothing to report.
 	feeds func(now time.Time, out *statelog.Reading)
 
+	// executors fills the executor runtime's half of a reading: the runs of
+	// seats whose resume waits for an operator, across the fleet
+	// ([Engine.executorReading]). Nil reads as nothing to report.
+	executors func(ctx context.Context, now time.Time, out *statelog.Reading)
+
 	// feedSources is the wake feed each log declares, by domain — the
 	// source whose dead-letter subject its row reads — and feedLetters the
 	// watch that reads them on every report (feeddeadletters.go). A log
@@ -332,6 +337,7 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		refs:        e.refsNearLimit,
 		entries:     e.entriesReading,
 		feeds:       e.feedsReading,
+		executors:   e.executorReading,
 		feedSources: e.feedSources(s.running()),
 		feedLetters: newDeadLetterWatch(e.deadLetterLedger, e.backends.Fleet, e.metrics),
 		seats:       func() int { return seatCount(e.Company()) },

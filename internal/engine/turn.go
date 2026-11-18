@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/accessreview"
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
@@ -198,9 +199,10 @@ type Dispatcher struct {
 	// ([Engine.readDelegatedRequests]). Nil reads nothing.
 	DelegatedRequests func(ctx context.Context, handle string, evs []*events.Event) []*events.Event
 
-	// StaleAssignments drops each assignment wake whose item was finished,
-	// removed or handed on since ([Engine.dropStaleAssignments]). Nil drops none.
-	StaleAssignments func(ctx context.Context, handle string, evs []*events.Event) []*events.Event
+	// StaleWakes drops each wake about work the seat holds whose item was
+	// finished, removed or handed on since ([Engine.dropStaleWakes]). Nil
+	// drops none.
+	StaleWakes func(ctx context.Context, handle string, evs []*events.Event) []*events.Event
 
 	// Observe publishes an engine-side observability event.
 	//
@@ -355,43 +357,15 @@ func (r Request) Ask() []*events.Event {
 
 // Dispatch runs one partition.
 //
-// THE ORDER IS THE PRODUCT, and it is stated once here because every stage's
-// position was earned by a specific failure — see internal/agent/inbox, which
-// owns the guard sequence and the reasons.
-//
-// What this frame adds around it is the two ledger reads and the one ledger
-// write, and their placement is equally deliberate:
-//
-//   - the completion read comes AFTER every parking branch, so a parked
-//     partition is never marked done, and BEFORE coalescing, so recorded
-//     constituents drop out and only the remainder merges;
-//   - the sandbox ANSWER OFFER comes after that read and before the merge, on
-//     the ordinary path as well as the park — because a run parked on a
-//     question leaves its seat free, so the reply that resumes it arrives
-//     here as an ordinary message and must be claimed before a turn eats it.
-//     What the offer answers is what happens to the delivery: spent on the
-//     run it resumed, HANDED BACK while a run is still owed it, or passed on
-//     to the ordinary route. It is the disposition that decides and never the
-//     error beside it — see [Dispatcher.answered];
-//   - the conversation read comes after that, because it is keyed on a
-//     conversation the surviving events name;
-//   - the completion WRITE comes after the turn, and a turn that failed is
-//     still recorded: the ledger answers "has this trigger been worked", not
-//     "did the work succeed", and re-running a failing turn on every
-//     redelivery is how one bad trigger becomes an infinite loop. A turn whose
-//     PHASE broke is recorded too, but only when [turn.Abandon] gives a
-//     reason — an outward write its own record shows, a panic, or a refusal
-//     every redelivery would meet again — see [Dispatcher.abandon] for why
-//     that is a different question from "did it fail", and why answering it
-//     with `err != nil` alone replayed a turn's external writes up to
-//     twenty-five times.
-//
-// NO PANIC LEAVES THIS FRAME. A phase that panics is recovered inside the turn
-// loop and comes back as an ordinary broken turn; anything else that panics
-// between the broker and the loop, in the stages below or in the turn's own
-// set-up and tear-down, is recovered here. Letting it through handed it to the
-// queue backend's handler guard, which NAKs a panic, so a defect was run again
-// up to the whole delivery budget. See [Dispatcher.recoverPanic].
+// THE ORDER IS THE PRODUCT: internal/agent/inbox owns the guard sequence and
+// the reasons, and this frame adds the two ledger reads and the one ledger
+// write, placed deliberately (the package doc's "Dispatch's order"). Every NAK
+// here asks [nakFailure], since a failure of this node's is never the mail's
+// own (the package doc's section of that name). NO PANIC LEAVES THIS FRAME: a
+// phase's panic is recovered inside the turn loop as a broken turn, and any
+// other between the broker and the loop, in the stages or the turn's set-up
+// and tear-down, here, since the queue's handler guard NAKs a panic, running a
+// defect again up to the whole delivery budget ([Dispatcher.recoverPanic]).
 func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.Event) (result queue.Result) {
 	d.enter(handle)
 	defer d.leave(handle)
@@ -677,8 +651,8 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		}
 		held.events = surviving
 	}
-	if d.StaleAssignments != nil {
-		if surviving = d.StaleAssignments(ctx, handle, surviving); len(surviving) == 0 {
+	if d.StaleWakes != nil {
+		if surviving = d.StaleWakes(ctx, handle, surviving); len(surviving) == 0 {
 			return queue.Ack()
 		}
 		held.events = surviving
@@ -804,8 +778,10 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			// is ever this delivery's to settle, and the tail, its copies
 			// waiting for the seat, is never gone with it ([goneBy]).
 			held.events, held.requeued = head, tail
+			// A requeue that failed for a reason of this node's is NAK'd
+			// as the node's own, never the mail's ([nakFailure]).
 			if err := d.Park(ctx, handle, tail); err != nil {
-				return queue.Nak(fmt.Errorf("engine: requeue %s: %w", handle, err))
+				return nakFailure(ctx, fmt.Errorf("engine: requeue %s: %w", handle, err))
 			}
 			routing = inbox.Routing{
 				WorkKey: headKey, Events: head,
@@ -995,14 +971,12 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			//
 			// A NAK, and so it comes back BEHIND the conversation's
 			// newer mail (queue.OutcomeNak): the spaced, budgeted retry a
-			// failing turn needs, which a deferral is not. What that
-			// order costs is closed where it would bite — a newer
-			// message's turn that was shown this one waiting in its
-			// thread answers the thread as it stands and records it as
-			// worked through, so this delivery is dropped when it comes
-			// round rather than answered a second time, out of order.
-			// See workedthrough.go.
-			return queue.Nak(fmt.Errorf("engine: turn for %s: %w", handle, err))
+			// failing turn needs, which a deferral is not; the order's
+			// cost is closed in workedthrough.go. THE NODE'S OWN where
+			// [nakFailure] says so: a turn a drain ended, a publish the
+			// broker did not answer or a coordination store that did not
+			// answer failed for nothing the mail did.
+			return nakFailure(ctx, fmt.Errorf("engine: turn for %s: %w", handle, err))
 		}
 		return d.abandon(ctx, handle, req, err, reason)
 	}
@@ -1577,9 +1551,10 @@ func (d *Dispatcher) SpendAnswer(ctx context.Context, handle string, evs []*even
 }
 
 // park requeues a delivery and acks it, or NAKs where it could not be
-// requeued. Only behind a pause hold ([inbox.ActionPauseAndPark]): the copies
-// land on the inbox the delivery came from, and with nothing stopping the
-// consumer they would be fetched straight back.
+// requeued, as the node's own where the requeue failed for a reason of this
+// node's ([nakFailure]). Only behind a pause hold ([inbox.ActionPauseAndPark]):
+// the copies land on the inbox the delivery came from, and with nothing
+// stopping the consumer they would be fetched straight back.
 //
 // It takes the EVENTS rather than the screening that asked for them, so the
 // list it requeues is stated where it is decided.
@@ -1601,9 +1576,66 @@ func (d *Dispatcher) park(ctx context.Context, handle string, evs []*events.Even
 	// that settles its original ([goneBy]).
 	held.requeued = evs
 	if err := d.Park(ctx, handle, evs); err != nil {
-		return queue.Nak(fmt.Errorf("engine: park %s: %w", handle, err))
+		return nakFailure(ctx, fmt.Errorf("engine: park %s: %w", handle, err))
 	}
 	return queue.Ack()
+}
+
+// nakFailure NAKs a seat's mail that failed, for a retry: as THIS NODE'S OWN
+// failure ([queue.NakNode]) where [nodesFailure] says it is one, and as the
+// mail's ([queue.Nak]) otherwise. Both return the delivery on the same
+// backoff and spend the same budget; what differs is where a delivery whose
+// budget is spent is kept ([queue.RetiredTo]): as the mail's, with its group's
+// poison, which nothing replays; as the node's, with its unhandled deliveries.
+// The requeue of a partition's tail, a park's requeue and a turn's failure all
+// answer through it, so a failure one keeps out of the poison the others keep
+// out too.
+func nakFailure(ctx context.Context, err error) queue.Result {
+	if nodesFailure(ctx, err) {
+		return queue.NakNode(err)
+	}
+	return queue.Nak(err)
+}
+
+// nodesFailure reports whether err, the failure of a delivery a seat was
+// handed, is THIS NODE'S OWN or its infrastructure's rather than the work's:
+// the one answer the seat's mailbox ([nakFailure]) and its control topic
+// ([controlOutcome]) NAK by, and the sandbox coordinator counts a failed resume
+// toward its give-up by ([sandbox.CoordinatorOptions.NodesFailure]), since the
+// same failure reaches all three. The node's: what the queue tells as the
+// node's ([queue.NodeFault]), a condition of the infrastructure by the one
+// classification ([builtin.InfrastructureKind], read off the failure), and the
+// sandbox coordinator's marks ([sandbox.ErrStoreSilent],
+// [sandbox.ErrUnannounced]); never [sandbox.ErrResumeElsewhere], which the
+// give-up counts once no node can make it. The package doc's "A failure of
+// this node's is never the mail's own" says why.
+func nodesFailure(ctx context.Context, err error) bool {
+	return storeUnheard(err) || queue.NodeFault(ctx, err) || infrastructureFailure(err)
+}
+
+// storeUnheard reports whether err carries one of the sandbox coordinator's
+// marks for a store that did not answer it: a step's silence
+// ([sandbox.ErrStoreSilent]) or a hand-back no waiter can announce again
+// ([sandbox.ErrUnannounced]).
+func storeUnheard(err error) bool {
+	return errors.Is(err, sandbox.ErrStoreSilent) || errors.Is(err, sandbox.ErrUnannounced)
+}
+
+// operatorsCondition is [sandbox.CoordinatorOptions.OperatorsCondition]: the
+// kind of err where it is a condition only an operator clears
+// ([builtin.OperatorKind]), by the one classification of conditions
+// ([builtin.ConditionKind]) every failure is told by.
+func operatorsCondition(err error) (string, bool) {
+	kind, ok := builtin.ConditionKind(err)
+	return kind, ok && builtin.OperatorKind(kind)
+}
+
+// infrastructureFailure reports whether err is a condition of the
+// infrastructure the engine runs on, by the one classification of conditions
+// ([builtin.ConditionKind], [builtin.InfrastructureKind]).
+func infrastructureFailure(err error) bool {
+	kind, ok := builtin.ConditionKind(err)
+	return ok && builtin.InfrastructureKind(kind)
 }
 
 // dropWorked removes the events the completion ledger has already recorded.

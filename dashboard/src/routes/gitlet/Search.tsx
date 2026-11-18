@@ -23,6 +23,7 @@ import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
 import type { CodeSearchAnswer } from "~/contract/code.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
+import { useGitletSectionCounts } from "./sectionCounts.ts";
 import { Facets } from "./search/Facets.tsx";
 import { Results } from "./search/Results.tsx";
 import {
@@ -69,6 +70,7 @@ function Lead({ icon, words }: { icon: ReactNode; words: string }) {
 }
 
 export function Search() {
+  useGitletSectionCounts();
   // `/` FOCUSES THIS SCREEN'S PHRASE rather than opening the palette over it.
   const box = useRef<HTMLInputElement>(null);
   useSearchTarget(box);

@@ -854,6 +854,14 @@
 // requester never reaches here: a person maintains every repository, and a
 // stranger reads none, both settled where the turn runs.
 //
+// A PAGE IS HELD TO ITS KIND'S BOUND ([ReadQuery.PageMax]): a read asking past
+// it is refused naming the bound, never clamped, so a caller reading a kind to
+// its end pages at that bound, never at [MaxSnapshotItems], which caps every
+// page the reader serves rather than naming any kind's. A limit the engine
+// chooses is the same on every call, so one past the bound would refuse every
+// call: TestEveryEngineReadAsksAPageItsKindCarries holds each such limit in the
+// module to the bound where it is written.
+//
 // # Every read of the rows seeks a named index
 //
 // Every statement this package spells that reads a code table — a SELECT, and

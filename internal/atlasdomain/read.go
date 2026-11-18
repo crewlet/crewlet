@@ -14,9 +14,8 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// Reader answers questions about the atlas from this node's own applied rows,
-// through the domain's read authority, at the level each caller asks. Nothing
-// here folds: the claims go to [atlas.Fold] beside the ones computed at read.
+// Reader answers from this node's applied rows, through the domain's read
+// authority, at each caller's level. Nothing here folds: [atlas.Fold] does.
 type Reader struct {
 	db  store.ReplicatedReader
 	log *statelog.Reader
@@ -26,8 +25,8 @@ type Reader struct {
 type ReaderOptions struct {
 	DB store.ReplicatedReader
 
-	// Log is this domain's read authority, required: without it every read
-	// level is a label rather than a guarantee.
+	// Log is this domain's read authority, required: without it a read level
+	// is a label, not a guarantee.
 	Log *statelog.Reader
 }
 
@@ -46,29 +45,26 @@ func NewReader(opts ReaderOptions) (*Reader, error) {
 // writes, wherever they made them.
 func DefaultRead() statelog.Freshness { return statelog.Freshness{Level: statelog.ReadSession} }
 
-// stale is the level the engine's own duties read at: a nomination decided
-// again in the write's own snapshot.
+// stale is the engine's duties' level: each nomination is decided again in the
+// write's own snapshot.
 var stale = statelog.Freshness{Level: statelog.ReadStale}
 
 // ---- claims ------------------------------------------------------------- //
 
-// Live is every claim the atlas holds now: the newest of each voice on each
-// slot of each entry, every one of which [atlas.Fold] reads.
+// Live is every claim the atlas holds now: each voice's newest on each slot of
+// each entry, what [atlas.Fold] reads.
 type Live struct {
 	Claims []atlas.Claim
 
-	// Position is where the answer is current through, and Complete false
+	// Position is where the answer is current through; Complete is false
 	// where this node holds a record it could not decode.
 	Position statelog.Position
 	Complete bool
 }
 
-// Live reads every live claim, at the caller's level: what the atlas folds
-// beside the claims it computes when it is read.
-//
-// EACH FROM ITS OWN RECORD'S JSON, one column a row: the driver's cost is per
-// column, and twenty-odd of them over the reference company's twenty thousand
-// claims cost ten times what one does (BenchmarkAtlasLiveRead).
+// Live reads every live claim at the caller's level, EACH FROM ITS RECORD'S
+// JSON, one column a row: the driver's cost is per column, and twenty-odd
+// columns cost ten times what one does (BenchmarkAtlasLiveRead).
 func (r *Reader) Live(ctx context.Context, fresh statelog.Freshness) (Live, error) {
 	var out Live
 	answer, err := r.log.Read(ctx, fresh.Query(DomainScope(), true), func(tx *sql.Tx) error {
@@ -97,9 +93,8 @@ func (r *Reader) Live(ctx context.Context, fresh statelog.Freshness) (Live, erro
 }
 
 // LiveOf reads every live claim one voice holds: what an integration's read is
-// diffed against before it is recorded (ADR-0129). Stale by default on the
-// duty's side, since the read decides nothing a snapshot would not decide
-// again: a claim it misses is written once more, which the applier takes once.
+// diffed against (ADR-0129). The duty reads it stale: a claim it misses is
+// written once more, which the applier takes once.
 func (r *Reader) LiveOf(ctx context.Context, src atlas.Source, fresh statelog.Freshness) (Live, error) {
 	var out Live
 	answer, err := r.log.Read(ctx, fresh.Query(DomainScope(), true), func(tx *sql.Tx) error {
@@ -158,12 +153,12 @@ type EntryRow struct {
 	ID  string
 	Ref atlas.Ref
 
-	// Version is the position of the newest record on the entry: the tag a
-	// person's edit names as its ifMatch.
+	// Version is the newest record's position on the entry: a person's
+	// edit's ifMatch.
 	Version uint64
 
-	// Retired is when a person's newest word on the entry itself retired it,
-	// zero while it stands.
+	// Retired is when a person's newest word on the entry retired it, zero
+	// while it stands.
 	Retired time.Time
 
 	// At is when the log first took a claim on it.
@@ -211,8 +206,8 @@ func (r *Reader) Entry(ctx context.Context, id string, fresh statelog.Freshness)
 
 // ---- purges ------------------------------------------------------------- //
 
-// PurgeRow is one purge: what it erased, by its id or its digest and never its
-// value, who ran it and when, and how many records it has kept from coming back.
+// PurgeRow is one purge: what it erased (by id or digest, never the value),
+// who ran it and when, and how many records it has kept from coming back.
 type PurgeRow struct {
 	// Entry is true for an entry's purge, false for a value's; ID is the
 	// entry's id or the value's digest.
@@ -228,8 +223,7 @@ type PurgeRow struct {
 	LastBlocked time.Time
 }
 
-// Purges reads every purge, newest first: the record an administrator's purge
-// keeps of itself.
+// Purges reads every purge, newest first.
 func (r *Reader) Purges(ctx context.Context, fresh statelog.Freshness) ([]PurgeRow, error) {
 	var out []PurgeRow
 	_, err := r.log.Read(ctx, fresh.Query(DomainScope(), true), func(tx *sql.Tx) error {
@@ -267,8 +261,8 @@ func (r *Reader) Purges(ctx context.Context, fresh statelog.Freshness) ([]PurgeR
 
 // ---- the engine's duties ------------------------------------------------ //
 
-// minAtStatements find the oldest instant at or after a bound and before
-// another that an expiry would take, one indexed probe each.
+// minAtStatements find the oldest instant in [from, end) an expiry would
+// take, one indexed probe each.
 var minAtStatements = []string{
 	`SELECT MIN(superseded_at) FROM atlas_claims INDEXED BY atlas_claims_expiry_idx
 		WHERE replaced = 1 AND superseded_at >= ? AND superseded_at < ?`,
@@ -276,9 +270,9 @@ var minAtStatements = []string{
 		WHERE retired = 1 AND last_at >= ? AND last_at < ?`,
 }
 
-// ExpirableHours lists, oldest first and at most limit of them, the hours that
-// hold history past cutoff an expiry would take: what the retention duty
-// nominates. A stale read: each expiry is decided again in its own snapshot.
+// ExpirableHours lists, oldest first and at most limit, the hours before cutoff
+// holding history an expiry would take: the retention duty's nominations. A
+// stale read: each expiry is decided again in its own snapshot.
 func (r *Reader) ExpirableHours(ctx context.Context, cutoff time.Time, limit int) ([]time.Time, error) {
 	if limit <= 0 {
 		return nil, nil
