@@ -26,24 +26,15 @@ import (
 // Reader answers questions about a person's conversations from this node's own
 // applied rows, opening every sealed value on this node's keyring.
 //
-// # Every read is the owner's
+// Every method takes the owner and answers [ErrNotFound] for anything not
+// theirs (package doc, "A conversation belongs to its owner"), except
+// [Reader.AuditTranscript], which opens another's conversation only for a
+// compliance read already recorded beside it ([Writer.RecordAuditRead]).
 //
-// Every method takes the owner and answers [ErrNotFound] for a conversation,
-// turn, card or proposal that is not theirs, exactly as for one that does not
-// exist: a caller with no relation is told it does not exist (ADR-0034's rule,
-// ADR-0053). THE ONE EXCEPTION is [Reader.AuditTranscript], which opens
-// somebody else's conversation only for the receipt of a compliance read
-// already recorded beside it ([Writer.RecordAuditRead]), so no path reads
-// another person's conversation without leaving the record they see.
-//
-// # Through the read authority
-//
-// Every read goes through [statelog.Reader], so the refusal ladder holds (an
-// evicted node, one below the trim floor and one whose applier stopped serve
-// nothing) and a record this node could not decode is reported rather than
-// answered around. Reads are served at `stale`: a person reads their own
-// conversation through the node their own writes waited on, and every write
-// here waits for this node's applier before it answers.
+// Every read goes through [statelog.Reader], so the refusal ladder holds and an
+// undecodable record is reported, not answered around. Reads are served at
+// `stale`: every write here waits for this node's applier, and a person reads
+// through the node their own writes waited on.
 type Reader struct {
 	db      store.ReplicatedReader
 	log     *statelog.Reader
@@ -109,10 +100,9 @@ func (r *Reader) read(ctx context.Context, scope statelog.ScopeSet, set bool,
 }
 
 // readChild runs fn in one transaction of the read authority, over the scope
-// of the conversation that the row of id in table belongs to: resolved inside
-// the transaction, because only the row says which conversation it is in. A
-// row this node does not hold reads over the whole domain, since a create this
-// node could not decode is exactly a row it does not hold.
+// of the conversation the row of id in table belongs to, resolved inside the
+// transaction since only the row names it. A row this node does not hold reads
+// over the whole domain: a create it could not decode is exactly such a row.
 func (r *Reader) readChild(ctx context.Context, table string, id uuid.UUID,
 	fn func(*sql.Tx) error) error {
 
@@ -469,9 +459,9 @@ func (r *Reader) Transcript(ctx context.Context, owner, id uuid.UUID) (Transcrip
 }
 
 // AuditTranscript is a conversation read for compliance (decision D06), for
-// the receipt of the compliance read [Writer.RecordAuditRead] recorded beside
-// it: a receipt whose record has not applied on this node opens nothing, so
-// the conversation is never read here before its owner can see who read it.
+// the receipt [Writer.RecordAuditRead] returned: a receipt whose record has not
+// applied on this node opens nothing, so the conversation is never read here
+// before its owner can see who read it.
 func (r *Reader) AuditTranscript(ctx context.Context, receipt AuditReceipt) (Transcript, error) {
 	if receipt.conversation == uuid.Nil || receipt.opID == "" {
 		return Transcript{}, invalid("a compliance read opens a conversation only for " +
@@ -491,8 +481,8 @@ func (r *Reader) AuditTranscript(ctx context.Context, receipt AuditReceipt) (Tra
 }
 
 // auditRecorded refuses a receipt whose compliance read has not applied on
-// this node as [ErrAuditPending]: what every audited read checks, in the same
-// transaction it then reads in.
+// this node as [ErrAuditPending], checked in the transaction the read then
+// reads in.
 func auditRecorded(ctx context.Context, tx *sql.Tx, receipt AuditReceipt) error {
 	var recorded int
 	if err := tx.QueryRowContext(ctx, `
@@ -681,10 +671,8 @@ type TurnRef struct {
 
 // ParkedPast nominates parked turns none of whose proposals expires after
 // now, the longest parked first, at most limit of them: the expiry
-// backstop's question. It only nominates: whether a turn has lapsed is
-// decided again against its proposals' states by the one rule that ends a
-// parked turn as expired (internal/assistant/proposal.Lapsed), and the close
-// is arbitrated.
+// backstop's question. It only nominates: whether a turn lapsed is decided
+// again by internal/assistant/proposal.Lapsed, and the close is arbitrated.
 func (r *Reader) ParkedPast(ctx context.Context, now time.Time, limit int) ([]TurnRef, error) {
 	if limit <= 0 {
 		return nil, invalid("a parked listing names how many it wants")
@@ -916,16 +904,13 @@ func (r *Reader) scanCard(row rowScanner) (Card, error) {
 // a shape its contract refuses, is read as: a plain notice in its place,
 // never the body.
 //
-// A CARD IS VALIDATED BEFORE IT IS RECORDED and never rewritten after, so a
-// stored card this build's [wire.Card.Validate] refuses was written to
-// another contract of an unreleased surface: an earlier one (a brief before
-// ADR-0062), or, during a rolling upgrade, a newer node's. Either way it is
-// not read, migrated or tolerated field by field: the transcript, the
-// dashboard and the conversation the model re-reads all see this notice, and
-// asking again writes the card in the shape this node reads. A kind this
-// build does not know at all passes through untouched, as the dashboard
-// already draws one it cannot. Each one is logged, by id, kind and the
-// contract's reason, and counted.
+// A CARD IS VALIDATED BEFORE IT IS RECORDED and never rewritten, so a stored
+// card [wire.Card.Validate] refuses was written to another contract (an
+// earlier one, or a newer node's mid-upgrade). It is not migrated or tolerated
+// field by field: the transcript, the dashboard and the model's re-read all
+// see this notice, and asking again writes the card in this node's shape. A
+// kind this build does not know passes through, as the dashboard draws one it
+// cannot. Each one is logged (id, kind, reason) and counted.
 func UnshownCardNotice() wire.Card {
 	return wire.Card{Type: wire.CardNotice, Notice: &wire.NoticeCard{Tone: wire.NoticeInfo,
 		Text: "This answer can't be shown here. Ask again to see it now."}}

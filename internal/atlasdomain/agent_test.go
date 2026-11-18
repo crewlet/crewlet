@@ -35,9 +35,8 @@ func (n *writeNode) observe(handle, turn string, evidence atlas.Evidence, c atla
 }
 
 // AN AGENT'S CLAIM LANDS ON EVERY NODE WITH ITS TURN, ITS EVIDENCE AND THE
-// TOOL IT CITED, the
-// seat as its source whatever the claim said, so its confidence is read off
-// the record on every node alike and chosen by nobody.
+// TOOL IT CITED, the seat as its source whatever the claim said, so its
+// confidence is read off the record on every node alike and chosen by nobody.
 //
 // Mutation: drop Turn and Evidence from the wire source (sourceOf) and every
 // agent's claim reads back as reported, with no turn.

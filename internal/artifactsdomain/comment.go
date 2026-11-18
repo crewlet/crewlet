@@ -258,9 +258,8 @@ type RemarkEdit struct {
 	Mentions []string
 }
 
-// RemarkRemoval removes one remark. Moderated is set by the API for a caller
-// who may remove somebody else's remark (an administrator); without it only
-// the author may.
+// RemarkRemoval removes one remark. Without Moderated, which the API sets for
+// an administrator, only the author may.
 type RemarkRemoval struct {
 	RemarkRef
 	Moderated bool

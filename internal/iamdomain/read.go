@@ -16,47 +16,18 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE READ SIDE OF THE IDENTITY ESTATE, and what is particular about it.
+// The read side of the identity estate.
 //
-// # Every answer is three-valued, and the third value is the point
-//
-// A read here decides whether somebody may act. Its three answers are the
-// engine's own three: this person is X, this person is definitively not X, and
-// this node could not tell — and the third is not a failure to be logged and
-// folded into the second. Folded, every credential in the company reads as
-// invalid for the length of an outage, which is how a company gets taught to
-// reset working passwords during one.
-//
-// So nothing here returns `(value, bool)`. An error is the unknown arm,
-// always, and a caller that cannot distinguish it has already lost the
-// distinction.
-//
-// # The session read is ONE read, deliberately
-//
-// [Directory.Resolve] answers six facts in one snapshot, because a revocation
-// landing between a session read and a person read produces a verdict that
-// never existed at any instant. That is not a performance argument; it is the
-// only shape in which "the replicated estate is not open" is one answer rather
-// than three.
-//
-// # Nothing here decrypts
-//
-// A person's name and address are SEALED under the fleet keyring. Every read
-// below returns the sealed bytes and leaves opening them to a surface that has
-// a reason to — so a value is opened only where somebody is shown it, and a
-// read that decides who may do what never touches one.
-//
-// # And nothing here reads at a level
-//
-// Every answer is THIS NODE'S ROWS, with how far behind the log they are
-// beside them ([Vouch], [Reader.At]): a read here decides whether somebody may
-// act, on every request, and the framework's levels would put a barrier on
-// the identity log for each one. The one read that must not be served from
-// before a position — a request carrying a session this node has not applied
-// yet — waits for the position the bearer itself states
-// ([Reader.AwaitApplied]), which is the applier's own wait and appends
-// nothing. So no read of this estate takes a barrier, and that is the read
-// model the identity log is sized by (internal/engine's register).
+// Every answer is three-valued: an error is the unknown arm, never folded into
+// "not X", or every credential reads as invalid for an outage's length; so
+// nothing here returns `(value, bool)`. A multi-fact answer is ONE snapshot
+// ([Reader.Resolve]): a revocation landing between two reads makes a verdict
+// that held at no instant. Nothing here decrypts: sealed bytes are opened only
+// where somebody is shown them. Nothing reads at a level, which would take a
+// barrier per request: answers are this node's rows beside their lag ([Vouch],
+// [Reader.At]), and a bearer's unapplied session waits for the position it
+// states ([Reader.AwaitApplied]), appending nothing. internal/engine's
+// register sizes the identity log for this read model.
 
 // Reader answers questions about this node's copy of the identity estate.
 type Reader struct {
@@ -72,33 +43,23 @@ type ReaderOptions struct {
 	// DB is the replicated estate. REQUIRED.
 	DB store.ReplicatedReader
 
-	// Reached is the position this node's rows are current through — its
-	// applier's reached position ([statelog.Runner.Reached]), every record
-	// at or below it committed or a barrier that writes no row — and Lag how
-	// far behind the log it is. Each is nil-safe and answers the zero value,
-	// which is what a reader with no runner behind it honestly has.
+	// Reached is the position this node's rows are current through: its
+	// applier's reached position ([statelog.Runner.Reached]), never the
+	// committed checkpoint, since a barrier whose checkpoint has not committed
+	// changes no row, and a record that writes one is reached only once
+	// committed. Lag is how far behind the log it is. Each is nil-safe and
+	// answers the zero value, which is what a reader with no runner honestly has.
 	//
-	// THE REACHED POSITION, NEVER THE COMMITTED CHECKPOINT, as every read of
-	// the rows takes it: a barrier whose checkpoint has not committed changes
-	// no row here, and a session's start or a token's binding is a record
-	// that writes one, so it is reached only once committed either way.
-	//
-	// WHETHER A RECORD THIS NODE RETAINED IS ABOUT SOMEBODY is not an
-	// option: it is read out of the deferral index inside the snapshot the
-	// rows are read in ([statelog.DeferredIn]). It was the runner's
-	// earliest deferral, which is about one bucket and — as the runner read
-	// it — carried no scope at all, so no retained record was ever about
-	// anybody and every "this node cannot vouch for this person" answer
-	// the session table and a token's binding turn on was dead.
+	// Whether a retained record is about somebody is not an option: it is read
+	// from the deferral index in the rows' own snapshot ([statelog.DeferredIn]),
+	// never the runner's earliest deferral, which names one bucket.
 	Reached func() statelog.Position
 	Lag     func() time.Duration
 
-	// Await blocks until this node's applier has reached a position — the
-	// runner's own wait ([statelog.Runner.WaitReached]). NIL ANSWERS AN
-	// ERROR rather than nil, for the other two's reason read the other way
-	// round: a reader with no runner behind it will never reach a position,
-	// and a wait that reported arrival would send a caller to decide on rows
-	// that are not there.
+	// Await blocks until this node's applier has reached a position
+	// ([statelog.Runner.WaitReached]). NIL ANSWERS AN ERROR, never arrival: a
+	// reader with no runner never reaches a position, and reporting arrival would
+	// send a caller to decide on rows that are not there.
 	Await func(context.Context, statelog.Position) error
 }
 
@@ -128,12 +89,10 @@ var errNoApplier = errors.New("iamdomain: this reader has no applier to wait " +
 // AwaitApplied blocks until this node's applier has reached a packed position,
 // or ctx ends.
 //
-// PACKED, because that is the form a session bearer carries its start in, and
-// the one caller is the request guard waiting for exactly that position — see
-// internal/api/auth's session arm. The stream is this DOMAIN's own, named by
-// the domain rather than read back off the applier: a packed position does not
-// carry one, a bearer is only ever about this log, and an applier that has
-// committed nothing yet has no position to read a stream name off.
+// PACKED, the form a session bearer carries its start in (internal/api/auth's
+// session arm). The stream is this domain's own: a packed position names none,
+// a bearer is only ever about this log, and an applier that has committed
+// nothing has no stream name to read.
 func (r *Reader) AwaitApplied(ctx context.Context, position uint64) error {
 	if r.await == nil {
 		return errNoApplier
@@ -143,21 +102,15 @@ func (r *Reader) AwaitApplied(ctx context.Context, position uint64) error {
 
 // ErrNotFound is a lookup this node could answer and that names nobody.
 //
-// A SENTINEL AND NOT A BOOL, because the caller's third answer is an error and
-// a bool beside one is two ways to say the same thing that eventually
-// disagree. What it deliberately is NOT is what a sign-in reports: see
-// [Reader.PersonByLogin].
+// A sentinel, not a bool beside an error, which would be two ways to say one
+// thing. A sign-in deliberately does NOT report it: see [Reader.PersonByLogin].
 var ErrNotFound = errors.New("no such person")
 
 // Resolve answers everything one bearer is checked against, in ONE snapshot.
 //
-// It satisfies [session.Directory], which is consumer-defined there and kept
-// to what validation needs. The six facts travel together because reading them
-// separately produces a verdict that never existed at any instant.
-//
-// AN ERROR IS ALWAYS THE UNKNOWN ARM. A replicated estate that is not open, a
-// store that cannot be read, a row that will not decode — every one is 503,
-// and none of them may be reported as "this session does not exist".
+// It satisfies [session.Directory]; the facts travel together because read
+// separately they make a verdict that held at no instant. AN ERROR IS ALWAYS
+// THE UNKNOWN ARM (503), never "this session does not exist".
 func (r *Reader) Resolve(ctx context.Context, lineage, person string) (
 	session.Identity, error) {
 
@@ -166,11 +119,9 @@ func (r *Reader) Resolve(ctx context.Context, lineage, person string) (
 		Lag:     r.lag(),
 	}
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
-		// THE DEFERRAL IS READ IN THE ROWS' OWN SNAPSHOT, and it is the
-		// framework's coverage answer: this node holds a record it could
-		// not decode whose scope covers this person's bucket. The read
-		// SUCCEEDS and its rows are simply not known to be complete,
-		// which is why this is a field rather than an error.
+		// THE DEFERRAL IS READ IN THE ROWS' OWN SNAPSHOT: a record this node
+		// could not decode whose scope covers this person's bucket. The read
+		// still succeeds, its rows just not known complete, so it is a field.
 		var err error
 		if out.Deferred, err = deferredFor(ctx, tx, person); err != nil {
 			return err
@@ -192,17 +143,14 @@ func (r *Reader) Resolve(ctx context.Context, lineage, person string) (
 	return out, nil
 }
 
-// Vouch is how far this node can vouch for the rows one read answered: how far
-// its applier is behind the log, and whether it holds a record it could not
-// decode whose scope covers the person those rows are about.
+// Vouch is how far this node can vouch for the rows one read answered: its
+// applier's lag, and whether it holds a record it could not decode whose scope
+// covers the person those rows are about.
 //
-// FACTS AND NOT A VERDICT. What a lag or a deferral MEANS is the caller's
-// table — internal/iam/session's for a session, the engine's for a Tier A
-// token's binding and a login's record — and a threshold chosen here would be
-// a second opinion about the one event [statelog.StallGrace] already names.
-// One value rather than two answers so that a caller cannot ask about the lag
-// and forget the deferral, which reads as a caught-up node while it holds a
-// newer peer's record about exactly this person.
+// FACTS, NOT A VERDICT: what they mean is the caller's table (the session
+// package's, the engine's for a token binding and a login's record); a
+// threshold here would second-guess [statelog.StallGrace]. One value, so no
+// caller asks about the lag and forgets the deferral.
 type Vouch struct {
 	Lag      time.Duration
 	Deferred bool
@@ -211,19 +159,12 @@ type Vouch struct {
 // PersonByLoginVouched is [Reader.PersonByLogin] and how far this node can
 // vouch for its answer, the row and the deferral read in ONE snapshot.
 //
-// For the callers that decide on a DIRECTORY ROW rather than on a credential:
-// a Tier A token's seat binding and the record a login keeps its holder's work
-// under. They read the row and then asked [Reader] separately whether a
-// record this node retained covered its person — two snapshots, so a record
-// reprocessed between them paired rows from before it with "nothing
-// deferred", a verdict that held at no instant. [Reader.MachineToken] and
-// [Reader.Resolve] read the two together for the same reason.
-//
-// An ABSENT row is vouched for over the ROOT — every deferral covers it —
-// because nothing can say which bucket a record this node could not decode is
-// about, and it may be the enrolment or the rename that took this login.
-// THREE-VALUED on the deferral: the index is a read, and one that failed says
-// nothing either way.
+// For callers that decide on a directory row rather than a credential (a Tier
+// A token's seat binding, a login's record): two snapshots would pair rows from
+// before a reprocessed record with "nothing deferred", as [Reader.Resolve] and
+// [Reader.MachineToken] avoid too. An ABSENT row is vouched for over the ROOT:
+// an undecodable record may be the enrolment or rename that took this login.
+// Three-valued on the deferral: a failed index read says nothing either way.
 func (r *Reader) PersonByLoginVouched(ctx context.Context, login string) (
 	Sighting, Vouch, error) {
 
@@ -251,14 +192,10 @@ func (r *Reader) PersonByLoginVouched(ctx context.Context, login string) (
 // deferredFor reports, inside the caller's snapshot, whether this node holds a
 // record it could not decode whose scope covers this person's bucket.
 //
-// THE BUCKET AND NOT THE PERSON, because that is all a deferral can say: its
-// scope is a bucket path, and the person a record is about is inside a payload
-// the deferring node could not decode. See scope.go for why the scope is flat
-// and bucketed rather than per person. And EVERY retained record, through the
-// framework's own index ([statelog.DeferredIn]) — the earliest one is usually
-// about somebody else, and a later one about exactly this person is the case
-// the answer exists for. A root-scoped record covers everybody, and an empty
-// person is covered by every record, since the probe is then the root.
+// THE BUCKET, not the person: a deferral's scope is a bucket path, the person
+// being inside a payload nobody here could decode (scope.go). EVERY retained
+// record, through [statelog.DeferredIn], since the earliest is usually
+// somebody else's. An empty person probes the root, which every record covers.
 func deferredFor(ctx context.Context, tx *sql.Tx, person string) (bool, error) {
 	var scope ScopeSet
 	if person == "" {
@@ -291,19 +228,16 @@ func readSessionRow(ctx context.Context, tx *sql.Tx, lineage string,
 		lineage).Scan(&epoch, &endedAt, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		// ABSENT IS A FINDING, not a failure: it is what the bearer's own
-		// start position turns into the two answers it actually is — a
-		// session that ended and was swept, or one this node has not
-		// applied yet. session.Row is where that is decided.
+		// ABSENT IS A FINDING, not a failure: session.Row turns it, with the
+		// bearer's start position, into "ended and swept" or "not applied yet".
 		return nil
 	case err != nil:
 		return fmt.Errorf("iamdomain: read the session row: %w", err)
 	}
 	doc, err := DecodeSession(document)
 	if err != nil {
-		// THE UNKNOWN ARM, as for a person's row: a session a newer peer
-		// wrote that this build cannot open is one whose facts this node
-		// cannot state, and answering it as absent would be a 401.
+		// THE UNKNOWN ARM: a newer peer's session this build cannot open has
+		// facts this node cannot state, and answered as absent it is a 401.
 		return fmt.Errorf("iamdomain: open session %q: %w", lineage, err)
 	}
 	out.Found = true
@@ -343,19 +277,14 @@ func readPersonRow(ctx context.Context, tx *sql.Tx, person string,
 	}
 	doc, err := DecodePerson(document)
 	if err != nil {
-		// THE UNKNOWN ARM, and deliberately not "no such person". A row
-		// written by a newer peer that this build cannot open is a
-		// person who exists and whose facts this node cannot state —
-		// answering 401 to them would sign out everybody enrolled since
-		// the upgrade started.
+		// THE UNKNOWN ARM, not "no such person": answering 401 to a newer
+		// peer's row would sign out everybody enrolled since the upgrade began.
 		return fmt.Errorf("iamdomain: open person %q: %w", person, err)
 	}
 	out.Found = true
-	// THE COLUMN AND NOT THE DOCUMENT. The column is what every predicate
-	// in this estate reads, and the status op is the one write that moves
-	// a stage without authoring a whole document — so a reader deciding
-	// from the document answered a different question from the rows beside
-	// it, and a suspended person's session validated as `active`.
+	// THE COLUMN, NOT THE DOCUMENT: every predicate here reads the column,
+	// and the status op moves a stage without a new document, so the
+	// document can still say `active` for a suspended person.
 	out.Stage = iam.Stage(stage)
 	out.Login = login
 	out.Grants = doc.Grants
@@ -363,17 +292,12 @@ func readPersonRow(ctx context.Context, tx *sql.Tx, person string,
 	return nil
 }
 
-// readEpoch fills a session subject's revocation epoch.
+// readEpoch fills a session subject's revocation epoch, in the person's
+// snapshot for [Reader.Resolve]'s reason.
 //
-// THE REVOCATION EPOCH IS ITS OWN ROW, and it is read in the same transaction
-// as the person for the reason [Reader.Resolve] exists: a revocation landing
-// between the person read and the epoch read produces a verdict that never
-// existed.
-//
-// READ WHETHER OR NOT A PERSON ROW EXISTS, because not every session's subject
-// has one: a session exchanged from a Tier A token names the token's login,
-// which nothing enrols, and "sign out everywhere" from it bumps the epoch under
-// that login. Read only beside a person row, that revocation ended nothing.
+// READ WHETHER OR NOT A PERSON ROW EXISTS: a session exchanged from a Tier A
+// token names the token's login, which nothing enrols, and "sign out
+// everywhere" from it bumps the epoch under that login.
 func readEpoch(ctx context.Context, tx *sql.Tx, subject string, out *uint64) error {
 	if subject == "" {
 		return nil
@@ -384,9 +308,8 @@ func readEpoch(ctx context.Context, tx *sql.Tx, subject string, out *uint64) err
 		subject).Scan(&epoch)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		// NO ROW IS EPOCH ZERO, which is a real value rather than a
-		// missing one: nobody has revoked anything for this subject, and
-		// every bearer it holds carries zero too.
+		// NO ROW IS EPOCH ZERO, a real value: nobody has revoked anything for
+		// this subject, and its bearers carry zero too.
 		return nil
 	case err != nil:
 		return fmt.Errorf("iamdomain: read the revocation epoch: %w", err)
@@ -396,24 +319,16 @@ func readEpoch(ctx context.Context, tx *sql.Tx, subject string, out *uint64) err
 }
 
 // MachineToken answers everything one presented machine token is checked
-// against, in ONE snapshot: the credential row under its id, the owner as this
-// node holds them now, the owner's current epoch, the company's current
-// session generation, and how far this node can vouch.
+// against, in ONE snapshot: the credential row, its owner now, the owner's
+// epoch, the company's session generation, and how far this node can vouch.
 //
-// It is what the request guard's machine-token arm reads on a data node, and
-// what a data node answers a node holding no identity rows with — narrowed by
-// internal/estate, which withholds the verifier — and it is the token's
-// [Reader.Resolve]: a revocation landing between a credential read and an
-// owner read would produce a verdict that never existed at any instant. WHAT
-// THE ROWS MEAN is [credential.CheckToken]'s, over the value returned.
-//
-// ONE KEYED READ OF ONE ROW, never a scan, because the token carries its own
-// id in the clear — which is what a credential presented on every request a
-// pipeline makes has to cost.
-//
-// AN ERROR IS ALWAYS THE UNKNOWN ARM. A row that will not decode is a newer
-// peer's, and answering it as "no such token" would tell a pipeline its
-// credential is broken for the length of an upgrade.
+// The request guard's machine-token arm reads it on a data node, which answers
+// a node holding no identity rows from it too (internal/estate withholds the
+// verifier). One snapshot for [Reader.Resolve]'s reason; what the rows mean is
+// [credential.CheckToken]'s. ONE KEYED READ, never a scan: the token carries
+// its id in the clear and is presented on every pipeline request. AN ERROR IS
+// ALWAYS THE UNKNOWN ARM: answering a newer peer's row "no such token" would
+// break a pipeline's credential for the length of an upgrade.
 func (r *Reader) MachineToken(ctx context.Context, id string) (credential.TokenRow, error) {
 	out := credential.TokenRow{Applied: uint64(r.reached().Packed())}
 	var owner string
@@ -430,10 +345,8 @@ func (r *Reader) MachineToken(ctx context.Context, id string) (credential.TokenR
 			Scan(&owner, &method, &verifier, &expires, &revoked, &document)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
-			// ABSENT IS A FINDING, which the token's own mint position
-			// turns into "gone" or "not yet" — and EVERY deferral covers
-			// it, because nothing can say which bucket a record this node
-			// could not decode is about.
+			// ABSENT IS A FINDING (the mint position makes it "gone" or "not
+			// yet"), and every deferral covers it: no bucket is known.
 			owner = ""
 			out.Deferred, err = deferredFor(ctx, tx, owner)
 			return err
@@ -455,8 +368,7 @@ func (r *Reader) MachineToken(ctx context.Context, id string) (credential.TokenR
 		if err = readGeneration(ctx, tx, &out.FleetGeneration); err != nil {
 			return err
 		}
-		// THE OWNER'S BUCKET, once the row has named them, read in the
-		// same snapshot as the row that named them.
+		// THE OWNER'S BUCKET, in the snapshot of the row that named them.
 		if out.Deferred, err = deferredFor(ctx, tx, owner); err != nil {
 			return err
 		}
@@ -492,8 +404,8 @@ func readTokenOwner(ctx context.Context, tx *sql.Tx, id string,
 	out.Found = true
 	out.ID = id
 	out.Kind = doc.Kind
-	// THE COLUMN, for [readPersonRow]'s reason: a token decided from the
-	// document served a suspended owner.
+	// THE COLUMN, for [readPersonRow]'s reason: else a suspended
+	// owner's token is served.
 	out.Stage = iam.Stage(stage)
 	out.Login = login
 	out.Grants = doc.Grants
@@ -509,9 +421,8 @@ func readGeneration(ctx context.Context, tx *sql.Tx, out *uint64) error {
 		Scan(&generation)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		// A FLEET THAT HAS NEVER INVALIDATED is generation zero, and
-		// every bearer carries zero, so this is the ordinary state of a
-		// company rather than a missing row.
+		// NEVER INVALIDATED is generation zero, which every bearer carries:
+		// a company's ordinary state, not a missing row.
 		return nil
 	case err != nil:
 		return fmt.Errorf("iamdomain: read the session generation: %w", err)
@@ -523,9 +434,8 @@ func readGeneration(ctx context.Context, tx *sql.Tx, out *uint64) error {
 // Sighting is one person as a sign-in resolves them: enough to verify a
 // credential against and nothing more.
 //
-// DELIBERATELY NOT A PERSON DOCUMENT. A sign-in runs before anybody is
-// authenticated, so what it may read is bounded by what a refusal is allowed
-// to disclose — which is nothing. What is here is what the verify step needs.
+// NOT A PERSON DOCUMENT: a sign-in runs unauthenticated, and its refusal may
+// disclose nothing.
 type Sighting struct {
 	ID          string
 	Kind        iam.Kind
@@ -538,30 +448,22 @@ type Sighting struct {
 
 // PersonByLogin resolves a login to the person who holds it.
 //
-// # Three answers, and the middle one is not an error
-//
 // A login nobody holds answers the zero [Sighting] and a nil error, NOT
-// [ErrNotFound]. That is the one place in this file the sentinel is
-// deliberately withheld, and it is the enumeration rule: a caller that could
-// tell "no such login" from "wrong password" has a roster, and the two arms
-// have to be indistinguishable in what they return, how long they take and
-// what they log. internal/iam/credential is where the timing half lives; this
-// is the shape half, and the caller spends a decoy's derivation against the
-// zero value rather than branching on it.
-//
-// An error is still the unknown arm, as everywhere here.
+// [ErrNotFound]: the enumeration rule. "No such login" and "wrong password"
+// must not differ in return, timing or logs; internal/iam/credential owns the
+// timing, this the shape, and the caller spends a decoy's derivation on the
+// zero value. An error is still the unknown arm.
 func (r *Reader) PersonByLogin(ctx context.Context, login string) (Sighting, error) {
 	return r.sighting(ctx, sightingByLogin, login)
 }
 
-// PersonByEmailBlind resolves a keyed address blind to its holder, on the same
-// three answers and for the same reason.
+// PersonByEmailBlind resolves a keyed address blind to its holder, on
+// [Reader.PersonByLogin]'s three answers and for its reason.
 //
-// THE BLIND AND NOT THE ADDRESS, because this read runs before anybody is
-// authenticated and an address is personal data. iam.NormalizeEmail and this
-// domain's blind are what a surface computes it with — and they must agree
-// with the party registry's fold or one address would reach a seat and a
-// different person.
+// THE BLIND, not the address: the read is unauthenticated and an address is
+// personal data. A surface computes it with iam.NormalizeEmail and this
+// domain's blind, which must agree with the party registry's fold or one
+// address would reach a seat and a different person.
 func (r *Reader) PersonByEmailBlind(ctx context.Context, blind string) (Sighting, error) {
 	return r.sighting(ctx, sightingByBlind, blind)
 }
@@ -600,22 +502,16 @@ func (r *Reader) sighting(ctx context.Context, by sightingQuery, token string) (
 
 // sightingIn resolves one person row inside a read already open.
 //
-// THE STATEMENT IS ONE OF THIS PACKAGE'S TWO, never a caller's string
-// ([sightingByLogin], [sightingByBlind]), each spelled whole:
-// a column passed in was a surface one parameter away from selecting on
-// something a request named, and a statement the plan gate could only copy.
+// THE STATEMENT IS ONE OF THIS PACKAGE'S TWO ([sightingByLogin],
+// [sightingByBlind]), each spelled whole, never a caller's: a passed-in column
+// is one parameter from selecting on what a request named.
 //
-// # Two rows holding one value are the unknown arm
-//
-// The directory decides every login and address on one subject, so ordinary
-// traffic never puts one on two rows. A node that RETAINED a directory record
-// — the one that moved somebody off a login — and then applied a later one
-// that gave the freed login to somebody else holds both rows until the first
-// is reprocessed. That node cannot say which of the two is the holder, so it
-// answers neither: an error, which a lookup serves as "ask another node" and
-// a sign-in as its ordinary refusal, and never an arbitrary pick, which would
-// sign somebody in as somebody else.
-// A restore that copies duplicate rows back lands here the same way.
+// TWO ROWS HOLDING ONE VALUE ARE THE UNKNOWN ARM. The directory decides each
+// value on one subject, but a node that retained the record freeing a login
+// and applied the later one reusing it holds both, as does a restore copying
+// duplicates back. It answers an error ("ask another node"; a sign-in's
+// ordinary refusal), never an arbitrary pick, which would sign somebody in as
+// somebody else.
 func sightingIn(ctx context.Context, tx *sql.Tx, by sightingQuery, token string,
 	out *Sighting) error {
 
@@ -644,8 +540,7 @@ func sightingIn(ctx context.Context, tx *sql.Tx, by sightingQuery, token string,
 		return fmt.Errorf("iamdomain: resolve a person: %w", err)
 	}
 	if found == 0 {
-		// NOBODY, and the zero value is the answer. See the doc on
-		// [Reader.PersonByLogin] for why this is not a sentinel.
+		// NOBODY: the zero value is the answer ([Reader.PersonByLogin]).
 		*out = Sighting{}
 		return nil
 	}
@@ -655,8 +550,8 @@ func sightingIn(ctx context.Context, tx *sql.Tx, by sightingQuery, token string,
 		return fmt.Errorf("iamdomain: open person %q: %w", out.ID, err)
 	}
 	out.Kind = doc.Kind
-	// THE COLUMN, for [readPersonRow]'s reason: a sign-in decided from the
-	// document admitted a suspended person.
+	// THE COLUMN, for [readPersonRow]'s reason: else a suspended person
+	// signs in.
 	out.Stage = iam.Stage(stage)
 	out.Login = login
 	out.Credentials = doc.Credentials
@@ -665,44 +560,18 @@ func sightingIn(ctx context.Context, tx *sql.Tx, by sightingQuery, token string,
 	return nil
 }
 
-// AnyPerson reports whether this estate holds a PERSON — whether anybody who
-// signs in with a password is enrolled.
+// AnyPerson reports whether this estate holds a PERSON, anybody who signs in
+// with a password: `/health`'s `identity`, which tells a fresh deployment's
+// operator to invite the first person. A MACHINE does not count (it signs
+// nobody in), a REMOVED person is a tombstone, a SUSPENDED one is somebody. A
+// COUNT, never a listing: an unauthenticated route asks it.
 //
-// WHAT IT IS FOR is `/health`'s `identity`: a fresh deployment's identity
-// estate is empty, and an operator looking at one, or a dashboard whose
-// sign-in form nobody can use yet, needs to be told the next step is to
-// invite the first person rather than left looking at a sign-in that fails.
-// A MACHINE does not count: a service account, or the row binding a Tier A
-// token to a seat, signs nobody in with a password, so an estate holding only
-// those is still waiting for its first person — counted, it read as claimed
-// and the sign-in page hid the way in behind a form nobody could use.
-// It is a COUNT rather than a listing precisely because it is asked by an
-// unauthenticated route — the answer is one bit, and a roster is what it must
-// never become.
-//
-// A REMOVED person is nobody, their row a tombstone. A SUSPENDED one is
-// somebody: the company has started.
-//
-// # "Nobody" is an absence, and it is proved against the log's end
-//
-// Two ways a node's rows read as nobody while the company has somebody, and
-// "nobody" is said only where neither holds — otherwise this is the unknown
-// arm, wrapping [statelog.ErrUnavailable] (and, for the first, [ErrNotCurrent]),
-// which clears on its own. "Somebody" needs no such proof: a row is a fact.
-//
-//   - BEHIND. end is the identity log's last sequence, read BEFORE this call
-//     (the engine's IdentityLogEnd), and rows that have not applied through it
-//     cannot say the enrolment is not among what they are missing
-//     ([CoversLog]). Every node holding the estate applies this log from
-//     boot, company or none, so a data node that has just joined a fleet with
-//     people in it is exactly the node whose empty rows would otherwise tell
-//     /health and its own boot log that nobody works there — and tell an
-//     operator to invite a founder into a company that has one.
-//   - RETAINED. Settled is not applied: this node's checkpoint moves past a
-//     record it RETAINS — a newer build's, one signed under a keyring key it
-//     was not restarted with — without writing its rows, so an enrolment it
-//     retained reads here exactly like nobody. So the whole deferral index is
-//     asked too, because a retained enrolment may be in any bucket.
+// "Somebody" is a fact; "nobody" is an absence [provedAbsent] proves against
+// end, the identity log's last sequence read BEFORE this call (the engine's
+// IdentityLogEnd): rows behind it ([CoversLog]) or retaining a record in any
+// bucket would tell a newly joined data node's /health that a company with
+// people has none. Unproved, it is the unknown arm, wrapping
+// [statelog.ErrUnavailable] and [ErrNotCurrent], which clears on its own.
 func (r *Reader) AnyPerson(ctx context.Context, end uint64) (bool, error) {
 	var held bool
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
@@ -722,13 +591,12 @@ func (r *Reader) AnyPerson(ctx context.Context, end uint64) (bool, error) {
 // anyPersonStatement is whether any row is a person's.
 const anyPersonStatement = `SELECT EXISTS(SELECT 1 FROM iam_people WHERE kind = ?)`
 
-// provedAbsent is the proof a missing row needs before it is read as "there is
-// none": these rows applied every record the log held at end, and retain none
-// they could not apply. what names the record a node behind would be missing,
-// for the error an operator reads.
+// provedAbsent is the proof a missing row needs before it reads as "none":
+// these rows applied every record the log held at end and retain none they
+// could not apply. what names the missing record in the operator's error.
 //
-// THE WHOLE DEFERRAL INDEX, never one bucket's: the row is missing, so nothing
-// here says whose bucket the missing record would be filed under.
+// THE WHOLE DEFERRAL INDEX, never one bucket's: nothing says whose bucket a
+// missing row's record would be filed under.
 func provedAbsent(ctx context.Context, tx *sql.Tx, end uint64, what string) error {
 	prefix, err := statelog.PrefixIn(ctx, tx, Domain{})
 	if err != nil {
@@ -767,27 +635,23 @@ func vouches(ctx context.Context, tx *sql.Tx, end uint64) (bool, error) {
 }
 
 // ErrNotCurrent reports a snapshot of the identity estate that cannot vouch for
-// an absence: it has not applied every record the log held when the question
-// was asked, whether because it is behind or because it RETAINED one.
+// an absence: it has not applied every record the log held when asked, being
+// behind or having RETAINED one.
 //
-// A SENTINEL, because the question that turns on it is answered by a row being
-// missing — whether a blind was ever derived ([Reader.HoldsBlinds]) — and on
-// such a snapshot a missing row is the one observation that proves nothing.
+// A SENTINEL, because the question it answers turns on a missing row (whether
+// a blind was ever derived, [Reader.HoldsBlinds]), which on such a snapshot
+// proves nothing.
 var ErrNotCurrent = errors.New("this node's identity data isn't up to date")
 
 // CoversLog proves, from one snapshot's prefix and the log's last sequence read
 // BEFORE that snapshot, that the snapshot's rows hold every record the log held
 // — or says, wrapping [ErrNotCurrent], why they do not.
 //
-// THE END IS READ FIRST, so a record landing between the two can only make the
-// answer "not current", never let a snapshot that missed it vouch for it.
-//
-// AND THE COMPARISON IS AGAINST WHAT THE SNAPSHOT APPLIED, never its
-// checkpoint. The applier's checkpoint moves past a record it RETAINS — one
-// at a record version this build cannot read, one signed under a keyring key
-// this node does not hold (a rotation half done), and every later record in a
-// bucket one of those covers — and a node holding such a record reads that
-// record's rows as rows nobody wrote.
+// END FIRST, so a record landing between can only make the answer "not
+// current". AGAINST WHAT THE SNAPSHOT APPLIED, never its checkpoint: that moves
+// past a RETAINED record (an unreadable record version, a keyring key this
+// node lacks mid-rotation, any later record in a bucket one covers), whose
+// rows this node reads as rows nobody wrote.
 func CoversLog(prefix statelog.Prefix, end uint64) error {
 	if prefix.Applied().Seq >= end {
 		return nil
@@ -809,35 +673,22 @@ const anyBlindStatement = `
 	    OR EXISTS(SELECT 1 FROM iam_invites)`
 
 // HoldsBlinds reports whether any row this node holds carries a value derived
-// from the company's blind-index key — a person's address, or an invitation's.
+// from the company's blind-index key: a person's address, or an invitation's.
 //
-// WHAT IT IS FOR is the one decision a missing key forces: mint one, or refuse.
-// On an estate that never held a blind a fresh key is simply the first one; on
-// one that did, the old key was DELETED, and a new one would orphan every
-// address the estate holds and let a second person take each of them, since
-// the directory compares an address by its blind and the new key derives a
-// different one.
-//
-// THREE-VALUED, and "none" is an ABSENCE that has to be proved: end is the
-// identity log's last sequence read BEFORE this call, and a snapshot that has
-// not applied every record through it — behind, or holding a record it
-// RETAINED — cannot say whether a blinded row is among what it has not applied.
-// So (true, nil) is a blind held, (false, nil) is none on rows that hold the
-// whole log, and an error wrapping [ErrNotCurrent] is this node being unable to
-// say — wrapping [statelog.ErrUnavailable] too, since another node may vouch
-// and this one will once it catches up — which refuses the mint exactly as an
-// unreadable store does.
+// It decides what a missing key forces: on an estate that never held a blind,
+// mint the first; on one that did, the old key was DELETED, and a new one would
+// orphan every address and let a second person take each, since the directory
+// compares addresses by blind. "None" is an absence proved against end, the
+// log's last sequence read BEFORE this call ([provedAbsent]): (true, nil) is a
+// blind held, (false, nil) none on rows holding the whole log, and an error
+// wrapping [ErrNotCurrent] and [statelog.ErrUnavailable] (another node may
+// vouch) refuses the mint as an unreadable store does.
 func (r *Reader) HoldsBlinds(ctx context.Context, end uint64) (bool, error) {
 	var held bool
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
-		// THE SAME PROOF [Reader.AnyPerson] takes, and for the same reason:
-		// "no blind here" is an absence. Through it the refusal wraps
-		// [statelog.ErrUnavailable] as well as [ErrNotCurrent] — a node
-		// behind its own log clears on its own — where the bare [CoversLog]
-		// error it used to return reached every surface as a fault: the
-		// first invitation a fresh node issued just after the session that
-		// asked for it was opened answered 500, that session's own record
-		// being the one these rows had not applied yet.
+		// [Reader.AnyPerson]'s proof: "no blind here" is an absence, and its
+		// [statelog.ErrUnavailable] serves a node behind its own log as "ask
+		// again", never a fault.
 		if err := provedAbsent(ctx, tx, end, "a blinded row"); err != nil {
 			return err
 		}
@@ -852,31 +703,20 @@ func (r *Reader) HoldsBlinds(ctx context.Context, end uint64) (bool, error) {
 	return held, err
 }
 
-// withTx runs one read in one transaction, which is what makes a multi-row
-// answer a snapshot rather than a sequence.
+// withTx runs one read in one transaction, which makes a multi-row answer a
+// snapshot rather than a sequence.
 //
-// A READ TRANSACTION, AND THE ONLY KIND THIS TYPE CAN OPEN: the reader holds a
-// [store.ReplicatedReader], which has no Tx and no Writer. A write transaction
-// takes the WRITE lock at BEGIN, so a reader using one would queue behind every
-// applier commit and hold the lock against them while it read — and the
-// replicated estate is derived state that ONLY its applier writes, so a read
-// path holding a write transaction over it is the shape a local write
-// eventually grows out of. The type rules it out before internal/store's
-// applier-exclusivity walk has anything to find.
-//
-// MARKED AS IDENTITY WORK ([store.Identity]), which is what spends the
-// connection the store holds back for it. Without the mark these reads draw from the
-// ordinary pool, where a socket storm takes every connection and the identity
-// lookup that would let those very requests be DECIDED queues behind all of
-// them — a queue that feeds itself, since the reads that are waiting are the
-// ones identity has to clear. It is the one kind of read in this tree that
-// belongs there: a keyed lookup, never a scan, and it is only ever asked
-// before a request can decide anything.
+// A READ TRANSACTION, the only kind a [store.ReplicatedReader] can open: a
+// write transaction takes the write lock at BEGIN, queuing behind and blocking
+// applier commits, and the estate is derived state ONLY its applier writes; the
+// type rules it out before internal/store's applier-exclusivity walk would.
+// MARKED AS IDENTITY WORK ([store.Identity]), to spend the connection the store
+// holds back for it: from the ordinary pool, a socket storm would queue the
+// lookup that decides those very requests behind them. It belongs there as a
+// keyed lookup, never a scan, asked before a request decides anything.
 func (r *Reader) withTx(ctx context.Context, fn func(*sql.Tx) error) error {
-	// NO GUARD FOR A CLOSED ESTATE: the handle answers [store.ErrNoEstate]
-	// from inside Read while no file is open — an adoption between its
-	// rename and its reopen — which is the same three-valued answer a guard
-	// here would have produced.
+	// NO GUARD FOR A CLOSED ESTATE: Read answers [store.ErrNoEstate] while no
+	// file is open (an adoption between rename and reopen), the same answer.
 	if err := r.db.Read(store.Identity(ctx), fn); err != nil {
 		if errors.Is(err, store.ErrNoEstate) {
 			return fmt.Errorf("%w: the replicated estate is not open on this "+
@@ -890,18 +730,11 @@ func (r *Reader) withTx(ctx context.Context, fn func(*sql.Tx) error) error {
 
 // InvitationRow is one invitation as a redemption resolves it.
 //
-// ITS OWN TYPE beside the [Invitation] document, and not the document itself,
-// because the two carry different things: the document is what a WRITER
-// states and this is what a READER establishes, with the applier's own
-// columns — the blind it was filed under and whether it has been spent —
-// which no payload carries.
-//
-// NO ADDRESS IN THE CLEAR. What comes back is the SEALED bytes and the blind,
-// because this read runs for an unauthenticated caller holding a link — and
-// what they present is the link, not a claim about whose address it is.
-//
-// AND NO SECRET: the row carries the link secret's VERIFIER, and the one
-// question anybody may ask of it is [InvitationRow.Admits].
+// ITS OWN TYPE beside the [Invitation] document: the document is what a writer
+// states, this what a reader establishes, with the applier's own columns (the
+// blind it is filed under, whether it is spent). NO ADDRESS IN THE CLEAR, only
+// the sealed bytes and the blind: an unauthenticated link holder reads it. AND
+// NO SECRET, only its verifier, asked through [InvitationRow.Admits].
 type InvitationRow struct {
 	ID         string
 	Blind      string
@@ -917,10 +750,9 @@ type InvitationRow struct {
 	// against, and empty for an invitation nothing can redeem.
 	Verifier string
 
-	// Seat is the seat redeeming this binds and the invitation holds while
-	// it is open — the COLUMN a hold is decided on ([heldByInvitation]),
-	// which the apply writes from [Invitation.Seat]. Every invitation names
-	// one ([Writer.Invite]).
+	// Seat is the seat redeeming this binds and an open invitation holds: the
+	// COLUMN a hold is decided on ([heldByInvitation]), written from
+	// [Invitation.Seat]. Every invitation names one ([Writer.Invite]).
 	Seat string
 
 	// Vouched is [ResetRow.Vouched], for [Reader.InvitationByID]: false on a
@@ -931,17 +763,14 @@ type InvitationRow struct {
 // Admits reports whether a secret presented with this invitation's id is the
 // one its link carries.
 //
-// CONSTANT-TIME, over the verifiers, so how far a guess matched is not a
-// timing — and FALSE for an invitation with no verifier, which is redeemable
-// by nobody: admitting it on its id alone would be admitting exactly what the
-// secret exists to close.
+// CONSTANT-TIME over the verifiers, so a partial match is no timing; FALSE for
+// an invitation with no verifier, which its id alone must never redeem.
 func (i InvitationRow) Admits(secret string) bool {
 	return invitationAdmits(i.Verifier, secret)
 }
 
-// invitationAdmits is [InvitationRow.Admits]' comparison, and the one the
-// redemption's own record asks ([Writer.Redeem]) — one function, so the route
-// and the record cannot come to disagree about what a secret is.
+// invitationAdmits is [InvitationRow.Admits]' comparison and [Writer.Redeem]'s:
+// one function, so the route and the record cannot disagree about a secret.
 func invitationAdmits(verifier, secret string) bool {
 	if verifier == "" || secret == "" {
 		return false
@@ -950,21 +779,14 @@ func invitationAdmits(verifier, secret string) bool {
 		[]byte(verifier)) == 1
 }
 
-// Spent reports whether this invitation can NO LONGER be redeemed, at now —
-// [openInvitation]'s complement, which is what the directory holds a value
-// against and the listing reads as outstanding.
+// Spent reports whether this invitation can NO LONGER be redeemed, at now:
+// [openInvitation]'s complement, which the directory holds a value against and
+// the listing reads as outstanding.
 //
-// ONE PREDICATE rather than fields a caller compares, because every way an
-// invitation stops working — redeemed, and expired — has the same remedy and
-// must have the same answer: a surface that told them apart would say "this was already used" to
-// somebody whose link merely aged out, and send them looking for whoever used
-// it.
-//
-// NO EXPIRY IS SPENT, never open for ever: no writer forms one, and three
-// readers had disagreed about the row that carries one — the redemption read
-// it as open for the life of the company while the hold and the listing read
-// it as closed — and the retention sweep collects it as it collects one that
-// aged out ([Applier.applySweep]).
+// ONE PREDICATE: redeemed and expired share one remedy and one answer, or a
+// surface would tell somebody whose link aged out it was "already used". NO
+// EXPIRY IS SPENT, never open for ever: no writer forms one, and the retention
+// sweep collects it like an expired one ([Applier.applySweep]).
 func (i InvitationRow) Spent(now time.Time) bool {
 	return !i.RedeemedAt.IsZero() || !now.Before(i.ExpiresAt)
 }
@@ -1019,13 +841,10 @@ type ResetRow struct {
 	Seat string
 
 	// First says the link sets the person's FIRST password: they hold no
-	// password credential at all, which is a created person's first
-	// password link before it is spent ([Writer.Create]). DERIVED from the
-	// credentials the person holds and never stored on the link, so the two
-	// cannot disagree — a reset link issued to somebody who never set a
-	// password sets their first one too, and is worded so. Nothing decides
-	// on it: the spend is the same record either way, and it is the reset
-	// screen's wording and the trail's that read it.
+	// password credential ([Writer.Create]'s first link, or a reset issued to
+	// somebody who never set one). DERIVED from their credentials, never stored
+	// on the link, so the two cannot disagree. Only wording reads it: the spend
+	// is the same record either way.
 	First bool
 
 	Verifier  string
@@ -1037,25 +856,21 @@ type ResetRow struct {
 	// an administrator, or the company's invalidated after a restore.
 	Ended bool
 
-	// Vouched is whether the rows this was read from held every record the
-	// identity log held when it was asked, and retain none they could not
-	// apply ([CoversLog]). Only where they do is a link they do not hold, or
-	// hold but cannot open, one that does not open: on a node behind the
-	// log, or holding a record it could not apply — a newer build's, one
-	// signed under a keyring key it was not restarted with — it may be a link
-	// issued in a record this node has not applied, and answered as dead it
-	// told its holder to ask for another and counted them as a guesser.
+	// Vouched is whether the rows held every record the identity log held when
+	// asked and retain none they could not apply ([CoversLog]). Only then is a
+	// link they lack, or cannot open, one that does not open: otherwise it may
+	// be in an unapplied record, and answered dead it tells its holder to ask
+	// for another and counts them as a guesser.
 	Vouched bool
 }
 
 // Opens reports whether a secret presented with this link's id is the link's,
-// and the link still sets a password at now: not revoked — which is what
-// spending it does — not ended by a counter, not past its expiry, and its
-// person somebody a reset may reach ([ResetStages]).
+// and the link still sets a password at now: not revoked (spending revokes it),
+// not ended by a counter, not expired, and its person one a reset may reach
+// ([ResetStages]).
 //
-// ONE PREDICATE, for [InvitationRow.Spent]'s reason: every way a link stops
-// working has one remedy, ask for another, and told apart they would say
-// which ids exist to anybody guessing secrets against them.
+// ONE PREDICATE, for [InvitationRow.Spent]'s reason, and because told apart
+// the ways a link fails would tell a secret-guesser which ids exist.
 func (r ResetRow) Opens(secret string, now time.Time) bool {
 	return r.ID != "" && r.Kind == iam.KindPerson &&
 		slices.Contains(ResetStages, r.Stage) &&
@@ -1063,11 +878,10 @@ func (r ResetRow) Opens(secret string, now time.Time) bool {
 		credential.VerifyReset(r.Verifier, r.ID, secret)
 }
 
-// ResetOf is the reset link id names among a person's credentials, as a
-// document a decide read holds them at counters — the zero row for one it does
-// not hold. It is what a spend's [PasswordSet.Check] judges the link by, in the
-// record's own snapshot, with the same [ResetRow.Opens] the link's screen asks
-// — and what a create's retry asks of its first password link
+// ResetOf is the reset link id names among a person's credentials as a decide
+// read holds them at counters, or the zero row. A spend's [PasswordSet.Check]
+// judges the link by it in the record's own snapshot, with the [ResetRow.Opens]
+// the link's screen asks, as does a create's retry of its first password link
 // ([Writer.firstLinkAs]).
 func ResetOf(person Person, id string, counters Counters) ResetRow {
 	for _, c := range person.Credentials {
@@ -1094,11 +908,10 @@ func holdsPassword(credentials []Credential) bool {
 }
 
 // ResetStages are the stages a password reset reaches: everybody enrolled and
-// not turned away — an invitation's person who never finished enrolling as
-// much as somebody active, and a person an administrator created, whose first
-// password link is spent through exactly this ([Writer.Create]). A suspended
-// or retired person is reactivated first, because a link that set their
-// password would hand back an account an administrator deliberately stopped.
+// not turned away, an invited person who never finished enrolling included,
+// and a created person's first link ([Writer.Create]). A suspended or retired
+// person is reactivated first: a link would hand back an account an
+// administrator deliberately stopped.
 var ResetStages = []iam.Stage{iam.StageInvited, iam.StageEnrolling, iam.StageActive}
 
 // resetLinkStatement is one reset link by its credential's key, with the
@@ -1146,8 +959,8 @@ func (r *Reader) ResetByID(ctx context.Context, id string, end uint64) (
 		if err != nil {
 			return fmt.Errorf("iamdomain: open reset link %q: %w", id, err)
 		}
-		// THE COUNTERS IN THE SNAPSHOT THE ROW IS READ IN, as the spend's
-		// own check reads them in its record's.
+		// THE COUNTERS IN THE ROW'S SNAPSHOT, as the spend's check reads them
+		// in its record's.
 		counters, err := countersOf(ctx, tx, out.PersonID)
 		if err != nil {
 			return err
@@ -1220,46 +1033,18 @@ func fromMillis(ms int64) time.Time {
 	return time.UnixMilli(ms).UTC()
 }
 
-// SessionStanding is who holds one session — empty for a lineage this node
-// does not hold — and whether this node's rows still hold it LIVE, both read
-// in ONE snapshot.
+// SessionStanding is who holds one session (empty for a lineage this node
+// does not hold) and whether its rows hold it LIVE, in ONE snapshot.
 //
-// # Why it is separate from [Reader.Resolve]
-//
-// Resolve answers what a BEARER is checked against: it takes the person the
-// bearer names and reads both rows in one snapshot, so a caller already
-// holding a cookie never has to ask whose session it is. This answers the
-// opposite question — whose IS this — and it is asked by a surface acting on a
-// lineage somebody TYPED.
-//
-// THAT DISTINCTION IS THE SECURITY PROPERTY. A lineage is not a secret: it
-// rides in a cookie, a proxy log, a screenshot. A surface that ended whatever
-// lineage it was handed would let anybody end anybody's session, and the only
-// thing that stops it is comparing the owner this node holds against the
-// caller this node resolved — neither of which the caller supplies.
-//
-// # And why it says whether the session is still live
-//
-// Because ending a session is a claim that it was live until now. Asked only
-// for the owner, a named sign-out closed and announced a session a record had
-// already ended — revoked, invalidated, past its absolute deadline — naming
-// the caller as the one who ended it. Live is [SessionRecord.Live], the
-// reading the listing reports: not ended, not past its absolute deadline, not
-// opened before the company's last invalidation, and at its person's current
-// revocation epoch. An absent row is never live.
-//
-// # And an absent row is PROVED against the log's end, or not said
-//
-// end is the identity log's last sequence, read BEFORE this snapshot (see
-// [CoversLog]), and a lineage these rows hold no record of is answered as
-// nobody's only where they hold every record the log held then. A named
-// sign-out answers "ended" for nobody's lineage — the session is over, or never
-// was — and on rows that had not yet applied the session's start that was a
-// session still running reported closed: an administrator ending a stolen
-// laptop's session on a node behind the one that listed it was told it had
-// ended and wrote nothing. Rows that cannot vouch for the absence answer
-// [ErrNotCurrent] under [statelog.ErrUnavailable], which a surface serves as
-// "ask again".
+// Unlike [Reader.Resolve], which takes the person a bearer names, this asks
+// whose a TYPED lineage is. A lineage is no secret (cookies, proxy logs,
+// screenshots), so comparing this owner with the caller this node resolved is
+// what stops anybody ending anybody's session. LIVE is [SessionRecord.Live],
+// the listing's reading, because ending a session claims it was live until
+// now. An absent row is never live, and is nobody's only where these rows
+// cover end, the log's last sequence read BEFORE this snapshot ([CoversLog]):
+// otherwise [ErrNotCurrent] under [statelog.ErrUnavailable] ("ask again"),
+// never "ended" for a session whose start this node has not applied.
 func (r *Reader) SessionStanding(ctx context.Context, lineage string,
 	now time.Time, end uint64) (string, bool, error) {
 
@@ -1324,10 +1109,8 @@ func readInvalidated(ctx context.Context, tx *sql.Tx) (uint64, error) {
 
 // SeatHolder is one seat binding, as contact routing reads the directory.
 //
-// A FACT AND NOT A VERDICT. Which stages may be reached through a seat's
-// contact identities is internal/notify's rule, stated once beside the
-// registry it governs; this package says who holds the seat and at what stage,
-// and nothing about what that means for a Slack mention.
+// A FACT, NOT A VERDICT: which stages a seat's contact identities may reach
+// is internal/notify's rule; this says who holds the seat at what stage.
 type SeatHolder struct {
 	// Seat is the seat's handle, which is immutable (ADR-0013): a reader
 	// finds the seat by it in the running organisation.
@@ -1342,39 +1125,27 @@ type SeatHolder struct {
 	Stage iam.Stage
 
 	// Removed marks a seat whose holder was REMOVED while holding it, and
-	// that nobody has been bound to since that removal.
+	// that nobody has been bound to since.
 	//
-	// A removal releases everything the person held, the seat among them,
-	// so the row that bound them is gone and the seat reads as held by
-	// nobody — the same as a seat nobody ever held, which routes as the
-	// chart declares. Answered that way, removing somebody would route
-	// MORE than suspending them: the seat's contact map still names the
-	// leaver's own accounts. The tombstone is what still says who held it,
-	// and it outlives every horizon here.
-	//
-	// IT SPEAKS FOR THE BINDING IT RELEASED AND NO OTHER. The first bind of
-	// the seat after the removal ends its say for good
-	// (`iam_removed.seat_rebound_by`): a successor who is bound and later
-	// moves off the seat — or a service account later unbound from it —
-	// hands the seat back to the chart like any other release, rather
-	// than back to the leaver's tombstone — which, read from the seat's
-	// current rows alone, withheld it again indefinitely whatever its
-	// contact map had since been pointed at. The tombstone, the successor's
-	// bind and the stamp all name the seat by its handle.
+	// The removal released the seat, which would then route as the chart
+	// declares: removing somebody would route MORE than suspending them, the
+	// contact map still naming the leaver's accounts. The tombstone outlives
+	// every horizon here. IT SPEAKS ONLY FOR THE BINDING IT RELEASED: the first
+	// bind after it stamps `iam_removed.seat_rebound_by`, so a successor's later
+	// release (or a service account's unbind) hands the seat to the chart, not
+	// back to the tombstone. All three name the seat by its handle.
 	Removed bool
 }
 
 // Requester is ONE seat's holder as a seat's turn composes the person it acts
 // for (internal/engine's turnRequesters, the requester ceiling): the
-// [SeatHolder] answer for that seat, and the grants the holder carries — the
-// person's own, as their document holds them ([Person.Grants]), a name this
-// build does not know kept, since the asking node decides which names it knows.
-// A removal carries none: the row that held them went with the person.
+// [SeatHolder] answer and the holder's own grants ([Person.Grants]), names this
+// build does not know kept, since the asking node decides which it knows. A
+// removal carries none.
 //
-// THE GRANTS AND NOTHING ELSE OF THE PERSON — never a credential, a verifier
-// or a sealed field — because the answer crosses to the node that asked
-// (estate's identity.requester), which decides the turn's ceiling on the
-// grants alone.
+// THE GRANTS AND NOTHING ELSE of the person, never a credential, verifier or
+// sealed field: the answer crosses to the asking node (estate's
+// identity.requester), which decides the ceiling on grants alone.
 type Requester struct {
 	SeatHolder
 
@@ -1384,31 +1155,17 @@ type Requester struct {
 	Grants []iam.Grant
 }
 
-// Requester is who holds ONE seat — the [Reader.SeatHolders] answer for that
-// seat alone, read in one snapshot — with the holder's grants, and whether
-// anybody holds it.
+// Requester is who holds ONE seat, the [Reader.SeatHolders] answer for that
+// seat alone in one snapshot, with the holder's grants, and whether anybody
+// holds it: by the same rule, the bound person (lowest id where rows name
+// several), else the removal no bind has stamped since (lowest person id,
+// [SeatHolder.Removed]), else nobody (false), a seat the chart speaks for.
 //
-// THE SAME ANSWER, by the same rule: the person bound to the seat, the lowest
-// id first where the rows name more than one (the first [Reader.SeatHolders]
-// lists); else the removal that released it and that no bind has stamped
-// since, the lowest person id first, marked [SeatHolder.Removed]; else nobody
-// (false), a seat the chart alone speaks for.
-//
-// # What it costs
-//
-// Two seeks at most, whatever the size of the directory: the binding by
-// `iam_people_seat_lookup_idx` — its row read for the stage, its document
-// beside it, so the grants cost a decode of one document and no seek — and,
-// only where no row binds the seat, the removal by `iam_removed_seat_idx`
-// (replicated migration 0122), whose order is the person's id. It is what a
-// seat's turn composes the person it acts for from, on every call of a tool
-// that decides an app or a relation for somebody — a cost that must not grow
-// with the people the company has hired or has ever removed
-// (BenchmarkRequester).
-//
-// Three-valued, as [Reader.SeatHolders] is: an error is UNKNOWN, never
-// nobody. A seat named by no handle is refused: every unbound person's row
-// holds the empty seat, and none of them holds one.
+// TWO SEEKS AT MOST, whatever the directory's size: `iam_people_seat_lookup_idx`
+// (its row carries the document, so grants cost one decode), then only where
+// unbound `iam_removed_seat_idx` (replicated migration 0122). Every tool call
+// deciding an app or relation pays it (BenchmarkRequester). An error is
+// UNKNOWN, never nobody. An empty seat is refused: every unbound row holds it.
 func (r *Reader) Requester(ctx context.Context, seat string) (Requester, bool, error) {
 	if seat == "" {
 		return Requester{}, false, fmt.Errorf("%w: a requester is asked of no seat", ErrInvalid)
@@ -1419,12 +1176,10 @@ func (r *Reader) Requester(ctx context.Context, seat string) (Requester, bool, e
 	)
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		out, held = Requester{}, false
-		// EVERY ROW ON THE SEAT, AND THE LOWEST ID KEPT HERE rather than by
-		// an ORDER BY id: asked to order by the primary key under a LIMIT,
-		// the driver walks the primary key's index over every person
-		// (measured: `SCAN iam_people USING INDEX sqlite_autoindex_…`), where
-		// the bare equality seeks the seat's lookup index. A seat is bound to
-		// one row; a second is a retained record's residue.
+		// EVERY ROW ON THE SEAT, THE LOWEST ID KEPT HERE, not by ORDER BY id:
+		// under a LIMIT that walks the primary key over every person (`SCAN
+		// iam_people USING INDEX sqlite_autoindex_…`), where the bare equality
+		// seeks the seat index. A second row is a retained record's residue.
 		rows, err := tx.QueryContext(ctx, seatBindingStatement, seat)
 		if err != nil {
 			return fmt.Errorf("iamdomain: read seat %s's binding: %w", seat, err)
@@ -1451,9 +1206,8 @@ func (r *Reader) Requester(ctx context.Context, seat string) (Requester, bool, e
 			return fmt.Errorf("iamdomain: read seat %s's binding: %w", seat, err)
 		}
 		if held {
-			// THE HOLDER'S GRANTS, from the document their row carries: an
-			// unreadable document is no answer, never a person holding
-			// nothing, which the asker would read as one who uses no app.
+			// THE HOLDER'S GRANTS: an unreadable document is no answer, never a
+			// person holding nothing, whom the asker would read as using no app.
 			var p Person
 			if p, err = DecodePerson(document); err != nil {
 				return fmt.Errorf("iamdomain: open seat %s's holder %s: %w", seat, out.Person, err)
@@ -1481,18 +1235,14 @@ func (r *Reader) Requester(ctx context.Context, seat string) (Requester, bool, e
 	return out, held, nil
 }
 
-// The statements [Reader.SeatHolders] reads in its one snapshot — every
-// binding, in seat order, and every removal whose seat no bind since has taken
-// and no current holder holds — and the two [Reader.Requester] seeks for one
-// seat: its bindings by `iam_people_seat_lookup_idx`, and its removal no bind
-// has stamped by `iam_removed_seat_idx`, the lowest person id first in that
-// index's own order.
+// The statements [Reader.SeatHolders] reads in one snapshot (every binding in
+// seat order; every removal no bind since has stamped and no current holder
+// holds) and [Reader.Requester]'s two seeks for one seat.
 //
 // THE REMOVAL'S SEAT IS ITS OWN COLUMN (`iam_removed.seat_id`, replicated
-// migration 0122), written by the removal's apply and re-derived from the
-// tombstone's claims ([Applier.Rederive]), never pulled out of the claims here:
-// a json_extract is a value no index reaches, and the tombstones are
-// permanent.
+// migration 0122), written by the apply and re-derived from the tombstone's
+// claims ([Applier.Rederive]): a json_extract of the permanent tombstones'
+// claims is a value no index reaches.
 const (
 	seatHoldersStatement = `
 		SELECT seat_id, id, stage FROM iam_people
@@ -1514,23 +1264,14 @@ const (
 )
 
 // SeatHolders is every seat binding this node's directory holds, read in ONE
-// snapshot so a bind and a removal landing between two reads cannot produce a
-// set that never existed.
+// snapshot so a bind and a removal between two reads cannot make a set that
+// never existed.
 //
-// # Three-valued, like everything here
-//
-// An error is the UNKNOWN arm — the replicated estate not open, a read that
-// failed — and must never be folded into an empty answer: an empty answer is
-// a real one ("nobody is bound to anything"), and a caller that read an
-// outage as it would hand every suspended person's seat back to the chart.
-//
-// # What it costs
-//
-// The current bindings are an index range over the seat index; the removals
-// are one row per person the company has ever removed, because a tombstone is
-// permanent. Both are read whole, because the one caller rebuilds a registry
-// whole — see [Applier]'s directory listener for why that is not a diff. A
-// question about ONE seat is [Reader.Requester], which seeks it.
+// Three-valued: an error is UNKNOWN, never an empty answer, which is real
+// ("nobody is bound") and would hand every suspended person's seat to the
+// chart. Both halves are read whole, the removals one row per person ever
+// removed, because the one caller rebuilds a registry whole ([Applier]'s
+// directory listener says why not a diff); one seat is [Reader.Requester]'s.
 func (r *Reader) SeatHolders(ctx context.Context) ([]SeatHolder, error) {
 	var out []SeatHolder
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
@@ -1556,12 +1297,9 @@ func (r *Reader) SeatHolders(ctx context.Context) ([]SeatHolder, error) {
 			return fmt.Errorf("iamdomain: read the seat bindings: %w", err)
 		}
 
-		// A REMOVAL'S SEAT, UNTIL IT IS BOUND AGAIN. `seat_rebound_by` is
-		// what hands the seat on for good — the first bind after the
-		// removal stamps it, so a later move off the seat, or a service
-		// account's unbind, does not bring the leaver back — and the NOT
-		// EXISTS keeps a current holder's standing the seat's word over a
-		// tombstone no bind has stamped yet.
+		// A REMOVAL'S SEAT, UNTIL IT IS BOUND AGAIN: the first bind after the
+		// removal stamps `seat_rebound_by` for good, and NOT EXISTS lets a
+		// current holder outrank a tombstone no bind has stamped yet.
 		removed, err := tx.QueryContext(ctx, removedHoldersStatement)
 		if err != nil {
 			return fmt.Errorf("iamdomain: read the removed seat holders: %w", err)

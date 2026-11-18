@@ -10,10 +10,6 @@ import (
 
 // TransitionChange is what one alarm instance did between two evaluations a
 // [Tracker] observed.
-//
-// A NAMED STRING, because it travels: on the inbound delivery a transition is
-// published as, in the prompt a woken seat reads, and as the attribute of the
-// counter the publishes are counted under.
 type TransitionChange string
 
 const (
@@ -35,12 +31,9 @@ func TransitionChanges() []TransitionChange {
 func (c TransitionChange) Valid() bool { return slices.Contains(TransitionChanges(), c) }
 
 // AlarmTransition is one alarm instance changing on one node's tracker — the
-// record a wake about it is derived from (ADR-0095).
-//
-// ONE PER INSTANCE, as the log lines are: a per-log alarm standing on two logs
-// is two instances, a per-entry alarm standing on two MCP servers is two more,
-// and the second log or server joining it is a transition of its own
-// ([instance]).
+// record a wake about it is derived from (ADR-0095). ONE PER [instance], as
+// the log lines are: a log or server joining an alarm already up is a
+// transition of its own.
 type AlarmTransition struct {
 	// ID is the transition's own id ([TransitionID]), which every copy of
 	// it carries and every wake derived from it is keyed on.
@@ -75,18 +68,15 @@ type AlarmTransition struct {
 }
 
 // TransitionID is the id of the transition change made by the instance of
-// kind on node — on the log domain, for a per-log alarm, or on the configured
-// entry, for a per-entry one — that was raised at since.
+// kind on node (on log domain, or on configured entry) that was raised at
+// since.
 //
-// DERIVED from what makes a transition the one it is, never minted at random:
-// an instance is raised once at an instant and clears once, so these six name
-// exactly one transition, and every copy of it — a republish, a second
-// delivery — carries the same id, which is what lets a wake derived from it be
-// recognised as a duplicate of itself. THE ENTRY IS ONE OF THE SIX because two
-// servers that go down in one evaluation are raised at one instant, and a wake
-// is keyed on this id: without it the second server's wake is a duplicate of
-// the first's and nobody is told. A UUIDv5 rather than the joined string, so
-// the id has one length and no separator a node, log or entry name could carry.
+// DERIVED, never minted: these six name exactly one transition, so a
+// republish or a second delivery carries the same id and a wake derived from
+// it is recognised as a duplicate. THE ENTRY IS ONE OF THE SIX because two
+// servers down in one evaluation share every other part, and the second's wake
+// would be dropped as the first's. A UUIDv5, so the id has one length and no
+// separator a name could carry.
 func TransitionID(node string, kind Kind, domain, entry string, change TransitionChange, since time.Time) string {
 	key := node + "\x00" + string(kind) + "\x00" + domain + "\x00" + entry + "\x00" + string(change) + "\x00" +
 		strconv.FormatInt(since.UnixNano(), 10)
@@ -97,13 +87,10 @@ func TransitionID(node string, kind Kind, domain, entry string, change Transitio
 // deployment: a new one would give a republished transition a new id.
 var transitionNamespace = uuid.MustParse("2451aa12-6e22-460a-a0cc-769ed90fbbb5")
 
-// Describe is what the table says of kind — what it means in an operator's
-// words and what to do about it, the two columns the published reference
-// prints ([AlarmReference]) — and false for a kind this build does not raise.
-//
-// FOR A SURFACE THAT TELLS SOMEBODY OF AN ALARM away from the reference, a
-// woken seat's prompt among them, so the words it reads are the table's own
-// rather than a second copy that drifts from it.
+// Describe is the table's meaning and remedy for kind (the columns
+// [AlarmReference] prints), and false for a kind this build does not raise. A
+// surface that tells somebody of an alarm, a woken seat's prompt among them,
+// reads the table's words here rather than a copy that drifts.
 func Describe(kind Kind) (meaning, remedy string, ok bool) {
 	for _, r := range table {
 		if r.kind == kind {

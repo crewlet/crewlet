@@ -11,11 +11,10 @@ import (
 )
 
 // THE PURGE GATE. A purge erases an entry or a value everywhere and leaves a
-// MARKER that no later record gets past: a claim on a purged entry, a claim
-// naming one, a claim carrying a purged value, and a claim on an entry whose key
-// is a purged value all land as nothing on every node, the purge's own record
-// excepted. Permanent: a purge is what a person reaches for when a value must
-// not be kept, and a marker that lapsed would let the next report bring it back.
+// MARKER no later record gets past: a claim on a purged entry, naming one,
+// carrying a purged value, or on an entry whose key is one lands as nothing on
+// every node, the purge's own record excepted. Permanent: a marker that lapsed
+// would let the next report bring the purged value back.
 
 // markerKind is what a purge marker names: an entry by its id, or a value by the
 // digest of its text.

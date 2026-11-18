@@ -10,52 +10,18 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// THE EXECUTOR STATEMENTS ARE THE ONES PLANNED, EVERY ONE OF THEM, AND EVERY
-// INDEX ON THEIR TABLES SERVES ONE.
-//
-// # Why this is asserted rather than reviewed
-//
-// Most of these statements run inside an apply, which holds the store's one
-// writer: a capture past its seat's budget reads the seat's ended sessions in
-// the order it releases them, an end reads its conversation to dedupe and
-// absorb, and a launch reads its conversation's head and its endings. A plan
-// that sorts there sorts while every other domain's applier on the node waits,
-// and one that reads a table whole reads every seat's sessions for one seat's
-// question — neither ever fails, both show up as a slow log. The planner is
-// the only thing that knows which a statement is, so this plans the
-// statements this package runs, named where they are defined, as a deployment
-// plans them: with no statistics, over an empty estate.
-//
-// # What it holds
-//
-//   - every statement in the module's source that reads `executor_sessions`,
-//     `executor_session_tombs` or `executor_seat_removals` is registered here
-//     ([storetest.StatementLiterals]): a reader nobody registered is one whose
-//     plan nobody checked;
-//   - a READ — a row by its key, a conversation's head and endings, the
-//     budget's release order, a seat's page, the retention's nominations,
-//     whether a live turn holds a row and the bases a seat's live turns
-//     hold — seeks an index it names, and one about an order sorts nothing;
-//   - a CENSUS — a seat's held bytes, a conversation's counts, a seat's rows
-//     deleted whole — reads no covered table from its heap;
-//   - a PASS reads every row by definition — the seats holding sessions, the
-//     sessions by sealing key, the bases every live turn holds — and is held
-//     to no sort;
-//   - no plan is one the driver decorrelated ([storetest.Decorrelated]);
-//   - and the inverse: every index the schema declares on a covered table is
-//     in some registered plan, the collector's object index through the
-//     statements the object store builds from [SessionObjectReferences].
-//
-// Mutation: drop `executor_sessions_ended_idx` and the budget's release sorts
-// a seat's ended sessions inside the apply; order the head by `read_through
-// DESC, end_seq ASC`, which `executor_sessions_line_idx` serves in neither
-// direction, and the head sorts a conversation's ended turns; order the
-// endings by `end_seq DESC, turn_id DESC` with no index to serve the second
-// column and the head's endings sort; page by `version` again and the
-// inventory names `executor_sessions_seat_idx` as reached by nothing; drop the
-// bases' partial index's predicate from the hold's point read and it cannot
-// seek the index it names; read a covered table in a new literal anywhere in
-// the module without registering it, and the walk names the file.
+// THE EXECUTOR STATEMENTS ARE THE ONES PLANNED, AND EVERY INDEX ON THEIR
+// TABLES SERVES ONE. Most run in an apply, holding the store's one writer, so
+// a sort or whole-table read stalls every applier and never fails; each is
+// planned as a deployment's is, with no statistics over an empty estate. Every
+// module statement reading `executor_sessions`, `executor_session_tombs` or
+// `executor_seat_removals` is registered ([storetest.StatementLiterals]); a
+// READ seeks an index it names, and one about an order sorts nothing; a CENSUS
+// reads none of them from its heap; a PASS sorts nothing; no plan is
+// [storetest.Decorrelated]; every index on them is in some plan, the object
+// index through [SessionObjectReferences]. Mutation: drop
+// `executor_sessions_ended_idx`, order the head by `read_through DESC, end_seq
+// ASC`, page by `version`, or read them in an unregistered literal: it goes red.
 func TestTheExecutorStatementsArePlanned(t *testing.T) {
 	t.Parallel()
 	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"),
@@ -188,8 +154,7 @@ func executorReads(t *testing.T) map[string]executorIndexed {
 		seat, turn, key = "ana", "turn", "chat:room"
 	)
 	out := map[string]executorIndexed{
-		// ONE TURN'S ROW, ITS TOMBSTONE AND ITS SEAT'S REMOVAL, by their
-		// keys: the decides', the appliers' and the readers'.
+		// ONE TURN'S ROW, ITS TOMBSTONE AND ITS SEAT'S REMOVAL, by their keys.
 		"a turn's row":               seek(sessionKey, readSessionStatement, seat, turn),
 		"a turn's tombstone":         seek(tombKey, readTombStatement, seat, turn),
 		"a seat's removal":           seek(removalKey, readRemovalStatement, seat),
@@ -208,10 +173,9 @@ func executorReads(t *testing.T) map[string]executorIndexed {
 		"an older attempt listed":    seek(conversationIdx, attemptsStatement, seat, key, "w", turn),
 		"an older attempt deduped":   seek(sessionKey, dedupeStatement, seat, turn),
 
-		// A HOLD: whether a live turn holds one row, asked of each row a
-		// release is about to take, and the bases a seat's live turns hold,
-		// read once before the budget's release walks — both through the
-		// partial index over exactly the rows that hold.
+		// A HOLD: whether a live turn holds a row, and the bases a seat's
+		// live turns hold, both through the partial index over exactly the
+		// rows that hold.
 		"whether a turn is held":             seek(heldIdx, heldStatement, seat, turn, turn),
 		"the bases a seat's live turns hold": seek(heldIdx, heldBasesStatement, seat, turn),
 
@@ -290,11 +254,8 @@ func executorCensuses() map[string]executorPlanned {
 }
 
 // executorPasses is every statement that reads every row it names by
-// definition: the seats holding sessions, which a retirement with no handle
-// matches its seat against, the sessions counted by the key that sealed them,
-// which a keyring rotation waits on, and the bases every live turn holds,
-// which the retention's listing leaves out — the last a pass of the partial
-// index alone, which holds only those rows.
+// definition: the seats holding sessions, the sessions by sealing key, and the
+// bases every live turn holds, the last a pass of the partial index alone.
 func executorPasses() map[string]executorPlanned {
 	return map[string]executorPlanned{
 		"the seats holding sessions":      {handlesStatement, nil},

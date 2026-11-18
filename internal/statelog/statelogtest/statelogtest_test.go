@@ -15,13 +15,8 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE CONTROL, expected to come back clean.
-//
-// A suite that reports a problem in everything it touches is a suite nobody
-// reads, and this is what says the cases can pass at all. It is also the only
-// thing exercising them until the first real domain arrives — so a case that
-// cannot pass here is a case that was written against a domain nobody has
-// built yet.
+// THE CONTROL, expected to come back clean: it says the cases can pass at all
+// (package doc, "A control case, expected to come back clean").
 func TestTheControlDomainPasses(t *testing.T) {
 	t.Parallel()
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
@@ -29,10 +24,9 @@ func TestTheControlDomainPasses(t *testing.T) {
 	})
 }
 
-// A COMPACTED CONTROL, because the two protocols are the two shapes the suite
-// has to be able to certify — and a case that assumes arbitration, an
-// operation ledger or contiguity passes against one and fails against the
-// other for the wrong reason.
+// A COMPACTED CONTROL: the two protocols are the two shapes the suite must
+// certify, and a case assuming arbitration, an operation ledger or contiguity
+// passes one and fails the other for the wrong reason.
 func TestTheCompactedControlPasses(t *testing.T) {
 	t.Parallel()
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
@@ -261,9 +255,9 @@ type controlBase struct{}
 
 func (controlBase) Name() string { return "control" }
 
-// controlStream is the control's own stream — named here rather than taken
-// from a production domain's topics constants, because a fake that took one
-// would certify the framework under a name a real domain owns.
+// controlStream is the control's own stream, not a production domain's topics
+// constant: a fake taking one would certify the framework under a name a real
+// domain owns.
 const (
 	controlStream = "CREWLET_CONTROL_LOG"
 	controlPrefix = "crewlet.control.log"
@@ -282,9 +276,8 @@ func (controlBase) Stream() statelog.StreamSpec {
 	}
 }
 
-// RecordVersion is 2 because the control's field table reaches 2 — the one
-// field a later build added ([controlFields]) — and a build reads exactly the
-// highest version its table introduces.
+// RecordVersion is 2: a build reads exactly the highest version its field
+// table introduces, and [controlFields] reaches 2.
 func (controlBase) RecordVersion() int { return 2 }
 
 func (controlBase) Envelope(payload []byte) (statelog.Envelope, error) {
@@ -481,13 +474,11 @@ func applyControlGate(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 	return int(n), err
 }
 
-// A DOMAIN THAT LIES ABOUT ITSELF IS CAUGHT, which is what says the cases can
-// fail as well as pass.
-//
-// Every arm here is a real defect that ships silently: an unclassed table is a
-// snapshot that carries what it should scrub, a mismatched protocol is a loop
-// that stalls or a hole it steps over, and an arbitrated kind with no ledger is
-// a write that cannot answer for itself.
+// A DOMAIN THAT LIES ABOUT ITSELF IS CAUGHT, which says the cases can fail as
+// well as pass. Each arm is a defect that ships silently: an unclassed table is
+// a snapshot carrying what it should scrub, a mismatched protocol a loop that
+// stalls or a hole it steps over, an arbitrated kind with no ledger a write
+// that cannot answer for itself.
 func TestTheSuiteCatchesADomainThatMisdeclaresItself(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -535,16 +526,11 @@ func TestTheSuiteCatchesADomainThatMisdeclaresItself(t *testing.T) {
 		})
 	}
 
-	// AND A CANDIDATE THAT PUBLISHES NOTHING, which is the one shape the
-	// suite cannot certify at all.
-	//
-	// Kinds is what these cases publish records OF, so a candidate declaring
-	// none leaves the apply path — the rolling-upgrade envelope contract, the
-	// op-id round trip, the gated reprocess — with nothing to exercise. It was
-	// three t.Skips, which reported a pass over a domain nothing had touched;
-	// they are fatal now, and this is what pins that. Without it the guard
-	// could be reverted to a skip and every case here would still be green,
-	// because every other candidate in this file declares a kind.
+	// AND A CANDIDATE THAT PUBLISHES NOTHING, which the suite cannot certify:
+	// with no Kinds the apply-path cases (the envelope contract, the op-id
+	// round trip, the gated reprocess) exercise nothing. Those cases fail
+	// rather than skip, and this pins it: every other candidate here declares
+	// a kind, so a guard reverted to a skip would leave every case green.
 	t.Run("a candidate that declares no kinds", func(t *testing.T) {
 		t.Parallel()
 		c := control()
@@ -565,11 +551,9 @@ func TestTheSuiteCatchesADomainThatMisdeclaresItself(t *testing.T) {
 		}
 	})
 
-	// AND A WRITE PATH THAT DROPS THE STAMP IT IS HANDED — the defect every
-	// domain in this tree shipped with. Each arm is a way to get it wrong:
-	// the stamp ignored outright, a writer that is some other node's, a
-	// generation that is not the snapshot's. Its verdict comes back from a
-	// write, so it needs a store.
+	// AND A WRITE PATH THAT DROPS THE STAMP IT IS HANDED: ignored outright,
+	// some other node's writer, or a generation not the snapshot's. Its
+	// verdict comes back from a write, so it needs a store.
 	for name, lie := range map[string]func(statelog.Stamp) statelog.Stamp{
 		"a write path that stamps nothing": func(statelog.Stamp) statelog.Stamp {
 			return statelog.Stamp{}
@@ -609,11 +593,9 @@ func TestTheSuiteCatchesADomainThatMisdeclaresItself(t *testing.T) {
 		}
 	})
 
-	// AND A DOMAIN THAT CANNOT SAY WHO IS EVICTED ON ITS OWN LOG, which is
-	// the defect the pages log shipped with: an applier, a fence and a table
-	// for an eviction, and no answer the trim could read — so an evicted
-	// node was counted on that log for ever. Each arm is a way to get the
-	// answer wrong; every verdict comes back from applied records.
+	// AND A DOMAIN THAT CANNOT SAY WHO IS EVICTED ON ITS OWN LOG: the trim
+	// reads that answer, so a wrong one counts an evicted node on the log for
+	// ever. Every verdict comes back from applied records.
 	for name, mutate := range map[string]func(*statelogtest.Candidate){
 		"an identity-claiming domain that lists no evictions": func(c *statelogtest.Candidate) {
 			c.Domain = unlisted{}
@@ -645,9 +627,8 @@ func TestTheSuiteCatchesADomainThatMisdeclaresItself(t *testing.T) {
 		})
 	}
 
-	// AND AN APPLIER THAT IS NOT IDEMPOTENT AT A POSITION. This one needs
-	// a store, so its verdict comes back from the apply case rather than
-	// from the declaration.
+	// AND AN APPLIER THAT IS NOT IDEMPOTENT AT A POSITION, judged by the
+	// apply case because it needs a store.
 	t.Run("an applier that is not idempotent at a position", func(t *testing.T) {
 		t.Parallel()
 		err := statelogtest.Idempotency(t, func(*testing.T) statelogtest.Candidate {
@@ -661,11 +642,10 @@ func TestTheSuiteCatchesADomainThatMisdeclaresItself(t *testing.T) {
 	})
 }
 
-// A KIND A ROW INTRODUCES IS STAMPED AT THAT ROW'S VERSION, and the suite holds
-// a domain to it in both directions: its ordinary record of that kind carries
-// the kind's own row and nothing else, so the version it is owed is the row's
-// rather than one — demanding one would demand that builds with no applier for
-// the kind apply it — and a record of it stamped one is the fault the row
+// A KIND A ROW INTRODUCES IS STAMPED AT THAT ROW'S VERSION, held both ways: an
+// ordinary record of the kind carries only the kind's own row, so it is owed
+// the row's version, not one (demanding one would demand that builds with no
+// applier for the kind apply it), and one stamped at one is the fault the row
 // exists to prevent.
 func TestTheSuiteHoldsAKindARowIntroducedToThatRowsVersion(t *testing.T) {
 	t.Parallel()
@@ -718,17 +698,13 @@ func TestTheSuiteHoldsAKindARowIntroducedToThatRowsVersion(t *testing.T) {
 	}
 }
 
-// A GATE IS STAMPED AT EXACTLY WHAT ITS OWN CHANGED APPLY NEEDS — the base
+// A GATE IS STAMPED AT EXACTLY WHAT ITS OWN CHANGED APPLY NEEDS: the base
 // version until a field the table marks [statelog.VersionedField.Gate] raises
-// it, and never higher for any other field.
-//
-// The suite once refused every gate above version 1, which is the rule for a
-// domain whose gates never change: the first change to an eviction's apply,
-// stamped above the base exactly as the framework's field table intends (an
-// older build HALTS at a gate it cannot read rather than applying it the old
-// way), would have failed the shared suite with a sentence saying that build
-// defers it. Each arm is one way the write path can stamp a gate, and the
-// verdict comes back from the bytes it published.
+// it, never higher for any other field. Refusing every gate above 1 would fail
+// a domain's first change to an eviction's apply, stamped above the base as the
+// field table intends (an older build HALTS at a gate it cannot read rather
+// than applying it the old way). Each arm is one way the write path can stamp
+// a gate; the verdict comes back from the bytes it published.
 func TestTheSuiteHoldsAGateToItsOwnChangedApplysVersion(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -824,14 +800,11 @@ func gateWrite(gate changedGate) func(context.Context, *statelog.Publisher, stor
 	}
 }
 
-// A DOMAIN THAT STAMPS THE WRONG VERSION IS CAUGHT, in both directions and
-// in both halves of the table-and-build agreement.
-//
-// Each arm is the shape the stamping rule was written against: a writer that
-// stamps its BUILD's version holds every record back from every older node,
-// one that stamps the base version always lets an older node apply a field
-// away, and a table and a build that disagree are one of those two waiting
-// for the day the other half moves.
+// A DOMAIN THAT STAMPS THE WRONG VERSION IS CAUGHT, both ways and in both
+// halves of the table-and-build agreement: a writer stamping its BUILD's
+// version holds every record back from every older node, one stamping the base
+// version lets an older node apply a field away, and a table and build that
+// disagree are one of those, waiting for the other half to move.
 func TestTheSuiteCatchesADomainThatStampsTheWrongVersion(t *testing.T) {
 	t.Parallel()
 	buildVersion := func(controlRecord) (int, error) { return controlDomain{}.RecordVersion(), nil }
@@ -961,9 +934,8 @@ type ledgerless struct{ controlDomain }
 
 func (ledgerless) OpsTable() string { return "" }
 
-// scrubbedLedger classes its operation ledger as this node's own, which is
-// what every domain here did until an adopter's first attempts started coming
-// back `unknown`.
+// scrubbedLedger classes its operation ledger as this node's own, so every
+// snapshot scrubs it and an adopter's first attempts come back `unknown`.
 type scrubbedLedger struct{ controlDomain }
 
 func (scrubbedLedger) Tables() map[string]statelog.TableClass {
@@ -1012,17 +984,11 @@ func (nothingReplicated) Tables() map[string]statelog.TableClass {
 	return map[string]statelog.TableClass{"control_widgets": statelog.Local}
 }
 
-// appendOnly writes a new row per delivery, so a redelivery is visible.
-// countingApplier is the liar: it writes the right ROW for every delivery and
-// the wrong VALUE, incrementing a column each time it sees one.
-//
-// THAT IS THE SHAPE A REAL NON-IDEMPOTENT APPLIER TAKES. An applier that
-// inserted a new row per delivery would be caught by counting rows, which the
-// suite did until this commit; the failure a content comparison exists to
-// catch is the one where the shape is right and the values are not — a
-// redelivery that increments, a clock that is read, a node id that is stamped.
-// Two nodes then hold the same number of rows and disagree about what is in
-// them, which is precisely what nobody notices.
+// countingApplier is the liar: the right ROW for every delivery and the wrong
+// VALUE, incrementing a column each time. That is the shape a real
+// non-idempotent applier takes (a redelivery that increments, a clock read, a
+// node id stamped): two nodes hold the same rows and disagree about what is in
+// them, which a row count misses and only a content comparison catches.
 type countingApplier struct{ controlApplier }
 
 func (countingApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record, _ statelog.ApplyOptions) (int, error) {
@@ -1036,9 +1002,8 @@ func (countingApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Recor
 // unlisted claims identity and has no answer for who is evicted on its log.
 type unlisted struct{ controlBase }
 
-// blindLister answers from somewhere other than its own log's rows — the
-// shape the trim's old read had, asking the tracker's table on the pages
-// log's behalf and finding nothing.
+// blindLister answers from rows other than its own log's, and so finds
+// nothing.
 type blindLister struct{ controlDomain }
 
 func (blindLister) Evictions(context.Context, store.ReplicatedReader) ([]statelog.EvictionRow, error) {
@@ -1065,14 +1030,13 @@ func (listingCompacted) Evictions(ctx context.Context, db store.ReplicatedReader
 	return controlDomain{}.Evictions(ctx, db)
 }
 
-// A DOMAIN THAT MISNAMES ITS NODE GATE IS CAUGHT.
-//
-// The publisher holds a write flagged a node gate to this answer, and the flag
-// excuses the passed-generation fence, a peer's truncated rows and the gate
-// reserve — so each arm is a defect that ships silently until the day it
-// matters: an eviction the publisher refuses on the log it was meant to
-// unpin, a node gate a lagging build defers instead of stopping on, or a log
-// that counts no node naming a record that may pass every fence.
+// A DOMAIN THAT MISNAMES ITS NODE GATE IS CAUGHT. The publisher holds a write
+// flagged a node gate to this answer, and the flag excuses the
+// passed-generation fence, a peer's truncated rows and the gate reserve, so
+// each arm ships silently until it matters: an eviction the publisher refuses
+// on the log it should unpin, a node gate a lagging build defers instead of
+// stopping on, or a log counting no node naming a record that may pass every
+// fence.
 func TestTheSuiteCatchesADomainThatMisnamesItsNodeGate(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {

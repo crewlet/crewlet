@@ -7,11 +7,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// A REMOVAL IS READ BACK BY ITS TOMBSTONE, and only a removal: what another
+// A removal is read back by its tombstone, and only a removal: what another
 // domain's erasure is reconciled against names exactly the persons whose
-// removal this node applied, in the order it was asked, and never a person
-// who is still here or an id nobody ever held. Mutation: answer every id
-// asked about and the person still here is named.
+// removal this node applied, in the order asked, never a person still here or
+// an id nobody held. Mutation: answer every id asked about and the person
+// still here is named.
 func TestARemovedPersonIsReadBackByTheirTombstone(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)

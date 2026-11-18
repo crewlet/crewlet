@@ -24,30 +24,16 @@ import (
 
 // THE ARTIFACTS WRITE PATH: one record per gesture step, published to the
 // subject of the thing it contends for, decided inside one snapshot of this
-// node's own rows.
+// node's own rows. The writer holds every rule a later build may change and
+// every rule needing more than this log's rows: a share's two domain rules
+// (never above the sharer's role, never company-wide from an agent), upload
+// key freshness, retention, the labels kept. It refuses early on what the
+// applier checks again (a refusal before the append costs the log nothing),
+// then READS ITS OWN VERDICT BACK (package doc, "A refusal is a row").
 //
-// # What the writer decides, and what it leaves to the applier
-//
-// The writer holds every rule a later build may change (the path grammar, the
-// media table, every bound in internal/artifacts/limits.go) and every rule that
-// needs more than this log's rows: the two domain rules a share is held to
-// (never above the sharer's role, never company-wide from an agent), the
-// freshness of an uploaded object's key, the retention list, the labels kept.
-// It refuses early from its snapshot on everything the applier will check again
-// (a moved head, a carry, a quota), because a refusal before the append costs
-// the log nothing.
-//
-// The applier then decides, from the record and its own rows alone, whatever
-// can still go the other way between the decide and the apply, and the writer
-// READS ITS OWN VERDICT BACK from the history row its operation wrote: a record
-// the broker accepted is not a record that applied.
-//
-// # The authority is stamped, never re-decided here
-//
-// Who may publish, share or purge is the authority table's, decided at the API
-// and carried in [Call.Authority]. This package does not evaluate the role
-// ladder against an action; a second evaluation would be two implementations
-// of one rule (ADR-0008).
+// Who may publish, share or purge is decided at the API and stamped in
+// [Call.Authority]; evaluating the role ladder here would be a second
+// implementation of one rule (ADR-0008).
 
 // Call is one write gesture's caller context.
 type Call struct {
@@ -235,11 +221,11 @@ func assetIDOf(opID string) uuid.UUID { return uuid.NewSHA1(AssetNamespace, []by
 // operation is the id one write is published under: derived from the call's
 // key when there is one, freshly minted when there is not.
 //
-// THE VERB, THE OBJECT AND WHAT THE WRITE SAYS ARE PART OF THE DERIVATION, the
-// pages store's rule: one key covers every record one gesture writes, and the
-// same key sent with another body is another operation rather than the first
-// answered back from the ledger with nothing of the second written. AND IT
-// CARRIES THE KEY'S OWN INSTANT, which the ledger vouches for a retry by.
+// THE VERB, THE OBJECT AND WHAT THE WRITE SAYS ARE PART OF THE DERIVATION (the
+// pages store's rule): one key covers every record of one gesture, and the
+// same key with another body is another operation, not the first answered from
+// the ledger with nothing of the second written. AND IT CARRIES THE KEY'S OWN
+// INSTANT, which the ledger vouches for a retry by.
 func (w *Writer) operation(c Call, verb, object string, content any) (string, error) {
 	key := strings.TrimSpace(c.OpKey)
 	if key == "" {
@@ -325,18 +311,14 @@ func (w *Writer) publish(ctx context.Context, req statelog.Request) (statelog.Re
 // publishError is the framework's refusal of a publish on subject, in this
 // domain's terms: a lost race is an artifact somebody kept changing, and a
 // create the framework found already made ([statelog.ErrExists]) is a
-// COLLISION — on a source address, another artifact holds it
-// ([ErrSourceTaken]); on anything else, what the create makes is there
-// ([ErrExists]). The framework's bare sentinel reached the artifacts API's
-// fallback and was answered as this node's fault.
+// COLLISION: [ErrSourceTaken] on a source address, else [ErrExists]. The bare
+// sentinel would reach the artifacts API's fallback as this node's fault.
 //
-// AND A WRITE THE DELETION GATE DROPPED IS A PURGE ([ErrPurged]): the decide
-// passed, and the artifact's purge landed ahead of the record, so its deletion
-// marker held the record on every node ([Gates.GatedAt]). That is the same
-// fact the decide reports when it is the one that finds the marker, and it is
-// told the same way — the framework states it as one of its conditions, which
-// the artifacts API answered `503` "try again" and a tool "try again
-// shortly", about an artifact nothing will ever write again.
+// AND A WRITE THE DELETION GATE DROPPED IS A PURGE ([ErrPurged]): the
+// artifact's purge landed ahead of the record, so its deletion marker held it
+// on every node ([Gates.GatedAt]). It is told as the decide tells that fact,
+// never as the framework's condition, which callers answer "try again" about
+// an artifact nothing will ever write again.
 func publishError(subject statelog.Subject, err error) error {
 	var refused *statelog.Unavailable
 	switch {
@@ -347,13 +329,11 @@ func publishError(subject statelog.Subject, err error) error {
 		}
 		return fmt.Errorf("%w: %s", ErrPurged, artifact)
 	case errors.Is(err, statelog.ErrConflict):
-		// THE FRAMEWORK'S SENTINEL AND NOT ITS ERROR, whose text names the
-		// subject the race was lost on, and not the subject either: a
-		// caller that printed this error would show a person a broker path.
+		// THE FRAMEWORK'S SENTINEL, NOT ITS ERROR OR THE SUBJECT: either
+		// would show a person a broker path.
 		return fmt.Errorf("%w: %w", ErrConflict, statelog.ErrConflict)
-	// THE COLLISION IS THE WHOLE OF WHAT HAPPENED, so the framework's own
-	// words, which name the subject's broker path, are not carried after
-	// it: a person reads this error on the artifacts API.
+	// THE COLLISION IS THE WHOLE OF WHAT HAPPENED: the framework's words
+	// name a broker path, and a person reads this error on the API.
 	case errors.Is(err, statelog.ErrExists) && ObjectKind(subject.Kind) == KindSource:
 		return ErrSourceTaken
 	case errors.Is(err, statelog.ErrExists):
@@ -424,10 +404,9 @@ func (w *Writer) refused(ctx context.Context, id string, e HistoryEntry) error {
 // refusal translates an apply's refusal into the error a caller acts on:
 // number is the version the refused record was about, where it was about one.
 //
-// A VERSION THE ARTIFACT DOES NOT KEEP IS SAID AS ONE, in the words the decide
-// says the same fact in ("this artifact doesn't keep version N"): answered as
-// the bare sentinel it was told as "no such artifact", about the artifact the
-// person was looking at.
+// A VERSION THE ARTIFACT DOES NOT KEEP IS SAID AS ONE, in the decide's words
+// ("this artifact doesn't keep version N"), never a bare "no such artifact"
+// about the artifact the person is looking at.
 func (w *Writer) refusal(ctx context.Context, id string, reason Refusal, s HistorySummary,
 	number int) error {
 

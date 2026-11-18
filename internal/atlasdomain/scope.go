@@ -10,10 +10,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A RECORD'S SCOPE: the complete set of objects its apply may write, stated by
-// the writer and readable at every version. A claim writes its own entry's rows
-// alone; a purge reaches every entry that names what it erases, so it is the
-// whole domain, as an expiry and a gate are.
+// A RECORD'S SCOPE: every object its apply may write, stated by the writer and
+// readable at every version. A purge reaches every entry naming what it
+// erases, so it is the whole domain.
 //
 //	at                 the whole domain: a gate, a purge, an expiry, or an unreadable scope
 //	at/e/<entry id>    one entry and every claim on it
@@ -162,11 +161,10 @@ func subjectPath(s Subject) string {
 	case KindEntry:
 		return ScopeTerm{Kind: TermEntry, Entry: s.ID}.Path()
 	case KindBarrier, KindTrimmed:
-		// The framework's own scope: neither writes a row of this domain's.
+		// Neither writes a row of this domain's.
 		return statelog.FrameworkScope
 	}
-	// A value, a gate, an expiry, a generation and an unknown kind are the
-	// whole domain.
+	// Every other kind, an unknown one included, is the whole domain.
 	return pathDomain
 }
 

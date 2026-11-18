@@ -114,14 +114,10 @@ func TestARecordWithNoVersionIsRefused(t *testing.T) {
 	}
 }
 
-// THE GATE IS ANSWERED FROM THE OP AND NOT FROM THE KIND.
-//
-// A removal rides the ORDINARY PERSON SUBJECT, so a reader that keyed on the
-// kind would defer it — and a deferred removal here is a person the company
-// off-boarded still signing in on one node, with no later record that ever
-// corrects it because nothing names a removed person again. An invalidation is
-// the same failure one blast radius wider: deferred, a node goes on honouring
-// every bearer the company just ended.
+// THE GATE IS ANSWERED FROM THE OP AND NOT FROM THE KIND: a removal rides an
+// ordinary subject, so a kind-keyed reader would defer it, leaving a person the
+// company off-boarded signing in on one node with nothing to correct it. A
+// deferred invalidation honours every bearer the company just ended.
 func TestOnlyARemovalAnInvalidationAndAnEvictionInstallAGate(t *testing.T) {
 	t.Parallel()
 	gates := []iamdomain.OpKind{
@@ -133,10 +129,9 @@ func TestOnlyARemovalAnInvalidationAndAnEvictionInstallAGate(t *testing.T) {
 		if got := env.InstallsGate(); got != want {
 			t.Errorf("%s reports InstallsGate() = %v, want %v", op, got, want)
 		}
-		// And the domain's own answer is the SAME answer, read rather
-		// than restated — a gate rule written twice is a record that
-		// stops the applier on the write side and is filed for later on
-		// the read side.
+		// And the domain's own answer is the SAME answer: a gate rule
+		// written twice can stop the applier on one side and defer on
+		// the other.
 		if got := (iamdomain.Domain{}).InstallsGate(
 			statelogEnvelope(op)); got != want {
 			t.Errorf("the domain reports InstallsGate(%s) = %v, want %v",
@@ -154,14 +149,11 @@ func TestOnlyARemovalAnInvalidationAndAnEvictionInstallAGate(t *testing.T) {
 	}
 }
 
-// THE ENVELOPE CARRIES NOTHING PERSONAL, and that is a property of the format
-// rather than of any one writer.
-//
-// Every envelope field is readable by every build for ever, which means it is
-// also rendered by every operator surface that reports a record nobody could
-// decode: a deferral row, a stalled-log report, a broker listing. A name, an
-// address or a login in one of those is a durable, replicated statement about
-// a person that this domain spends the rest of its design avoiding.
+// THE ENVELOPE CARRIES NOTHING PERSONAL, as a property of the format rather
+// than of any one writer: every operator surface that reports an undecodable
+// record (a deferral row, a stalled-log report, a broker listing) renders it,
+// and a name, address or login there is a durable, replicated statement about
+// a person.
 func TestTheEnvelopeHasNoFieldThatCouldHoldPersonalData(t *testing.T) {
 	t.Parallel()
 	data, err := json.Marshal(iamdomain.RecordEnvelope{
@@ -174,9 +166,8 @@ func TestTheEnvelopeHasNoFieldThatCouldHoldPersonalData(t *testing.T) {
 	if err := json.Unmarshal(data, &named); err != nil {
 		t.Fatalf("the envelope does not marshal to an object: %v", err)
 	}
-	// The eight reserved keys, and nothing else may join them. The list is
-	// spelled out rather than derived, because the point is that adding a
-	// field to this struct is a decision somebody has to write down here.
+	// The eight reserved keys, and nothing else may join them. Spelled out,
+	// not derived, so adding a field is a decision written down here.
 	want := []string{"v", "subject", "op", "scope"}
 	for _, key := range want {
 		if _, ok := named[key]; !ok {
@@ -206,12 +197,10 @@ func TestTheEnvelopeHasNoFieldThatCouldHoldPersonalData(t *testing.T) {
 	}
 }
 
-// EVERY OP IS CLASSIFIED OR DELIBERATELY SILENT, in both directions.
-//
-// An unclassified op writes no authentication trail at all, which is
-// indistinguishable from one that was never meant to — so the check is
-// two-sided and names the op rather than counting, for internal/skipgate's
-// reason: a count goes green when one omission is fixed and another appears.
+// EVERY OP IS CLASSIFIED OR DELIBERATELY SILENT, in both directions: an
+// unclassified op silently writes no authentication trail. The check names the
+// op rather than counting, which goes green when one omission is fixed and
+// another appears (internal/skipgate's reason).
 func TestEveryOpIsClassifiedOrDeliberatelySilent(t *testing.T) {
 	t.Parallel()
 	if err := iamdomain.CheckHistoryClasses(); err != nil {

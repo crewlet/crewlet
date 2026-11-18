@@ -10,30 +10,16 @@ import (
 	"github.com/crewlet/crewlet/internal/jsoncarry"
 )
 
-// THE TYPED PAYLOADS, one per (subject kind, op) that writes rows.
+// The typed payloads, one per (subject kind, op) that writes rows. Each is
+// FULL POST-STATE, never a patch: a person is submitted whole, as a form, so a
+// patch would be a diff every data node reassembles, and the objects are small.
 //
-// # Every one of them is FULL POST-STATE
-//
-// Not a patch, which is the opposite of the tracker's choice for its largest
-// objects: a person is authored as a FORM and submitted whole, so the writer
-// always holds the complete new value and a patch would be a diff it computed
-// in order to be reassembled by every data node. The objects are also small — a
-// person is a name, an address, a stage and a handful of grants.
-//
-// # What a payload may and may not carry
-//
-// A NAME OR AN ADDRESS IS ALWAYS SEALED. Never the cleartext, on any payload,
-// at any version: the record is on the broker, in every data node's deferred
-// table, in every snapshot and in every backup, and sealing at the WRITER under
-// the fleet keyring is what keeps every one of those ciphertext. See [Sealer].
-//
-// A BLIND IS ALWAYS THE MATCHED FORM. Never the address it was derived from —
-// a blind is what a directory decide and a lookup compare, and the
-// address it came from is the one value the estate is built to not hold.
-//
-// EVERY DOCUMENT CARRIES ITS OWN VERSION and an Extra map, so a field a newer
-// build wrote round-trips through a node that cannot interpret it. The rule
-// and its one load-bearing clause are [jsoncarry]'s.
+// A name or an address is ALWAYS SEALED, at the writer under the fleet keyring
+// ([Sealer]), because the record lives on the broker and in every deferred
+// table, snapshot and backup. A blind is always the matched form, never the
+// address it came from, which the estate never holds. Every document carries
+// its own version and an Extra map, so a newer build's field round-trips
+// ([jsoncarry]).
 
 // DocumentVersion is the document shape THIS BUILD writes.
 const DocumentVersion = 1
@@ -53,9 +39,8 @@ type Person struct {
 	// Kind is person or machine, in internal/iam's vocabulary.
 	Kind iam.Kind `json:"kind"`
 
-	// Stage is how far through enrolment they are. Only `active` may act,
-	// which is an allowlist of one: a stage this build does not know
-	// answers false, and a denylist would have admitted it.
+	// Stage is how far through enrolment they are. Only `active` may act: an
+	// allowlist of one, so a stage this build does not know answers false.
 	Stage iam.Stage `json:"stage"`
 
 	// NameSealed and EmailSealed are sealed under the fleet keyring with
@@ -63,84 +48,60 @@ type Person struct {
 	NameSealed  string `json:"name_sealed,omitempty"`
 	EmailSealed string `json:"email_sealed,omitempty"`
 
-	// Credentials are every way this person can prove themselves, as FULL
-	// POST-STATE like the rest of the document.
-	//
-	// ON THE PERSON RATHER THAN ON A SUBJECT OF THEIR OWN, and the
-	// reason is that a credential has no address. An address, a login and
-	// a seat are values two writers can RACE FOR, which is why the
-	// directory decides them; a credential belongs to exactly one person
-	// from the moment it exists, so the only contention it can have is
-	// with that person's other edits, and their subject already
-	// serialises those.
-	//
-	// The cost is stated rather than glossed: changing a password is a
-	// read-modify-write of the whole person. That is the write authority's
-	// own shape — take ONE snapshot, decide and form the expectation
-	// inside it — so it is safe, and a person is a name, a stage and a
-	// handful of credentials rather than anything large.
+	// Credentials are every way this person can prove themselves. On the
+	// person, not a subject of their own: unlike an address, login or seat, a
+	// credential is never raced for, so the person's subject already
+	// serialises its writes. Changing a password is a read-modify-write of
+	// the whole (small) person, safe inside the write authority's one snapshot.
 	Credentials []Credential `json:"credentials,omitempty"`
 
-	// Grants are the permissions this person carries, as internal/iam
-	// names them: admin, and the apps they use.
-	//
-	// ON THE PERSON AND NOT DERIVED FROM A ROLE, because this engine has
-	// no roles: a permission is the unit internal/authz decides with, and
-	// a role would be a second vocabulary that has to be kept in step with
-	// it. A name this build does not know is KEPT in the row and grants
-	// nothing — see [iam.Grant] — and a writer may remove it but never add
-	// it ([Writer.MayConfer]).
+	// Grants are the permissions this person carries, in internal/iam's
+	// names: admin, and the apps they use. No roles: a role would be a second
+	// vocabulary to keep in step with the permissions internal/authz decides
+	// with. An unknown name is kept and grants nothing ([iam.Grant]); a writer
+	// may remove it but never add it ([Writer.MayConfer]).
 	Grants []iam.Grant `json:"grants,omitempty"`
 
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Enrolled is an enrolment's payload: a person created whole, on the
-// directory subject ([OpEnrol]).
-//
-// THE DOCUMENT AND THE UNIQUE VALUES TOGETHER, because the record is the one
-// that creates the row: the document is what the person's own subject owns
-// from here on, and the identifiers are what the directory owns — so a node
-// applying it writes the whole row once, and every later record touches one
-// half of it or the other.
+// directory subject ([OpEnrol]). It carries the document (the person's own
+// subject owns it from here on) and the unique values (the directory owns
+// them) together, because this record creates the row; every later record
+// touches one half or the other.
 type Enrolled struct {
 	V int `json:"v"`
 
-	// Person is the document the row stores: their kind, stage, sealed
-	// name and address, first credential and grants — a created person's
-	// first password link, a redeemer's chosen password, and none for a
-	// service account.
+	// Person is the document the row stores. Its first credential is a
+	// created person's first password link, a redeemer's chosen password,
+	// or none for a service account.
 	Person Person `json:"person"`
 
 	// Holds is the login, the address blind and the seat the person is
-	// enrolled holding — each decided free in the record's own snapshot.
+	// enrolled holding, each decided free in the record's own snapshot.
 	Holds Identifiers `json:"holds"`
 
 	// Invitation is the invitation this enrolment REDEEMS, or empty for an
-	// administrator's create. The apply marks it spent in the same
-	// transaction that writes the person, so a redemption is never a
-	// person with a link that still opens.
+	// administrator's create. The apply marks it spent in the transaction
+	// that writes the person, so a redeemed link never still opens.
 	Invitation string `json:"invitation,omitempty"`
 
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // IdentityChange is an identity change's payload ([OpIdentity]): the login and
-// the seat an enrolled person holds from this record on.
-//
-// BOTH ARE ALWAYS STATED, as post-state, and the decide fills the one the
-// caller left alone from its own snapshot — so a record frees whatever its
-// person held before by stating what they hold now, and a node applying it
-// needs nothing but the record.
+// the seat an enrolled person holds from this record on. Both are always
+// stated, the decide filling the one the caller left alone from its snapshot,
+// so the record frees what was held before and applies from itself alone.
 type IdentityChange struct {
 	V int `json:"v"`
 
 	// Login is never empty: every principal holds one.
 	Login string `json:"login"`
 
-	// SeatID is the seat's handle (ADR-0013), or empty for a service
-	// account bound to none — never for a person, whose seat is moved and
-	// never cleared.
+	// SeatID is the seat's handle (ADR-0013), empty only for a service
+	// account bound to none; a person's seat is moved, never cleared.
 	SeatID string `json:"seat_id"`
 
 	Extra map[string]json.RawMessage `json:"-"`
@@ -154,132 +115,88 @@ type Invitation struct {
 	// ID is the invitation's own id, which is what a redemption names.
 	ID string `json:"id"`
 
-	// EmailBlind is the keyed blind of the address it was issued to — the
-	// value a directory decide compares against every person's and every
-	// other open invitation's, and never the address itself.
+	// EmailBlind is the keyed blind of the address it was issued to, which a
+	// directory decide compares; never the address itself.
 	EmailBlind string `json:"email_blind"`
 
-	// Sealed is the address, sealed as the INVITATION's own rather than a
-	// person's — there is no person yet — so it opens as nothing else
-	// ([Sealer.SealInvitation]).
+	// Sealed is the address, sealed as the invitation's own (there is no
+	// person yet), so it opens as nothing else ([Sealer.SealInvitation]).
 	Sealed string `json:"sealed,omitempty"`
 
 	// InvitedBy is the actor who issued it, and Grants what redeeming it
-	// confers — decided once, by the person who decided it, rather than
-	// again by whoever happens to process the redemption.
+	// confers: decided once by the issuer, not by whoever processes the
+	// redemption.
 	InvitedBy string      `json:"invited_by,omitempty"`
 	Grants    []iam.Grant `json:"grants,omitempty"`
 
-	// Verifier is [InvitationVerifier] of the secret the link carries
-	// beside the id ([Blinder.InvitationSecret]) — what a redemption's
-	// presented secret is checked against, and never the secret, because
-	// the id alone is in every snapshot, backup and proxy log.
-	//
-	// AN INVITATION WITHOUT ONE IS REDEEMABLE BY NOBODY: admitting it on
-	// its id would be admitting exactly what this field exists to close.
+	// Verifier is [InvitationVerifier] of the secret the link carries beside
+	// the id ([Blinder.InvitationSecret]), never the secret, because the id
+	// alone is in every snapshot, backup and proxy log. An invitation without
+	// one is redeemable by nobody.
 	Verifier string `json:"verifier,omitempty"`
 
-	// Seat is the HANDLE of the seat redeeming this BINDS (ADR-0013), and
-	// holds until then. Decided once by whoever issued it, on a seat the
-	// chart held as a human seat nobody held, and bound by the redemption's
-	// own record. Every invitation names one ([Writer.Invite]).
+	// Seat is the HANDLE of the human seat redeeming this binds (ADR-0013),
+	// held by the invitation until then: chosen unheld by the issuer and
+	// bound by the redemption's own record. Every invitation names one
+	// ([Writer.Invite]).
 	Seat string `json:"seat,omitempty"`
 
-	// ExpiresAt is when it stops being redeemable. THE WRITER'S CLOCK is
-	// not what enforces it: the applier stores the instant and the
-	// redemption compares against the BROKER's, so two nodes reach the
-	// same verdict.
+	// ExpiresAt is when it stops being redeemable. The redemption compares
+	// it against the BROKER's instant, never the writer's clock, so two
+	// nodes reach the same verdict.
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
 
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Session is one signed-in session's lineage.
-//
-// NO IP ADDRESS, NO USER AGENT, NO DEVICE FINGERPRINT, and the absence is the
-// design rather than a field nobody got to. Where a session was opened from is
-// a request-scoped observation; putting one on a replicated, retained record
-// would make every data node's database a location history of everybody who
-// works here — and a state log's records outlive the rows derived from them.
 type Session struct {
 	V int `json:"v"`
 
 	// Person is whose session it is.
 	Person string `json:"person"`
 
-	// Epoch is the person's revocation epoch at the moment it opened. A
-	// bearer presenting an epoch below the person's current one is over,
-	// which is what makes "sign out everywhere" ONE write rather than N
-	// deletes.
+	// Epoch is the person's revocation epoch when it opened. A bearer below
+	// the person's current epoch is over, so "sign out everywhere" is ONE
+	// write, not N deletes.
 	Epoch uint64 `json:"epoch"`
 
-	// AbsoluteExpiresAt is the deadline no re-issue moves. The IDLE
-	// deadline is deliberately absent: it rides in the bearer's own
-	// signature, so moving it costs no store write at all.
+	// AbsoluteExpiresAt is the deadline no re-issue moves. The idle deadline
+	// rides in the bearer's own signature, so moving it costs no store write.
 	AbsoluteExpiresAt time.Time `json:"absolute_expires_at,omitzero"`
 
-	// ProvedAt is when the holder proved who they are to open this
-	// session — a password and its second factor, or an invitation — which
-	// is what a step-up surface asks to be recent.
-	//
-	// ON THE SESSION AND NOT THE PERSON, because proof is a fact about one
-	// sign-in: a person proving themselves on a laptop proves nothing
-	// about the phone they signed in on last week. A step-up re-proves by
-	// OPENING A NEW SESSION, so the value is written once, at start, and
-	// never moved — which keeps this log's volume proportional to
-	// sign-ins rather than to requests.
-	//
-	// ZERO IS "NOTHING WAS PROVED", never "long ago": a session exchanged
-	// from a Tier A token proves no person is at the keyboard, and a
-	// stale-but-set instant would one day have made it fresh.
+	// ProvedAt is when the holder proved who they are to open this session (a
+	// password and second factor, or an invitation), which a step-up surface
+	// asks to be recent. On the session, not the person: proof is a fact
+	// about one sign-in. A step-up opens a new session, so this is written
+	// once and the log's volume follows sign-ins, not requests. Zero is
+	// "nothing was proved" (a Tier A token's exchange), never "long ago".
 	ProvedAt time.Time `json:"proved_at,omitzero"`
 
 	// EnrolmentOnly marks a session that may do nothing but ENROL A SECOND
-	// FACTOR: opened by a password alone — a sign-in, a step-up or an
-	// invitation's redemption — for a person who holds
-	// none, where the sign-in policy in force requires one.
-	//
-	// ON THE SESSION, decided ONCE by the sign-in that opened it, rather
-	// than re-derived per request from the person's credentials and the
-	// node's configuration: what makes a session restricted is what its
-	// SIGN-IN proved, and a person who enrols afterwards has proved
-	// nothing more on this session — completing the enrolment REPLACES it
-	// with a full one, as a step-up does. Derived per request, the answer
-	// would also move with every node's own setting, and one browser would
-	// be restricted on one node and free on the next.
-	//
-	// ITS ZERO IS AN UNRESTRICTED SESSION, which is every session a
-	// password and a second factor proved, and every one a Tier A token
-	// opens.
-	//
-	// NOT THE ONLY COPY. The bearer the sign-in mints carries the same
-	// decision, signed ([session.Bearer.EnrolmentOnly]), because this row
-	// is exactly what a node serving a session it has not applied yet does
-	// not have — and a sign-in answers before any node applies it. The row
-	// is what the directory's session listing reads; the request path reads
-	// both.
+	// FACTOR: opened by a password alone (a sign-in, step-up or redemption)
+	// for a person who holds none, where the sign-in policy requires one.
+	// Decided once by that sign-in, not per request: the restriction is what
+	// the sign-in proved (completing enrolment REPLACES the session, as a
+	// step-up does), and a per-request answer would move with each node's
+	// setting. Zero is unrestricted. The bearer carries the same decision,
+	// signed ([session.Bearer.EnrolmentOnly]), because a sign-in answers
+	// before any node applies this row; the session listing reads the row,
+	// the request path both.
 	EnrolmentOnly bool `json:"enrolment_only,omitempty"`
 
-	// UserAgent is the browser that opened the session, as its User-Agent
-	// header named it, clipped to [MaxSessionUserAgent] bytes; and Remote is
-	// the address it opened from, resolved through `api.trusted_proxies`
-	// ([auth.Clients]) as the sign-in's own audit row names it. Both are
-	// written once, at the start, and never moved.
-	//
-	// WHAT LETS A PERSON TELL THEIR SESSIONS APART. A listing of sessions
-	// that said only when each began and when it ends offered "Sign out" on
-	// rows nobody could match to a device, so the one session on a lost
-	// laptop could only be ended with every other. Empty on a session a
-	// Tier A token's exchange opened with no browser behind it, and on one
-	// an earlier build wrote.
+	// UserAgent is the opening browser's User-Agent header, clipped to
+	// [MaxSessionUserAgent] bytes, and Remote the address it opened from,
+	// resolved through `api.trusted_proxies` ([auth.Clients]) as the
+	// sign-in's audit row names it; both written once, at the start. They let
+	// a person tell their sessions apart, to end the one on a lost laptop
+	// alone. Empty on a session a Tier A token's exchange opened.
 	UserAgent string `json:"user_agent,omitempty"`
 	Remote    string `json:"remote,omitempty"`
 
-	// EndedReason is why a session stopped, on the CLOSE record: signed
-	// out, revoked or expired. "This
-	// session was revoked, and why" is the sentence an investigation is
-	// looking for, and it is the one an ordinary delete would not have
-	// left behind.
+	// EndedReason is why a session stopped, on the CLOSE record: signed out,
+	// revoked or expired. It is what an investigation looks for, and what a
+	// plain delete would not leave behind.
 	EndedReason string `json:"ended_reason,omitempty"`
 
 	Extra map[string]json.RawMessage `json:"-"`
@@ -296,116 +213,93 @@ type Credential struct {
 	Method CredentialMethod `json:"method"`
 
 	// Verifier is what a presented secret is checked AGAINST, never the
-	// secret: an argon2id digest with its parameters, or a hash of a
-	// machine token or of a recovery code — and, for a second factor, the
-	// sealed seed ([MethodTOTP] says why that one is a secret).
+	// secret: an argon2id digest with its parameters, or a hash of a machine
+	// token or recovery code; for a second factor, the sealed seed
+	// ([MethodTOTP] says why that one is a secret).
 	Verifier string `json:"verifier,omitempty"`
 
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
 	RevokedAt time.Time `json:"revoked_at,omitzero"`
 
-	// Label is what the mint called this credential, for somebody who
-	// holds four tokens and has to know which one to revoke.
-	//
-	// FREE TEXT AND NOT AN IDENTITY: two credentials may share a label,
-	// nothing resolves one, and the id is what every revocation names.
-	// It is in the clear like the login, for the same reason — a value
-	// the directory prints on every row is one an operator needs to be
-	// able to read back.
+	// Label is what the mint called this credential, so somebody holding
+	// four tokens knows which to revoke. Free text, not an identity: labels
+	// may repeat and every revocation names the id. In the clear like the
+	// login, because the directory prints it on every row.
 	Label string `json:"label,omitempty"`
 
 	// Grants are what a MACHINE TOKEN was minted carrying: a subset of its
-	// owner's grants, decided in the snapshot the mint read the owner in.
-	// They are a CEILING on the token rather than a grant of its own — a
-	// request carries only what the owner still holds — so demoting a
-	// person demotes every token they made. Empty on every other method.
+	// owner's grants, decided in the mint's snapshot. A CEILING, not a grant
+	// of its own: a request carries only what the owner still holds, so
+	// demoting a person demotes their tokens. Empty on every other method.
 	Grants []iam.Grant `json:"grants,omitempty"`
 
-	// Epoch is the owner's revocation epoch when a machine token was
-	// minted or a reset link issued. Either is refused once the owner's
-	// epoch moves past it, which is what makes signing somebody out
-	// everywhere — and suspending or offboarding them — end every token and
-	// link they hold as well as every session ([Credential.EndedBy]).
+	// Epoch is the owner's revocation epoch when a machine token was minted
+	// or a reset link issued; either is refused once that epoch moves past
+	// it, so signing out everywhere, suspending or offboarding ends every
+	// token and link too ([Credential.EndedBy]).
 	Epoch uint64 `json:"epoch,omitempty"`
 
-	// Generation is the company's session generation when a machine token
-	// was minted or a reset link issued, and either is refused once the
-	// generation moves past it — for the reason a session is: a backup
-	// taken before a token was revoked, or a link spent, restores it
-	// live, and the restore runbook's invalidate-all is the only gesture
-	// that can end every such credential without knowing which they were.
+	// Generation is the company's session generation when the token was
+	// minted or the link issued, refused once it moves past, as a session is: a backup restores a
+	// revoked token or a spent link live, and the restore runbook's
+	// invalidate-all is the one gesture that ends every such credential.
 	Generation uint64 `json:"generation,omitempty"`
 
 	// Spent marks a reset link its person USED, beside the revocation every
-	// link they held takes when a password is set: listed as revoked alone,
-	// the link they had just used read as one an administrator withdrew.
+	// link takes when a password is set, so it does not read as one an
+	// administrator withdrew.
 	Spent bool `json:"spent,omitempty"`
 
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // The bounds on a person's document, each refused `ErrInvalid` at the write
-// that would cross it, never cut to fit.
-//
-// THEY ARE WHAT BOUND THIS LOG'S LARGEST RECORD ([IamMaxRecordBytes]). A
-// person's document is FULL POST-STATE — a change to any credential
-// republishes every one, and a rename republishes the name — so a field with
-// no bound is a record with none, and the log's gate reserve is sized by its
-// largest record. The HTTP surfaces bounded a body, which bounded nothing a
-// CLI, a duty or a test publishes.
+// that would cross it, never cut to fit. They bound this log's largest record
+// ([IamMaxRecordBytes]), which sizes its gate reserve: the document is full
+// post-state, so an unbounded field is an unbounded record, and an HTTP body
+// limit bounds nothing a CLI, duty or test publishes.
 const (
-	// MaxName bounds a person's display name before it is sealed: two
-	// hundred and fifty-six bytes, because it has to fit on a roster row
-	// and beside every change they make.
+	// MaxName bounds a person's display name before it is sealed: 256 bytes,
+	// to fit a roster row and beside every change they make.
 	MaxName = 256
 
-	// MaxAddress bounds a person's address before it is sealed: three
-	// hundred and twenty bytes, the longest RFC 5321 permits.
+	// MaxAddress bounds a person's address before it is sealed: 320 bytes,
+	// the longest RFC 5321 permits.
 	MaxAddress = 320
 
 	// MaxHeldCredentials is the most credentials one person's document
-	// holds, lapsed ones included — they stay until the retention sweep
-	// collects them ([SessionRowGrace] after they lapse), or until a write
-	// needs their room ([fitHeld]).
-	//
-	// SIXTY-FOUR. A person proves themselves with a password, an
-	// authenticator and a recovery set — three — and everything else is a
-	// machine token, which only that person mints, by hand, for an
-	// assistant or a pipeline. Sixty-one of those live at once is far past
-	// any person's working set, and at the widest a token can be it keeps
-	// the document inside the record the log declares.
+	// holds, lapsed ones included, until the retention sweep collects them
+	// ([SessionRowGrace] after they lapse) or a write needs their room
+	// ([fitHeld]). Sixty-four: a password, an authenticator and a recovery
+	// set, plus sixty-one hand-minted machine tokens, far past any working
+	// set, and at the widest token the document fits the log's declared
+	// record.
 	MaxHeldCredentials = 64
 )
 
 // Counters are the two numbers that end a credential stamped with them, read in
 // one snapshot: the person's revocation epoch and the company's session
-// generation. Every gesture that ends a person's sessions and machine tokens —
-// a password set, signing out everywhere, a suspension, an administrator
-// ending their sessions, invalidating everybody's — moves one of them and
-// writes no `revoked_at`.
+// generation. Every gesture that ends a person's sessions and machine tokens
+// moves one of them and writes no `revoked_at`.
 type Counters struct{ Epoch, Generation uint64 }
 
 // EndedBy reports a credential a COUNTER ended: a machine token minted, or a
-// reset link issued, at an epoch or a generation that has since moved on — the
-// comparison [credential.CheckToken] refuses a token on. Counters only move
-// forward, so it never verifies again.
-//
-// A RESET LINK IS ENDED THE WAY A TOKEN IS: refused only while a suspension's
-// stage stood, a link sent out of band came back with the reactivation, and
-// whoever kept a copy of it set the person's password.
+// reset link issued, at an epoch or generation since moved on (the comparison
+// [credential.CheckToken] refuses a token on). Counters only move forward, so
+// it never verifies again. A reset link is ended like a token: one refused
+// only while a suspension stood would let whoever kept an out-of-band copy set
+// the password after reactivation.
 func (c Credential) EndedBy(now Counters) bool {
 	return (c.Method == MethodToken || c.Method == MethodReset) &&
 		(now.Epoch > c.Epoch || now.Generation > c.Generation)
 }
 
-// stampIssued is after with every reset link before did not hold stamped with
-// counters — the issuing snapshot's, so the link is ended by whatever moves
-// one of them next, as a token minted in that snapshot is ([Credential.EndedBy]).
-// STAMPED BY THE RECORD, never by its caller: the caller forms the person
-// without either counter, which it could only read in another transaction.
-// Two records issue a link and both stamp it in their own snapshot: an
-// administrator's reset ([Writer.UpdatePerson]) and a created person's first
-// password link ([Writer.Create]), which holds no earlier set — before is nil.
+// stampIssued is after with every reset link not in before stamped with the
+// issuing snapshot's counters, so the link ends with whatever moves one next,
+// as a token minted there does ([Credential.EndedBy]). The record stamps,
+// never its caller, which could read the counters only in another transaction.
+// Callers: an administrator's reset ([Writer.UpdatePerson]) and a created
+// person's first password link ([Writer.Create]), where before is nil.
 func stampIssued(before, after []Credential, counters Counters) []Credential {
 	held := make(map[string]bool, len(before))
 	for _, c := range before {
@@ -420,36 +314,17 @@ func stampIssued(before, after []Credential, counters Counters) []Credential {
 	return out
 }
 
-// fitHeld is a credential set as a write lands it: set itself where it is
-// within [MaxHeldCredentials], and otherwise set without the credentials that
-// LAPSED EARLIEST — revoked, past their expiry, or ended by a counter
-// ([Credential.EndedBy]) at counters — until it is. Refused as cause only when
-// the credentials still LIVE are past the cap on their own.
+// fitHeld is set as a write lands it: unchanged within [MaxHeldCredentials],
+// otherwise without the credentials that LAPSED EARLIEST (revoked, expired, or
+// ended by a counter at counters, [Credential.EndedBy]) until it fits. It
+// refuses with cause only when the live credentials alone are past the cap.
 //
-// # Why a lapsed credential gives up its place rather than holding it
-//
-// The cap bounds the RECORD, and a lapsed credential verifies nothing: it is
-// kept only so the listing can say what was revoked or expired, and why, for
-// the week before the retention sweep collects it. Counted like a live one
-// until then, a person at the cap could be told to revoke a token nothing uses
-// — which frees nothing, since the revocation keeps it on the document — and
-// then to wait up to a week, while a pipeline minting short-lived tokens could
-// not mint at all and a person enrolling a second factor, or regenerating
-// their recovery codes, was refused over tokens that had stopped working. The
-// sweep drops the same credentials, from the same document, a few days later;
-// this drops them sooner, and only as many as the write needs.
-//
-// EARLIEST FIRST, by the instant each stopped verifying — its revocation or
-// its expiry, whichever came first — with the set's own order breaking a tie,
-// so the credential dropped is the one the sweep would have collected first,
-// and the rest keep their account for their full week.
-//
-// A CREDENTIAL A COUNTER ENDED IS LAPSED, and the earliest of all: it writes no
-// `revoked_at`, so nothing says when it stopped, and the sweep never collects
-// it before its own expiry — up to a year for a token. Counted as live, a
-// person signed out everywhere with sixty tokens was refused every mint, second
-// factor and recovery set over tokens that could never verify again, each
-// listed as revoked with no way to revoke it.
+// A lapsed credential verifies nothing and is kept only for the listing until
+// the sweep collects it; counted as live, a person at the cap was refused a
+// mint, a second factor or new recovery codes over dead tokens. Earliest first,
+// by when each stopped verifying (set order breaking ties), drops what the
+// sweep would collect first. A counter-ended one writes no `revoked_at` and
+// the sweep keeps it until expiry (up to a year), so it counts as earliest.
 func fitHeld(set []Credential, now time.Time, counters Counters,
 	cause error) ([]Credential, error) {
 
@@ -521,63 +396,38 @@ const (
 	// MethodToken is a machine's bearer token, held as a hash.
 	MethodToken CredentialMethod = "token"
 
-	// MethodTOTP is a time-based code from an authenticator app, and it
-	// is the one method whose stored value is the SECRET rather than a
-	// verifier — because TOTP is symmetric and there is no other shape
-	// for it. Both ends derive the same code from the same seed, so an
-	// engine that held only a digest could verify nothing.
+	// MethodTOTP is a time-based code from an authenticator app, the one
+	// method whose stored value is the SECRET, not a verifier: TOTP is
+	// symmetric, so a digest could verify nothing. A leaked estate would
+	// yield second factors, so the seed is sealed under the fleet keyring
+	// before it reaches a payload, as a name and address are; the applier
+	// writing it cannot read it.
 	//
-	// WHAT THAT COSTS IS STATED RATHER THAN GLOSSED: a leaked estate
-	// yields second factors, where it yields nothing usable for a
-	// password. What bounds it is the same thing that bounds every other
-	// secret this company holds — the seed is SEALED under the fleet
-	// keyring before it reaches a payload, exactly as their name and
-	// address are, so a row is not a secret and the applier that writes
-	// it cannot read it.
-	//
-	// THE LAST ACCEPTED STEP rides in [Credential.Extra] rather than in a
-	// column of its own, because it is the one field a NEWER build might
-	// need beside it and a column added later never runs (schema_migrations
-	// keys on the filename). It is what makes a code single-use: a replay
-	// inside the same 30-second window is refused by comparing against it.
+	// The last accepted step rides in [Credential.Extra], not a column,
+	// because a newer build may need fields beside it and a column added
+	// later never runs (schema_migrations keys on the filename). Comparing
+	// against it refuses a replay inside the same 30-second window.
 	MethodTOTP CredentialMethod = "totp"
 
 	// MethodRecovery is the set of ten single-use codes issued beside a
-	// second factor, each held as a SHA-256 hash — a verifier, unlike the
-	// seed above, because a recovery code is presented rather than
-	// derived.
-	//
-	// ITS OWN METHOD RATHER THAN A FIELD ON THE TOTP ONE, because
-	// spending a code is a write to the person's record and the two are
-	// rotated independently: somebody re-enrols an authenticator without
-	// invalidating the codes they printed, and regenerates the codes
-	// without re-enrolling the app.
+	// second factor, each held as a SHA-256 hash, since a code is presented,
+	// not derived. Its own method, not a field on the TOTP one: spending a
+	// code writes the person, and the two rotate independently (re-enrol the
+	// app and keep the codes, or regenerate the codes and keep the app).
 	MethodRecovery CredentialMethod = "recovery"
 
-	// MethodReset is a ONE-TIME PASSWORD LINK: a RESET LINK an
-	// administrator issued, or the FIRST PASSWORD LINK an administrator's
-	// create issued the person it created ([Writer.Create]). Either is a
-	// 256-bit secret — a reset's crypto/rand, a first link's derived under
-	// the company's key — held, like a machine token's, as a SHA-256
-	// verifier ([credential.ResetVerifier]), with an expiry; nothing stored
-	// tells the two apart, and nothing needs to: one spend path serves both,
-	// and whether a link sets somebody's first password is read off whether
-	// they hold one ([ResetRow.First]).
+	// MethodReset is a ONE-TIME PASSWORD LINK, a reset or a create's first
+	// ([Writer.Create]): a 256-bit secret (crypto/rand, or derived under the
+	// company's key) held as a SHA-256 verifier ([credential.ResetVerifier])
+	// with an expiry. One spend path serves both; a link is a first one when
+	// its person holds no password ([ResetRow.First]). A credential row, so
+	// it is listed, revoked and swept like any other.
 	//
-	// A CREDENTIAL ROW RATHER THAN A TABLE OF ITS OWN, because it is one:
-	// something presented and checked against a verifier, owned by one
-	// person, listed among their credentials so an administrator sees the
-	// outstanding link and revokes it like anything else, and collected
-	// by the sweep once it is spent, revoked or past its expiry.
-	//
-	// IT AUTHENTICATES NOTHING BUT ITS OWN SPEND. No sign-in reads it — a
-	// password is found by its method — and no bearer path does: the
-	// machine-token read refuses a row of any other method, and its
-	// verifier is formed under a prefix of its own, so no token value
-	// could verify against one. Spending it is the one thing it does
-	// ([Writer.SetPassword]), and the spend revokes it — as does a grant
-	// its person gains ([Writer.UpdatePerson]), since the link was judged
-	// against its issuer's grants at the issue.
+	// It authenticates nothing but its own spend ([Writer.SetPassword]):
+	// sign-in finds a password by method, the machine-token read refuses
+	// other methods, and its verifier's prefix matches no token. The spend
+	// revokes it, as does a grant its person gains ([Writer.UpdatePerson]),
+	// since the issue judged it against its issuer's grants.
 	MethodReset CredentialMethod = "reset"
 )
 
@@ -587,11 +437,8 @@ var CredentialMethods = []CredentialMethod{
 }
 
 // SecondFactorMethods are the methods that satisfy a second factor rather
-// than a first.
-//
-// A SET RATHER THAN A PREDICATE ON THE VALUE, because the question "does this
-// person hold a second factor" is asked of a LIST of credentials and answering
-// it per method is what keeps the caller from spelling the same two names.
+// than a first: a set, so a caller asking it of a list of credentials never
+// spells the two names itself.
 var SecondFactorMethods = []CredentialMethod{MethodTOTP, MethodRecovery}
 
 // SecondFactor reports whether a method satisfies a second factor.
@@ -615,12 +462,9 @@ func (m CredentialMethod) Valid() bool {
 }
 
 // Cancellation is an invitation withdrawn before anybody redeemed it
-// ([OpCancel]).
-//
-// IT NAMES THE INVITATION AND THE ADDRESS IT HELD, as the blind, and nothing
-// else: the address's blind is what the trail row is filed under and what
-// buckets the record, as the issue's own did, and the apply deletes the row by
-// its id. The address itself is in neither.
+// ([OpCancel]). It names the invitation, which the apply deletes by id, and
+// its address's blind, which files the trail row and buckets the record as the
+// issue's did; never the address.
 type Cancellation struct {
 	V int `json:"v"`
 
@@ -631,12 +475,9 @@ type Cancellation struct {
 }
 
 // PasswordChange is a person's password replaced and their revocation epoch
-// moved, in one record ([OpPassword]).
-//
-// THE DOCUMENT IS FULL POST-STATE, as every content record's is — the new
-// password among the credentials, every outstanding reset link revoked — and
-// the EPOCH IS STATED, never incremented by the applier, for [Revocation]'s
-// reason.
+// moved, in one record ([OpPassword]). The document is full post-state (the
+// new password in, every outstanding reset link revoked) and the epoch is
+// stated, never incremented by the applier, for [Revocation]'s reason.
 type PasswordChange struct {
 	V int `json:"v"`
 
@@ -650,9 +491,9 @@ type PasswordChange struct {
 type Revocation struct {
 	V int `json:"v"`
 
-	// Epoch is the NEW value, stated rather than derived: an applier that
-	// incremented a column would fold over an arrival order, and two nodes
-	// at one checkpoint have seen the same set in a different order.
+	// Epoch is the NEW value, stated: an applier incrementing a column would
+	// fold over arrival order, which two nodes at one checkpoint may have
+	// seen differently.
 	Epoch uint64 `json:"epoch"`
 
 	Extra map[string]json.RawMessage `json:"-"`
@@ -665,49 +506,38 @@ type StatusChange struct {
 	Stage iam.Stage `json:"stage"`
 
 	// Epoch is the revocation epoch a stage that may not act moves the
-	// person to, STATED for [Revocation]'s reason, and zero for one that
-	// may: a suspension ENDS every session and machine token they hold.
-	// Refused only while the stage stood, they came back with a
-	// reactivation — and the browser that had been told so had already
-	// dropped its cookie, so the one copy a reactivation revived was a copy
-	// somebody else kept.
+	// person to, stated for [Revocation]'s reason, and zero for one that may.
+	// A suspension ENDS every session and machine token: merely refused
+	// while the stage stood, they would come back at reactivation, and the
+	// one copy revived would be one somebody else kept.
 	Epoch uint64 `json:"epoch,omitempty"`
 
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// Removal is a person the company no longer has.
-//
-// A GATE, so its record stays at the base version for every build there will
-// ever be ([MutationRecord.readByEveryBuild]) and its shape, pinned at
-// [GateRecordVersion], may only ever grow by addition: a removal a node
-// deferred would be somebody off-boarded still signing in on that node, with
-// no later record that corrects it.
+// Removal is a person the company no longer has. A GATE: its record stays at
+// the base version for every build ([MutationRecord.readByEveryBuild]) and its
+// shape, pinned at [GateRecordVersion], only grows by addition, because a
+// deferred removal is an off-boarded person still signing in on that node with
+// no later record to correct it.
 type Removal struct {
 	V int `json:"v"`
 
-	// Released are the identifiers this removal gives back, as BLINDS and
-	// logins rather than addresses — the row that records them outlives
-	// the person, and writing an address into the one row designed to
-	// outlive somebody would be the removal's own promise broken by the
-	// mechanism that makes it.
+	// Released are the identifiers this removal gives back, as blinds and
+	// logins, never addresses: the row recording them outlives the person.
 	Released Identifiers `json:"released,omitzero"`
 
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// Identifiers is the set of unique values one person holds, by class.
+// Identifiers is the set of unique values one person holds, by class: a
+// struct, not a map, so a new class is a named field the releasing removal
+// cannot miss.
 //
-// A STRUCT AND NOT A MAP, so a class added later is a field with a name rather
-// than a key every reader has to know to look for — and so the removal that
-// releases them cannot silently miss one it has never heard of.
-//
-// THE JSON KEYS ARE STORED: a removal's tombstone holds them as
-// `iam_removed.claims_json`, an operator's answer to "who held this", and the
-// seat a removal released is ALSO its `seat_id` column, written from SeatID by
-// the removal's apply and re-derived from these keys by [Applier.Rederive], so
-// that a seat's removals are found by a seek rather than by reading every
-// tombstone's claims.
+// The JSON keys are STORED: a removal's tombstone holds them as
+// `iam_removed.claims_json`, and the released seat is also its `seat_id`
+// column, written from SeatID by the apply and re-derived from these keys by
+// [Applier.Rederive], so a seat's removals are found by a seek.
 type Identifiers struct {
 	EmailBlind string `json:"email_blind,omitempty"`
 	Login      string `json:"login,omitempty"`
@@ -719,97 +549,71 @@ func (c Identifiers) Empty() bool {
 	return c.EmailBlind == "" && c.Login == "" && c.SeatID == ""
 }
 
-// Sweep deletes one bucket's expired rows below a POSITION.
-//
-// A POSITION AND NEVER A CLOCK, which is the whole of why this is a record
-// rather than a local delete: these rows are identity-claimed, so two nodes
-// sweeping on their own clocks would hold different bytes and "N byte-identical
-// copies" would quietly become a claim about how synchronised their clocks
-// were. The publisher resolves each horizon to a position ONCE, and every data
-// node then deletes exactly the same rows.
+// Sweep deletes one bucket's expired rows below a POSITION, never a clock,
+// which is why it is a record rather than a local delete: these rows are
+// identity-claimed, and nodes sweeping on their own clocks would diverge. The
+// publisher resolves each horizon to a position once and every data node
+// deletes the same rows.
 type Sweep struct {
 	V int `json:"v"`
 
-	// Bucket is which sixty-fourth this record sweeps. It is on the
-	// payload as well as in the subject so an applier that has the record
-	// need not parse a subject back to learn it.
+	// Bucket is which sixty-fourth this record sweeps, on the payload too so
+	// an applier need not parse the subject.
 	Bucket Bucket `json:"bucket"`
 
 	// Changes and Sessions are the two authentication-trail horizons, as
-	// the composed positions the publisher resolved them to. Zero means
-	// "nothing to delete for this class", which is ordinary on a young
-	// company and is NOT the same as "delete everything": a zero position
-	// is below every row's version.
+	// composed positions. Zero means nothing to delete for that class, not
+	// everything: a zero position is below every row's version.
 	Changes  uint64 `json:"changes,omitempty"`
 	Sessions uint64 `json:"sessions,omitempty"`
 
-	// Expired is the instant sessions, invitations and credentials are
-	// collected against once they are over — ended, expired, redeemed or
-	// revoked — already net of [SessionRowGrace], so the applier compares
-	// and never subtracts.
-	//
-	// THE PUBLISHER READ IT, ONCE, and that is the whole of the clock
-	// this path is allowed: every data node then compares the same carried
-	// value against the broker instants its rows already hold, so a node
-	// whose own clock is a year out deletes exactly what its peers do.
+	// Expired is the instant over sessions, invitations and credentials
+	// (ended, expired, redeemed or revoked) are collected against, already
+	// net of [SessionRowGrace], so the applier compares and never subtracts.
+	// The publisher read it once: every node compares this carried value
+	// with the broker instants its rows hold, whatever its own clock says.
 	Expired time.Time `json:"expired,omitzero"`
 
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// Invalidation ends every session in the company at once.
-//
-// A GATE, like a removal and an eviction, so its record stays at the base
-// version for every build there will ever be and its shape is pinned at
-// [GateRecordVersion]: a node that deferred this would
-// go on honouring every bearer the company had just invalidated, and no later
-// record about any of those sessions repairs it.
-//
-// ITS PAYLOAD IS TWO FIELDS AND WILL STAY TWO, which is what staying at the
-// base costs and what it buys. Anything a bearer-invalidation might later want to
-// say — which sessions, on whose authority, under what policy — belongs on a
-// record that is allowed to evolve, because a field added here could only be
-// read by builds that already had it.
+// Invalidation ends every session in the company at once. A GATE, its shape
+// pinned at [GateRecordVersion]: a node that deferred it would keep honouring
+// every bearer just invalidated, and no later record repairs that. Its payload
+// stays two fields; anything more (which sessions, whose authority, what
+// policy) belongs on a record allowed to evolve, since a field added here is
+// read only by builds that already have it.
 type Invalidation struct {
 	V int `json:"v"`
 
-	// Generation is the NEW value, stated rather than derived, for
-	// [Revocation.Epoch]'s reason: an applier that incremented a column
-	// would fold over an arrival order, and two nodes at one checkpoint
-	// have seen the same set in a different order.
+	// Generation is the NEW value, stated for [Revocation.Epoch]'s reason.
 	Generation uint64 `json:"generation"`
 
-	// By is who decided. Nobody bumps this casually and everybody asks
-	// afterwards, so the answer rides the record rather than being
-	// reconstructed from an audit row somebody has to find.
+	// By is who decided, carried on the record because everybody asks
+	// afterwards.
 	By string `json:"by,omitempty"`
 
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Eviction gates a node's records on this log, or readmits it. The node is the
-// record's SUBJECT ([EvictionSubject]), so nothing here repeats it. A GATE, so
-// its shape is pinned at [GateRecordVersion] like a removal's.
+// record's SUBJECT ([EvictionSubject]). A GATE, its shape pinned at
+// [GateRecordVersion] like a removal's.
 //
-// # The position is the record's own, and never a field
-//
-// The gate drops the node's records ABOVE the eviction's own position and
-// counts them again FROM the readmission's, so the boundary is where the
-// record LANDED — which only the broker knows, after the writer has formed the
-// payload. A payload that stated its positions asked the writer for a number
-// it cannot have; the applier takes both from the record's position, as every
-// sibling log's does, and the payload says only which of the two it is.
+// It states no position: the gate drops the node's records above the
+// eviction's own position and counts them again from the readmission's, and
+// only the broker knows where a record lands, after the payload is formed. The
+// applier takes both from the record's position, as every sibling log does.
 type Eviction struct {
 	V int `json:"v"`
 
-	// Readmit turns the record into the INVERSE COMMIT rather than a
-	// delete, so an eviction's whole history survives a replay and a node
-	// that was evicted, readmitted and evicted again reads correctly
-	// rather than as one long absence.
+	// Readmit makes the record the INVERSE COMMIT rather than a delete, so
+	// the whole history survives a replay and a node evicted, readmitted
+	// and evicted again does not read as one long absence.
 	Readmit bool `json:"readmit,omitempty"`
 
-	// By is who decided, which is the first thing an operator reading an
-	// eviction they did not expect needs.
+	// By is who decided, the first thing an operator reading an unexpected
+	// eviction needs.
 	By string `json:"by,omitempty"`
 
 	Extra map[string]json.RawMessage `json:"-"`
@@ -829,21 +633,15 @@ type Generation struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// The encode/decode pairs. Each is the same three lines because the rule is
-// [jsoncarry]'s and not this package's: a decode keeps what it has no home
-// for, an encode folds it back, and a carried field loses to a known one.
+// The encode/decode pairs follow [jsoncarry]'s rule: a decode keeps what it
+// has no home for, an encode folds it back, and a carried field loses to a
+// known one.
 
-// # A person and a credential carry at ANY DEPTH, through codecs of their own
-//
-// A person's document travels INSIDE an enrolment and a password change, and
-// every credential travels inside a person's — and encoding/json marshals a
-// nested struct by its fields, where Extra is `-`. So a nested person or
-// credential DROPPED everything it carried, and a credential's carried fields
-// are where the second factor's last accepted step and the recovery codes'
-// verifiers ride: every recovery code was refused for want of a verifier, and
-// a TOTP code verified as often as it was presented inside its window. The
-// two methods on each are the pair rather than a second copy of it, so the
-// rule holds wherever the type is found.
+// Person and Credential carry at ANY DEPTH through codecs of their own:
+// encoding/json marshals a nested struct by its fields, where Extra is `-`,
+// and a credential's carried fields hold the TOTP last accepted step and the
+// recovery codes' verifiers (lost, a TOTP code replays and every recovery code
+// is refused).
 
 // MarshalJSON folds what a person's document carries back in, at any depth.
 func (p Person) MarshalJSON() ([]byte, error) {
@@ -1077,18 +875,15 @@ func DecodeStatus(data []byte) (StatusChange, error) {
 func EncodeRemoval(r Removal) ([]byte, error) { return jsoncarry.Encode(r, r.Extra) }
 
 // DecodeRemoval reads a removal's payload, keeping every field this build has
-// no home for, and checks no version: a removal is a gate, so a record above
-// this build's version has already stopped the applier at the envelope pass.
+// no home for, and checks no version: a gate is pinned at [GateRecordVersion],
+// so a higher version is no newer shape but a record that must not exist, and
+// the envelope pass has already stopped the applier on it.
 func DecodeRemoval(data []byte) (Removal, error) {
 	var r Removal
 	extra, err := jsoncarry.Decode(data, &r, removalFields)
 	if err != nil {
 		return Removal{}, fmt.Errorf("iamdomain: decode a removal: %w", err)
 	}
-	// NO VERSION CHECK: a gate's payload is pinned at [GateRecordVersion]
-	// for ever, so a version above this build's is not a newer shape to
-	// defer — it is a record that must not exist, and the envelope pass
-	// has already refused it as a gate.
 	r.Extra = extra
 	return r, nil
 }
@@ -1128,9 +923,6 @@ func DecodeInvalidation(data []byte) (Invalidation, error) {
 	if err != nil {
 		return Invalidation{}, fmt.Errorf("iamdomain: decode an invalidation: %w", err)
 	}
-	// NO VERSION CHECK, like a removal and an eviction: a version above
-	// this build's cannot exist on a gate, and the envelope pass has
-	// already refused it as one.
 	i.Extra = extra
 	return i, nil
 }
@@ -1148,8 +940,8 @@ func DecodeEviction(data []byte) (Eviction, error) {
 	if err != nil {
 		return Eviction{}, fmt.Errorf("iamdomain: decode an eviction: %w", err)
 	}
-	// A GATE, like a removal and for the reason one layer up: a node that
-	// deferred an eviction goes on applying records every peer is dropping.
+	// A gate: a node that deferred an eviction would apply records every
+	// peer drops.
 	e.Extra = extra
 	return e, nil
 }
@@ -1199,8 +991,8 @@ func checkVersion(got int) error {
 	return nil
 }
 
-// The field sets, DERIVED from each struct's own tags rather than typed
-// again — see [jsoncarry.Names] for the four names hand-kept lists missed.
+// The field sets, derived from each struct's own tags, never hand-kept
+// ([jsoncarry.Names]).
 var (
 	personFields         = jsoncarry.Names(Person{})
 	enrolledFields       = jsoncarry.Names(Enrolled{})

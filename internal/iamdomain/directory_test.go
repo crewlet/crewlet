@@ -22,23 +22,15 @@ import (
 // EVERY UNIQUE COLUMN IS WRITTEN FROM THE DIRECTORY'S APPLY AND NOWHERE ELSE —
 // AND SO IS EVERY VALUE AN INVITATION HOLDS.
 //
-// A login, an address and a seat are decided on ONE subject, in one snapshot
-// of every row, and that is the whole of what keeps two people off one of
-// them: there is no unique index in this estate and there cannot be one. A
-// statement anywhere else that set one of the three columns would be a write
-// no directory decision ever saw — the duplicate nothing refuses. An open
-// invitation holds an address and a seat by the same decision, so the columns
-// a hold is read from are held to the same rule — with the one other writer
-// the seat column has, the applier's re-derivation of rows an older build
-// applied, which writes the value the apply would have.
+// No unique index keeps a login, address or seat to one holder, only the
+// directory's decide (package doc, "ONE SUBJECT FOR THE DIRECTORY"), which
+// also holds an open invitation's address and seat; a statement elsewhere
+// setting one is a duplicate nothing refuses. The seat's one other writer, the
+// applier's re-derivation (apply.go), writes what the apply would have. A walk
+// over the source: no behavioural case shows which statements exist.
 //
-// A WALK OVER THE SOURCE, because the property is about which statements
-// exist rather than about what any one record does: a behavioural case could
-// only show the paths somebody thought to exercise.
-//
-// Mutation: add `login = ?` to the person record's UPDATE in apply_person.go,
-// or a `seat_id` set to empty to the erasure's UPDATE in apply_erase.go, and
-// this fails naming that file.
+// Mutation: add `login = ?` to apply_person.go's UPDATE, or set `seat_id` to
+// empty in apply_erase.go's, and this fails naming that file.
 func TestEveryUniqueColumnIsWrittenOnlyFromTheDirectory(t *testing.T) {
 	t.Parallel()
 	for table, rule := range map[string]struct {
@@ -130,17 +122,12 @@ func uniqueWritesOf(t *testing.T, table string, unique *regexp.Regexp,
 // A DIRECTORY DECISION IS REFUSED WHILE THIS NODE RETAINS A RECORD — any
 // record, in any bucket.
 //
-// A login, an address or a seat is decided against every row that could hold
-// it, and a record this node holds but cannot decode may be the very rename or
-// enrolment that took the value. The framework's own probe asks only about the
-// buckets the new record declares, which is the people it writes rather than
-// the people it compares against, so the decide asks the whole index and is
-// refused `deferred` — another node can decide it.
-//
-// THE CONTROL IS THE REMOVAL BESIDE IT: it frees values rather than taking
-// one, so the same retained record does not refuse it — which says the
-// refusal comes from the directory's own question and not from a node that
-// fails every write.
+// An undecodable record may be the rename or enrolment that took the login,
+// address or seat being decided. The framework's probe asks only about the
+// buckets the new record declares (the people it writes, not those it
+// compares against), so the decide asks the whole index and is refused
+// `deferred`. The control, a removal, frees values, so the same record does
+// not refuse it: the refusal is the directory's, not a failing node's.
 //
 // Mutation: drop the wholeDirectory call from SetIdentity's decide and the
 // rename lands.
@@ -223,12 +210,8 @@ func TestADirectoryWriteRefusesWhileThisNodeRetainsARecord(t *testing.T) {
 }
 
 // A REDEMPTION IS ONE RECORD: the person, their address, their login and the
-// spent link, together.
-//
-// It was a sequence — an address claim, a login claim, the person, and a spend
-// the sign-in surface published afterwards — so a redemption that stopped
-// part way left a claimed address with nobody behind it, or a person whose
-// link still opened. One record lands all of it or none of it.
+// spent link, together, so none stops part way with an address claimed for
+// nobody or a person whose link still opens.
 //
 // Mutation: drop the invitation's spend from the enrolment's apply and the
 // link is still open once the person exists.
@@ -293,10 +276,9 @@ func TestARedemptionIsOneRecord(t *testing.T) {
 
 // A CONTENT RECORD NEVER CREATES A PERSON.
 //
-// The directory creates a row — its decide is the one that read every login,
-// address and seat — and a record on the person's own subject only changes a
-// row that exists. A content record about somebody this node holds no row for
-// writes nothing: no person, and no credential rows hanging off nobody.
+// Only the directory's decide read every login, address and seat, so only it
+// creates a row; a record on the person's own subject changes one that exists,
+// and about somebody with no row writes nothing, credentials included.
 //
 // Mutation: turn writePerson's UPDATE back into an upsert and the record
 // creates the person, credentials and all.
@@ -351,11 +333,10 @@ func TestAContentRecordNeverCreatesAPerson(t *testing.T) {
 
 // TWO ROWS HOLDING ONE LOGIN ARE THE UNKNOWN ARM, never an arbitrary pick.
 //
-// Ordinary traffic never puts one login on two rows. A node that retained the
-// record that moved somebody off a login, and then applied the later one that
-// gave it to somebody else, holds both until the first is reprocessed — and
-// so does a restore that copied a duplicate back. Answering either row would
-// sign somebody in as somebody else; the answer is "ask another node".
+// A node that retained the record moving somebody off a login, then applied
+// the later one giving it to somebody else, holds both until the first is
+// reprocessed, as does a restore that copied a duplicate back. Answering
+// either row would sign somebody in as somebody else.
 //
 // Mutation: read the login with `LIMIT 1` and the first row is answered as
 // its holder.
@@ -386,11 +367,10 @@ func TestTwoRowsHoldingOneLoginAreTheUnknownArm(t *testing.T) {
 // AN ADMINISTRATOR'S CREATE OF AN ADDRESS AN OPEN INVITATION HOLDS IS REFUSED,
 // NAMING THE INVITATION.
 //
-// The invitation is on its way to the person at that address; creating them
-// beside it would leave a link that creates a second person on one address the
-// day it is followed. The refusal names the invitation, because that is what
-// an administrator withdraws or lets lapse — a person id would name nobody.
-// The create names ANOTHER seat, so the address is the one value refused.
+// Created beside it, the invitation's link would make a second person on the
+// address. The refusal names the invitation, which is what an administrator
+// withdraws or lets lapse. The create names another seat, so the address is
+// the one value refused.
 //
 // Mutation: drop the address's open-invitation check from the enrolment's
 // decide and the create lands beside the invitation.
@@ -421,10 +401,9 @@ func TestACreateOfAnInvitedAddressNamesTheInvitation(t *testing.T) {
 	}
 }
 
-// AND ONE ONTO A SEAT AN OPEN INVITATION HOLDS IS REFUSED, NAMING IT — for the
-// address's reason: the invitation is a person on their way to that seat, and
-// a create beside it would put two people on one. A create of ANOTHER address,
-// so the seat is the one value refused.
+// A CREATE ONTO A SEAT AN OPEN INVITATION HOLDS IS REFUSED, NAMING IT, else
+// two people would hold one seat. The create names another address, so the
+// seat is the one value refused.
 //
 // Mutation: drop the seat's open-invitation check from the enrolment's decide
 // and the create lands on the invited seat.

@@ -5,14 +5,10 @@ import (
 	"time"
 )
 
-// AN ALARM'S DURATION IS SPELLED AS THE DASHBOARD SPELLS ONE.
-//
-// `time.Duration.String` wrote "85h58m0s", "11.39s" and "24h0m0s" into every
-// alarm sentence, beside screens whose own formatter writes "85h 58m", "11s"
-// and "24h" — two spellings of one reading on one page, and hundredths nobody
-// measured to. The cases are that formatter's (dashboard lib/format.ts
-// fmtDuration), plus the carries a grain boundary must hand up rather than
-// print as "1000ms" or "60m".
+// AN ALARM'S DURATION IS SPELLED AS THE DASHBOARD SPELLS ONE ("85h 58m", not
+// `time.Duration.String`'s "85h58m0s"). The cases are the dashboard's
+// (lib/format.ts fmtDuration), plus the carries a grain boundary must hand up
+// rather than print as "1000ms" or "60m".
 func TestAnAlarmsDurationIsSpokenLikeTheDashboards(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

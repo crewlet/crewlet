@@ -42,14 +42,12 @@ func (l *lineLog) count(msg string) int {
 
 // A COMMIT BESIDE THE LOOP IS NO RETRY OF A FAILED FETCH.
 //
-// A barrier is handed to the checkpoint transaction beside the loop and held at
-// its commit; the broker then fails two fetches in a row, and the commit returns
-// in the pause after the first. A run of failures is written as its start and
-// its end: one `statelog_apply_retrying` for the two fetches and one
-// `statelog_apply_recovered` once a fetch is answered. Before, the commit
-// between them was taken for the retry — a recovery written naming the fetch's
-// error, the fault's clock and its back-off reset — and the second failed fetch
-// began a run of its own.
+// A barrier's checkpoint commit beside the loop is held while the broker fails
+// two fetches in a row, and returns in the pause after the first. A run of
+// failures is written as its start and end: one `statelog_apply_retrying` for
+// both fetches and one `statelog_apply_recovered` once a fetch is answered.
+// Taken for the retry, the commit would write a recovery naming the fetch's
+// error, reset the fault's clock and back-off, and start a second run.
 func TestACommitBesideTheLoopIsNoRetryOfAFailedFetch(t *testing.T) {
 	t.Parallel()
 	lines := &lineLog{}

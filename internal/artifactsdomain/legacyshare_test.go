@@ -10,13 +10,12 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A SHARE STORED BEFORE THE GRANT RULE STAYS THE OWNER'S TO ACT ON. A build
-// before [artifacts.Audience.ValidateGrant] wrote `seat:token:maya`, a login
-// named as a seat, which reaches nobody. The owner still sees it among the
-// artifact's shares, may change its role, and withdraws it by its text form; it
-// is never counted in a listing it is then withheld from; and a NEW share to a
-// login is refused. A record the engine could neither honour nor remove was a
-// dead end on every deployment that held one.
+// A SHARE STORED BEFORE THE GRANT RULE STAYS THE OWNER'S TO ACT ON: a
+// `seat:token:maya` share (a login named as a seat, which reaches nobody and
+// [artifacts.Audience.ValidateGrant] now refuses) is still listed among the
+// artifact's shares, may change its role and is withdrawn by its text form; it
+// is never counted in a listing it is withheld from; and a NEW share to a
+// login is refused. Otherwise the record could be neither honoured nor removed.
 func TestAShareStoredBeforeTheGrantRuleIsListedAndWithdrawn(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)

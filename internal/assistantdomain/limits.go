@@ -2,12 +2,10 @@ package assistantdomain
 
 import "github.com/crewlet/crewlet/internal/assistant/wire"
 
-// THE BOUNDS ON WHAT IS STORED. They are this package's because the writer is
-// where a value is refused before it is sealed and published, and the
-// orchestrator (internal/assistant) reads them from here rather than stating
-// its own: a bound written twice is one the two sides disagree about, and the
-// side that lost would be a record the log refuses `record_too_large` after a
-// turn already showed it.
+// THE BOUNDS ON WHAT IS STORED live here, where the writer refuses a value
+// before it is sealed, and internal/assistant reads them rather than stating
+// its own: a bound written twice drifts, and the losing side is a record the
+// log refuses `record_too_large` after a turn already showed it.
 const (
 	// TitleMaxBytes bounds a conversation's title.
 	TitleMaxBytes = 256
