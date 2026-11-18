@@ -28,12 +28,16 @@ import { civilAt, readerDay } from "~/lib/format.ts";
 import type { Paged } from "~/lib/usePaged.ts";
 import "~/styles/gitlet.css";
 
-/** A run of rows under one heading: a day of a timeline, or a queue's box later. */
+/** A run of rows under one heading: a day of a timeline, or a queue's box. */
 export interface CodeListGroup<T> {
   key: string;
   heading: ReactNode;
   /** Beside the heading: "2 of 13". */
   aside?: ReactNode;
+  /** Drawn in the group before its rows, on the spine: a queue's train base. */
+  first?: ReactNode;
+  /** Drawn in the group after its rows: callouts, a note, an empty state. */
+  last?: ReactNode;
   rows: readonly T[];
 }
 
@@ -44,8 +48,11 @@ export interface CodeListProps<T> {
   rowKey: (row: T) => string;
   /** What the list is, said by assistive technology: "History of main". */
   "aria-label": string;
-  /** `card` (default): one card of rows. `timeline`: each group a heading on a spine over its card. */
-  look?: "card" | "timeline";
+  /**
+   * `card` (default): one card of rows. `timeline`: each group a heading on a spine over its card.
+   * `boxes`: each group a card, its heading the card's head and its rows on a spine.
+   */
+  look?: "card" | "timeline" | "boxes";
   /** The glyph on the spine at each heading (a commit's, a push's). */
   spine?: ComponentType<GlyphProps>;
   /** The groups' heading level under the page's own headings. Three by default. */
@@ -56,6 +63,8 @@ export interface CodeListProps<T> {
   peek?: (row: T) => ObjectRef | undefined;
   /** The row the reader is on that is no peek (a pane beside the list). */
   isSelected?: (row: T) => boolean;
+  /** A plain press on the row's link, or Enter on its row: the host opens it in place (a pane). */
+  onOpen?: (row: T) => void;
   /** The row's parts, in reading order. */
   lead?: (row: T) => ReactNode;
   title: (row: T) => ReactNode;
@@ -203,7 +212,9 @@ export function useListKeys(opts: {
       run: (e) => {
         if (cursor === null) return;
         const event = e as KeyboardEvent;
-        if (onOpen) {
+        const modified = event.metaKey || event.ctrlKey || event.shiftKey || event.altKey;
+        // A MODIFIED ENTER is the link's, as a modified click is: a new tab or window.
+        if (onOpen && !modified) {
           onOpen(cursor, event);
           return;
         }
@@ -242,6 +253,7 @@ export function CodeList<T>({
   rowHref,
   peek,
   isSelected,
+  onOpen,
   lead,
   title,
   titleAfter,
@@ -268,7 +280,20 @@ export function CodeList<T>({
     [groups, rows],
   );
   const keys = useMemo(() => all.map(rowKey), [all, rowKey]);
-  const { cursor, focusRow } = useListKeys({ root, keys, onceClaimed: keysOnceClaimed });
+  const openKey = useMemo(() => {
+    if (!onOpen) return undefined;
+    const byKey = new Map(all.map((r) => [rowKey(r), r]));
+    return (key: string) => {
+      const item = byKey.get(key);
+      if (item !== undefined) onOpen(item);
+    };
+  }, [all, rowKey, onOpen]);
+  const { cursor, focusRow } = useListKeys({
+    root,
+    keys,
+    onOpen: openKey,
+    onceClaimed: keysOnceClaimed,
+  });
 
   const { open } = usePeekControls();
   const peeked = usePeek();
@@ -322,7 +347,9 @@ export function CodeList<T>({
                 data-list-link=""
                 href={to}
                 aria-current={current ? "true" : undefined}
-                onClick={ref ? peekClickHandler(() => open(ref)) : undefined}
+                onClick={peekClickHandler(
+                  ref ? () => open(ref) : onOpen ? () => onOpen(item) : undefined,
+                )}
               >
                 {words}
               </a>
@@ -355,6 +382,7 @@ export function CodeList<T>({
       className={cx(
         "code-list",
         look === "timeline" && "code-list--timeline",
+        look === "boxes" && "code-list--boxes",
         lead && "code-list--lead",
         density === "compact" && "code-list--compact",
       )}
@@ -375,18 +403,32 @@ export function CodeList<T>({
       {!card &&
         groups.map((group, index) => (
           <div key={group.key} className="code-list__group">
-            <Heading className="code-list__heading" id={`${id}-${index}`}>
-              {Spine && (
-                <span className="code-list__node" aria-hidden="true">
-                  <Spine size="sm" />
-                </span>
-              )}
-              {group.heading}
-              {group.aside && <span className="code-list__aside">{group.aside}</span>}
-            </Heading>
-            <ol className="code-list__rows" aria-labelledby={`${id}-${index}`}>
-              {group.rows.map(row)}
-            </ol>
+            {look === "boxes" ? (
+              // THE BOX'S HEAD BAND: the aside holds controls, so it stands beside the heading.
+              <div className="code-list__band">
+                <Heading className="code-list__heading" id={`${id}-${index}`}>
+                  {group.heading}
+                </Heading>
+                {group.aside && <div className="code-list__aside">{group.aside}</div>}
+              </div>
+            ) : (
+              <Heading className="code-list__heading" id={`${id}-${index}`}>
+                {Spine && (
+                  <span className="code-list__node" aria-hidden="true">
+                    <Spine size="sm" />
+                  </span>
+                )}
+                {group.heading}
+                {group.aside && <span className="code-list__aside">{group.aside}</span>}
+              </Heading>
+            )}
+            {group.first ? <div className="code-list__first">{group.first}</div> : null}
+            {group.rows.length > 0 && (
+              <ol className="code-list__rows" aria-labelledby={`${id}-${index}`}>
+                {group.rows.map(row)}
+              </ol>
+            )}
+            {group.last ? <div className="code-list__last">{group.last}</div> : null}
           </div>
         ))}
       {(paged?.more || paged?.pageError || foot) && (

@@ -2558,12 +2558,12 @@ type PendingStore interface {
 	// asked first, so a row a newer lease owns is [ErrSeatNotHeld] whether or
 	// not that lease has decided its ending too, which the seat's next holder
 	// does as it recovers a run it found claimed, fencing it before it ends it
-	// ([Coordinator.RecoverSeat]). A launch told nothing went on to
-	// start a job on a row that never named it, in a box nothing would
-	// reclaim. A row that went between the create and the reset is created
-	// again; one removed after the launch's own create or reset landed is
-	// this launch's ending, decided and finished, and refuses it
-	// [ErrRunEnding] — created again, it would carry no ending.
+	// ([Coordinator.RecoverSeat]). A row that went between the create and
+	// the reset is created again; one removed after the launch's own create
+	// or reset landed is this launch's ending, and refuses it [ErrRunEnding].
+	// ANY OTHER FAILURE PAST A WRITE THAT MAY HAVE NAMED THE JOB — the create,
+	// the reset, the log's opening — wraps [UnopenedLaunchError], naming it;
+	// a refusal (these two, [ErrCodeHoldsFull]) never does.
 	//
 	// THE TURN'S CODE HOLDS ARE UNIONED, NEVER RESET: a create writes the
 	// run's [PendingRun.CodeHolds], and a reset writes the union of what the

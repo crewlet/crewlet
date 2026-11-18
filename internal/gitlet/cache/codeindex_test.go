@@ -57,15 +57,13 @@ func tipPaths(t *testing.T, c *cache.Cache, s cache.Synced) map[string]bool {
 	return out
 }
 
-// A SWAP LINKS THE CODE INDEX (S18). A compaction keeps every object, and the
-// index is keyed by blob, so the incarnation a compaction's swap promotes
-// holds the old copy's index files as SECOND NAMES of the same inodes, its
-// record carried — and the indexer, looking at the same tip, reads no blob:
-// a compaction never costs a re-index.
+// A SWAP LINKS THE CODE INDEX (S18). A compaction keeps every object and the
+// index is keyed by blob, so the incarnation its swap promotes holds the old
+// copy's index files as SECOND NAMES of the same inodes, record carried, and
+// the indexer at the same tip reads no blob: a compaction never re-indexes.
 //
-// Mutation: drop the index on pack-retired (derived.go's declaration,
-// OnPackRetired: Drop) — the next incarnation holds no index, and the
-// indexer reads every blob again.
+// Mutation: drop the index on pack-retired (derived.go's OnPackRetired: Drop):
+// the next incarnation holds none, and the indexer reads every blob again.
 func TestASwapLinksTheCodeIndex(t *testing.T) {
 	t.Parallel()
 	var reads blobReads
@@ -104,12 +102,11 @@ func TestASwapLinksTheCodeIndex(t *testing.T) {
 	}
 }
 
-// A NEW TIP INDEXES ONLY ITS NEW BLOBS. Every blob a segment holds is known,
-// so a build at a later tip reads through its cat-file only the blobs that
-// tip brought — whatever the branch holds besides — and the tip map names
-// every file of the new tip.
+// A NEW TIP INDEXES ONLY ITS NEW BLOBS: a later build reads through its
+// cat-file only the blobs that tip brought, and the tip map names every file
+// of the new tip.
 //
-// Mutation: treat every blob of the tip as unknown (codeindex.go's known) —
+// Mutation: treat every blob of the tip as unknown (codeindex.go's known):
 // the second build reads all three.
 func TestANewTipIndexesOnlyItsNewBlobs(t *testing.T) {
 	t.Parallel()
@@ -136,16 +133,13 @@ func TestANewTipIndexesOnlyItsNewBlobs(t *testing.T) {
 }
 
 // AN INDEX BUILD MERGES AS IT WRITES, never once at its end
-// (codeindex.MergeNewest). Four files of disjoint text at a segment a file
-// write four equal segments; merged as each is written they settle as one
-// of three and the fourth — the fourth is less than half the three, so it
-// stays — where one merge pass after the fourth folds all four into one
-// from the end, rewriting what it merged at every step: k²/2 segments'
-// writes for k, which a repository of a gigabyte at 64 MiB a segment
-// paid nineteen times over.
+// (codeindex.MergeNewest): one pass at the end rewrites what it merged at
+// every step, k²/2 segments' writes for k. Four files of disjoint text at a
+// segment a file settle as one merged of three plus the fourth, which is
+// under half the three and stays.
 //
-// Mutation: merge only after the last segment (flush returns nil rather
-// than merging) — the index holds one segment.
+// Mutation: merge only after the last segment (flush returns nil rather than
+// merging): the index holds one segment.
 func TestAnIndexBuildMergesAsItWritesNotOnceAtTheEnd(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -170,16 +164,14 @@ func TestAnIndexBuildMergesAsItWritesNotOnceAtTheEnd(t *testing.T) {
 	}
 }
 
-// A BUILD READS WHAT IT PLACED THROUGH MAPPINGS IT GIVES BACK: an index built
-// as eight one-file segments, merged as each is written, opens every segment
-// it placed over a mapping of the placed file — never the bytes it wrote,
-// held in the heap until it committed — and holds a mapping only of the
-// segments it still reads: a merge's two inputs go as it is placed, so the
-// build holds no more mappings than segments, and none once it is over.
+// A BUILD READS WHAT IT PLACED THROUGH MAPPINGS IT GIVES BACK: each segment it
+// placed is opened over a mapping of the placed file, never the bytes it held
+// in the heap, and a merge's two inputs are unmapped as its output is placed,
+// so the build maps no more than its segments, and none once it is over.
 //
-// Mutations: keep a merge's inputs mapped until the build ends, and the build
-// holds a mapping a segment it ever placed, red; drop nothing at the build's
-// end, and its mappings outlive it, red.
+// Mutations: keep a merge's inputs mapped until the build ends, and it holds
+// a mapping a segment it ever placed; drop nothing at the build's end, and
+// its mappings outlive it.
 func TestABuildReadsWhatItPlacedThroughMappingsItGivesBack(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -222,14 +214,13 @@ func TestABuildReadsWhatItPlacedThroughMappingsItGivesBack(t *testing.T) {
 	}
 }
 
-// THE INDEX SKIPS BINARIES AND LARGE FILES (M6-D12), by the one rule git grep
-// -I keeps too: a file past codeindex.MaxFileBytes is never read — its size,
-// from ls-tree -l, is enough — and a binary one is read and recorded skipped,
-// so neither is searched and neither is read again at a later tip.
+// THE INDEX SKIPS BINARIES AND LARGE FILES (M6-D12), by git grep -I's rule: a
+// file past codeindex.MaxFileBytes is never read (ls-tree -l gives its size),
+// and a binary one is read and recorded skipped; neither is searched or read
+// again at a later tip.
 //
-// Mutation: read every blob whatever its size (codeindex.go's segments) — the
-// build reads three; or record no skip for a binary — the map says it is
-// searched.
+// Mutation: read every blob whatever its size (codeindex.go's segments): the
+// build reads three; or record no skip for a binary: the map says searched.
 func TestTheIndexSkipsBinariesAndLargeFiles(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -252,16 +243,16 @@ func TestTheIndexSkipsBinariesAndLargeFiles(t *testing.T) {
 	}
 }
 
-// THE SECOND HOLDER FILLS ITS COPY (M6-D12). A `search: indexed`
-// repository's index is kept by the first gitlet.IndexHolders of its git order,
-// and a holder that holds no copy fills one for it — deliberately, beside the
-// read path's rule that only the home fills — while a node past the holders
-// fills nothing, and a holder the order no longer names drops what it kept
-// once the order has stood cache.IndexPlacementGrace.
+// THE SECOND HOLDER FILLS ITS COPY (M6-D12). A `search: indexed` repository's
+// index is kept by the first gitlet.IndexHolders of its git order: a holder
+// with no copy fills one (deliberately, beside the read path's rule that only
+// the home fills), a node past the holders fills nothing, and one the order
+// no longer names drops its index once the order has stood
+// cache.IndexPlacementGrace.
 //
-// Mutation: hold to the first node of the order alone (codeindex.go's
-// indexHeld) — the second holder keeps no index; or skip the drop — the node
-// the order moved past keeps its index.
+// Mutation: hold to the order's first node alone (codeindex.go's indexHeld):
+// the second holder keeps no index; or skip the drop: the node the order
+// moved past keeps its index.
 func TestTheSecondHolderFillsItsCopy(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -319,18 +310,16 @@ func TestTheSecondHolderFillsItsCopy(t *testing.T) {
 	}
 }
 
-// A HOLDER BACK WITHIN THE GRACE MOVES NO INDEX. The order is over the live
-// Gitlet nodes, and a restarting node leaves it for the length of its restart,
-// which made the next node of each of its repositories' orders a holder that
-// filled a copy and built a whole index — dropped again the moment the node
-// was back. A node that becomes a holder fills and builds nothing until its
-// place has stood cache.IndexPlacementGrace, and a place that changes back
-// meanwhile starts the grace again; one that stands builds.
+// A HOLDER BACK WITHIN THE GRACE MOVES NO INDEX. A restarting node leaves the
+// order of live Gitlet nodes, making the next node a holder that would fill a
+// copy and build a whole index, dropped once the node is back. So a new
+// holder fills and builds nothing until its place has stood
+// cache.IndexPlacementGrace, and a place that changes back restarts the grace.
 //
-// Mutation: act on a holder's place at once (codeindex.go's settled answering
-// true for every holder) — the third node fills while the second restarts; or
-// keep the grace's start when the place changes back (settled keeping since)
-// — the second absence builds at once.
+// Mutation: act at once (codeindex.go's settled answering true for every
+// holder): the third node fills while the second restarts; or keep the
+// grace's start when the place changes back (settled keeping since): the
+// second absence builds at once.
 func TestAHolderBackWithinTheGraceMovesNoIndex(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -377,14 +366,13 @@ func TestAHolderBackWithinTheGraceMovesNoIndex(t *testing.T) {
 	}
 }
 
-// THE CODE INDEXES ARE TRIMMED BEFORE A REPOSITORY. What the node's indexes
-// hold past their share of the budget (cache.CodeIndexShare) is theirs to
-// give back, whole and searched least recently first
-// (TestTheTrimKeepsWhatIsSearchedAndTakesNothingStraightBack): one dropped is
-// built again from one tip's blobs, where a repository evicted is a cold sync
-// of every pack.
+// THE CODE INDEXES ARE TRIMMED BEFORE A REPOSITORY: what they hold past their
+// share (cache.CodeIndexShare) goes first, whole and least recently searched
+// first (TestTheTrimKeepsWhatIsSearchedAndTakesNothingStraightBack), since a
+// dropped index rebuilds from one tip's blobs and an evicted repository is a
+// cold sync of every pack.
 //
-// Mutation: trim nothing (codeindex.go's trimCodeIndexes answers at once) —
+// Mutation: trim nothing (codeindex.go's trimCodeIndexes answers at once):
 // the index stays past its share.
 func TestTheCodeIndexesAreTrimmedToTheirShare(t *testing.T) {
 	t.Parallel()
@@ -414,17 +402,16 @@ func TestTheCodeIndexesAreTrimmedToTheirShare(t *testing.T) {
 	}
 }
 
-// ONLY THE FIRST OF TWO HOLDERS SENDS A SEARCH ON. A search of the default
-// branch that a holder's index does not answer for yet may be sent on to the
-// next node (gitlet.UnreadyIndexBuilding) only by the FIRST of the
-// repository's index holders, and only where the order names a second: the
-// second holder has no holder after it, and the only holder of a one-node
-// fleet none at all, so either refusing would leave the search unanswered
+// ONLY THE FIRST OF TWO HOLDERS SENDS A SEARCH ON. A default-branch search a
+// holder's index cannot answer yet goes on to the next node
+// (gitlet.UnreadyIndexBuilding) only from the FIRST holder of an order that
+// names a second: the second holder has none after it, nor has a one-node
+// fleet's only holder, so either passing would leave the search unanswered
 // until its indexer caught up. A node past the holders is no holder.
 //
-// Mutation: let every holder pass a search on (indexHolder's holders[0]) —
-// the second holder passes; let the only holder pass (indexHolder's
-// len(holders) > 1) — the one-node fleet's holder passes.
+// Mutation: let every holder pass a search on (indexHolder's holders[0]): the
+// second holder passes; let the only holder pass (indexHolder's
+// len(holders) > 1): the one-node fleet's holder passes.
 func TestOnlyTheFirstOfTwoHoldersSendsASearchOn(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -471,15 +458,13 @@ func fourSegmentFiles() map[string]string {
 	return files
 }
 
-// AN INDEX BUILD SYNCS ITS DIRECTORY ONCE. Nothing names a file a build
-// places until its commit stores the record, and every staged file is synced
-// as it is written, so the index's directory is synced once, before the
-// commit — never after each placement, which cost a first build of many
-// segments a second fsync a file. A build of four segments, merged twice,
-// and a tip map places seven files and syncs the directory once.
+// AN INDEX BUILD SYNCS ITS DIRECTORY ONCE, before its commit: nothing names a
+// placed file until the commit stores the record, and each staged file is
+// synced as written, so a sync per placement buys nothing. A build of four
+// segments, merged twice, and a tip map places seven files and syncs once.
 //
 // Mutation: sync the directory after each placement (codeindex.go's place,
-// b.c.durableDir of the index's directory after the rename) — seven syncs.
+// b.c.durableDir of the index's directory after the rename): seven syncs.
 func TestAnIndexBuildSyncsItsDirectoryOnce(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -554,19 +539,17 @@ func (h *indexHashes) counts() map[string]int {
 	return maps.Clone(h.seen)
 }
 
-// A SEARCH NEVER HASHES A CODE INDEX. After a restart nothing in the process
-// has held an index's files to their trailers, and holding them is a cold
-// read of every byte of the index: a search that finds it so reads the tip
-// with git grep — however many search at once — and the indexer's next look
-// verifies it, each file once, off every request's path, while a search that
-// asks meanwhile greps rather than wait for it; the searches after it read
-// the index and hash nothing.
+// A SEARCH NEVER HASHES A CODE INDEX. After a restart no index is held to its
+// trailers, and doing so is a cold read of every byte: a search finding it so
+// greps the tip (however many search at once), and the indexer's next look
+// verifies each file once, off every request's path; a search meanwhile
+// greps rather than wait, and later searches read the index, hashing nothing.
 //
 // Mutation: let a search verify (codeindex.go's CodeIndex asks codeIndex with
-// verify) — the searches hash the files; verify nothing in the indexer
-// (Index's codeIndexVouched check skipped) — the index stays unopened; or let
+// verify): the searches hash the files; verify nothing in the indexer
+// (Index's codeIndexVouched check skipped): the index stays unopened; or let
 // a search wait for the indexer's verifying opening (codeIndex's verifying
-// answer skipped) — it waits out its context.
+// answer skipped): it waits out its context.
 func TestASearchNeverHashesACodeIndex(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -641,14 +624,12 @@ func TestASearchNeverHashesACodeIndex(t *testing.T) {
 	}
 }
 
-// A LOOK AT UNMOVED REFS READS NO TIP. The indexer looks at every repository
-// it keeps an index of every minute, and reading a tip is a git process; only
-// a round that writes the copy's refs can move the tip, so a look that finds
-// the refs the index's tip was read under reads nothing — and one after any
-// ref moved, the default branch's or another, reads the tip again.
+// A LOOK AT UNMOVED REFS READS NO TIP. Only a round writing the copy's refs
+// can move the tip, so the indexer's minutely look reads the tip (a git
+// process) only after a ref moved, the default branch's or another.
 //
-// Mutation: read the tip whatever the refs (Index's unmoved answer skipped)
-// — the looks at unmoved refs read it.
+// Mutation: read the tip whatever the refs (Index's unmoved answer skipped):
+// the looks at unmoved refs read it.
 func TestALookAtUnmovedRefsReadsNoTip(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -691,20 +672,17 @@ func keeps(c *cache.Cache, repo string) bool {
 	return ok
 }
 
-// THE TRIM KEEPS WHAT IS SEARCHED, AND TAKES NOTHING STRAIGHT BACK. Past their
-// share, the node's code indexes lose the index of the repository SEARCHED
-// least recently here — whatever its copy's readers did since — and the
-// indexer builds a trimmed index again only into room for what it held, or
-// for a repository searched more recently than an index it would displace:
-// rebuilt at the next look, an index the trim took put the share over again
-// and the trim took the next, every minute, for ever.
+// THE TRIM KEEPS WHAT IS SEARCHED, AND TAKES NOTHING STRAIGHT BACK. Past
+// their share, the indexes lose the repository SEARCHED least recently here,
+// whatever its copy's readers did since; the indexer builds a trimmed index
+// again only into room for it, or for a repository searched more recently
+// than the index it would displace, else trim and rebuild cycle every minute.
 //
-// Mutation: order the trim by the copy's last use alone (codeindex.go's
-// trimCodeIndexes) — the searched index, read longer ago, goes; build a
-// trimmed index again whatever the share (indexHeld's mayBuildIndex check
-// skipped) — the trimmed one is rebuilt at once; or never let a search
-// displace an index (mayBuildIndex answering false with no room) — the
-// searched repository's index is not built back.
+// Mutation: order the trim by the copy's last use (codeindex.go's
+// trimCodeIndexes): the searched index goes; rebuild whatever the share
+// (indexHeld's mayBuildIndex check skipped): the trimmed one returns at once;
+// or never let a search displace an index (mayBuildIndex answering false with
+// no room): the searched repository's index is not built back.
 func TestTheTrimKeepsWhatIsSearchedAndTakesNothingStraightBack(t *testing.T) {
 	t.Parallel()
 	files := map[string]string{"a.go": "package a\n", "b.go": "package b\n"}
@@ -757,14 +735,13 @@ func TestTheTrimKeepsWhatIsSearchedAndTakesNothingStraightBack(t *testing.T) {
 	}
 }
 
-// AN INDEXER'S LOOK IS NO USE OF THE COPY. The indexer looks at every copy it
-// keeps an index of every minute; counted as a reader's use, that made each
-// such copy look used within the minute to the budget's eviction, which then
-// evicted the repositories people read first. A look leaves the copy's last
-// use where its readers left it.
+// AN INDEXER'S LOOK IS NO USE OF THE COPY: counted as one, its minutely look
+// would make every indexed copy look recently used to the budget's eviction,
+// which would evict the repositories people read instead. A look leaves the
+// last use where readers left it.
 //
-// Mutation: pin the indexer's sync as a use (sync.go's indexSync, use true)
-// — the look moves the last use.
+// Mutation: pin the indexer's sync as a use (sync.go's indexSync, use true):
+// the look moves the last use.
 func TestAnIndexersLookIsNoUseOfTheCopy(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -784,14 +761,12 @@ func TestAnIndexersLookIsNoUseOfTheCopy(t *testing.T) {
 	}
 }
 
-// AN EVICTED COPY IS FILLED BACK ONLY INTO ROOM. A copy the indexer keeps an
-// index in that the budget evicted is filled again only once the budget has
-// room for what it held: filled at the next look, it evicted the next least
-// used copy, a GET a pack every minute while the held copies outgrew the
-// budget.
+// AN EVICTED COPY IS FILLED BACK ONLY INTO ROOM: refilled at once, an indexed
+// copy the budget evicted would evict the next least used, a GET a pack every
+// minute while the held copies outgrow the budget.
 //
 // Mutation: fill whatever the budget's room (indexHeld's roomToFill check
-// skipped) — the evicted copy is filled at the next look.
+// skipped): the evicted copy is filled at the next look.
 func TestAnEvictedCopyIsFilledBackOnlyIntoRoom(t *testing.T) {
 	t.Parallel()
 	files := map[string]string{"a.go": "package a\n"}

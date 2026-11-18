@@ -848,10 +848,9 @@ export const ACTIONS = {
     scope: "person",
   },
   code_rerun_checks: {
-    // RE-RUN CHECKS: every check of the change's head whose latest attempt
-    // did not pass, each at its next attempt (`all_failed`), on the checks
-    // log the change's checks tab reads.
-    args: ["repo", "change", "all_failed"],
+    // RE-RUN CHECKS: a change's failed ones (`change`, `all_failed`), or one
+    // run of a commit's check (`sha`, `checked_for`, `checks`).
+    args: ["repo", "change", "all_failed", "sha", "checked_for", "checks"],
     domain: "code",
     apps: ["gitlet"],
     refreshes: [],

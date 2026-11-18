@@ -269,8 +269,9 @@ export const KEY_MAX = 40;
 const KEY_PATTERN = new RegExp(MODEL_KEY_PATTERN);
 
 /** The steps a draft walks; Where it runs only for a harness that runs coding. */
-export function stepsFor(d: Pick<Draft, "harness">): WizardStep[] {
-  return WIZARD_STEPS.filter((s) => s !== "runs" || canExecute(d));
+/** The steps for the draft: Where it runs only for a harness that codes, Review only for an edit. */
+export function stepsFor(d: Pick<Draft, "harness">, editing: boolean): WizardStep[] {
+  return WIZARD_STEPS.filter((s) => (s !== "runs" || canExecute(d)) && (editing || s !== "review"));
 }
 
 export const STEP_LABELS: Readonly<Record<WizardStep, string>> = {

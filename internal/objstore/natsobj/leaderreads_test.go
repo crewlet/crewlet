@@ -266,7 +266,7 @@ func TestAPieceReadIsGivenAPiecesCrossingAcrossALink(t *testing.T) {
 		piece func(time.Duration) bool
 		want  string
 	}{
-		{"across a link", acrossLink,
+		{"across a link", acrossLink(),
 			func(got time.Duration) bool { return got >= jsprovision.ReadTerm+crossing },
 			fmt.Sprintf("at least the read term and a piece's crossing at the floor, %v",
 				jsprovision.ReadTerm+crossing)},

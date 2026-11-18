@@ -22,8 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// verify is the whole of a check, as the host runs one: admitted, run and let
-// go.
+// verify runs a whole check as the host does: admitted, run and released.
 func verify(ctx context.Context, c *cache.Cache, repo string, repair bool) (cache.VerifyReport, error) {
 	v, err := c.AdmitVerify(repo)
 	if err != nil {
@@ -44,8 +43,8 @@ func problemsOf(t *testing.T, what string, problems []string, want ...string) {
 	}
 }
 
-// damage overwrites n bytes of the file at path, at offset from its end,
-// with b — a disk that went bad under an installed file.
+// damage writes b over the file at path, fromEnd bytes before its end: a disk
+// gone bad under an installed file.
 func damage(t *testing.T, path string, fromEnd int64, b []byte) {
 	t.Helper()
 	if err := os.Chmod(path, 0o600); err != nil {
@@ -67,12 +66,10 @@ func damage(t *testing.T, path string, fromEnd int64, b []byte) {
 	}
 }
 
-// VERIFY REPAIRS A CORRUPT CACHE: it names each thing a cache holds that its
-// rows do not say — bytes that hash to something else, a pack no row names,
-// a loose ref — and, asked to repair, rebuilds the repository and checks the
-// rebuilt cache the same way, reporting what it found before beside what is
-// left after, which is nothing: a rebuild is the rows and the object store
-// made files again.
+// VERIFY REPAIRS A CORRUPT CACHE: it names each thing the cache holds that
+// its rows do not say (bytes hashing to something else, a pack no row names, a
+// loose ref) and, asked to repair, rebuilds and rechecks, reporting what it
+// found beside what is left, which is nothing.
 func TestVerifyRepairsACorruptCache(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -91,9 +88,8 @@ func TestVerifyRepairsACorruptCache(t *testing.T) {
 		t.Fatalf("Verify of a clean cache = %+v; want no problems over its 2 packs and 1 ref at %s", clean, s.Position)
 	}
 
-	// The bytes just before the first pack's trailer belong to its last
-	// object, a blob, whose content no connectivity check reads: only the
-	// hash can find them.
+	// The bytes before the pack's trailer are a blob's, which no connectivity
+	// check reads: only the hash finds them.
 	damage(t, filepath.Join(s.Dir, "objects", "pack", "pack-"+first.GitChecksum+".pack"), 28,
 		[]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff})
 	_, stray := w.packInto(t, stranger, s.Dir, nil)
@@ -132,11 +128,9 @@ func TestVerifyRepairsACorruptCache(t *testing.T) {
 	}
 }
 
-// VERIFY'S REPAIR DOWNLOADS ONLY WHAT IT FOUND DAMAGED: it has just held every
-// pack to its row, so the rebuild links in each pack that hashed to its row —
-// read-only files, named by their rows — and asks the object store only for
-// the rest; a stray goes with the rebuild's own sweep, for nothing. One
-// damaged pack among many costs one GET, not one a pack the repository holds.
+// VERIFY'S REPAIR DOWNLOADS ONLY WHAT IT FOUND DAMAGED: the rebuild links in
+// each pack that hashed to its row and fetches only the rest; a stray goes
+// with the rebuild's sweep. One damaged pack costs one GET, not one per pack.
 func TestVerifysRepairDownloadsOnlyWhatItFoundDamaged(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -175,34 +169,18 @@ func TestVerifysRepairDownloadsOnlyWhatItFoundDamaged(t *testing.T) {
 	}
 }
 
-// VERIFY REPAIRS THE COPY'S OWN DIRECTORY IN PLACE. A copy the maintainer has
-// indexed — its multi-pack-index, the bitmap and the commit-graph written —
-// is found holding entries outside its image and nothing else wrong: a stray
-// file at its root, a loose ref and a symbolic link at config over a file
-// holding exactly the configuration the pool requires. Asked to repair, the
-// check reads the copy whole IN PLACE: the same incarnation, nothing
-// downloaded, counted once under reason verify, every entry moved aside and
-// config written again — and the index, its bitmap and the graph are the very
-// files they were, where a rebuild into a new incarnation left none of them
-// until the maintainer wrote them again.
+// VERIFY REPAIRS THE COPY'S OWN DIRECTORY IN PLACE. An indexed copy holding
+// only entries outside its image is read whole in place: same incarnation,
+// nothing downloaded, one rebuilds{reason=verify}, and its index, bitmap and
+// graph kept, where a rebuild drops them until the maintainer rewrites them.
 //
-// What that read leaves — something writing into the directory past its
-// sweep — is rebuilt, SEEDED with every pack the check found whole, so
-// nothing is downloaded, and counted under reason verify: Found what the
-// first check found, both repairs reported, and the rebuilt copy clean. A
-// SHAPE written there past the sweep stops the read in place at the pool's
-// own shape check; that is the check's finding too, answered to it with the
-// copy as it stands, never handed to the repair a git process asks for —
-// which would rebuild the copy unseeded, under reason shape, or be refused
-// by the window a copy rebuilt at a git process's word stands in. The read
-// that stopped at its shape check read nothing whole, so only the rebuild is
-// counted.
+// What that read leaves (a write past its sweep) is rebuilt seeded with every
+// whole pack. A SHAPE written past the sweep stops the read at the pool's
+// shape check: the check's finding, never handed to the git-process repair
+// (unseeded, under reason shape, or refused by an earlier one's window).
 //
-// Mutations: route a report whose problems are all the copy's own directory
-// to the rebuild (inPlaceOnly false), and the first arm's copy is a new
-// incarnation without its bitmap; make the read in place an ordinary caller
-// rather than a check, and the shape arms rebuild with every pack downloaded
-// again, counted under shape, or are refused behind the earlier rebuild.
+// Mutations: inPlaceOnly false, and the first arm loses its bitmap; the read
+// in place as an ordinary caller's, and the shape arms redownload or refuse.
 func TestVerifyRepairsTheCopysOwnDirectoryInPlace(t *testing.T) {
 	t.Parallel()
 	stray := func(t *testing.T, dir string) {
@@ -213,19 +191,16 @@ func TestVerifyRepairsTheCopysOwnDirectoryInPlace(t *testing.T) {
 	}
 	for name, tc := range map[string]struct {
 		// replant, when set, writes into the incarnation the read in place
-		// has just swept: something writing into the directory past the
-		// sweep.
+		// has just swept.
 		replant func(t *testing.T, dir string)
-		// always: replant past EVERY sweep once armed, the rebuild's own
-		// included — something that keeps writing into the directory, which
-		// no repair on this node ends.
+		// always replants past every sweep once armed, the rebuild's
+		// included: a writer no repair on this node ends.
 		always bool
-		// behind: the copy stands one rebuild along its line, made at a git
-		// process's word, whose window refuses another such rebuild.
+		// behind stands the copy one git-process rebuild along its line,
+		// whose window refuses another.
 		behind bool
-		// verifies is what rebuilds{reason=verify} counts: the read in
-		// place once it has read the copy whole — not one a shape stopped
-		// at its sweep's check — and a rebuild once it is made.
+		// verifies is rebuilds{reason=verify}'s count: the read in place once
+		// it read the copy whole (not one a shape stopped), plus a rebuild.
 		verifies uint64
 	}{
 		"the read in place ends it":                     {verifies: 1},
@@ -243,10 +218,9 @@ func TestVerifyRepairsTheCopysOwnDirectoryInPlace(t *testing.T) {
 			for range 3 {
 				tip, _ = w.push(t, repo, "refs/heads/main", nil)
 			}
-			// armed, once set, has the next full round's sweep replant: the
-			// read in place's, since every other round the check makes of a
-			// copy this process has read whole is a delta — and with always,
-			// every sweep after it.
+			// armed has the next full round's sweep replant: the read in
+			// place's, since the check's other rounds of a copy read whole are
+			// deltas. With always, every sweep after it too.
 			var armed atomic.Bool
 			c := w.open(t, clk.on, func(o *cache.Options) {
 				cache.AfterSweep(o, func(dir string) {
@@ -311,9 +285,8 @@ func TestVerifyRepairsTheCopysOwnDirectoryInPlace(t *testing.T) {
 			armed.Store(leftBehind)
 			report, err := verify(t.Context(), c, repo, true)
 			if tc.always {
-				// The rebuild meets the shape past its own sweep too and
-				// fails: the operator is answered with the second check's
-				// report, the read in place's own finding first.
+				// The rebuild meets the shape too and fails: the answer is the
+				// second check's report, the read in place's finding first.
 				met := "reading it whole in place met the copy damaged (" + string(cache.RebuildShape) + ")"
 				if err == nil || !errors.Is(err, gitproc.ErrRepoShape) || !report.RepairedInPlace ||
 					report.Rebuilt || len(report.Problems) == 0 || !strings.HasPrefix(report.Problems[0], met) {
@@ -341,8 +314,6 @@ func TestVerifyRepairsTheCopysOwnDirectoryInPlace(t *testing.T) {
 				t.Errorf("the repair asked the object store for %d objects, want none: every pack was found whole",
 					got)
 			}
-			// Every repair Verify made is counted under verify, and nothing
-			// under any other reason.
 			want := map[cache.RebuildReason]uint64{cache.RebuildVerify: tc.verifies}
 			for _, reason := range cache.RebuildReasons {
 				if got := rebuilds(w, reason) - before[reason]; got != want[reason] {
@@ -375,20 +346,17 @@ func TestVerifyRepairsTheCopysOwnDirectoryInPlace(t *testing.T) {
 }
 
 // A REPAIR VERIFY HAS SHOWN WHOLE ENDS ITS LINE: the cache cannot see a
-// request succeed, so a rebuild it made at a git process's word holds the
-// repository to a window before the next — which an operator's repair is not
-// held to, since the damage is named — and a repair Verify then checked
-// against every row is known to have ended what it was made for, so damage
-// found on it later is new damage, rebuilt at once — whichever way Verify
-// repaired it: by a rebuild (a pack hashing to another bundle), or in place
-// (a loose ref, the copy's own directory out of place).
+// request succeed, so a rebuild at a git process's word holds the repository
+// to a window (an operator's, naming the damage, is not); a repair Verify
+// checked against every row ended what it was for, so later damage is new,
+// rebuilt at once, whether Verify rebuilt (a pack hashing wrong) or in place.
 //
-// Driven through the whole rebuild itself (cache.RebuildWhole): a request
-// reaches it only once its in-place round and its scrub found nothing to
-// fetch again (TestARequestsPackDamageIsRepairedInPlaceFirst).
+// Driven through cache.RebuildWhole: a request reaches it only once its
+// in-place round and scrub found nothing to fetch again
+// (TestARequestsPackDamageIsRepairedInPlaceFirst).
 //
 // Mutation: end no line after a repair in place, and the in-place arm's next
-// rebuild is refused for the window of the line it stands in.
+// rebuild is refused for its line's window.
 func TestARepairVerifyHasShownWholeEndsItsLine(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -444,9 +412,8 @@ func TestARepairVerifyHasShownWholeEndsItsLine(t *testing.T) {
 }
 
 // VERIFY NAMES WHAT A REBUILD CANNOT FIX: a pack gone from the object store
-// as well as from the cache is damage no rebuild repairs — the rebuild reads
-// the same rows and finds the same object missing — so Verify answers the
-// problems it found with the rebuild's failure, which names the object.
+// as well as the cache fails the rebuild too, so Verify answers its problems
+// with the rebuild's failure, which names the object.
 func TestVerifyNamesWhatARebuildCannotFix(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -472,8 +439,8 @@ func TestVerifyNamesWhatARebuildCannotFix(t *testing.T) {
 	if report.Rebuilt || report.Repo != repo {
 		t.Errorf("Verify answered %+v, want the first pass's report", report)
 	}
-	// fsck's first finding — the branch whose tip is gone — and never the
-	// notice it ends that report with, which names nothing.
+	// fsck's finding of the lost tip, never the notice ending its report,
+	// which names nothing.
 	problemsOf(t, "Verify found", report.Problems, "pack "+row.PackID+" (pack-"+row.GitChecksum+") is missing")
 	if !slices.ContainsFunc(report.Problems, func(p string) bool {
 		return strings.HasPrefix(p, "fsck: ") && strings.Contains(p, tip) && !strings.Contains(p, "notice:")
@@ -482,15 +449,14 @@ func TestVerifyNamesWhatARebuildCannotFix(t *testing.T) {
 	}
 }
 
-// A CHECK IS ADMITTED BEFORE IT READS ANYTHING: it takes its maintenance slot
-// — a free one or none, the lane never waits — before its sync, its listing
-// or a byte of a pack, so with the lane held it is refused busy at once,
-// saying to run it again, having read nothing; and it holds that slot from
-// its first read to its last, so on a one-slot lane two checks at once read
-// one repository, never two, and the second is refused before it begins.
+// A CHECK IS ADMITTED BEFORE IT READS ANYTHING: it takes a free maintenance
+// slot or none (the lane never waits) before its sync, listing or any pack
+// byte, so with the lane held it is refused busy at once, saying to run it
+// again; and it holds the slot to its last read, so a one-slot lane checks
+// one repository at a time.
 //
-// Mutation: take the slot at the fsck rather than at the admission, and a
-// check is admitted with the lane held, and a second beside the first.
+// Mutation: take the slot at the fsck rather than at admission, and a check
+// is admitted with the lane held, and a second beside the first.
 func TestACheckIsAdmittedBeforeItReadsAnything(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -554,29 +520,18 @@ func TestACheckIsAdmittedBeforeItReadsAnything(t *testing.T) {
 	}
 }
 
-// A CHECK PASS ENDS AT ITS BOUND, AND SAYS SO AS IT BEGINS: every pass is told
-// to its caller with the bound what the copy holds gives it (CheckBudget), a
-// repair's rebuild with none — its reads of the object store are bounded each
-// on its own — and a pass still running at its bound is ended there,
-// ErrPastBound naming the bound, with what it found before; the copy is no
-// worse for it, and a check with room checks it whole. The bound grows with
-// what a copy holds: the hashing and the connectivity check over every byte.
+// A CHECK PASS ENDS AT ITS BOUND, AND SAYS SO AS IT BEGINS: each pass tells
+// its caller its bound (CheckBudget, growing with the bytes), a repair's
+// rebuild none (each store read has its own); a pass running at its bound
+// ends with ErrPastBound naming it, and what it found; one with room finishes.
 //
-// The bound is a claim about the clock, so the case runs in a synctest
-// bubble, and holds it from both sides: one pass is wedged one nanosecond
-// past its bound and must end there, another one nanosecond short of it and
-// must check the copy whole, each counted from the instant the pass told its
-// caller the bound and armed it, which is exact on the bubble's clock however
-// slow the runner — git's own work takes none of it, since the bubble's clock
-// moves only while every goroutine in it waits. On the machine's clock a
-// wedge had to outlast the bound by a margin a loaded runner could not eat,
-// and a pass ended anywhere inside that margin passed.
+// In a synctest bubble, from both sides (1ns past the bound, 1ns short),
+// counted from when the pass armed and told it: exact however slow the
+// runner, since the bubble's clock moves only while every goroutine waits.
 //
-// Mutations: run the pass under its caller's context alone, and the wedge
-// past its bound ends with the check still running, which then runs whole
-// and answers no ErrPastBound; arm the pass at twice the bound it tells and
-// names, and the same; arm it at half the bound, and the pass wedged short of
-// its bound is ended inside it.
+// Mutations: run the pass under its caller's context alone, or arm it at
+// twice its told bound, and the wedge past it answers no ErrPastBound; arm it
+// at half, and the pass short of its bound is ended.
 func TestACheckPassEndsAtItsBound(t *testing.T) {
 	t.Parallel()
 	if small, large := cache.CheckBudget(1<<20), cache.CheckBudget(1<<30); small >= large ||
@@ -618,8 +573,7 @@ func TestACheckPassEndsAtItsBound(t *testing.T) {
 		w.sync(t, c, repo)
 
 		var told []time.Duration
-		// Told as the pass arms its bound, with nothing between: the instant
-		// the bound counts from.
+		// Told as the pass arms its bound: the instant the bound counts from.
 		checking := func(b time.Duration) {
 			mu.Lock()
 			armedAt = time.Now()
@@ -643,8 +597,8 @@ func TestACheckPassEndsAtItsBound(t *testing.T) {
 			t.Errorf("the check told its caller %v, want its one pass's bound", told)
 		}
 
-		// A PASS WITH ROOM: wedged to one nanosecond short of its bound, it
-		// is not ended, and checks the copy whole.
+		// A PASS WITH ROOM: wedged 1ns short of its bound, it checks the copy
+		// whole.
 		mu.Lock()
 		bound, wedge = 20*time.Millisecond, 20*time.Millisecond-time.Nanosecond
 		mu.Unlock()
@@ -663,8 +617,8 @@ func TestACheckPassEndsAtItsBound(t *testing.T) {
 			t.Errorf("the check with room told its caller %v, want its one pass's bound", told)
 		}
 
-		// THE REPAIR: a damaged copy found, the rebuild told with no bound,
-		// and the rebuilt copy's pass told its own.
+		// THE REPAIR: the rebuild is told no bound, the rebuilt copy's pass
+		// its own.
 		mu.Lock()
 		bound, wedge = time.Hour, 0
 		mu.Unlock()
@@ -690,13 +644,12 @@ func TestACheckPassEndsAtItsBound(t *testing.T) {
 	})
 }
 
-// A CHECK OF A REPOSITORY THIS NODE HOLDS NO COPY OF IS NONE: a check builds no
-// copy, since building one is a whole download of the repository into a cache
-// that then keeps it, evicting warm repositories to do so — so it is refused
-// at once, having downloaded nothing and left the cache as it was.
+// A CHECK OF A REPOSITORY THIS NODE HOLDS NO COPY OF IS NONE: it is refused at
+// once, since building a copy is a whole download the cache then keeps,
+// evicting warm repositories.
 //
 // Mutation: drop the held check from AdmitVerify, and the check downloads the
-// repository and leaves it in the cache.
+// repository and leaves it cached.
 func TestACheckOfARepositoryThisNodeDoesNotHoldIsNone(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -717,10 +670,10 @@ func TestACheckOfARepositoryThisNodeDoesNotHoldIsNone(t *testing.T) {
 	}
 }
 
-// VERIFY HASHES THE BUNDLE, NOT THE PACK: a row's hash is of the pack, its
-// index and its reverse index back to back, as the push stored them — so a
-// byte gone bad in an index is found by the hash, and a section cut short by
-// its size, each naming the pack and the section.
+// VERIFY HASHES THE BUNDLE, NOT THE PACK: a row's hash covers the pack, its
+// index and reverse index back to back, as the push stored them, so a bad
+// index byte fails the hash and a short section its size, each naming the
+// pack and section.
 func TestVerifyHashesTheBundleNotThePack(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -733,8 +686,8 @@ func TestVerifyHashesTheBundleNotThePack(t *testing.T) {
 		t.Fatalf("Verify of a clean cache = %+v, %v; want no problems", report, err)
 	}
 
-	// The .idx's own trailing checksum: no lookup reads it, so the hash is
-	// the only thing that can see it changed.
+	// The .idx's trailing checksum: no lookup reads it, so only the hash sees
+	// it changed.
 	idx := filepath.Join(s.Dir, "objects", "pack", "pack-"+second.GitChecksum+".idx")
 	raw, err := os.ReadFile(idx)
 	if err != nil {
@@ -763,13 +716,11 @@ func TestVerifyHashesTheBundleNotThePack(t *testing.T) {
 	}
 }
 
-// VERIFY LEAVES A MAINTENANCE RUN TO FINISH: a run in flight on the
-// repository is never stopped for a check — its work thrown away would be
-// done again at once, and on a lane of one slot the run done again took the
-// slot back while the check hashed, so the check's fsck was refused on every
-// retry — and the files it holds only while it runs (the index's and the
-// graph's locks, a bitmap's temporary file) are no damage. The same files with
-// no run in flight are, and each is named.
+// VERIFY LEAVES A MAINTENANCE RUN TO FINISH: a run in flight is never stopped
+// for a check (redone at once on a one-slot lane, it retakes the slot while
+// the check hashes, refusing the fsck on every retry), and the files it holds
+// only while running (index and graph locks, a bitmap's temporary file) are
+// no damage. With no run in flight they are, each named.
 func TestVerifyLeavesAMaintenanceRunToFinish(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -817,8 +768,7 @@ func TestVerifyLeavesAMaintenanceRunToFinish(t *testing.T) {
 	if !cache.Maintaining(c, repo) {
 		t.Fatal("Verify stopped the maintenance run on the repository")
 	}
-	// The run's own files were the case's stand-ins: gone before it writes
-	// its own.
+	// The case's stand-ins go before the run writes its own.
 	for _, rel := range running {
 		if err := os.Remove(filepath.Join(s.Dir, rel)); err != nil {
 			t.Fatal(err)
@@ -848,13 +798,11 @@ func TestVerifyLeavesAMaintenanceRunToFinish(t *testing.T) {
 	}
 }
 
-// NO MAINTENANCE RUN STARTS UNDER A VERIFY: its fsck asks for a maintenance
-// slot and is refused rather than queued, so a run started while it checks
-// would take the lane's last free slot — a one-slot lane's only one — and
-// answer the person who asked "run it again", into the same race. So the
-// repository is held off the maintainer from the listing to the fsck, and the
-// maintainer kicked as Verify lets it go: a repository due all along is taken
-// up at once rather than at the next tick.
+// NO MAINTENANCE RUN STARTS UNDER A VERIFY: its fsck is refused, not queued,
+// without a free maintenance slot, so a run started mid-check would take a
+// one-slot lane's slot and answer "run it again". The repository is held off
+// the maintainer from listing to fsck, and the maintainer kicked as Verify
+// lets go, so a repository due all along runs at once, not at the next tick.
 func TestNoMaintenanceRunStartsUnderAVerify(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -865,8 +813,8 @@ func TestNoMaintenanceRunStartsUnderAVerify(t *testing.T) {
 	var c *cache.Cache
 	var mu sync.Mutex
 	var under []string
-	// check runs the maintainer's own pass, as a kick would have it run, and
-	// notes a run it started or found in flight.
+	// check runs the maintainer's pass as a kick would, noting a run it
+	// started or found in flight.
 	check := func(stage string) {
 		started, _ := cache.StartMaintainerPass(c)
 		kicked := cache.MaintainerKicked(c)
@@ -888,8 +836,8 @@ func TestNoMaintenanceRunStartsUnderAVerify(t *testing.T) {
 	}
 	w.sync(t, c, repo)
 	clk.Add(cache.MidxDebounce)
-	// The sync's own kick, answered: sent once its round has let the
-	// repository go, which may be just after the sync's answer.
+	// The sync's own kick, sent once its round lets the repository go, which
+	// may follow the sync's answer.
 	eventually(t, "the sync's own kick", func() bool { return cache.MaintainerKicked(c) })
 
 	report, err := verify(t.Context(), c, repo, false)
@@ -912,21 +860,17 @@ func TestNoMaintenanceRunStartsUnderAVerify(t *testing.T) {
 	}
 }
 
-// A round that began after Verify's own sync and is still writing when
-// Verify comes to list is waited for: the listing reads the directory the
-// round left, never one half written. The round is let go only once every
-// other goroutine of the case is durably blocked (synctest.Wait, in a
-// bubble), and the clock has then moved past every timer the cache arms
-// (pastEveryTimer) and every goroutine has blocked again: a listing that did
-// not wait has begun by then, however late Verify ran, and so has one that
-// waited for the round only as long as a grace of its own. The pass's own
-// bound is set that much past CheckBudget, so the span does not end it; and
-// on a healthy build the round, held on its fault, and Verify behind it wait
-// on no other clock, so nothing runs in the span.
+// A round begun after Verify's sync and still writing when Verify lists is
+// waited for: the listing never reads a half-written directory. The round is
+// released only after synctest.Wait, the clock moved past every timer the
+// cache arms (pastEveryTimer), and Wait again, so a listing that did not wait,
+// or waited only for a grace of its own, has begun by then. The pass's bound
+// is set that much past CheckBudget so the span does not end it, and on a
+// healthy build nothing else waits on a clock, so nothing runs in the span.
 //
-// Mutations: Verify lists without the repository's write lock (list's
-// acquireWrite taken out) — it lists while the round is held writing; Verify
-// waits for the lock a minute at most — the same, once the clock has moved.
+// Mutations: list without the repository's write lock (list's acquireWrite
+// taken out), or wait for it a minute at most, and Verify lists while the
+// round is held writing.
 func TestVerifyWaitsForARoundStillWriting(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -959,9 +903,8 @@ func TestVerifyWaitsForARoundStillWriting(t *testing.T) {
 						done <- synced{held.Position, err}
 					}()
 					<-reached
-					// Let go once Verify is parked on the round — or has
-					// listed without waiting for it, at once or once the
-					// clock has moved.
+					// Release once Verify is parked on the round, or has
+					// listed without waiting, at once or once the clock moved.
 					go func() {
 						synctest.Wait()
 						time.Sleep(pastEveryTimer)
@@ -998,8 +941,7 @@ func TestVerifyWaitsForARoundStillWriting(t *testing.T) {
 }
 
 // A round waiting for a listing to end is a round of the cache's lifetime:
-// Stop ends its wait, and it answers ErrStopped rather than run once the
-// listing lets it.
+// Stop ends its wait, and it answers ErrStopped rather than run later.
 func TestStopEndsARoundWaitingForAListing(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -1019,8 +961,8 @@ func TestStopEndsARoundWaitingForAListing(t *testing.T) {
 					}
 					done <- err
 				}()
-				// The round waits for this listing from the moment the
-				// sync is its waiter.
+				// The round waits for this listing once the sync is its
+				// waiter.
 				deadline := time.Now().Add(hangDetector)
 				//fixedwait:measure a setup poll's own deadline: its firing only ends the wait, and ErrStopped decides
 				for cache.Waiting(c, repo) == 0 && time.Now().Before(deadline) {
@@ -1047,18 +989,14 @@ func TestStopEndsARoundWaitingForAListing(t *testing.T) {
 }
 
 // A CHECK NAMES THE DAMAGE ITS OWN SYNC MEETS, AND REPAIRS ONLY WHEN ASKED.
-// The sync that brings the copy to the check's floor is a delta that peels a
-// tag set since; when that peel meets the copy damaged — its shape refused,
-// an object gone from its packs — the check is handed the copy as it stands
-// and names the damage first among its problems. Repaired under it, a plain
-// check downloaded the repository (or put the directory right in place) and
-// reported the repaired copy clean, the damage it was asked to name hidden.
-// Asked to repair, it repairs under reason verify, the sync's damage among
-// what it found: a shape — the copy's own directory — in place, the same
-// incarnation read whole with nothing downloaded; an object gone, by a
-// rebuild.
+// The sync bringing the copy to the check's floor is a delta peeling a tag
+// set since; when the peel meets the copy damaged (shape refused, an object
+// gone), the check is handed the copy as it stands and names the damage
+// first, never hidden behind a repaired copy. Asked to repair, it repairs
+// under reason verify with the sync's damage among what it found: a shape in
+// place (same incarnation, nothing downloaded), a lost object by a rebuild.
 //
-// Mutation: answer a checking caller of a damaged round as every other
+// Mutation: answer a checking caller of a damaged round as any other
 // (damagedRound), and the plain check names nothing and the copy is repaired.
 func TestACheckNamesTheDamageItsSyncMeets(t *testing.T) {
 	t.Parallel()
@@ -1103,8 +1041,8 @@ func TestACheckNamesTheDamageItsSyncMeets(t *testing.T) {
 			if got := cache.Repos(c)[repo]; got != 1 {
 				t.Errorf("a plain check left incarnation %d, want the damaged 1 untouched", got)
 			}
-			// The tag's own pack, installed by the delta before its peel met
-			// the damage, and nothing else.
+			// Only the tag's pack, installed by the delta before its peel met
+			// the damage.
 			if got := w.objects.total() - before; got != 1 {
 				t.Errorf("a plain check asked the object store for %d objects, want the tag's one pack", got)
 			}
@@ -1140,15 +1078,14 @@ func TestACheckNamesTheDamageItsSyncMeets(t *testing.T) {
 	}
 }
 
-// VERIFY NAMES A DERIVED FILE THAT FAILS ITS CHECKSUM. git reads a bitmap, a
-// multi-pack-index and a commit-graph without checking them, and no git
-// command names a damaged bitmap, so the check holds each to its own trailer
-// (step 4) — the one check that can name one. A file dropped between the
-// listing and its hash is no finding: a repair round may run between the two.
+// VERIFY NAMES A DERIVED FILE THAT FAILS ITS CHECKSUM. git reads a bitmap,
+// multi-pack-index and commit-graph unchecked, and no git command names a
+// damaged bitmap, so the check holds each to its own trailer (step 4). A file
+// dropped between listing and hash is no finding: a repair round may run
+// between.
 //
-// Mutations: skip the derived files — the damaged bitmap, index and graph are
-// reported clean; read a vanished file as damage — the dropped graph is a
-// problem.
+// Mutations: skip the derived files, and the damaged ones read clean; read a
+// vanished file as damage, and the dropped graph is a problem.
 func TestVerifyNamesADerivedFileThatFailsItsChecksum(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -1206,19 +1143,15 @@ func TestVerifyNamesADerivedFileThatFailsItsChecksum(t *testing.T) {
 }
 
 // WHAT THE SYNC BEFORE A CHECK REPAIRED IS NO PROBLEM OF THE COPY, AND ASKS NO
-// REBUILD. A previous process left a copy whose bitmap is damaged (K4), and a
-// check asked to repair is this process's first look at it: the sync before
-// the check is the copy's first round, whose own check holds the bitmap to its
-// trailer and drops it in place. The check tells that first and apart
-// (RepairedBySync), finds the copy it was handed whole, and rebuilds nothing:
-// the incarnation stays, its graph with it, and the maintainer writes the
-// index and bitmap again over the same packs, as it would have anyway.
-// Counted among the problems, the repair rebuilt a sound copy into a new
-// incarnation with no index, bitmap or graph until the maintainer wrote them
-// again — minutes to hours of bitmapless clones of a large repository.
+// REBUILD. A previous process left a damaged bitmap (K4); the check's sync is
+// the copy's first round, whose own check drops the bitmap in place. The check
+// reports that apart (RepairedBySync), finds the copy whole, and rebuilds
+// nothing: the incarnation and its graph stay, and the maintainer rewrites
+// index and bitmap as it would anyway. A rebuild would leave a large
+// repository's clones bitmapless for minutes to hours.
 //
-// Mutation: count the sync's repairs among the problems — the check rebuilds
-// the copy (rebuilds{reason=verify} 1, a new incarnation).
+// Mutation: count the sync's repairs among the problems, and the check
+// rebuilds the copy (rebuilds{reason=verify} 1, a new incarnation).
 func TestASyncsRepairAsksNoRebuildOfACheck(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -1249,14 +1182,13 @@ func TestASyncsRepairAsksNoRebuildOfACheck(t *testing.T) {
 	}
 }
 
-// A CHECK THAT LEAVES IS HANDED NOTHING: a round answers each checking caller
-// with what its own check repaired (round.found) only while that caller still
-// waits. One whose context ended has stopped reading, so a write to it races
-// whatever it read on the way out — the race detector's verdict on this case.
+// A CHECK THAT LEAVES IS HANDED NOTHING: a round hands a checking caller what
+// its own check repaired (round.found) only while that caller still waits; one
+// whose context ended has stopped reading, so the write would race its read
+// on the way out, which the race detector flags.
 //
-// Mutation: hand a checking caller round.found whether or not it has gone,
-// and the run reports a data race between the round's write and the leaving
-// check's read.
+// Mutation: hand round.found to a caller that has gone, and the run reports a
+// data race.
 func TestACheckThatLeavesIsHandedNothing(t *testing.T) {
 	t.Parallel()
 	var (
@@ -1295,9 +1227,9 @@ func TestACheckThatLeavesIsHandedNothing(t *testing.T) {
 		t.Fatal("the check's round never reached its end")
 	}
 	cancel()
-	// Released once the check has LEFT its round — and before the test
-	// hears from it, since what it says on its way out would order its read
-	// before the round's write and hide the race this case is for.
+	// Released once the check has LEFT its round, before the test hears from
+	// it: its reply would order its read before the round's write and hide the
+	// race.
 	//fixedwait:liveness
 	for deadline := time.Now().Add(hangDetector); cache.Waiting(c, repo) != 0; time.Sleep(time.Millisecond) {
 		//fixedwait:measure the poll's own deadline, whose firing only fails the case
@@ -1306,8 +1238,8 @@ func TestACheckThatLeavesIsHandedNothing(t *testing.T) {
 		}
 	}
 	close(release)
-	// A sync queued behind the held round runs only once that round has
-	// answered every caller it had, the one that left included.
+	// A sync queued behind the held round runs only once that round answered
+	// every caller, the one that left included.
 	w.sync(t, c, repo).Release()
 	select {
 	case err := <-ran:

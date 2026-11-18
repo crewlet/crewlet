@@ -24,38 +24,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// BenchmarkProvenance is what the index of which push introduced each commit
-// costs (provenance.go, backfill.go), each arm the figure a decision of
-// constants.go or a statement of docs/concepts/scaling.md rests on:
-//
-//   - op=fold/bucket=B is a delta round's fold of its pushes into the index —
-//     the run it builds, writes, syncs and commits — against the round it is
-//     part of: a warm repository of 100 packs, each iteration one push of
-//     medianPush bytes, synced as a delta, its pack downloaded from a store
-//     in the process (memobj: the round's own side alone) or from the S3
-//     fake at providerFirstByte (fake: the floor of what a bucket answers
-//     in). fold-ns/op is the fold, ns/op the whole round, fold-% the share;
-//     merges/push is the backfill's merges the folds leave due, taken after
-//     each round untimed, and index-syncs/push the syncs folds and merges
-//     make, counted from both (a fold's two, a merge's four).
-//   - op=lookup/runs=R is a commit's lookup in an index of R runs holding
-//     four million commits between them, the commit absent — every run
-//     binary-searched, a lookup's worst case — in ns a lookup (ns/lookup),
-//     against which MaxProvenanceRuns is chosen; bytes/commit is what runs
-//     of pushes of three commits each hold for each commit introduced.
-//   - op=backfill/pushes=N is a cold Gitlet node's backfill of a history of N
-//     pushes through a solo node — the data node's own read of its push
-//     rows, a page at a time, answered in process where the engine's router
-//     adds its hop — paced as production paces it (BackfillIdle, one Gitlet
-//     node to one data node): the pages, the pushes and the bytes of each
-//     answer, the data node's read and the whole step a page in ms, and the
-//     seconds the history took (s/op). 300 000 pushes run only under
-//     gittest.LargeEnv.
-//   - op=merge/refs=R is a merge of two runs of mergePushes pushes each, in
-//     memory, every push moving the one branch (one) or a ref of its own
-//     (each) — a repository whose seats push a branch apiece — in ns a push
-//     and bytes allocated a ref (B/ref): what the merge holds of the refs,
-//     which streamed a key at a time does not grow with them.
+// BenchmarkProvenance is what the index of pushes costs (provenance.go,
+// backfill.go); constants.go and docs/concepts/scaling.md rest on its arms.
+// op=fold/bucket=B is a delta round's fold (fold-ns/op, fold-%) against the
+// round (ns/op): 100 warm packs, a medianPush push an iteration, its pack from
+// memobj or the S3 fake at providerFirstByte; merges/push and index-syncs/push
+// (two a fold, four a merge) count the backfill's work, untimed.
+// op=lookup/runs=R is an absent commit's lookup (every run searched) over four
+// million commits: ns/lookup, which MaxProvenanceRuns rests on, and
+// bytes/commit at three a push. op=backfill/pushes=N is a cold Gitlet node
+// reading N pushes from a solo data node, paced as production (BackfillIdle);
+// 300 000 only under gittest.LargeEnv. op=merge/refs=R merges two runs of
+// mergePushes, each push moving one branch or its own ref: B/ref stays flat.
 func BenchmarkProvenance(b *testing.B) {
 	quiet(b)
 	for _, bucket := range []string{"memobj", "fake"} {
@@ -78,20 +58,13 @@ func BenchmarkProvenance(b *testing.B) {
 }
 
 // BenchmarkBackfillPick is what the backfill's pick of its next step costs a
-// node holding copies=N copies of repositories (schedule.go) — N at
-// config.CodeMaxRepos, every repository a company may hold — each operation
-// one pick and its step taken as done, the copies synthetic and holding no
-// file:
-//
-//   - due=one: one copy with a step due among N, due again after each step,
-//     as a busy repository's folds keep it — the steady state, where a pick
-//     walking every copy cost them all on every push;
-//   - due=all: every copy due, each picked once and its gap closed — the
-//     warm-up after a restart, when every copy's first round opens a gap.
-//
-// ns/op is a pick. Beside the picks, run back to back, lookup-p99-ns and
-// lookup-max-ns are what a request's lookup of its copy (Holds, which takes
-// the lock every request's sync takes to find its copy) waited meanwhile.
+// node holding copies=N synthetic copies (schedule.go), N at
+// config.CodeMaxRepos; an operation is one pick, its step taken as done.
+// due=one keeps one copy due among N, as a busy repository's folds do (the
+// steady state, where a pick walking every copy would pay for all on every
+// push); due=all is the warm-up after a restart, every copy due once. ns/op is
+// a pick; lookup-p99-ns and lookup-max-ns are what a request's Holds, taking
+// the lock every sync takes, waited meanwhile.
 func BenchmarkBackfillPick(b *testing.B) {
 	quiet(b)
 	for _, due := range []string{"one", "all"} {
@@ -194,9 +167,8 @@ func benchFold(b *testing.B, bucket string) {
 			b.Fatalf("a sync after one push: a %s round, %v", s.Kind, err)
 		}
 		s.Release()
-		// The backfill's merges the fold leaves due, as a started cache's
-		// backfill takes them between pushes: what a push costs the node
-		// beside its round, not timed with it.
+		// The merges the fold leaves due, taken between pushes as a started
+		// cache's backfill does: a push's cost beside its round, untimed.
 		if _, err := cache.BackfillPass(c); err != nil {
 			b.Fatal(err)
 		}
@@ -207,20 +179,16 @@ func benchFold(b *testing.B, bucket string) {
 	}
 	b.ReportMetric(float64(foldNs.Load())/float64(b.N), "fold-ns/op")
 	b.ReportMetric(100*float64(foldNs.Load())/float64(roundNs), "fold-%")
-	// Each fold syncs its staged run and crewlet/; each merge those two and
-	// the state's two: the syncs the index adds to a push, beside the
-	// round's own state write.
+	// A fold syncs its staged run and crewlet/; a merge those two and the
+	// state's two.
 	b.ReportMetric(float64(merges.Load())/float64(b.N), "merges/push")
 	b.ReportMetric(float64(2*folds.Load()+4*merges.Load())/float64(b.N), "index-syncs/push")
 }
 
 // lookupPushes and lookupCommits are op=lookup's index: four million commit
-// records, 96 MB of them — every run of it, at 64 runs as at one, past a
-// server's last-level cache, so a lookup's binary searches pay the memory
-// misses a large repository's index does, as an index of a few hundred
-// thousand commits, whose runs a cache holds, would not. A lookup reads the
-// commit records alone, so the pushes are few and each introduces
-// gitlet.MaxIntroduced.
+// records, 96 MB, past a server's last-level cache at 64 runs as at one, so
+// lookups pay a large index's memory misses. A lookup reads commit records
+// alone, so the pushes are few and each introduces gitlet.MaxIntroduced.
 const (
 	lookupPushes  = 4_000
 	lookupCommits = gitlet.MaxIntroduced
@@ -300,16 +268,14 @@ const backfillLogBytes = 256 << 20
 const backfillWorkers = 16
 
 // benchBackfill is op=backfill over a history of pushes pushes: a solo fleet
-// of two Gitlet nodes, the history proposed to the data node's committer, and
-// the second Gitlet node — which never read the repository — emptied, its first
-// round reading the repository whole and its history then wanted.
+// of two Gitlet nodes, the second emptied, read whole by its first round, then
+// its history wanted.
 func benchBackfill(b *testing.B, pushes int) {
 	var pagesRead, readNs, readBytes atomic.Int64
 	f := gitlettest.SoloNode(b, gitlettest.SoloOptions{Shape: gitlettest.Shape{GitletNodes: 2}, People: []string{"ceo"},
 		LogBytes: backfillLogBytes,
-		// What the router reads for each of the backfill's pages: its time
-		// and the bytes of its answer. One row is the horizon's read, never
-		// a page of history.
+		// Each backfill page's read time and answer bytes; a one-row read
+		// is the horizon's, never a page.
 		WrapReads: func(next gitlettest.Reads) gitlettest.Reads {
 			return func(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 				began := time.Now()
@@ -380,18 +346,17 @@ func benchBackfill(b *testing.B, pushes int) {
 	b.ReportMetric(float64(pushes)/n, "pushes/page")
 	b.ReportMetric(float64(readBytes.Load())/n, "bytes/page")
 	b.ReportMetric(float64(readNs.Load())/n/1e6, "read-ms/page")
-	// Each step is followed by BackfillIdle times its own duration at one
-	// Gitlet node to one data node: what a page took is the paced time over
-	// 1 + BackfillIdle.
+	// Each step idles BackfillIdle times its duration (one Gitlet node to one
+	// data node), so a page's step is the paced time over 1 + BackfillIdle.
 	b.ReportMetric(perOp/n/(1+cache.BackfillIdle)*1e3, "step-ms/page")
 	b.ReportMetric(perOp, "s/op")
 }
 
-// proposeHistory proposes n pushes to repo's committer, as many at once as
-// backfillWorkers, each worker moving a branch of its own between first and
-// second — second a fast-forward, first back by force — and every push naming
-// three commits it introduced, ids drawn as git's are: a history's push rows
-// without a pack each, since every move names a commit the repository holds.
+// proposeHistory proposes n pushes to repo's committer, backfillWorkers at
+// once, each worker moving its own branch between first and second (forward,
+// then back by force), every push naming three drawn commits it introduced:
+// push rows needing no pack, since every move names a commit the repository
+// holds.
 func proposeHistory(b *testing.B, f *gitlettest.SoloFleet, repo, first, second string, n int) {
 	b.Helper()
 	pusher := gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "bench", Seat: "ceo"}

@@ -885,7 +885,6 @@ var allowed = []Entry{
 	{File: "internal/objstore/natsobj/put_test.go", Func: "TestAPieceTheStreamRefusesFailsThePutAtOnce", ElapsedBound: 1, Piece: 9},
 	{File: "internal/objstore/natsobj/put_test.go", Func: "TestAPutAcrossALinkSlowerThanFiveSecondsAMessageLands", ElapsedBound: 1, ExemptElapsed: 1, Piece: 9},
 	{File: "internal/objstore/natsobj/put_test.go", Func: "TestAPutTheBrokerStopsAcknowledgingFailsAsStalled", HeadStart: 1, ElapsedBound: 1, Piece: 9},
-	{File: "internal/objstore/natsobj/put_test.go", Func: "TestAPutWaitingForAPlaceEndsWhenTheConnectionTakesNothing", ElapsedBound: 1, Piece: 9},
 	{File: "internal/objstore/natsobj/put_test.go", Func: "TestAPutWaitingForAPlaceIsNoStallWhileTheConnectionMoves", ElapsedBound: 1, Piece: 9},
 	{File: "internal/objstore/natsobj/put_test.go", Func: "link.carry", ExemptWait: 1, ExemptElapsed: 1, Piece: 9},
 	{File: "internal/objstore/natsobj/put_test.go", Func: "pausing.Read", ExemptWait: 1, Piece: 9},

@@ -14,28 +14,18 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/cache"
 )
 
-// EVERY DERIVED FILE IS DECLARED, and every declaration says everything a
-// reader of it needs (ADR-0086). A derived file is one the cache writes from
-// what an incarnation already holds and no row names; the sweep keeps, Verify
-// admits, the check and the scrub hold, the budget counts and the maintainer
-// writes exactly what the declarations say, so a file real git writes that no
-// declaration owns is trashed under a running reader, and a pattern that
-// names what no writer makes is a hole anyone may fill.
+// EVERY DERIVED FILE IS DECLARED, and every declaration says all its readers
+// need (ADR-0086): the sweep, Verify, the check, the scrub, the budget and the
+// maintainer act on exactly the declarations, so a file git writes that none
+// owns is trashed under a running reader, and a pattern naming what no writer
+// makes is a hole anyone may fill. So the declarations validate; each row of a
+// TABLE of every name written in the derived directories matches only its
+// owner or holder (or none), and every pattern a row (regular expressions
+// can't be compared for overlap); REAL GIT leaves under objects/ only a row's
+// pack or a declaration's file, and each declaration whose write ran owns one.
 //
-// Three halves. The declarations pass their own validation. A TABLE of every
-// name git and the cache write in an incarnation's derived directories — each
-// with the declaration that owns it or holds it while a write runs, or none —
-// is held to the declarations in both directions, because regular
-// expressions cannot be compared for overlap in general: every row is matched
-// by exactly the declaration it names and by no other, and every pattern
-// matches a row. And REAL GIT — a round's index and the maintainer's bitmap
-// and graph, on the suite's git — leaves no file under objects/ that is not a
-// row's pack or a declaration's own, and each declaration whose write ran
-// owns a file on disk.
-//
-// Mutation: narrow the multi-pack-index bitmap's pattern (midxBitmap) so it
-// matches no bitmap git writes: the table's bitmap row is undeclared, the
-// pattern matches no row, and the bitmap real git wrote is no declaration's.
+// Mutation: narrow midxBitmap to match no bitmap git writes: the table fails
+// both ways, and real git's bitmap is no declaration's.
 func TestEveryDerivedFileIsDeclared(t *testing.T) {
 	t.Parallel()
 	decls := cache.DerivedFiles()
@@ -84,17 +74,14 @@ func TestEveryDerivedFileIsDeclared(t *testing.T) {
 			// The tag index, one file under crewlet/.
 			{rel: "crewlet/tags", owner: cache.DerivedTags},
 			{rel: "crewlet/tags.1"}, {rel: "crewlet/tags/x"}, {rel: "objects/info/tags"},
-			// The installed published chain (layers.go): each layer's
-			// multi-pack-index and bitmap and the chain file the cache writes
-			// from the rows, as git 2.56.0 names them, and each layer's
-			// commit-graph layer — and the node's tip over them, a layer of the
-			// same name — under the graph's own chain file, whose lock and
-			// temporary layer the tip's write holds while git writes it
-			// (maintain.go). Beside them, names no write of this build makes:
-			// a layer's reverse index as a file (git writes it as the RIDX
-			// chunk), a publisher's temporary layer (the sweep trashes one), a
-			// name whose checksum is short, and a temporary layer of another
-			// length than git's mkstemp gives.
+			// The installed chain (layers.go): each layer's multi-pack-index
+			// and bitmap and the chain file the cache writes, as git 2.56.0
+			// names them, and the commit-graph layers with the node's tip over
+			// them, whose lock and temporary layer the tip's write holds
+			// (maintain.go). Then names no write makes: a layer's reverse index
+			// as a file (git writes the RIDX chunk), a publisher's temporary
+			// layer (the sweep trashes it), a short checksum, and a temporary
+			// layer of another length than git's mkstemp gives.
 			{rel: "objects/pack/multi-pack-index.d/multi-pack-index-chain", owner: cache.DerivedLayers},
 			{rel: "objects/pack/multi-pack-index.d/multi-pack-index-" + cs + ".midx", owner: cache.DerivedLayers},
 			{rel: "objects/pack/multi-pack-index.d/multi-pack-index-" + cs + ".bitmap", owner: cache.DerivedLayers},
@@ -234,12 +221,11 @@ func oneName(name cache.DerivedName) []cache.DerivedName {
 	return []cache.DerivedName{name}
 }
 
-// derivedOnDisk is every file under the incarnation at dir's objects/ that is
-// no pack's own file, and every file under its crewlet/ — the two roots the
-// declarations own files in — by its path relative to dir, slash-separated,
-// sorted; a directory a declaration owns whole (the memo's tree) is one entry,
-// its own files its declaration's to keep. A copy that has not yet written
-// into crewlet/ has none.
+// derivedOnDisk lists, relative to dir, slash-separated and sorted, every file
+// under the incarnation's objects/ that is no pack's own and every file under
+// its crewlet/ (the roots declarations own files in); a directory a
+// declaration owns whole (the memo's tree) is one entry. A copy with no
+// crewlet/ yet has none there.
 func derivedOnDisk(t *testing.T, dir string) []string {
 	t.Helper()
 	pack := regexp.MustCompile(`^pack-[0-9a-f]{40}\.(pack|idx|rev)$`)

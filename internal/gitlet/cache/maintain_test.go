@@ -21,23 +21,17 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// caseRoundPacks is the round's index threshold a case lowers
-// MidxRoundPacks to (cache.RoundPacksAt), so a handful of pushes exercises
-// the round's own index rather than hundreds.
+// caseRoundPacks is the round-index threshold a case lowers MidxRoundPacks
+// to (cache.RoundPacksAt), so a handful of pushes exercises the round's index.
 const caseRoundPacks = 8
 
 // A FULL ROUND INDEXES MANY PACKS BEFORE IT ANSWERS: one push is one pack
-// until the repository's home merges them, and a repository its compactions
-// fall behind holds up to gitlet.MaxPacksPerRepo, so the request a cold cache
-// was synced for would otherwise be served by git searching every pack's
-// index for every object.
-// The round's index has no bitmap — a merge of the packs' own indexes — and
-// a busy node answers without it rather than wait: slower, never wrong. The
-// bitmap is the maintainer's, due as soon as the packs have stood still.
-// Under MidxRoundPacks the round writes none: there the index costs the cold
-// request more than it saves it (BenchmarkPackLookup), and the maintainer's
-// own follows once the packs have stood still and the runs queued before it
-// have ended.
+// until compaction merges them (up to gitlet.MaxPacksPerRepo), and without an
+// index git searches every pack's .idx for every object. The round's index
+// has no bitmap, and a node with no read slot free answers without it:
+// slower, never wrong. The bitmap is the maintainer's, once the packs stand
+// still. Under MidxRoundPacks the round writes none: there the index costs
+// the cold request more than it saves (BenchmarkPackLookup).
 func TestAFullRoundIndexesManyPacksBeforeItAnswers(t *testing.T) {
 	t.Parallel()
 	t.Run("at the threshold", func(t *testing.T) {
@@ -153,11 +147,9 @@ func TestAFullRoundIndexesManyPacksBeforeItAnswers(t *testing.T) {
 	})
 }
 
-// graphFirst runs the graph-first runs that every copy a round has just read
-// whole with no commit-graph is due for at once (GRAPH FIRST, maintain.go) —
-// ahead of every index, each in a slot of its own — and waits for them,
-// failing t unless they ran on exactly repos, before a case goes on to the
-// ORDINARY runs it is about. The cache's clock does not move.
+// graphFirst runs the graph-first runs every copy a round read whole with no
+// commit-graph is due for at once (GRAPH FIRST, maintain.go), failing t
+// unless they ran on exactly repos. The cache's clock does not move.
 func graphFirst(t *testing.T, c *cache.Cache, repos ...string) {
 	t.Helper()
 	var ran []string
@@ -199,12 +191,11 @@ func (b *blocking) Read([]byte) (int, error) {
 
 // A ROUND NEVER REPLACES AN INDEX THAT EXISTS: git deletes a bitmap that does
 // not match the index it writes, and the index on disk may be the
-// maintainer's — so a full round asks the FILE, not the state, which reads
-// none beside an index on disk when it was unreadable. A pack the round will
-// sweep takes the index with it, and the round writes one of its own over the
-// packs it keeps — as many as its threshold, which the case lowers — in the
-// copy it answers, the next incarnation where a reader holds the old one
-// (swap.go), to which the maintainer adds the bitmap.
+// maintainer's, so a full round asks the file, not the state, which records
+// none when unreadable. A pack the round sweeps takes the index with it, and
+// the round writes its own over the packs it keeps into the copy it answers,
+// the next incarnation where a reader holds the old one (swap.go); the
+// maintainer then adds the bitmap.
 func TestARoundNeverReplacesAnIndexThatExists(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -220,9 +211,9 @@ func TestARoundNeverReplacesAnIndexThatExists(t *testing.T) {
 	s := w.sync(t, c, repo)
 	packDir := filepath.Join(s.Dir, "objects", "pack")
 	midx := filepath.Join(packDir, "multi-pack-index")
-	// The maintainer's index, with its bitmap — written here by the client's
-	// git, as the maintainer's run writes it. git keeps an identical index
-	// it is asked to write again, and deletes the bitmap beside it.
+	// The maintainer's index and bitmap, written by the client's git. git
+	// keeps an identical index it is asked to write again, and deletes the
+	// bitmap beside it.
 	w.client.Run(t, s.Dir, "-c", "core.multiPackIndex=true", "multi-pack-index", "write", "--bitmap", "--no-progress")
 	bitmap := bitmapOf(t, packDir)
 	first := inode(t, midx)
@@ -240,9 +231,8 @@ func TestARoundNeverReplacesAnIndexThatExists(t *testing.T) {
 		t.Error("a full round with an unreadable state replaced the index on disk, or its bitmap")
 	}
 
-	// The reader the last sync handed out holds the copy, so the pack the
-	// recreated log does not name leaves it by the swap: the round's own
-	// index is written into the next incarnation, which it answers.
+	// The last sync's reader holds the copy, so the swept pack leaves by the
+	// swap: the round's index goes into the next incarnation, which it answers.
 	w.log.recreate(before)
 	s = w.sync(t, c, repo)
 	if statOK(t, filepath.Join(s.Dir, "objects", "pack", "pack-"+last.GitChecksum+".idx")) {
@@ -285,14 +275,12 @@ func bitmapOf(t *testing.T, packDir string) string {
 	return found[0]
 }
 
-// THE MAINTAINER'S BITMAP CARRIES ITS LOOKUP TABLE: a table of the commits it
-// holds a bitmap for, so a reader loads the bitmap of a commit only when it is
-// asked for one. Without it every upload-pack that opens the bitmap reads
-// every commit's entry before it answers — a blobless clone's lazy fetch of
-// one blob included. Read from the file git wrote: the header's option word,
-// bytes 6 and 7 big-endian, carries BITMAP_OPT_LOOKUP_TABLE (0x10). And the
-// arm BenchmarkMidx prices it against is a bitmap WITHOUT the table, so the
-// switch it flips is held here to writing one.
+// THE MAINTAINER'S BITMAP CARRIES ITS LOOKUP TABLE, so a reader loads only
+// the bitmap of the commit it asks for; without it every upload-pack that
+// opens the bitmap reads every commit's entry first, a blobless clone's lazy
+// fetch of one blob included. BenchmarkMidx prices it against a bitmap
+// without the table, so the switch it flips (SetBitmapLookupTable) is held
+// here to dropping it.
 func TestTheMaintainersBitmapCarriesItsLookupTable(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -357,10 +345,9 @@ func inode(t *testing.T, path string) uint64 {
 
 // THE MAINTAINER INDEXES AFTER A BURST: once a repository's packs have stood
 // still for MidxDebounce it writes a multi-pack-index with its bitmap and a
-// commit-graph, which git serves; then nothing for MidxMinInterval, and
-// nothing while a burst is still landing — the debounce, not the count, is
-// what holds a due repository back. Its commit-graph is written before all
-// of that, at once (graph first), with no index.
+// commit-graph; then nothing for MidxMinInterval, nor while a burst is still
+// landing: the debounce, not the count, holds a due repository back. Its
+// commit-graph comes first, at once and alone (graph first).
 func TestTheMaintainerIndexesAfterABurst(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -429,12 +416,10 @@ func TestTheMaintainerIndexesAfterABurst(t *testing.T) {
 }
 
 // A REPOSITORY THAT NEVER STANDS STILL IS STILL MAINTAINED: pushed to more
-// often than every MidxDebounce, its packs never stand still, and a debounce
-// with no ceiling would leave every one of them outside any index for as long
-// as the pushes kept coming — every lookup a search of each pack's own .idx.
-// So the oldest pack no index covers waits MidxMaxWait at most, however
-// recent the newest is: the one run the interval allows, at exactly that
-// bound and not a pass sooner.
+// often than every MidxDebounce, a debounce with no ceiling would leave its
+// packs outside any index for as long as the pushes kept coming. So the
+// oldest uncovered pack waits MidxMaxWait at most: one run, at that bound and
+// not a pass sooner.
 func TestARepositoryThatNeverStandsStillIsStillMaintained(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -468,15 +453,13 @@ func TestARepositoryThatNeverStandsStillIsStillMaintained(t *testing.T) {
 	}
 }
 
-// ONE PACK IS INDEXED ONCE, AND MIDXPACKS MORE AGAIN: the bitmap and the
-// commit-graph are what a clone counts objects from and what a walk reads
-// commits from, and neither needs a second pack to be worth having — a
-// history imported in one push is one pack, and without them every clone of
-// it walks the whole history. So a repository with no index is due at its
-// first pack, and one with the maintainer's is due again only once MidxPacks
-// packs have gathered beside it — fewer cost a request only the walk of their
-// own commits and trees, a twentieth of a millisecond a pack, against a run
-// that rewrites the whole index. An empty repository has nothing to index.
+// ONE PACK IS INDEXED ONCE, AND MIDXPACKS MORE AGAIN: a clone counts objects
+// from the bitmap and a walk reads commits from the commit-graph, and a
+// history imported in one push is one pack, so a repository with no index is
+// due at its first pack. One with the maintainer's is due again only once
+// MidxPacks packs gather beside it: fewer cost a request a twentieth of a
+// millisecond a pack, against a run that rewrites the whole index. An empty
+// repository has nothing to index.
 func TestOnePackIsIndexedOnceAndMidxPacksMoreAgain(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -515,10 +498,10 @@ func TestOnePackIsIndexedOnceAndMidxPacksMoreAgain(t *testing.T) {
 	}
 }
 
-// THE DUTY CYCLE BOUNDS A HEAVY REPOSITORY: a run that took two minutes is
-// not followed by another for twenty — MidxDutyCycle times as long — however
-// soon MidxMinInterval allows one, so no repository takes more than a tenth of
-// a core's time. What the last run took survives a restart in the state.
+// THE DUTY CYCLE BOUNDS A HEAVY REPOSITORY: a two-minute run is followed by
+// none for twenty (MidxDutyCycle times as long), however soon MidxMinInterval
+// allows one, so no repository takes more than a tenth of a core. What the
+// last run took survives a restart in the state.
 func TestTheDutyCycleBoundsAHeavyRepository(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -553,10 +536,10 @@ func TestTheDutyCycleBoundsAHeavyRepository(t *testing.T) {
 }
 
 // MAINTENANCE NEVER DELAYS A SYNC: the maintainer holds a pin, never the
-// repository's round, so a sync that removes nothing completes while a run is
-// in flight and leaves it running; and a sync that must remove a pack STOPS
-// the run first — an index naming a missing pack fails every read of the
-// repository — rather than wait for it to finish.
+// repository's round, so a sync that removes nothing completes beside a run
+// in flight and leaves it running; a sync that must remove a pack stops the
+// run first (an index naming a missing pack fails every read) rather than
+// wait for it.
 func TestMaintenanceNeverDelaysASync(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -639,16 +622,14 @@ func TestMaintenanceNeverDelaysASync(t *testing.T) {
 	}
 }
 
-// A DROP STOPS A RUN WRITING WHAT IT DROPS, at whatever change makes it — a
-// delta's pack added included, which never stops a run otherwise: git reads a
-// write's inputs as it starts, so a run in flight across a change its
-// declaration drops on would rename in a file built over the inputs before
-// it, and record it current. Over declarations in which the multi-pack-index
-// is dropped when a pack is added, a delta adding a pack while the
-// maintainer's index step is held stops the run before the pack is in: the
-// held step sees its context cancelled, the delta is answered, and the
-// incarnation records no index and holds none. The graph the run wrote first
-// is kept, its declaration keeping it when a pack is added.
+// A DROP STOPS A RUN WRITING WHAT IT DROPS, at whatever change makes it, a
+// delta's added pack included (which otherwise stops no run): git reads a
+// write's inputs as it starts, so a run in flight across the change would
+// rename in a file built over the old inputs and record it current. With the
+// multi-pack-index declared dropped on a pack added, a delta adding a pack
+// while the index step is held stops the run before the pack is in: the step
+// is cancelled, the delta answered, and the incarnation records and holds no
+// index. The graph the run wrote first stays, declared kept on a pack added.
 //
 // Mutation: drop dropFor's stopWriting, and the run is left running across
 // the delta.
@@ -721,18 +702,15 @@ func TestADropStopsARunWritingWhatItDrops(t *testing.T) {
 }
 
 // NO RUN STARTS WHILE AN ADOPTION HOLDS THE REPOSITORY, and the last to let go
-// wakes the maintainer. An adoption adds a pack, and a declaration may drop
-// what a run writes when one is added — a drop that stops a run in flight, so
-// a run started between it and the pack's links would write over the packs
-// before the change and record the file current after it. A pass while an
-// adoption holds the repository's write lock starts nothing on it, however
-// due — a copy with no graph is due at once — and owes the maintainer a wake,
-// which the adoption sends as it lets go, rather than leave the graph to the
-// next tick.
+// wakes the maintainer. An adoption adds a pack, on which a declaration may
+// drop what a run writes, so a run started between that drop and the pack's
+// links would write over the old packs and record the file current. A pass
+// under an adoption's write lock starts nothing on the repository, however
+// due (a graph-less copy is due at once), and owes the maintainer a wake the
+// adoption sends as it lets go, rather than leave the graph to the next tick.
 //
 // Mutations: drop runnable's adoption term (the pass starts the graph-first
-// run under the adoption); drop releaseWrite's owed wake (no kick follows the
-// adoption).
+// run under the adoption); drop releaseWrite's owed wake (no kick follows).
 func TestNoRunStartsWhileAnAdoptionHoldsTheRepository(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -773,14 +751,13 @@ func TestNoRunStartsWhileAnAdoptionHoldsTheRepository(t *testing.T) {
 }
 
 // A SWEEP DROPS THE MULTI-PACK-INDEX WITH A PACK: a full round that finds a
-// pack the rows no longer name — the log recreated holding fewer — takes the
+// pack the rows no longer name (the log recreated holding fewer) takes the
 // index, its bitmap and the commit-graph with it, so no reader meets an index
-// naming a pack that is gone, nor a graph naming a commit that left with it:
-// IN PLACE from a copy nobody can hold yet (a boot's first round), and BY THE
-// SWAP from one a reader holds (swap.go), whose next incarnation never holds
-// them while the reader's copy keeps every one. Either way the copy the round
-// answers is whole to git and records no file over the packs, and the
-// maintainer writes a new index once it is due again.
+// naming a gone pack or a graph naming a commit gone with it: in place from a
+// copy nobody can hold yet (a boot's first round), by the swap (swap.go) from
+// one a reader holds, the next incarnation holding none while the reader's
+// copy keeps them. Either way the answered copy is whole to git and records
+// no file over the packs, and the maintainer reindexes once due.
 //
 // Mutation: declare the graph kept on a pack removed (OnPackRemoved), and both
 // arms keep it.
@@ -855,10 +832,9 @@ func TestASweepDropsTheMultiPackIndexWithAPack(t *testing.T) {
 	}
 }
 
-// MAINTENANCE RUNS ONLY IN A FREE MAINTENANCE SLOT: a pool of two process
-// slots has one maintenance slot, and with it held the maintainer runs and
-// records nothing — it never waits for one, and a run that never started is
-// no run — and runs once it is free.
+// MAINTENANCE RUNS ONLY IN A FREE MAINTENANCE SLOT: with a two-slot pool's
+// one maintenance slot held, the maintainer neither waits nor records
+// anything (a run that never started is no run), and runs once it is free.
 func TestMaintenanceRunsOnlyInAFreeMaintenanceSlot(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -889,10 +865,10 @@ func TestMaintenanceRunsOnlyInAFreeMaintenanceSlot(t *testing.T) {
 }
 
 // ONE LONG RUN DOES NOT HOLD THE OTHERS BACK: a bitmap over the largest
-// repository the defaults admit is hours, and the maintenance lane is half the
-// node's cores — so with a run held in flight, another repository due in the
-// same pass runs to its end in a slot of its own rather than waiting behind
-// it. A lane of three slots: the maintainer keeps one free for a person.
+// repository the defaults admit takes hours, so with a run held in flight,
+// another repository due in the same pass runs to its end in a slot of its
+// own. A lane of three (half of six cores): the maintainer keeps one free for
+// a person.
 func TestOneLongRunDoesNotHoldTheOthersBack(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -958,14 +934,12 @@ func TestOneLongRunDoesNotHoldTheOthersBack(t *testing.T) {
 }
 
 // THE MAINTAINER LEAVES A MAINTENANCE SLOT FOR A PERSON: `crewlet gitlet
-// verify`, which every refused rebuild tells an operator to run, checks a
-// repository in the maintenance lane and is refused, never queued, when no
-// slot is free — so however long the maintainer's runs last, one slot of a
-// lane of two is never theirs. Two repositories due, each run holding a slot
-// for as long as the case lets it: one run starts, and a maintenance-class
-// process started meanwhile is admitted. (Only a graph-first run, a walk of
-// the commits of seconds, may take that slot: graphFirst below, and
-// TestAGraphLessCopyIsGraphedFirst.)
+// verify`, which every refused rebuild tells an operator to run, runs in the
+// maintenance lane and is refused, never queued, when no slot is free, so one
+// slot of a lane of two is never the maintainer's. Two repositories due, each
+// run holding its slot: one starts, and a maintenance-class process started
+// meanwhile is admitted. (Only a graph-first run, seconds long, may borrow
+// that slot: TestAGraphLessCopyIsGraphedFirst.)
 func TestTheMaintainerLeavesAMaintenanceSlotForAPerson(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -1025,13 +999,12 @@ func TestTheMaintainerLeavesAMaintenanceSlotForAPerson(t *testing.T) {
 }
 
 // MAINTENANCE RUNS BESIDE THE LARGEST AS MEMORY ALLOWS: a bitmap holds about
-// BitmapBytesPerObject an object of its repository, and a node that has just joined
-// finds its largest repositories due together — so the runs beside the
-// largest in flight are held to an allowance, while the largest itself, the
-// price of serving its repository at all, starts whenever a slot is free.
-// Three repositories due in a lane with room for three runs, and an allowance
-// that holds one of the two smaller beside the larger: two run, and the third
-// waits for the next pass.
+// BitmapBytesPerObject an object, and a node that just joined finds its
+// largest repositories due together, so runs beside the largest in flight are
+// held to an allowance, while the largest itself, the price of serving its
+// repository at all, starts whenever a slot is free. Three due in a lane of
+// three, an allowance fitting one small run beside the large: two run, the
+// third at the next pass.
 func TestMaintenanceRunsBesideTheLargestAsMemoryAllows(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -1088,12 +1061,11 @@ func TestMaintenanceRunsBesideTheLargestAsMemoryAllows(t *testing.T) {
 	}
 }
 
-// A MAINTENANCE RUN IS CHARGED BY ITS REPOSITORY'S OBJECTS, as the packs'
-// rows count them — a multiplication, never a read of the disk: its own
-// figure an object, and room for a transfer of the repository beside it — and the
-// count is exact on every incarnation the maintainer may run on: set whole by
-// a full round (a restart's first, which installs nothing it already holds),
-// and raised by every pack a delta installs.
+// A MAINTENANCE RUN IS CHARGED BY ITS REPOSITORY'S OBJECTS as the packs' rows
+// count them, never by a read of the disk: its own figure an object plus room
+// for a transfer beside it. The count is exact on every incarnation the
+// maintainer may run on: set whole by a full round (a restart's first
+// installs nothing it holds) and raised by every pack a delta installs.
 func TestAMaintenanceRunIsChargedByItsRepositorysObjects(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -1123,11 +1095,10 @@ func TestAMaintenanceRunIsChargedByItsRepositorysObjects(t *testing.T) {
 }
 
 // A COMMIT-GRAPH REFUSED A SLOT IS ASKED FOR AGAIN AT ONCE: a graph-first
-// run whose step finds no slot of the lane free — another process took them
-// between the pass and the run — never started, so it records nothing and
-// pushes nothing back, and the next pass asks again with no interval to wait
-// out. Once it runs, the graph is written alone: no index, and no run the
-// duty cycle counts, so the bitmap after it is not held back by it.
+// run that finds every lane slot taken between the pass and the run never
+// started, so it records nothing and the next pass asks again with no
+// interval. Once it runs, the graph is written alone: no index, and no run
+// the duty cycle counts, so the bitmap after it is not held back.
 func TestACommitGraphRefusedASlotIsAskedForAgainAtOnce(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -1188,25 +1159,18 @@ func TestACommitGraphRefusedASlotIsAskedForAgainAtOnce(t *testing.T) {
 	}
 }
 
-// A GRAPH-LESS COPY IS GRAPHED FIRST. Without a commit-graph every walk git
-// makes over a repository goes by date, and a push of a commit dated before
-// its parent walks every commit in each of them; on a node that just joined,
-// or a copy rebuilt, the maintainer's queue is every other repository's
-// bitmap — hours. So a copy a round has read whole with no graph is due for
-// it at once, with no debounce, and in a slot of its own beside a run that
-// holds the maintainer's: the one kept for a person's verify, lent for the
-// seconds a walk of the commits takes and never for the index and bitmap the
-// copy may be due for as well, which are hours on a large repository. Both
-// ways the copy can reach the pass: before its packs have stood still, and
-// with its ordinary run due too — every graph-less copy after a restart,
-// whose first full round adds no packs. Either way the run writes the graph
-// alone, and a maintenance-class process started once it is written is
-// admitted while the maintainer's own slot is still held.
+// A GRAPH-LESS COPY IS GRAPHED FIRST. Without a commit-graph git walks by
+// date, and a push of a commit dated before its parent walks every commit,
+// while a joining node's or rebuilt copy's maintainer queue is hours of
+// bitmaps. So a copy read whole with no graph is due at once, no debounce, in
+// the slot kept for a person's verify: lent for the seconds the graph takes,
+// never for the index and bitmap. Either arm (packs not yet still; ordinary
+// run due too, as after a restart) writes the graph alone and frees the slot.
 //
-// Mutation: drop the graph-first plan (runPlan.first) from plan, or hold it
-// to the maintainer's own slots in startMaintenance, and the copy waits for
-// the long run; admit a graph-first plan carrying an index at the lane's
-// limit, and the due copy's run goes on to its index in the kept slot.
+// Mutation: drop runPlan.first from plan, or hold it to the maintainer's own
+// slots in startMaintenance, and the copy waits for the long run; admit a
+// graph-first plan carrying an index at the lane's limit, and the run goes on
+// to its index in the kept slot.
 func TestAGraphLessCopyIsGraphedFirst(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1230,7 +1194,7 @@ func TestAGraphLessCopyIsGraphedFirst(t *testing.T) {
 			graphFirst(t, c, long)
 			clk.Add(cache.MidxDebounce)
 			// THE LONG RUN: long's bitmap, holding the maintainer's one slot
-			// of the two for as long as the case lets it.
+			// of the two until the case lets it go.
 			letGo := startHeld(t, c, indexing, release, long)
 			defer letGo()
 
@@ -1247,16 +1211,15 @@ func TestAGraphLessCopyIsGraphedFirst(t *testing.T) {
 }
 
 // ANOTHER GRAPH-LESS COPY IS GRAPHED WHILE THE FIRST ONE'S BITMAP RUNS. A
-// graph-first run that finds one of the maintainer's own slots free takes it
-// for its whole plan — the graph, then the index and bitmap it is due for —
-// and the next graph-less copy, finding the maintainer's slots taken, is lent
-// the person's for its graph alone rather than waiting out that bitmap; the
-// slot is the person's again as soon as the graph is written.
+// graph-first run that finds a maintainer's slot free takes it for its whole
+// plan (graph, then index and bitmap), and the next graph-less copy is lent
+// the person's slot for its graph alone, the person's again once it is
+// written.
 //
 // Mutation: admit a graph-first plan carrying an index at the lane's limit in
 // startMaintenance, and the second copy's run goes on to its index in the
-// kept slot; drop the graph-only fallback on noSlot, and the second copy is
-// not graphed until the first one's bitmap ends.
+// kept slot; drop the graph-only fallback on noSlot, and the second copy
+// waits for the first one's bitmap.
 func TestAnotherGraphLessCopyIsGraphedWhileTheFirstOnesBitmapRuns(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -1283,10 +1246,9 @@ func TestAnotherGraphLessCopyIsGraphedWhileTheFirstOnesBitmapRuns(t *testing.T) 
 	graphedAlone(t, w, c, indexing, second, s2.Dir)
 }
 
-// holdEveryIndex opens w's cache on clk with a lane of two maintenance slots,
-// every multi-pack-index step of a run holding a maintenance slot — as the
-// git of a long bitmap does — until release is closed, and saying so on
-// indexing first.
+// holdEveryIndex opens w's cache on clk with a lane of two maintenance slots;
+// every multi-pack-index step holds a slot, as a long bitmap's git does, until
+// release is closed, saying so on indexing first.
 func holdEveryIndex(t *testing.T, w *syncWorld, clk *clock) (c *cache.Cache, indexing chan struct{},
 	release chan struct{}) {
 
@@ -1313,10 +1275,10 @@ func holdEveryIndex(t *testing.T, w *syncWorld, clk *clock) (c *cache.Cache, ind
 	return c, indexing, release
 }
 
-// startHeld starts a pass that must start repo's run alone, and waits for
-// that run to hold the maintainer's slot at its index step (holdEveryIndex);
-// it answers what lets every held run go and waits for the pass's, for the
-// case to defer.
+// startHeld starts a pass that must start repo's run alone and waits for it
+// to hold the maintainer's slot at its index step (holdEveryIndex). It answers
+// a letGo, for the case to defer, that releases every held run and waits for
+// the pass.
 func startHeld(t *testing.T, c *cache.Cache, indexing <-chan struct{}, release chan struct{},
 	repo string) (letGo func()) {
 
@@ -1340,10 +1302,9 @@ func startHeld(t *testing.T, c *cache.Cache, indexing <-chan struct{}, release c
 }
 
 // graphedAlone runs a pass while the maintainer's one slot of two is held at
-// an index step, and fails t unless it ran repo's graph-first run alone — the
-// graph written, no index, the run ended without reaching its index — and a
-// maintenance-class process started after it is admitted: the kept slot is
-// the person's again.
+// an index step, and fails t unless it ran repo's graph-first run alone (the
+// graph written, no index reached) and a maintenance-class process started
+// after it is admitted: the kept slot is the person's again.
 func graphedAlone(t *testing.T, w *syncWorld, c *cache.Cache, indexing <-chan struct{}, repo, dir string) {
 	t.Helper()
 	ran := make(chan []string, 1)
@@ -1370,10 +1331,9 @@ func graphedAlone(t *testing.T, w *syncWorld, c *cache.Cache, indexing <-chan st
 	}
 }
 
-// A GRAPH-FIRST RUN COMES BEFORE EVERY BITMAP IN A PASS: two repositories due
-// — one for its bitmap, with more packs uncovered, one read whole with no
-// graph — in a lane whose maintainer runs one at a time: the graph-less copy
-// is started first, and the bitmap at the next pass.
+// A GRAPH-FIRST RUN COMES BEFORE EVERY BITMAP IN A PASS: in a lane of one
+// run, a graph-less copy starts ahead of a repository due for its bitmap with
+// more packs uncovered, which runs at the next pass.
 //
 // Mutation: sort graph-first candidates by packs uncovered alone in
 // maintainerPass, and the bitmap is started first.
@@ -1407,14 +1367,12 @@ func TestAGraphFirstRunIsStartedAheadOfABitmap(t *testing.T) {
 	}
 }
 
-// THE END OF A RUN STATS ONLY WHAT THE DECLARATIONS OWN. A maintenance run
-// counts what it leaves against the budget as it ends, and a full round that
-// stops the run — and so every request that round answers — waits for that
-// end. objects/pack holds three files a pack beside the index's, with no cap
-// on the packs, so the count lists each directory a declaration owns a file
-// in once and stats only the declared files there: none of the packs' own
-// files, however many the copy holds, while every file the runs wrote — the
-// graph-first run's graph, the bitmap run's index and bitmap — is counted.
+// THE END OF A RUN STATS ONLY WHAT THE DECLARATIONS OWN: a run counts what it
+// leaves against the budget as it ends, and a full round that stops the run
+// (and every request that round answers) waits for that end. objects/pack
+// holds three files a pack, with no cap on packs, so the count stats only the
+// declared files in each directory a declaration owns one in, yet counts
+// every file the runs wrote.
 //
 // Mutation: derivedSizes sizes every entry it lists (a nil keep), and the
 // end of each run stats every pack's .pack, .idx and .rev.
@@ -1441,7 +1399,7 @@ func TestTheEndOfARunStatsOnlyTheDerivedFiles(t *testing.T) {
 	defer s.Release()
 
 	// Only the maintainer's runs are counted: the full round's own measure
-	// counts the packs' bytes, and stats every entry to do it.
+	// stats every entry to count the packs' bytes.
 	counting.Store(true)
 	graphFirst(t, c, repo)
 	clk.Add(cache.MidxDebounce)
@@ -1477,11 +1435,10 @@ func TestTheEndOfARunStatsOnlyTheDerivedFiles(t *testing.T) {
 
 // A RUN STOPPED FROM OUTSIDE IS NO RUN: a rolling deploy's Stop, a full
 // round's sweep or a retire ends a run its repository did not fail, and
-// recorded as one it would push the next run back by the interval — or by
-// MidxDutyCycle times however long it had run, hours for a bitmap a deploy
-// cut short near its end — with nothing written. So nothing is recorded or
-// persisted, and after a restart the repository is due once its packs have
-// stood still.
+// recorded it would push the next run back by the interval or MidxDutyCycle
+// times its length (hours for a bitmap cut short) with nothing written. So
+// nothing is recorded or persisted, and after a restart the repository is
+// due once its packs stand still.
 func TestARunStoppedFromOutsideIsNoRun(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -1551,13 +1508,11 @@ func holdSlotUntil(t *testing.T, pool *gitproc.Pool, class gitproc.Class) func()
 }
 
 // A FAILED MAINTENANCE LEAVES NOTHING BEHIND: the run is the only writer of
-// the index and the commit-graph in its incarnation, so a lock still there
-// when it fails — a killed writer's, which git cannot remove — is its own to
-// remove, as is the temporary file git writes a bitmap into, which git does
-// not clean up when it is killed. A failed run is still a run: it waits out
-// MidxMinInterval, and the one after it succeeds — a graph-first run too,
-// whose graph is then due only by the ordinary rules rather than asked again
-// every pass.
+// the index and commit-graph in its incarnation, so a lock left when it fails
+// (a killed writer's, which git cannot remove) is its own to remove, as is
+// the temporary bitmap file a killed git leaves. A failed run is still a run:
+// it waits out MidxMinInterval and then runs, a graph-first one too, whose
+// graph is then due by the ordinary rules rather than asked again every pass.
 func TestAFailedMaintenanceLeavesNothingBehind(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -1600,10 +1555,9 @@ func TestAFailedMaintenanceLeavesNothingBehind(t *testing.T) {
 	}
 }
 
-// THE MAINTAINER WORKS ONLY ON WHAT THIS PROCESS HAS READ WHOLE: a directory
-// a previous process left may hold strays its first round is about to sweep,
-// and an index written over them would be dropped with them. Once a round has
-// converged it, it is due.
+// THE MAINTAINER WORKS ONLY ON WHAT THIS PROCESS HAS READ WHOLE: a previous
+// process's directory may hold strays its first round will sweep, taking any
+// index written over them. Once a round has converged it, it is due.
 func TestTheMaintainerWaitsForAWholeRead(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -1625,13 +1579,9 @@ func TestTheMaintainerWaitsForAWholeRead(t *testing.T) {
 }
 
 // A FULL ROUND WAKES THE MAINTAINER ONCE IT HAS LET THE REPOSITORY GO. A pass
-// starts no run on a repository a round holds (runnable), so the wake is
-// sent once the round no longer runs: a copy's first round leaves it with no
-// commit-graph, due at once, and the graph is written with no tick at all.
-// Woken from inside the round, as it once was, the pass met the round still
-// running and left the repository to the next tick, MidxDebounce later — the
-// graph-first run, an index repair and a copy's first index each waited for
-// it.
+// starts no run on a repository a round holds (runnable), so a wake from
+// inside the round would leave the repository to the next tick, MidxDebounce
+// later; sent after, it has a first round's due graph written with no tick.
 //
 // Mutation: kick the maintainer from converge (inside the round), and the
 // kick is pending while the round still holds the repository.
@@ -1673,19 +1623,14 @@ func TestAFullRoundWakesTheMaintainerOnceItLetsTheRepositoryGo(t *testing.T) {
 }
 
 // A RUN A ROUND HELD BACK STARTS AS THE ROUND ENDS. A pass starts no run on a
-// repository a round holds (runnable), and the next tick is no promise of a gap:
-// every linearizable read is a round, so a repository read steadily is in one for
-// much of its time and a tick lands in one about that often. Owing nothing, each
-// landing cost another MidxDebounce, and a graph due at once was left to the
-// odds — Gitlet's suite, polling a copy for it, saw a minute's ticks all
-// land in a round and no graph at all.
-//
-// The copy is read whole empty and takes its first pack by a delta, so no full
-// round's wake stands in. A pass runs inside the round that applied the pack, as
-// a tick landing there runs it: the walk finds the round holding the repository;
-// or, in the second arm, the walk found it runnable and the round began before
-// the pass came to start the run. Either way it starts nothing, and the round's
-// end starts the run, with no tick and no other pass.
+// repository a round holds (runnable), and every linearizable read is a round,
+// so a steadily read repository is in one for much of its time and a tick lands
+// in one about as often: owing nothing, each landing costs another MidxDebounce
+// and a graph due at once is left to the odds. The copy is read whole empty and
+// takes its first pack by a delta, so no full round's wake stands in; a pass
+// inside that round finds it held at its walk, or (second arm) runnable at the
+// walk but held as it starts the run. It starts nothing, and the round's end
+// starts the run, with no tick and no other pass.
 //
 // Mutations: drop Cache.run's startOwed — no run follows the round; start runs
 // under a round (startRun's round term) — the pass in the round starts one.
@@ -1741,18 +1686,13 @@ func TestARunARoundHeldBackStartsAsTheRoundEnds(t *testing.T) {
 }
 
 // ROUNDS BACK TO BACK STILL GET THE MAINTAINER ITS RUN, AND THEIR CALLERS NEVER
-// WAIT FOR IT. Every linearizable read is a round, and a caller that arrives
-// during one is queued behind it, so a repository read faster than its rounds
-// take has no moment between them: each starts under the lock the last ended
-// under, a pass finds a round holding it at every tick, and a wake it was owed
-// waits for a gap that does not come. Its graph, its index and its bitmap would
-// wait out its traffic, on the copy that most needs them.
-//
-// Here no gap opens by construction: every round, before it lets go, has the
-// caller of the next one queued behind it. One tick comes. The run the pass found
-// due starts between two rounds, and is held in flight while more rounds end —
-// the callers wait for nothing of it — and then writes the graph, the rounds
-// still going.
+// WAIT FOR IT. A caller arriving during a round queues behind it, so a
+// repository read faster than its rounds take has no gap: a pass finds a round
+// holding it at every tick, and an owed wake waits for a gap that never comes,
+// on the copy that most needs its graph, index and bitmap. Here every round has
+// the next caller queued before it lets go: one tick comes, the due run starts
+// between two rounds and is held while more rounds end, then writes the graph,
+// the rounds still going.
 //
 // Mutations: drop Cache.run's startOwed, or move it behind c.start — no run ever
 // starts, since the next round is always already running; have startOwed wait
@@ -1844,12 +1784,12 @@ func TestRoundsBackToBackStillGetTheMaintainersRun(t *testing.T) {
 	stop()
 }
 
-// A REPOSITORY A ROUND HOLDS KEEPS ITS PLACE IN THE PASS'S ORDER. No pass can
-// start its run, and left out of the order it would come last for as long as its
-// rounds ran back to back, behind every repository a pass can start. So on a lane
-// of one slot a pass inside the round of the repository first in its order starts
-// nothing behind it, and the room it keeps is the room that repository's run is
-// admitted in at the round's end, rather than beside. The one behind runs next.
+// A REPOSITORY A ROUND HOLDS KEEPS ITS PLACE IN THE PASS'S ORDER: left out,
+// it would come last, behind every startable repository, for as long as its
+// rounds ran back to back. So on a lane of one slot a pass inside the round of
+// the repository first in its order starts nothing behind it, keeping the room
+// that repository's run is admitted in at the round's end. The one behind
+// runs next.
 //
 // Mutations: answer a repository a round holds notDue rather than heldBack
 // (startRun) — the pass starts the one behind it in the only slot; admit the run
@@ -1899,11 +1839,10 @@ func TestARepositoryARoundHoldsKeepsItsPlaceInThePass(t *testing.T) {
 	}
 }
 
-// AN OWED RUN WAITS OUT A QUEUED ROUND THAT WOULD STOP IT. A full round's sweep
-// stops every run on the copy and waits for it to end, and a rebuild replaces the
-// copy under it. A run started for the round queued behind to stop would be a git
-// begun only to be killed, with that round's callers waiting for it to die. So the
-// debt stands for that round's end, and no run begins before then.
+// AN OWED RUN WAITS OUT A QUEUED ROUND THAT WOULD STOP IT. A full round's
+// sweep stops every run on the copy and waits for it, and a rebuild replaces
+// the copy, so a run started before such a queued round is a git begun only to
+// be killed while that round's callers wait. The debt stands until its end.
 //
 // Mutations: answer no from queuedRoundStops's full term, or its rebuild term —
 // the run begins between the two rounds.
@@ -1977,11 +1916,10 @@ func TestAnOwedRunWaitsOutAQueuedRoundThatWouldStopIt(t *testing.T) {
 }
 
 // A STARTED CACHE MAINTAINS AT ITS TICKS, AND STOP ENDS A RUN: Start runs
-// the maintainer, which looks at every tick and runs what is due then — not
-// before — and Stop cancels a run in flight and waits for it, so the
-// directory is free — the claim back — when Stop returns. Each tick is a
-// send the maintainer must take, so the one after a pass is taken only once
-// that pass has ended.
+// the maintainer, which runs at each tick what is due then, not before, and
+// Stop cancels a run in flight and waits for it, so the directory's claim is
+// free when Stop returns. A tick is a send the maintainer must take, so the
+// next is taken only once the pass before it has ended.
 func TestStopEndsAMaintenanceRun(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -2058,20 +1996,18 @@ func TestStopEndsAMaintenanceRun(t *testing.T) {
 	layout.Release()
 }
 
-// EVERY GRAPH WRITE COMPUTES EVERY FILTER, AND IS CHARGED ITS TREES: every
-// commit-graph write the cache declares — own mode's whole graph and the
-// node's tip — computes the changed-path filter of every commit it covers
-// that lacks one (--changed-paths, and no --max-new-filters: a bound left a
-// large repository's reads diffing most of its history for thousands of
-// writes and bounded nothing a write holds), and is charged, whatever it
-// covers, the trees its filters' diffs keep in git's delta base cache up to
-// that cache's cap (Write.BaseBytes, GraphBaseBytes) — a figure an object
-// alone admits a short tail's tip or a small repository's graph at a fraction
-// of what it holds.
+// EVERY GRAPH WRITE COMPUTES EVERY FILTER, AND IS CHARGED ITS TREES: each
+// declared commit-graph write (own mode's graph and the node's tip) computes
+// the changed-path filter of every commit lacking one (--changed-paths, no
+// --max-new-filters: a bound leaves a large repository's reads diffing most
+// of its history for thousands of writes and bounds nothing a write holds),
+// and is charged, whatever it covers, GraphBaseBytes (Write.BaseBytes) for
+// the trees its filters' diffs keep in git's delta base cache up to its cap;
+// a per-object figure alone would admit a short tail's tip or a small graph
+// at a fraction of what it holds.
 //
-// Mutations: bound either write's filters (--max-new-filters=100 in its
-// argument list); drop --changed-paths from one; drop the fixed part from
-// either declaration — each is red.
+// Mutations: bound either write's filters (--max-new-filters=100); drop
+// --changed-paths from one; drop the fixed part from either declaration.
 func TestEveryGraphWriteComputesEveryFilterAndIsChargedItsTrees(t *testing.T) {
 	t.Parallel()
 	graphs := 0
@@ -2101,25 +2037,22 @@ func TestEveryGraphWriteComputesEveryFilterAndIsChargedItsTrees(t *testing.T) {
 	}
 }
 
-// THE MAINTAINER'S STEPS ARE THE DECLARED WRITES (ADR-0086). What a pass and
-// a round run, and what a refusal is said and counted as, are read from the
-// declarations (cache.DerivedFiles): every multi-pack-index and commit-graph
-// process the cache starts runs exactly one declared write's argument list —
-// the round's index the round write's, the maintainer's its bitmap, index and
-// graph writes', and the node's tip over an installed chain the tip's — and
-// every declared write runs, since an argument list that no process ran is one
-// somebody changed beside its declaration. And when the node's memory refuses
-// everything — of a copy in own mode and of one in chain mode — the refusals
-// name exactly the declared maintainer steps, each line's estimate the write's
-// own charge.
+// THE MAINTAINER'S STEPS ARE THE DECLARED WRITES (ADR-0086): every
+// multi-pack-index and commit-graph process the cache starts (the round's
+// index; the maintainer's bitmap, index and graph; the node's tip over an
+// installed chain) runs exactly one declared write's argument list
+// (cache.DerivedFiles), and every declared write runs, since a list no
+// process ran was changed beside its declaration. When memory refuses
+// everything, in own and chain mode, the refusals name exactly the declared
+// maintainer steps, each line's estimate the write's own charge.
 //
 // Mutation: hard-code the graph's argument list in runMaintenance with
 // --split, and the recorded process is no declared write's; give the round's
 // index its own list beside its declaration, and the round's process is.
 func TestTheMaintainersStepsAreTheDeclaredWrites(t *testing.T) {
 	t.Parallel()
-	// Git's writes: an in-process one (the index of pushes') runs no git
-	// process, and the writers gate ties it to its file instead.
+	// Git's writes only: the index of pushes' runs in process, and the
+	// writers gate ties it to its file instead.
 	var declared []cache.Write
 	for _, d := range cache.DerivedFiles() {
 		for _, wr := range d.Writes {
@@ -2146,11 +2079,9 @@ func TestTheMaintainersStepsAreTheDeclaredWrites(t *testing.T) {
 		for range caseRoundPacks {
 			w.push(t, indexed, "refs/heads/main", nil)
 		}
-		// plain holds some two thousand objects: past them its index without a
-		// bitmap — IndexBaseBytes beside an amount an object — fits a budget
-		// a byte short of its bitmap's, where a smaller repository's bitmap
-		// is the cheaper of the two (840 bytes an object against 320 and a
-		// mebibyte: past about 2 020 objects).
+		// plain holds some two thousand objects: past about 2 020 its index
+		// without a bitmap (IndexBaseBytes, a mebibyte, plus 320 bytes an
+		// object) fits a budget a byte short of its bitmap's (840 an object).
 		const plainFiles = 2200
 		files := make(map[string]string, plainFiles)
 		for i := range plainFiles {
@@ -2166,9 +2097,9 @@ func TestTheMaintainersStepsAreTheDeclaredWrites(t *testing.T) {
 		if ran := cache.MaintainerPass(c); len(ran) != 1 || ran[0] != indexed {
 			t.Fatalf("the first pass ran %v, want %s", ran, indexed)
 		}
-		// An index without a bitmap: the bitmap a byte past what the node
-		// can give, and the graph, whose fixed part (GraphBaseBytes) is far
-		// past it, refused beside it — own mode's graph ran for indexed.
+		// An index without a bitmap: the bitmap a byte past the budget, and the
+		// graph (its fixed part, GraphBaseBytes, far past it) refused beside it;
+		// own mode's graph ran for indexed.
 		w.sync(t, c, plain).Release()
 		budget := cache.BitmapCharge(c, plain) - 1
 		if cache.IndexCharge(c, plain) > budget {
@@ -2184,11 +2115,10 @@ func TestTheMaintainersStepsAreTheDeclaredWrites(t *testing.T) {
 			t.Fatalf("%s holds an index over %d packs (bitmap %t); the case needs both packs indexed without a "+
 				"bitmap", plain, packs, bitmap)
 		}
-		// And the node's tip over an installed chain, on a budget of its own
-		// charge: plain, indexed a moment ago, is not due again whatever the
-		// budget, and its graph's charge — its fixed part beside its two
-		// thousand objects — is past the tip's, its fixed part beside a tail
-		// of a few.
+		// The node's tip over an installed chain, on a budget of its own
+		// charge: plain, just indexed, is not due again, and its graph's charge
+		// (fixed part plus two thousand objects) is past the tip's (fixed part
+		// plus a tail of a few).
 		chained := w.repo(t, 3)
 		p := w.pushN(t, chained, 3)
 		w.log.publish(chained, w.buildChain(t, p[:2]), nil)
@@ -2269,9 +2199,8 @@ func TestTheMaintainersStepsAreTheDeclaredWrites(t *testing.T) {
 			}
 		}
 		for step, v := range gauged {
-			// A PUBLICATION'S STEP is the maintainer's background work beside
-			// its declared writes, gauged at every pass, and nothing was
-			// published here, so nothing of it is refused.
+			// A PUBLICATION'S STEP is background work beside the declared
+			// writes, gauged every pass; nothing was published, so none refused.
 			if step == cache.PublishStep {
 				if v != 0 {
 					t.Errorf("%s{step=%s} = %v, want 0 with no publication refused",

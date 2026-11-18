@@ -7,17 +7,15 @@ import (
 )
 
 // A FETCH A MOVED PLACEMENT HOLDS REPLACES AN OLDER STAGING UNDER ITS ID, BUT
-// NOT ITS TWIN: the installer keeps one staged layer a repository and layer id
-// (holdFetched), so where the very layer over the very base is staged already —
-// the maintainer's adoption, which came while the fetch downloaded — that one
-// stays and the fetched copy goes; and where the id names a layer over another
-// base, an older staging no plan of this chain wants, the fetch the plan made
-// takes its place, as a newer adoption replaces an older one.
+// NOT ITS TWIN: holdFetched keeps one staged layer a repository and layer id, so
+// the very layer over the very base already staged (the maintainer's adoption,
+// made during the download) stays and the fetched copy goes; an id staged over
+// another base, which no plan of this chain wants, gives way to the fetch, as a
+// newer adoption replaces an older one.
 //
-// Mutations: keep whatever is staged under the id (holdFetched's twin test
-// dropped, the fetch always the one to go) — the layer over the new base is
-// lost; replace whatever is staged (the twin test dropped the other way) — the
-// adoption gives way to its own fetched copy.
+// Mutations: holdFetched's twin test dropped either way: always keep the staged
+// one (the layer over the new base is lost) or always replace it (the adoption
+// gives way to its own fetched copy).
 func TestAHeldFetchReplacesAnOlderStagingButNotItsTwin(t *testing.T) {
 	t.Parallel()
 	c := &Cache{installer: newLayerInstaller(FetchConcurrency)}

@@ -358,6 +358,34 @@ describe("the peek", () => {
   });
 });
 
+describe("a host that opens in place", () => {
+  // Mutation: prevent every click, or open on a modified Enter.
+  test("a host that opens a row in place takes its plain press and Enter, and a modified press keeps the link", () => {
+    const onOpen = vi.fn();
+    mount(<Timeline onOpen={onOpen} />, "#/gitlet");
+    const { seen, stop } = clicks();
+    try {
+      fireEvent.click(link("Row 2"), { ctrlKey: true });
+      expect(onOpen).not.toHaveBeenCalled();
+      expect(seen).toEqual([{ href: "#/x/r2", prevented: false }]);
+      expect(fireEvent.click(link("Row 2"))).toBe(false);
+      expect(onOpen).toHaveBeenCalledTimes(1);
+      expect(onOpen.mock.calls[0]![0]).toMatchObject({ id: "r2" });
+      press("j");
+      act(() => link("Row 1").blur());
+      press("Enter", { shiftKey: true });
+      expect(onOpen).toHaveBeenCalledTimes(1);
+      expect(seen.at(-1)).toEqual({ href: "#/x/r1", prevented: false });
+    } finally {
+      stop();
+    }
+    press("Enter");
+    expect(onOpen).toHaveBeenCalledTimes(2);
+    expect(onOpen.mock.calls[1]![0]).toMatchObject({ id: "r1" });
+    expect(location.hash).toBe("#/gitlet");
+  });
+});
+
 describe("Load more", () => {
   const paged = (over: Partial<NonNullable<Props["paged"]>> = {}) => ({
     more: true,
@@ -638,6 +666,53 @@ describe("roles", () => {
     );
     expect(screen.queryByText("Loading changes")).toBeNull();
     expect(screen.getByRole("list", { name: "Changes" })).toBeTruthy();
+  });
+
+  // Mutation: drop an empty group, draw `last` before the rows, or the aside inside the heading.
+  test("a boxed list draws each group as a card with its first and last parts, and keeps j and k across groups", () => {
+    const { container } = mount(
+      <CodeList<Row>
+        look="boxes"
+        groups={[
+          {
+            key: "web",
+            heading: "web into main",
+            aside: <button type="button">More on web</button>,
+            first: <span>Train base of web</span>,
+            last: <span>How web lands</span>,
+            rows: ROWS.slice(0, 2),
+          },
+          { key: "docs", heading: "docs into main", last: <span>Nothing queued</span>, rows: [] },
+          { key: "api", heading: "api into main", rows: ROWS.slice(2, 3) },
+        ]}
+        rowKey={(r) => r.id}
+        rowHref={(r) => `#/x/${r.id}`}
+        aria-label="Merge queues"
+        lead={(r) => r.id}
+        title={(r) => r.title}
+      />,
+    );
+    expect(container.querySelector(".code-list--boxes")).not.toBeNull();
+    const boxes = [...container.querySelectorAll<HTMLElement>(".code-list__group")];
+    expect(boxes.map((b) => b.querySelector(".code-list__heading")?.textContent)).toEqual([
+      "web into main",
+      "docs into main",
+      "api into main",
+    ]);
+    expect([...boxes[0]!.children].map((el) => el.className)).toEqual([
+      "code-list__band",
+      "code-list__first",
+      "code-list__rows",
+      "code-list__last",
+    ]);
+    expect(boxes[0]!.querySelector(".code-list__band > .code-list__aside button")).not.toBeNull();
+    expect(boxes[0]!.querySelector(".code-list__heading button")).toBeNull();
+    expect(within(boxes[1]!).getByText("Nothing queued")).toBeTruthy();
+    expect(within(boxes[1]!).queryByRole("list")).toBeNull();
+    expect(screen.getByRole("list", { name: "web into main" })).toBeTruthy();
+    act(() => link("Row 2").focus());
+    press("j");
+    expect(document.activeElement).toBe(link("Row 3"));
   });
 
   // Mutation: draw something for a call with neither rows nor groups.

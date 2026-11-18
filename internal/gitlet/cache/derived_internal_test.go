@@ -12,18 +12,17 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 )
 
-// A DECLARATION THAT LEAVES ANYTHING UNSAID IS REFUSED, naming the
-// declaration and the field: every reader of a derived file reads its
-// declaration and nothing beside it, so a field left empty is a question
-// some reader answers for itself — the sweep trashing a file nothing said it
-// owned, a write with no deadline, a pattern matching part of a name. Each
-// row breaks one field of a valid declaration. And what holds only across
+// A DECLARATION THAT LEAVES ANYTHING UNSAID IS REFUSED, naming the declaration
+// and the field: a derived file's readers read only its declaration, so an
+// empty field is a question some reader answers for itself (the sweep trashing
+// an unowned file, a write with no deadline, a pattern matching part of a
+// name). Each row breaks one field of a valid declaration. Across
 // declarations: one name a declaration, one maintainer write a step (the
-// refusal counter and gauge are keyed by step), every file under objects/,
-// and every part a damage report drops some declaration's.
+// refusal counter and gauge are keyed by step), every file under objects/, and
+// every part a damage report drops some declaration's.
 //
-// Mutation: make Validate skip the anchoring check (anchored) — the
-// unanchored rows pass.
+// Mutation: make Validate skip the anchoring check (anchored): the unanchored
+// rows pass.
 func TestValidateRefusesAnUnsaidDeclaration(t *testing.T) {
 	t.Parallel()
 	midx := func() Derived { return DerivedFiles()[0] }
@@ -162,21 +161,18 @@ func TestValidateRefusesAnUnsaidDeclaration(t *testing.T) {
 	})
 }
 
-// AN IN-PROCESS DECLARATION — the cache's own code writes its files — SAYS
-// WHAT IT HOLDS AND CLAIMS NOTHING A GIT WRITE HAS: no lane, deadline, charge
-// an object or argument list, which nothing would read, but a Charge
-// sentence; where no git reads its files either (the index of pushes), nothing
-// done on a report, since no report can name such a file; at most one main
-// file, its presence otherwise its record's; and every file of one no git
-// reads under crewlet/, never objects/, the namespace a push's scratch names
-// as its alternate. And a git write beside its in-process ones is held to what
-// git writing a declaration's files asks of it — a file whose presence is its
-// own, and a part a damage report names it by — so no git process writes a
-// file no git process reads. Each row breaks one of those on the provenance
-// index's valid declaration.
+// AN IN-PROCESS DECLARATION (the cache's own code writes its files) CLAIMS
+// NOTHING A GIT WRITE HAS: no lane, deadline, charge an object or argument
+// list, but a Charge sentence, and at most one main file (without one, its
+// presence is its record's). Where no git reads its files (the index of
+// pushes), it does nothing on a report, which cannot name such a file, and
+// keeps them under crewlet/, never objects/, the namespace a push's scratch
+// names as its alternate. A git write beside its in-process ones asks what git
+// writing the files asks (a main file, a part a damage report names), so no git
+// writes a file no git reads. Each row breaks one of those on the index of
+// pushes' declaration.
 //
-// Mutation: let an in-process write name a lane (drop validateInProcess's lane
-// case) — the "a lane" row passes.
+// Mutation: drop validateInProcess's lane case: the "a lane" row passes.
 func TestValidateRefusesAnInProcessDeclarationThatClaimsAGitWrite(t *testing.T) {
 	t.Parallel()
 	provenance := func() Derived {
@@ -270,25 +266,18 @@ func TestValidateRefusesAnInProcessDeclarationThatClaimsAGitWrite(t *testing.T) 
 	})
 }
 
-// WHO READS A DECLARATION'S FILES IS ITS PART'S TO SAY, never who writes them
-// (§6.0's restatement of P2's rule): the installed chain is the cache's own
-// write of files every git process reads, so a declaration whose every write
-// is in-process may name a part a report drops — and then lives under
-// objects/ — where one NO git reads names none and keeps its files on a
-// report; one git writes names a part, whatever else it says. A declaration
-// git reads may be written by both kinds of writer: the installed
-// commit-graph layers by the cache's install and the node's tip over them by
-// git, one chain file listing both. And what the installed chain's
-// declarations hold beside it: a name carrying its own checksum (Named) has
-// the one group Prior has and is never both; the chain file, the one Main,
-// carries neither; a chain is cut to a prefix of itself and dropped on
-// nothing; and no other declaration cuts. Each row breaks one of those on a
-// valid declaration of the build.
+// WHO READS A DECLARATION'S FILES IS ITS PART'S TO SAY, never who writes them.
+// One only the cache writes may name a part a report drops (the installed
+// chain, which every git reads; its files then live under objects/); one no
+// git reads names none and keeps its files on a report; one git writes names a
+// part. One may have both writers: the cache installs graph layers and git
+// writes the node's tip over them, one chain file listing both. The chain's
+// declarations also hold: a Named name has Prior's one group and is never both;
+// the chain file, the one Main, carries neither; a chain is cut to a prefix and
+// dropped on nothing; no other declaration cuts.
 //
-// Mutation: restore P2's "an in-process declaration has Part 0" — the
-// installed chain's own declaration is refused (the accepted rows fail, and
-// Open of every cache with them); restore "a declaration's writes are of one
-// kind" — the graph's, its install's and its tip's, is refused.
+// Mutation: require Part 0 of an in-process declaration, or one writer kind a
+// declaration: the installed chain's declarations are refused.
 func TestValidateHoldsAPartToWhoReadsTheFiles(t *testing.T) {
 	t.Parallel()
 	of := func(name DerivedName) Derived {
@@ -367,18 +356,16 @@ func TestValidateHoldsAPartToWhoReadsTheFiles(t *testing.T) {
 }
 
 // A TREE IS ONE DIRECTORY THE CACHE'S OWN CODE OWNS WHOLE, AND NOTHING ELSE
-// LIVES IN IT. A declaration that owns a directory whole (Owned.Tree) — the
-// memo's crewlet/memo, one file an answer — is the cache's own write: git
-// writes no directory the cache keeps without reading inside. It is one
-// literal name, carrying no checksum, and the declaration's main entry, whose
-// presence and bytes are the declaration's record (Derived.tree). Its files'
-// check is read by the cache's own reads alone (CheckEntryDigest), never by a
-// git-written declaration's. And no other declaration's files live under it:
-// the image keeps a tree without reading inside, so one there would be kept by
-// no sweep and counted by no measure. Each row breaks one of those.
+// LIVES IN IT. A declaration owning a directory whole (Owned.Tree; the memo's
+// crewlet/memo, one file an answer) is the cache's own write: git writes no
+// directory the cache keeps unread. It is one literal name with no checksum
+// and the declaration's main entry, its presence and bytes the record
+// (Derived.tree). Its check (CheckEntryDigest) is only the cache's own reads',
+// never a git-written declaration's. No other declaration's files live under
+// it: the image keeps a tree unread, so a file there is kept by no sweep and
+// counted by no measure.
 //
-// Mutation: admit a tree that is not its declaration's main entry (drop the
-// tree's Main case) — the "not main" row passes.
+// Mutation: drop the tree's Main case: the "not main" row passes.
 func TestValidateRefusesATreeThatIsNoDirectoryOfItsOwn(t *testing.T) {
 	t.Parallel()
 	of := func(name DerivedName) Derived {
@@ -443,13 +430,11 @@ func TestValidateRefusesATreeThatIsNoDirectoryOfItsOwn(t *testing.T) {
 	})
 }
 
-// A FAILED WRITE CLEARS WHAT IT HOLDS, A LOCK BY NAME AND A DIRECTORY LISTED
-// AT MOST ONCE. Each write declares what it holds while it runs (Write.Holds),
-// so a failure clears exactly that: the round's index holds its lock alone,
-// which is removed by name with no listing — objects/pack holds three files a
-// pack, and a failed round's index was a listing of it on the request the
-// round answers — and a maintainer's run over the index with its bitmap and
-// the graph removes both locks by name and lists objects/pack ONCE for the
+// A FAILED WRITE CLEARS WHAT IT HOLDS (Write.Holds), A LOCK BY NAME AND A
+// DIRECTORY LISTED AT MOST ONCE. The round's index holds only its lock, removed
+// by name: listing objects/pack (three files a pack) would run on the request
+// the round answers. A maintainer's run over the index with its bitmap and the
+// graph removes both locks by name and lists objects/pack ONCE, for the
 // bitmap's temporary file, the one pattern that is no literal.
 //
 // Mutations: clear every held pattern by listing (the round's write lists
