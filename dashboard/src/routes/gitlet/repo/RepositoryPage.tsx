@@ -74,16 +74,19 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { closedBy } from "~/app/nav.ts";
+import { usePageLabels } from "~/app/Shell.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { CHANGE_STATE_FILTERS, isRepoName, repoStatusWord } from "~/lib/code.ts";
-import { fmtDateTime } from "~/lib/format.ts";
+import { fmtAt, fmtDateTime } from "~/lib/format.ts";
+import { useClock } from "~/lib/clock.ts";
 import { indexOrg, seatPath, unitByKey, unitPlace, useSeatBadgeOf } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useHeldGrants } from "~/lib/viewer.ts";
 import { gateLine, pushRuleLine, ruleSourceLine } from "~/lib/protection.ts";
 import {
+  contentHeld,
   importStanding,
   pullMirrorStanding,
   purgeStanding,
@@ -103,7 +106,7 @@ import { Commits } from "./History.tsx";
 import { AddPathOwnerButton, PathOwnerControls } from "./PathOwners.tsx";
 import { ProtectButton, RuleControls } from "./Protect.tsx";
 import { RepoRail } from "./Rail.tsx";
-import { DeleteRepoControl, DeletedNotice } from "./RepoLife.tsx";
+import { DeleteRepoControl, DeletedHereProvider, DeletedNotice, GoneContent } from "./RepoLife.tsx";
 import {
   ArchiveControl,
   DetailsControl,
@@ -160,6 +163,8 @@ export function RepositoryPage({ repo }: { repo: string }) {
   );
   const live = counts.data?.counts?.changes?.live;
   const panelId = useId();
+  // AN OLD NAME'S ADDRESS NAMES THE REPOSITORY IT REDIRECTS TO in the trail.
+  usePageLabels(current !== "" && current !== repo ? { [repo]: current } : {});
   if (!named) {
     return (
       <EmptyState
@@ -187,9 +192,12 @@ export function RepositoryPage({ repo }: { repo: string }) {
       </QueryState>
     );
   }
+  // A DELETED REPOSITORY'S CONTENT IS NOT READ: its tabs that read it say so
+  // and offer no clone, push or compare (`contentHeld`).
+  const gone = contentHeld(detail) !== undefined;
   return (
-    <>
-      {detail.head && (
+    <DeletedHereProvider>
+      {detail.head && !gone && (
         <PageActions>
           <ButtonLink size="small" variant="secondary" href={compareHref(detail.name)}>
             Compare
@@ -207,24 +215,7 @@ export function RepositoryPage({ repo }: { repo: string }) {
         />
       </header>
       {detail.status === "deleted" && <DeletedNotice repo={detail} />}
-      {detail.redirect && (
-        // A RENAME LEAVES THE OLD NAME REDIRECTING for a while: the page reads
-        // the repository it found, and says what it is called now.
-        <Callout
-          variant="neutral"
-          action={
-            <a className="t-link" href={repoHref(detail.name)}>
-              Open {detail.name}
-            </a>
-          }
-        >
-          {`“${repo}” is now called “${detail.name}”`}
-          {detail.redirect_until
-            ? `; the old name is released ${fmtDateTime(detail.redirect_until)}`
-            : ""}
-          .
-        </Callout>
-      )}
+      {detail.redirect && <RenamedNotice repo={detail} asked={repo} />}
       <div
         className="tabpanel"
         role="tabpanel"
@@ -232,15 +223,44 @@ export function RepositoryPage({ repo }: { repo: string }) {
         aria-labelledby={tabId(panelId, tab)}
         tabIndex={0}
       >
-        {tab === "code" && <Code repo={detail} cloneURL={read.data?.clone_url} counts={counts} />}
+        {tab === "code" &&
+          (gone ? (
+            <GoneContent repo={detail} what="files" />
+          ) : (
+            <Code repo={detail} cloneURL={read.data?.clone_url} counts={counts} />
+          ))}
         {tab === "changes" && <RepoChanges repo={detail} />}
-        {tab === "commits" && <Commits repo={detail} />}
+        {tab === "commits" &&
+          (gone ? <GoneContent repo={detail} what="commits" /> : <Commits repo={detail} />)}
         {tab === "branches" && <Branches repo={detail} />}
         {tab === "pushes" && <PushHistory repo={detail.name} />}
         {tab === "checks" && <RepoChecks repo={detail.name} />}
         {tab === "settings" && <Settings repo={detail} />}
       </div>
-    </>
+    </DeletedHereProvider>
+  );
+}
+
+/**
+ * A RENAME LEAVES THE OLD NAME REDIRECTING for a while: the page reads the
+ * repository it found, and says what it is called now and when the old name
+ * is let go, as a moment a person plans by.
+ */
+function RenamedNotice({ repo, asked }: { repo: CodeRepoDetail; asked: string }) {
+  const until = repo.redirect_until;
+  const released = useClock((t) => (until ? fmtAt(until, t) : ""));
+  return (
+    <Callout
+      variant="neutral"
+      action={
+        <a className="t-link" href={repoHref(repo.name)}>
+          Open {repo.name}
+        </a>
+      }
+    >
+      {`“${asked}” is now called “${repo.name}”`}
+      {released ? `; the old name is released ${released}` : ""}.
+    </Callout>
   );
 }
 

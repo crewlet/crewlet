@@ -16,13 +16,14 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { Announcer } from "@crewlethq/ui";
+import { Announcer, ToastProvider } from "@crewlethq/ui";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
+import { fmtAt, fmtBytes, fmtDate } from "~/lib/format.ts";
 import { pinZoneForTest } from "~/lib/prefs.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
@@ -33,7 +34,6 @@ import { afterMicrotasks } from "~/test/settle.ts";
 import { modules } from "~/test/source.ts";
 import { DECLARED, DECLARED_LIFE, PERSON_ONLY, PURGE_KEEPERS } from "~/lib/repoWrites.ts";
 import { SYNTAX_MAX_BYTES, load } from "~/lib/syntax/index.ts";
-import { forgetDownloadProbes } from "./downloads.ts";
 import { forgetTreeChoice } from "./FileView.tsx";
 import { forgetTrees } from "./tree.ts";
 import { sinceOf } from "../when.ts";
@@ -52,7 +52,6 @@ vi.mock("~/lib/syntax/index.ts", async (real) => {
 
 afterEach(() => {
   cleanup();
-  forgetDownloadProbes();
   forgetTrees();
   forgetTreeChoice();
   vi.useRealTimers();
@@ -328,6 +327,8 @@ interface Coded {
   binary?: boolean;
   /** Held until it settles: a read of the blob by its id alone. */
   held?: Promise<void>;
+  /** Its blame's lines as the engine sends them, where a test names them. */
+  blame?: Record<string, unknown>[];
 }
 
 /** A coded file's lines, without their newlines. */
@@ -379,12 +380,14 @@ function codedBlame(url: URL, path: string, f: Coded) {
         path,
         start_line: from,
         end_line: to,
-        lines: all.slice(from - 1, to).map((text, i) => ({
-          line: from + i,
-          commit: HEAD,
-          orig_line: from + i,
-          text,
-        })),
+        lines:
+          f.blame?.slice(from - 1, to) ??
+          all.slice(from - 1, to).map((text, i) => ({
+            line: from + i,
+            commit: HEAD,
+            orig_line: from + i,
+            ...(text ? { text } : {}),
+          })),
         commits: { [HEAD]: { author: "Ada", authored_at: "2026-10-20T10:00:00Z" } },
       },
     }),
@@ -533,7 +536,8 @@ function stubEngine(
                 end_line: 3,
                 lines: [
                   { line: 1, commit: HEAD, orig_line: 1, text: "package app" },
-                  { line: 2, commit: HEAD, orig_line: 2, text: "" },
+                  // AN EMPTY LINE CARRIES NO `text`: the engine leaves it out (omitempty).
+                  { line: 2, commit: HEAD, orig_line: 2 },
                   { line: 3, commit: OTHER, orig_line: 3, text: "func Run() {}" },
                 ],
                 commits: {
@@ -697,7 +701,7 @@ const WRITER = {
   acts: ["code_update_repo", "code_purge_unreachable", "code_import_repo"],
 };
 
-function mount(hash: string, repo = "web", viewer: unknown = ADMIN_VIEWER) {
+function mount(hash: string, repo = "web", viewer: unknown = ADMIN_VIEWER, toasts = false) {
   location.hash = hash;
   const store = new Store();
   store.applyOrg(ORG);
@@ -705,7 +709,7 @@ function mount(hash: string, repo = "web", viewer: unknown = ADMIN_VIEWER) {
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
     what === "viewer" ? Promise.resolve(viewer) : new Promise(() => {});
-  render(
+  const page = (
     <ClientContext.Provider value={{ store, socket }}>
       <SessionReading>
         <ViewerProvider>
@@ -716,8 +720,9 @@ function mount(hash: string, repo = "web", viewer: unknown = ADMIN_VIEWER) {
           <Announcer label="Announcements" />
         </ViewerProvider>
       </SessionReading>
-    </ClientContext.Provider>,
+    </ClientContext.Provider>
   );
+  render(toasts ? <ToastProvider>{page}</ToastProvider> : page);
 }
 
 const reads = (asked: URL[], what: string) => asked.filter((u) => u.pathname === `/query/${what}`);
@@ -1251,8 +1256,8 @@ test("a deployment with no address says so and holds the command", async () => {
   expect(screen.queryByText(/git remote add origin/)).toBeNull();
 });
 
-/** The engine as stubEngine answers it, the archive's probe answered `status`; every probe kept. */
-function stubArchive(status: number, repo: Record<string, unknown> = detail()) {
+/** The engine as stubEngine answers it, and every request to a download route kept by its method. */
+function stubArchive(repo: Record<string, unknown> = detail()) {
   const asked = stubEngine(repo);
   const engine = vi.mocked(fetch).getMockImplementation()!;
   const probes: string[] = [];
@@ -1260,9 +1265,9 @@ function stubArchive(status: number, repo: Record<string, unknown> = detail()) {
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));
-      if (url.pathname !== "/git/web/-/archive.zip") return engine(input, init);
+      if (!url.pathname.startsWith("/git/web/-/")) return engine(input, init);
       probes.push(init?.method ?? "GET");
-      return new Response(null, { status });
+      return new Response(null, { status: 405 });
     }),
   );
   return { asked, probes };
@@ -1276,7 +1281,7 @@ const zipOf = (panel: HTMLElement) =>
 // DOWNLOAD ZIP IS THE LISTING'S COMMIT, whole, never the branch's name, which
 // the route refuses. Mutation: link `rev=` to the address's ref, and this fails.
 test("Download ZIP downloads the commit the listing resolved", async () => {
-  stubArchive(405);
+  stubArchive();
   mount("#/gitlet/repos/web?ref=feature");
 
   const panel = await openCode();
@@ -1287,34 +1292,20 @@ test("Download ZIP downloads the commit the listing resolved", async () => {
   expect(link.getAttribute("title")).toBe("Every file of 0123456, as a ZIP");
 });
 
-// AN OLDER FLEET HOLDS THE DOWNLOAD WITH ITS REASON, asked once per name, on the
-// menu's first opening. Mutation: draw the link on a 404, or probe on the page's
-// mount or on every opening, and this fails.
-test("Download ZIP is held on a fleet that does not serve it, and the probe is asked once", async () => {
-  const { probes } = stubArchive(404);
+// THE DOWNLOAD ROUTES ARE THE ENGINE'S OWN, so nothing asks them first: a
+// probe was a failed request in every reader's console. Mutation: probe the
+// archive before linking it, and this fails.
+test("Download ZIP is linked with no request to the archive first", async () => {
+  const { probes } = stubArchive();
   mount("#/gitlet/repos/web");
-  await screen.findByRole("link", { name: "src" });
+  const panel = await openCode();
+  await waitFor(() => expect(zipOf(panel).tagName).toBe("A"));
   expect(probes).toEqual([]);
-
-  let panel = await openCode();
-  const held = await waitFor(() => {
-    const zip = zipOf(panel);
-    expect(zip.getAttribute("aria-disabled")).toBe("true");
-    const why = document.getElementById(zip.getAttribute("aria-describedby") ?? "");
-    expect(why?.textContent).toBe("Downloading a ZIP is not available on this fleet yet.");
-    return zip;
-  });
-  expect(held.tagName).toBe("BUTTON");
-  fireEvent.keyDown(panel, { key: "Escape" });
-  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  panel = await openCode();
-  await waitFor(() => expect(zipOf(panel).getAttribute("aria-disabled")).toBe("true"));
-  expect(probes).toEqual(["HEAD"]);
 });
 
 // A COMMIT NOT YET KNOWN IS NO DOWNLOAD: held, saying what it waits for.
 test("Download ZIP is held while the listing's commit is unknown", async () => {
-  const { asked } = stubArchive(405);
+  const { asked } = stubArchive();
   let release = () => {};
   const engine = vi.mocked(fetch).getMockImplementation()!;
   vi.stubGlobal(
@@ -1343,7 +1334,7 @@ test("Download ZIP is held while the listing's commit is unknown", async () => {
 // A LISTING THAT FAILED IS NO DOWNLOAD: held, saying the commit could not be read.
 // Mutation: say it waits for the commit instead, and this fails.
 test("Download ZIP is held with its reason when the listing fails", async () => {
-  stubArchive(405);
+  stubArchive();
   const engine = vi.mocked(fetch).getMockImplementation()!;
   vi.stubGlobal(
     "fetch",
@@ -1454,6 +1445,27 @@ test("the blame is read at the file's commit and heads each run of lines once", 
   expect(reads(asked, "code_blame")[0]?.searchParams.get("ref")).toBe(HEAD);
 });
 
+// AN EMPTY LINE IS DRAWN EMPTY, and only a line the engine marks too long
+// (`text_bytes`) says its size. Mutation: read a missing `text` as elided, and
+// the blank line reads "(a line of 0 B)".
+test("a blame draws an empty line empty and says the size of one too long to send", async () => {
+  stubEngine(detail(), [], {
+    "src/long.go": {
+      oid: OTHER,
+      text: "a\n\nb\n",
+      blame: [
+        { line: 1, commit: HEAD, orig_line: 1, text: "a" },
+        { line: 2, commit: HEAD, orig_line: 2 },
+        { line: 3, commit: HEAD, orig_line: 3, text_bytes: 4096 },
+      ],
+    },
+  });
+  mount("#/gitlet/repos/web?path=src%2Flong.go&lens=blame");
+  const table = await screen.findByRole("table", { name: /Who last changed each line/ });
+  const texts = [...table.querySelectorAll(".code-blame__text")].map((t) => t.textContent);
+  expect(texts).toEqual(["a", "", `(a line of ${fmtBytes(4096)})`]);
+});
+
 // The blame column is a cell, so its times keep the short form.
 test("the blame column says each run's time in the short form", async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -1465,6 +1477,22 @@ test("the blame column says each run's time in the short form", async () => {
     expect(
       [...document.querySelectorAll(".code-blame__when")].map((t) => t.textContent).sort(),
     ).toEqual(["7d ago", "8d ago"]),
+  );
+});
+
+// THE WHEN COLUMN FITS ITS LONGEST TIME: a run older than thirty days is
+// named by its date, which a column sized for "12d ago" drew under the face.
+// Mutation: keep the column at 7ch, and this fails.
+test("the blame's when column is as wide as its longest time", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-12-28T12:00:00Z"));
+  stubEngine(detail(), [], { "src/old.go": { oid: OTHER, text: "a\n" } });
+  mount("#/gitlet/repos/web?path=src%2Fold.go&lens=blame");
+  const table = await screen.findByRole("table", { name: /Who last changed each line/ });
+  const date = fmtDate("2026-10-20T10:00:00Z");
+  expect(date.length).toBeGreaterThan(7);
+  await waitFor(() =>
+    expect(table.style.getPropertyValue("--code-blame-when")).toBe(`${date.length}ch`),
   );
 });
 
@@ -2675,6 +2703,52 @@ test("a repository is deleted only once its name is typed back", async () => {
   expect(acted[0]).toEqual({ tool: "code_delete_repo", args: { repo: "web" } });
 });
 
+// THE READER'S OWN DELETE MOVES THEM TO ITS NOTICE: the Settings that held
+// Delete fold away, so the notice above the tabs is scrolled into view and
+// takes the focus. Mutation: leave the focus where the dialog dropped it, or
+// leave the scroll, and this fails.
+test("a delete brings the Deleted notice into view and focuses it", async () => {
+  const scrolled = watchScrolls();
+  const repo = detail({ managed_by: "tools" });
+  stubEngine(repo);
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (new URL(String(input)).pathname === "/operator/act/code_delete_repo") {
+        Object.assign(repo, { status: "deleted", deleted_at: "2026-10-30T10:00:00Z" });
+      }
+      return engine(input, init);
+    }),
+  );
+  mount("#/gitlet/repos/web?tab=settings", "web", MAINTAINER);
+  const del = await screen.findByRole("button", { name: "Delete repository" });
+  await waitFor(() => expect(del.getAttribute("title")).toBeNull());
+  fireEvent.click(del);
+  const dialog = await screen.findByRole("dialog", { name: "Delete web?" });
+  fireEvent.change(within(dialog).getByLabelText(/to confirm/), { target: { value: "web" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Delete repository" }));
+  const notice = await waitFor(() => {
+    const el = document.querySelector<HTMLElement>(".code-repo-notice");
+    expect(el).toBeTruthy();
+    return el!;
+  });
+  await waitFor(() => expect(document.activeElement).toBe(notice));
+  expect(scrolled).toContain(notice);
+});
+
+// A NOTICE DRAWN ON ARRIVAL TAKES NOTHING: a deleted repository opened, or
+// deleted by somebody else, leaves the focus where it is.
+test("a repository found deleted takes no focus to its notice", async () => {
+  stubEngine(
+    detail({ managed_by: "tools", status: "deleted", deleted_at: "2026-10-30T10:00:00Z" }),
+  );
+  mount("#/gitlet/repos/web", "web", MAINTAINER);
+  await screen.findByRole("button", { name: "Restore repository" });
+  await afterMicrotasks();
+  expect(document.activeElement).not.toBe(document.querySelector(".code-repo-notice"));
+});
+
 // A DECLARED REPOSITORY'S LIFE IS THE COMPANY DOCUMENT'S: its delete and its
 // protection are drawn and held with where they are changed. Mutation: hide
 // them, or let a declared repository through, and this fails.
@@ -2722,6 +2796,21 @@ test("the protect form offers exemptions from approval only beside an approval a
   expect(acted[0]?.args).toMatchObject({ approvals: "none" });
 });
 
+// A RENAME'S OLD ADDRESS SAYS WHEN THE OLD NAME IS LET GO as a moment a
+// person plans by: to the minute, never an engine log's seconds. Mutation:
+// format it with fmtDateTime, and this fails.
+test("an old name's notice says when it is released, to the minute", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-18T12:00:00Z"));
+  stubEngine(
+    detail({ redirect: "web-old", redirect_until: "2026-12-18T16:43:26Z", managed_by: "tools" }),
+  );
+  mount("#/gitlet/repos/web-old");
+  const notice = await screen.findByText(/is now called/);
+  expect(notice.textContent).toContain(fmtAt("2026-12-18T16:43:26Z", Date.now()));
+  expect(notice.textContent).not.toMatch(/:26/);
+});
+
 // A DELETED REPOSITORY SAYS SO ABOVE ITS TABS and offers its restore, one
 // code_restore_repo naming it. Mutation: drop the notice or its press and this
 // fails.
@@ -2740,6 +2829,42 @@ test("a deleted repository says so and is restored by one request", async () => 
   fireEvent.click(restore);
   await waitFor(() => expect(acted).toHaveLength(1));
   expect(acted[0]).toEqual({ tool: "code_restore_repo", args: { repo: "web" } });
+});
+
+// A DELETED REPOSITORY'S CONTENT IS NOT READ: its Code and Commits tabs say
+// so, and nothing offers to clone it, push to it, compare it or list its tags,
+// empty or not. Mutation: draw the files, the clone card or Compare for a
+// deleted repository, and this fails.
+test.each([
+  ["with content", {}],
+  ["empty", { head: undefined, branches: 0 }],
+])("a deleted repository %s reads no content and offers no clone or push", async (_, extra) => {
+  const deleted = detail({
+    managed_by: "tools",
+    status: "deleted",
+    deleted_at: "2026-10-30T10:00:00Z",
+    ...extra,
+  });
+  const asked = stubEngine(deleted);
+  mount("#/gitlet/repos/web", "web", MAINTAINER);
+  expect(await screen.findByText("web's files are not read while it is deleted")).toBeTruthy();
+  expect(screen.queryByText(CLONE_URL)).toBeNull();
+  expect(screen.queryByText(/git remote add origin/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "Code" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "Compare" })).toBeNull();
+
+  act(() => {
+    location.hash = "#/gitlet/repos/web?tab=commits";
+  });
+  expect(await screen.findByText("web's commits are not read while it is deleted")).toBeTruthy();
+  act(() => {
+    location.hash = "#/gitlet/repos/web?tab=branches&view=tags";
+  });
+  expect(await screen.findByText("web's tags are not read while it is deleted")).toBeTruthy();
+  await afterMicrotasks();
+  for (const read of ["code_tree", "code_log", "code_tags", "code_blob"]) {
+    expect(reads(asked, read)).toEqual([]);
+  }
 });
 
 // A BRANCH IS DELETED AT THE HEAD ITS ROW SHOWS, confirmed in the page first:
@@ -2850,6 +2975,27 @@ test("a tag is deleted at the value its row shows, held where a rule keeps it", 
   expect(acted[0]).toEqual({
     tool: "code_delete_tag",
     args: { repo: "web", tag: "v2", expected_target: OTHER },
+  });
+});
+
+// A DELETED BRANCH COMES BACK FROM ITS TOAST: Undo makes it again at the head
+// it was deleted at. Mutation: offer no Undo, or make it at the default
+// branch's head, and this fails.
+test("a deleted branch's Undo makes it again at the head it was deleted at", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail({ managed_by: "tools" }), acted);
+  mount("#/gitlet/repos/web?tab=branches", "web", MAINTAINER, true);
+  const del = await screen.findByRole("button", { name: "Delete feature" });
+  await waitFor(() => expect(del.getAttribute("title")).toBeNull());
+  fireEvent.click(del);
+  fireEvent.click(
+    within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete branch" }),
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+  await waitFor(() => expect(acted).toHaveLength(2));
+  expect(acted[1]).toEqual({
+    tool: "code_create_branch",
+    args: { repo: "web", branch: "feature", at: OTHER },
   });
 });
 
@@ -4745,7 +4891,7 @@ const reasonOf = (el: HTMLElement) =>
 // RAW AND DOWNLOAD NAME THE FILE'S COMMIT, whole, never the branch or the tag, which
 // the route refuses. Mutation: build `rev` from the address, and this fails.
 test("Raw and Download name the file's commit, never the branch", async () => {
-  stubArchive(405);
+  stubArchive();
   mount(MAIN_GO_AT);
   const raw = await screen.findByRole("link", { name: "Raw" });
   const path = "path=cmd%2Fweb%2Fmain.go";
@@ -4756,31 +4902,24 @@ test("Raw and Download name the file's commit, never the branch", async () => {
   expect(download.getAttribute("download")).toBe("main.go");
 
   cleanup();
-  stubArchive(405);
+  stubArchive();
   mount("#/gitlet/repos/web?ref=refs%2Ftags%2Fv1&path=cmd%2Fweb%2Fmain.go");
   expect((await screen.findByRole("link", { name: "Raw" })).getAttribute("href")).toBe(
     `/git/web/-/raw?rev=${HEAD}&${path}`,
   );
 });
 
-// AN OLDER FLEET HOLDS RAW AND DOWNLOAD with the reason, probed once for the page.
-// Mutation: draw the links on a 404, or probe on every file, and this fails.
-test("Raw and Download are held on a fleet that serves no downloads, probed once", async () => {
-  const { probes } = stubArchive(404);
+// RAW AND DOWNLOAD ARE LINKED WITH NO PROBE, on every file. Mutation: ask the
+// raw route before linking it, and this fails.
+test("Raw and Download are linked with no request to the route first", async () => {
+  const { probes } = stubArchive();
   mount(MAIN_GO_AT);
-  const raw = await waitFor(() => {
-    const held = screen.getByRole("button", { name: "Raw" });
-    expect(reasonOf(held)).toBe("Downloading a file is not available on this fleet yet.");
-    return held;
-  });
-  expect(raw.getAttribute("aria-disabled")).toBe("true");
-  const download = screen.getByRole("button", { name: "Download main.go" });
-  expect(reasonOf(download)).toBe("Downloading a file is not available on this fleet yet.");
+  await screen.findByRole("link", { name: "Raw" });
   act(() => {
     location.hash = "#/gitlet/repos/web?path=go.mod";
   });
-  await screen.findByRole("button", { name: "Download go.mod" });
-  expect(probes).toEqual(["HEAD"]);
+  await screen.findByRole("link", { name: "Download go.mod" });
+  expect(probes).toEqual([]);
 });
 
 /** A file of two pages (BIG_PAGE_LINES and ten more), its lines `l<n>`. */
@@ -4827,6 +4966,73 @@ test("Copy copies the whole file, reading the pages not loaded", async () => {
   await screen.findByRole("button", { name: "Copied the file's contents" });
   expect(clip.written.at(-1)).toBe("package app\n\nfunc Run() {}\n");
   expect(reads(whole, "code_blob")).toHaveLength(before);
+});
+
+/** The engine as stubEngine answers it, the raw route answering picture bytes; every raw read kept. */
+function stubPictures(files: Record<string, Coded>, repo = detail()) {
+  stubEngine(repo, [], files);
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  const raws: URL[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), location.href);
+      if (url.pathname !== "/git/web/-/raw") return engine(input, init);
+      raws.push(url);
+      return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+        status: 200,
+        headers: { "Content-Type": "application/octet-stream", "Content-Length": "4" },
+      });
+    }),
+  );
+  const made: Blob[] = [];
+  vi.stubGlobal(
+    "URL",
+    Object.assign(URL, {
+      createObjectURL: (blob: Blob) => {
+        made.push(blob);
+        return `blob:picture-${made.length}`;
+      },
+      revokeObjectURL: () => {},
+    }),
+  );
+  return { raws, made };
+}
+
+// A PICTURE IS SHOWN, never called a binary file nobody can see: its bytes read
+// from the raw route at the file's commit and shown as their own type.
+// Mutation: answer every binary file "Git draws no lines", and this fails.
+test("a picture file is shown from the raw route at the file's commit", async () => {
+  const { raws, made } = stubPictures({
+    "assets/logo.png": { oid: OTHER, text: "x\n", binary: true, size: 4 },
+  });
+  mount("#/gitlet/repos/web?path=assets%2Flogo.png");
+  const img = await screen.findByRole("img", { name: "logo.png" });
+  expect(img.getAttribute("src")).toBe("blob:picture-1");
+  expect(made[0]?.type).toBe("image/png");
+  expect(raws[0]?.searchParams.get("rev")).toBe(HEAD);
+  expect(raws[0]?.searchParams.get("path")).toBe("assets/logo.png");
+  expect(screen.queryByText("Git draws no lines of a binary file.")).toBeNull();
+});
+
+// A README'S PICTURE IS THE REPOSITORY'S FILE at the README's commit, its path
+// read from the README's directory; another host's is never fetched. Mutation:
+// render the README with no image resolver, and the logo reads as its alt text.
+test("a README's relative picture is read from the repository at its commit", async () => {
+  const { raws } = stubPictures({
+    "README.md": {
+      oid: OTHER,
+      text: "# Hi\n\n![logo](./assets/logo.png) ![badge](https://ci.example.com/b.svg)\n",
+    },
+  });
+  mount("#/gitlet/repos/web");
+  const img = await screen.findByRole("img", { name: "logo" });
+  expect(img.getAttribute("src")).toBe("blob:picture-1");
+  expect(raws.map((u) => u.searchParams.get("path"))).toEqual(["assets/logo.png"]);
+  expect(raws[0]?.searchParams.get("rev")).toBe(HEAD);
+  // ANOTHER HOST'S PICTURE IS NEVER FETCHED: it reads as the renderer draws it without a resolver.
+  expect(screen.queryByRole("img", { name: "badge" })).toBeNull();
+  expect(screen.getByText("badge")).toBeTruthy();
 });
 
 // COPY IS HELD WITH ITS REASON for a binary file and past 1 MiB, and says when the

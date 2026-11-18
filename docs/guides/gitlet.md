@@ -156,10 +156,11 @@ ref moved, as you:
   over;
 - **Branches**: **New branch** at a branch, a tag or a commit
   (`code_create_branch`), and **Delete** at the head the row shows
-  (`code_delete_branch`), after a confirmation; on **Tags**, **New tag** at a
-  branch or a commit, annotated where you give it a message
-  (`code_create_tag`), and a tag's **Delete** at the value the row shows
-  (`code_delete_tag`), held where a protection rule keeps the tag;
+  (`code_delete_branch`), after a confirmation, its toast's **Undo** making
+  it again at that head; on **Tags**, **New tag** at a branch or a commit,
+  annotated where you give it a message (`code_create_tag`), and a tag's
+  **Delete** at the value the row shows (`code_delete_tag`), held where a
+  protection rule keeps the tag;
 - a commit's page bar: **Browse files**, **Revert** and **Cherry-pick** onto
   a branch you choose (`code_revert`, `code_cherry_pick`); a conflict commits
   nothing. **Tag** tags the commit (`code_create_tag`). A commit's page says how it was pushed and how it landed, with the

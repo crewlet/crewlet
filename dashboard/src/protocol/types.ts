@@ -9606,7 +9606,9 @@ export interface CodeBlameLine {
   commit: string;
   orig_line: number;
   orig_path?: string;
+  /** Left out for an empty line too. */
   text?: string;
+  /** Its size where its text was too long to send: the one mark of a line elided. */
   text_bytes?: number;
 }
 

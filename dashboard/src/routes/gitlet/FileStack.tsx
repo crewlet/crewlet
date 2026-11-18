@@ -61,6 +61,7 @@ import { statusWord } from "./FileTree.tsx";
 import { PatchPager } from "./PatchPager.tsx";
 import { repoHref } from "./paths.ts";
 import { useDiffSides, useDiffTokens, useExpandLines } from "./syntax.tsx";
+import { SlashBreaks } from "./ui.tsx";
 import { changePartParams, refusedWords, useAskAgainWhenMoved } from "./change/reads.ts";
 import "~/styles/gitlet.css";
 
@@ -603,7 +604,11 @@ function PathWords({ path }: { path: string }) {
   const slash = path.lastIndexOf("/");
   return (
     <>
-      {slash >= 0 && <span className="code-file__dir">{path.slice(0, slash + 1)}</span>}
+      {slash >= 0 && (
+        <span className="code-file__dir">
+          <SlashBreaks text={path.slice(0, slash + 1)} />
+        </span>
+      )}
       <span>{path.slice(slash + 1)}</span>
     </>
   );

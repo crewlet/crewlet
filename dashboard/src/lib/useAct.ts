@@ -97,6 +97,11 @@ export interface PressLabel {
    * on the result `run` resolves with, in the person's words.
    */
   drawsCaveats?: boolean;
+  /**
+   * The press that takes an applied write back, offered as the toast's Undo:
+   * a branch deleted is made again at the head it had.
+   */
+  undo?: () => void;
 }
 
 /** How one press is sent. */
@@ -269,16 +274,20 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
           // long it stays is the caveat's to say ([caveatToast]); the
           // variant's own duration applies.
           const caveated = press.label.drawsCaveats ? null : caveatToast(result.caveats);
+          const undo = press.label.undo;
+          const action = undo ? { action: { label: "Undo", onClick: undo } } : {};
           if (caveated) {
             toast.show({
               variant: caveated.variant,
               title: press.label.done,
               message: caveated.message,
+              ...action,
             });
           } else {
             const said = press.label.landed?.(result.receipt);
-            if (said) toast.show({ variant: "success", title: press.label.done, message: said });
-            else toast.ok(press.label.done);
+            if (said)
+              toast.show({ variant: "success", title: press.label.done, message: said, ...action });
+            else toast.ok(press.label.done, action);
           }
           break;
         }

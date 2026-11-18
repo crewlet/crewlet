@@ -11,11 +11,20 @@
  * the company document's, and either takes maintain (`lib/repoWrites.ts`).
  */
 
-import { useState } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   Button,
   Callout,
   ConfirmField,
+  EmptyState,
   FormField,
   Input,
   Stack,
@@ -24,7 +33,7 @@ import {
 import { Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { fmtDateTime } from "~/lib/format.ts";
-import { deleteHeld, restoreHeld } from "~/lib/repoWrites.ts";
+import { contentHeld, deleteHeld, restoreHeld } from "~/lib/repoWrites.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { CodeRepoDetail } from "~/protocol/index.ts";
@@ -50,8 +59,22 @@ export function DeleteRepoControl({ repo }: { repo: CodeRepoDetail }) {
   );
 }
 
+/** The repository this page just deleted, whose notice is brought into view and focused once drawn. */
+const DeletedHere = createContext<{ name: string | null; set: (name: string | null) => void }>({
+  name: null,
+  set: () => {},
+});
+
+/** Around a repository's page: where its delete tells its notice to come into view. */
+export function DeletedHereProvider({ children }: { children: ReactNode }) {
+  const [name, set] = useState<string | null>(null);
+  const value = useMemo(() => ({ name, set }), [name]);
+  return <DeletedHere.Provider value={value}>{children}</DeletedHere.Provider>;
+}
+
 function DeleteDialog({ repo, onClose }: { repo: CodeRepoDetail; onClose: () => void }) {
   const write = useAct("code_delete_repo");
+  const here = useContext(DeletedHere);
   const [typed, setTyped] = useState("");
   const [reason, setReason] = useState("");
   const blocked = confirmMatches(typed, repo.name) ? undefined : "Type its name to confirm.";
@@ -61,7 +84,10 @@ function DeleteDialog({ repo, onClose }: { repo: CodeRepoDetail; onClose: () => 
       { repo: repo.name, ...(reason.trim() ? { reason: reason.trim() } : {}) },
       { done: `Deleted ${repo.name}` },
     );
-    if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
+    if (result && (result.kind === "applied" || result.kind === "pending")) {
+      here.set(repo.name);
+      onClose();
+    }
   };
   return (
     <Modal
@@ -116,26 +142,52 @@ function DeleteDialog({ repo, onClose }: { repo: CodeRepoDetail; onClose: () => 
 export function DeletedNotice({ repo }: { repo: CodeRepoDetail }) {
   const write = useAct("code_restore_repo");
   const viewer = useViewer();
+  const here = useContext(DeletedHere);
+  const place = useRef<HTMLDivElement>(null);
+  // THE READER'S OWN DELETE MOVES THEM HERE: the control they pressed is gone
+  // with the page that held it, and the notice may lie above the scroll.
+  const arrived = here.name === repo.name;
+  useEffect(() => {
+    if (!arrived) return;
+    place.current?.focus({ preventScroll: true });
+    place.current?.scrollIntoView?.({ block: "nearest" });
+    here.set(null);
+  }, [arrived, here]);
   return (
-    <Callout variant="warning">
-      <Stack gap={2}>
-        <span>
-          {repo.name} is deleted
-          {repo.deleted_at ? `, since ${fmtDateTime(repo.deleted_at)}` : ""}: nobody clones it or
-          pushes to it. It can be restored as it was until it is purged.
-        </span>
-        <span>
-          <WriteButton
-            write={write}
-            size="small"
-            variant="secondary"
-            blocked={restoreHeld(repo, viewer)}
-            onPress={() => void write.run({ repo: repo.name }, { done: `Restored ${repo.name}` })}
-          >
-            Restore repository
-          </WriteButton>
-        </span>
-      </Stack>
-    </Callout>
+    <div ref={place} className="code-repo-notice" tabIndex={-1}>
+      <Callout variant="warning">
+        <Stack gap={2}>
+          <span>
+            {repo.name} is deleted
+            {repo.deleted_at ? `, since ${fmtDateTime(repo.deleted_at)}` : ""}: nobody clones it or
+            pushes to it. It can be restored as it was until it is purged.
+          </span>
+          <span>
+            <WriteButton
+              write={write}
+              size="small"
+              variant="secondary"
+              blocked={restoreHeld(repo, viewer)}
+              onPress={() => void write.run({ repo: repo.name }, { done: `Restored ${repo.name}` })}
+            >
+              Restore repository
+            </WriteButton>
+          </span>
+        </Stack>
+      </Callout>
+    </div>
+  );
+}
+
+/**
+ * A tab that reads a deleted repository's content (its files, its history,
+ * its tags): none is read, and no clone or push is offered, until its restore.
+ */
+export function GoneContent({ repo, what }: { repo: CodeRepoDetail; what: string }) {
+  return (
+    <EmptyState
+      title={`${repo.name}'s ${what} are not read while it is deleted`}
+      description={contentHeld(repo) ?? ""}
+    />
   );
 }
