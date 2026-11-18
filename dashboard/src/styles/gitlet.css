@@ -263,8 +263,8 @@
   text-decoration: none;
 }
 
-/* THE TAB ROW'S NOTE: the head's lines added and removed, five squares told by
-   shape (filled added, hollow removed); the diff colours stay a diff's own. */
+/* A DIFFSTAT: lines added and removed in the diff family's inks, five squares
+   told by shape too (filled added, hollow removed). */
 .code-diffstat {
   display: inline-flex;
   align-items: center;
@@ -288,8 +288,34 @@
   border-radius: 2px;
 }
 
+.code-diffstat__added {
+  color: var(--color-diff-added-sign);
+}
+
+.code-diffstat__removed {
+  color: var(--color-diff-removed-sign);
+}
+
 .code-diffstat__squares > [data-kind="added"] {
-  background: currentColor;
+  border-color: var(--color-diff-added-mark);
+  background: var(--color-diff-added-mark);
+}
+
+.code-diffstat__squares > [data-kind="removed"] {
+  border-color: var(--color-diff-removed-mark);
+}
+
+/* Forced colours drop the fills; the filled square keeps its shape in the text colour. */
+@media (forced-colors: active) {
+  .code-diffstat__squares > [data-kind="added"] {
+    forced-color-adjust: none;
+    border-color: CanvasText;
+    background: CanvasText;
+  }
+
+  .code-diffstat__squares > [data-kind="removed"] {
+    border-color: GrayText;
+  }
 }
 
 /* MORE: where the change came from, then whom its records notified. */
@@ -328,54 +354,197 @@
   padding: var(--spacing-4);
 }
 
-/* THE MERGE BOX: the standing across its head, the conditions, the controls. */
+/* THE MERGE BOX: a section per condition, each on its disc, then the controls. */
 .code-merge-box {
   overflow: hidden;
 }
 
-.code-merge-box__head {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--spacing-3);
+.code-merge-box__section {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--spacing-3);
+  row-gap: var(--spacing-2);
   padding: var(--spacing-3) var(--spacing-4);
 }
 
-.code-merge-box__glyph {
-  flex: none;
-  display: inline-flex;
-  color: var(--color-text-tertiary);
+.code-merge-box__section + .code-merge-box__section {
+  border-block-start: 1px solid var(--color-border-default);
 }
 
-/* COLOUR IS STATE: a change every condition of which is met is ready, done
-   with every question its gate asks. */
-.code-merge-box__glyph--done {
-  color: var(--color-feedback-success-ink);
-}
-
-.code-merge-box__title {
+.code-merge-box__words {
+  grid-column: 2;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
   min-width: 0;
 }
 
-.code-merge-box__said {
-  color: var(--color-text-secondary);
+.code-merge-box__title {
   font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
 }
 
-.code-merge-box__checks {
-  padding: var(--spacing-2) var(--spacing-4);
+.code-merge-box__said {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.code-merge-box__end {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacing-2);
+}
+
+.code-merge-box__faces {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+.code-merge-box__more {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* A SECTION'S ROWS: the check rows and a conflict's paths, under its words. */
+.code-merge-checks,
+.code-merge-paths,
+.code-merge-checks__pane {
+  grid-column: 2 / -1;
+  margin: 0;
+}
+
+.code-merge-checks {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+.code-merge-checks[hidden] {
+  display: none;
+}
+
+.code-merge-check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-3);
+  font-size: var(--font-size-xs);
+}
+
+.code-merge-check + .code-merge-check {
   border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-merge-check__said {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+.code-merge-check__said > strong {
+  color: var(--color-text-primary);
+}
+
+.code-merge-check__end {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-merge-check__details {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+.code-merge-paths {
+  padding-inline-start: var(--spacing-4);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
 }
 
 .code-merge-box__controls {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-2);
+  gap: var(--spacing-3);
   padding: var(--spacing-3) var(--spacing-4);
   border-block-start: 1px solid var(--color-border-default);
   background: var(--color-surface-subtle);
+}
+
+.code-merge-box__how,
+.code-merge-box__act {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+
+.code-merge-box__ticks {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2) var(--spacing-4);
+  margin-inline-start: auto;
+}
+
+.code-merge-box__sum {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.code-merge-box__sum > :first-child {
+  flex: 0 0 72px;
+}
+
+/* WHAT THE PRESS WILL DO, beside Gitlet's mark at the row's end, whatever its length. */
+.code-merge-box__note {
+  display: inline-flex;
+  flex: 1 1 16rem;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacing-2);
+  min-width: 0;
+  margin: 0 0 0 auto;
+  text-align: end;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: normal;
+}
+
+@container page (width < 640px) {
+  .code-merge-box__section {
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+  .code-merge-box__end {
+    grid-column: 2 / -1;
+    justify-content: flex-start;
+  }
+  .code-merge-box__ticks {
+    flex-direction: column;
+    margin-inline-start: 0;
+  }
+  .code-merge-box__note {
+    flex-basis: 100%;
+    justify-content: flex-start;
+    margin-inline-start: 0;
+    text-align: start;
+  }
 }
 
 /* A LIVE CHANGE'S CONDITIONS TO MERGE: a glyph, the condition, and what it
@@ -450,9 +619,23 @@
   border-block-start: 2px solid var(--color-border-default);
 }
 
+/* AFTER THE BREAK: a spine from the merge box's disc down to the composer's face, no further. */
+.code-timeline--tail::before {
+  content: none;
+}
+
+.code-timeline--tail > .code-timeline__item:first-child::before {
+  content: "";
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: calc(-1 * (var(--tl-col) + var(--tl-gap)) + var(--tl-col) / 2 - 1px);
+  block-size: calc(100% + var(--spacing-4));
+  border-inline-start: 2px solid var(--color-border-default);
+}
+
 /* THE RAIL: a line down the face column's centre, every record hung on it in
    log order. A card stands to the right of its writer's face; a row's disc
-   sits on the rail itself. Only a review's disc takes a hue (rule C7). */
+   sits on the rail itself. A review's disc and the merge box's discs take a hue (rule C7). */
 .code-timeline {
   --tl-col: 32px;
   --tl-gap: var(--spacing-3);
@@ -566,7 +749,8 @@
   margin-inline-end: var(--spacing-1);
 }
 
-/* THE DISC: a glyph on a round ground; neutral, or a review's verdict (C7). */
+/* THE DISC: a glyph on a round ground; neutral, a review's verdict or a merge condition's
+   standing (C7). Each tint lies on an opaque ground, so the spine never shows through. */
 .code-disc {
   display: inline-grid;
   place-items: center;
@@ -586,14 +770,40 @@
 
 .code-disc[data-tone="success"] {
   border-color: var(--color-feedback-success-line);
-  background: var(--color-feedback-success-soft);
+  background:
+    linear-gradient(var(--color-feedback-success-soft), var(--color-feedback-success-soft)),
+    var(--color-surface-subtle);
   color: var(--color-feedback-success-ink);
 }
 
 .code-disc[data-tone="danger"] {
   border-color: var(--color-feedback-danger-line);
-  background: var(--color-feedback-danger-soft);
+  background:
+    linear-gradient(var(--color-feedback-danger-soft), var(--color-feedback-danger-soft)),
+    var(--color-surface-subtle);
   color: var(--color-feedback-danger-ink);
+}
+
+.code-disc[data-tone="info"] {
+  border-color: var(--color-feedback-info-line);
+  background:
+    linear-gradient(var(--color-feedback-info-soft), var(--color-feedback-info-soft)),
+    var(--color-surface-subtle);
+  color: var(--color-feedback-info-ink);
+}
+
+.code-disc[data-tone="warning"] {
+  border-color: var(--color-feedback-warning-line);
+  background:
+    linear-gradient(var(--color-feedback-warning-soft), var(--color-feedback-warning-soft)),
+    var(--color-surface-subtle);
+  color: var(--color-feedback-warning-ink);
+}
+
+/* THE MERGE BOX'S DISC on the spine, 40 px. */
+.code-disc[data-size="large"] {
+  inline-size: 40px;
+  block-size: 40px;
 }
 
 .code-tl-strong {
@@ -672,6 +882,10 @@
   .code-disc[data-size="small"] {
     inline-size: 20px;
     block-size: 20px;
+  }
+  .code-disc[data-size="large"] {
+    inline-size: 24px;
+    block-size: 24px;
   }
   .code-tl-event__end {
     flex-basis: 100%;
@@ -759,18 +973,8 @@
   min-width: 0;
 }
 
-/* A COMMENT OF THE READER'S OWN, at the foot: their face, then the box. */
+/* A COMMENT OF THE READER'S OWN, at the foot, its face on the spine. */
 .code-compose {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--spacing-3);
-}
-
-.code-compose__box {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: var(--spacing-2);
   min-width: 0;
 }
 
@@ -780,6 +984,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--spacing-2);
+  inline-size: 100%;
 }
 
 .code-carries {
@@ -860,27 +1065,106 @@
   margin: 0;
 }
 
-.code-rail__stack {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
+/* A ROW LED BY A GLYPH: the sentence wraps beside it, never under it. */
+.code-rail__row--lead {
+  flex-wrap: nowrap;
+  align-items: flex-start;
 }
 
-.code-rail__paths {
-  margin: 0;
-  padding-inline-start: var(--spacing-4);
-  font-size: var(--font-size-xs);
-  overflow-wrap: anywhere;
+.code-rail__row--lead > .code-rail__note {
+  min-width: 0;
 }
 
 .code-rail__branches {
   display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+/* A SECTION'S HEAD: its title, and what acts on it at the end. */
+.code-rail__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+  min-block-size: 24px;
+}
+
+.code-rail__head > a {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--spacing-1);
+  white-space: nowrap;
+}
+
+.code-rail__line {
+  display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-1);
+}
+
+.code-rail__end {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  margin-inline-start: auto;
+}
+
+/* A REVIEWER'S VERDICT MARK in its verdict's tone, the verdict said beside it (C7). */
+.code-rail__mark {
+  display: inline-flex;
+  color: var(--color-text-tertiary);
+}
+
+.code-rail__mark[data-tone="success"] {
+  color: var(--color-feedback-success-ink);
+}
+
+.code-rail__mark[data-tone="danger"] {
+  color: var(--color-feedback-danger-ink);
+}
+
+/* AN ASK THAT WAITS: a dot in the waiting party's tone, its words in its title. */
+.code-rail__dot {
+  inline-size: 8px;
+  block-size: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-text-tertiary);
+}
+
+.code-rail__dot[data-tone="warning"] {
+  background: var(--color-feedback-warning-ink);
+}
+
+.code-rail__dot[data-tone="info"] {
+  background: var(--color-feedback-info-ink);
+}
+
+.code-rail__checks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
   margin: 0;
+  padding: 0;
+  list-style: none;
   font-size: var(--font-size-sm);
-  overflow-wrap: anywhere;
+}
+
+.code-rail__checks > li {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-rail__faces {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1);
+  margin: 0;
 }
 
 /* PROVENANCE: the change's record, a card of its properties, at a reading
@@ -898,22 +1182,27 @@
   align-items: start;
 }
 
+.code-files[data-tree="hidden"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 @container page (width < 720px) {
   .code-files {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  .code-files__pane {
+    position: static;
+  }
+
+  .code-files__pane .code-tree__scroll {
+    max-block-size: calc(100cqb / 2);
+  }
 }
 
-.code-files__totals {
-  margin: 0;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
-/* THE FILE TREE: directories with their glyph, files a row each — status
-   letter, name, counts — the one on screen pressed. */
-.code-ftree,
-.code-ftree__nested {
+/* THE FILE TREE: the kit's tree rows (`.code-tree__item`), each file's
+   badges, counts and status square at its end. */
+.code-ftree {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-0);
@@ -923,74 +1212,40 @@
   min-width: 0;
 }
 
-.code-ftree__nested {
-  padding-inline-start: var(--spacing-4);
-}
-
-.code-ftree__dir {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.code-ftree__dirname {
-  display: flex;
+.code-ftree__facts {
+  display: inline-flex;
   align-items: center;
   gap: var(--spacing-2);
-  padding: var(--spacing-1) var(--spacing-2);
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-  overflow-wrap: anywhere;
-}
-
-.code-ftree__file {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  width: 100%;
-  padding: var(--spacing-1) var(--spacing-2);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: inherit;
-  font: inherit;
-  font-size: var(--font-size-sm);
-  text-align: start;
-  cursor: pointer;
-}
-
-.code-ftree__file:hover {
-  background: var(--color-surface-hover);
-}
-
-.code-ftree__file[aria-current="true"] {
-  background: var(--color-surface-pressed);
-  font-weight: var(--font-weight-medium);
-}
-
-.code-ftree__status {
-  flex: none;
-  display: inline-grid;
-  place-items: center;
-  inline-size: var(--spacing-4);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-xs);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-secondary);
-}
-
-.code-ftree__name {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow-wrap: anywhere;
+  font-size: var(--font-size-xs);
 }
 
 .code-ftree__counts {
-  flex: none;
-  font-size: var(--font-size-xs);
+  display: inline-flex;
+  gap: var(--spacing-1);
+  font-family: var(--font-family-mono);
   font-variant-numeric: tabular-nums;
+}
+
+/* A FILE'S STATUS in the kit's file ink, beside its word in the row's name. */
+.code-ftree__status {
+  display: inline-flex;
   color: var(--color-text-tertiary);
+}
+
+.code-ftree__status[data-status="A"] {
+  color: var(--color-file-added-ink);
+}
+
+.code-ftree__status[data-status="M"] {
+  color: var(--color-file-modified-ink);
+}
+
+.code-ftree__status[data-status="D"] {
+  color: var(--color-file-deleted-ink);
+}
+
+.code-ftree__status[data-status="R"] {
+  color: var(--color-file-renamed-ink);
 }
 
 /* ONE FILE'S DIFF: its head — path, what became of it, its counts, the way
@@ -1000,32 +1255,6 @@
   flex-direction: column;
   gap: var(--spacing-3);
   min-width: 0;
-}
-
-.code-diff-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-1) var(--spacing-3);
-  padding: var(--spacing-2) var(--spacing-3);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-subtle);
-}
-
-.code-diff-head__path {
-  min-width: 0;
-  font-weight: var(--font-weight-semibold);
-  overflow-wrap: anywhere;
-}
-
-.code-diff-head__facts {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
-.code-diff-head__view {
-  margin-inline-start: auto;
 }
 
 /* A FINDING, as a card under its review or its line: its weight, subject,
@@ -1819,6 +2048,8 @@
 }
 
 .code-tree__item .code-ftree__name {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1836,7 +2067,8 @@
 }
 
 /* THE FILE ON SCREEN: the selected tint and the accent edge; forced colours paint its outline. */
-.code-tree__item[aria-current="page"] {
+.code-tree__item[aria-current="page"],
+.code-tree__item[aria-current="true"] {
   background: var(--color-surface-selected);
   box-shadow: inset 2px 0 0 var(--color-brand-accent);
   outline: 2px solid transparent;
@@ -3218,22 +3450,90 @@
   color: var(--color-text-secondary);
 }
 
-/* HOW IT ARRIVED AND ITS CHANGES, side by side where there is room. */
-.code-commit-cards {
+/* A COMMIT'S PROVENANCE: a row a fact, its glyph in a quiet disc, its time at the row's end
+   (under its second line where the card is narrow). */
+.code-prov-card {
+  container: code-prov / inline-size;
+}
+
+.code-prov {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.code-prov__row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--spacing-4);
+  grid-template-columns: var(--size-control-sm) minmax(0, 1fr) auto;
+  gap: var(--spacing-1) var(--spacing-3);
   align-items: start;
+  padding: var(--spacing-3) var(--spacing-4);
 }
 
-@container page (width < 720px) {
-  .code-commit-cards {
-    grid-template-columns: minmax(0, 1fr);
+.code-prov__row + .code-prov__row {
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-prov__disc {
+  display: inline-flex;
+  grid-row: span 2;
+  align-items: center;
+  justify-content: center;
+  inline-size: var(--size-control-sm);
+  block-size: var(--size-control-sm);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-inset);
+  color: var(--color-text-tertiary);
+}
+
+.code-prov__sentence {
+  grid-column: 2;
+  margin: 0;
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.code-prov__more {
+  grid-column: 2;
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.code-prov__time {
+  grid-column: 3;
+  grid-row: 1;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+/* A NAME AND ITS FACE stay together when a sentence wraps. */
+.code-prov__who {
+  white-space: nowrap;
+}
+
+.code-prov__ref {
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-prov__bound {
+  margin: 0;
+  padding: 0 var(--spacing-4) var(--spacing-3);
+}
+
+@container code-prov (width < 640px) {
+  .code-prov__row {
+    grid-template-columns: var(--size-control-sm) minmax(0, 1fr);
   }
-}
 
-.code-commit-card {
-  min-width: 0;
+  .code-prov__time {
+    grid-column: 2;
+    grid-row: auto;
+  }
 }
 
 /* ---- The workspace's listings ---------------------------------------------- */
@@ -3348,31 +3648,127 @@
   margin-inline-start: auto;
 }
 
-/* A PUSH'S REFS: a ref a line — its glyph, its name, what became of it and
-   the commits it moved between. */
+/* A PUSH'S REFS: one bordered block a ref, its glyph, what became of it, its name and its ids. */
 .code-push-refs {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: var(--spacing-1);
   min-width: 0;
 }
 
 .code-push-ref {
-  display: flex;
+  display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-1) var(--spacing-2);
+  max-width: 100%;
   min-width: 0;
+  padding: var(--spacing-1) var(--spacing-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-elevated);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
 }
 
 .code-push-ref__name {
-  font-family: var(--font-family-mono);
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
 .code-push-ref__word {
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-push-ref__ids {
+  white-space: nowrap;
+}
+
+/* THE PUSHES FEED: a sentence a push, its chips under it, its time and pack at its end. */
+.code-pushes-feed .code-list__aside {
+  margin-inline-start: 0;
+  font-weight: var(--font-weight-medium);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+
+.code-push-sentence {
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-secondary);
+}
+
+.code-push-sentence > strong {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.code-push-change {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-push-facts {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--spacing-1);
+  align-self: start;
   font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+
+.code-push-pack {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+/* THE TOTAL at the toolbar's end, on its own line's end once the toolbar wraps. */
+.code-pushes-total {
+  margin-inline-start: auto;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.code-pushes-total > strong {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+/* A RULE'S PATTERN on its own line, its words under it. */
+.code-pushes-rule {
+  display: block;
+}
+
+/* A REFUSED HISTORY: the engine's sentence, then Clear filters while narrowed. */
+.code-pushes-refused {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+}
+
+.code-push-stored {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  margin: var(--spacing-2) 0 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+@container code-list (width < 640px) {
+  .code-push-facts {
+    flex-direction: row;
+    gap: var(--spacing-2);
+  }
 }
 
 /* ---- Gitlet › Search ------------------------------------------------------ */
@@ -3544,4 +3940,393 @@
 
 .code-repo-title__link:hover {
   color: var(--color-text-primary);
+}
+
+/* THE FILES' TOOLBAR: the tree's toggle, what is compared, Go to file, then
+   the layout and Finish review at its end; it wraps by groups. */
+.code-files-bar {
+  flex-wrap: wrap;
+}
+
+.code-files-bar__words {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+/* A DIFF'S TOTALS, its figures in the diffstat's inks. */
+.code-files-bar__totals {
+  margin: 0;
+}
+
+.code-files-bar__totals > strong {
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-files-bar .code-files-bar__find {
+  flex: 0 1 16rem;
+  inline-size: auto;
+  min-inline-size: 10rem;
+}
+
+.code-files-bar__end {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-inline-start: auto;
+}
+
+@container page (width < 640px) {
+  .code-files-bar__layout {
+    display: none;
+  }
+
+  .code-files-bar .code-files-bar__find {
+    flex: 1 1 10rem;
+  }
+}
+
+/* THE PANE'S FOOT: what the files are compared with, and what lies on them. */
+.code-tree__foot {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-block-start: 1px solid var(--color-border-default);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.code-tree__said {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* THE STACK: every file a card, its head stuck under the toolbar as its body scrolls by. */
+.code-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+.code-stack > .code-file {
+  gap: 0;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
+  overflow: clip;
+  scroll-margin-top: var(--sticky-top);
+}
+
+/* A HEAD'S LEAD wraps inside itself; its counts and menu keep the first line's end. */
+.code-file__head {
+  position: sticky;
+  top: var(--sticky-top);
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--spacing-2);
+  padding: var(--spacing-1) var(--spacing-2);
+  border-block-end: 1px solid var(--color-border-default);
+  background: var(--color-surface-subtle);
+}
+
+/* THE LEAD IS A LINE OF TEXT, so the copy and tags follow the path's last word. */
+.code-file__lead {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.code-file__lead > * {
+  vertical-align: middle;
+}
+
+.code-file__lead > :not(:last-child) {
+  margin-inline-end: var(--spacing-1);
+}
+
+.code-file__path {
+  display: inline;
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  word-break: break-all;
+}
+
+.code-file__dir {
+  color: var(--color-text-secondary);
+  font-weight: var(--font-weight-regular);
+}
+
+.code-file__fold[aria-expanded="false"] svg {
+  rotate: -90deg;
+}
+
+.code-file__end {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-block-size: var(--size-control-sm);
+}
+
+.code-file__binary {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.code-file__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+  padding: var(--spacing-2);
+}
+
+/* THE DIFF IS FLUSH WITH THE CARD under its head; what is said around it keeps its padding. */
+.code-stack .code-file__body {
+  gap: 0;
+  padding: 0;
+}
+
+.code-file__outdated,
+.code-file__unplaced {
+  padding: var(--spacing-2);
+}
+
+.code-file__unplaced {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  border-block-end: 1px solid var(--color-border-default);
+}
+
+.code-file__unplaced > .code-file__note {
+  padding: 0;
+}
+
+.code-file__note {
+  margin: 0;
+  padding: var(--spacing-1) var(--spacing-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.code-file__pending {
+  padding: var(--spacing-2);
+}
+
+.code-file__pager {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2);
+}
+
+/* A GAP'S ROW: its controls in the numbers' gutter, git's hunk line in the code's column;
+   the gutter's width is in the code's face, as a line's. */
+.code-gap {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--spacing-2);
+  min-block-size: var(--size-control-sm);
+  padding: 0 var(--spacing-3) 0 var(--spacing-2);
+  background: var(--color-diff-hunk-row);
+  color: var(--color-text-tertiary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-compact);
+}
+
+/* UNDER A LINE, the row is the last of its notes and reaches the diff's edges. */
+.code-gap:not(.code-gap--lead, .code-gap--trail) {
+  margin: 0 calc(-1 * var(--spacing-3)) calc(-1 * var(--spacing-2));
+}
+
+.code-gap:not(.code-gap--lead, .code-gap--trail):first-child {
+  margin-block-start: calc(-1 * var(--spacing-2));
+}
+
+.code-gap--lead {
+  border-block-end: 1px solid var(--color-border-default);
+}
+
+.code-gap--trail {
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-gap__controls {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-inline-size: calc(var(--code-gap-digits) * 2ch + 2ch + var(--spacing-2) * 2);
+}
+
+.code-gap[data-split] .code-gap__controls {
+  min-inline-size: calc(var(--code-gap-digits) * 1ch + 2ch + var(--spacing-2));
+}
+
+:where(.code-gap__controls) > * {
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-xs);
+}
+
+.code-gap__header {
+  grid-column: 2;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.code-gap__failed {
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+/* FINISH REVIEW's words and the count of the head's drafts. */
+.code-finish {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+.code-finish__count {
+  min-inline-size: 1.25rem;
+  padding-inline: var(--spacing-1);
+  border-radius: var(--radius-pill);
+  background: color-mix(in oklab, var(--color-text-on-accent) 24%, transparent);
+  color: var(--color-text-on-accent);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+/* THE PANE'S HEAD: Filter files and its options, the options' dot when any narrows. */
+.code-files__filter {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+.code-files__words {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.code-files__options {
+  position: relative;
+  display: inline-flex;
+}
+
+.code-files__dot {
+  position: absolute;
+  inset-block-start: 2px;
+  inset-inline-end: 2px;
+  inline-size: 6px;
+  block-size: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-brand-accent);
+}
+
+.code-files__popover {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3);
+}
+
+.code-files__set {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.code-files__set > legend {
+  margin-block-end: var(--spacing-1);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
+}
+
+.code-files__showing {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1);
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.code-tree__foot .code-files__showing {
+  font-size: inherit;
+}
+
+.code-files__counts > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.code-ftree__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--color-text-secondary);
+}
+
+/* A DRAFTED FINDING: the reader's own, dashed until a review sends it. */
+.code-finding[data-draft] {
+  border-style: dashed;
+  background: var(--color-surface-subtle);
+}
+
+.code-finding__aside {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* A HEAD'S CONTROL REFUSED (Viewed): said under the head, which never reflows. */
+.code-file__refusal {
+  padding: var(--spacing-2);
+  border-block-end: 1px solid var(--color-border-default);
+}
+
+/* ON A PHONE A HEAD'S END (counts, Viewed, menu) takes its own line under the path. */
+@container page (width < 640px) {
+  .code-file__head {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .code-file__end {
+    justify-self: end;
+  }
+}
+
+/* HOW MANY FILES ARE VIEWED, in the files' toolbar: the words, then a short meter. */
+.code-files-bar__viewed {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.code-files-bar__viewed .code-files-bar__meter {
+  inline-size: 4rem;
+}
+
+@container page (width < 640px) {
+  .code-files-bar__viewed .code-files-bar__meter {
+    display: none;
+  }
 }

@@ -14,111 +14,37 @@ import (
 )
 
 // memorySyncInterval is how often a node carries what its seats have just
-// learned onto the memory changelog.
-//
-// IT IS THE CRASH WINDOW WHILE THE CYCLES KEEP UP, and that is the only thing
-// sizing it. A node that dies without releasing loses what of its seats'
-// memory the changelog has not acknowledged: while every cycle gets through
-// every seat's own pass, what each wrote since its last one. Each cycle
-// carries every held seat's own pass, what it wrote while held here and then
-// its tables sent whole, before it gives the backlogs their turn: the rows an
-// acquisition or a restart left this node to carry back for each seat, which
-// the changelog mostly holds already ([memorySync.resume]). So what a seat
-// writes waits for no backlog while the seats' own passes leave the backlogs'
-// turn the time to move a mark. Otherwise the window is longer whatever this
-// value is. A backlogs' turn that moves nothing, reached with too little of a
-// cycle left or on a broker that has stopped acknowledging, or a cycle that
-// runs out just before it, gives the backlogs the next cycle's start, and that
-// cycle can be theirs alone; and each seat whose own pass a cycle runs out in
-// holds the seats after it back too. With k such seats, a seat waits up to
-// 2k + 2 cycles between two that reach its own, two of them for the backlogs'
-// turn even when no own pass runs out, so a crash can lose up to 2k + 3
-// cycles' writes ([memorySync.resume]). A seat still being taken is carried by
-// no cycle until its hydration completes, so it is not among the k
-// (memsync.ErrNotHeld). A seat's new rows wait behind a burst it wrote, too,
-// such as a vector fill after a change of embedding model
-// (crewlet/crewlet#1041). A seat whose counterparty profiles and skills
-// outlast a cycle never has its onboarding marker carried, while the seats'
-// backlogs still take their turn once in every lap of the seats
-// (crewlet/crewlet#1040). A row larger than the broker takes fails every pass
-// of its seat that meets it, at that row, so nothing after it in that pass, in
-// its table or in the tables the pass carries after it, is carried
-// (crewlet/crewlet#349). A graceful handoff's flush starts where the cycles
-// left off, and what it cannot reach in its own bound is lost too
-// ([memoryFlushTimeout]).
-//
-// Thirty seconds against a turn that takes minutes, so while the cycles keep
-// up the worst case is roughly one turn's worth of diary entries and one
-// episode — and a seat that re-runs a lost turn writes them again. Shorter
-// buys a smaller window on a failure that is already rare; longer starts
-// losing whole turns of learning to a single crash.
-//
-// It is also comfortably inside the 45-second lease TTL, so a node that stops
-// publishing has usually published once more before a peer can take its seats
-// and hydrate.
+// learned onto the memory changelog: the crash window while the cycles keep
+// up, and that alone sizes it. Thirty seconds against a turn of minutes loses
+// at worst about one turn's diary entries and one episode, which a re-run turn
+// writes again; longer loses whole turns, shorter buys little on a rare
+// failure. It sits inside the 45-second lease TTL, so a stopped node has
+// usually published once more before a peer can take its seats. Under overload
+// the window grows whatever this value is: up to 2k + 3 cycles for k seats a
+// cycle runs out in ([memorySync.resume]), longer behind a burst
+// (crewlet/crewlet#1041), profiles and skills that outlast a cycle
+// (crewlet/crewlet#1040) or a row the broker refuses (crewlet/crewlet#349).
 const memorySyncInterval = 30 * time.Second
 
-// memoryFlushTimeout bounds the last publish a released seat gets.
-//
-// FIVE SECONDS, held there by what runs beside it rather than by a count of
-// rows. The seat's last lifecycle event is published beside the teardown this
-// runs in, under the same five seconds ([lifecyclePublishBudget]), so a stream
-// that has stopped acknowledging costs a release one bound rather than two. A
-// drain releases every seat at once (seat.Host.ReleaseAll), so the flushes
-// cost it five seconds together, which is what docs/concepts/agent-runtime.md
-// counts for them in how long a stop takes. No test pins the value, so these
-// are what a change to it answers to.
-//
-// WHAT FIVE SECONDS CARRIES, at one broker round trip a row from the marks the
-// seat's cycles left, is about fifty rows at 100 ms (a leaf link to another
-// region), a thousand at 5 ms and five thousand at 1 ms: a sixth of what a
-// thirty-second cycle carries between all the node's seats. It carries them in
-// a cycle's order ([flushSeatMemory]): what the seat wrote while held here
-// first, then its counterparty profiles, skills and onboarding marker, which
-// every own pass sends whole, and then, while the bound has time, the rows
-// this node held for the seat when it took it, its backlog, which the
-// changelog mostly holds already. What it has not reached of the first two
-// when it expires is lost, as a crash loses it, and that can be more than the
-// last cycle's writes:
-//
-//   - when the seat's counterparty profiles and skills alone outlast the five
-//     seconds: the flush is cut inside them, short of the onboarding marker
-//     and the backlog after them (crewlet/crewlet#1040);
-//   - behind a burst the seat wrote, such as a vector fill after a change of
-//     embedding model, larger than five seconds of round trips carry
-//     (crewlet/crewlet#1041).
-//
-// A flush that fails loses the same. One that meets a row larger than the
-// broker takes fails that pass at it, as every cycle of the seat has, so
-// nothing after that row in its pass, in its table or in the tables the pass
-// carries after it, is carried (crewlet/crewlet#349): such a row of the
-// seat's own stops its own pass, and leaves the backlog the rest of the
-// bound. What a flush has not reached of the backlog stays in this node's
-// store, and the fleet loses it only where the changelog lacks it: rows an
-// earlier holding's flush did not reach, or rows a changelog restored while
-// the node ran does not hold. A seat is published only under its holding on
-// each node (memsync.ErrNotHeld), so no cycle of this node publishes it once
-// its release has begun, no next holder before its hydration completes, and
-// no node whose hydration of the seat failed; what a flush does carry of the
-// profiles, skills and marker can still be replaced by an older copy in two
-// ways: by the one row a cycle of this node was sending as the release
-// began, and by a node still carrying the seat while another holds it, one
-// whose lease lapsed under it (crewlet/crewlet#511).
+// memoryFlushTimeout bounds the last publish a released seat gets: five
+// seconds, the bound of the seat's last lifecycle event beside it
+// ([lifecyclePublishBudget]), so a stream that stopped acknowledging costs a
+// release one bound, not two, and a drain (seat.Host.ReleaseAll) the five
+// seconds docs/concepts/agent-runtime.md counts. No test pins it. At one round
+// trip a row that is about fifty rows at 100 ms, a thousand at 5 ms. It carries
+// them in a cycle's order ([publishTurn]); what it misses of the seat's own
+// pass is lost as a crash loses it, which can exceed the last cycle's writes
+// (crewlet/crewlet#1040, #1041 and #349), and what it misses of the backlog
+// stays in this node's store. What it carries can still be overwritten by an
+// older copy, from the row a cycle had in flight as the release began or from
+// a node whose lease lapsed under it (crewlet/crewlet#511).
 const memoryFlushTimeout = 5 * time.Second
 
 // memoryAgentID is the id a seat's memory changelog is addressed by: the
-// UUIDv5 over (company name, handle) (ADR-0013), DERIVED rather than looked up
-// in the roster.
-//
-// The roster cannot answer for the seat the release flush exists for. A
-// revision that removes a seat is already installed when the node lets the
-// seat go, so a lookup found nobody and the flush published to a subject with
-// an empty seat token, which the broker refuses — every removed seat logged
-// `seat_memory_not_flushed` and what its flush was to carry never reached the
-// changelog that a seat re-added under the same handle hydrates from.
-//
-// Empty only with no company to derive it in, which the memory syncer reads as
-// a seat with no address and carries nothing for.
+// UUIDv5 over (company name, handle) (ADR-0013), derived rather than looked up
+// in the roster, which no longer holds a seat a revision removed by the time
+// its release flush runs; an empty seat token is a subject the broker refuses.
+// Empty only with no company, which the memory syncer carries nothing for.
 func memoryAgentID(company *Company, handle string) string {
 	if company == nil || company.Org == nil {
 		return ""
@@ -130,10 +56,9 @@ func memoryAgentID(company *Company, handle string) string {
 	return id.String()
 }
 
-// backlogsTurn names the backlogs' turn among a cycle's turns, where
-// [memorySync.resume] and what a cycle says (`next`, `not_reached`) name each
-// seat's turn by the seat's handle: a name no handle takes, since a handle
-// matches [a-z0-9][a-z0-9-]* (org.ValidHandle).
+// backlogsTurn names the backlogs' turn where [memorySync.resume] and a cycle's
+// log (`next`, `not_reached`) name a seat's by its handle: no handle can take
+// it, since a handle matches [a-z0-9][a-z0-9-]* (org.ValidHandle).
 const backlogsTurn = "(backlogs)"
 
 // memorySync is the publish loop, the handle that stops it, and the state its
@@ -142,147 +67,36 @@ type memorySync struct {
 	stop chan struct{}
 	done sync.WaitGroup
 
-	// resume is the turn the next cycle starts at, a seat's or the
-	// backlogs' ([backlogsTurn]), "" for the first held seat's; and
-	// backlogResume is the seat the next backlogs' turn starts at, "" for
-	// the first held seat. Touched only by the loop's own goroutine.
+	// resume is the turn the next cycle starts at, a seat's or [backlogsTurn],
+	// "" for the first seat; backlogResume the seat the next backlogs' turn
+	// starts at, "" for the first. Touched only by the loop's goroutine.
 	//
-	// A CYCLE IS ONE LAP OVER ITS TURNS ([publishHeldMemory]): one for each
-	// held seat, in sorted order, which is the seat's own pass, what it
-	// wrote while held here and then its tables sent whole
-	// ([memsync.Syncer.PublishOwn]), and one more after the last of them,
-	// the BACKLOGS' TURN, which carries each held seat's backlog
-	// ([memsync.Syncer.PublishBacklog]), the rows this node held for the
-	// seat when it took it, with what the cycle has left, the seats taking
-	// turns within it from backlogResume ([publishBacklogs]).
-	//
-	// THE RULE, over a lap's turns: the next starts at the turn the bound
-	// ran out inside, which had only part of a cycle, or, when that turn
-	// was the first and so had the whole cycle, at the turn after it,
-	// wrapping round, so the first seat's after the backlogs', a lone turn
-	// being its own next ([nextStart]); at the first turn not reached when
-	// the bound ran out between two; at the first when every turn was had.
-	// Within the backlogs' turn the seats follow the same rule over what the
-	// cycle left the turn: its first seat had all of that, which is the
-	// whole cycle only when the turn was the cycle's first.
-	//
-	// WITH ONE EXCEPTION: a backlogs' turn the bound cut after it moved a
-	// mark hands the next cycle to the first seat, wherever it stood in this
-	// one. So the backlogs take a cycle's start only after a turn of theirs
-	// that moved nothing while it was not the first, which had too little
-	// of the cycle to move a mark, or when the cycle ran out just before
-	// their turn. Without the exception, a backlog longer than a cycle, such
-	// as the whole store a restart leaves a data node to carry back for each
-	// seat it held, would take the start of every other cycle, and in those
-	// the seats' own rows would wait behind it, which is what carrying them
-	// first exists to end (crewlet/crewlet#1039). With it, while the seats'
-	// own passes leave the backlogs' turn the time to move a mark, every
-	// cycle starts at the first seat and carries every seat's own rows
-	// before any backlog.
-	//
-	// AND THE WHOLE CYCLE A LATE TURN EARNS IS THE SEAT'S IT WAS CUT IN. A
-	// backlogs' turn that moved nothing while it was not the cycle's first
-	// starts the next cycle so that it has a whole one, for the backlog it
-	// was cut in, whose next row needs more than the turn had; so the next
-	// backlogs' turn starts at that seat even when it was the turn's first,
-	// which the rule within the turn would pass for having had all the cycle
-	// left it. Passed, the seat lost that whole cycle to the next seat's
-	// backlog, and with it every whole cycle its cuts earned for as long as
-	// that backlog lasted: a backlog whose next row needs more than the
-	// seats' own passes leave of a cycle moved not at all while another
-	// seat's drained, which can be the whole store a restart leaves a data
-	// node to carry back for that seat. A first seat cut after it moved a
-	// mark is passed as the rule says, since it needs no whole cycle to move
-	// more, and so is one cut with nothing in a turn that had the whole
-	// cycle, whose next row no cycle carries: it holds no other seat's
-	// backlog back.
-	//
-	// THE BACKLOGS TAKE A TURN OF THEIR OWN, AND FOR GOOD, rather than what
-	// each cycle has left once every seat's own pass has returned. That order
-	// carries no backlog in a cycle whose own passes leave it less than one
-	// round trip, and none at all while that holds cycle after cycle: under a
-	// burst a seat wrote (crewlet/crewlet#1041), or on a node whose seats'
-	// profiles and skills, which every own pass sends whole, together fill a
-	// cycle (crewlet/crewlet#1040). A turn in the rotation keeps the backlogs
-	// moving under any overload of the own passes, whatever its kind, as the
-	// rotation keeps every seat's own pass moving, so it stays once
-	// crewlet/crewlet#1040 carries the profiles and skills by change sequence:
-	// it is not that issue's stopgap. What it costs: under overload a cycle
-	// can start part-way through the seats, and the backlogs' turn then comes
-	// before the own passes of the seats after it in that cycle, which had
-	// theirs in the cycle before.
-	//
-	// NOT THE MEMORY FILL'S RULE ([memoryFill.resume]), which starts at the
-	// seat the last tick ran out at whatever its place. Here a turn that had
-	// the whole cycle would then have every cycle until what it carries ran
-	// dry, and every other turn would wait that long, the seats sorted
-	// before it included, which a sorted start carried every cycle: at
-	// 100 ms a publish, 18 000 rows are half an hour. Nor the turn after it
-	// every time: a turn that ran a cycle out second would then never go
-	// first, so of two seats that each need most of a cycle the second would
-	// never have a whole one: its whole-each-cycle tables, which keep
-	// nothing of a cut publish, would never be carried past where its cycles
-	// cut them, nor the onboarding marker after them.
-	//
-	// WHAT IT GUARANTEES, with k the held seats whose own pass a cycle runs
-	// out in, whether the pass needs more than a whole cycle (a burst,
-	// profiles and skills that outlast one) or was reached with less of one
-	// left than it needs: NO SEAT WAITS MORE THAN 2k + 2 CYCLES between two
-	// that reach its own pass. A cycle that runs out inside a turn stops
-	// there, and the next starts at that turn, which then has the whole cycle,
-	// or after it when it has just had one; so each turn a cycle runs out in
-	// holds the turns after it back for at most two cycles before the cycles
-	// pass it, and they come back to it only after reaching every other turn.
-	// The backlogs' turn is one more such turn, which is the 2, and the
-	// exception only shortens what it holds back: after a cut that moved a
-	// mark the cycles pass it at once. A turn a cycle cut short goes first in
-	// the next, so a seat whose own pass fits a whole cycle completes it at
-	// least once in every 2k + 3 cycles, and a seat whose own pass needs more
-	// has a whole cycle at least once in every 2k + 2; and A CRASH LOSES UP TO
-	// 2k + 3 CYCLES' WRITES of a seat, the cycles it waited and the one that
-	// reached it ([memorySyncInterval]). The backlogs' turn waits no longer
-	// between two cycles that reach it, and has the whole of the next after a
-	// cycle that reached it with too little left to move a mark, or ran out
-	// just before it; that cycle starts with the backlog the turn was cut in,
-	// or the first it did not reach. So a seat whose backlog's next row needs
-	// more than the seats' own passes leave of a cycle, and fits a whole one,
-	// has a whole cycle at the latest in the second backlogs' turn after one
-	// that reaches it. The bounds are reached. Of held seats a, b, c and d, in
-	// cycles from b's turn where the own passes run out in c's alone, twice,
-	// and the backlogs' turn moves nothing in two: b completes and the first
-	// cycle runs out in c's turn, c has the whole second, d completes and the
-	// third runs out in the backlogs' turn, the backlogs have the whole
-	// fourth, and a, which none of them reached, waits those four: 2k + 2 for
-	// k = 1. A smaller bound would need a fact per turn that one resume cannot
-	// hold, whether a turn cut part-way through the rotation has had its whole
-	// cycle since, and denying that turn its whole cycle instead is the
-	// turn-after-it rule, which starves.
+	// A cycle is one lap ([lapOrder]): each held seat's own pass in sorted
+	// order, then the backlogs' turn ([publishBacklogs]). The next lap starts at
+	// the turn the bound ran out inside, or after it when that turn was the
+	// first ([nextStart]); at the first unreached turn when it ran out between
+	// two; at the first seat when it did not run out, or when a cut backlogs'
+	// turn moved a mark. So no seat waits more than 2k + 2 cycles, for k seats a
+	// cycle runs out in, and a crash loses up to 2k + 3 cycles' writes (package
+	// doc, "Memory sync cycles").
 	resume, backlogResume string
 }
 
 // startMemorySync carries the memory of the seats this node holds.
 //
-// A PER-NODE LOOP rather than a fleet singleton, which is the opposite of the
-// retention sweep beside it: a singleton is right when N nodes would do the
-// same work, and here they would each do DIFFERENT work — every node has its
-// own store holding its own seats' memory, and only that node can read it.
-//
-// Nothing here fails a turn or a seat. What a publish that does not land
-// costs is split by table: one with a watermark keeps every row the changelog
-// acknowledged, and the seat's next publish resumes at the first it did not,
-// while a whole-each-cycle table keeps nothing of it and is sent whole again.
-// A release's flush carries on from the same marks, for [memoryFlushTimeout],
-// and what it does not reach is lost to the seat's next holder, which that
-// constant says can be more than the last cycle's writes.
+// A per-node loop, not a fleet singleton like the retention sweep: only each
+// node can read its own seats' memory from its own store. Nothing here fails a
+// turn or a seat: a publish that does not land keeps, of a table with a
+// watermark, every row the changelog acknowledged, and sends a
+// whole-each-cycle table whole again; a release's flush carries on from the
+// same marks ([memoryFlushTimeout]).
 func (e *Engine) startMemorySync(ctx context.Context) {
 	if e.memory == nil {
 		return
 	}
-	// DETACHED from the signal context, like the sweep and the waiter
-	// beside it: a loop bound to it stops at SIGTERM, before the drain has
-	// released the seats whose memory it is carrying. Its own stop channel
-	// is what ends it, and stopMemorySync is what closes that — after the
-	// drain, so the loop carries every seat until its release's flush.
+	// Detached from the signal context: one bound to it stops at SIGTERM,
+	// before the drain has released the seats it carries. stopMemorySync
+	// closes the stop channel that ends it, after the drain.
 	ctx = context.WithoutCancel(ctx)
 	loop := &memorySync{stop: make(chan struct{})}
 	e.memorySync = loop
@@ -300,17 +114,12 @@ func (e *Engine) startMemorySync(ctx context.Context) {
 	})
 }
 
-// stopMemorySync ends the loop, waiting for an in-flight cycle.
-//
-// Waiting rather than signalling and walking away: a cycle mid-publish holds
-// a store read and a broker write, and letting the process close either one
-// underneath it turns an orderly shutdown into a logged failure on the way
-// out. Called AFTER the drain, which has released every seat this node held,
-// each with its flush. A cycle that began before a release can still be
-// running, though: it walks the seats it found held then. It carries nothing
-// of a seat whose release has begun, stopping at the next row of one it was
-// partway through (memsync.ErrNotHeld), so what this waits for is the cycle's
-// other seats and the row in flight, for up to the cycle's bound.
+// stopMemorySync ends the loop, waiting for an in-flight cycle: one
+// mid-publish holds a store read and a broker write, and closing either under
+// it turns an orderly shutdown into a logged failure. Called after the drain;
+// a cycle begun before a release stops at that seat's next row
+// (memsync.ErrNotHeld), so this waits for its other seats and the row in
+// flight, for up to the cycle's bound.
 func (e *Engine) stopMemorySync() {
 	if e.memorySync == nil {
 		return
@@ -320,30 +129,11 @@ func (e *Engine) stopMemorySync() {
 	e.memorySync = nil
 }
 
-// syncSeatMemory publishes one cycle for every seat this node holds.
-//
-// BOUNDED BY THE INTERVAL ITSELF. The loop's context is detached, so without
-// this a publish against a broker that has stopped answering blocks the cycle
-// for ever — and stopMemorySync, which waits for it, would then block the
-// shutdown for ever with it. A cycle that cannot finish before the next one
-// is due has fallen behind whatever it does next, so the interval is the
-// value.
-//
-// ONE LAP OVER THE SEATS' TURNS AND THE BACKLOGS' ([memorySync.resume]): each
-// held seat's own pass, what it wrote while held here and its tables sent
-// whole, and then, with what the cycle has left, the backlogs' turn, the rows
-// this node held for each seat when it took it. WHAT A CYCLE THE BOUND CUTS
-// KEEPS: of a table with a watermark, every row the changelog acknowledged,
-// and the seat's next call of that range resumes it at the first row it did
-// not; of a whole-each-cycle table, nothing, and the seat's next own pass
-// sends it whole again. The turns the cycle did not reach are not called on a
-// bound already spent, and the next cycle starts at the turn this one ran out
-// in, after it, or at the first seat, by [memorySync.resume]'s rule. A cycle
-// that ran out says so in one line, naming the call it ran out in: a call
-// that moved a mark is a backlog draining or a burst of the seat's own, at
-// INFO, and so is a cycle that ran out between two calls; one that moved
-// none, or that had the whole cycle and was cut inside a whole-each-cycle
-// table, warns ([syncReport.lines]).
+// syncSeatMemory publishes one cycle for every seat this node holds
+// ([memorySync.cycle]), bounded by the interval: the loop's context is
+// detached, so an unanswering broker would otherwise block the cycle, and
+// stopMemorySync with it, for ever, and a cycle still running when the next is
+// due has fallen behind whatever it does.
 func (e *Engine) syncSeatMemory(ctx context.Context, loop *memorySync) {
 	node := e.node
 	if node == nil {
@@ -392,10 +182,8 @@ type releasedMemory interface {
 }
 
 // memoryPass names which of a seat's two publishes a call is, as every line
-// about one says it (`pass`): its own pass, what the seat wrote while held
-// here and its tables sent whole ([memsync.Syncer.PublishOwn]), or its
-// backlog, the rows this node held for it when it took it
-// ([memsync.Syncer.PublishBacklog]).
+// about one says it (`pass`): its own pass ([memsync.Syncer.PublishOwn]) or its
+// backlog ([memsync.Syncer.PublishBacklog]).
 type memoryPass string
 
 const (
@@ -424,12 +212,11 @@ type passCall struct {
 	spent   bool
 }
 
-// notHeld says the call carried nothing more of the seat because this node's
-// holding of it did not let it (memsync.ErrNotHeld). To a cycle, a seat still
-// being taken, being released or released: neither a failure nor a cut, since
-// the seat is not the cycle's to carry, and nothing about it is said. A flush
-// begins only under a holding its release turned ([releaseSeatMemory]), so to
-// a flush it is that holding ended under it, which [flushSeatMemory] warns of.
+// notHeld says this node's holding of the seat stopped the call
+// (memsync.ErrNotHeld). To a cycle that is a seat not its to carry, neither a
+// failure nor a cut, and said nothing of; to a flush, which begins only under a
+// holding its release turned ([releaseSeatMemory]), a holding ended under it,
+// which [flushSeatMemory] warns of.
 func (c passCall) notHeld() bool { return errors.Is(c.err, memsync.ErrNotHeld) }
 
 // failed says the call returned an error while the bound still had time: a
@@ -441,30 +228,16 @@ func (c passCall) failed() bool { return c.err != nil && !c.spent && !c.notHeld(
 // ([passCall.notHeld]).
 func (c passCall) cut() bool { return c.err != nil && c.spent && !c.notHeld() }
 
-// publishTurn is one seat's whole turn under ctx, its bound: the seat's own
-// pass, then, while ctx has time, its backlog, whatever else the own pass
-// returned.
-// It is a released seat's last turn ([flushSeatMemory]); a cycle takes the two
-// apart, every held seat's own pass before the backlogs' turn
+// publishTurn is a released seat's last turn under ctx ([flushSeatMemory]): its
+// own pass, then, while ctx has time, its backlog. A cycle takes the two apart
 // ([publishHeldMemory]).
 //
-// NO BACKLOG ONCE THE SEAT'S HOLDING DOES NOT LET IT BE FLUSHED: an own pass
-// that answered memsync.ErrNotHeld ends the turn, since the backlog would
-// answer the same.
-//
-// THE OWN PASS FIRST, so what the seat wrote while held here, and then its
-// profiles, skills and onboarding marker, which every own pass sends whole, go
-// before the rows this node held for it when it took it: every acquisition and
-// restart leaves the node that backlog, which the changelog mostly holds
-// already, and what the seat wrote waited behind it, so a handoff or a crash
-// before it had drained lost what the seat wrote (crewlet/crewlet#1039). A cut
-// now loses the backlog first.
-//
-// THE BACKLOG AFTER AN OWN PASS THAT FAILED WITH TIME LEFT too: a row of the
-// seat's own the broker refuses (crewlet/crewlet#349) stops that pass and
-// never the backlog, which loses nothing by having the time the own pass left.
-// NO BACKLOG ON A SPENT BOUND, as no seat is called on one: an own pass the
-// bound cut, or one that returned as it ran out, ends the turn there.
+// The own pass first, so what the seat wrote, and the tables every own pass
+// sends whole, go before the backlog the changelog mostly holds already: a cut
+// loses the backlog first (crewlet/crewlet#1039). The backlog runs after an own
+// pass that failed with time left, since a refused row of the seat's own
+// (crewlet/crewlet#349) is no reason to lose it; not after one that answered
+// memsync.ErrNotHeld, which the backlog would answer too, nor on a spent bound.
 func publishTurn(ctx context.Context, memory memoryFlusher, handle string) seatTurn {
 	var turn seatTurn
 	turn.own.carried, turn.own.err = memory.FlushOwn(ctx, handle)
@@ -501,11 +274,9 @@ func publishHeldMemory(ctx context.Context, held heldHandles, memory memoryPubli
 	lap := lapOrder(held.Held(), resume)
 	for i, turn := range lap {
 		if ctx.Err() != nil {
-			// THE BOUND RAN OUT BEFORE THIS TURN BEGAN, just as the one
-			// before it returned, so the next cycle starts here. Called
-			// anyway, as seats used to be, this turn and every one after it
-			// failed at once, each with a warning of its own, in every cycle
-			// a backlog outlasted.
+			// The bound ran out as the turn before returned: the next cycle
+			// starts here, and calling the rest on a spent bound would only
+			// fail each with a warning of its own.
 			report.ranOut, report.resume, report.notReached = true, turn, lap[i:]
 			report.cut.pass = passOwn
 			if turn == backlogsTurn {
@@ -515,10 +286,9 @@ func publishHeldMemory(ctx context.Context, held heldHandles, memory memoryPubli
 		}
 		var movedMarks bool
 		if turn == backlogsTurn {
-			// THE SEATS HELD ARE READ AGAIN AS THE TURN BEGINS, so a seat
-			// released since the lap began is not called, and one taken
-			// since is: its holding is live if its hydration has completed,
-			// and otherwise its backlog carries nothing.
+			// The seats held are read again: one released since the lap
+			// began is not called, and one taken since is, carrying nothing
+			// until its hydration completes.
 			backlogs := publishBacklogs(ctx, held.Held(), memory, backlogResume, i == 0)
 			report.backlogResume = backlogs.resume
 			report.failed = append(report.failed, backlogs.failed...)
@@ -529,15 +299,11 @@ func publishHeldMemory(ctx context.Context, held heldHandles, memory memoryPubli
 			report.backlogsNotReached = backlogs.notReached
 			movedMarks = backlogs.marked > 0
 		} else {
-			// EACH CALL IS CLASSIFIED ON ITS OWN, by the bound as it
-			// returned ([syncReport.lines]). A FAILURE WITH TIME LEFT, a
-			// refusal or a broker error, is that call's: the seat has had
-			// its turn, its marks keep what the changelog acknowledged
-			// before the row that failed, and the cycle moves on without
-			// touching where the next one starts. A SEAT NOT THE CYCLE'S TO
-			// CARRY, still being taken, being released or released
-			// ([passCall.notHeld]), has had its turn too, and is said
-			// nothing of.
+			// Each call is classified by the bound as it returned
+			// ([syncReport.lines]). A failure with time left is that call's:
+			// its marks keep what the changelog acknowledged, and where the
+			// next cycle starts is untouched. A seat not the cycle's to
+			// carry ([passCall.notHeld]) has had its turn, said nothing of.
 			var own passCall
 			own.carried, own.err = memory.PublishOwn(ctx, turn)
 			own.spent = ctx.Err() != nil
@@ -550,18 +316,14 @@ func publishHeldMemory(ctx context.Context, held heldHandles, memory memoryPubli
 			}
 			report.cut = call
 		}
-		// THE BOUND RAN OUT INSIDE THIS TURN: a turn that was not the
-		// cycle's first had only part of a cycle, so the next cycle starts
-		// at it, and the first had the whole cycle, so the next starts at
-		// the turn after it ([nextStart]). The rule's bound, and why it is
-		// not the memory fill's rule: [memorySync.resume].
+		// The bound ran out inside this turn: [nextStart] picks where the
+		// next cycle starts, by [memorySync.resume]'s rule.
 		report.ranOut, report.first = true, i == 0
 		report.resume, report.notReached = nextStart(lap, i), lap[i+1:]
 		if turn == backlogsTurn && movedMarks {
-			// THE ONE EXCEPTION: a backlogs' turn the bound cut after it
-			// moved a mark needs no whole cycle to move more, so the next
-			// cycle starts at the first seat, and every seat's own rows go
-			// before what is left of the backlogs ([memorySync.resume]).
+			// The exception: a backlogs' turn cut after it moved a mark
+			// needs no whole cycle to move more, so every seat's own rows go
+			// first.
 			report.resume = ""
 		}
 		return report
@@ -570,12 +332,9 @@ func publishHeldMemory(ctx context.Context, held heldHandles, memory memoryPubli
 }
 
 // publishBacklogs is a cycle's backlogs' turn under ctx, the cycle's bound:
-// the backlog of each seat held names ([memsync.Syncer.PublishBacklog]), one
-// after another in [cycleOrder] from resume, until every seat's has been
-// called or ctx runs out, by the rule a cycle's lap follows
-// ([memorySync.resume]). first says the turn is the cycle's first, so the
-// first seat it calls has the whole cycle. It reports what the turn did and
-// where the next one starts.
+// each held seat's backlog ([memsync.Syncer.PublishBacklog]) in [cycleOrder]
+// from resume, by the rule a cycle's lap follows ([memorySync.resume]). first
+// says the turn is the cycle's first, so its first seat has the whole cycle.
 func publishBacklogs(ctx context.Context, held []string, memory memoryPublisher,
 	resume string, first bool,
 ) backlogsReport {
@@ -583,8 +342,8 @@ func publishBacklogs(ctx context.Context, held []string, memory memoryPublisher,
 	order := cycleOrder(held, resume)
 	for i, handle := range order {
 		if ctx.Err() != nil {
-			// THE BOUND RAN OUT BETWEEN TWO SEATS' BACKLOGS, as the one
-			// before this returned: the next backlogs' turn starts here.
+			// The bound ran out between two seats' backlogs: the next
+			// backlogs' turn starts here.
 			report.ranOut, report.resume, report.notReached = true, handle, order[i:]
 			report.cut.pass = passBacklog
 			return report
@@ -604,15 +363,11 @@ func publishBacklogs(ctx context.Context, held []string, memory memoryPublisher,
 		report.ranOut, report.cut = true, call
 		report.resume, report.notReached = nextStart(order, i), order[i+1:]
 		if !first && report.marked == 0 {
-			// THE TURN CAME LATE AND MOVED NOTHING, so the lap starts the
-			// next cycle at the backlogs' turn, for a whole cycle
-			// ([publishHeldMemory]), and that cycle is this seat's: its
-			// backlog's next row needs more than the turn had. The rule
-			// starts the next turn here already for any seat but the turn's
-			// first, which it passes for having had all the cycle left the
-			// turn, and that was not the whole cycle ([memorySync.resume]).
-			// Judged by the turn's marks, as the lap judges it, rather than
-			// by this call's: a first seat's are the turn's.
+			// A late turn that moved nothing: the lap gives the next cycle
+			// to the backlogs' turn ([publishHeldMemory]), and that whole
+			// cycle is this seat's, whose next row needs more than the turn
+			// had, even as the turn's first, which [nextStart] would pass.
+			// Judged by the turn's marks, as the lap judges it.
 			report.resume = handle
 		}
 		return report
@@ -638,17 +393,16 @@ type backlogsReport struct {
 	cut        seatPublish
 	notReached []string
 
-	// marked is the rows of every call of the turn that moved a mark, which
-	// says whether a turn the bound cut moved one ([memorySync.resume]'s
-	// exception): a turn that moved marks in one seat's backlog and was cut
-	// in the next one's is draining, whatever the cut call itself carried.
+	// marked is the rows of every call of the turn that moved a mark: a turn
+	// cut after any seat's backlog moved one is draining, whatever the cut
+	// call carried ([memorySync.resume]'s exception).
 	marked int
 }
 
 // nextStart is where a rotation over order starts next when the cycle's bound
 // ran out inside its i-th turn ([memorySync.resume]): at that turn, which had
-// only part of the cycle, or, when it was the first and so had the whole
-// cycle, at the turn after it, wrapping round, a lone turn being its own next.
+// only part of the cycle, or after the first, which had the whole cycle,
+// wrapping round, a lone turn being its own next.
 func nextStart(order []string, i int) string {
 	if i == 0 {
 		return order[1%len(order)]
@@ -656,12 +410,10 @@ func nextStart(order []string, i int) string {
 	return order[i]
 }
 
-// lapOrder is a cycle's turns in the order it takes them: one for each seat
-// held, sorted as [cycleOrder] sorts them, and the backlogs' turn
-// ([backlogsTurn]) after the last of them, rotated to start at resume. A
-// resume the node no longer holds starts at the turn after it, which the last
-// cycle did not reach either: for one that sorts after every seat still held,
-// the backlogs' turn. "" starts at the first seat.
+// lapOrder is a cycle's turns: the held seats sorted, then [backlogsTurn],
+// rotated to start at resume. A resume the node no longer holds starts at the
+// turn after it, which the last cycle did not reach either (the backlogs' turn
+// for one sorting after every held seat); "" starts at the first seat.
 func lapOrder(held []string, resume string) []string {
 	turns := append(slices.Sorted(slices.Values(held)), backlogsTurn)
 	at := len(turns) - 1
@@ -673,9 +425,8 @@ func lapOrder(held []string, resume string) []string {
 
 // cycleOrder is the seats held in the order a backlogs' turn calls them:
 // sorted, so a seat's place does not depend on how the host lists them, and
-// rotated to start at resume, or, for a resume the node no longer holds, at
-// the first seat after it. A resume that sorts after every held seat, or none,
-// starts at the first.
+// rotated to start at resume, or at the first seat after a resume no longer
+// held; one sorting after every held seat, or "", starts at the first.
 func cycleOrder(held []string, resume string) []string {
 	seats := slices.Sorted(slices.Values(held))
 	if at, _ := slices.BinarySearch(seats, resume); at < len(seats) {
@@ -697,15 +448,12 @@ type syncReport struct {
 	failed []seatPublish
 
 	// ranOut says the cycle's bound ran out before every turn had been had.
-	// cut is the call it ran out inside: with no handle when it ran out
-	// between two turns, its pass then the pass of the turn it did not
-	// begin, or between two seats' backlogs inside the backlogs' turn, which
-	// inBacklogs says it ran out in. first says the turn it ran out in was
-	// the cycle's first, so had the whole cycle. notReached is the turns the
-	// cycle never began, in its order: the seats', by their handles, and the
-	// backlogs', [backlogsTurn]. backlogsNotReached is, for a cycle that ran
-	// out in the backlogs' turn, the seats whose backlog that turn never
-	// called.
+	// cut is the call it ran out inside, with no handle when it ran out
+	// between two calls, its pass then that of the call not begun.
+	// inBacklogs says it ran out in the backlogs' turn, and first that it ran
+	// out in the cycle's first turn, which had the whole cycle. notReached is
+	// the turns never begun, in order, and backlogsNotReached the seats whose
+	// backlog the backlogs' turn never called.
 	ranOut             bool
 	cut                seatPublish
 	inBacklogs, first  bool
@@ -729,45 +477,17 @@ func (r syncReport) log(ctx context.Context) {
 	}
 }
 
-// lines is what a cycle says: a warning for each call that failed with time
-// left, a seat's own pass or its backlog, and one line for a cycle whose bound
-// ran out, naming the call it ran out in, where the next cycle starts (`next`,
-// empty for the first seat) and the turns it never began (`not_reached`, the
-// backlogs' turn written as [backlogsTurn]), which say nothing of their own;
-// one that ran out in the backlogs' turn names too where that turn starts next
-// and the seats whose backlog it never called (`backlogs_next`,
-// `backlogs_not_reached`). Every line names the pass of the call it is about
-// (`pass`): the call that failed, the call the bound ran out in, or, for a
-// cycle that ran out between two calls, the first it did not make. So two
-// lines about one seat are told apart.
-//
-// EACH CALL IS SAID ON ITS OWN, a seat's own pass and its backlog alike,
-// never two merged into one: a seat whose own pass was refused with time left
-// warns whatever its backlog then did, and a row the broker refuses is
-// refused every cycle (crewlet/crewlet#349).
-//
-// THE RUN-OUT'S LEVEL IS DECIDED BY PROGRESS, by one rule for both passes. A
-// call cut after its rows moved a mark says so at INFO: of a backlog, the
-// backlog draining that a seat's first cycles after an acquisition carry; of
-// an own pass, a burst the seat wrote (crewlet/crewlet#1041). A warning every
-// thirty seconds for that would read as a fault on every boot. A call that
-// moved no mark had nothing acknowledged that stays carried and warns, as
-// every seat did every cycle while the broker would not acknowledge. So does a
-// seat that had the whole cycle and was cut inside a whole-each-cycle table,
-// whatever it marked, since its marks say nothing of those tables: they keep
-// nothing of a cut publish, so a seat whose counterparty profiles and skills
-// outlast a cycle never has the rest of them carried past where each cycle
-// cuts them, nor the onboarding marker after them (crewlet/crewlet#1040), and
-// a whole cycle cut there is the sign of it this loop sees. A seat cut there
-// with only part of a cycle is given a whole one next, and says so at INFO
-// when it moved a mark. Those two cases are an own pass's alone, and the rule
-// needs no test of the pass for them: a backlog sends no table whole, and
-// every row it carries moves a mark. And a cycle that ran out between two
-// calls, the one before it whole, is said at INFO: a warning would read a
-// complete call as a fault.
-//
-// A VALUE, so what a cycle says is a fact a test reads rather than a side
-// effect on the process's logger.
+// lines is what a cycle says, as a value a test reads rather than a side effect
+// on the logger. Each call is said on its own: a warning for each that failed
+// with time left (a refused row is refused every cycle, crewlet/crewlet#349),
+// and one line for a run-out naming its `pass` (or the first not begun),
+// `next`, `not_reached` and, in the backlogs' turn, `backlogs_next` and
+// `backlogs_not_reached`. A run-out after the call moved a mark (a backlog
+// draining, a burst: crewlet/crewlet#1041) is INFO, since a warning every
+// thirty seconds would read as a fault on every boot, and so is one between two
+// calls, the last of them complete. One that moved no mark warns, as does a
+// seat that had the whole cycle and was cut in a whole-each-cycle table, which
+// keeps nothing of a cut publish: the sign of crewlet/crewlet#1040.
 func (r syncReport) lines() []reportLine {
 	var out []reportLine
 	for _, failed := range r.failed {
@@ -845,34 +565,16 @@ func (r syncReport) lines() []reportLine {
 }
 
 // flushSeatMemory is a released seat's last turn under ctx, the flush's bound
-// ([memoryFlushTimeout]), and what it says: the seat's own pass, then, while
-// the bound has time, its backlog, from the marks the cycles left
-// ([publishTurn]).
-//
-// EACH CALL IS SAID ON ITS OWN, at the level of what it lost. An own pass that
-// returned an error, cut by the bound or refused, warns
-// (seat_memory_not_flushed, pass=own): what it did not reach of what the seat
-// wrote while held here and of its tables sent whole is lost to the seat's
-// next holder. So does a backlog that failed with time left (pass=backlog). A
-// backlog the bound cut, or never began because the own pass returned whole
-// as the bound ran out, is said at INFO (memory_flush_ran_out, pass=backlog):
-// the flush carried what the seat wrote, and ran out in the rows this node
-// held for it when it took it, which the changelog mostly holds already. One
-// warning for any error of the flush, as before the backlog had a call of its
-// own, would warn for the backlog's tail on every handoff that came soon after
-// an acquisition.
-//
-// AND A HOLDING THAT ENDS UNDER THE FLUSH WARNS too (memsync.ErrNotHeld,
-// seat_memory_not_flushed, either pass): a release flushes only a holding it
-// turned to releasing ([releaseSeatMemory]), and the release and the seat's
-// next taking are serialised, so nothing should end it before the flush
-// returns, and what the flush did not carry is lost to the next holder as a
-// refusal's is. Said nothing of, as a cycle says nothing of a seat that is not
-// its to carry, a release that flushed under a holding it never turned would
-// lose every seat's last writes without a line.
-//
-// A VALUE, so what a flush says is a fact a test reads rather than a side
-// effect on the process's logger.
+// ([memoryFlushTimeout]), from the marks the cycles left ([publishTurn]), and
+// what it says, as a value a test reads. Each call is said at the level of what
+// it lost. An own pass that returned an error warns (seat_memory_not_flushed):
+// what it missed is lost to the next holder. A backlog that failed with time
+// left warns too; one the bound cut or never began is INFO
+// (memory_flush_ran_out), since the changelog mostly holds it and a warning
+// would fire on every handoff soon after an acquisition. A holding ended under
+// the flush (memsync.ErrNotHeld) warns: the release turned it and is serialised
+// with the next taking, so nothing should end it, and silence would lose a
+// seat's last writes without a line.
 func flushSeatMemory(ctx context.Context, memory memoryFlusher, handle string) []reportLine {
 	turn := publishTurn(ctx, memory, handle)
 	var out []reportLine
@@ -913,32 +615,17 @@ func flushSeatMemory(ctx context.Context, memory memoryFlusher, handle string) [
 }
 
 // releaseSeatMemory is a released seat's memory: its holding here turned to
-// releasing, its last turn under [memoryFlushTimeout] ([flushSeatMemory]), and
-// then the seat forgotten ([memsync.Syncer.Forget]).
-//
-// RELEASING FIRST, before the flush begins: from then on the seat is the
-// flush's to carry and never the cycle's, so a cycle partway through the seat
-// stops at its next row rather than publish older copies of its profiles,
-// skills and onboarding marker over the flush's, and one that reaches it later
-// carries nothing of it (crewlet/crewlet#511).
-//
-// AND NO FLUSH FOR A SEAT WITH NO LIVE HOLDING HERE to turn
-// ([memsync.Syncer.Releasing] answers false): one whose hydration here failed
-// or never ran, whose store can hold copies of its profiles, skills and
-// onboarding marker older than the changelog's, which a flush would put over
-// them (crewlet/crewlet#511). It is forgotten all the same, and nothing is
-// said: it lost nothing that was this node's to carry, and the failed taking
-// said so already. A taking that failed AFTER its hydration completed has a
-// live holding and is flushed: what its hydration just wrote, the changelog's
-// own copies of those tables, which puts nothing older over them.
-//
-// The flush is BOUNDED, on a context the release's own does not cut, because
-// this runs on the release path, including a drain, where every seat passes
-// through here at once (seat.Host.ReleaseAll): a broker that has stopped
-// answering must cost the drain a few seconds, not the whole shutdown. And it
-// is best effort: the seat is already gone, so a failure costs the successor
-// what the changelog has not acknowledged, as a crash does, where refusing to
-// release would strand the seat for a full TTL.
+// releasing, its last turn ([flushSeatMemory]), then the seat forgotten.
+// Releasing first, so a cycle partway through the seat stops at its next row
+// rather than put older profiles, skills and onboarding marker over the
+// flush's (crewlet/crewlet#511). No flush, and no line, without a live holding
+// to turn ([memsync.Syncer.Releasing]): a store whose hydration failed or never
+// ran can hold copies older than the changelog's; one that failed after its
+// hydration completed is flushed, as it holds the changelog's own copies. The
+// flush is bounded on a context the release's does not cut, since a drain
+// releases every seat at once (seat.Host.ReleaseAll), and best effort: what it
+// misses costs the successor as a crash does, where refusing to release would
+// strand the seat for a full TTL.
 func releaseSeatMemory(ctx context.Context, memory releasedMemory, handle string) {
 	defer memory.Forget(handle)
 	if !memory.Releasing(handle) {

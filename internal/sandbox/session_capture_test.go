@@ -43,9 +43,8 @@ func TestTheSwitchOffAsksNoHostForALostRunsSession(t *testing.T) {
 
 // A SPOOL A CRASH LEFT BEHIND IS SWEPT BY THE FIRST TAKE AFTER IT AGES past the
 // longest a keep may still wait to open its spool, and by every take after — a
-// younger one, a keep under way, never. Swept once a
-// process, a node restarted soon after a crash found that crash's spools young
-// at its first take and never swept again.
+// younger one, a keep under way, never. Swept only once a process, a node
+// restarted soon after a crash would find its spools young and never sweep them.
 //
 // Mutation: sweep once a coordinator, sweep a young spool, or sweep another
 // directory than the coordinator's own, and a check below goes red.
@@ -135,13 +134,11 @@ func TestASpoolNeverOutlivesItsCapture(t *testing.T) {
 }
 
 // A JOB THAT CONTINUES IN ITS TURN'S BOX IS SCRUBBED OF WHAT THE JOBS BEFORE IT
-// WERE HANDED. The relaunch runs no setup and resumes the session the box holds,
-// which holds the earlier job's lines, so its record seals the earlier job's
-// secrets beside its own: a token rotated while the box waited, handed only to
-// the first job, is in the continued session and in the box, and no capture of
-// the relaunch was scrubbed of it. And a box continued whose record says nothing
-// of what the jobs before it were handed keeps no capture at all, rather than
-// one scrubbed of less than the box holds.
+// WERE HANDED. The relaunch resumes the session the box holds, earlier jobs'
+// lines included, so its record seals their secrets beside its own: a token
+// rotated while the box waited, handed only to the first job, is still in the
+// session and the box. A continued box whose record says nothing of what the
+// jobs before were handed keeps no capture rather than one scrubbed of less.
 //
 // Mutation: seal only the relaunch's own secrets, or seal them alone where the
 // earlier jobs' are unknown, and a check below goes red.
@@ -204,11 +201,11 @@ func TestAJobContinuingInItsTurnsBoxScrubsWhatTheJobsBeforeItWereHanded(t *testi
 }
 
 // A LOGIN THE BOX'S CODE GREW PAST WHAT A LAUNCH MAY HAND REFUSES THE CAPTURE.
-// The box can write its login — its harness refreshes the file there — and every
-// string in it was a value of the scrub, held whole in one replacer: a file of
-// millions of short strings cost the engine host a gibibyte before a byte of the
-// session was read. A login past what a whole launch may hand is no harness's,
-// and the capture is refused, saying why.
+// The box can write its login (its harness refreshes the file), and every
+// string in it becomes a scrub value held in one replacer, so an unbounded file
+// of short strings costs the engine host memory without limit. A login past
+// what a whole launch may hand is no harness's: the capture is refused, saying
+// why.
 //
 // Mutation: read the login again without its bound, and the session is taken.
 func TestALoginTheBoxGrewPastItsBoundRefusesTheCapture(t *testing.T) {
@@ -302,17 +299,12 @@ func readUntil(t *testing.T) (read context.Context, by time.Time) {
 	return read, deadline.Add(-discardGrace)
 }
 
-// A CAPTURE'S OUTCOME IS STAMPED IN THE ROOM THE READ LEAVES IT. A take whose
-// place was reserved and whose spool then failed is stamped refused under a
-// context of its own that ends at the read's by — never at the take's own
-// deadline, which may be what ended the spool and would leave the stamp no
-// time, and never past by, where the read needs the rest of its time for the
-// box's pause.
-//
-// THE TAKE TAKES A SECOND between reserving its place and its refusal, on the
-// bubble's clock, so a stamp bounded by the room the read had when the take
-// began, not at by, ends past it, where a take that took no time ended it at
-// by all the same.
+// A CAPTURE'S OUTCOME IS STAMPED IN THE ROOM THE READ LEAVES IT. A reserved
+// take whose spool failed is stamped refused under its own context ending at
+// the read's by: not the take's deadline, which may be what ended the spool,
+// and not past by, which the read needs for the box's pause. The take spends a
+// second on the bubble's clock between reserving and refusing, so a stamp
+// bounded by the room the read had when the take began ends past by.
 //
 // Mutation: bound the refusal's stamp by the take's own deadline, by the
 // record's budget alone, or by the room the read had when the take began, and
@@ -351,22 +343,17 @@ func TestACapturesOutcomeIsStampedInTheRoomTheReadLeavesIt(t *testing.T) {
 	})
 }
 
-// A PLACE RESERVED AS THE TAKE'S TIME RAN OUT IS SETTLED. The coordination store
-// took the reservation of the take's place and answered after the take's own
-// deadline, so the take never spooled — and the place stood begun on the run's
-// row, read as a keep under way for as long as a capture can take, the turn's
-// end waiting on it, with nobody left to settle it. The take stamps its place
-// refused in the room the read leaves its outcome stamp, decided on the row as
-// it stands: its own begun place is advanced, and a place another read reserved
-// in its stead is left as it stands, the take standing by for that read's
-// capture as one whose reservation was refused outright does
-// (TestAReadWhoseReservationWentUnansweredBesideAnotherStandsByForIt has what it
-// keeps).
+// A PLACE RESERVED AS THE TAKE'S TIME RAN OUT IS SETTLED. Answered after the
+// take's deadline, the reservation would leave the place begun, read as a keep
+// under way that the turn's end waits on, with nobody to settle it. The take
+// stamps it refused in the room the read leaves, decided on the row as it
+// stands: its own begun place is advanced, and one another read reserved is
+// left, the take standing by for that read's capture
+// (TestAReadWhoseReservationWentUnansweredBesideAnotherStandsByForIt).
 //
 // Mutation: leave a reservation that ended unanswered as it is, or settle the
 // place whoever reserved it, and a case goes red; walk away from the place
-// another read reserved, as such a take once did, and that case spools
-// nothing.
+// another read reserved, and that case spools nothing.
 func TestAPlaceReservedAsTheTakesTimeRanOutIsSettled(t *testing.T) {
 	t.Parallel()
 	for name, steal := range map[string]bool{
@@ -496,14 +483,11 @@ func (s *lateStore) Get(ctx context.Context, turnID string) (PendingRun, bool, e
 }
 
 // A RESERVATION THE STORE TAKES LATE IS SETTLED WHICHEVER WAY IT LANDS. A take
-// that hears nothing of its reservation by its own deadline settles its place
-// refused, as one stamp decided on the row as it stands when the store writes
-// it: where the store applies the reservation only after its asker gave up, the
-// settle lands first and the reservation, arriving after it, finds the place
-// answered and takes nothing; and where the store, its stream's leader stepping
-// down after it took the reservation, answers nothing for a while, the settle is
-// asked again until it lands, within the read's time. Either way the place is
-// refused on the row, never left begun.
+// unanswered by its deadline settles its place refused, one stamp decided on
+// the row as the store writes it: a reservation applied after its asker gave up
+// finds the place answered and takes nothing; a store answering nothing while
+// its stream elects a leader is asked again until the settle lands, within the
+// read's time. Either way the place is refused, never left begun.
 //
 // Mutation: decide the settle off one read of the row, or give up on a read or
 // stamp the store did not answer, and a case leaves the place begun.
@@ -565,16 +549,14 @@ func (s *lostAnswers) StampCapture(ctx context.Context, turnID string, stamp Ses
 	return false, errors.New("the store's answer never reached its asker")
 }
 
-// A TAKE'S OWN RESERVATION, ITS ANSWER LOST, IS ITS OWN. The store applied the
-// take's reservation and its answer never came back, so the take asked again —
-// and the place it asks for is the one its first ask already holds. Answered as
-// another read's, the take walked away from it, begun, with nobody to settle it
-// and nothing kept. So the store answers a stamp the row already holds as
-// taken: the take goes on under its own place, and its session is kept.
+// A TAKE'S OWN RESERVATION, ITS ANSWER LOST, IS ITS OWN. Asked again, the place
+// is the one its first ask already holds; answered as another read's, the take
+// would walk away from it begun, nothing kept. So the store answers a stamp the
+// row already holds as taken, and the take goes on under its own place.
 //
-// IN A SYNCTEST BUBBLE, so the ask again is held to the rig's record budget on
-// the bubble's clock, which only the asks' own waits advance: on the wall clock
-// a starved runner spent the budget before the second ask, and it was refused.
+// IN A SYNCTEST BUBBLE, so the record budget runs on the bubble's clock, which
+// only the asks' own waits advance: a starved runner's wall clock could spend
+// it before the second ask.
 //
 // Mutation: answer a reservation the row already holds as not taken, and the
 // take keeps nothing and leaves its place begun.

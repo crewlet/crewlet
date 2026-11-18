@@ -11,13 +11,9 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A DEPENDENCY IS WRITTEN AT BOTH ENDS, and until this existed neither end
-// could be written at all.
-//
-// `waiting_on` had no producer in the whole tree: `maintainDeps` derived the
-// dependency table from it, the unblock duty scanned that table, `blocked`
-// filtered on it and `Snapshot.Unblocked` routed off it — an entire subsystem
-// over a relation kind nothing could author.
+// A DEPENDENCY IS WRITTEN AT BOTH ENDS: the authored `waiting_on` edge, the
+// blocker's mirror, and the derived row `maintainDeps` writes for `blocked` and
+// the unblock duty.
 func TestADependencyIsWrittenAtBothEnds(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -63,12 +59,9 @@ func TestADependencyIsWrittenAtBothEnds(t *testing.T) {
 	}
 }
 
-// THE BLOCKER'S ASSIGNEE IS TOLD, and this is the wake that had no producer.
-//
-// `Snapshot.Dependents` is the sole input of the `blocking` arm, and the
-// authored commit routes to the DEPENDENT's parties — so "the wake went out
-// with the other commit" was never true for the person who now owes somebody
-// their work.
+// THE BLOCKER'S ASSIGNEE IS TOLD, by the mirror: `Snapshot.Dependents` is the
+// sole input of the `blocking` arm, and the authored commit routes to the
+// DEPENDENT's parties.
 func TestTheBlockersAssigneeIsToldSomebodyWaits(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -134,12 +127,8 @@ func TestABlockerThatCannotTakeTheEdgeRefusesItFirst(t *testing.T) {
 	}
 }
 
-// AN UNMIRRORED EDGE IS FLAGGED, AND THE DUTY WRITES WHAT DID NOT LAND.
-//
-// The flag had no producer: it was carried through from whatever the record
-// said, and no record ever said anything — so the partial index the schema
-// ships "for the relations repair duty's selection" was over a column that was
-// zero on every row in the company.
+// AN UNMIRRORED EDGE IS FLAGGED `one_sided`, AND THE DUTY WRITES WHAT DID NOT
+// LAND: the flag is the column the repair duty's partial index selects on.
 func TestAnUnmirroredEdgeIsFlaggedAndRepaired(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -196,9 +185,8 @@ func TestAnUnmirroredEdgeIsFlaggedAndRepaired(t *testing.T) {
 	if blk := r.task(t, "blk"); !slices.Contains(blk.Task.Dependents, "dep") {
 		t.Errorf("the repair did not write the mirror: %v", blk.Task.Dependents)
 	}
-	// AND THE FLAG CLEARS, which is the half a repair that only wrote the
-	// mirror would leave: without the blocker-side re-judge the duty would
-	// repair this edge for ever, writing a mirror that is already there.
+	// AND THE FLAG CLEARS: without the blocker-side re-judge the duty would
+	// repair this edge for ever, rewriting a mirror already there.
 	if flagged := r.flagged(t, "one_sided"); len(flagged) != 0 {
 		t.Errorf("the edge is still flagged after its mirror landed: %v — the "+
 			"duty would repair it on every tick, for ever", flagged)
@@ -279,13 +267,11 @@ func TestAMirrorThatCanNeverLandIsStampedFinal(t *testing.T) {
 
 // THE ONE-SIDED SCAN COUNTS EACH BLOCKER'S OWN DEPENDENTS.
 //
-// How many dependents a blocker already lists is what makes an edge whose
-// mirror it lacks permanently one-sided at [worklet.MaxDependents], so the
-// count is a decision rather than a decoration. The scan reads it for its
-// batch in one grouped read of the batch's blockers rather than per edge, so
-// each edge must be handed its OWN blocker's count — two blockers holding
-// different numbers of dependents, each with an edge missing from its mirror,
-// tell a count filed under the wrong task, or under nobody, from the right one.
+// The count decides whether an unmirrored edge is permanently one-sided (at
+// [worklet.MaxDependents]). The scan reads it in one grouped read of the
+// batch's blockers, so each edge must get its OWN blocker's count: two blockers
+// with different counts, each missing a mirror, tell a count filed under the
+// wrong task, or under nobody, from the right one.
 //
 // Mutation: file the counts under each edge's dependent rather than its
 // blocker, or drop the fill, and both edges read zero.
@@ -331,12 +317,9 @@ func TestTheOneSidedScanCountsEachBlockersDependents(t *testing.T) {
 	}
 }
 
-// THE ATTENTION FLAGS OR RATHER THAN AND.
-//
-// Each flag was ANDed with the last, so the screen the design specifies —
-// which names every flag there is and expects the tasks carrying any of them —
-// answered nothing, on every company, and looked exactly like a company with
-// nothing wrong.
+// THE ATTENTION FLAGS OR RATHER THAN AND: the screen names every flag and wants
+// the tasks carrying any, and ANDed it answers nothing, which looks exactly
+// like a company with nothing wrong.
 func TestTheAttentionFlagsMatchAnyNotAll(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -480,11 +463,9 @@ func (r *roundTrip) wakes(t *testing.T) []*worklet.Notify {
 
 // A `blocking`-ONLY CHANGE RETURNS THE POSITION IT WROTE AT.
 //
-// The authored commits for that direction are on the COUNTERPARTIES' subjects
-// and the mirror is this task's own, so nothing is published on the subject
-// the caller named. A result carrying the zero position would make the
-// caller's own barrier a no-op, and its next read would come back missing the
-// write it just made.
+// Its authored commits are on the COUNTERPARTIES' subjects, before its own
+// mirror; a zero position would make the caller's barrier a no-op, and its
+// next read would miss the write it just made.
 func TestABlockingOnlyChangeReturnsAPosition(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -522,12 +503,10 @@ func TestABlockingOnlyChangeReturnsAPosition(t *testing.T) {
 
 // A DEPENDENCY CHANGE ANSWERS AT ITS LAST COMMIT, end to end.
 //
-// A waiting-on change authors its edge on this task and then mirrors onto the
-// blocker, so the mirror is the later record: a read barriered at the
-// authored commit comes back without the blocker's side of the edge. The
-// per-commit folding — which version, which outcome — is pinned against
-// values in TestADependencyResultFoldsEveryCommit, since this harness applies
-// nothing until it drains and so answers every commit `pending`.
+// A waiting-on change's mirror is its later record, so a read barriered at the
+// authored commit misses the blocker's side. The per-commit folding is pinned
+// in TestADependencyResultFoldsEveryCommit, since this harness answers every
+// commit `pending` until it drains.
 func TestADependencyAnswersAtItsLastCommit(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -555,14 +534,11 @@ func TestADependencyAnswersAtItsLastCommit(t *testing.T) {
 // THE OPEN-ASK INFERENCE IS INDEX-SERVED, and the term that makes it so is
 // one a reader would delete as redundant.
 //
-// `tracker_comments_open_asks_idx` is PARTIAL — `WHERE ask <> ” AND
-// resolved = 0 AND answered_by IS NULL AND removed = 0` — and a planner
-// matches a partial index by SYNTACTIC implication. `ask = ?` does not imply
-// `ask <> ”` to it, because a bound parameter could be the empty string, so
-// the query states the literal term as well and reads a seekable range rather
-// than every comment on the task. The statement planned is the one the
-// inference runs, with its arguments bound as it binds them: a copy planned
-// here stayed green with the term deleted from the real one.
+// `tracker_comments_open_asks_idx` is PARTIAL (`WHERE ask <> ” AND ...`), and
+// a planner matches a partial index by SYNTACTIC implication: `ask = ?` does
+// not imply `ask <> ”`, since the parameter could be empty, so the query also
+// states the literal term. The statement planned is the inference's own, bound
+// as it binds it: a copy planned here would stay green with the term deleted.
 //
 // Mutation: delete the non-empty ask term from the inference's statement and
 // the plan stops naming the open-asks index.
@@ -579,12 +555,9 @@ func TestTheOpenAskInferenceIsIndexServed(t *testing.T) {
 	}
 }
 
-// THE REPAIR AGES ON THE EDGE, not on the task.
-//
-// The only other column it could have aged on is the dependent's own
-// `updated_at`, which any unrelated edit resets — so a busy task would
-// postpone its own repair indefinitely, and the busiest tasks are exactly the
-// ones that acquire dependencies.
+// THE REPAIR AGES ON THE EDGE, not on the task: the dependent's `updated_at`
+// resets on any edit, so a busy task, the kind that acquires dependencies,
+// would postpone its own repair indefinitely.
 func TestTheRepairAgesOnTheEdgeNotTheTask(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -634,14 +607,11 @@ func TestTheRepairAgesOnTheEdgeNotTheTask(t *testing.T) {
 
 // CLOSING AN ITEM AS A DUPLICATE KEEPS ITS OTHER RELATIONS.
 //
-// A relation gesture is an ADD against the task's own rows, resolved inside
-// the writer's snapshot. The alternative — stating the one edge as the whole
-// collection, which is how both callers of this used to do it — deletes every
-// other relation the item had, and the dependency edges are the expensive
-// half: their mirrors on the blockers survive, so those tasks go on listing a
-// dependent whose own side is gone. That is the one-sided state INVERTED, and
-// nothing scans for it: the repair selects on the AUTHORED edge, which is
-// exactly the row that was deleted.
+// A relation gesture is an ADD resolved inside the writer's snapshot. Stating
+// the one edge as the whole collection deletes every other relation, and the
+// blockers' mirrors survive listing a dependent whose side is gone: the
+// one-sided state INVERTED, which nothing scans for, since the repair selects
+// on the AUTHORED edge.
 func TestMarkingADuplicateKeepsTheEdgesTheItemAlreadyHad(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -695,20 +665,11 @@ func TestMarkingADuplicateKeepsTheEdgesTheItemAlreadyHad(t *testing.T) {
 	}
 }
 
-// A BLOCKER CAN STILL BE EDITED — and until this existed, it could not be.
-//
-// The apply rewrites `blocker_open` and `cleared_at` on every row naming this
-// task as a blocker, on EVERY task apply: `maintainDeps` runs out of
-// `explodeTask`, which nothing gates on what the patch changed. The writer
-// widened its scope to those dependents only when the patch carried a STATUS,
-// so a patch to anything else claimed a scope short of what its own apply
-// writes — and [ScopeSet.covers] inside the decide refused it.
-//
-// The refusal was PERMANENT while reading as transient: it wraps
-// `statelog.ErrConflict` and tells the caller to re-run, and the re-run took
-// the same gate and came up short again. So a task somebody waited on could
-// never be retitled, re-assigned, re-pointed, given a due date or moved into
-// a size, for as long as the edge existed.
+// A BLOCKER CAN STILL BE EDITED. EVERY task apply rewrites `blocker_open` and
+// `cleared_at` on each row naming the task as a blocker (`maintainDeps` runs
+// out of `explodeTask`, ungated), so every patch's scope must cover those
+// dependents, not only a STATUS patch's, or [ScopeSet.covers] refuses it with
+// a `statelog.ErrConflict` that no re-run clears.
 func TestABlockerTakesAnOrdinaryEditWhileSomebodyWaitsOnIt(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -722,10 +683,8 @@ func TestABlockerTakesAnOrdinaryEditWhileSomebodyWaitsOnIt(t *testing.T) {
 	}
 	r.drain()
 
-	// NOT A STATUS PATCH — that one always worked, and asserting it would
-	// be asserting the half that was never broken. An ordinary field edit
-	// is what this case is about: a task somebody waits on takes one like
-	// any other.
+	// NOT A STATUS PATCH, whose scope always covered the dependents: an
+	// ordinary field edit is what this case is about.
 	points := 8.0
 	if _, err := r.writer.UpdateTask(t.Context(), "op-edit", "blk", "ENG",
 		worklet.NoIfMatch, worklet.TaskPatch{

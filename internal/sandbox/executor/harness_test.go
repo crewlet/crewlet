@@ -169,6 +169,23 @@ func TestARunThatHitItsCapIsNotASuccess(t *testing.T) {
 	if res.Error != "error_max_turns" {
 		t.Fatalf("the failure says %q; want how the run ended", res.Error)
 	}
+	if !res.RoundCapped {
+		t.Fatal("a run that exhausted its turns is not marked as ended on its round cap")
+	}
+}
+
+// ONLY THE CAP'S OWN SUBTYPE marks a run round-capped: another failure, and a
+// success, are not.
+func TestOnlyTheCapsSubtypeMarksARunRoundCapped(t *testing.T) {
+	t.Parallel()
+	for _, line := range []string{
+		`{"type":"result","subtype":"error_during_execution","is_error":true}`,
+		`{"type":"result","subtype":"success","is_error":false,"result":"done","num_turns":30}`,
+	} {
+		if res := claude().Parse(line); res.RoundCapped {
+			t.Errorf("%s read as ended on its round cap", line)
+		}
+	}
 }
 
 // A run whose model call failed is a SUCCESS subtype carrying is_error, and
@@ -636,8 +653,8 @@ func TestTheOpenCodeParserRebuildsTheAnswerAndTheTranscript(t *testing.T) {
 	if len(res.DeliveredRefs) != 1 {
 		t.Fatalf("refs = %v", res.DeliveredRefs)
 	}
-	// A bare "[tool] shell" is useless when a run fails — the transcript has
-	// to say WHAT ran.
+	// A bare call is useless when a run fails: the transcript has to say
+	// WHAT ran.
 	if !strings.Contains(res.Transcript, "pytest -q") {
 		t.Fatalf("the transcript does not say what ran:\n%s", res.Transcript)
 	}
@@ -679,13 +696,18 @@ func TestTheAnswerIsTheLastMessagesText(t *testing.T) {
 	}
 }
 
+// A FINISHED OPENCODE CALL IS ITS CALL AND ITS RESULT AT ONCE, timed by the
+// call's own start and end where the event carries them.
 func TestAFailedToolIsMarkedInTheTranscript(t *testing.T) {
 	t.Parallel()
-	stream := `{"type":"tool_use","part":{"tool":"shell","state":{"input":{"command":"pytest"},"status":"error","error":"2 failed"}}}
+	stream := `{"type":"tool_use","part":{"tool":"shell","state":{"input":{"command":"pytest"},"status":"error",` +
+		`"error":"2 failed","time":{"start":1794632160734,"end":1794632161984}}}}
+{"type":"tool_use","part":{"tool":"read","state":{"input":{"filePath":"/repo/a.go"},"status":"completed"}}}
 {"type":"text","part":{"text":"could not fix it"}}`
 	res := opencode().Parse(stream)
-	if !strings.Contains(res.Transcript, "error: 2 failed") {
-		t.Fatalf("a failed tool is invisible:\n%s", res.Transcript)
+	want := "[tool 1] shell: pytest\n[failed 1 1250ms] 2 failed\n[tool 2] read: /repo/a.go\n[ok 2]\ncould not fix it"
+	if res.Transcript != want {
+		t.Fatalf("transcript =\n%s\nwant\n%s", res.Transcript, want)
 	}
 }
 

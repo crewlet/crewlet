@@ -18,9 +18,8 @@ import (
 )
 
 // A CHANGE'S LANDING AND THE HOME'S DUE LISTING, through the committer and the
-// reader on a real embedded broker: the record the repository's home Gitlet node
-// asks for a change whose head its target came to hold, and the rows it finds
-// its change work in.
+// reader on a real embedded broker: the record a repository's home asks for a
+// change whose head its target came to hold, and the rows listing its work.
 
 // landing is the home's landing of revision rev of change, its head head,
 // found inside target at tip.
@@ -43,18 +42,16 @@ func (n *node) merged(change string) (state, via, at string) {
 }
 
 // A LANDING IS DECIDED AGAINST THE TIP ITS HOME READ: the home's record of a
-// change whose head its target came to hold — moved past it rather than onto
-// it — merges the change by `push` at that tip, decided by the committer
-// against the change's head revision and head, its target branch and the
-// target's tip as the home read them: a head moved since, a retarget, or the
-// target moved on are each refused stale, appending nothing; a closed change
-// is landed by nobody; a merged one is answered unchanged. The home's own
-// write names no asker and no version, and a committer holding no chart
-// decides it all the same.
+// change whose head its target came to hold (moved past it, not onto it)
+// merges the change by `push` at that tip, the committer deciding against the
+// head revision, head, target branch and tip the home read: a head moved
+// since, a retarget or a target moved on is refused stale, appending nothing;
+// a closed change is landed by nobody; a merged one is answered unchanged. The
+// home's write names no asker and no version, and a committer holding no chart
+// decides it alike.
 //
-// Mutation: drop the tip's check, and a landing read against a tip the
-// target has moved from merges the change at a commit its target no longer
-// holds.
+// Mutation: drop the tip's check, and a landing read against a tip the target
+// has moved from merges the change at a commit its target no longer holds.
 func TestALandingIsDecidedAgainstTheTipItsHomeRead(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -120,20 +117,17 @@ func TestALandingIsDecidedAgainstTheTipItsHomeRead(t *testing.T) {
 }
 
 // A LANDING THE HOME FOUND WAKES FOR WHOM ITS MERGING PUSH WAS MADE (ADR-0109):
-// the landing names whoever made the push its home found bringing the change's
-// head into its target (TestALandingIsMadeByThePushThatBroughtItsHeadIn), and
-// that push is the change's merge, so where a seat made it in a turn it worked
-// for somebody, the change's other authors are told it merged for that
-// somebody, as the push's own merge would have told them. dev's change from
-// feature into release lands by a push of a merge commit onto release: the
-// seat cto's, made in a turn founder woke, lands it through a routing carrying
-// founder beside cto, at version 2, and dev, its owner, is woken by cto for
-// founder; cto's made for nobody, and a person's, carry nobody, at version 1,
-// and dev is woken by the pusher alone.
+// the landing names who made the push bringing the change's head into its
+// target (TestALandingIsMadeByThePushThatBroughtItsHeadIn); that push is the
+// change's merge, so a seat's made in a turn for somebody tells the other
+// authors it merged for that somebody. dev's change into release lands by a
+// merge commit pushed onto release: cto's, in a turn founder woke, routes
+// founder beside cto at version 2, and dev, its owner, is woken by cto for
+// founder; cto's for nobody, and a person's, carry nobody at version 1, and
+// dev is woken by the pusher alone.
 //
 // Mutations: landingPusher reading no carrier, or the landing's decide handing
-// its routing none — the landing made for founder carries nobody and dev is
-// woken for nobody, red.
+// its routing none → the landing made for founder carries nobody, red.
 func TestALandingTheHomeFoundWakesForWhomItsMergingPushWasMade(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -245,21 +239,17 @@ func (n *node) dueRepos() []string {
 }
 
 // THE DUE LISTING IS THE ROWS: a live change whose head revision holds no facts,
-// or no mergeability, against the branch it merges into is due — on the listing
-// of repositories by its repository, and on its repository's listing with its
-// target's tip and the position that moved it there and what it owes, beside
-// the repository's path owners — and each record takes its half off: its facts
-// recorded leave its merge owed, and its mergeability recorded takes it off; a
-// retarget puts both back; a change whose target branch is gone is due
-// nothing, and neither is one of an archived repository. The engine's own read
-// names no asker, the instant its home's refresh is paced by, and only it
-// names a due repository. The path owners ride only a page naming a change
-// that owes its facts.
+// or no mergeability, against its target is due, listed by repository and on
+// its repository's page with the target's tip, the position that moved it
+// there and what it owes. Its facts recorded leave its merge owed, its
+// mergeability takes it off, a retarget puts both back; a gone target branch
+// or an archived repository owes nothing. The engine's read names no asker but
+// the instant its refresh is paced by, and alone names a due repository; path
+// owners ride only a page naming a change that owes its facts.
 //
-// Mutations: take facts of a change's head revision against another branch for
-// its facts, and the retargeted change drops off the listing; take the facts
-// for the merge, and a change whose facts are recorded owes no merge; answer
-// the owners on every page, and the page owing only a merge carries them.
+// Mutations: facts against another branch taken for its facts → the retargeted
+// change drops off; the facts taken for the merge → no merge owed once facts
+// are recorded; owners on every page → a page owing only a merge carries them.
 func TestTheDueListingIsTheRows(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

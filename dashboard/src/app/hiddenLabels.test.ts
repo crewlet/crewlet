@@ -122,6 +122,11 @@ const DECLARED: Declared[] = [
     element: "FormField",
     why: "Drawn alone; beside other scopes the section heading names it.",
   },
+  {
+    where: "routes/gitlet/change/Viewed.tsx",
+    element: "Meter",
+    why: "The words beside the bar say how many files are viewed of how many.",
+  },
 ];
 
 /** The props that keep a name and draw no words. */

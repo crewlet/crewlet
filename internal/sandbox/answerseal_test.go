@@ -133,8 +133,7 @@ func TestAnAnswerOpensOnlyAsTheAnswerToTheQuestionItWasSealedFor(t *testing.T) {
 }
 
 // A KEY THIS NODE DOES NOT HOLD is its own answer, not a refusal of the
-// answer: the seal names a key, this node's ring has no such id, and the line
-// it is logged with names the keys the node does hold.
+// answer, and its error names the keys the node does hold.
 func TestAnAnswerUnderAKeyThisNodeDoesNotHoldIsToldApart(t *testing.T) {
 	t.Parallel()
 	run := PendingRun{TurnID: "t1", LaunchID: "launch-1"}
@@ -154,10 +153,9 @@ func TestAnAnswerUnderAKeyThisNodeDoesNotHoldIsToldApart(t *testing.T) {
 	}
 }
 
-// THE ANSWER'S WORDS ARE ONLY INSIDE ITS SEAL: a recorded answer, encoded as the
-// store keeps it, carries neither the text nor who gave it in a field of its
-// own — the deliveries it was made of ride beside it as the messages they are —
-// and the turn the answer resumes is handed both, out of the seal.
+// THE ANSWER'S WORDS ARE ONLY INSIDE ITS SEAL: a recorded answer, encoded as
+// the store keeps it (its deliveries aside), carries neither the text nor who
+// gave it in the clear, and the resumed turn is handed both out of the seal.
 func TestARecordedAnswerCarriesItsWordsOnlyInsideItsSeal(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -198,9 +196,9 @@ func TestARecordedAnswerCarriesItsWordsOnlyInsideItsSeal(t *testing.T) {
 }
 
 // AN ANSWER WHOSE SEAL DOES NOT OPEN IS HANDED TO NO TURN AND NAMES NOBODY,
-// however it fails to open: no resume, no announcement of who answered,
-// nothing recorded as worked or handed back to the seat — and the run waits on
-// its question again, logged at error, for the next reply to answer it.
+// however it fails: no resume, no announcement, nothing recorded as worked or
+// handed back — and the run, logged at error, waits on its question again for
+// the next reply.
 //
 // Not parallel: it captures the process-wide logger ([captureLogs]).
 func TestAnAnswerWhoseSealDoesNotOpenIsHandedToNoTurn(t *testing.T) {
@@ -240,8 +238,8 @@ func TestAnAnswerWhoseSealDoesNotOpenIsHandedToNoTurn(t *testing.T) {
 			rig := newCoordRig(t)
 			parkOnAQuestion(t, rig)
 			run := rig.get("t1")
-			// A REAL DELIVERY BEHIND IT, so that a let-go which handed it
-			// back or recorded it as worked would have something to show.
+			// A REAL DELIVERY BEHIND IT, so a let-go that handed it back or
+			// recorded it as worked would show it.
 			words, answer := chatReply(answerOnTheDM, "use main",
 				replyAt("use main", run.AskedAt.Add(time.Minute))).answerOf(rig.now)
 			if len(answer.Events) == 0 {
@@ -298,10 +296,10 @@ func TestAnAnswerWhoseSealDoesNotOpenIsHandedToNoTurn(t *testing.T) {
 	}
 }
 
-// AN ANSWER SEALED UNDER A KEY THIS NODE DOES NOT HOLD WAITS: never resumed and
-// never let go of on this node — recorded and owed, uncounted, the seat's inbox
-// held behind it and a warning naming the keys the node holds — and resumed by
-// the first holder of the seat that holds the key.
+// AN ANSWER SEALED UNDER A KEY THIS NODE DOES NOT HOLD WAITS: never resumed or
+// let go of here — owed, uncounted, the seat's inbox held behind it and a
+// warning naming the keys the node holds — and resumed by the first holder of
+// the seat that holds the key.
 //
 // Not parallel: it captures the process-wide logger ([captureLogs]).
 func TestAnAnswerUnderAKeyThisNodeDoesNotHoldWaitsForANodeThatHoldsIt(t *testing.T) {
@@ -324,8 +322,8 @@ func TestAnAnswerUnderAKeyThisNodeDoesNotHoldWaitsForANodeThatHoldsIt(t *testing
 	if err := rig.recoverSeat(t.Context(), rigLease.Owner, rigLease.Epoch); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
-	// AS MANY TIMES AS THE BACKSTOP COMES ROUND, past every attempt bound a
-	// failed resume has: nothing is counted, so nothing is ever let go of.
+	// PAST EVERY ATTEMPT BOUND a failed resume has: nothing is counted, so
+	// nothing is let go of.
 	for range MaxAnswerAttempts + 2 {
 		rig.fireRetries()
 	}
@@ -393,11 +391,9 @@ func (c *Coordinator) waitingOn(turnID string) Condition {
 	return ""
 }
 
-// WHO WROTE A REPLY RIDES ITS SEAL WITH THE WORDS. The run a chat reply carries
-// on reads it fenced under who wrote it, so that label is handed to the run out
-// of the seal like the words, never off the row beside it: a row that named a
-// stranger's reply as a colleague's would have the run take a stranger's words
-// as a colleague's request.
+// WHO WROTE A REPLY RIDES ITS SEAL WITH THE WORDS, never off the row: a row
+// that named a stranger's reply as a colleague's would have the run take a
+// stranger's words as a colleague's request.
 //
 // Mutation: leave the label out of the sealed body and the opened answer names
 // no writer.

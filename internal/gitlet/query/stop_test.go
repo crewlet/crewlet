@@ -14,9 +14,9 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/query"
 )
 
-// heldListing runs every git process on the pool beneath but a tree's listing,
-// which it holds until its context ends — a read whose git the stop finds
-// running — telling entered when it begins. ran counts what it was asked.
+// heldListing runs every git process on the pool beneath but a tree's
+// listing, which it holds until its context ends (a git the stop finds
+// running), signalling entered when it begins. ran counts the processes asked.
 type heldListing struct {
 	query.Pool
 	entered chan struct{}
@@ -34,14 +34,13 @@ func (p *heldListing) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, e
 }
 
 // A STOP CUTS THE READS IN FLIGHT AND REFUSES EVERY LATER ONE, each answered
-// unready about the node, node_failed — so its walk asks the next Gitlet node and
-// lets it fill a copy — and nothing recorded: a read cut, or refused before it
-// started, sent the repository's contents to nobody. A later read starts
-// nothing at all.
+// unready, node_failed, so its walk asks the next Gitlet node, and none
+// recorded: a cut or refused read sent the repository's contents to nobody.
+// A later read starts nothing at all.
 //
-// Mutation: drop the cut, and the stop waits for a git the read holds until
-// the hang detector goes red; answer a cut read with what its wait said, and it
-// reads as the caller's own cancellation.
+// Mutation: drop the cut, and the stop waits on the held git until the hang
+// detector goes red; answer a cut read with what its wait said, and it reads
+// as the caller's own cancellation.
 func TestAStopCutsTheReadsInFlightAndRefusesTheRest(t *testing.T) {
 	t.Parallel()
 	settings := gitlettest.Settings()
@@ -91,18 +90,13 @@ func TestAStopCutsTheReadsInFlightAndRefusesTheRest(t *testing.T) {
 }
 
 // A STOP WAITS FOR A READ STILL BEING RECORDED: a read that answered before
-// the stop is recorded before the stop returns, so whatever the node does with
-// its records once Gitlet has stopped on it — the usage day's last flush —
-// is short of no read this server answered.
+// the stop is recorded before the stop returns, so the usage day's last flush
+// after Gitlet's stop is short of no read this server answered. The recording
+// runs on the read's own context (Options.Fetched), inside the span a stop
+// waits for (TestAStopWaitsForEveryReadInFlight), so it sees the stop's cut;
+// one made once its read had ended would see that end first.
 //
-// A read is recorded inside the span a stop waits for
-// (TestAStopWaitsForEveryReadInFlight): its recording runs on the read's own
-// context (Options.Fetched), which the stop cuts while the read is in flight
-// — so the recording sees the stop's cut, where one made once its read had
-// ended would see that end first.
-//
-// Mutation: record a read on a context that has ended, as one recorded once
-// its read had ended — red.
+// Mutation: record a read on a context that has ended, red.
 func TestAStopWaitsForAReadStillBeingRecorded(t *testing.T) {
 	t.Parallel()
 	settings := gitlettest.Settings()

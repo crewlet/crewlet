@@ -9,25 +9,15 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// EVERY ARGUMENT THE AUTHORITY TABLE READS IS ONE ITS TOOL DECLARES.
+// EVERY ARGUMENT THE AUTHORITY TABLE READS IS ONE ITS TOOL DECLARES: a row
+// naming a field its tool lacks reads empty on every call, and every personal
+// class refuses an empty owner, so the tool is shut for all but an admin.
+// Nothing else catches it: internal/authz's walks hold the rules against
+// themselves, and [TestEveryRegisteredToolHasAnAuthorityRule] only the tool
+// names.
 //
-// This is the walk that had to exist. [subjectOf] used to hold closures —
-// `ownerFrom("handle")` — and four rows named a field their tool does not
-// have: `my_work`, `mark_inbox` and `set_pins` take no handle at all, and
-// `save_work_view` spells its own `owner`. Every one of them read empty on
-// every call, every personal class refuses an empty owner, and so four tools
-// a seat uses each turn were gated shut for everybody but an admin — with the
-// only symptom a refusal naming a grant the caller already held.
-//
-// NOTHING ELSE CATCHES IT. The completeness walks in internal/authz hold the
-// rules table against itself, and [TestEveryRegisteredToolHasAnAuthorityRule]
-// holds it against the tool NAMES. A field name inside a row is below all of
-// them.
-//
-// BOTH DIRECTIONS, so the list below is exactly the rows: a tool listed there
-// that no row governs is one whose row was deleted — an app's own verb, which
-// reads no object — and a stale entry would go on claiming this walk covers
-// a tool it reads nothing of.
+// BOTH DIRECTIONS, so the list is exactly the rows: a stale entry would claim
+// this walk covers a tool it reads nothing of.
 func TestEveryObjectFieldIsOneItsToolDeclares(t *testing.T) {
 	t.Parallel()
 	declared := declaredArguments(t)
@@ -61,12 +51,10 @@ func TestEveryObjectFieldIsOneItsToolDeclares(t *testing.T) {
 	}
 }
 
-// AND A PERSONAL VERB WITH NO HANDLE IS ABOUT THE CALLER.
-//
-// The other half of the same bug: the four that take no argument must still
-// reach their class with an owner, or [authz.ClassOwnRecord] reads the empty
-// one as [authz.ReasonUnnamed] and refuses. Mutating [subject.objectFor]'s
-// personal default to leave the owner empty turns this red.
+// AND A PERSONAL VERB WITH NO HANDLE IS ABOUT THE CALLER, or
+// [authz.ClassOwnRecord] reads the empty owner as [authz.ReasonUnnamed] and
+// refuses. Mutating [subject.objectFor]'s personal default to leave the owner
+// empty turns this red.
 func TestAPersonalVerbWithNoHandleIsAboutTheCaller(t *testing.T) {
 	t.Parallel()
 	caller := iam.Principal{Kind: iam.KindSeat, Seat: "ana", Stage: iam.StageActive}
@@ -78,10 +66,8 @@ func TestAPersonalVerbWithNoHandleIsAboutTheCaller(t *testing.T) {
 				name, got.Owner)
 		}
 	}
-	// AND A VIEW IS NOT, which is why it has a kind of its own: omitting
-	// the owner SHARES a view rather than making it mine, so filling one
-	// in here would hand every seat a personal view it never asked for
-	// and hide the container's own rule.
+	// AND A VIEW IS NOT: omitting the owner SHARES a view, so filling one
+	// in would hand every seat a personal view and hide the container's rule.
 	view := subjectOf["save_work_view"].objectFor(caller,
 		map[string]any{"container": "project:eng"})
 	if view.Owner != "" {
@@ -93,11 +79,10 @@ func TestAPersonalVerbWithNoHandleIsAboutTheCaller(t *testing.T) {
 			view.ContainerKind, view.Container)
 	}
 
-	// AND A PERSONAL ONE IS THE CALLER'S OWN RECORD, whoever the caller
-	// is: a bound person's under their seat, never the login they could
-	// have typed, and one the engine can name nothing for names NOTHING —
-	// which every class refuses — rather than falling back to the shared
-	// reading of an owner-less view.
+	// AND A PERSONAL ONE IS THE CALLER'S OWN RECORD: a bound person's under
+	// their seat, never their login, and a caller the engine can name nothing
+	// for names NOTHING (refused by every class) rather than falling back to
+	// the shared reading of an owner-less view.
 	for _, c := range []struct {
 		name   string
 		caller iam.Principal
@@ -124,13 +109,10 @@ func TestAPersonalVerbWithNoHandleIsAboutTheCaller(t *testing.T) {
 	}
 }
 
-// AND A GATED TOOL IS COMPARABLE.
-//
-// A registered tool is compared with `==` — internal/engine asserts a seat's
-// builtins are the applied epoch's OBJECTS and not merely its names — and a
-// wrapper that embedded the [Authorizer] func by value made that comparison a
-// RUNTIME PANIC. Nothing in the type system says so, which is why it is said
-// here: revert [gate] to returning values and this test panics.
+// AND A GATED TOOL IS COMPARABLE: internal/engine compares registered tools
+// with `==` (a seat's builtins are the applied epoch's OBJECTS), and a wrapper
+// holding the [Authorizer] func by value makes that a RUNTIME PANIC the type
+// system does not catch. Revert [gate] to returning values and this panics.
 func TestAGatedToolIsComparable(t *testing.T) {
 	t.Parallel()
 	authorize := Decide(authz.NoChart{})
@@ -163,15 +145,11 @@ func declaredArguments(t *testing.T) map[string][]string {
 	return declared
 }
 
-// toolsWithArguments is one instance of every tool [subjectOf] governs.
-//
-// CONSTRUCTED WITH NO DEPENDENCIES, because what is read is `Name()` and
-// `Parameters()` and neither touches one — and because the alternative,
-// standing up the full registry, needs a fixture of forty seams that the
-// external suite already owns and this package cannot import.
-//
-// HAND-WRITTEN AND UNABLE TO GO STALE: the walk above fails on a row with no
-// entry here and on an entry with no row, so the two change together.
+// toolsWithArguments is one instance of every tool [subjectOf] governs, built
+// with no dependencies since `Name()` and `Parameters()` touch none (the full
+// registry's fixture lives in the external suite, which this package cannot
+// import). It cannot go stale: the walk above fails on a row with no entry
+// here and on an entry with no row.
 func toolsWithArguments() []tools.Callable {
 	return []tools.Callable{
 		&getWorkItem{}, &commentOnWorkItem{},

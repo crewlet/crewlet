@@ -12,77 +12,53 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The applier, and the four rules that make it a PURE FUNCTION of the log.
+// The applier is a PURE FUNCTION of the log, so every node's replicated file
+// is byte-identical (a checksum checks it). Four rules keep it so:
 //
-// N nodes derive one SQL state from one ordered stream, and the claim that
-// their tables are byte-identical is checkable — a checksum over the
-// replicated file. That claim survives exactly as long as these four hold:
-//
-//  1. IT READS NO CONFIG AND NO CLOCK. Everything it would otherwise read
-//     arrives in [statelog.ApplyOptions]: the batch's instant, the broker's own
-//     timestamp, and the epoch values the domain declared it reads. A node that
-//     read its own configuration mid-apply would write rows its peer did not.
-//  2. IT WRITES ONLY WHAT THE RECORD SAYS. No lookup against a live counter,
-//     no "current" anything: the record carries its complete new values,
-//     because that is what makes a replay from zero produce the same rows as
-//     the original apply did.
-//  3. EVERY DERIVED INSTANT IS A MAX OVER A SET, never a fold over an arrival
-//     order. Two nodes at one checkpoint have seen the same set and a different
-//     order, so a fold gives them different answers — permanently, on a column
-//     nothing repairs.
-//  4. EVERY UPSERT CARRIES ITS VERSION GUARD, and the guard is a SKIP rather
-//     than an error: a redelivered record is ordinary traffic, and a
-//     constraint violation inside this transaction would abort it identically
-//     on every node and stall the whole fleet's log.
+//  1. NO CONFIG AND NO CLOCK: all it reads arrives in [statelog.ApplyOptions].
+//  2. ONLY WHAT THE RECORD SAYS: a record carries its complete new values, so
+//     a replay from zero writes the original apply's rows.
+//  3. EVERY DERIVED INSTANT IS A MAX OVER A SET, never a fold over arrival
+//     order, which differs between nodes at one checkpoint ([effectiveAt]).
+//  4. EVERY UPSERT CARRIES A VERSION GUARD THAT SKIPS rather than errs: a
+//     redelivery is ordinary, and a constraint violation would abort the
+//     transaction on every node and stall the fleet's log.
 
 // Applier writes this node's copy of the tracker's state.
 //
-// It carries NO NODE IDENTITY, and that is the purity rule rather than an
-// omission: [statelog.Applier] forbids one, because an applier that could
-// read which node it runs on could write rows its peers do not. The eviction
-// gate needs none either — it compares the record's own
-// [statelog.Record.Writer] against the eviction rows in this transaction. What
-// it does hold of its node is a LISTENER, told after a commit whose inbox moved
-// on this node (internal/inbox's movement.go), and a listener writes no row:
-// every node's applier still writes the same rows from the same records.
+// It carries NO NODE IDENTITY ([statelog.Applier] forbids one: it could write
+// rows its peers do not); the eviction gate reads [statelog.Record.Writer]
+// instead. Its one hold on its node is a LISTENER told after a commit whose
+// inbox moved, which writes no row.
 type Applier struct {
 	// moved is told, after a committed batch, whose inbox moved on this
-	// node. Nil is legal and means nobody is listening.
+	// node. Nil means nobody is listening.
 	moved func([]inbox.Movement)
 
-	// inboxed is the notices the batch wrote or deleted, filled inside Apply
-	// and drained by Committed — see [inbox.Batch] for why it holds no lock.
+	// inboxed is the notices the batch wrote or deleted, filled by Apply and
+	// drained by Committed; [inbox.Batch] says why it holds no lock.
 	inboxed inbox.Batch
 }
 
 // NewApplier builds the applier for one node.
 //
-// moved is called after a COMMITTED batch with every inbox that batch moved,
-// each movement naming this domain as its source. After the commit and never
-// inside the transaction: the store re-runs the body of an attempt that failed
-// transiently, and a movement announced from inside it would announce a notice
-// no row holds.
+// moved is called after a COMMITTED batch with every inbox it moved, never
+// inside the transaction: the store re-runs a transiently failed attempt, and
+// a movement announced from inside it could name a notice no row holds.
 func NewApplier(moved func([]inbox.Movement)) *Applier {
 	return &Applier{moved: moved}
 }
 
 // Committed is the post-commit half.
 //
-// EVERY CONSEQUENCE OF A TRACKER RECORD THAT ANOTHER NODE COULD NEED IS A ROW.
-// A wake is derived by the change feed — something that outlives this process
-// — rather than published here as a courtesy, which is the whole reason a wake
-// survives the node that wrote the record dying between the commit and the
-// publish.
-//
-// What happens here is the one consequence no other node needs: telling THIS
-// node's open dashboards whose inbox just moved (internal/inbox's
-// movement.go). Every data node applies every record, and only a data node
-// serves dashboards (ingress requires `data`), so each one tells its own — and
-// a node that dies before telling them has no sockets left to tell.
+// Every consequence another node could need is a ROW (a wake is derived by
+// the change feed, so it survives this node dying after the commit). Here is
+// only the one no other node needs: telling THIS node's open dashboards whose
+// inbox moved. Every data node applies every record and only a data node
+// serves dashboards, so each tells its own.
 func (a *Applier) Committed(context.Context) {
-	// RESET BEFORE THE CALL, not after: the listener may take long enough
-	// for the next batch to be waiting behind it, and a set drained
-	// afterwards would be delivered twice or lost.
+	// DRAINED BEFORE THE CALL: the next batch may wait behind a slow
+	// listener, and a set drained after would be delivered twice or lost.
 	moved := a.inboxed.Drain(Domain{}.Name())
 	if len(moved) > 0 && a.moved != nil {
 		a.moved(moved)
@@ -91,18 +67,14 @@ func (a *Applier) Committed(context.Context) {
 
 // Gated reports a record that must produce no rows at all.
 //
-// TWO GATES, both READ FROM THIS SAME TRANSACTION, because their answer has to
-// come from the state the record would have applied against rather than from a
-// cache that may be a heartbeat old:
+// TWO GATES, both READ FROM THIS TRANSACTION, never a cache a heartbeat old:
 //
-//  1. THE EVICTION GATE. A record written by a node the fleet evicted before
-//     the record's own position is dropped everywhere. It depends on nothing
-//     but the log's own order, which is what makes it the fence that holds
-//     when coordination cannot be reached at all.
-//  2. THE DELETION GATE. A record about a task a purge destroyed applies
-//     nowhere, for ever — otherwise a redelivery months later would resurrect
-//     rows an operator deliberately removed. A TURN charged to that task is
-//     about it too, and is read past on the same marker.
+//  1. THE EVICTION GATE: a record by a node evicted before the record's
+//     position is dropped everywhere. It depends only on the log's order, so
+//     it fences even when coordination is unreachable.
+//  2. THE DELETION GATE: a record about a purged task (a turn charged to it
+//     included) applies nowhere, for ever, so a late redelivery cannot
+//     resurrect rows an operator removed.
 func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (statelog.Reason, bool, error) {
 	if rec.Writer != "" {
 		var from, readmitted sql.NullInt64
@@ -117,11 +89,8 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 				"node %s: %w", rec.Writer, err)
 		default:
 			at := rec.Position.Packed()
-			// THE WINDOW IS HALF-OPEN AT BOTH ENDS, and both ends
-			// matter: a record at or below the eviction's own position
-			// was written while the node was still counted, and one at
-			// or above a readmission is written by a node the fleet has
-			// taken back.
+			// (from, readmitted): at or below the eviction the node was
+			// still counted, and at or above a readmission it is back.
 			evicted := from.Valid && at > from.Int64
 			back := readmitted.Valid && at >= readmitted.Int64
 			if evicted && !back {
@@ -130,19 +99,11 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 		}
 	}
 
-	// The deletion gate reads the marker of the task the record is ABOUT —
-	// [markedTask], which the publisher's reader asks too. A purge is the
-	// one operation that removes rows, and its marker is what makes the
-	// removal permanent rather than a race a redelivery can undo.
-	//
-	// A TURN IS GATED TOO, on its task's marker — a turn's subject id IS its
-	// task's id. A turn is additive and carries no expectation, so nothing at
-	// the broker orders it against a purge of the same task: a turn decided
-	// while the task existed can land after the purge that removed it. Ungated,
-	// its spend update found no row and stopped the applier on EVERY data node,
-	// since every data node applies the same log in the same order — a
-	// fleet-wide wedge from one ordinary race. Gated, it is read past and
-	// counted as a hit on the marker like any other late write.
+	// The marker of the task the record is ABOUT ([markedTask], which the
+	// publisher's reader asks too). A TURN IS GATED TOO (its subject id is its
+	// task's): it carries no expectation, so nothing orders it against a
+	// purge, and ungated its spend update would find no row and stop the
+	// applier on every data node. Gated, it counts as a hit on the marker.
 	if taskID, ok := markedTask(rec.Subject); ok {
 		var author sql.NullString
 		err := tx.QueryRowContext(ctx,
@@ -155,12 +116,9 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 			return "", false, fmt.Errorf("worklet: read the deletion gate for "+
 				"task %s: %w", taskID, err)
 		}
-		// THE ONE EXCEPTION IS THE RECORD THAT WROTE THE MARKER, by its
-		// own id — not by its op kind. "Any purge" would let a SECOND
-		// purge of the same task through, and a purge is the one
-		// operation that destroys rows; by the committed sequence would
-		// fail for a republished copy, leaving a node holding only that
-		// copy unable to write its own marker at all.
+		// THE RECORD THAT WROTE THE MARKER passes, matched by id: by op kind
+		// a second purge would get through, and by committed sequence a
+		// republished copy could never write its node's marker.
 		if author.Valid && author.String == rec.OpID {
 			return "", false, nil
 		}
@@ -178,11 +136,10 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 
 // Apply writes one record's rows.
 //
-// The dispatch is on the SUBJECT KIND, and every kind has a case — including
-// the two that write nothing, which are cases rather than a default so that a
-// kind added later without one faults below rather than being silently
-// ignored. A Go switch is not exhaustive, so that fault — certified by
-// TestAKindNobodyDeclaredFaults — is the only thing that catches it.
+// Every SUBJECT KIND has a case, the two that write nothing included, so a
+// kind added without one faults below rather than being ignored: a Go switch
+// is not exhaustive, and that fault (TestAKindNobodyDeclaredFaults) is the
+// only check.
 func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 	opts statelog.ApplyOptions) (int, error) {
 
@@ -201,14 +158,12 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 
 	switch ObjectKind(rec.Subject.Kind) {
 	case KindBarrier:
-		// THE READ INDEX'S OWN APPEND. It writes no row on any node, and
-		// that is its entire content: it exists so a linearizable read
-		// has a quorum-committed position to wait through.
+		// THE READ INDEX'S APPEND: no row, only a quorum-committed position
+		// for a linearizable read to wait through.
 		return 0, nil
 	case KindTrimmed:
-		// THE TRIM'S OWN RECORD. The framework removes this log's anchors
-		// below the floor its subject names, in this same transaction
-		// (ADR-0080); this domain writes nothing for it.
+		// THE TRIM'S RECORD: the framework removes the anchors below its
+		// floor in this transaction (ADR-0080); this domain writes nothing.
 		return 0, nil
 	case KindTurn:
 		return a.applyTurn(ctx, tx, at)
@@ -229,10 +184,9 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 	case KindProject, KindTags, KindCatalogue, KindView, KindPerson, KindFile:
 		return a.applyDocument(ctx, tx, at)
 	}
-	// A KIND THIS BUILD DOES NOT KNOW REACHES HERE ONLY BY WAY OF A RECORD
-	// AT A VERSION IT CAN READ, which is a writer publishing a kind it
-	// never declared. Retaining it would file it under a kind nothing will
-	// ever apply; failing is what makes the writer's mistake visible.
+	// An unknown kind at a version this build reads is a writer publishing a
+	// kind it never declared: failing makes the mistake visible, where
+	// retaining it would file it under a kind nothing ever applies.
 	return 0, fmt.Errorf("worklet: %s is not a kind this build applies, and the "+
 		"record at %s claims version %d — a kind is declared before it is "+
 		"published", rec.Subject.Kind, rec.Position, record.V)
@@ -243,41 +197,32 @@ type applyContext struct {
 	record   MutationRecord
 	position statelog.Position
 
-	// packed is the composed position, which is the version every object
-	// row's guard compares against.
+	// packed is the composed position: the version every object row's guard
+	// compares against.
 	packed int64
 
-	// brokerAt is the broker's own instant for this record. THE APPLIER
-	// NEVER READS A CLOCK: this is what makes an effective instant
-	// byte-identical on every node.
+	// brokerAt is the broker's instant for this record, read in place of a
+	// clock so an effective instant is byte-identical on every node.
 	brokerAt time.Time
 
 	epoch map[string]any
 
-	// maxVariables is the estate's own parameter limit, and it is what
-	// bounds every multi-row insert this apply issues — see [insertMany].
-	//
-	// A PROPERTY OF THE ESTATE RATHER THAN OF THE RECORD, carried here only
-	// because this is the value already gathered once per apply. Zero means
-	// the framework did not probe one and degrades to a row per statement,
-	// which is the shape every applier had before [store.InsertRows]: slow,
-	// never wrong.
+	// maxVariables is the estate's parameter limit, bounding every multi-row
+	// insert ([insertMany]). Zero means none was probed: a row per
+	// statement, slow but never wrong.
 	maxVariables int
 }
 
 // subject is the record's own subject.
 func (c applyContext) subject() Subject { return c.record.Subject }
 
-// authored is the writer's own instant, which is REPORTED and never ordered
-// on.
+// authored is the writer's own instant: REPORTED, never ordered on.
 func (c applyContext) authored() time.Time { return c.record.CreatedAt }
 
-// skewMs is the difference between the two clocks, published as a number
-// rather than corrected.
+// skewMs is the difference between the two clocks, published, not corrected.
 //
-// AGAINST THE RAW BROKER VALUE, never against a clamped effective instant:
-// differencing a clamp against a clock reports a large skew on whichever node
-// happened to write second and names it for its neighbour's error.
+// AGAINST THE RAW BROKER VALUE, never a clamped effective instant, which would
+// blame whichever node wrote second for its neighbour's skew.
 func (c applyContext) skewMs() int64 {
 	if c.authored().IsZero() || c.brokerAt.IsZero() {
 		return 0
@@ -300,18 +245,14 @@ const turnSpendStatement = `
 
 // applyTurn records a turn and adds its spend to the task.
 //
-// THE ONE ADDITIVE OP. The insert is what gates the addition — the counters
-// move only when the row was new — so a redelivery cannot double-count and the
-// running total is a function of the applied records rather than a separately
-// transmitted number that can disagree with them.
+// THE ONE ADDITIVE OP: the counters move only when the insert was new, so a
+// redelivery cannot double-count.
 //
-// A SPEND UPDATE AFFECTING ZERO ROWS IS A MALFORMED RECORD AND STOPS THE LOOP:
-// it names a task this node does not have, which under a strict replay cannot
-// happen — the writer's decide read the task, so its create is below this
-// position — and it is a writer's bug rather than a race, and continuing would
-// leave a total nobody can reconcile. The ONE race there is, a purge landing
-// between the decide and this record, never reaches here: the deletion gate
-// reads a turn on a purged task past before Apply runs (see [Applier.Gated]).
+// A SPEND UPDATE AFFECTING ZERO ROWS STOPS THE LOOP: the writer's decide read
+// the task, so under a strict replay its create is below this position: a
+// missing one is a writer's bug, and skipping it would leave a total nobody can
+// reconcile. The one race, a purge after the decide, is read past by
+// [Applier.Gated] first.
 func (a *Applier) applyTurn(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
 	var turn TurnRecord
 	if err := decodePayload(c.record.Mutation, &turn); err != nil {
@@ -344,7 +285,7 @@ func (a *Applier) applyTurn(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		return 0, fmt.Errorf("worklet: read the turn insert's effect: %w", err)
 	}
 	if inserted == 0 {
-		// A REDELIVERY, and the whole point of gating on the insert.
+		// A redelivery.
 		return 0, nil
 	}
 	spend, err := tx.ExecContext(ctx, turnSpendStatement,
@@ -384,14 +325,12 @@ const effectiveAtStatement = `
 // effectiveAt is D141's closed form: the fleet-agreed instant for a subject at
 // a position.
 //
-// A MAX OVER A SET, never a fold over arrival order. Two nodes at one
-// checkpoint have seen the same set of rows and a different order of them, so a
-// fold gives them different answers — permanently, on a column nothing
-// repairs, and the two readers of this value compare it against each other.
+// A MAX OVER A SET, never a fold over arrival order: two nodes at one
+// checkpoint hold the same set in different orders, and a fold would split
+// them for good on a column nothing repairs.
 //
-// The set is every row ABOUT THIS SUBJECT at a composed position at or below
-// this one, across both the history and the turn tables — turn rows are in the
-// chain because a turn is something that happened to the task.
+// The set is every history and turn row about this subject at or below this
+// composed position (a turn is something that happened to the task).
 func effectiveAt(ctx context.Context, tx *sql.Tx, subjectID string, c applyContext) (time.Time, error) {
 	var highest sql.NullInt64
 	err := tx.QueryRowContext(ctx, effectiveAtStatement,
@@ -407,9 +346,9 @@ func effectiveAt(ctx context.Context, tx *sql.Tx, subjectID string, c applyConte
 	return store.DecodeTime(highest.Int64), nil
 }
 
-// decodePayload reads a typed payload, treating an absent one as an empty
-// object rather than as an error — a record whose operation needs no payload
-// is ordinary, and a nil check at every call site is a check somebody forgets.
+// decodePayload reads a typed payload, an absent one as an empty object: an
+// operation needing no payload is ordinary, and a nil check at every call site
+// is one somebody forgets.
 func decodePayload(raw []byte, into any) error {
 	if len(raw) == 0 {
 		return nil

@@ -26,6 +26,8 @@ import {
   VersionTimeline,
   useToast,
   type VersionItem,
+  TableEntityCell,
+  PrincipalAvatar,
 } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -323,9 +325,20 @@ function ChangeRecord({ detail }: { detail: ArtifactDetail }) {
                   {entry.work_item ? ` for ${entry.work_item}` : ""}
                 </>
               ),
-              who: (entry) => (
-                <TableTextCell>{actorName(entry.actor, people.seatName)}</TableTextCell>
-              ),
+              who: (entry) =>
+                entry.actor?.name && entry.actor.kind !== "system" ? (
+                  <TableEntityCell
+                    name={actorName(entry.actor, people.seatName)}
+                    badge={
+                      <PrincipalAvatar
+                        principal={people.seatPrincipal(entry.actor.name)}
+                        size="xs"
+                      />
+                    }
+                  />
+                ) : (
+                  <TableTextCell>{actorName(entry.actor, people.seatName)}</TableTextCell>
+                ),
             },
             now,
           )}

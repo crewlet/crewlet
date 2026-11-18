@@ -22,27 +22,15 @@ import (
 	"github.com/crewlet/crewlet/internal/hostbox"
 )
 
-// THE REFS: packed-refs and HEAD, written after every pack they need is
-// installed, so no reader ever sees a ref before its objects.
-//
-// THERE ARE NEVER LOOSE REFS — a loose ref outranks packed-refs for every
-// reader — so packed-refs is the whole ref store, and it is PEELED: every ref
-// under refs/tags/ that names an annotated tag is followed by the commit (or
-// tree, or blob) the tag points at, under the header's `peeled` trait, which
-// is exactly what git trusts for refs/tags/. Without it git reads every tag
-// object to peel it on every advertisement: 5 000 annotated tags advertise
-// in 7 ms peeled and 28 ms not. The peel is ONE `cat-file --batch-check`
-// over the tags a round changed, run once every pack is installed.
-//
-// A DELTA IS A STREAM MERGE of the file on disk with the rows that moved —
-// one sequential read and one sequential write, IN PLACE, never a parse into
-// a map: a file of gitlet.MaxRefsPerRepo refs is about 10 MB, and every node
-// rewrites it after every push that moves a ref, so a line carried is checked
-// and copied straight from the read buffer and only a moved ref's line is
-// made. The file read is hashed as it is read; a file that is not the one this
-// cache wrote (gone, unreadable, its digest, or a line outside the grammar) is
-// not merged onto, because a merge would carry the damage forward — the round
-// reads the repository whole instead.
+// The refs: packed-refs and HEAD, written after every pack they need is
+// installed, so no reader sees a ref before its objects. There are never loose
+// refs (one outranks packed-refs for every reader), so packed-refs is the whole
+// ref store. It is peeled: each refs/tags/ ref naming an annotated tag is
+// followed by what the tag points at, under the header's `peeled` trait, which
+// git trusts, so an advertisement reads no tag object (5 000 tags: 7 ms peeled,
+// 28 ms not). The peel is one cat-file over the tags a round changed, once
+// every pack is installed (peel). A delta is a stream merge onto the file this
+// cache wrote (mergeDelta).
 
 // packedRefsHeader is packed-refs' first line, and the whole of an empty one.
 const packedRefsHeader = "# pack-refs with: peeled sorted \n"
@@ -65,28 +53,17 @@ func headValid(raw []byte) bool {
 	return ok && gitref.ValidBranch(string(branch))
 }
 
-// writeRefs makes inc's HEAD and packed-refs the snapshot's, and reports
-// whether it wrote either, and whether it wrote the tag index or its record.
-// The tag index is levelled in the same step and renamed in with packed-refs
-// (tags.go), so no reader sees the two disagree.
-//
-// HEAD is written when the incarnation has no state, when the default branch
-// changed, or — on a full round — when its bytes are not the target's.
-// packed-refs is written when the round is full or the delta names a ref:
-// staged, then the sync.refs fault point, then both renamed in under the
-// entry's mu with the digest that describes the new file — so Verify reads
-// the file and its digest together — and the incarnation synced once, before
-// the state that claims the position may be renamed in.
-//
-// A FULL ROUND WHOSE packed-refs IS ALREADY, BYTE FOR BYTE, THE ONE IT STAGED
-// leaves it in place and reports nothing written: the file on disk is hashed
-// against the staged file's digest, so damage or an edit is still put right,
-// while a copy holding exactly its image is not written into. Reported as
-// written, every full round "wrote into" its copy whatever it changed, so the
-// in-place round a failed request asks first (Cache.Rebuild) made every copy
-// a rebuild had just read look moved, and the rule that refuses a rebuild of
-// what the last one read (rebuildRefusal's unchanged) never held.
-//
+// writeRefs makes inc's HEAD and packed-refs the snapshot's, reporting whether
+// it wrote either and whether it wrote the tag index or its record (levelled
+// here and renamed in with packed-refs, tags.go, so the two never disagree).
+// HEAD is written when inc has no state, the default branch changed, or a full
+// round finds other bytes; packed-refs when the round is full or the delta
+// names a ref. Both are staged, then the sync.refs fault point, then renamed in
+// under e.mu with the new digest (Verify reads file and digest together), and
+// the directory is synced once, before the state claiming the position.
+// A full round whose packed-refs already hashes to the staged file leaves it
+// and reports nothing written: else every Rebuild's in-place round would make
+// the copy look moved, and rebuildRefusal's unchanged rule could never hold.
 // by is the round's reader of inc (roundReader), which the peel names.
 func (c *Cache) writeRefs(ctx context.Context, e *entry, inc *incarnation, snap snapshot,
 	by gitproc.Repairer) (refsWrote, tagsWrote bool, err error) {
@@ -166,10 +143,9 @@ func (c *Cache) writeRefs(ctx context.Context, e *entry, inc *incarnation, snap 
 		}
 	}
 	if refsMove {
-		// The refs moved: what a declaration says of that, before the new
-		// packed-refs is renamed in (dropFor's order rule). No declaration
-		// drops for moved refs today — a bitmap names commits it selected,
-		// and stays sound whichever refs point at them.
+		// Declared before the new packed-refs is renamed in (dropFor's
+		// order rule). None drops for moved refs: a bitmap names the
+		// commits it selected, sound whichever refs point at them.
 		if _, err = c.dropFor(e, inc, EventRefsMoved, eventDetail{}); err != nil {
 			return false, false, fmt.Errorf("cache: sync %s: refs: %w", e.id, err)
 		}
@@ -304,22 +280,17 @@ func writeFull(w io.Writer, refs []gitlet.RefRow, peeled map[string]string, out 
 }
 
 // mergeDelta writes the packed-refs in dir merged with a delta's refs: a ref
-// the delta names takes its new object (an empty OID deletes it, and a
-// deletion of a ref the file does not hold is nothing), and every other line —
-// its peel line included — is carried byte for byte, written straight from
-// the read buffer. digest is what this cache last wrote there.
-//
-// IN PLACE, because every Gitlet node runs it after every push that moves a ref,
-// over a file of up to gitlet.MaxRefsPerRepo lines: a line carried is checked
-// on the bytes the reader holds and copied out, and only a moved ref's line is
-// made — so the merge allocates for what moved and never for the file.
-//
-// A file it cannot read whole AS THE ONE THIS CACHE WROTE is errRefsNotOurs —
-// missing, not a file, failing a read, its digest or a line outside the
-// grammar alike — and the round reads the repository whole and writes the
-// file afresh: an operator's rm and a disk fault are exactly what that
-// repairs, where failing would fail every delta that moves a ref until the
-// process restarts. A failure to WRITE the staged file is the round's own.
+// the delta names takes its new object (an empty OID deletes it; deleting a ref
+// the file lacks is nothing), and every other line, peel lines included, is
+// carried byte for byte. digest is what this cache last wrote there.
+// It runs in place, since every Gitlet node runs it on every push that moves a
+// ref, over up to gitlet.MaxRefsPerRepo lines: it allocates only for what moved
+// (TestADeltaMergeAllocatesForWhatMovedNotForTheFile).
+// A file it cannot read whole as the one this cache wrote (missing, unreadable,
+// a wrong digest, a line outside the grammar) is errRefsNotOurs: the round
+// reads the repository whole and writes it afresh, repairing an operator's rm
+// or a disk fault, where failing would fail every delta until a restart.
+// A failure to write the staged file is the round's own.
 func mergeDelta(dir string, w io.Writer, delta []gitlet.RefRow, peeled map[string]string,
 	digest string, out *refsFile) error {
 
@@ -544,15 +515,13 @@ func (c *Cache) peel(ctx context.Context, id, dir string, snap snapshot, by gitp
 		}
 		return nil
 	})
-	// --buffer: no tag waits on an answer before it is sent, and without it
-	// git writes and flushes every line on its own — 14 ms against 22 ms a
-	// thousand ids (gitproc's measured section) — paid for every tag a full
-	// round sets, while the round holds the repository's directory.
-	// THROUGH THE DROPPING VIEW where the copy holds one (heldView): a tag a
-	// push revived onto a dropping tag object before its expunge's begin is
-	// one the copy serves, and named missing it would fail every round of the
-	// repository until the expunge's commit — which its maintainer's own
-	// rescue, waiting on a sync of the repository, could then never make.
+	// --buffer: no tag waits on an answer before the next is sent, and
+	// without it git flushes every line (gitproc's measured section), a cost
+	// paid per tag a full round sets while the round holds the directory.
+	// Through the copy's dropping view (heldView): a tag a push revived onto a
+	// dropping tag object before its expunge's begin is one the copy serves;
+	// named missing, it would fail every round until the expunge's commit, which
+	// its maintainer's rescue, waiting on a sync of the repository, never makes.
 	_, err := c.git.Run(ctx, gitproc.Cmd{
 		Dir: dir, Dropping: heldView(dir), Args: []string{"cat-file", "--batch-check=%(objectname) %(objecttype)",
 			"--buffer"},

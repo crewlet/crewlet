@@ -38,7 +38,7 @@ export function withinBound(text: string): string {
 }
 
 /** A path with its matched runs strong: `spans` count code points, never code units. */
-function Matched({ path, spans }: { path: string; spans: readonly [number, number][] }) {
+export function Matched({ path, spans }: { path: string; spans: readonly [number, number][] }) {
   const points = Array.from(path);
   const slash = path.lastIndexOf("/");
   const dirPoints = slash < 0 ? 0 : Array.from(path.slice(0, slash + 1)).length;

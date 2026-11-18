@@ -16,29 +16,24 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// THE COMPANY'S BRAND, AS AN AGENT APPLIES IT (ADR-0048: the adopted brand is
-// the company's public face).
+// THE COMPANY'S BRAND, AS AN AGENT APPLIES IT (ADR-0048). The artifact origin
+// links the adopted brand's stylesheet beside the kit, and the dashboard draws
+// docs and dashboards in it, so a page using the kit's tokens is on brand with
+// no step of the agent's. get_company_brand answers what only a model can
+// apply because it writes it literally (a slide's inline colours and faces, a
+// logo placed in a page, a typeface copied into a version), read once per
+// authoring session rather than carried in every turn's prompt: the artifacts
+// log is never read on a turn's own path.
 //
-// Most of the brand is applied FOR the agent: the artifact origin links the
-// adopted brand's stylesheet beside the kit on every page and design, and the
-// dashboard draws docs and dashboards in it, so a page written with the kit's
-// tokens is on brand with no step of the agent's. What only a model can apply
-// is what it writes literally: a slide's inline colours and faces, a logo
-// placed in a page, a typeface copied into a version. get_company_brand is
-// that, read once per authoring session rather than carried in every turn's
-// prompt (the artifacts log is never read on a turn's own path).
-//
-// EVERYBODY READS IT, under every ceiling, a stranger's included: what an
-// administrator adopted is the face the company shows on everything it
-// publishes, so nothing in it is anybody's to withhold. Only the ADOPTED
-// version is answered, never a kit's head: a draft an agent or a colleague
-// published reaches nobody until a person adopts it.
-//
-// THE VOICE IS THE ONE FREE TEXT, and whoever drafted it need not be an
-// administrator, so it arrives fenced under the `company` trust: adopted for
-// everybody, governing tone and wording and never the task, the tools, the
-// recipients or access. Colours, faces and logos are structured values the
-// engine validated, answered plain (every string still neutralised).
+// EVERYBODY READS IT, under every ceiling, a stranger's included: the adopted
+// brand is the face the company shows, nobody's to withhold. Only the ADOPTED
+// version is answered, never a kit's head: a draft reaches nobody until adopted.
+
+// THE VOICE IS THE ONE FREE TEXT, and its drafter need not be an
+// administrator, so it arrives fenced under the `company` trust: governing
+// tone and wording, never the task, the tools, the recipients or access.
+// Colours, faces and logos are values the engine validated, answered plain
+// (every string still neutralised).
 
 type companyBrand struct{ deps ArtifactDeps }
 
@@ -122,11 +117,11 @@ func (t *companyBrand) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return read.answer(ctx, t.Name(), out, "")
 }
 
-// voiceAuthors are who the adopted voice's fence names: who published the
-// adopted version, who WROTE it (possibly an agent), and the administrator who
-// adopted it (the fence names each once). The trust is `company` either way;
-// what the fence must not say is that the administrator wrote words an agent
-// drafted. An adoption recorded before its author was kept names its adopter.
+// voiceAuthors are who the adopted voice's fence names: who WROTE the adopted
+// version (possibly an agent) and the administrator who adopted it, each once.
+// The trust is `company` either way; the fence must never say the
+// administrator wrote words an agent drafted. An adoption with no recorded
+// author names its adopter alone.
 func voiceAuthors(read *foreignRead, adoption artifactsdomain.Adoption) []provenance.Author {
 	var out []provenance.Author
 	if a := adoption.KitAuthor; a.Name != "" {
@@ -135,11 +130,10 @@ func voiceAuthors(read *foreignRead, adoption artifactsdomain.Adoption) []proven
 	return append(out, read.writer(adoption.AdoptedBy.Name, adoption.AdoptedBy.Kind))
 }
 
-// The kit tokens the adopted brand restyles, by the role that fills each: what
-// a page colours and sets type with to follow the brand in both modes. They
+// The kit tokens the adopted brand restyles, by the role that fills each. They
 // are the public names the artifact kit's brand layer declares from the
-// `--brand-*` inputs the brand stylesheet sets (@crewlethq/artifact-kit,
-// brand.css), so a page written with them follows a later adoption too.
+// brand stylesheet's `--brand-*` inputs (@crewlethq/artifact-kit, brand.css),
+// so a page written with them follows a later adoption too, in both modes.
 var brandTokens = map[string]string{
 	"primary":   "--color-brand-accent",
 	"secondary": "--color-brand-highlight",

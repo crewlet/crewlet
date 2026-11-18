@@ -31,11 +31,9 @@ import (
 )
 
 // A REANCHOR'S INPUTS NAME THE STREAM THEY WERE READ FROM, and its instant is
-// the LIVE one.
-//
-// The creation instant, the first sequence, this node's position and the
-// fleet's high-water mark are each a fact about ONE log, the one the operator
-// named. Every domain, because the operator may name any of them.
+// the LIVE one: the creation instant, first sequence, this node's position and
+// the fleet's high-water mark are each a fact about the ONE log the operator
+// named. Every domain is checked, since the operator may name any.
 func TestAReanchorsInputsNameTheStreamTheyWereReadFrom(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
@@ -71,14 +69,12 @@ func TestAReanchorsInputsNameTheStreamTheyWereReadFrom(t *testing.T) {
 
 // THE FLEET'S HIGH-WATER MARK IS READ IN THIS DOMAIN'S OWN GENERATION.
 //
-// It is what "only the most caught-up node may reanchor" compares this node's
-// position against, and a sequence at another generation is a number in
-// another space: a peer that has already re-anchored reports the adopted
-// stream's sequences, a peer behind a reanchor a dead stream's. Compared as
-// though they were this generation's, the first made the most caught-up node
-// look behind and the second hid a node that was genuinely further along. So
-// is a sequence at this generation on ANOTHER stream, which is what every
-// node that came up on a rebuilt log with no rows reports.
+// "Only the most caught-up node may reanchor" compares this node's position
+// against it, and a sequence at another generation (a peer that re-anchored
+// reports the adopted stream's, one behind a reanchor a dead stream's) or at
+// this generation on ANOTHER stream (any node that came up on a rebuilt log
+// with no rows) is a number in another space: counted, it makes the most
+// caught-up node look behind or hides one genuinely further along.
 func TestAReanchorsHighWaterMarkIsReadInItsOwnGeneration(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
@@ -158,16 +154,14 @@ func TestAPeerIsOnThisStreamOnlyWhereItsRowSaysSo(t *testing.T) {
 
 // ONLY A PEER HOLDING HISTORY THE LOG DOES NOT COUNTS AS AHEAD.
 //
-// "Only the most caught-up node may reanchor" protects what a reanchor would
-// lose: history a peer applied that the log no longer holds. A peer whose
-// checkpoint record the log DOES hold is on the log — every record it applied
-// is one the log still carries — and counting it refused every reanchor of a
-// node the log diverged from, because the copy-age nodes that wrote the log
-// past it stand further along the log than its checkpoint; force was the only
-// way through, and force waives the rule where it does apply. So the record a
-// peer's checkpoint names is asked of the log, and only a peer past the log's
-// end, with another record at its sequence, or naming no record counts — the
-// highest of them named.
+// "Only the most caught-up node may reanchor" protects history a peer applied
+// that the log no longer holds. A peer whose checkpoint record the log DOES
+// hold is on the log, and counting it would refuse every reanchor of a node
+// the log diverged from (the nodes that wrote the log past it stand further
+// along), leaving only force, which waives the rule where it does apply. So
+// the record a peer's checkpoint names is asked of the log, and only a peer
+// past the log's end, with another record at its sequence, or naming no record
+// counts, the highest of them named.
 func TestOnlyAPeerHoldingHistoryTheLogDoesNotCountsAsAhead(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
@@ -251,14 +245,10 @@ func TestAReanchorOfAStreamThatCannotBeReadRefuses(t *testing.T) {
 }
 
 // A LOG RECREATED BETWEEN BOOTS IS RE-ANCHORED WITHOUT A RESTART, and the
-// other domains never notice.
-//
-// Every half of the verb had broken this: it moved every domain's checkpoint
-// from the one stream named, so the pages and vector logs came out keyed to the
-// tracker's instant and stopped at the next boot; its version reset failed on
-// its first statement; its record went through a publisher whose fence refuses
-// exactly while a stream is recreated; and nothing cleared the verdict or
-// started the loop again, so even a reanchor that worked needed a restart.
+// other domains never notice: only the named stream's checkpoint moves (keyed
+// to its own instant), the version reset runs, the record goes around the
+// publisher whose fence refuses while a stream is recreated, and the verdict
+// clears and the loop starts again.
 func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
@@ -416,21 +406,16 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 	waitUntil(t, 20*time.Second, "the node to admit seats after a restart", hydrated(t, e3))
 	for _, name := range e3.core.Load().log.held().order {
 		runner := e3.core.Load().log.Domain(name).runner
-		// THE CHECKPOINT ITS OWN ROW HOLDS, which is what loading it means
-		// — the barrier the first boot put on each log that takes one,
-		// and whatever framework records followed it — and zero for a log
-		// nothing was ever written to, the vector and usage logs here: the
-		// company boots with no activation, so neither its chart nor its
-		// containers are written at boot, and no vector was ever computed.
+		// THE CHECKPOINT ITS OWN ROW HOLDS: the barrier the first boot put
+		// on each log that takes one, plus any framework records after it,
+		// and zero for a log nothing was written to (the vector and usage
+		// logs: the company boots with no activation and computes no vector).
 		//
-		// The row is READ AGAIN AT EVERY LOOK rather than once before the
-		// wait, because this node's own collector pins the tracker's and
-		// the code log at boot ([notReanchored] says why), and a barrier
-		// applied after a single read moved the runner past a row that was
-		// never read again: a wait that could no longer be met. Each look
-		// reads the runner first and its row second, and the row is
-		// committed before the runner moves, so the two agree only once
-		// nothing is mid-apply.
+		// The row is READ AGAIN AT EVERY LOOK: this node's collector pins the
+		// tracker's and the code log at boot ([notReanchored]), so a row read
+		// once can fall behind the runner and the wait is never met. Each look
+		// reads the runner before its row, and the row commits before the
+		// runner moves, so the two agree only once nothing is mid-apply.
 		waitUntil(t, 10*time.Second, name+"'s applier to load its checkpoint", func() bool {
 			if runner.Stopped() != nil {
 				return true
@@ -453,16 +438,13 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 // A BROKER RESTORED FROM AN OLDER COPY IS RE-ANCHORED AT ITS END, AND NOTHING
 // THE ROWS ALREADY HOLD IS APPLIED AGAIN.
 //
-// Bringing the broker's store directory back from a copy keeps the stream,
-// creation instant and all, so every identity check passes and the log merely
-// ENDS below this node's checkpoint. Its surviving records are a prefix of the
-// history the rows were derived from. The reanchor used to put the new
-// generation's checkpoint one below the first of them regardless, so the
-// resumed applier replayed the whole copy in a generation that outranks every
-// row: each object rolled back to the state it had when the copy was taken, and
-// what the rows had gained since — the tail the copy never had — was written
-// over. The history and the inbox are keyed on the record, so they did not
-// double; the objects are what went wrong, and they are what is checked.
+// A store directory restored from a copy keeps the stream, creation instant and
+// all, so every identity check passes and the log merely ENDS below this node's
+// checkpoint, its records a prefix of the rows' history. Replayed in a new
+// generation that outranks every row, they would roll each object back to the
+// copy and overwrite the tail the rows gained since. The history and the inbox
+// are keyed on the record and cannot double; the objects can roll back, so
+// they are what is checked.
 func TestARestoredBrokerIsReanchoredAtItsEndReplayingNothing(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
@@ -635,18 +617,14 @@ func taskState(t *testing.T, e *Engine, id string) taskFields {
 
 // A FLEET'S MOST CAUGHT-UP NODE CAN RE-ANCHOR A LOG EVERY NODE LOST.
 //
-// When a stream is rebuilt under a fleet, every node is left at the same
-// generation on the stream that was lost, each with whatever it had applied.
-// The reanchor used to count every such peer as "hydrated on the live stream" —
-// a generation cannot say which stream a sequence is on — and refused, naming
-// them and pointing at their snapshots, which are keyed to the lost stream and
-// adoptable by nobody. So no node of a fleet of two or more could ever run it.
-//
-// What refuses now is what the identity claim is about: a peer that has already
-// re-anchored the stream (a later generation), and a peer further along the
-// stream THIS node's rows came from. A peer at the same generation on another
-// stream — a node that came up with no rows after the rebuild, counting the new
-// stream from 1 — is further along nothing this node discards.
+// A stream rebuilt under a fleet leaves every node at the same generation on
+// the lost stream. A generation cannot say which stream a sequence is on, so
+// counting every such peer as ahead would let no node of a fleet of two or
+// more run it. Only what the identity claim is about refuses: a peer that has
+// already re-anchored the stream (a later generation), and a peer further along
+// the stream THIS node's rows came from. A peer at the same generation on
+// another stream (a node that came up with no rows, counting the new stream
+// from 1) is further along nothing this node discards.
 func TestAFleetsMostCaughtUpNodeCanReanchorALogEveryNodeLost(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
@@ -778,12 +756,9 @@ func TestAFleetsMostCaughtUpNodeCanReanchorALogEveryNodeLost(t *testing.T) {
 }
 
 // A LOG REBUILT UNDER A RUNNING NODE IS RE-ANCHORED WITH THE INSTANT ITS
-// REFUSAL NAMES.
-//
-// The refusal every read and write gives names the LIVE instant; the verb used
-// to demand the instant sampled at boot, so following the refusal's own advice
-// was refused — and confirming the boot instant keyed the checkpoint to a
-// stream that no longer existed, which the next boot found recreated again.
+// REFUSAL NAMES: every read's and write's refusal names the LIVE instant, and
+// the checkpoint is keyed to it; the instant sampled at boot names a stream
+// that no longer exists, which the next boot would find recreated again.
 func TestALogRebuiltUnderARunningNodeIsReanchoredWithTheInstantItsRefusalNames(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
@@ -839,13 +814,10 @@ func TestALogRebuiltUnderARunningNodeIsReanchoredWithTheInstantItsRefusalNames(t
 	}
 }
 
-// A REANCHOR OF THE KNOWLEDGE BASE'S LOG IS THE KNOWLEDGE BASE'S.
-//
-// It published the TRACKER's generation record on the tracker's log and wrote
-// the tracker's audit row, whatever stream was named. Now the pages log gets
-// the pages record and the pages audit row, the tracker's checkpoint, audit and
+// A REANCHOR OF THE KNOWLEDGE BASE'S LOG IS THE KNOWLEDGE BASE'S: the pages
+// log gets the pages record and audit row, the tracker's checkpoint, audit and
 // rows are untouched, and a page written before the reanchor is written again
-// after it — at an expectation of zero, from an anchor in the generation the
+// after it, at an expectation of zero, from an anchor in the generation the
 // log left.
 func TestAReanchorOfThePagesLogIsThePagesOwn(t *testing.T) {
 	t.Parallel()
@@ -915,14 +887,10 @@ func TestAReanchorOfThePagesLogIsThePagesOwn(t *testing.T) {
 	})
 }
 
-// EVERY REGISTERED DOMAIN CAN BE RE-ANCHORED.
-//
-// A reanchor asks the domain for its generation record before it reads
-// anything else, and a registered domain with no answer could never be
-// recovered from a recreated log: the usage log had none, so the verb its
-// stopped applier names refused it every time, and that was found by an
-// operator in the middle of the incident the verb exists for rather than by
-// the build.
+// EVERY REGISTERED DOMAIN CAN BE RE-ANCHORED: a reanchor asks the domain for
+// its generation record before it reads anything else, so a registered domain
+// with no answer could never be recovered from a recreated log, and the build
+// finds that rather than an operator mid-incident.
 func TestEveryRegisteredDomainCanBeReanchored(t *testing.T) {
 	t.Parallel()
 	for _, domain := range registeredDomains() {
@@ -1149,15 +1117,12 @@ func TestAReanchorOfTheCodeLogIsGitletsOwn(t *testing.T) {
 //
 // The usage applier's guard is a position: a seat-day moves only for a record
 // above the version its row holds. A log rebuilt at the same generation counts
-// from one again, so every later publish of a day the estate already holds sits
-// below that row and is dropped — today's spend freezes on every node until the
-// day turns over, and nothing reports it. The reanchor is what moves the domain
-// to a generation every new record sits above, and nothing else exercised it
-// for this log.
-//
-// The domain keeps no generation RECORD — it claims no identity, so there is no
-// first-writer-wins to protect — which is why this case asserts the outcome the
-// reanchor exists for rather than an audit row.
+// from one again, so every later publish of a day the estate holds is dropped
+// and today's spend silently freezes until the day turns over; the reanchor
+// moves the domain to a generation every new record sits above. The domain
+// keeps no generation RECORD (it claims no identity, so has no
+// first-writer-wins to protect), so this case asserts that outcome rather than
+// an audit row.
 func TestAReanchorOfTheUsageLogLetsTodaysSpendMoveAgain(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
@@ -1246,25 +1211,16 @@ func TestAReanchorOfTheUsageLogLetsTodaysSpendMoveAgain(t *testing.T) {
 
 // A REANCHOR OF THE USAGE LOG ENDS BY PUBLISHING EVERY DAY AGAIN.
 //
-// A restored usage log is followed from its end, so the node that re-anchors it
-// never applies what the data nodes published after the restore — and a day
-// published there, and unmoved since, stays at its pre-restore value on it. So
-// a reanchor of this log is a rise in that node's generation, which every
-// data node's publisher answers by publishing every day its event log holds
-// again (internal/usage's republish.go). The heartbeat hands the publisher the
-// generation of every data node off the positions register, this node's own
-// off its runner — so its own reanchor is a rise at once — and the applier the
-// reanchor relaunches wakes the publisher on its first drain, the moment it
-// can publish, rather than leaving the pass for its next tick.
-//
-// The publisher here ticks once an hour, so only that wake can have run the
-// pass this case waits for.
-//
-// Mutations, each checked red: take this node's own generation off its row
-// rather than its runner (the pass answers the generation the reanchor left);
-// drop the wake from the usage applier's drain (nothing answers inside the
-// hour); drop the observation from the heartbeat (a peer's generation is never
-// seen).
+// A restored usage log is followed from its end, so the re-anchoring node
+// misses what data nodes published since and a day unmoved after stays stale.
+// Its reanchor is a rise in its generation, which every data node's publisher
+// answers by republishing every day its event log holds (internal/usage's
+// republish.go). The heartbeat hands the publisher each data node's generation
+// off the positions register, this node's own off its runner, so its own
+// reanchor is a rise at once; the relaunched applier wakes the publisher on its
+// first drain. The publisher here ticks hourly, so only that wake can run the
+// pass. Mutations, each red: this node's generation off its row, not its
+// runner; no wake in the usage applier's drain; no heartbeat observation.
 func TestAReanchorOfTheUsageLogEndsByPublishingEveryDayAgain(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
@@ -1339,10 +1295,9 @@ func TestAReanchorOfTheUsageLogEndsByPublishingEveryDayAgain(t *testing.T) {
 // ONE DOMAIN'S LOOP HALTS AND RESUMES WITHOUT THE OTHERS.
 //
 // A reanchor moves one domain's checkpoint, whose only other writer is that
-// domain's loop — so that loop, and only that one, is ended for the length of
-// the transition: a batch it committed after the transition's transaction
-// would write the old generation back. Ending every domain's loop, which is
-// all the set's own halt could do, would pause the whole node for one log.
+// domain's loop, so only that loop is ended for the transition: a batch it
+// committed after the transition's transaction would write the old generation
+// back, and halting the whole set would pause the node for one log.
 func TestHaltingOneApplierLeavesTheOthersRunning(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
@@ -1462,25 +1417,17 @@ func readCursorRow(t *testing.T, e *Engine, domain string) cursorRow {
 }
 
 // notReanchored fails the test where a domain's checkpoint moved the way only a
-// reanchor moves one: into another GENERATION, onto another stream, or keyed to
-// a stream other than the one it was keyed to before — or, where it was keyed
-// to none, other than the domain's own live log — or BACKWARDS. And it fails
-// where the checkpoint moved forward across any record but a FRAMEWORK one
-// ([statelog.FrameworkScope] — a barrier, a trimmed record), which write no
-// domain row: anything else past before is a write the case did not make, or a
-// reanchor that reached a log it was not asked about.
+// reanchor moves one: into another GENERATION, onto another stream, keyed to a
+// stream other than before (or, where keyed to none, other than the domain's
+// own live log), BACKWARDS, or forward across any record but a FRAMEWORK one
+// ([statelog.FrameworkScope]: a barrier, a trimmed record), which writes no row.
 //
-// THE SEQUENCE IS NOT HELD EQUAL, because a running log's checkpoint advances
-// on records no test writes: the object collector's pin is a linearizable read,
-// which appends a barrier to every log a declared table names objects on (the
-// tracker's, and the code log since it declared code_packs), and the trim and
-// every other linearizable read append records of their own. A case that
-// captured a checkpoint and demanded it back exactly failed whenever one landed
-// in between — about one run in three once the collector pinned the code log.
-// What a reanchor writes is ONE checkpoint, a generation and the instant it is
-// keyed to ([statelog.Reanchor]), so those are held exactly, a sequence only
-// ever moves forward within a generation, and every record it moves across is
-// read back and held to the framework's scope.
+// THE SEQUENCE IS NOT HELD EQUAL: a running log's checkpoint advances on
+// records no test writes, as the object collector's pin appends a barrier to
+// every log a declared table names objects on (the tracker's, the code log's
+// code_packs) and the trim and other linearizable reads append their own. A
+// reanchor writes a generation and its keyed instant ([statelog.Reanchor]), so
+// those are held exactly and the sequence only forward within a generation.
 func notReanchored(t *testing.T, e *Engine, domain string, before cursorRow, during string) {
 	t.Helper()
 	got := readCursorRow(t, e, domain)
@@ -1581,13 +1528,12 @@ func jetStreamOn(t *testing.T, back *Backends) natsjs.JetStream {
 
 // TWO NODES CANNOT OPEN ONE GENERATION.
 //
-// A peer that re-anchored the same rebuilt log a moment earlier — before its
-// position row said so, which is what leaves this node's guard with nothing to
-// refuse on — has its generation record on the subject this node's append
-// contends for. The append loses, and the transition used to read the taken
-// subject as its own earlier attempt: it committed its checkpoint in the same
-// generation over its own rows. Through the real log, the record that landed is
-// read back and the peer named, and nothing moves.
+// A peer that re-anchored the same rebuilt log a moment earlier, before its
+// position row said so (leaving this node's guard nothing to refuse on), has
+// its generation record on the subject this node's append contends for. The
+// append loses, and the taken subject must not read as this node's own earlier
+// attempt: through the real log, the record that landed is read back, the peer
+// named, and nothing moves.
 func TestTwoNodesCannotOpenOneGeneration(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)

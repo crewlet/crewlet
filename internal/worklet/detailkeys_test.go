@@ -7,23 +7,14 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// AN ITEM'S OWN DETAIL NAMES THE TASKS ITS HISTORY POINTS AT.
+// AN ITEM'S OWN DETAIL NAMES THE TASKS ITS HISTORY POINTS AT, so the
+// dashboard renders "Parent: — → ENG-1" rather than the uuid. The detail read
+// hands its history rows' sides to the walk the feed uses (held by
+// `TestAReparentRecordsBothParentsByID`), so this asserts only that the detail
+// read ASKS, from the raw snapshot shape its history keeps.
 //
-// `TestAReparentRecordsBothParentsByID` holds the company-wide log, which
-// resolved a re-parent to "Parent: — → ENG-1". This is the screen a reader
-// actually opens to ask what happened to THIS task, and for the same commit it
-// rendered "Parent: — → 1d573f85-…": the answer carried no map, so the
-// dashboard had nothing to resolve the id with.
-//
-// The map is NOT a second implementation — the detail read collects the sides
-// of its own history rows and hands them to the same walk the feed uses — so
-// the one thing this asserts that the case above cannot is that the detail
-// read ASKS, and that the raw snapshot shape its history keeps is collected
-// from at all.
-//
-// IT DEPENDS ON `History`, because the map labels those rows: a caller that
-// did not ask for them gets no map, and the field is omitted rather than
-// carrying a resolution of nothing.
+// The map depends on `History`: a read without it gets no map, omitted
+// rather than a resolution of nothing.
 func TestATaskDetailResolvesTheParentItsHistoryNames(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -39,9 +30,8 @@ func TestATaskDetailResolvesTheParentItsHistoryNames(t *testing.T) {
 	}
 	r.drain()
 
-	// READ OFF THE ROW, because the key is minted by the create from the
-	// project's own counter — what the fixture calls the task is not what
-	// it is called.
+	// READ OFF THE ROW: the create mints the key from the project's
+	// counter, not from the fixture's name.
 	want := r.task(t, "t-parent").Task.Key
 	if want == "" {
 		t.Fatal("the parent has no key, so this case asserts nothing")

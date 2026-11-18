@@ -84,20 +84,16 @@ func (w *syncWorld) packTips(t testing.TB, f *fixture, tips ...string) gitlet.Pa
 }
 
 // served syncs h into a cache on clk, has its maintainer write the
-// multi-pack-index with its bitmap and the commit-graph — the copy a previous
-// process served clones from — and stops it, answering the incarnation's
-// directory.
+// multi-pack-index with its bitmap and the commit-graph, as a previous process
+// left them, stops it, and answers the incarnation's directory.
 //
-// The bitmap PREFERS THE NEWER PACK, so a clone of the copy is sent the newer
-// pack's entries as they are stored (pack.allowPackReuse=single,
-// cache.ServeConfig) and the case that damages one of them knows a clone
-// reads it nowhere. The maintainer writes its index with no --preferred-pack,
-// so git takes the pack whose .pack has the oldest modification time to the
-// second (gittest.PreferredPack), and which that is would otherwise be the
-// round's install timing: the two packs nearly always land in one second, and
-// git then took the newer, but now and then they straddle one and it took the
-// older, and pack-objects read the newer pack's damaged entry and named it —
-// so the newer pack's .pack is dated an hour before the older's.
+// The bitmap must PREFER THE NEWER PACK, so a clone is sent that pack's entries
+// as stored (pack.allowPackReuse=single, cache.ServeConfig) and a case damaging
+// one knows a clone reads it nowhere. With no --preferred-pack, git takes the
+// pack whose .pack has the oldest mtime to the second (gittest.PreferredPack),
+// which install timing would otherwise decide (packs straddling a second made
+// a clone read the damaged entry); so the newer .pack is dated an hour before
+// the older's.
 func (w *syncWorld) served(t testing.TB, h history, clk *clock) string {
 	t.Helper()
 	c := w.open(t, clk.on)
@@ -230,23 +226,17 @@ func tip(h history) []string     { return []string{h.commits[3]} }
 func tipBlob(h history) []string { return []string{h.commits[3], h.blob} }
 
 // THE FIRST FULL ROUND OF A PROCESS HOLDS EVERY INDEX FILE IT DID NOT WRITE TO
-// ITS TRAILER, AND REPAIRS WHAT FAILS IN PLACE BEFORE IT ANSWERS. A previous
-// process served the copy — the maintainer's index, bitmap and graph over its
-// two packs — and left it damaged, one case an arm; this process's first
-// round finds it. A derived file failing its trailer is DROPPED and written
-// again at once — the graph graph-first, the index as a repair — never
-// written over (git keeps a damaged bitmap whose index has not changed, and
-// cannot write an index over offsets it cannot read). A pack whose .idx or
-// .rev fails, or that is at the wrong size, is REINSTALLED with one GET a
-// damaged pack, renamed over its files in the same incarnation. Every arm
-// then answers main whole and right: four commits, the first an ancestor, the
-// side commit not, and a clone with every object. A sound copy downloads
-// nothing, drops nothing, and counts every file sound.
+// ITS TRAILER, AND REPAIRS WHAT FAILS IN PLACE BEFORE IT ANSWERS. A failing
+// derived file is DROPPED and written again at once, never over (git keeps a
+// damaged bitmap whose index is unchanged, and cannot write an index over
+// offsets it cannot read); a pack whose .idx or .rev fails, or is the wrong
+// size, is REINSTALLED in place, one GET a pack. Every arm then answers main
+// whole; a sound copy downloads and drops nothing and counts every file sound.
 //
-// Mutations: no check — the I9, side and IO arms answer wrong; derived files
-// only — the stored arms' clone and counts fail; a stored file dropped rather
-// than reinstalled — its objects missing; the wrong size alone — the R2 arm
-// (a .rev of the right size with the wrong bytes) answers wrong.
+// Mutations: no check (the I9, side and IO arms answer wrong); derived files
+// only (the stored arms' clone and counts fail); a stored file dropped, not
+// reinstalled (its objects missing); the size alone (R2, a right-sized .rev
+// with wrong bytes, answers wrong).
 func TestAFirstRoundChecksEveryIndexFileItDidNotWrite(t *testing.T) {
 	t.Parallel()
 	graph, midx := gitproc.PartCommitGraph, gitproc.PartMultiPackIndex
@@ -457,11 +447,9 @@ func TestACheckedFileIsNotHashedAgain(t *testing.T) {
 }
 
 // A BITMAP GIT KEPT IS NOT VOUCHED FOR BY THE RUN THAT KEPT IT. The
-// maintainer's index step over an index whose packs have not changed keeps
-// the bitmap beside it as it is — damaged or not — and exits 0, so a run
-// vouches only for what it changed: a damaged bitmap put in under a cache
-// whose index covers the same packs is still found by the next full round,
-// and dropped.
+// maintainer's index step over unchanged packs keeps the bitmap as it is,
+// damaged or not, and exits 0, so a run vouches only for what it changed and
+// the next full round still finds and drops a damaged bitmap.
 //
 // Mutation: vouch every derived file present after a run — the damaged bitmap
 // is skipped by the round, and survives it.
@@ -497,9 +485,8 @@ func TestABitmapGitKeptIsNotVouchedByTheRunThatKeptIt(t *testing.T) {
 }
 
 // A PACK AT THE WRONG SIZE IS INSTALLED AGAIN BY RENAMING OVER ITS FILES, NEVER
-// REMOVED FIRST: while its download runs, a git process over the copy still
-// finds every object the pack holds where it was. Removed first, its objects
-// were missing for the whole download.
+// REMOVED FIRST, so a git process over the copy finds every object the pack
+// holds throughout the download.
 //
 // Mutation: move the pack's files into trash/ before the download — the read
 // made while the download is held finds no such object.
@@ -550,18 +537,17 @@ func TestAPackAtTheWrongSizeIsReinstalledOverItsFiles(t *testing.T) {
 }
 
 // A CHECK HOLDS ONE READ SLOT A PIECE, AND NONE BETWEEN PIECES OR WHILE THE
-// ROUND RUNS GIT. Hashing is a request's core, so it is a slot of the read
-// lane — taken for one piece and given back before the next, so a read queued
-// meanwhile is admitted between two pieces (the lane is first come, first
-// served: gitproc's TestHoldReadIsAReadSlot) — and none is held while the
-// round's own git runs, which waits in the same lane. A check that cannot have
-// a slot in SlotWait fails the round busy, and the next round checks.
+// ROUND RUNS GIT. Hashing is a request's core, so it takes a read slot for one
+// piece and gives it back before the next, admitting a queued read between
+// pieces (the lane is first come, first served: gitproc's
+// TestHoldReadIsAReadSlot); none is held while the round's own git, which
+// waits in the same lane, runs. A check given no slot in SlotWait fails the
+// round busy, and the next round checks.
 //
-// Mutations: no slot — a piece sees every slot free; the slot held for a
-// whole file or the whole check — a piece's release sees one still taken; the
-// slot held across the peel — the peel's hook sees one taken (in a lane of one
-// slot, the peel waits on the check); a refused slot read as a verdict — the
-// busy round answers; a refused slot counted `unreadable`.
+// Mutations: no slot — a piece sees every slot free; held for a file or the
+// whole check — a piece's release sees one taken; held across the peel — the
+// peel's hook sees one taken (in a one-slot lane, the peel waits on the check);
+// a refused slot read as a verdict (the busy round answers), or `unreadable`.
 func TestTheCheckTakesAReadSlotAPieceAndNoneForTheRoundsGit(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -766,21 +752,17 @@ func TestAVerdictHoldsOnlyForTheFileItHashed(t *testing.T) {
 }
 
 // BenchmarkCheck is what the check costs a copy's first request after a
-// restart: the repository BenchmarkMidx builds (64 packs of a source
-// repository's history), its maintainer's index, bitmap and graph written,
-// the cache restarted — so no file is vouched for — and one linearizable
-// sync, whose full round holds every index file to its trailer before it
-// answers.
+// restart: BenchmarkMidx's repository (64 packs) with its maintainer's index,
+// bitmap and graph, the cache restarted so nothing is vouched for, and one
+// linearizable sync, whose full round checks every index file before it answers.
 //
-//   - cache=page: the files in the page cache, as on a node whose last
-//     process served them moments before;
-//   - cache=cold: every file of the incarnation dropped from the page cache
-//     first (posix_fadvise), so the hash reads at the volume's throughput.
+//   - cache=page: the files in the page cache, as just after a restart;
+//   - cache=cold: the incarnation dropped from the page cache (posix_fadvise),
+//     so the hash reads at the volume's throughput.
 //
-// Each reports check-ms, the check's own time (crewlet.code.cache.check.
-// duration), beside the whole first round's ns/op; checked-MB, the index
-// files it read; and s/GB, the check's seconds per gigabyte of the copy's
-// packs — the figure the package doc and the deployment guide carry.
+// It reports check-ms (crewlet.code.cache.check.duration) beside the round's
+// ns/op, checked-MB (the index files read), and s/GB of the copy's packs, the
+// figure the package doc and the deployment guide carry.
 func BenchmarkCheck(b *testing.B) {
 	quiet(b)
 	for _, arm := range []struct {
@@ -891,15 +873,13 @@ func (f *failOnce) at(path string) error {
 }
 
 // A FILE THE DISK CANNOT READ IS REPAIRED AS ONE THAT FAILED ITS CHECKSUM. A
-// bad sector under a checkable file answers its read with an error, not a
-// verdict — and a full round that failed over it left the repository unserved
-// on the node for good: no round could ever pass the file, and the
-// maintainer, whose rewrite would have replaced a derived one, runs only on a
-// copy a round has converged. So the check, and the scrub, count it
-// `unreadable` and take it as damaged at the identity it had: a pack's index
-// is installed again over its files — one GET, a new inode where the bad
-// sector was — a derived file dropped and written again, a pack's body
-// fetched again by the scrub's repair round. Every arm then answers whole.
+// bad sector answers a read with an error, not a verdict; failing the round on
+// it would leave the repository unserved for good, since no round could pass
+// the file and the maintainer runs only on a converged copy. So the check and
+// the scrub count it `unreadable` and take it as damaged at the identity it
+// had: a pack's index installed again (one GET, a new inode off the bad
+// sector), a derived file dropped and written again, a pack's body fetched
+// again by the scrub's repair round. Every arm then answers whole.
 //
 // Mutation: fail the round over an unreadable file (the arms' syncs fail, and
 // keep failing); pass it over in the scrub (the pack is never fetched again).
@@ -971,17 +951,14 @@ func TestAFileTheDiskCannotReadIsRepaired(t *testing.T) {
 	}
 }
 
-// A PACK'S VOUCHES FIT IN A QUARTER OF A KILOBYTE. Every incarnation a node
-// holds keeps a vouch for each of its packs' .idx and .rev, for as long as it
-// holds the copy, and a pack is added by every push — so the vouches are kept
-// as ONE entry a pack keyed by its checksum's twenty bytes, and none for the
-// .pack, which the check never reads: measured on Go 1.27.2, 118 to 207 bytes
-// a pack across the map's growth (168 at 300 000), where keyed by each file's
-// sixty-byte path, a .pack's among them, they took 528.
+// A PACK'S VOUCHES FIT IN A QUARTER OF A KILOBYTE. Every incarnation keeps a
+// vouch for each pack's .idx and .rev while it holds the copy, and every push
+// adds a pack, so the vouches are ONE entry a pack keyed by its checksum's
+// twenty bytes, none for the .pack, which the check never reads (118 to 207
+// bytes a pack on Go 1.27.2; keyed by each file's sixty-byte path, 528).
 //
-// Not parallel: the heap is measured, and another case allocating beside it
-// would be counted as the vouches'. The least of three readings is taken for
-// the same reason.
+// Not parallel, and the least of three readings: the heap is measured, and
+// another case's allocations would count as the vouches'.
 //
 // Mutation: key the vouches by each file's path (a pack costs 528 bytes).
 func TestAPacksVouchesFitInAQuarterKilobyte(t *testing.T) {
@@ -996,16 +973,14 @@ func TestAPacksVouchesFitInAQuarterKilobyte(t *testing.T) {
 	}
 }
 
-// EVERY HOLD OF A DERIVED FILE TO ITS BYTES READS ITS DECLARATION'S CHECK —
-// the first round's check, the scrub and Verify alike — rather than holding
-// every file a declaration owns to git's trailer whatever the declaration
-// says: a declaration whose files carry no trailer (a file the engine writes
-// itself) would otherwise fail every check, be dropped as damaged and be
-// written again, on every round. Over the build's declarations each reader
-// holds the commit-graph to its trailer; with the graph's declaration naming
-// a Check no reader of this build knows (one Validate refuses at Open, set
-// here after it), each refuses, naming the declaration and its Check, before
-// it reads a byte — and never treats the graph as a file with a trailer.
+// EVERY HOLD OF A DERIVED FILE TO ITS BYTES READS ITS DECLARATION'S CHECK (the
+// first round's check, the scrub and Verify alike), never assuming git's
+// trailer: a file without one (one the engine writes itself) would otherwise
+// be dropped as damaged and written again every round. Under the build's
+// declarations each reader holds the commit-graph to its trailer; with the
+// graph's declaration naming a Check this build does not know (set after
+// Open's Validate, which refuses it), each refuses, naming the declaration and
+// its Check, before reading a byte.
 //
 // Mutation: have the check, the scrub or Verify build a derived file's
 // expectation from its name alone (no ownedFile.held), and its arm passes.

@@ -8,25 +8,23 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// WHAT A FAILED RUN'S REPORTS NAME: the failures a check's own report files
-// say — a JUnit XML file (junit.go) and a SARIF log (sarif.go), each a path
-// in its checkout its definition names — read once its command ends, each at
-// most sandbox.MaxFileBytes, and held to what an ending carries: at most
-// gitlet.MaxCheckFailures failures weighing at most gitlet.MaxCheckFailureBytes
-// encoded, each message at most gitlet.CheckFailureMessageBytes, and every one
-// past either counted rather than named (FailuresOmitted). FIRST COME FIRST
-// KEPT, in the report's own order: the order a test runner writes is the order
-// a person reads, and the first failure of a cascade is the one that says
-// why.
+// WHAT A FAILED RUN'S REPORTS NAME: the failures in the check's own report
+// files, a JUnit XML file (junit.go) and a SARIF log (sarif.go) at checkout
+// paths its definition names, read once its command ends, each at most
+// sandbox.MaxFileBytes, and held to what an ending carries: at most
+// gitlet.MaxCheckFailures failures within gitlet.MaxCheckFailureBytes
+// encoded, each message at most gitlet.CheckFailureMessageBytes, the rest
+// counted (FailuresOmitted). FIRST COME FIRST KEPT, in the report's order:
+// that is the order a person reads, and a cascade's first failure says why.
 
 // failures is what a run's reports named, held to an ending's bounds.
 type failures struct {
 	kept    []gitlet.CheckFailure
 	bytes   int
 	omitted int
-	// tests and failed are the JUnit report's counts, and skipped its skipped
-	// tests, and results how many SARIF results were failures — each -1 where
-	// no report of its kind was read.
+	// tests, failed and skipped are the JUnit report's counts, results the
+	// SARIF results that were failures; each -1 where no report of its kind
+	// was read.
 	tests, failed, skipped, results int
 }
 
@@ -42,9 +40,9 @@ func (fs *failures) counts() *gitlet.CheckTests {
 	return &gitlet.CheckTests{Total: fs.tests, Failed: fs.failed, Skipped: fs.skipped}
 }
 
-// failureOverhead is what one failure's encoding adds to its fields' bytes
-// beyond them — its keys, quotes, braces and the comma between two — so the
-// running weight never undercounts the encoded list.
+// failureOverhead is what one failure's encoding adds beyond its fields'
+// bytes (keys, quotes, braces, the comma between two), so the running weight
+// never undercounts the encoded list.
 var failureOverhead = func() int {
 	b, _ := json.Marshal([]gitlet.CheckFailure{{Path: "", Line: 1, TestID: "", Message: ""}})
 	return len(b)

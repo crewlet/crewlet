@@ -9,12 +9,10 @@ import (
 
 // THE VIEW TRIGGER COMES DOWN BEFORE ANYTHING IT READS FROM.
 //
-// The directory trigger is not a reader so much as a WRITER of what a company
-// routes by: a rebuild registers every seat's contact identities in a new
-// party registry. Ended with the logs at the bottom of the teardown, an
-// identity record landing after the vendor wiring had been stopped rebuilt a
-// registry over transports nothing serves. And the native half comes down
-// before the core whose logs it reads.
+// The directory trigger WRITES what a company routes by: a rebuild registers
+// every seat's contact identities in a new party registry, so one run after
+// the vendor wiring stopped builds a registry over transports nothing serves.
+// And the native half comes down before the core whose logs it reads.
 //
 // Read from the SOURCE, for [TestEveryVendorReconcilerRunsOnApply]'s reason:
 // the window is a race no case can open on demand. Mutation: move
@@ -73,24 +71,18 @@ func TestTheClaimGatesWatchStopsBeforeWhatItsGateReads(t *testing.T) {
 	}
 }
 
-// AND THE DUTIES COME DOWN IN THE ORDER THE DOCS STATE: the native half's
-// embedding writer before the core's trim and identity duties, every one
-// before the node gives its duty leases back, and all of that before the
-// native half and the logs.
+// AND THE DUTIES COME DOWN IN THE ORDER THE DOCS STATE: the embedding writer
+// before the core's trim and identity duties, every duty before its lease is
+// given back, and all of that before the native half and the logs.
 //
-// The embedding duty publishes vector records into a log the trim is deciding
-// how far to purge, so it stops first; a duty still ticking after
-// [Engine.releaseDuties] runs beside the peer that has just taken its lease;
-// and a duty stopped after the logs publishes into a log nothing applies. The
-// control-plane page and the engine's row said the native half came down
-// before the core's duties, which the teardown has never done — this holds
-// the order it does, so the next sentence written about it has something to
-// be checked against.
+// The embedding duty publishes into a log the trim is deciding how far to
+// purge; a duty ticking after [Engine.releaseDuties] runs beside the peer
+// that has just taken its lease; one stopped after the logs publishes into a
+// log nothing applies.
 //
-// Mutation: move stopRetention above stopEmbedding, any duty — the object
-// collector included — below releaseDuties, any writer of a usage row —
-// Gitlet included — below stopUsage, or stopMemorySync above
-// stopMemoryFill, and this fails naming the pair.
+// Mutation: move stopRetention above stopEmbedding, any duty (the object
+// collector included) below releaseDuties, any usage-row writer (Gitlet
+// included) below stopUsage, or stopMemorySync above stopMemoryFill.
 func TestTheDutiesStopBeforeTheirLeasesAndTheLogs(t *testing.T) {
 	t.Parallel()
 	order := callsIn(t, "teardown")
@@ -117,14 +109,11 @@ func TestTheDutiesStopBeforeTheirLeasesAndTheLogs(t *testing.T) {
 	}
 	// AND EVERY WRITER OF A ROW ITS DAY COUNTS IS DOWN BEFORE ITS LAST FLUSH:
 	// what one writes after it is published only by a next start, which a
-	// node that never starts again does not have. The learning passes spend
-	// auxiliary calls, the scheduler records fires, Gitlet files
-	// every fetch and git read of a unit's repository it serves — a peer's
-	// read on its git lane among them, until its cache stops — the ledgers'
-	// last flush writes the spend and the reads of every one of them, and the
-	// custody keeper settles a stateless node's rows into this node's days
-	// until it leaves the group. (The memory fill is none of them: it only
-	// embeds, and its order is the memory sync's, below.)
+	// node that never starts again lacks. The writers: the learning passes'
+	// auxiliary calls, the scheduler's fires, Gitlet's fetches and git reads
+	// (a peer's on its git lane too), the ledgers' last flush, and the custody
+	// keeper settling a stateless node's rows. (The memory fill only embeds;
+	// its order is the memory sync's, below.)
 	for _, writer := range []string{"stopLearning", "stopScheduler", "stopGitletHost",
 		"stopLedgers", "stopKeeper"} {
 		if at(writer) > at("stopUsage") {
@@ -169,17 +158,15 @@ func TestTheDutiesStopBeforeTheirLeasesAndTheLogs(t *testing.T) {
 	}
 }
 
-// EVERY NODE'S ANSWERERS AND HOLDS COME DOWN BEFORE THE CORE — and so before
+// EVERY NODE'S ANSWERERS AND HOLDS COME DOWN BEFORE THE CORE, and so before
 // the node's own stop, which follows it and detaches the inboxes.
 //
-// The fleet history, the steer desk, a seat's memory and a run's live output
-// are each a scatter subject this node answers for, armed at boot on every
-// node — and so, on a data node, are the estate service a node without data
-// reads and writes through and the broker membership every member answers;
-// one still registered when the store and the logs close answers a peer's
-// question from a file that is closing, and a note it accepts reaches no
-// round. The pause watch and the budget parks take holds on mailboxes, and
-// one firing into a closing client would log a release it could not make.
+// The fleet history, the steer desk, a seat's memory, a run's live output and,
+// on a data node, the estate service and the broker membership are scatter
+// subjects this node answers; one still registered as the store and logs close
+// answers from a closing file, and a note it accepts reaches no round. The
+// pause watch and budget parks hold mailboxes, and one firing into a closing
+// client logs a release it could not make.
 //
 // Mutation: move any of them below stopCore, or stopServingEstate below
 // stopNative, and this fails naming it.
@@ -201,10 +188,9 @@ func TestTheAnswerersAndTheHoldsStopBeforeTheCore(t *testing.T) {
 			t.Errorf("the teardown stops the core before %s", answerer)
 		}
 	}
-	// The estate service answers out of the native half's readers too, and a
-	// node that has decided to go away stops being asked before it stops
-	// being able to answer, so the next request goes to a peer rather than
-	// waiting out its budget here.
+	// The estate service answers from the native half's readers too, and stops
+	// being asked before it stops being able to answer, so the next request
+	// goes to a peer rather than waiting out its budget here.
 	if at("stopServingEstate") > at("stopNative") {
 		t.Error("the teardown stops the native half before it withdraws the " +
 			"estate service that answers out of it")
@@ -213,15 +199,12 @@ func TestTheAnswerersAndTheHoldsStopBeforeTheCore(t *testing.T) {
 
 // EVERY FINAL FLUSH LANDS BEFORE THE CUSTODY THAT CARRIES IT.
 //
-// On a node without `data` an event reaches the company's history only
-// through the custody buffer, which hands it to a data node's keeper: the
-// authentication trail's last minute and the ledgers' last records are each
-// published by a final flush, so a flush run after the custody's own puts its
-// records in a buffer nothing will ever empty. The custody and the keeper are
-// never on one node — the custody is a node without `data`'s, the keeper a
-// data node's — so how the two are ordered says nothing; the keeper's place is
-// before the usage publisher's last flush
-// (TestTheDutiesStopBeforeTheirLeasesAndTheLogs).
+// On a node without `data` an event reaches the history only through the
+// custody buffer, which hands it to a data node's keeper; the authentication
+// trail's last minute and the ledgers' last records are final flushes, so one
+// run after the custody's lands in a buffer nothing empties. The custody and
+// the keeper are never on one node, so their order says nothing; the keeper's
+// place is TestTheDutiesStopBeforeTheirLeasesAndTheLogs's.
 //
 // Mutation: move stopAuthEvents or stopLedgers below stopCustody, and this
 // fails naming it.

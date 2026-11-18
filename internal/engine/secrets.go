@@ -14,45 +14,24 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
-// THE ${VAR} RESOLVER THIS NODE USES, and why it is one rather than ten.
+// THE NODE HOLDS ONE ${VAR} RESOLVER, so the resolution order is decided in
+// one place and a new call site (an api_key, a token, an mcp_env, a sandbox
+// env) cannot silently skip the store. A field, not an install: the config
+// package refuses a process global.
 //
-// Every place that reads a configured value — a provider's api_key, an
-// integration's token, a per-role mcp_env, a sandbox's env block — resolves
-// ${VAR} references. Each of them used to call config.EnvOnly() directly,
-// which meant the resolution ORDER was decided ten times: putting the secret
-// store in front of the environment would have been ten edits, and the
-// eleventh call site added afterwards would have silently skipped it while
-// looking exactly like the others.
-//
-// So the node holds one, and the store goes in front of the environment in
-// exactly one place. The config package deliberately refuses a process
-// global — every call site here can be handed one — so this is a field, not
-// an install.
-//
-// # Store first, environment behind
-//
-// A rotated secret must win over a stale `.env` that was exported into this
-// process months ago. That is the whole reason the store exists: rotation is
-// an UPDATE of one row, and if the environment could shadow it the rotation
-// would appear to work and change nothing.
+// The store goes in front of the environment: rotation updates one row, and
+// a stale exported `.env` that could shadow it would make it change nothing.
 
 // Resolve answers what a config value's ${VAR} references currently resolve
-// to, through this node's own chain — the secret store, then the environment.
-//
-// Exported because the webhook edge needs it and lives outside this package:
-// it verifies with the VALUE, never with the reference, and a literal
-// "${GITLAB_SIGNING_SECRET}" reaching a verifier refuses every delivery the
-// third-party app sends.
+// to, through this node's chain: the secret store, then the environment.
+// Exported for the webhook edge, which must verify with the VALUE: a literal
+// "${GITLAB_SIGNING_SECRET}" reaching a verifier refuses every delivery.
 func (e *Engine) Resolve(value string) string { return e.resolver().Value(value) }
 
 // LookupSecret answers what ONE ${VAR} name resolves to on this node, and
-// whether anything answered.
-//
-// Three-valued in the way that matters to an operator surface: the bool
-// separates "the store and the environment both have nothing for this name"
-// from "it resolved to the empty string", and the setup screen renders those
-// differently. Resolve cannot make that distinction, because expansion
-// treats an empty answer as found.
+// whether anything answered: the setup screen renders "nothing has this name"
+// and "it resolved to the empty string" differently, which Resolve cannot
+// tell apart.
 func (e *Engine) LookupSecret(name string) (string, bool) { return e.resolver().LookupOK(name) }
 
 // deriveKey is a key for one purpose from this node's secrets keyring, alike on
@@ -69,10 +48,8 @@ func (e *Engine) deriveKey(info string) []byte {
 	return ring.Derive(info)
 }
 
-// resolver is the chain this node resolves ${VAR} through.
-//
-// Never nil: until a snapshot is installed — and on an engine holding no
-// store at all — it resolves from the environment alone.
+// resolver is the chain this node resolves ${VAR} through. Never nil: until a
+// snapshot is installed, or with no store at all, it is the environment alone.
 func (e *Engine) resolver() *config.Resolver {
 	if v := e.env.Load(); v != nil {
 		return v.resolver
@@ -109,10 +86,9 @@ type secretView struct {
 	values map[string]string
 }
 
-// installSecrets publishes one snapshot as this node's resolver: THE STORE IN
-// FRONT OF THIS NODE'S ENVIRONMENT ([Engine.environment]), which is the chain
-// [config.WithStore] builds over the process's own. The caller holds
-// [Engine.secretsMu].
+// installSecrets publishes one snapshot as this node's resolver, the store in
+// front of [Engine.environment] (the chain [config.WithStore] builds). The
+// caller holds [Engine.secretsMu].
 func (e *Engine) installSecrets(values map[string]string) {
 	e.env.Store(&secretView{
 		resolver: config.NewResolver(config.MapSource(values), e.environment()),
@@ -120,38 +96,23 @@ func (e *Engine) installSecrets(values map[string]string) {
 	})
 }
 
-// refreshSecrets rebuilds the resolver from the secret store.
+// refreshSecrets rebuilds the resolver from the secret store, reporting
+// whether a snapshot was installed ("no store" and "an empty store" resolve
+// identically). A snapshot, not a live query, so ${VAR} expansion deep in
+// config walking never makes a database round trip. Rebuilt on every apply,
+// which is the rotation gesture: re-activating an unchanged revision picks up
+// a rotated secret.
 //
-// A SNAPSHOT, not a live query, because ${VAR} expansion happens deep inside
-// config walking — per role, per provider, per MCP server — and a database
-// round trip there would put the store on the path of every config read.
-//
-// Refreshed on every apply, which is also the documented ROTATION GESTURE:
-// re-activating an unchanged revision is how an operator picks up a secret
-// they just rotated, and it works precisely because the snapshot is rebuilt
-// here rather than cached for the life of the process.
-//
-// # A failure leaves the previous snapshot standing
-//
-// It does NOT fall back to the environment. Falling back is the stale-.env
-// shadowing this whole mechanism exists to prevent, and it would happen at
-// the worst moment — a store blip during an apply — silently swapping every
-// rotated credential for whatever the process was booted with. There IS a
-// previous snapshot on every engine [New] returns, because the boot does not
-// go on without one ([Engine.bootSecrets]), and an apply refuses to build on
-// an engine that holds a store and none ([Engine.Apply]).
-//
-// Reports whether a snapshot was installed, so a caller — and the suite —
-// can tell "this node has no secret store" from "the store answered with
-// nothing in it", which the resolver renders identically.
+// A FAILURE KEEPS THE PREVIOUS SNAPSHOT, never falling back to the
+// environment, which on a store blip would swap every rotated credential for
+// the boot-time one. Every engine [New] returns holds one
+// ([Engine.bootSecrets]), and [Engine.Apply] refuses an engine with a store
+// but no snapshot.
 func (e *Engine) refreshSecrets(ctx context.Context) bool {
 	installed, err := e.loadSecrets(ctx)
 	if err != nil {
-		// NO KEYRING IS NOT A QUIET CASE ANY MORE. It was a supported
-		// deployment, logged at debug; [openCipher] now refuses to build
-		// an engine without one, so meeting it here is a fault like any
-		// other unreadable store, and it keeps the previous snapshot for
-		// the same reason.
+		// No keyring is a fault here too ([openCipher] refuses an engine
+		// without one), keeping the previous snapshot like any other.
 		log.ErrorContext(ctx, "secret_store_unreadable", "error", err,
 			"detail", "the previous snapshot keeps serving; rotated secrets "+
 				"will not be picked up until the store is readable")
@@ -163,10 +124,8 @@ func (e *Engine) refreshSecrets(ctx context.Context) bool {
 // node's snapshot, or reports why it could not. A false with no error is an
 // engine holding no store at all, which installs nothing.
 func (e *Engine) loadSecrets(ctx context.Context) (bool, error) {
-	// SERIALISED WITH EVERY OTHER REFRESH: the store is read under the
-	// same lock the snapshot is installed under, so whichever of two runs
-	// later read the store later, and neither installs a snapshot older
-	// than the other's.
+	// Read under the install lock, so of two refreshes the later install
+	// always holds the later read.
 	e.secretsMu.Lock()
 	defer e.secretsMu.Unlock()
 	values, err := e.secretSnapshot(ctx)
@@ -174,49 +133,33 @@ func (e *Engine) loadSecrets(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	if values == nil {
-		// NO STORE AT ALL, which is not an empty one: installing a
-		// snapshot here would log secret_snapshot_loaded on a node that
-		// has nowhere to load one from, and an operator reading that
-		// line would conclude the store is wired when it is not.
+		// No store at all, not an empty one: logging secret_snapshot_loaded
+		// here would tell an operator a store is wired when it is not.
 		return false, nil
 	}
 	e.installSecrets(values)
-	// NAMES ONLY. This is the one log line that could put a company's whole
-	// credential set into a file, so it counts them instead.
+	// A count only: this line could otherwise log the whole credential set.
 	log.InfoContext(ctx, "secret_snapshot_loaded", "secrets", len(values))
 	return true, nil
 }
 
-// bootSecretsFirstWait is how long a boot waits before it asks a secret store
-// that did not answer again, doubling from here to [configplane.ReconcileInterval]:
-// what a boot meets is a coordination group still electing its leader or a
-// leaf link a moment from up, which clear in seconds, and past that the store
-// is asked as often as the control plane asks for the activation pointer.
+// bootSecretsFirstWait is a boot's first wait before re-asking a secret store
+// that did not answer, doubling to [configplane.ReconcileInterval]: a leader
+// election or a leaf link coming up clears in seconds, and past that the
+// store is asked as often as the activation pointer.
 const bootSecretsFirstWait = time.Second
 
 // bootSecrets takes the snapshot a booting node resolves its company from, and
-// does not return without one.
-//
-// NO EPOCH IS BUILT FROM THE ENVIRONMENT ALONE on a node that holds a secret
-// store. A failed read keeps the previous snapshot standing
-// ([Engine.refreshSecrets]), and at boot there is no previous snapshot: a boot
-// whose read failed went on to build its company from whatever the process was
-// started with, so a provider whose `model` is a ${VAR} only the store held
-// refused the boot, and one whose key was such a reference ran without it.
-// The first apply did not heal it either, since its own read could fail the
-// same way and it recorded the environment-only epoch as applied. So the boot
-// holds a snapshot before it builds anything, every engine [New] returns holds
-// one, and the previous-snapshot rule is true on every read after it.
-//
-// TWO KINDS OF FAILURE, told apart because only one of them clears by waiting:
-//   - A value this node's keyring cannot open ([secrets.ErrDecrypt]), or no
-//     keyring at all, fails the boot, naming the secret. Every node runs the
-//     same Tier A keyring, so it is a key dropped from it, and only a restart
-//     with that key back, or the value set again, changes the answer.
-//   - Anything else is a store that did not answer, asked again from
-//     [bootSecretsFirstWait] doubling to the reconcile interval for as long as
-//     the boot's context lives. The node is past its boundary by then: its
-//     probes answer, /ready says it is starting, and it holds no seat.
+// does not return without one: an epoch built from the environment alone
+// would resolve a store-only ${VAR} wrong, and every later read relies on a
+// previous snapshot ([Engine.refreshSecrets]). Only one failure clears by
+// waiting:
+//   - A value the keyring cannot open ([secrets.ErrDecrypt]), or no keyring,
+//     fails the boot: it is a key dropped from the shared Tier A keyring,
+//     cleared only by a restart with it back or the value set again.
+//   - Anything else is retried from [bootSecretsFirstWait] while the context
+//     lives; meanwhile the probes answer, /ready says starting, and the node
+//     holds no seat.
 func (e *Engine) bootSecrets(ctx context.Context) error {
 	for attempt := 1; ; attempt++ {
 		_, err := e.loadSecrets(ctx)
@@ -258,16 +201,11 @@ func (e *Engine) holdsSecretStore() bool {
 }
 
 // secretSnapshot reads and unseals every stored secret, or reports why not.
+// The fleet's store is the only one: a credential is company-wide state, so a
+// rotation must reach every node, and no node-local half exists.
 //
-// THE FLEET'S STORE IS THE ONLY ONE. A credential is company-wide state: it
-// was the last kind living somewhere only one node could see, so a rotation
-// reached the node an operator pointed the harness at and nowhere else — and a
-// command run with the engine stopped writes the fleet's store too, so there
-// is no node-local half left to read.
-//
-// Nil values with a nil error means an Engine with no fleet store at all —
-// one built by hand in a test, since [New] refuses a set of backends without
-// one — which leaves the environment-only resolver in place.
+// Nil values with a nil error is an engine with no fleet store (hand-built in
+// a test; [New] refuses one), leaving the environment-only resolver.
 func (e *Engine) secretSnapshot(ctx context.Context) (map[string]string, error) {
 	if e.backends == nil || e.backends.Fleet == nil {
 		return nil, nil
@@ -278,19 +216,12 @@ func (e *Engine) secretSnapshot(ctx context.Context) (map[string]string, error) 
 	return fleetsecrets.New(e.backends.Fleet, e.cipher).All(ctx)
 }
 
-// openCipher builds this node's keyring cipher, or refuses the boot.
-//
-// A NODE WITH NO KEYRING DOES NOT START. It used to be a supported posture —
-// secrets from the environment, the store unused, the company document read
-// in plaintext — and every node needs the keyring now: every state-log record
-// is signed and verified under it, and the document a peer fetches from the
-// coordination store is authenticated by its seal. Tier A refuses a file
-// without one ([config.Bootstrap.Validate]); this is the engine's own
-// refusal, for a Bootstrap that did not come through that door, and it runs
-// BEFORE anything opens, so a keyless node leaves no store file behind — the
-// unconfigured node included, which used to start no state log until it had a
-// company and so met no signer at all. A keyring that is configured but broken
-// fails here too, naming the key.
+// openCipher builds this node's keyring cipher, or refuses the boot: every
+// state-log record is signed under it and a peer's fetched company document is
+// authenticated by its seal, so a node with no keyring (or a broken one) does
+// not start. The engine's own refusal, for a Bootstrap that skipped
+// [config.Bootstrap.Validate]; it runs before anything opens, so a keyless
+// node, an unconfigured one included, leaves no store file behind.
 func openCipher(boot *config.Bootstrap) (secrets.Cipher, error) {
 	if boot == nil {
 		return nil, fmt.Errorf("engine: no bootstrap config, so no keyring")
@@ -304,16 +235,12 @@ func openCipher(boot *config.Bootstrap) (secrets.Cipher, error) {
 
 // PersonSealer is what this node seals and opens a person's own values with:
 // their name, their address, an invitation's address and a second factor's
-// seed, all under the fleet keyring ([iamdomain.Sealer]).
+// seed, all under the fleet keyring ([iamdomain.Sealer]). Over the engine's
+// own cipher, so one keyring rotation covers it, the secret store and the
+// state log.
 //
-// OVER THE ENGINE'S OWN CIPHER, the one that seals the company's secret store
-// and signs every state-log record, so a keyring rotation is one gesture for
-// all of them.
-//
-// NIL ONLY ON AN ENGINE WITH NO KEYRING — one built by hand in a test, since
-// [New] refuses a node without one — and every write that seals is then
-// refused BY NAME at the call, where a sealer over nothing would have written
-// cleartext.
+// Nil only with no keyring (hand-built in a test; [New] refuses one), so a
+// sealing write is refused by name rather than written in cleartext.
 func (e *Engine) PersonSealer() *iamdomain.Sealer {
 	if e == nil || e.cipher == nil {
 		return nil
@@ -326,17 +253,15 @@ func (e *Engine) PersonSealer() *iamdomain.Sealer {
 }
 
 // IdentityKeyring is the identity estate's half of a keyring rotation, or nil
-// on an engine with no core runtime — one a test built by hand, since every
-// engine [New] builds opens the identity estate at boot, company or none.
+// on an engine with no core runtime (hand-built in a test; [New] always opens
+// the identity estate).
 //
-// ITS OWN HALF, because a store write cannot do it: the same keyring seals
-// every person's name, address and second factor, in rows derived from the
-// identity log — a node that rewrote its own would disagree with its peers, and
-// a replay would write the old ciphertext back — so a rekey moves them with a
-// RECORD per person, through the node's own writer ([iamdomain.Writer.Reseal]).
-// The node and not the caller, for the secret store's reason: a rekey re-seals
-// values it did not choose, and whoever rotated the keyring is the rotation's
-// own fact, which the rekey route logs.
+// Its own half because the sealed values live in rows derived from the
+// identity log: a node rewriting its own copy would disagree with its peers
+// and a replay would restore the old ciphertext, so a rekey writes a record
+// per person through the node's writer ([iamdomain.Writer.Reseal]). The node,
+// not the caller, writes it: the rekey re-seals values the caller did not
+// choose, and the rekey route logs who rotated.
 func (e *Engine) IdentityKeyring() *IdentityKeyring {
 	reader, writer := e.IAM(), e.IAMWriter()
 	if reader == nil || writer == nil {
@@ -364,18 +289,12 @@ func (k *IdentityKeyring) Reseal(ctx context.Context) (iamdomain.ResealReport, e
 }
 
 // PersonBlinder is where this node gets the company's address blind, or nil.
+// A source resolved at each use, whose key the first node needing it mints:
+// a key read once at boot would stay absent and refuse every address.
 //
-// A SOURCE, RESOLVED AT EACH USE, and the key it reads is MINTED by the first
-// node that needs one. This used to read the key once at boot and answer nil
-// when it was absent — and nothing anywhere minted it, so on every deployment
-// every enrolment with an address, every invitation and every sign-in by
-// address was refused for a key that did not exist.
-//
-// NIL ONLY ON AN ENGINE WITH NO STORE — one built by hand in a test, since
-// [New] refuses a node without a keyring or a fleet backend — and the writes
-// that need a blind are then refused BY NAME at the call. Returned as the
-// interface with an explicit nil, never a typed one, so a caller's nil check
-// means what it says.
+// Nil only with no store (hand-built in a test; [New] refuses one), so the
+// writes needing a blind are refused by name. An untyped nil, so a caller's
+// nil check means what it says.
 func (e *Engine) PersonBlinder() iamdomain.Blinds {
 	if e == nil || e.backends == nil || e.backends.Fleet == nil || e.cipher == nil {
 		return nil

@@ -18,59 +18,29 @@ import (
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// AN ENGINE WRITE IS BUILT HERE AND LANDS AS A PUSH (ADR-0092). A seat's or a
-// person's change made through a tool — files committed, a commit reverted or
-// picked, a branch created or deleted — is built on the repository's Gitlet node,
-// in a scratch beside its cache, by git's own plumbing over exactly the trees
-// the change touches (build.go), and handed to the SAME landing every push
-// takes (land.go): its status check, its protections, its blob limit, its size,
-// the bundle stored with the listing, the proposal, the wait for its row and
-// the adoption serve the write as they serve the relay. Its push id is an
-// unnamed derivation of the caller's operation (gitlet.WritePushID), and its
-// commit's author and dates are pure functions of the operation and its parent
-// (Signer, commitDates), so a retry — on this node, on the runner-up after
-// silence, after a crash — is the same push and the same commit, and collapses
-// at the committer.
-//
-// A REFUSAL IS DECIDED BEFORE THE BYTES AND NEVER ON A STALE READ (the host's
-// rule since M2): every refusal a write would answer from its copy — the
-// repository's status, the grant, a protection, a stale head — is judged
-// again once at the log's head (a linearizable re-sync) before it is answered,
-// so a seat's session floor, which holds its own writes and not a protection a
-// person just removed, refuses nothing a current copy would let through —
-// while the seat's re-syncs on this node last (gitlet.NewResyncs): past them a
-// seat's refusal is answered from its session, saying so, rather than paying
-// the code log a barrier the census never gave it.
-
 // Signer names an engine-built commit's author and committer from the serving
-// node's epoch (the engine's codeSigner): the author is the acting principal —
-// a seat's role name and role.email, or the bound person's, else
-// `<handle>@<code.identity_domain>` — and the committer the engine,
-// `Crewlet <engine@<code.identity_domain>>`, a CONVENTION that marks the
-// commits the host built in a cooperating client's history and authenticates
-// nothing: any client can write it, and only the push row (`via engine`, its
-// principal) says who built a commit (ADR-0092). A coding box's push whose
-// pack holds a commit naming it that the repository does not already hold is
-// refused (forged_committer, landing.EngineCommitter); a person's may carry
-// one.
+// node's epoch (the engine's codeSigner): the author is the acting principal (a
+// seat's role name and role.email, or the bound person's, else
+// `<handle>@<code.identity_domain>`), the committer
+// `Crewlet <engine@<code.identity_domain>>`. That committer is a convention and
+// authenticates nothing: only the push row (`via engine`) says who built a
+// commit (ADR-0092). A coding box's pack holding a commit naming it that the
+// repository lacks is refused (forged_committer, landing.EngineCommitter); a
+// person's may carry one.
 type Signer interface {
-	// Sign is the signature of a commit p makes. An error is a node that
-	// cannot sign — it holds no epoch, or its chart holds no seat p names —
-	// and the write runs nothing.
+	// Sign is the signature of a commit p makes. An error (no epoch, or no
+	// seat p names on the chart) means the write runs nothing.
 	Sign(p gitlet.Principal) (Signature, error)
-	// Committer is the address Sign names every commit's committer by on
-	// the serving epoch, `engine@<code.identity_domain>` — what a coding
-	// box's pack may hold no commit of that the repository does not already
-	// hold (forged_committer). An error is a node that holds no epoch, which
-	// judges no box's push.
+	// Committer is the address Sign names every committer by on the serving
+	// epoch, `engine@<code.identity_domain>` (what forged_committer judges a
+	// box's pack by). An error is a node that holds no epoch.
 	Committer() (string, error)
-	// Author is the name and address a commit names the seat handle by as
-	// its AUTHOR where the engine did not act as that seat (U43 a): a
-	// squash's, authored by its change's owner, and the `Co-authored-by:`
-	// trailer of each of its other authors — the chart's role name and
-	// address as Sign names them, or, for a seat the chart no longer holds,
-	// the handle at `<handle>@<code.identity_domain>`: a seat that left
-	// still wrote what it wrote. An error is a node that holds no epoch.
+	// Author is the name and address a commit authors the seat handle by
+	// where the engine did not act as that seat (U43 a): a squash's owner and
+	// each `Co-authored-by:` trailer. It is the chart's role name and address
+	// as Sign gives them or, for a seat the chart no longer holds,
+	// `<handle>@<code.identity_domain>`: a seat that left still wrote what it
+	// wrote. An error is a node that holds no epoch.
 	Author(handle string) (name, email string, err error)
 }
 
@@ -105,12 +75,11 @@ type inflightWrite struct {
 	done chan struct{}
 	res  gitlet.EngineWriteResult
 	err  error
-	// cut: the write ended because its OWN caller left or its answer fell due
-	// — before it had an answer of its own — so a caller still waiting runs
-	// the write itself rather than take that.
+	// cut: the write ended without an answer because its OWN caller left or
+	// its answer fell due, so a caller still waiting runs the write itself.
 	cut bool
-	// joined counts the writes that joined this one (under writesMu): the
-	// suite's window onto the join (export_test.go).
+	// joined counts the writes that joined this one (under writesMu), for the
+	// suite (export_test.go).
 	joined int
 }
 
@@ -120,71 +89,17 @@ type inflightWrite struct {
 var errWritesStopping = errors.New("host: Gitlet is stopping")
 
 // Write builds the change w asks for in a scratch beside this node's cache and
-// lands it as one push (land, O15.1). It answers a refusal of the change
-// (EngineWriteResult.Refusal), a refusal of the push (its Command), or the
-// push's outcome, applied, pending or unknown.
-//
-//  0. w is held to gitlet.EngineWrite.Validate.
-//  1. A stopping host answers gitlet.ErrNotServing, about this node. A SEAT'S
-//     write on a node confirmed behind the company's configuration (Current
-//     false) is gitlet.ErrGitUnready{behind_config}, having started nothing, so
-//     the walk asks the runner-up; a person's never consults it. Whom a seat's
-//     write is made for is then held to its ceiling on this node's chart
-//     (writtenForOn): a carrier its ceiling does not bound is refused
-//     gitlet.ErrInvalid, and one a node holding no chart yet cannot judge is
-//     gitlet.ErrGitUnready{no_chart}, each before anything is read or built.
-//  2. A second write of the same push id on this node waits for the first
-//     (the IN-FLIGHT JOIN) and is answered what it is answered — a push id
-//     names one scratch, once — unless the first ended only because ITS
-//     caller left, when the second runs the write itself.
-//  3. A node holding no copy of the repository, nor filling one, answers a
-//     write that is not its walk's effective home's (gitlet.EngineWrite.Home)
-//     gitlet.ErrGitUnready{not_held} at once; the copy is synced to the
-//     caller's floor, within statelog.ReadBudget, the sync's failure read as
-//     a read's is (cache.EveryFillMeets).
-//  4. The repository's status, the stateless rules, the grant
-//     (gitlet.GrantOf on this node's chart, held to the write's ceiling —
-//     gitlet.EngineWrite.Ceiling) and the protections of the one
-//     command the write makes are judged on the synced row; then the copy is
-//     checked (build.go's check): where the branch is, by its exact name, and
-//     what the objects the write names by id are — short reads, each one
-//     lookup.
-//  5. A head that is not the one the caller read is first looked up as this
-//     write's own push (Estate.PushOutcome): FOUND, the write already landed
-//     and is answered from its row, nothing built.
-//  6. Every refusal of 3–5 — and an object the copy lacks — is judged again
-//     once at the log's head (a linearizable re-sync) before it is answered:
-//     a SEAT'S re-sync drawn from its seat's bucket on this node
-//     (Options.Resyncs, its turn the principal — gitlet.NewResyncs), and past
-//     it the refusal is answered from the seat's session, saying it was not
-//     judged again and when the seat's re-syncs come back.
-//  7. The build (build.go), in the write's scratch (cache.NewScratch, named
-//     the push id), under ONE unit of the node's seat git-work share, given
-//     back before the landing, within ONE budget of git run time,
-//     gitlet.WriteBuildDeadline — a commit_files' read of what every path it
-//     names and every directory above one is at its parent among it, whose
-//     cost grows with the square of a path's depth (building.paths): a
-//     refusal of the change, a conflict or nothing to change is answered
-//     here, nothing stored. Then gitletfault.WriteAfterBuild.
-//  8. THE DEADLINE RULE: a caller whose deadline cannot hold the bundle's
-//     upload (gitlet.UploadDeadline, at most gitlet.WriteUploadAllowance) and the
-//     proposal after it (gitlet.MinProposeAttempt) is answered busy with
-//     nothing uploaded — a slow bucket costs a refusal, never a PUT nobody
-//     proposes.
-//  9. land, with gitlet.ViaEngine and the write's principal; the answer is the
-//     landing's, its outcome from the push's row only.
-//
-// ctx ENDS WHEN THE ANSWER IS DUE (gitlet.AnswerBy, the estate's git arm and the
-// router's own in-process run): every wait before the landing that it ends is
-// answered gitlet.ErrGitUnready while the asker still listens; the landing's
-// own are its own. A write cut by the host's stop before its landing ran
-// nothing, and is answered gitlet.ErrNotServing.
-//
-// Every write is counted (crewlet.code.host.writes) and timed
-// (crewlet.code.host.write.duration), and logged code_write at info. It
-// publishes NO operator_acted: that record is the relay's of a git push, which
-// nothing else records; a person's tool call is already one from the act
-// catalogue's dispatch, and a seat's write is its push row and its turn.
+// lands it as one push (package doc, "An engine write is built beside the copy
+// and lands as a push"). It answers a refusal of the change
+// (EngineWriteResult.Refusal), of the push (its Command), or the push's outcome.
+// A stopping host answers gitlet.ErrNotServing; a seat's write on a node behind
+// the company's configuration (Current false) is ErrGitUnready{behind_config},
+// so the walk asks the runner-up; writtenForOn judges whom it is made for. A
+// second write of a push id on this node joins the first (a push id names one
+// scratch) and takes its answer, unless the first was cut only by its own
+// caller leaving. The rest is run's. ctx ends when the answer is due
+// (gitlet.AnswerBy): a wait before the landing it ends is answered unready, and
+// a write cut there ran nothing (cutOrGone). record counts, times and logs it.
 func (s *Server) Write(ctx context.Context, w gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
 	if err := w.Validate(); err != nil {
 		return gitlet.EngineWriteResult{}, err
@@ -230,15 +145,13 @@ func (s *Server) Write(ctx context.Context, w gitlet.EngineWrite) (gitlet.Engine
 	}
 }
 
-// writtenForOn is why a seat's write w may not be made for whom it states, on
+// writtenForOn is why a seat's write w may not be made for whom it states on
 // this node's chart (gitlet.EngineWrite.WrittenForOn), or nil: only the chart
 // tells a person's seat, which bounds nothing, from a colleague's, whose
-// ceiling the write carries beside it. Asked before anything of the write is
-// read or built, since what it judges is the request; a write carrying
-// somebody that a node holding no chart yet cannot judge is answered unready,
-// about this node, so a Gitlet node holding one builds it, as every rule that
-// judges a seat's write answers there. A write carrying nobody, and a
-// person's, which carries nothing, need no chart for it.
+// ceiling the write carries. It judges the request, so it runs before anything
+// is read or built; a node holding no chart yet answers unready, about itself,
+// so a node holding one builds it. A write carrying nobody, and a person's,
+// need no chart.
 func (s *Server) writtenForOn(w gitlet.EngineWrite) error {
 	if w.Principal.Kind != gitlet.PrincipalAgent || w.WrittenFor.Carrier() == nil {
 		return nil
@@ -252,10 +165,9 @@ func (s *Server) writtenForOn(w gitlet.EngineWrite) error {
 	return w.WrittenForOn(roster)
 }
 
-// enter admits one write to a running host — the in-process twin of begin,
-// which answers a request over HTTP — and answers the write's context: the
-// caller's, cut by the host's stop with errWritesStopping as its cause, so a
-// stop reaches every git process of a write in flight.
+// enter admits one write to a running host (the in-process twin of begin) and
+// answers its context: the caller's, cut by the host's stop with cause
+// errWritesStopping, so a stop reaches every git process in flight.
 func (s *Server) enter(parent context.Context) (context.Context, func(), bool) {
 	s.mu.Lock()
 	if s.stopped {
@@ -312,9 +224,9 @@ func (s *Server) joinWrite(pushID string) (*inflightWrite, bool) {
 	return f, true
 }
 
-// landWrite ends the in-flight write of pushID with what it came to, letting
-// every write waiting on it go. A FINISHED WRITE LEAVES NO ENTRY: a later
-// retry runs the pipeline again and is answered from the push's row.
+// landWrite ends the in-flight write of pushID with what it came to, releasing
+// its waiters. It leaves no entry: a later retry runs the pipeline again and is
+// answered from the push's row.
 func (s *Server) landWrite(pushID string, f *inflightWrite, res gitlet.EngineWriteResult, err error, cut bool) {
 	s.writesMu.Lock()
 	delete(s.writes, pushID)
@@ -340,13 +252,12 @@ type writing struct {
 	// its budget of git run time (build.go's budget and charge).
 	metered bool
 	left    time.Duration
-	// landNeed is what the last landing's deadline rule held the caller's
-	// deadline to — gitlet.MinProposeAttempt and its bundle's upload — and 0
-	// before one, or for a caller with no deadline: a merge's measure of
-	// the landing a rebuild would make again (merge.go's roomToRebuild).
+	// landNeed is what the last deadlineRule held the caller's deadline to,
+	// 0 before one or with no deadline: merge.go's roomToRebuild measures a
+	// rebuild's landing by it.
 	landNeed time.Duration
-	// opens is the change the write's push opens as its build formed it —
-	// a revert_change's "Revert <repo>!<n>" — and nil for every other kind.
+	// opens is the change the push opens as its build formed it (a
+	// revert_change's "Revert <repo>!<n>"), nil for every other kind.
 	opens *gitlet.ChangeOption
 
 	started             time.Time
@@ -368,16 +279,17 @@ func (s *Server) write(ctx context.Context, w gitlet.EngineWrite, pushID string)
 	defer func() { wr.record(ctx, res, err) }()
 	res, err = wr.run(ctx)
 	if err != nil && !wr.landed && ctx.Err() != nil {
-		// CUT BEFORE ITS LANDING, by the stop or the answer's due instant:
-		// whatever the wait or the process it cut answered, the write ran
-		// nothing, and what it says is about this node.
+		// Cut before its landing: whatever the cut wait or process said, the
+		// write ran nothing, and the answer is about this node.
 		err = s.cutOrGone(ctx)
 	}
 	res.PushID = pushID
 	return res, err
 }
 
-// run is steps 3 to 9.
+// run is the write after its join: judge, buildShared, deadlineRule, land. A
+// node holding no copy answers unready, not_held, unless it is the walk's home
+// (gitlet.EngineWrite.Home), the one node that fills a copy.
 func (wr *writing) run(ctx context.Context) (gitlet.EngineWriteResult, error) {
 	s, w := wr.s, wr.w
 	if !w.Home && !s.o.Cache.Holds(w.RepoID) {
@@ -386,9 +298,8 @@ func (wr *writing) run(ctx context.Context) (gitlet.EngineWriteResult, error) {
 				"that fills a copy; a Gitlet node holding one builds it meanwhile", s.o.NodeID, w.RepoID)}
 	}
 	if w.Kind == gitlet.WriteMergeChange {
-		// A MERGE IS ITS OWN PIPELINE from here (merge.go): judged by its
-		// change and its gate rather than the push rules of one command, and
-		// landed as a merge record.
+		// A merge is its own pipeline (merge.go): judged by its change and
+		// gate, not one command's push rules, and landed as a merge record.
 		return wr.runMerge(ctx)
 	}
 	syncStart := s.now()
@@ -441,12 +352,11 @@ func (wr *writing) fresh() statelog.Freshness {
 	return f
 }
 
-// sync pins the copy at fresh, in place of any the write holds, its wait
-// bounded by statelog.ReadBudget and by ctx — answered as a read's sync is
-// (query's sync): a copy that cannot be brought there in time, or that failed
-// on what every node's copy is filled from, is unready, syncing; one that
-// failed for a reason of the node's own is unready, node_failed. Gone is the
-// repository the rows hold no live row of.
+// sync pins the copy at fresh in place of any the write holds, within
+// statelog.ReadBudget and ctx, its failures answered as query's sync answers
+// them: late, or failed on what every node's copy is filled from, is unready,
+// syncing; failed for the node's own reason, node_failed. gone is a repository
+// with no live row.
 func (wr *writing) sync(ctx context.Context, fresh statelog.Freshness) (gone bool, err error) {
 	s := wr.s
 	sctx, cancel := context.WithTimeout(ctx, s.syncWait)
@@ -489,8 +399,8 @@ func (wr *writing) unready(why gitlet.UnreadyReason, detail string) error {
 	return &gitlet.ErrGitUnready{Reason: why, Detail: detail}
 }
 
-// writeVerdict is a refusal of the push a write's judgement reached: its reason and
-// sentence, and whether it is the head's — a stale read the write's own
+// writeVerdict is a refusal of the push a write's judgement reached: its reason,
+// its sentence, and whether it is a stale head, which the write's own earlier
 // landing may explain.
 type writeVerdict struct {
 	reason gitlet.Refusal
@@ -498,10 +408,13 @@ type writeVerdict struct {
 	stale  bool
 }
 
-// judge is steps 3 to 6: the copy synced to the caller's floor, the write
-// judged on it, and — before any refusal is answered — once more at the log's
-// head. It answers what the build reads (judgement) or, done, the write's
-// answer: a refusal, or the push's own row where the write already landed.
+// judge syncs the copy to the caller's floor (fresh) and judges the write on it
+// (rules, then build.go's check). A refusal, or an object the copy lacks, is
+// judged once more at the log's head before it is answered, so a session floor
+// refuses nothing a current copy allows; a seat's re-sync comes from its bucket
+// (resync), and once spent the refusal is answered from its session, saying so
+// and when re-syncs return. It answers what the build reads or, done, the
+// write's answer: a refusal, or its own push's row where it already landed.
 func (wr *writing) judge(ctx context.Context) (judgement, gitlet.EngineWriteResult, bool, error) {
 	s, w := wr.s, wr.w
 	asked, askedAt := false, ""
@@ -532,11 +445,9 @@ func (wr *writing) judge(ctx context.Context) (judgement, gitlet.EngineWriteResu
 		case v.reason == "" && j.absent == "":
 			return j, gitlet.EngineWriteResult{}, false, nil
 		case v.stale && (!asked || j.head != askedAt):
-			// A HEAD THAT MOVED may be this write's own push, landed by an
-			// earlier ask of it — on this node, on another after silence —
-			// and is looked up as one before it is called stale: found, the
-			// write is answered from its row with nothing built. Asked again
-			// at the log's head only where the head moved between the two.
+			// A moved head may be this write's own push, landed by an earlier
+			// ask on any node: looked up (outcome) before it is called stale,
+			// and again at the log's head only where the head moved since.
 			asked, askedAt = true, j.head
 			if res, _, found, err := wr.outcome(ctx); err != nil || found {
 				return judgement{}, res, true, err
@@ -549,8 +460,6 @@ func (wr *writing) judge(ctx context.Context) (judgement, gitlet.EngineWriteResu
 				fresh = statelog.Freshness{Level: statelog.ReadLinearizable}
 				continue
 			}
-			// THE SEAT'S RE-SYNCS ARE SPENT: the refusal is answered from
-			// its session, saying it was not judged again.
 			note = " " + gitlet.NotRejudged(spent, "this turn's", "this seat's", s.now())
 		}
 		if j.absent != "" && v.reason == "" {
@@ -561,10 +470,10 @@ func (wr *writing) judge(ctx context.Context) (judgement, gitlet.EngineWriteResu
 	}
 }
 
-// resync draws the write's one re-judgement at linearizable from its seat's
-// bucket on this node (Options.Resyncs, the query server's own): a SEAT'S
-// write, its turn the principal, nil where it is taken; a person's is never
-// charged — its floor is the log's head, which it reads by right.
+// resync draws a seat's write's one linearizable re-judgement from its seat's
+// bucket on this node (Options.Resyncs, the query server's own; its turn the
+// principal), nil where taken. A person's is never charged: it reads the log's
+// head by right.
 func (wr *writing) resync() *costlimit.Refusal {
 	p := wr.w.Principal
 	if p.Kind != gitlet.PrincipalAgent {
@@ -594,9 +503,9 @@ func (wr *writing) rules() (writeVerdict, error) {
 				"%q's grant by; a Gitlet node holding one builds the write", s.o.NodeID, w.Principal.Seat))
 		}
 	}
-	// THE SEAT'S GRANT, HELD TO WHOEVER ITS TURN WORKS FOR (gitlet.WriteCeiling):
-	// judged here, from this node's chart and the synced row, as the seat's
-	// own is — never on the node the turn runs on.
+	// The grant, held to whoever the turn works for (gitlet.WriteCeiling), is
+	// judged here on this node's chart and the synced row, never on the
+	// node the turn runs on.
 	grant := gitlet.GrantOf(w.Principal, repo, roster)
 	if w.Ceiling != nil {
 		grant = grant.Under(w.Ceiling.Grant(repo, roster))
@@ -606,9 +515,8 @@ func (wr *writing) rules() (writeVerdict, error) {
 	}
 	rules, err := gitlet.ParseProtections(repo.Protections)
 	if err != nil {
-		// A RULE THIS BUILD CANNOT READ is a row of the snapshot this build
-		// cannot use: asking again reads the same rule, and a node of a newer
-		// build may judge it.
+		// A rule this build cannot read: asking again reads the same, and a
+		// newer build's node may judge it.
 		return writeVerdict{}, wr.unready(gitlet.UnreadySyncing, fmt.Sprintf("%s cannot read a protection of "+
 			"repository %s (%v); a node of a newer build judges it", s.o.NodeID, repo.Name, err))
 	}
@@ -623,8 +531,8 @@ func (wr *writing) rules() (writeVerdict, error) {
 		if err != nil {
 			return writeVerdict{}, err
 		}
-		// A SIGNATURE GIT WOULD NOT WRITE AS GIVEN is the signer's bug: told
-		// before the build rather than by commit-tree after it.
+		// A signature git would not write as given is the signer's bug, told
+		// before the build rather than by commit-tree.
 		for _, part := range []struct{ name, value string }{
 			{"author name", sig.AuthorName}, {"author email", sig.AuthorEmail},
 			{"committer name", sig.CommitterName}, {"committer email", sig.CommitterEmail},
@@ -639,10 +547,10 @@ func (wr *writing) rules() (writeVerdict, error) {
 	return writeVerdict{}, nil
 }
 
-// placeholder is the new id a write's command is judged with before its
-// commit exists: the grant and the protections read only which ref moves and
-// whether it is created, updated or deleted, never to what — and a write never
-// forces, since its commit sits on the head it read.
+// placeholder is the new id a write's command is judged with before its commit
+// exists: the grant and the protections read only which ref moves and how
+// (create, update, delete), never to what, and a write never forces, since its
+// commit sits on the head it read.
 const placeholder = "1111111111111111111111111111111111111111"
 
 // judged is the write's one command as the rules judge it.
@@ -672,12 +580,11 @@ func (wr *writing) refused(reason gitlet.Refusal, detail string) gitlet.EngineWr
 	return gitlet.EngineWriteResult{Command: c}
 }
 
-// outcome is step 5: this write's own push looked up at the copy's position,
-// within statelog.ReadBudget. Found, it is the write's answer, from its row,
-// beside every ref update the row names (a merge's second, its source's
-// deletion, says what the answer's one Command cannot). An outcome that
-// cannot be learned is answered busy — never stale, which a write that may
-// have landed must not be told.
+// outcome looks this write's own push up at the copy's position, within
+// statelog.ReadBudget. Found, it is the write's answer from its row, beside
+// every ref update the row names (a merge's source deletion, which the answer's
+// one Command cannot say). An outcome that cannot be learned is answered busy,
+// never stale: a write that may have landed must not be told that.
 func (wr *writing) outcome(ctx context.Context) (gitlet.EngineWriteResult, []gitlet.Command, bool, error) {
 	s := wr.s
 	octx, cancel := context.WithTimeout(ctx, s.syncWait)
@@ -707,7 +614,7 @@ func (wr *writing) outcome(ctx context.Context) (gitlet.EngineWriteResult, []git
 		"call again"), nil, true, nil
 }
 
-// repoName is the synced repository's name, or its id before any sync.
+// repoNameOf is the repository's name, or its id before any sync.
 func (s *Server) repoNameOf(repo gitlet.RepoRef) string {
 	if repo.Name != "" {
 		return repo.Name
@@ -723,13 +630,14 @@ func (wr *writing) repoName() string {
 	return wr.w.RepoID
 }
 
-// buildShared is step 7: the build under one unit of the node's seat git-work
-// share, taken for the build's git alone and given back before the landing,
-// and within ONE budget of git run time its processes share
-// (gitlet.WriteBuildDeadline). Past gitlet.GitShareWait the share is unready,
-// about this node; a build whose own git runs the whole budget is too_large,
-// since another node would take as long. A create or a delete of a branch
-// builds nothing and takes no unit.
+// buildShared builds under one unit of the node's seat git-work share, held for
+// the build's git alone and given back before the landing, within one budget of
+// git run time its processes share (gitlet.WriteBuildDeadline). Past
+// gitlet.GitShareWait the share is unready, about this node; a build whose git
+// runs the whole budget is too_large, since another node would take as long. A
+// commit_files' read of its paths (building.paths), costing the square of a
+// path's depth, is the build's, so it runs under the unit and the budget, never
+// in the check. A branch create or delete builds nothing and takes no unit.
 func (wr *writing) buildShared(ctx context.Context, sc *cache.Scratch, j judgement) (built,
 	gitlet.EngineWriteResult, bool, error) {
 
@@ -749,8 +657,8 @@ func (wr *writing) buildShared(ctx context.Context, sc *cache.Scratch, j judgeme
 		return built{}, gitlet.EngineWriteResult{}, true, err
 	}
 	defer release()
-	// THE BUILD'S OWN GIT BEGINS: from here every process is given what is
-	// left of one budget of run time, and charged what it ran.
+	// From here every git process gets what is left of the budget and is
+	// charged what it ran.
 	wr.metered, wr.left = true, s.buildBudget(w.Kind)
 	b, res, done, err := wr.build(ctx, sc, j)
 	wr.metered = false
@@ -778,14 +686,12 @@ func (wr *writing) changeRefused(r gitlet.WriteRefusal, detail string) gitlet.En
 	return gitlet.EngineWriteResult{Refusal: r, Detail: detail}
 }
 
-// deadlineRule is step 8: a write whose caller's deadline cannot hold its
-// bundle's upload — gitlet.UploadDeadline of its size, at most
-// gitlet.WriteUploadAllowance — and the proposal after it
-// (gitlet.MinProposeAttempt) is refused busy, with nothing uploaded: a slow
-// bucket costs a refusal, never a PUT nobody proposes. ctx ends when the
-// answer is due (gitlet.AnswerBy), a reply's margin short of the caller's own
-// deadline, so what is left of it is what the landing has. A caller with no
-// deadline holds any.
+// deadlineRule refuses busy, with nothing uploaded, a write whose ctx cannot
+// hold its bundle's upload (gitlet.UploadDeadline of its size, at most
+// gitlet.WriteUploadAllowance) and the proposal after it
+// (gitlet.MinProposeAttempt): a slow bucket costs a refusal, never a PUT nobody
+// proposes. ctx ends when the answer is due (gitlet.AnswerBy), so what is left
+// of it is what the landing has. A caller with no deadline holds any.
 func (wr *writing) deadlineRule(ctx context.Context, sc *cache.Scratch) (gitlet.EngineWriteResult, bool, error) {
 	deadline, ok := ctx.Deadline()
 	if !ok {
@@ -811,8 +717,8 @@ func (wr *writing) deadlineRule(ctx context.Context, sc *cache.Scratch) (gitlet.
 	return gitlet.EngineWriteResult{}, false, nil
 }
 
-// land is step 9: the landing every push takes, and the write's answer from
-// what it came to.
+// land hands the write to the landing every push takes (with gitlet.ViaEngine)
+// and answers from what it came to, its outcome from the push's row only.
 func (wr *writing) land(ctx context.Context, sc *cache.Scratch) (gitlet.EngineWriteResult, error) {
 	s, w := wr.s, wr.w
 	wr.landed = true
@@ -845,7 +751,10 @@ func (wr *writing) land(ctx context.Context, sc *cache.Scratch) (gitlet.EngineWr
 	return res, nil
 }
 
-// record counts, times and logs one write as it ended.
+// record counts, times and logs (code_write) one write as it ended. It publishes
+// no operator_acted: that record is the relay's, for a git push nothing else
+// records; a person's tool call already has one from the act catalogue's
+// dispatch, and a seat's write is its push row and its turn.
 func (wr *writing) record(ctx context.Context, res gitlet.EngineWriteResult, err error) {
 	s := wr.s
 	outcome := writeOutcome(res, err)
@@ -869,10 +778,9 @@ func (wr *writing) record(ctx context.Context, res gitlet.EngineWriteResult, err
 	default:
 		refusal = string(res.Command.Reason)
 	}
-	// WHO WROTE, as code_push names a pusher: the seat the write is the
-	// commit's author for — a person's human seat or the agent's own — and
-	// the credential a person came through beside it (iam.ActorFor: one
-	// person, many credentials), or the turn behind a seat's.
+	// Who wrote, as code_push names a pusher: the seat the commit is authored
+	// for, beside the credential a person came through (iam.ActorFor: one
+	// person, many credentials) or the turn behind a seat's.
 	p := wr.w.Principal
 	attrs := []any{"repo", wr.repoName(), "kind", wr.w.Kind, "principal_kind", p.Kind, "seat", p.Seat,
 		"operator_id", p.OperatorID, "turn_id", p.Run.TurnID, "push_id", wr.pushID, "outcome", outcome,
@@ -904,7 +812,7 @@ func writeOutcome(res gitlet.EngineWriteResult, err error) string {
 	return writeRefused
 }
 
-// short is an id's first seven digits, as a sentence names a commit.
+// shortID is an id's first seven digits, as a sentence names a commit.
 func shortID(id string) string {
 	if len(id) > 7 {
 		return id[:7]

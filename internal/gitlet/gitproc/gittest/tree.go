@@ -9,13 +9,11 @@ import (
 )
 
 // A WORK TREE'S WIDTH, for every benchmark whose figure follows the files one
-// checkout holds rather than the history behind it: what `git status`, a
-// commit of one changed file and a checkout cost follows how many files and
-// directories a tree has, and a History's trees are narrow — 1 421 files at a
-// gigabyte — because a history's size is in its versions. ONE GENERATOR, of
-// History's composition: files of historyFileBytes seeded random bytes in
-// directories of historyDirFiles, so a figure over a tree and one over a
-// history are of one shape of file.
+// checkout holds (`git status`, a one-file commit, a checkout), which a
+// History's narrow trees cannot give. ONE GENERATOR, of History's composition:
+// files of historyFileBytes seeded random bytes in directories of
+// historyDirFiles, so a figure over a tree and one over a history are of one
+// shape of file.
 
 // TreeCommitFiles is the most files one commit of a Tree adds. A wider tree
 // is written as a commit per TreeCommitFiles files, each adding the next ones,

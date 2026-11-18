@@ -1863,7 +1863,8 @@ answer that holds every record the code log had committed when it was asked.
   moved; every other listing, a live state's in a window among them, in the
   order the records that opened its changes landed on the code log. Every change it lists says how many of its
   findings stand open — none of its authors has answered them — and **when it
-  last moved**.
+  last moved**. Its changes' **words** name a listing too, alone or beside the
+  rest ([Searching changes by their words](#searching-changes-by-their-words)).
 - **When a change last moved** is the later of two instants, one a subject it
   moves on: the last record on its repository's subject that changed its row
   (its open, an edit, a draft, a retarget, a close, a reopen, a landing, a
@@ -2122,6 +2123,56 @@ listing of repositories and one repository's detail answer each one's counts
 and their card ([Listing repositories](#listing-repositories)) where
 `repo_facts=true` asks
 ([`GET /gitlet/counts`](../reference/api-endpoints.md#the-code-reads)).
+
+### Searching changes by their words
+
+A listing of changes takes **words** (`text=`): it keeps the changes in whose
+title or description every word appears, one word in the title and another in
+the description included. A word is a run of two or more letters or digits,
+case folded and cut at 64 bytes, with no stemming and no prefix: `deploy` does
+not find `deploys`. A search takes 1 to 8 words and at most 400 bytes. The
+results keep the listing's own order and are never ranked; words alone name a
+listing, newest opened first.
+
+With no reviewer, need, work item or readiness bucket, **each data node's own
+index of changes' words leads**. It reads the newest 5 000 changes of the
+narrowest of the listing's repository, owner, state and rarest word, keeps the
+newest 1 000 holding every word, and judges each in the read, beside every
+change moved since the index last caught up, so a change opened or retitled a
+moment ago is found at once and pages are full. Newest is when a change's open
+was asked, the instant its id carries, the same on every node. Beside a
+reviewer, a need, a work item or a readiness bucket, that walk leads and the
+words are judged on each change it reads, a page still being the rows it read.
+
+Every page a listing's words narrowed carries `changes_text`, empty where the
+search was whole: `truncated` says more changes may hold the words than one
+search reads (add a word, or name a repository, an owner or a state);
+`indexed_back_to` that this node's index is still being built and has reached
+back to the changes opened at that instant, so one opened at or before it may
+be missing; and `building` that this node's index is behind the rows it holds,
+is being rebuilt, or is holding back behind a record this node keeps for a
+newer build, so a change holding the words may be missing. Never read either
+as "no change holds them". A page without `changes_text` was answered by a
+node that does not read `text=`, and is the listing unnarrowed.
+
+Each data node builds its index from the rows it holds, after an upgrade, when
+it joins and when its copy of the estate is replaced: **newest first**, beside
+every change that moves meanwhile, so the changes opened lately are searchable
+within minutes and older ones fill in behind until `indexed_back_to` is gone.
+At 40 000 changes a day of 150 distinct words, the last day is searchable after
+about 14 minutes, the last week after about 2 hours, the last month after about
+8 hours and a year after about 4 days, each a lower bound that grows where the
+index outgrows the node's memory. A replaced copy keeps the documents it had:
+the build rewrites only those whose change moved, at about 0.2 ms a change
+otherwise, and removes those the copy does not hold. The index costs every data
+node about 10.4 KB a change of 150 distinct words, kept as long as the change's
+repository: about 152 GB a year at 40 000 such changes a day. Each batch is held
+to about two seconds of writing, and the smaller batches a large index takes
+cost more, about 11 KB a change at 32 KiB batches. In a search across
+repositories, a deleted repository's changes count toward the 5 000 and the
+1 000 until its purge, though none is listed. A listing by words is held to
+the reader's grant as every listing is
+([ADR-0156](../../adr/0156-a-changes-words-are-indexed-on-each-data-node-and-every-match-is-judged-in-the-read.md)).
 
 ---
 
@@ -3583,7 +3634,10 @@ asks of a live repository's unreachable objects
   weigh: the push records, the change descriptions, the comments and the
   checks' definitions and output it removes together stop at about 32 MiB, so
   a repository with long descriptions, long discussions or many failed checks
-  takes more steps rather than longer ones;
+  takes more steps rather than longer ones; each data node's index of changes'
+  words ([Searching changes by their words](#searching-changes-by-their-words))
+  drops a purged repository's documents within one rotation of its follower
+  after the last step;
 - every data node applies every step on its one write lane, so the duty paces
   itself: after each step it waits twice the step's duration, a third of the
   lane, and a pass stops after a minute of steps and the next resumes from

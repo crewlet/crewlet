@@ -1,64 +1,15 @@
-// The MARKERS a removal leaves, and the two operations that must never depend
-// on one: creating a key, and sweeping the markers themselves.
-//
-// A KV delete or purge does not remove a key's subject from its stream: it
-// appends a message whose KV-Operation header says DEL or PURGE, and on these
-// buckets — one revision per key — that marker replaces the value it removes.
-// A bucket the broker ages takes the marker with everything else. A bucket it
-// never ages keeps every marker for the life of the deployment, and every one
-// of them is a leader read on each listing whose pass delivers it (walk.go, "A
-// tombstone the pass delivered is not an answer"). So they are swept.
+// The MARKERS a removal leaves: a DEL or PURGE message that, at one revision
+// per key, replaces the value. A bucket the broker never ages keeps each one,
+// a leader read on every listing that delivers it (package doc, "A tombstone
+// the pass delivered is not an answer"), so [sweepMarkers] removes them, and
+// [createKey] must not depend on one.
 //
 // # Every removal is a purge
 //
-// In a bucket no clock ages, a record is removed with a PURGE rather than a
-// delete. On a bucket keeping one revision per key the two leave the same
-// single marker, so the marker is not the reason. The reason is the key's
-// OLDER revisions: a purge removes every one of them whatever history the
-// bucket was created with, and a bucket here is adopted as it already exists
-// ([openBucket]), so its history is not this build's to assume. A listing
-// never returns the marker either way ([visitLive]), and [sweepMarkers]
-// removes it once it is older than [coord.MarkerRetention].
-//
-// # A create asks the LEADER, and survives the sweep
-//
-// The client's own Create (nats.go jetstream/kv.go) writes at an expected
-// revision of zero, and when that is refused it reads the key and, finding a
-// marker, writes again at the marker's revision. Three things are wrong with
-// that shape here, and the sweep adds the third:
-//
-//   - its read is the bucket's Get, a DIRECT get any replica answers (walk.go,
-//     "Every certifying answer is the LEADER's"). A replica that has not
-//     applied the removal answers with the old value, and a create over a key
-//     removed on the leader reports the key as held by a record that is gone;
-//   - the second write's refusal is returned as the client got it, and on a
-//     REPLICATED stream that is a bare API error matching no sentinel —
-//     measured at three replicas, a fifth of the losers of a create over a
-//     marker — so a lost race read as an outage;
-//   - and a marker SWEPT between its read and its second write fails that
-//     write against a subject that now holds nothing, which the client reports
-//     as the key existing.
-//
-// [createKey] is the one create this package makes. It conditions on what the
-// stream LEADER holds and loops: a live value is the key existing, a marker is
-// the revision to write over, and nothing at all — never written, or its
-// marker swept — is a write at zero. A marker's persistence is therefore
-// something no write here needs.
-//
-// # The sweep removes only what it saw
-//
-// NOT the client's PurgeDeletes, which collects markers with a watcher and
-// then purges each one's subject OUTRIGHT: a key re-created between the
-// watcher delivering its marker and the purge loses its new value, the one
-// outcome a sweep of records nobody needs may never have. [sweepMarkers]
-// purges each subject THROUGH the marker's own revision
-// ([server.JSApiStreamPurgeRequest] with a sequence bound), so a value written
-// after the pass saw the marker has a later sequence and is untouched — by
-// the broker, in the same step that removes the marker, with no read to
-// race. And its pass is deliberately UNCERTIFIED: a marker it misses is swept
-// on the next tick, and a marker it delivers from a replica that is behind is
-// either still the key's newest message or already replaced, and the bound
-// removes it or nothing.
+// In a bucket no clock ages, a record is removed with a PURGE, not a delete:
+// a purge also removes the key's OLDER revisions, whatever history a bucket
+// adopted as it exists ([openBucket]) was created with. A listing never
+// returns the marker ([visitLive]); it goes after [coord.MarkerRetention].
 
 package kv
 
@@ -78,57 +29,44 @@ import (
 	"github.com/crewlet/crewlet/internal/jsapi"
 )
 
-// createRounds bounds [createKey]'s loop.
-//
-// An ordinary create takes ONE round; a create over a marker takes two (the
-// refusal, then the write at the marker's revision); and a marker swept between
-// that read and that write takes three. Every round past those needs ANOTHER
-// writer to remove the key again inside this one's read-to-write window, which
-// nothing in this estate does repeatedly — or, on a replicated bucket, a peer's
-// create of the same key still IN FLIGHT: the broker refuses a write to a
-// subject that has one in flight, and the leader reads nothing there until it
-// lands, so the next round writes at zero again. That one is over as soon as
-// the peer's create commits: measured at three replicas, in two hundred bursts
-// of sixteen creates of one key at once, one call needed a second write and
-// none a third. Eight is all of that twice over with room, and exhausting it is
-// reported as UNKNOWN through [contended] — never as the key being held, since
-// losing says nothing about who holds it.
+// createRounds bounds [createKey]'s loop. A create takes one round, two over
+// a marker (the refusal, then the write at its revision), three if the marker
+// is swept in between. More needs another writer removing the key inside this
+// one's read-to-write window, or on a replicated bucket a peer's create of the
+// key still IN FLIGHT (refused, and the leader reads nothing until it lands),
+// which ends when the peer commits: at three replicas, 200 bursts of 16
+// concurrent creates of one key needed at most two writes. Eight is that twice
+// over with room; exhausting it is UNKNOWN ([contended]), never the key held,
+// since losing says nothing about who holds it.
 const createRounds = 8
 
-// errCreateUnanswered marks the one failure of [createKey] after which the
-// key may hold the value: a write of its own that went out and was answered
-// with something other than a refusal — most often not answered at all.
-//
-// A MARK, because the loop reads between its writes and a caller holding only
-// the error could not otherwise tell that failure from a read's. The two ask
-// opposite things of a caller that reports to a person ([coord.ErrWriteUnknown]
-// is that caller's word for the first): after a read failed, every write this
-// create made had been REFUSED, so nothing was written. Package-private
-// because the callers that ignore it lose nothing by doing so — a create that
-// failed is unavailable to them either way — and a caller that needs it says
-// so in its own contract ([FleetStore.putChatReadAt]).
+// errCreateUnanswered marks the one [createKey] failure after which the key
+// may hold the value: its own write went out and the answer was not a refusal
+// (most often no answer). A MARK, because the loop reads between writes: after
+// any other failure every write had been REFUSED, so nothing was written, and
+// a caller reporting to a person ([coord.ErrWriteUnknown]) must tell the two
+// apart. Package-private: callers that ignore it lose nothing, and one that
+// needs it says so in its contract ([FleetStore.putChatReadAt]).
 var errCreateUnanswered = errors.New("the create was sent and its answer was not a refusal")
 
 // createKey writes value under key only when the key holds no live value,
-// answering the revision it wrote, or an error wrapping
-// [jetstream.ErrKeyExists] when the stream leader holds a live value there.
+// answering the revision written, or an error wrapping [jetstream.ErrKeyExists]
+// when the stream LEADER holds a live value. Each refused round asks the
+// leader: a live value is the key existing, a marker the revision to write
+// over, nothing (never written, or its marker swept) a write at zero.
 //
-// Every other failure is for the caller to classify as unavailable — a create
-// that could not be made establishes nothing — and THEY ARE TWO KINDS, told
-// apart by [errCreateUnanswered]. Marked: a write's own failure, which may
-// have landed. Unmarked: the leader reader could not be built (before any
-// write), a refused round could not read the key again, or every round was
-// refused ([contended]) — after each of which every write this call made had
-// been refused, so nothing was written. And a value past what a key holds
-// ([coord.ErrValueTooLarge]) is refused before it is sent, so it is returned
-// as it is, neither marked nor unavailable: nothing went out. See the file
-// doc for why this is not the bucket handle's own Create.
+// NOT the bucket's Create, whose retry reads a DIRECT get any replica answers
+// (package doc, "Every single-key read is the leader's"), returns a replicated
+// stream's refusal as a bare API error (a lost race read as an outage), and
+// reports a marker swept before its second write as the key existing. Other
+// failures are the caller's to call unavailable, marked [errCreateUnanswered]
+// or not; [coord.ErrValueTooLarge] returns as is, since nothing was sent.
 func createKey(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue,
 	key string, value []byte) (uint64, error) {
 
-	// Resolved up front, although only a refused create reads, for
-	// [eachEntryUnder]'s reason: a client built on an API this engine does
-	// not speak must fail every create rather than only the ones that raced.
+	// Resolved up front though only a refused create reads, for
+	// [eachEntryUnder]'s reason: a client on an API this engine does not
+	// speak fails every create, not only those that raced.
 	read, err := newLeaderReader(js, kv)
 	if err != nil {
 		return 0, err
@@ -140,18 +78,15 @@ func createKey(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValu
 		case err == nil:
 			return revision, nil
 		case errors.Is(err, coord.ErrValueTooLarge):
-			// REFUSED BEFORE IT WAS SENT: nothing went out, so nothing
-			// may have landed.
+			// REFUSED BEFORE IT WAS SENT: nothing may have landed.
 			return 0, err
 		case !isWrongLastSequence(err):
-			// NOT A REFUSAL, so nothing says the broker did not take it:
-			// the request went out and what came back — most often
-			// nothing in time — is not the answer to it.
+			// NOT A REFUSAL, so the broker may have taken it: what came
+			// back (most often nothing in time) is not its answer.
 			return 0, fmt.Errorf("%w: %w", errCreateUnanswered, err)
 		}
-		// REFUSED, so this round wrote nothing, and neither did any round
-		// before it: a failure from here on is a create that left the key
-		// as it found it.
+		// REFUSED, like every round before it: a failure from here on
+		// left the key as it found it.
 		last, err := read.last(ctx, key)
 		switch {
 		case errors.Is(err, jetstream.ErrKeyNotFound):
@@ -177,9 +112,10 @@ type sweepPass struct {
 
 // walkForSweep walks kv whole, values included, for the sweeps of its keys.
 //
-// NO INDEX: nothing certifies a sweep, because a key it misses is swept on the
-// next tick — so its pass ends on the quiet from the start rather than waiting
-// on removals no delivery will follow (see [passOver]).
+// UNCERTIFIED, with NO INDEX: a key it misses is swept next tick, so its pass
+// ends on the quiet rather than waiting on removals ([passOver]). A marker
+// from a lagging replica is still the key's newest message or already
+// replaced, and the purge's bound removes it or nothing.
 func walkForSweep(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue) (sweepPass, error) {
 	what := "the markers in " + kv.Bucket()
 	purge, err := newLeaderPurge(js, kv)
@@ -194,8 +130,13 @@ func walkForSweep(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyV
 }
 
 // sweepMarkers removes, from one bucket, every delete or purge marker written
-// before cutoff, reporting how many messages went: one pass of the bucket
-// ([walkForSweep]) and the sweep of it ([sweepMarkersIn]).
+// before cutoff, reporting how many messages went ([walkForSweep], then
+// [sweepMarkersIn]).
+//
+// NOT the client's PurgeDeletes, which purges each marker's subject OUTRIGHT
+// and so takes a value re-created after its watcher saw the marker. Each
+// subject is purged THROUGH the marker's own revision ([leaderPurge.through]),
+// a bound the broker applies with no read to race.
 func sweepMarkers(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue,
 	cutoff time.Time) (int64, error) {
 
@@ -209,15 +150,13 @@ func sweepMarkers(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyV
 // sweepMarkersIn removes, from one bucket's pass, every delete or purge marker
 // written before cutoff, reporting how many messages went.
 //
-// A failure stops the sweep of this bucket and reports what it had removed
-// beside the error: every marker left is swept on the next tick, and a sweep
-// that pressed on past a broker refusing it would only log the same refusal
-// once per marker.
+// A failure stops this bucket's sweep, reporting what it removed beside the
+// error: what is left goes next tick, and pressing on past a refusing broker
+// would only log the refusal once per marker.
 func sweepMarkersIn(ctx context.Context, kv jetstream.KeyValue, walked sweepPass, cutoff time.Time) (int64, error) {
 	what := "the markers in " + kv.Bucket()
 	pass, purge := walked.keys, walked.purge
-	// KEY ORDER, so two sweeps of one bucket walk it identically and a
-	// failure part-way names the same key on every retry.
+	// KEY ORDER, so a failure part-way names the same key on every retry.
 	keys := make([]string, 0, len(pass))
 	for key, kve := range pass {
 		if kve.Operation() != jetstream.KeyValuePut && kve.Created().Before(cutoff) {
@@ -239,11 +178,9 @@ func sweepMarkersIn(ctx context.Context, kv jetstream.KeyValue, walked sweepPass
 // leaderPurge removes messages on one key's subject through a revision, with a
 // `$JS.API.STREAM.PURGE` the stream leader performs.
 //
-// ON THE WIRE rather than through the client's Stream.Purge for one reason:
-// that call answers only an error, and the broker's answer carries how many
-// messages the purge removed. A marker the pass saw may already have been
-// replaced by the time it is purged, and a sweep that counted what it ASKED
-// for would report removing markers nobody removed.
+// ON THE WIRE, not the client's Stream.Purge, which answers only an error:
+// the broker's answer counts what was removed, and a marker the pass saw may
+// already be replaced, so counting what was ASKED would overreport.
 type leaderPurge struct {
 	conn    *nats.Conn
 	subject string // the PURGE subject of this bucket's stream, in the client's API
@@ -268,8 +205,8 @@ func newLeaderPurge(js jetstream.JetStream, kv jetstream.KeyValue) (*leaderPurge
 }
 
 // through removes every message on key's subject at or below revision,
-// answering how many there were. A message written after revision survives:
-// the broker applies the bound itself, under the stream's own lock.
+// answering how many there were. A later message survives: the broker applies
+// the bound under the stream's own lock.
 func (p *leaderPurge) through(ctx context.Context, key string, revision uint64) (uint64, error) {
 	if _, bounded := ctx.Deadline(); !bounded {
 		var cancel context.CancelFunc
@@ -303,13 +240,11 @@ func (p *leaderPurge) through(ctx context.Context, key string, revision uint64) 
 // SweepMarkers removes every marker written before cutoff from each bucket the
 // broker never ages — see [coord.Markers].
 //
-// EVERY such bucket rather than the ones known to remove keys: the set is
-// derived from the retention each bucket is opened with ([OpenFleet]), so a
-// family that starts removing records is swept without anybody remembering
-// to add it, and a bucket that holds no marker costs one pass that finds
-// none. A bucket the broker ages needs nothing — its markers age out with
-// its records. Every bucket is tried even when one fails, for the maintenance
-// tick's own reason: one unreachable stream must not stop the rest.
+// EVERY such bucket, not those known to remove keys: the set derives from
+// each bucket's retention ([OpenFleet]), so a family that starts removing
+// records is swept without anyone adding it; a markerless bucket costs one
+// pass. An aged bucket's markers age out with its records. One unreachable
+// stream does not stop the rest.
 func (f *FleetStore) SweepMarkers(ctx context.Context, cutoff time.Time) (int64, error) {
 	var (
 		swept int64
@@ -329,12 +264,10 @@ func (f *FleetStore) SweepMarkers(ctx context.Context, cutoff time.Time) (int64,
 		if kv.Bucket() != f.runs.Bucket() {
 			continue
 		}
-		// AND THE ONE VALUE A REMOVAL CAN LEAVE: a part beside a sandbox
-		// run (its log, its handed set, its leads) whose record went while its
-		// node stopped before the part did, found in the SAME pass, which
-		// already carries every record key and every part key of the runs
-		// bucket, so the logs, up to half a megabyte each, are walked once
-		// a tick rather than twice.
+		// AND THE ONE VALUE A REMOVAL CAN LEAVE: a sandbox run's part (log,
+		// handed set, leads) whose record went while its node stopped first.
+		// Found in the SAME pass, so the logs (up to half a megabyte each)
+		// are walked once a tick, not twice.
 		n, err = f.sweepRunParts(ctx, pass, cutoff)
 		swept += n
 		if err != nil {

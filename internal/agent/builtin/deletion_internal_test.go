@@ -16,24 +16,15 @@ import (
 // A WRITE ABOUT WHAT A DELETION KEEPS DELETED IS NOT FOUND, IN WORDS THAT DO NOT
 // SEND A MODEL BACK TO TRY AGAIN.
 //
-// The deletion gate drops a record on every node once its object's deletion
-// marker landed ahead of it, and the framework states that as one of its
-// conditions ([statelog.Unavailable], [statelog.ReasonDeleted]). [WriterClass]
-// did not class it, so every tool whose failure falls back to that table
-// reached [Condition] and told a model "update_work_item did not land
-// (statelog: unavailable (deleted): the record at 3:4 was durable and applied
-// nowhere — the broker holds the operation id for 2m0s)", and the artifacts'
-// and the datastores' tools added "Try again shortly" — about something
-// nothing will ever write again, on any node. The same refusal read inside a
-// sentence that names what it stopped ([writeTold]) carried the framework's
-// whole text too.
-//
-// EVERY TOOL FAILURE A DELETION CAN REACH: the tracker's, the knowledge base's,
-// the artifacts' and the datastores'. Chat keeps no deletion marker — its gates
-// drop an evicted writer's records alone — so no chat write meets one.
+// Once an object's deletion marker lands ahead of a record, the deletion gate
+// drops it on every node ([statelog.ReasonDeleted]) and nothing will ever write
+// it, so [WriterClass] classes it not found, and neither a tool failure nor a
+// sentence naming what it stopped ([writeTold]) carries the framework's text
+// or "Try again". The walk covers the tracker's, the knowledge base's, the
+// artifacts' and the datastores' failures; chat keeps no deletion marker.
 //
 // Mutation: drop the deletion arm from WriterClass and every row goes red; ask
-// Condition before WriterSentence in toldOf again and the walk's sentence does.
+// Condition before WriterSentence in toldOf and the walk's sentence does.
 func TestAWriteAboutWhatADeletionKeepsDeletedIsNotFound(t *testing.T) {
 	t.Parallel()
 	deleted := &statelog.Unavailable{Reason: statelog.ReasonDeleted,

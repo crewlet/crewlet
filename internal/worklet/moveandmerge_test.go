@@ -11,13 +11,8 @@ import (
 )
 
 // A MOVE CARRIES ITS SUBTREE'S TAGS INTO THE TARGET, as its source declares
-// them, and leaves the target's own alone.
-//
-// The step took the tags from its caller, and every caller passed none — so it
-// never ran, and a moved task arrived in its new project carrying a label the
-// project had never declared: a grouping on the card that no filter in that
-// project offers. And had it run, it wrote the target's WHOLE set composed
-// from a read outside any snapshot.
+// them, and leaves the target's own alone: a moved task never carries a label
+// its new project does not declare, which no filter there would offer.
 func TestAMoveCarriesItsSubtreesTagsIntoTheTarget(t *testing.T) {
 	t.Parallel()
 	r := moveFixture(t, "m-kid")
@@ -61,10 +56,8 @@ func TestAMoveCarriesItsSubtreesTagsIntoTheTarget(t *testing.T) {
 	}
 }
 
-// A MOVE WAKES THE PEOPLE ON THE ROOT. Its step was published with no
-// notification, though the kind routes and falls back to a lead exactly as a
-// status change does — so a task could leave its project, change its key, and
-// nobody on it heard.
+// A MOVE WAKES THE PEOPLE ON THE ROOT: the kind routes and falls back to a
+// lead exactly as a status change does.
 func TestAMoveWakesThePeopleOnTheRoot(t *testing.T) {
 	t.Parallel()
 	r := moveFixture(t)
@@ -83,10 +76,9 @@ func TestAMoveWakesThePeopleOnTheRoot(t *testing.T) {
 }
 
 // A MERGE REFUSES TO CARRY SUBTASKS INTO ANOTHER PROJECT, before its first
-// append. A subtask under an item in another project is drawn under it on
+// append: a subtask under an item in another project is drawn under it on
 // neither board and sits in the attention queue as `inconsistent_project`,
-// which only a move of its root clears — and the docs told a reader to "move
-// it" when nothing could.
+// which only a move of its root clears.
 func TestAMergeRefusesToCarrySubtasksIntoAnotherProject(t *testing.T) {
 	t.Parallel()
 	r := moveFixture(t, "m-kid")
@@ -156,15 +148,10 @@ func TestAMergeWalkNeverCarriesASubtaskAcrossProjects(t *testing.T) {
 }
 
 // A MOVE WHOSE TAG CLASHES WITH THE TARGET'S IS REFUSED BEFORE ITS FIRST APPEND,
-// naming the clash — never half-made, and never a sentence nobody can act on.
-//
-// Two projects may each have a tag labelled "API" under different slugs, and a
-// subtree carrying ENG's cannot declare it in OPS without making two tags
-// nobody could tell apart. The refusal came from the declaration — the move's
-// first append — as a bare error the tool rendered as "the change was NOT
-// made". It is now a TagClash naming both tags, and the move itself is not
-// touched: no alias, no key, no mark. Declared in OPS under a label of its own,
-// the same move goes through.
+// as a TagClash naming both tags, and nothing of the move is made (no alias,
+// key or mark). Two projects may each label a tag "API" under different slugs,
+// and declaring ENG's in OPS would make two tags nobody could tell apart.
+// Declared in OPS under a label of its own, the same move goes through.
 func TestAMoveWhoseTagClashesWithTheTargetsIsRefusedNamingIt(t *testing.T) {
 	t.Parallel()
 	r := moveFixture(t, "m-kid")

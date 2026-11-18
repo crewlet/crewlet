@@ -266,6 +266,10 @@ type Result struct {
 	// `max_turns`). A worker is never extended, so it is also its ceiling.
 	MaxRounds int
 
+	// Exhausted is whether the worker spent its rounds still asking for
+	// tools ([toolloop.Result.ExhaustedRounds]).
+	Exhausted bool
+
 	// StartedAt is when the worker's clock started — the same instant
 	// Elapsed is measured from, so the two place it on a timeline exactly.
 	StartedAt time.Time

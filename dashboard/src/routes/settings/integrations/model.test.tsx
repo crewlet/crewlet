@@ -233,7 +233,8 @@ test("an advisory is a note, and a finding this build does not know un-readies i
       inputs({
         rows: rowsOf({ key: "github", configured: true, reconcile: { phase: "ready", findings } }),
         setup: new Map([["github", listing("github", { seats: [seat] })]]),
-        seatOf: (h) => (h === "cto" ? { name: "CTO", kind: "agent" } : undefined),
+        seatOf: (h) =>
+          h === "cto" ? { name: "CTO", kind: "agent", avatar: undefined } : undefined,
       }),
     );
 
@@ -452,7 +453,9 @@ test("an issue names its agents as the chart does, and keeps the rest as said", 
         },
       }),
       seatOf: (h) =>
-        h === "sre" ? { name: "Site Reliability Engineer", kind: "agent" } : undefined,
+        h === "sre"
+          ? { name: "Site Reliability Engineer", kind: "agent", avatar: undefined }
+          : undefined,
     }),
   );
   const issue = tool.issues[0]!;

@@ -99,6 +99,10 @@ func TestADecisionIsValidatedField(t *testing.T) {
 		{"a relative url", func(d *decision.Decision) {
 			d.Evidence = []decision.Evidence{{Kind: decision.EvidenceURL, Ref: "/doclet/pages/1"}}
 		}, "https://"},
+		{"an artifact by its address", func(d *decision.Decision) {
+			d.Evidence = []decision.Evidence{{Kind: decision.EvidenceArtifact,
+				Ref: "https://crewlet.example.com/dashboard#/artifacts/0f2a6c3e-6b1d-4e0a-9d6f-2b4c8a1e7f30"}}
+		}, "a lowercase uuid"},
 		{"no role", func(d *decision.Decision) { d.Role = "" }, "decision.role"},
 		{"an unknown role", func(d *decision.Decision) { d.Role = "owner" }, "decision.role"},
 		{"an unknown surface", func(d *decision.Decision) {
@@ -203,5 +207,25 @@ func fixture() *decision.Decision {
 		Recommended: "ship",
 		Rationale:   "The audit reviews last quarter's code.",
 		Role:        decision.RoleApprover,
+	}
+}
+
+// A QUESTION COMPOSED FROM UNBOUNDED NAMES IS THE MOST SPECIFIC PHRASING THAT
+// FITS, and the last where none does. Mutation: return the first phrasing
+// and the long one is refused at write.
+func TestAQuestionIsTheMostSpecificPhrasingThatFits(t *testing.T) {
+	t.Parallel()
+	long := "May " + strings.Repeat("x", decision.MaxQuestion) + " run it?"
+	for _, c := range []struct {
+		phrasings []string
+		want      string
+	}{
+		{[]string{"May cto run it?", "May this agent run it?"}, "May cto run it?"},
+		{[]string{long, "May this agent run it?"}, "May this agent run it?"},
+		{[]string{long, long + "!"}, long + "!"},
+	} {
+		if got := decision.FittingQuestion(c.phrasings...); got != c.want {
+			t.Errorf("FittingQuestion = %.40q, want %.40q", got, c.want)
+		}
 	}
 }

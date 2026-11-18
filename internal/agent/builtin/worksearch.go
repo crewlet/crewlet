@@ -13,34 +13,19 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// Finding a work item by what it SAYS.
+// Finding a work item by what it SAYS, descriptions included, which the
+// board's `text` (a substring of key or title) cannot see.
 //
-// # Why this is a verb of its own beside `list_work_items`
-//
-// The board's `text` argument is a substring of the key or the title, composed
-// into the board query with every other filter. It is the right thing for "the
-// item whose key I am half sure of", and it cannot see a description at all —
-// so the whole of what somebody wrote down about a piece of work was
-// unreachable from a seat, while the engine had been paying to embed every one
-// of those descriptions the entire time.
-//
-// The two are not one verb because they answer differently shaped questions. A
-// board narrows a list and keeps the board's own order; this ranks a corpus
-// and its answer IS the order. Folding ranking into the board would make the
-// sort argument mean two things depending on whether `text` was set, and
-// paging a ranked list through a keyset cursor over a board's sort is not a
-// thing that works.
-//
-// # And why it is not `search_knowledge`
-//
-// That seam is backend-neutral with Confluence behind it, and Confluence has
-// no work items. See worklet/search.go.
+// Not folded into `list_work_items`: a board narrows a list in its own order,
+// while this ranks and its answer IS the order, so `sort` would mean two things
+// and a keyset cursor cannot page a ranking. Not `search_knowledge` either:
+// that seam has Confluence behind it, which has no work items
+// (worklet/search.go).
 
 // WorkSearcher ranks work items by text, declared by the consumer.
 //
-// Nil on a build with no index — a company on Jira, or a node whose index has
-// not been wired — and the tool is then OMITTED rather than refusing at the
-// call, on [Register]'s own rule.
+// Nil with no index (a company on Jira, or an index not wired), and the tool is
+// then omitted rather than refusing, on [Register]'s rule.
 type WorkSearcher interface {
 	Search(ctx context.Context, q worklet.SearchQuery) (worklet.SearchAnswer, error)
 }
@@ -115,20 +100,17 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"about, in plain words."), nil
 	}
 	if knowledge.CheckQuery(text) != nil {
-		// REFUSED, NOT CUT, at the bound every ranked search shares
-		// ([knowledge.MaxQueryBytes]). The search behind this refuses it
-		// too, but as an error the model would read as the tracker
-		// failing; this says what to send instead.
+		// Refused, not cut, at [knowledge.MaxQueryBytes]: the search behind
+		// refuses it as an error a model reads as the tracker failing, and
+		// this says what to send instead.
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
 		return failed(fmt.Sprintf(SearchWorkItemsTool+"' `text` is %d bytes and takes at "+
 			"most %d — say what the work is about in a phrase, not the task or a "+
 			"pasted thread.", len(text), knowledge.MaxQueryBytes)), nil
 	}
-	// THE MODE IS AN ARGUMENT, hybrid when none is named, in the one
-	// vocabulary both of the engine's ranked searches share — the same three
-	// values `search_knowledge` and the dashboard's search take. A mode this
-	// build does not know is refused, naming the ones it does: falling back
-	// to the default would answer a different question from the one asked.
+	// The mode vocabulary is the one `search_knowledge` and the dashboard
+	// share. An unknown mode is refused, naming the known ones: falling back
+	// to the default would answer a different question.
 	mode, err := knowledge.ParseMode(argString(args, "mode"))
 	if err != nil {
 		return refusedBy(tools.RefusalInvalid, err, unknownMode(SearchWorkItemsTool,
@@ -139,9 +121,8 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	})
 	switch {
 	case errors.Is(err, worklet.ErrIndexBuilding):
-		// NOT AN EMPTY ANSWER. "There is nothing" is what a model acts
-		// on by filing a duplicate, and the honest answer while a node
-		// is still building its index is that it cannot say yet.
+		// Not an empty answer: a model acts on "there is nothing" by
+		// filing a duplicate, and a node still building cannot say yet.
 		return refusedBy(tools.RefusalUnavailable, waits(), "This node is still building "+
 			"its search index, so it cannot answer that yet — it says nothing "+
 			"about whether the work exists. Try again shortly, or narrow it "+
@@ -155,35 +136,29 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	out := map[string]any{"query": text, "matches": hits, "count": len(hits),
 		"mode": string(answer.ServedMode)}
-	// A RANKING OTHER THAN THE ONE ASKED FOR IS SAID, for the reason the
-	// coverage below is: a keyword answer read as a hybrid one is a seat
-	// concluding nothing describes the work it meant, and a semantic search
-	// that served nothing read as "no matches" is the same mistake with no
-	// rows at all. internal/knowledge's mode doc is the rule.
+	// A ranking other than the one asked for is said, or a seat reads a
+	// keyword or empty semantic answer as "nothing describes this"
+	// (internal/knowledge's mode doc).
 	if note := workDegradedNote(mode, answer.Outcome); note != "" {
 		out["degraded"] = note
 	}
 	if !answer.Coverage.Complete && answer.Coverage.BucketsMissing > 0 {
-		// SAID IN THE ANSWER, because the model is what decides what
-		// "no match" means, and a ranking over part of the corpus reads
-		// exactly like one over all of it.
+		// Said, because a ranking over part of the corpus reads exactly
+		// like one over all of it.
 		out["partial"] = "this search covered only part of the company's " +
 			"work — some of the fleet did not answer in time — so an item " +
 			"not listed here may still exist"
 	}
-	// EACH SNIPPET IS FENCED as the description it was cut from, exactly as
-	// get_work_item fences the item it opens (ADR-0040), and every other
-	// string — a title above all — neutralised: a ranked answer is a list of
-	// what other people wrote, read straight into the seat's context. The
-	// index keeps the opening of a description and not who wrote it, and
-	// only company principals write here, so it is a colleague's text with
-	// nobody named ([provenance.TrustForPartial]).
+	// Each snippet is fenced as the description it was cut from, as
+	// get_work_item fences it (ADR-0040). The index keeps no author and only
+	// company principals write here, so it is a colleague's text with nobody
+	// named ([provenance.TrustForPartial]).
 	read := newForeignRead(turn, actor.Handle)
 	for i, hit := range hits {
 		read.fence(fieldPath{}.key("matches").index(i).key("snippet"),
 			provenance.SourceWorkDescription, nil, true, hit.Snippet)
 	}
-	// AND EVERY TITLE IS A NAME nobody is recorded as writing.
+	// Every title is a name nobody is recorded as writing.
 	if len(hits) > 0 {
 		namesBy(read)
 	}

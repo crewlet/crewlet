@@ -21,46 +21,25 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// The person tools: one human's inbox, queue and pins.
+// The person tools: one human's inbox, queue and pins. A seat has none: it has
+// a mailbox (the durable subscription the engine attaches with the seat), and
+// nothing on a person's record describes it. They are the OPERATOR surface's,
+// where a person acts through their own credential.
 //
-// # Why a SEAT has none of these
-//
-// A seat is not a human. It has a mailbox rather than an inbox — the durable
-// subscription the engine attaches when it acquires the seat — and nothing on
-// a person's record describes it. These are the OPERATOR's, which is the one
-// surface where a person acts through their own credential.
-//
-// # The authority is the engine's, not this package's
-//
-// Every rule about who may write what lives in internal/worklet: the inbox and
-// the pins only on behalf of the person whose they are, the priorities also by
-// a LEAD for somebody in their line. What these tools add is the org lookup
-// the tracker deliberately does not do — this package has a chart and that one
-// does not.
-//
-// # A name is resolved to its RECORD before anything is decided about it
-//
-// Every person verb names whose record it is about, and every one resolves that
-// name through [WorkDeps.personRecord] — [iam.OwnerOf], the one function the
-// query surface reads a record under too — BEFORE it asks the table or touches
-// a row. The caller's own names are their own record; somebody else's LOGIN
-// is their holder's record, looked up in the identity directory; anything
-// else is the chart's. They used to be read literally, or sent through the
-// fuzzy colleague resolver: an administrator's `jane.doe`, for a person bound
-// to the seat `jane`, read an empty inbox and wrote marks where nothing of hers
-// reads them, and `set_priorities` set the queue of whichever seat the login
-// resembled. And the verb is asked on the RESOLVED record, because the lead
-// relation is a fact about a seat: decided on a login, a lead was refused the
-// report they lead.
+// Who may write what is internal/worklet's: inbox and pins only for their
+// owner, priorities also for a LEAD of that person; these tools add the org
+// lookup the tracker lacks. Every verb resolves its name to a RECORD through
+// [WorkDeps.personRecord] ([iam.OwnerOf], which the query surface reads under
+// too) BEFORE deciding anything, and asks the verb of that record: the lead
+// relation is about a seat, so decided on a login it refuses a lead their report.
 
 // PersonWriter is the tracker write side these tools need.
 //
-// GESTURES for the inbox and the pins, never the lists: each is resolved by
-// the tracker against the record its own decide reads, so a tool never sends
-// back a list it read — which is how one "mark this read" used to erase every
-// other mark. See [inbox.Gesture]. Every verb carries the authority the
-// table decided ([admittedWrite]), because the tracker keeps the one rule of
-// its own — an agent never re-orders a colleague's queue — and refuses a write
+// The inbox and pins take GESTURES, never lists: the tracker resolves each
+// against the record its own decide reads, so a tool never writes back a list
+// it read and erases marks made since ([inbox.Gesture]). Every verb carries the
+// authority the table decided ([admittedWrite]): the tracker keeps one rule of
+// its own (an agent never re-orders a colleague's queue) and refuses a write
 // nobody admitted.
 type PersonWriter interface {
 	MarkInbox(ctx context.Context, opID, handle string, seen statelog.Position,
@@ -175,48 +154,33 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	// YOUR OWN QUEUE IS NEVER LOOKED UP, and SOMEBODY ELSE'S LOGIN IS NEVER
-	// A SEAT. Your own — by omission or by either of your names — is the
-	// record your writes are made under; it was sent through the fuzzy
-	// colleague resolver like anybody else's, so an unbound `jane.doe`
-	// holding admin set the priorities of the seat `jane`. And
-	// the same happened to an administrator naming `jane.doe` for somebody
-	// else: the route admitted the request on that name and the resolver
-	// wrote into the seat it resembled. A login is the identity directory's
-	// to resolve, so only a name that is neither — a handle, a role, a
-	// display name, an address — reaches the chart.
-	//
-	// THE AUTHORITY IS ASKED ON WHAT THE NAME RESOLVES TO and not at the
-	// gate, because the ARGUMENT IS NOT THE OBJECT: decided on what a model
-	// typed, a lead who wrote their report's NAME was refused as leading
-	// nobody called that. [subjectOf] marks this verb `inTool` for exactly
-	// that reason, and [WorkDeps.personRecord] is the one relation decision
-	// the call gets.
+	// Your own queue is never looked up and somebody else's LOGIN is never a
+	// seat: your own (by omission or either name) is the record your writes
+	// are made under, and a login is the identity directory's to resolve. Only
+	// a name that is neither (handle, role, display name, address) reaches the
+	// chart, whose fuzzy resolver would turn a login into the seat it resembles.
+	// The authority is asked on what the name RESOLVES TO, not at the gate,
+	// because the argument is not the object: [subjectOf] marks this verb
+	// `inTool` for that, and [WorkDeps.personRecord] is the one decision.
 	handle, refusal := t.deps.personRecord(ctx, worklet.SetPrioritiesTool,
 		authz.ActionPrioritiesSet, argString(args, "handle"),
 		func(typed string) (string, string) {
-			// A TYPED NAME IS RESOLVED AGAINST THE CHART, because a
-			// typo here writes a whole PERSON RECORD for somebody who
-			// does not exist — a queue nobody will ever read, and a
-			// wake routed to a handle Route drops in silence.
+			// Resolved against the chart: a typo would write a whole
+			// person record nobody reads, with a wake Route drops.
 			return t.deps.resolveHandle(ctx, worklet.SetPrioritiesTool,
 				"`handle`", typed)
 		})
 	if refusal != nil {
 		return *refusal, nil
 	}
-	// AND THE GESTURE BAR IS THE TRACKER'S OWN, passed rather than
-	// decided: a seat that LEADS somebody is admitted by the table above
-	// and still may not re-order their queue, because that is a hand-off
-	// in disguise. See [worklet.PersonAuthority].
+	// The gesture bar is the tracker's, passed rather than decided: a seat
+	// that LEADS somebody is admitted above and still may not re-order their
+	// queue, a hand-off in disguise ([worklet.PersonAuthority]).
 	authority := admittedWrite(actor)
-	// EVERY ENTRY IS RESOLVED TO AN ID, because the list is stored as ids
-	// and read back by joining on them — and this tool's own description
-	// invites a key. An unresolved `ENG-42` failed in three places at
-	// once and reported nothing anywhere: the entry vanished from
-	// `my_work`, it vanished from `preset=priorities`, and the wake that
-	// tells the person their queue changed was silently suppressed —
-	// while the call answered `outcome: applied`.
+	// Every entry is resolved to an ID: the list is stored as ids and joined
+	// on them, and the description invites a key. An unresolved key vanishes
+	// from `my_work` and `preset=priorities` and suppresses the wake, while
+	// the call answers `applied`.
 	items := argStrings(args, "items")
 	resolved := make([]string, 0, len(items))
 	for _, ref := range items {
@@ -227,9 +191,8 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		resolved = append(resolved, id)
 	}
-	// THE VERSION THE CALLER READ, when it names one: an order is a
-	// statement about every entry at once, so a reorder made from an old
-	// screen would put back an order somebody has since replaced.
+	// An order is a statement about every entry at once, so a reorder from
+	// an old screen would put back an order somebody has since replaced.
 	var ifMatch *uint64
 	if _, given := args["if_match"]; given {
 		version := argInt(args, "if_match", -1)
@@ -244,9 +207,8 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	result, err := writer.WritePriorities(ctx, opID, handle, resolved, ifMatch,
 		authority)
 	if errors.Is(err, worklet.ErrStaleVersion) {
-		// THE LIST MOVED, and the remedy names the read that shows it —
-		// the generic sentence sends a caller to get_work_item, which
-		// knows nothing about a person's queue.
+		// The remedy names the read that shows the list: the generic one
+		// sends a caller to get_work_item, which knows no person's queue.
 		return refusedBy(tools.RefusalStaleVersion, err, fmt.Sprintf("%s was "+
 			"refused: %s. Nothing is wrong with your order — somebody "+
 			"changed this person's record after you read it. Call "+
@@ -503,38 +465,17 @@ func (d WorkDeps) writeInbox(ctx context.Context, actor Actor, writer PersonWrit
 }
 
 // MarkInboxFor and SetPinsFor write the inbox or the pins of the person a NAME
-// addresses — somebody else's, or the caller's own named by either of their
-// names — deciding the verb on the record the name resolves to.
+// addresses (somebody else's, or the caller's own by either name), deciding
+// the verb on the record the name resolves to.
 //
-// # Why these are not arguments on the tools
-//
-// `mark_inbox` and `set_pins` take no handle, and that is deliberate: a model
-// that could name whose inbox to mark could mark anybody's, and the only
-// caller with a legitimate reason to reach another person's record is an
-// administrator unsticking a departed person's queue — a person at a screen,
-// never a seat in a turn. So the TOOLS stay narrow, and the one surface that
-// serves that administrator (the HTTP write surface, `PUT
-// /worklet/people/{handle}/inbox` and `…/pins`) reaches the same parsing, the
-// same writer and the same receipt through here. Two copies of "read an inbox
-// mark out of a body" would drift on exactly the parts nobody re-reads: which
-// entries are dropped, what a bad reason is refused with.
-//
-// # Resolved, THEN decided, and never looked up in the chart
-//
-// The name goes through [WorkDeps.personRecord]: the caller's own names are
-// their own record, somebody else's login is their holder's record in the
-// identity directory, and anything else must be a seat the chart has EXACTLY
-// ([chartRecord]). The verb is asked on the record that resolves to — the
-// owner, or an admin — because it was decided on the path's name
-// before, and that name was not the record: an administrator naming a bound
-// person's login was admitted and the write landed under the login, where no
-// screen of theirs reads it. It used to go the other way too: the fuzzy
-// colleague resolver turned a login into the seat whose display name it
-// resembled, and wrote there.
-//
-// The tracker's own rule — a seat never writes a colleague's record — still
-// applies on top, so an authority marked Agent is refused there whatever the
-// table said.
+// The tools take no handle on purpose: a model that could name whose inbox to
+// mark could mark anybody's, and only an administrator at a screen unsticking a
+// departed person's queue needs another's record. That surface (`PUT
+// /worklet/people/{handle}/inbox` and `…/pins`) comes through here so parsing,
+// writer and receipt have no second copy to drift. The name goes through
+// [WorkDeps.personRecord], a seat matched EXACTLY against the chart
+// ([chartRecord]), never fuzzily; the tracker's own rule (a seat never writes
+// a colleague's record) still applies on top.
 func MarkInboxFor(ctx context.Context, deps WorkDeps, name string,
 	args map[string]any) tools.Result {
 
@@ -566,48 +507,18 @@ func SetPinsFor(ctx context.Context, deps WorkDeps, name string,
 	return deps.writePins(ctx, actor, writer, whose, args, admittedWrite(actor))
 }
 
-// personRecord is the record a person verb's NAME addresses, with the verb
-// decided on it — or the refusal the tool answers.
+// personRecord is the record a person verb's NAME addresses with the verb
+// decided on it, or the refusal. [iam.OwnerOf] resolves the name (the query
+// surface reads under it too); one it leaves unsettled goes to seat: as typed
+// for a read ([readAsNamed]), exactly against the chart for a route's path
+// ([chartRecord]), the colleague lookup for a model's ([WorkDeps.resolveHandle]).
 //
-// # Resolved first, by the one owner function
-//
-// [iam.OwnerOf] answers the name: the caller's own record for no name or
-// either of theirs, a login's holder's record through [WorkDeps.Holders], and
-// anything else handed back UNSETTLED for seat to resolve the way this verb
-// resolves a name — as typed for a read, exactly against the chart for a
-// write a route names by its path ([chartRecord]), through the colleague
-// lookup for one a model typed ([WorkDeps.resolveHandle]). The query surface reads a
-// person's record through the same function, so a record this writes is the
-// record a screen reads.
-//
-// # But the authority comes before the directory
-//
-// Somebody else's login is looked up only once [WorkDeps.mayLook] has let it
-// be: the verb decided on a record nobody has resolved yet. Admin passes, a
-// caller who could be admitted only as the lead of whoever holds the
-// login passes, and everybody else — a caller who leads nobody, and any
-// non-admin on a verb only a record's owner may take — is refused with the
-// very refusal they would get on somebody's seat they do not lead, before the
-// directory is asked anything. Asked after, what the directory said differed
-// by login: a login nobody holds was refused on the name as typed, and a held
-// one this node could not place answered 503 naming the seat it was bound to —
-// so a caller with no authority over anybody read which logins exist, and
-// whose seat each holds, off the difference.
-//
-// # Then decided, on what it resolved to
-//
-// The relation the table asks is about a SEAT, so it is asked of the record
-// and never of the spelling: a lead naming their report's login is admitted,
-// where decided on the login they led nobody.
-//
-// # And a login that names nobody discloses nothing
-//
-// A login nobody holds, and a holder whose seat the chart no longer has, are
-// decided on the name AS TYPED — which nobody leads, so only admin
-// passes — and only then refused as naming no record. A node that cannot say
-// is 503-shaped ([ErrUndecidable]) and says nothing either way: the
-// directory's own words go to the log, because they name the seat a login is
-// bound to and the answer goes to whoever asked.
+// Somebody else's login is looked up only once [WorkDeps.mayLook] admits it,
+// and the verb is decided again on the resolved SEAT, never the spelling. A
+// login naming no record is decided on the name as typed (only admin passes)
+// before it is refused as not found, and an undecidable node answers 503
+// ([ErrUndecidable]) with the detail only in the log: any other order lets a caller with no authority read
+// which logins exist, and whose seat each holds, off the difference.
 func (d WorkDeps) personRecord(ctx context.Context, tool string,
 	action authz.Action, name string,
 	seat func(string) (string, string)) (string, *tools.Result) {
@@ -619,8 +530,8 @@ func (d WorkDeps) personRecord(ctx context.Context, tool string,
 	var looked *iam.LookRefused
 	switch {
 	case errors.As(err, &looked):
-		// THE TABLE'S OWN REFUSAL, worded as every other one is — the
-		// same bytes this caller gets on a seat they do not lead.
+		// The table's own refusal: the bytes this caller gets on a seat
+		// they do not lead.
 		return "", refusalOf(authorityRefusal(string(action), looked.Err))
 	case errors.Is(err, iam.ErrNoHolder), errors.Is(err, iam.ErrHolderUnseated):
 		if denied := d.mayWrite(ctx, action,
@@ -628,8 +539,7 @@ func (d WorkDeps) personRecord(ctx context.Context, tool string,
 
 			return "", denied
 		}
-		// THE RECORD THE CALL IS ABOUT DOES NOT EXIST, which is the
-		// not-found class rather than an argument to change.
+		// No such record: the not-found class, not an argument to change.
 		return "", refusalOf(refusedBy(tools.RefusalNotFound, err, fmt.Sprintf(
 			"%s names %q, and there is no record of anybody's under it: %v.",
 			tool, clip(name), err)))
@@ -663,15 +573,11 @@ func (d WorkDeps) personRecord(ctx context.Context, tool string,
 }
 
 // mayLook is the authority a person verb decides BEFORE the identity directory
-// is asked whose record somebody else's login is — see [iam.MayLook] and
-// [authz.Object.Unresolved]: the same verb, through the same authorizer, asked
-// of a record nobody has resolved yet.
-//
-// [authz.ErrUnresolved] LETS THE LOOKUP HAPPEN and nothing more. It is the
-// answer for a caller who could be admitted only as the lead of whoever holds
-// the login, which is a question about the record — so the login is looked
-// up, and [WorkDeps.personRecord] decides the verb again on what it resolved
-// to. Every other answer is the caller's, and comes back as it is.
+// is asked whose record somebody else's login is ([iam.MayLook],
+// [authz.Object.Unresolved]). [authz.ErrUnresolved], the answer for a caller
+// who could be admitted only as the login holder's lead, lets the lookup
+// happen and nothing more: [WorkDeps.personRecord] decides the verb again on
+// the resolved record. Every other answer comes back as it is.
 func (d WorkDeps) mayLook(action authz.Action) iam.MayLook {
 	return func(ctx context.Context, login string) error {
 		if d.Authorize == nil {
@@ -687,28 +593,17 @@ func (d WorkDeps) mayLook(action authz.Action) iam.MayLook {
 	}
 }
 
-// readAsNamed is how a READ resolves a name [iam.OwnerOf] handed back
-// unsettled: as typed. A seat's handle reads that seat's record, and a name no
-// record is under reads the empty one a person starts with — the answer the
-// query surface gives the same question, so the tool and the screen cannot
-// disagree about somebody who has no record yet.
+// readAsNamed is how a READ resolves a name [iam.OwnerOf] left unsettled: as
+// typed, so a name with no record reads the empty one a person starts with,
+// as the query surface answers, and the tool and the screen agree.
 func readAsNamed(name string) (string, string) { return name, "" }
 
 // chartRecord is how a write a route names by its path resolves a name
-// [iam.OwnerOf] handed back unsettled: EXACTLY a seat the chart has, or
-// refused.
-//
-// # Never looked up
-//
-// The fuzzy colleague resolver is for words a model typed. A route's path is
-// a record's name, and resolving it turned it into whichever seat it
-// resembled — a write into a record nobody named.
-//
-// # But refused when nobody could own it
-//
-// What the resolver did guard against is a record under a name nobody has, so
-// a name that is not a seat handle's shape is refused, and so is a handle the
-// chart lacks. A nil or empty roster admits a well-formed handle, for
+// [iam.OwnerOf] left unsettled: EXACTLY a seat the chart has, or refused.
+// Never the fuzzy resolver, which is for a model's words and would write into
+// whichever seat a path resembled; but a name not shaped like a handle, or a
+// handle the chart lacks, is refused so no record lands under a name nobody
+// has. A nil or empty roster admits a well-formed handle, for
 // [WorkDeps.resolveHandle]'s reason.
 func (d WorkDeps) chartRecord(tool string) func(string) (string, string) {
 	return func(handle string) (string, string) {
@@ -735,14 +630,10 @@ func (d WorkDeps) chartRecord(tool string) func(string) (string, string) {
 }
 
 // admittedWrite is the authority a person verb passes the tracker once the
-// table has admitted it — [WorkDeps.personRecord]'s decision for a named
-// record, or the registration gate's for the caller's own.
-//
-// AUTHORIZED IS ALWAYS TRUE HERE and that is not a rubber stamp: nothing
-// reaches this without the table having answered for the record it names, and
-// [worklet.ownRecord] compares the actor to the handle before it ever reads
-// this. What the value carries that matters is the GESTURE bar, which is the
-// tracker's own and not the table's.
+// table has admitted it ([WorkDeps.personRecord] for a named record, the
+// registration gate for the caller's own). Authorized is always true because
+// nothing reaches here unadmitted, and [worklet.ownRecord] compares actor to
+// handle first; what matters is Agent, the tracker's own GESTURE bar.
 func admittedWrite(actor Actor) worklet.PersonAuthority {
 	return worklet.PersonAuthority{Authorized: true, Agent: !actor.Kind.Person()}
 }
@@ -783,16 +674,13 @@ func inboxGesture(args map[string]any) (inbox.Gesture[worklet.Reason], string) {
 	return gestureOf(args, worklet.Reasons, words.And(worklet.Reasons))
 }
 
-// gestureOf reads an inbox mark's arguments — `read`, `unread`, `unsnooze`,
-// `snooze`, `read_through` and `primary_reasons` — as one gesture over a
-// domain's reasons, or the sentence refusing them: ONE PARSER for every
-// domain's mark tool (mark_inbox, code_mark_inbox), so a schema they share
-// is read the one way and refused in the same words.
-//
-// PRESENCE, NOT VALUE, decides `primary_reasons`: an empty list is a choice —
-// the shipped default — and an absent one leaves the person's choice alone,
-// which a nil slice could not tell apart. reasons are the domain's, which a
-// declared reason must be one of, and list names them as one sentence.
+// gestureOf reads an inbox mark's arguments as one gesture over a domain's
+// reasons, or the sentence refusing them: ONE PARSER for every domain's mark
+// tool (mark_inbox, code_mark_inbox), so a shared schema is read and refused
+// the same way. PRESENCE decides `primary_reasons`, which a nil slice cannot:
+// an empty list takes the shipped default, an absent one leaves the person's
+// choice alone. reasons is the domain's set a declared reason must be in, and
+// list names it as one sentence.
 func gestureOf[R ~string](args map[string]any, reasons []R, list string) (inbox.Gesture[R], string) {
 	var g inbox.Gesture[R]
 	g.Read = argStrings(args, "read")
@@ -955,11 +843,9 @@ func favoriteChange(args map[string]any) (worklet.SetChange[worklet.Favorite], s
 	return change, ""
 }
 
-// InboxReader is the read side the inbox tool needs.
-//
-// DECLARED HERE, by the consumer, like every other seam in this tree — and
-// separately from [PersonReader] because they are different questions: one is
-// the person's own marks, the other is what the company asked of them.
+// InboxReader is the read side the inbox tool needs, apart from
+// [PersonReader]: that is the person's own marks, this what the company asked
+// of them.
 type InboxReader interface {
 	Inbox(ctx context.Context, q worklet.InboxQuery, now time.Time) (
 		worklet.InboxAnswer, error)
@@ -1085,12 +971,9 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 	if err != nil {
 		return readFailure(ctx, worklet.WorkInboxTool, err), nil
 	}
-	// EACH NOTICE'S TEXT IS ITS CHANGE'S MAKER'S WORDS, fenced under them as
-	// the activity feed fences the same change (ADR-0040); an ask's decision
-	// is a name the notice records no writer of.
-	//
-	// READ AS THE CALLER, so a notice of their own change is their own words:
-	// the operator surface's actor, the person or credential asking.
+	// Each notice's text is its change's maker's words, fenced as the activity
+	// feed fences that change (ADR-0040); an ask's decision is a name with no
+	// recorded writer. Read as the caller, so their own change is their words.
 	self := ""
 	if actor, err := t.deps.actor(ctx, nil); err == nil {
 		self = actor.Handle
@@ -1108,8 +991,8 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 		"Ask for fewer with `limit`, or narrow with `reasons` or `since`.")
 }
 
-// snoozeScopeNames is the three scopes, derived from the inbox's own list so
-// a scope added there is offered here without a copy to keep in step.
+// snoozeScopeNames is the scopes, derived from [inbox.SnoozeScopes] so a new
+// one needs no copy here.
 func snoozeScopeNames() []string {
 	out := make([]string, 0, len(inbox.SnoozeScopes))
 	for _, scope := range inbox.SnoozeScopes {

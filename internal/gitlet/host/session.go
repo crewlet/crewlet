@@ -18,48 +18,43 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// PROC-RECEIVE, THE ENGINE'S SIDE: what a push's hook is served once it has
-// named its session — git's ref updates and the push's options read off the
-// hook, handed to the one landing every push takes (land.go), and git told
-// what landed, and what became of the change the options asked for
-// (change.go). Everything here is the RELAY's — the protocol, the keepalive,
-// the report — and what a push IS once receive-pack has written its pack is
-// the landing's.
+// PROC-RECEIVE, THE ENGINE'S SIDE: a named session's ref updates and push
+// options are read off the hook, handed to the one landing (land.go), and git
+// is told what landed and what became of the asked-for change (change.go).
+// Only the protocol, the keepalive and the report are the RELAY's; what a
+// push IS once receive-pack wrote its pack is the landing's.
 
 // session is one push's hook session: the relay's own state, and what the
 // receive handler hands the landing.
 type session struct {
 	token string
-	// ctx is the request's work context, cancel ends it — what a receive-pack
-	// that ended, and a stopping host, end the session's work with.
+	// ctx is the request's work context; cancel ends it, as an ended
+	// receive-pack or a stopping host does.
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	// synced is the incarnation the push's sync pinned — its Repo the
-	// linearizable row the push is judged on — and scratch the repository
-	// its receive-pack runs in, leaning on it.
+	// synced is the incarnation the push's sync pinned (its Repo the
+	// linearizable row the push is judged on), and scratch the repository its
+	// receive-pack runs in, leaning on it.
 	synced     cache.Synced
 	scratch    *cache.Scratch
 	pushID     string
 	principal  gitlet.Principal
 	receivedAt time.Time
 	// adm is the push's admission: its grant, judged again on a command the
-	// landing finds forced (landing.ForcedGrant), and — for a coding box —
-	// the run whose floor an applied push raises before `ok` is written
-	// (raiseFloor).
+	// landing finds forced (landing.ForcedGrant), and a coding box's run,
+	// whose floor an applied push raises before `ok` (raiseFloor).
 	adm admission
 	// preRefused is what the receive handler refused before receive-pack
 	// ran, by ref.
 	preRefused map[string]answered
 	// judged is every command the handler asked synced.Repo's protections
-	// about — with Forced unknown, so false — as it asked
-	// (protectAfterForce).
+	// about, as asked: Forced unknown, so false (protectAfterForce).
 	judged map[judgedKey]bool
 
-	// indexed is the receive-pack's Cmd.Indexed: closed when the hook first
-	// reaches the relay, which receive-pack starts only once its index-pack
-	// has exited — so the cores it was lent are repaid before the upload and
-	// the record wait (gitproc.MaxLentCores).
+	// indexed is the receive-pack's Cmd.Indexed, closed when the hook first
+	// reaches the relay (only after index-pack exits), so its lent cores are
+	// repaid before the upload and the record wait (gitproc.MaxLentCores).
 	indexed     chan struct{}
 	indexedOnce sync.Once
 
@@ -127,19 +122,17 @@ func (sess *session) outcome() pushResult {
 // not what git sends.
 var errProtocol = errors.New("host: git handed the hook a command it cannot read")
 
-// serveSession is one push's session, on its hook's connection: git's version
-// block and commands read, the handler's own refusals folded into them, the
-// push landed (land) and git told what landed. Every step's failure ends it
-// with a sentence on the hook's stderr and exit 1 — git then fails every ref
-// of the push — and the push recorded failed.
+// serveSession is one push's session on its hook's connection: git's version
+// block and commands read, the handler's refusals folded in, the push landed
+// (land) and git told what landed. A failed step ends it with a sentence on
+// the hook's stderr and exit 1, so git fails every ref, and the push recorded
+// failed.
 //
-// Its log line says WHOSE step failed, since the two send an operator to
-// different places: code_hook_protocol is the RELAY's — git's version block or
-// commands not what git sends, before anything is stored — and
-// code_push_unchecked the push's own work, a landing that could not finish (a
-// git process over the push's objects failing or past its deadline on this
-// node, its pack unreadable), after which a bundle may already be stored and
-// named by no row, which the object collector removes after its grace.
+// Its log line says WHOSE step failed, as each sends an operator elsewhere:
+// code_hook_protocol is the RELAY's (git spoke wrongly, nothing stored);
+// code_push_unchecked the landing's (a git process failed or overran, a pack
+// unreadable), which may leave a bundle no row names, removed by the object
+// collector after its grace.
 func (s *Server) serveSession(sess *session, br *bufio.Reader, fw *frameWriter) {
 	sess.reachedRelay()
 	ctx := sess.ctx
@@ -154,9 +147,8 @@ func (s *Server) serveSession(sess *session, br *bufio.Reader, fw *frameWriter) 
 		end(words)
 	}
 	// unchecked is the push's own work ended with no outcome: at DEBUG when
-	// the push's request ended under it — its client gone, the host stopping,
-	// receive-pack ended — which the handler logs for what it was
-	// (code_git_abandoned, code_push_failed), so a client that hangs up mid
+	// its request ended under it, which the handler logs for what it was
+	// (code_git_abandoned, code_push_failed), so a client hanging up mid
 	// check is no WARN.
 	unchecked := func(words string, err error) {
 		attrs := []any{"repo", sess.synced.Repo.Name, "push_id", sess.pushID, "words", words, "error", err}
@@ -184,8 +176,8 @@ func (s *Server) serveSession(sess *session, br *bufio.Reader, fw *frameWriter) 
 		protocol("git handed the hook a command it cannot read", err)
 		return
 	}
-	// THE PUSH'S OPTIONS, which git sends after the commands only because
-	// the relay answered its version block that it reads them.
+	// THE PUSH'S OPTIONS come after the commands only because the relay's
+	// version block answer said it reads them.
 	var options []string
 	if features.pushOptions {
 		if options, err = readHookPushOptions(br); err != nil {
@@ -200,8 +192,8 @@ func (s *Server) serveSession(sess *session, br *bufio.Reader, fw *frameWriter) 
 	}
 	// A CODING BOX COMMITS NOTHING AS THE ENGINE that the repository does not
 	// already hold: the address is read off the epoch now, as the engine's
-	// own writes are signed, so a revision that moves the identity domain
-	// holds a box to the new one from its activation.
+	// own writes are signed, so a moved identity domain binds a box from its
+	// activation.
 	committer, err := sess.adm.engineCommitter(s.o.Signer)
 	if err != nil {
 		unchecked("the engine could not name the committer its own commits carry, which a coding box's "+
@@ -224,11 +216,10 @@ func (s *Server) serveSession(sess *session, br *bufio.Reader, fw *frameWriter) 
 	}
 	stop()
 	sess.conclude(ld.Result)
-	// A CODING BOX'S APPLIED PUSH RAISES ITS RUN'S FLOOR to the push's row
-	// before `ok` is written, so whatever node the box reads next holds what
-	// it pushed. A raise that fails answers `ok` all the same: the push is
-	// durable, and what the box may then read behind is its own push, whose
-	// objects it holds.
+	// A CODING BOX'S APPLIED PUSH RAISES ITS RUN'S FLOOR before `ok`, so any
+	// node the box reads next holds what it pushed. A failed raise still
+	// answers `ok`: the push is durable, and the box can only read behind its
+	// own push, whose objects it holds.
 	if ld.Result.outcome == types.AuditApplied {
 		if rerr := s.raiseFloor(ctx, sess.adm, ld.Result.position); rerr != nil {
 			s.log.Warn("code_box_floor_unraised", "repo", sess.synced.Repo.Name, "push_id", sess.pushID,
@@ -257,19 +248,16 @@ func (s *Server) serveSession(sess *session, br *bufio.Reader, fw *frameWriter) 
 	_ = fw.write(frameExit, []byte{0})
 }
 
-// procFeatures are the features of git's proc-receive version block the relay
-// answers: --atomic, which the report must agree with, and push-options —
-// offered only for a push that sent options — which the relay answers it
-// reads, so git sends them after the commands, and only then.
+// procFeatures are the proc-receive features the relay answers: --atomic,
+// which the report must agree with, and push-options (offered only for a push
+// that sent options), which makes git send them after the commands.
 type procFeatures struct{ atomic, pushOptions bool }
 
-// versionBlock reads git's version block — pkt-lines to a flush, the first
-// `version=1` with its NUL-separated features — and answers `version=1` with
-// push-options where git offered them (so git hands the hook the push's
-// options after its commands, readHookPushOptions) and no feature otherwise:
-// the protocol's negotiation, in which the hook answers what it reads of what
-// git offered. It reports both features, the options the ones the relay must
-// read now that it said it would.
+// versionBlock reads git's version block (pkt-lines to a flush, the first
+// `version=1` with NUL-separated features) and answers `version=1` with
+// push-options where git offered them, so git hands over the options after
+// the commands (readHookPushOptions), and no feature otherwise. It reports
+// both features; the relay must then read the options it said it would.
 func (s *Server) versionBlock(br *bufio.Reader, fw *frameWriter) (procFeatures, error) {
 	var f procFeatures
 	first := true
@@ -307,14 +295,12 @@ func (s *Server) versionBlock(br *bufio.Reader, fw *frameWriter) (procFeatures, 
 }
 
 // readHookPushOptions reads the push options git hands the hook after the
-// commands — one pkt-line each, to a flush, sent because the relay answered
-// git's version block that it reads them (versionBlock). They are
-// AUTHORITATIVE as the commands are: what receive-pack read from the client
-// and accepted, which the client's own bytes beside it are not — a special
-// packet among them is a protocol violation, and each option is its line, its
-// one trailing line feed dropped as git's packet reader drops it. How many and
-// how long the handler held before receive-pack read any (readCommands), so
-// they are nothing a push could not already make the receiver hold.
+// commands, one pkt-line each to a flush (versionBlock). Like the commands
+// they are AUTHORITATIVE, what receive-pack accepted, unlike the client's own
+// bytes: a special packet among them is a protocol violation, and each option
+// is its line less one trailing line feed, as git's packet reader drops it.
+// The handler already held as many, as long, before receive-pack read any
+// (readCommands), so they make the receiver hold nothing new.
 func readHookPushOptions(br *bufio.Reader) ([]string, error) {
 	var options []string
 	for {
@@ -332,10 +318,10 @@ func readHookPushOptions(br *bufio.Reader) ([]string, error) {
 	}
 }
 
-// readHookCommands reads git's `<old> <new> <ref>` lines to a flush. These are
-// AUTHORITATIVE — what git received and accepted; commands git refused itself
-// never reach the hook. A line that does not parse, or more than
-// gitlet.MaxCommandsPerPush of them, is a protocol violation.
+// readHookCommands reads git's `<old> <new> <ref>` lines to a flush. They are
+// AUTHORITATIVE, what git accepted; commands git refused never reach the hook.
+// A line that does not parse, or more than gitlet.MaxCommandsPerPush, is a
+// protocol violation.
 func readHookCommands(br *bufio.Reader) ([]gitlet.Command, error) {
 	var cmds []gitlet.Command
 	for {
@@ -361,11 +347,10 @@ func readHookCommands(br *bufio.Reader) ([]gitlet.Command, error) {
 }
 
 // keepalive writes the session's step on the hook's stderr every
-// Timing.Keepalive after the first, until the stop it answers is called:
-// without side-band git keeps no connection alive while the hook is silent, and
-// the engine's line on receive-pack's stderr is then what feeds the stall
-// watchdog; with side-band git keeps it alive itself, and the line is for the
-// person watching. `\r`, so a terminal redraws one line.
+// Timing.Keepalive until its stop is called: without side-band git keeps
+// nothing alive while the hook is silent, so this line feeds the stall
+// watchdog; with side-band it is for the person watching. `\r`, so a terminal
+// redraws one line.
 func (s *Server) keepalive(sess *session, fw *frameWriter) (stop func()) {
 	done := make(chan struct{})
 	ended := make(chan struct{})

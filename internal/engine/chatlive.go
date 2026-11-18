@@ -7,51 +7,36 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
-// ChatLive is what the process attaches for the engine's own chat's live half:
-// where a committed chat batch is announced to the sockets this node serves,
-// and the poster a Chatlet seat's working indicator is raised on.
+// ChatLive is the engine's own chat's live half: where a committed chat batch
+// is announced to this node's sockets, and the poster a Chatlet seat's working
+// indicator is raised on. The api's chat hub implements it.
 //
-// ONE VALUE FOR BOTH HALVES, because both are one hub: the room a person is
-// watching is where a committed message is pushed AND where "is thinking…"
-// appears, and the hub's presence answer is how a screen on another node sees
-// an indicator raised here. Two attachments could be handed two hubs, and then
-// a seat's indicator is recorded in one that no presence answer reads.
-//
-// ATTACHED ON EVERY NODE, sockets or none: a seat raises its indicator on the
-// node its turn runs on, and a node without the `ingress` role, or with no
-// listener, runs turns too. So an attached hub is not by itself a node with
-// screens to tell, which is why [ChatLive.ServesSockets] is asked.
-//
-// DECLARED HERE, by the consumer, and kept to what the engine calls. The api's
-// chat hub implements it.
+// ONE VALUE FOR BOTH HALVES, because both are one hub: its presence answer is
+// how a screen on another node sees an indicator raised here, so two hubs
+// would record an indicator in one no presence answer reads. ATTACHED ON EVERY
+// NODE, sockets or none, because any node runs turns; so an attached hub is
+// not by itself screens to tell, which is [ChatLive.ServesSockets].
 type ChatLive interface {
-	// Applied hears every committed chat batch this node's sockets are to be
-	// shown ([chatlet.Observer]) — its own applier's while its copy serves, a
-	// sound peer's, relayed, while it does not (liverelay.go). It is called
-	// on that applier's goroutine, or the relay follower's, with the next
-	// batch waiting behind it, so it must not block.
+	// Applied hears every committed chat batch this node's sockets are shown
+	// ([chatlet.Observer]): its own applier's while its copy serves, else a
+	// sound peer's, relayed (liverelay.go). It runs on that applier's or the
+	// relay follower's goroutine with the next batch behind it: never block.
 	chatlet.Observer
 
-	// Reread tells every chat screen on this node that the batches Applied
-	// hears have a GAP — its sockets switched from this node's own applier
-	// to a relayed peer's, back, or from one peer to another — and what was
-	// committed in between is not replayed: a screen reads its rooms again.
-	// It must not block either.
+	// Reread tells every chat screen on this node that what Applied hears has
+	// a GAP (its source switched between its own applier and a relayed peer,
+	// or between peers) and nothing in between is replayed: a screen rereads
+	// its rooms. It must not block.
 	Reread()
 
 	// ServesSockets reports whether this node shows anybody what Applied
-	// hears: true where the API's socket surface is built over this hub,
-	// whether or not a screen is open right now, and false on a node that
-	// serves no API and attached its hub for the working indicator alone.
-	// A FACT ABOUT THE NODE rather than about who is looking, as the inbox's
-	// listener is one the API registers wherever it serves: a count of open
-	// screens would let the first screen of a node out of service hear its
-	// own applier until the relay's follower next looked.
-	//
-	// The live relay's follower reads it ([Engine.liveListening]): on a node
-	// that answers false, a peer's batches have nowhere to go, and following
-	// them would be a loop asking a peer every few seconds for batches it
-	// hands to nobody, reported as relaying. It must not block.
+	// hears: true where the API's socket surface is built over this hub, open
+	// screens or not; false on a node that attached it for the working
+	// indicator alone. A FACT ABOUT THE NODE, not a count of open screens,
+	// which would let the first screen of a node out of service hear its own
+	// applier until the relay's follower next looked. [Engine.liveListening] reads it: on a node
+	// answering false, following a peer's batches is a loop handing them to
+	// nobody, reported as relaying. It must not block.
 	ServesSockets() bool
 
 	// StatusPoster is where a Chatlet seat's working indicator is raised —
@@ -60,24 +45,18 @@ type ChatLive interface {
 	notify.StatusPoster
 }
 
-// SetChatLive attaches the chat live half — the api's hub — to this engine.
+// SetChatLive attaches the chat live half (the api's hub); nil detaches, and
+// it is safe to call while running or to leave unset.
 //
-// A SETTER AND NOT AN OPTION, for [Engine.SetOnInboxMoved]'s reason: the API
-// half is built after the engine. The chat applier is handed the engine's own
-// hook at construction ([applyHooks].chatApplied) and the hook reads what is
-// attached at CALL time, so the applier may already be applying when the hub
-// arrives and nothing has to be rebuilt; before it, a committed batch is
-// announced to nobody, which is what a screen nobody has opened needs. Safe to
-// call while the engine is running, and safe to leave unset; nil detaches.
+// A SETTER, NOT AN OPTION, for [Engine.SetOnInboxMoved]'s reason: the API is
+// built after the engine. The applier's hook ([applyHooks].chatApplied) reads
+// what is attached at CALL time, so nothing is rebuilt. It does rebuild the
+// working indicator, which no hook reaches: [New] ran
+// [Engine.startNotifications] before the hub existed, and a replaced or
+// detached hub takes its driver with it.
 //
-// AND IT REBUILDS THE WORKING INDICATOR, which is the half no hook reaches:
-// [New] ran [Engine.startNotifications] before the hub existed, so the boot
-// company has no Chatlet driver until one is built over what arrives here —
-// and a hub replaced or detached takes its driver with it.
-//
-// START THE HUB BEFORE ATTACHING IT: what is attached is called on the
-// applier's goroutine, and a hub whose own loop is not running is a buffer that
-// fills during a catch-up.
+// START THE HUB BEFORE ATTACHING IT: it is called on the applier's goroutine,
+// and a hub whose loop is not running is a buffer that fills during a catch-up.
 func (e *Engine) SetChatLive(ctx context.Context, live ChatLive) {
 	e.chatLive.Store(&live)
 	e.applyChatStatus(ctx, e.Company())

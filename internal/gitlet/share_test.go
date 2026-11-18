@@ -13,23 +13,14 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// SEAT GIT WORK IS HALF THE READ LANE. A node's seats together hold at most
-// ShareOf its read lane's slots — half, at least one — because the other half
-// is what a person's push scans, a sync round's peel and a fetch's want check
-// wait in, FIFO, for at most gitproc.SlotWait: sized to the lane, a burst of
-// seat reads would refuse a person's push busy. Over four read slots two units
-// are held, a third taker waits, and past GitShareWait (scaled here) it is
-// answered unready — about the node, so the asker's walk moves on — rather
-// than queued longer; a unit given back is taken by the waiter; and however
-// many takers race, never more than two run at once. Every take is timed by
-// its outcome — the one that ran out its whole wait, which is a term of the
-// attempt its asker was given — and the gauge follows what is held.
-//
-// In a bubble, so the race is decided rather than sampled: the bubble's clock
-// moves only once every taker is parked, on the share or in its hold, so every
-// taker the share admits has counted itself running before any hold ends —
-// one admitted past the share is seen beside the others however the runner
-// schedules them — and the wait a third taker runs out is the bubble's 50 ms.
+// SEAT GIT WORK IS HALF THE READ LANE (ShareOf, at least one), so a burst of
+// seat reads never refuses a person's push busy. Over four slots two units are
+// held; a third taker past GitShareWait (scaled) is unready, about the node,
+// rather than queued; a released unit is the waiter's; racing takers never
+// exceed two; every take is timed by outcome, and the gauge follows what is held.
+// In a bubble the race is decided, not sampled: the clock moves only once every
+// taker is parked, so one admitted past the share is seen beside the others,
+// and the third taker's wait is exactly the bubble's 50 ms.
 //
 // Mutation: ShareOf answering the whole lane — four in flight, red. An
 // unready take recorded as no wait — red. A taker admitted without a unit
@@ -199,13 +190,11 @@ func TestAWritesBuildDrawsOnTheSeatShare(t *testing.T) {
 	}
 }
 
-// THE ENGINE'S OWN READS ARE COUNTED APART FROM THE SEATS': a revision's
-// facts and a commit's checks file, which a repository's home reads, and a
-// read made for a check take their unit as `work=engine`, and every other
-// read as a seat's (`work=read`) — and the engine's unit is one of the SAME
-// share, so a seat's read beside it waits as beside another seat's. Counted
-// as a seat's read, a home's background facts reads holding a small node's
-// one unit read to an operator as the seats' own load.
+// THE ENGINE'S OWN READS ARE COUNTED APART FROM THE SEATS': a home's revision
+// facts and checks file, and a read made for a check, take their unit as
+// `work=engine`, every other read as `work=read` — of the SAME share, so a
+// seat's read beside one waits as beside another seat's. Counted as seats',
+// a home's background reads would show an operator as the seats' own load.
 //
 // Mutation: SeatWork answering read for every query — the facts read counts
 // work=read, red.

@@ -28,7 +28,7 @@ const (
 // declined, removed, lapses or is refused by the provisioner's catalogue.
 //
 // NEVER A CREDENTIAL AND NEVER THE AGENT'S WORDS: the grant is named by its
-// permission and scope, and why it was asked for stays on the grant itself.
+// permission, scope and target, and why it was asked for stays on the grant.
 type SeatGrantChanged struct {
 	// Integration is the account's integration and Lane the block the grant
 	// lives in.
@@ -59,12 +59,14 @@ type SeatGrantChanged struct {
 	At time.Time `json:"at"`
 }
 
-// GrantSetting is one grant in the vendor's terms.
+// GrantSetting is one grant in the vendor's terms, with what the one change it
+// was asked for changes, where it was.
 type GrantSetting struct {
 	ID         string    `json:"id,omitempty"`
 	Permission string    `json:"permission"`
 	Scope      []string  `json:"scope,omitempty"`
 	ExpiresAt  time.Time `json:"expires_at,omitzero"`
+	Target     string    `json:"target,omitempty"`
 }
 
 // EventType is the "seat_grant_changed" wire type.

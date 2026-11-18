@@ -32,24 +32,17 @@ func recordedRows(t *testing.T, r coord.NodeStatusRecord) coord.NodeStatusRecord
 }
 
 // A NODE'S MCP, MODEL AND RUNNER ROWS AND WHAT IT RUNS ON LEAVE ITS PRESENCE
-// LEASE FOR ITS STATUS RECORD. The presence a started node writes carries its
-// placement half and its live core and nothing a company's configuration can
-// grow: no `mcp`, `models` or `runners` in its status and no `infra` beside
-// it. Its record, written by its own writer at its presence's epoch, carries
-// them: a row per model entry the company declares, and the infra summary its
-// file gives.
+// LEASE FOR ITS STATUS RECORD. The presence carries its placement half and
+// live core, nothing a company's configuration can grow: no `mcp`, `models` or
+// `runners` in its status and no `infra` beside it. The record, written by the
+// node's own writer at its presence's epoch, carries a row per declared model
+// entry and the infra summary its file gives.
 //
-// AND THE ENGINE RUNS THAT WRITER: the host's claim of the presence wakes it
-// ([Engine.statusRecordClaimed]) and its own loop writes the record, which the
-// case waits for rather than driving a pass; and a clean stop removes it,
-// which the case reads off the backends it lent the engine, still open after
-// the stop. TestTheStatusRecordFollowsChangesAndOutlivesNoReconcile holds the
-// loop's schedule on a bubble's clock.
-//
-// Red on main: the presence's status carried `models` and `runners`, and the
-// presence carried `infra`. Mutations: start no loop (no record is ever
-// written), wire no claim hook (the claim wakes nothing), or remove nothing at
-// the stop (the record outlives it).
+// AND THE ENGINE RUNS THAT WRITER: the presence's claim wakes it
+// ([Engine.statusRecordClaimed]), its own loop writes the record (the case
+// waits for it rather than driving a pass), and a clean stop removes it.
+// TestTheStatusRecordFollowsChangesAndOutlivesNoReconcile holds the schedule. Mutations: start no loop, wire no claim hook, or
+// remove nothing at the stop.
 func TestANodesStatusRowsLeaveItsPresenceLease(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
@@ -186,26 +179,18 @@ func (w *writes) made() ([]time.Time, []coord.NodeStatusRecord) {
 	return slices.Clone(w.at), slices.Clone(w.got)
 }
 
-// A NODE'S STATUS RECORD FOLLOWS WHAT IT SAYS, AND NEVER AGES OUT WHILE IT LIVES.
+// A NODE'S STATUS RECORD FOLLOWS WHAT IT SAYS, AND NEVER AGES OUT WHILE IT
+// LIVES. On a bubble's clock, at the floor lease's renew period (4 s):
+//   - a change other than a model's last answer is written within a period;
+//   - a last answer alone waits for the reconcile;
+//   - the record is rewritten at least every [coord.ReconcileInterval], so no
+//     gap passes the bucket's age, [coord.StatusFreshness];
+//   - a new presence epoch is written on the pass that sees it, at once on a
+//     claim; a node holding no presence writes nothing;
+//   - a refused write is made again on the next pass; a clean stop removes it.
 //
-// On a bubble's clock, at the floor lease's renew period (4 s):
-//   - a change other than a model's last answer is written within a renew
-//     period;
-//   - a change to a last answer alone is not written on its own, only with the
-//     reconcile;
-//   - the record is rewritten at least every [coord.ReconcileInterval] however
-//     little moves, so over a minute of nothing moving no gap between writes
-//     passes it, and so none passes the bucket's age, [coord.StatusFreshness];
-//   - a new presence epoch is written on the pass that sees it, whatever the
-//     reconcile's schedule, and at once where a claim wakes the loop; a node
-//     holding no presence writes nothing;
-//   - a write the store refused is made again on the next pass;
-//   - a clean stop removes the record.
-//
-// Mutations: skip the reconcile rewrite (the record ages out: the longest gap
-// passes the age), compare the last answer too (the last-answer arm writes),
-// drop the epoch from the fingerprint (the new epoch waits for the reconcile),
-// or let a claim wake nothing (the claim's epoch waits for the next tick).
+// Mutations: skip the reconcile rewrite, compare the last answer too, drop the
+// epoch from the fingerprint, or let a claim wake nothing.
 func TestTheStatusRecordFollowsChangesAndOutlivesNoReconcile(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -377,11 +362,10 @@ func TestTheStatusRecordFollowsChangesAndOutlivesNoReconcile(t *testing.T) {
 	})
 }
 
-// A PEER'S SIT-OUT IS READ OFF ITS STATUS RECORD, AT ITS PRESENCE'S EPOCH.
-// Before this node retries a model, it asks whether any live node sits it out
-// ([Engine.fleetSitsOut]): a peer's record saying so holds the retry, and a
-// record the peer's earlier incarnation left — its presence since claimed
-// again — holds nothing, since the process that met the limit is gone.
+// A PEER'S SIT-OUT IS READ OFF ITS STATUS RECORD, AT ITS PRESENCE'S EPOCH
+// ([Engine.fleetSitsOut]): a live peer's record holds this node's retry of a
+// model, and one its earlier incarnation left holds nothing, since the
+// process that met the limit is gone.
 //
 // Mutation: read the records without the presence join, and the stale record
 // holds the retry.

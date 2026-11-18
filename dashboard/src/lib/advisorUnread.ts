@@ -11,7 +11,11 @@ const UNREAD_WORDS: Readonly<Record<string, string>> = {
     "The agents' turns couldn't be read, so the patterns the engine finds in them are missing.",
   pauses:
     "The agents' pauses couldn't be read, so an agent the engine paused for a failure may be missing.",
-  runs: "The week's failed runs couldn't all be read, so a sandbox that ran out of memory may be missing.",
+  runs: "The week's failed runs couldn't all be read, so a sandbox that ran out of memory or runs that ended on their round cap may be missing.",
+  budget_stops:
+    "The week's budget stops couldn't be read, so an agent its budget stopped may be missing.",
+  merges:
+    "The week's merge decisions couldn't be read, so a repository whose merges wait for want of CI may be missing.",
   atlas: "The atlas couldn't be read, so what in it needs a person is missing.",
   atlas_sources:
     "The atlas's sources couldn't be read, so one that stopped reading may be missing.",
@@ -26,6 +30,8 @@ const UNREAD_NAMES: Readonly<Record<string, string>> = {
   ledger: "the agents' turns",
   pauses: "the agents' pauses",
   runs: "the week's failed runs",
+  budget_stops: "the week's budget stops",
+  merges: "the week's merge decisions",
   atlas: "the atlas",
   atlas_sources: "the atlas's sources",
   alarms: "the engine's alarms",

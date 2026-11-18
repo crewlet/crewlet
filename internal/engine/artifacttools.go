@@ -20,27 +20,25 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE ARTIFACTS TOOLS' ENGINE WIRING: the same deps for a seat's registry and
-// for the operator catalogue, over the artifacts estate through the router (a
-// node without `data` acts through a data node), the node's one publish
-// pipeline, the running chart, the identity directory for whoever a turn is
-// acting for, and the executor's box a publish reads.
+// THE ARTIFACTS TOOLS' ENGINE WIRING: one set of deps for a seat's registry and
+// the operator catalogue, over the artifacts estate through the router, the
+// node's one publish pipeline, the chart, the identity directory and the
+// executor's box a publish reads.
 
 // ArtifactToolDeps are the artifacts tools' dependencies on this node, or the
-// zero value (which serves none of them) where the node takes no artifact
-// uploads: it runs no object store, no coordination store or no router.
+// zero value (serving none) where the node takes no artifact uploads: no object
+// store, coordination store or router.
 //
-// EXPORTED for the operator surface, which builds its catalogue outside this
-// package; a seat's registry takes the same value at every apply ([equip]).
+// EXPORTED for the operator surface's catalogue; a seat's registry takes the
+// same value at every apply ([equip]).
 func ArtifactToolDeps(e *Engine) builtin.ArtifactDeps {
 	if e == nil || e.router == nil {
 		return builtin.ArtifactDeps{}
 	}
 	publisher, err := e.ArtifactUploads()
 	if err != nil {
-		// A NODE THAT TAKES NO UPLOADS SERVES NO ARTIFACT TOOL rather than
-		// a catalogue it cannot complete: the reason is the pipeline's, and
-		// was logged where it was built.
+		// A NODE THAT TAKES NO UPLOADS SERVES NO ARTIFACT TOOL, never a
+		// partial catalogue; the pipeline logged the reason when built.
 		log.Debug("artifact_tools_omitted", "reason", err.Error())
 		return builtin.ArtifactDeps{}
 	}
@@ -52,7 +50,7 @@ func ArtifactToolDeps(e *Engine) builtin.ArtifactDeps {
 		Requesters:   turnRequesters{engine: e},
 		Limits:       e.artifactLimits,
 		ManageOthers: e.artifactsManageOthers,
-		Link:         e.artifactLink,
+		Link:         e.ArtifactLink,
 		Org:          e.currentOrg,
 		Await:        e.router.Await,
 		KitVersion:   kitVersion,
@@ -61,9 +59,8 @@ func ArtifactToolDeps(e *Engine) builtin.ArtifactDeps {
 	if e.sandbox.Load() != nil {
 		deps.Boxes = artifactBoxes{engine: e}
 	}
-	// THE PRESENCE HUB, so a seat reading or writing an artifact (or its
-	// datastore, whose tools share this half) appears in the artifact's
-	// room. A nil hub stays a nil interface, which tells nobody.
+	// THE PRESENCE HUB, so a seat using an artifact or its datastore appears in
+	// the artifact's room. A nil hub stays a nil interface.
 	if e.presence != nil {
 		deps.Presence = e.presence
 	}
@@ -71,7 +68,7 @@ func ArtifactToolDeps(e *Engine) builtin.ArtifactDeps {
 }
 
 // ArtifactCommentRouter decides who a comment on an artifact wakes and tells:
-// the chart now, the seats a remark names and the linked items' assignees.
+// the seats a remark names and the linked items' assignees, on the chart now.
 // Exported for the artifacts API, which forms the same records.
 func ArtifactCommentRouter(e *Engine) builtin.ArtifactCommentRouter {
 	return builtin.ArtifactCommentRouter{Org: e.currentOrg, Mentions: LiveMentions(e),
@@ -111,18 +108,17 @@ func (a artifactAssignees) Assignees(ctx context.Context, id artifacts.ID) ([]st
 	return out, nil
 }
 
-// artifactsManageOthers is the company's `artifacts.agents_manage_others` as
-// the running revision says it: false, the closed end, on a node with none.
+// artifactsManageOthers is the running revision's
+// `artifacts.agents_manage_others`: false, the closed end, on a node with none.
 func (e *Engine) artifactsManageOthers() bool {
 	c := e.Company()
 	return c != nil && c.Config != nil && c.Config.Artifacts.AgentsManageOthers
 }
 
-// artifactLink is the dashboard's address of an artifact, on
-// `api.external_url`, or empty where the deployment names none: the one
-// function every tool answer's `url` is built by, so an agent forwarding a
-// link forwards a working dashboard address.
-func (e *Engine) artifactLink(id artifacts.ID) string {
+// ArtifactLink is an artifact's dashboard address on `api.external_url`, or
+// empty where none is set: the one builder of every tool answer's `url`, so a
+// forwarded link works, and of what a decision reads back as the artifact.
+func (e *Engine) ArtifactLink(id artifacts.ID) string {
 	if e.externalBase == "" {
 		return ""
 	}
@@ -142,15 +138,12 @@ func (e *Engine) currentOrg() *org.Organization {
 // artifactBoxes attaches the box of the executor working in a turn, for a
 // publish reading its build.
 //
-// THE RUN READS ITS OWN BOX, WHILE IT WORKS. A seat's executor is its coding
-// harness's own run in that box, and every call that names a box source reaches
-// here from its harness over the tool bridge — a worker it delegates to holds no
-// artifact write — while the run's record reads running: a collected run's
-// resumed segment calls no artifact tool (its reviewer holds one submission
-// tool, and the delivery check none). So a running record is the one a box is
-// read for, and the run says by calling when its build is ready. A record past
-// it has no reader left: one parked on a question has its job paused, which a
-// read would wake; a collected one is over; a reaped pause has no box.
+// THE RUN READS ITS OWN BOX, WHILE IT WORKS. Every call naming a box source
+// comes from the seat's harness over the tool bridge while its record reads
+// running (a delegated worker holds no artifact write; a collected run's
+// resumed segment calls no artifact tool). So only a running record's box is
+// read. Past it nobody reads: a parked job is paused and a read would wake it,
+// a collected run is over, and a reaped pause has no box.
 type artifactBoxes struct{ engine *Engine }
 
 func (b artifactBoxes) Box(ctx context.Context, t *turnctx.Turn) (builtin.ArtifactBox, error) {
@@ -187,17 +180,15 @@ func (b artifactBoxes) attach(ctx context.Context, t *turnctx.Turn) (sandbox.San
 		return nil, builtin.ErrNoBox
 	}
 	if manager.OnLaunchHost(row) && row.LaunchNode != b.engine.id {
-		// ANOTHER NODE'S HOST: the seat moved since the run launched, and
-		// its box is a process tree or a container there, which only that
-		// node touches (internal/sandbox, boxhost.go).
+		// ANOTHER NODE'S HOST: the seat moved since launch, and only that node
+		// touches its box (internal/sandbox, boxhost.go).
 		return nil, fmt.Errorf("%w: the executor's box is on node %s's host, and this turn "+
 			"runs on another node", builtin.ErrNoBox, row.LaunchNode)
 	}
-	// ATTACHED, NEVER RECONNECTED: the job is working in the box, and a
-	// reconnect resumes and re-times it — E2B's /connect moves a box's kill
-	// timer to its own, under the waiter that keeps it — where a reader
-	// changes nothing. A box paused under a running record is a collection
-	// that has not moved the record on yet: its run is over.
+	// ATTACHED, NEVER RECONNECTED: a reconnect resumes and re-times the box
+	// (E2B's /connect replaces its kill timer under the job's waiter), where a
+	// reader must change nothing. A box paused under a running record is a
+	// collection not yet recorded: its run is over.
 	box, _, err := manager.Attach(ctx, sandbox.Placement(row.Placement), row.SandboxID, row.Harness)
 	switch {
 	case errors.Is(err, sandbox.ErrBoxGone), errors.Is(err, sandbox.ErrBoxPaused):
@@ -217,8 +208,8 @@ type runBox struct {
 	listed map[string]bool
 }
 
-// boxListTimeout bounds the listing command: a find over a build directory,
-// which a box under load answers in seconds.
+// boxListTimeout bounds the listing command, in seconds: a find over a build
+// directory, which a box under load answers in seconds.
 const boxListTimeout = 60
 
 // listEntryBytes bounds the listing's output per file it may name: a path of
@@ -226,38 +217,30 @@ const boxListTimeout = 60
 // its terminator.
 const listEntryBytes = 2*artifacts.MaxPathBytes + 1
 
-// The listing command's own exits, each one no exit of the tools it runs nor a
-// box's own (124 for its timeout, 125 for a runtime's failure, 126 and 127 for
-// a command it can't run, above 128 for a signal) is.
+// The listing command's own exits, none of them an exit of the tools it runs
+// or of a box (124 timeout, 125 runtime failure, 126/127 can't run, >128 signal).
 const (
 	// listNotADirectory is a dir the workspace does not hold as a
 	// directory: missing, a file or a link.
 	listNotADirectory = 3
-	// listNoWorkspace is a workspace that is gone from the box, which no
-	// dir the caller names can list.
+	// listNoWorkspace is a workspace gone from the box.
 	listNoWorkspace = 4
-	// listIncomplete is find exiting non-zero: it walked part of the dir
-	// and could not read the rest (a directory the box's user can't open,
-	// a read error), so what it printed is not the whole listing.
+	// listIncomplete is find exiting non-zero: it could not read part of the
+	// dir, so what it printed is not the whole listing.
 	listIncomplete = 5
 )
 
-// Files lists every regular file under dir through the box itself: find
-// prints NUL-terminated paths and never follows a link (`-type f` is false for
-// one), and the output is cut at what max entries can weigh, so a box cannot
-// hand the engine an unbounded answer.
+// Files lists every regular file under dir through the box itself: find prints
+// NUL-terminated paths, never follows a link (`-type f`), and the output is cut
+// at what max entries can weigh, so a box cannot hand back an unbounded answer.
+// A non-directory dir is the caller's ([builtin.ErrNotADirectory]), a gone
+// workspace [builtin.ErrNoWorkspace]. find gets `./dir`, never bare: a dir
+// named `-delete` would be a find expression.
 //
-// A DIR THE WORKSPACE DOES NOT HOLD AS A DIRECTORY IS THE CALLER'S
-// ([builtin.ErrNotADirectory]), asked of the box before find runs, and a
-// workspace that is gone is said as that ([builtin.ErrNoWorkspace]). find is
-// handed the dir as `./dir`, never bare, because a dir named `-delete` is a
-// find expression and ran over the whole workspace.
-//
-// FIND'S OWN EXIT IS CARRIED OUT OF THE PIPELINE, whose status is head's: a
-// walk that failed partway printed what it reached, and the listing was taken
-// as the whole build. A find that exits non-zero is [builtin.ErrListIncomplete]
-// unless head cut its output first, which killed it, and a find or a head the
-// box can't run is its image ([boxExited]). Any other exit is the box's.
+// FIND'S OWN EXIT IS CARRIED OUT OF THE PIPELINE (whose status is head's), or a
+// walk failing partway passes as the whole build: non-zero is
+// [builtin.ErrListIncomplete] unless head's cut killed it; 126/127 is the
+// image ([boxExited]); any other exit is the box's.
 func (b *runBox) Files(ctx context.Context, dir string, max int) ([]string, error) {
 	limit := max * listEntryBytes
 	start := "."
@@ -286,9 +269,8 @@ func (b *runBox) Files(ctx context.Context, dir string, max int) ([]string, erro
 		return nil, boxExited("list "+dir, res)
 	}
 	if cut {
-		// CUT, SO THE LAST NAME MAY BE HALF OF ONE: answer one more entry
-		// than asked for, which the caller refuses as too many. A find
-		// head's cut killed exits non-zero, which says nothing more.
+		// CUT, SO THE LAST NAME MAY BE HALF OF ONE: answer one more entry than
+		// asked for, which the caller refuses as too many.
 		out := make([]string, 0, max+1)
 		for i := 0; i <= max; i++ {
 			out = append(out, "")
@@ -309,11 +291,9 @@ func (b *runBox) Files(ctx context.Context, dir string, max int) ([]string, erro
 	return out, nil
 }
 
-// checkNotARegularFile is the file check's own exit for a path that names no
-// regular file of the workspace, which no box's own exit is: test's own false
-// is 1, which is also what a container runtime's CLI exits with when it fails
-// itself, and read as the caller's path it told a box the runtime could not
-// reach as a file the caller named wrong.
+// checkNotARegularFile is the file check's own exit for a path naming no
+// regular file, never test's 1, which a failing container runtime CLI also
+// exits with and would blame the caller's path for the runtime's fault.
 const checkNotARegularFile = 3
 
 // Open streams one regular file. A path the listing did not name is held to
@@ -334,12 +314,9 @@ func (b *runBox) Open(ctx context.Context, p string) (io.ReadCloser, error) {
 		switch res.ExitCode {
 		case 0:
 		case checkNotARegularFile:
-			// THE CALLER'S PATH, which names nothing a publish can read:
-			// [sandbox.ErrNotRegularFile] is what the tool refuses it by,
-			// as the argument it is, where an unmarked error was told as a
-			// fault of this node. The check's own exit and nothing else: a
-			// check the box timed out, killed or couldn't run is the box's,
-			// never a path the caller named wrong.
+			// THE CALLER'S PATH, refused as an argument
+			// ([sandbox.ErrNotRegularFile]), not a node fault. Only this exit:
+			// a check timed out, killed or unrunnable is the box's.
 			return nil, fmt.Errorf("engine: %s is missing from the box's workspace, "+
 				"or %w", p, sandbox.ErrNotRegularFile)
 		default:
@@ -349,15 +326,12 @@ func (b *runBox) Open(ctx context.Context, p string) (io.ReadCloser, error) {
 	return b.box.OpenFile(ctx, full)
 }
 
-// boxExited is a command the engine runs in a box exiting with a status the
-// command itself never answers with, classed by what clears it ([sandbox.Why]):
-// 126 or 127 is a box that cannot run its shell, or find or head (a listing
-// carries find's own status out for this), which is its image, a setup a
-// person changes; 124 (its timeout), above 128 (a signal ended it) and
-// anything else, a runtime's own failure among it, is the box failing on its
-// side, which clears when it answers again. Unclassed, every one was told as
-// a fault of this node. Its stderr goes to the log with the error, never to a
-// reader.
+// boxExited is a command in a box exiting with a status the command itself
+// never answers with, classed by what clears it ([sandbox.Why]): 126 or 127
+// (cannot run its shell, find or head) is the image, a setup a person changes;
+// anything else (124 timeout, >128 signal, a runtime failure) is the box's
+// side, clearing when it answers again. Unclassed it would read as this node's
+// fault. Its stderr goes to the log, never to a reader.
 func boxExited(what string, res sandbox.ExecResult) error {
 	err := fmt.Errorf("engine: %s in the box exited %d: %s", what, res.ExitCode,
 		strings.TrimSpace(clipTail(res.Stderr)))

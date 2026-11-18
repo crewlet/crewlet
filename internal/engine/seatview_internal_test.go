@@ -11,14 +11,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A NODE RUNNING NO COMPANY ANSWERS UNKNOWN, NEVER SEATLESS.
-//
-// The zero [SeatView] is what a view over no engine is, and the one answer it
-// must not give is "no seat" — [session.ResolveSeat] reads that as the
-// seatless arm and hands somebody bound to a lead's seat an empty handle,
-// which is the silent fall-through the whole three-valued shape exists to
-// prevent. Seat errors and HumanSeats reports no running company, so a person
-// is then 503 rather than served.
+// A NODE RUNNING NO COMPANY ANSWERS UNKNOWN, NEVER SEATLESS: "no seat" from
+// the zero [SeatView] would make [session.ResolveSeat] hand somebody bound to
+// a lead's seat an empty handle. Seat errors and HumanSeats reports no running
+// company, so a person gets a 503.
 func TestASeatViewWithNoCompanyRefusesRatherThanAnsweringSeatless(t *testing.T) {
 	t.Parallel()
 	var view SeatView
@@ -30,8 +26,7 @@ func TestASeatViewWithNoCompanyRefusesRatherThanAnsweringSeatless(t *testing.T) 
 		t.Errorf("HumanSeats answered %v as a running company's seats, so a "+
 			"node with none would list a company with no people", seats)
 	}
-	// AND THROUGH THE RESOLVER, which is where it matters: the row must
-	// be `stalled` rather than `seatless`.
+	// Through the resolver the row must be `stalled`, not `seatless`.
 	binding := session.ResolveSeat(t.Context(), view,
 		session.PersonRow{Found: true, Seat: "platform-lead"})
 	if binding.Row != session.SeatRowStalled {
@@ -43,12 +38,7 @@ func TestASeatViewWithNoCompanyRefusesRatherThanAnsweringSeatless(t *testing.T) 
 }
 
 // A BINDING'S SEAT IS THE SEAT THE RUNNING COMPANY HOLDS UNDER ITS HANDLE, and
-// it is gone the moment an applied revision no longer holds it.
-//
-// The running company is what every surface on this node routes, attributes
-// and authorizes by, so a seat it does not hold is conclusively absent — not
-// "not yet": there is no log this node can be behind on.
-//
+// it is conclusively gone the moment an applied revision no longer holds it.
 // The control is the seat before the apply: found, and human.
 func TestTheSeatViewAnswersFromTheRunningCompany(t *testing.T) {
 	t.Parallel()
@@ -117,14 +107,10 @@ func TestSeatViewOfANilEngineIsTheZeroValue(t *testing.T) {
 	}
 }
 
-// THE LAG IS A DURATION DERIVED FROM THIS APPLIER'S OWN DRAIN RATE.
-//
-// "Four hundred records behind" is not a length of time until something says
-// how fast this node applies them, and what reads the answer compares it
-// against [statelog.StallGrace]. Until this existed the figure handed to the
-// session tables was hardcoded at zero, so the `stalled` arm of both tables
-// could never fire and a node an hour behind authenticated as a caught-up
-// one.
+// THE LAG IS A DURATION DERIVED FROM THIS APPLIER'S OWN DRAIN RATE, since its
+// readers compare it against [statelog.StallGrace]: a lag stuck at zero would
+// let a node an hour behind authenticate as caught up, the session tables'
+// `stalled` arm never firing.
 func TestTheLagIsRecordsOverTheDrainRate(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -138,20 +124,17 @@ func TestTheLagIsRecordsOverTheDrainRate(t *testing.T) {
 		{"sixty records at ten a second", 160, 100, 10, 6 * time.Second},
 		{"one record at one a second", 101, 100, 1, time.Second},
 		{
-			// A RATE OF ZERO IS FLOORED AT ONE rather than divided
-			// by: a node with no measured rate is the one least able
-			// to claim it is nearly caught up, so one second per
-			// record is the deliberately pessimistic reading.
+			// A RATE OF ZERO IS FLOORED AT ONE, not divided by: a
+			// node with no measured rate cannot claim to be nearly
+			// caught up, so one second per record is pessimistic.
 			name: "no measured rate is one record per second",
 			last: 190, applied: 100, drain: 0,
 			want: 90 * time.Second,
 		},
 		{
-			// AND A FRACTIONAL RATE TRUNCATES TOWARDS THE SAME
-			// FLOOR rather than towards zero seconds, for the same
-			// reason: half a record a second is slower than one, and
-			// rounding it up to one understates the lag — which is
-			// the direction that serves a stalled node's sessions.
+			// A FRACTIONAL RATE IS FLOORED AT ONE TOO, not
+			// truncated to zero; rounding half a record a second up
+			// to one understates the lag, in a stalled node's favour.
 			name: "a rate below one is floored at one",
 			last: 130, applied: 100, drain: 0.5,
 			want: 30 * time.Second,
@@ -177,8 +160,8 @@ func TestALagPastTheStallGraceIsVisibleAsOne(t *testing.T) {
 	}
 }
 
-// THE STORE AND THE READ ARE THE SAME NUMBER, which is what makes the
-// heartbeat's sample reachable from the request path at all.
+// THE STORE AND THE READ ARE THE SAME NUMBER, so the heartbeat's sample
+// reaches the request path.
 func TestTheObservedLagIsWhatTheRequestPathReads(t *testing.T) {
 	t.Parallel()
 	var d runningLog
@@ -191,20 +174,13 @@ func TestTheObservedLagIsWhatTheRequestPathReads(t *testing.T) {
 	}
 }
 
-// THE NODE'S OWN WRITER IS AN ADMINISTRATOR, AND NOTHING ELSE.
-//
-// An identity gesture is performed on behalf of a person who does not exist:
-// the person an invitation redeems into, the company's first person included.
-// It goes through this node's own writer, and the domain refuses an
-// administrative record from a party that does not hold admin.
-//
-// This pairing had already drifted once — the writer held one capability and
-// the domain asked for another — so every bootstrap and every redemption was
-// refused on a real deployment, invisibly, because the surface that drives
-// them is exercised against a stub writer. Pinned EXACTLY, because admin is
-// every app beside it and a list carrying anything more is a name the
-// vocabulary does not have. Mutation: write as [worklet, doclet] and the
-// node cannot redeem an invitation; this goes red.
+// THE NODE'S OWN WRITER IS AN ADMINISTRATOR, AND NOTHING ELSE: it writes the
+// identity gestures for a person who does not exist yet (an invitation's
+// redeemer, the first person included), and the domain refuses an
+// administrative record from a party without admin. The surface driving them
+// runs against a stub writer, so only this catches a drift. Pinned EXACTLY:
+// admin is every app beside it, and anything more is a name the vocabulary
+// lacks. Mutation: write as [worklet, doclet] and this goes red.
 func TestTheNodesOwnWriterIsAnAdministrator(t *testing.T) {
 	t.Parallel()
 	if !slices.Equal(nodeWriterGrants, []iam.Grant{iam.GrantAdmin}) {

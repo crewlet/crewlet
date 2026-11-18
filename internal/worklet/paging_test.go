@@ -7,10 +7,8 @@ import (
 // THE OPTION LISTS ARE PAGED BY WHOLE FIELDS, and a field that does not fit
 // comes back with NONE of its options rather than some.
 //
-// Half a list is worse than none: a model setting a value would choose from
-// what it was shown and believe that was the set. The counts beside it —
-// `options_total` against `options_shown` — are what say otherwise, and they
-// are the pair because a single number cannot answer "am I seeing all the
+// A model shown half a list believes it is the set. `options_total` against
+// `options_shown` says otherwise: one number cannot answer "am I seeing all the
 // choices".
 func TestOptionListsPageByWholeFields(t *testing.T) {
 	t.Parallel()
@@ -46,9 +44,8 @@ func TestOptionListsPageByWholeFields(t *testing.T) {
 				len(got[i].Config.Options))
 		}
 	}
-	// AND A CATALOGUE THAT FITS IS UNTOUCHED, which is every ordinary
-	// company: the paging is for the deep vocabulary, not a tax on the
-	// common case.
+	// AND A CATALOGUE THAT FITS IS UNTOUCHED: the paging is for the deep
+	// vocabulary, not a tax on the common case.
 	whole, shown := pageOptions(fields, 300)
 	if shown != 300 {
 		t.Errorf("a catalogue inside the budget showed %d of 300 options", shown)
@@ -76,12 +73,9 @@ func itoaSmall(n int) string {
 
 // THE COUNT SAYS WHETHER IT REACHED THE END.
 //
-// The hint stops at a ceiling, and before this the answer carried the stopping
-// value — 10001 — with nothing to say it was a stopping value. Every reader
-// that did not carry its own copy of the ceiling reported it as an exact
-// total, and a model asked "how much open work is there" answered "10001".
-// The one reader that did carry a copy compared with `>=`, so a set of exactly
-// ten thousand — which IS exact — rendered as "10000+".
+// The hint stops at a ceiling, so a bare stopping value (10001) reads as an
+// exact total, and a reader comparing with `>=` renders an exact ten thousand as
+// "10000+". capHint returns the flag beside the value.
 func TestTheTotalHintSaysWhenItStoppedCounting(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

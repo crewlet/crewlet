@@ -227,6 +227,18 @@ func rowFor(p string) (Entry, bool) {
 	return Entry{}, false
 }
 
+// ExtensionsOf is every extension whose default type is of class c, in table
+// order: what a refusal of a file of that class names as the ones that publish.
+func ExtensionsOf(c Class) []string {
+	var out []string
+	for _, row := range table {
+		if row.Types[0].Class == c {
+			out = append(out, row.Extension)
+		}
+	}
+	return out
+}
+
 // extensions is every extension the table serves, for a refusal to list.
 func extensions() []string {
 	out := make([]string, 0, len(table))

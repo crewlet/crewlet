@@ -2,15 +2,11 @@ package prompts
 
 import "github.com/crewlet/crewlet/internal/org"
 
-// The REAL-SHAPED inputs the outline tests build every prompt from.
-//
-// Real-shaped is the point: what an outline exists to get right is the content
-// a builder EMBEDS, and every one of these carries headings of its own the way
-// production content does — a chat trigger's "## Triage — decide BEFORE
-// replying" and "## Thread context", a pull request's "# Title", a model's
-// "## Summary" quoted back as evidence, a ledger's "###" entries — beside
-// multi-byte text (em dashes, accents, emoji), so a boundary measured in runes
-// or one that drifts by a byte lands inside a character and is caught.
+// The REAL-SHAPED inputs the outline tests build every prompt from: embedded
+// content carries headings of its own, as production content does, so an
+// outline guessed from `##` lines is caught; and multi-byte text (em dashes,
+// accents, emoji), so a boundary measured in runes or off by a byte lands
+// inside a character and is caught.
 
 // chatTrigger is a chat notification body as internal/notify renders one: the
 // message, then the engine's own sections INSIDE the body.
@@ -39,13 +35,9 @@ const iterationLedger = "### Round 1 — sent back\n" +
 	"- `slack_post` → success: \"## Deploy 2.3 — done 🎉\"\n" +
 	"### Round 2\n- `jira_create` → error: field \"résumé\" is required\n"
 
-// richSeat is the lead of a mixed company: every identity section the
-// executor renders has something to say.
-//
-// Every seat is named by its HANDLE — the unit's lead, what the lead manages
-// and the seat looked up — because that is a seat's identity (ADR-0013); a
-// display name is prose, and a chart that pointed at one would point at
-// nobody once somebody renamed the seat.
+// richSeat is the lead of a mixed company, so every identity section the
+// executor renders has something to say. Seats are named by handle, a seat's
+// identity (ADR-0013), never by display name.
 func richSeat() Seat {
 	o := &org.Organization{
 		Name:     "Acme — Zürich",
@@ -114,8 +106,7 @@ func richExecutorInput() ExecutorInput {
 	return ExecutorInput{
 		AvailableTools: []string{
 			"read_file", "delegate", "comment_on_work_item",
-			// AND THE CODE TOOLS, so the guidance they gate renders — the
-			// reads' and the writes'.
+			// The code tools, so the read and write guidance they gate renders.
 			"code_resolve", "code_read", "code_diff", "code_compare", "code_landed_in", "code_log", "code_blame",
 			"code_get_change", "code_search", "code_commit_files", "code_create_repo", "code_merge_change",
 		},

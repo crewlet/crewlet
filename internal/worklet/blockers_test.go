@@ -30,12 +30,9 @@ func blockerIDs(got worklet.TaskRow) []string {
 	return out
 }
 
-// THE ROW CARRIES WHICH TASK HOLDS IT UP, not only that something does.
-//
-// `blocked` is one bit, and a bit cannot be drawn as a relation: a renderer
-// showing two bars on a date axis has to know WHICH of the rows it holds is
-// the blocker, and the only other way to learn that was a single-task read per
-// bar — fifty reads to draw fifty rows.
+// THE ROW CARRIES WHICH TASK HOLDS IT UP, not only that something does:
+// `blocked` is one bit, and a renderer drawing bars on a date axis must know
+// which row is the blocker without a single-task read per bar.
 func TestABoardRowNamesTheTasksItWaitsOn(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -58,9 +55,8 @@ func TestABoardRowNamesTheTasksItWaitsOn(t *testing.T) {
 		t.Error("the edge reports its blocker closed while the blocker is " +
 			"open — a renderer would draw a settled dependency")
 	}
-	// AND THE BLOCKER'S OWN ROW CARRIES NOTHING: the edge is authored on
-	// one end, and a row that listed the other direction too would make
-	// every arrow appear twice.
+	// The blocker's own row carries nothing: the edge is authored on the
+	// dependent, and listing both directions would draw every arrow twice.
 	if got := blockerIDs(row(t, r, "blk")); len(got) != 0 {
 		t.Errorf("the blocker's row waits on %v, want nothing — the edge is "+
 			"authored on the dependent", got)
@@ -68,11 +64,9 @@ func TestABoardRowNamesTheTasksItWaitsOn(t *testing.T) {
 }
 
 // THE FLAG IS THE EDGES, so no screen can show one without the other.
-//
-// `blocked` comes from an EXISTS in the row's own SELECT and `waiting_on` from
-// a second statement over two more tables. Two computations of one fact is how
-// a badge ends up beside no arrows, or an arrow beside no badge — the exact
-// contradiction [TaskRow.Overdue] exists to prevent for dates.
+// `blocked` comes from an EXISTS in the row's SELECT and `waiting_on` from a
+// second statement: two computations of one fact, the contradiction
+// [TaskRow.Overdue] prevents for dates.
 func TestTheBlockedFlagIsTheEdgesItCarries(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -103,9 +97,8 @@ func TestTheBlockedFlagIsTheEdgesItCarries(t *testing.T) {
 	}
 	check("with the blocker open")
 
-	// AND AFTER THE BLOCKER FINISHES, which is the transition that moves
-	// the flag: the edge stays, its state changes, and both have to move
-	// together.
+	// After the blocker finishes, the transition that moves the flag: the
+	// edge stays, its state changes, and both have to move together.
 	done := worklet.StatusDone
 	if _, err := r.writer.UpdateTask(t.Context(), "op-close", "blk", "ENG",
 		worklet.NoIfMatch, worklet.TaskPatch{Status: &done},
@@ -142,9 +135,8 @@ func TestAnEdgeSurvivesItsBlockerLeavingThePage(t *testing.T) {
 	}
 	r.drain()
 
-	// THE KEY IS THE WRITER'S, never the caller's: `CreateTask` mints it
-	// from the project's own counter, so what a test asked to call a task
-	// is not what `key=` matches.
+	// The key is the writer's, never the caller's: CreateTask mints it from
+	// the project's own counter.
 	answer := r.ask(map[string]any{
 		"container": "project:ENG", "key": row(t, r, "dep").Key,
 	})
@@ -159,13 +151,10 @@ func TestAnEdgeSurvivesItsBlockerLeavingThePage(t *testing.T) {
 	}
 }
 
-// THE TIMELINE IS A SHAPE EVERY CONTAINER HAS, and it arrives ordered by when
-// work STARTS.
-//
-// A date axis whose rows come in rank order draws a staircase nobody can read,
-// and re-sorting in the client would make the ORDER of a page depend on which
-// rows the page happened to contain — the one arrangement a paged answer
-// cannot be fixed up after the fact.
+// THE TIMELINE IS A SHAPE EVERY CONTAINER HAS, ordered by when work STARTS:
+// rank order draws an unreadable staircase on a date axis, and a client re-sort
+// would make a page's order depend on which rows it holds, which a paged
+// answer cannot fix up after the fact.
 func TestEveryContainerOffersATimelineOrderedByWhenWorkStarts(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -194,23 +183,19 @@ func TestEveryContainerOffersATimelineOrderedByWhenWorkStarts(t *testing.T) {
 		t.Errorf("the timeline arrives sorted by %q, want the axis it draws "+
 			"against", got)
 	}
-	// AND IT IS A SHAPE THE WRITE SIDE ACCEPTS, so a person can save their
-	// own filters as one. A tab nothing could author would be a rendering
-	// with exactly one instance for ever.
+	// And the write side accepts the shape, so a person can save their own
+	// filters as one rather than the tab having exactly one instance.
 	if !worklet.ViewTimeline.Valid() {
 		t.Error("a view naming the timeline shape is refused at the write — " +
 			"the tab exists and nobody can save one")
 	}
 }
 
-// A WRITE TO A BLOCKER IS PROBED WHERE ITS DEPENDENT IS FILED.
-//
-// Every apply of a blocker rewrites rows keyed on the tasks waiting on it, so
-// its record claims each dependent — and a dependent in ANOTHER project is
-// filed there, not under the blocker's. The scope named every dependent under
-// the blocker's own project, a path no record about it is filed under, so a
-// record this node could not decode about a cross-project dependent never
-// stopped the write that rewrites that dependent's row.
+// A WRITE TO A BLOCKER IS PROBED WHERE ITS DEPENDENT IS FILED. Each apply
+// of a blocker rewrites rows keyed on its dependents, so its record claims
+// each one under the project it is filed in, not the blocker's: otherwise a
+// record this node cannot decode about a cross-project dependent would not
+// stop the write that rewrites that dependent's row.
 func TestAWriteToABlockerIsProbedWhereItsDependentIsFiled(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -243,11 +228,9 @@ func TestAWriteToABlockerIsProbedWhereItsDependentIsFiled(t *testing.T) {
 	}
 }
 
-// AN EDGE NAMES ITS BLOCKER BY KEY, so a page that holds no row for the
-// blocker can still say which task holds it up: a project's list named a
-// blocker in another project by nothing ("Blocked") while All tasks, which
-// held the row, said "Blocked · PROD-9". Asked for the dependent alone, the
-// answer carries no row for the blocker and still names it.
+// AN EDGE NAMES ITS BLOCKER BY KEY, so a page holding no row for the blocker
+// (a project's list, for one in another project) can still say which task
+// holds it up. Asked for the dependent alone, the answer still names it.
 func TestAnEdgeNamesItsBlockerByKeyWithoutItsRow(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

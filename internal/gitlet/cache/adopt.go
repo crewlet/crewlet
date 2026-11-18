@@ -16,50 +16,21 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE RECEIVING NODE'S OWN PACK. A push's receive-pack wrote its pack, its
-// .idx and its .rev into the push's scratch — the bundle the host stored — so
-// once the push's row has applied, the node that took the push links those
-// files into the cache rather than download them back: Adopt. A compaction's
-// outputs are adopted the same way by the Gitlet node that built them
-// (internal/gitlet/compact), every output of one scratch in one call: what the
-// one node that built them would otherwise download back, a GET an output. So
-// are an expunge's begin's (AdoptDropping for its dropping packs, into the
-// copy's dropping view) and its commit's rescue.
-//
-// AN ADOPTION NEVER WAITS AND IS NEVER LOST. What it must not do is write
-// beside a ROUND — a full one sweeps what its snapshot does not name and
-// counts what it finds, so a pack linked in beside it could be swept as a
-// stray or counted twice — nor beside Verify's listing, which must see no
-// step half done. So the entry's write lock is SHARED by adoptions, each
-// linking its own pack's files, and taken WHOLE (writeExclusive) by a round
-// and by a listing: adoptions never exclude one another — group commit
-// answers up to MaxPushesPerRecord pushes of one repository with one record,
-// so they arrive together — and an adoption that finds the lock held whole,
-// or a round or a listing waiting for it, does not wait: it HANDS its pack to
-// that holder. The pack's files are staged in tmp/ under second names first —
-// they must outlive the scratch, which the host removes as soon as the push
-// is answered — and registered on the entry by checksum; the round that is
-// writing installs a pack it is about to download from the staging instead
-// (three links, no GET), and whoever holds the lock installs every staging
-// still registered before it lets the lock go (releaseWrite). So the node
-// that took a push downloads it only when a round that read the push's row
-// had already begun that pack's GET before the adoption handed it the
-// staging — a round learns of the pack from the row, so the window runs from
-// the row's apply on this node to the adoption's registration, and the
-// staging is then found held and dropped — or when the links fail; never
-// because a busy repository always has a round in flight, which is when an
-// adoption saves the most.
-//
-// Which of the two happens is decided under the entry's mu, in one step with
-// the registration (a try of the write lock, never a wait), and a holder
-// takes the registrations and lets the lock go under the same mu: no staging
-// is registered after its holder's last look.
+// Adoption links what this node wrote into the cache in place of its GET: a
+// push's pack, a compaction's outputs, an expunge's packs (dropping ones by
+// AdoptDropping) and rescue, a maintainer's layer (AdoptLayer); package doc,
+// "A push never runs in a cache". Adoptions share an entry's write lock
+// (group commit lands a repository's pushes together); a round and Verify's
+// listing take it whole, since a full round sweeps and counts what it finds
+// and a listing must see no step half done. An adoption finding it held or
+// awaited never waits: it stages its files in tmp/ (outliving the scratch,
+// removed once the push is answered) and registers them in entry.handed,
+// which the holder installs before it lets go (releaseWrite). The try and
+// the holder's last look both run under the entry's mu.
 
 // writeExclusive is the weight a round and Verify's listing take of an
-// entry's write lock — all of it — where an adoption takes one: any number of
-// adoptions hold it at once, and nothing holds it beside a round or a
-// listing. The largest weight there is, so no count of adoptions in flight
-// can reach it.
+// entry's write lock, where an adoption takes one: the largest there is, so
+// no count of adoptions in flight reaches it.
 const writeExclusive = math.MaxInt64
 
 // adoptOutcome is what became of one adoption: the outcome attribute of
@@ -84,90 +55,43 @@ const (
 // .rev, then the .idx LAST — git counts a pack present once its .idx exists.
 var bundleOrder = []string{".pack", ".rev", ".idx"}
 
-// staging is a pushed pack's three files under second names in tmp/,
-// tmp/adopt-<uuidv7>.{pack,rev,idx}: links of the scratch's own files, so
-// they hold no bytes of their own while the scratch stands and outlive it
-// when it goes. Counted in the cache's tmp/ bytes until dropped.
+// staging is a pushed pack's three files linked into tmp/ as
+// tmp/adopt-<uuidv7>.{pack,rev,idx}: no bytes of their own while the scratch
+// stands, and they outlive it. Counted in tmp/'s bytes until dropped.
 type staging struct {
 	pack gitlet.PackRef
 	stem string
-	// dropping: the pack's row is one an expunge's begin left dropping
-	// ([Cache.AdoptDropping]) — placed in the copy's dropping view and
-	// recorded a dropping row, never linked into objects/pack.
+	// dropping: an expunge's begin left the row dropping
+	// ([Cache.AdoptDropping]); placed in the dropping view, never objects/pack.
 	dropping bool
 }
 
-// Adopt installs packs from a scratch into the repository's CURRENT
-// incarnation by hard link — a push's one pack, or every output of a
-// compaction — so the node that wrote them does not download them back —
-// unless a round that read their rows had already begun a pack's GET before
-// the adoption handed it the staging, or a link fails (see above): called by
-// the host once the push's row has applied, and before it tells the client ok
-// — a client fetching from this node at once would otherwise race the
-// adoption and download its own push — and by the compactor once its
-// compaction's record has applied.
-//
-// The rows having applied is the one thing Adopt cannot check, and the
-// caller's whole obligation: a pack linked in before its row would be an
-// object no row names, fetchable by id from this node alone until the next
-// full round swept it.
-//
-// EVERY PACK ADOPT ADOPTS IS LIVE, linked into objects/pack: a push's, a
-// compaction's output, an expunge's kept pack and its rescue are, by the
-// records that add them (gitlet.PackPush, gitlet.PackCompact, gitlet.PackExpunge,
-// gitlet.PackRescue). A pack an expunge's begin leaves dropping is never
-// Adopt's — linked here it would be one a push could rely on — but
-// [Cache.AdoptDropping]'s, into the copy's dropping view, as its row places
-// it. A rescue byte for byte one of the dropping packs it was cut from moves
-// that checksum's files out of the view as its row moves its place
-// (liveAdopted).
-//
-// Each of packs is its row's: its checksum must be one of the scratch's
-// packs', and each section's size that pack's file's (a .rev missing
-// included) — the files linked ARE the bundle the caller uploaded and sealed,
-// so the sizes are the whole check; a disagreement would install bytes no row
-// names, and refuses the whole call ([ErrInvalid]), nothing linked.
-//
-// ONE CALL, ONE ADOPTION, however many packs: one share of the directory's
-// write lock (an adoption's weight, never writeExclusive — adoptions never
-// exclude one another), one dropFor of a pack added, one sync of the
-// directory, and every pack counted under its own outcome. It NEVER WAITS:
-// adoptions share the directory, and one that meets a round or a listing
-// writing it hands every pack to that writer, which installs them before it
-// lets the directory go (see above). Otherwise a nil error with nothing
-// linked is a cache that already holds the packs, or no cache of the
-// repository on this node. Every pack is counted under its outcome
-// (crewlet.code.cache.adoptions).
-//
-// The CURRENT incarnation, not the scratch's: a rebuild — or a swap — between
-// the caller's sync and its adoption leaves the rows applied either way, and
-// the current incarnation is the one the next reader is handed. Its state is
-// not written — the next round that moves its refs writes it, and a boot's
-// first round recounts the directory.
+// Adopt hard-links live packs from sc (a push's, a compaction's outputs, an
+// expunge's kept packs or rescue) into objects/pack of the repository's
+// CURRENT incarnation, the next reader's, so the node that wrote them does not
+// GET them back. Call it once their rows have applied, which it cannot check:
+// a pack linked first is an object no row names, served by this node alone. A
+// push calls it before answering, lest its client race it to a GET. A pack not
+// sc's by checksum and every section's size (.rev too) refuses the call whole
+// ([ErrInvalid]); nil with nothing linked is a cache already holding the
+// packs, or none of the repository here. It takes one share of the write
+// lock, never waits (it hands its packs to the writer), syncs once, counts
+// each pack in crewlet.code.cache.adoptions and leaves the state file to the
+// next round. An expunge's dropping pack is [Cache.AdoptDropping]'s.
 func (c *Cache) Adopt(ctx context.Context, repoID string, sc *Scratch, packs ...gitlet.PackRef) error {
 	return c.adopt(ctx, repoID, sc, false, packs)
 }
 
-// AdoptDropping installs packs an expunge's begin left DROPPING from the
-// scratch its maintainer built them in — the cruft its build wrote beside the
-// kept packs — into the repository's current incarnation by hard link, as
-// [Cache.Adopt] installs a live pack: called by the maintainer once the
-// begin's record has applied, so the node that built them downloads none of
-// them back — up to internal/gitlet/compact's ExpungeInputByteCap of GETs a
-// cycle, of bytes its own disk held a moment before, for packs the cycle's
-// commit retires minutes later. Every other Gitlet node installs them by its
-// next round, from the store, as their rows place them.
-//
-// INTO THE DROPPING VIEW, NEVER objects/pack: each pack's files are linked
-// into the incarnation's objects-dropping/pack — made, durably, where the
-// copy holds no view yet — and its row recorded a DROPPING row of the live
-// set, exactly where a round's install of the row would place it (placeOf),
-// so only a process serving the copy reads them and no push relies on one
-// (packPlace). A pack whose checksum a live row of the incarnation names
-// already is held in objects/pack, where that row keeps its files, and its
-// row recorded beside it. Everything else — the checks, one share of the
-// write lock that never waits, the hand-over to a round, the outcomes — is
-// Adopt's, and so is the caller's obligation: the rows must have applied.
+// AdoptDropping is [Cache.Adopt], obligation included, for the packs an
+// expunge's begin left DROPPING, built in its maintainer's scratch: called
+// once the begin's record has applied, it spares that node up to
+// internal/gitlet/compact's ExpungeInputByteCap of GETs a cycle for packs the
+// commit retires minutes later. Each pack's files go into the incarnation's
+// objects-dropping/pack (made durably where missing), never objects/pack, and
+// its row is recorded dropping, where a round's install would place it
+// (placeOf), so only a process serving the copy reads them and no push relies
+// on one (packPlace). A pack whose checksum a live row already names stays in
+// objects/pack with that row's files.
 func (c *Cache) AdoptDropping(ctx context.Context, repoID string, sc *Scratch, packs ...gitlet.PackRef) error {
 	return c.adopt(ctx, repoID, sc, true, packs)
 }
@@ -301,30 +225,18 @@ func (c *Cache) adoptCounted(repoID string, outcome adoptOutcome) {
 	}
 }
 
-// AdoptLayer hands the installer a published layer its own node wrote — the
-// repository's MAINTAINER, which built it in sc — so that node installs it
-// with no GET: called once the publication's record has applied, as Adopt is
-// for a pack, and for the same reason only then (a layer placed before its
-// row would be a chain no row names). row is the layer as the record names it.
-//
-// sc holds the layer's files under the names git gives them — its
-// multi-pack-index layer and bitmap in objects/pack/multi-pack-index.d, and
-// its commit-graph layer, where it carries one, in objects/info/commit-graphs
-// — and its commit-graph-chain lists the base's graph layers, root first, and
-// then the layer's own: what git leaves where it wrote a split graph over a
-// named base. They are hard-linked into tmp/layer-<id>-<v7>/, which outlives
-// the scratch, held to row over that base (gitlet.CheckLayer: the rule every
-// install meets, hashed a piece at a time in a slot of the read lane), and
-// registered for the installer: the round or the installer that next reaches
-// the layer over that very base places them in place of a GET
-// (crewlet.code.cache.layers{outcome=adopted}). One no round's chain names
-// within objstore.RecordWithin is a function of a record that never applied,
-// and the janitor discards it (expireStagedLayers).
-//
-// A row the files are not (gitlet.ErrBadLayer), or a scratch of another cache
-// or repository, is refused (ErrInvalid) with nothing staged; a link or a
-// read that fails, no read slot in time and an ended ctx are returned as
-// they came, and cost the installer a GET, never the publication.
+// AdoptLayer hands the installer a published layer its own node, the
+// repository's maintainer, built in sc, so it is placed with no GET. Like
+// Adopt, call it only once the publication's record has applied: placed
+// before its row, the layer is a chain no row names. row is the layer as the
+// record names it; sc holds its files where git wrote them, over a base whose
+// graph layers its commit-graph-chain lists, root first, before the layer's
+// own. They are linked into tmp/layer-<id>-<v7>/, which outlives sc, held to
+// row (gitlet.CheckLayer, hashed in the read lane) and registered for the
+// next round or install over that base (crewlet.code.cache.layers{outcome=adopted});
+// one no chain names within objstore.RecordWithin is discarded (expireStagedLayers).
+// Files that are not row (gitlet.ErrBadLayer) or a foreign scratch are refused
+// (ErrInvalid); any other failure costs the installer a GET, never the publication.
 func (c *Cache) AdoptLayer(ctx context.Context, repoID string, sc *Scratch, row gitlet.LayerRef) error {
 	switch {
 	case sc == nil || sc.c != c:
@@ -352,16 +264,14 @@ func (c *Cache) AdoptLayer(ctx context.Context, repoID string, sc *Scratch, row 
 	if err != nil {
 		return fmt.Errorf("cache: adopting layer %s into %s: %w", row.LayerID, repoID, err)
 	}
-	// Hashed in the read lane a piece at a time: the publisher holds no
-	// maintenance slot by now, having released its admission once its build's
-	// last git step ended.
+	// The read lane: the publisher released its maintenance slot when its
+	// build's last git step ended.
 	if err = checkStaged(ctx, st, base, c.pieces(c.git.HoldRead).layer()); err != nil {
 		st.remove(c)
 		if errors.Is(err, gitlet.ErrBadLayer) {
 			return fmt.Errorf("%w: adopting layer %s into %s: %w", ErrInvalid, row.LayerID, repoID, err)
 		}
-		// A read that failed, no read slot in time or ctx ended: nothing
-		// said of the files, whose layer the installer fetches instead.
+		// Says nothing of the files; the installer fetches the layer instead.
 		return fmt.Errorf("cache: adopting layer %s into %s: %w", row.LayerID, repoID, err)
 	}
 	st.base = base
@@ -381,10 +291,9 @@ func (c *Cache) AdoptLayer(ctx context.Context, repoID string, sc *Scratch, row 
 }
 
 // scratchGraphBase is the commit-graph layers the scratch at dir wrote row's
-// graph layer over, root first: its commit-graph-chain's lines, less the
-// layer's own last line — or all of them where the layer carries no graph.
-// A chain that does not end in the layer's own graph layer is refused: the
-// files are no layer the row names.
+// graph layer over, root first: its commit-graph-chain less the layer's own
+// last line, or all of it where the layer carries no graph. A chain not
+// ending in the layer's graph is refused: the files are no layer row names.
 func scratchGraphBase(dir string, row gitlet.LayerRef) ([]string, error) {
 	text, err := os.ReadFile(filepath.Join(dir, graphChainRel))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -482,10 +391,10 @@ func (c *Cache) stageAdoption(sc *Scratch, pack gitlet.PackRef, dropping bool) (
 	return st, nil
 }
 
-// dropStaging removes a staging's names from tmp/ — never its bytes, which
-// the scratch's names or an incarnation's still hold — and takes it out of
-// tmp/'s count. A removal that fails is logged: a boot empties tmp/. Once
-// Stop has begun it removes nothing, since tmp/ is the next Open's to empty.
+// dropStaging removes a staging's names from tmp/ (its bytes stay with the
+// scratch's or an incarnation's names) and takes it out of tmp/'s count. A
+// failed removal is logged, and after Stop nothing is removed: the next
+// Open empties tmp/.
 func (c *Cache) dropStaging(st *staging) {
 	c.tmpBytes.Add(-st.pack.Size)
 	if !c.enter() {
@@ -509,15 +418,13 @@ func removeAll(stem string, exts []string) error {
 	return errors.Join(errs...)
 }
 
-// linkBundle links a pack's three files from stem into the incarnation's
-// objects/pack as pack-<cs>.*, through link — os.Link where it is nil; a
-// swap's link, which a case can make fail (Cache.link) — in bundleOrder,
-// calling placed after each, and reports whether it linked them. A name
-// already there — a file of the same pack, which two pushes of the same
-// content share, or one an install a failed round left — is the pack HELD:
-// whatever this call linked before it is taken back, and nothing else is
-// touched. Any other failure takes back what was linked and is returned. The
-// directory is not synced: its caller makes the step durable.
+// linkBundle links a pack's three files from stem into packDir as
+// pack-<cs>.* in bundleOrder through link (os.Link where nil; a swap passes
+// Cache.link, which a case can make fail), calling placed after each, and
+// reports whether it linked them. A name already there (two pushes of the
+// same content share a pack, or a failed round's install left it) is the
+// pack HELD: what this call linked is taken back, nothing else touched. Any
+// other failure is taken back and returned. The caller syncs the directory.
 func linkBundle(link func(oldname, newname string) error, stem, packDir, checksum string,
 	placed func(ext string)) (bool, error) {
 	if link == nil {
@@ -541,14 +448,11 @@ func linkBundle(link func(oldname, newname string) error, stem, packDir, checksu
 	return true, nil
 }
 
-// liveAdopted records st's pack as a live row of inc, the adoption's; e.mu is
-// held. Where the live set placed its checksum in the DROPPING VIEW before —
-// only rows an expunge's begin left dropping named it: a rescue byte for byte
-// the dropping pack it was cut from, which a commit's rescue of a dropping
-// pack a ref reaches whole is — the pack is placed live now, and its files in
-// the view are LEAVING, by the next round's swap, as a delta's move of a pack
-// out of the view leaves them (applyDelta): no later delta moves its place,
-// since the adoption already has, so left unnoted they would stay in the view
+// liveAdopted records st's pack as a live row of inc; e.mu is held. Where its
+// checksum was in the DROPPING VIEW (a rescue byte for byte the dropping pack
+// it was cut from, as a commit's rescue of a pack a ref reaches whole is), its
+// view files are marked LEAVING for the next round's swap, as applyDelta
+// marks a delta's move: no later delta moves it, so unmarked they would stay
 // beside their live copy until a full round swept them.
 func liveAdopted(inc *incarnation, st *staging) {
 	cs := st.pack.GitChecksum
@@ -563,10 +467,9 @@ func liveAdopted(inc *incarnation, st *staging) {
 	inc.leaving[leaveKey{placeDropping, cs}] = EventPackRetired
 }
 
-// adopted records st's pack as a row of inc's live set, the adoption's: live
-// (liveAdopted), or — an expunge's dropping pack ([Cache.AdoptDropping]) —
-// the dropping row its begin wrote, which places the pack's files in the
-// dropping view unless a live row names the same checksum. e.mu is held.
+// adopted records st's pack as a row of inc's live set: live (liveAdopted),
+// or for an expunge's dropping pack ([Cache.AdoptDropping]) the dropping row
+// its begin wrote. e.mu is held.
 func adopted(inc *incarnation, st *staging) {
 	if st.dropping {
 		setLive(inc, st.pack.PackID, liveOf(st.pack, gitlet.PackDropping))
@@ -576,9 +479,8 @@ func adopted(inc *incarnation, st *staging) {
 }
 
 // adoptedPlace is where inc keeps st's pack's files once its row is recorded
-// (placeOf): objects/pack for a live row; for a dropping one the dropping
-// view, but objects/pack where a live row names its checksum already, whose
-// files are there. e.mu is held.
+// (placeOf): objects/pack, or the dropping view for a dropping row whose
+// checksum no live row names. e.mu is held.
 func adoptedPlace(inc *incarnation, st *staging) packPlace {
 	if st.dropping && placeOf(inc, st.pack.GitChecksum) != placeLive {
 		return placeDropping
@@ -586,30 +488,25 @@ func adoptedPlace(inc *incarnation, st *staging) packPlace {
 	return placeLive
 }
 
-// placeStagings installs stagings into inc — the write lock held, inc pinned
-// — and drops them, whatever the outcome: each pack's files linked where its
-// row places them (adoptedPlace: objects/pack, or the dropping view, made
-// first where the copy holds none) unless the incarnation holds one of them
-// there already, and counted, then each directory linked into synced ONCE for
-// them all; and answers each staging's outcome, in order, with every failure
-// joined.
+// placeStagings installs stagings into inc (write lock held, inc pinned) and
+// drops them whatever happens: each pack's files are linked where its row
+// places them (adoptedPlace; the dropping view made first where missing)
+// unless already there, and counted, and each directory is synced ONCE. It
+// answers each staging's outcome in order, every failure joined.
 //
-// A DIRECTORY SYNC THAT FAILS LEAVES THE PACKS INSTALLED AND COUNTED, and is
-// returned, exactly as a round's install answers one: the names are there and
-// every reader of the directory sees them; what the failed sync costs is their
-// surviving a crash, and a boot's first round is a full one, which installs
-// whatever a crash lost. Taking the links back would cost the next sync a GET
-// a pack to repair nothing.
+// A FAILED DIRECTORY SYNC LEAVES THE PACKS INSTALLED AND COUNTED, and is
+// returned, as a round's install does: readers see the names, only their
+// surviving a crash is lost, and a boot's first round is full and installs
+// what a crash lost. Taking the links back would cost a GET to repair nothing.
 func (c *Cache) placeStagings(e *entry, inc *incarnation, stagings []*staging) ([]adoptOutcome, error) {
 	defer func() {
 		for _, st := range stagings {
 			c.dropStaging(st)
 		}
 	}()
-	// THE ROW IS IN THE INCARNATION once this ends, whatever it links: its
-	// row has applied, and the pack is either linked here or held already
-	// (swap.go's live set — a compaction's retirement of it takes it out by
-	// this id, before any delta has served it).
+	// The row enters the incarnation whether the pack is linked or held: it
+	// has applied, and a compaction retiring it takes it out by this id
+	// (swap.go's live set).
 	held := func(st *staging) {
 		e.mu.Lock()
 		adopted(inc, st)
@@ -634,8 +531,7 @@ func (c *Cache) placeStagings(e *entry, inc *incarnation, stagings []*staging) (
 			outcomes[i] = adoptFailed
 			errs = append(errs, fmt.Errorf("pack %s: %w", st.pack.PackID, err))
 		case state:
-			// Installed — or begun by an install a failed round left, which
-			// the next round finishes.
+			// Installed, or begun by a failed round, which the next finishes.
 			held(st)
 			outcomes[i] = adoptHeld
 		default:
@@ -646,17 +542,14 @@ func (c *Cache) placeStagings(e *entry, inc *incarnation, stagings []*staging) (
 	if len(toLink) == 0 {
 		return outcomes, errors.Join(errs...)
 	}
-	// Packs added: what a declaration says of one, once for the call and
-	// before any is linked in (dropFor's order rule). No declaration drops
-	// for an added pack today.
+	// Once for the call, before any pack is linked (dropFor's order rule).
 	if _, err := c.dropFor(e, inc, EventPackAdded, eventDetail{}); err != nil {
 		for _, i := range toLink {
 			outcomes[i] = adoptFailed
 		}
 		return outcomes, errors.Join(append(errs, err)...)
 	}
-	// THE DROPPING VIEW, made durable before any pack is placed in it, as a
-	// round's install makes it for the copy's first dropping pack.
+	// The dropping view is made durable before any pack is placed in it.
 	var viewErr error
 	if view {
 		viewErr = c.ensureView(inc.dir)
@@ -701,13 +594,11 @@ func (c *Cache) placeStagings(e *entry, inc *incarnation, stagings []*staging) (
 		outcomes[i] = adoptAdopted
 	}
 	inc.unmoved = false
-	// No repair (incarnation.repairWrite): an adopted pack adds what no
-	// failed request needed, and leaves whatever failed it as it was.
-	// The maintainer's debounce and ceiling, exactly as a round that adds a
-	// pack sets them — for a pack in objects/pack, the one directory the
-	// copy's index covers, so a dropping pack alone sets neither; and like
-	// such a round's, no kick: the pack is due only once the debounce has
-	// passed, which is the maintainer's own tick.
+	// No repair (incarnation.repairWrite): an adopted pack leaves whatever
+	// failed a request as it was. The maintainer's debounce and ceiling are
+	// set as a round adding a pack sets them, for objects/pack only (the one
+	// directory the index covers), and with no kick: the pack is due once the
+	// debounce passes, on the maintainer's own tick.
 	if addedLive {
 		e.lastAdded = now
 		if e.uncoveredSince.IsZero() {
@@ -769,16 +660,14 @@ func (c *Cache) claimHanded(e *entry, p gitlet.PackRow) *staging {
 	return st
 }
 
-// releaseWrite lets go of n of e's write lock — taken by a round, a listing
-// or an adoption — after installing every staging handed to e meanwhile into
-// its current incarnation (placeStagings). The registrations are taken, and
-// the lock let go, under e.mu: an adoption that fails to try the lock under
-// the same mu registers before this last look, or finds the lock free.
-// Taken back after a release, a staging is dropped where nothing is left to
-// install it into — the repository purged or evicted — and, once Stop has
-// begun, left to the next boot's tmp/. An adoption's share (n one, never
-// writeExclusive) leaves the adoptions holding the repository, and the last
-// to leave wakes the maintainer a pass it held back is owed (owedWake).
+// releaseWrite lets go of n of e's write lock (a round's, a listing's or an
+// adoption's) after installing every staging handed to e meanwhile into its
+// current incarnation (placeStagings). Taking the registrations and the
+// release both run under e.mu, so an adoption whose try fails under it has
+// registered before this last look, or finds the lock free. A staging with no
+// incarnation left (purged or evicted) is dropped, and after Stop left to the
+// next boot's tmp/. The last adoption to leave (n one) wakes the maintainer
+// for a pass it held back (owedWake).
 func (c *Cache) releaseWrite(e *entry, n int64) {
 	for {
 		e.mu.Lock()

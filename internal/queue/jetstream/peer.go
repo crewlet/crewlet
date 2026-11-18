@@ -16,56 +16,29 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// Peer returns a second client on the same broker — another node of the
-// fleet, in this process.
+// Peer returns a second client on the same broker: another node of the fleet,
+// in this process, as a fleet test needs. The embedded server and its clients
+// are separate things, as in a real fleet where each node dials the cluster.
 //
-// The embedded server is one thing; a client of it is another. Keeping them
-// separate is what lets a fleet test run two nodes against one broker, and
-// it mirrors how a real fleet is arranged: each node dials the cluster, and
-// nothing about one node's attachments is visible to its peers.
-//
-// The peer does not own the embedded server. Stopping it closes its own
-// connection and leaves the broker running for whoever else is using it.
-//
-// Nor does it inherit this client's node: a peer is a different node, and one
-// that published as this one would name the wrong origin on everything it
-// sent. It names itself through its own opts.
+// The peer does not own the broker: stopping it leaves the server running for
+// every other client. Nor does it inherit this client's node, which would name
+// the wrong origin on everything it sent; it names itself through opts.
 func (q *Queue) Peer(ctx context.Context, opts ...queue.Option) (*Queue, error) {
-	// The peer never owns the broker: stopping it must leave the server
-	// and every other client running, exactly as one node leaving a
-	// cluster does.
 	return newQueueOn(ctx, q.cfg, q.embedded, false, queue.Resolve(opts...))
 }
 
-// Backlog reports the events a subscription retains and has not acked — the
-// mail an unowned seat is holding.
+// Backlog reports the events a subscription retains and has not acked: the
+// mail an unowned seat is holding. Test-facing, because seat ownership rests
+// on "the mail survived".
 //
-// Test-facing. A producer or consumer never asks this, but "the mail
-// survived" is a property seat ownership rests on, so it must be assertable.
+// SIZED FROM THE STREAM, NEVER FROM THE CONSUMER: the stream stores and acks a
+// publish before the consumer's pending count catches up, so a consumer-sized
+// read answers "no mail" for mail that is there. The conformance suite owes
+// READ-YOUR-OWN-WRITE (queuetest.Capabilities) and asserts absences with no
+// wait, so a lagging view would blame the operation under test for the mail.
 //
-// SIZED FROM THE STREAM, NEVER FROM THE CONSUMER, and that is the whole
-// subtlety of this function. The obvious form asks the durable consumer how
-// much it has pending and reads that many messages — which is exact, one
-// round trip, and WRONG, because a consumer's pending count is not caught up
-// when the publish that produced it has already been acked. The stream stores
-// the message and acks the publisher; the consumer's own accounting follows
-// after. Measured on the embedded broker: immediately after an acked Publish
-// the consumer reported nothing pending in about two reads in three, and in
-// every one of those the stream already held the message.
-//
-// So the consumer-sized form answers "no mail" for mail that is demonstrably
-// there. Every inspection capability this backend supplies owes
-// READ-YOUR-OWN-WRITE to the conformance suite (see queuetest.Capabilities),
-// and cases that assert an ABSENCE read with no wait because an absence has
-// no signal to wait on — so a lagging view does not merely go quiet, it
-// reports the operation under test as the thing that changed the mail. That
-// is what turned an unrelated merge red on main: a baseline snapshot read
-// empty, the same read a moment later saw the event, and Quiesce — which
-// with nothing attached writes nothing at all — was blamed for it.
-//
-// ON A LANED TOPIC THE LANE'S MAIL IS PART OF IT ([queue.HasLane]), listed
-// first, because a subscription's mail is both of its mailboxes and the lane
-// is the one it takes first.
+// On a laned topic the lane's mail is part of it ([queue.HasLane]), listed
+// first, as the mailbox the subscription takes first.
 func (q *Queue) Backlog(ctx context.Context, topic, group string) ([]*events.Event, error) {
 	stream, err := q.streamFor(ctx, topic)
 	if err != nil {
@@ -90,14 +63,11 @@ func (q *Queue) Backlog(ctx context.Context, topic, group string) ([]*events.Eve
 // Waiting reports what a subscription holds that no handler of this client is
 // running on ([queue.EventQueue.Waiting]).
 //
-// FROM EACH CONSUMER'S OWN STATE, one info request per mailbox: messages it
-// has not delivered plus messages delivered and not acknowledged, which on a
-// mailbox with one group is everything it has not finished (the topic's own
-// consumer and, on a laned topic, the lane's). A message this client's handler
-// is running on is unfinished too, and is taken off ([attachment.running]);
-// one fetched in a drain and not yet dispatched, or handed back for a
-// redelivery, is waiting and stays counted. Consumer state trails a publish by
-// a moment, which a display can carry and a decision could not.
+// From each mailbox consumer's own state: undelivered plus delivered and
+// unacknowledged, less what this client's handlers are running on
+// ([attachment.running]). One fetched and not yet dispatched, or handed back
+// for redelivery, stays counted. Consumer state trails a publish by a moment,
+// which a display can carry and a decision could not.
 func (q *Queue) Waiting(ctx context.Context, topic, group string) (queue.Waiting, error) {
 	stream, err := q.streamFor(ctx, topic)
 	if err != nil {
@@ -170,18 +140,11 @@ func (q *Queue) backlogOf(ctx context.Context, stream, topic, name string) ([]*e
 	}
 
 	// The window is (what this GROUP has finished with, what the STREAM
-	// still holds]. Both bounds come from the side that can be trusted for
-	// the direction it moves the answer: the stream's counts are synchronous
-	// with the publish ack and cannot under-report, and the consumer's ack
-	// floor can only lag BACKWARDS, which widens the window and so can never
-	// hide mail. A wider window costs at most a message this group already
-	// acked and another group still holds; a narrower one loses mail.
-	//
-	// Reading from the ack floor rather than from the head of the stream
-	// also fixes what the consumer-sized form got wrong whenever two groups
-	// share a subject: it asked for N messages and took the FIRST N on the
-	// subject, which under interest retention are the ones the other group
-	// is still holding, not this group's own.
+	// still holds]. Each bound can only err wide: the stream's counts are
+	// synchronous with the publish ack, and the ack floor lags backwards. A
+	// wider window costs a message this group acked that another still
+	// holds; a narrower one loses mail. From the ack floor, not the head: under interest retention
+	// the first N on a shared subject are another group's.
 	above := int(lastSeq) - int(info.AckFloor.Stream)
 	limit := min(stored, above)
 	if limit <= 0 {
@@ -194,10 +157,8 @@ func (q *Queue) backlogOf(ctx context.Context, stream, topic, name string) ([]*e
 // pair's dead-letter subjects hold, its poison and its unhandled deliveries
 // ([queue.RetiredTo]), in the order the stream kept them.
 //
-// Sized from the stream for the same reason as Backlog, and with the same
-// second benefit: the fixed limit this used to pass meant every call waited
-// out the fetch deadline, because a fetch returns early only once it has the
-// whole batch it asked for and there are never 256 dead letters.
+// Sized from the stream, as Backlog is, which also lets the fetch return at
+// once: a fetch returns early only once it has the whole batch it asked for.
 func (q *Queue) DeadLetters(ctx context.Context, topic, group string) ([]*events.Event, error) {
 	subjects := []string{topics.DeadLetter(topic, group), topics.Unhandled(topic, group)}
 	stream, err := q.streamFor(ctx, subjects[0])
@@ -219,19 +180,15 @@ func (q *Queue) DeadLetters(ctx context.Context, topic, group string) ([]*events
 }
 
 // storedOn reports how many messages the stream still holds on one subject,
-// and the stream's last sequence.
-//
-// This is the observable that is synchronous with a publish: the server has
-// stored the message before it acks the publisher, so a count taken after
-// Publish returns already includes it. Nothing derived from a CONSUMER has
-// that property — see Backlog.
+// and the stream's last sequence: synchronous with a publish, since the server
+// stores before it acks, which nothing derived from a consumer is (Backlog).
 func (q *Queue) storedOn(ctx context.Context, stream, subject string) (int, uint64, error) {
 	st, err := q.js.Stream(ctx, stream)
 	if err != nil {
 		return 0, 0, fmt.Errorf("inspect stream %s: %w", stream, err)
 	}
 	// The per-subject map is populated ONLY for a requested filter, so the
-	// filter is what makes the count exist rather than what narrows it.
+	// filter is what makes the count exist.
 	info, err := st.Info(ctx, jetstream.WithSubjectFilter(subject))
 	if err != nil {
 		return 0, 0, fmt.Errorf("stream info %s: %w", stream, err)
@@ -239,36 +196,23 @@ func (q *Queue) storedOn(ctx context.Context, stream, subject string) (int, uint
 	return int(info.State.Subjects[subject]), info.State.LastSeq, nil
 }
 
-// peekPage bounds ONE fetch, so a long list is paged rather than cut.
-//
-// It replaced a fixed limit of 256 passed straight to Fetch, which was a
-// SILENT TRUNCATION — a subject holding more reported the first 256 and said
-// nothing — and which was also what made every dead-letter read wait out the
-// deadline below, since a fetch returns early only once it has the whole batch
-// it asked for and there are never 256 dead letters.
+// peekPage bounds ONE fetch, so a long list is paged rather than silently cut.
 const peekPage = 256
 
-// peekWait bounds one fetch of a batch the caller has ALREADY established is
-// there: both callers size their read from the stream's own count before
-// asking for it. So this is a broker round trip's ceiling rather than the
-// normal cost, and WAITING IS THE POINT — the messages are known to be stored,
-// so the wait absorbs the server's own catch-up. It is why this stayed a timed
-// fetch instead of becoming FetchNoWait, which returns whatever happens to be
-// ready at that instant. That is the shape of answer the comment on Backlog
-// describes, and it is what turned CI red.
+// peekWait bounds one fetch of a batch the caller has already established is
+// stored, so it is a round trip's ceiling, not the normal cost. WAITING IS THE
+// POINT: it absorbs the server's catch-up, where FetchNoWait returns whatever
+// is ready that instant, the lagging answer Backlog describes.
 const peekWait = 500 * time.Millisecond
 
 // peekBackstop reaps a throwaway consumer whose peek never returned.
 //
 // A BACKSTOP, NOT A LIFETIME: every peek deletes its own consumer, so this
-// only ever covers a caller that died mid-fetch, and 60x the fetch deadline is
-// already generous for that. It was a minute, with nothing deleting anything —
-// long enough for a polling inspection to leave thousands alive, and a leaked
-// ack-none consumer is not inert: it holds INTEREST, and on an
-// interest-retention stream that keeps messages the real subscription has
-// already acked. An inspection that changes what the stream retains is the one
-// thing this function's own contract says it must not do. Measured: thirty
-// backlog reads left thirty-one consumers on the stream.
+// covers only a caller that died mid-fetch, for which 60x peekWait is
+// generous. Kept short because a leaked
+// ack-none consumer holds INTEREST, and on an interest-retention stream keeps
+// messages the real subscription acked: an inspection that changes what the
+// stream retains.
 const peekBackstop = 30 * time.Second
 
 // peekCleanup bounds the delete, which runs on a context that may already be
@@ -288,10 +232,9 @@ func (q *Queue) peek(
 	subject := strings.Join(subjects, ", ")
 	cons, drop, err := q.throwaway(ctx, stream, jetstream.ConsumerConfig{
 		FilterSubjects: subjects,
-		// By sequence rather than DeliverAll, so a caller that knows what
-		// it has already finished with can say so. A filtered consumer
-		// starts at the first MATCHING message at or after the sequence,
-		// so a floor pointing at another subject's message is harmless.
+		// By sequence, so a caller can skip what it has finished with. A
+		// filtered consumer starts at the first MATCHING message at or after
+		// it, so a floor on another subject's message is harmless.
 		DeliverPolicy: jetstream.DeliverByStartSequencePolicy,
 		OptStartSeq:   from,
 	})
@@ -311,10 +254,9 @@ func (q *Queue) peek(
 			got++
 			var ev events.Event
 			if err := json.Unmarshal(msg.Data(), &ev); err != nil {
-				// REPORTED, never skipped. "The mail is there and this
-				// build cannot read it" and "there is no mail" are
-				// different facts, and these are the functions the
-				// conformance suite reads its absence assertions through.
+				// REPORTED, never skipped: "this build cannot read the mail"
+				// and "there is no mail" are different facts, and the
+				// conformance suite's absence assertions read through here.
 				return nil, fmt.Errorf("peek decode %s: %w", subject, err)
 			}
 			out = append(out, &ev)
@@ -323,23 +265,13 @@ func (q *Queue) peek(
 			return nil, fmt.Errorf("peek fetch %s: %w", subject, err)
 		}
 		if got == 0 {
-			// A SHORT READ IS THE ORDINARY END OF THE WINDOW, not an
-			// anomaly, and must not be reported as one. limit is an upper
-			// bound rather than a count: the stream's per-subject total
-			// includes messages below this group's ack floor — mail it has
-			// finished with that a sibling group still holds — and the
-			// sequence bound is the STREAM's last, which spans every
-			// subject on it. Asking for more than the window holds is
-			// normal, so coming up empty means it is exhausted.
-			//
-			// Written out because the obvious hardening is wrong. Turning
-			// this into an error would fail every inspection of a subject
-			// two groups share. The lagging read the rest of this file
-			// exists to prevent is a different thing: it answered without
-			// asking the broker at all, where this has asked and waited
-			// peekWait for the store to answer.
-			//
-			// It is also the only thing that guarantees this loop ends.
+			// A SHORT READ IS THE ORDINARY END OF THE WINDOW, never an error,
+			// and the only thing that ends this loop. limit is an upper bound:
+			// the per-subject total includes mail below this group's ack floor
+			// that a sibling group still holds, and the stream's last sequence
+			// spans every subject. Erroring here would fail every inspection of
+			// a shared subject; unlike a lagging read, this one has asked the
+			// broker and waited peekWait.
 			break
 		}
 	}
@@ -349,8 +281,7 @@ func (q *Queue) peek(
 // Attachments reports every (topic, group) pair THIS client is attached to.
 //
 // Scoped to the client, never the broker: "attached to exactly the seats I
-// own" is the assertion that catches a double-consumer split-brain, and a
-// fleet-wide answer cannot make it.
+// own" is the assertion that catches a double-consumer split-brain.
 func (q *Queue) Attachments() [][2]string {
 	q.mu.Lock()
 	defer q.mu.Unlock()

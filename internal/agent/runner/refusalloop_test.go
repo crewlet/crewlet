@@ -19,8 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// refusingWrite is a write tool that refuses every call on its policy, as
-// create_artifact refused the GP-38 brand kit fourteen times.
+// refusingWrite is a write tool that refuses every call on its policy.
 type refusingWrite struct{}
 
 func (refusingWrite) Name() string               { return "create_thing" }
@@ -31,14 +30,12 @@ func (refusingWrite) Call(context.Context, map[string]any) (tools.Result, error)
 		Failed: true, Cause: tools.RefusalInvalid}, nil
 }
 
-// THE GP-38 TURN, REPLAYED THROUGH THE RUNNER (ADR-0059): the seat's executor
-// run asks over the tool bridge for the artifacts skill by the wrong key and is
-// told the right one, loads it, and then keeps writing a version its tool
-// refuses. From the fourth refusal on, the answer tells it to stop and raise a
-// blocker, and the node counts the loop once
-// (crewlet.tools.policy_refusal_loops); the run ends on its own submission,
-// which its surface accepts. Every call is played as the bridge plays it,
-// admitted to the surface the run was launched with ([play]).
+// THE GP-38 LOOP (a brand kit refused fourteen times), REPLAYED, IS STOPPED AND
+// COUNTED ONCE (ADR-0059): an executor asks for the artifacts skill by the wrong key and is told the right
+// one, loads it, then keeps writing a version its tool refuses. From the
+// fourth refusal on the answer says stop and raise a blocker, the node counts
+// the loop once (crewlet.tools.policy_refusal_loops), and the run's own
+// submission is accepted. Every call is played as the bridge plays it ([play]).
 //
 // Mutation: drop the Metrics wiring from the runner's surface and nothing is
 // counted; drop the key list from load_tool_skill and the miss names none.

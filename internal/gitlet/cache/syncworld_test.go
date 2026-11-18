@@ -34,10 +34,9 @@ import (
 
 // THE REPOSITORIES A CASE SYNCS: real git history in a work tree per
 // repository, each push ONE pack of its new objects stored as the bundle a
-// receiving node's receive-pack would have stored (the pack, its .idx and its
-// .rev), its row and its ref written to a fakeLog. A case then syncs a cache
-// over that log and that store, and compares what it built against a cache
-// built from nothing at the same position.
+// receiving node would store (pack, .idx, .rev), its row and ref written to a
+// fakeLog. A case syncs a cache over that log and store and compares it with
+// a cache built from nothing at the same position.
 
 // syncWorld is a world whose cache reads a fakeLog and an object store.
 type syncWorld struct {
@@ -95,9 +94,8 @@ func newSyncWorld(t testing.TB, backend string) *syncWorld {
 }
 
 // openS3Fake is the S3 backend over srv, path style, at the production part
-// size: what a sync world stores its packs in when its backend is onS3. A
-// case that sets srv's latency or bandwidth sets it before this, since
-// opening the backend checks the bucket.
+// size. A case sets srv's latency or bandwidth before this, since opening the
+// backend checks the bucket.
 func openS3Fake(t testing.TB, srv *s3fake.Server) objstore.Backend {
 	t.Helper()
 	b, err := s3obj.Open(t.Context(), s3obj.Config{
@@ -134,8 +132,8 @@ func (w *syncWorld) wire(o *cache.Options) {
 	o.Fetch, o.Objects, o.Metrics = w.log, w.objects, w.rec
 }
 
-// open boots a cache over the world — Prepare, a pool, Open — reading its log
-// and its store; it is stopped when the case ends.
+// open boots a cache over the world's log and store, stopped when the case
+// ends.
 func (w *syncWorld) open(t testing.TB, mutate ...func(*cache.Options)) *cache.Cache {
 	t.Helper()
 	return w.world.open(t, append([]func(*cache.Options){w.wire}, mutate...)...)
@@ -159,8 +157,7 @@ func (w *syncWorld) repo(t testing.TB, n int) string {
 }
 
 // push commits files on repo's work tree and stores the commit's new objects
-// as ONE pack, written to the log with ref moved to the commit. It answers
-// the commit and its row.
+// as ONE pack, written to the log with ref moved to the commit.
 func (w *syncWorld) push(t testing.TB, repo, ref string, files map[string]string) (string, gitlet.PackRow) {
 	t.Helper()
 	return w.pushAs(t, repo, ref, files, "")
@@ -176,8 +173,8 @@ func (w *syncWorld) pushAs(t testing.TB, repo, ref string, files map[string]stri
 	return oid, row
 }
 
-// commit is a push's commit and its stored pack, its row not yet written: a
-// case writes it at the moment it chooses (w.log.write).
+// commit is a push's commit and its stored pack, its row left for the case to
+// write when it chooses (w.log.write).
 func (w *syncWorld) commit(t testing.TB, repo string, files map[string]string, packID string) (string, gitlet.PackRow) {
 	t.Helper()
 	f := w.repos[repo]
@@ -191,8 +188,7 @@ func (w *syncWorld) commit(t testing.TB, repo string, files map[string]string, p
 	return oid, row
 }
 
-// pack packs the objects tip reaches that no earlier push did into a bundle
-// in the store, and answers its row.
+// pack stores the objects tip reaches that no earlier push did as a bundle.
 func (w *syncWorld) pack(t testing.TB, f *fixture, tip, packID string) gitlet.PackRow {
 	t.Helper()
 	bare := gittest.Empty(t)
@@ -210,10 +206,9 @@ func (w *syncWorld) pack(t testing.TB, f *fixture, tip, packID string) gitlet.Pa
 }
 
 // packInto commits files on repo's work tree and packs the commit's new
-// objects into dir's objects/pack — a push's scratch, as its receive-pack
-// would leave it — answering the commit and the pack's checksum. Nothing is
-// stored and no row is written: a case does each at the moment it chooses
-// (w.storeBundle, w.log.write).
+// objects into dir's objects/pack, as receive-pack leaves a push's scratch,
+// answering the commit and the pack's checksum. The case stores and writes
+// the row when it chooses (w.storeBundle, w.log.write).
 func (w *syncWorld) packInto(t testing.TB, repo, dir string, files map[string]string) (string, string) {
 	t.Helper()
 	f := w.repos[repo]
@@ -253,8 +248,8 @@ func (w *syncWorld) storeBundle(t testing.TB, b gittest.Bundled, packID string) 
 	return row
 }
 
-// putBundle is storeBundle answering its failure, for a fixture storing many
-// bundles at once off the test's goroutine.
+// putBundle is storeBundle returning its error, for use off the test's
+// goroutine.
 func (w *syncWorld) putBundle(ctx context.Context, b gittest.Bundled, packID string) (gitlet.PackRow, error) {
 	obj, err := w.store.Put(ctx, bytes.NewReader(b.Bytes), int64(len(b.Bytes)),
 		objstore.PutMeta{ContentType: gitlet.BundleContentType})
@@ -285,7 +280,7 @@ func (w *syncWorld) tag(t testing.TB, repo, name string, annotated bool) string 
 }
 
 // tagged is an annotated tag of repo's newest commit, its tag object pushed
-// as its own pack: it answers the tag object and that pack's row.
+// as its own pack; it answers the tag object and that pack's row.
 func (w *syncWorld) tagged(t testing.TB, repo, name string) (string, gitlet.PackRow) {
 	t.Helper()
 	f := w.repos[repo]
@@ -297,10 +292,9 @@ func (w *syncWorld) tagged(t testing.TB, repo, name string) (string, gitlet.Pack
 	return oid, row
 }
 
-// merged is ONE pack of every object of the packs rows name — a compaction's
-// output, as git's own merge of them writes it (pack-objects --stdin-packs)
-// — stored, and its row answered as a compaction's, not yet written: a case
-// writes it, retiring rows, at the moment it chooses (w.log.compact).
+// merged stores ONE pack of every object of rows' packs, as a compaction's
+// pack-objects --stdin-packs writes it, and answers its compaction row
+// unwritten: the case retires rows when it chooses (w.log.compact).
 func (w *syncWorld) merged(t testing.TB, rows ...gitlet.PackRow) gitlet.PackRow {
 	t.Helper()
 	bare := gittest.Empty(t)
@@ -333,10 +327,9 @@ func (w *syncWorld) merged(t testing.TB, rows ...gitlet.PackRow) gitlet.PackRow 
 	return row
 }
 
-// compacted is a compaction of rows on repo, written: their merge stored
-// (merged), and ONE record retiring them and adding it, as the code domain's
-// apply of a compaction writes one. It answers the output's row, Added at the
-// record's position.
+// compacted is merged written as the code domain writes a compaction: ONE
+// record retiring rows and adding the output, whose row (Added at the
+// record's position) it answers.
 func (w *syncWorld) compacted(t testing.TB, repo string, rows ...gitlet.PackRow) gitlet.PackRow {
 	t.Helper()
 	out := w.merged(t, rows...)
@@ -370,20 +363,18 @@ func (w *syncWorld) dir(t testing.TB, c *cache.Cache, repo string) string {
 }
 
 // image is what an incarnation IS, as text a case compares: HEAD, config and
-// packed-refs byte for byte, the names of its pack files, its tag index byte
-// for byte with its rows, and every entry outside the image grammar. The
-// maintainer's outputs — the multi-pack-index and the commit-graph — are left
-// out: whether one is on disk is the maintainer's schedule, not the rows'. So
-// is the rest of crewlet/, the index of pushes: what it holds is how much of
-// the push history this copy has read, never what a fresh copy at the same
-// position would — it is held to the rows by its own check (checkIndex).
+// packed-refs byte for byte, its pack file names, its tag index and rows, and
+// every entry outside the image grammar. The multi-pack-index and
+// commit-graph are left out (their presence is the maintainer's schedule, not
+// the rows'), and so is the index of pushes, which reflects how much history
+// this copy has read; checkIndex holds it to the rows.
 func (w *syncWorld) image(t testing.TB, c *cache.Cache, repo string) string {
 	t.Helper()
 	return imageOf(t, w.dir(t, c, repo))
 }
 
-// rebuilt is the image of a FRESH cache — its own directory and pool —
-// synced linearizably from nothing at the log's position now.
+// rebuilt is the image of a FRESH cache synced linearizably from nothing at
+// the log's position now.
 func (w *syncWorld) rebuilt(t testing.TB, repo string) string {
 	t.Helper()
 	image, _ := w.rebuiltChain(t, repo)
@@ -391,10 +382,9 @@ func (w *syncWorld) rebuilt(t testing.TB, repo string) string {
 }
 
 // rebuiltChain is rebuilt's image and the published chain the fresh cache
-// holds once its installer has had its say (settledSync): what its full round
-// installed before it answered, and what it left its installer — a missing
-// part is asked about at the log's head once, from there. A repository with
-// no chain is one sync, as rebuilt always was.
+// holds once its installer has settled (settledSync), counting what the full
+// round left its installer (a missing part asked about once, at the log's
+// head) as well as what it installed.
 func (w *syncWorld) rebuiltChain(t testing.TB, repo string) (string, cache.Chain) {
 	t.Helper()
 	c, stop := w.fresh(t)
@@ -405,9 +395,8 @@ func (w *syncWorld) rebuiltChain(t testing.TB, repo string) (string, cache.Chain
 }
 
 // fresh is a cache of its own directory and pool over the world's log and
-// store — a Gitlet node that joins with nothing, recording nothing in the
-// world's log, metrics or logs — and what stops it and removes its
-// directory.
+// store, as a node joining with nothing, recording nothing in the world's
+// log, metrics or logs; the func stops it and removes its directory.
 func (w *syncWorld) fresh(t testing.TB) (*cache.Cache, func()) {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "reference")
@@ -465,14 +454,12 @@ func imageOf(t testing.TB, dir string) string {
 			packs = append(packs, name)
 		case parent == filepath.Join("objects", "pack") && maintainer.MatchString(name):
 		case parent == filepath.Join(gitproc.DroppingDir, "pack") && packFile.MatchString(name):
-			// THE DROPPING VIEW: the packs only rows an expunge's begin
-			// left dropping name, part of the image as much as objects/pack.
+			// The packs an expunge's begin left dropping (package doc, "The
+			// dropping view") are part of the image.
 			dropping = append(dropping, name)
-		// The published chain's two directories — its multi-pack-index layers
-		// and its commit-graph layers with the node's tip — are derived
-		// files, which a check of their own holds (gitlettest.LayersHold): a
-		// copy's chain is no function of the rows alone, since a layer the
-		// store lost after the copy installed it stays installed there.
+		// The published chain's layers are no function of the rows alone (a
+		// layer the store lost after install stays installed), so
+		// gitlettest.LayersHold checks them instead.
 		case rel == filepath.Join("objects", "pack", "multi-pack-index.d") && d.IsDir(),
 			rel == filepath.Join("objects", "info", "commit-graphs") && d.IsDir():
 			return fs.SkipDir
@@ -492,8 +479,7 @@ func imageOf(t testing.TB, dir string) string {
 	slices.Sort(strays)
 	fmt.Fprintf(&b, "== packs\n%s\n", strings.Join(packs, "\n"))
 	if len(dropping) > 0 {
-		// Only where there are any, so every image of a copy no expunge has
-		// touched reads as it always has.
+		// Only when non-empty, so a copy no expunge touched has no section.
 		fmt.Fprintf(&b, "== dropping\n%s\n", strings.Join(dropping, "\n"))
 	}
 	fmt.Fprintf(&b, "== outside the image\n%s\n", strings.Join(strays, "\n"))
@@ -516,9 +502,9 @@ func tagsImage(dir string) string {
 	return fmt.Sprintf("%x\n%s\n", sha256.Sum256(raw), strings.Join(rows, "\n"))
 }
 
-// countingObjects is the store's read, counted: the opens of each object, in
-// order, and the most open at once — and, when a case asks, held: an object's
-// opens until the case lets them go (hold), each counted open while it waits.
+// countingObjects counts the store's opens per object, their order and the
+// most open at once; hold, when set, blocks an object's opens until the case
+// releases them, each counted open while it waits.
 type countingObjects struct {
 	inner cache.Objects
 
@@ -528,9 +514,8 @@ type countingObjects struct {
 	inFlight int
 	most     int
 	hold     func(objstore.Key) <-chan struct{}
-	// fail, when set, is the store's answer to an open of an object under
-	// the open's context, nil to open it; readFail the answer of every read
-	// of an object it opened, nil to read it.
+	// fail, when set, fails an open (nil opens it); readFail fails every
+	// read of an opened object (nil reads it).
 	fail     func(context.Context, objstore.Key) error
 	readFail func(objstore.Key) error
 }
@@ -689,8 +674,8 @@ func runGit(t testing.TB, pool *gitproc.Pool, dir string, stdin string, args ...
 	return string(res.Stdout), err
 }
 
-// runGitOver is runGit in the scratch or view sc, which names its alternate —
-// the incarnation it leans on — as every process run in it must.
+// runGitOver is runGit in the scratch or view sc, naming its alternate (the
+// incarnation it leans on) as every process run in it must.
 func runGitOver(t testing.TB, pool *gitproc.Pool, sc *cache.Scratch, args ...string) (string, error) {
 	t.Helper()
 	res, err := pool.Run(t.Context(), gitproc.Cmd{Dir: sc.Dir, Alternate: sc.Alternate, Args: args,

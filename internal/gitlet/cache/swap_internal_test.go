@@ -7,16 +7,14 @@ import (
 )
 
 // EVERY FIELD OF AN INCARNATION IS CLASSIFIED FOR THE SWAP (swap.go's
-// swapFields), both ways and in the struct's order: a field the table does
-// not name is one a swap would silently leave behind — a verdict of the files
-// it links lost, or a reader's state carried into a copy it never held — so a
-// part that adds a field to incarnation cannot land it without saying what a
-// swap does with it. Each entry is of a class there is, says why, and carries
-// exactly when its class does: a carried field the promote has no carry for
-// is one the promote never copies.
+// swapFields), both ways and in the struct's order: an unnamed field is one a
+// swap silently leaves behind (a lost verdict of the files it links, or a
+// reader's state carried into a copy it never held). Each entry has a real
+// class and a why, and a carry exactly when its class carries: a carried
+// field with no carry is one the promote never copies.
 //
-// Mutations: add a field to incarnation (named nowhere); drop a row (a field
-// classified nowhere); a carried row with no carry.
+// Mutations: add a field to incarnation; drop a row; a carried row with no
+// carry.
 func TestEveryIncarnationFieldIsClassifiedForTheSwap(t *testing.T) {
 	t.Parallel()
 	typ := reflect.TypeFor[incarnation]()

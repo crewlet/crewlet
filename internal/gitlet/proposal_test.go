@@ -20,12 +20,11 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
-// A REF IS RECORDED WHOLE, OR BOUNDED BY A DIGEST OF THE WHOLE: every ref a
-// push may move — and every one refused for its shape alone — rides its record
-// as itself; one past MaxRefNameBytes or not UTF-8 rides it within
-// MaxRefNameBytes of UTF-8 that names its length and a digest of all of it, so
-// two refs sharing an opening still differ, the form survives JSON as itself,
-// and recording a recorded ref changes nothing.
+// A REF IS RECORDED WHOLE, OR BOUNDED BY A DIGEST OF THE WHOLE: a ref a push
+// may move, even one refused for its shape, is recorded as itself; one past
+// MaxRefNameBytes or not UTF-8 within MaxRefNameBytes of UTF-8 naming its length
+// and a digest of all of it, so refs sharing an opening differ, the form
+// survives JSON, and recording it again changes nothing.
 func TestARefIsRecordedWholeOrBoundedByADigestOfTheWhole(t *testing.T) {
 	t.Parallel()
 	longest := "refs/heads/" + strings.Repeat("x", gitlet.MaxRefNameBytes-len("refs/heads/"))
@@ -74,10 +73,10 @@ func TestARefIsRecordedWholeOrBoundedByADigestOfTheWhole(t *testing.T) {
 	}
 }
 
-// A PROPOSAL CARRIES EVERY REF IN ITS RECORDED FORM: a command naming a ref
-// past MaxRefNameBytes, or one that is not UTF-8, is refused by name — so
-// nothing that reaches a record or a row is longer, or reads back as another
-// ref — and the same command carrying the recorded form is taken.
+// A PROPOSAL CARRIES EVERY REF IN ITS RECORDED FORM: a ref past
+// MaxRefNameBytes or not UTF-8 is refused by name, so nothing longer, or
+// reading back as another ref, reaches a record or a row; its recorded form is
+// taken.
 func TestAProposalCarriesEveryRefInItsRecordedForm(t *testing.T) {
 	t.Parallel()
 	for _, ref := range []string{"refs/heads/" + strings.Repeat("&", 60_000), "refs/heads/\xff"} {
@@ -97,31 +96,18 @@ func TestAProposalCarriesEveryRefInItsRecordedForm(t *testing.T) {
 	}
 }
 
-// THE COMMANDS' BOUND HOLDS WHATEVER A PUSH'S WORK ADDS: a push whose commands
-// ValidateCommands admits stays within EntryRoom once its work has made it as
-// large as it can — every command forced and refused under the longest code,
-// a pack, the most introduced ids and the largest count, the longest
-// principal and node — and one command more of the same is refused as too
-// wide, typed with what the push takes and what one push may. Measured with
-// refs JSON spells six times over, the shape that reaches the bound: plain
-// refs at the longest take under half the room for every command a push may
-// carry. And for a SEAT'S push, whose principal carries the run behind it,
-// every field of the run at MaxProvenanceBytes of what JSON spells six times
-// over — a coding box's run id at its one spelling, a UUID's, beside its
-// harness and its work item's identity and project at that bound, which
-// the box's admission alone stamps — the way — the longest, and a coding
-// box's — and the company day its committer stamps on the entry at its
-// longest: the principal and the way are measured as their proposer stamped
-// them, so the room they take is room the commands are not admitted to, and
-// so is the day's, which no proposer sends.
+// THE COMMANDS' BOUND HOLDS WHATEVER A PUSH'S WORK ADDS: commands
+// ValidateCommands admits stay within EntryRoom once the work grows the push
+// as far as it can (every command forced and refused under the longest code, a
+// pack, MaxIntroduced ids, the largest count, the longest principal and node,
+// each ref and run field but the box's UUID run id of '&', six bytes in JSON,
+// and the company day its committer stamps), and one command more is a
+// TooWideError; MaxCommandsPerPush plain refs always fit. The principal, way
+// and day are measured as stamped, so commands never take their room.
 //
-// Mutations: measure the completed entry with the principal's run dropped
-// (completed() clearing w.Principal.Run) — the seat's push is admitted
-// commands its run then has no room beside, and its entry runs past EntryRoom;
-// measure a seat's entry without its day — the entry its committer stamps
-// outgrows the bound; measure the box's run without its work item's identity
-// and project (completed() clearing them) — the box is admitted commands they
-// have no room beside, and its entry runs past EntryRoom, red.
+// Mutations: completed() clearing the principal's run, or the box's work item
+// identity and project, or a measure without the day — the entry outgrows
+// EntryRoom, red.
 func TestTheCommandsBoundHoldsWhateverAPushsWorkAdds(t *testing.T) {
 	t.Parallel()
 	node := strings.Repeat("n", 64)
@@ -234,26 +220,18 @@ func TestTheCommandsBoundHoldsWhateverAPushsWorkAdds(t *testing.T) {
 	}
 }
 
-// A PUSH MEASURED FOR ITS RECORD COUNTS WHOM IT WAS MADE FOR (ADR-0109): a
-// seat's push its committer stamps whom it was made for on — a credential's at
-// its widest, a login of iam.MaxLogin bytes with every app this build knows,
-// under MaxCarrierBytes — is measured carrying it, before its work and as it
-// is proposed. At the most commands of the costliest ref ValidateCommands
-// admits beside that carrier, the entry its committer writes carries it and
-// fits what the push was measured at, and the push its work completes still
-// passes Validate's budget; measured without it, the push is short of the
-// entry its committer writes. And a LANDING keeps on each push row it lands
-// its entry's carrier, read from the entry's row rather than the land record,
-// which carries none: MaxLandEntries entries each enqueued for the widest
-// carrier, landing into a target of the costliest name and deleting sources of
-// it, weigh their carriers on their rows — MaxLandEntries × MaxCarrierBytes at
-// most — and under a quarter of HorizonBytesPerRecord in all, so the history's
-// removal still keeps pace with what one record adds.
+// A PUSH MEASURED FOR ITS RECORD COUNTS WHOM IT WAS MADE FOR (ADR-0109): with
+// the widest carrier (an iam.MaxLogin credential with every app, within
+// MaxCarrierBytes), the most commands ValidateCommands admits complete to an
+// entry that carries it, fits its measure and passes Validate; measured
+// without it the push is short. A landing's push rows keep their entries'
+// carriers, read from the entries' rows since the land record carries none: at
+// MaxLandEntries of the widest, costliest-named, they keep at most
+// MaxLandEntries × MaxCarrierBytes of carriers and weigh under a quarter of
+// HorizonBytesPerRecord, so the history's removal keeps pace with one record.
 //
-// Mutations: entryWith leaving the carrier off a seat's entry — the entry its
-// committer writes carries nobody, and is measured without it, red; a
-// landing's push rows taking no carrier from their entries' rows — they keep
-// none, red.
+// Mutations: entryWith leaving the carrier off a seat's entry, red; a
+// landing's push rows taking no carrier from their entries' rows, red.
 func TestAPushMeasuredForItsRecordCountsWhomItWasMadeFor(t *testing.T) {
 	t.Parallel()
 	widest := &types.WorkingFor{Kind: types.WorkingForCredential,
@@ -390,26 +368,18 @@ func engineBuilt(p gitlet.Proposal, packBytes int64) gitlet.Proposal {
 	return p
 }
 
-// A PROPOSAL NAMES HOW ITS PACK WAS BUILT, and an engine-built one is one
-// commit on one ref: a proposal naming no way, or one this build does not know,
-// is the proposer's bug and refused naming via — by ValidateCommands too, whose
-// measure would otherwise be short of the entry; a push the engine built moving
-// two refs, or --atomic, or storing a pack past what a Gitlet node's build stores
-// (gitlet.MaxWritePackBytes, which only an engine-built push is held to), is
-// refused naming what it broke; and a person's push the engine built of one
-// command is a proposal. So is a seat's, whichever way it was built, since the
-// decide judges a seat's grant — one naming the run that made it, which the
-// engine stamps on every seat's push: a seat's push naming none is its
-// proposer's bug, refused naming principal.run. A seat's push git received is
-// its coding box's, which names its launch and harness — one naming none is
-// refused naming principal.run.run_id — and a push the engine built is a tool
-// call's, whose run is its turn, so one naming an executor is refused naming
-// the same.
+// A PROPOSAL NAMES HOW ITS PACK WAS BUILT: no via, or one this build does not
+// know, is refused naming via, by ValidateCommands too, lest its measure fall
+// short of the entry. An engine-built push is one commit on one ref with a pack
+// within MaxWritePackBytes (held to it alone): two refs, --atomic or a larger
+// pack is refused naming what it broke. A seat's push, judged by its grant
+// either way, names its run (else principal.run), with an executor (run_id)
+// when git received it from a coding box and none when the engine built it for
+// a tool call's turn (else principal.run.run_id).
 //
-// Mutations: refuse every principal but an operator's again (validFields'
-// refusal the decide's grant lifts) — the seat's pushes are refused, red; take
-// a seat's push git received naming no executor — its row would be one no
-// read of the run finds, red.
+// Mutations: refuse every principal but an operator's in validFields — the
+// seat's pushes are refused, red; take a seat's git push naming no executor —
+// no read of the run finds its row, red.
 func TestAProposalNamesHowItsPackWasBuilt(t *testing.T) {
 	t.Parallel()
 	one := proposal("0190f3c4-0000-7000-8000-00000000c0de", update("refs/heads/main", gitlet.ZeroOID, oidOf("B")))
@@ -500,12 +470,10 @@ func TestAProposalNamesHowItsPackWasBuilt(t *testing.T) {
 }
 
 // A PROVENANCE FIELD IS FITTED, NEVER REFUSED: a work key copied from another
-// system as it arrived — a GitLab key of a nested namespace's path past the
-// bound, a key holding a newline, one that is not UTF-8 — comes back at most
-// MaxProvenanceBytes of valid UTF-8 with no control character, a run carrying
-// it is one Validate takes, two keys sharing their first 256 bytes come back
-// different, a key already within the rules comes back as it is, and fitting a
-// fitted key changes nothing.
+// system as it arrived (a deep GitLab path, a newline, not UTF-8) is fitted to
+// at most MaxProvenanceBytes of UTF-8 with no control character, which
+// Validate takes; keys sharing their first 256 bytes stay distinct, a key
+// within the rules is kept as it is, and fitting a fitted key changes nothing.
 //
 // Mutation: FitProvenance answering s as it is — the long key fails Validate.
 func TestAProvenanceFieldIsFittedNeverRefused(t *testing.T) {
@@ -543,10 +511,10 @@ func TestAProvenanceFieldIsFittedNeverRefused(t *testing.T) {
 }
 
 // THE RECEIVER CHECKS AN UNSTORED PACK AS ITS COMMITTER WILL CHECK IT STORED:
-// ValidateUnstored answers what Validate answers once the put has filled in
-// the object's key and digest — a proposal both take, one past its record's
-// room both refuse, a pack whose sizes lay out no bundle both refuse — and
-// refuses a pack already stored, which Validate is the check of.
+// ValidateUnstored answers what Validate answers once the put fills in the
+// object's key and digest (both take a proposal, both refuse one past its
+// record's room or a pack whose sizes lay out no bundle), and refuses a pack
+// already stored, which is Validate's to check.
 func TestAnUnstoredPackIsCheckedAsItWillBeStored(t *testing.T) {
 	t.Parallel()
 	stored := proposal("0190f3c4-0000-7000-8000-00000000c0de", update("refs/heads/main", gitlet.ZeroOID,

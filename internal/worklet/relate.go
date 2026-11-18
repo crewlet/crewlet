@@ -12,35 +12,25 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// The two halves of a dependency, and why each is a gesture rather than a set.
+// A dependency is the one MIRRORED relation: `waiting_on` is authored on the
+// dependent, and the blocker carries its id in [Task.Dependents] so a close
+// names whom it unblocks without a reverse scan.
 //
-// A dependency is the one relation this design MIRRORS: `waiting_on` is
-// authored on the dependent, and the blocker carries the dependent's id in
-// [Task.Dependents] so a close can name who it unblocks without a reverse scan
-// over every task in the company.
-//
-// Both halves are collections a record carries WHOLE, and both are bounded —
-// [MaxWaitingOn], [MaxOtherRelations], [MaxDependents]. That combination is
-// what makes a caller-formed set wrong twice over: it discards every edge that
-// arrived between the caller's read and its write, and it has nothing to count
-// the cap against, because the set a cap governs is the one the write lands
-// on. So both travel as an INTENT and are settled here, inside the writer's
-// decide snapshot, exactly as [settleWatch] settles the watchers.
+// Both halves are bounded collections a record carries WHOLE ([MaxWaitingOn],
+// [MaxOtherRelations], [MaxDependents]), so a caller-formed set would discard
+// edges added since the caller's read and count its cap against the wrong set.
+// Both travel as an INTENT, settled inside the decide snapshot as
+// [settleWatch] settles watchers.
 
-// settleRelations resolves a relation gesture into the whole collection.
-//
-// INSIDE THE DECIDE SNAPSHOT, for the reason [settleWatch]'s doc gives: the
-// set a gesture is resolved against has to be the set the record lands on.
-// It returns a COPY rather than writing through the patch it was given,
-// because Decide runs again on a retry and a resolution folded into the
-// captured patch would compound across attempts.
+// settleRelations resolves a relation gesture into the whole collection,
+// inside the decide snapshot (see [settleWatch]). It returns a COPY: Decide
+// re-runs on a retry, and a resolution folded into the captured patch would
+// compound across attempts.
 func (w *Writer) settleRelations(current Task, patch TaskPatch) (TaskPatch, error) {
 	if patch.Relate == nil {
-		// A WHOLE SET STILL HAS TO FIT. Nothing in this tree states
-		// one any more — every caller says what it wants as a gesture —
-		// but the field is on the RECORD, so it is what a future writer
-		// reaches for first, and a cap enforced on the gesture alone is
-		// a cap that writer walks straight past.
+		// A WHOLE SET STILL HAS TO FIT: no caller states one today, but
+		// the field is on the record, and a cap enforced on the gesture
+		// alone is one a future writer walks past.
 		if patch.Relations != nil {
 			if err := checkRelations(current.ID, *patch.Relations); err != nil {
 				return patch, err
@@ -49,24 +39,17 @@ func (w *Writer) settleRelations(current Task, patch TaskPatch) (TaskPatch, erro
 		return patch, nil
 	}
 	if patch.Relations != nil {
-		// BOTH SPELLINGS AT ONCE IS A PROGRAMMING ERROR, refused rather
-		// than resolved in some order: one of them is a delta and the
-		// other is the whole set, and whichever won would silently
-		// discard the other.
+		// BOTH SPELLINGS AT ONCE IS REFUSED, not ordered: whichever won
+		// would silently discard the other.
 		return patch, invalid("this patch on task %s carries both a "+
 			"relation gesture and a whole relation set — a caller states one "+
 			"or the other", current.ID)
 	}
-	// THE WRITER STAMPS THE EDGES IT AUTHORS, so no caller has to hold a
-	// clock or repeat the actor it is already acting as. An edge arriving
-	// with either already set keeps it: the dependency sequence stamps its
-	// own from one instant shared across every edge of the call, and a
-	// second stamp here would give the last one a different second.
-	//
-	// ON A COPY, because this runs inside a decide the framework may run
-	// again — and a stamp written back onto the caller's own intent would
-	// make the second round's record carry the first round's instant, for
-	// every path that reuses an intent value.
+	// THE WRITER STAMPS THE EDGES IT AUTHORS. One already stamped keeps
+	// it: the dependency sequence stamps every edge of a call with one
+	// shared instant. ON A COPY, since the decide may re-run and a stamp
+	// written onto the caller's intent would carry the first round's
+	// instant into the next.
 	stamped := *patch.Relate
 	stamped.Add = slices.Clone(stamped.Add)
 	for i, add := range stamped.Add {
@@ -103,11 +86,8 @@ func (r *RelationIntent) resolve(current Task) ([]Relation, error) {
 	next := slices.Clone(current.Relations)
 	for _, drop := range r.Remove {
 		next = slices.DeleteFunc(next, func(have Relation) bool {
-			// ON (Kind, Other) ALONE. A note is something somebody
-			// typed on an edge rather than part of the edge's
-			// identity, so removing one does not require quoting it
-			// back — and a caller that had to would be removing the
-			// edge it last read rather than the edge that is there.
+			// ON (Kind, Other) ALONE: a note is not part of the
+			// edge's identity, so removal never quotes it back.
 			return have.Kind == drop.Kind && have.Other == drop.Other
 		})
 	}
@@ -116,10 +96,8 @@ func (r *RelationIntent) resolve(current Task) ([]Relation, error) {
 			return have.Kind == mark.Kind && have.Other == mark.Other
 		})
 		if at < 0 {
-			// THE EDGE WENT AWAY, which is the repair succeeding by
-			// another route: somebody removed the dependency the duty
-			// was about to give up on. Marking a relation that is not
-			// there would ADD one.
+			// THE EDGE WENT AWAY: the repair succeeded by another
+			// route, and marking a missing relation would ADD one.
 			continue
 		}
 		next[at].OneSidedFinal = true
@@ -128,12 +106,9 @@ func (r *RelationIntent) resolve(current Task) ([]Relation, error) {
 		if slices.ContainsFunc(next, func(have Relation) bool {
 			return have.Kind == add.Kind && have.Other == add.Other
 		}) {
-			// AN EDGE THAT IS ALREADY THERE IS NOT AN ERROR. A
-			// retried turn re-states its own edges, and an edge's
-			// durable identity is (Kind, Other) — so the second
-			// statement is the same edge rather than a second one,
-			// and refusing it would fail the retry the engine's own
-			// redelivery guarantees make ordinary.
+			// AN EDGE ALREADY THERE IS NOT AN ERROR: a retried turn
+			// re-states its edges, and refusing the same (Kind, Other)
+			// would fail an ordinary redelivery.
 			continue
 		}
 		next = append(next, add)
@@ -141,12 +116,9 @@ func (r *RelationIntent) resolve(current Task) ([]Relation, error) {
 	return next, nil
 }
 
-// dedupeRelations keeps the FIRST of each (Kind, Other), order preserved.
-//
-// Deterministically, because every data node stores what this record says:
-// two spellings of one edge inside a `set` would otherwise be two rows on the
-// node that applied the record and one on the node that re-derived the
-// document.
+// dedupeRelations keeps the FIRST of each (Kind, Other), order preserved, so
+// every data node stores one row per edge whether it applied the record or
+// re-derived the document.
 func dedupeRelations(in []Relation) []Relation {
 	type edge struct {
 		kind  RelationKind
@@ -166,12 +138,9 @@ func dedupeRelations(in []Relation) []Relation {
 }
 
 // checkRelations is the two caps, counted by kind, plus what an edge must be.
-//
-// TWO NUMBERS RATHER THAN ONE, which is the design's own shape: a dependency
-// edge costs a mirrored commit on the blocker and a row in the dependency
-// table that every close scans, while a `linked` edge is inert and costs
-// bytes. So `waiting_on` is bounded at [MaxWaitingOn] and everything else
-// together at [MaxOtherRelations].
+// TWO CAPS because a `waiting_on` edge costs a mirrored commit and a row every
+// close scans, while other edges are inert bytes: [MaxWaitingOn] and
+// [MaxOtherRelations].
 func checkRelations(taskID string, relations []Relation) error {
 	waiting, other, entries := 0, 0, 0
 	for _, r := range relations {
@@ -192,10 +161,8 @@ func checkRelations(taskID string, relations []Relation) error {
 			return invalid("task %s carries a %s relation naming no "+
 				"other task", taskID, r.Kind)
 		case r.Other == taskID:
-			// A SELF-EDGE IS REFUSED RATHER THAN DROPPED. As a
-			// `waiting_on` it is a task that blocks itself, which
-			// the dependency table would read as permanently
-			// blocked and no close could ever clear.
+			// A SELF-EDGE IS REFUSED, not dropped: as `waiting_on` it
+			// is a block no close could ever clear.
 			return invalid("task %s carries a %s relation to itself",
 				taskID, r.Kind)
 		case len(r.Note) > MaxRelationNote:
@@ -270,12 +237,9 @@ func settleDependents(current Task, patch TaskPatch) (TaskPatch, error) {
 	return patch, nil
 }
 
-// checkDependents is [MaxDependents], enforced where the set grows by one.
-//
-// THE CAP IS A SCOPE BOUND BEFORE IT IS A FAN-OUT BOUND. A group change on a
-// blocker rewrites two columns on every dependent, and the record has to
-// ENUMERATE those objects in its declared scope — so a blocker past this many
-// dependents is one whose own close could not state what it touches.
+// checkDependents is [MaxDependents], enforced where the set grows by one. It
+// is a SCOPE bound: a blocker's close rewrites every dependent, which its
+// record must enumerate in its declared scope.
 func checkDependents(taskID string, dependents []string) error {
 	if len(dependents) <= MaxDependents {
 		return nil
@@ -295,50 +259,22 @@ func relationKindList() string {
 }
 
 // scopeForDependents widens a task write's scope to the dependents its apply
-// will write.
+// will write, on EVERY patch: `maintainDeps` rewrites the dependents' rows on
+// every task apply, whatever the patch changed.
 //
-// # Why this read is BEFORE the request rather than inside its decide
-//
-// The publisher probes the deferral index with the REQUEST's scope and the
-// applier files a deferral under the ENVELOPE's — see [envelopeOf] — so the
-// two have to be one set, and the request's is fixed before the decide runs.
-// A scope widened only inside the decide would be a record filed under objects
-// its own writer never probed.
-//
-// Reading it early makes it possible for a dependent to arrive in between, so
-// the decide re-checks the claim with [ScopeSet.covers] and refuses a write
-// whose scope came up short. That is the honest pairing: an early read is safe
-// exactly when something later proves it was still right.
-//
-// # Every patch, not only a status one
-//
-// The apply rewrites `blocker_open` and `cleared_at` on every row naming this
-// task as a blocker on EVERY task apply — `maintainDeps` runs out of
-// `explodeTask`, which nothing gates on what the patch changed. Widening only
-// a status write left every other patch to a task somebody waits on claiming a
-// scope short of what its own apply writes, which [ScopeSet.covers] then
-// refused inside the decide — permanently, since the re-run it asked for took
-// the same gate and came up short again.
-//
-// It returns the scope unchanged when the task has no dependents, which is the
-// overwhelming majority of tasks: the read below is one indexed lookup and the
-// widening is nothing at all.
+// It reads BEFORE the request, not inside the decide: the publisher probes the
+// deferral index with the request's scope and the applier files under the
+// envelope's ([envelopeOf]), so the two must be one set. A dependent arriving
+// in between is caught by [ScopeSet.covers] inside the decide.
 func (w *Writer) scopeForDependents(ctx context.Context, id string,
 	scope ScopeSet) (ScopeSet, error) {
 
 	if w.db.IsZero() {
-		// A WRITER WITH NO REPLICATED ESTATE CANNOT ENUMERATE, and the
-		// honest move is to leave the scope alone rather than refuse
-		// every status write it makes. Such a writer cannot have
-		// AUTHORED a dependency either — [Writer.Depend] reads its
-		// counterparties through this same estate and refuses without
-		// one — so the ordinary case here is a task with no dependents
-		// and a scope that is already right.
-		//
-		// The case it cannot rule out is a dependent another node wrote,
-		// and that one is caught where it matters: [ScopeSet.covers]
-		// runs inside the decide, against the rows this write actually
-		// lands on, and refuses naming the object the claim is short by.
+		// NO REPLICATED ESTATE, NOTHING TO ENUMERATE: the scope stays as
+		// it is rather than refusing every write. Such a writer cannot
+		// author a dependency ([Writer.Depend] refuses without one), and
+		// one another node wrote is refused by [ScopeSet.covers] inside
+		// the decide.
 		return scope, nil
 	}
 	var (
@@ -348,11 +284,8 @@ func (w *Writer) scopeForDependents(ctx context.Context, id string,
 	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		current, held, err := readTask(ctx, tx, id)
 		if err != nil || !held {
-			// NOT HELD IS NOT AN ERROR HERE. The decide is what
-			// refuses a task this node does not have, with the
-			// message that says so; this read only widens a scope,
-			// and widening nothing leaves that refusal to the one
-			// place that states it properly.
+			// NOT HELD IS NOT AN ERROR HERE: the decide refuses a
+			// task this node lacks; this read only widens a scope.
 			return err
 		}
 		dependents = current.Dependents
@@ -371,14 +304,10 @@ func tasksFiledStatement(n int) string {
 	return `SELECT id, project_key FROM tracker_tasks WHERE id IN (` + placeholders(n) + `)`
 }
 
-// dependentsFiled is where each of these tasks is filed — its project — for
-// the ones this node holds.
-//
-// READ FROM THE DEPENDENTS' OWN ROWS, because a dependent's project is not on
-// the blocker's row and cross-project dependencies are allowed: a scope that
-// named a dependent under the BLOCKER's project named a path no record about
-// the dependent is filed under, so a record this node could not decode about
-// that dependent never blocked the write rewriting its row.
+// dependentsFiled is where each of these tasks is filed (its project), for the
+// ones this node holds. READ FROM THE DEPENDENTS' OWN ROWS: dependencies cross
+// projects, and naming a dependent under the blocker's project names a path its
+// deferred records are not filed under.
 func dependentsFiled(ctx context.Context, tx *sql.Tx, ids []string) (map[string]string, error) {
 	filed := make(map[string]string, len(ids))
 	if len(ids) == 0 {
@@ -401,18 +330,12 @@ func dependentsFiled(ctx context.Context, tx *sql.Tx, ids []string) (map[string]
 }
 
 // withObjects turns a sentinel scope into the enumeration that also names
-// these ids, keeping whatever the scope already stated.
+// these ids, keeping whatever the scope already stated. The subject's own term
+// is kept, since an enumeration carries no sentinel.
 //
-// THE SUBJECT IS ALWAYS AMONG THEM. A scope built from terms carries no
-// sentinel, so dropping the subject's own term would claim the dependents and
-// not the task being written.
-//
-// EACH DEPENDENT UNDER THE PROJECT IT IS FILED IN, from filed. One this node
-// does not hold has no path this build can form, so it is claimed by the
-// DOMAIN: the one term that certainly contains it. That over-claims — a
-// deferral anywhere in the tracker then blocks this write — which is the safe
-// direction, and it is reached only by an edge whose other end this node has
-// never applied.
+// Each dependent is named under the project filed gives; one this node does not
+// hold is claimed by the DOMAIN, the one term certain to contain it. That
+// over-claims, the safe direction.
 func (s ScopeSet) withObjects(subject string, ids []string, filed map[string]string) ScopeSet {
 	if len(ids) == 0 {
 		return s
@@ -442,12 +365,8 @@ func (s ScopeSet) withObjects(subject string, ids []string, filed map[string]str
 
 // namesFiled reports whether terms already claim id where filed says it is:
 // its object term under its own project, its project's container, or the
-// domain.
-//
-// THE CONTAINER COUNTS, because an enumeration past [MaxScopeTerms] folds its
-// largest project into one ([ScopeSet.capped]): a check that read only object
-// terms would refuse the very scope the cap made of a blocker's sixty-four
-// dependents.
+// domain. The container counts because [ScopeSet.capped] folds an enumeration
+// past [MaxScopeTerms] into its largest project's container.
 func (ScopeSet) namesFiled(terms []ScopeTerm, id string, filed map[string]string) bool {
 	project, held := filed[id]
 	return slices.ContainsFunc(terms, func(t ScopeTerm) bool {
@@ -464,11 +383,8 @@ func (ScopeSet) namesFiled(terms []ScopeTerm, id string, filed map[string]string
 }
 
 // covers reports whether this scope already names every one of these objects
-// where filed says each one is.
-//
-// WHERE, not only WHICH: a dependent that moved project between the read that
-// built this scope and the snapshot deciding it is named at a path its records
-// are no longer filed under, and a check on the id alone would pass it.
+// where filed says each one is: WHERE, not only WHICH, since a dependent may
+// have moved project since the read that built the scope.
 func (s ScopeSet) covers(ids []string, filed map[string]string) error {
 	if len(ids) == 0 {
 		return nil
@@ -477,11 +393,8 @@ func (s ScopeSet) covers(ids []string, filed map[string]string) error {
 		if s.namesFiled(s.Terms, id, filed) {
 			continue
 		}
-		// NAMED, AND NOT SILENTLY WIDENED. The request's scope is what
-		// the publisher probed the deferral index with, and this record
-		// is about to be filed under a different one — so a write that
-		// went ahead would be a record whose own writer never looked
-		// where it is filed.
+		// REFUSED, NOT SILENTLY WIDENED: the publisher probed the
+		// deferral index with the request's scope, never this one.
 		return fmt.Errorf("worklet: task %s waits on this one and this write's "+
 			"scope does not name it, so the record would not cover an object "+
 			"its own apply writes — re-run it, and the second attempt "+

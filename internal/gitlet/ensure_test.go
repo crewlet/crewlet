@@ -14,7 +14,7 @@ import (
 )
 
 // countingPublisher is a node's write authority that remembers the subject
-// kind of every publish it is asked for — what a reconcile costs, counted.
+// kind of every publish it is asked for: a reconcile's cost, counted.
 type countingPublisher struct {
 	gitlet.Publisher
 	mu    sync.Mutex
@@ -49,11 +49,10 @@ func countingStore(t *testing.T, n *node) (*gitlet.Store, *countingPublisher) {
 	return s, counting
 }
 
-// ENSUREREPOS ANSWERS WHAT ENSUREREPO ANSWERS, declaration by declaration —
-// an unchanged repository and one this activation already deleted from the
-// one read, everything else through EnsureRepo — and publishes for what
-// changed alone: the batch read, then a claim for a new name and a claim and
-// a settle for changed settings.
+// ENSUREREPOS ANSWERS WHAT ENSUREREPO ANSWERS, declaration by declaration: an
+// unchanged repository and one this activation deleted from the one read, the
+// rest through EnsureRepo. It publishes only for what changed: the batch read,
+// a claim for a new name, a claim and a settle for changed settings.
 func TestEnsureReposAnswersWhatEnsureRepoAnswers(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -114,11 +113,9 @@ func TestEnsureReposAnswersWhatEnsureRepoAnswers(t *testing.T) {
 }
 
 // AN ACTIVATION THAT CHANGES NOTHING IS ONE PUBLISH, however many repositories
-// it declares: the batch read finds every one as declared — every other one
-// naming path owners, which the read takes beside its rules, and the rest a
-// rule with a merge gate, which it takes with its rule — and no repository's
-// own subject is published to — where EnsureRepo spent two publishes a
-// repository to find the same.
+// it declares: the batch read finds each as declared (alternately naming path
+// owners and a rule with a merge gate, both of which it reads), and no
+// repository's own subject is published to, where EnsureRepo spends two each.
 //
 // Mutation: leave the path owners out of the batch read — every repository
 // naming them reads as changed and is published to, red; leave the gates out
@@ -167,11 +164,10 @@ func TestAnUnchangedActivationIsOnePublish(t *testing.T) {
 }
 
 // A RECORD THIS NODE CANNOT DECODE ANSWERS AS IT DOES THROUGH ENSUREREPO. The
-// batch read's probe covers the whole domain, so a deferred record anywhere
-// sends every declaration through EnsureRepo, whose own probe covers that
-// repository's paths: one the record covers is refused — never answered
-// unchanged from rows the record left stale — and one it does not is
-// answered as before.
+// batch probe covers the whole domain, so a deferred record sends every
+// declaration through EnsureRepo, whose probe covers its repository's paths:
+// one the record covers is refused, never answered unchanged from stale rows,
+// and one it does not is answered as before.
 func TestADeferredRecordIsAnsweredAsEnsureRepoAnswersIt(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -208,15 +204,12 @@ func TestADeferredRecordIsAnsweredAsEnsureRepoAnswersIt(t *testing.T) {
 }
 
 // A BATCH REFUSED FOR A REASON EVERY DECLARATION SHARES IS THE CALL'S ERROR
-// AND EVERY DECLARATION'S ANSWER, from its one publish. A node whose applier
-// is held below the activation's own fence refuses the batch `behind` on that
-// fence's session floor — the floor every per-repository publish waits on too
-// — so each of them would wait out the same budget for the same refusal: at
-// the ten thousand repositories a configuration may declare, hours before the
-// reconcile reported what the first publish already knew. The call says so
-// once, and each declaration it left undecided carries that same error, so a
-// caller logging the call's failure can pass over every one of them. Only a
-// declaration that is not one is answered otherwise, by its own refusal.
+// AND EVERY DECLARATION'S ANSWER, from its one publish. An applier held below
+// the activation's fence refuses the batch `behind` on the fence's session
+// floor, which every per-repository publish waits on too: retrying each would
+// take hours at ten thousand repositories for the same refusal. Each
+// undecided declaration carries that same error, so a caller logging the
+// call's failure can skip them; only an invalid declaration gets its own.
 func TestABatchRefusedBehindIsEveryDeclarationsAnswer(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -280,18 +273,17 @@ func TestEnsureReposRestoresWhatALaterActivationDeclaresAgain(t *testing.T) {
 	}
 }
 
-// AN OLDER ACTIVATION'S RECONCILE IS SUPERSEDED, the call and every declaration
-// in it — never answered unchanged from a snapshot a later fence stands in, and
-// from the batch's one publish, since every per-repository decide reads that
-// same fence first and answers the same — and an activation Activate never made
-// fails the call.
+// AN OLDER ACTIVATION'S RECONCILE IS SUPERSEDED, the call and every
+// declaration, from the batch's one publish (each per-repository decide reads
+// the same fence first), never answered unchanged from a snapshot a later
+// fence stands in; an activation Activate never made fails the call.
 func TestEnsureReposIsSupersededByALaterActivation(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
 	stale := n.activate(t1)
-	// STEADY IS WHAT t1 DECLARED AND t2 DID NOT CHANGE, so its row still
-	// carries t1 — no activation re-stamps an unchanged repository — and only
-	// the fence says a later activation owns it.
+	// STEADY IS WHAT t1 DECLARED AND t2 DID NOT CHANGE: its row still carries
+	// t1 (nothing re-stamps an unchanged repository); only the fence says a
+	// later activation owns it.
 	if _, err := n.store.EnsureRepo(t.Context(), stale, gitlet.Declared{
 		Name: "steady", Settings: described("same"),
 	}); err != nil {

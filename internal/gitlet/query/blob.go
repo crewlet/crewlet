@@ -12,22 +12,17 @@ import (
 )
 
 // A FILE is `git cat-file blob <id>` streamed through a page cutter that keeps
-// only the page being cut — every Write of it bounded, gitproc's contract — and
-// counts the rest of the file's lines as they pass, so Lines is the whole
-// file's while no more than a page of it is ever held. A page is whole lines
-// from where it starts while their encoded text fits; a line longer than a page
-// on its own is served in pieces at rune boundaries (Continues), each page's
-// cursor naming the byte the next resumes at, so the pieces concatenate to the
-// line byte for byte. git cannot seek inside an object, so a page past the
-// first reads everything before it — which is why, where the memo takes them,
-// the run cuts every page from the asked one to its range's end (blobPages),
-// each begun where the one before it ends: one stream of a file serves every
-// page a read of it asks for after (memo.go).
+// only the page being cut (every Write bounded, gitproc's contract) and counts
+// the rest of the file's lines as they pass, so Lines is the whole file's. A
+// page is whole lines while their encoded text fits; a line longer than a page
+// is served in pieces at rune boundaries (Continues) that concatenate to it
+// byte for byte. git cannot seek inside an object, so where the memo takes
+// them one run cuts every page from the asked one to its range's end
+// (blobPages; package doc, "The memo").
 //
-// BINARY is git's own test (buffer_is_binary): a NUL in the first 8 000
-// bytes, which codeindex.Binary holds — the one copy of the rule, by which the
-// code index skips the same files `git grep -I` does. Such a file is answered
-// by its size, with no text, and its stream is ended there.
+// BINARY is git's own test (buffer_is_binary), a NUL in the first 8 000 bytes,
+// held once in codeindex.Binary so the code index skips what `git grep -I`
+// does. Such a file is answered by its size, no text, its stream ended there.
 
 // blobRead answers a file read: a blob by its own id, or the file a path names
 // in a commit — or, where the path names a directory or none is given of a
@@ -152,13 +147,11 @@ func (r *read) readBlob(ctx context.Context, rev, blob, path string, size int64,
 }
 
 // blobPages is a Cmd.Stdout cutting a file read's pages out of the stream:
-// the page asked for, and — where more is set — every page after it to the
-// end of the read's range, each a blobPage of its own, begun where the last
-// one's next cursor names and fed the bytes of the line it begins in from
-// there (lineBuf), so every page is exactly the page a read from its cursor
-// would cut, and each is handed to page as it is cut. It decides binary
-// itself, git's test on the file's opening, and counts the whole file's lines
-// whatever the pages do.
+// the page asked for and, where more is set, every page after it to the
+// read's range's end, each a blobPage begun at the last one's next cursor and
+// fed its line's bytes from there (lineBuf), so it is exactly the page a read
+// from that cursor would cut; each is handed to page as it is cut. It decides
+// binary and counts the whole file's lines whatever the pages do.
 type blobPages struct {
 	room  int
 	more  bool

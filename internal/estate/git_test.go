@@ -25,10 +25,9 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// fakeGit is one Gitlet node's git half: it records every read it is asked —
-// stamped home or not — and the deadline of the context it was asked under,
-// and answers each with an answer naming itself, or unready where it is told
-// to be.
+// fakeGit is one Gitlet node's git half: it records every read asked, stamped
+// home or not, with its context's deadline, and answers naming itself, or
+// unready where told to be.
 type fakeGit struct {
 	name string
 
@@ -37,37 +36,30 @@ type fakeGit struct {
 	// deadlines is, for every read asked, its context's deadline; the zero
 	// time where it had none.
 	deadlines []time.Time
-	// unready answers every read gitlet.ErrGitUnready for this reason, where
-	// set — a SEAT'S read alone where seatsOnly is, as a node behind its
+	// unready, where set, answers every read gitlet.ErrGitUnready for this
+	// reason — only a seat's where seatsOnly is, as a node behind its
 	// configuration judges no seat and serves a person.
 	unready   gitlet.UnreadyReason
 	seatsOnly bool
-	// held is the repositories it holds a copy of, where it is set — a read
-	// not stamped home of any other is not_held, as the query server answers
-	// it — and nil for a node holding every repository.
+	// held is the repositories it holds a copy of (nil: every one); a read of
+	// any other not stamped home is not_held, as the query server answers.
 	held map[string]bool
 	// share, where set, is the node's seat git-work share, a unit of which
-	// every read takes before it answers — and a read the context's end
-	// stops waiting for one answers as the query server does: unready, at
-	// its share, where its answer fell due (gitlet.AnswerDue), and the
-	// context's own error where its caller went away.
+	// every read takes first. A read the context's end stops waiting answers
+	// as the query server does: unready at its share where its answer fell
+	// due (gitlet.AnswerDue), else the context's own error.
 	share *gitlet.GitShare
 
-	// written is every engine write it was asked, stamped home or not, with
-	// its context's deadline; and ranNothing,
-	// where set, is what it refuses every write with about itself —
-	// Gitlet stopping, or holding no epoch to sign by — having run
-	// nothing (gitlet.ErrNotServing). A write is otherwise answered as a read
-	// is: unready where the node is told to be, not_held where it holds no
-	// copy and is not the walk's home, and else applied, the node's name its
-	// commit.
+	// written is every engine write asked, with its context's deadline.
+	// ranNothing, where set, refuses every write having run nothing (Gitlet
+	// stopping, or no epoch to sign by: gitlet.ErrNotServing). A write is
+	// otherwise answered as a read is, else applied with the node's name as
+	// its commit.
 	written    []askedWrite
 	ranNothing error
 
-	// previewed is every merge preview it was asked, stamped home or not,
-	// each answered as a read is: unready where the node is told to be,
-	// not_held where it holds no copy and is not the walk's home, and else
-	// a clean merge of the two commits asked.
+	// previewed is every merge preview asked, each answered as a read is,
+	// else a clean merge of the two commits.
 	previewed []gitlet.MergePreviewQuery
 }
 
@@ -131,19 +123,15 @@ func (g *fakeGit) writes() []askedWrite {
 	return slices.Clone(g.written)
 }
 
-// servedAnAttempt reports whether deadline — what a git half was served
-// until — is a reply's margin (gitlet.ReplyMargin) before the end of an attempt
-// of whole that the router began between before and after.
+// servedAnAttempt reports whether deadline, what a git half was served until,
+// is gitlet.ReplyMargin before the end of an attempt of whole that the router
+// began between before and after.
 //
-// READ OFF THE DEADLINE THE REQUEST CARRIED, never off the time left when the
-// half began: that also counts the walk's own work and, for a peer's half, the
-// broker's hop and the envelope's checks, which a loaded runner under the
-// race detector stretched past any slack a case could allow (a write asked
-// under a caller's twenty seconds was served with 17.87 s left). The deadline
-// is fixed where the router opens its attempt and travels with the request
-// unchanged, so it is exact whatever the scheduling. Monotonic readings are
-// stripped (Round(0)): a peer's deadline crossed the wire, which carries the
-// wall clock alone.
+// It reads the deadline the request carried, fixed where the router opens its
+// attempt, never the time left when the half began: that also counts the
+// walk's work, the broker's hop and the envelope's checks, unbounded on a
+// loaded runner under -race. Round(0) strips monotonic readings, since a
+// peer's deadline crossed the wire as wall clock alone.
 func servedAnAttempt(deadline, before, after time.Time, whole time.Duration) bool {
 	if deadline.IsZero() {
 		return false
@@ -205,8 +193,8 @@ func (g *fakeGit) readDeadlines() []time.Time {
 	return slices.Clone(g.deadlines)
 }
 
-// gitHalf is a node's git half as [LocalGit] answers it: node's, and none —
-// Gitlet not built — where node is nil.
+// gitHalf is a node's git half as [LocalGit] answers it; none (Gitlet not
+// built) where node is nil.
 type gitHalf struct{ node *fakeGit }
 
 func (h gitHalf) Git() (GitServer, bool) {
@@ -216,10 +204,10 @@ func (h gitHalf) Git() (GitServer, bool) {
 	return h.node, true
 }
 
-// gitletNodes serves each of names as a GITLET node of the fleet — a data node too,
-// as every Gitlet node is in this release, over a copy of its own — answering
-// from a fake git half, and lists them in the routers' git placement. A name
-// in idle is served without Gitlet.
+// gitletNodes serves each of names as a Gitlet node of the fleet (a data node
+// too, over its own copy, as every Gitlet node is), answering from a fake git
+// half, and lists them in the routers' git placement. A name in idle is served
+// without Gitlet.
 func (f *fleet) gitletNodes(t *testing.T, names []string, idle ...string) map[string]*fakeGit {
 	t.Helper()
 	halves := map[string]*fakeGit{}
@@ -276,11 +264,9 @@ func asks(halves map[string]*fakeGit) map[string]int {
 }
 
 // writeOf is a person's commit of one file onto repo's main, as a tool asks
-// one: under an operation of its own, valid by the one rule every party to a
-// write holds it to (gitlet.EngineWrite.Validate), and stated made for nobody,
-// as a serving node reads every write it decodes — so what arrives is what
-// was sent, and a case that puts a seat in its writer's place sends a write
-// its router asks.
+// one: its own operation, valid by gitlet.EngineWrite.Validate, and made for
+// nobody, as a serving node reads every write it decodes — so what arrives is
+// what was sent.
 func writeOf(repo string) gitlet.EngineWrite {
 	text := "one\n"
 	return gitlet.EngineWrite{Kind: gitlet.WriteCommitFiles, RepoID: repo,
@@ -291,9 +277,8 @@ func writeOf(repo string) gitlet.EngineWrite {
 		Files: []gitlet.FileOp{{Op: gitlet.FileOpPut, Path: "README.md", Content: &text}}}
 }
 
-// seatWriteOf is a seat's commit onto its own branch of repo: one a node behind
-// the company's configuration judges no grant for, naming the turn that made
-// it.
+// seatWriteOf is a seat's commit onto its own branch of repo, naming its turn:
+// one a node behind the company's configuration judges no grant for.
 func seatWriteOf(repo string) gitlet.EngineWrite {
 	w := writeOf(repo)
 	w.Principal = gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev",
@@ -328,20 +313,17 @@ func previewsAsked(halves map[string]*fakeGit) map[string]int {
 	return out
 }
 
-// A GIT OPERATION IS ASKED OF ITS REPOSITORY'S HOME (ADR-0089): for each of a
-// thousand repositories, the first Gitlet node asked — and the one that answers,
-// every node answering — is the first of rendezvous.Order(repository, every
-// live Gitlet node), from a node that holds nothing and from a Gitlet node whose own
-// half answers in process, for a read by object id, an engine write and a merge
-// preview alike: the home's copy is the one a repository's reads keep warm, and
-// a write is built and a preview merged beside it. Never the node that answered
-// last (a keyed order
-// has no sticky node) and never the asking Gitlet node out of its turn: asked
-// first wherever it is not the home, it would warm a copy of every repository
-// its seats read or wrote.
+// A GIT OPERATION IS ASKED OF ITS REPOSITORY'S HOME (ADR-0089): for a thousand
+// repositories, the only Gitlet node asked, every node answering, is the first
+// of rendezvous.Order(repository, live Gitlet nodes), from a node holding
+// nothing and from a Gitlet node answering in process, for a read, an engine
+// write and a merge preview alike: the home's copy is the one kept warm. Never
+// the node that answered last (a keyed order has no sticky node), never the
+// asking Gitlet node out of turn, which would warm a copy of every repository
+// its seats touch.
 //
-// Mutation: order by the asking node's own id rather than the repository's —
-// most reads and writes answered by a node that is not their home, red.
+// Mutation: order by the asking node's id rather than the repository's — most
+// operations answered by a node that is not their home, red.
 func TestAGitOperationIsAskedOfItsRepositorysHome(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -421,18 +403,16 @@ func TestAGitOperationIsAskedOfItsRepositorysHome(t *testing.T) {
 }
 
 // HOME IS THE READS' FIRST GITLET NODE: for two hundred repositories over five
-// Gitlet nodes, the home every router names — one on a node that holds nothing,
-// and one on a Gitlet node whose own half is built, asked in process — is the Gitlet
-// node the walk asks a read of the repository first on a quiet fleet, the one
-// that answers it stamped home, and a Gitlet node is home (HomeOf) for exactly
-// the repositories that name it. With no demotion: a home that answered nothing
-// is still the home. A placement that cannot say who serves git is an error —
-// unknown, never "this node" or "home to none" — and a fleet with no Gitlet node
-// is ErrNoGitletNode.
+// Gitlet nodes, the home every router names (on a node holding nothing, and on
+// a Gitlet node with its half in process) is the node a quiet fleet's walk asks
+// first, stamped home, and HomeOf names a node for exactly those repositories.
+// No demotion: a home that answered nothing is still the home. A placement that
+// cannot say who serves git is an error, never "this node" or "home to none",
+// and a fleet with no Gitlet node is ErrNoGitletNode.
 //
-// Mutations: key Home on the asking node's id rather than the repository's —
-// most homes are not the node the reads ask first, red; order Home with the
-// walk's demotions — the suspect home is no longer named, red.
+// Mutations: key Home on the asking node's id — most homes are not the node the
+// reads ask first, red; order Home with the walk's demotions — the suspect home
+// is no longer named, red.
 func TestHomeIsTheReadsFirstGitletNode(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -479,8 +459,8 @@ func TestHomeIsTheReadsFirstGitletNode(t *testing.T) {
 		t.Fatalf("git-c's HomeOf names %d repositories, and it is the home of %d", len(own), homes["git-c"])
 	}
 
-	// NO DEMOTION: a home the router remembers silent keeps its
-	// repositories, where the walk asks it last.
+	// NO DEMOTION: a home remembered silent keeps its repositories, though the
+	// walk asks it last.
 	repo := repoID(3)
 	home, err := f.client.Home(repo)
 	if err != nil {
@@ -512,13 +492,11 @@ func TestHomeIsTheReadsFirstGitletNode(t *testing.T) {
 }
 
 // HOMES ARE JUDGED AGAINST ONE READING: HomeOf over a thousand repositories
-// reads who serves git ONCE, and names exactly the repositories Home names
-// this node for — the home's change work's backstop pass over its workers'
-// listings pays one read of the presence view, never one a repository — and
-// asked of no repository it reads nothing and names none.
+// reads who serves git ONCE (the change work's backstop pass pays one presence
+// read, never one a repository) and names exactly the repositories Home names
+// this node for; asked of none, it reads nothing and names none.
 //
-// Mutation: read who serves git again for every repository (HomeOf over
-// Home), and the placement is read a thousand times.
+// Mutation: HomeOf over Home, and the placement is read a thousand times.
 func TestHomeOfJudgesEveryRepositoryAgainstOneReading(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -557,16 +535,14 @@ func TestHomeOfJudgesEveryRepositoryAgainstOneReading(t *testing.T) {
 	}
 }
 
-// A REPOSITORY'S GIT ORDER IS EVERY LIVE GITLET NODE, ITS HOME FIRST, THE SAME ON
-// EVERY NODE: GitOrder names each Gitlet node once — the asking node's own half
-// among them where it is built — with Home its first node, whichever node asks;
-// a node the router remembers silent keeps its place, since a check's claim is
-// ranked by this order on every node alike; and a placement that cannot say who
-// serves git answers unknown, a fleet with none ErrNoGitletNode.
+// A REPOSITORY'S GIT ORDER IS EVERY LIVE GITLET NODE, ITS HOME FIRST, THE SAME
+// ON EVERY NODE: GitOrder names each Gitlet node once, the asker's own built
+// half included, Home first; a node remembered silent keeps its place, since a
+// check's claim is ranked by this order on every node alike; an unknown
+// placement answers unknown, a fleet with none ErrNoGitletNode.
 //
-// Mutations: order it with the walk's demotions, and the suspect home falls
-// out of first place, red; answer the order without this node's own half, and
-// git-c is missing from its own order, red.
+// Mutations: order with the walk's demotions — the suspect home falls from
+// first, red; leave out this node's own half — git-c is missing, red.
 func TestAGitOrderIsEveryGitletNodeItsHomeFirst(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -611,13 +587,11 @@ func TestAGitOrderIsEveryGitletNodeItsHomeFirst(t *testing.T) {
 }
 
 // A SCATTER'S ORDERS ARE ONE READING: GitOrders over a thousand repositories
-// reads who serves git once and answers each the order GitOrder does; asked of
-// no repository it reads nothing; and a placement that cannot say answers
-// unknown for all of them.
+// reads who serves git once and answers each GitOrder's order; asked of none it
+// reads nothing; an unknown placement answers unknown for all.
 //
-// Mutations: read who serves git again for every repository, and the
-// placement is read a thousand times, red; order with the walk's demotions,
-// and a suspect home falls out of first place, red.
+// Mutations: read the placement per repository — read a thousand times, red;
+// order with the walk's demotions — a suspect home falls from first, red.
 func TestAScattersGitOrdersAreOneReading(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -661,13 +635,13 @@ func TestAScattersGitOrdersAreOneReading(t *testing.T) {
 }
 
 // MAINTAINERS ARE JUDGED AGAINST ONE LISTING: MaintainerOf over a thousand
-// repositories, each at its own charge, reads the git listing ONCE and names
-// exactly the repositories Maintainer names this node for — a maintainer's
-// pass over its due listing pays one read of the presence view, never one a
-// repository — and asked of no repository it reads nothing and names none.
+// repositories, each at its own charge, reads the git listing ONCE (a
+// maintainer's pass pays one presence read, never one a repository) and names
+// exactly the repositories Maintainer names this node for; asked of none, it
+// reads nothing and names none.
 //
-// Mutation: read the listing again for every repository (MaintainerOf over
-// Maintainer), and it is read a thousand times.
+// Mutation: MaintainerOf over Maintainer, and the listing is read a thousand
+// times.
 func TestMaintainerOfJudgesEveryRepositoryAgainstOneListing(t *testing.T) {
 	t.Parallel()
 	const gib = int64(1) << 30
@@ -714,33 +688,17 @@ func TestMaintainerOfJudgesEveryRepositoryAgainstOneListing(t *testing.T) {
 }
 
 // THE MAINTAINER IS THE FIRST NODE IN ORDER THAT HOLDS THE CHARGE: over five
-// Gitlet nodes advertising {8, 8, 64, 8, 8} GiB of background budget and a
-// thousand repositories, work every node holds (4 GiB) is each repository's
-// home's — the maintainer IS the home on alike work — work only the large node
-// holds (40 GiB) is that node's for every repository, and work no node holds
-// (100 GiB) is the home's, whose own admission then refuses it. A node that
-// SAYS it has nothing to give — Gitlet not built — is passed over as
-// one too small is: with the large node saying so, the 40 GiB work is each
-// home's again. And a Gitlet node is the maintainer (MaintainerOf) of exactly the
-// repositories that name it, its own git half in process.
+// Gitlet nodes advertising {8, 8, 64, 8, 8} GiB, work every node holds (4 GiB)
+// is the home's, work only the large node holds (40 GiB) is that node's, work
+// none holds (100 GiB) the home's, whose admission refuses it. A node SAYING it
+// has nothing (Gitlet not built) is passed over as too small. NOTHING MOVES
+// PAST A HOME ON MISSING INFORMATION: a node NOT SAYING (no figure in its row)
+// is passed over as a runner-up but keeps what it is home to, so work never
+// goes to a node holding no copy only to be refused after a cold sync. git-c's
+// MaintainerOf agrees with Maintainer for every repository.
 //
-// NOTHING MOVES PAST A HOME ON MISSING INFORMATION. A node NOT SAYING — its row
-// carries no figure — is passed over where it is a runner-up and keeps the
-// repositories it is home to. So a small runner-up not saying leaves the large
-// node the maintainer of the 40 GiB work of every repository it ranks ahead of
-// the large node for and is not home to — never handed to a node that holds no
-// copy of it, only for that node's own admission to refuse it after a cold sync
-// of its whole history — while the repositories it is home to stay with it; the
-// large node not saying is passed over for every repository but its own, so the
-// 40 GiB work is each home's; and a home not saying keeps its own repositories'
-// 4 GiB work rather than hand it to their runners-up.
-//
-// Mutations: walk the nodes by budget rather than in the repository's order —
-// the large node maintains every repository's 4 GiB work, red; keep a runner-up
-// not saying in its place — the small runner-up takes the large node's 40 GiB
-// work, red; pass over a home not saying — the quiet home's repositories move to
-// their runners-up, red; answer the order's first node whatever it holds — the
-// 40 GiB work stays with the homes, red.
+// Mutations: walk by budget / keep a runner-up not saying / pass over a home
+// not saying / answer the first node whatever it holds — each red.
 func TestTheMaintainerIsTheFirstNodeInOrderThatHoldsTheCharge(t *testing.T) {
 	t.Parallel()
 	const gib = int64(1) << 30
@@ -790,10 +748,9 @@ func TestTheMaintainerIsTheFirstNodeInOrderThatHoldsTheCharge(t *testing.T) {
 	says(func(said map[string]int64) { said["git-c"] = 0 })
 	each("the large node saying it has nothing to give", 40*gib, home)
 
-	// THE PREMISES the quiet arms stand on: repositories the small node
-	// git-b ranks ahead of the large node for without being their home —
-	// the ones a quiet runner-up kept in its place would take — and
-	// repositories git-b and git-a are each home to.
+	// THE PREMISES of the quiet arms: repositories git-b ranks ahead of the
+	// large node without being home (what a quiet runner-up kept in place
+	// would take), and repositories git-b and git-a are each home to.
 	ahead, homed := 0, map[string]int{}
 	for i := range 1000 {
 		repo := repoID(i)
@@ -822,16 +779,14 @@ func TestTheMaintainerIsTheFirstNodeInOrderThatHoldsTheCharge(t *testing.T) {
 	each("a home not saying", 4*gib, home)
 }
 
-// A MAINTAINER NOBODY CAN READ IS UNKNOWN, NEVER A GUESS: where the listing of
-// who serves git and what each advertises cannot be read, Maintainer answers
-// its error — never "this node" and never "nobody" — and MaintainerOf answers
-// it in place of a set, so a node that cannot tell compacts and publishes
-// nothing that pass. And a listing that carries no Gitlet node has nobody to maintain
-// anything, ErrNoGitletNode — a node whose own git half is built included, which
-// no listing carries: its peers name nobody either.
+// A MAINTAINER NOBODY CAN READ IS UNKNOWN, NEVER A GUESS: with the git listing
+// unreadable, Maintainer and MaintainerOf answer its error, never "this node"
+// or "nobody", so a node that cannot tell compacts and publishes nothing that pass. A listing
+// with no Gitlet node is ErrNoGitletNode, even on a node whose own git half is
+// built: its peers name nobody either.
 //
-// Mutation: answer a listing that could not be read with the node this one's
-// own git half would make it — MaintainerOf names the repository, red.
+// Mutation: answer an unreadable listing by this node's own git half —
+// MaintainerOf names the repository, red.
 func TestAMaintainerOfAnUnreadablePlacementIsUnknown(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -868,14 +823,13 @@ func TestAMaintainerOfAnUnreadablePlacementIsUnknown(t *testing.T) {
 	}
 }
 
-// A NODE IS LISTED WHERE ITS GIT LISTING CARRIES IT, AND ONLY THERE — the
-// question a maintainer's loops wait on before their first pass: a node the
-// listing names is listed; one it does not name is not, its own git half
-// built — the very node Maintainer never answers, though Home places it; and
-// a listing that cannot be read is unknown, never "not listed".
+// A NODE IS LISTED WHERE ITS GIT LISTING CARRIES IT, AND ONLY THERE (what a
+// maintainer's loops wait on before their first pass): one it does not name is
+// not, its own git half built — the node Maintainer never answers, though Home
+// places it; an unreadable listing is unknown, never "not listed".
 //
-// Mutation: answer Listed by this node's own git half, as Home places it, and
-// the unlisted node is listed.
+// Mutation: answer Listed by this node's own git half — the unlisted node is
+// listed, red.
 func TestANodeIsListedOnlyWhereItsGitListingCarriesIt(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -909,9 +863,8 @@ func TestANodeIsListedOnlyWhereItsGitListingCarriesIt(t *testing.T) {
 }
 
 // shiftingListing is who serves git on a fleet whose presence view lists again
-// between ANY two reads: every read — of the holders or of the listing — is
-// answered from the listing it holds now, and the next listing of its script is
-// put in its place. listings counts the reads of the listing.
+// between ANY two reads: each read, of the holders or the listing, is answered
+// from the current listing and the script's next is put in its place.
 type shiftingListing struct {
 	mu       sync.Mutex
 	script   []GitListing
@@ -947,26 +900,17 @@ func (s *shiftingListing) listed() int {
 	return s.listings
 }
 
-// A MAINTAINER IS WEIGHED OFF THE LISTING THAT NAMES IT. On a fleet whose view
-// lists again between any two reads — the small node git-a in one listing and
-// gone from the next — every maintainer question reads the listing ONCE, and
-// the node it names for work only the large node holds (40 GiB) is the large
-// node for every one of a thousand repositories, whichever listing the
-// question read: never git-a, which one listing names too small to hold the
-// work and the other does not name at all. Ordered off one listing and weighed
-// off the next, git-a would read as a home not saying and keep the work of
-// every repository it is home to — on every node reading in that window.
+// A MAINTAINER IS WEIGHED OFF THE LISTING THAT NAMES IT. With the view listing
+// again between any two reads (git-a in one listing, gone from the next), each
+// maintainer question reads the listing ONCE, and 40 GiB work goes to the large
+// node for all thousand repositories, never git-a: ordered off one listing and
+// weighed off the next, git-a would read as a home not saying and keep it.
+// A Gitlet node the listing does not carry is GONE, never "not saying", even
+// with its own half built (draining, or not yet listed): it maintains nothing.
 //
-// And a Gitlet node the listing does not carry is no maintainer — GONE, never a
-// node not saying — even where its own git half is built: a node that gave its
-// presence back to drain, or whose row no listing has carried yet, takes no
-// repository's maintenance, and names what every listed node names.
-//
-// Mutations: weigh each node by a read of the listing of its own — git-a,
-// ordered off one listing and weighed off the next, keeps the large node's
-// work, and the listing is read more than once a question, red; place this
-// node by its own git half rather than by the listing — the unlisted node
-// maintains the repositories it would be home to, red.
+// Mutations: weigh each node off its own read of the listing — git-a keeps the
+// work, red; place this node by its own git half — the unlisted node maintains
+// what it would be home to, red.
 func TestAMaintainerIsWeighedOffTheListingThatNamesIt(t *testing.T) {
 	t.Parallel()
 	const gib = int64(1) << 30
@@ -1036,16 +980,14 @@ func TestAMaintainerIsWeighedOffTheListingThatNamesIt(t *testing.T) {
 	}
 }
 
-// A GITLET NODE THAT IS SYNCING SENDS THE ASKER TO THE RUNNER-UP, and is not held
-// against it: a home whose copy cannot answer inside its budget — still
-// downloading the repository — says `behind`, the walk asks the repository's
-// runner-up, and the next read asks the home first again, since a node syncing
-// a repository is the right node a moment later. Demoted like a node that ran
-// nothing, every repository a home was filling would move to its runner-up for
-// half a minute and fill there too.
+// A GITLET NODE THAT IS SYNCING SENDS THE ASKER TO THE RUNNER-UP, and is not
+// held against it: a home still downloading says `behind`, the walk asks the
+// runner-up, and the next read asks the home first again. Demoted like a node
+// that ran nothing, every repository it was filling would move to its runner-up
+// and fill there too.
 //
-// Mutation: read `behind` as `no_backend` — the home declined, and the second
-// read asks the runner-up first, red.
+// Mutation: read `behind` as `no_backend` — the second read asks the runner-up
+// first, red.
 func TestAGitletNodeThatIsSyncingSendsTheAskerToTheRunnerUp(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -1076,18 +1018,15 @@ func TestAGitletNodeThatIsSyncingSendsTheAskerToTheRunnerUp(t *testing.T) {
 	}
 }
 
-// ONLY THE EFFECTIVE HOME IS ASKED TO FILL (ADR-0089, the scale critic's rule):
-// over four Gitlet nodes, the walk's first attempt is stamped home and every later
-// one is not — the one node a walk lets start a download of a repository it
-// holds no copy of — and once the home has gone silent, the router asks it
-// last and its runner-up is the walk's first node, so the runner-up's attempt
-// is the one stamped. A home's death so costs the fleet one download of each
-// repository read, by its runner-up, never one by every Gitlet node a walk
-// reaches. And the git placement is told the home went unanswered, as the data
-// placement is told of a silent data node, so it lists the Gitlet nodes again.
+// ONLY THE EFFECTIVE HOME IS ASKED TO FILL (ADR-0089): over four Gitlet nodes,
+// only the walk's first attempt is stamped home (allowed to start a download);
+// once the home is silent the router asks it last, so its runner-up's attempt
+// is stamped. A home's death costs one download per repository read, never one
+// per Gitlet node a walk reaches. The git placement is told the home went
+// unanswered, as the data placement is of a silent data node.
 //
-// Mutations: stamp every attempt home — the later attempts stamped, red; tell
-// only the data placement of a silent node — the git placement never told, red.
+// Mutations: stamp every attempt home — later attempts stamped, red; tell only
+// the data placement — the git placement never told, red.
 func TestOnlyTheEffectiveHomeIsAskedToFill(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -1109,9 +1048,8 @@ func TestOnlyTheEffectiveHomeIsAskedToFill(t *testing.T) {
 		}
 	}
 
-	// THE HOME GOES SILENT, and the runner-up and the rest hold no copy:
-	// the walk that meets the silence asks the rest unstamped, and none
-	// fills; the next walk asks the runner-up first, stamped, and it fills.
+	// THE HOME GOES SILENT, the rest holding no copy: that walk asks them
+	// unstamped and none fills; the next asks the runner-up first, stamped.
 	f.nodes[order[0]].set(func(n *fakeNode) { n.silent = true })
 	for _, n := range order[1:] {
 		halves[n].set(func(g *fakeGit) { g.unready, g.held = "", map[string]bool{} })
@@ -1120,8 +1058,8 @@ func TestOnlyTheEffectiveHomeIsAskedToFill(t *testing.T) {
 	if _, err := f.client.Code().GitRead(t.Context(), treeOf(repo)); !errors.As(err, &unserved) {
 		t.Fatalf("a read whose home is silent and whose other nodes hold no copy = %v, want it unserved", err)
 	}
-	// THE GIT PLACEMENT IS TOLD, so it lists its Gitlet nodes again rather
-	// than wait out the silent one's heartbeat.
+	// THE GIT PLACEMENT IS TOLD, so it lists again rather than wait out the
+	// silent node's heartbeat.
 	f.git.mu.Lock()
 	told := slices.Contains(f.git.unanswered, order[0])
 	f.git.mu.Unlock()
@@ -1146,7 +1084,7 @@ func TestOnlyTheEffectiveHomeIsAskedToFill(t *testing.T) {
 	}
 }
 
-// seatTreeOf is a seat's read of repo's root at a commit: one a node behind
+// seatTreeOf is a seat's read of repo's root at a commit, which a node behind
 // the company's configuration judges no grant for.
 func seatTreeOf(repo string) gitlet.GitQuery {
 	q := treeOf(repo)
@@ -1167,21 +1105,15 @@ func stamped(halves map[string]*fakeGit) []string {
 }
 
 // A HOME THAT JUDGES NO SEAT HANDS THE FILL TO ITS RUNNER-UP (ADR-0089). A
-// home confirmed behind the company's configuration — shed, or stuck because
-// its apply failed while a peer applied, and live in the git placement all the
-// while — refuses every seat's read `behind_config` before it syncs anything,
-// for as long as it stays behind. Its runner-up and the third node hold no
-// copy. A walk that kept the fill on its first node asked them unstamped, both
-// answered `not_held`, and every seat read of the repository was answered by
-// nobody until the home recovered. The fill moves on instead: the runner-up is
-// stamped, fills, and serves; the next seat read asks the home first again —
-// it is not demoted — and the runner-up again; a person's read, which judges
-// no chart, is the home's; the third node is never asked to fill. And the
-// asker remembers the home's posture for its data operations, as it would had
-// a data operation told it.
+// home behind the company's configuration, still live in the git placement,
+// refuses every seat's read `behind_config` before syncing; the others hold no
+// copy, so a fill kept on the first node would leave every seat read unserved
+// (`not_held`) until it recovered. Instead the runner-up is stamped, fills and
+// serves; the next seat read asks the home first again (not demoted); a
+// person's read, judging no chart, is the home's; the third node never fills;
+// and the asker remembers the home's posture for its data operations.
 //
-// Mutation: keep the stamp on the walk's first node alone — the runner-up is
-// asked unstamped and the seat read is unserved, red.
+// Mutation: stamp the walk's first node alone — the seat read is unserved, red.
 func TestAHomeThatJudgesNoSeatHandsTheFillToItsRunnerUp(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -1229,15 +1161,13 @@ func TestAHomeThatJudgesNoSeatHandsTheFillToItsRunnerUp(t *testing.T) {
 }
 
 // THE FILL MOVES ON ONLY PAST A NODE BRINGING NO COPY UP. For every reason a
-// home may give for not answering, and for a home that does not run Gitlet, over
-// a runner-up and a third node that hold no copy: where no copy serving the
-// read is coming on the home — behind the configuration (a seat's read), a
-// failure of its own, Gitlet not built — its runner-up is stamped, fills and
-// serves; where one may be — the home syncing, at its share, its chart
-// moments away — the runner-up and the third are asked unstamped, start
-// nothing, and the read is unserved: a second download beside the home's
-// would double the fill a walk exists to make once. A reason a newer build
-// gives, which this one does not know, keeps the fill where it is.
+// home may give, and a home without Gitlet, over two nodes holding no copy:
+// where no serving copy is coming on the home (behind the configuration for a
+// seat's read, its own failure, Gitlet not built) the runner-up is stamped,
+// fills and serves; where one may be (syncing, at its share, its chart moments
+// away) the others are asked unstamped and the read is unserved, since a second
+// download would double the fill. A reason this build does not know keeps the
+// fill where it is.
 //
 // Mutations: let `syncing` pass the fill — its row served, red; keep the fill
 // past a home without Gitlet — that row unserved, red.
@@ -1292,13 +1222,11 @@ func TestTheFillMovesOnlyPastANodeBringingNoCopyUp(t *testing.T) {
 	}
 }
 
-// A NODE WITHOUT GITLET RUNS NO GIT READ: a Gitlet node whose company has not
-// built Gitlet answers `no_backend` — never silence, which its asker
-// would read as a node gone — so the walk asks the repository's runner-up and
-// asks that node LAST for git reads for the next [suspectFor], where it is
-// passed over and its runner-up is the walk's effective home. And a Gitlet node
-// asking for itself without Gitlet leaves itself out of its own order,
-// saying why.
+// A NODE WITHOUT GITLET RUNS NO GIT READ: it answers `no_backend` (never
+// silence, which reads as a node gone), so the walk asks the runner-up and asks
+// that node LAST for git reads for [suspectFor], its runner-up the effective
+// home. A Gitlet node without Gitlet leaves itself out of its own order, saying
+// why.
 //
 // Mutation: forget a `no_backend` for a git read — the second read asks the
 // node without Gitlet first again, red.
@@ -1354,13 +1282,11 @@ func TestANodeWithoutGitletRunsNoGitRead(t *testing.T) {
 	}
 }
 
-// A GIT READ IS NEVER ASKED ON THE SHARED LANE: a Gitlet node answers a git read
-// — a read by object id, or a merge preview — on its git lane alone and a data
-// operation on the shared lane alone, each asked on the other answered
-// unserved naming the lane it is answered on and nothing run — the separation
-// is the server's to keep, so a git read's sync and its git process never hold
-// a slot the node's replicated reads and a push's resolve are answered
-// through.
+// A GIT READ IS NEVER ASKED ON THE SHARED LANE: a Gitlet node answers a git
+// read or merge preview on its git lane alone and a data operation on the
+// shared lane alone; each asked on the other is unserved, naming its lane, with
+// nothing run. The server keeps the separation, so a git read's sync never
+// holds a slot replicated reads and a push's resolve need.
 func TestAGitReadIsNeverAskedOnTheSharedLane(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -1396,15 +1322,12 @@ func TestAGitReadIsNeverAskedOnTheSharedLane(t *testing.T) {
 }
 
 // THE WIRE CARRIES NO UNREADY GIT ERROR: a Gitlet node whose copy cannot answer
-// inside its budget answers `behind`, naming why in the reply's detail and
-// carrying no error — so the asker reads it as a node that ran nothing, moves
-// on without demoting it, and a walk nobody served is ErrUnserved, never a
-// gitlet.ErrGitUnready a caller could take for the repository's own answer. The
-// error type is registered all the same, as every error of the gitlet package
-// is, for the reason the list is complete at all. What crosses is its REASON,
-// beside the `behind` (reply.Unready), which the walk reads to know who may
-// fill a copy; and a seat's read refused for the node's configuration says so
-// as `behind_config`, the node's posture, as every operation says it.
+// in budget answers `behind` with the reason in the detail and no error, so the
+// asker moves on without demoting it, and a walk nobody served is ErrUnserved,
+// never a gitlet.ErrGitUnready a caller could take for the repository's answer
+// (the type is registered anyway, as every gitlet error is). Its REASON crosses
+// as reply.Unready, which tells the walk who may fill; a seat's read refused
+// for the node's configuration says `behind_config`, as every operation does.
 func TestTheWireCarriesNoUnreadyGitError(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -1444,25 +1367,18 @@ func TestTheWireCarriesNoUnreadyGitError(t *testing.T) {
 	}
 }
 
-// A GITLET NODE AT ITS SHARE IS HEARD INSIDE ITS ASKER'S ATTEMPT. A Gitlet node
-// whose seat git-work share is held, asked by a router whose git attempt is
-// shorter than the share's own wait and the reply's margin together, is
-// served under a context that ends a reply's margin before the attempt does:
-// its read stops waiting for a unit there and its `behind` — at its share —
-// reaches the asker while it still listens. So the walk ends naming the
-// share, the node was heard, and neither placement is told it went
-// unanswered. Served to the request's deadline itself, the read waited for
-// its unit until the asker had stopped listening, and the asker, its attempt
-// spent and nothing heard, took a busy node for a gone one: asked it last for
-// every operation and told both placements.
+// A GITLET NODE AT ITS SHARE IS HEARD INSIDE ITS ASKER'S ATTEMPT. With its
+// seat git-work share held and an attempt shorter than the share's wait plus
+// the reply's margin, the read is served until a reply's margin before the
+// attempt ends, so its `behind` (at its share) reaches the asker while it
+// listens: the walk names the share and no placement is told it went
+// unanswered. Served to the deadline itself, a busy node reads as a gone one.
 //
 // Mutation: serve the git arm until the request's deadline — the placements
 // told the node went unanswered, red.
 //
-// IN A SYNCTEST BUBBLE ([inBubble]), for
-// [TestANodeThatLagsItsReadsBarrierIsHeardSayingSo]'s reason: the node's
-// answer has the margin's second to reach its router, and on the machine's
-// clock a loaded runner may spend it.
+// In a synctest bubble ([inBubble]), for
+// [TestANodeThatLagsItsReadsBarrierIsHeardSayingSo]'s reason.
 func TestAGitletNodeAtItsShareIsHeardInsideItsAskersAttempt(t *testing.T) {
 	t.Parallel()
 	inBubble(t, testAGitletNodeAtItsShareIsHeardInsideItsAskersAttempt)
@@ -1509,14 +1425,11 @@ func testAGitletNodeAtItsShareIsHeardInsideItsAskersAttempt(t *testing.T) {
 	}
 }
 
-// A GIT READ IN PROCESS IS HELD TO THE ATTEMPT A REMOTE ONE IS. A Gitlet node's
-// own seats' reads run in process; they are given the git attempt a remote
-// asker gives the same read and served until the reply's margin before it,
-// as the node's server serves the remote one — so the git half sees the same
-// time left whichever node asked, and answers alike. Run under its caller's
-// context, a read asked from the home itself had no bound but its caller's,
-// and waited out a busy read lane or a slow sync that every other node's
-// asker was answered unready for.
+// A GIT READ IN PROCESS IS HELD TO THE ATTEMPT A REMOTE ONE IS: a Gitlet
+// node's own seats' reads get the remote git attempt, served until the reply's
+// margin before it, so the half sees the same time left whichever node asked.
+// Under its caller's context alone, a read from the home would wait out a busy
+// lane or slow sync that every remote asker is answered unready for.
 //
 // Mutation: run the in-process read under its caller's context — its half
 // sees no deadline, red.
@@ -1544,32 +1457,18 @@ func TestAGitReadInProcessIsHeldToTheAttemptARemoteOneIs(t *testing.T) {
 	}
 }
 
-// A NODE BEHIND THE COMPANY'S CONFIGURATION DECIDES NO GRANT (M3-O8's hard arm).
-// A read whose asker is a SEAT is judged by the serving node's chart — which
-// repositories it lists, whether it reads one — so a data node confirmed
-// behind the company's configuration (shed or stuck) answers none of it: asked
-// first it says `behind_config` and a current node answers; asked LAST, the
-// only data node, told to answer anyway, it refuses again and the walk ends
-// unserved, having run nothing — a revision it failed to apply may be the one
-// that revoked the grant. A person's read consults no chart, and the same node
-// answers it as its last resort. In process alike: this node's own copy behind
-// the configuration refuses its own seat's read and serves its person's.
+// A NODE BEHIND THE COMPANY'S CONFIGURATION DECIDES NO GRANT (M3-O8's hard
+// arm). A SEAT's read is judged by the serving node's chart, so a data node
+// behind (shed or stuck) refuses it `behind_config`, even asked LAST as the
+// only node: the revision it failed may have revoked the grant. A person's
+// read judges no chart and is served there as the last resort. A SEAT'S PUSH
+// is judged by the COMMITTER's chart: one gated on the node's posture hands it
+// on, to the current runner-up or, alone, to unserved with its log untouched;
+// a person's push reaches its log. In process alike.
 //
-// A SEAT'S PUSH likewise, whose decide judges its grant from the COMMITTER's
-// chart: a committer behind the configuration decides none of it, asked first
-// or asked last. The node behind runs a REAL committer gated as the engine
-// gates one — its Current is the node's posture — so its repository's
-// committer first in the key's order, the seat's push is decided by the
-// current runner-up; and the only data node left, told to answer anyway, the
-// committer hands it on and the walk ends unserved, its log untouched — while
-// a person's push, whose decide reads no chart, reaches that committer's log
-// as the last resort. In process alike.
-//
-// Mutations: drop the hard arm — the seat's read runs on the node behind, red;
-// let the last resort skip it (a request told to answer anyway judged with no
-// posture) — the asked-last seat read runs, red; drop the committer's gate
-// (gitlet.CommitterOptions.Current) — the asked-last seat's push reaches the
-// log of the committer behind, red.
+// Mutations: drop the hard arm, or skip it for a request told to answer anyway
+// — the seat's read runs on the node behind, red; drop the committer's gate
+// (gitlet.CommitterOptions.Current) — the seat's push reaches its log, red.
 func TestANodeBehindTheConfigurationDecidesNoGrant(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -1642,8 +1541,8 @@ func TestANodeBehindTheConfigurationDecidesNoGrant(t *testing.T) {
 		p.Principal, p.Commands[0].Ref = asker, ref
 		return p
 	}
-	// A seat's push git receives is its coding box's, naming the executor
-	// run that pushed and its harness beside the turn that launched it.
+	// A seat's push git receives is its coding box's, naming the executor run
+	// and its harness beside the turn that launched it.
 	seatPush := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev",
 		Run: gitlet.RunProvenance{TurnID: "019a0c2e-0000-7000-8000-00000000d00d",
 			RunID: "019a0c2e-0000-7000-8000-00000000b0c5", Harness: "claude-code"}}
@@ -1694,11 +1593,10 @@ func TestANodeBehindTheConfigurationDecidesNoGrant(t *testing.T) {
 }
 
 // gatedCommitter makes n's code half a REAL committer, gated as the engine
-// gates one — confirmed behind the company's configuration exactly while n
-// is — and judging a seat's push by [platform]'s chart, over a code log that
-// takes no record: every append it is asked answers a conflict, which the
-// committer answers busy, and is counted — so a push that reached it was
-// decided on n, and one that did not was handed on before any decide.
+// gates one (behind the configuration exactly while n is) and judging a seat's
+// push by [platform]'s chart, over a log whose every append is a counted
+// conflict: a push that reached it was decided on n, one that did not was
+// handed on before any decide.
 func gatedCommitter(t *testing.T, n *fakeNode) *refusingLog {
 	t.Helper()
 	log := &refusingLog{}
@@ -1735,19 +1633,14 @@ func (l *refusingLog) Publish(context.Context, statelog.Request) (statelog.Resul
 // appends is how many appends the log was asked.
 func (l *refusingLog) appends() int { return int(l.asked.Load()) }
 
-// EVERY OPERATION THAT JUDGES A GRANT IS DECLARED. The hard arm is a
-// declaration rather than a list kept beside the registry: every operation on
-// a domain's copy whose arguments carry the gitlet.Principal it judges — a
-// read's Asker, a lifecycle request's Actor — declares judgesGrant, so a read
-// or a write added later that a seat asks is held by the arm the day it is
-// declared — and none that names no such principal does. A git operation
-// declares none: its Gitlet node judges the grant and answers a seat itself where
-// it is behind its configuration (gitlet.UnreadyBehindConfig), which the walk
-// moves on from; declared, the Gitlet node would refuse persons' reads too.
-// And each READ's declaration judges a SEAT and no other asker: a person's
-// read consults no chart, and an introduced page names nobody. A lifecycle
-// request judges the chart for EVERY actor, a person's create's owner
-// included, so its declaration holds of every request.
+// EVERY OPERATION THAT JUDGES A GRANT IS DECLARED: every operation on a
+// domain's copy whose arguments carry the gitlet.Principal it judges (a read's
+// Asker, a lifecycle request's Actor) declares judgesGrant, so one added later
+// is held by the hard arm, and none naming no such principal does. A git
+// operation declares none: its Gitlet node answers a seat itself
+// (gitlet.UnreadyBehindConfig); declared, it would refuse persons' reads too.
+// A READ's declaration judges a SEAT alone (a person's read consults no chart);
+// a lifecycle request's judges EVERY actor, a person's create's owner included.
 //
 // Mutations: drop code.resolve_ref's or code.lifecycle's declaration, or
 // declare code.git_read — each red.
@@ -1800,10 +1693,9 @@ func TestEveryOperationThatJudgesAGrantIsDeclared(t *testing.T) {
 		{opCodeChange.spec, gitlet.ChangeProposal{Asker: person}, false},
 		// A LANDING, the home's own write naming no asker, judges no grant.
 		{opCodeChange.spec, gitlet.ChangeProposal{Landed: &gitlet.ChangeLanded{}}, false},
-		// EVERY ENQUEUE, whoever asks — its gate counts approvals, owners'
-		// lead chains and a seat's merge authority by the chart — and a
-		// seat's dequeue, whose grant the chart says; a person's dequeue
-		// consults none.
+		// EVERY ENQUEUE, whoever asks (its gate counts approvals, owners' lead
+		// chains and a seat's merge authority by the chart), and a seat's
+		// dequeue; a person's dequeue consults no chart.
 		{opCodeQueue.spec, gitlet.QueueProposal{Asker: seat, Enqueue: &gitlet.Enqueue{}}, true},
 		{opCodeQueue.spec, gitlet.QueueProposal{Asker: person, Enqueue: &gitlet.Enqueue{}}, true},
 		{opCodeQueue.spec, gitlet.QueueProposal{Asker: seat, Dequeue: &gitlet.Dequeue{}}, true},
@@ -1832,16 +1724,14 @@ func TestEveryOperationThatJudgesAGrantIsDeclared(t *testing.T) {
 			Request: []gitlet.Reviewer{{Handle: "dev"}}}}, true},
 		{opCodeConversation.spec, gitlet.ConversationWrite{Asker: person, Reviewers: &gitlet.ReviewerRequest{
 			Withdraw: []string{"dev"}}}, false},
-		// A REVISION'S FACTS, the home's own write naming no asker, whose
-		// path owners the chart resolves and judges; and A MERGEABILITY, the
-		// home's own too, a merge's or a refresh's, whose readiness the chart
-		// judges — whose approvals count, who maintains the repository.
+		// A REVISION'S FACTS, the home's own write naming no asker, whose path
+		// owners the chart resolves; and A MERGEABILITY, the home's too, whose
+		// readiness the chart judges (whose approvals count, who maintains).
 		{opCodeConversation.spec, gitlet.ConversationWrite{Revise: &gitlet.Revise{}}, true},
 		{opCodeConversation.spec, gitlet.ConversationWrite{Mergeability: &gitlet.Mergeability{}}, true},
 		{opCodeConversation.spec, gitlet.ConversationWrite{Mergeability: &gitlet.Mergeability{Refresh: true}}, true},
 		// A PERSON'S MARK OF THEIR OWN CODE INBOX, held to the handle by the
-		// principal alone: no chart, whoever asks — a seat's is refused by
-		// the writer, never judged.
+		// principal alone: no chart; a seat's is refused by the writer.
 		{opCodeMark.spec, gitlet.MarkWrite{Asker: person, Handle: "founder"}, false},
 		{opCodeMark.spec, gitlet.MarkWrite{Asker: seat, Handle: "dev"}, false},
 	} {
@@ -1855,14 +1745,11 @@ func TestEveryOperationThatJudgesAGrantIsDeclared(t *testing.T) {
 	}
 }
 
-// PRODUCTION'S GIT READ ATTEMPT HOLDS A GIT READ'S WAITS at their whole budgets
-// with the reply's margin — a free unit of the node's seat git-work share, the
-// cache's sync to the asker's floor, one linearizable re-sync of an id the copy
-// lacks, the read's own git (the run time every process of its kind shares)
-// and the answer's trip back: 2 + 2 + 2 + 10 + 1, seventeen seconds — and it
-// is the attempt a router gives a git read, never a data read's ten seconds,
-// which a git read's waits at their budgets outlast. The sum is spelled here
-// from each term's own constant, so a term raised without the attempt fails
+// PRODUCTION'S GIT READ ATTEMPT HOLDS A GIT READ'S WAITS at their whole
+// budgets: a unit of the seat git-work share, the sync to the asker's floor, a
+// linearizable re-sync of a missing id, the read's own git and the reply's
+// margin, 2 + 2 + 2 + 10 + 1 = 17 s, never a data read's ten seconds. Each term
+// is spelled from its own constant, so one raised without the attempt fails
 // here rather than as a healthy home heard silent.
 func TestProductionsGitReadAttemptHoldsAGitReadsWaits(t *testing.T) {
 	t.Parallel()
@@ -1880,12 +1767,10 @@ func TestProductionsGitReadAttemptHoldsAGitReadsWaits(t *testing.T) {
 	}
 }
 
-// A ROUTER NEEDS A GIT PLACEMENT: built without one, it would answer every git
-// read as a fleet with no Gitlet node in it — a wiring mistake that reads as a
-// deployment fact — so it is refused by name, and an empty placement is the
-// one way to say a fleet has no Gitlet node. A git read nobody answered then says
-// it was the GITLET nodes that could not answer, and a data operation the same
-// router could not place still names the data nodes.
+// A ROUTER NEEDS A GIT PLACEMENT: without one every git read would read as a
+// fleet with no Gitlet node, a wiring mistake posing as a deployment fact, so
+// it is refused by name; an empty placement says the fleet has none. An
+// unanswered git read names the GITLET nodes, a data operation the data nodes.
 //
 // Mutation: leave a git walk's refusal unmarked — it says no data node serves
 // the estate, red.
@@ -1907,8 +1792,8 @@ func TestARouterNeedsAGitPlacement(t *testing.T) {
 	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "no node with the gitlet role is live") {
 		t.Errorf("a read with no Gitlet node live = %v, want it unserved saying so", err)
 	}
-	// AND IT NAMES THE GITLET NODES, never the data nodes, which serve: the
-	// refusal is read by whoever has to find which nodes could not answer.
+	// AND IT NAMES THE GITLET NODES, never the data nodes: whoever reads it
+	// has to find which nodes could not answer.
 	if err == nil || !unserved.Git || !strings.Contains(err.Error(), "no Gitlet node serves") ||
 		strings.Contains(err.Error(), "data node") {
 		t.Errorf("a git read nobody answered says %q, want it to name the Gitlet nodes", err)
@@ -1921,29 +1806,17 @@ func TestARouterNeedsAGitPlacement(t *testing.T) {
 }
 
 // AN ENGINE WRITE THAT RAN NOTHING MOVES ON WITH THE SAME WRITE (ADR-0089,
-// ADR-0092). A write is idempotent by its push id, derived from its
-// operation, so wherever its home ran none of it the walk asks the runner-up
-// the very write the home was asked — the same operation, the same push:
+// ADR-0092): idempotent by its push id, derived from its operation, the
+// runner-up is asked the very write.
+//   - HOME RAN NOTHING (gitlet.ErrNotServing): asked stamped home, since the
+//     home brings no copy up, and the home is asked writes LAST for 30 s;
+//   - HOME WENT SILENT (perhaps landed): asked unstamped, since the silent node
+//     may be filling, and the home is asked last;
+//   - HOME AT ITS SHARE: asked unstamped, and the home is not demoted.
 //
-//   - THE HOME RAN NOTHING about itself — Gitlet stopping there, no epoch to
-//     sign by (gitlet.ErrNotServing): the runner-up is asked the write byte for
-//     byte, stamped home too, since a node that runs nothing brings no copy
-//     up and the fill passes; and the home is asked writes LAST for thirty
-//     seconds, so the next write of a repository it is home to is the
-//     runner-up's, never a refusal the home gives again;
-//   - THE HOME WENT SILENT — gone, or wedged with the write perhaps landed:
-//     the runner-up is asked the same write — the push whose row it answers
-//     from where the silent node landed it — unstamped, since a silent node
-//     may be filling the copy it was asked to; and the home is asked last;
-//   - THE HOME IS AT ITS SHARE, busy and holding its copy: the runner-up is
-//     asked the same write unstamped, and the home is not demoted — the next
-//     write asks it first again.
-//
-// Mutations: answer gitlet.ErrNotServing as the write's answer (opCodeGitWrite
-// without ranNothing) — the walk ends on the home's refusal, red; answer an
-// unready home's gitlet.ErrGitUnready as the answer (without gitUnready) — red;
-// declare the write a once-write — a silent home's write ends
-// ErrOutcomeUnknown, red.
+// Mutations: answer gitlet.ErrNotServing (no ranNothing) or an unready home's
+// gitlet.ErrGitUnready (no gitUnready) as the answer — the walk ends on it,
+// red; declare it a once-write — a silent home's ends ErrOutcomeUnknown, red.
 func TestAnEngineWriteThatRanNothingMovesOnWithTheSameWrite(t *testing.T) {
 	t.Parallel()
 	holders := []string{"git-a", "git-b", "git-c"}
@@ -2020,18 +1893,14 @@ func TestAnEngineWriteThatRanNothingMovesOnWithTheSameWrite(t *testing.T) {
 	}
 }
 
-// AN ENGINE WRITE THE ONE RULE REFUSES IS ASKED OF NO GITLET NODE: the router that
-// carries a write holds it to gitlet.EngineWrite.Validate, as the tool that asks
-// it and the Gitlet node that builds it do, so a malformed write — a branch git
+// AN ENGINE WRITE THE ONE RULE REFUSES IS ASKED OF NO GITLET NODE: the router
+// holds it to gitlet.EngineWrite.Validate, so a malformed write (a branch git
 // refuses, a seat's write naming no turn, a payload past its bound as the wire
-// spells it (a revert's message, which nothing else bounds, or a commit's
-// message of '<', each six bytes on the wire) — is gitlet.ErrInvalid at once,
-// naming the field, and costs no Gitlet node a round trip, a sync or a slot of
-// its lane.
+// spells it: a revert's message, or a commit message of '<', six bytes on the
+// wire) is gitlet.ErrInvalid at once, naming the field, costing no node a trip.
 //
-// Mutations: carry the write unvalidated — the Gitlet node is asked it and builds
-// it, red; measure the message by its length (gitlet.EngineWrite.Validate) — the
-// '<' commit and the revert are asked of a Gitlet node, red.
+// Mutations: carry it unvalidated — the node builds it, red; measure the
+// message by its length — the '<' commit and the revert are asked, red.
 func TestAnEngineWriteTheOneRuleRefusesIsAskedOfNoNode(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -2061,12 +1930,10 @@ func TestAnEngineWriteTheOneRuleRefusesIsAskedOfNoNode(t *testing.T) {
 	}
 }
 
-// A GIT WRITE IS NEVER ANSWERED ON ANOTHER LANE: a Gitlet node answers an engine
-// write on its git writes' lane alone, and a read by object id on the reads'
-// lane alone — each asked on another answered unserved, naming the lane it is
-// answered on, nothing run — so a write's sync, build, upload and proposal
-// never hold a slot a seat's read of any repository on the node, a push's
-// proposal or a fetch's resolve is answered through. On its own lane it runs.
+// A GIT WRITE IS NEVER ANSWERED ON ANOTHER LANE: an engine write runs on the
+// git writes' lane alone, a read by object id on the reads' lane alone; each
+// asked on another is unserved, naming its lane, nothing run, so a write never
+// holds a slot a seat's read, a push's proposal or a fetch's resolve needs.
 func TestAGitWriteIsNeverAnsweredOnAnotherLane(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -2108,19 +1975,13 @@ func TestAGitWriteIsNeverAnsweredOnAnotherLane(t *testing.T) {
 }
 
 // PRODUCTION'S GIT WRITE ATTEMPT HOLDS AN ENGINE WRITE'S WAITS at their whole
-// budgets — a unit of the node's seat git-work share, three reads at the read
-// budget (the sync to the caller's floor, the read of whether a moved head is
-// the write's own push, the one sync at the log's head every refusal is judged
-// again at), the build's own git, the bundle's upload at the pace floor, the
-// proposal's own attempt (a floor wait, a commit budget and the reply's
-// margin) and the answer's trip back: 2 + 6 + 10 + 30 + 33 + 1, eighty-two
-// seconds — and it is the attempt a router gives an engine write on a Gitlet
-// node, never a data write's sixty seconds, which a write's waits at their
-// budgets outlast. A router whose git write attempt cannot hold the proposal
-// the write makes after the reply's margin is refused naming the field, and
-// one a nanosecond longer is taken. Every term is spelled from its own
-// constant, so a term raised without the attempt fails here rather than as a
-// healthy home heard silent.
+// budgets: a share unit, three reads (sync to the floor, whether a moved head
+// is its own push, the sync every refusal is judged again at), the build's
+// git, the upload at the pace floor, the proposal's attempt and the reply's
+// margin, 2 + 6 + 10 + 30 + 33 + 1 = 82 s, never a data write's sixty. An
+// attempt that cannot hold the proposal after the margin is refused naming the
+// field; a nanosecond longer is taken. Each term is spelled from its constant,
+// so one raised alone fails here rather than as a healthy home heard silent.
 func TestProductionsGitWriteAttemptHoldsAWritesWaits(t *testing.T) {
 	t.Parallel()
 	proposal := statelog.ReadBudget + gitlet.CommitBudget + gitlet.ReplyMargin
@@ -2161,12 +2022,10 @@ func TestProductionsGitWriteAttemptHoldsAWritesWaits(t *testing.T) {
 	}
 }
 
-// AN ENGINE WRITE'S ATTEMPT FOLLOWS ITS KIND'S BUILD (M5-D11): the git write
-// attempt's build term — a push-landing write's ten seconds — is replaced by
-// the kind's own, so a merge_change, built under a mergeability's thirty
-// seconds, is given 102 s, a rebase_change, built under its forty, 112 s,
-// and every other kind its 82 s; and the walk reads it
-// off the write it carries, every attempt of it, the home's included.
+// AN ENGINE WRITE'S ATTEMPT FOLLOWS ITS KIND'S BUILD (M5-D11): the build term
+// (a push-landing write's ten seconds) becomes the kind's own, so merge_change
+// (thirty) gets 102 s, rebase_change (forty) 112 s, every other kind 82 s, read
+// off the write on every attempt, the home's included.
 //
 // Mutation: give every write the class's attempt → the merge's 82 s, red.
 func TestAnEngineWritesAttemptFollowsItsKind(t *testing.T) {
@@ -2197,21 +2056,16 @@ func TestAnEngineWritesAttemptFollowsItsKind(t *testing.T) {
 	}
 }
 
-// A GIT WRITE IS HELD TO ITS OWN ATTEMPT, WHATEVER ITS CALLER ALLOWS. Its Gitlet
-// node fits every stage of it — the sync, the build, the upload and the
-// proposal — into the router's git write attempt, so the router gives it that
-// attempt and no more, even under a caller's deadline minutes away (a
-// turn's): a node silent through it is wedged, and the walk's runner-up builds
-// the same push. Given the caller's deadline instead, as a write on a data
-// node is, a wedged home held a seat's tool call until its turn gave up, and
-// the runner-up was never asked. So the git half is served with the attempt
-// less the reply's margin — asked of a peer and asked in process alike — under
-// no deadline of the caller's and under a longer one; and a caller's SHORTER
-// deadline stays its own.
+// A GIT WRITE IS HELD TO ITS OWN ATTEMPT, WHATEVER ITS CALLER ALLOWS: its node
+// fits every stage into the git write attempt, so a node silent through it is
+// wedged and the runner-up builds the same push; under the caller's deadline
+// (a turn's, minutes away) a wedged home would hold the tool call until the
+// turn gave up. The half is served the attempt less the reply's margin, peer
+// and in process alike, under no caller deadline or a longer one; a SHORTER
+// one stays the caller's.
 //
-// Mutation: give a git write its caller's deadline, as a data node's write has
-// (budgetFor) — the write under a five-minute caller is served with nearly
-// five minutes, red.
+// Mutation: give it the caller's deadline (budgetFor) — the write under a
+// five-minute caller is served nearly five minutes, red.
 func TestAGitWriteIsHeldToItsOwnAttempt(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -2222,9 +2076,8 @@ func TestAGitWriteIsHeldToItsOwnAttempt(t *testing.T) {
 		"asked in process by the Gitlet node": f.gitRouter(t, "git-a", gitHalf{node: half}),
 	} {
 		for _, tc := range []struct {
-			// caller is the caller's own deadline, zero for none, and
-			// callers whether that deadline, not the router's attempt, is
-			// what the git half is served until a reply's margin before.
+			// caller is the caller's deadline (zero: none); callers is
+			// whether it, not the attempt, bounds what the half is served.
 			caller  time.Duration
 			callers bool
 		}{

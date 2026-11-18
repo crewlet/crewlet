@@ -12,25 +12,21 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A SEAT'S MEMORY IS PUBLISHED ONLY WHILE THIS NODE HOLDS IT (#511).
+// A SEAT'S MEMORY IS PUBLISHED ONLY WHILE THIS NODE HOLDS IT.
 //
 // The changelog keeps the last message on each row's subject, so a node that
 // publishes a seat it does not hold puts its own, possibly older, copies over
-// the holder's. A node did, three ways: its memory sync cycle published a seat
-// whose hydration was still running, every row of it as its own; a cycle
-// begun before a seat's release went on publishing it beside the release's
-// flush, or started on it after the release had forgotten it; and the release
-// of a seat whose hydration failed flushed this node's own copies. A seat is now
-// carried only under its holding here: live from a hydration that completed,
-// for the cycle's calls, releasing from the start of its release, for the
-// flush's, and none otherwise. The cases below hold each publisher.
+// the holder's. A seat is carried only under its holding here: live from a
+// hydration that completed, for the cycle's calls; releasing from the start of
+// its release, for the flush's; none otherwise. The cases below hold each
+// publisher: the cycle during a hydration, after a Forget and across a
+// release, and the flush of a seat whose hydration failed.
 
-// heldFromEmpty begins the live holding of the seat handle names on s at
-// boundary 0, as a hydration of it onto a store and a changelog that held
-// nothing of it records it, and answers s: every row s's store holds for the
-// seat, or comes to, is then the holding's own. It is what a case that
-// publishes a seat it never hydrates stands for: the node that has held the
-// seat all along.
+// heldFromEmpty begins s's live holding of handle's seat at boundary 0, as a
+// hydration onto an empty store and changelog records it, so every row s's
+// store holds or comes to hold for the seat is the holding's own, and answers
+// s: the node that has held the seat all along, for a case that never
+// hydrates it.
 func heldFromEmpty(s *Syncer, handle string) *Syncer {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -38,8 +34,8 @@ func heldFromEmpty(s *Syncer, handle string) *Syncer {
 	return s
 }
 
-// boundary is where the seat's own writes begin on s: its holding's
-// ([seatHolding.boundary]), and 0 for a seat with none.
+// boundary is where the seat's own writes begin on s
+// ([seatHolding.boundary]), and 0 for a seat with no holding.
 func (s *Syncer) boundary(handle string) int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -49,8 +45,8 @@ func (s *Syncer) boundary(handle string) int64 {
 	return 0
 }
 
-// backlogRows is every row of the seat db holds for the backlog to carry: in
-// a table it carries, stamped at or below through.
+// backlogRows counts the seat's rows in db the backlog carries: in a table it
+// carries, stamped at or below through.
 func backlogRows(t *testing.T, db *store.DB, through int64) int {
 	t.Helper()
 	n := 0
@@ -60,8 +56,8 @@ func backlogRows(t *testing.T, db *store.DB, through int64) int {
 	return n
 }
 
-// noMarksOf says every mark s keeps for the seat: none is what a case after a
-// Forget wants.
+// noMarksOf fails the case for every mark s keeps for the seat, which a case
+// after a Forget wants none of.
 func noMarksOf(t *testing.T, s *Syncer) {
 	t.Helper()
 	s.mu.Lock()
@@ -74,10 +70,9 @@ func noMarksOf(t *testing.T, s *Syncer) {
 	}
 }
 
-// takingJS is a changelog over a real one that runs during inside the
-// hydration it serves, once, as the first table's replay opens: while the
-// seat is still being taken. It records the subject of every row published
-// through it, the barrier aside.
+// takingJS is a changelog over a real one that runs during once, as the
+// hydration's first replay opens: while the seat is still being taken. It
+// records every row subject published through it, barriers aside.
 type takingJS struct {
 	jetstream.JetStream
 	during    func()
@@ -106,24 +101,16 @@ func (j *takingJS) Publish(ctx context.Context, subject string, body []byte,
 
 // A SEAT STILL BEING TAKEN IS NOT PUBLISHED BY THE CYCLE.
 //
-// The seat host counts a seat whose acquisition is still running among those
-// it holds, and the memory sync cycle publishes every held seat, so it reached
-// a seat this node was still hydrating. With no boundary yet, every row this
-// node held for it was its own, and the cycle put those copies, older than
-// the changelog's where a peer had held the seat since, over the newer rows
-// the hydration had yet to read (#511's body). Here a peer published the
-// seat's memory, this node holds older copies of the same rows, and the
-// cycle's two calls run while the hydration opens its first table's replay:
-// on a node taking the seat for the first time, and on one whose syncer
-// still held the seat from before, its backlog carried and marked. Once the
-// hydration has completed, the seat's backlog is everything this node holds
-// for it, from its first row: a mark of the holding from before would skip
-// the rows it had carried, which are the republish that puts this node's rows
-// back on a changelog restored or recreated meanwhile.
+// The seat host counts a seat still being acquired as held, and the cycle
+// publishes every held seat: this node's older copies would land over the
+// newer rows the hydration had yet to read. The cycle's two calls run here as
+// the hydration opens its first replay, on a node new to the seat and on one
+// still holding it from before. Once hydrated, the backlog is everything this
+// node holds from its first row: an earlier holding's mark would skip rows the
+// republish onto a restored or recreated changelog needs.
 //
-// Mutation: publish a seat with no live holding, begin the holding as the
-// hydration begins, leave a holding the hydration found in place, or keep its
-// marks, and this goes red.
+// Mutation: publish with no live holding, begin the holding as the hydration
+// begins, or keep a holding it found or its marks, and this goes red.
 func TestASeatStillBeingTakenIsNotPublishedByTheCycle(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -151,9 +138,9 @@ func TestASeatStillBeingTakenIsNotPublishedByTheCycle(t *testing.T) {
 			changelog := jsOn(t, conn)
 			s := newSyncer(kept, changelog, func(string) string { return seat.AgentID })
 			if tc.heldBefore {
-				// THE HOLDING FROM BEFORE, its backlog carried, onto a
-				// changelog of its own so the peer's rows stay the newer,
-				// which marks every row this node holds.
+				// THE HOLDING FROM BEFORE, its backlog carried (marking every
+				// row) onto a changelog of its own, so the peer's rows stay
+				// the newer.
 				s.js = &roundTripJS{}
 				if err := s.recordBoundary(t.Context(), seat.Handle); err != nil {
 					t.Fatalf("record the boundary from before: %v", err)
@@ -190,9 +177,8 @@ func TestASeatStillBeingTakenIsNotPublishedByTheCycle(t *testing.T) {
 					"to read", words.AndMore(js.published, 6))
 			}
 
-			// AND ONCE THE HYDRATION HAS COMPLETED, the cycle carries the
-			// seat: what this node held for it is now its backlog, every
-			// row of it from the first.
+			// AND ONCE THE HYDRATION HAS COMPLETED, the cycle carries
+			// everything this node held for the seat as its backlog.
 			want := backlogRows(t, kept, s.boundary(seat.Handle))
 			if carried, err := s.PublishBacklog(t.Context(), seat.Handle); err != nil ||
 				carried.Rows != want {
@@ -206,13 +192,11 @@ func TestASeatStillBeingTakenIsNotPublishedByTheCycle(t *testing.T) {
 
 // A PUBLISH THAT STARTS AFTER FORGET CARRIES NOTHING.
 //
-// A cycle walks the seats it found held as it began, so it can reach a seat
-// after the seat's release has flushed and forgotten it. With the seat's
-// marks gone it published everything this node held for the seat, whole
-// tables included, over what the next holder had written since (#511's first
-// comment, its second case). Here the seat is held, written to and released:
-// its holding turned, its flush run and the seat forgotten; then a cycle's two
-// calls reach it, and a flush's after them.
+// A cycle walks the seats held as it began, so it can reach one its release
+// has flushed and forgotten; with the marks gone it would publish everything
+// this node held for the seat over what the next holder wrote since. Here the
+// seat is held, written to and released (turned, flushed, forgotten), then a
+// cycle's two calls and a flush's reach it.
 //
 // Mutation: publish a seat with no holding, or flush one whose holding is
 // live rather than releasing, and this goes red.
@@ -276,20 +260,13 @@ func TestAPublishThatStartsAfterForgetCarriesNothing(t *testing.T) {
 
 // A PUBLISH A FORGET OVERTAKES STOPS AT ITS NEXT ROW AND LEAVES NO MARK.
 //
-// A cycle takes no seat's lock, so a release can flush and forget a seat while
-// the cycle is still publishing it. The call went on: it continued its table
-// from its own cursor and every later table from the zeroed marks, and
-// re-created the seat's marks as its rows were acknowledged, which left marks
-// of a holding that had ended to skip rows of the next one's backlog. It now
-// checks the seat's holding before each row: one a Forget overtakes stops at
-// its next row, in every table, and the row it was sending as the Forget came
-// moves no mark when it is acknowledged. Here 300 notes, a page being about a
-// hundred and twenty-five, besides a row of every table, in the seat's own
-// range and in its backlog, with the Forget inside the publish of the tenth
-// row, or between the first page and the second. A call that goes on moves no
-// mark, so it reads the same page again and again: the changelog refuses
-// every row past those the seat holds, which fails the case rather than
-// leaving it to the test binary's timeout.
+// A cycle takes no seat's lock, so a release can forget a seat mid-publish; a
+// call that went on would re-create an ended holding's marks, skipping rows of
+// the next holding's backlog. So the holding is checked before each row, and
+// the row in flight at the Forget moves no mark. Here 300 notes (a page is
+// about 125) and a row of every table, in the seat's range and backlog, with
+// the Forget in the tenth row's publish or between pages. A call going on
+// rereads its page forever, so the changelog refuses it rows: it fails.
 //
 // Mutation: check the holding only as the call begins, or once per page or
 // per table, or move a mark under a holding that has ended, and this goes red.
@@ -359,14 +336,11 @@ func TestAPublishAForgetOvertakesStopsAtItsNextRowAndLeavesNoMark(t *testing.T) 
 // A CYCLE PARTWAY THROUGH A SEAT AT ITS RELEASE PUBLISHES NOTHING AFTER THE
 // FLUSH BEGINS.
 //
-// A cycle took its snapshot of the held seats before the release, and was
-// partway through the seat's rows as the release's flush published the same
-// rows: the cycle then went on, and its copies of the seat's profiles, skills
-// and onboarding marker, read before the flush's, landed after them and
-// replaced them (#511's first comment, its first case). The release turns the
-// seat's holding to releasing before its flush, and the cycle stops at its
-// next row. Here the seat holds 300 notes besides a row of every table, and
-// the release comes inside the cycle's publish of its hundredth row.
+// A cycle that went on past the flush would land its copies of the seat's
+// profiles, skills and onboarding marker, read before the flush's, over them.
+// The release turns the holding to releasing before its flush, and the cycle
+// stops at its next row. Here 300 notes and a row of every table, the release
+// inside the cycle's publish of its hundredth row.
 //
 // Mutation: check the holding only as a call begins, flush under the live
 // holding, or let the cycle go on under a releasing one, and this goes red.
@@ -437,18 +411,14 @@ func TestACyclePartWayThroughASeatAtItsReleasePublishesNothingAfterTheFlushBegin
 
 // A SEAT WHOSE HYDRATION FAILED FLUSHES NOTHING ON ITS RELEASE.
 //
-// A seat whose acquisition fails is given straight back, and its release
-// flushed it. Its hydration may have failed before it read the seat's
-// profiles, skills and onboarding marker, so this node's store still holds
-// its own copies of them, older than the changelog's where a peer has held
-// the seat since, and the flush put them over the peer's (#511's second
-// comment). A hydration that fails begins no holding, so the release has none
-// to turn (Releasing answers false) and a flush carries nothing; one that
-// completes does, and its release flushes. Here a peer published the seat, this node holds older
-// copies, and its hydration fails as a replay opens: on a node that never held
-// the seat, and on one whose syncer still held it from before.
+// A failed hydration may not have read the seat's profiles, skills and
+// onboarding marker, so a flush would put this node's older copies over a
+// peer's newer ones. A failed hydration begins no holding, so Releasing
+// answers false and a flush carries nothing; one that completes does, and its
+// release flushes. Here the hydration fails as a replay opens, on a node new
+// to the seat and on one still holding it from before.
 //
-// Mutation: begin the holding as a hydration begins, or on its failure, leave
+// Mutation: begin the holding as a hydration begins or on its failure, leave
 // a holding the hydration found in place, or flush with no holding, and this
 // goes red.
 func TestASeatWhoseHydrationFailedFlushesNothingOnItsRelease(t *testing.T) {

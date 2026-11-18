@@ -105,20 +105,13 @@ func requestsCarried(writer *codeWrites) map[string][]types.WrittenFor {
 	return out
 }
 
-// EVERY CODE WRITE STATES WHOM IT IS MADE FOR (ADR-0109): every request a code
-// tool's call forms — a change's lifecycle (an open, an edit, a close, a
-// reopen), its conversation (the open's ask of its reviewers, an ask for
-// review, a review, a comment and its thread's mark, an answer to findings,
-// an apply's answer), an engine write (an apply's suggestions, a merge, a
-// rebase, a revert of a change and its merge, a commit, a revert, a
-// cherry-pick, a branch made and one deleted) and a dequeue — and the merge an
-// approved ask_to_merge makes in the asking run's resumed turn, states whom it
-// is made for: in a turn a colleague seat woke, that seat; a person, their
-// seat; a credential acting as no seat, that credential with the apps this
-// node holds it to — the narrower of what its write carried and what this
-// node resolves it to; and a turn nobody woke, nobody, stated so. A person's
-// own call states nothing, which every node reads as nobody
-// (types.WrittenFor.For).
+// EVERY CODE WRITE STATES WHOM IT IS MADE FOR (ADR-0109): every request
+// [codeWriteCalls] forms, and the merge an approved ask_to_merge makes in the
+// resumed turn, states it: in a turn a colleague seat or a person woke, that
+// seat; a credential acting as no seat, that credential with the narrower of
+// the apps its write carried and this node resolves; a turn nobody woke,
+// nobody, stated so. A person's own call states nothing, which every node
+// reads as nobody (types.WrittenFor.For).
 //
 // Mutations: proposeChange, conversing.decided, the open's ask, the dequeue
 // or the engine writes' helper leaving the carrier unstated — that request
@@ -131,10 +124,8 @@ func TestEveryCodeWriteStatesWhomItIsMadeFor(t *testing.T) {
 	speaker := func(handle string) []types.CanonicalIdentity {
 		return []types.CanonicalIdentity{{Handle: handle}}
 	}
-	// THE COUNTS every row sends, so a call that sent nothing fails too: the
-	// nine engine writes the tools build, the revert's merge and the approved
-	// ask_to_merge's; four of a change's lifecycle; seven of its
-	// conversation; one dequeue.
+	// THE COUNTS, so a call that sent nothing fails too: engine writes are
+	// the tools' nine, the revert's merge and the approved ask_to_merge's.
 	want := map[string]int{"engine write": 11, "change's lifecycle": 4, "change's conversation": 7, "queue write": 1}
 	for _, c := range []struct {
 		name string
@@ -167,8 +158,7 @@ func TestEveryCodeWriteStatesWhomItIsMadeFor(t *testing.T) {
 					t.Fatalf("%s answered %q", call.tool, got.Output)
 				}
 			}
-			// THE APPROVED ASK_TO_MERGE, carried on in the asking run's
-			// resumed turn: the code tools' own merge, as the seat.
+			// The approved ask_to_merge, in the asking run's resumed turn.
 			merge := releaseTool(t, builtin.Deps{Code: deps}, builtin.AskToMergeTool)
 			approved := tools.WithApproval(asSeat("agent-cto"), tools.Approval{By: "ops-lead", HeldID: "held-9"})
 			if got, err := merge.CallForTurn(approved, turn, map[string]any{"change": "site!7", "head": revHead(3),
@@ -219,14 +209,11 @@ func TestEveryCodeWriteStatesWhomItIsMadeFor(t *testing.T) {
 	})
 }
 
-// A CODE WRITE WHOSE ARGUMENTS NAME SOMEBODY GETS NOTHING WIDER (ADR-0109): whom
-// a code write is made for is composed from the call's own ceiling and never
-// from what a model writes, so a call whose arguments carry a `written_for`
-// and a `working_for` naming another seat is refused at the gate as an
-// argument no tool declares, sending nothing — and past the gate, its ceiling
-// composed from the turn as the gate would bind it, the request each tool forms
-// is made for whoever the turn works for, the colleague seat whose ask woke
-// it, never the seat the arguments named.
+// A CODE WRITE WHOSE ARGUMENTS NAME SOMEBODY GETS NOTHING WIDER (ADR-0109): it
+// is made for whom the call's ceiling says, never what a model writes. A
+// `written_for` or `working_for` argument is refused at the gate as undeclared,
+// sending nothing; past the gate, the request is still made for the colleague
+// seat whose ask woke the turn, not the seat the arguments named.
 //
 // Mutation: an engine write, a change's lifecycle, its conversation or a
 // dequeue made for the seat its arguments name → red.

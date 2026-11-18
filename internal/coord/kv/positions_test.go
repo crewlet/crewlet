@@ -144,7 +144,7 @@ func TestAPositionClassWalkSeesOnlyItsOwnClass(t *testing.T) {
 	classes := []string{
 		"node", "floor", "hold", "backup",
 		"maintenance", "admitted", "maintenance-ack", coord.SeatPauseClass,
-		coord.ConversationHoldClass, coord.AtlasWakeClass,
+		coord.ConversationHoldClass, coord.AtlasWakeClass, coord.AdvisorRecordClass,
 	}
 	for _, class := range classes {
 		key := coord.DocumentKey(class, "n-1")

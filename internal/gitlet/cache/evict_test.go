@@ -12,9 +12,8 @@ import (
 )
 
 // A PINNED REPOSITORY IS NEVER EVICTED, whatever the budget: a reader's git
-// process has its directory as its GIT_DIR, and a request it is serving is
-// the very use the budget is there to keep warm. Once it lets go, the next
-// pass takes it.
+// process has its directory as its GIT_DIR, and the request it serves is the
+// use the budget keeps warm. Once it lets go, the next pass takes it.
 func TestAPinnedRepositoryIsNeverEvicted(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -82,11 +81,10 @@ func TestEvictionKeepsTheCacheUnderBudget(t *testing.T) {
 	}
 }
 
-// AN IDLE REPOSITORY UNDER THE BUDGET IS KEPT, however long it has been idle:
-// it costs disk the budget already bounds, and evicting it would cost a GET a
-// push at its next fetch. Brought forward a month later it costs what moved —
-// one delta call and the one new pack — and a cache older than the rows'
-// tombstone horizon is answered whole, reusing every pack it holds.
+// AN IDLE REPOSITORY UNDER THE BUDGET IS KEPT, however long it has been idle
+// (package doc, "Kept while there is room"). Brought forward a month later it
+// costs what moved, one delta call and the one new pack, and a cache older
+// than the rows' tombstone horizon is answered whole, reusing every pack.
 func TestAnIdleRepositoryUnderBudgetIsKept(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -130,7 +128,7 @@ func TestAnIdleRepositoryUnderBudgetIsKept(t *testing.T) {
 }
 
 // A REPOSITORY LARGER THAN THE BUDGET IS SERVED: a request is waiting for it,
-// so its sync succeeds and says how far over it is; held, a pass keeps it, and
+// so its sync succeeds and logs how far over it is; held, a pass keeps it;
 // released, the next pass takes it.
 func TestARepositoryLargerThanTheBudgetIsServed(t *testing.T) {
 	t.Parallel()
@@ -235,19 +233,13 @@ func TestAnEvictedRepositorySyncsCold(t *testing.T) {
 }
 
 // A ROUND THAT GROWS THE CACHE PAST ITS BUDGET KICKS THE JANITOR: a burst of
-// cold syncs would otherwise overshoot the budget by whatever arrives before
-// the next tick. The cache here is never started, so a kick stays where it
-// was sent until the case takes it (cache.JanitorKicked): every kick before
-// the round is taken first, the round's is read once it has answered, and
-// the pass that kick wakes the janitor for, run by the case, evicts the
-// repository used longest ago and keeps the one a reader holds.
-//
-// Read off a started janitor, an eviction could not say whose kick woke it.
-// The round's end wakes the maintainer, a maintenance run's end unpins the
-// repository it ran on, and an unpin over the budget kicks the janitor too
-// (Cache.unpin) — so a round that kicked nothing still had the repository
-// evicted, by the maintenance run its own end woke, well inside any bound a
-// case would wait.
+// cold syncs would otherwise overshoot the budget until the next tick. The
+// cache is never started, so a kick waits until the case takes it
+// (cache.JanitorKicked): earlier kicks are taken first, the round's is read
+// once it has answered, and the case's pass evicts the repository used
+// longest ago and keeps the one a reader holds. A started janitor could not
+// say whose kick woke it: the round's end wakes the maintainer, whose run's
+// unpin over the budget kicks the janitor too (Cache.unpin).
 //
 // Mutation: a round kicks no janitor for growing past the budget (sync.go's
 // kick on overBudget taken out) — no kick waits once the round has answered.
@@ -284,7 +276,7 @@ func TestAGrowingRoundKicksTheJanitor(t *testing.T) {
 }
 
 // A REPOSITORY OVER THE BUDGET GOES ONCE ITS LAST READER LETS GO: the release
-// that unpins it kicks the janitor, rather than leaving it to the next tick —
+// that unpins it kicks the janitor rather than leaving it to the next tick,
 // which this janitor never takes. The pass the round's own growth kicked has
 // ended, keeping it, before the reader lets go.
 func TestARepositoryOverTheBudgetGoesWithItsLastReader(t *testing.T) {
@@ -328,9 +320,9 @@ func startIdle(t *testing.T, w *syncWorld, c *cache.Cache) {
 	})
 }
 
-// WHAT SCRATCH/ HOLDS COUNTS AGAINST THE BUDGET: a push's scratch repository
-// is disk the cache uses, and only the disk knows how much — so the janitor
-// measures it, and both its total and the gauge include it.
+// WHAT SCRATCH/ HOLDS COUNTS AGAINST THE BUDGET: only the disk knows how much
+// a push's scratch repository uses, so the janitor measures it, and both its
+// total and the gauge include it.
 func TestTheJanitorCountsWhatScratchHolds(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -354,13 +346,11 @@ func TestTheJanitorCountsWhatScratchHolds(t *testing.T) {
 	}
 }
 
-// A FILE IN SCRATCH/ WITH ANOTHER NAME IS COUNTED ONCE: a push's
-// advertisement links the cache's packed-refs into its view, and an adopted
-// push's pack is linked from its scratch into the incarnation before the
-// scratch goes — the same bytes on the disk once, already in the total
+// A FILE IN SCRATCH/ WITH ANOTHER NAME IS COUNTED ONCE: an advertisement's
+// view links the cache's packed-refs, and an adopted push's pack is linked
+// into the incarnation before its scratch goes, bytes already in the total
 // through the incarnation. Counted twice, every adopted push would evict as
-// many bytes again of the repositories used least recently, each a cold
-// sync later.
+// many bytes again, each a cold sync later.
 func TestAFileScratchSharesWithTheCacheIsCountedOnce(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -393,17 +383,14 @@ func TestAFileScratchSharesWithTheCacheIsCountedOnce(t *testing.T) {
 }
 
 // AN ENTRY REMOVED WHILE THE JANITOR MEASURES SCRATCH/ IS NOTHING TO COUNT,
-// AND NO FAILURE, wherever the walk meets its absence: the host moves an
-// advertisement view into trash/ the moment its advertisement is written, and
-// a push's receive-pack removes its object quarantine as it ends, while the
-// janitor's walk may have listed either and not yet opened it. scratch/ then
-// holds exactly what the walk counts, so nothing is logged —
-// code_cache_scratch_unmeasured tells an operator the cache counts less than
-// the disk holds, which is untrue of an entry that is gone, and on a node that
-// pushes all day it would come at random and bury the line that is true. A
-// directory still there that the walk cannot read does hold bytes it did not
-// count, and is logged: here one replaced by a file under the walk, the one
-// such failure a case can make whoever runs it.
+// AND NO FAILURE, wherever the walk meets its absence: the host trashes an
+// advertisement view once written, and receive-pack removes its quarantine as
+// it ends, either perhaps listed by the walk and not yet opened.
+// code_cache_scratch_unmeasured says the cache counts less than the disk
+// holds, untrue of an entry that is gone, and on a busy node would bury the
+// true lines. A directory still there the walk cannot read is logged: here
+// one replaced by a file under the walk, the one such failure any runner can
+// make.
 func TestAnEntryRemovedUnderTheScratchMeasureIsNothingToCount(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -415,8 +402,8 @@ func TestAnEntryRemovedUnderTheScratchMeasureIsNothingToCount(t *testing.T) {
 			var err error
 			switch dir {
 			case view:
-				// scratch/'s listing named it; the host's Remove moves it
-				// whole, as the walk is about to list it.
+				// Listed in scratch/; the host's Remove moves it whole
+				// as the walk is about to list it.
 				err = os.Rename(view, w.path("trash", "adv-1.git"))
 			case quarantine:
 				// Two levels inside a scratch the walk has entered.

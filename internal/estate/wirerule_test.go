@@ -21,10 +21,10 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// wireInner, wirePromoted and wireArgs are an operation's arguments as the
-// cases below need them: a nested struct, a list of them, a pointer to one, a
-// struct embedded for its promoted fields, a map whose keys are data, a raw
-// document that is data, and a field the wire never carries.
+// wireInner, wirePromoted and wireArgs hold every shape the cases below need:
+// a nested struct, a list of them, a pointer to one, an embedded struct's
+// promoted fields, a map whose keys are data, a raw document that is data, and
+// a field the wire never carries.
 type (
 	wireInner struct {
 		Note  string `json:"note"`
@@ -44,9 +44,9 @@ type (
 )
 
 // AN INPUT CROSSES WITH EVERY FIELD AT ITS ZERO LEFT OFF, and is otherwise
-// json.Marshal's, byte for byte: a field a later build adds then reaches a data
-// node of an earlier build only where a write sets it, and a write that does
-// not is served by either build exactly as it was before the field existed.
+// json.Marshal's, byte for byte: a field a later build adds reaches an older
+// data node only where a write sets it, so a write that does not is served by
+// either build.
 //
 // Mutation: drop OmitZeroStructFields from inputEncoding and the zero value
 // goes on the wire as every one of its keys.
@@ -69,16 +69,14 @@ func TestAnInputLeavesEveryFieldAtItsZeroOffTheWire(t *testing.T) {
 	}
 }
 
-// EVERY KEY A TYPE DOES NOT DECLARE IS NAMED, AT EVERY DEPTH, AND ONCE: inside
-// a nested struct, in every element of a list (named once for the list, not
-// once per element), behind a pointer, and a `-` field's name, which the wire
-// never carries; while a promoted field, a name in another case, a map's keys
-// and a raw document's inside are read as the standard library reads them —
-// declared, or data.
+// EVERY KEY A TYPE DOES NOT DECLARE IS NAMED, AT EVERY DEPTH, AND ONCE: in a
+// nested struct, in a list's elements (once for the list), behind a pointer,
+// and a `-` field's name; a promoted field, a name in another case, a map's
+// keys and a raw document's inside are declared or data, as the standard
+// library reads them.
 //
-// Mutation: decode with json.Unmarshal, as define did, and no key is named;
-// strike a member only from the element the decoder pointed at, and the list's
-// is named twice.
+// Mutation: decode with json.Unmarshal and no key is named; strike a member
+// only from the element the decoder pointed at, and the list's is named twice.
 func TestEveryKeyATypeDoesNotDeclareIsNamedAtEveryDepth(t *testing.T) {
 	t.Parallel()
 	raw := []byte(`{"name":"another case","Zone":"promoted",` +
@@ -113,13 +111,11 @@ func TestEveryKeyATypeDoesNotDeclareIsNamedAtEveryDepth(t *testing.T) {
 	}
 }
 
-// A BASELINE TOLD RECORD CROSSES THE WIRE AS ITSELF. A seat's first told record
-// carries no changes, and its validation refuses a baseline that tells one. Sent
-// as json.Marshal writes it, a nil json.RawMessage crossed as `null`, which the
-// serving node decoded as the four bytes "null" — so every baseline a node
-// without data recorded was refused there as a baseline that tells a change,
-// and the seat was told its whole access afresh on every turn. Left off the
-// wire at its zero, it arrives nil, as it left.
+// A BASELINE TOLD RECORD CROSSES THE WIRE AS ITSELF: a seat's first, it carries
+// no changes, and validation refuses a baseline that tells one. A nil json.RawMessage
+// marshalled as `null` arrives as those four bytes, so the baseline is refused
+// and the seat told its whole access afresh every turn; left off at its zero,
+// it arrives nil.
 //
 // Mutation: drop OmitZeroStructFields from inputEncoding and Changes arrives
 // as "null".
@@ -141,14 +137,14 @@ func TestABaselineToldRecordCrossesTheWireAsItself(t *testing.T) {
 	}
 }
 
-// A DATA NODE RUNS NOTHING OF A REQUEST ITS BUILD CANNOT READ WHOLE: a request
-// whose arguments or actor hold keys its types do not declare is refused,
-// naming every one under the member of the request that held it and the node
-// that refused, as its own error — not a decode failure, and never run without
-// them — before the tracker is asked anything. The same request read whole runs.
+// A DATA NODE RUNS NOTHING OF A REQUEST ITS BUILD CANNOT READ WHOLE: keys its
+// types do not declare, in the arguments or the actor, are refused before the
+// tracker is asked, as an ErrUnknownKeys naming each under its request member
+// and the refusing node — not a decode failure, and never run without them.
+// The same request read whole runs.
 //
-// Mutation: decode the inputs leniently, as define did (RejectUnknownMembers
-// off), and the task is created without the keys it was sent.
+// Mutation: decode the inputs leniently (RejectUnknownMembers off) and the task
+// is created without the keys it was sent.
 func TestADataNodeRunsNothingOfARequestItsBuildCannotReadWhole(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -184,10 +180,9 @@ func TestADataNodeRunsNothingOfARequestItsBuildCannotReadWhole(t *testing.T) {
 	}
 }
 
-// A REQUEST ONE DATA NODE'S BUILD CANNOT READ IS SERVED BY ANOTHER'S: the node
-// that refused it ran nothing, so the walk asks the next — a data node of the
-// writer's build — under the same operation, and the node that refused is not
-// the one asked first next time.
+// A REQUEST ONE DATA NODE'S BUILD CANNOT READ IS SERVED BY ANOTHER'S: the
+// refusing node ran nothing, so the walk asks the next under the same
+// operation, and the refusing node is not asked first next time.
 //
 // Mutation: drop the refusal's arm from Router.settle and the write fails with
 // the first node's refusal.
@@ -220,10 +215,9 @@ func TestARequestOneBuildCannotReadIsServedByAnother(t *testing.T) {
 	}
 }
 
-// A REQUEST NO DATA NODE CAN READ WHOLE SAYS WHAT WOULD SERVE IT: the caller is
-// told the operation, every key and every node that refused — a data node of
-// the writer's build is needed — as the error every caller of an estate nobody
-// served also reads, since nothing ran; and never that its outcome is unknown.
+// A REQUEST NO DATA NODE CAN READ WHOLE SAYS WHAT WOULD SERVE IT: the operation,
+// every key and every refusing node (a data node of the writer's build is
+// needed), as an estate nobody served (nothing ran), never an unknown outcome.
 //
 // Mutation: end the walk with the bare ErrUnserved (drop walk.refusedOr) and
 // errors.As finds no ErrUnknownKeys.
@@ -260,8 +254,8 @@ func TestARequestNoDataNodeCanReadWholeSaysWhatWouldServeIt(t *testing.T) {
 
 // A REFUSAL NEVER HIDES A WRITE THAT MAY HAVE LANDED: a repeatable write one
 // node refused and another never answered may have run on the second, so its
-// outcome is unknown and the same operation is the retry — not a refusal
-// saying nothing ran, which invites a second write under a fresh id.
+// outcome is unknown and the same operation is the retry — a refusal saying
+// nothing ran would invite a second write under a fresh id.
 //
 // Mutation: put the walk's refusal ahead of its unanswered nodes in
 // walk.unserved and the caller is told nothing ran.
@@ -278,8 +272,8 @@ func TestARefusalNeverHidesAWriteThatMayHaveLanded(t *testing.T) {
 }
 
 // A ONCE-WRITE A NODE REFUSED UNREAD IS ASKED OF THE NEXT: a page comment with
-// no key of its caller's is never asked twice where a node MAY have run it, and
-// a node that refused it for keys its build does not declare ran nothing of it.
+// no caller's key is never asked twice where a node MAY have run it, and a node that refused its
+// undeclared keys ran nothing of it.
 //
 // Mutation: drop the refusal's arm from Router.settle and the comment fails
 // with the first node's refusal.
@@ -298,10 +292,9 @@ func TestAOnceWriteANodeRefusedUnreadIsAskedOfTheNext(t *testing.T) {
 }
 
 // A KEYED WRITE MOVES OFF A COMMITTER WHOSE BUILD CANNOT READ IT: the push goes
-// to the repository's runner-up with its push id, nothing decided by the
-// committer that refused, and the next push carrying what it refused asks that
-// committer last — a keyed order has no sticky node to move the walk off it,
-// and its build outlasts one push.
+// to the repository's runner-up with its push id, the refusing committer
+// deciding nothing, and the next such push asks that committer last — a keyed
+// order has no sticky node to move the walk off it, and a build outlasts a push.
 //
 // Mutation: drop markUnread from the refusal's arm and the second push is asked
 // of the committer that refused again.
@@ -328,9 +321,8 @@ func TestAKeyedWriteMovesOffACommitterThatCannotReadIt(t *testing.T) {
 	}
 }
 
-// A GIT OPERATION NO GITLET NODE CAN READ WHOLE IS REFUSED SO TOO: the walk over
-// the Gitlet nodes ends in the refusal, its account the git walk's own, and the
-// node's git half was never asked.
+// A GIT OPERATION NO GITLET NODE CAN READ WHOLE IS REFUSED SO TOO: the git walk
+// ends in the refusal, carrying its own account, and no git half is asked.
 //
 // Mutation: end routeGit with the bare ErrUnserved and errors.As finds no
 // ErrUnknownKeys.
@@ -350,13 +342,11 @@ func TestAGitOperationNoGitletNodeCanReadWholeIsRefused(t *testing.T) {
 	}
 }
 
-// AN ANSWER A CALLER WRITES BACK IS READ WHOLE OR REFUSED: a newer data node's
-// answer holding a key this build does not declare is refused, naming it under
-// the result and the node that gave it, since the caller would drop it and
-// write the rest back; an answer read whole decodes; and the serving node
-// leaves its fields at their zero off it. An answer nobody writes back drops
-// what this build does not declare, as it always has: showing less of it loses
-// nothing.
+// AN ANSWER A CALLER WRITES BACK IS READ WHOLE OR REFUSED: a newer node's answer
+// holding an undeclared key is refused, naming it under the result and the
+// node, since the caller would write the rest back without it; one read whole
+// decodes, and is sent with its zero fields left off. An answer nobody writes
+// back drops what this build does not declare: showing less loses nothing.
 //
 // Mutation: decode a carried answer with json.Unmarshal and the prior is
 // handed to the save without the key; drop answeredWhole from opViewPrior and
@@ -400,20 +390,16 @@ func TestAnAnswerACallerWritesBackIsReadWholeOrRefused(t *testing.T) {
 	}
 }
 
-// A HOME'S QUEUE READ IS READ WHOLE OR REFUSED: a newer data node's due-queue
-// page holding a member this build does not declare — on an entry its home
-// would land or eject, or on a close it owes — is refused, naming the member
-// under the result and the node that gave it, since the home steps on every
-// entry as the entry it read and would carry the rest on without the member;
-// a page read whole decodes, its fields at their zero left off by the serving
-// node; and a home of a build that read its queue as a kind of code.read,
-// whose answer a caller only shows, is refused by this build's data node,
-// whose code.read declares no such member, its code half never asked — so no
-// home steps on less than a data node answered.
+// A HOME'S QUEUE READ IS READ WHOLE OR REFUSED: a due-queue page holding an
+// undeclared member, on an entry or an owed close, is refused naming it under
+// the result and the node, since the home acts on each entry as it read it; a
+// page read whole decodes, sent with its zero fields left off; and an older
+// home asking its queue as a kind of code.read, whose answer is only shown, is
+// refused unread — so no home acts on less than a data node answered.
 //
 // Mutation: drop answeredWhole from opCodeQueueDue and the page reaches the
-// home without the member; declare queue_due among code.read's arguments
-// again and the older home's read is answered.
+// home without the member; declare queue_due among code.read's arguments and
+// the older home's read is answered.
 func TestAHomesQueueReadIsReadWholeOrRefused(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -464,8 +450,8 @@ func TestAHomesQueueReadIsReadWholeOrRefused(t *testing.T) {
 		t.Errorf("a page is sent as (%s, %v), want its fields at their zero left off", got, err)
 	}
 
-	// AN OLDER HOME'S READ, a kind of code.read: its member is no argument of
-	// that operation in this build, which reads its home's queue whole alone.
+	// AN OLDER HOME'S READ, a kind of code.read: queue_due is no argument of
+	// that operation in this build.
 	node := f.nodes["data-a"]
 	older := request{Op: opCodeRead.spec.name, Args: json.RawMessage(`{"kind":"queue_due","queue_due":{"repo_id":"` +
 		repoID(1) + `"},"fresh":{"level":"stale"}}`)}
@@ -512,9 +498,9 @@ func TestACountsPartThisBuildDoesNotDeclareIsRefusedUnread(t *testing.T) {
 }
 
 // A VIEWED MARK THIS BUILD DOES NOT DECLARE IS REFUSED UNREAD: a code.mark whose files gesture
-// carries a member this build does not know is refused naming it, the code half never asked, so the
-// walk asks another; the gesture whole is asked once.
-// Mutation: decode the arguments without RejectUnknownMembers, and the code half is asked, red.
+// carries an undeclared member is refused naming it, the code half never asked; the gesture whole
+// is asked once.
+// Mutation: decode the arguments without RejectUnknownMembers, and the code half is asked.
 func TestAViewedMarkThisBuildDoesNotDeclareIsRefusedUnread(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -620,10 +606,9 @@ func TestAQueueReadAskingForTrainsIsAskedOfABuildThatReadsIt(t *testing.T) {
 }
 
 // A REQUEST NO BUILD COULD READ WHOLE CROSSES AS ITSELF, AND AS AN ESTATE NOBODY
-// SERVED: a node that answers on another's behalf — a Gitlet node proposing a
-// push its data nodes refused — hands its asker the refusal with every field,
-// so the asker's walk moves on from it as from any node that ran nothing, and
-// every caller that reads an estate nobody served still reads one.
+// SERVED: a node answering on another's behalf (a Gitlet node proposing a push
+// its data nodes refused) hands back the refusal with every field, so the
+// asker's walk moves on as from any node that ran nothing.
 //
 // Mutation: drop ErrUnknownKeys from typedKinds and errors.As finds nothing on
 // the far side.
@@ -644,9 +629,9 @@ func TestARefusalOfUnreadKeysCrossesAsItself(t *testing.T) {
 	}
 }
 
-// declaresLess is a data node of an older build, as the router meets one: every
-// request it is sent holds key, set, in the object at path of its arguments —
-// a field the asker's build sets and this node's does not declare.
+// declaresLess plays a data node of an older build: every request it is sent
+// holds key, set, in the object at path of its arguments — a field the asker's
+// build sets and this node's does not declare.
 func declaresLess(key string, path ...string) func(request) request {
 	return func(req request) request {
 		var doc map[string]any
@@ -691,13 +676,12 @@ func inputRoots() map[reflect.Type]string {
 	return roots
 }
 
-// inputTypes is every type reachable from [inputRoots] the way the encoder
-// reaches one — through a pointer, a slice, an array and a map's values, and
-// every field it carries — with the root it was reached from. A type that
-// writes or reads its own encoding ([encodesItself]) is reached, and nothing
-// inside it; but the actors decode themselves through the caller's own decoder
-// and have no encoder, so what crosses of them is their plain encoding
-// ([plainlyEncoded]), and they are walked into as any struct is.
+// inputTypes is every type reachable from [inputRoots] as the encoder reaches
+// one (pointers, slices, arrays, map values, every carried field), with its
+// root. A type with its own encoding ([encodesItself]) is reached but not
+// entered; the actors decode through the caller's decoder and have no encoder,
+// so they cross plainly encoded ([plainlyEncoded]) and are entered as any
+// struct.
 func inputTypes() map[reflect.Type]string {
 	found := map[reflect.Type]string{}
 	var walk func(ty reflect.Type, from string)
@@ -731,12 +715,10 @@ func inputTypes() map[reflect.Type]string {
 	return found
 }
 
-// EVERY FIELD AN OPERATION TAKES LEAVES THE WIRE AT ITS ZERO — the arguments of
-// every operation at every depth, the actor a write runs as, and an answer a
-// caller writes back: a key goes on the wire only where it carries a value, so
-// a field a later build adds is refused by an older data node only for a write
-// that uses it, and never for one that does not. What a field's zero means is
-// [define]'s rule: what a build without the field does.
+// EVERY FIELD AN OPERATION TAKES LEAVES THE WIRE AT ITS ZERO — every argument at
+// every depth, the actor, and an answer a caller writes back — so an older data
+// node refuses a later build's field only for a write that uses it. What a
+// field's zero means is [define]'s rule.
 //
 // Mutation: drop OmitZeroStructFields from inputEncoding and every field of
 // every type is named.
@@ -772,12 +754,11 @@ func TestEveryFieldAnOperationTakesLeavesTheWireAtItsZero(t *testing.T) {
 	}
 }
 
-// zeroByMethod is every type an operation's inputs — or an answer a caller
-// writes back — hold that has an IsZero method of its own, which is what
-// decides when the wire leaves it out ([inputEncoding]), and why a reader of
-// its absence, which decodes Go's zero, loses nothing; and, as
+// zeroByMethod is every type in an operation's inputs (or an answer written
+// back) whose own IsZero decides when the wire leaves it out ([inputEncoding]),
+// with why a reader decoding Go's zero in its place loses nothing; and, as
 // "<type>.<field>", every field such a method calls zero while it holds
-// something, and why that something is nothing a reader misses.
+// something, with why no reader misses it.
 //
 // TWO-SIDED, like [carriedByServer]: a type or a field found and not listed
 // fails, and one listed that nothing carries fails too.
@@ -815,12 +796,11 @@ var zeroByMethod = map[string]string{
 // in place of comparing with Go's zero.
 type isZeroer interface{ IsZero() bool }
 
-// EVERY ZERO A TYPE'S OWN METHOD DECIDES DROPS NOTHING A READER MISSES. The
-// wire leaves a field out where its type's IsZero says so, and its reader
-// decodes Go's zero in its place: a method that calls a value carrying
-// something zero would drop that something on every routed write — so every
-// such type is named with why its reader loses nothing, and every field its
-// method ignores is found by setting each alone and named with why too.
+// EVERY ZERO A TYPE'S OWN METHOD DECIDES DROPS NOTHING A READER MISSES: the
+// wire leaves a field out where its IsZero says so and the reader decodes Go's
+// zero, so a method calling a value that holds something zero drops it on every
+// routed write. Every such type, and every field its method ignores (found by
+// setting each alone), is named in zeroByMethod with why.
 //
 // Mutation: delete statelog.Position.Stream from zeroByMethod and the gate
 // names the stream a zero position drops.
@@ -866,23 +846,17 @@ func TestEveryZeroAMethodDecidesDropsNothingAReaderMisses(t *testing.T) {
 	}
 }
 
-// zeroThroughPointer is every field an operation's inputs — or an answer a
-// caller carries into another request — hold whose type is a POINTER (or an
-// interface) at a type with an IsZero method of its own, as "<struct
-// type>.<field>", and why no reader of it reads a pointer at what that method
-// calls zero otherwise than nil: encoding/json/v2 asks the method THROUGH the
-// pointer ([inputEncoding]), so such a pointer crosses as no value at all and
-// the serving node decodes nil.
+// zeroThroughPointer is every field, as "<struct type>.<field>", in an
+// operation's inputs (or an answer carried on) that is a POINTER or interface
+// at a type with its own IsZero, with why every reader reads a pointer at that
+// zero as nil: encoding/json/v2 asks the method THROUGH the pointer
+// ([inputEncoding]), so it crosses as nothing and decodes nil.
 //
-// EACH REASON NAMES EVERY READER, and is true of each — or says how no reader
-// meets the pointer at the zero: a field whose readers tell the two apart is
-// never listed as one they do not, but reshaped until none meets it — a clear
-// spelled as a flag of its own (worklet.TaskPatch.ClearDue), a bound held as a
-// value whose zero means unset (worklet.ShowClosed.Since), a value no write
-// may carry refused before it is asked ([op.refusedBeforeAsking]).
-//
-// TWO-SIDED, like [zeroByMethod]: a field found and not listed fails, and one
-// listed that nothing carries fails too.
+// EACH REASON NAMES EVERY READER, or how none meets the pointer at the zero. A
+// field whose readers tell the two apart is reshaped, never listed: a clear as
+// its own flag (worklet.TaskPatch.ClearDue), a bound whose zero means unset
+// (worklet.ShowClosed.Since), a value refused before asking
+// ([op.refusedBeforeAsking]). TWO-SIDED, like [zeroByMethod].
 var zeroThroughPointer = map[string]string{
 	"worklet.View.DeletedAt": "never set in a save: tracker.write_view's writer refuses a view " +
 		"carrying it (worklet.checkView), and the one write that stamps it is the writer's own " +
@@ -935,15 +909,11 @@ var zeroThroughPointer = map[string]string{
 		"no position, so nil, which is what crosses, reads the same",
 }
 
-// NO POINTER AT A ZERO CROSSES WHERE A READER WOULD MISS IT. The wire leaves a
-// pointer whose type's own IsZero calls what it points at zero off, exactly as
-// it leaves nil off, and the serving node decodes nil: a field whose readers
-// told a pointer at the zero from nil — a patch's date at the zero instant,
-// once its clear — lost that meaning on every routed request while the same
-// request in process kept it, and the zero gate below it, reading a type's
-// IsZero on values alone, passed. So every such field, at every depth of every
-// operation's inputs and every answer carried on, is named with why its readers
-// read the two alike, or how none of them meets the pointer at the zero.
+// NO POINTER AT A ZERO CROSSES WHERE A READER WOULD MISS IT: the wire leaves off
+// a pointer at what its type's IsZero calls zero, as it leaves nil, so a reader
+// telling the two apart loses that only on routed requests, which the value
+// gate above cannot see. Every such field, at every depth of every input and
+// answer carried on, is named in zeroThroughPointer.
 //
 // Mutation: delete worklet.TaskPatch.DueAt from zeroThroughPointer and the gate
 // names it.
@@ -1031,11 +1001,10 @@ func samplesOf(ty reflect.Type) []reflect.Value {
 	return []reflect.Value{v}
 }
 
-// decodesItself is every type an operation takes that decodes its own JSON —
-// an UnmarshalJSON of its own, or the standard library's twin of one — and why
-// it drops no member a newer build added: a method decoding an object with
-// json.Unmarshal of its own would drop exactly the keys the wire's rule
-// refuses, below where the rule can see.
+// decodesItself is every type an operation takes that decodes its own JSON
+// (json.Unmarshaler or jsonv2.UnmarshalerFrom), with why it drops no member a
+// newer build added: its own json.Unmarshal would drop exactly the keys the
+// wire's rule refuses, below where the rule can see.
 //
 // TWO-SIDED, like [carriedByServer].
 var decodesItself = map[string]string{
@@ -1079,14 +1048,10 @@ const codeWriteDecodes = "refuses one there too: it decodes through the decoder 
 	"credential's carrier names, that the build does not know (gitlet's unknownToThisBuild), which " +
 	"drops nothing either"
 
-// NO TYPE AN OPERATION TAKES DECODES A KEY AWAY BY ITSELF. The wire's rule
-// refuses an undeclared member at every depth the standard library decodes,
-// and a type with an UnmarshalJSON of its own is a depth it does not: such a
-// method decoding an object with a plain json.Unmarshal would drop a newer
-// build's key with nothing to say so. Each one is named with why it cannot —
-// it decodes no object, it decodes through the caller's own decoder so the
-// rule refuses such a key inside it too, or it keeps what it does not know and
-// writes it back.
+// NO TYPE AN OPERATION TAKES DECODES A KEY AWAY BY ITSELF: the wire's rule does
+// not reach inside a type's own UnmarshalJSON, so each is named with why it
+// cannot drop a newer build's key — it decodes no object, it decodes through
+// the caller's decoder, or it keeps what it does not know and writes it back.
 //
 // Mutation: delete time.Time from decodesItself and the gate names it.
 func TestNoTypeAnOperationTakesDecodesAKeyAwayByItself(t *testing.T) {
@@ -1118,12 +1083,10 @@ func TestNoTypeAnOperationTakesDecodesAKeyAwayByItself(t *testing.T) {
 }
 
 // answeredWholeBy is every read declared answered whole ([op.answeredWhole]),
-// and the write its answer is carried into — the operation, and who carries
-// it.
+// with the operation its answer is carried into and who carries it.
 //
 // TWO-SIDED: a read declared and not listed fails, and so does one listed and
-// no longer declared — a list of which answers are written back is a claim
-// about callers, and one nothing checks goes stale as they move.
+// no longer declared — an unchecked claim about callers goes stale.
 var answeredWholeBy = map[string]string{
 	"artifacts.version_carried": "artifacts.publish: a patch keeps every file of its base version, " +
 		"and a publish carries a file of a version it names, each as the entry it read here " +
@@ -1151,11 +1114,9 @@ var answeredWholeBy = map[string]string{
 		"answers as the entry it read, stating the page's position as what it saw (internal/gitlet/home)",
 }
 
-// EVERY ANSWER READ WHOLE IS ONE A CALLER CARRIES INTO ANOTHER REQUEST, and
-// names the request: a read declared so refuses a newer data node's answer an
-// older caller cannot read whole, which is right only where the caller would
-// send the rest on — written back, or asked by — and wrong for one that only
-// shows it.
+// EVERY ANSWER READ WHOLE IS ONE A CALLER CARRIES INTO ANOTHER REQUEST, which it
+// names: refusing an answer the caller cannot read whole is right only where
+// the caller sends it on, and wrong where it only shows it.
 //
 // Mutation: drop answeredWhole from opViewPrior and the gate names
 // tracker.view_prior as listed and no longer read whole.

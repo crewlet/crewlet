@@ -8,9 +8,8 @@ import (
 
 // ---- MCP grants and sign-ins --------------------------------------------- //
 
-// One grant and one sign-in per server, each filed in the positions register
-// under a class of its own: see internal/coord's mcpoauth.go. The model
-// retries' verbs (modelrecords.go), over the server's name.
+// One grant and one sign-in per server, each a positions-register class of
+// its own (internal/coord's mcpoauth.go), over [entryClass] keyed by server.
 
 var (
 	mcpGrantClass = entryClass[coord.MCPGrant]{
@@ -19,8 +18,7 @@ var (
 		key:    coord.MCPGrantKey,
 		entry:  coord.MCPGrantServerOf,
 		stored: func(g coord.MCPGrant, server string, version uint64) coord.MCPGrant {
-			// A RECORD DESCRIBES THE SERVER IT IS FILED UNDER, whatever its
-			// body says.
+			// The server it is filed under, whatever its body says.
 			g.Server, g.At, g.Version = server, g.At.UTC(), version
 			return g
 		},

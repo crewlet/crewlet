@@ -86,8 +86,7 @@ func ghostServer(t *testing.T) *httptest.Server {
 		case strings.HasSuffix(r.URL.Path, "/users/me") &&
 			r.Header.Get("Authorization") == "Bearer admin-token":
 			// THE PROVISIONING TOKEN IS A SYSTEM ADMIN, so the pass's
-			// preflight, which runs whether or not it has a seat to
-			// provision, has nothing to report about it.
+			// preflight (run even with no seat to provision) reports nothing.
 			w.Write([]byte(`{"id":"admin","username":"admin","roles":"system_admin system_user"}`))
 		case strings.HasSuffix(r.URL.Path, "/users/me"):
 			w.Write([]byte(`{"id":"bot-ceo","username":"ceo","is_bot":true}`))
@@ -97,13 +96,12 @@ func ghostServer(t *testing.T) *httptest.Server {
 		case strings.HasSuffix(r.URL.Path, "/config/client"):
 			w.Write([]byte(`{}`))
 		case strings.HasSuffix(r.URL.Path, "/teams/name/eng"):
-			// THE TEAM THE COMPANY NAMES EXISTS, so the access sync reads
-			// its agents back rather than stopping at a setting the
-			// operator got wrong.
+			// THE TEAM EXISTS, so the access sync reads its agents back
+			// rather than stopping at a misconfigured team.
 			w.Write([]byte(`{"id":"team-eng","name":"eng"}`))
 		default:
-			// The websocket among them: the seat keeps reconnecting in
-			// the background, which is no part of what is asserted.
+			// The websocket too: the seat's background reconnects are not
+			// asserted on.
 			w.WriteHeader(http.StatusNotFound)
 			w.Write([]byte(`{"message":"not here"}`))
 		}
@@ -113,19 +111,16 @@ func ghostServer(t *testing.T) *httptest.Server {
 }
 
 // A PERSON THE CHART NAMES BY AN ACCOUNT NOBODY HOLDS IS IN THE INTEGRATION'S
-// STATUS, which is where an operator looks — and on the pass's every return,
-// the one that cannot provision and the one that reconciles alike: whether a
-// person's name holds an account is no part of provisioning, and a company
-// whose bots were made by hand has people the agents may not recognise all
-// the same.
+// STATUS, where an operator looks, on every return of the pass (the one that
+// cannot provision and the one that reconciles alike): whether a name holds an
+// account is no part of provisioning, and hand-made bots do not change it.
 func TestTheMattermostPassReportsAPersonNobodyHolds(t *testing.T) {
 	t.Parallel()
 	chat := ghostServer(t)
 	company := ghostCompany(t, chat.URL)
-	// A FLEET STORE, which every engine [New] builds has: the pass reads the
-	// seat access ledger once the Mattermost vendor has opened. And the CEO's
-	// bot token, sealed under its own name as the engine seals it for a
-	// company that provisions its bots.
+	// A FLEET STORE, as every engine [New] builds has: the pass reads the seat
+	// access ledger once the Mattermost vendor opens. And the CEO's bot token,
+	// sealed under its own name as the engine seals it when it provisions bots.
 	sealed := config.MapSource{"MATTERMOST_BOT_TOKEN_CEO": "tok-ceo"}
 	e := &Engine{backends: &Backends{Fleet: memory.NewFleet()}, environ: sealed}
 	e.epoch.current.Store(company)
@@ -163,9 +158,8 @@ func TestTheMattermostPassReportsAPersonNobodyHolds(t *testing.T) {
 		name string
 		in   setup.PassInput
 		// want is every kind the pass reports, in order: the return's own,
-		// then the person's, then the access sync's. The company has not
-		// been migrated onto per-seat access, so the sync says it left the
-		// agents' accounts as they are.
+		// the person's, then the access sync's (the company is not on
+		// per-seat access, so the sync reports leaving the accounts alone).
 		want []integration.FindingKind
 	}{{
 		name: "no administrator token",
@@ -175,10 +169,8 @@ func TestTheMattermostPassReportsAPersonNobodyHolds(t *testing.T) {
 		},
 	}, {
 		// AN ADMINISTRATOR TOKEN AND A SINK, so the pass reaches the
-		// reconcile and returns what it found. The company's half mints
-		// nothing (every bot is the access sync's) and answers with no
-		// finding of its own: the person is the whole of what that return
-		// reports.
+		// reconcile. Its company half mints nothing (every bot is the access
+		// sync's) and finds nothing, so the person is all that return reports.
 		name: "the reconcile's return",
 		in:   setup.PassInput{Operator: "admin-token", Sink: sink},
 		want: []integration.FindingKind{
@@ -210,9 +202,9 @@ func TestTheMattermostPassReportsAPersonNobodyHolds(t *testing.T) {
 
 // A TOKEN HANDED IN MINTS NO BOT FOR A COMPANY THAT PROVISIONS NONE. Its bots
 // were made by hand, so no seat's tool server waits on this pass
-// ([seatMinter]); a run that reconciled anyway would mint tokens for servers
-// that were never told one was coming. The setup route refuses that run
-// before it starts, and the pass refuses it again where it reads its plan.
+// ([seatMinter]), and minted tokens would go to servers never told to expect
+// one. The setup route refuses that run, and the pass again where it reads
+// its plan.
 func TestAnAdministratorTokenMintsNoBotForACompanyThatProvisionsNone(t *testing.T) {
 	t.Parallel()
 	chat := ghostServer(t)
@@ -231,17 +223,15 @@ func TestAnAdministratorTokenMintsNoBotForACompanyThatProvisionsNone(t *testing.
 }
 
 // A CHANGE IN WHO THE PEOPLE ARE BRINGS THE STATUS FORWARD. The reconcile loop
-// reads a settled surface again only on its own cadence — ten minutes at the
-// least, an hour for a fix the operator owes — so the transport tells it when
-// its people findings change, and the next tick runs the Mattermost pass
-// however recently it last ran.
+// rereads a settled surface only on its cadence (ten minutes at least, an hour
+// for a fix the operator owes), so the transport tells it when its people
+// findings change and the next tick runs the Mattermost pass regardless.
 func TestAPeopleChangeBringsTheMattermostStatusForward(t *testing.T) {
 	t.Parallel()
 	chat := ghostServer(t)
 	company := ghostCompany(t, chat.URL)
 	fleet := memory.NewFleet()
-	// THE CEO'S BOT TOKEN, sealed under its own name as the engine seals it
-	// for a company that provisions its bots.
+	// THE CEO'S BOT TOKEN, sealed under its own name as the engine seals it.
 	e := &Engine{
 		backends: &Backends{Queue: queuememory.New(), Fleet: fleet},
 		environ:  config.MapSource{"MATTERMOST_BOT_TOKEN_CEO": "tok-ceo"},
@@ -271,8 +261,8 @@ func TestAPeopleChangeBringsTheMattermostStatusForward(t *testing.T) {
 		t.Fatalf("a settled surface ran %d passes, want 1", got)
 	}
 
-	// THE TRANSPORT STARTS, and its first answer is that nobody holds the
-	// founder's name: a change in what the status should say.
+	// THE TRANSPORT STARTS, and its first answer (nobody holds the founder's
+	// name) changes what the status should say.
 	tr, err := e.startMattermost(t.Context(), company, company.Config.Integrations.Mattermost)
 	if err != nil {
 		t.Fatalf("startMattermost: %v", err)
@@ -316,12 +306,11 @@ func (nopPublisher) Publish(context.Context, string, *events.Event) error { retu
 
 // A NAME REPORTED AS MOVED IS ANSWERED BY AN APPLY, AND BY NOTHING ELSE.
 //
-// The party registry is rebuilt on two triggers: an apply, and the identity
-// directory moving under the same company. Only the first states who anybody is,
-// so a person's name found holding another account stays reported through any
-// number of directory rebuilds — a suspension of somebody else is no answer to
-// it — and the next apply clears it. Mutation: pass true for every rebuild and
-// the report is gone after the first directory rebuild.
+// The party registry is rebuilt on an apply and when the identity directory
+// moves under the same company; only an apply states who anybody is. So a name
+// found holding another account stays reported through any number of directory
+// rebuilds, and the next apply clears it. Mutation: pass true for every rebuild
+// and the report is gone after the first directory rebuild.
 func TestOnlyAnApplyAnswersAMovedName(t *testing.T) {
 	t.Parallel()
 	var holder atomic.Value
@@ -332,8 +321,7 @@ func TestOnlyAnApplyAnswersAMovedName(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "/users/me") &&
 			r.Header.Get("Authorization") == "Bearer admin-token":
 			// THE PROVISIONING TOKEN IS A SYSTEM ADMIN, so the pass's
-			// preflight, which runs whether or not it has a seat to
-			// provision, has nothing to report about it.
+			// preflight (run even with no seat to provision) reports nothing.
 			w.Write([]byte(`{"id":"admin","username":"admin","roles":"system_admin system_user"}`))
 		case strings.HasSuffix(r.URL.Path, "/users/me"):
 			w.Write([]byte(`{"id":"bot-ceo","username":"ceo","is_bot":true}`))
@@ -413,8 +401,8 @@ roles:
 		return len(got) == 1 && got[0].Kind == integration.FindingContactMoved
 	}
 
-	// THE NAME COMES TO HOLD ANOTHER ACCOUNT, found by the ask the first
-	// directory rebuild makes.
+	// THE NAME COMES TO HOLD ANOTHER ACCOUNT, found by the first directory
+	// rebuild's ask.
 	holder.Store("u-mallory")
 	e.rebuildPartiesLocked(running, notify.Standing{})
 	deadline := time.Now().Add(10 * time.Second)

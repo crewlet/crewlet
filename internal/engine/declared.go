@@ -16,80 +16,29 @@ import (
 // ErrUndeclaredCodeCache is the refusal of a TEST's node that would build
 // Gitlet on figures it took from the machine running the suite.
 //
-// A NODE THAT HOSTS CODE SIZES TWO THINGS FROM ITS MACHINE where Tier A leaves
-// them unset: the code cache's budget, from the ROOM on the cache's volume
-// ([codeCacheBudget]: the free space, less what a broker beside it may still
-// write under its limit and the request and patch spools), and the transfer
-// lane, from the machine's cores as its memory allows. A production node is
-// meant to. In a test both are facts about the runner rather than the case: a
-// fixture whose broker declares its sixteen gibibytes beside the cache has a
-// derived budget only where the runner has about seventeen and a half free,
-// and below that the node refuses to host code at all — the end-to-end gates'
-// five code-hosting cases all failed at engine.New with that refusal on a
-// runner with 9.2 GB free (CI run 41669250876) — while a sixteen-core runner's
-// lane took four gibibytes of spools out of the same room.
-// internal/queue/jetstream/brokertest's package doc has the history.
-//
-// So IN A TEST BINARY ([testbinary.Running]) a node that builds Gitlet with
-// gitlet.cache_max_bytes or gitlet.max_transfers unset REFUSES TO, naming them and
-// brokertest.GitletCacheIn, which declares both. A cache whose volume the case
-// stands in for itself ([Options.cacheDisk]) derives its budget from the
-// case's figures and is not asked for one. The one case that may leave them
-// to the machine is one whose SUBJECT is that derivation, booted under
-// [SizedByTheMachine]. Outside a test binary none of this is read. The
-// broker's own size is held the same way, by the broker
-// ([jetstream.ErrUndeclaredSize]).
-//
-// WHERE GITLET IS BUILT ([Engine.buildGitletHost]), at boot or at the
-// apply that first hosts code, rather than in the fixtures: every test that
-// boots Gitlet reaches it, through whatever fixture, so the rule needs no
-// list of them.
+// Where Tier A leaves them unset, a code-hosting node sizes its cache's budget
+// from the room on its volume ([codeCacheBudget]) and its transfer lane from
+// the machine's cores: in a test, facts about the runner, so a fixture passes
+// on one runner and fails on another (brokertest's package doc). So in a test
+// binary ([testbinary.Running]) Gitlet built with gitlet.cache_max_bytes or
+// gitlet.max_transfers unset is refused, naming brokertest.GitletCacheIn; a
+// case standing in the volume ([Options.cacheDisk]) is not asked the budget,
+// and [SizedByTheMachine] opts out a case about the derivation. Checked in
+// [Engine.buildGitletHost], which every fixture reaches, so none is listed.
 var ErrUndeclaredCodeCache = errors.New("engine: a test left the figures of Gitlet's cache to the machine")
 
 // ErrUndeclaredBrokerLimit is the refusal of a TEST's node that dials an
-// external broker whose account states no JetStream limit.
-//
-// A NODE ON AN EXTERNAL BROKER READS THE ACCOUNT'S LIMIT AND NOTHING ELSE
-// ([jetstream.Queue.StreamBudget]): the servers' own caps are not a client's
-// to read. Where the account states none, the node stands three quarters of
-// its own stream volume's free space in for the limit ([unstatedLimit]) and
-// reserves its object bucket and sizes its state logs from that
-// ([objectsReservation], [logsGrantable]). A production node is meant to: it
-// is the one figure the node has. In a test that volume is the runner's,
-// while the server the case started holds every reservation to a cap the case
-// declared (brokertest's TestEveryNATSServerATestBuildsDeclaresItsSize), so
-// the two agreed only while the runner's disk was small enough: the
-// object-window case's broker, its store capped at brokertest.StoreMaxBytes
-// and its account stating nothing, refused the node's bucket on every runner
-// with more than about 92 GB free.
-//
-// So IN A TEST BINARY ([testbinary.Running]) a node whose external broker's
-// account states no limit REFUSES TO OPEN ITS BACKENDS, naming
-// externaltest.Start, whose server's account states
-// brokertest.StoreMaxBytes. It does not ask whether anything would be sized
-// from the stand-in — store.objects.nats_max_bytes set, every log's ceiling
-// declared — because stating the limit costs a case nothing and settles every
-// figure at once. The one case that may leave it unstated is one whose
-// SUBJECT is that derivation, opened under [SizedByTheMachine]. Outside a
-// test binary none of this is read, and nothing is asked of the broker.
-//
-// A MEMBER AND A LEAF ARE NOT ASKED. A member reads its own server's cap,
-// the very one that refuses it, so the two agree on any machine, and a test
-// declares it besides (jetstream.ErrUndeclaredSize). A leaf reads its
-// members' account, which the engine's own broker never limits, so asking it
-// would refuse every leaf, the shape production runs included. What a leaf
-// stands in sizes only the object bucket, since it holds no state log, and
-// only where the leaf makes the bucket, which its members make at their own
-// boot, before a fixture starts a leaf beside them. Nor is a budget the broker
-// did not answer: that is the broker under load rather than the case's
-// declaration, and the sizing that follows asks again and says so if nobody
-// answers then either.
-//
-// AT THE OPENING OF THE BACKENDS ([openNATS]), before anything is reserved on
-// the broker: every route a test takes to a node on an external broker — an
-// engine's boot, a `crewlet run` child (the test binary itself, run again),
-// backends a case opens and lends to [New] — opens them there, so the rule
-// needs no list of the fixtures.
+// external broker whose account states no JetStream limit. Such a node stands
+// three quarters of its stream volume's free space in for one ([unstatedLimit])
+// and sizes its object bucket and state logs from it; in a test that volume is
+// the runner's while the server holds the case's cap, so the two agree only on
+// a small enough disk. So in a test binary it refuses to open its backends
+// ([openNATS], before anything is reserved), naming externaltest.Start, even
+// where nothing would be sized from the stand-in: stating costs a case nothing.
+// [SizedByTheMachine] opts out a case about the derivation. Not asked: a member
+// (its own server's cap refuses it alike on any machine), a leaf (its members'
+// account is never limited, so asking would refuse every leaf), or a budget the
+// broker did not answer (load, which the sizing that follows asks again).
 var ErrUndeclaredBrokerLimit = errors.New("engine: a test left its external broker's limit to the machine's free disk")
 
 // SizedByTheMachine is ctx carrying why a test leaves an engine it boots under
@@ -153,9 +102,8 @@ func undeclaredBrokerLimit(ctx context.Context, b *config.Bootstrap, q any) erro
 	budget, err := broker.StreamBudget(readCtx)
 	cancel()
 	if err != nil {
-		// NOT REFUSED: a budget the broker did not answer is the broker under
-		// load rather than the case's declaration, and the sizing that
-		// follows asks again and says so if nobody answers then either.
+		// Not refused: an unanswered budget is load, not the case's declaration
+		// ([ErrUndeclaredBrokerLimit]).
 		//
 		//nolint:nilerr // Deliberate: see the paragraph above.
 		return nil

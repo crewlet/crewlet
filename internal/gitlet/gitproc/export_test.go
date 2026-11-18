@@ -9,17 +9,17 @@ import (
 )
 
 // RemoteEnv is what a case resolves a remote against in place of the
-// process's own: the resolver the remote's host and the network's NAT64
-// prefixes are asked of, the proxy the process would name for a URL (nil
-// names none), and the values SSL_CERT_FILE and SSL_CERT_DIR would hold.
+// process's own: the resolver for the remote's host and the network's NAT64
+// prefixes, the proxy for a URL (nil names none), and SSL_CERT_FILE and
+// SSL_CERT_DIR.
 type RemoteEnv struct {
 	Resolver       httpx.Resolver
 	Proxy          func(*url.URL) (*url.URL, error)
 	CAFile, CADirs string
 }
 
-// ResolveRemoteWith is ResolveRemote against env: a remote a case builds
-// reaching no network and no environment of the machine's.
+// ResolveRemoteWith is ResolveRemote against env, reaching neither the
+// machine's network nor its environment.
 func ResolveRemoteWith(ctx context.Context, env RemoteEnv, rawURL string, allowPrivate bool) (Remote, error) {
 	proxy := env.Proxy
 	if proxy == nil {
@@ -36,38 +36,34 @@ func SetTimings(p *Pool, slotWait, killGrace time.Duration) {
 	p.slotWait, p.killGrace = slotWait, killGrace
 }
 
-// SetRemoteStall scales the stall p derives a remote run's TCP keepalive from
-// (TransferStall: quiet for half of it before the first probe, the rest
-// shared among the probes), in whole seconds, for a case that waits longer
-// than a stall (call before any Run).
+// SetRemoteStall scales TransferStall, which p derives a remote run's TCP
+// keepalive from in whole seconds (Remote.config), for a case that waits
+// longer than a stall (call before any Run).
 func SetRemoteStall(p *Pool, stall time.Duration) { p.remoteStall = stall }
 
-// SetClock has p read the instants a run's process began and was reaped at
-// from now rather than the machine's clock (Result.Began, Result.Took), so a
-// case states them rather than ordering two readings of the wall clock, which
-// a coarse clock stamps equal. Call before any Run.
+// SetClock has p read Result.Began and Result.Took from now rather than the
+// machine's clock, so a case states them rather than ordering two wall-clock
+// readings a coarse clock stamps equal. Call before any Run.
 func SetClock(p *Pool, now func() time.Time) { p.now = now }
 
-// SeeGrace has p arm the wait between a run's SIGTERM and its SIGKILL
-// through armed rather than a timer: armed is handed the grace the pool
-// waits, exactly, and answers the channel whose value ends the wait. Call
-// before any Run.
+// SeeGrace has p arm the wait between a run's SIGTERM and SIGKILL through
+// armed rather than a timer: armed gets the exact grace and answers the
+// channel that ends the wait. Call before any Run.
 func SeeGrace(p *Pool, armed func(grace time.Duration) <-chan time.Time) {
 	p.grace = func(d time.Duration) (<-chan time.Time, func() bool) {
 		return armed(d), func() bool { return true }
 	}
 }
 
-// OnDrain has p tell fn each stream a run's drain begins to wait for, in the
-// drain's order — stdout, stderr, the trace and, last, stdin — from the run's
-// own goroutine, so fn must not block. It is the parked state a case waits a
-// run into before it lets the run's caller go on: a run that has reached its
-// drain has been reaped and swept, and one waiting for its stdin has nothing
-// left to wait for but its caller's Read. Call before any Run.
+// OnDrain has p tell fn each stream a run's drain begins to wait for, in
+// order (stdout, stderr, the trace, last stdin), on the run's goroutine, so
+// fn must not block. A case parks a run there before releasing its caller: a
+// run in its drain has been reaped and swept, and one waiting for stdin waits
+// only on its caller's Read. Call before any Run.
 func OnDrain(p *Pool, fn func(stream string)) { p.draining = fn }
 
-// ResolveMemory is what New sizes the lanes by under o, the node's own
-// memory read by read.
+// ResolveMemory is what New sizes the lanes by under o, reading the node's
+// memory with read.
 func ResolveMemory(o Options, read func() (Memory, error)) (Memory, error) {
 	return resolveMemory(o, read)
 }
@@ -79,11 +75,10 @@ func SetCaptureMax(p *Pool, n int) { p.captureMax = n }
 // accounting cases.
 func ReadLane(p *Pool) (held, lent int64) { return p.read.counts() }
 
-// Waiting is how many runs wait in p's lane of class c: queued for a slot
-// and granted none yet. It is the parked state a case waits a run into
-// before it lets a slot go or ends the run's caller, so the release or the
-// cancel meets the waiter the case names rather than a run still on its way
-// to the lane.
+// Waiting is how many runs wait in p's lane of class c, queued and not yet
+// granted. A case parks a run there before releasing a slot or ending the
+// caller, so the release or cancel meets that waiter rather than a run still
+// on its way to the lane.
 func Waiting(p *Pool, c Class) int64 {
 	l := p.lane(c)
 	l.mu.Lock()
@@ -94,21 +89,20 @@ func Waiting(p *Pool, c Class) int64 {
 // ShareForget is the decayed charge below which an idle account is forgotten.
 const ShareForget = shareForget
 
-// SetArrivalOrder replaces p's transfer lane with one of the same width that
-// grants in ARRIVAL ORDER and keeps no book — the lane before the share, which
-// BenchmarkTransferShare's control runs. Call before any Run.
+// SetArrivalOrder replaces p's transfer lane with one as wide that grants in
+// ARRIVAL ORDER and keeps no book: BenchmarkTransferShare's control. Call
+// before any Run.
 func SetArrivalOrder(p *Pool) { p.transfer = newLane(ClassTransfer, p.transfer.size) }
 
 // SetRunUncapped lifts p's transfer lane's cap on the coding boxes' class
-// (ShareClass.Cap): its book reckons each class's cap of a lane twice as wide,
-// and a box's half of that is the whole lane — the share without the cap,
-// work-conserving for every class, which BenchmarkTransferShare's
-// runs-uncapped control runs. Call before any Run.
+// (ShareClass.Cap): its book reckons caps for a lane twice as wide, so a
+// box's half is the whole lane. BenchmarkTransferShare's runs-uncapped
+// control. Call before any Run.
 func SetRunUncapped(p *Pool) { p.transfer.book.slots = 2 * int(p.transfer.size) }
 
 // SetWeights has p's transfer lane weigh the classes by weights in place of
-// ShareClass.Weight: the search BenchmarkTransferShare's runs arms make for
-// the weights a contended lane holds its pass rule at. Every class needs a
+// ShareClass.Weight, for BenchmarkTransferShare's runs arms' search for the
+// weights at which a contended lane holds its pass rule. Every class needs a
 // weight above zero. Call before any Run.
 func SetWeights(p *Pool, weights map[ShareClass]int) {
 	p.transfer.book.weight = func(c ShareClass) int { return weights[c] }
@@ -121,8 +115,8 @@ func TransferHeld(p *Pool, c ShareClass) int {
 	return p.transfer.book.classes[c].running
 }
 
-// SetShareClock sets the clock p's transfer lane reads its book by — what a
-// benchmark moves minutes on without waiting them. Call before any Run.
+// SetShareClock sets the clock p's transfer lane's book reads, so a
+// benchmark moves minutes without waiting them. Call before any Run.
 func SetShareClock(p *Pool, now func() time.Time) {
 	p.transfer.book.now = now
 	p.transfer.book.swept = now()
@@ -140,9 +134,9 @@ func NewShareLane(cores, slots int, now func() time.Time) *ShareLane {
 	return &ShareLane{l: newShareLane(int64(slots), book)}
 }
 
-// TransferLane is p's own transfer lane — as New sized it and charges it —
-// driven as a ShareLane, with no git process. Move its clock with
-// SetShareClock first.
+// TransferLane is p's own transfer lane, as New sized and charges it, driven
+// as a ShareLane with no git process. Move its clock with SetShareClock
+// first.
 func TransferLane(p *Pool) *ShareLane { return &ShareLane{l: p.transfer} }
 
 // Turn is one arrival at a ShareLane: granted at once, or queued until a
@@ -251,8 +245,8 @@ func FormatTable() map[string]FormatRow {
 // CanonicalFormat is the form a format is looked up by.
 func CanonicalFormat(format string) string { return canonicalFormat(format) }
 
-// ReadTrace reads stream as the trace sink of a run in dir reads its trace2
-// event stream, written in pieces of at most piece bytes (0: whole): the
+// ReadTrace reads stream as a run's trace sink in dir reads its trace2 event
+// stream, in pieces of at most piece bytes (0: whole), and answers the
 // summary, the kind an ExitError would carry, and the damage.
 func ReadTrace(dir string, stream []byte, piece int) (t Trace, kind, damage error) {
 	s := newTraceSink(dir)
@@ -268,8 +262,8 @@ func ReadTrace(dir string, stream []byte, piece int) (t Trace, kind, damage erro
 	return s.summary(), s.kind(), s.damage(time.Time{})
 }
 
-// TraceHeld is the most capacity the line a trace sink holds reached while
-// it read stream in pieces of piece bytes: what it keeps of a line.
+// TraceHeld is the largest capacity a trace sink's held line reached while
+// reading stream in pieces of piece bytes.
 func TraceHeld(stream []byte, piece int) int {
 	s := newTraceSink("")
 	most := 0

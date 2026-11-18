@@ -42,8 +42,11 @@ export interface SeatFace {
    * lib/seats.ts), which is what draws an operator as the person they are.
    */
   kind?: SeatKind | undefined;
-  /** How an agent is drawn, where the chart holds the seat. */
-  avatar?: AgentAvatar | null | undefined;
+  /**
+   * How an agent is drawn: the chart's answer, required so a grid cannot drop
+   * an agent's character by omission (null for a person, undefined off the chart).
+   */
+  avatar: AgentAvatar | null | undefined;
   /** What the seat is doing now (`statusOf` in lib/seats.ts), drawn on the badge. */
   status?: AvatarStatus | undefined;
 }

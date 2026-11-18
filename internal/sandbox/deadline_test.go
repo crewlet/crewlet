@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-// launchUntil is [waiterRig.launch] for a turn whose wall-clock cap ends at
-// deadline: the launch writes the turn's deadline onto the row it opens.
+// launchUntil is [waiterRig.launch] with the turn's wall-clock cap ending at
+// deadline, written onto the row it opens.
 func (r *waiterRig) launchUntil(turnID string, deadline time.Time) PendingRun {
 	r.t.Helper()
 	ctx := r.t.Context()
@@ -34,12 +34,10 @@ func (r *waiterRig) launchUntil(turnID string, deadline time.Time) PendingRun {
 	return r.get(turnID)
 }
 
-// A RUN THAT OUTLASTS ITS TURN'S CAP IS ENDED, AS IF IT HAD FINISHED. The turn's
-// own segments refuse to start a round past its deadline, and a detached run is
-// no round of theirs: a scheduled turn with a half-hour cap had runs that went
-// on for hours, bounded by their turn cap alone. The poll fires the completion
-// of a run still working once the deadline has passed — and not a moment
-// before, nor for a turn with no cap.
+// A RUN THAT OUTLASTS ITS TURN'S CAP IS ENDED, AS IF IT HAD FINISHED. A
+// detached run is no round of the turn's segments, so their deadline check
+// never stops it; the poll fires its completion once the deadline has passed,
+// not before, and never for a turn with no cap.
 func TestARunPastItsTurnsDeadlineIsEnded(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -55,12 +53,11 @@ func TestARunPastItsTurnsDeadlineIsEnded(t *testing.T) {
 	}
 }
 
-// AND ITS COLLECTION SAYS SO, AND KEEPS EVERYTHING IT DID. The job was working
-// when the poll ended it, so what is collected is what it had done by then —
-// never a success, since it did not get to say it was done — and the resumed
-// turn judges it on every call it made, those that landed after the claim read
-// the row included — and the identities of those its log dropped from its
-// middle with them, which the resumed turn's call log is seeded by.
+// AND ITS COLLECTION SAYS SO, AND KEEPS EVERYTHING IT DID: never a success,
+// since it never said it was done, and the resumed turn judges it on every
+// call, those landing after the claim read the row included, plus the
+// identities of calls its log dropped from the middle, which seed the resumed
+// turn's call log.
 //
 // Mutation: keep no identity of a call the log drops from its middle
 // ([BridgeLog.appendCall]), and the resumed turn counts two calls its run made
@@ -70,11 +67,9 @@ func TestARunEndedAtItsDeadlineIsCollectedWithWhatItDid(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launchUntil("t1", rig.now.Add(-time.Minute))
 	rig.coordinator.countRun("swe", StatusRunning)
-	// The job is still working: the fake reports a result only for what it
-	// streamed so far, and nothing finished it.
+	// The job is still working: nothing finished it.
 	rig.runner.CollectFunc = func(ctx context.Context) error {
-		// A call the run made while its completion was being claimed, and
-		// then enough more that its log dropped two from its middle.
+		// Calls made during the claim, enough that the log drops two from its middle.
 		row := rig.getIn(ctx, "t1")
 		for i := range MaxBridgeCalls + 2 {
 			call := BridgeCall{Name: "read_file", At: rig.now, Digest: fmt.Sprintf("%064x", i)}
@@ -115,28 +110,18 @@ func TestARunEndedAtItsDeadlineIsCollectedWithWhatItDid(t *testing.T) {
 	}
 }
 
-// A CAPPED RUN STILL SAYS IT WAS CUT OFF AT ITS CAP. Its collection ends a job
-// its turn's cap passed while it still worked, so by the time its result is
-// read the job is over, and its own record says at most that a request ended
-// it ([Result.JobEnd]), which names no cause. It is still the run its cap
-// ended — never a success, its resume and its record saying the wall-clock cap
-// ended it, and never parked on the question it asked on its way out —
-// wherever its collection SAW it working past the cap: its poll answered that
-// it ran; or, where that poll could not say, its script heard the request to
-// end, or its own record says a request ended it. And a job that finished by
-// itself before its cap's collection read it is no run the cap ended: not
-// asked, not swept, and collected as any finished job is, whether or not the
-// poll could say so.
+// A CAPPED RUN STILL SAYS IT WAS CUT OFF AT ITS CAP. By the time its result is
+// read the job is over, its record naming at most a request ([Result.JobEnd]),
+// no cause. Wherever the collection SAW it working past the cap (its poll said
+// so, or else its script heard the request or its record names one), it fails
+// citing the wall-clock cap and is never parked on its question. A job that
+// finished before the collection read it is collected as finished: not asked,
+// not swept, whatever the poll could say.
 //
-// Mutation: read ENDED off whether the job is over once its end is done, and a
-// run its cap stopped whose end left no record reads as one that finished;
-// read it off the poll alone, and one whose poll could not say and whose
-// script heard the request is said only to have been ended on request and is
-// parked on its question; drop the job's own record of the request, and so is
-// one whose request was heard and whose answer was lost; mark every collection
-// whose poll could not say ended, or every collection past the cap, and a job
-// that finished by itself is said cut off; end a job its poll found over, and
-// it is swept.
+// Mutation: read ENDED off the job being over, off the poll alone, or without
+// the job's own record of the request; mark every unsure poll or every
+// collection past the cap ended; or end a job its poll found over; and a case
+// goes red.
 func TestACappedRunStillSaysItWasCutOffAtItsCap(t *testing.T) {
 	t.Parallel()
 	recorded := Result{Text: "halfway through", JobEnd: JobEndAsked, Error: "the run was ended on request " +
@@ -148,15 +133,13 @@ func TestACappedRunStillSaysItWasCutOffAtItsCap(t *testing.T) {
 		pollFails bool
 		// finished is a job that finished by itself before its collection.
 		finished bool
-		// answer is how the request to end the job is answered: "" by a
-		// script that hears it and ends the job; "lost" by one that heard it
-		// and ended the job while its answer never came back; "gone" by a
-		// box that finds the pid the script recorded no process of the job,
-		// as a finished job's is.
+		// answer is how the request to end the job is answered: "" heard and
+		// ended; "lost" heard and ended, the answer never back; "gone" the
+		// recorded pid no longer the job's, as after it finished.
 		answer string
 		// endsAs is what the job reports once a request ended it.
 		endsAs Result
-		// cutOff is a run its cap cut off, and asks the requests to end its job.
+		// cutOff is a run its cap cut off; asks counts requests to end its job.
 		cutOff bool
 		asks   int
 	}{
@@ -180,8 +163,7 @@ func TestACappedRunStillSaysItWasCutOffAtItsCap(t *testing.T) {
 			if tc.cutOff {
 				rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?"),
 					Branch: "wip/t1"})
-				// WHAT A JOB ITS END STOPPED REPORTS, which the collection
-				// opens the run's failure with.
+				// What the stopped job reports, which opens the run's failure.
 				rig.runner.EndsAs(tc.endsAs)
 			}
 			if tc.pollFails {
@@ -246,16 +228,13 @@ func TestACappedRunStillSaysItWasCutOffAtItsCap(t *testing.T) {
 }
 
 // A CAP'S VERDICT OUTLIVES A READ CUT SHORT AS IT ENDS THE JOB. A collection
-// that sees its job still working past its turn's cap — its poll answered that
-// it ran, or, where that poll could not say, its script heard the request to
-// end — records so on the job's record before it ends the job
-// ([LaunchRecord.EndedAtDeadline]). The read can be cut short as it ends the
-// job — its node draining, the seat moving — and the kill that outlives it can
-// take the job's script before the script records the request, leaving the job
-// over with nothing in its box that says a request ended it. The claim goes
-// back, and the collection made again reads the job's record: the run is still
-// the one its cap cut off, never a success, and never parked on the question
-// it asked on its way out.
+// that sees its job working past the cap (its poll said so, or else its
+// script heard the request) records so ([LaunchRecord.EndedAtDeadline]) before
+// ending it, because a read cut short
+// there (node draining, seat moving) can let the kill take the script before
+// it records the request, leaving nothing in the box. The retried collection
+// reads the record: still cut off at its cap, never a success, never parked on
+// its question.
 //
 // Mutation: record nothing on the job's record, or only what the poll saw, and
 // the run collected again reads as one that ended by itself, and is parked on
@@ -279,10 +258,8 @@ func TestACapsVerdictOutlivesAReadCutShortAsItEndsTheJob(t *testing.T) {
 			if tc.pollFails {
 				rig.runner.PollErr = errors.New("the box's exec did not answer")
 			}
-			// THE READ IS CUT SHORT AS THE JOB'S SCRIPT IS ASKED TO END IT — its
-			// node draining — and the kill that outlives it takes the job
-			// before the script records the request: the job over, and its box
-			// holding nothing that says a request ended it.
+			// The read is cut short as the script is asked to end the job, and
+			// the kill takes the job before the script records the request.
 			ctx, drain := context.WithCancel(t.Context())
 			defer drain()
 			rig.runner.EndFunc = func(context.Context, Sandbox, RunHandle) (EndAsk, error) {
@@ -295,8 +272,7 @@ func TestACapsVerdictOutlivesAReadCutShortAsItEndsTheJob(t *testing.T) {
 				return nil
 			}
 			rig.runner.EndsAs(Result{Text: "halfway through", Error: "the harness exited with status 143"})
-			// A BOX READ UNDER THE CUT-SHORT READ'S CONTEXT FAILS, as every
-			// real box's does.
+			// A box read under the cancelled context fails, as a real box's does.
 			rig.runner.CollectFunc = func(read context.Context) error { return read.Err() }
 
 			payload, ev := rig.completion("t1")
@@ -308,7 +284,7 @@ func TestACapsVerdictOutlivesAReadCutShortAsItEndsTheJob(t *testing.T) {
 					"and its turn not resumed", box.JobCalls(), len(rig.resumer.calls()))
 			}
 
-			// THE COLLECTION MADE AGAIN, on the claim the cut-short one handed back.
+			// The collection again, on the claim the cut-short one handed back.
 			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 				t.Fatalf("OnCompleted, made again: %v", err)
 			}
@@ -327,12 +303,10 @@ func TestACapsVerdictOutlivesAReadCutShortAsItEndsTheJob(t *testing.T) {
 	}
 }
 
-// AND IT IS NOT PARKED ON A QUESTION IT ASKED ON ITS WAY. A run the clock is
-// stopping is not one a person's answer could continue, so a question it
-// recorded before its cap ended it is collected with the rest of what it did:
-// the turn is resumed, judging a run cut off at its cap, and nobody is asked.
-// The question is still SAID, in the note that ends it: the turn and the
-// seat's next turn read that the run was waiting on a person, and what for.
+// AND IT IS NOT PARKED ON A QUESTION IT ASKED ON ITS WAY: no answer could
+// continue a run the clock stopped, so the turn resumes judging it cut off and
+// nobody is asked. The question is still said in the closing note, so the turn
+// and the seat's next turn see what the run was waiting on.
 //
 // Mutation: park on the claimed row's question whether or not the run was
 // ended at its cap, and the run waits on an answer nothing will continue;

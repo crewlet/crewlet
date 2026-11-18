@@ -92,6 +92,7 @@ var companyFields = map[string]classified{
 	"NotificationCoalesceMaxBatch":      {exposure: exposureGuarded, why: "an operational setting"},
 	"Workers":                           {exposure: exposureGuarded, why: "operational configuration of the delegate surface"},
 	"Assistant":                         {exposure: exposureGuarded, why: "the Dashboard Assistant's model chain and limits, an operational setting"},
+	"Advisor":                           {exposure: exposureGuarded, why: "the advisor analyst's model chain, cadence and ceiling, an operational setting"},
 	// GUARDED, as Integrations is: which integrations the engine has moved
 	// onto per-seat access is the engine's own migration state about those
 	// blocks, nothing a reader of the chart draws, and the Agents tab reads
@@ -1279,10 +1280,9 @@ func TestTheOrgProjectionPublishesWhatASeatRunsOn(t *testing.T) {
 	}
 }
 
-// AN AGENT SEAT IS PUBLISHED WITH THE AVATAR IT IS DRAWN AS, its defaults
-// filled in, and A PERSON WITH NONE. Every screen draws a seat from this one
-// answer, so a seat that names one part keeps the other's default here rather
-// than in a copy of the default each screen would keep.
+// AN AGENT SEAT IS PUBLISHED WITH THE AVATAR IT IS DRAWN AS, an absent part
+// picked from its handle, and A PERSON WITH NONE. Every screen draws a seat
+// from this one answer rather than from a copy of the default of its own.
 func TestTheOrgProjectionPublishesHowEachAgentIsDrawn(t *testing.T) {
 	t.Parallel()
 	company := &config.Company{
@@ -1300,8 +1300,8 @@ func TestTheOrgProjectionPublishesHowEachAgentIsDrawn(t *testing.T) {
 	got := orgOf(t, a)
 	for i, want := range []*api.OrgAvatar{
 		{Character: "hexlet", Color: "cyan"},
-		{Character: "crewlet", Color: "rose"},
-		{Character: "crewlet", Color: "purple"},
+		{Character: string(config.DefaultAvatar("pm").Character), Color: "rose"},
+		{Character: string(config.DefaultAvatar("swe").Character), Color: string(config.DefaultAvatar("swe").Color)},
 		nil,
 	} {
 		seat := got.Roles[i]

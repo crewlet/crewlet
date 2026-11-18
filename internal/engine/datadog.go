@@ -5,9 +5,6 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
-// datadogPrompt is the alert prompt, matching the other third-party apps' helpers.
-//
-// A function rather than a package-level value because every one of its
-// neighbours is one, and a lone variable here would read as a prompt that
-// holds state when it holds none.
+// datadogPrompt is the alert prompt: a function, like the other third-party
+// apps' helpers, since a lone variable would read as a prompt holding state.
 func datadogPrompt() notify.Prompt { return datadog.Prompt{} }

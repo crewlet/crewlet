@@ -10,17 +10,11 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
-// A RECEIPT THAT ECHOES AN ASK STILL CARRIES THE WRITE'S CAVEATS.
-//
-// create_work_item answers through the fence when its receipt echoes the
-// decision the caller has just asked, labelled as the caller's own words
-// (ADR-0040), and answers every caveat its write produced through the one
-// helper that writes a model's phrasing and a person's from the same values
-// (ADR-0060). One create can be both: it asks a decision, declares a label
-// that is a near-duplicate of another, and its dependencies do not land.
-// Answered through the fence alone, the near-duplicate and the dependencies
-// were nowhere: the model read no `warnings` and no `dependencies_failed`, and
-// a person's surface was told the item was filed with no caveat at all.
+// A RECEIPT THAT ECHOES AN ASK STILL CARRIES THE WRITE'S CAVEATS. A
+// create_work_item receipt echoing the caller's ask is fenced as the caller's
+// own words (ADR-0040), and its caveats are answered for a model and a person
+// from the same values (ADR-0060); one create can be both, and the fenced path
+// must not drop the `warnings`, `dependencies_failed` or a person's caveats.
 //
 // Mutation: answer ownReceipt's fenced path with the foreign read alone, and
 // the model's warnings and both of a person's caveats go red.

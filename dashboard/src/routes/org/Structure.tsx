@@ -39,6 +39,7 @@ import { handleLabel, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import { Builder } from "./builder/Builder.tsx";
 import { builderSurfaces } from "./builder/surfaces.ts";
 import { LiveStructure, useLiveValue } from "./structureLive.tsx";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 
 /** How long a scroll rests before the address records it: the end of a scroll, not each frame. */
 const SCROLL_SETTLE_MS = 150;
@@ -130,6 +131,7 @@ export function FindSeat() {
       found.map((seat) => ({
         value: seat.key,
         label: seat.name,
+        leading: <ChoiceFace seat={seat} />,
         hint: [handleLabel(seat.handle), unitPath(seat.unit)].filter(Boolean).join(" · "),
       })),
     [found],

@@ -2564,7 +2564,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// HOW IT REACHES THE CHANGELOG ([memoryConfig]).
 	e.memory, err = memsync.New(backends.Store, backends.CoordinationJetStream(),
 		func(handle string) string { return memoryAgentID(e.Company(), handle) },
-		memoryConfig(opts.Bootstrap, backends, n.Host().HeartbeatInterval()))
+		memoryConfig(opts.Bootstrap, backends))
 	if err != nil {
 		return nil, fmt.Errorf("engine: memory sync: %w", err)
 	}
@@ -2883,6 +2883,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	}
 	if d.DelegatedRequests == nil {
 		d.DelegatedRequests = e.readDelegatedRequests
+	}
+	if d.StaleAssignments == nil {
+		d.StaleAssignments = e.dropStaleAssignments
 	}
 	if d.Observe == nil {
 		d.Observe = e.observe

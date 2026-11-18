@@ -73,11 +73,10 @@ roles:
 
 // A PASS STARTS NO CHILD FOR A SEAT THIS NODE CANNOT PROVE IT HOLDS.
 //
-// A child is the seat's identity at the vendor, and a pass an apply or a retry
-// runs lands at a moment of its own choosing — possibly after the lease lapsed
-// and a peer took the seat, before the heartbeat here noticed. Such a pass
-// must not start anything; it is retried instead, and starts the child once
-// the lease is provable again.
+// A child is the seat's identity at the vendor, and an apply's or a retry's
+// pass may land after the lease lapsed, before the heartbeat noticed. Such a
+// pass starts nothing; it is retried, and starts the child once the lease is
+// provable again.
 func TestAPassStartsNoChildForASeatThisNodeCannotProve(t *testing.T) {
 	t.Parallel()
 	e := &Engine{mcp: mcp.NewBridge(nil, mcp.Supervision{})}
@@ -106,15 +105,10 @@ func TestAPassStartsNoChildForASeatThisNodeCannotProve(t *testing.T) {
 	}
 }
 
-// AN APPLY HANDS A SEAT'S PASS TO ITS RUNNER AND DOES NOT WAIT FOR IT.
-//
-// A pass can take a child's whole startup timeout, and the apply runs this
-// stage with its new epoch already current: every stage after it — a new
-// role's mailbox, the mail held for want of a model, the scheduler, the sweep
-// that claims the seats the revision added — would wait behind a vendor
-// handshake. Here the pass blocks in its first step for ten seconds; the apply
-// must return at once and leave a runner going, which then files what the pass
-// concluded.
+// AN APPLY HANDS A SEAT'S PASS TO ITS RUNNER AND DOES NOT WAIT FOR IT, or
+// every later apply stage would wait behind a vendor handshake. Here the pass
+// blocks in its first step for ten seconds; the apply must return at once and
+// leave a runner going, which then files what the pass concluded.
 func TestAnApplyDoesNotWaitForASeatsPass(t *testing.T) {
 	t.Parallel()
 	e := &Engine{mcp: mcp.NewBridge(nil, mcp.Supervision{})}
@@ -154,14 +148,11 @@ func TestAnApplyDoesNotWaitForASeatsPass(t *testing.T) {
 // AN APPLY THAT FINDS A SEAT BEFORE ITS CLAIM'S FIRST PASS IS FOLDED INTO THE
 // CLAIM, which returns only once that pass has run.
 //
-// Registering the seat is what lets an apply find it, and the claim runs its
-// first pass only after — after retiring a predecessor, too. An apply landing
-// in between that became the seat's runner left the claim asking it to go
-// again and returning at once: the mailbox opened on children still being
-// started, which is exactly what the claim exists to prevent. The claim is the
-// seat's runner from before it is registered, so the apply can only ask it to
-// go again. The pass here takes a second, so a claim that returned while
-// another goroutine ran it would find nothing concluded.
+// The claim is the seat's runner from before it registers the seat, so an
+// apply landing before its first pass can only ask it to go again, and the
+// mailbox never opens on children still starting. The pass here takes a
+// second, so a claim that returned while another goroutine ran it would find
+// nothing concluded.
 func TestAnApplyBeforeTheClaimsFirstPassIsFoldedIntoIt(t *testing.T) {
 	t.Parallel()
 	e := &Engine{mcp: mcp.NewBridge(nil, mcp.Supervision{})}
@@ -199,11 +190,10 @@ func TestAnApplyBeforeTheClaimsFirstPassIsFoldedIntoIt(t *testing.T) {
 	}
 }
 
-// AND THE SAME THROUGH THE WHOLE CLAIM, in the window that is widest: the
-// claim has registered the seat and is retiring a PREDECESSOR — a failed
-// acquire's state the re-claim found still there, whose pass is in no hurry to
-// end — when the apply lands. The seat's own pass is a start that lasts its
-// two-second timeout, so a claim that let the apply run it would return
+// AND THE SAME THROUGH THE WHOLE CLAIM, in its widest window: the claim has
+// registered the seat and is retiring a PREDECESSOR (a failed acquire's state,
+// its pass stuck) when the apply lands. The seat's own pass is a start lasting
+// its two-second timeout, so a claim that let the apply run it would return
 // seconds before anything was concluded.
 func TestAnApplyWhileTheClaimRetiresAPredecessorIsFoldedIntoIt(t *testing.T) {
 	t.Parallel()
@@ -247,10 +237,8 @@ func TestAnApplyWhileTheClaimRetiresAPredecessorIsFoldedIntoIt(t *testing.T) {
 
 // A RELEASED SEAT RUNS NO PASS AGAIN, armed retry or not.
 //
-// The release cancels the pass in flight, waits for it, and disarms the retry;
-// a pass asked for afterwards does nothing. Here the retry is due every few
-// milliseconds, so a timer that survived the release would run a pass within
-// the wait below — and a pass is what starts children.
+// Here the retry is due every few milliseconds, so a timer that survived the
+// release would run a pass, which starts children, within the wait below.
 func TestAReleasedSeatRunsNoPassAgain(t *testing.T) {
 	t.Parallel()
 	e := &Engine{mcp: mcp.NewBridge(nil, mcp.Supervision{}), mcpRetryBase: time.Millisecond}
@@ -284,11 +272,9 @@ func TestAReleasedSeatRunsNoPassAgain(t *testing.T) {
 
 // A RELEASE ENDS A START IN FLIGHT rather than waiting it out.
 //
-// A pass an apply or a retry runs can be mid-start when placement takes the
-// seat away — and a start that never hears back waits for its whole startup
-// timeout, two minutes by default. The release cancels the pass, so handing
-// the seat on costs a child's teardown, not its timeout. The child here is a
-// process that never answers the handshake, given a minute to.
+// A start that never hears back waits its whole startup timeout, so the
+// release cancels the pass: handing the seat on costs a child's teardown, not
+// its timeout. The child here never answers the handshake, given a minute to.
 func TestAReleaseEndsAStartInFlight(t *testing.T) {
 	t.Parallel()
 	company := hangingCompany(t, 60)
@@ -322,11 +308,9 @@ func TestAReleaseEndsAStartInFlight(t *testing.T) {
 	<-done
 }
 
-// A SPEC THAT CAN NEVER LAUNCH IS NOT RETRIED. Nothing about it changes until a
-// revision does, and the apply that brings that revision runs a pass of its
-// own; retrying it on a timer would only repeat the same refusal. A start that
-// fails for a reason that can pass — here an absent binary, which an image
-// update or a package fetch can supply — is.
+// A SPEC THAT CAN NEVER LAUNCH IS NOT RETRIED: only a revision changes it, and
+// its apply runs a pass of its own. A start that fails for a reason that can
+// pass (here an absent binary, which an image update can supply) is.
 func TestOnlyAFailureThatCanPassIsRetried(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
@@ -347,13 +331,11 @@ func TestOnlyAFailureThatCanPassIsRetried(t *testing.T) {
 	}
 }
 
-// A SEAT'S RETRY IS THE MCP RESTART SCHEDULE, and the engine's one knob moves
-// it: the base doubling up to twenty bases, each wait spread by a fifth either
-// way ([mcp.RestartWait], whose own suite holds the schedule). A second copy of
-// that schedule here, anchored to the same seat cadence by a comment of its
-// own, is what the next change to one of them would leave behind — and an
-// unbounded doubling overflows into a negative wait that reads as "due now",
-// every tick.
+// A SEAT'S RETRY IS THE MCP RESTART SCHEDULE ([mcp.RestartWait], whose own
+// suite holds it), moved by the engine's one knob: the base doubling up to
+// twenty bases, each wait spread by a fifth either way. A second copy here
+// would drift from it, and an unbounded doubling overflows into a negative wait
+// that reads as "due now", every tick.
 func TestASeatRetryWaitsOnTheMCPRestartSchedule(t *testing.T) {
 	t.Parallel()
 	within := func(e *Engine, failures int, want time.Duration) {

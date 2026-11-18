@@ -11,8 +11,8 @@ import (
 )
 
 type condenseCall struct {
-	// handle and turn are the run's: a rewrite is a model call the engine
-	// charges to the seat and files under the turn the run belongs to.
+	// handle and turn are the run's: a rewrite is a model call charged to the
+	// seat and filed under the run's turn.
 	handle string
 	turn   string
 	part   RunPart
@@ -79,15 +79,11 @@ func TestARunsAccountPastTheRecordIsCondensedNotCut(t *testing.T) {
 }
 
 // NO MODEL, NO CUT. A piece no model could condense keeps WHOLE lines up to
-// the bound and says how many it left out — the report its opening, where its
-// summary is, and the failure BOTH ENDS: its end, where the line naming what
-// broke is, and its start, where the engine states the exit status and the
-// harness's own error before the error stream. Kept from its end alone, a failure
-// with a long error stream lost those. A rewrite that came back past the
-// bound is no rewrite.
+// the bound and says how many it left out: the report its opening, the
+// failure BOTH ENDS (its end names what broke; its start holds the engine's
+// exit status and harness error). A rewrite past the bound is no rewrite.
 //
-// Mutation: keep a failure's end alone, as it was, and the exit status is
-// gone.
+// Mutation: keep a failure's end alone, and the exit status is gone.
 func TestAnUncondensedAccountDropsWholeLinesAndSaysSo(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -146,12 +142,10 @@ func TestAnUncondensedAccountDropsWholeLinesAndSaysSo(t *testing.T) {
 	}
 }
 
-// THE COORDINATOR'S OWN PREFIX FITS THE ROOM A RUNNER LEAVES IT. A runner
-// composes its failure to MaxFailureBytes; the coordinator may then put the
-// sentence saying the run was ended at its turn's wall-clock cap in front of it
-// ([endedAtDeadline]), and what it gets must still be what one condensation
-// reads, or the compactor refuses it before any model is asked. The sentence,
-// with its separator, leaves most of the reserve for what redaction can add
+// THE COORDINATOR'S OWN PREFIX FITS THE ROOM A RUNNER LEAVES IT: a runner's
+// MaxFailureBytes failure with the wall-clock-cap sentence ([endedAtDeadline])
+// in front must still be what one condensation reads, or the compactor refuses
+// it unasked; the sentence leaves most of the reserve for what redaction adds
 // where the pieces join.
 func TestTheCoordinatorsPrefixFitsTheRoomARunnerLeavesIt(t *testing.T) {
 	t.Parallel()
@@ -165,13 +159,10 @@ func TestTheCoordinatorsPrefixFitsTheRoomARunnerLeavesIt(t *testing.T) {
 			MaxFailureBytes, failureReserve, MaxCondenseBytes)
 	}
 
-	// End to end: the longest failure a runner composes, ended at its
-	// deadline, and the failure the condenser is then handed: WHOLE, the
-	// sentence in front of the runner's failure, every byte of both. The
-	// pre-trim that brings an oversized failure inside what a condensation
-	// reads would keep the handed text inside the bound however small the
-	// reserve, so what shows the reserve holding the prefix is that nothing
-	// was trimmed.
+	// End to end: the longest failure a runner composes, ended at its deadline,
+	// reaches the condenser WHOLE, sentence and failure. The pre-trim would keep
+	// the handed text in bound whatever the reserve, so the proof that the
+	// reserve holds the prefix is that nothing was trimmed.
 	//
 	// Mutation: set failureReserve to zero, and the failure reaches the
 	// condenser with its middle taken out.
@@ -204,11 +195,9 @@ func TestTheCoordinatorsPrefixFitsTheRoomARunnerLeavesIt(t *testing.T) {
 }
 
 // A FAILURE PAST WHAT ONE CONDENSATION READS IS BROUGHT INSIDE IT, NOT GIVEN UP
-// ON. Nothing outside this package keeps a runner's promise for it, and a
-// harness's own error can be as long as the file it was read from — handed over
-// whole, the compactor refuses it before a model is asked, and the resumed
+// ON: handed over whole, the compactor refuses it unasked and the resumed
 // executor reads the uncondensed fallback although a model was configured. The
-// failure keeps its start and its end in whole lines, says what it left out
+// failure keeps its start and end in whole lines, notes what it left out
 // inside the bound, and THAT is condensed.
 //
 // Mutation: hand the condenser the failure as it came, and it is past what a
@@ -255,15 +244,11 @@ func TestALineLongerThanTheRecordIsLeftOutWhole(t *testing.T) {
 	}
 }
 
-// EVERY BACKEND REFUSES A FILE PAST THE CAP. A reader that stops at its cap
-// reports a clean end of file, so a clipped report reads as a finished one;
-// and the local backend read whatever the job wrote, whole, into the memory of
-// the host it shares.
-//
-// The rule at a cap of a KiB, where the +1 and the refusal naming its cap are
-// the same branches they are at 32 MiB; and then the local backend at the REAL
-// cap, through a box its own constructor built, over a sparse file that costs
-// the disk nothing.
+// EVERY BACKEND REFUSES A FILE PAST THE CAP, since a clipped report reads as a
+// finished one. The rule runs at a 1 KiB cap, where the +1 and the refusal
+// naming its cap take the branches they take at 32 MiB, then on the local
+// backend at the REAL cap, through a box its constructor built, over a sparse
+// file that costs the disk nothing.
 func TestAFilePastTheCapIsRefusedNotClipped(t *testing.T) {
 	t.Parallel()
 	const small = 1 << 10
@@ -307,14 +292,11 @@ func TestAFilePastTheCapIsRefusedNotClipped(t *testing.T) {
 	}
 }
 
-// EVERY BOX READS WHOLE UP TO MAXFILEBYTES unless a suite said otherwise —
-// the fake, a direct box from Create, and a box of either placement reattached
-// from its directory. (Create's container branch needs a container runtime;
-// like every constructor it gives its box no cap, and a box with none reads
-// by MaxFileBytes, which is what the others prove.) The contract suite
-// certifies the fake and the local boxes at a cap of its own, so this is what
-// ties that cap to the one a running engine reads by. E2B keeps its contract
-// at MaxFileBytes itself, so the real figure is certified there.
+// EVERY BOX READS WHOLE UP TO MAXFILEBYTES unless a suite said otherwise: the
+// fake, a direct box from Create, and a reattached box of either placement
+// (Create's container branch needs a runtime, and gives no cap like the rest).
+// The contract suite certifies the fake and local boxes at a cap of its own,
+// so this ties that cap to the engine's; E2B's contract runs at MaxFileBytes.
 func TestEveryBoxReadsWholeUpToMaxFileBytes(t *testing.T) {
 	t.Parallel()
 	if MaxFileBytes != 32<<20 {

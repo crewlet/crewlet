@@ -9,15 +9,14 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 )
 
-// A RUN CONTINUING A SESSION ITS TURN WENT PAST IS LED SO. The session a
-// conversation's last turn left was kept while that turn still worked, and the
-// turn's end said it went on past it — and the turn may have been lost after,
-// or lost with an end that said nothing of going on: the launcher's basis says
-// which, with when the session was kept, and the lead the run is handed before
-// the turn's own brief says where the session ends, in place of a turn
-// boundary it does not reach — never that a session its turn went on past runs
-// through the turn — and of a lost turn's, that it may not hold the last of
-// what that turn did.
+// A RUN CONTINUING A SESSION ITS TURN WENT PAST IS LED SO. A conversation's
+// last session was kept while its turn still worked; the turn may have gone
+// on past it, been lost after, or been lost with no word of going on. The
+// launcher's basis says which and when the session was kept, and the lead
+// handed before the turn's brief says where the session ends in place of a
+// turn boundary it does not reach (never that it runs through a turn that
+// went past it) and, of a lost turn's, that it may not hold the last of what
+// that turn did.
 //
 // Mutation: lead the run off the base's turn and its end alone, leaving out
 // whether that turn went on past the session, was lost, or when the session

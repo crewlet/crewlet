@@ -17,21 +17,15 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// THE ORACLES: the whole-text rules the automata of claudelinetext.go
-// replaced, as they read a text they held whole. Each automaton answers as its
-// rule does, in any pieces ([TestATextsFactsAreReadAsItsWholeTextReadsThem]).
+// THE ORACLES: the whole-text rule each automaton of claudelinetext.go answers
+// as, in any pieces ([TestATextsFactsAreReadAsItsWholeTextReadsThem]).
 
 // handbackNotice reports whether a task notification's text names
 // [claudeToolHandback] anywhere: [textHandback]'s rule.
 func handbackNotice(text string) bool { return strings.Contains(text, claudeToolHandback) }
 
 // taskNotification is the subagent and the leg a task notification's text
-// names: its lines, in order, `<task-notification>`, `<task-id>A</task-id>`,
-// `<tool-use-id>L</tool-use-id>`, any number of
-// `<output-file>…</output-file>`, and `<status>completed</status>`, nothing
-// after the status read. False for any other text, an agent outside
-// [validClaudeAgent]'s rule, or a leg outside the call-id rule
-// ([sandbox.ValidCallID]): [textNotice]'s rule.
+// names, read whole: [textNotice]'s rule.
 func taskNotification(text string) (agent, leg string, ok bool) {
 	line, rest := nextLine(text)
 	if line != "<task-notification>" {
@@ -73,8 +67,7 @@ func enclosed(line, opening, closing string) (string, bool) {
 	return strings.CutSuffix(inner, closing)
 }
 
-// utf16Units is how many UTF-16 code units JavaScript counts the string text
-// as long: two for a rune past the basic plane, one for every other:
+// utf16Units is text's length in UTF-16 code units, as JavaScript counts it:
 // [textUnits]'s rule.
 func utf16Units(text []byte) int {
 	units := 0
@@ -348,31 +341,17 @@ func ltBoundary(text string, at int) bool {
 	return false
 }
 
-// A TEXT'S FACTS ARE READ AS ITS WHOLE TEXT READS THEM: what each automaton
-// reads of a text handed it in pieces of whole characters (whole, as textCut
-// cuts it, in pieces of 1, 2, 7, 8, 13, 51, 4 Ki and 64 Ki bytes, and of
-// random sizes) is what its whole-text rule reads of the text held whole:
-// whether it says anything (strings.ContainsFunc with jsTrimKeeps), the
-// subagent and the leg a task notification names (taskNotification), whether
-// it names the handback tool (handbackNotice), its length and its opening's
-// and its whole's SHA-256 (as the holdings' count hashed them), and its length
-// in UTF-16 code units up to one past a skill name's bound (utf16Units). Held
-// on every text the testdata threads hold, on the shapes each rule turns on
-// (a notification with 10,000 output files, one output file's line of 9 MiB, a
-// carriage return before a break, an output file of no name and one whose
-// opening and closing overlap, the handback tool's name split by a cut, a
-// character trim() keeps or drops alone, texts at either side of each digest's
-// bound and of a skill name's), on every two-piece cut of each short seed, and
-// on random texts; and textCut never cuts inside a character.
+// A TEXT'S FACTS ARE READ AS ITS WHOLE TEXT READS THEM: each automaton, handed
+// a text in pieces of whole characters (whole, as textCut cuts it, in fixed
+// sizes from 1 byte to 64 KiB, and in random sizes), answers as its oracle
+// reads the text whole; held on every testdata text, the shapes each rule turns
+// on ([ltSeeds]), every two-piece cut of each short seed, and random texts; and
+// textCut never cuts inside a character.
 //
-// Mutation: end a notification's line at a carriage return, and an output
-// file's line holding one before its closing names no leg; read an output
-// file's line by its opening alone, and one with no closing passes for one;
-// hash the whole of a text past 4 KiB, and a longer one has a whole; count a
-// character past U+FFFF as one unit, and a skill's name of them is short; drop
-// the handback's carry, and a name split by a cut is missed; and cut a whole
-// text inside a character, and a space past the basic Latin reads as saying
-// something.
+// Mutation: end a notification's line at a carriage return; read an output
+// file's line by its opening alone; hash the whole of a text past 4 KiB; count
+// a character past U+FFFF as one unit; drop the handback's carry; or cut a
+// whole text inside a character: each turns this test red.
 func TestATextsFactsAreReadAsItsWholeTextReadsThem(t *testing.T) {
 	t.Parallel()
 	rng := rand.New(rand.NewChaCha8([32]byte{'t', 'e', 'x', 't'}))
@@ -414,9 +393,8 @@ func TestATextsFactsAreReadAsItsWholeTextReadsThem(t *testing.T) {
 // value, -1 bytes, as does a tool_use's call; and a text of no bytes is a text,
 // 0 bytes long with the empty text's digests, never the zero value.
 //
-// Mutation: read the zero value's length as 0, and a call no reading filled
-// claims a text of no bytes with digests no text has; store a text's length
-// as written, and a text of no bytes reads as none.
+// Mutation: read the zero value's length as 0, or store a text's length as
+// written, and the two are confused.
 func TestAResultTextsZeroValueIsNoText(t *testing.T) {
 	t.Parallel()
 	if n := (threadResultText{}).Bytes(); n != -1 {

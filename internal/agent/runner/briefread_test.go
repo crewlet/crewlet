@@ -7,13 +7,12 @@ import (
 )
 
 // A RELAUNCH HANDS ITS LAUNCH THE READ ITS BRIEFS WERE BUILT FROM. A relaunch
-// that carries the round on builds every brief from one read of the round's
-// log, then readies its launch — its probe, any rewrite of a long call, the
-// call a person approved — before the launch's opening moves the log on: a call
-// of the job before landing in between is told by none of them. So the launch
-// is handed how many calls the log had taken at that read
-// (runner.Continuation.BriefRead), past which its opening marks the round's
-// calls late (sandbox.BridgeLog's lateAfter).
+// carrying the round on builds every brief from one read of the round's log,
+// then readies its launch (probe, long-call rewrite, approved call) before the
+// launch's opening moves the log on, so a call of the job before landing in
+// between is told by no brief. The launch is handed the log's call count at
+// that read (runner.Continuation.BriefRead), past which its opening marks the
+// round's calls late (sandbox.BridgeLog's lateAfter).
 //
 // Mutation: hand the launch no read, and the opening marks nothing.
 func TestARelaunchHandsItsLaunchTheReadItsBriefsWereBuiltFrom(t *testing.T) {

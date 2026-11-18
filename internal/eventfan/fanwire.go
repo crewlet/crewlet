@@ -29,10 +29,8 @@ import (
 // never sends it — because no peer that does not know it is ever asked. Adding
 // a question, a filter or a field a merge reads is moving [Protocol].
 
-// Protocol is the scatter version this build speaks, asks in and answers. It
-// moves by the rule above: a question, a filter or a field a merge reads.
-//
-// What the current format carries, and why each piece is shaped as it is:
+// Protocol is the scatter version this build speaks, asks in and answers; it moves
+// by the rule above. What the current format carries, and why each piece is so:
 //
 //   - A listing filters on `channel_id`, `agent_id`, `suspended` and
 //     `failed` — the last the event log's "Failures only", narrowing the rows
@@ -78,7 +76,9 @@ import (
 //     records that made them ([store.EventLog.ToolCalls]), each node's
 //     newest `limit` in the listing's one order, which the asker merges and
 //     cuts again.
-const Protocol = 8
+//   - A turn's part ranks its summary and work item by instant ([store.TurnPartial]),
+//     so the merge's maximum is the turn's newest completion, not its greatest text.
+const Protocol = 9
 
 // Subject is where a history question is scattered: ONE subject for the whole
 // fleet, every data node serving it, because the answerers are every data node

@@ -14,13 +14,10 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE ENVELOPE DECODES AT A VERSION THIS BUILD HAS NEVER HEARD OF.
-//
-// This is the property the whole two-pass split exists for. A rolling upgrade
-// puts a newer peer's record on the wire; a node that could not decode its
-// envelope would have no subject to file it under, no scope for a writer to
-// probe for and no kind for a gate to read — so it could not retain it, and
-// dropping it is data loss.
+// THE ENVELOPE DECODES AT A VERSION THIS BUILD HAS NEVER HEARD OF, the property
+// the two-pass decode exists for (package doc, "Why the record decodes in two
+// passes"): without its envelope a newer peer's record could not be retained,
+// and dropping it is data loss.
 func TestAnUnknownVersionStillYieldsAnEnvelope(t *testing.T) {
 	t.Parallel()
 	payload := []byte(`{
@@ -54,8 +51,7 @@ func TestAnUnknownVersionStillYieldsAnEnvelope(t *testing.T) {
 	if !asFuture(err, &future) {
 		t.Fatalf("a V99 record failed with %v rather than a version refusal", err)
 	}
-	// AND THE ENVELOPE COMES BACK WITH THE ERROR, because that is
-	// precisely what the caller retains.
+	// AND THE ENVELOPE COMES BACK WITH THE ERROR: the caller retains it.
 	if rec.Subject.Kind != worklet.KindTask {
 		t.Fatalf("the refusal carried no subject to file the record under: %+v", rec)
 	}
@@ -65,10 +61,7 @@ func asFuture(err error, target **worklet.ErrFutureVersion) bool {
 	return errors.As(err, target)
 }
 
-// A RECORD WITHOUT A VERSION IS REFUSED, and that is not the same refusal.
-//
-// A record at a version this build does not know is a newer peer; a record at
-// no version at all cannot be told apart from one, and treating it as future
+// A RECORD WITHOUT A VERSION IS REFUSED, not treated as a newer peer's, which
 // would retain a malformed record at its position for ever.
 func TestARecordWithNoVersionIsRefused(t *testing.T) {
 	t.Parallel()
@@ -97,25 +90,10 @@ func TestTheSubjectSentinelIsOneByteOnTheWire(t *testing.T) {
 }
 
 // A SUBJECT'S CONTAINER SURVIVES THE ROUND TRIP, AND THE WRITER'S PATH IS THE
-// APPLIER'S.
-//
-// # The failure this exists to catch
-//
-// A task's scope path sits under its project's, and the project is a column on
-// the row rather than anything in the subject — so it has to travel ON THE
-// RECORD. It used to be an argument to Resolve, which meant the writer passed
-// the project and the envelope decoder, which has no row to read it from,
-// passed nothing.
-//
-// Nothing raised. The publisher probed the deferral index over t/c/ENG/o/<id>
-// while the applier filed every deferral under t/c/workspace/o/<id>, so the
-// two-clause containment probe — the one piece of SQL in this design where a
-// wrong clause is data loss rather than a wrong answer — simply never matched.
-// A writer would be told its task was clean while a record it could not decode
-// sat deferred against it, take the retry-at-zero branch, and overwrite a
-// mutation no reprocess recovers.
-//
-// So: encode, decode, resolve, and compare against the writer's own path.
+// APPLIER'S. A task's path sits under its project, which is not in the subject,
+// so it travels ON THE RECORD. Were the two paths to differ, the publisher's
+// deferral probe would never match the applier's filing, and a writer would
+// overwrite a deferred mutation no reprocess recovers.
 func TestAScopesContainerSurvivesTheWire(t *testing.T) {
 	t.Parallel()
 	subject := worklet.TaskSubject("b1b2b3b4-0000-4000-8000-000000000001")
@@ -142,9 +120,8 @@ func TestAScopesContainerSurvivesTheWire(t *testing.T) {
 			"nobody sees", got, want)
 	}
 
-	// AND THE PROJECT IS WHAT MAKES IT A PROJECT'S. A container dropped
-	// on the wire would resolve to the workspace and still look like a
-	// path, which is exactly why the comparison above is not enough.
+	// AND THE PROJECT IS WHAT MAKES IT A PROJECT'S: a dropped container
+	// resolves to the workspace and still looks like a path.
 	if slices.Equal(read.Resolve(subject).Paths,
 		worklet.ScopeSet{Subject: true}.Resolve(subject).Paths) {
 		t.Fatal("a task in ENG resolves to the same path as one in no project " +
@@ -152,11 +129,9 @@ func TestAScopesContainerSurvivesTheWire(t *testing.T) {
 	}
 }
 
-// AN UNREADABLE SCOPE IS THE WHOLE DOMAIN, NEVER THE SUBJECT AND NEVER EMPTY.
-//
-// This runs on a node reading a record a newer build wrote. Assuming a V1
-// convention holds for a V2 operation is the exact bug the field exists to
-// close, and an error here would take the two-pass decode down with it.
+// AN UNREADABLE SCOPE IS THE WHOLE DOMAIN, NEVER THE SUBJECT AND NEVER EMPTY: it
+// is a newer build's record, whose convention this build cannot assume, and an
+// error here would take the two-pass decode down with it.
 func TestAnUnreadableScopeIsTheWholeDomain(t *testing.T) {
 	t.Parallel()
 	for name, raw := range map[string]string{
@@ -180,12 +155,8 @@ func TestAnUnreadableScopeIsTheWholeDomain(t *testing.T) {
 	}
 }
 
-// AN UNKNOWN TERM KIND IS THE DOMAIN, NOT A SKIPPED TERM.
-//
-// A term this build cannot interpret is a claim about a blast radius it cannot
-// bound. Dropping it silently narrows a newer peer's scope to whatever this
-// build happened to recognise, which is how a deferred record stops blocking
-// the objects it touched.
+// AN UNKNOWN TERM KIND IS THE DOMAIN, NOT A SKIPPED TERM: dropping it narrows a
+// newer peer's scope, and its deferred record stops blocking what it touched.
 func TestAnUnknownTermKindWidensRatherThanNarrows(t *testing.T) {
 	t.Parallel()
 	unknown := worklet.ScopeTerm{Kind: "shard", ID: "7"}.Path()
@@ -196,12 +167,9 @@ func TestAnUnknownTermKindWidensRatherThanNarrows(t *testing.T) {
 	}
 }
 
-// THE CONTAINMENT THE SCOPE FIELD EXISTS FOR, IN BOTH DIRECTIONS.
-//
-// A record deferred on a project must block a write to a task in that project,
-// and a record deferred on one task must NOT block a write to its neighbour.
-// Both are properties of the PATHS rather than of the term kinds, which is why
-// an object's path is written under its container.
+// THE CONTAINMENT THE SCOPE FIELD EXISTS FOR, IN BOTH DIRECTIONS: a record
+// deferred on a project blocks a write to its task, and one deferred on a task
+// does NOT block its neighbour. Both are properties of the PATHS.
 func TestAContainerCoversItsTasksAndSiblingsDoNot(t *testing.T) {
 	t.Parallel()
 	project := worklet.ScopeSet{Terms: []worklet.ScopeTerm{
@@ -224,9 +192,7 @@ func TestAContainerCoversItsTasksAndSiblingsDoNot(t *testing.T) {
 	}
 }
 
-// A BARRIER INTERSECTS NOTHING.
-//
-// It writes no row anywhere, so a scope that intersected anything would make
+// A BARRIER INTERSECTS NOTHING: it writes no row, and intersecting would make
 // every linearizable read wait behind every other one.
 func TestABarrierIntersectsNothing(t *testing.T) {
 	t.Parallel()
@@ -242,9 +208,7 @@ func TestABarrierIntersectsNothing(t *testing.T) {
 }
 
 // A TRIMMED RECORD INTERSECTS NOTHING, for the barrier's reason: it writes no
-// row of this domain's anywhere, so a scope that intersected an object would
-// make every read and write of it wait behind a record that changed none of
-// its rows.
+// row of this domain's.
 func TestATrimmedRecordIntersectsNothing(t *testing.T) {
 	t.Parallel()
 	trimmed := worklet.ScopeSet{Subject: true}.Resolve(worklet.TrimmedSubject(statelog.Position{
@@ -259,10 +223,9 @@ func TestATrimmedRecordIntersectsNothing(t *testing.T) {
 	}
 }
 
-// THE TRIMMED RECORD IS ITS LITERAL — through the encoder the trim calls, so
-// what is pinned is what is appended: the base version whatever this build
-// reads, the writer the eviction gate reads, the floor in the subject, and no
-// operation id.
+// THE TRIMMED RECORD IS ITS LITERAL, through the encoder the trim calls: the
+// base version whatever this build reads, the writer the eviction gate reads,
+// the floor in the subject, and no operation id.
 func TestTheTrimmedRecordIsItsLiteral(t *testing.T) {
 	t.Parallel()
 	body, err := worklet.EncodeTrimmed(statelog.TrimmedEnvelope(statelog.Position{
@@ -282,9 +245,8 @@ func TestTheTrimmedRecordIsItsLiteral(t *testing.T) {
 }
 
 // THE TRIMMED RECORD'S ENCODER REFUSES WHAT THE FRAMEWORK WOULD NOT RECOGNISE,
-// at the write — never in the subject's validation, which runs on the read
-// path too and would turn one malformed record into an applier that stops on
-// every node.
+// at the write: the subject's validation also runs on the read path, where a
+// refusal stops the applier on every node.
 func TestEncodeTrimmedRefusesWhatTheFrameworkWouldNotRecognise(t *testing.T) {
 	t.Parallel()
 	good := statelog.TrimmedEnvelope(statelog.Position{
@@ -304,11 +266,8 @@ func TestEncodeTrimmedRefusesWhatTheFrameworkWouldNotRecognise(t *testing.T) {
 	}
 }
 
-// A GATE IS ABOUT THE WHOLE DOMAIN.
-//
-// An eviction licenses or drops records on every subject, so anything narrower
-// would be a claim the record does not make — and a write that slipped past a
-// deferred gate is the one failure with no inverse.
+// A GATE IS ABOUT THE WHOLE DOMAIN: an eviction acts on every subject, and a
+// write that slipped past a deferred gate has no inverse.
 func TestAGateCoversEverything(t *testing.T) {
 	t.Parallel()
 	gate := worklet.ScopeSet{Subject: true}.Resolve(worklet.EvictionSubject("node-9"))
@@ -323,12 +282,9 @@ func TestAGateCoversEverything(t *testing.T) {
 	}
 }
 
-// THE SCOPE CAP IS REFUSED AT THE WRITER, WITH THE FIX IN THE MESSAGE.
-//
-// A writer whose affected set is larger emits the smallest covering container
-// or family term, which is what keeps the field bounded by construction. The
-// refusal has to say so, because the alternative a writer reaches for is
-// truncation.
+// THE SCOPE CAP IS REFUSED AT THE WRITER, WITH THE FIX IN THE MESSAGE: emit the
+// smallest covering container or family term, since the alternative a writer
+// reaches for is truncation.
 func TestAnOversizedScopeIsRefusedNamingTheCoveringTerm(t *testing.T) {
 	t.Parallel()
 	terms := make([]worklet.ScopeTerm, worklet.MaxScopeTerms+1)
@@ -357,10 +313,8 @@ func TestAScopeCannotBeBothTheSubjectAndAList(t *testing.T) {
 	}
 }
 
-// A NEWER BUILD'S TOP-LEVEL FIELDS SURVIVE A ROUND TRIP.
-//
-// Additive evolution is the rule the envelope rests on, and a field this build
-// drops is a field the peer that wrote it never gets back.
+// A NEWER BUILD'S TOP-LEVEL FIELDS SURVIVE A ROUND TRIP: the envelope evolves
+// additively, and a dropped field never gets back to the peer that wrote it.
 func TestUnknownTopLevelFieldsRoundTrip(t *testing.T) {
 	t.Parallel()
 	payload := []byte(`{
@@ -422,25 +376,15 @@ func TestEncodeRefusesARecordThatCannotBeApplied(t *testing.T) {
 	}
 }
 
-// THE BARRIER'S RECORD IS THE LITERAL ITS COST MODEL WAS MEASURED FROM.
-//
-// The read index appends one of these per linearizable read — millions a year
-// — so its size is not a curiosity: the log's byte ceiling, the trim's
-// cadence and the whole capacity model are derived from it. A struct tag that
-// quietly renamed a field or omitted the empty id would move that number with
-// nothing to notice.
-//
-// THE ENCODER THE READ INDEX CALLS, not a struct this case builds: the version
-// is the one field the encoder chooses, and a barrier written at the domain's
-// newest version is one every node on the build before retains — a deferral
-// row per linearizable read for the length of a rolling upgrade.
+// THE BARRIER'S RECORD IS THE LITERAL ITS COST MODEL WAS MEASURED FROM: one is
+// appended per linearizable read, and the log's byte ceiling, the trim's
+// cadence and the capacity model derive from its size (package doc, "What a
+// day costs the log, measured").
 func TestTheBarrierRecordIsItsMeasuredLiteral(t *testing.T) {
 	t.Parallel()
-	// THROUGH THE ENCODER THE READ INDEX CALLS, so the literal is what is
-	// actually appended — version stamp included. A barrier is pinned at
-	// the base version whatever version this build reads, and the encoder
-	// refuses one carrying a versioned field, so every build there is can
-	// apply it.
+	// THROUGH THE ENCODER THE READ INDEX CALLS, version stamp included: a
+	// barrier is pinned at the base version so every build applies it; at
+	// the newest, an older node retains one per read through an upgrade.
 	body, err := worklet.EncodeBarrier(statelog.Envelope{
 		Kind: statelog.BarrierKind, Gen: 3,
 	})
@@ -452,26 +396,17 @@ func TestTheBarrierRecordIsItsMeasuredLiteral(t *testing.T) {
 		t.Fatalf("the barrier record encodes as\n  %s\nand the measured literal is\n  %s",
 			body, want)
 	}
-	// AND IT CARRIES NO OPERATION ID. An op id is what invites a message
-	// id, and a duplicate ack is served out of the broker's dedupe window
-	// with no quorum round trip at all — which is the one thing a read
-	// barrier must never be.
+	// AND IT CARRIES NO OPERATION ID: that invites a message id, and the
+	// broker's dedupe window acks a duplicate with no quorum round trip,
+	// which a read barrier must never skip.
 	if strings.Contains(string(body), "op_id") {
 		t.Error("a barrier carries an operation id")
 	}
 }
 
-// A RECORD FROM A NEWER BUILD ROUND-TRIPS LOSSLESSLY.
-//
-// # The failure this exists to catch
-//
-// The decoder kept a newer build's unknown fields in Extra and the encoder
-// dropped them: `json:"-"` on the field and `json.Marshal(r)` on the struct.
-// So a record relayed by an older node lost everything the writer wrote that
-// the relay had no field for — which is the exact contract that makes a
-// rolling upgrade possible, and it was false in the one direction that
-// matters. The change feed is where it showed: a parser on a newer node reads
-// a record an older node relayed and sees only the half its relay understood.
+// A RECORD FROM A NEWER BUILD ROUND-TRIPS LOSSLESSLY: the encoder writes back
+// the unknown fields the decoder kept in Extra, or a record an older node
+// relays loses everything it had no field for.
 func TestARecordFromANewerBuildReEncodesWithItsUnknownFields(t *testing.T) {
 	t.Parallel()
 	original := worklet.MutationRecord{
@@ -517,9 +452,8 @@ func TestARecordFromANewerBuildReEncodesWithItsUnknownFields(t *testing.T) {
 	}
 
 	// AND A RECORD THIS BUILD WROTE IS BYTE-IDENTICAL TO ITS STRUCT'S OWN
-	// ENCODING. The merge path costs a map round trip and reorders the
-	// keys, and the barrier's literal — whose size the read index's whole
-	// cost model rests on — must not move because a relay path exists.
+	// ENCODING: the merge path reorders keys, and the barrier's measured
+	// literal must not move.
 	same, err := original.Encode()
 	if err != nil {
 		t.Fatalf("re-encode the original: %v", err)
@@ -530,20 +464,10 @@ func TestARecordFromANewerBuildReEncodesWithItsUnknownFields(t *testing.T) {
 	}
 }
 
-// EVERY FIELD ON THE PATCH MAKES IT NON-EMPTY, one at a time.
-//
-// The emptiness answer decides whether a write happens at all, so a field it
-// does not see is a write the caller is told succeeded and that changed
-// nothing — no error, no warning, no history row, and no way to tell it apart
-// from a write that landed. That is not hypothetical: the hand-written
-// version of this check listed fourteen of the struct's fields, so
-// `update_work_item` given a custom-field value as its only argument reported
-// success and wrote nothing at all.
-//
-// DRIVEN BY REFLECTION over the struct rather than by a list here, for the
-// reason the check itself is: a list in the test drifts exactly as fast as a
-// list in the code, and the field that broke this was the one nobody added to
-// either.
+// EVERY FIELD ON THE PATCH MAKES IT NON-EMPTY, one at a time: an empty patch
+// skips the write, so a field Empty misses is a write reported as succeeded
+// that changed nothing. DRIVEN BY REFLECTION, since a list here would drift as
+// a list in the code does.
 func TestEveryFieldOfAPatchIsAChange(t *testing.T) {
 	t.Parallel()
 	if !(worklet.TaskPatch{}).Empty() {
@@ -567,13 +491,10 @@ func TestEveryFieldOfAPatchIsAChange(t *testing.T) {
 	}
 }
 
-// nonZero is a set value of one of the patch's fields. Every field is a
-// pointer, a slice or a map — which is the type's own rule, so that the zero
-// value can mean "not set" — and an allocated one of any of those is not zero;
-// or a CLEAR FLAG (ClearStart, ClearDue), the rule's one exception, a bool that
-// takes a date off and whose false clears nothing, which is "not set" too
-// (TaskPatch's doc says why a date is cleared by a flag). Any other plain
-// value is refused: its zero may be a setting.
+// nonZero is a set value of one of the patch's fields: an allocated pointer,
+// slice or map (the type's rule, so zero means "not set"), or true for a CLEAR
+// FLAG (ClearStart, ClearDue; see TaskPatch), whose false is "not set" too. Any
+// other plain value is refused: its zero may be a setting.
 func nonZero(t *testing.T, field reflect.StructField) reflect.Value {
 	t.Helper()
 	ft := field.Type

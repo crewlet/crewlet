@@ -44,9 +44,8 @@ func stampedVersion(t *testing.T, body []byte) int {
 // A RECORD WITHOUT A NEW FIELD STILL ENCODES AT VERSION ONE, whatever the
 // build reads.
 //
-// Stamping the build's own version was the bug: the day [RecordVersion] moved,
-// every write a new node made — the ones carrying nothing new included — would
-// have been retained by every old node, with everything its scope met, for the
+// Stamped at the build's own [RecordVersion], every write a new node made
+// would be retained by every old node, with everything its scope met, for the
 // length of the upgrade.
 func TestARecordWithoutANewFieldStillEncodesAtVersionOne(t *testing.T) {
 	t.Parallel()
@@ -111,10 +110,9 @@ func TestARecordCarryingANewFieldIsStampedAtItsVersion(t *testing.T) {
 }
 
 // A VERSION THE CALLER SET BELOW WHAT THE RECORD CARRIES IS REFUSED, and a
-// RECORD EVERY BUILD MUST READ MAY CARRY NO VERSIONED FIELD AT ALL — a gate is
-// pinned at [GateRecordVersion], and the barrier and a reanchor's generation at
-// [baseRecordVersion], so every build there will ever be can read them. Refused
-// whatever version it was stamped at, since a version high enough to hold the
+// RECORD EVERY BUILD MUST READ MAY CARRY NO VERSIONED FIELD AT ALL: a gate is
+// pinned at [GateRecordVersion], the barrier and a reanchor's generation at
+// [baseRecordVersion]. Refused at any stamp, since one high enough to hold the
 // field is one an older node defers or retains.
 func TestAStampBelowWhatTheRecordCarriesIsRefused(t *testing.T) {
 	t.Parallel()

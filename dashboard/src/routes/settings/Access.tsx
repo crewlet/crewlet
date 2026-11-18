@@ -170,7 +170,7 @@ import { useNow } from "~/lib/clock.ts";
 import { asSentence, fmtDate, tsKey } from "~/lib/format.ts";
 import { NODE_FILE_CHANGE } from "~/lib/nodeFile.ts";
 import { ADMIN, accessLine, holds, needsWords } from "~/lib/access.ts";
-import { documentUnits, handleLabel, indexOrg, unitByKey } from "~/lib/seats.ts";
+import { documentUnits, handleLabel, indexOrg, seatLookup, unitByKey } from "~/lib/seats.ts";
 import { useIamGesture } from "~/lib/iamWrite.ts";
 import { useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -963,7 +963,12 @@ export function People() {
                       sortValue: (s) => s.name || s.handle,
                       cell: (s) => (
                         <TableEntityCell
-                          {...linkedSeat({ handle: s.handle, name: s.name, kind: "human" })}
+                          {...linkedSeat({
+                            handle: s.handle,
+                            name: s.name,
+                            kind: "human",
+                            avatar: null,
+                          })}
                         />
                       ),
                     },
@@ -1354,6 +1359,7 @@ function PersonName({ row }: { row: DirectoryRow }) {
           name={name}
           size="xs"
           kind="human"
+          avatar={null}
           icon={row.kind === "person" ? undefined : <KeyGlyph size="sm" />}
           decorative
         />
@@ -1434,12 +1440,7 @@ function Contacts({ contact }: { contact: ConfigRole["contact"] }) {
  */
 function BoundSeat({ seat, index }: { seat?: string; index: ReturnType<typeof indexOrg> }) {
   if (!seat) return <EmptyValue label="No seat" />;
-  const held = index.byHandle.get(seat);
-  return (
-    <TableEntityCell
-      {...linkedSeat({ handle: seat, name: held?.name ?? seat, kind: held?.kind })}
-    />
-  );
+  return <TableEntityCell {...linkedSeat({ handle: seat, ...seatLookup(index)(seat) })} />;
 }
 
 /** A finding's fix, opened from its row: the dialog the person's peek opens for it. */
@@ -1759,7 +1760,12 @@ function Inviter({ author, index }: { author?: string; index: ReturnType<typeof 
   const seat = index.byHandle.get(author);
   return seat ? (
     <TableEntityCell
-      {...linkedSeat({ handle: author, name: seat.name || author, kind: seat.kind })}
+      {...linkedSeat({
+        handle: author,
+        name: seat.name || author,
+        kind: seat.kind,
+        avatar: seat.avatar,
+      })}
     />
   ) : (
     <TableKeyCell value={author} />

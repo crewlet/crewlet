@@ -692,7 +692,7 @@ export function WriterCell({ writer }: { writer: Writer }) {
         />
       );
     case "login":
-      return <TableEntityCell {...plainSeat({ name: writer.name, kind: "human" })} />;
+      return <TableEntityCell {...plainSeat({ name: writer.name, kind: "human", avatar: null })} />;
     case "system":
       return <TableTextCell>{writer.name}</TableTextCell>;
     case "engine":

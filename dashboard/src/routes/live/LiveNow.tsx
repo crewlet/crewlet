@@ -88,7 +88,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { ADMIN } from "~/lib/access.ts";
 import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
-import { awaitingPerson, indexOrg, workingLongestFirst } from "~/lib/seats.ts";
+import { awaitingPerson, indexOrg, seatBadgeOf, workingLongestFirst } from "~/lib/seats.ts";
 import { phaseKey, type PhaseRecord } from "~/lib/phases.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -99,6 +99,7 @@ import type { AgentRow, EventSeries, ExecutorRow, InboxWaiting } from "~/protoco
 import { waitingCount } from "~/lib/inboxWaiting.ts";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import { phaseWord } from "~/lib/waterfall.ts";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 
 /**
  * WHICH WINDOWS THE STRIP HAS: the short end of the shared vocabulary, since
@@ -300,14 +301,14 @@ export function LiveNow() {
   );
   const latest = seat ? (seatEvents.data?.events ?? []) : pushed.slice(0, LATEST_EVENTS);
 
-  // A recorded phase names its seat by id and by role; the chart names it.
-  const nameOfPhase = useMemo(() => {
+  // A recorded phase names its seat by id and by role; the chart draws it.
+  const seatOfPhase = useMemo(() => {
+    const badge = seatBadgeOf(index);
     const byId = new Map<string, string>();
     for (const a of agents) {
-      if (a.agent_id && a.handle)
-        byId.set(a.agent_id, index.byHandle.get(a.handle)?.name ?? a.role);
+      if (a.agent_id && a.handle && index.byHandle.has(a.handle)) byId.set(a.agent_id, a.handle);
     }
-    return (r: PhaseRecord) => byId.get(r.agentId) ?? r.role;
+    return (r: PhaseRecord) => badge(byId.get(r.agentId) ?? r.role);
   }, [agents, index]);
 
   const filtering = !!(seat || phase || failed === "true");
@@ -332,7 +333,11 @@ export function LiveNow() {
             onChange={(value) => setSeat(String(value))}
             options={[
               { value: "", label: "Every seat" },
-              ...agentSeats.map((s) => ({ value: s.handle, label: s.name })),
+              ...agentSeats.map((s) => ({
+                value: s.handle,
+                label: s.name,
+                leading: <ChoiceFace seat={s} />,
+              })),
             ]}
             ariaLabel="Seat"
             menuClassName="seat-filter-menu"
@@ -581,7 +586,7 @@ export function LiveNow() {
             phase={phase}
             failed={failed === "true"}
             runningKeys={runningKeys}
-            nameOf={nameOfPhase}
+            seatOf={seatOfPhase}
             now={now}
           />
         ) : (

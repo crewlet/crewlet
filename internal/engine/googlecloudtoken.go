@@ -14,29 +14,18 @@ import (
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
-// An agent's own Google Cloud access token, issued where the seat's values are
-// read.
-//
-// A seat on at Google Cloud acts as its own service account, which the access
-// sync makes and the ledger records by unique ID, and the only credential it
-// holds is an access token the engine mints for that account by impersonating
-// it as the provisioner ([googlecloud.Client.SeatToken]). Configuration names
-// it as `${GOOGLE_CLOUD_ACCESS_TOKEN_<HANDLE>}`, and the engine issues it
-// through the contract every credential issued at use shares (issued.go):
-// [googleCloudSeatIssuer] is Google Cloud's implementation of [seatIssuer].
-//
-// Google Cloud's stories:
-//
-//   - THE AGENT'S ACCOUNT IS NOT READY YET: the ledger records none, since the
-//     sync is still making it, or Google refuses the token with a 403 or a 404
-//     within [googlecloud.GrantSettle] of Crewlet's grant. Nobody owes a step,
-//     so the value waits, and the seat asks again on the restart schedule
-//     until it clears ([errIssueSettling], [seatToken.settling]).
-//   - GOOGLE REFUSED THE TOKEN after that, or the connection holds a value the
-//     client refuses: a person's step, named ([googlecloud.TokenRefusal]).
-//   - GOOGLE DID NOT ANSWER, or the ledger could not be read: a wait.
-//   - THE SEAT IS OFF, or the integration is not connected yet: nothing issues
-//     anything.
+// An agent's own Google Cloud access token: the seat acts as its own service
+// account (made by the access sync, kept in the ledger by unique ID), and the
+// engine mints its token by impersonating it as the provisioner
+// ([googlecloud.Client.SeatToken]), named `${GOOGLE_CLOUD_ACCESS_TOKEN_<HANDLE>}`
+// and issued at use through [seatIssuer] (issued.go). Its outcomes:
+//   - ACCOUNT NOT READY (none in the ledger yet, or a 403/404 within
+//     [googlecloud.GrantSettle] of the grant): a wait nobody owes, asked again
+//     on the restart schedule ([errIssueSettling], [seatToken.settling]).
+//   - REFUSED after that, or a value the client refuses: a person's step,
+//     named ([googlecloud.TokenRefusal]).
+//   - GOOGLE NOT ANSWERING, or the ledger unread: a wait.
+//   - THE SEAT OFF, or the integration unconnected: nothing is issued.
 
 // errGoogleCloudSettling is an issue that waits on nobody: the agent's account
 // not made yet, or a grant Google is still applying ([errIssueSettling]).

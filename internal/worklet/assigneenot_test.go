@@ -11,11 +11,10 @@ import (
 // `assignee=!<handle>` IS THE WORK THAT HANDLE DOES NOT HOLD, spelled as
 // `status=` spells its negation.
 //
-// A person's list of what they follow or were brought onto is asked as the
-// work list narrowed to them, and without the negation it repeated every task
-// they hold, which their own queue already is: the engine's own My work blocks
-// leave those out, and the list a reader filters has to ask the same question.
-// `!none` leaves out exactly what `none` admits.
+// A person's list of what they follow or were brought onto is the work list
+// narrowed to them, less the tasks they hold, which their own queue already
+// is — the question the engine's My work blocks ask. `!none` leaves out
+// exactly what `none` admits.
 func TestAnAssigneeCanBeLeftOut(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

@@ -24,134 +24,23 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE SWAP: A ROUND THAT TAKES A PACK OUT OF A COPY A READER MAY HOLD BUILDS
-// THE COPY'S NEXT INCARNATION BESIDE IT (ADR-0090). A compaction retires packs — the
-// code domain moves their rows into code_packs_retired, the outputs holding
-// every object of them — and each Gitlet node's cache learns it from a round: a
-// delta's retired phase, or the retirements a full answer serves above the
-// caller's position. Its pack files then leave the copy. They cannot leave IN
-// PLACE: git opens a pack lazily, part way through a run, so a clone reading
-// the copy's old refs may open a retired pack's files a second after the
-// round, and no pin of a file could say which a running process will touch —
-// a scratch push's pin holds its incarnation whole for the same reason. So
-// the copy is SWAPPED, as a rebuild replaces one: the round applies to its
-// end on the current incarnation — every pack installed or adopted, the refs
-// written, the state renamed in, a truthful superset of the rows at the
-// round's position — and then the next incarnation, repos/<id>.<n+1>.git, is
-// built BY HARD LINKS of every pack the live rows still name, its HEAD,
-// config and packed-refs and every derived file a retirement keeps but the
-// memo, renamed into repos/ whole, and made current, the memo's tree MOVED
-// into it whole as it is — one rename however many answers it holds
-// (carryMemo), as a rebuild's promote moves it; the old one is retired, and
-// its readers keep it whole until the last of them lets go (entry.go's
-// retired-incarnation rule). The cost follows the pack COUNT — three links a
-// live pack, one each for HEAD, config and packed-refs, the carried files'
-// links and the memo's one rename — never the bytes: no GET and no git
-// process, but a full round's own index, which it writes over the next
-// incarnation rather than the one it leaves. Its durability is ONE SYNC A
-// DIRECTORY, made once the staging is complete and before its rename
-// (syncStaged): objects/pack, objects/info where it carries the commit-graph,
-// crewlet/ where it carries the index of pushes or the tag index, which every
-// copy holds, the installed chain's two directories where it holds one, then
-// the state — its own file and the staged root — and repos/ after the rename:
-// five to six fsyncs a swap — seven to nine for a copy serving from a published
-// chain, whose two chain files the layer step writes from the rows, each made
-// durable as it is staged. The staging is ONE step of durable.go's rule, never
-// several: nothing in it is read before the rename makes it an incarnation, and
-// a crash before the rename leaves it in scratch/, which the boot moves aside.
-// Synced step by step, a swap made up to eleven, every one a journal commit
-// while the round holds the repository, on every Gitlet node at every
-// compaction.
-//
-// WHAT LEAVES, AND WHAT IT TAKES WITH IT. The live set (entry.go's live) is
-// the rows the copy last converged to hold, by pack id: set whole by a full
-// round, a delta's added rows set and its retired rows taken out, an adopted
-// pack set. A pack's files leave once no live row names their checksum
-// (incarnation.leaving), each with the event that took it out — a
-// retirement, an expunge's commit taking a dropping pack out of the
-// repository, or a stray no retirement accounts for (a log gone back or
-// recreated, a full answer that served no retirements) — and every derived
-// file whose declaration DROPS on one of those events is simply not linked
-// into the next incarnation, which never holds it, so the drop precedes the
-// change the moment any reader can see it (dropFor's order rule). A merge
-// drops no commit, so a retirement keeps the commit-graph (X04): the next
-// incarnation holds the very same inode; a stray drops it, and so does an
-// expunge, whose commits are gone from the repository — the memo with it, its
-// answers perhaps about what was purged. A round that crosses an expunge's
-// begin AND its commit never places the dropping pack, so the begin's inputs
-// are what take the purged commits out of the copy, and they leave as the
-// commit's (sync.go's crossedACommit), never as a retirement.
-//
-// WHAT CARRIES OVER. A linked file is the same inode, its bytes those this
-// process wrote, checked or scrubbed, so the promote carries every per-file
-// verdict of the files it links — their vouches, the hint hashes of their
-// packs, the scrub's schedule and the packs it found whole, what a repair
-// still owes them — and nothing for a file it dropped; and the repository's
-// own records — its position, its refs, its rebuild line, its maintenance
-// cadence, its last use. Every field of an incarnation is classified in
-// swapFields, which TestEveryIncarnationFieldIsClassifiedForTheSwap holds to
-// the struct both ways, so a field a later part adds is classified before a
-// swap can lose it.
-//
-// NOTHING WRITES A FILE THE SWAP LINKS while it links it: a run of the
-// maintainer in flight on the copy the swap leaves is stopped, and waited
-// for, first — counted as a RUN by the duty cycle, the stop its end and what
-// it had spent its length, since a repository compacted more often than its
-// index run lasts would otherwise have every run stopped and every next one
-// due at once, holding a maintenance slot for ever and writing nothing — and
-// that copy's index of pushes takes no commit from then on (entry.swap).
-//
-// THE OLD COPY'S FILES ARE THE NEXT ONE'S where it kept them, so what is
-// learnt of them after the swap lands on the incarnation serving them now
-// (serving): a verdict reached over them — a scrub that was reading them, a
-// forced check of the round that swapped — is recorded there; what a git
-// process over the old copy reports is that copy's scrub's evidence (observe,
-// handOn), as is what the round's own index reports from the staged directory
-// (swapAt); and a request whose git failed over the old copy runs once more
-// over the one serving, its repair unspent, so damage in a file the two share
-// is repaired there and damage in one that left is simply gone
-// (swappedAnswer). A copy a rebuild replaced is none of these: its successor
-// was read whole and checked.
-//
-// A SWAP THAT FAILS leaves the copy as it was: the staged directory goes into
-// trash/, the current incarnation keeps serving — it holds every live pack and
-// the round's refs — what is leaving stays so, and the round answers from it.
-// The repository's next round, delta or full, tries the swap again. A copy
-// whose live pack, HEAD, config or packed-refs is gone from its own
-// directory cannot be linked from; it is marked to be read whole, so its
-// next round — full — puts the pack back with one GET, or the file anew, and
-// swaps.
-//
-// THE INSTALLED CHAIN CROSSES A SWAP BY ITS ROWS (layers.go). Every pack an
-// installed layer names joins the packs the next incarnation holds, live row
-// or none — the chain holds its packs — and a swap that PLACES a chain, the
-// installer's or a full round's on a copy a reader may hold, links the layers
-// it keeps, renames in the ones it fetched, writes both chain files — their
-// directories synced once with the rest of the staging, as every other one
-// is — and carries no own-mode index and no graph (EventLayersMoved drops
-// them: git reads either before a chain); the packs the chain it leaves held
-// alone go with the old copy. Before the rename a CANARY reads through the
-// staged chain's bitmap wherever the placement added a layer, and a canary
-// that fails abandons the placement — its added layers refused corrupt —
-// while the swap is made again for any packs still leaving.
-//
-// A CRASH before the rename leaves the old incarnation the highest in repos/
-// with its state and the staged one in scratch/, which every boot empties;
-// the state names the floor the leaving files' retirements are above
-// (state.LeavingSince), so the boot's first round reads them as retirements
-// and keeps the commit-graph. The rename is the swap's one irreversible step,
-// and its fault point (gitletfault.SyncSwapBeforeRename) is the moment before
-// it.
+// The swap (package doc, "A pack leaves a copy a reader may hold by a swap";
+// ADR-0090): the next incarnation is staged under scratch/ by hard links, made
+// durable as ONE step of durable.go's rule (syncStaged), and renamed in. A
+// derived file whose declaration drops on an event of what leaves is never
+// linked, so the drop precedes the change (dropFor's order rule); a round that
+// crosses an expunge's begin and commit takes the purged packs out as the
+// commit's (sync.go's crossedACommit), never as a retirement. What is learnt
+// of the old copy's files afterwards lands on the copy serving them (serving,
+// observe, handOn, swapAt, swappedAnswer). The rename is the one irreversible
+// step; gitletfault.SyncSwapBeforeRename is the moment before it.
 
-// swapGraph is the graph attribute of crewlet.code.cache.swaps: what became
-// of the commit-graph of the copy a swap left — kept by the next
-// incarnation, dropped, or none there to keep (swapped) — that the next
-// incarnation serves from an installed chain, or that the swap failed. CHAIN
-// is its own value because own mode's answers do not hold there: a chained
-// copy holds no whole graph to keep, and the background indexing writes none
-// beside the chain (layers.go), so counting its swaps as dropped would read
-// as a graph to be written again, and as none would hide that a chain's
-// every placement on a held copy is a swap.
+// The graph attribute of crewlet.code.cache.swaps: what became of the left
+// copy's commit-graph (swapped), a next incarnation serving a chain, or a
+// failed swap. CHAIN is its own value: a chained copy holds no whole graph and
+// the indexing writes none beside the chain (layers.go), so "dropped" would
+// read as a graph owed, and "none" would hide that every placement on a held
+// copy is a swap.
 const (
 	swapGraphKept    = "kept"
 	swapGraphDropped = "dropped"
@@ -161,23 +50,17 @@ const (
 )
 
 // swapLeaving swaps inc, the entry's current incarnation, into its next when
-// packs are leaving it or step places its chain (layers.go: a full round's
-// placement on a copy a reader may hold, or the installer's), and answers the
-// incarnation that is current once it returns: the next one, or inc after a
-// swap that failed — which leaves inc serving, its leaving kept for the next
-// round. A copy whose live pack or root file is gone from its directory is
-// marked to be read whole. The caller holds the entry's write lock whole, for
-// its round or its placement. snap is the snapshot the round APPLIED — a full
-// one's index is written over the next incarnation, which holds exactly its
-// packs — or the zero snapshot where it applied none.
+// packs are leaving it or step places its chain (layers.go), and answers the
+// incarnation current on return: the next, or inc after a failed swap, its
+// leaving kept for the next round. The caller holds the entry's write lock for
+// its round or placement. snap is the snapshot the round APPLIED (a full one's
+// index is written over the next incarnation), or zero where it applied none.
 //
-// A PLACEMENT WHOSE CANARY FINDS THE CHAIN UNSOUND IS ABANDONED: every layer
-// it added is refused as corrupt, and the swap is made again for what else it
-// was for — packs leaving — with the chain the copy holds carried as it
-// stands, so one bad layer undoes none of the round's own work. A canary that
-// read nothing of the chain is no verdict, and fails the swap at its step as
-// a write the disk failed does (layers.go's canary). Whatever the placement
-// fetched and no swap placed goes from tmp/.
+// A placement whose canary finds the chain unsound is abandoned, its added
+// layers refused as corrupt, and the swap made again for the packs leaving
+// with the held chain as it stands, so one bad layer undoes none of the round.
+// A canary that read nothing is no verdict and fails the swap (layers.go's
+// canary). What the placement fetched and no swap placed goes from tmp/.
 func (c *Cache) swapLeaving(ctx context.Context, e *entry, inc *incarnation, snap snapshot,
 	step *layerStep) *incarnation {
 
@@ -256,11 +139,9 @@ func (c *Cache) swapOnce(ctx context.Context, e *entry, inc *incarnation, snap s
 	if c.metrics != nil {
 		c.metrics.Add(metrics.CodeCacheSwaps, 1, metrics.Attrs{"graph": swapFailed})
 	}
-	// EVERY LAYER THE SWAP WAS TO PLACE FAILED WITH IT, a try that may pass —
-	// a full round's left to the installer, which the round's end kicks, and
-	// the installer's tried again behind its wait — counted once a try, as a
-	// fetch that failed is, whoever's the placement was. A canary's verdict is
-	// no such try: its refusal counts it (swapLeaving).
+	// Every layer the swap was to place failed with it, counted once a try as a
+	// failed fetch is: it may pass next time (the installer retries). A
+	// canary's verdict is no try: its refusal counts it (swapLeaving).
 	var bad *canaryFailed
 	if s.layers != nil && !errors.As(err, &bad) {
 		for _, st := range s.layers.fetched {
@@ -269,12 +150,10 @@ func (c *Cache) swapOnce(ctx context.Context, e *entry, inc *incarnation, snap s
 		c.countLayers(layerFailed, len(s.layers.fetched))
 	}
 	if errors.Is(err, fs.ErrNotExist) && (s.step == stepPacks || s.step == stepRoot) {
-		// A file the swap links is gone from the copy's own directory —
-		// damage no retry ends, since every swap of the copy links it
-		// again: the next round reads the copy whole and swaps. It puts a
-		// live pack back with one GET (install's lost), counted as the
-		// stored files' repair, and HEAD, config or packed-refs anew (tidy,
-		// writeRefs), as the shape its sweep puts right.
+		// A file the swap links is gone from the copy's own directory, which
+		// no retry ends: the next round reads the copy whole, putting a live
+		// pack back with one GET (install's lost) or a root file anew (tidy,
+		// writeRefs), and swaps.
 		reason := RebuildStored
 		if s.step == stepRoot {
 			reason = RebuildShape
@@ -301,18 +180,16 @@ const (
 	stepRename  = "rename"
 )
 
-// stagedName is the name under scratch/ a swap of repository id stages its
-// next incarnation at: swap.<id>.<v7>.git — the id so a report of a git
-// process run there finds the repository (swapAt), a fresh v7 so no two
-// swaps' stagings, a crashed one's among them, share a name.
+// stagedName is where under scratch/ a swap of repository id stages:
+// swap.<id>.<v7>.git, the id so a git process's report there finds the
+// repository (swapAt), a fresh v7 so no two stagings, a crashed one's among
+// them, share a name.
 func stagedName(id string) string { return "swap." + id + "." + newV7() + ".git" }
 
-// swapAt is the entry whose swap stages its next incarnation at dir, and the
-// incarnation that swap leaves — the entry's current one until the promote —
-// or nil: a git process run in the staged directory, the round's own index
-// (step 5), reads the live packs' files, which the next incarnation holds as
-// the very inodes the one it leaves does, so what it reports is about the copy
-// serving them now, and the promote carries what that copy makes of it.
+// swapAt is the entry whose swap stages at dir and the incarnation it leaves,
+// or nil. A git process in the staged directory (the round's index, step 5)
+// reads the very inodes the leaving copy serves, so its report is about that
+// copy, and the promote carries what that copy makes of it.
 func (c *Cache) swapAt(dir string) (*entry, *incarnation) {
 	if dir == "" || filepath.Dir(dir) != filepath.Join(c.dir, scratchDir) {
 		return nil, nil
@@ -335,89 +212,73 @@ func (c *Cache) swapAt(dir string) (*entry, *incarnation) {
 	return nil, nil
 }
 
-// swappedOut reports whether inc is an incarnation a swap replaced whose
-// files the entry's current incarnation serves now (serving), as the very
-// inodes for every one it kept: the copy a reader still holds was swapped
-// under it. One a rebuild replaced is not — its successor was read whole and
-// checked, and holds none of its files unchecked — nor one of a purged or
-// evicted repository. e.mu is held.
+// swappedOut reports whether a swap replaced inc and the entry's current
+// incarnation serves its files now (serving), the same inodes for each kept.
+// One a rebuild replaced is not (its successor was read whole and checked),
+// nor one of a purged or evicted repository. e.mu is held.
 func swappedOut(e *entry, inc *incarnation) bool {
 	return !e.dead && e.current != nil && inc != e.current && serving(inc) == e.current
 }
 
-// swapping is one swap in flight: the incarnation it leaves and the one it
-// builds, what it keeps and what it has done — what the promote's carries
+// swapping is one swap in flight: the incarnation it leaves, the one it
+// builds, and what it keeps and has done, which the promote's carries
 // (swapFields) read.
 type swapping struct {
 	c    *Cache
 	e    *entry
 	inc  *incarnation
 	snap snapshot
-	// layers is a PLACEMENT the swap makes of the installed chain
-	// (layers.go): the chain the next incarnation holds, the layers it keeps
-	// of inc linked and those fetched renamed in — or nil, inc's installed
-	// chain carried whole, every pack it names being in inc (the chain holds
-	// its packs). chain is the chain the next incarnation holds once the
-	// layer step has run, added the layers of it inc did not hold, which the
-	// canary reads, and chainShared the bytes of each chain declaration's
-	// files the two incarnations hold alike, linked.
+	// layers is the placement the swap makes of the installed chain
+	// (layers.go), or nil to carry inc's chain whole (the chain holds its
+	// packs). chain is the chain next holds once the layer step ran, added its
+	// layers inc lacked (which the canary reads), and chainShared the bytes of
+	// each chain declaration's files both incarnations hold, linked.
 	layers      *layerStep
 	chain       []gitlet.LayerRow
 	added       []gitlet.LayerRow
 	chainShared map[DerivedName]int64
-	// tip is the node's tip commit-graph layer the next incarnation carries,
-	// linked, with the tail the last write of it covered (tipOver,
-	// tipWritten): inc's where the swap keeps the whole chain beneath it and
-	// every pack leaving is a retirement (tipGoes) — none otherwise, and none
-	// for a placement, which moves the chain beneath it.
+	// tip is the node's tip graph layer next carries, linked, with the tail its
+	// last write covered (tipOver, tipWritten): inc's where the whole chain
+	// beneath it crosses and every pack leaving is a retirement (tipGoes),
+	// else none, as for a placement, which moves the chain beneath it.
 	tip        tipLayer
 	tipOver    tailDigest
 	tipWritten bool
-	// placedLayers is the staged layers the layer step renamed in,
-	// keptLayers how many it linked, and cutLayers how many layers of inc's
-	// installed chain the next incarnation carries no file of — replaced by
-	// a publication, stale, above a pack leaving, or fetched again over
-	// files that failed: what the swap counts once it is made, as cutChain
-	// counts what it cuts in place.
+	// placedLayers is what the layer step renamed in, keptLayers how many it
+	// linked, cutLayers how many of inc's layers next carries no file of;
+	// counted once the swap is made, as cutChain counts a cut in place.
 	placedLayers []*stagedLayer
 	keptLayers   int
 	cutLayers    int
-	// wrote is every file the layer step placed by a write or a rename
-	// rather than a link — the layers it fetched, the two chain files —
-	// relative to the staged root: syncStaged syncs their directories, as
-	// it syncs those of what the swap linked.
+	// wrote is every file the layer step wrote or renamed in rather than
+	// linked, relative to the staged root, whose directories syncStaged syncs.
 	wrote []string
 
-	// next is the incarnation being built, staged at staged until the rename
-	// gives it its number. stagedAt is the staged directory as step 1 named
-	// it, never moved: what a git process run there names (swapAt). step is
-	// the step in flight, which a failure names.
+	// next is the incarnation being built, at staged until the rename numbers
+	// it. stagedAt is the directory as step 1 named it, never moved, which
+	// swapAt matches. step is the step in flight, which a failure names.
 	next     *incarnation
 	staged   string
 	stagedAt string
 	step     string
 
-	// packs is the live set's packs by checksum — what the next incarnation
-	// holds — places where it holds each (packPlace: objects/pack, or the
-	// dropping view for a pack only dropping rows name), and keys the same
-	// checksums as the twenty bytes a vouch keys a pack by. keep is the
-	// declarations a swap may carry: those no event of what is leaving
-	// drops; carried, the ones it linked files of, and the memo once the
-	// promote has moved its tree (carryMemo). linked is every derived file it
-	// linked, by its path relative to the incarnation.
+	// packs is the live set's packs by checksum (what next holds), places
+	// where each lies (packPlace: objects/pack, or the dropping view for a pack
+	// only dropping rows name), keys the same checksums as a vouch keys them.
+	// keep is the declarations no event of what leaves drops; carried those it
+	// linked files of, plus the memo once moved (carryMemo). linked is every
+	// derived file it linked, relative to the incarnation.
 	packs   map[string]livePack
 	places  map[string]packPlace
 	keys    map[[hashTrailer]byte]bool
 	keep    derivedSet
 	carried derivedSet
 	linked  map[string]bool
-	// events is every event that took a pack file out, refsBytes the
-	// packed-refs it linked, and shared the bytes the two incarnations hold
-	// alike: the live packs' and the packed-refs' — of which sharedDropping
-	// the dropping view's. heldGraph: the copy the swap leaves held a
-	// commit-graph once nothing could write one in it — its own whole graph,
-	// or its installed chain's graph layers — what tells a swap that dropped
-	// the graph from one of a copy with none to keep (swapped).
+	// events is every event that took a pack file out, refsBytes the linked
+	// packed-refs' size, shared the bytes both hold (live packs, packed-refs),
+	// sharedDropping the dropping view's part. heldGraph: the left copy held a
+	// commit-graph (own, or its chain's graph layers) once nothing could write
+	// one, which tells a dropped graph from none to keep (swapped).
 	events         map[Event]bool
 	refsBytes      int64
 	shared         int64
@@ -473,12 +334,9 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 	s.tip, s.tipOver, s.tipWritten = inc.tip, inc.tipOver, inc.tipWritten
 	hadTip := inc.tip.id != ""
 	e.mu.Unlock()
-	// 0. THE CHAIN the next incarnation holds, decided before anything is
-	// staged: the placement's, or inc's own carried — cut where a pack
-	// leaving names a layer of it, which the chain's holding its packs means
-	// none does (prefixOf, the one cut) — and every pack it names joins what
-	// the next incarnation holds, live or not: the chain holds its packs; and
-	// whether the node's tip crosses over it.
+	// 0. THE CHAIN next holds, decided before anything is staged (chainOf):
+	// the placement's, or inc's cut where a pack leaving names a layer
+	// (prefixOf); every pack it names joins what next holds, live or not.
 	if err := s.chainOf(installed, chainPacks, leaving); err != nil {
 		s.step = stepLayers
 		return nil, err
@@ -497,15 +355,11 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 	}
 	s.linked = map[string]bool{}
 
-	// 1. STAGE scratch/swap.<id>.<v7>.git: scratch/, because a crash before
-	// the rename must leave the old incarnation the highest in repos/ — and
-	// Open empties scratch/ into trash/ — and because the janitor counts
-	// scratch/ by sole names, so the staged links count only what they alone
-	// hold. Named by the repository, so what a git process run in it reports
-	// reaches the copy whose files it reads (swapAt). Its directories are
-	// every incarnation's (requiredDirs); its files are all linked but its
-	// state. From here the swap is the entry's (entry.swap), until
-	// swapLeaving ends it.
+	// 1. STAGE under scratch/: a crash before the rename must leave the old
+	// incarnation the highest in repos/ (Open empties scratch/), and the
+	// janitor counts scratch/ by sole names, so the staged links count only
+	// what they alone hold. From here the swap is the entry's (entry.swap)
+	// until swapLeaving ends it.
 	s.step = stepStage
 	s.staged = filepath.Join(c.dir, scratchDir, stagedName(e.id))
 	if err := os.Mkdir(s.staged, hostbox.DirMode); err != nil {
@@ -521,18 +375,14 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 			return nil, err
 		}
 	}
-	// THE NEXT INCARNATION stands outside the cache's total while it is
-	// staged — discarded, as an incarnation whose bytes the total does not
-	// count is — so nothing a step records of it moves the total, and a
-	// swap that fails takes nothing back out: the promote counts it in.
+	// Staged, next stands outside the cache's total (discarded), so no step
+	// moves the total and a failed swap takes nothing back: the promote counts
+	// it in.
 	s.next = &incarnation{dir: s.staged, discarded: true}
 
-	// 2. THE PACKS, every one the live set names, largest first: .pack, .rev,
-	// then .idx last, so a pack is present to git only once whole — each
-	// where the live set places it, linked from where inc holds it there: a
-	// dropping pack into the next incarnation's dropping view, made for its
-	// first (a next incarnation holding none has none), every other into
-	// objects/pack.
+	// 2. THE PACKS, largest first: .pack, .rev, then .idx, so git sees a pack
+	// only once whole; each linked into its place, a dropping one into next's
+	// dropping view, made for the first (a next holding none has none).
 	s.step = stepPacks
 	order := slices.SortedFunc(maps.Keys(s.packs), func(a, b string) int {
 		return cmp.Or(cmp.Compare(s.packs[b].size, s.packs[a].size), cmp.Compare(a, b))
@@ -560,11 +410,9 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 		}
 	}
 
-	// 3. THE ROOT'S FILES — HEAD, config and packed-refs — the old
-	// incarnation's own, LINKED: none is ever written in place (a rewrite of
-	// any stages and renames, as tidy and writeRefs do), so a link is a
-	// snapshot of each, the packed-refs the round's own; written afresh,
-	// HEAD and config cost two files staged and synced on every swap.
+	// 3. THE ROOT'S FILES, LINKED: none is ever written in place (tidy and
+	// writeRefs stage and rename), so a link is a snapshot; written afresh,
+	// HEAD and config would cost two files staged and synced every swap.
 	s.step = stepRoot
 	for _, name := range []string{"HEAD", "config", "packed-refs"} {
 		if err := c.link(filepath.Join(inc.dir, name), filepath.Join(s.staged, name)); err != nil {
@@ -578,11 +426,9 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 	s.refsBytes = info.Size()
 	s.shared += s.refsBytes
 
-	// 4. THE DERIVED FILES a retirement keeps, once nothing writes one in the
-	// copy the swap leaves: a maintenance run on it stopped and waited for
-	// (stopRun), and its index of pushes taking no commit while the swap is
-	// the entry's (commitIndex), so what the next incarnation records of a
-	// file is what the swap linked of it.
+	// 4. THE DERIVED FILES kept, once nothing writes one in the left copy: its
+	// maintenance run stopped (stopRun), its index of pushes taking no commit
+	// while the swap is the entry's (commitIndex).
 	s.step = stepDerived
 	s.stopRun()
 	if rel := c.image.mainRel(DerivedGraph); rel != "" {
@@ -590,51 +436,40 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 		s.heldGraph = gerr == nil
 	}
 	if _, graph := chainIDs(installed); len(graph) > 0 || hadTip {
-		// A chain's graph layers and the node's tip over them are the copy's
-		// commit-graph as much as an own one is: a swap whose next incarnation
-		// holds no chain and no graph took them, and the maintainer writes a
-		// whole graph again.
+		// A chain's graph layers and the tip are the copy's commit-graph too:
+		// a next with no chain and no graph dropped them.
 		s.heldGraph = true
 	}
 	if err = s.carryDerived(); err != nil {
 		return nil, err
 	}
 
-	// 4b. THE INSTALLED CHAIN (layers.go): every layer of it the copy kept
-	// LINKED, every one the placement fetched RENAMED IN from tmp/, and both
-	// chain files written over the chain — staged and renamed in, after the
-	// layers' files, so neither names a file not there — with no directory
-	// synced at the step: the staging's every directory is, once, at step 6.
+	// 4b. THE INSTALLED CHAIN (placeLayers): kept layers linked, fetched ones
+	// renamed in, both chain files after the layers' so neither names a file
+	// not there; no directory synced here (step 6).
 	s.step = stepLayers
 	if err = s.placeLayers(); err != nil {
 		return nil, err
 	}
 
-	// 5. A FULL ROUND'S INDEX over exactly the live packs, written into the
-	// staged directory as it would have been into the old one in place —
-	// part of the round's answer, in the round's read lane, vouched for as
-	// written; what its git reports reaches the copy it reads (swapAt). A
-	// delta writes none, and nor does a round beside a chain the next
-	// incarnation holds (indexRound's indexed). Never a failure of the swap:
-	// a round answers without its index, slower and never wrong.
+	// 5. A FULL ROUND'S INDEX over exactly the live packs, in the staged
+	// directory and the round's read lane, vouched as written; its git's
+	// reports reach the copy it reads (swapAt). None for a delta or beside a
+	// chain (indexRound's indexed). Never a swap failure: a round answers
+	// without its index, slower and never wrong.
 	if s.snap.full {
 		c.indexRound(ctx, e, s.next, s.snap)
 	}
 
 	// 5b. THE CANARY (layers.go), where the placement added a layer: one
-	// bitmapped walk in the staged directory before the rename that makes
-	// the chain visible — a layer over the wrong base passes every check of
-	// its own files and fails the first read through its bitmap. Its verdict
-	// that the chain is unsound abandons the placement (swapLeaving), its
-	// added layers refused — before the staging is synced, which a placement
-	// abandoned would have spent; a canary that read nothing of the chain (no
-	// read slot within SlotWait, its deadline) is no verdict, and fails the
-	// swap here, as a write the disk failed would, for the layers to be tried
-	// again. The installer's placement walks in the installer's share of the
-	// read lane for canaries (takeInstallRead), behind the serving — never
-	// behind its checks' hashing, since this swap holds the repository's
-	// write lock, which the repository's rounds wait for; a round's, which a
-	// reader waits on, in the lane as the round's other reads do.
+	// bitmapped walk of the staging before the rename makes the chain visible,
+	// since a layer over the wrong base passes its own files' checks. An
+	// unsound verdict abandons the placement (swapLeaving) before the staging
+	// is synced; a canary that read nothing (no slot within SlotWait, its
+	// deadline) fails the swap as a disk write would, to be tried again. The
+	// installer's canary walks in its share of the read lane (takeInstallRead),
+	// never behind its checks' hashing, since this swap holds the write lock
+	// the repository's rounds wait for; a round's in the lane as its others.
 	if len(s.added) > 0 {
 		s.step = stepCanary
 		objects := make(map[string]int64, len(s.packs))
@@ -686,19 +521,14 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 	return s.next, nil
 }
 
-// stopRun stops a maintenance run on the incarnation the swap leaves and waits
-// for it to end, as a full round's sweep stops one (stopMaintenance): nothing
-// then writes a derived file of that copy while the swap links it, so what
-// the next incarnation records of a file is what it holds. The stop counts as
-// a RUN of the duty cycle where the run is one it counts (maintRun.duty) —
-// the repository's last run ended now, after what the run had spent — since
-// a run ended from outside records no end of its own (maintain), and a
-// repository compacted more often than its index run lasts would otherwise
-// have every run stopped and every next one due at once: a maintenance slot
-// held for ever, and nothing written. A run that ended by itself meanwhile
-// recorded its own end, which stands. Recorded on the incarnation the swap
-// leaves, it is carried with the rest of its cadence (swapFields), and kept
-// by a swap that fails: the run was stopped either way.
+// stopRun stops a maintenance run on the left incarnation and waits for it (as
+// stopMaintenance does), so nothing writes a derived file the swap links. The
+// stop counts as a run of the duty cycle where the run counts (maintRun.duty):
+// a run ended from outside records no end (maintain), and a repository
+// compacted more often than its index run lasts would otherwise have every
+// run stopped and the next due at once, a slot held for ever writing nothing.
+// A run that ended by itself meanwhile keeps its own end. Carried by
+// swapFields, and kept by a failed swap: the run was stopped either way.
 func (s *swapping) stopRun() {
 	s.e.mu.Lock()
 	m, before := s.e.maint, s.inc.maintained
@@ -718,16 +548,12 @@ func (s *swapping) stopRun() {
 	}
 }
 
-// carryDerived links into the staged incarnation the files of every
-// declaration the swap keeps, and gives it what each records: the files a
-// git process writes by the declaration's own patterns (carryFiles) and the
-// index of pushes by its record (carryIndex). A directory a declaration owns
-// whole — the memo's tree — is never linked: it MOVES into the next
-// incarnation as that is promoted, one rename (promote's carryMemo, SeedMove),
-// where linked an entry at a time it would cost a stat and a link an answer
-// inside the round that holds the repository, on every Gitlet node holding it at
-// every compaction. The directories its links land in are synced with the
-// rest of the staging, once each (syncStaged).
+// carryDerived links into the staging the files of every declaration the swap
+// keeps, with each one's record: by its patterns (carryFiles), or by its
+// record for the index of pushes (carryIndex). A tree a declaration owns (the
+// memo's) is never linked but MOVES at the promote, one rename (carryMemo,
+// SeedMove), where links would cost a stat and a link an answer while the
+// round holds the repository. syncStaged syncs the directories.
 func (s *swapping) carryDerived() error {
 	var err error
 	s.c.image.each(s.keep, func(i int, d *Derived) {
@@ -739,10 +565,8 @@ func (s *swapping) carryDerived() error {
 		case d.tree():
 			// Moved at the promote (carryMemo), never linked here.
 		case d.chained():
-			// The installed chain: placed by the layer step (placeLayers),
-			// layer by layer as the chain the next incarnation holds says —
-			// never by its patterns, which would carry a layer the chain
-			// leaves and the chain file naming it.
+			// Placed layer by layer by placeLayers, never by its patterns,
+			// which would carry a layer the chain leaves and the file naming it.
 		case d.Name == DerivedCodeIndex:
 			carried, err = s.carryCodeIndex(d)
 		case d.inProcess() && !d.hasMain():
@@ -757,21 +581,12 @@ func (s *swapping) carryDerived() error {
 	return err
 }
 
-// syncStaged makes durable what the staging holds below its root, before its
-// state is written: each directory a link or a write landed in, synced ONCE —
-// objects/pack for the live packs and a full round's index, which is written
-// only over them, the directory of each derived file it linked (objects/info
-// for the commit-graph, crewlet/ for the index of pushes or the tag index,
-// which every copy holds), and those of the installed chain the layer step
-// linked, renamed in and wrote (multi-pack-index.d and commit-graphs, a chain
-// file in each). The root — HEAD, config, packed-refs and the state — is synced
-// by the state's write, last (writeState). Nothing in the staging is read
-// before the rename makes it an incarnation, and a crash before the rename
-// leaves it in scratch/, which every boot moves aside, so the staging needs its
-// files durable once, at the end, and never step by step: each sync more is a
-// journal commit while the round holds the repository, on every Gitlet node at
-// every compaction, which can wait out the data other rounds are writing, the
-// readers waiting on the round with it.
+// syncStaged syncs ONCE each directory of the staging a link or write landed
+// in (objects/pack, each linked derived file's, the chain's), before the
+// state; the state's write syncs the root last (writeState). Nothing reads the
+// staging before the rename, and a crash leaves it in scratch/ for the boot to
+// move aside, so one sync at the end suffices: each sync more is a journal
+// commit while the round holds the repository, readers waiting on it.
 func (s *swapping) syncStaged() error {
 	dirs := map[string]bool{}
 	for _, place := range s.places {
@@ -804,19 +619,15 @@ func (s *swapping) syncStaged() error {
 // rename, and syncStaged syncs every directory the step wrote in, once.
 func unsynced(string) error { return nil }
 
-// chainOf decides the chain the next incarnation holds — the placement's
-// rows (layers), or inc's installed chain cut to the prefix the packs
-// leaving leave valid (prefixOf) — and the layers of it inc does not hold,
-// which the canary reads; and adds to the packs the next incarnation holds
-// every pack that chain names, with the figures inc recorded of it: a pack
-// an installed layer names stays while the layer does, whether or not a live
-// row still names it (layers.go, the chain holds its packs). A pack the chain
-// names that inc holds neither as a live row nor for its chain fails the swap:
-// a layer is valid only over every pack it names. The node's tip — s.tip and
-// the tail its last write covered, inc's as step 0 read them — crosses only
-// where the chain beneath it does, whole, and every pack leaving is a
-// retirement (tipGoes). installed, held and leaving are inc's, read under
-// e.mu: its chain, the packs its chain holds and the pack files leaving.
+// chainOf decides the chain next holds (the placement's rows, or inc's cut to
+// the prefix the leaving packs leave valid: prefixOf) and the layers of it inc
+// lacks, which the canary reads; and adds every pack that chain names to
+// s.packs at inc's figures, live row or not (the chain holds its packs). A
+// named pack inc holds neither live nor for its chain fails the swap: a layer
+// is valid only over every pack it names. The tip crosses only where the whole
+// chain beneath it does and every pack leaving is a retirement (tipGoes).
+// installed, held and leaving are inc's chain, chain packs and leaving files,
+// read under e.mu.
 func (s *swapping) chainOf(installed []gitlet.LayerRow, held map[string]livePack, leaving map[string]bool) error {
 	if s.layers != nil {
 		s.chain = slices.Clone(s.layers.rows)
@@ -834,10 +645,8 @@ func (s *swapping) chainOf(installed []gitlet.LayerRow, held map[string]livePack
 			s.tip, s.tipOver, s.tipWritten = tipLayer{}, tailDigest{}, false
 		}
 	}
-	// CUT is every layer of inc whose files the next incarnation does not
-	// carry: one its chain does not hold, and one fetched again over files
-	// that failed their check — counted as the cut in place counts them
-	// (cutChain), so the outcome reads alike whichever way it was placed.
+	// CUT: every layer of inc whose files next does not carry (outside its
+	// chain, or fetched again over failed files), counted as cutChain counts.
 	refetched := map[string]bool{}
 	if s.layers != nil {
 		for _, st := range s.layers.fetched {
@@ -868,22 +677,15 @@ func (s *swapping) chainOf(installed []gitlet.LayerRow, held map[string]livePack
 	return nil
 }
 
-// placeLayers is the swap's layer step: every layer of the chain the next
-// incarnation holds placed in the staged directory — renamed in from tmp/
-// where the placement fetched it (a layer new to the copy, or one fetched
-// again over files that failed their check), linked from inc otherwise, the
-// same inodes — then the node's tip linked where it crosses (chainOf), both
-// chain files written over the chain, the commit-graph's ending in that tip,
-// and the next incarnation's record of it set (recordInstalled) at the bytes
-// the rows count. Nothing is synced here: the directories of what it wrote and linked
-// are synced once with the rest of the staging (syncStaged), since nothing
-// reads the staging before its rename, where synced as an incarnation's are
-// in place its two chain files would cost four more directory syncs at every
-// swap of a chained copy. Every file it wrote is vouched, as written by this
-// process from files held to their rows; a linked one carries inc's vouch
-// (carryVouches).
-// The bytes the two incarnations hold alike, linked, are counted by
-// declaration (chainShared), which the promote takes out of inc's total.
+// placeLayers is the layer step: each layer of next's chain renamed in from
+// tmp/ where the placement fetched it, else linked from inc; the tip linked
+// where it crosses (chainOf); both chain files written, the graph's ending in
+// the tip; next's record set (recordInstalled). Nothing is synced here:
+// syncStaged syncs the directories once, sparing a chained copy four
+// directory syncs a swap. A written file is vouched (this process wrote it
+// from files held to their rows); a linked one carries inc's (carryVouches).
+// Bytes both hold, linked, count by declaration in chainShared, which the
+// promote takes out of inc's total.
 func (s *swapping) placeLayers() error {
 	c := s.c
 	fetched := map[string]*stagedLayer{}
@@ -919,10 +721,8 @@ func (s *swapping) placeLayers() error {
 		s.chainShared[DerivedGraphLayers] += r.Layer.GraphBytes
 	}
 	if s.tip.id != "" {
-		// THE NODE'S TIP, linked over the whole chain it was written over —
-		// or, gone from inc's directory (a run that ended before the swap
-		// stopped it wrote another), carried as none, and as no write of one:
-		// the maintainer writes one at once over the next incarnation's tail.
+		// THE TIP, linked; gone from inc (a run ended before stopRun wrote
+		// another), carried as none, which the maintainer writes at once.
 		rel := tipRel(s.tip.id)
 		err := os.MkdirAll(filepath.Join(s.staged, filepath.Dir(rel)), hostbox.DirMode)
 		if err == nil {
@@ -967,10 +767,9 @@ func (s *swapping) placeLayers() error {
 	return nil
 }
 
-// carryFiles links every regular file of the old incarnation d owns into the
-// same place in the staged one, and records d there as the old one records
-// it — at the bytes it linked; a part linked beside no main file is counted
-// and never read as made (recordDerived's rule).
+// carryFiles links every regular file d owns in inc into the same place in the
+// staging and records d there as inc does, at the bytes linked; a part linked
+// beside no main file is counted, never read as made (recordDerived's rule).
 func (s *swapping) carryFiles(d *Derived) (bool, error) {
 	var bytes int64
 	present, main := false, false
@@ -1017,16 +816,13 @@ func (s *swapping) carryFiles(d *Derived) (bool, error) {
 	return true, nil
 }
 
-// carryIndex links every run of the old incarnation's index of pushes into
-// the staged one and carries its record — the one it read, which takes no
-// commit while the swap is the entry's (commitIndex), so every run it names
-// is on disk to link; the backfill's work on the old copy from then on is the
-// next copy's to redo. An index whose log a round marked gone carries
-// nothing, and nor does one a run of which is gone from the disk: the next
-// copy starts with no index, which its backfill reads again, rather than a
-// record naming a file it does not hold — and the swap goes on, where failing
-// it would fail every swap of the copy until a full round, keeping retired
-// packs in it for as long.
+// carryIndex links every run of inc's index of pushes into the staging and
+// carries its record, which takes no commit while the swap is the entry's
+// (commitIndex), so every run it names is on disk; backfill work on inc from
+// then on is next's to redo. An index whose log is gone (historyGone), or one
+// missing a run, carries nothing and the swap goes on: next's backfill reads
+// it again, where failing would fail every swap of the copy until a full
+// round, keeping retired packs for as long.
 func (s *swapping) carryIndex(d *Derived) (bool, error) {
 	s.e.mu.Lock()
 	rec, st, gone := s.inc.record(), s.inc.derived[d.Name], s.inc.historyGone
@@ -1066,14 +862,10 @@ func (s *swapping) carryIndex(d *Derived) (bool, error) {
 	return true, nil
 }
 
-// writeState writes the staged incarnation's state — staged in tmp/ and
-// renamed in, the directory synced, as every state is — from the records the
-// old incarnation holds now and what the swap counted of the next: its packs,
-// their bytes and the packed-refs', its objects, and its derived files'. It
-// carries the copy's LAST USE as every state written does (writeState's
-// stampUse): a swap is work, no use, and a state stamped with the moment of
-// its write would bring a copy nobody had read in a week back from a restart
-// as the copy read last.
+// writeState writes the staged incarnation's state from inc's records and
+// what the swap counted of next. It carries the copy's LAST USE (writeState's
+// stampUse): a swap is no use, and a state stamped at its write would bring a
+// copy nobody had read in a week back from a restart as the copy read last.
 func (s *swapping) writeState(ctx context.Context) error {
 	s.e.mu.Lock()
 	next, inc := s.next, s.inc
@@ -1092,10 +884,9 @@ func (s *swapping) writeState(ctx context.Context) error {
 	}
 	s.c.setSize(next, s.shared)
 	s.c.setDropping(next, s.sharedDropping)
-	// THE EPOCH ITS OBJECTS/ HOLDS (Synced.DropEpoch): the rows' at the
-	// position it reflects, every pack file of which it holds where they
-	// place it — a begin's inputs gone with inc — once its chain holds no
-	// pack for a row that is not live (liveChain), and inc's otherwise.
+	// THE EPOCH ITS OBJECTS/ HOLDS (Synced.DropEpoch): the rows', since it
+	// holds every pack file where they place it, once its chain holds no pack
+	// for a row not live (liveChain); inc's otherwise.
 	next.dropEpoch = inc.dropEpoch
 	if liveChain(inc, s.chain) {
 		next.dropEpoch = inc.repo.DropEpoch
@@ -1104,16 +895,13 @@ func (s *swapping) writeState(ctx context.Context) error {
 	return s.c.persist(ctx, s.e, next, false)
 }
 
-// rename gives the staged incarnation its number — one past the highest the
-// entry has, current or retiring, past every name repos/ already holds — and
-// renames it into repos/, the one step that makes it the repository's
-// newest: os.Lstat first, because a rename onto an EMPTY directory succeeds
-// silently on both supported platforms, and the next number again where the
-// rename finds the name taken. Race-free: only the entry's round and the
-// boot create incarnation names, and the caller holds the round. repos/ is
-// synced before anything is promoted; a sync that fails fails the swap, and
-// the directory — renamed already — is taken back out of repos/ with the
-// staging (s.staged names where it is).
+// rename numbers the staging one past every incarnation the entry has and
+// every name repos/ holds, and renames it in. It Lstats first, because a
+// rename onto an EMPTY directory succeeds silently on both supported
+// platforms, and tries the next number where the name is taken. Race-free:
+// only the entry's round and the boot create incarnation names, and the
+// caller holds the round. repos/ is synced before any promote; a failed sync
+// fails the swap, s.staged naming the renamed directory to take back out.
 func (s *swapping) rename() error {
 	s.e.mu.Lock()
 	n := 1
@@ -1150,42 +938,32 @@ func (s *swapping) rename() error {
 	}
 }
 
-// promote makes the next incarnation the entry's current one in place of
-// inc, in three steps. Under e.mu, next is counted into the cache's total and
-// inc left counting only the files it holds alone — the leaving packs' and the
-// derived files a retirement drops. Then the memo's tree MOVES into next
-// whole, one rename however many answers it holds (carryMemo), as a rebuild's
-// promote moves it — where no event of what leaves drops it, as an expunge's
-// commit does: between the two locked steps, since the memo's lock is
-// taken before e.mu, and before inc is retired, since an inc nobody holds goes
-// into trash/ at its retirement, its tree with it. Then, under e.mu again,
-// every field is carried by its class (swapFields), next is made current, and
-// inc is retired, which stops a maintenance run on it (its cadence carried as
-// a run), and goes into trash/ with its last reader.
+// promote makes next the entry's current incarnation in three steps. Under
+// e.mu, next is counted into the cache's total and inc left counting only what
+// it holds alone. Then the memo's tree moves into next whole (carryMemo) where
+// nothing leaving drops it: outside e.mu, since the memo's lock is taken
+// before e.mu, and before inc retires, since a retired inc nobody holds goes
+// into trash/ with its tree. Then, under e.mu, every field is carried by its
+// class (swapFields), next made current and inc retired.
 func (s *swapping) promote() {
 	c, e, inc, next := s.c, s.e, s.inc, s.next
 	e.mu.Lock()
-	// THE TOTAL: next counted in — the live packs, the packed-refs and the
-	// derived files it linked — and inc from here on only what it holds
-	// ALONE: the files of the leaving packs and of the declarations a
-	// retirement drops. Every file the two share is counted once, by next,
-	// so the budget sees what the swap gives back when inc goes. next holds
-	// no memo yet: the move below counts it as it moves it (setMemo).
+	// THE TOTAL: every file both share counted once, by next, so the budget
+	// sees what the swap gives back when inc goes. next holds no memo yet:
+	// the move below counts it (setMemo).
 	next.discarded = false
 	c.heldBytes.Add(next.diskBytes + next.metaBytes)
-	// The code index carryCodeIndex linked in is counted in the indexes' own
-	// total too (setDerived counts nothing of a discarded incarnation, which
-	// next was until now), as inc's count of it goes to nothing below: the
-	// share the janitor holds them to sees the index once, as next's.
+	// The linked code index joins the indexes' own total too (setDerived
+	// counted nothing while next was discarded), as inc's count goes to zero
+	// below, so the janitor's share sees it once.
 	c.codeIndexBytes.Add(next.derived[DerivedCodeIndex].Bytes)
 	c.droppingBytes.Add(next.droppingBytes)
 	c.setSize(inc, max(inc.diskBytes-s.shared, 0))
 	c.setDropping(inc, max(inc.droppingBytes-s.sharedDropping, 0))
 	c.image.each(s.carried, func(_ int, d *Derived) {
 		if st, ok := inc.derived[d.Name]; ok {
-			// A chain's files are shared only where a layer was kept, linked:
-			// inc holds its chain files, and every layer the next one does
-			// not, alone.
+			// Shared only where a layer was kept: inc holds alone its chain
+			// files and every layer next does not.
 			if d.chained() {
 				st.Bytes = max(st.Bytes-s.chainShared[d.Name], 0)
 			} else {
@@ -1195,13 +973,9 @@ func (s *swapping) promote() {
 		}
 	})
 	e.mu.Unlock()
-	// THE MEMO, served from inc until here and from next from here on —
-	// unless an event of what leaves drops it (s.keep): an expunge's commit,
-	// one of whose answers may quote what it purged, leaves the tree with inc
-	// to go with it, as a swap leaves every file a dropping declaration owns.
-	// None moves from a memo shut either — a round that dropped it with its
-	// history leaves it shut over the packs that history left (apply). Either
-	// way next opens a memo of its own.
+	// THE MEMO moves unless an event of what leaves drops it (s.keep): an
+	// expunge's commit, whose answers may quote what it purged. None moves
+	// from a memo shut by its round either (apply). Else next opens its own.
 	if s.keep&c.image.set(DerivedMemo) != 0 {
 		c.carryMemo(e, inc, next)
 	}
@@ -1214,16 +988,12 @@ func (s *swapping) promote() {
 			f.carry(s)
 		}
 	}
-	// THE TAIL of next, counted afresh from the live set just carried into it
-	// and the chain its layer step placed (recordInstalled counted it before
-	// the live set was next's). The tip the swap carried keeps the digest of
-	// the tail its last write covered, so it stands where next's tail is that
-	// tail — the packs leaving are retirements, which take no commit with
-	// them (X04) — and is wanted again where it is not: a compaction's own
-	// output is a pack the tail gains, whose commits the digest cannot tell
-	// from a push's, so the tip is written again at the ordinary cadence over
-	// the tail's commits alone — once too often for a merge, never once too
-	// few for a push.
+	// THE TAIL, recounted now the live set is next's (recordInstalled counted
+	// it before). The carried tip keeps its tail digest: it stands where
+	// next's tail is that tail (retirements take no commit, X04), and is
+	// rewritten at the ordinary cadence where a compaction's output joined it,
+	// since the digest cannot tell that from a push: once too often for a
+	// merge, never once too few for a push.
 	recountTail(next)
 	inc.successor = next
 	e.current = next
@@ -1236,20 +1006,15 @@ func (s *swapping) promote() {
 	c.trash(gone)
 }
 
-// swapped records a swap made: code_cache_swapped and
-// crewlet.code.cache.swaps, by whether the next incarnation serves from an
-// installed chain (layers.go), and otherwise by what became of the
-// commit-graph — kept, where the next incarnation linked it; dropped, where
-// the copy held one, its own or its chain's graph layers, and the next holds
-// none — a stray no retirement accounts for or an expunge took it, or the
-// chain was cut whole — which the maintainer writes again at once; none,
-// where the copy held none to keep, its graph not yet written or past what
-// the node's memory holds, so nothing was lost and nothing is written again.
-// Counted as dropped, a node too small for a large repository's graph
-// counted every compaction of it among the drops that say whole reads cannot
-// see their retirements. The packs dropped are every pack the old
-// incarnation held that the next does not: what was leaving, and the packs a
-// chain the placement replaced held alone, whose rows had gone.
+// swapped records a swap made (code_cache_swapped, crewlet.code.cache.swaps)
+// by its graph: chain where next serves an installed chain; kept where next
+// linked the graph; dropped where the copy held one (own or chain graph
+// layers) and next holds none, which the maintainer writes again at once;
+// none where the copy held none to keep (unwritten, or past the node's
+// memory). Counted as dropped, every compaction of a repository too large for
+// the node would count among the drops that say whole reads miss their
+// retirements. The packs dropped are every pack inc held that next does not:
+// what was leaving, and the packs a replaced chain held alone.
 func (c *Cache) swapped(s *swapping, next *incarnation, took time.Duration) {
 	graph := swapGraphNone
 	switch rel := c.image.mainRel(DerivedGraph); {
@@ -1354,11 +1119,9 @@ type swapField struct {
 	carry func(s *swapping)
 }
 
-// swapFields is EVERY FIELD OF incarnation, each in exactly one class, in the
-// struct's order: the promote carries each carried field by its own carry,
-// and TestEveryIncarnationFieldIsClassifiedForTheSwap holds the table to the
-// struct both ways, so a field a later part adds is classified before a swap
-// can lose it.
+// swapFields is EVERY FIELD OF incarnation, each in one class, in the
+// struct's order; TestEveryIncarnationFieldIsClassifiedForTheSwap holds it to
+// the struct both ways, so a new field is classified before a swap can lose it.
 var swapFields = []swapField{
 	{name: "n", class: own, why: "the number the rename gave it"},
 	{name: "dir", class: own, why: "repos/<id>.<n>.git, its own directory"},

@@ -21,86 +21,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE CHANGE READS: code_list_changes, the company's changes a page at a time,
-// and code_get_change, one change a PART at a time — what it is, whether it
-// may merge, its files and a file's patch at a revision or since an earlier
-// one, its findings placed in the revision asked about, its reviews and its
-// comments. Two more of the code reads ([CodeTools]), offered and judged as
-// every one of them is: a seat's and a person's assistant's alike, on the one
-// list both surfaces take; each call decided again for whoever woke the turn
-// ([CodeDeps.caller]); the repository a call names resolved once a turn and
-// held ([CodeDeps.repo]); and every question held, where it is answered, to
-// the grant on the change's repository — of the caller and of the colleague
-// a turn reads for ([gitlet.JudgeRead]). [changeToolNeeds] names, one table for
-// every change tool, the access each one's call needs.
+// The change reads: code_list_changes, the company's changes a page at a
+// time, and code_get_change, one change a part at a time. Two more code reads
+// ([CodeTools]), offered and judged as every one is: each call decided for
+// whoever woke the turn ([CodeDeps.caller]), the repository resolved once a
+// turn ([CodeDeps.repo]), and every question held to the grant on the change's
+// repository of the caller and of the colleague a turn reads for
+// ([gitlet.JudgeRead]); [changeToolNeeds] names each tool's access.
 //
-// # Rows at the seat's level, once a call
-//
-// A change, its revisions and its conversation are ROWS, read at the seat's
-// level — linearizable on both surfaces ([seatReadLevel]) — as a
-// repository's are, so an answer holds every record the code log committed
-// before the call. A call that reads the change more than once — the
-// findings beside the revisions they are placed in, two revisions to compare
-// — makes its first read at that level and every later one at SESSION,
-// floored at the first's position: one barrier a call, and every later read
-// at or past what the first saw. That first read is the call's RESOLUTION
-// of the repository too, where the turn has not resolved it yet — on a
-// turn's first call naming it, and on every call the operator surface makes,
-// which has no turn ([changeRead.ask]): a `repo` read before it would be a
-// second linearizable read, and a second barrier the code log appends and
-// waits a quorum for, one after the other.
-//
-// A read that needs the change's state, its revision, its head and its
-// branches — a revision's files, a patch, the findings, a write of its
-// conversation — reads it IN BRIEF ([gitlet.ReadQuery.Brief]): its row beside
-// its head revision, and none of what its detail reads besides — its
-// description, kept on rows of its own so a hot read skips it, its authors,
-// its conversation, its mergeability and its readiness judged anew. Only the
-// summary, which presents them, merge_readiness, which presents its
-// readiness, and a dequeue, which acts on it, read the change in detail
-// ([changeRead.detail]): a seat reviews a change a file at a time, and every
-// file's call used to judge a readiness nobody read.
-//
-// # Objects at the revisions' own floors
-//
-// A revision's files, a file's patch, what changed between two revisions and
-// where a finding's lines are now are reads BY OBJECT ID of the heads and the
-// bases the rows recorded, asked of the repository's home Gitlet node at a SYNC
-// level: the furthest of this node's own floor on the repository, the
-// record that moved each revision's head and, where its facts are recorded,
-// the record that moved its target to the tip its base was read from. Never
-// at a row read's checkpoint, which a linearizable read takes past its own
-// barrier: a copy current to every push still sits below it, and a floor
-// there would make the Gitlet node sync for nothing (codetools.go says the same
-// of a ref). A finding is placed in a revision floored at the change's HEAD
-// revision too: its findings were raised on revisions up to it, so the copy
-// holds every blob their lines were read in.
-//
-// # Text somebody wrote, fenced by who wrote it
-//
-// A change's description, a review's summary, a finding's body and its
-// suggestion, and a comment reach the model fenced — `change_description`,
-// `change_review`, `change_comment` — and, unlike a repository's own text,
-// each NAMES ITS WRITER, whom the change's rows record: the owner who opened
-// it, the reviewer, the raiser, the commenter, each a seat or the human seat a
-// person holds, at the trust that writer earns from the reader
-// ([provenance.TrustFor]). A description is the owner's at the open and may
-// have been rewritten since by a maintainer or a person the row does not
-// name, so one whose change has moved since its open is read at
-// [provenance.TrustForPartial]. A patch is a repository's text, read as
-// code_diff reads one (`repo_patch`, trust `external`). Every other string is
-// defused ([foreignRead]).
-//
-// # One page, one tool answer
-//
-// A row read pages by the estate's bound, four mebibytes; a tool answer is 64
-// KiB. So every page these tools answer is cut WHOLE-ROW at one tool answer
-// as it is sent, fences and all ([fitLabelled]), and resumes after the last
-// row it kept by that row's own cursor — [gitlet.ReadQuery.ChangesCursor] for a
-// listing, each part's row's Cursor for a change's — never by a spelling of
-// the reader's cursors written again here. A Gitlet node cuts its page at
-// gitlet.MaxGitAnswerBytes, which leaves these tools' wrapping room in the
-// answer, as it does code_diff's.
+// Text somebody wrote is fenced NAMING ITS WRITER ([provenance.TrustFor]); a
+// description whose change moved since its open is read at
+// [provenance.TrustForPartial]; a patch is repository text (`repo_patch`,
+// trust `external`); every other string is defused ([foreignRead]).
 
 // The change read tools' names: each is its authority row's action.
 const (
@@ -112,41 +44,18 @@ const (
 // order a catalogue lists them; [changeToolNeeds] names the access each needs.
 func ChangeToolNames() []string { return []string{CodeListChangesTool, CodeGetChangeTool} }
 
-// changeToolNeeds is the ACCESS each change tool's call needs on the change's
-// repository — of its caller and, in a turn a colleague seat woke, of that
-// seat too, whom the call reads for (the requester ceiling, [CodeDeps.caller]):
-// ONE TABLE, which TestEveryChangeToolNamesTheAccessItNeeds holds to the
-// change tools, [ChangeToolNames] and [ChangeWrites], both ways.
+// changeToolNeeds is the access each change tool's call needs on the change's
+// repository, of its caller and of a colleague seat that woke the turn
+// ([CodeDeps.caller]). TestEveryChangeToolNamesTheAccessItNeeds holds it, both
+// ways, to the change tools, [ChangeToolNames], [ChangeWrites] and the
+// committer's reading of a write's kind (review for a review, else read).
 //
-// A READ NEEDS READ, the one access the node that answers it judges both
-// principals at: every question a read makes carries the colleague as its
-// ceiling ([gitlet.ReadQuery.CeilingSeat], [gitlet.GitQuery.CeilingSeat]), and
-// [gitlet.JudgeRead] serves only what the caller and the colleague may each
-// read. A read tool's need above read would be one no read holds a colleague
-// to, so a read's row is read and nothing else.
-//
-// A WRITE NEEDS THE LEAST ACCESS AT WHICH ITS DECIDE MAY ADMIT IT, and the
-// rest is the RELATION the deciding node judges from its own chart (the
-// change domain's rule D21), which no access alone names: an open needs the
-// push of the branch it proposes — a full_access seat's own namespace on a
-// repository it reads, so read — and a change's lifecycle is steered by its
-// owner, whatever their access, by a principal that maintains the repository
-// or by a person — so read too. A comment and an ask for review need read (an
-// author asks whatever their access); a review needs review, the one write
-// whose access alone admits it; and an answer to findings is an author's, or a
-// dismissal by the raiser, a maintainer or a person — read.
-//
-// A WRITE IN A TURN A COLLEAGUE SEAT WOKE holds that colleague at the same
-// access, on the data node that decides it (gitlet.ChangeProposal.Ceiling,
-// gitlet.ConversationWrite.Ceiling, [CodeDeps.writeCaller]): the relation beyond
-// it is the seat's own to meet, so an author may ask a seat to review the
-// change it could never review itself. The committer reads that access from
-// the write's kind — review for a review, read for every other — which
-// TestEveryChangeToolNamesTheAccessItNeeds holds to these rows. A REBASE is a
-// branch move and nothing else, so the Gitlet node that builds it holds the
-// colleague as it holds every branch write (gitlet.EngineWrite.Ceiling,
-// gitlet.Grant.Under on the source it moves, the seat's own work spared), and no
-// decide reads an access for it.
+// A read needs read, the one access [gitlet.JudgeRead] judges both principals
+// at. A write needs the least access its decide may admit it at, the rest the
+// deciding node's relation (rule D21): an open pushes to a seat's own
+// namespace and an owner, maintainer or person steers a change, so only a
+// review needs review. A colleague is held at that access, not the relation
+// ([CodeDeps.writeCaller]): an author may ask a seat to review what it can't.
 var changeToolNeeds = map[string]gitlet.Access{
 	CodeListChangesTool:     gitlet.AccessRead,
 	CodeGetChangeTool:       gitlet.AccessRead,
@@ -157,46 +66,35 @@ var changeToolNeeds = map[string]gitlet.Access{
 	CodeReviewChangeTool:    gitlet.AccessReview,
 	CodeCommentOnChangeTool: gitlet.AccessRead,
 	CodeResolveFindingTool:  gitlet.AccessRead,
-	// An apply pushes the change's source branch — a full_access seat's own
-	// namespace on a repository it reads among them — so read, the push's
-	// rule the Gitlet node's and the committer's.
+	// An apply pushes the source branch, a full_access seat's own namespace:
+	// the push's rule, read.
 	CodeApplySuggestionsTool: gitlet.AccessRead,
-	// A rebase force-pushes the change's source branch, its rule likewise the
-	// Gitlet node's and the committer's — and, in a turn a colleague woke, the
-	// colleague's too, on that Gitlet node (gitlet.EngineWrite.Ceiling).
+	// A rebase is a branch move only: the Gitlet node holds a colleague as at
+	// every branch write (gitlet.EngineWrite.Ceiling); no decide reads this.
 	CodeRebaseChangeTool: gitlet.AccessRead,
-	// A merge and a dequeue are decided from the deciding node's own chart —
-	// who may merge into the target is its gate's merge_by (M5-D2), who may
-	// take an entry out its enqueuer, its change's owner, a maintainer or a
-	// person — so read, the least access at which it may admit the call. In
-	// a turn somebody woke each carries the turn's ceiling, held to that
-	// same relation for the requester where it is decided (the Gitlet node for
-	// a merge, the committer for a dequeue), never to an access alone.
+	// Decided from the deciding node's chart — a merge by its gate's merge_by
+	// (M5-D2), a dequeue by its enqueuer, the owner, a maintainer or a
+	// person — and the turn's ceiling held to that same relation where it is
+	// decided (Gitlet node, committer), never to an access alone.
 	CodeMergeChangeTool:   gitlet.AccessRead,
 	CodeDequeueChangeTool: gitlet.AccessRead,
-	// A revert creates a branch — a full_access seat's own namespace — and
-	// opens a change in that push's record, so its rule is the push's, the
-	// Gitlet node's and the committer's, as a rebase's: read.
+	// A revert pushes a branch and opens a change in that push's record: the
+	// push's rule, read.
 	CodeRevertChangeTool: gitlet.AccessRead,
 }
 
-// The listing's page. A listed change is its row and its readiness in a line,
-// about six hundred bytes at an ordinary title, so twenty are a fifth of one
-// tool answer — a screen of them — and fifty at most; a page that outgrows
-// the answer at the widest titles and branch names is cut whole-row at it.
+// The listing's page: a listed change is about 600 bytes, so twenty are a
+// fifth of one tool answer and fifty at most; a page of the widest rows is cut
+// whole-row at the answer.
 const (
 	defaultCodeChangeList = 20
 	maxCodeChangeList     = 50
 )
 
-// The pages of one change's parts, each the rows a page READS: twenty-five
-// revisions, findings, reviews or comments — about what a model reads down a
-// list at once, and at an ordinary row (a revision about three hundred bytes,
-// a finding or a review about a kilobyte, a comment about half of one) under
-// half of one tool answer; a page of long rows is cut whole-row at the answer.
-// The findings' page is also at most what one re-anchoring places,
-// gitlet.MaxReanchors, which the constant below holds at compile time, so a
-// page of them is placed by one read (gitlet.Place).
+// The rows a page of one change's part reads: twenty-five, about what a model
+// reads down a list at once and under half a tool answer at ordinary rows (a
+// revision ~300 bytes, a finding or review ~1 KiB, a comment half that); a
+// page of long rows is cut whole-row at the answer.
 const (
 	changeRevisionsPage = 25
 	changeFindingsPage  = 25
@@ -204,17 +102,15 @@ const (
 	changeCommentsPage  = 25
 )
 
-// A page of findings is placed in one read: its size may not pass what one
-// re-anchoring places (a negative constant does not compile), since a larger
-// page would cost a turn a read more than it needs.
+// A page of findings may not pass what one re-anchoring places (a negative
+// constant does not compile), so one read places it ([gitlet.Place]).
 const _ = uint(gitlet.MaxReanchors - changeFindingsPage)
 
 // ---- a change as these tools name it ------------------------------------ //
 
 // codeChangeRow is a change as the change tools name it: what a seat reads it
-// by and decides about — its reference, its branches, its head, who owns it,
-// the work it carries, its version, which a write of it names — never the
-// ids and positions that are Gitlet's own bookkeeping.
+// by and decides about, its version for a write to name, never Gitlet's own
+// ids and positions.
 type codeChangeRow struct {
 	Ref         string             `json:"ref"`
 	Title       string             `json:"title" untrusted:"name"`
@@ -260,10 +156,9 @@ func changeRowOf(s gitlet.ChangeSummary) codeChangeRow {
 	return row
 }
 
-// party is one of a change's parties — its owner, a reviewer, a raiser, a
-// commenter — as a fence names its writer: a seat by its handle, a person by
-// the human seat they hold, and a kind this build does not name resolved
-// against the turn's chart as an unkinded record's is.
+// party is one of a change's parties as a fence names its writer: a seat by
+// its handle, a person by their human seat, and a kind this build does not
+// name resolved against the turn's chart.
 func (r *foreignRead) party(handle string, kind gitlet.PartyKind) provenance.Author {
 	switch kind {
 	case gitlet.PartyAgent:
@@ -363,15 +258,14 @@ func (t *codeListChanges) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	named := strings.TrimSpace(argString(args, "repo")) != ""
 	if !named && work == "" && q.State == "" && q.Reviewer == "" && q.Needs == "" {
-		// REFUSED BEFORE ANYTHING IS READ, in the reader's own terms: no
-		// index holds every change the company has, so a listing names what
-		// it walks.
+		// Refused before anything is read: no index holds every change, so
+		// a listing names what it walks.
 		return failed(fmt.Sprintf("%s needs to know what to list: a `repo`, a `work` item, a `state`, a "+
 			"`reviewer` or `needs` (%s) — `needs: me` is what waits on you.", t.Name(), words.Or(gitlet.Needs()))), nil
 	}
 	if work == noWorkItem {
-		// `none` IS A WRITE'S WORD, carrying no item: the work index holds
-		// only the changes that carry one, so no listing walks the rest.
+		// `none` is a write's word: the work index holds only changes that
+		// carry an item.
 		return failed(fmt.Sprintf("%s: `work` names the item whose changes to list — `%s` lists nothing; "+
 			"name a `repo`, an `owner` or a `state` instead.", t.Name(), noWorkItem)), nil
 	}
@@ -387,10 +281,9 @@ func (t *codeListChanges) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 	}
 	if work != "" {
-		// THE ITEM IS NAMED AS THE CHANGE WRITES NAME THEIRS, once every
-		// argument has been judged, and listed by the identity a change's row
-		// holds, which is all the reader takes: a Worklet key resolved by the
-		// tracker's own read, an identity as named ([CodeDeps.listedWorkItem]).
+		// Named as the change writes name theirs, once every argument is
+		// judged, and listed by the identity a change's row holds
+		// ([CodeDeps.listedWorkItem]).
 		item, refusal := t.deps.listedWorkItem(ctx, t.Name(), "work", work)
 		if refusal != nil {
 			return *refusal, nil
@@ -399,9 +292,8 @@ func (t *codeListChanges) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if named {
 		var refusal *tools.Result
-		// THE LISTING IS THE RESOLUTION where the turn has none: one
-		// linearizable read, one barrier, rather than a `repo` read first
-		// ([CodeDeps.repoRead]).
+		// The listing is the resolution where the turn has none: one barrier,
+		// not a `repo` read first ([CodeDeps.repoRead]).
 		first := q
 		first.Resolve = true
 		if repo, resolved, refusal = t.deps.repoRead(ctx, turn, t.Name(), c, name, &first); refusal != nil {
@@ -433,11 +325,9 @@ func (t *codeListChanges) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		rows[i] = changeRowOf(s)
 	}
-	// A PAGE CUT WHOLE-ROW AT THE ANSWER, resuming after the last change
-	// kept by the walk's own cursor ([gitlet.ReadQuery.ChangesCursor]): a row
-	// is bounded by the domain's own limits — a title, two branch names, a
-	// close reason and a readiness sentence, each at its longest a few
-	// kilobytes — so one row always fits, and a page of the widest is cut.
+	// Cut whole-row at the answer, resuming by the walk's own cursor
+	// ([gitlet.ReadQuery.ChangesCursor]); the domain's limits keep a row to a
+	// few kilobytes, so one row always fits.
 	page := func(k int) any {
 		next := answer.Next
 		if k > 0 && k < len(rows) {
@@ -446,10 +336,8 @@ func (t *codeListChanges) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return codeChangeList{Changes: rows[:k], Next: next, Position: answer.Position}
 	}
 	read := newForeignRead(turn, c.asker.Seat)
-	// A CHANGE'S TITLE AND CLOSE REASON ARE NAMES somebody chose — its owner
-	// at the open, or whoever edited it since, whom the row does not name —
-	// neutralised in place, and the envelope says the company's writers it
-	// does not name had a hand in them (ADR-0040).
+	// A title and a close reason may be an editor's the row does not name, so
+	// the envelope says unnamed writers had a hand in them (ADR-0040).
 	if len(rows) > 0 {
 		namesBy(read)
 	}
@@ -557,10 +445,9 @@ func (t *codeGetChange) Call(ctx context.Context, args map[string]any) (tools.Re
 // rest of a call's arguments, before anything is.
 func changeArg(tool string, args map[string]any) (string, int64, *tools.Result) {
 	repo := strings.TrimSpace(argString(args, "repo"))
-	// `change` IS DECLARED TEXT, read by the check's own readers: a number
-	// the model sent is the text it spells (argval.String), and the number
-	// in it is read by the one integer rule (argval.Whole), so "42", 42 and
-	// "web!42" all name change 42.
+	// `change` is declared text: a number the model sent is the text it
+	// spells (argval.String), read by the one integer rule (argval.Whole), so
+	// "42", 42 and "web!42" all name change 42.
 	s := strings.TrimSpace(argString(args, "change"))
 	if name, n, ok := strings.Cut(s, "!"); ok {
 		if repo != "" && repo != name {
@@ -677,9 +564,9 @@ type changeRead struct {
 	turn *turnctx.Turn
 	tool string
 	c    codeCaller
-	// name is the repository as the call names it, and repo the repository
-	// the name resolved to: the turn's resolution, or — zero until then —
-	// the call's own first read's ([changeRead.ask]).
+	// name is the repository as the call names it, and repo what it resolved
+	// to: the turn's resolution, or the call's first read's, zero until then
+	// ([changeRead.ask]).
 	name   string
 	repo   gitlet.RepoRef
 	number int64
@@ -695,13 +582,12 @@ func (g *changeRead) ref() string {
 }
 
 // ask is q, a read of the repository the call names, asked as its caller. A
-// call that has not resolved the repository yet makes q that RESOLUTION
-// ([CodeDeps.repoRead]): q asks Gitlet for the repository its name
-// resolves to beside its own answer ([gitlet.ReadQuery.Resolve]), at the seat's
-// level, and the call keeps it — so the call's first read is ONE
-// linearizable read, where a `repo` read and then q were two barriers on the
-// code log, one after the other. A turn that resolved the name before answers
-// the resolution from its lookups, and q is asked by the name it resolved to.
+// call that has not resolved the repository yet (every operator-surface call,
+// which has no turn) makes q that resolution
+// ([CodeDeps.repoRead], [gitlet.ReadQuery.Resolve]), at the seat's level
+// ([seatReadLevel]): one linearizable read, where a `repo` read first would be
+// a second barrier the code log appends and waits a quorum for. A turn that
+// resolved the name already answers it from its lookups.
 func (g *changeRead) ask(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, *tools.Result) {
 	if g.repo.ID == "" {
 		first := q
@@ -724,11 +610,11 @@ func (g *changeRead) ask(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAn
 	return answer, nil
 }
 
-// read is q — a `change` read of this call's change — asked as its caller
-// ([changeRead.ask]): at the seat's level, or, where after is set, at session
-// floored at it — a later read of the call, at or past what its first saw. A
-// change naming another repository than the one the turn resolved the name
-// to is refused as a name taken again between the two ([CodeDeps.sameRepo]).
+// read is q, a `change` read of this call's change ([changeRead.ask]): at the
+// seat's level, or, where after is set, at session floored at it, so a call
+// pays one barrier and every later read is at or past what its first saw. A
+// change of another repository than the turn resolved the name to is refused
+// as a name taken again between the two ([CodeDeps.sameRepo]).
 func (g *changeRead) read(ctx context.Context, q gitlet.ReadQuery, after statelog.Position) (gitlet.ReadAnswer,
 	*tools.Result) {
 
@@ -753,12 +639,12 @@ func (g *changeRead) read(ctx context.Context, q gitlet.ReadQuery, after statelo
 	return answer, nil
 }
 
-// head is the change IN BRIEF and its head revision — its row beside a first
-// page of its revisions, one revision long ([gitlet.ReadQuery.Brief]) — and the
-// position it was read at: what every read that acts on the change's state,
-// its revision, its head or its branches asks, none of which reads its
-// description, its authors, its conversation, its mergeability or its
-// readiness.
+// head is the change IN BRIEF ([gitlet.ReadQuery.Brief]) beside its head
+// revision, and the position read at: what every read acting on its state,
+// revision, head or branches asks. Brief skips the description, authors,
+// conversation, mergeability and a readiness judged anew, which only the
+// summary, merge_readiness and a dequeue need ([changeRead.detail]): a seat
+// reviews a file at a time, and each call would judge a readiness unread.
 func (g *changeRead) head(ctx context.Context, after statelog.Position) (*gitlet.ChangeSummary, gitlet.RevisionRow,
 	statelog.Position, *tools.Result) {
 
@@ -775,14 +661,11 @@ func (g *changeRead) head(ctx context.Context, after statelog.Position) (*gitlet
 	return answer.ChangeBrief, answer.Revisions[0], answer.Position, nil
 }
 
-// row is the change's ROW ALONE — in brief and with no revision
-// ([gitlet.ReadQuery.Brief] beside DetailOnly), one seek of its number on
-// Gitlet — and the position it was read at, at the seat's level: what a
-// read that needs nothing of the change but its state, its branches, its id
-// and its number asks, which an executor's launch on a change is
-// ([CodeDeps.runChange]). Its detail would read its description, authors,
-// conversation and mergeability and judge its readiness, all of it dropped.
-// Read at session floored at after, as [changeRead.head] is.
+// row is the change's row alone, in brief with no revision
+// ([gitlet.ReadQuery.Brief] beside DetailOnly), one seek on Gitlet, and the
+// position read at: for a read needing only its state, branches, id and
+// number, as an executor's launch on a change ([CodeDeps.runChange]). Read at
+// session floored at after, as [changeRead.head] is.
 func (g *changeRead) row(ctx context.Context, after statelog.Position) (*gitlet.ChangeSummary, statelog.Position,
 	*tools.Result) {
 
@@ -798,11 +681,9 @@ func (g *changeRead) row(ctx context.Context, after statelog.Position) (*gitlet.
 	return answer.ChangeBrief, answer.Position, nil
 }
 
-// detail is the change IN DETAIL and its head revision — its detail beside a
-// first page of its revisions, one revision long — and the position it was
-// read at: what a read that presents the change's readiness, or acts on it,
-// asks, at the price of its description, its authors, its conversation, its
-// mergeability and its readiness judged ([changeRead.head] reads none).
+// detail is the change IN DETAIL beside its head revision, and the position
+// read at: for a read that presents or acts on its readiness, at the price
+// [changeRead.head] skips.
 func (g *changeRead) detail(ctx context.Context, after statelog.Position) (*gitlet.ChangeDetail, gitlet.RevisionRow,
 	statelog.Position, *tools.Result) {
 
@@ -867,9 +748,10 @@ func plural(n int64, one, many string) string {
 	return many
 }
 
-// floor is what a read by object id of revs is asked with ([changeRead]'s
-// doc): the code domain's one rule ([gitlet.ObjectFloor]) over this node's own
-// floor on the repository.
+// floor is what a read by object id of revs is asked with: the code domain's
+// rule ([gitlet.ObjectFloor]) over this node's own floor on the repository.
+// Never a row read's checkpoint, which a linearizable read takes past its
+// barrier: the Gitlet node would sync for nothing (codetools.go, of a ref).
 func (g *changeRead) floor(revs ...gitlet.RevisionRow) statelog.Freshness {
 	return gitlet.ObjectFloor(g.deps.Code.FloorOf(g.repo.ID), revs...)
 }
@@ -991,20 +873,18 @@ func (g *changeRead) summary(ctx context.Context, cursor string) (tools.Result, 
 		case k > 0:
 			return answer.Revisions[k-1].Cursor()
 		}
-		// NONE KEPT BESIDE THE DETAIL: the next page starts at this one's
-		// first revision, a page of revisions alone.
+		// None kept beside the detail: the next page starts at this one's
+		// first revision.
 		return gitlet.RevisionRow{N: answer.Revisions[0].N + 1}.Cursor()
 	}
 	build := func(k int) (*foreignRead, any) {
 		read := newForeignRead(g.turn, g.c.asker.Seat)
 		if d := answer.Change; d != nil {
-			// THE OWNER'S WORDS AT THE OPEN, and since then perhaps an
-			// editor's the row does not name: any record that moved the
-			// change past its open may have rewritten them.
+			// The owner's words at the open, perhaps rewritten by an editor
+			// the row does not name in any record that moved it past its open.
 			read.fence(fieldPath{}.key("change").key("description"), provenance.SourceChangeDescription,
 				[]provenance.Author{read.party(d.Owner, d.OwnerKind)}, d.Version > 1, d.Body)
-			// AND ITS TITLE AND CLOSE REASON, names whose writers the row
-			// does not name ([codeListChanges]'s reason).
+			// And its title and close reason ([codeListChanges]'s reason).
 			namesBy(read)
 		}
 		return read, codeChangeSummary{Repo: g.repo.Name, Change: detail, Revisions: revs[:k], Next: next(k),
@@ -1015,9 +895,8 @@ func (g *changeRead) summary(ctx context.Context, cursor string) (tools.Result, 
 	case err != nil:
 		return labelFault(ctx, g.tool, err), nil
 	case k == 0 && len(rendered) > ToolAnswerBytes:
-		// THE DETAIL ALONE PAST ONE ANSWER: a description at its longest,
-		// in characters JSON escapes, or a change with many authors. No part
-		// narrows it.
+		// The detail alone past one answer: a long description in escaped
+		// characters, or many authors. No part narrows it.
 		return failed(fmt.Sprintf("%s: %s's description and authors alone are past one answer, so its summary "+
 			"cannot be read through %s; its other parts can.", g.tool, g.ref(), g.tool)), nil
 	}
@@ -1071,9 +950,8 @@ func (g *changeRead) readiness(ctx context.Context) (tools.Result, error) {
 		out.Mergeability = &codeMergeability{Revision: m.Revision, TargetRef: m.TargetRef, TargetOID: m.TargetOID,
 			State: m.State, ConflictsOmitted: m.ConflictsOmitted, At: m.At}
 	}
-	// THE CONFLICTING PATHS CUT AT THE ANSWER, the rest counted beside those
-	// named: a merge records up to a git page of them, which a readiness
-	// beside it can push past one answer.
+	// The conflicting paths cut at the answer, the rest counted: a merge
+	// records up to a git page of them, which a readiness beside can push past.
 	page := func(k int) any {
 		cut := out
 		if m := out.Mergeability; m != nil {
@@ -1104,18 +982,17 @@ type codeChangeDiff struct {
 	gitlet.GitAnswer
 }
 
-// diff answers a revision's files or one file's patch: from the revision's
-// recorded base to its head, or — since an earlier revision — the interdiff
-// of the two, kept to the files either touches (gitlet.md, "What changed
-// between two revisions") — the two revisions read at once once the head is
-// ([gitlet.ChangeRevisions]), as the API's change question reads them.
+// diff answers a revision's files or one file's patch: from its recorded base
+// to its head, or since an earlier revision the interdiff kept to the files
+// either touches (gitlet.md, "What changed between two revisions"), the two
+// revisions read at once after the head ([gitlet.ChangeRevisions]).
 func (g *changeRead) diff(ctx context.Context, call changeCall) (tools.Result, error) {
 	d, head, first, refusal := g.head(ctx, statelog.Position{})
 	if refusal != nil {
 		return *refusal, nil
 	}
-	// THE REVISION READ, AS ITS NUMBER SAYS: the head where none is asked —
-	// so an earlier one is checked against it before either is read.
+	// The head where no revision is asked, so an earlier one is checked
+	// against it before either is read.
 	asked := head.N
 	if call.revision != 0 {
 		asked = call.revision
@@ -1158,8 +1035,8 @@ func (g *changeRead) diff(ctx context.Context, call changeCall) (tools.Result, e
 	read := newForeignRead(g.turn, g.c.asker.Seat)
 	narrow := "Read one file's patch with part diff and `file`."
 	if df := page.Diff; df != nil && df.Patch != "" {
-		// A PATCH IS THE REPOSITORY'S TEXT, both sides of it, which nobody
-		// this read can name vouches for: fenced as code_diff fences one.
+		// A patch is the repository's text, which nobody this read can name
+		// vouches for: fenced as code_diff fences one.
 		read.fenceRepository(fieldPath{}.key("diff").key("patch"), provenance.SourceRepoPatch, df.Patch)
 		narrow = fmt.Sprintf("The patch spells fence markers, which grow when they are escaped: read the file's "+
 			"lines at the revision's head (%s) with %s and a line range instead.", rev.Head, CodeReadTool)
@@ -1169,16 +1046,14 @@ func (g *changeRead) diff(ctx context.Context, call changeCall) (tools.Result, e
 }
 
 // recorded refuses a revision whose files cannot be read from its facts
-// ([gitlet.RevisionRow.FilesGap]): none recorded — a live change's home reads
-// them within a minute of the push, and a change merged or closed before it
-// did never has them — or, where based, none of a base to diff its head from:
-// a history that shares no commit with its target, whose change is every file
-// of its head.
+// ([gitlet.RevisionRow.FilesGap]): none recorded yet (a live change's home
+// records them within a minute; a change merged or closed first never has
+// them), or, where based, no base because its history shares no commit with
+// its target, so its change would be every file of its head.
 func (g *changeRead) recorded(d *gitlet.ChangeSummary, r gitlet.RevisionRow, based bool) *tools.Result {
 	switch r.FilesGap(d.State, based) {
 	case gitlet.FilesPending:
-		// A WAIT CLEARS IT ([waits]): the home records the facts on its own,
-		// within a minute of the push, and nothing a person does is needed.
+		// A wait clears it ([waits]): the home records the facts on its own.
 		res := refusedBy(tools.RefusalUnavailable, waits(), fmt.Sprintf("%s: revision %d of %s has no "+
 			"recorded base yet: the repository's home Gitlet node records each revision's facts against its "+
 			"target within a minute of its push. Try again shortly.", g.tool, r.N, g.ref()))
@@ -1242,12 +1117,10 @@ type codeFinding struct {
 	At *gitlet.FindingPlace `json:"at,omitempty"`
 }
 
-// findings answers a page of the change's findings, each placed in the
-// revision asked about: the page first, at the seat's level; then the change
-// and its head revision — and the revision asked about where it is another —
-// at session floored at it, so the head is every revision a finding of the
-// page was raised on; then ONE re-anchoring of every finding raised on
-// another revision than the one asked about.
+// findings answers a page of findings, each placed in the revision asked
+// about: the page at the seat's level, then the head (and the asked revision)
+// at session floored at it, so the head covers every revision the page's
+// findings were raised on, then ONE re-anchoring of those raised elsewhere.
 func (g *changeRead) findings(ctx context.Context, call changeCall) (tools.Result, error) {
 	page, refusal := g.read(ctx, gitlet.ReadQuery{Part: gitlet.PartFindings, Cursor: call.cursor,
 		Limit: changeFindingsPage}, statelog.Position{})
@@ -1282,13 +1155,11 @@ func (g *changeRead) findings(ctx context.Context, call changeCall) (tools.Resul
 	build := func(k int) (*foreignRead, any) {
 		read := newForeignRead(g.turn, g.c.asker.Seat)
 		for i, f := range page.Findings[:k] {
-			// A FINDING IS ITS RAISER'S WORDS: what it says, and the lines it
-			// would put in place of its own.
+			// A finding is its raiser's words: its body and its suggestion.
 			raiser := []provenance.Author{read.party(f.Raiser, f.RaiserKind)}
 			at := fieldPath{}.key("findings").index(i)
-			// ITS TITLE IS ITS RAISER'S NAME FOR IT, and a resolution's note
-			// its resolver's, whom the envelope names among nobody it vouches
-			// for as the only writer.
+			// Its title is its raiser's name for it; a resolution's note is
+			// its resolver's, whom the row does not name ([namesBy]).
 			read.attribute(raiser, false)
 			if f.ResolutionNote != "" {
 				namesBy(read)
@@ -1317,13 +1188,12 @@ func (g *changeRead) findings(ctx context.Context, call changeCall) (tools.Resul
 	return compactAnswer(rendered, "Read the findings a page at a time with `cursor`.")
 }
 
-// place is where each finding of findings is in revision rev of a change whose
-// head revision is head, by the finding's id: what the rows say without a read
-// ([gitlet.PlaceFindings]), and every other finding by the re-anchoring reads
-// the code domain's rule asks ([gitlet.Place]) — one, for a page of this tool's
-// size — floored at the head revision — the latest any finding was raised on
-// — and at rev's own head and base. A finding on the old side of a revision
-// whose base is not yet recorded is in neither, unplaced.
+// place is where each finding is in revision rev, by its id: what the rows
+// say without a read ([gitlet.PlaceFindings]), the rest by the re-anchoring
+// reads [gitlet.Place] asks (one, for this tool's page), floored at head (the
+// latest any finding was raised on, so the copy holds every blob their lines
+// were read in) and at rev. A finding on the old side of a revision whose base
+// is not yet recorded is left unplaced.
 func (g *changeRead) place(ctx context.Context, head, rev gitlet.RevisionRow,
 	findings []gitlet.FindingRow) (map[string]gitlet.FindingPlace, *tools.Result) {
 
@@ -1492,17 +1362,14 @@ func (g *changeRead) answerPage(ctx context.Context, n int, build func(k int) (*
 	return compactAnswer(rendered, fmt.Sprintf("Read the %ss a page at a time with `cursor`.", kind))
 }
 
-// fitLabelled is the longest prefix of n rows whose answer fits one tool
-// answer, with that answer rendered as it is sent — n where the whole page
-// does — for a page whose rows carry fenced text: build makes the answer
-// holding the first k rows AND the read that labels it, afresh for each
-// probe, so a probe's fences and its envelope are of the rows it holds alone.
-// A fence registered for a row a probe leaves out would be one no field of it
-// holds, which rendering refuses ([foreignRead.render]'s fail-closed rule).
-//
-// MEASURED AS SENT, as [foreignRead.fit] is — each probe rendered the way the
-// answer goes out — by a search over the prefixes, since an answer only grows
-// with its rows.
+// fitLabelled is the longest prefix of n rows whose answer, rendered as sent,
+// fits one tool answer (n where the whole page does), with that answer, for
+// rows carrying fenced text. A row read pages at the estate's 4 MiB bound and
+// a tool answer is 64 KiB, so a page is cut whole-row here and resumes by its
+// last kept row's own cursor, never one spelled again here. build makes the
+// first k rows' answer AND the read labelling it, afresh per probe: a fence
+// for a row the probe leaves out is one no field holds, which
+// [foreignRead.render] refuses. A binary search, as an answer only grows.
 func fitLabelled(n int, build func(k int) (*foreignRead, any)) (int, json.RawMessage, error) {
 	render := func(k int) (json.RawMessage, error) {
 		read, v := build(k)

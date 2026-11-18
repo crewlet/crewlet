@@ -18,16 +18,11 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// askEvent builds an ask THE WAY internal/a2a BUILDS IT: events.New over the
-// registered payload, never a hand-written Payload bag.
-//
-// The bag is a shape no producer emits — a2a.Service publishes the typed
-// struct, whose fields marshal flat beside the envelope while Payload stays
-// empty — so a literal one is a fiction, and asserting against it is how the
-// engine's reads of Payload["channel_id"] and Payload["content"] stayed green
-// while answering "" for every real ask: answerColleague logged
-// a2a_answer_unaddressable and returned, so no colleague question was ever
-// answered.
+// askEvent builds an ask the way internal/a2a builds it: events.New over the
+// registered payload, never a hand-written Payload bag. No producer emits a
+// bag (the typed struct marshals flat beside the envelope), so asserting
+// against one lets a read of Payload["channel_id"] pass while every real ask
+// is answered nowhere.
 func askEvent(channelID, brief string) *events.Event {
 	ev := events.New(types.A2ARequest{
 		ChannelID: channelID, Requester: "ceo",
@@ -45,22 +40,17 @@ func answerDispatched(ctx context.Context, e *Engine, c *Company, req Request, r
 	e.answerColleague(ctx, c, answeringOf(req), colleagueAskOf(askOf(req.Events)), res, nil)
 }
 
-// A COLLEAGUE'S QUESTION REACHES THE SEAT THAT HAS TO ANSWER IT.
-//
-// The regression this exists for: DescribeTrigger read only the "text"
-// payload key, and the A2A wakes put their body under "content" — so an
-// answering seat was handed the bare string "(a2a_request)" as its whole
-// task. It ran a full turn against a blank ask, which a model answers by
-// inventing one. Nothing failed; the answer was simply about nothing.
+// A COLLEAGUE'S QUESTION REACHES THE SEAT THAT HAS TO ANSWER IT: a trigger
+// description that misses the A2A body hands the seat "(a2a_request)" as its
+// whole task, and a model answers a blank ask by inventing one.
 func TestAColleaguesQuestionReachesTheAnsweringTurn(t *testing.T) {
 	t.Parallel()
 	got := DescribeTrigger([]*events.Event{askEvent("a2a-1", "What broke last night?")}, "")
 	if !strings.Contains(got, "What broke last night?") {
 		t.Errorf("the answering turn's task = %q", got)
 	}
-	// And it names WHO asked, which is the other half of an ask a seat can
-	// act on: an anonymous question has no reply target a model can reason
-	// about.
+	// And it names WHO asked: an anonymous question has no reply target a
+	// model can reason about.
 	if !strings.Contains(got, "Chief Executive") {
 		t.Errorf("the answering turn's task does not name the asker: %q", got)
 	}
@@ -118,11 +108,9 @@ func TestTheAskIsPickedOutOfThePartition(t *testing.T) {
 	}
 }
 
-// THE ECHO IS THE ASKER'S ONLY CONTEXT.
-//
-// The asking turn ENDED when it asked and nothing rehydrates it, so without
-// the question echoed back the woken turn receives an answer with no record
-// of what it asked.
+// THE ECHO IS THE ASKER'S ONLY CONTEXT: the asking turn ended when it asked
+// and nothing rehydrates it, so without the question the woken turn has an
+// answer with no record of what it asked.
 func TestTheQuestionIsEchoedBack(t *testing.T) {
 	t.Parallel()
 	if got := askedQuestion(askEvent("a2a-1", "What broke?")); got != "What broke?" {
@@ -141,13 +129,9 @@ func TestTheQuestionIsEchoedBack(t *testing.T) {
 	}
 }
 
-// THE ANSWER LEG, END TO END.
-//
-// The regression this exists for: a2a.Service.Reply had no caller outside its
-// own suite. An ask woke its target, the target ran a whole turn, and the
-// answer went nowhere — the asker, told by a2a_ask to finish its turn rather
-// than wait, was never woken, and the terminal state of every exchange was
-// the maintenance sweep closing an idle channel an hour later.
+// THE ANSWER LEG, END TO END: an ask wakes its target, the target's turn
+// answers on the channel, and the asker, told by a2a_ask to end its turn
+// rather than wait, is woken by that answer and not left to the idle sweep.
 func TestAnAnsweredAskWakesTheAskerAndClosesTheChannel(t *testing.T) {
 	t.Parallel()
 	e := watchdogEngine(t)
@@ -170,9 +154,8 @@ func TestAnAnsweredAskWakesTheAskerAndClosesTheChannel(t *testing.T) {
 		t.Fatalf("subscribe: %v", err)
 	}
 
-	// AND THE CLOSE RECORD, which is the audit row the Turn screen draws.
-	// Subscribed before the answer for the same reason the inbox is:
-	// interest retention drops a publish no consumer covers.
+	// AND THE CLOSE RECORD, the audit row the Turn screen draws, subscribed
+	// before the answer for the same reason as the inbox.
 	closes := make(chan *events.Event, 4)
 	if err := e.Backends().Queue.Subscribe(t.Context(),
 		topics.Event("a2a_channel_closed"), "close-probe",
@@ -209,10 +192,9 @@ func TestAnAnsweredAskWakesTheAskerAndClosesTheChannel(t *testing.T) {
 			t.Fatal("the asker was never woken with the answer")
 		}
 	}
-	// THE TYPED PAYLOAD. The wake used to carry its body in the envelope's
-	// free-form bag, which meant the ask could only be read by a consumer
-	// that knew the key; it is a registered payload now, so the brief the
-	// turn is given comes off the same struct the decoder builds.
+	// THE TYPED PAYLOAD: the brief the turn is given comes off the same
+	// registered struct the decoder builds, not a free-form bag only a
+	// consumer knowing the key could read.
 	answer, ok := events.DataAs[*types.A2AMessage](reply)
 	if !ok {
 		t.Fatalf("the reply does not carry a typed A2AMessage payload")
@@ -239,16 +221,14 @@ func TestAnAnsweredAskWakesTheAskerAndClosesTheChannel(t *testing.T) {
 	}
 
 	// THE ANSWERING RUN, not the unit of work: a trigger that fails without
-	// acting is redelivered, so one work key legitimately runs several
-	// times and a parent pointer naming it could not say which attempt
-	// answered. See ADR-0017.
+	// acting is redelivered, so one work key runs several times and a parent
+	// naming it could not say which attempt answered (ADR-0017).
 	if reply.ParentTurnID != "run-answer" {
 		t.Errorf("the reply points at %q, want the answering RUN",
 			reply.ParentTurnID)
 	}
 
-	// One ask, one answer, then CLOSED — rather than left to the idle
-	// sweep.
+	// One ask, one answer, then CLOSED, not left to the idle sweep.
 	ch, err := a2a.NewCoordStore(e.Backends().Fleet).Get(t.Context(), channelID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
@@ -257,10 +237,9 @@ func TestAnAnsweredAskWakesTheAskerAndClosesTheChannel(t *testing.T) {
 		t.Error("the channel was left open after its one answer")
 	}
 
-	// AND THE CLOSE SAYS WHO AND WHEN. ClosedBy went unwritten on every
-	// path, so every close this engine published read as "system" — the
-	// wording reserved for the sweep — and with no turn id the row could
-	// never appear on the answering turn's page.
+	// AND THE CLOSE SAYS WHO AND WHEN: an unset ClosedBy reads as "system",
+	// the sweep's wording, and with no turn id the row never appears on the
+	// answering turn's page.
 	var record *types.A2AChannelClosed
 	closeDeadline := time.After(10 * time.Second)
 	for record == nil {
@@ -283,11 +262,8 @@ func TestAnAnsweredAskWakesTheAskerAndClosesTheChannel(t *testing.T) {
 	}
 }
 
-// A SUSPENDED TURN HAS NOT ANSWERED YET.
-//
-// It is parked on its executor's run and is still going. Replying now would
-// send the asker an artifact from a turn that has not finished; the frame that
-// ends it answers then, off the ask on the run's record
+// A SUSPENDED TURN HAS NOT ANSWERED YET: it is parked on its executor's run,
+// and the frame that ends it answers, off the ask on the run's record
 // (a2aparked_internal_test.go).
 func TestASuspendedTurnDoesNotAnswerYet(t *testing.T) {
 	t.Parallel()
@@ -315,11 +291,9 @@ func TestASuspendedTurnDoesNotAnswerYet(t *testing.T) {
 	}
 }
 
-// A TURN THAT PRODUCED NOTHING STILL OWES AN ANSWER.
-//
-// Silence leaves the asker waiting on a channel the idle sweep closes later
-// with no explanation and without waking it, which is strictly worse than a
-// short "I could not" the asker can act on.
+// A TURN THAT PRODUCED NOTHING STILL OWES AN ANSWER: silence leaves the asker
+// on a channel the idle sweep closes without waking it, worse than a short
+// "I could not" it can act on.
 func TestATurnThatDeliveredNothingStillAnswers(t *testing.T) {
 	t.Parallel()
 	e := watchdogEngine(t)
@@ -357,14 +331,10 @@ func TestATurnWithNoAskAnswersNobody(t *testing.T) {
 	}, turn.Result{Decision: phase.Done, Artifact: "posted"})
 }
 
-// THE DELEGATION CAP READS THE TRIGGER, so it can bound anything at all.
-//
-// The regression this exists for: Request.Depth was set at no site on the
-// inbox path, so every turn ran at depth 0, turn.CheckDepth compared a
-// constant zero against the limit and could never fire, and
-// turn_engine.delegation_depth_limit bounded nothing. The one guard against
-// two agents asking each other the same question until a budget runs out was
-// inert — which only became reachable once an answer could travel back.
+// THE DELEGATION CAP READS THE TRIGGER, so it bounds anything at all: a turn
+// whose Request.Depth is never set runs at depth 0, turn.CheckDepth never
+// fires (turn_engine.delegation_depth_limit bounds nothing), and two agents
+// can ask each other the same question until a budget runs out.
 func TestTheDelegationDepthComesOffTheTrigger(t *testing.T) {
 	t.Parallel()
 	deep := askEvent("a2a-1", "?")
@@ -380,11 +350,9 @@ func TestTheDelegationDepthComesOffTheTrigger(t *testing.T) {
 	}
 }
 
-// THE DEEPEST OF A BATCH, not the first.
-//
-// A coalesced partition can hold triggers that arrived by different routes,
-// and taking the first would let a shallow one arriving beside a deep ask
-// reset the count — which is exactly the reset an unbounded ping-pong needs.
+// THE DEEPEST OF A BATCH, not the first: a coalesced partition can hold
+// triggers from different routes, and taking a shallow one beside a deep ask
+// resets the count, which is the reset an unbounded ping-pong needs.
 func TestACoalescedPartitionTakesItsDeepestTrigger(t *testing.T) {
 	t.Parallel()
 	shallow := &events.Event{ID: uuid.New(), Type: "external_notification"}
@@ -411,12 +379,9 @@ func answerText(res turn.Result, err error) string {
 	return text
 }
 
-// A COLLEAGUE IS TOLD WHAT ACTUALLY HAPPENED.
-//
-// Only `done` produced something for them. The other decisions carry an
-// artifact that means something else: `skipped` holds the EXECUTOR'S private
-// reasoning that nobody was asking, which is both internal and wrong, since
-// somebody plainly was. Forwarding it verbatim sends the wrong thing while
+// A COLLEAGUE IS TOLD WHAT ACTUALLY HAPPENED: only `done` produced something
+// for them, and forwarding another decision's artifact (`skipped` holds the
+// executor's private reasoning that nobody asked) sends the wrong thing
 // looking like an answer.
 func TestTheAnswerSaysWhatTheTurnActuallyDid(t *testing.T) {
 	t.Parallel()
@@ -453,18 +418,11 @@ func TestTheAnswerSaysWhatTheTurnActuallyDid(t *testing.T) {
 	}
 }
 
-// A BLOCKED TURN'S ACCOUNT IS AN ANSWER, not a failure to produce one.
-//
-// This is the one way `done` arrives carrying no prose: the seat answered as
-// far as it could, put the rest to somebody who has to answer it, and had
-// nothing left to write. `submit_work` refuses a blocked outcome with empty
-// evidence, so the one case whose artifact may be empty is the one case
-// guaranteed to have something to say instead.
-//
-// The consequence of getting this wrong is worse than a thin answer:
-// answerColleague CLOSES the channel straight after, so the asker is told the
-// turn produced nothing AND has nowhere to follow up — and it re-asks, which
-// is the duplicate the answer leg exists to stop.
+// A BLOCKED TURN'S ACCOUNT IS AN ANSWER, not a failure to produce one: it is
+// the one way `done` arrives with no prose, and `submit_work` refuses a
+// blocked outcome without evidence, so there is always something to say.
+// Answered with the apology instead, the asker, whose channel answerColleague
+// closes straight after, has nowhere to follow up and re-asks.
 func TestABlockedTurnAnswersWithWhatStoppedIt(t *testing.T) {
 	t.Parallel()
 	blocked := turn.Result{

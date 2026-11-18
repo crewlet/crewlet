@@ -16,18 +16,12 @@ import (
 
 // The catalogue tools: what a task may BE, and what it may carry.
 //
-// # Reading is a SEAT's, writing is not
-//
-// `get_work_catalogue` is in every seat's registry, because `create_work_item`
-// refuses a type the company has not declared and a model that cannot read the
-// catalogue can only guess — which is precisely how `Bug`, `bugfix` and `BUG`
-// came to sit beside `bug` in companies whose engines did not check. Telling
-// the model what exists is cheaper than refusing it repeatedly.
-//
-// Writing is the OPERATOR's alone. A declaration is the company's vocabulary:
-// a seat adding a type to make its own create succeed is a seat editing the
-// rules it is being judged by, and the refusal it was working around is the
-// signal a person needs to see.
+// Reading is every SEAT's: `create_work_item` refuses an undeclared type, and
+// a model that cannot read the catalogue can only guess (`Bug`, `bugfix` and
+// `BUG` beside `bug`). Writing is the OPERATOR's alone: the declarations are
+// the company's vocabulary, and a seat adding a type to make its own create
+// succeed would be editing the rules it is judged by, hiding the refusal a
+// person needs to see.
 
 // CatalogueWriter is the tracker write side these tools need.
 type CatalogueWriter interface {
@@ -72,10 +66,9 @@ func (t *getWorkCatalogue) Call(ctx context.Context, args map[string]any) (tools
 func (t *getWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
-	// THE IDENTITY CHECK IS ON A READ TOO, exactly as it is on
-	// list_work_items beside it: outside a turn a seat's registry has no
-	// seat, and a tool that answered anyway would be answering as nobody.
-	// The operator surface supplies its own actor, so this succeeds there.
+	// The identity check holds on a read too: outside a turn a seat's
+	// registry has no seat, and answering would answer as nobody. The
+	// operator surface supplies its own actor.
 	if _, err := t.deps.actor(ctx, turn); err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
 		return unattributed(worklet.GetWorkCatalogueTool, err), nil
@@ -173,10 +166,8 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 	// own detail beneath it — see [callOutcome].
 	var call callOutcome
 
-	// BOTH LISTS ARE READ BEFORE EITHER IS WRITTEN. A malformed `fields`
-	// used to be found only after `types` had landed, and the call answered
-	// the parse refusal alone — a caller told its call failed, holding a
-	// catalogue whose types had already been replaced.
+	// BOTH LISTS ARE READ BEFORE EITHER IS WRITTEN, so a malformed `fields`
+	// cannot fail the call after `types` has already been replaced.
 	var types []worklet.TaskType
 	var fields []worklet.FieldDef
 	if hasTypes {
@@ -192,23 +183,20 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 		}
 	}
 
-	// TWO WRITES, NEVER ONE, because they are two objects on two subjects
-	// (see internal/worklet/catalogue.go). A call sending both does them
-	// in order; a refused second write after a landed first is reported as
-	// exactly that ([partlyWritten]), because the first list IS replaced.
+	// TWO WRITES, NEVER ONE: two objects on two subjects (see
+	// internal/worklet/catalogue.go). A refused second write after a landed
+	// first is reported as exactly that ([partlyWritten]): the first IS replaced.
 	if hasTypes {
-		// DERIVED from the call, like every write it makes, so the call
-		// made again — a seat's re-run, an operator's retry — replaces the
-		// list once ([opIDFor]).
+		// Derived from the call, so the call made again replaces the list
+		// once ([opIDFor]).
 		opID := opIDFor(actor, t.Name(), "types", "workspace", args)
 		result, err := writer.WriteTypes(ctx, opID, types)
 		if err != nil {
 			return writeFailure(ctx, actor, worklet.WriteWorkCatalogueTool, err), nil
 		}
 		if result.Outcome == statelog.OutcomeUnknown {
-			// THE FIELDS WAIT FOR IT: a call answered with one half's
-			// receipt and the other's doubt is a call the reader has to
-			// take apart, and repeating the whole of it is harmless.
+			// THE FIELDS WAIT FOR IT: half a receipt beside half a doubt is a
+			// call the reader must take apart; repeating all of it is harmless.
 			next := restateNext("Read the catalogue with " + worklet.GetWorkCatalogueTool)
 			if hasFields {
 				next = "The fields were NOT written: the call stopped here, " +
@@ -280,39 +268,16 @@ func catalogueTypes(args map[string]any) ([]worklet.TaskType, string) {
 
 // catalogueFields reads the declared fields a caller sent.
 //
-// AN ABSENT ID IS MINTED, because a caller declaring a NEW field has no id to
-// send and one it invented would be a uuid it has to keep. An id it DOES send
-// is kept exactly, which is what lets an edit reach the field it names — and
-// what makes the archive rule enforceable at all.
+// An absent id is minted, since a NEW field has none to send; a sent id is
+// kept exactly, which is what lets an edit reach the field it names (and the
+// archive rule hold).
 //
-// # ONE GRAMMAR WITH THE READ
-//
-// The shape here is the shape [worklet.FieldDef] is SERVED in (`applies_to`,
-// and the settings nested under `config`), because the only honest edit of a
-// declaration is the one `get_work_catalogue` just handed back. It was not:
-// the options lived at the TOP level of a tool's field spec while the answer
-// carries them under `config`, so an operator who echoed the read to rename
-// one field dropped `options` from every field in the list — accepted, since a
-// choice field may legitimately declare none, and every stored value keyed by
-// an option id then resolved to nothing.
-//
-// # AND EVERY SETTING, not just the one
-//
-// Seven of [worklet.FieldConfig]'s keys had no reader here at all, so a number
-// field was integer-precision whatever anybody declared, a date could never
-// hold a time, and a labels field could never take more than one — while
-// [worklet.FieldDef]'s own `applies_to` could not be set either, leaving every
-// field applying to every type. Each is a setting the coercion table reads on
-// every write and nothing could put there: the refusal a caller was handed —
-// "set a value at that precision, or widen the field's own" — named a remedy
-// no surface of this engine offered.
-//
-// WHICH TYPE MAY CARRY WHICH SETTING IS THE TRACKER'S ANSWER, never a second
-// one here: its own `checkConfig` refuses a knob a type cannot read, naming
-// the knob and the types that use it, and it runs on BOTH write paths — the
-// workspace catalogue and a project's own declarations. A gate repeated here
-// would be the third rule the coercion table's own comment records going out
-// of step with the other two.
+// The shape is the one [worklet.FieldDef] is SERVED in (`applies_to`, the
+// settings under `config`), every [worklet.FieldConfig] key included, because
+// the only honest edit of a declaration is the one `get_work_catalogue` just
+// handed back. Which type may carry which setting is the tracker's answer
+// alone (its `checkConfig`, on both write paths); a gate repeated here would
+// be a third rule to drift from the other two.
 func catalogueFields(args map[string]any) ([]worklet.FieldDef, string) {
 	raw, ok := argval.List(args["fields"])
 	if !ok {
@@ -352,13 +317,10 @@ func catalogueFields(args map[string]any) ([]worklet.FieldDef, string) {
 
 // fieldConfig reads one declaration's `config` object.
 //
-// AN ABSENT `config` IS AN EMPTY ONE, which is the rule every other attribute
-// of a declaration already follows: `fields` REPLACES the declared set and a
-// declaration in it is whole, so an omitted `required` is false and an omitted
-// `precision` is zero. There is no patch shape to inherit from — the list is
-// the post-state — and a reader that KEPT a setting the caller left out would
-// make clearing one impossible, while letting a field composed from scratch
-// silently inherit whatever its predecessor held.
+// An absent `config` is an empty one, like every other attribute of a
+// declaration: `fields` is the post-state, not a patch, so a reader that kept
+// an omitted setting would make clearing one impossible and let a field
+// composed from scratch inherit its predecessor's.
 func fieldConfig(spec map[string]any, slug string) (worklet.FieldConfig, string) {
 	raw, sent := spec["config"]
 	if !sent || raw == nil {
@@ -390,10 +352,8 @@ func fieldConfig(spec map[string]any, slug string) (worklet.FieldConfig, string)
 		}
 		out.Precision = places
 	}
-	// THE BOUNDS ARE READ BY PRESENCE, which is why they are pointers on
-	// the declaration: a `min` of 0 is a real floor and an absent one is no
-	// floor at all, so a reader that could not tell them apart would put a
-	// floor of zero under every number field anybody declared.
+	// The bounds are read by presence (pointers on the declaration): a `min`
+	// of 0 is a real floor and an absent one is none.
 	low, refusal := fieldBound(config, slug, "min")
 	if refusal != "" {
 		return worklet.FieldConfig{}, refusal
@@ -456,12 +416,8 @@ func catalogueOptions(config map[string]any, slug string) ([]worklet.Option, str
 }
 
 // fieldDeclarationSchema is ONE custom-field declaration, as both tools that
-// take one describe it.
-//
-// ONE FUNCTION, because there are two callers and they had already drifted:
-// this tool described an option's own keys while `write_project` declared
-// `options` as a list of bare objects, so the same argument was documented to
-// a model twice and only one of the two said what an option is.
+// take one (this and `write_project`) describe it: one function, so the two
+// cannot document the same argument two ways.
 func fieldDeclarationSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
@@ -501,15 +457,11 @@ func fieldDeclarationSchema() map[string]any {
 	}
 }
 
-// fieldConfigSchema is what a field's TYPE lets it be configured with.
-//
-// EVERY KEY A SERVED DECLARATION CAN CARRY, spelled as the read spells it, so
-// the object a caller edits is the object it was handed. The two keys of
-// [worklet.FieldConfig] missing here are the two no stored declaration may
-// hold either: a `rollup` block and a `tracking` list both say a value keeps
-// itself up to date, and the tracker refuses both because this build computes
-// neither — so a read can never hand one back, and offering them would spend a
-// round on an argument whose every value is refused.
+// fieldConfigSchema is what a field's TYPE lets it be configured with: every
+// key a served declaration can carry, spelled as the read spells it, so the
+// object a caller edits is the one it was handed. [worklet.FieldConfig]'s
+// `rollup` and `tracking` are left out: the tracker refuses both (this build
+// computes neither), so no read hands one back.
 func fieldConfigSchema() map[string]any {
 	return map[string]any{
 		"type": "object",

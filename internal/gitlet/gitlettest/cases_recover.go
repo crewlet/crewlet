@@ -11,20 +11,19 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitletfault"
 )
 
-// F21: a crash at every step of a push leaves a state the client was told
-// the truth about — never an ok for a ref no row moved — that every cache
-// converges to, that leaves no object no row names once the collector has run,
-// and that the same push re-run completes.
+// F21: a crash at every push step leaves a state the client was told the
+// truth about (never an ok for a ref no row moved), that every cache converges
+// to, that holds no unnamed object once the collector has run, and that the
+// same push re-run completes.
 func aCrashAtEveryPushStepLeavesATruthfulState(t *testing.T, newFleet NewFleet) {
 	for _, point := range gitletfault.PushPath() {
 		t.Run(string(point), func(t *testing.T) { crashAt(t, newFleet, point) })
 	}
 }
 
-// crashAt is F21 at one point. A CRASH, never a Block: a node killed in this
-// process cancels the hit's context, and a Block would let the step's own
-// error path tidy up before the restart — which a process that died never
-// does (internal/gitlet/gitletfault).
+// crashAt is F21 at one point. A Crash, never a Block: a Block lets the step's
+// own error path tidy up before the restart, which a dead process never does
+// (internal/gitlet/gitletfault).
 func crashAt(t *testing.T, newFleet NewFleet, point gitletfault.Point) {
 	c := newCase(t, newFleet, Shape{}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")
@@ -76,10 +75,9 @@ func crashAt(t *testing.T, newFleet NewFleet, point gitletfault.Point) {
 	assertConverged(t, c.Fleet)
 }
 
-// assertNoUnnamedObject fails t unless, once the collector has run, every
-// object the store holds is named by a pack row: an upload a crash orphaned
-// is the collector's to remove — it is the one deleter (ADR-0027) — and it
-// must find and remove it.
+// assertNoUnnamedObject fails t unless, once the collector has run, a pack row
+// names every object the store holds: an upload a crash orphaned is the
+// collector's to remove, as the one deleter (ADR-0027).
 func assertNoUnnamedObject(t *testing.T, c *Case) {
 	t.Helper()
 	report := c.Fleet.Collect(t)
@@ -163,9 +161,8 @@ func aPurgedRepositoryLeavesNothing(t *testing.T, newFleet NewFleet) {
 	assertConverged(t, c.Fleet)
 }
 
-// R7: while the data node is evicted nothing takes a push, and git is told
-// so — nobody ran it, so a re-run lands it — and once readmitted the push
-// lands.
+// R7: while the data node is evicted nothing takes a push, and git is told it
+// was never run, so the re-run once readmitted lands it.
 func anEvictedNodesPushesAreRefused(t *testing.T, newFleet NewFleet) {
 	c := newCase(t, newFleet, Shape{}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")

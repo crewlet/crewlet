@@ -21,17 +21,15 @@ import (
 
 // A JOIN PINS THE TAIL IN THE ARTEFACT'S GENERATION, NEVER ITS OWN.
 //
-// A sequence names a number space, and the pin is only a pin when it is
-// stated in the log's. The artefact's generation is the log's — the join
-// refuses an offer at any other — while the joiner's own checkpoint is the one
-// position a join knows to be wrong: a node that never ran has none, which
-// read as generation 0, and a node a reanchor passed holds the old one. Stated
-// in either, the hold sat below the log's generation, and the trim reads such
-// a hold as an UNKNOWN term — it blocked every trim of the log for a minute
-// and then, gone stale, pinned nothing at all.
+// A sequence pins only in the log's number space, which is the artefact's
+// generation (the join refuses any other). The joiner's own checkpoint is
+// wrong for it: a node that never ran reads as generation 0, one a reanchor
+// passed holds the old one, and the trim reads a hold below the log's
+// generation as an UNKNOWN term — blocking every trim until it goes stale,
+// then pinning nothing.
 //
-// The joiner here has no estate open, as a node that never ran has none worth
-// reading: the pin must not need one.
+// The joiner has no estate open, as a node that never ran has none: the pin
+// must not need one.
 func TestAJoinPinsTheTailInTheArtefactsGeneration(t *testing.T) {
 	t.Parallel()
 	fleet := memory.NewFleet()
@@ -93,14 +91,12 @@ func joinHolds(t *testing.T, register interface {
 
 // THE JOIN'S PIN RENEWS ITSELF FOR AS LONG AS IT IS HELD, AND NOT AFTER.
 //
-// The trim ignores a hold older than its stale bound, which is what stops a
-// crashed holder pinning the log for ever — and reads a pin nobody renews as
-// exactly such a holder. The join's pin was put once and never renewed, so a
-// minute into any transfer it pinned nothing, and a boot's join — which
-// nothing else counts — could lose the very tail it was fetching. Here the
-// node renews on a cadence a case can wait out, and the trim is asked at an
-// instant that leaves the pin's first put past the stale bound and its latest
-// renewal inside it: a pin put once is ignored there, a renewed one is not.
+// The trim ignores a hold older than its stale bound (so a crashed holder
+// cannot pin the log for ever), so a pin put once pins nothing a minute into a
+// transfer, and a boot's join, which nothing else counts, could lose the tail
+// it is fetching. The trim is asked at an instant that leaves the first put
+// past the stale bound and the latest renewal inside it: only a renewed pin
+// holds there.
 func TestAJoinsPinRenewsItselfUntilReleased(t *testing.T) {
 	t.Parallel()
 	fleet := memory.NewFleet()
@@ -121,8 +117,8 @@ func TestAJoinsPinRenewsItselfUntilReleased(t *testing.T) {
 		t.Fatalf("%d join pin(s) in the register once taken, want one", len(taken))
 	}
 
-	// A RENEWAL A WHOLE STALE BOUND AFTER THE FIRST PUT — fifty
-	// milliseconds standing in for the minute, at a millisecond's cadence.
+	// A RENEWAL A WHOLE STALE BOUND AFTER THE FIRST PUT: 50ms stands in for
+	// the minute, at a millisecond's cadence.
 	const stale = 50 * time.Millisecond
 	var renewed coord.TrimHold
 	waitUntil(t, 10*time.Second, "a renewal of the join's pin", func() bool {
@@ -165,15 +161,11 @@ func TestAJoinsPinRenewsItselfUntilReleased(t *testing.T) {
 // AN INSTALLED ARTEFACT'S PIN IS KEPT UNTIL A ROW OF THIS NODE'S OWN COUNTS IT.
 //
 // The trim counts a node by its published position, and a boot's join runs
-// before the node has published one — before it holds a presence lease, too —
-// so while it adopts, and after, until its first row lands, nothing but its
-// own pin keeps the tail it is about to replay. Released at the end of the
-// join, the pin left exactly that window open. So it is kept, and a published
-// row releases it only when it counts the tail: on every log, a position no
-// further along than the rows this node holds. A row naming more than the rows
-// hold — a runner still keyed to the checkpoint an artefact replaced reports
-// that, and it may be ahead on a log the node was current on — or naming
-// nothing for a log, keeps it.
+// before the node publishes one (or holds a presence lease), so until its first
+// row lands only its own pin keeps the tail it will replay. A row releases the
+// pin only when, on every log, it names a position no further than the rows
+// this node holds. A row ahead of them (a runner still keyed to the checkpoint
+// an artefact replaced reports that) or naming nothing for a log keeps it.
 func TestAnInstalledArtefactsPinIsKeptUntilThisNodeIsCounted(t *testing.T) {
 	t.Parallel()
 	db, estate := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
@@ -263,9 +255,8 @@ func TestAnInstalledArtefactsPinIsKeptUntilThisNodeIsCounted(t *testing.T) {
 // A REJOIN KEEPS THE PIN ON ITS ARTEFACT'S TAIL UNTIL A PUBLISH COUNTS IT.
 //
 // The whole path on a real broker: a running node below the floor adopts a
-// donor's snapshot, and its pin on the tail is still in the register when the
-// rejoin returns — the heartbeat is held off, so nothing has published since
-// the install — and gone once a publish has written a row of the node's own.
+// donor's snapshot; with the heartbeat held off, its pin is in the register
+// when the rejoin returns, and gone once a publish writes a row of its own.
 func TestARejoinKeepsItsPinUntilAPublishCountsIt(t *testing.T) {
 	t.Parallel()
 	e, back, q := bootRejoinNode(t)
@@ -327,14 +318,11 @@ func (f *handoverFleet) Holds(ctx context.Context) ([]coord.TrimHold, error) {
 
 // A HANDOVER BETWEEN THE TRIM'S TWO READS STILL KEEPS THE TAIL.
 //
-// A joiner writes the row that counts it and only then releases its pin. The
-// trim read the positions register first and the holds second, so a handover
-// that landed between them was in neither read — no row yet, no pin any more —
-// and at boot no presence lease counted the joiner either: the tick saw only
-// the donor, a thousand records on, and could purge the tail the joiner had
-// just installed itself in front of. Holds read first, a pin the tick misses
-// was released before that read began, so the row that replaced it is in the
-// positions read that follows.
+// A joiner writes the row that counts it, then releases its pin. Were positions
+// read before holds, a handover between the reads would be in neither (and at
+// boot no presence lease counts the joiner), so the tick could purge the tail
+// the joiner just installed. With holds read first, a pin the tick misses was
+// released before that read, so its replacing row is in the positions read.
 func TestATrimTickSeesAJoinsPinOrTheRowThatReplacedIt(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -391,11 +379,10 @@ func TestATrimTickSeesAJoinsPinOrTheRowThatReplacedIt(t *testing.T) {
 	}
 }
 
-// registerTape is the fleet's register with a tape, in the order the register
-// took them, of what one node did there: its join's pin put, a positions row
-// of its own written, its join's pin released. A pin and a row are taped once
-// the register has taken them, a release as it is asked for — so a row taped
-// before a release was written before the release began.
+// registerTape is the fleet's register with a tape, in the register's order,
+// of what one node did there: its join's pin put, a positions row of its own,
+// its join's pin released. A pin and a row are taped once taken, a release as
+// it is asked for, so a row taped before a release was written before it began.
 type registerTape struct {
 	fleetRegister
 	node string
@@ -458,20 +445,15 @@ func (r *registerTape) PutPositions(ctx context.Context, p coord.NodePositions) 
 
 // A BOOT'S JOIN KEEPS ITS PIN UNTIL THE NODE'S FIRST ROW COUNTS IT.
 //
-// The exposed path: a node that boots below the floor adopts before it holds a
-// presence lease and before its heartbeat has written a row, so between the
-// install and that first row nothing in the fleet counts it but its own pin. A
-// pin released as the join returned left exactly that interval open to a trim
-// tick, which could remove the tail the node had just installed itself in
-// front of. So the same node boots a second time, below the floor, with a
-// donor waiting, and the register's tape must show the join's pin put, then a
-// row of the node's own naming the tracker at no more than the artefact, and
-// only then the pin's release — which must come.
+// A node booting below the floor adopts before it holds a presence lease or
+// writes a row, so until that first row only its own pin keeps the tail it
+// installed from a trim. The same node boots a second time below the floor,
+// with a donor waiting, and the register's tape must show the pin put, then a
+// row of its own naming the tracker at no more than the artefact, then the
+// pin's release, which must come.
 //
-// THE ORDER ON THE TAPE rather than the register at the instant New returns,
-// because the heartbeat publishes at once as the state log starts, before New
-// returns: by then a correct boot has usually released the pin already, and a
-// snapshot of the register would pass or fail on the race.
+// The tape's order, not the register when New returns: the heartbeat publishes
+// as the state log starts, before New returns, so a snapshot would race.
 func TestABootJoinKeepsItsPinUntilItsFirstRowCountsIt(t *testing.T) {
 	t.Parallel()
 	n := openRejoinNode(t)

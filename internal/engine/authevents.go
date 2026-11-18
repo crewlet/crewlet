@@ -13,18 +13,14 @@ import (
 // startAuthEvents builds this node's authentication audit trail and starts the
 // loop that publishes each closed minute of failed attempts.
 //
-// ONE TRAIL PER PROCESS, built here rather than by each surface, because the
-// tally it keeps is the node's: a failed sign-in and a bearer the guard
-// refused, from one source in one minute, are one count only because both
-// reach the same trail. Two trails would publish two rows for one minute, and
-// neither would say how hard the node was being pushed.
-//
-// BEFORE THE NATIVE ESTATE, because both the identity writer and the state log's
-// appliers announce through it, and AFTER New's failure guard is armed, so a
-// boot that fails later stops the loop with everything else.
+// ONE TRAIL PER PROCESS, because its tally is the node's: a failed sign-in and
+// a refused bearer from one source in one minute are one count only on one
+// trail. Started BEFORE the native estate, whose identity writer and appliers
+// announce through it, and AFTER New's failure guard is armed, so a boot that
+// fails later stops the loop with everything else.
 func (e *Engine) startAuthEvents(ctx context.Context) error {
-	// NIL COUNTS NOTHING, and a nil *Recorder is not nil once it is an
-	// interface — so the absence is passed as an absent interface.
+	// A nil *Recorder is not nil once it is an interface, so the absence is
+	// passed as an absent interface.
 	var counter authevents.Counter
 	if e.metrics != nil {
 		counter = e.metrics
@@ -35,11 +31,9 @@ func (e *Engine) startAuthEvents(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("engine: authentication audit trail: %w", err)
 	}
-	// DETACHED, like every loop the node owns: SIGTERM does not end it,
-	// [Engine.stopAuthEvents] does — and its last act is to publish the
-	// minute still open, which a loop that died with the caller's context
-	// would drop. Detached from the boot's CANCELLATION and nothing else,
-	// so the loop keeps the values the boot context carries.
+	// Detached from the boot's CANCELLATION only (keeping its values):
+	// [Engine.stopAuthEvents] ends it, and its last act publishes the minute
+	// still open, which a loop dying with the caller's context would drop.
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	done := make(chan struct{})
 	go func() {
@@ -56,10 +50,9 @@ func (e *Engine) startAuthEvents(ctx context.Context) error {
 
 // stopAuthEvents ends the trail's loop, publishing what it still holds.
 //
-// AFTER the native estate has stopped — its appliers witness refused records
-// through the trail — and BEFORE the backends close, because the final flush
-// publishes onto the broker they own. Nil-safe, for a boot that failed before
-// the trail existed.
+// AFTER the native estate has stopped (its appliers witness through the trail)
+// and BEFORE the backends close (the final flush publishes onto their broker).
+// Nil-safe, for a boot that failed before the trail existed.
 func (e *Engine) stopAuthEvents() {
 	if e.stopAuthTrail != nil {
 		e.stopAuthTrail()
@@ -70,8 +63,8 @@ func (e *Engine) stopAuthEvents() {
 // AuthEvents is this node's authentication audit trail: what the sign-in
 // surface, the request guard and the identity directory hand what they saw to.
 //
-// Never nil on an engine [New] returned, which is what lets the API refuse to
-// be built without it rather than quietly auditing nothing.
+// Never nil on an engine [New] returned, so the API can refuse to be built
+// without it rather than quietly audit nothing.
 func (e *Engine) AuthEvents() *authevents.Trail { return e.authEvents }
 
 // stateLogWitness is the state log's witness over this node's trail, or nil when
@@ -86,9 +79,8 @@ func (e *Engine) stateLogWitness() statelog.Witness {
 // refusalWitness puts a record a state log would not authenticate onto the
 // audit feed.
 //
-// THE RUNNER DECIDES WHAT IS SAID and how often — once per verdict and key id,
-// capped — so this only translates: the framework's verdict becomes the event
-// type it names, on the ordinary path.
+// The runner decides what is said and how often (once per verdict and key id,
+// capped); this only translates the verdict into the event type it names.
 type refusalWitness struct{ trail *authevents.Trail }
 
 // RecordRefused implements [statelog.Witness].

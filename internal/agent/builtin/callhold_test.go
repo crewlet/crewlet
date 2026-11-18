@@ -119,13 +119,9 @@ func TestACallIsHeldOnlyForAJobThatCanParkOnIt(t *testing.T) {
 	}
 }
 
-// A CALL TOO LARGE TO HOLD IS REFUSED BEFORE ANYTHING IS ASKED, ITS SIZE NAMED. A
-// call held for approval never reaches its server, so nothing but the run's row
-// bounds what it carries, and the row carries its arguments sealed — a
-// megabyte file of markup three and a half times over. The holder refuses such
-// a call while the run can still split or shorten it, saying how large it is
-// and how large one may be, and records no question; a call within the share is
-// held as ever.
+// A CALL TOO LARGE TO HOLD IS REFUSED BEFORE ANYTHING IS ASKED, ITS SIZE NAMED,
+// while the run can still split or shorten it: nothing but the run's row bounds
+// a held call's sealed arguments. A call within the bound is held as ever.
 //
 // Mutation: hold the call whatever it carries, and the store refuses the
 // question, which the run is told to make again, refused every time.

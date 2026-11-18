@@ -197,7 +197,7 @@ func TestAnImageNothingCanReadIsSaidWithWhatWorks(t *testing.T) {
 func TestADeepRunReachesCrewletOnlyThroughTheTurnsSurface(t *testing.T) {
 	t.Parallel()
 	script := evals.NewDeepScript(evals.DeepRunScript{
-		Lines:  []string{"Reading the work of the last month", "[tool] Bash: python3 tally.py"},
+		Lines:  []string{"Reading the work of the last month", "[tool 1] Bash: python3 tally.py", "[ok 1 900ms]"},
 		Calls:  []llm.ToolCall{readCall("b1")},
 		Files:  []assistant.DeepFile{{Name: "teams.md", Content: []byte("# Proposed teams\n")}},
 		Report: "Three teams cover the work; the report is in teams.md.", Input: 900, Output: 100})
@@ -763,7 +763,7 @@ func TestAContinuedRunWorksOnTheScreenAsTheDecisionLeftIt(t *testing.T) {
 // NO HOST PATH OR RAW TOOL LINE REACHES A PERSON from deep work: a run whose
 // transcript names its box's paths, its harness's tools and Crewlet's MCP tools,
 // and whose report says where it wrote a file, shows the person plain lines
-// (no "[tool]", no absolute path, no Crewlet call, which its nested steps
+// (no tag, no absolute path, no Crewlet call, which its nested steps
 // already list), and hands the model a report with every path cut to the file's
 // name. Mutation: keep the transcript verbatim, or fence the report as the run
 // wrote it, and this fails.
@@ -771,9 +771,11 @@ func TestNoHostPathReachesAPersonFromDeepWork(t *testing.T) {
 	t.Parallel()
 	box := "/private/tmp/claude-501/review-engine/data/assistant-boxes/7f3a/outbox"
 	script := evals.NewDeepScript(evals.DeepRunScript{
-		Lines: []string{"[tool] mcp__crewlet__list_artifacts", "[tool] Write: " + box + "/report.md",
-			"[tool] ToolSearch: select:Read,Write", "I saved the draft in " + box + "/report.md.",
-			"[tool] Bash: rsvg-convert logo.svg -o logo.png → error: not found"},
+		Lines: []string{"[tool 1] mcp__crewlet__list_artifacts", "[failed 1 40ms] denied",
+			"[tool 2] Write: " + box + "/report.md", "[ok 2 3ms]", "[tool 3] ToolSearch: select:Read,Write",
+			"I saved the draft in " + box + "/report.md.",
+			"[tool 4] Bash: rsvg-convert logo.svg -o logo.png", "[input 4] rsvg-convert logo.svg -o logo.png",
+			"[failed 4 120ms] not found"},
 		Files:  []assistant.DeepFile{{Name: "report.md", Content: []byte("# Report\n")}},
 		Report: "I wrote the full report to " + box + "/report.md.", Input: 900, Output: 100})
 	f := deepRig(t, script, startDeep("Review the brand"), evals.Say("Done."))
@@ -793,8 +795,8 @@ func TestNoHostPathReachesAPersonFromDeepWork(t *testing.T) {
 		t.Fatal("the run showed no activity at all")
 	}
 	for _, line := range shown {
-		for _, internal := range []string{"[tool]", "/private/", "assistant-boxes", "mcp__",
-			"ToolSearch", "select:"} {
+		for _, internal := range []string{"[tool", "[input", "[ok", "[failed", "/private/", "assistant-boxes",
+			"mcp__", "ToolSearch", "select:", "rsvg", "denied"} {
 			if strings.Contains(line, internal) {
 				t.Errorf("a person reads %q, which carries %q", line, internal)
 			}

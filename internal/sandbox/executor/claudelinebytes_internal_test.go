@@ -33,14 +33,8 @@ func wholeLineBytes(raw []byte) threadBytes {
 }
 
 // slotKeyAt is where, in raw, a record's line, the 36 bytes every large-file
-// reader keys it by begin, -1 where they key it by none: the 36 bytes after
-// the first `"uuid":"` they follow with `","timestamp":"`, of several such the
-// first at the line's object depth one ([depthOneOf]), else the last of them,
-// and where none is, after the first `"uuid":"` (2.1.322's pa in ike
-// @293793061, keyed alike in F1t @293788207; 2.1.310's vs in HMt @247176207,
-// alike in FPt @247171899), none where fewer than 36 bytes follow it. A reader
-// reads those bytes as latin1 and compares them as written, so only the same
-// bytes are the same uuid. The matches are read as bytes.Index finds them, each
+// reader keys it by begin, -1 where none ([threadBytes.KeyedBy] has the rule;
+// [depthOneOf] the depth). Matches are read as bytes.Index finds them, each
 // search resuming past the last match's key: of `"uuid":"uuid":"` the second
 // is never one.
 func slotKeyAt(raw []byte) int {
@@ -115,21 +109,17 @@ func depthOneOf(raw []byte, at []int) int {
 }
 
 // A LINE'S BYTES ARE READ AS THE WHOLE LINE READS THEM, in pieces of any size
-// ([lineBytes]): every fact equal to what the whole-line functions read of the
-// line ([wholeLineBytes]), whatever the pieces it is written in, and each
-// reader of the head answering on the head as on the whole line: the
-// dispatch's sidechain head ([sidechainHeaded]), the parent's end
-// ([slotHead]) for null and for the 38 bytes after the prefix, named or not,
-// and a subagent's head at every end; and KeyedBy for the 36 bytes after
-// every `"uuid":"`, for an id of no key and for none. The lines are every line
-// of every Claude Code thread under testdata, the layer's own records and the
-// hard cases ([byteFactLines]), each written in pieces of 1, 2, 7, 8, 13, 51
-// and 65,536 bytes and in pieces of random sizes.
+// ([lineBytes]): every fact equals [wholeLineBytes]'s, and each reader of the
+// head answers on the head as on the whole line ([sidechainHeaded]; [slotHead]
+// for null and for the 38 bytes after the prefix, named or not; a subagent's
+// head at every end); KeyedBy answers alike for the 36 bytes after every
+// `"uuid":"`, for an id of no key and for none. The lines are every Claude Code
+// thread's under testdata, the layer's own records and [byteFactLines]' hard
+// cases, in pieces of 1, 2, 7, 8, 13, 51 and 65,536 bytes and of random sizes.
 //
-// Mutation: take a `"uuid":"` 7 bytes past the last taken rather than 8;
-// read the depth after stepping a quote; drop the comparisons a piece ends
-// inside; pass over a quote a backslash escapes; or hold a head a byte short
-// of the longest head any reader reads.
+// Mutation: take a `"uuid":"` 7 bytes past the last taken rather than 8; read
+// the depth after stepping a quote; drop the comparisons a piece ends inside;
+// skip an escaped quote; or hold a head a byte short of the longest read.
 func TestALinesBytesAreReadAsTheWholeLineReadsThem(t *testing.T) {
 	t.Parallel()
 	if lineHeadBytes != len(slotPrefix)+slotKeyLen+2+len(slotSidechainHead) {

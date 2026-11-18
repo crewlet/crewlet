@@ -10,52 +10,34 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE CODE FEED: a seat hears about a change by a WAKE DERIVED FROM THE LOG
-// (ADR-0012), never published by the writer that decided the record. The code
-// log's own fleet-wide consumer ([FeedGroup]) reads every committed record on
-// whichever data node wins it; the translator here decides whether a record
-// can wake a seat at all, the parser ([Parser]) decides which seats from the
-// routing snapshot the record carries ([ChangeRouting]), and the notification
-// spine publishes each wake to its seat's inbox. The applier's notice rows
-// (apply_notices.go) are the record of whom a record concerned; the wakes are
-// the seats among them the company still employs, and nothing else.
-//
-// # Only seats are woken
-//
-// A person is never queue-woken: their code inbox is composed from the notice
-// rows the applier writes, which is where a person reads. So a record whose
-// routing tells only persons — an answer to a person's finding, a merge of a
-// person's change — is no delivery at all, and the feed acknowledges it.
-//
-// # A change's wake names its work item
-//
-// A change implements one work item (ADR-0097), and its routing carries it, so
-// every wake about the change names it ([Prompt.WorkItem]) and the turn the
-// wake starts is charged to it (ADR-0022's trigger rule). No change row
-// carries spend of its own: spend is the turn's, charged to the item.
+// THE CODE FEED: a seat hears about a change by a wake derived from the log
+// (ADR-0012), never published by the record's writer. The log's fleet-wide
+// consumer ([FeedGroup]) reads every committed record; the translator here
+// decides whether a record can wake a seat, the parser ([Parser]) which seats,
+// from the routing the record carries ([ChangeRouting]). The applier's notice
+// rows (apply_notices.go) record whom a record concerned; the wakes are the
+// seats among them the company still employs. A person is never queue-woken
+// (their inbox is the notice rows), so a record routed only to persons is
+// acknowledged. Every wake about a change names its work item
+// ([Prompt.WorkItem], ADR-0097) and its turn is charged to it (ADR-0022): a
+// change carries no spend. The package doc's "A change wakes the seats its
+// records concern" has the rest.
 
 // FeedGroup is the code log's wake consumer: the fleet-wide group the code
 // feed runs as ([Domain.FeedGroup]) and the one the log's trim waits on.
 //
-// STABLE FOR THE DEPLOYMENT'S LIFE. The fleet's position on the log IS this
-// consumer, and a renamed group is a fresh consumer that starts from the log's
-// first retained record: every change the log still holds would come back as a
-// wake, which only the change feed's claim and the derived wake id collapse,
-// and only inside their own windows. Reserved by Gitlet's first
-// milestone and never renamed.
-//
-// The group, not the broker's consumer name: the durable consumer is named
-// from the group and the stream together (`<group>__CREWLET_CODE_LOG__<digest>`).
+// Never renamed: the fleet's position on the log IS this consumer, and a
+// renamed group starts from the log's first retained record, re-waking every
+// change the log holds beyond what the feed's claim and the derived wake id
+// collapse inside their windows. It is the group, not the durable consumer's
+// name (`<group>__CREWLET_CODE_LOG__<digest>`).
 const FeedGroup = "crewlet-code-feed"
 
-// RecordID is the identity one record about a change is told by: its operation
-// id, else its position on the log — never an id minted by whoever reads it,
-// which would differ between two nodes reading one record. ONE RULE for the
-// two readers that key on a record: the applier's notice row
-// (code_notifications.record_id) and the feed's claim, and through
-// [NoticeID] — the record and the change a notice is about — the wake ids
-// ([changefeed.WakeID]), so a notice and the wake it records name one record
-// and one change.
+// RecordID is the identity a record about a change is told by: its operation
+// id, else its log position — never an id minted by its reader, which would
+// differ between nodes. The applier's notice row (code_notifications.record_id),
+// the feed's claim and, through [NoticeID], the wake ids ([changefeed.WakeID])
+// all key on it, so a notice and its wake name one record and one change.
 func RecordID(opID string, at statelog.Position) string {
 	if opID != "" {
 		return opID
@@ -64,12 +46,9 @@ func RecordID(opID string, at statelog.Position) string {
 }
 
 // Translator decides whether a committed code record can wake a seat, and
-// hands the parser the whole record.
-//
-// THE WHOLE RECORD TRAVELS, as the tracker's does: the node that wins a feed
-// message is rarely the one running the seat it wakes and is often behind on
-// its own rows, and the record carries the routing its writer decided, so the
-// parser routes without reading a row.
+// hands the parser the whole record: the node that wins a feed message is
+// often behind on its own rows, so the parser routes from the routing the
+// record carries, never from a row.
 type Translator struct{}
 
 // NewTranslator builds the code log's feed translator.
@@ -81,31 +60,17 @@ func (t *Translator) Source() changefeed.Source {
 	return changefeed.Source{Name: Source, Group: FeedGroup}
 }
 
-// Translate decides whether rec wakes anybody.
+// Translate decides whether rec wakes anybody. A record that wakes nobody is
+// acknowledged, since one returned for having nothing to say comes back for
+// ever and holds every wake behind it: one [wakesAnybody] turns away off the
+// envelope, undecoded; one carrying no routing (from before changes, a push
+// moving no change, a compaction); and one routed only to its own actor or to
+// persons.
 //
-// # The ways a record wakes nobody, each an ACK, and the one deferral
-//
-// A record on a subject no change is about — a name, an eviction, a
-// generation, the company's activation, a person's marks, the barrier and the
-// trimmed record — is machinery or bookkeeping, and so is every record of a
-// repository's checks but an attempt's ending: its queue, its start, a
-// dispatch and a sweep carry no routing, and are acknowledged off the
-// envelope, never decoded ([wakesAnybody]), as is a repository's viewed key,
-// which routes nobody. A record about a repository or a change that carries
-// no routing is one that concerns nobody: every record
-// from before changes existed, a push that moves no change, a compaction. And
-// a record whose routing tells only its own actor, or only persons, has no
-// seat to wake.
-//
-// Each is a DECISION, and a decision is handling: acknowledged rather than
-// returned, because a record returned for having nothing to say comes back for
-// ever and every wake behind it waits.
-//
-// A record this build cannot decode past its envelope is NOT one: it is a
-// newer build's, whose routing rules this node does not have, so it has
-// decided nothing about it. It is DEFERRED to a peer on that build
-// ([changefeed.Defer]), never acknowledged: the feed's consumer is the
-// fleet's, so a record acked here is one no peer would ever see (#838).
+// A record this build cannot decode past its envelope is a newer build's,
+// whose routing rules this node lacks: it is DEFERRED to a peer
+// ([changefeed.Defer]), never acknowledged, since the consumer is the fleet's
+// and a record acked here is one no peer ever sees (#838).
 func (t *Translator) Translate(_ context.Context, rec changefeed.Record) (changefeed.Delivery, bool, error) {
 	envelope, err := DecodeEnvelope(rec.Payload)
 	if err != nil {
@@ -116,12 +81,9 @@ func (t *Translator) Translate(_ context.Context, rec changefeed.Record) (change
 	}
 	record, err := Decode(rec.Payload)
 	if err != nil {
-		// A RECORD FROM A NEWER BUILD. Its envelope decoded, so this node
-		// knows what it is about and that it cannot read its rules — and
-		// waking somebody from a payload it cannot decode would be inventing
-		// a notification. It is DEFERRED to a peer on the newer build, never
-		// answered "no wake": the feed's consumer is the fleet's, so a
-		// record this node acked is one no peer would ever see (#838).
+		// A newer build's record: waking anybody from a payload this node
+		// cannot read would invent a notification, so it defers (see
+		// Translate).
 		var future *ErrFutureVersion
 		if errors.As(err, &future) {
 			return changefeed.Delivery{}, false, changefeed.Defer(changefeed.DeferNewerRecord, err)
@@ -130,9 +92,9 @@ func (t *Translator) Translate(_ context.Context, rec changefeed.Record) (change
 	}
 	payload, err := DecodeMutation(record)
 	if err != nil {
-		// A PAIR THIS BUILD DOES NOT KNOW at a version it reads: the applier
-		// stops on it too, so the feed waits beside it rather than
-		// acknowledging a record nobody here has applied.
+		// A pair this build does not know at a version it reads: the applier
+		// stops on it too, so the feed waits beside it rather than ack a
+		// record nobody here has applied.
 		return changefeed.Delivery{}, false, fmt.Errorf("gitlet: read the payload on %s: %w", rec.Key, err)
 	}
 	if !wakesASeat(Concerns(RoutingsOf(payload))) {
@@ -146,22 +108,14 @@ func (t *Translator) Translate(_ context.Context, rec changefeed.Record) (change
 	return changefeed.Delivery{Body: body, ID: RecordID(record.OpID, at), Actor: routedActor(payload)}, true, nil
 }
 
-// wakesAnybody reports a record, by its envelope, that can carry a routing: a
-// repository's (its changes' lifecycle, the pushes that merge or open one, and
-// its queues' merges, ejections, landings and broken landings), a change's
-// (its conversation and its home's facts), and of a repository's checks an
-// attempt's ending alone (a failed check of a change's head:
-// CheckFinished.Routing). Every other kind, and every other op of the checks,
-// is named by its absence, because a new one routes nobody until its records
-// carry a routing and this names it. A repository's viewed key routes nobody
-// either, so the record that carries a key is acknowledged undecoded.
-//
-// BY THE OP TOO for the checks, the one kind most of whose records route
-// nobody: every attempt is queued, and every one a runner takes is started,
-// and a queued attempt carries its whole definition, so decoding those only
-// to find no routing would parse records the checks subject carries for every
-// attempt for nothing. An ending is decoded, since whether it failed a head is
-// in its payload.
+// wakesAnybody reports, by its envelope, a record that can carry a routing:
+// any repository record but its viewed key, any change record, and of the
+// checks only an attempt's ending (a failed check of a change's head:
+// CheckFinished.Routing). Every other kind is named by its absence, so a new
+// one routes nobody until its records carry a routing and this names it. The
+// checks are filtered by op because most of their records route nobody: every
+// attempt is queued and started, a queued one carrying its whole definition,
+// and decoding those would find nothing.
 func wakesAnybody(kind ObjectKind, op OpKind) bool {
 	switch kind {
 	case KindRepo:
@@ -189,9 +143,9 @@ func routedActor(payload any) string {
 	return actor
 }
 
-// recordBody renders a record as the map a parser reads, THROUGH THE DOMAIN'S
-// OWN ENCODER, so the body is exactly the record — fields this build carries
-// and does not understand included.
+// recordBody renders a record as the map a parser reads through the domain's
+// own encoder, so the body is exactly the record, fields this build carries
+// but does not understand included.
 func recordBody(record MutationRecord) (map[string]any, error) {
 	data, err := Encode(record)
 	if err != nil {
@@ -204,10 +158,10 @@ func recordBody(record MutationRecord) (map[string]any, error) {
 	return body, nil
 }
 
-// FeedSource opens the code log's own durable consumer — a SECOND consumer
-// over the stream the applier reads, at its own position, so a wake is derived
-// by something that outlives the writer. A seam the engine fills, because
-// which broker the log lives on is the engine's business.
+// FeedSource opens the code log's own durable consumer: a second consumer over
+// the stream the applier reads, at its own position, so a wake is derived by
+// something that outlives the writer. The engine fills it, since which broker
+// holds the log is the engine's business.
 type FeedSource struct {
 	Log DomainConsumer
 }

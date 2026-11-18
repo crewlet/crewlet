@@ -19,9 +19,9 @@ import (
 
 // The metadata keys the prompt reads back.
 //
-// NAMED CONSTANTS because the parser writes them and the prompt reads them,
-// and a typo in either is a field that silently renders empty — which looks
-// exactly like a change that had nothing to say.
+// NAMED CONSTANTS because the parser writes them and the prompt reads them: a
+// typo in either silently renders an empty field, which looks exactly like a
+// change that had nothing to say.
 const (
 	MetaTaskKey = "item_key"
 	MetaTaskID  = "item_id"
@@ -39,81 +39,64 @@ const (
 	MetaExcerpt      = "excerpt"
 	MetaLate         = "late"
 
-	// MetaDeltas is WHAT MOVED, already rendered — one `field: from → to`
-	// line per value delta and one `field: added …; removed …` line per set
-	// the record carries, written by [changedText].
-	//
-	// RENDERED AT THE PARSE rather than carried typed, because the spine's
-	// envelope is a string map and this is the only side of the boundary
-	// where [Notify.Fields] still exists: a prompt is handed a
-	// [notify.Inbound] and has no route back to the record. Prose in
-	// metadata is what [MetaExcerpt] already is.
+	// MetaDeltas is WHAT MOVED, already rendered by [changedText]: one
+	// `field: from → to` line per value delta and one `field: added …; removed …`
+	// line per set. Rendered here because the envelope is a string map and
+	// [Notify.Fields] exists only on this side: a prompt is handed a
+	// [notify.Inbound] with no route back to the record.
 	MetaDeltas = "deltas"
 
-	// MetaMoved is WHAT KINDS OF CHANGE the write made: every kind whose
-	// field it moved ([Notify.movedKinds]), whatever kind its record ended
-	// with, comma-separated in [ChangeKinds] order, and absent where it
-	// moved none of them. The prompt says what happened by it, as the
-	// router decides who hears it by the same deltas ([Notify.moved]): a
-	// hand-off written with a status is a `status` record whose wake names
-	// `assignee` here too, so its new holder reads that the task was
-	// assigned to them and the change line names both moves (#953).
+	// MetaMoved is WHAT KINDS OF CHANGE the write made: every kind whose field
+	// it moved ([Notify.movedKinds]), whatever kind its record ended with,
+	// comma-separated in [ChangeKinds] order, absent where it moved none. The
+	// prompt says what happened by it, as the router decides who hears by the
+	// same deltas ([Notify.moved]): a hand-off written with a status is a
+	// `status` record whose wake names `assignee` here too, so its new holder
+	// reads that the task was assigned to them.
 	MetaMoved = "moved"
 
-	// MetaObject and MetaObjectID are WHAT the change was about, and they
-	// exist because one of the two routable kinds is not a task. The
-	// prompt keys its opener on the object rather than on the change kind:
-	// "somebody wrote your priority list" is a different sentence from "a
-	// task you are assigned to", and a builder that had only the kind
-	// would have to infer the noun from a switch that grows with every
-	// kind.
+	// MetaObject and MetaObjectID are WHAT the change was about, since one of
+	// the two routable kinds is not a task. The prompt keys its opener on the
+	// object, not the change kind: "somebody wrote your priority list" is not "a
+	// task you are assigned to", and inferring the noun from the kind would take
+	// a switch that grows with every kind.
 	MetaObject   = "object"
 	MetaObjectID = "object_id"
 
-	// MetaVia is WHY this seat is being told, and it is not decoration:
-	// "you were mentioned" and "you are watching this" ask for different
-	// things, and the prompt renders them as an ask and as news.
+	// MetaVia is WHY this seat is being told: the prompt renders "you were
+	// mentioned" as an ask and "you are watching this" as news.
 	MetaVia = "routed_via"
 
-	// MetaCommentID is the comment the change carried — for an ask, the
-	// id the answer names in `answers`, which is what lets the prompt
-	// write the answering call out whole rather than leaving the seat to
-	// find the id in a thread read.
+	// MetaCommentID is the comment the change carried: for an ask, the id an
+	// answer names in `answers`, so the prompt writes the answering call out
+	// whole rather than leaving the seat to find it in a thread read.
 	MetaCommentID = "comment_id"
 
-	// MetaDecision is the [Decision] a new ask carries, as JSON: the
-	// question, the options and what the asker recommends. JSON rather
-	// than flattened keys because the spine's envelope is a string map
-	// and a decision is a structure, and the prompt is its one reader.
+	// MetaDecision is the [Decision] a new ask carries (question, options,
+	// recommendation) as JSON: the envelope is a string map, a decision is a
+	// structure, and the prompt is its one reader.
 	MetaDecision = "decision"
 
-	// MetaChoice, MetaQuestion and MetaInform are the [AnsweredDecision]
-	// an answer closed: the option it chose (a [DecisionOption] as JSON,
-	// absent for an answer in prose), the question it answered, and the
-	// channel the asker said it would report the outcome in (an [Inform]
-	// as JSON). They are what the asker's wake renders — which choice was
-	// made by its label, and where it promised to say so.
+	// MetaChoice, MetaQuestion and MetaInform are the [AnsweredDecision] an
+	// answer closed: the chosen option (a [DecisionOption] as JSON, absent for a
+	// prose answer), the question, and where the asker promised to report the
+	// outcome (an [Inform] as JSON). The asker's wake renders them.
 	MetaChoice   = "choice"
 	MetaQuestion = "question"
 	MetaInform   = "inform"
 )
 
-// Parser turns a mutation record into the notifications it implies.
+// Parser turns a mutation record into the notifications it implies; it
+// implements [notify.Parser].
 //
-// It implements [notify.Parser]. EVERYTHING IT NEEDS IS IN THE PAYLOAD: the
-// record carries its own routing snapshot, so the node that wins a delivery
-// routes without reading rows it may be behind on.
-//
-// # What it adds to [Candidates], which does the actual deciding
-//
-// Three things, and only three: it turns a decoded record into the candidate
-// set, it asks the party registry whether each handle is still a seat, and it
-// renders what survives as the spine's own shape. Every rule about WHO lives
-// where it can be exercised without a registry, a webhook or an organization:
-// the eighteen reasons and their precedence in recipients.go, the mute in the
-// snapshot wake.go forms, and the rule the reasons are applied by — one reason
-// per handle, the fallback chain, the post-filter — in internal/routing, which
-// every native domain shares.
+// The record carries its own routing snapshot, so the node that wins a delivery
+// routes without reading rows it may be behind on. The parser only decodes the
+// record into [Candidates], asks the party registry whether each handle is
+// still a seat, and renders the survivors in the spine's shape. Every rule
+// about WHO lives where it is testable without a registry: the reasons and
+// their precedence in recipients.go, the mute in wake.go's snapshot, and the
+// one-reason-per-handle rule, fallback chain and post-filter in
+// internal/routing, which every native domain shares.
 type Parser struct {
 	logger *slog.Logger
 }
@@ -144,20 +127,16 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 		return nil, err
 	}
 	if record.Notify == nil {
-		// A RECORD NOBODY ANNOUNCED reaching the parser at all means the
-		// feed's own decision was bypassed — a replayed body, a test, a
-		// second producer. Answering "nobody" rather than erroring keeps
-		// the two layers independent: the feed decides what to relay and
-		// this decides who it is for, and neither depends on the other
-		// having decided the same way.
+		// A RECORD NOBODY ANNOUNCED means the feed's decision was bypassed (a
+		// replayed body, a test, a second producer). Answering "nobody" rather than
+		// erroring keeps the layers independent: the feed decides what to relay,
+		// this decides who it is for.
 		return nil, nil
 	}
 	if !record.Subject.Kind.Routable() {
-		// A PROJECT, A CATALOGUE, A VIEW OR A TAG SET is read from its
-		// own surface rather than woken into somebody's inbox, and a
-		// counter or an alias has no audience at all. See
-		// [ObjectKind.Routable] for why the set is closed rather than a
-		// negative test.
+		// A PROJECT, A CATALOGUE, A VIEW OR A TAG SET is read from its own surface
+		// rather than woken into an inbox, and a counter or an alias has no
+		// audience. [ObjectKind.Routable] says why the set is closed.
 		return nil, nil
 	}
 
@@ -202,11 +181,10 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 		out = append(out, notify.Routed{
 			Inbound: inbound,
 			To:      notify.Recipient{Handle: c.Handle},
-			// DERIVED, so a redelivery is recognisable as one. The
-			// feed's claim is the first dedupe layer and it FAILS OPEN
-			// — a coordination store that cannot be reached must not
-			// stop notifications — so this is what catches what slips
-			// through, in the inbox and in the completion ledger.
+			// DERIVED, so a redelivery is recognisable: the feed's claim fails
+			// open (an unreachable coordination store must not stop
+			// notifications), and this catches what slips through, in the inbox
+			// and the completion ledger.
 			WakeID: changefeed.WakeID(record.OpID, c.Handle),
 			// AND STAMPED WITH THE RECORD'S OWN INSTANT, which every copy
 			// of this wake carries — see [notify.Routed.WakeAt].
@@ -218,11 +196,10 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 
 // registryHas narrows the party registry to the one question routing asks.
 //
-// A HANDLE THAT IS NO LONGER A SEAT is somebody who left — a changed handle
-// included, which is a removed seat (ADR-0013). It is dropped rather than
-// routed, because a notification addressed to nobody is one nothing reports.
-// A nil registry admits everybody, which is the honest answer for a deployment
-// with no organization loaded yet.
+// A HANDLE THAT IS NO LONGER A SEAT (a changed handle is a removed seat,
+// ADR-0013) is dropped, since a notification addressed to nobody is one
+// nothing reports. A nil registry admits everybody: no organization is loaded
+// yet.
 func registryHas(reg *notify.Registry) func(string) bool {
 	if reg == nil {
 		return nil
@@ -235,26 +212,19 @@ func registryHas(reg *notify.Registry) func(string) bool {
 
 // inbound is the notification every recipient's copy is made from.
 //
-// # Why the task id is the SNAPSHOT's and not the subject's
-//
-// One of the two routable kinds is not a task, and on it the subject's id is a
-// person's handle. Writing that into `item_id` would hand the prompt a pointer
-// that `get_work_item` cannot resolve — and the prompt would render a "read
-// this task first" block naming something that is not a task, which costs the
-// seat a round and a failed tool call to discover.
-//
-// So the task fields come from the SNAPSHOT, which carries a task only when
-// the wake is genuinely about one: a `prioritised` wake names the task that
-// reached the top of somebody's list, and a person's own bookkeeping names
-// none.
+// The task fields come from the SNAPSHOT, not the subject: on the routable
+// kind that is not a task the subject's id is a person's handle, which
+// `get_work_item` cannot resolve, so the prompt would send the seat to read
+// something that is not a task. The snapshot carries a task only when the wake
+// is about one: a `prioritised` wake names the task that reached the top of
+// somebody's list, and a person's own bookkeeping names none.
 func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 	snapshot := record.Notify.Snapshot
 	metadata := map[string]string{
-		// WHO MADE THE CHANGE, under the one actor key every parser
-		// stamps ([notify.ActorField]), so the spine's self-action guard
-		// covers this source as it covers every other — the second face of
-		// the rule [Route] already applies here, and one that agrees with
-		// it by asking the same reason ([Prompt.WakesActor]).
+		// WHO MADE THE CHANGE, under the actor key every parser stamps
+		// ([notify.ActorField]), so the spine's self-action guard covers this
+		// source too, agreeing with [Route] by asking the same reason
+		// ([Prompt.WakesActor]).
 		notify.ActorField: record.Actor,
 		MetaTaskKey:       snapshot.Key,
 		MetaTaskID:        snapshot.TaskID(record.Subject),
@@ -270,12 +240,8 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 	if record.Notify.Excerpt != "" {
 		metadata[MetaExcerpt] = record.Notify.Excerpt
 	}
-	// WHAT MOVED, not only that something did. The record has carried
-	// these deltas since the first wake and nothing rendered them, so a
-	// seat woken by a status change was told "The status changed by ada."
-	// and had to spend a tool round to learn what it changed TO — and the
-	// side it moved FROM is not on the task at all, so that round could
-	// never recover it.
+	// WHAT MOVED, not only that something did: the side it moved FROM is not on
+	// the task, so no tool round could recover it.
 	if text := changedText(record.Notify.Fields, record.Notify.FieldsOmitted); text != "" {
 		metadata[MetaDeltas] = text
 	}
@@ -304,26 +270,21 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 		}
 	}
 	if record.Notify.Late {
-		// THE FLAG A READER NEEDS to understand why they are hearing
-		// about something that happened hours ago: it is a repair, not
-		// the change itself.
+		// THE FLAG A READER NEEDS to see why they hear of something hours old:
+		// it is a repair, not the change itself.
 		metadata[MetaLate] = "true"
 	}
 	if snapshot.KeyCollision && metadata[MetaTaskID] != "" {
-		// THE KEY IS NOT THIS TASK'S ADDRESS: it opens the task that
-		// claimed it first, and the prompt has to send the seat to the id
-		// instead. Only beside an id, which is the address it stands in
-		// for — a flag with no id to go to would leave the prompt nothing
-		// to name.
+		// THE KEY IS NOT THIS TASK'S ADDRESS: it opens the task that claimed it
+		// first, so the prompt sends the seat to the id instead. Only beside an
+		// id, or the flag would leave the prompt nothing to name.
 		metadata[MetaKeyCollision] = "true"
 	}
 	body, source := wakeBody(record)
 	if body != "" {
-		// WHAT THE BODY IS AND WHO WROTE IT, for the fence the spine puts
-		// it in (ADR-0040): every word of a change's text is its author's
-		// — their comment, the description they filed, the reason they
-		// gave — and the record states the kind of author they are, which
-		// is what names them when the roster no longer holds the handle.
+		// WHAT THE BODY IS AND WHO WROTE IT, for the spine's fence (ADR-0040):
+		// every word is the author's, and the record's author kind is what names
+		// them once the roster no longer holds the handle.
 		metadata[notify.BodySourceField] = string(source)
 		metadata[notify.BodyAuthorField] = record.Actor
 		metadata[notify.BodyAuthorKindField] = string(record.ActorKind)
@@ -335,36 +296,26 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 		Subject:   subjectLine(snapshot, record.Subject, record.Notify.Kind),
 		Body:      body,
 		Metadata:  metadata,
-		// AND WHO THE SENDER IS, by the record's own kind: the actor is a
-		// seat's handle, a credential's login or a node's name, and only the
-		// kind tells a turn this wakes whether a colleague is asking or
-		// nobody is (notify.FirstPartyWriter); and whom an agent wrote it
-		// for, which the turn this wakes works for (ADR-0109).
+		// WHO THE SENDER IS, by the record's own kind: the actor may be a seat's
+		// handle, a credential's login or a node's name, and only the kind tells
+		// the woken turn whether a colleague is asking or nobody is
+		// (notify.FirstPartyWriter); and whom an agent wrote it for, which that
+		// turn works for (ADR-0109).
 		Writer: notify.FirstPartyWriter(iam.ActorKind(record.ActorKind), record.Actor, record.ActorApps,
 			record.WorkingFor),
 	}
 }
 
 // wakeBody is what a woken seat reads of a change: the WHOLE text the card's
-// excerpt was cut from, wherever the record carries it.
+// excerpt was cut from, wherever the record carries it, and what that text is.
 //
-// The card excerpt is a preview for a list of notices, cut at [MaxExcerpt] and
-// marked, and it points at the whole. The wake prompt is not a list: it is the
-// one message a seat ACTS on, and a comment cut at six hundred bytes there is
-// a comment that ended there — the seat answers the first paragraph of a
-// review and never reads the "but" in the second. The record already carries
-// the comment, or the created task, whole in its payload, so the prompt is
-// given that.
-//
-// RECOGNISED BY DERIVATION, never guessed: the whole text is used exactly when
-// the record's excerpt is what [excerptOf] makes of it. An excerpt somebody
-// stated — a hand-off's reason, a purge's line — is not derived from the
-// payload, does not match, and is shown as the text it is.
-//
-// AND WHAT IT IS, which only this derivation knows: the comment the excerpt was
-// cut from, the description a new task was filed with, or — an excerpt nothing
-// in the payload explains — a note its author wrote about the change, which is
-// the label its fence carries ([provenance.SourceChangeNote]).
+// The excerpt, cut at [MaxExcerpt], previews a list of notices; the wake is the
+// one message a seat acts on, and a comment cut there loses the "but" in its
+// second paragraph. The whole text is used exactly when the record's excerpt is
+// what [excerptOf] makes of it: a stated excerpt (a hand-off's reason, a
+// purge's line) does not match and is shown as itself. Its source is the
+// comment, the new task's description, or else a note its author wrote about
+// the change ([provenance.SourceChangeNote]), the label its fence carries.
 func wakeBody(record MutationRecord) (string, provenance.Source) {
 	excerpt := record.Notify.Excerpt
 	if excerpt == "" {
@@ -407,10 +358,9 @@ func wakeBody(record MutationRecord) (string, provenance.Source) {
 // a create, and otherwise the note its author wrote about the change (a
 // hand-off's reason, a purge's line, a re-prioritisation's line).
 //
-// ONE RULE for every reader of an excerpt — the wake whose payload does not
-// explain its excerpt, and the activity feed, a task's history and a person's
-// inbox, which hold the excerpt and never the payload — so a change's text is
-// labelled the same wherever a seat reads it.
+// ONE RULE for every reader of an excerpt (this wake, and the activity feed, a
+// task's history and a person's inbox, which hold no payload), so a change's
+// text is labelled alike wherever a seat reads it.
 func ExcerptSource(kind ChangeKind) provenance.Source {
 	switch kind {
 	case ChangeComment, ChangeCommentEdited:
@@ -423,12 +373,10 @@ func ExcerptSource(kind ChangeKind) provenance.Source {
 
 // askedDecision is the decision a record's NEW ask carries, or nil.
 //
-// READ FROM THE RECORD'S OWN PAYLOAD, where the comment travels whole: a
-// patch's `comment`, or the question a create was filed as ([TaskCreate]) —
-// both under the same key, which is why one shape decodes either. Only on the
-// kinds that WRITE an ask: an edit re-sends the whole comment, decision
-// included, and a wake rendering the options again would ask the question
-// twice.
+// READ FROM THE PAYLOAD, where the comment travels whole: a patch's `comment`
+// or the question a create was filed as ([TaskCreate]), under the same key.
+// Only on the kinds that WRITE an ask: an edit re-sends the whole comment, and
+// rendering its options again would ask the question twice.
 func askedDecision(record MutationRecord) *decision.Decision {
 	switch record.Notify.Kind {
 	case ChangeComment, ChangeCreated:
@@ -458,15 +406,11 @@ func jsonText(value any) string {
 
 // subjectLine is the one line a recipient sees before they read anything.
 //
-// IT NAMES THE OBJECT, because a line that said "a task" for a person's own
-// priority list would be the first false sentence a recipient reads — and the
-// subject is also what a digest coalesces on, so a wrong noun there is wrong
-// in every summary too.
-//
-// AND IT NAMES THE TASK BY ITS ADDRESS ([Snapshot.Address]) — the id where
-// another task claimed its key first — because it is the first reference the
-// seat is shown, under **Task:**, and a key there is one a seat types into
-// get_work_item and lands on the claimant with.
+// IT NAMES THE OBJECT, since "a task" for a person's priority list would be
+// false, and digests coalesce on the subject. AND THE TASK BY ITS ADDRESS
+// ([Snapshot.Address]), the id where another task claimed its key first: it
+// is the first reference a seat is shown, and a key there lands it on the
+// claimant.
 func subjectLine(snapshot Snapshot, subject Subject, kind ChangeKind) string {
 	key := snapshot.Address(subject)
 	if key == "" {
@@ -491,9 +435,8 @@ func objectLabel(subject Subject) string {
 
 // withVia copies the metadata with this recipient's own reason on it.
 //
-// A COPY, because every recipient of one record gets a different reason and
-// they share the map otherwise — writing in place would give all of them
-// whichever one was rendered last.
+// A COPY: recipients of one record share the map, so writing in place would
+// give all of them the last reason rendered.
 func withVia(base map[string]string, via string) map[string]string {
 	out := make(map[string]string, len(base)+1)
 	for k, v := range base {
@@ -505,18 +448,14 @@ func withVia(base map[string]string, via string) map[string]string {
 
 // recordFromBody reads the record back out of a delivery.
 //
-// THROUGH JSON AND THEN THE RECORD'S OWN DECODER. The body arrives as a map
-// because that is what every other parser's webhook carries, and re-marshalling
-// it is what lets the record's own two-pass decode run — which is what makes a
-// body relayed by a build that did not understand every field still yield
-// everything the writer wrote.
+// THROUGH JSON AND THEN [Decode]: the body arrives as a map, as every parser's
+// webhook does, and re-marshalling lets the record's two-pass decode keep what
+// a relaying build did not understand.
 //
-// A RECORD AT A VERSION A NEWER BUILD WRITES IS DEFERRED to a peer on that
-// build ([notify.Defer]), never refused as a payload nobody can read: the
-// notify service acks what a parser refuses, on the ONE group every node takes
-// inbound mail from, so the wake the newer node's feed relayed was gone for
-// the whole fleet when an older node won its delivery during a roll
-// (crewlet#993). It is the feed's own future-version arm ([Translator]), met
+// A RECORD AT A NEWER VERSION IS DEFERRED to a peer on that build
+// ([notify.Defer]), never refused: the notify service acks a refusal on the
+// ONE group every node takes inbound mail from, so the wake would be lost to
+// the fleet during a roll. It is the feed's future-version arm ([Translator])
 // on this side of the relay.
 func recordFromBody(body map[string]any) (MutationRecord, error) {
 	raw, err := json.Marshal(body)

@@ -12,13 +12,13 @@ import (
 	"github.com/crewlet/crewlet/internal/coord/memory"
 )
 
-// THE TURN'S LEADS BESIDE ITS ROW (leads.go, coordstore.go): the part that keeps
-// them names the run it is of, the row names the run and counts the leads the
-// part has taken, the attach takes a brief's own leads into it before it writes
-// the row, and a resume reads them as the row expects them.
+// THE TURN'S LEADS BESIDE ITS ROW (leads.go, coordstore.go): the part names its
+// run, the row names the run and counts the leads the part took, an attach takes
+// a brief's own leads before writing the row, and a resume reads them as the
+// row expects.
 
-// stageLeads writes value as turnID's leads part whatever it holds, as a store
-// another writer used, or a removal left, would hold it.
+// stageLeads writes value as turnID's leads part unconditionally, as another
+// writer or a removal may have left it.
 func stageLeads(t *testing.T, runs coord.SandboxRuns, turnID string, value []byte) {
 	t.Helper()
 	if _, ok, err := runs.MutateSandboxRunPart(t.Context(), turnID, coord.RunLeads,
@@ -44,12 +44,11 @@ func keptAnswer(job string) KeptLead {
 }
 
 // THE RUN IS NAMED FOR ITS LEADS BY ITS CREATE, AND KEPT BY EVERY RESET. The
-// leads part outlives every relaunch as the row does, and a turn's row can be
-// removed and created again beside a part an earlier run left, so the row names
-// the run its leads are kept for: the job whose launch created it, and for a
-// row an older build created, the first job this build's relaunch opened on it.
-// Nothing renames it, a reset keeps the count of the leads its part has taken
-// too, and neither is ever the caller's to hand in.
+// part outlives every relaunch, and a row can be removed and recreated beside
+// an earlier run's part, so the row names its leads' run: the job whose launch
+// created it, or for an older build's row, this build's first relaunch on it.
+// Nothing renames it, a reset keeps the count of leads the part took, and the
+// caller hands in neither.
 //
 // Mutation: let a reset name the run every time, the create name none, or the
 // create take the caller's name, and a check goes red.
@@ -104,15 +103,13 @@ func TestTheRunIsNamedForItsLeadsByItsCreateAndKeptByEveryReset(t *testing.T) {
 	}
 }
 
-// A RESUME READS EVERY LEAD ITS ROW COUNTS, OR SAYS IT IS NOT KEPT. The row says
-// what the part beside it should hold: the run the leads are of and how many
-// the part has taken. So the read gives back the run's own part as it is, its
-// cut the leads it took and no longer keeps, and counts against the row every
-// lead the part cannot give back: none beside the row, a part short of the
-// row's count, a part of another run. A part that took more than the row counts
-// (its attach took the leads and never landed) is read whole. A row naming no
-// run (an older build's, never relaunched here) reads no part as its own. And
-// a part that does not decode is an error, never "none".
+// A RESUME READS EVERY LEAD ITS ROW COUNTS, OR SAYS IT IS NOT KEPT. The row
+// names the run and counts what its part took; the read gives back the run's
+// own part, its cut what it took and no longer keeps, and counts as cut every
+// lead the part cannot give back: no part, one short of the row's count, one
+// of another run. A part past the count (its attach took and never landed)
+// reads whole; a row naming no run (an older build's, never relaunched here)
+// reads no part as its own; a part that does not decode is an error, never "none".
 //
 // Mutation: cut by the part's count alone, read a part whatever run it names,
 // or read one that does not decode as none, and a case goes red.
@@ -171,16 +168,13 @@ func TestAResumeReadsEveryLeadItsRowCountsOrSaysItIsNotKept(t *testing.T) {
 	}
 }
 
-// A LEADS PART OF ANOTHER RUN IS REPLACED ONLY BY THE RUN ITS ROW NAMES. The
-// store may leave a part of an earlier run of the turn beside the row, and a
-// part may be one nothing can read: the take that finds either asks the row
-// whose the part should be. Where the row names the take's run, the part is
-// replaced and the take's own lead is its first. Where it names another, the
-// take is a launch of a run that ended: it writes nothing, and its attach is
-// refused, with the contract's two answers in its order, a lease the row
-// outranks the launch's by first. The one thing such a launch can leave is a
-// part where none stood, naming its ended run, which the row's next take
-// replaces (and which no reader of the row reads as its own).
+// A LEADS PART OF ANOTHER RUN IS REPLACED ONLY BY THE RUN ITS ROW NAMES. A take
+// finding an earlier run's part, or one nothing can read, asks the row whose it
+// should be. The row's own run replaces it, its lead first; any other is a
+// launch of a run that ended: it writes nothing, and its attach is refused,
+// ErrSeatNotHeld where the row's lease outranks the launch's, else
+// ErrRunEnding. All it can leave is a part where none stood, naming its ended
+// run, which the row's next take replaces and no reader of the row reads.
 //
 // Mutation: replace whatever part is there without asking the row, take into
 // another run's part, refuse the row's own run, or answer an ending where the
@@ -289,11 +283,10 @@ func TestALeadsPartOfAnotherRunIsReplacedOnlyByTheRunItsRowNames(t *testing.T) {
 }
 
 // AN ATTACH MARKS LEADS ONLY ON THE JOB THEY WERE KEPT FOR. The take comes first
-// and keeps what it took, but the marks are the job's: an attach whose brief's
-// leads name another job than the one the row names, or the row's job under
-// another run than the one the row names, marks none of them on the row and
-// moves the row's count of them none, so no job is marked with another's leads,
-// nor with leads a part of another run keeps under numbers of its own.
+// and keeps what it took, but the marks are the job's: leads naming another job
+// than the row's, or the row's job under another run, mark nothing on the row
+// and leave its count, so no job is marked with another's leads or with numbers
+// another run's part keeps.
 //
 // Mutation: mark whatever job the row names, or under whatever run, and a case
 // goes red.
@@ -305,8 +298,7 @@ func TestAnAttachMarksLeadsOnlyOnTheJobTheyWereKeptFor(t *testing.T) {
 			return BriefLeads{Run: row.LeadsRun, Job: "another-job", Own: []KeptLead{keptAnswer("another-job")}}
 		},
 		// WHERE NO PART STANDS, the take lands one under the run it names
-		// (the residual a launch of an ended run can leave) and asks the row
-		// nothing.
+		// (as a launch of an ended run can) and asks the row nothing.
 		"the row's job under another run": func(row PendingRun) BriefLeads {
 			return BriefLeads{Run: "another-run", Job: row.LaunchID, Own: []KeptLead{keptAnswer(row.LaunchID)}}
 		},
@@ -341,12 +333,11 @@ func TestAnAttachMarksLeadsOnlyOnTheJobTheyWereKeptFor(t *testing.T) {
 }
 
 // AN ATTACH MARKS THE LEADS ITS BRIEF COULD NOT READ. A relaunch whose resume
-// could not read the run's leads hands on the ones its job's record marks by
-// their numbers alone, and its brief may open with no lead of its own (a
-// replaced sign-in's carries none): the attach that names the command still
-// takes, so the job it opens marks each of them the part keeps, for a
-// continuation of its session to tell once a read answers, and counts them.
-// Numbers alone write nothing beside the row.
+// could not read the leads hands on its job's marks by number alone, and its
+// brief may carry no lead of its own (a replaced sign-in's carries none): the
+// attach still takes, so the job marks and counts each one the part keeps, for
+// a continuation of its session to tell once a read answers. Numbers alone
+// write nothing beside the row.
 //
 // Mutation: take only where the brief opened with or told a lead by name, and
 // the job marks none.
@@ -389,8 +380,7 @@ func TestAnAttachMarksTheLeadsItsBriefCouldNotRead(t *testing.T) {
 }
 
 // leadsRefused is a store whose every write of a run's leads part fails, as an
-// unreachable coordination store's would, and whose every other call is the
-// store's.
+// unreachable coordination store's would; every other call is the store's.
 type leadsRefused struct{ leadsStore }
 
 // leadsStore names the store leadsRefused embeds, whose own name is one of its
@@ -405,12 +395,12 @@ func (r leadsRefused) MutateSandboxRunPart(ctx context.Context, turnID string, p
 	return r.leadsStore.MutateSandboxRunPart(ctx, turnID, part, decide)
 }
 
-// A TAKE THE STORE CANNOT WRITE REFUSES THE ATTACH. The take comes before the
-// row's write, so refusing it starts nothing the row names, as a refused row
-// write does: the launch abandons its box. Gone on with instead, the job would
-// run with a brief that told leads the run does not keep, and a later brief to
-// a session that may lack it would tell less with nothing saying so. An attach
-// whose brief opened with no lead of its own takes nothing, and lands.
+// A TAKE THE STORE CANNOT WRITE REFUSES THE ATTACH. The take precedes the row's
+// write, so refusing it starts nothing the row names and the launch abandons
+// its box. Gone on with, the job would run on a brief telling leads the run
+// does not keep, and a later brief to a session that may lack them would tell
+// less with nothing saying so. An attach with no lead of its own takes nothing,
+// and lands.
 //
 // Mutation: log the take's failure and go on, and the row names the command.
 func TestATakeTheStoreCannotWriteRefusesTheAttach(t *testing.T) {
@@ -439,11 +429,9 @@ func TestATakeTheStoreCannotWriteRefusesTheAttach(t *testing.T) {
 }
 
 // A LEADS TAKE THAT NAMES NO RUN OR NO JOB IS REFUSED. A launch names both from
-// the row it opened, so leads that name neither are a caller's fault: taken,
-// they would land in a part no row reads as its own and mark no job, and the
-// job would run on a brief whose leads nothing keeps. The attach is refused
-// before anything is written, the part and the row as they were, and the
-// launch abandons its box as for any refused attach.
+// its row, so their absence is a caller's fault: taken, the leads would land in
+// a part no row reads and mark no job. The attach is refused before anything is
+// written, and the launch abandons its box as for any refused attach.
 //
 // Mutation: take leads that name no run or no job, and a case goes red.
 func TestALeadsTakeThatNamesNoRunOrNoJobIsRefused(t *testing.T) {
@@ -481,12 +469,11 @@ func TestALeadsTakeThatNamesNoRunOrNoJobIsRefused(t *testing.T) {
 }
 
 // A RESUME IS HANDED THE LEADS BESIDE ITS ROW, AND EVERY ONE IT CANNOT READ. The
-// coordinator reads the turn's leads inside the resume's frame, beside the log,
-// and hands them in the one request it builds; where the store cannot give them
-// back, the resume still runs, told that every lead the row counts is not kept,
-// never that there is none, and that the read failed, so the leads its job's
-// brief told are handed on by their numbers for a later read to tell: a lead
-// told again is a message the session may already show, and the brief says how
+// coordinator reads them inside the resume's frame, beside the log, into its
+// one request. Where the store cannot, the resume still runs, told the read
+// failed and every lead the row counts is not kept (never that there is none),
+// so its brief's leads are handed on by number for a later read to tell: a
+// lead told again may already show in the session, and the brief says how
 // many it cannot tell.
 //
 // Mutation: leave the leads off the request, hand an unread part on as none or

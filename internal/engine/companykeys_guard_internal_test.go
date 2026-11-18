@@ -13,15 +13,14 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
-// noEstate is the guard of a key no estate derives a value under — which is
-// what the race cases' test key is.
+// noEstate guards a key no estate derives values under, as the race cases'
+// test key is.
 func noEstate(context.Context) error { return nil }
 
 // A COMPANY KEY WITH NO GUARD IS NOT MINTED AT ALL.
 //
-// The chart's key was minted with a nil guard, which read as "mint whatever
-// happens" — so the day somebody deleted it, the next call would have minted
-// over it. A nil guard is refused by name now, and nothing is stored.
+// A nil guard would mint over a deleted key, so it is refused by name and
+// nothing is stored.
 func TestACompanyKeyWithNoGuardIsNotMinted(t *testing.T) {
 	t.Parallel()
 	fleet := coordmem.NewFleet()
@@ -37,14 +36,11 @@ func TestACompanyKeyWithNoGuardIsNotMinted(t *testing.T) {
 
 // A MISSING KEY IS JUDGED ON ROWS PROVED AGAINST THE LOG'S END, READ FIRST.
 //
-// Whether a missing blind-index key was deleted or never minted is answered by
-// the rows — an estate holding a blind had a key — and "no blind here" is an
-// ABSENCE, which proves nothing on rows that have not applied the whole log.
-// So the log's end is read BEFORE the rows are asked, and handed to them to be
-// proved against: an end that cannot be read refuses without asking, and rows
-// that cannot vouch for the end — behind, or holding a record they retained,
-// which the applier's checkpoint moves past — refuse as surely as an
-// unreadable store. The one answer that mints is "none", proved.
+// "No blind here" proves nothing on rows that have not applied the whole log,
+// so the end is read BEFORE the rows and handed to them: an unreadable end
+// refuses without asking, rows that cannot vouch for it (behind, or holding a
+// retained record) refuse like an unreadable store, and only a proved "none"
+// mints.
 func TestAMissingKeyIsJudgedOnRowsProvedAgainstTheLogsEnd(t *testing.T) {
 	t.Parallel()
 	var order []string

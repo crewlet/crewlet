@@ -47,13 +47,11 @@ roles:
 `
 
 // A SEAT'S MODEL IS SHOWN THE HEALTH TOOLS ONLY WHERE ITS ROLE CARRIES THE
-// GRANT. Every seat's registry holds them, as it holds every builtin; the
-// runner the epoch builds for a turn leaves out what the authority table
-// refuses the seat before anything is named — decided as the seat the turn
-// acts as, over the epoch's own chart — so the seat whose role does not carry
-// the grant is shown neither, and the seat whose role does is shown both. Read
-// off what the executor sends its model, because the decision is the epoch's
-// and the leaving out is the runner's, and either half alone could drop it.
+// GRANT. Every seat's registry holds them; the runner the epoch builds leaves
+// out what the authority table refuses the seat, decided as the seat the turn
+// acts as over the epoch's own chart. Read off what the executor sends its
+// model, since the decision is the epoch's and the leaving out the runner's,
+// and either half alone could drop it.
 //
 // Mutation: RunnerFor not handing the runner what withheldFrom answers, or
 // withheldFrom deciding as anybody but the seat, and the ungranted seat is
@@ -112,13 +110,9 @@ func shownTools(t *testing.T, c *Company, handle string, reg *tools.Registry) []
 	return names
 }
 
-// shownExecutor is [shownTools] and everything the executor's first run is
-// launched with beside them — its standing instructions and its brief — the
-// run launching nothing.
-//
-// THE SURFACE THE LAUNCH IS HANDED, since the executor is its harness's own
-// run: the bridge serves that surface and nothing else, so what is active on
-// it is exactly what the run may call.
+// shownExecutor is [shownTools] plus the standing instructions and brief the
+// executor's first run is launched with, the run launching nothing. The launch
+// is the surface under test: the bridge serves exactly what the run was handed.
 func shownExecutor(t *testing.T, c *Company, handle string, reg *tools.Registry) ([]string, string) {
 	t.Helper()
 	models, err := phase.NewRegistry([]phase.Entry{{Key: "only", Provider: refusingProvider{}}})
@@ -179,15 +173,14 @@ func (idleGitletNodes) CodeStatus(context.Context, builtin.CodeStatusAsk) (built
 // unreadCode is Gitlet's reads as no case asks them: registering code_status needs a reader.
 type unreadCode struct{ builtin.CodeReader }
 
-// A CODE STATUS REPORT IS ABOUT THE GITLET NODES IT ASKED, EVERY ONE: each node
-// asked is answered or named with why not; a reply from a node not asked — an
-// older build answers whatever a question names, and a Gitlet node the roster no
-// longer holds answers a question naming nobody — is dropped, since the report
-// is about the nodes a page lists; one node is one status, however often its
-// broker delivered it, and a later reply never unsays one already read; a
-// reply at a version this build does not read is named rather than read, and
-// one it cannot read at all names nobody. The coverage is complete only where
-// every node asked answered.
+// A CODE STATUS REPORT IS ABOUT THE GITLET NODES IT ASKED, EVERY ONE: each is
+// answered or named with why not; a reply from a node not asked (an older build
+// answers whatever a question names, a node off the roster a question naming
+// nobody) is dropped; one node is one status however often its broker
+// delivered it, and a later reply never unsays one already read; a reply at a
+// version this build does not read is named rather than read, and one it
+// cannot read at all names nobody. Coverage is complete only where every node
+// asked answered.
 //
 // Mutation: leave the silent nodes out of the coverage, keep a reply from a
 // node not asked, read a reply at another version, or keep a second reply
@@ -262,15 +255,12 @@ func TestACodeStatusReportIsAboutTheGitletNodesItAsked(t *testing.T) {
 	}
 }
 
-// A CODE STATUS ASK WAITS FOR EVERY GITLET NODE IT ASKED, BY NAME. A node it did
-// not ask can answer too — an older build answers whatever a question names,
-// and a draining Gitlet node, its presence given back, answers a question naming
-// nobody until its host stops — and a scatter's replies carry no sender: an
-// ask that ended at as many replies as it asked nodes ended on such a node's
-// answer before an asked one's, and the report called that node silent for its
-// whole budget. Here git-d, not asked, answers first, and git-b answers only
-// once git-d's reply has reached the asker: the ask still waits for git-b, and
-// the report is complete, with git-b's status and not git-d's.
+// A CODE STATUS ASK WAITS FOR EVERY GITLET NODE IT ASKED, BY NAME. A node not
+// asked can answer too (an older build answers whatever a question names; a
+// draining node answers a question naming nobody until its host stops), and a
+// scatter's replies carry no sender. Here git-d, not asked, answers first, and
+// git-b only once git-d's reply has reached the asker: the ask still waits for
+// git-b, and the report is complete, with git-b's status and not git-d's.
 //
 // Mutation: end the ask at as many replies as it asked nodes — git-d's answer
 // fills it, and git-b is named silent, red.
@@ -338,12 +328,11 @@ func TestACodeStatusAskWaitsForEveryGitletNodeItAsked(t *testing.T) {
 }
 
 // A GITLET NODE ANSWERS ONLY A CODE STATUS QUESTION THAT NAMES IT, OR NAMES
-// NOBODY, and carries its hot list only where the question asks for it: a page
-// of a few Gitlet nodes is answered by those few however large the fleet, none of
-// them sending a hot list the page would throw away. A question naming other
-// nodes is answered with nothing, before the node's status is read. The zero
-// question — no nodes, no without_hot — is the one every build before the two
-// fields asked, and is answered whole, hot list and all.
+// NOBODY, and carries its hot list only where asked: a page of a few nodes is
+// answered by those few, none sending a hot list the page would discard. A
+// question naming other nodes gets nothing, before the status is read. The
+// zero question (no nodes, no without_hot), which older builds ask, is answered
+// whole, hot list and all.
 //
 // Mutation: answer a question that names other nodes, or read the hot list
 // whatever without_hot says, and a case is red.
@@ -395,12 +384,11 @@ func TestAGitletNodeAnswersOnlyACodeStatusQuestionThatNamesIt(t *testing.T) {
 }
 
 // A PAGE OF CODE STATUS ASKS ITS OWN GITLET NODES AND WAITS FOR THOSE ALONE:
-// Engine.CodeStatus names the page's nodes in its question, so a Gitlet node off
-// the page reads no status and sends none, and the ask ends once the page's
-// nodes have answered — a node off the page that never answers holds up
-// nothing, where an ask of the whole fleet for every page waited its whole
-// budget on it. A page asks for no hot list it does not carry. An ask of every
-// Gitlet node names none, and each node answers it with its hot list.
+// Engine.CodeStatus names the page's nodes in its question, so a node off the
+// page reads no status and sends none, and the ask ends once the page's nodes
+// have answered, never held up by a node off the page. A page asks for no hot
+// list it does not carry; an ask of every Gitlet node names none, and each
+// answers with its hot list.
 //
 // Mutation: leave the page's nodes out of the question — git-c reads its
 // status — or wait out the budget rather than end at the page's last answer —
@@ -490,13 +478,12 @@ func TestAPageOfCodeStatusAsksAndWaitsForItsOwnGitletNodesAlone(t *testing.T) {
 }
 
 // THE HEALTH TOOLS ARE OFFERED WHERE THEIR READS ARE: fleet_health wherever
-// the node reads the fleet's presence leases, which every node of a running
-// fleet does, with the requester ceiling's halves beside them, and code_status
-// on the code tools' own terms — a node serving Gitlet holds it and one
-// of a company hosting no code does not, whose fleet has no Gitlet node to ask.
-// Through the running wiring: the seat's registry is equipped at the apply,
-// and the operator's halves read the same deps. No engine, or one that runs
-// nothing, offers neither.
+// the node reads the fleet's presence leases (every node of a running fleet),
+// with the requester ceiling's halves beside them; code_status on the code
+// tools' terms, held by a node serving Gitlet and not by one of a company
+// hosting no code. Through the running wiring: the seat's registry is equipped
+// at the apply and the operator's halves read the same deps. No engine, or one
+// that runs nothing, offers neither.
 //
 // Mutation: HealthToolDeps handing Status where the code tools are not
 // offered, the leases or a code half without the requester ceiling's halves,

@@ -8,18 +8,16 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// A WEEKLY SCAN WEIGHS ONLY WHAT ARRIVED A GRACE AGO, EARLIEST FIRST: on the
-// maintainer's own schedule, the files an expunge may take — and so the files
-// its scan weighs — are those whose rows' newest content arrived at or before
-// the instant (gitlet.PackRow.Arrived), a file judged by the latest of its rows,
-// so a part that arrived late keeps the whole file, earliest arrival first;
-// and a file one of whose rows' arrival is not known (zero: a pack a cache
-// adopted before a round served its row) is passed over, the side the grace
-// keeps whole, however old its other rows are.
+// A WEEKLY SCAN WEIGHS ONLY WHAT ARRIVED A GRACE AGO, EARLIEST FIRST: the
+// files a scheduled expunge may take are those whose rows all arrived at or
+// before the instant (gitlet.PackRow.Arrived), judged by the latest row so a
+// late part keeps the whole file; a file with a row of unknown arrival (zero:
+// adopted by a cache before a round served its row) is passed over, however
+// old its other rows.
 //
-// Mutation: take a file whose arrival is not known, and the unknown file is
-// weighed; judge a file by its EARLIEST row, and the file with a late part is;
-// order by id, and the files come out of arrival order.
+// Mutation: take a file of unknown arrival, and it is weighed; judge a file by
+// its EARLIEST row, and the one with a late part is; order by id, and the files
+// come out of arrival order.
 func TestAWeeklyScanWeighsOnlyWhatArrivedAGraceAgo(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2031, 3, 1, 9, 0, 0, 0, time.UTC)
@@ -32,11 +30,9 @@ func TestAWeeklyScanWeighsOnlyWhatArrivedAGraceAgo(t *testing.T) {
 }
 
 // A WEEKLY PLAN TAKES ONLY WHAT FREES A BYTE, DENSEST FIRST: of the files the
-// schedule may take, a cycle's inputs are those its scan found holding bytes
-// no tip reaches — a file that frees nothing is never rewritten, however old
-// — the one freeing the most for each byte it rewrites first, earliest arrival
-// breaking a tie; nothing young, part young or of unknown arrival is taken
-// whatever it would free.
+// schedule may take, only those holding bytes no tip reaches, however old the
+// rest, the most freed per byte rewritten first, earliest arrival breaking a
+// tie; nothing young, part young or of unknown arrival, whatever it would free.
 //
 // Mutation: take a file that frees nothing, and the old reachable file is
 // planned; order by arrival alone, and the densest file is not first; drop
@@ -91,10 +87,10 @@ func checksums(files []pack) []string {
 }
 
 // AN EXPUNGE ON THE SCHEDULE IS DUE PAST A QUARTER AND AT THE LEAST: its
-// unreachable bytes must be MORE than 1/gitlet.ExpungeShare of the live bytes —
-// exactly a quarter is not — and AT LEAST the least an expunge frees — one
-// byte under it is not, whatever its share — and every compactor the engine
-// builds holds gitlet.ExpungeMinBytes as that least.
+// unreachable bytes are MORE than 1/gitlet.ExpungeShare of the live bytes
+// (exactly a quarter is not) and AT LEAST the least an expunge frees (a byte
+// under is not, whatever its share), which every compactor the engine builds
+// holds at gitlet.ExpungeMinBytes.
 //
 // Mutation: drop `unreachable >= least` from expungeDue, and the case under
 // the least is due; judge the share with >=, and exactly a quarter is; leave

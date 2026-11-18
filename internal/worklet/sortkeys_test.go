@@ -6,9 +6,8 @@ import (
 	"time"
 )
 
-// The clock and zone this file's parses resolve against. Its own, because
-// `wednesday` and `berlin` belong to the EXTERNAL suite and this file is
-// inside the package — `sortColumns` is unexported.
+// The clock and zone this file's parses resolve against, its own: `wednesday`
+// and `berlin` belong to the EXTERNAL suite, and `sortColumns` is unexported.
 var (
 	someWednesday = time.Date(2031, 4, 16, 14, 30, 0, 0, time.UTC)
 	someZone      = time.UTC
@@ -17,13 +16,10 @@ var (
 // THE TWO HALVES OF A SORT KEY AGREE, and neither fails loudly alone.
 //
 // A key [sortColumns] or [derivedOrders] holds and [sortKeys] refuses is
-// UNREACHABLE: dead code carrying a comment about behaviour implemented
-// somewhere else, which is what `removed` was. A key [sortKeys] admits and
-// neither compiles is worse: the parser accepts it, [sortTerms] silently drops
-// the term, and the answer comes back in the DEFAULT order with nothing saying
-// the caller's own ordering was ignored, the same failure shape [checkKeys]
-// exists to prevent for filters. And a key in both would be compiled one way
-// and documented the other.
+// UNREACHABLE. A key [sortKeys] admits and neither compiles is worse:
+// [sortTerms] silently drops the term and the answer comes back in the DEFAULT
+// order, the failure [checkKeys] prevents for filters. A key in both would be
+// compiled one way and documented the other.
 func TestEverySortKeyCompilesAndEveryColumnIsReachable(t *testing.T) {
 	t.Parallel()
 	for _, key := range sortKeys {
@@ -52,10 +48,8 @@ func TestEverySortKeyCompilesAndEveryColumnIsReachable(t *testing.T) {
 	}
 }
 
-// AND A SORT KEY IS A PARAMETER VALUE, so it may never be a parameter NAME's
-// spelling by accident: `sort=start` and `start=2026-01-01` are a column and a
-// date filter, and reading either as the other answers a question nobody
-// asked. This is the pair that made it worth stating — `start` is both.
+// AND A SORT KEY IS A PARAMETER VALUE, never read as a NAME: `sort=start`
+// and `start=2026-01-01` are a column and a date filter, and `start` is both.
 func TestASortKeyAndAFilterMayShareAName(t *testing.T) {
 	t.Parallel()
 	if !slices.Contains(sortKeys, "start") || !slices.Contains(QueryKeys, "start") {

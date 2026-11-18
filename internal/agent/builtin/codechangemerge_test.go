@@ -26,11 +26,10 @@ func mergeArgs() map[string]any {
 }
 
 // A MERGE REFUSAL NAMES EVERY UNMET PRECONDITION: a merge its target's gate
-// does not allow yet is answered not_ready — its own class, never invalid —
-// naming each precondition the committer found unmet and whom each waits on,
-// not only the first, and telling the caller a ready_to_merge wake follows.
-// The merge itself is ONE engine write of the change's target, named by its
-// number, from the head its caller read, by the method it asked.
+// does not allow yet is not_ready, never invalid, naming each unmet
+// precondition and whom it waits on, not only the first, and saying a
+// ready_to_merge wake follows. The merge is ONE engine write of the target,
+// naming the change, from the head its caller read, by the method it asked.
 //
 // Mutations: answer a gate_unmet as invalid; name only the first unmet
 // precondition → red.
@@ -72,12 +71,10 @@ func TestAMergeRefusalNamesEveryUnmetPrecondition(t *testing.T) {
 	}
 }
 
-// AN UNSAID DELETE_BRANCH IS THE GITLET NODE'S: a merge of a seat's branch whose
-// caller says nothing of the branch sends no word of it — the Gitlet node that
-// judges the merge decides the default on that snapshot, from the gate it
-// reads for the merge anyway — reads no merge gate for it, and answers the
-// deletion the Gitlet node decided; a caller that says keep sends keep, and is
-// answered what the Gitlet node did.
+// AN UNSAID DELETE_BRANCH IS THE GITLET NODE'S: a merge whose caller says
+// nothing of the branch sends no word of it, reads no merge gate, and answers
+// the deletion the Gitlet node decided; a caller that says keep sends keep and
+// is answered what the Gitlet node did.
 //
 // Mutations: the tool deciding the default itself — sending false, or
 // reading the target's gates first — red; the answer ignoring the Gitlet node's
@@ -129,9 +126,8 @@ func TestAnUnsaidDeleteBranchIsTheGitletNodes(t *testing.T) {
 	}
 }
 
-// A QUEUED MERGE ANSWERS ITS POSITION: a change its target's queue took is
-// answered queued, with its entry and its place in the queue from 1 — and a
-// close of its work item asked of it is recorded on its entry, never made by
+// A QUEUED MERGE ANSWERS ITS POSITION: queued, with its entry and its place
+// from 1; a close of its work item is recorded on the entry, never made by
 // this call (the landing closes it).
 //
 // Mutation: answer a queued merge as merged; drop the place → red.
@@ -163,11 +159,10 @@ func TestAQueuedMergeAnswersItsPosition(t *testing.T) {
 	}
 }
 
-// CLOSE TASK IS STEP TWO: a direct merge asked to close its change's work
-// item closes it — status done, as the caller — under the merge's operation's
-// second step, so the same call made again is the same close; and a close
-// that fails leaves the merge merged and says why beside it, never a refusal
-// of the call.
+// CLOSE TASK IS STEP TWO: a direct merge asked to close its work item closes
+// it (status done, as the caller) under the operation's second step, so the
+// same call made again is the same close; a failed close leaves the merge
+// merged and says why beside it, never a refusal of the call.
 //
 // Mutations: close under the merge's own operation id; answer a failed close
 // as the call's failure → red.
@@ -216,11 +211,9 @@ func TestCloseTaskIsStepTwo(t *testing.T) {
 	}
 }
 
-// CLOSE TASK IS DECIDED AS WORKLET'S WRITE: a merge's row takes Gitlet,
-// but the close its step two makes is update_work_item's, the Worklet
-// app's — so a person who uses Gitlet and not Worklet merges the change
-// and is told the item was not closed and why, the item untouched, while one
-// who does closes it.
+// CLOSE TASK IS DECIDED AS WORKLET'S WRITE: a person with Gitlet but not
+// Worklet merges the change and is told the item was not closed and why, the
+// item untouched, while one with Worklet closes it.
 //
 // Mutation: closeTask asking no decision before it closes → red.
 func TestCloseTaskIsDecidedAsWorkletsWrite(t *testing.T) {
@@ -266,16 +259,14 @@ func TestCloseTaskIsDecidedAsWorkletsWrite(t *testing.T) {
 	}
 }
 
-// A DEQUEUE TAKES THE CHANGE'S OWN ENTRY OUT, FROM ITS ONE READ: the call's
-// read of the change names its live entry on the queue precondition, and
-// code_dequeue_change asks ONE dequeue of that entry — as its caller, naming
-// no run — with no read of the queue and no read of the change but the
-// conversation's one; a change that read names in no queue is refused
-// conflict, nothing asked.
+// A DEQUEUE TAKES THE CHANGE'S OWN ENTRY OUT, FROM ITS ONE READ: the read of
+// the change names its live entry on the queue precondition, and
+// code_dequeue_change asks ONE dequeue of it, as its caller naming no run, with
+// no other read of the queue or the change; a change in no queue is refused
+// not_found, nothing asked.
 //
-// Mutations: page the target's queue for the entry, as the tool once did —
-// the read the fake answers names no entry and the dequeue is refused, and a
-// queue read is counted, red; keep the turn's run on the asker → red.
+// Mutations: page the target's queue for the entry (the fake's queue read
+// names none, and is counted) → red; keep the turn's run on the asker → red.
 func TestADequeueTakesTheChangesOwnEntryOut(t *testing.T) {
 	t.Parallel()
 	host := newChangeHost(siteChange().queued())
@@ -299,9 +290,8 @@ func TestADequeueTakesTheChangesOwnEntryOut(t *testing.T) {
 	writer = &codeWrites{}
 	got = callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newChangeHost(siteChange()), writer)),
 		writerTurn(t), builtin.CodeDequeueChangeTool, map[string]any{"change": "site!7"})
-	// NOT FOUND, NEVER CONFLICT: an entry that is not live never becomes
-	// live again by itself, so a caller told to retry would ask for ever; and
-	// it carries the committer's own word, not_queued, as its refusal would.
+	// NOT FOUND, NEVER CONFLICT: an entry that is not live never becomes live
+	// again, so a retry would ask for ever; it carries the word not_queued.
 	var word *builtin.HostRefusal
 	if !got.Failed || tools.RefusalOf(got) != tools.RefusalNotFound || len(writer.queuesAsked()) != 0 ||
 		!errors.As(got.Cause, &word) || word.Refusal != string(gitlet.MergeRefusalNotQueued) {
@@ -311,12 +301,9 @@ func TestADequeueTakesTheChangesOwnEntryOut(t *testing.T) {
 }
 
 // A MERGE OF AN ENDED CHANGE IS A CONFLICT, as every code tool's write of one
-// is: the change is in a state that refuses the merge until somebody reopens
-// it (or, merged, for good), which internal/mcp's one rule classes conflict,
-// never invalid — the request names the change it means — nor anything a wait
-// clears. It is refused before anything is built, under the committer's own
-// word, change_not_open, so a surface answering in its own words reads the
-// word and not the sentence.
+// is (builtin.mergeRefusalClass), never invalid nor anything a wait clears. It is
+// refused before anything is built, under the committer's word
+// change_not_open, so a surface answering in its own words reads the word.
 //
 // Mutation: refuse it as invalid again → red.
 func TestAMergeOfAnEndedChangeIsAConflict(t *testing.T) {
@@ -359,8 +346,8 @@ func workedChange() *changeFixture {
 	return f
 }
 
-// closes is Worklet as a merge's step two reads and closes one
-// task: ENG-42 in progress at version 4, its close failing with fail.
+// closes is Worklet as a merge's step two reads and closes one task: ENG-42
+// in progress at version 4, its close failing with fail.
 type closes struct {
 	fail  error
 	mu    sync.Mutex

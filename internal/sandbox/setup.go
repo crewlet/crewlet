@@ -11,88 +11,60 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// DefaultSetupTimeout is the budget for one setup command.
+// DefaultSetupTimeout is the budget for one setup command: a cold dependency
+// install over a network takes one to five minutes, a large clone or an image
+// pull up to ten, and a wedged command fails as a named setup failure at its
+// own budget. Provisioning is not a control-plane call, so it never takes the
+// backend's control timeout, sized for a mkdir.
 //
-// Anchored to what provisioning actually is: a cold dependency install
-// (apt-get install, npm ci, uv sync) over a network is typically one to five
-// minutes, and a large monorepo clone or an image pull can reach ten. Ten
-// minutes covers those, and a wedged command surfaces as a named setup
-// failure at its own budget.
-//
-// ONE COMMAND'S BUDGET, NEVER THE PROVISIONING'S. A launch runs the
-// harness's install and then every one of the operator's steps one after
-// another, and a check's box its git check and its clone, each to this budget
-// unless its step sets its own — so a launch whose operator declares a handful
-// of steps can provision for longer than the box's TTL ([DefaultBoxTimeout],
-// 900s, a step and a half of this budget). Nothing races the two: the launch keeps the box's timer refreshed for
-// as long as it provisions it ([keepProvisioning]), so the provider never
-// reaps a box out from under a step that is still within its budget, and
-// only that budget ends a slow step.
-//
-// It exists at all because provisioning is NOT a control-plane call: without
-// its own budget these commands inherited the backend's control timeout —
-// sized for a mkdir or a docker exec, not for work — so any real provisioning
-// step was killed and failed the whole acquisition.
+// It bounds one command, never the provisioning: a launch's steps together may
+// outrun the box's TTL ([DefaultBoxTimeout]), since the launch keeps the box's
+// timer refreshed while it provisions ([keepProvisioning]) and only this
+// budget ends a slow step.
 const DefaultSetupTimeout = 10 * time.Minute
 
 // SetupStep is one declarative provisioning unit applied to a fresh sandbox.
 //
-// A harness's box needs environment wiring beyond the harness itself: git
-// auth, package-registry credentials, preinstalled toolchains, whatever the
-// org's tasks demand. Rather than hardcoding each concern into a runner,
-// provisioning is an ordered list of these — one unit each contributing files,
-// commands, env, and a paragraph of brief.
+// A launch's steps come from company config, in order: providers.sandbox.setup,
+// then role.sandbox.setup. The engine ships none, git auth included: it gives
+// only what config cannot know, as generic run env (the LLM credentials,
+// CREWLET_AGENT_HANDLE, CREWLET_AGENT_EMAIL; tokens come from role.sandbox.env),
+// and commands run WITH that env, so a recipe maps it into its tool's shape.
 //
-// A launch's steps come from company config, applied in order:
-// providers.sandbox.setup for every sandbox role, then role.sandbox.setup
-// extras. FOR ANY OTHER HOST THE ENGINE SHIPS NONE OF ITS OWN — git auth
-// included. What stays engine-side is only what static config cannot know,
-// expressed generically: the run env carries the LLM credentials and the
-// agent's identity as CREWLET_AGENT_HANDLE / CREWLET_AGENT_EMAIL, never a
-// tool-specific variable. External tokens are declared in role.sandbox.env,
-// and setup commands execute WITH the run env, so a recipe maps the generic
-// facts into tool shape itself.
-//
-// The one exception is Gitlet, the engine's own git host, whose repositories a run
-// is granted rather than told about: the commands that give a box one are the
-// engine's ([CodingSteps]: [GitVersionStep], a [CloneRecipe], the monitor's
-// [MonitorStep]), answered by the `code_checkout` that grants it for the run
-// to run itself, never applied at launch, and so is the git access they clone
-// with — the run's credential and the box's git configuration ([BoxGit],
-// ADR-0093), in the launch's own environment.
+// The exception is Gitlet, whose repositories a run is granted: the
+// `code_checkout` granting one hands the run the engine's [CodingSteps] to run
+// itself, never at launch, with the run's credential and [BoxGit] (ADR-0093)
+// in the launch's own environment.
 type SetupStep struct {
 	// Name is a short identifier, used in logs and setup-failure errors.
 	Name string `yaml:"name" json:"name"`
 
 	// Files are written into the box (path → content) before Commands run,
-	// byte for byte: each body arrives as the content it is, a whole
-	// `${VAR}` already read by the engine at launch and any other `${…}`
-	// left for whatever reads the file inside the box.
+	// byte for byte: a body that is wholly one `${VAR}` was resolved at
+	// launch, and any other `${…}` is left for whatever reads the file.
 	Files map[string]string `yaml:"files,omitempty" json:"files,omitempty"`
 
 	// Commands run in order after the files land. A non-zero exit fails the
-	// sandbox acquisition — no silent half-provisioning.
+	// sandbox acquisition: no silent half-provisioning.
 	Commands []string `yaml:"commands,omitempty" json:"commands,omitempty"`
 
 	// Env is merged into the harness's run env. ${VAR} references are
 	// resolved exactly ONCE, with the rest of the sandbox env at launch.
 	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
 
-	// OptionalKeys names the keys of Env and the paths of Files whose value
-	// may resolve to nothing at launch: the engine leaves such a variable
-	// out and writes no such file, where any other reference that resolves
-	// to nothing is the run's gap: the executor's box starts without it,
-	// and the engine says so.
+	// OptionalKeys names the keys of Env and paths of Files that may resolve
+	// to nothing at launch: such a variable is left out and such a file not
+	// written. Any other reference resolving to nothing is the run's gap,
+	// which the engine reports.
 	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty"`
 
-	// Brief is the environment-context paragraph for the harness —
-	// what this step made true about the box. Empty means nothing to tell.
+	// Brief is the environment-context paragraph for the harness: what this
+	// step made true about the box. Empty means nothing to tell.
 	Brief string `yaml:"brief,omitempty" json:"brief,omitempty"`
 
-	// TimeoutSeconds is how long each of this step's commands may run.
-	// Zero takes [DefaultSetupTimeout]. Raise it for a step you know is
-	// slow; lower it for one that should be instant, so a hung command
-	// surfaces as a setup failure rather than eating the turn.
+	// TimeoutSeconds is how long each of this step's commands may run; zero
+	// takes [DefaultSetupTimeout]. Lower it for a step that should be
+	// instant, so a hung command fails setup rather than eating the turn.
 	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty"`
 }
 
@@ -103,24 +75,16 @@ func (s SetupStep) timeout() time.Duration {
 	return DefaultSetupTimeout
 }
 
-// SetupError reports a setup step failing — the box is not usable as promised,
-// so the acquisition fails and the caller tears the box down.
+// SetupError reports a setup step failing: the box is not usable as promised,
+// so the acquisition fails and the caller tears the box down. It is distinct
+// from an install failure because a broken setup step is operator config, not
+// the harness; [SetupError.why] classes it.
 //
-// Distinct from an install failure on purpose: a failed setup step is an
-// OPERATOR CONFIG problem (a broken role or provider setup command), not a
-// harness install problem, and the two want different debugging. One
-// status says the recipe is not what broke: a command that exits
-// [exitTempFail] says a download it makes failed for now ([SetupError.why]).
-//
-// THREE FAILURES, AND THE MESSAGE SAYS WHICH. A step fails writing one of its
-// files, or running a command that then exits non-zero, or running a command
-// that reports no exit status at all — one the box could not start, or one
-// whose box went away under it, which the message cannot tell apart and so
-// does not claim either of: [SetupError.Detail] carries the box's own account.
-// One sentence for all three named a refused file "command #0 failed (exit
-// 0)" — a command that does not exist, failing with the status that means
-// success — and a command with no exit status "failed (exit 0)" too, which
-// sent the operator to read a command for the reason it exited cleanly.
+// The message names which of three failures it was: writing a file, a command
+// exiting non-zero, or a command reporting no exit status (the box could not
+// start it, or went away under it; the message claims neither, and
+// [SetupError.Detail] carries the box's account). Never "failed (exit 0)" for
+// a command that reported none or a file that was refused.
 type SetupError struct {
 	Step string
 	// File is the path a write into the box failed for. Set only when a
@@ -128,18 +92,16 @@ type SetupError struct {
 	File string
 	// Command is the failed command's 1-based position within the step.
 	Command int
-	// Exited is whether the command reported an exit status, which Exit
-	// then holds — a signal that ended it as a shell reports one, 128 plus
-	// its number. A command the box could not start has none, and neither
-	// does one whose box went away before it reported.
+	// Exited is whether the command reported an exit status, held in Exit
+	// (a signal as a shell reports one, 128 plus its number). A command the
+	// box could not start, or whose box went away, has none.
 	Exited bool
 	Exit   int
 	Detail string
 
-	// Err is what the box answered where it did not run the step to an
-	// exit status — a write or a command it could not take — and nil for
-	// a command that exited: what kept the step from running is the
-	// box's, and [WhyOf] reads it through [SetupError.Unwrap].
+	// Err is the box's answer where it did not run the step to an exit
+	// status (a write or a command it could not take), nil for a command
+	// that exited; [WhyOf] reads it through [SetupError.Unwrap].
 	Err error
 }
 
@@ -162,23 +124,17 @@ func (e *SetupError) Error() string {
 // Unwrap is what the box answered, where it answered something.
 func (e *SetupError) Unwrap() error { return e.Err }
 
-// why is a step a command of which EXITED non-zero: the recipe is the
-// company's, so a person changes it. A step the box never ran to an exit is
-// not classed here: the box's own answer says why ([SetupError.Err]).
+// why classes a step a command of which EXITED non-zero as the recipe's to
+// change, the step's own timeout (124) included: a command stopped by
+// timeout_seconds is as likely an unreachable network as a slow one, and the
+// budget is the operator's. A step the box never ran to an exit is not
+// classed here; the box's own answer says why ([SetupError.Err]).
 //
-// EXCEPT A COMMAND THAT EXITED [exitTempFail], which is the recipe saying
-// that a download it makes is failing on the far side, and still was once
-// the command's own retries ran out: a wait clears that, not a person
-// ([WhySetupUnavailable]). Only the recipe can tell the two apart: the
-// engine has a status, and an account of the failure it does not read. A
-// step that downloads on every new box, as the sandbox guide's stock-image
-// recipe installs its harness from npm and GitHub, makes a registry's
-// outage an ordinary way for a setup to fail, and classed with every other
-// exit it would read as a setup an administrator has to fix, which no wait
-// clears. Every other status is
-// still the recipe's to change, the step's own timeout (124) among them: a
-// command that runs until timeout_seconds stops it is as likely a network
-// the box cannot reach as a slow one, and the budget is the operator's.
+// Except [exitTempFail]: the recipe saying a download is failing on the far
+// side after its own retries, which a wait clears ([WhySetupUnavailable]).
+// Only the recipe can tell the two apart, and a step that downloads on every
+// new box (the sandbox guide's stock-image recipe) would otherwise read a
+// registry outage as a setup an administrator has to fix.
 func (e *SetupError) why() (Why, bool) {
 	if e.Exited && e.Exit == exitTempFail {
 		return WhySetupUnavailable, true
@@ -187,22 +143,18 @@ func (e *SetupError) why() (Why, bool) {
 }
 
 // exitTempFail is the status a setup command exits with to say its failure
-// is temporary: EX_TEMPFAIL, which sysexits.h defines as a temporary failure
-// worth retrying, so the convention is the shell's own rather than a number
-// only this engine reads that way. docs/concepts/code-sandbox.md tells a
-// recipe when to use it.
+// is temporary: sysexits.h's EX_TEMPFAIL, so the convention is the shell's
+// own, not this engine's. docs/concepts/code-sandbox.md tells a recipe when
+// to use it.
 const exitTempFail = 75
 
-// ApplySetup applies every step to a box: write files, run commands, in order —
-// a fresh box's whole provisioning, or a check box's git floor and checkout
-// ([Manager.AcquireBox]).
+// ApplySetup applies every step to a box, files then commands, in order: a
+// fresh box's provisioning, or a check box's git floor and checkout
+// ([Manager.AcquireBox]). Commands run WITH env, the harness's run env, so a
+// recipe can use the engine's identity facts and its own tokens.
 //
-// env is the run env the harness will get — commands run WITH it so a
-// recipe can reference the engine's identity facts and its own configured
-// tokens at provisioning time.
-//
-// Returns a [SetupError] on the FIRST failure, a file or a command, so the
-// caller tears the box down: the harness's brief promises this environment, so a partial
+// It returns a [SetupError] on the first failure so the caller tears the box
+// down: the harness's brief promises this environment, so a partial
 // application must never reach a run.
 func ApplySetup(ctx context.Context, box Sandbox, steps []SetupStep, env map[string]string) error {
 	for _, step := range steps {
@@ -223,14 +175,10 @@ func ApplySetup(ctx context.Context, box Sandbox, steps []SetupStep, env map[str
 				return &SetupError{Step: step.Name, Command: i + 1, Detail: err.Error(), Err: err}
 			}
 			if result.ExitCode != 0 {
-				// NOT the command text. The engine resolves nothing in a
-				// command — the box's shell expands its `$VAR`s from the
-				// run env — but a recipe may still spell a credential out
-				// literally, and this message is logged AND handed back to
-				// the LLM.
-				// The step name plus the command's position identifies it
-				// precisely, and the operator has the config; stderr is
-				// redacted for the same reason a transcript is.
+				// Not the command text: a recipe may spell a credential out
+				// literally, and this message is logged AND handed to the
+				// LLM. The step and position identify the command; stderr
+				// is redacted for the same reason a transcript is.
 				return &SetupError{
 					Step:    step.Name,
 					Command: i + 1,
@@ -246,16 +194,11 @@ func ApplySetup(ctx context.Context, box Sandbox, steps []SetupStep, env map[str
 	return nil
 }
 
-// EnvironmentBrief is the "## Your environment" block for the harness.
-//
-// A generic sandbox intro, then each step's brief paragraph (what the
-// configured provisioning made true about the box — this is where a
-// config-authored git-auth step tells the agent which token to use), then the
-// connected MCP servers. The agent should not have to rediscover — or fail
-// against — what its environment already provides.
-//
-// Mechanism and hint together: the steps make the environment work no matter
-// how the agent reasons, and the brief stops it wasting rounds finding out.
+// EnvironmentBrief is the "## Your environment" block for the harness: a
+// generic sandbox intro, each step's brief (where a config-authored git-auth
+// step names the token to use), then the connected MCP servers. The steps make
+// the environment work however the agent reasons; the brief saves it rounds
+// rediscovering, or failing against, what is already provided.
 func EnvironmentBrief(steps []SetupStep, mcpServers []string) string {
 	lines := []string{
 		"\n## Your environment",

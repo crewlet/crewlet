@@ -10,11 +10,10 @@ import (
 
 // THE SECRET STORE STANDS IN FRONT OF THE ENVIRONMENT THE ENGINE WAS HANDED.
 //
-// Every apply rebuilds the resolver over the store's snapshot, and the chain it
-// built ended in the PROCESS environment whatever the engine had been handed —
-// so a node's own environment answered until the first apply and the process's
-// after it. The store still wins over a stale value, the handed environment
-// still answers what the store does not hold, and nothing reaches past it.
+// Every apply rebuilds the resolver over the store's snapshot, and that chain
+// must end in the HANDED environment, not the process's: the store wins over a
+// stale value, the handed environment answers what the store lacks, and
+// nothing reaches past it.
 func TestTheSecretStoreFrontsTheHandedEnvironment(t *testing.T) {
 	t.Parallel()
 	e, sv := engineWithSecrets(t)

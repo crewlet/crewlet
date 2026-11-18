@@ -8,28 +8,21 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
-// THE JOB'S MAIN THREAD, READ ONCE BY THE COLLECTION.
-//
-// A relaunch that carries a round on in the job's own box continues the copy of
-// the session that box holds, and Claude Code may compact that copy before the
-// relaunch's first request (resumed.go). The run's event stream measures the
-// input of the newest request alone ([Result.LastRequest]), never the reply's
-// output nor what came after it, so only the box's thread bounds what the
-// harness counts there. So the read that collects a job reads the job's main
-// thread ONCE, on the box's host, before the take ([Coordinator.readMainThread]),
-// and every reading the collection asks of that thread shares the one read
-// ([MainThreadAsk]): what Claude Code counts the copy at ([ResumedCount]) now,
-// and whether its session shows a hook's serve of a note taken ([HookReceipts]),
-// never a second read of the thread.
-//
-// ITS COUNT IS WRITTEN WITH HOW THE HARNESS ENDED, after the take, in the
-// collection's one write of the job's end ([EndRead.Count]). A stop's read and
-// a loss's ask their served notes' receipts and no count: no relaunch carries
-// their round on in place. A job not over is counted unread, its receipts read.
+// THE JOB'S MAIN THREAD, READ ONCE. A relaunch carrying a round on in the job's
+// own box continues the session copy the box holds, which Claude Code may
+// compact before its first request (resumed.go); the event stream measures only
+// the newest request's input ([Result.LastRequest]), so only the box's thread
+// bounds what the harness counts. So the read of a job's box reads that thread
+// ONCE, on the box's host, before the take ([Coordinator.readMainThread]), and
+// every reading asked of it shares the one read ([MainThreadAsk]): the count
+// ([ResumedCount]), written after the take in the collection's one write of the
+// job's end ([EndRead.Count]), and the receipts of a hook's serves
+// ([HookReceipts]). A stop's read and a loss's ask receipts and no count: no
+// relaunch carries their round on in place. A job not over is counted unread,
+// its receipts read.
 
 // MainThreadReadWait bounds the read of a job's main thread at its collection
-// ([Coordinator.readMainThread]): the one wait every reading of the one read
-// shares.
+// ([Coordinator.readMainThread]): one wait every reading of the read shares.
 //
 // FIFTEEN SECONDS: the main thread at its bound, its chain, count and receipts
 // in one walk, reads in 2.78 to 2.85 s on two cores of the engine host (the
@@ -153,11 +146,10 @@ func hookEventOf(boundary string) string {
 // the receipts of the hooks' serves the copy holds ([askedTakes]). A job not
 // over is counted [CountUnread] with no count read ([capturePoint.final]), and
 // so is a runner that reads no thread. The count carries the least window the
-// run reported ([Result.ReportedWindow]).
-//
-// WITHIN [Coordinator.mainThreadWait], armed here, inside the read's context:
-// past it, the read ends where it is, the count is [CountUnread] and no
-// receipt is decided. Logged where the count is marked.
+// run reported ([Result.ReportedWindow]). Held within
+// [Coordinator.mainThreadWait], armed here: past it the read ends where it is,
+// the count is [CountUnread] and no receipt is decided; a marked count is
+// logged.
 func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sandbox, runner Runner,
 	read BoxRead, at capturePoint, result Result) MainThreadReading {
 
@@ -199,13 +191,12 @@ func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sa
 	return reading
 }
 
-// unboundedBecause is why a read of a job's main thread that answered mark holds
-// no bound, as its log says it: of a thread not read whole, what may have
-// stopped the read; of a release the count's rules were not read in, or a saved
-// compaction, that the thread was not read at all, since each is found before
-// it is opened (internal/sandbox/executor's mainthread.go); and of every other
-// mark, that the thread was read whole and its bytes cannot bound what the mark
-// names.
+// unboundedBecause is why a read that answered mark holds no bound, as its log
+// says: of a thread not read whole, what may have stopped the read; of a
+// release the count's rules were not read in, or a saved compaction, that the
+// thread was not read at all, each being found before it is opened
+// (internal/sandbox/executor's mainthread.go); of any other mark, that the
+// thread was read whole and its bytes cannot bound what the mark names.
 func unboundedBecause(mark CountMark) string {
 	switch mark {
 	case CountUnread:

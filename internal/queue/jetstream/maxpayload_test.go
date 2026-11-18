@@ -25,18 +25,11 @@ import (
 
 // A SERVER THAT CANNOT CARRY THE CONTRACT IS REFUSED WHEN THE QUEUE OPENS.
 //
-// The client refuses a message past what its server announced, locally, and
-// nothing compared that with what this build sends: a server at nats-server's
-// 1 MiB default took every small write and refused the first large one, so a
-// node booted, served, and refused its first large event or state-log record
-// only when it was written.
-// Refused at Open, the misconfiguration is a boot that names the setting, the
-// value the server announced and the value this build needs.
-//
-// The boundary is exact in both directions, because the need is exact: a
-// state-log record at its log's declared largest is [queue.MaxPayloadBytes] on
-// the wire, so a byte short refuses a record the build will write, and a
-// server announcing more than the contract carries it.
+// The client refuses a message past what its server announced only when it is
+// written, so a node on a 1 MiB server would boot and fail its first large
+// event or state-log record. Refused at Open, the boot names the setting, the
+// value announced and the value this build needs. The boundary is exact: a
+// record at its log's declared largest is [queue.MaxPayloadBytes] on the wire.
 //
 // Mutation: compare against the default 1 MiB, or against the contract with
 // `>` rather than `>=`, and a row goes red — or drop heldToTheContract from
@@ -93,23 +86,16 @@ func TestAServerBelowTheContractIsRefusedWhenTheQueueOpens(t *testing.T) {
 
 // THE LIMIT READ IS THE ONE THE CONNECTION IS HELD TO, an account's included.
 //
-// nats-server holds a client to the lowest of its own max_payload and the
-// payload limits of the account it signed in to and of its user — an
-// account's `limits { max_payload }` in the server's file here, the `payload`
-// limit of an account's or a user's JWT in operator mode — and says so only in
-// the INFO it sends once the connection has authenticated, after the PONG that
-// completes the connect. Read straight off the connect, the check saw the
-// server's own 8 MiB and passed a node whose every message past the account's
-// limit would be refused, which is the failure it exists to move to the boot.
+// nats-server holds a client to the lowest of its own max_payload and its
+// account's and user's payload limits (`limits { max_payload }` in the file,
+// the JWT's `payload` in operator mode), and says so only in the INFO it sends
+// after authentication, behind the connect's PONG. Read straight off the
+// connect, the check sees the server's 8 MiB and passes. Rows: an account at a
+// quarter of the contract, refused naming its number; one at exactly the
+// contract, which opens (the control).
 //
-// The server here carries the contract and the account it signs the node in
-// to states a limit of its own: a quarter of it, refused naming the account's
-// number; exactly the contract, which opens — the control that the account is
-// otherwise one the queue works in.
-//
-// Mutation: read nc.MaxPayload() without the round trip before it in
-// announcedMaxPayload and the refusing row goes red (the connection has almost
-// never read the second INFO by then; -count=20 shows it).
+// Mutation: read nc.MaxPayload() without its round trip in announcedMaxPayload
+// and the refusing row goes red (nearly always; -count=20 shows it).
 func TestALimitTheSigningInAccountStatesIsTheOneRead(t *testing.T) {
 	t.Parallel()
 	const password = "not-in-any-refusal"
@@ -205,19 +191,11 @@ accounts {
 // THE EMBEDDED BROKER'S REFUSAL BLAMES THE BUILD, because no setting reaches it
 // — on every connection this package opens to it.
 //
-// The same check runs on the connections to the broker this build configures
-// itself, and there it cannot fire unless [embeddedOptions] stopped setting
-// the ceiling — the edit this case stages, a broker built from those options
-// with MaxPayload taken back out. That is the one change whose cost is
-// otherwise invisible: every node boots against nats-server's 1 MiB default
-// and fails only its first large write. It fails the boot instead, and a
-// sentence sending an operator to stream.url or a server's configuration file
-// would send them after a knob that does not exist on this topology.
-//
-// Three openers, because there are three consumers of a connection and one
-// dial beneath them: the queue's own, the coordination store's, and the second
-// connection a subsystem owns — a snapshot donor's, streaming mebibyte chunks.
-// Checked in one of them only, the others would be the member nobody asked.
+// The check fires on the embedded broker only if [embeddedOptions] stopped
+// setting the ceiling (staged here), leaving nats-server's 1 MiB default; it
+// then fails the boot without sending an operator to stream.url or a server
+// file, knobs this topology lacks. All three openers over the one dial are
+// checked: the queue's own, the coordination store's, a snapshot donor's.
 //
 // Mutation: drop heldToTheContract from embeddedServer.connect and every row
 // goes red; hand it `false` for an embedded broker, or swap its two sentences,
@@ -295,13 +273,10 @@ func TestAnEmbeddedBrokerWithoutTheCeilingFailsTheBootAndBlamesTheBuild(t *testi
 
 // A SECOND CONNECTION TO AN OPERATOR'S SERVER IS HELD TO THE CONTRACT TOO.
 //
-// [Queue.DialOwned] dials the operator's cluster afresh, and lands on
-// whichever member answers — which need not be the one the queue's own
-// connection was checked against at boot. What rides it is a snapshot donor
-// streaming mebibyte chunks to a joining node, so a member below the contract
-// failed the chunks of a transfer a node had advertised, with nothing said
-// about why. The case opens a queue on a server that carries the contract,
-// restarts it allowing a quarter, and asks for a second connection.
+// [Queue.DialOwned] dials the operator's cluster afresh and may land on a
+// member other than the one checked at boot; a snapshot donor streams mebibyte
+// chunks over it, which a member below the contract would refuse unexplained.
+// The case restarts the server allowing a quarter of the contract, then dials.
 //
 // Mutation: drop heldToTheContract from dial and this goes red.
 func TestASecondConnectionToAnOperatorsServerIsHeldToTheContract(t *testing.T) {
@@ -327,18 +302,12 @@ func TestASecondConnectionToAnOperatorsServerIsHeldToTheContract(t *testing.T) {
 
 // A RECONNECT TO A SERVER BELOW THE CONTRACT IS SAID WHEN IT HAPPENS.
 //
-// The check at the dial reads the member the connection landed on, and a
-// client dialling a cluster reconnects to whichever member answers — so a
-// member configured apart from the others, or a server whose limit was
-// lowered under a running node, is met after boot. Nothing can be refused by
-// then; what the line buys is that the first word about it is not a large
-// write's `record_too_large`.
-//
-// Two halves, because the handler is called by the client on a goroutine this
-// package does not own: the handler's own answer, asserted directly with a
-// logger the case holds, and that it is the handler every connection this
-// package opens is given — the queue's own, the coordination store's and a
-// subsystem's second, and an operator's dial as much as an embedded one.
+// A client reconnects to whichever cluster member answers, so a member
+// configured apart, or a limit lowered under a running node, is met after boot,
+// when nothing can be refused: the line makes the first word about it something
+// other than a large write's `record_too_large`. The handler runs on the
+// client's goroutine, so the case asserts its answer directly, and apart that
+// every connection this package opens, external or embedded, is given it.
 //
 // Mutation: drop the ReconnectHandler option from either dial and a row of
 // the second half goes red; log nothing, or log on a server that carries the
@@ -432,22 +401,14 @@ func TestAReconnectToAServerBelowTheContractIsNamed(t *testing.T) {
 // A MESSAGE TOO LARGE FOR THE SERVER NAMES THE SERVER'S OWN LIMIT, on every
 // verb that sends one.
 //
-// The embedded broker is configured at exactly [queue.MaxPayloadBytes], and a
-// server announcing less is refused when the queue opens — so on every
-// connection this backend OPENS the contract's number and the connection's
-// agree. They part only when the server CHANGES under a running node: a
-// reconnect to a cluster member configured apart from the one the node booted
-// against, or a server restarted with a smaller max_payload. The client
-// refuses against what the server it reached said, so a refusal naming the
-// contract there names a limit the message is inside of, and sends whoever
-// reads it looking for the wrong knob — and a scatter request between the two
-// failed with the client's bare error rather than the contract's
-// [queue.ErrTooLarge], which is the one failure a producer must be able to
-// tell from a broker that is merely down.
-//
-// So the queue opens against an external server that carries the contract,
-// the server is restarted under it allowing a quarter of that, and each
-// message is larger than the new limit and smaller than the contract.
+// The contract and the connection's limit agree on every connection this
+// backend opens, and part only when the server CHANGES under a running node (a
+// reconnect to a member configured apart, a restart with a smaller
+// max_payload). The client refuses against the server it reached, so a refusal
+// naming the contract would send its reader after the wrong knob, and a
+// scatter request must still fail with [queue.ErrTooLarge], which a producer
+// tells from a broker that is merely down. Staged by restarting the server at
+// a quarter of the contract and sending messages between the two limits.
 func TestAMessageTooLargeNamesTheServersOwnLimit(t *testing.T) {
 	t.Parallel()
 	const limit = queue.MaxPayloadBytes / 4

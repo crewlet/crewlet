@@ -23,33 +23,24 @@ import (
 
 // POST /git/{repo}/git-receive-pack — A PUSH, the handler's half of the
 // receive pipeline (steps 0–7, and 9 the answer): its command section read and
-// what can be refused without objects refused, the cache synced through the
-// barrier (a coding box's at its run's session), the push's scratch made, and
-// receive-pack run there — never in the
-// cache — with the one hook that relays every ref update to the session
-// (session.go), which hands them to the one landing every push takes
-// (land.go, step 8) and reports what landed.
+// what needs no object refused, the cache synced through the barrier (a coding
+// box's at its run's session), the push's scratch made, and receive-pack run
+// there, never in the cache, with the one hook relaying every ref update to
+// the session (session.go), which hands them to the one landing (land.go,
+// step 8) and reports what landed.
 
-// receiveConfig is the RECEIVE CONFIGURATION every push's receive-pack runs
-// with, its advertisement's included, in this order:
+// receiveConfig is every push's receive-pack configuration, its advertisement's included:
 //
-//   - receive.procReceiveRefs=refs/: every command goes to the engine's hook,
-//     and git moves no ref itself;
-//   - receive.unpackLimit=1: the push is kept as ONE pack, the unit a row
-//     names;
+//   - receive.procReceiveRefs=refs/: every command goes to the hook; git moves no ref;
+//   - receive.unpackLimit=1: the push stays ONE pack, the unit a row names;
 //   - receive.fsckObjects=true: a malformed object is refused at the door;
 //   - receive.maxInputSize: the epoch's code.limits.max_push_bytes;
-//   - receive.advertisePushOptions=true: a push opens a change from its
-//     options (`git push -o change`, gitlet.ParseChangeOptions), which
-//     receive-pack hands the hook after the commands — what it read, which
-//     the relay reads there (session.go) — and which the handler's section
-//     bound holds before receive-pack, which keeps every one in its memory,
-//     reads any (readCommands);
-//   - receive.autogc=false and receive.updateServerInfo=false: a scratch is
-//     thrown away;
-//   - pack.writeReverseIndex=true and pack.indexVersion=2: the .rev and the
-//     version-2 .idx the push's BUNDLE carries, written by receive-pack's own
-//     index-pack, so no other process and no other node ever indexes the pack.
+//   - receive.advertisePushOptions=true: `git push -o change` opens a change
+//     (gitlet.ParseChangeOptions); receive-pack holds each in memory, handing
+//     them to the hook after the commands (session.go): readCommands bounds them;
+//   - receive.autogc=false, receive.updateServerInfo=false: a scratch is thrown away;
+//   - pack.writeReverseIndex=true, pack.indexVersion=2: the .rev and v2 .idx the
+//     push's BUNDLE carries, so no other process or node indexes the pack.
 func receiveConfig(l gitlet.Limits) []gitproc.KV {
 	return []gitproc.KV{
 		{Key: "receive.procReceiveRefs", Value: "refs/"},
@@ -99,12 +90,10 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request, admit admit
 	limits := s.limits()
 	drainLimit := limits.MaxPushBytes + MaxCommandSectionBytes
 	if r.ContentLength > drainLimit {
-		// A DECLARED LENGTH THIS LARGE is a client configured to buffer a
-		// gigabyte (git sends one only under its post buffer); draining it
-		// to say so is the cost the bound exists to refuse. Judged once the
-		// request is admitted, never before it, so the push is recorded as
-		// whoever sent it — and a client nobody knows is challenged first,
-		// as for every other refusal of a push.
+		// A DECLARED LENGTH THIS LARGE (git sends one only within its post
+		// buffer): draining it to say so is the cost the bound refuses. Judged
+		// after admission, so the push is recorded as whoever sent it and an
+		// unknown client is challenged first, as for every refusal of a push.
 		auth.GitText(w, http.StatusRequestEntityTooLarge, "this push is "+humanBytes(r.ContentLength)+
 			", past code.limits.max_push_bytes ("+humanBytes(limits.MaxPushBytes)+")")
 		audit.record(pushRecord{outcome: types.AuditRefused, refusal: RefusalPushTooLarge})
@@ -151,11 +140,10 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request, admit admit
 		audit.record(pushRecord{outcome: types.AuditRefused, refusal: RefusalCommands, commands: len(sec.Commands)})
 		return
 	case err != nil:
-		// A COMMAND LIST THAT COULD NOT BE READ is a push all the same, and
-		// recorded like every other: refused for its commands when its bytes
-		// are not pkt-lines — the client's to fix, as git's own unpack error
-		// over a pack that is not one is — and failed when the body itself
-		// failed (cut short, not gzip, too slow), as it is past the section.
+		// A COMMAND LIST THAT COULD NOT BE READ is still a recorded push:
+		// refused for its commands when its bytes are not pkt-lines (the
+		// client's to fix), failed when the body itself failed (cut short,
+		// not gzip, too slow), as past the section.
 		rec := pushRecord{outcome: types.AuditFailed, commands: len(sec.Commands)}
 		if errors.Is(err, errMalformed) {
 			rec.outcome, rec.refusal = types.AuditRefused, RefusalCommands
@@ -165,8 +153,7 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request, admit admit
 		return
 	case sec.Empty():
 		// GIT'S PROBE before a push past its post buffer: a 200 and nothing
-		// run, so git sends the real request — the push's end, which records
-		// it. This one is none.
+		// run, so git sends the real request, which records the push.
 		audit.none()
 		w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
 		w.WriteHeader(http.StatusOK)
@@ -175,17 +162,13 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request, admit admit
 	// A FAILURE FROM HERE ON is recorded with the commands the push names.
 	audit.failed.commands = len(sec.Commands)
 	// THE GRANT (ADR-0088), before the repository's status: a principal that
-	// may push nothing here — a token bound to nobody — is refused whole, as
-	// its advertisement refused it, every command with the sentence its grant
-	// gives. One that may push some commands has the rest refused beside the
-	// stateless rules, which come first: a reserved ref is reserved_ref to
-	// everybody, never a question of who asks. An update is judged here as a
-	// fast-forward, since whether it is forced is the landing's verdict, after
-	// the sync — which no PERSON or token can tell apart: a person maintains
-	// and passes both rows, and a token bound to nobody passes neither. A
-	// coding box's seat can — a seat holding write updates and may not force
-	// — and its forced update is refused by the decide's grant rule (2b) on
-	// the landing's verdict, as an engine write's is.
+	// may push nothing here (a token bound to nobody) is refused whole, as its
+	// advertisement was. Otherwise the stateless rules come first (a reserved
+	// ref is reserved_ref to everybody), then the grant, judging an update as a
+	// fast-forward: whether it is forced is the landing's verdict after the
+	// sync, and changes nothing for a person (passes both) or a token bound to
+	// nobody (passes neither). A coding box's seat holding write may not force;
+	// its forced update is refused by the decide's grant rule (2b).
 	grant := adm.grant
 	if !grant.MayPush() {
 		refuseAll(grantRefusal(adm.principal()), refuseWith(sec.Commands,
@@ -209,11 +192,10 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request, admit admit
 	if s.refusedEvery(sec, pre, refuseAll) {
 		return
 	}
-	// WHAT ONE PUSH MAY CARRY, before any work is spent on it: the commands
-	// as they will be proposed, with everything the work may add at its
-	// largest (gitlet.Proposal.ValidateCommands). Past it, a push was refused by
-	// its committer after receive-pack, the scans, the bundle's put and the
-	// estate's round trip — as the engine refusing its own proposal.
+	// WHAT ONE PUSH MAY CARRY, before any work is spent on it: the commands as
+	// they will be proposed, with all the work may add at its largest
+	// (gitlet.Proposal.ValidateCommands); otherwise the committer refuses it
+	// only after receive-pack, the scans, the bundle's put and the round trip.
 	if words := commandsRefusal(adm, s.o.NodeID, sec, pre); words != "" {
 		refuseAll(RefusalCommands, refuseWith(sec.Commands, func(parsedCommand) (gitlet.Refusal, string) {
 			return "", words
@@ -226,11 +208,10 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request, admit admit
 	}
 
 	// 3 THE SYNC, at the request's refs level (admission.refs): through the
-	// barrier for a person, and for a coding box at its run's session — its
-	// floor, which its own advertisement raised to what it showed. Either way
-	// a cache at or past the advertisement holds every base a thin pack
-	// deltas against, and its row is what the status and the protections are
-	// judged on — never the stale resolve.
+	// barrier for a person, at its run's session for a coding box (a floor its
+	// advertisement raised to what it showed). A cache at or past the
+	// advertisement holds every base a thin pack deltas against, and its row,
+	// never the stale resolve, is what status and protections are judged on.
 	synced, err := s.o.Cache.Sync(ctx, adm.repo.ID, adm.refs())
 	if err != nil {
 		s.syncFailed(w, r, adm.name, err)
@@ -240,11 +221,10 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request, admit admit
 
 	// 3–7 OVER THE SYNCED INCARNATION, and once more over a rebuilt one when
 	// the pool refused receive-pack for the incarnation's shape (repairing):
-	// the scratch's one alternate is the incarnation, so a cache git refuses
-	// for its shape would refuse every push to it, and the refusal comes
-	// before git starts or a byte of the body is read — the push is received
-	// whole on the second run. Everything judged on the row is judged again
-	// on the rebuilt one, from the refusals that needed no object.
+	// the scratch's alternate is the incarnation, so that shape would refuse
+	// every push, and the refusal comes before git reads a byte of the body,
+	// so the second run receives the push whole. The row's judgments are made
+	// again on the rebuilt one, from the refusals that needed no object.
 	out := newSink(w, "application/x-git-receive-pack-result", s.now)
 	defer out.End()
 	// ITS BYTES, however the answer ends (Server.served): the push itself is
@@ -263,11 +243,10 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request, admit admit
 	}
 	sess, pushID, res, ended, claimed := rcv.sess, rcv.pushID, rcv.res, rcv.ended, rcv.claimed
 
-	// 9 THE ANSWER AND THE RECORD. A push whose hook claimed its session
-	// is recorded as the session concluded it — applied, pending, unknown,
-	// refused — WHATEVER THEN BECAME OF THE CONNECTION: once a push reached
-	// its proposal, the record may have landed, and "failed" would say it
-	// did not. Only a push no session concluded is recorded failed.
+	// 9 THE ANSWER AND THE RECORD. A push whose hook claimed its session is
+	// recorded as the session concluded it WHATEVER THEN BECAME OF THE
+	// CONNECTION: once proposed, the record may have landed, and "failed"
+	// would deny it. Only a push no session concluded is recorded failed.
 	rec := pushRecord{pushID: pushID, commands: len(sec.Commands), outcome: types.AuditFailed}
 	if claimed {
 		result := sess.outcome()
@@ -283,10 +262,9 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request, admit admit
 		rec.outcome, rec.refusal, rec.git = types.AuditRefused, RefusalGit, sentence(res.LastLine())
 	case runErr == nil:
 	case ended:
-		// THE CLIENT HUNG UP, OR THE HOST IS STOPPING, and the kill of
-		// receive-pack is that end's: answered as it (s.ended — a 503 a
-		// stopping host gives, nothing to a client that is gone), never as
-		// the code log failing, and a started response is cut.
+		// THE CLIENT HUNG UP, OR THE HOST IS STOPPING, and receive-pack's
+		// kill is that end's: answered as it (s.ended), never as the code
+		// log failing, and a started response is cut.
 		audit.record(rec)
 		if out.Started() {
 			panic(http.ErrAbortHandler)
@@ -294,11 +272,9 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request, admit admit
 		s.ended(w, r, adm.name, runErr)
 		return
 	case errors.Is(runErr, gitproc.ErrInput):
-		// THE CLIENT'S BODY FAILED — cut short, too slow for its pace, or
-		// not gzip — and git read no whole push to answer. Past git's first
-		// byte its own report (an unpack error) ended the response; before
-		// it the client is told 400, as a fetch whose body failed is — a
-		// handler returning without writing answers an empty 200, which git
+		// THE CLIENT'S BODY FAILED (cut short, too slow, not gzip). Past
+		// git's first byte its unpack error ended the response; before it,
+		// a 400, since returning unwritten answers an empty 200, which git
 		// cannot tell from a push that did nothing.
 		if !out.Started() {
 			auth.GitText(w, http.StatusBadRequest, "the push's body could not be read: "+sentence(runErr.Error()))
@@ -320,11 +296,9 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request, admit admit
 	audit.record(rec)
 }
 
-// receiving is what a push brings to one run of its steps 3 to 7: its
-// admission and command section, the body past the section, the epoch's
-// limits, the incarnation it is received over, the refusals made before it
-// (its own copy: the run adds what the row's protections refuse), and how a
-// refusal of every command is answered.
+// receiving is what a push brings to one run of its steps 3 to 7. pre is the
+// run's own copy of the refusals made before it: the run adds what the row's
+// protections refuse.
 type receiving struct {
 	adm       admission
 	sec       section
@@ -336,10 +310,10 @@ type receiving struct {
 	out       *sink
 }
 
-// received is what one run of a push's steps 3 to 7 came to: answered when
-// it answered the request itself — a refusal judged on the row, a fault, a
-// scratch that could not be made — and otherwise the session its hook was
-// given and what receive-pack did.
+// received is what one run of a push's steps 3 to 7 came to: answered when it
+// answered the request itself (a refusal judged on the row, a fault, a scratch
+// that could not be made), otherwise its hook's session and what receive-pack
+// did.
 type received struct {
 	answered bool
 	sess     *session
@@ -352,11 +326,11 @@ type received struct {
 	ended, claimed bool
 }
 
-// receiveOver is a push's steps 3 to 7 over p.synced: the status and the
-// protections judged on its row, the push's identity, its scratch over the
-// incarnation and its session, and receive-pack run there. The scratch is
-// removed and the session's work ended before it returns, so a second run
-// over a rebuilt incarnation starts from nothing of the first.
+// receiveOver is a push's steps 3 to 7 over p.synced: status and protections
+// judged on its row, the push's identity, its scratch and session, and
+// receive-pack run there. The scratch is removed and the session's work ended
+// before it returns, so a second run over a rebuilt incarnation starts from
+// nothing of the first.
 func (s *Server) receiveOver(ctx context.Context, w http.ResponseWriter, r *http.Request, p receiving) received {
 	adm, sec, synced, pre := p.adm, p.sec, p.synced, p.pre
 	if s.refusedByStatus(synced.Repo, sec, p.refuseAll) {
@@ -364,10 +338,9 @@ func (s *Server) receiveOver(ctx context.Context, w http.ResponseWriter, r *http
 	}
 	rules, err := gitlet.ParseProtections(synced.Repo.Protections)
 	if err != nil {
-		// A RULE THIS BUILD CANNOT READ — a pattern a newer peer admitted —
-		// is a row of the snapshot this build cannot use, answered as one:
-		// asking again reads the same rule, and a node of a newer build may
-		// judge it.
+		// A RULE THIS BUILD CANNOT READ (a newer peer's pattern) is a snapshot
+		// this build cannot use: asking again reads the same rule, and a newer
+		// node may judge it.
 		s.syncFailed(w, r, adm.name, fmt.Errorf("%w: %w", cache.ErrBadSnapshot, err))
 		return received{answered: true}
 	}
@@ -418,8 +391,7 @@ func (s *Server) receiveOver(ctx context.Context, w http.ResponseWriter, r *http
 	sess.receivedAt, sess.preRefused, sess.judged = s.now(), pre, judged
 	s.relay.open(sess)
 
-	// 7 RECEIVE-PACK, in the scratch. No GIT_PROTOCOL: git never asks
-	// protocol v2 of a push.
+	// 7 RECEIVE-PACK, in the scratch. No GIT_PROTOCOL: a push is never v2.
 	res, runErr := s.runGit(work, gitproc.Cmd{
 		Dir: scratch.Dir, Alternate: scratch.Alternate, Args: []string{"receive-pack", "--stateless-rpc", scratch.Dir},
 		Config: receiveConfig(p.limits), Hooks: s.o.Cache.Hooks(),
@@ -432,9 +404,8 @@ func (s *Server) receiveOver(ctx context.Context, w http.ResponseWriter, r *http
 		Deadline: receivePackDeadline(p.limits, synced.Repo, sec.Commands, s.o.Timing),
 		Stall:    s.o.Timing.Stall, Indexed: sess.indexed,
 	})
-	// THE REQUEST'S OWN END — its client gone, or the host stopping — read
-	// BEFORE relay.close, which ends work whatever happened: judged after
-	// it, every failure would read as a process the engine killed.
+	// THE REQUEST'S OWN END, read BEFORE relay.close, which ends work whatever
+	// happened: read after it, every failure would look engine-killed.
 	ended := ctx.Err() != nil
 	claimed := s.relay.close(sess)
 	return received{sess: sess, pushID: pushID, res: res, runErr: runErr, ended: ended, claimed: claimed}
@@ -455,11 +426,11 @@ func (s *Server) refusedByStatus(repo gitlet.RepoRef, sec section,
 	return true
 }
 
-// refusedEvery refuses a push every command of which pre refuses — or, an
-// --atomic push, any of whose commands pre refuses (gitlet.Atomic) — before
-// receive-pack runs: there is nothing to upload and nothing to propose. But an
-// attempt (gitlet.Attempted) is received, every command it refuses added to
-// pre, so its landing records it with nothing stored.
+// refusedEvery refuses, before receive-pack runs, a push every command of
+// which pre refuses (any one, for an --atomic push: gitlet.Atomic): nothing is
+// left to upload or propose. An attempt (gitlet.Attempted) is received
+// instead, its refusals added to pre, so its landing records it with nothing
+// stored.
 func (s *Server) refusedEvery(sec section, pre map[string]answered,
 	refuseAll func(AuditRefusal, []answered)) bool {
 
@@ -504,11 +475,10 @@ func refuseWith(cmds []parsedCommand, reason func(parsedCommand) (gitlet.Refusal
 }
 
 // drain reads what is left of a refused push's body, up to limit and one
-// byte: a response written while git is still uploading is lost to a broken
-// pipe, and git prints `RPC failed` instead of the reason (measured). A body
-// past the limit is not drained further — the report is still written, and a
-// client that sent more than its limit sees the transport fail, which is
-// what receive-pack's own maxInputSize would show it.
+// byte: a response written while git still uploads is lost to a broken pipe,
+// and git prints `RPC failed` instead of the reason. Past the limit the report
+// is still written, and the client sees the transport fail, as receive-pack's
+// own maxInputSize would show it.
 func drain(body io.Reader, limit int64) {
 	_, _ = io.Copy(io.Discard, io.LimitReader(body, limit+1))
 }

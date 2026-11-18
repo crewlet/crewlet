@@ -27,55 +27,16 @@ import (
 
 // A STOP AGAINST A COORDINATION STORE THAT HAS GONE AWAY SPENDS ONE ALLOWANCE.
 //
-// A member that has lost its coordination store still stops in order: it
-// gives its presence and its seats back, releases its duties and withdraws its
-// admission — and every one of those fails. The leases fall back to lapsing on
-// their TTL; the admission has no TTL and falls back to nothing, so it runs on
-// a share of the allowance no step before it can spend — carved out of the
-// allowance rather than added to it. Each step used to wait out a bound of its
-// own, so the stop spent their sum, close to an orchestrator's kill grace and
-// past it once the flushes behind them ran. Here every read and give-back the
-// lease and fleet stores are asked for stalls once the stop begins — the removal
-// of the node's status record among them, whose fallback is its bucket's age
-// and which is a step of the same allowance — until the
-// deadline its context carries or, where it carries none, for a bound of the
-// stand-in's own: a whole lease TTL, past which every lease the stop races has
-// lapsed anyway. The TTL is [startedLeaseTTL], so the allowance is a third of
-// it, the admission's share included, where the old sum was a bound per step.
-// (The stream stays up: the native backends this company runs are reached
-// through the broker's own client, which a stand-in cannot be.)
-//
-// A RECONCILE PASS IS IN FLIGHT WHEN THE STOP BEGINS, under the hold on its
-// surface: the integration loop's first grant is held back until then. The
-// teardown waits for that pass, and the pass gives its hold back on the
-// context the hold was taken on — long before the stop — so that give-back
-// sat out a whole stalled round trip beside the allowance until the engine
-// bound it to the stop. Held rather than left to chance, because the loop's
-// first pass runs as it starts and is over by the stop on an idle machine, so
-// a case that waited for luck exercised the give-back only under load.
-//
-// THE STORE GOES AWAY AS THE STOP BEGINS — the moment its drain is decided
-// ([engine.Engine.ShuttingDown]) — rather than a moment before it, because the
-// subject is the round trips the STOP makes. One begun earlier ends on its own
-// client's bound like any round trip in flight when a stop begins, and a case
-// that took the store away first measured whether one of those happened to
-// start in between.
-//
-// THE ALLOWANCE IS READ OFF THE DEADLINES THE STOP HANDED ITS ROUND TRIPS,
-// never off the stop's wall clock. The clock is the allowance plus every
-// local step of the teardown — the loops it ends, the flushes, the native
-// half and the stream it closes — which a loaded machine stretches past any
-// margin, and a margin wide enough for that would let a step that waited out
-// a bound of its own through too. The deadlines are exact, whatever the
-// scheduler does: a step begun at an instant is given the rest of the one
-// allowance ([seat.StopStep]), which is spent only while a step is in flight,
-// so the time covered by the stalled steps' spans from start to deadline is at
-// most the allowance less the admission's share — up to the start of the step
-// whose deadline is latest the covered time is time a step was in flight, and
-// from there that step was handed what was left — and the admission's own
-// bound adds at most its share. So the verdict is that measure, and that no
-// round trip ended on the stand-in's own bound: a step the stop left
-// unbounded, whose span no deadline covers.
+// Every give-back, duty read, status-record removal and admission withdrawal
+// stalls from the moment the stop begins ([engine.Engine.ShuttingDown]; a round
+// trip begun earlier ends on its client's bound), until its context's deadline
+// or else a whole TTL ([stalls.ownBound]). Leases fall back to their TTL; the
+// admission has none, so it runs on a share carved out of the allowance. A
+// reconcile pass is held in flight across the stop ([heldPass]), so its
+// give-back is a step too. The stream stays up: the native backends reach it
+// through the broker's own client, which a stand-in cannot be. The verdict is
+// read off the deadlines handed out ([coveredByDeadlines]) and no round trip
+// ending on its own bound, never off the stop's clock, which load stretches.
 func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
@@ -107,11 +68,8 @@ func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	// THE PREMISE IS WAITED FOR, never read once: a node claims its seats
-	// once its appliers are level with their logs, which on a loaded
-	// machine or under -race comes after Start returns. Read straight
-	// after it, the case failed its premise whenever the claim gate opened
-	// a moment late, before anything it is about had happened.
+	// THE PREMISE IS WAITED FOR, never read once: a node claims its seats once
+	// its appliers are level, which under load or -race is after Start returns.
 	waitFor(t, "both seats to be claimed", func() bool {
 		return len(e.Node().Host().Held()) == 2
 	})
@@ -132,10 +90,7 @@ func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 	calls := record.all()
 
 	// THE PREMISE: the stop made every kind of round trip the verdict is
-	// about — a lease given back by the drain, the duties' read, the
-	// admission's withdrawal — and the held pass gave its hold back as a
-	// step of the stop, ended when the allowance ran out. Without the last,
-	// the case would pass with the give-back it exists for never reached.
+	// about; without the held pass's give-back the case passes never reaching it.
 	for _, want := range []struct {
 		what string
 		is   func(stalled) bool
@@ -186,10 +141,9 @@ const (
 	// endedByDeadline is a round trip whose context's deadline passed:
 	// the bound the stop handed it.
 	endedByDeadline stallEnd = iota
-	// endedByCaller is one whose context was cancelled before any
-	// deadline — a loop the teardown stopped, or a give-back whose step of
-	// the allowance ran out — which is its caller's bound, not one of its
-	// own.
+	// endedByCaller is one whose context was cancelled before any deadline
+	// (a loop the teardown stopped, a give-back whose step ran out): its
+	// caller's bound, not one of its own.
 	endedByCaller
 	// endedByOwnBound is one that carried no deadline and waited out the
 	// stand-in's own bound ([stalls.ownBound]).
@@ -226,13 +180,10 @@ func (c stalled) String() string {
 
 // stalls records every round trip the gone store answers.
 type stalls struct {
-	// ownBound is how long a request whose context carries no deadline is
-	// held before it fails on its own: the stand-in for a client's own
-	// timeout, set far past every wait a caller ends. The longest of those
-	// is a give-back the teardown ends when the allowance runs out, an
-	// allowance and the stop's own local steps after the stall began, so a
-	// request held a whole TTL — three allowances — is one the stop left a
-	// bound of its own.
+	// ownBound stands in for a client's own timeout on a request whose context
+	// carries no deadline. A whole TTL, three allowances: far past the longest
+	// wait a caller ends (a give-back cut when the allowance runs out, plus the
+	// stop's local steps).
 	ownBound time.Duration
 
 	mu    sync.Mutex
@@ -240,11 +191,9 @@ type stalls struct {
 }
 
 // stall waits out a round trip to a store that has gone away and records it.
-//
-// A CONTEXT WITH A DEADLINE IS ANSWERED ONLY WHEN IT ENDS — no timer of the
-// stand-in's races it, so a goroutine the scheduler starves cannot pick the
-// stand-in's own bound over the deadline it was handed. One with none ends
-// with its context or [stalls.ownBound], whichever comes first.
+// A context with a deadline is answered only when it ends, with no timer of
+// the stand-in's racing it, so a starved goroutine cannot pick
+// [stalls.ownBound] over the deadline it was handed.
 func (s *stalls) stall(ctx context.Context, op, resource string) error {
 	c := stalled{op: op, resource: resource, start: time.Now()}
 	c.deadline, _ = ctx.Deadline()
@@ -279,10 +228,11 @@ func (s *stalls) all() []stalled {
 }
 
 // coveredByDeadlines is the measure of the union of the spans from each round
-// trip's start to the deadline it ended on: how much time the stop's bounds
-// covered between them, however they overlapped. A span whose deadline is not
-// after its start — a step begun with nothing of the allowance left, handed a
-// context already ended — covers nothing.
+// trip's start to the deadline it ended on. A step is handed the rest of one
+// allowance ([seat.StopStep]), spent only while a step is in flight, so the
+// measure is at most the allowance, the admission's share included. A span
+// whose deadline is not after its start (a step begun with nothing left)
+// covers nothing.
 func coveredByDeadlines(calls []stalled) time.Duration {
 	type span struct{ from, to time.Time }
 	spans := make([]span, 0, len(calls))
@@ -321,7 +271,8 @@ type stallingLeases struct {
 
 // heldPass is the reconcile pass a stop begins in the middle of: granted is
 // closed when the first surface hold is taken, and that hold reaches its pass
-// only once the stop has begun.
+// only once the stop has begun. Held, not left to chance: on an idle machine
+// the loop's first pass is over before the stop.
 type heldPass struct {
 	once    sync.Once
 	granted chan struct{}
@@ -393,44 +344,16 @@ func (f stallingFleet) DeleteMCPListing(ctx context.Context, server, node string
 
 // A STOP ON A STREAM THAT WILL NOT ACKNOWLEDGE LEAVES NOTHING HELD.
 //
-// The event stream and the coordination buckets are separately replicated
-// streams, so the stream can lose its quorum while the store answers. A stop's
-// last events are publishes on it — the node's `org_stopped` and each seat's
-// `agent_terminated` — and a publish the stream never acknowledges waits out
-// whatever deadline it is handed. As steps of the stop's allowance they spent
-// it, and the presence, both seats, the admission and every duty were left
-// held against a store that was answering all along: the presence and the
-// seats until their TTL, the duties for theirs, and the admission — which has
-// none — until an operator excluded the node. Here the stream holds both kinds
-// of event exactly as its client does, until the request's deadline or five
-// seconds without one, and the store is untouched: after the stop, nothing of
-// this node's is held.
-//
-// AND A SEAT'S LAST EVENT IS OVER BEFORE ITS LEASE IS GIVEN BACK, published
-// beside the seat's teardown but never past it: a peer that takes the seat
-// over then announces it after this node let it go, where the other order
-// shows the live projection a running seat as terminated.
-//
-// AND IT RUNS BESIDE THE SEAT'S TEARDOWN, not in front of it. Each seat holds
-// a memory row here, and the memory changelog acknowledges the release's last
-// publish of it only after [teardownHold], so each seat's teardown takes
-// seconds of its own. Beside it, the event costs the seat no time the teardown
-// is not already spending; in front of it, every seat's lease waits for the
-// sum of the two.
-//
-// AND THE ANNOUNCEMENT RUNS BESIDE THE DRAIN, so the stream's silence costs
-// the stop one of its bounds while the seats' run, not one after the other.
-//
-// The lease TTL is [startedLeaseTTL] — an allowance of a third of it — so a
-// lease a stop failed to give back is still held when the case reads it,
-// seconds later.
-//
-// EACH "BESIDE" IS READ OFF THE RECORDED WAITS, never off the stop's clock: the
-// seat's last event and its held memory publish overlap, and the announcement
-// overlaps every seat's last event — where one in front of the other ends
-// before the other begins. Judged by how long the lease took after the release
-// began, or how long the whole stop took, against a slack of seconds, a loaded
-// machine's scheduling decided the verdict as much as the order did.
+// A stop's last events (`org_stopped`, each seat's `agent_terminated`) wait
+// out whatever deadline they get on a stream that lost quorum while the store
+// answers; charged to the allowance they left presence, seats, duties and the
+// TTL-less admission held. Here ([unacknowledgedLastRecords]) nothing of this
+// node's is held after the stop ([startedLeaseTTL] keeps a missed lease held).
+// Read off the recorded waits, never the stop's clock:
+//   - a seat's last event ends before its lease is given back, or a peer's
+//     takeover shows in the live projection as terminated;
+//   - it runs beside the seat's teardown ([teardownHold]), so a lease waits
+//     for the longer, not the sum; the announcement runs beside the drain.
 func TestAStopOnAStreamThatWillNotAcknowledgeLeavesNothingHeld(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
@@ -598,14 +521,10 @@ var errNoQuorum = errors.New("the event stream has lost quorum")
 // teardownHold is how long the memory changelog takes to acknowledge a seat's
 // last memory publish once the stop has begun.
 //
-// SHORTER THAN THE EVENT'S BOUND BY SECONDS, and seconds long itself, so each
-// order the case tells apart misses by seconds rather than by a scheduler's
-// whim: a lease given back without waiting for the seat's event comes two
-// seconds before the event is over, and a teardown run after the event, or the
-// event after the teardown, holds a wait of its own seconds long that the other
-// is over before or begins after. A hold that ran to the flush's own deadline
-// would end with the event, and the first of those would be told apart by
-// microseconds.
+// Seconds long, and seconds shorter than the event's bound, so each order the
+// case tells apart misses by seconds rather than by scheduling: a hold running
+// to the flush's own deadline would end with the event, so a lease given back
+// without waiting for it would be told apart only by microseconds.
 const teardownHold = 3 * time.Second
 
 // unacknowledgedLastRecords is the engine's own broker with an event stream

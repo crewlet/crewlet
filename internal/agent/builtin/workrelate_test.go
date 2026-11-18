@@ -16,14 +16,9 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A BARE LIST IS REFUSED NAMING BOTH SHAPES, which is the whole reason these
-// arguments are objects.
-//
-// The two readings of `waiting_on: ["ENG-7"]` are opposite: as a delta it adds
-// one edge, and as a set it silently drops every edge not repeated. A tool
-// that guessed would be right half the time and lose somebody's dependencies
-// the other half — which is exactly what `watchers: [me]` did to the watcher
-// set before the watch gesture existed.
+// A BARE LIST IS REFUSED NAMING BOTH SHAPES: `waiting_on: ["ENG-7"]` as a
+// delta adds one edge and as a set drops every edge not repeated, so a tool
+// that guessed would lose somebody's dependencies half the time.
 func TestABareListIsRefusedForASetValuedArgument(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -55,7 +50,7 @@ func TestABareListIsRefusedForASetValuedArgument(t *testing.T) {
 func TestAWholeSetOfDependenciesBecomesADelta(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	// THE ITEM ALREADY WAITS ON TWO, so a `set` naming one of them and a
+	// The item already waits on two, so a `set` naming one of them and a
 	// new one is exactly one add and one remove.
 	detail := trk.tasks["ENG-1"]
 	detail.Task.Relations = []worklet.Relation{
@@ -111,8 +106,8 @@ func TestADependencyOnlyCallWritesNoPatch(t *testing.T) {
 	if len(trk.depended) != 1 {
 		t.Fatalf("the dependency change did not reach the sequence")
 	}
-	// AND THE ANSWER STILL CARRIES AN OUTCOME, which a caller reads to
-	// know its write landed.
+	// The answer still carries the outcome a caller reads to know its write
+	// landed.
 	var answer map[string]any
 	if err := json.Unmarshal([]byte(got.Output), &answer); err != nil {
 		t.Fatalf("the answer is not json: %v", err)
@@ -127,9 +122,8 @@ func TestARerouteIsRefusedToASeatThatDoesNotLead(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
-	// A COLLEAGUE AND NOT [everyGrant], which carries admin — every
-	// relation class checks admin before it asks the chart, so the case
-	// would assert nothing.
+	// A colleague, not [everyGrant]: every relation class checks admin before
+	// the chart, so admin would make the case assert nothing.
 	got := callWorkAs(colleagueCaller(), t, reg, builtin.UpdateWorkItemTool,
 		map[string]any{"item": "ENG-1", "routing_unit": "backend"})
 	if !got.Failed {
@@ -144,11 +138,9 @@ func TestARerouteIsRefusedToASeatThatDoesNotLead(t *testing.T) {
 	}
 }
 
-// AN ASK RESOLVES ITS HANDLE AND TRAVELS ON THE WAKE.
-//
-// `Comment.Ask` had no writer at all, so the whole open-ask mechanism —
-// `my_work.asked_of_me`, the `has_open_asks` filter, the `asked` routing arm —
-// read back columns nothing ever wrote.
+// AN ASK RESOLVES ITS HANDLE AND TRAVELS ON THE WAKE: `Comment.Ask` is what
+// `my_work.asked_of_me`, the `has_open_asks` filter and the `asked` routing arm
+// read.
 func TestAnAskIsResolvedAndRoutes(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -183,9 +175,7 @@ func TestAnAskIsResolvedAndRoutes(t *testing.T) {
 		t.Errorf("the asked party is not an ADDRESSED candidate: %+v",
 			worklet.Candidates(wake))
 	}
-	// AND AN UNKNOWN HANDLE IS REFUSED, because an ask addressed to a
-	// spelling wakes nobody and leaves a question open on the board for
-	// ever.
+	// An unknown handle is refused (see askable).
 	if got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": false,
 		"item": "ENG-1", "body": "?", "ask": "nobody",
 	}); !got.Failed {
@@ -226,13 +216,12 @@ func TestACommentThatAsksNobodyWarnsAboutTheAssignee(t *testing.T) {
 		t.Errorf("the warning is %q, want it to say the assignee is not woken "+
 			"and name the remedy", warnings[0])
 	}
-	// AND A PERSON'S SURFACE IS HANDED THE SAME CAVEAT, whose words for a
-	// person are what the act route answers: the model's sentence above
-	// names an argument a person has no control for.
+	// A person's surface gets the same caveat in a person's words, the ones
+	// the act route answers: the model's names an argument a person lacks.
 	if len(got.Caveats) != 1 || got.Caveats[0] != caveat.UnaddressedComment("pm", false) {
 		t.Errorf("the result carries %+v, want the unaddressed comment's caveat", got.Caveats)
 	}
-	// AND AN ASK SILENCES IT, because then somebody IS being asked.
+	// An ask silences it, because then somebody IS being asked.
 	trk.patched = nil
 	if got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": false,
 		"item": "ENG-1", "body": "?", "ask": "pm",
@@ -244,15 +233,12 @@ func TestACommentThatAsksNobodyWarnsAboutTheAssignee(t *testing.T) {
 // A COMMENT MADE AGAIN REPORTS WHAT ITS POST DID, never what this attempt
 // resolved.
 //
-// A call made again after its first attempt landed — a retry after an unknown,
-// a redelivered turn, an approval retried — is answered from the remark's row
-// with nothing published, and the writer says what that row asked and answered
-// ([worklet.WriteResult.Posted]). The attempt's own read can disagree with it
-// where the first attempt landed after that read, or where the read could not
-// be made at all: it inferred a question asked since, or none. Reported from
-// the read, the receipt named a question the write never closed, and an answer
-// in words was warned that nobody was asked to reply. The control is a remark
-// that answered nothing, which is warned as its first attempt was.
+// A repeat after the first attempt landed (a retry after an unknown, a
+// redelivered turn, an approval retried) is answered from the remark's row
+// ([worklet.WriteResult.Posted]). The attempt's own read can disagree, having
+// run before the first attempt landed or not at all; reported from it, the
+// receipt names a question the write never closed. The control is a remark
+// that answered nothing, warned as its first attempt was.
 //
 // Mutation: report from the read rather than from Posted and every case goes
 // red.
@@ -312,9 +298,8 @@ func askable() []colleague.Seat {
 }
 
 // AN ANSWER THE READER REFUSES REACHES THE CALLER AS THAT REFUSAL, classed and
-// in the reader's own words, and posts nothing. It used to arrive as "could
-// not read the tracker … try again": a retry that refused identically, over a
-// sentence that no longer said which comment was wrong.
+// in the reader's own words, and posts nothing, rather than as a read failure
+// whose retry refuses identically.
 func TestAnAnswerToAnAnsweredQuestionIsRefusedAsSuch(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -342,14 +327,11 @@ func TestAnAnswerToAnAnsweredQuestionIsRefusedAsSuch(t *testing.T) {
 
 // A WRITE THAT ALSO DEPENDS ANSWERS FOR BOTH RECORDS, never for the first.
 //
-// create_work_item with `waiting_on` and update_work_item with a field and a
-// dependency each append the item's own record and THEN the dependency
-// sequence. Answering only the first record's outcome and position — which
-// both tools did — handed a caller a floor BELOW the edge it had just written,
-// so the read after the write showed the item without its blocker, and
-// reported a dependency whose outcome was `unknown` as `applied`, which every
-// transport promises never to do. The version moves too: the authored edge is
-// a commit on the item, and an If-Match with the older version is refused.
+// A create with `waiting_on`, or an update with a field and a dependency,
+// appends the item's record and THEN the dependency sequence. Answering the
+// first alone gives a floor below the new edge, so the read after the write
+// misses the blocker, and reports an `unknown` dependency as `applied`. The
+// version moves too: an If-Match with the older one is refused.
 func TestAWriteThatAlsoDependsAnswersForBothRecords(t *testing.T) {
 	t.Parallel()
 	later := worklet.DependencyResult{WriteResult: worklet.WriteResult{
@@ -430,11 +412,10 @@ func decodeAnswer(t *testing.T, got tools.Result) map[string]any {
 	return answer
 }
 
-// A SET IS READ AS EVERY LIST OF STRINGS IS, never as no list (ADR-0059): the
-// check at the surface admits one reference for a list of one, and refList
-// read it as nil, so `{"set": "ENG-2"}` cleared every edge and was answered
-// applied. Now one reference is the set of one, a number is the reference it
-// spells, and a value that is no list at all is refused with nothing written.
+// A SET IS READ AS EVERY LIST OF STRINGS IS, never as no list (ADR-0059): one
+// reference is the set of one, so `{"set": "ENG-2"}` clears no other edge, a
+// number is the reference it spells, and a value that is no list at all is
+// refused with nothing written.
 //
 // Mutation: read the set with a bare .([]any) and the single reference wipes
 // both edges.
@@ -473,10 +454,9 @@ func TestASetIsNeverReadAsNoList(t *testing.T) {
 	}
 }
 
-// A NULL SET IS ABSENT (#423 review): the check at the surface reads null as
-// absent, and the tool read `{"set": null}` as the empty set, clearing every
-// relation. Now null is absent to both ([argval.Object]): a set that states
-// nothing is refused as asking for nothing, with nothing written.
+// A NULL SET IS ABSENT, to the surface's check and the tool alike
+// ([argval.Object]): `{"set": null}` is refused as asking for nothing, rather
+// than clearing every relation.
 //
 // Mutation: read the object with a bare .(map[string]any) and both edges are
 // cleared.
@@ -503,9 +483,7 @@ func TestANullSetIsAbsent(t *testing.T) {
 }
 
 // `include` IS READ AS EVERY LIST OF STRINGS IS: "body" is the list of one
-// part, so the description comes back, where read as no list it returned no
-// part at all and answered as though nothing had been asked; a value that is
-// no list is refused.
+// part, so the description comes back; a value that is no list is refused.
 //
 // Mutation: read `include` with a bare .([]any) and "body" reads nothing.
 func TestIncludeIsNeverReadAsNoList(t *testing.T) {

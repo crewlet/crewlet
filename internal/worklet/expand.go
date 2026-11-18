@@ -13,67 +13,44 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// Saved views and presets as DEFAULTS, and why the expansion is not the
-// parser's.
+// Saved views and presets are DEFAULTS: loaded first, with the caller's
+// explicit keys overriding them, so a person who opens a saved board and picks
+// another assignee gets the view with that one key changed.
 //
-// `view=<id>` and `preset=<name>` each stand for a set of parameters, and the
-// grammar's own doc has always said how they compose: "loaded FIRST and
-// explicit keys override them, so a saved view is a set of defaults rather
-// than a lock". A person who opens a saved board and then picks a different
-// assignee gets the view with that one key changed — never the view, and never
-// the key alone.
-//
-// [ParseQuery] cannot do it. A view is a ROW, so reading one is I/O, and this
-// grammar's whole shape rests on a parser that cannot fail on a store — the
-// same reason a custom field's ref reaches the compiler unresolved. So the
-// expansion is a step BEFORE the parse, taken by whoever has the reader:
-// [Reader.Expand] answers the merged parameters and the caller parses those.
-//
-// # Why a view may not set every key
-//
-// A saved view carrying `view=` would expand into itself, and one carrying
-// `cursor=` would resume a page the caller never asked for. Both are refused
-// at the SAVE — see [checkView] — which is the only writer of a view's
-// parameters, so no stored view carries one.
+// The expansion is not [ParseQuery]'s: a view is a ROW, so reading one is I/O,
+// and the parser must not fail on a store (the reason a custom field's ref
+// reaches the compiler unresolved). So it is a step BEFORE the parse:
+// [Reader.Expand] answers the merged parameters and the caller parses those. A
+// view carrying `view=` would expand into itself and one carrying `cursor=`
+// resume a page nobody asked for; [checkView], the only writer of a view's
+// parameters, refuses both.
 
-// The presets, and there are exactly five: each is a question a person asks
-// often enough that a screen puts it on a tab.
-//
-// Three of them name an index: `tracker_tasks_queue_idx` names
-// `preset=my_queue`, `tracker_task_deps_open_idx` names `preset=blocked`, and
-// the overdue date alias's own comment names "the preset that means the same
-// thing". The other two are the two lists a PERSON has that the rows alone
-// cannot express — what somebody put at the top of their queue, and what
-// nobody has picked up.
+// The presets: five questions a person asks often enough that a screen puts
+// each on a tab. `tracker_tasks_queue_idx` names `preset=my_queue`,
+// `tracker_task_deps_open_idx` `preset=blocked`, and the overdue date alias's
+// comment names `preset=overdue`; priorities and triage are the two lists a
+// PERSON has that the rows alone cannot express.
 const (
 	// PresetMyQueue is what the viewer is expected to do next: their open
-	// work, most important first. It is the one preset that needs to know
-	// WHO is asking, which is why [Reader.Expand] takes a viewer.
+	// work, most important first. The one preset that needs WHO is asking,
+	// hence [Reader.Expand]'s viewer.
 	PresetMyQueue = "my_queue"
 
-	// PresetBlocked is open work that cannot move, which is the list a
-	// lead reads before a stand-up.
+	// PresetBlocked is open work that cannot move.
 	PresetBlocked = "blocked"
 
-	// PresetOverdue is open work past its due date — the same predicate
-	// the `due=overdue` alias carries, rather than a second one that
-	// drifts from it.
+	// PresetOverdue is open work past its due date: the `due=overdue`
+	// alias's own predicate, not a second one that drifts from it.
 	PresetOverdue = "overdue"
 
 	// PresetPriorities is the caller's own ordered list, open tasks only.
-	//
-	// It is the one preset whose ORDER is the answer: the rows come back
-	// in the sequence somebody arranged them in rather than in any sort,
-	// which is why it expands to a key the query grammar has rather than
-	// to a `sort=`.
+	// Its ORDER is the answer, so it expands to the grammar's `priorities` key
+	// rather than to a `sort=`.
 	PresetPriorities = "priorities"
 
-	// PresetTriage is the open work nobody has picked up.
-	//
-	// With ONE FIXED STATUS SET there is no intake status to filter on —
-	// a company cannot declare a `triage` column — so the honest
-	// definition of "needs somebody to decide" is the unassigned open
-	// work, which is what a lead actually reads it for.
+	// PresetTriage is the open work nobody has picked up: with ONE FIXED
+	// STATUS SET a company cannot declare an intake (`triage`) status, so the
+	// unassigned open work is what "needs somebody to decide" means.
 	PresetTriage = "triage"
 )
 
@@ -82,18 +59,14 @@ var Presets = []string{
 	PresetMyQueue, PresetPriorities, PresetTriage, PresetBlocked, PresetOverdue,
 }
 
-// expansionRefused are the keys a view or a preset may not carry.
-//
-// `view` and `preset` because an expansion that expanded again would be a
-// loop; `cursor` because a page boundary belongs to the caller that was handed
-// it and to nobody else; `read_level`, `max_lag_seconds`, `max_lag_seq` and
-// `min_position` because how fresh an answer must be is a property of the
-// SURFACE asking, and a saved row that carried one would let a board silently
-// downgrade a seat's own read — or, for the floor, pin every later reader to
-// a position from the day the view was saved. `around` for the reason
-// `cursor` is: which task a caller is standing on is the caller's own, and a
-// view that carried one would answer every reader's "3 of 18" about a task
-// they never opened.
+// expansionRefused are the keys a view or a preset may not carry: `view`
+// and `preset` (an expansion that expanded again would loop); `cursor` and
+// `around` (the page boundary and the task a caller stands on are that
+// caller's own; a saved `around` would answer every reader's "3 of 18" about
+// a task they never opened); `read_level`, `max_lag_seconds`, `max_lag_seq`
+// and `min_position` (freshness belongs to the SURFACE asking: a saved one
+// would silently downgrade a seat's read, or pin every later reader to the
+// position the view was saved at).
 var expansionRefused = []string{
 	"view", "preset", "cursor", "around", "read_level", "max_lag_seconds",
 	"max_lag_seq", "min_position",
@@ -101,12 +74,10 @@ var expansionRefused = []string{
 
 // Viewer is who is asking, as much as an expansion needs to know.
 //
-// A STRUCT RATHER THAN A HANDLE, because `preset=my_queue` needs two facts
-// about the reader and not one: who they are, and which project is theirs —
-// its second arm is the unassigned work in their OWN container, and unscoped
-// that arm offers every unclaimed task in the company. Both are properties of
-// the SURFACE's own credential, and neither can be read from the tracker,
-// which holds no org.
+// A STRUCT, not a handle: `preset=my_queue` needs who the reader is and which
+// project is theirs (its unassigned arm, unscoped, offers every unclaimed task
+// in the company). Both come from the SURFACE's credential; the tracker holds
+// no org.
 type Viewer struct {
 	Handle string
 
@@ -118,12 +89,9 @@ type Viewer struct {
 
 // Expand resolves `view=` and `preset=` into the parameters they stand for.
 //
-// THE CALLER'S OWN KEYS WIN, every one of them: the expansion is a set of
-// defaults. A preset expands first and a view over it, because a view is the
-// more specific thing — somebody saved it — and both lose to what was typed.
-// [mergeExpansion] is what does the merging, and the one other reader of a
-// view's parameters — a pinned view's count in [Reader.Views] — goes through
-// it too.
+// THE CALLER'S OWN KEYS WIN: the expansion is defaults. A preset expands
+// first and a view over it, the more specific thing, and both lose to what was
+// typed. [mergeExpansion] merges, for [Reader.Views]'s pinned-view count too.
 func (r *Reader) Expand(ctx context.Context, params map[string]any,
 	viewer Viewer) (MapParams, error) {
 
@@ -156,35 +124,26 @@ func savedDefaults(params map[string]string) MapParams {
 	return out
 }
 
-// mergeExpansion is the whole of what a read's parameters mean once a preset
-// and a saved view have been read: the preset's defaults, the view's over
-// them, the caller's over both — and then `me` resolved to the viewer over the
-// RESULT.
+// mergeExpansion is what a read's parameters mean once a preset and a saved
+// view are read: the preset's defaults, the view's over them, the caller's
+// over both, then `me` resolved to the viewer over the RESULT, because a `me`
+// means the reader wherever it was written: a view saved with
+// `f.reviewers=me` must open for whoever opens it, not reach the compiler as
+// a literal "me".
 //
-// OVER THE RESULT, because a `me` means the reader wherever it was written.
-// Resolved over the caller's keys alone, a view SAVED with `f.reviewers=me`
-// reached the compiler as a literal "me" and was refused as unresolved — so
-// the one thing [resolveViewerKeys] says a saved `me` is for, a view that
-// means whoever opens it, could not be opened at all.
-//
-// ONE FUNCTION FOR BOTH READERS of a view — the board that runs it
-// ([Reader.Expand]) and the count beside its pin ([countView]) — because the
-// count is only the board's total while the two expand alike, and a second
-// merge is how a sidebar number stops being the number on the board it opens.
+// ONE FUNCTION FOR BOTH READERS of a view, the board ([Reader.Expand]) and
+// its pin's count ([countView]), so the sidebar number stays the board's.
 func mergeExpansion(caller map[string]any, preset, view MapParams,
 	viewer string) (MapParams, error) {
 
 	merged := make(MapParams, len(preset)+len(view)+len(caller))
 	maps.Copy(merged, preset)
 	maps.Copy(merged, view)
-	// THE CALLER'S LAST, so every explicit key overrides — and `view` and
-	// `preset` themselves survive into the parsed query, where they are
-	// what an answer can say it came from.
+	// THE CALLER'S LAST, so every explicit key overrides; `view` and
+	// `preset` survive into the parsed query, which names them as its source.
 	maps.Copy(merged, MapParams(caller))
-	// `me` IS RESOLVED ALWAYS, with or without a view or a preset: a
-	// `f.<slug>=me` on a query that names neither is still a query about
-	// the reader, and returning the parameters untouched would hand the
-	// compiler a literal "me".
+	// `me` IS RESOLVED ALWAYS: an `f.<slug>=me` on a query naming no view
+	// or preset is still a query about the reader.
 	resolved, err := resolveViewerKeys(merged, viewer)
 	if err != nil {
 		return nil, err
@@ -194,16 +153,11 @@ func mergeExpansion(caller map[string]any, preset, view MapParams,
 
 // resolveViewerKeys substitutes the reader for every `me` a query names.
 //
-// ONE PLACE, and it is here rather than in the parser for the reason the
-// preset expansion is: a parser that resolved a viewer would be a parser that
-// needed one, and the viewer is a property of the SURFACE — its credential,
-// its turn's seat — rather than of the text somebody typed. A saved view
-// carrying `me` means whoever opens it, which is only true if the
-// substitution happens per read.
-//
-// A COPY, never a mutation of the caller's map: the same parameters are held
-// by whoever built them, and rewriting one person's `me` into a handle would
-// make the next reader of that map see somebody else's query.
+// Here, not in the parser, for the preset expansion's reason: the viewer is a
+// property of the SURFACE (its credential, its turn's seat), not of the text
+// typed, and a saved view's `me` means whoever opens it only if substituted
+// per read. It answers a COPY: whoever built the caller's map still holds it,
+// and rewriting its `me` would show the next reader somebody else's query.
 func resolveViewerKeys(params map[string]any, viewer string) (map[string]any, error) {
 	var named []string
 	for key, value := range params {
@@ -231,52 +185,41 @@ func resolveViewerKeys(params map[string]any, viewer string) (map[string]any, er
 	return out, nil
 }
 
-// expandPreset is one preset's parameters.
-// The viewer's own PROJECT is what `my_queue`'s second arm needs, and only the
-// caller can supply it: the tracker holds no org, so "this seat's project" is
-// a fact about the chart and is resolved before the expansion.
+// expandPreset is one preset's parameters. The viewer's PROJECT, which
+// `my_queue`'s second arm needs, comes from the caller: the tracker holds no
+// org, so it is resolved from the chart before the expansion.
 func expandPreset(name string, viewer Viewer) (MapParams, error) {
 	open := string(GroupNotStarted) + "," + string(GroupActive)
 	switch name {
 	case PresetMyQueue:
 		if viewer.Handle == "" {
-			// A QUEUE WITH NOBODY'S NAME ON IT IS EVERY OPEN TASK,
-			// which is the widest possible reading of "mine". Refused
-			// naming what is missing rather than answered.
+			// A QUEUE WITH NOBODY'S NAME ON IT is every open task, the
+			// widest reading of "mine": refused, naming what is missing.
 			return nil, fmt.Errorf("worklet: preset=%s is what one person is "+
 				"expected to do next and this read names nobody — a surface "+
 				"resolves the viewer from its own credential before it asks",
 				PresetMyQueue)
 		}
-		// "WHAT CAN I PICK UP" IS A DISJUNCTION, and both arms matter:
-		// the work this person HOLDS, and the work in their project that
-		// NOBODY holds. Written as `assignee=me` alone it answered only
-		// the first, so a seat whose queue was empty read the company as
-		// having nothing for it while its own project's unassigned
-		// backlog sat there.
+		// "WHAT CAN I PICK UP" IS A DISJUNCTION: the work this person
+		// HOLDS, and the work in their project NOBODY holds; `assignee=me`
+		// alone hides that backlog from a seat whose queue is empty.
 		//
-		// AND `blocked=false`, because a task that cannot move is not
-		// something to pick up — it is `preset=blocked`'s answer, and
-		// putting it here would mean the two presets returned the same
-		// rows for the wrong reason.
+		// AND `blocked=false`: a task that cannot move is not something to
+		// pick up, it is `preset=blocked`'s answer.
 		out := MapParams{
 			"status_group": open,
 			"blocked":      "false",
-			// PRIORITY THEN DUE, which is the order
-			// `tracker_tasks_queue_idx` is built in — so the preset
-			// the index is named for is the query it serves.
+			// PRIORITY THEN DUE, the order `tracker_tasks_queue_idx`
+			// is built in, so the index serves this preset.
 			"sort": "-priority,due",
 		}
 		home := strings.TrimSpace(viewer.Project)
 		if home == "" {
-			// A VIEWER WITH NO PROJECT OF THEIR OWN HAS NO SECOND ARM.
-			// The unclaimed arm is "the work in MY project nobody
-			// holds", and with no project it used to go UNSCOPED —
-			// every unassigned task in the company, the widest reading
-			// of "what can I pick up" and the one this arm is scoped to
-			// prevent. A seat whose unit files no project, and every
-			// token or service account the directory binds to no seat,
-			// pick up what they hold.
+			// A VIEWER WITH NO PROJECT OF THEIR OWN HAS NO SECOND ARM:
+			// unscoped, it would be every unassigned task in the company,
+			// the reading this arm's scope prevents. A seat whose unit files
+			// no project, or a token or service account bound to no seat,
+			// picks up what it holds.
 			out["assignee"] = viewer.Handle
 			return out, nil
 		}
@@ -298,15 +241,12 @@ func expandPreset(name string, viewer Viewer) (MapParams, error) {
 				"the viewer from its own credential before it asks",
 				PresetPriorities)
 		}
-		// NO `sort`, DELIBERATELY. The order of this list is the answer
-		// — it is what somebody decided — so it is the list's own, and a
-		// sort key here would be a second order overriding the first.
-		// [Reader.Tasks] restores it after the rows are read.
+		// NO `sort`, DELIBERATELY: the order somebody decided is the
+		// answer, and a sort key would override it. [Reader.Tasks]
+		// restores it after the rows are read.
 		return MapParams{"priorities": viewer.Handle, "status_group": open}, nil
 	case PresetTriage:
-		// UNASSIGNED OPEN WORK, and that is the honest definition: with
-		// one fixed status set there is no intake status to filter on,
-		// so "needs somebody to decide" is "nobody has picked it up".
+		// UNASSIGNED OPEN WORK, as [PresetTriage] defines it.
 		return MapParams{
 			"assignee": "none", "status_group": open, "sort": "-priority,created",
 		}, nil
@@ -314,8 +254,7 @@ func expandPreset(name string, viewer Viewer) (MapParams, error) {
 		return MapParams{"blocked": "true", "status_group": open}, nil
 	case PresetOverdue:
 		// THE ALIAS, not a second predicate: `due=overdue` carries its
-		// own open condition, and writing the condition again here is
-		// how two spellings of one question drift apart.
+		// own open condition, and a copy here would drift from it.
 		return MapParams{"due": "overdue"}, nil
 	}
 	return nil, fmt.Errorf("worklet: %q is not a preset; the three are %s",
@@ -325,14 +264,11 @@ func expandPreset(name string, viewer Viewer) (MapParams, error) {
 // expandView reads one saved view's own parameters.
 func (r *Reader) expandView(ctx context.Context, id string) (MapParams, error) {
 	var out MapParams
-	// A STALE READ, ALWAYS — and deliberately NOT a surface of its own in
-	// [statelog.ReadLevelDefaults]. The level here is a property of the
-	// ROWS rather than of the reader: the parameters of a saved view are
-	// not something anybody writes and then reads back in one gesture, so
-	// no caller's surface has an interest in them being fresher. Taking
-	// the caller's own level would put a board's furniture on the same
-	// round trip as its rows, which is a barrier per navigation to
-	// re-read a filter somebody saved last month.
+	// A STALE READ, ALWAYS, and deliberately not a surface of its own in
+	// [statelog.ReadLevelDefaults]: nobody writes a view's parameters and reads
+	// them back in one gesture, so the level belongs to the ROWS, and the
+	// caller's own would cost a board a barrier per navigation to re-read a
+	// filter somebody saved last month.
 	if _, err := r.log.Read(ctx, statelog.Query{
 		Level: statelog.ReadStale, Scope: viewScope(Container{
 			Kind: ContainerWorkspace,
@@ -363,9 +299,9 @@ func (r *Reader) expandView(ctx context.Context, id string) (MapParams, error) {
 
 // ExpandedQuery is the whole chain: expand, then parse.
 //
-// ONE ENTRY POINT, so a surface cannot parse without expanding — which would
-// answer a `view=` as an unfiltered list, the exact silence this grammar's
-// unknown-key refusal exists to stop.
+// ONE ENTRY POINT, so no surface parses without expanding and answers a
+// `view=` as an unfiltered list, the silence the unknown-key refusal exists
+// to stop.
 func (r *Reader) ExpandedQuery(ctx context.Context, params map[string]any,
 	viewer Viewer, now time.Time, loc *time.Location) (Query, error) {
 

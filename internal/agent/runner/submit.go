@@ -78,24 +78,14 @@ type workPayload struct {
 }
 
 // decodeWork validates a submission against the engine's own record of the
-// turn.
+// turn: a closure, because whether a cited tool was really called and whether
+// anybody is waiting are facts the model does not control. Checked HERE, a
+// wrong claim costs one bounced call the model can fix, not a review round or
+// an accepted no-op.
 //
-// A CLOSURE over that record, not a plain function, because the two questions
-// worth asking cannot be answered from the arguments alone: whether a cited
-// tool was really called, and whether anybody is waiting for this turn. The
-// first is the engine's log; the second is the trigger's own type. Both are
-// facts the model does not control, which is the whole point — the account a
-// phase gives of itself is exactly what a phase can get wrong.
-//
-// Checking HERE rather than after the phase means a wrong claim costs one
-// bounced tool call inside the loop, which the model can fix, instead of a
-// whole review round or a silently accepted no-op.
-//
-// `called` is the TURN's record, the closed rounds included ([turn.Record]),
-// never the phase's own: a delivery an earlier round made is citable, because
-// the prior-work ledger forbids the round to make it again. Read per phase, a
-// round sent back for a re-read had eleven citations of its own turn's comment
-// refused, and ran out of rounds saying so.
+// `called` is the TURN's record, closed rounds included ([turn.Record]), never
+// the phase's: a delivery an earlier round made is citable, since the
+// prior-work ledger forbids making it again.
 func decodeWork(reply turn.Reply, called func() []ledger.Call, surface func() turn.Surface,
 ) func(map[string]any) (workPayload, error) {
 	return func(args map[string]any) (workPayload, error) {
@@ -106,13 +96,9 @@ func decodeWork(reply turn.Reply, called func() []ledger.Call, surface func() tu
 		switch turn.Outcome(w.Outcome) {
 		case turn.OutcomeDelivered, turn.OutcomeNoAction, turn.OutcomeBlocked:
 		case "":
-			// An absent outcome is `delivered`, the common case and the
-			// one every other field is written for. It is also the safe
-			// default: the engine checks a delivery claim against the
+			// Absent is `delivered`: the claim is checked against the
 			// record either way, so a forgotten field costs a correction
-			// at worst, while refusing the submission outright throws
-			// away a round of real work over the most predictable
-			// omission.
+			// at worst, where refusing it throws away a round of work.
 			w.Outcome = string(turn.OutcomeDelivered)
 		default:
 			return w, fmt.Errorf(
@@ -124,10 +110,9 @@ func decodeWork(reply turn.Reply, called func() []ledger.Call, surface func() tu
 		switch turn.Outcome(w.Outcome) {
 		case turn.OutcomeNoAction:
 			if reply.Awaited() {
-				// SILENCE IS NOT A DECLINE. The requester cannot tell it
-				// from a message that was lost, and the engine knows one
-				// arrived — so this is refused where the model can still
-				// act on it rather than corrected a phase later.
+				// SILENCE IS NOT A DECLINE: the requester cannot tell it
+				// from a lost message, so it is refused while the model
+				// can still act.
 				return w, fmt.Errorf("this turn was asked for directly, so no_action is not " +
 					"available: reply where you were asked — even to decline — and report " +
 					"that as delivered")
@@ -153,9 +138,9 @@ func decodeWork(reply turn.Reply, called func() []ledger.Call, surface func() tu
 // [turn.Check] and [turn.OverrideDone] say the same after the phase, so what
 // is refused here is refused there too.
 //
-// FIRST, before the decode's own checks: a pickup's run that wrote nothing is
-// told what would answer the pickup rather than that any delivery would do.
-// answer reads the record at the submission, under the call's own context.
+// FIRST, before decode's checks, so a run that wrote nothing is told what
+// answers the pickup rather than that any delivery would do. answer reads the
+// record at the submission, under the call's context.
 func typedPickup(reply turn.Reply, answer func(context.Context) types.PickupAnswer,
 	decode func(map[string]any) (workPayload, error),
 ) func(context.Context, map[string]any) (workPayload, error) {
@@ -175,24 +160,16 @@ func typedPickup(reply turn.Reply, answer func(context.Context) types.PickupAnsw
 }
 
 // keptWhole is decode for a submission a run is MAKING, held to what the run's
-// log keeps whole.
+// log keeps whole. The collection replays a submission from that log
+// ([replaySubmission]), which keeps the newest one whole only up to
+// sandbox.MaxSubmissionArgsBytes, so a longer one would collect as no
+// submission: it is refused here, while the run can shorten it, past
+// sandbox.MaxSubmissionBytes as the log would hold it. That is half what the
+// log keeps, since the run's own spelling of the canonical form can only add
+// to it, and never past the other half. The size is stated rounded up
+// (kept.SizeUp), so a byte past never reads as the bound itself.
 //
-// THE COLLECTION REPLAYS A RUN'S SUBMISSION FROM ITS LOG ([replaySubmission]),
-// the bridged call log kept beside the run's row, so a submission is the run's
-// outcome only as the log holds it, and the log is bounded in bytes: it keeps
-// the newest successful submission whole up to sandbox.MaxSubmissionArgsBytes,
-// and every other call's arguments with their largest values left out. A
-// submission past what it keeps would be collected as a round that submitted
-// nothing. So the tool refuses it here, while the run can still shorten it,
-// naming its size: past sandbox.MaxSubmissionBytes, measured as the log would
-// hold it (its arguments as the engine records them and the log escapes them),
-// which is half what the log keeps — the run's own spelling of what the tool
-// reads in canonical form can only add to it, and never past the other half.
-// The size is stated rounded up (internal/kept's SizeUp), so a submission a
-// byte past the bound never reads as the bound itself.
-//
-// LIVE ONLY. The replay decodes without it: the submission is made, and one a
-// build before this bound recorded whole is replayed as it stands.
+// LIVE ONLY: the replay decodes without it, as the submission is already made.
 func keptWhole(decode func(map[string]any) (workPayload, error)) func(map[string]any) (workPayload, error) {
 	return func(args map[string]any) (workPayload, error) {
 		text, err := tools.RecordArgs(args)
@@ -208,23 +185,16 @@ func keptWhole(decode func(map[string]any) (workPayload, error)) func(map[string
 	}
 }
 
-// makingWork is decode for a submission a run is MAKING: every rule
-// [decodeWork] holds a submission to, and then a no_action refused once the
-// turn's record shows it acted outside the engine ([turn.Acted]), saying what
-// it did ([turn.ActedAccount]: a call the engine only presumes wrote named as
-// one) — one bounced call inside the round, where [turn.Check]'s correction
-// of the same claim relaunches the round in a new run and spends a review
-// after it. On a turn somebody is waiting on, decodeWork's own refusal of any
-// no_action speaks first.
+// makingWork is decode for a submission a run is MAKING: [decodeWork]'s rules,
+// then a no_action refused once the turn's record shows it acted outside the
+// engine ([turn.Acted]), saying what it did ([turn.ActedAccount]). One bounced
+// call here saves [turn.Check]'s correction a relaunched run and a review. On
+// an awaited turn decodeWork's refusal of any no_action speaks first.
 //
-// LIVE ONLY, as [keptWhole] is, and for a reason of its own: the collection
-// replays a submission against EVERY call the round made
-// ([Runner.resumeAgentRun]), those the run made after submitting included. A
-// no_action the run made before it acted would be refused there, and the round
-// collected as one that submitted nothing — rescued as incomplete, its account
-// lost, while the lost path's [submitted] reads the same calls as a
-// submission. Accepted on replay, the claim reaches [turn.Check], which
-// corrects it by the same rule on the same record.
+// LIVE ONLY: the replay checks against EVERY call the round made
+// ([Runner.resumeAgentRun]), those after the submission included, so a
+// no_action made before acting would collect as no submission, its account
+// lost. Accepted on replay, [turn.Check] corrects it by the same rule.
 func makingWork(reply turn.Reply, called func() []ledger.Call, surface func() turn.Surface,
 ) func(map[string]any) (workPayload, error) {
 	decode := decodeWork(reply, called, surface)
@@ -245,34 +215,23 @@ func makingWork(reply turn.Reply, called func() []ledger.Call, surface func() tu
 // opens with: a turn that claims delivery while nothing reached the surface it
 // was asked on.
 //
-// ONE SPELLING, EXPORTED, because a test that scripts a model has to recognise
-// the refusal to answer it, and a copy of the sentence drifts silently: the
-// end-to-end chat case once matched the surface without the backticks this
-// puts round it, never saw the refusal, and answered submit_work until the
-// rounds ran out.
+// EXPORTED, because a test that scripts a model must recognise the refusal,
+// and a copied sentence drifts silently.
 func NotDeliveredOn(surface string) string {
 	return fmt.Sprintf("nothing has been delivered on `%s` yet, which is where this was asked",
 		surface)
 }
 
-// citations checks that a delivery claim names calls that actually happened.
+// citations checks that a delivery claim names calls that actually happened,
+// only where a TOOL was the way to deliver: a colleague's ask is answered by
+// the engine, and an unaddressed turn owes nobody a post, so a citation there
+// would loop a turn that did right.
 //
-// Only where a TOOL was the way to deliver. A colleague's ask is answered by
-// the engine on the channel it opened, and an unaddressed turn owes nobody a
-// posted answer, so demanding a citation in either case would loop a turn that
-// did exactly the right thing.
+// The refusal lists what IS citable: the usual failure is a model naming the
+// tool it meant to call, and a bare "no" sends it round the same loop.
 //
-// The refusal lists what IS citable, because the failure this catches is
-// usually a model naming the tool it meant to call rather than one it did, and
-// a bare "no" sends it round the same loop.
-//
-// ELIGIBILITY IS SURFACE-SCOPED, by the same rule [turn.DeliveredTo] applies
-// and for the same reason the two must agree: what the engine refuses here it
-// must also refuse after the review, or a model is told one thing at
-// submission and judged by another. A flat list is how this told a seat to
-// "cite one of create_work_item" while a founder waited in a chat thread —
-// which would have produced a clean `delivered`, a clean `done`, and the same
-// silence.
+// ELIGIBILITY IS SURFACE-SCOPED by [turn.DeliveredTo]'s rule, so what is
+// refused at submission is refused after the review too.
 func citations(cited []string, reply turn.Reply, calls []ledger.Call, s turn.Surface) error {
 	if reply.Kind != turn.ReplyTool {
 		return nil
@@ -291,39 +250,30 @@ func citations(cited []string, reply turn.Reply, calls []ledger.Call, s turn.Sur
 	}
 	slices.Sort(eligible)
 	if len(eligible) == 0 {
-		// THE REMEDY NAMES THE TOOLS ([turn.Remedy]). Pointing every seat at
-		// discovery sent one woken on the tracker — whose tools it already
-		// held — to the only MCP server it had, to post where nothing could
-		// count it.
+		// THE REMEDY NAMES THE TOOLS ([turn.Remedy]), not discovery, which
+		// can lead to a server where nothing could count the post.
 		remedy := turn.Remedy(s, reply)
 		on := reply.Surface
 		named := on != "" && s.Reaches(on)
 		acted := turn.ActedWith(calls, s)
 		switch {
 		case named && turn.KnownDelivered(calls, s):
-			// NAMED WHEN IT IS KNOWN. "No tool that acts outside the engine
-			// was called" reads as plainly false to a model looking at its
-			// own successful write to another surface, and a refusal a model
-			// does not believe is one it argues with rather than acts on.
-			// Known, not presumed ([turn.KnownDelivered]): a turn that only
-			// searched through a tool that no hint marks as a read or as a
-			// write is told what it called by the next case instead.
+			// A write elsewhere is NAMED, or "no tool was called" reads as
+			// false and the model argues rather than acts. Known, not
+			// presumed ([turn.KnownDelivered]): an unhinted call falls to
+			// the next case.
 			return fmt.Errorf("%s — a call that reached somewhere else does not "+
 				"answer the person waiting. %s Do that before reporting the work "+
 				"delivered", NotDeliveredOn(on), remedy)
 		case named && acted != "":
-			// ACTED, AND REACHED NOBODY WAITING THERE: an ask, a reaction, a
-			// publish. "No call in this turn has reached anybody", said to
-			// it, is false, so it is told what it did call
-			// ([turn.ActedWith]), as every correction that finds the turn
-			// acted but delivered nothing is.
+			// ACTED, AND REACHED NOBODY WAITING (an ask, a reaction, a
+			// publish): told what it called ([turn.ActedWith]), since "no
+			// call reached anybody" would be false.
 			return fmt.Errorf("%s: this turn called %s, but none of that reached the person "+
 				"waiting there. %s Do that before reporting the work delivered",
 				NotDeliveredOn(on), acted, remedy)
 		case named:
-			// And only when it is TRUE. "A call that reached somewhere else"
-			// said to a turn that reached nowhere sends the model looking for
-			// a write it never made.
+			// Only when TRUE, or the model looks for a write it never made.
 			return fmt.Errorf("%s: no call in this turn has reached anybody. %s Do "+
 				"that before reporting the work delivered", NotDeliveredOn(on), remedy)
 		case acted != "":
@@ -353,32 +303,23 @@ func decodeReview(args map[string]any) (reviewPayload, error) {
 	if err := structured.Remarshal(args, &r); err != nil {
 		return r, err
 	}
-	// AGAINST PHASE'S OWN LIST, never a spelling of it. This switch listed
-	// "done", "self_iterate" and "failed" as literals, so renaming one of
-	// them left this accepting a value nothing else produces; then it
-	// listed the constants, which catches a rename but still leaves an
-	// ADDITION refused here while the schema offers it.
-	// [phase.ReviewDecisions] is the list, and the schema's enum is built
-	// from the same call — see [reviewDecisionEnum].
-	//
-	// phase.Skipped is deliberately absent from it: a skip is the ENGINE's
-	// own reading of a round nobody was waiting on (see [turn.Check]), and
-	// a reviewer reaching it would mean the turn ran after deciding not to.
+	// AGAINST [phase.ReviewDecisions], never a spelling of it, so a rename or
+	// an addition reaches this and the schema's enum ([reviewDecisionEnum])
+	// together. phase.Skipped is absent on purpose: a skip is the ENGINE's
+	// reading of a round nobody waited on ([turn.Check]).
 	switch {
 	case r.Decision == "":
-		// An absent decision is `done`. The alternative — defaulting to
-		// self_iterate — spends another whole round on a review that
-		// simply forgot a field, and the engine still overturns a `done`
-		// that delivered nothing.
+		// Absent is `done`: self_iterate would spend a round on a forgotten
+		// field, and the engine still overturns a `done` that delivered
+		// nothing.
 		r.Decision = phase.Done
 	case !slices.Contains(phase.ReviewDecisions(), r.Decision):
 		return r, fmt.Errorf("decision must be one of %s, %s or %s, got %q",
 			phase.Done, phase.SelfIterate, phase.Failed, r.Decision)
 	}
 	if r.Decision == phase.SelfIterate && strings.TrimSpace(r.Notes) == "" {
-		// A loop-back with no correction sends the next round to do
-		// exactly what the last one did. The stall guard would eventually
-		// catch it, but only after spending the rounds.
+		// A loop-back with no correction repeats the last round; the stall
+		// guard would catch it only after spending the rounds.
 		return r, fmt.Errorf("self_iterate needs notes saying what the next round should do differently")
 	}
 	if err := reviewWithinBounds(r); err != nil {
@@ -389,17 +330,14 @@ func decodeReview(args map[string]any) (reviewPayload, error) {
 
 // The most a review's words may weigh, in bytes. See [reviewWithinBounds].
 const (
-	// finalArtifactBytes is what a run's own report may weigh
-	// (sandbox.MaxRunTextBytes): the final artifact is what the turn hands
-	// back in place of its executor's output, and is never longer than that
-	// output may be.
+	// finalArtifactBytes is a run's own report's bound
+	// (sandbox.MaxRunTextBytes): the artifact stands in for that output.
 	finalArtifactBytes = sandbox.MaxRunTextBytes
 
-	// reviewProseBytes is what each of a review's notes and its account of
-	// what landed may weigh: what an executor's whole submission may
-	// (sandbox.MaxSubmissionBytes). A correction the next round can act on
-	// is a few paragraphs; one longer is a document, which belongs where the
-	// work was delivered.
+	// reviewProseBytes bounds the notes and completed_work each, as an
+	// executor's whole submission is (sandbox.MaxSubmissionBytes): a
+	// correction is a few paragraphs, and a document belongs where the work
+	// was delivered.
 	reviewProseBytes = sandbox.MaxSubmissionBytes
 )
 
@@ -407,13 +345,11 @@ const (
 // naming the field, its size and its bound, while the reviewer can still
 // shorten them.
 //
-// REFUSED WHERE THEY ARE MADE, never cut where they are read. The final
-// artifact is the turn's answer: its record's response and its
-// `plan_summary`, the reply a colleague who asked is handed, and the episode
-// the seat's memory keeps. The notes are the next round's brief and every
-// later round's prior-work ledger, and both ride the review's own record. Cut
-// at each of those, every reader would hold a different opening of one
-// answer, and none could ask for the rest.
+// REFUSED WHERE THEY ARE MADE, never cut where they are read: the final
+// artifact and the notes each reach several readers (the record's response
+// and `plan_summary`, a colleague's reply, memory; the next round's brief and
+// prior-work ledger), and cut at each, every reader would hold a different
+// opening of one answer.
 func reviewWithinBounds(r reviewPayload) error {
 	for _, field := range []struct {
 		name  string

@@ -12,83 +12,27 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// RecordVersion is the record shape THIS BUILD can decode — never the version
-// it stamps on what it writes.
+// RecordVersion is the record shape THIS BUILD can decode, never the version it
+// stamps: [Encode] stamps the LOWEST version that reads a record, from
+// [versionedFields], and RecordVersion is always that table's highest. A record
+// above it is RETAINED, not skipped (statelog's deferral contract), so a rolling
+// upgrade reduces coverage rather than causing an outage.
 //
-// A record above it is RETAINED rather than skipped (statelog's deferral
-// contract), which is what makes a rolling upgrade a period of reduced
-// coverage rather than an outage. What a writer stamps is the LOWEST version
-// that reads the record, computed by [Encode] from [versionedFields] — the
-// tracker's rule and the knowledge base's, one rule across the strict domains.
-// It moves only with the table, and exactly to the table's highest version.
-//
-// # The base format
-//
-// Version 1 is what the domain landed on main with: every op, subject kind,
-// payload, field and value that crewlet#298 (merge commit 22280fcf93,
-// 2026-11-03) brought. Every build that carries the domain reads all of it,
-// and a doc here that calls a shape BASE FORMAT says so. Comments written
-// before that merge, the headers of the replicated migrations among them, rest
-// on "the domain's stated condition" instead: none of the domain was on main
-// yet, so no build of main, no image and no release carried it. The merge
-// ended the condition. What it guaranteed, that no build carrying the domain
-// has run without a shape, holds of every shape the merge brought and of
-// nothing added since: every push to main ships as the image of main, so a
-// build without a later shape may run beside one that has it.
-//
-// Anything a record gains from now on is a [versionedFields] row: a field, or
-// a new value of a closed set it carries (an op, a subject kind, a principal
-// kind, a push's way), which statelog.VersionedField.Equals names. An apply
-// that comes to derive rows from what a record already carries needs one too:
-// the record says so through the field or value that leads to them, or through
-// a field its writer stamps for them, and that takes the row. The row comes
-// with RecordVersion moved to its version, its line under "What each version
-// added", a Carrying record in the statelogtest candidate and, for a new op,
-// the op excepted from the stamp test's base-format loop. Without it, an older
-// build would apply the record short of what it gained, or fail on it where it
-// must retain it: at DecodeMutation's default arm for a new op, at Apply's
-// unknown-kind arm for a new kind. A record every build must read takes none:
-// a gate ([GateRecordVersion]), the barrier, the trimmed record and a
-// reanchor's generation are pinned at version 1, and [Encode] refuses one that
-// carries a versioned field.
-//
-// Rows that are a pure function of rows every data node holds alike take no
-// [versionedFields] row: the applier re-derives them ([DerivationVersion]), and
-// what they add to a record stays out of the rows its horizons are given.
-//
-// A field of an estate request or answer is no record's and takes no row: what
-// an older build makes of one is the estate wire's to decide (internal/estate,
-// wirerule.go).
-//
-// # What each version added
-//
-//   - 1: every shape this domain landed on main with.
-//   - 2: whom an agent's write was made for (ADR-0109): beside the actor its
-//     routings name ([ChangeRouting.WorkingFor]) — and beside none on the
-//     merge queue's ejection and a close it could not make, whom the entry's
-//     enqueue was made for (concerns.go's head, "Whom the actor acted for") —
-//     and on an open, a reopen, a push's entry, a merge and an enqueue
-//     whatever they wake ([WorkingForVersion]).
-//   - 3: when a revision's facts were measured, and the globs each path owner
-//     they matched and each ask of one is for ([OwnedPathsVersion]).
-//   - 4: a person's viewed marks on a change's files, and the key a
-//     repository's are digested under ([OpViewed], [OpViewedKey],
-//     [ViewedVersion]).
-//   - 5: how many commits a push a rule refused offered ([OfferedVersion]).
-//   - 6: a check's test counts, its output's lines and whether its tail
-//     begins inside one ([CheckCountsVersion]).
-//   - 7: the train a failed check's ejection failed on ([TestedInVersion]).
+// Version 1, the BASE FORMAT, is every shape crewlet#298 landed on main with,
+// read by every build that carries the domain; a migration citing "the
+// domain's stated condition" predates that merge, which ended it. Since then
+// every push to main ships as main's image, so a later shape may meet a build
+// without it: what a record gains is a [versionedFields] row, and each version
+// past 1 is a constant below naming what it added.
 const RecordVersion = TestedInVersion
 
-// WorkingForVersion is the version from which a record carries whom an
-// agent's write was made for — on a routing beside its actor, or beside none
-// on the merge queue's ejection and a close it could not make, and on the
-// payloads the engine's later records read it back from (an open, a reopen, a
-// push's entry, a merge and an enqueue) — which the applier keeps on the rows
-// those writes make (code_revisions, code_pushes and code_queue's
-// working_for, the replicated migration
-// a_code_row_keeps_whom_an_agents_write_was_made_for). A record below it keeps
-// none, whatever it holds ([keptCarrier]).
+// WorkingForVersion is the version from which a record carries whom an agent's
+// write was made for (ADR-0109; concerns.go, "Whom the actor acted for"): on a
+// routing beside its actor, beside none on the merge queue's ejection and a
+// close it could not make, and on an open, a reopen, a push's entry, a merge and
+// an enqueue. The applier keeps it as working_for on code_revisions,
+// code_pushes and code_queue; a record below it keeps none, whatever it holds
+// ([keptCarrier]).
 const WorkingForVersion = 2
 
 // OwnedPathsVersion is the version from which a revise carries when its home measured the facts
@@ -112,13 +56,12 @@ const CheckCountsVersion = 6
 // (code_queue.ejected's tested_in); an ejection below it names none.
 const TestedInVersion = 7
 
-// baseRecordVersion is version 1, the base format: what every build there has
-// ever been reads, and what a record carrying no versioned field is stamped
-// at. THE BARRIER, THE TRIMMED RECORD AND A REANCHOR'S GENERATION ARE PINNED AT
-// IT FOR EVER, as every gate is ([GateRecordVersion]), because of what an older
-// node does with a record it cannot read: it retains it — one more deferral
-// row per linearizable read, every anchor a trimmed record names kept, a
-// generation transition never made.
+// baseRecordVersion is version 1, the base format: what every build reads, and
+// what a record carrying no versioned field is stamped at. The barrier, the
+// trimmed record and a reanchor's generation are PINNED at it for ever, as every
+// gate is ([GateRecordVersion]), because an older node retains a record it
+// cannot read: a deferral row per linearizable read, every anchor a trimmed
+// record names kept, a generation transition never made.
 const baseRecordVersion = 1
 
 // GateRecordVersion is the version every gate-installing record carries, FOR
@@ -129,39 +72,20 @@ const baseRecordVersion = 1
 const GateRecordVersion = 1
 
 // versionedFields is every field a code record has gained since the base
-// format, and the version a reader must be at to apply a record carrying it.
-// Adding one is adding a row here, moving [RecordVersion] to its version, and
-// giving the statelogtest candidate a record that carries it
-// ([statelog.VersionedField]).
-//
-// WHOM A WRITE WAS MADE FOR is version 2, on every op it rides: a routing's
-// beside its actor — or beside none on the merge queue's ejection and a close
-// it could not make, under the same row — which every payload about a change
-// carries at `mutation.routing` (a list of them, a queue's, walked element by
-// element) and a push's entries at `mutation.pushes.routing`; and the
-// payload's own, an open's, a reopen's, a merge's and an enqueue's at
-// `mutation.working_for` and a push entry's at `mutation.pushes.working_for`.
-// The routing's row and the payload's own are on EVERY OP rather than the
-// ones that carry one today, because every payload's working_for means one
-// thing, and a later payload that carries it is stamped by its row too.
-//
-// WHEN FACTS WERE MEASURED AND WHAT GLOBS OWNERS ARE ASKED FOR are version 3, on a revise: the home's
-// measured_at and requested_owners.paths, and the writer's asked.paths and asked.paths_omitted, which
-// rides beside paths with a row of its own, a field's version being the field's.
-//
-// A PERSON'S VIEWED MARKS AND A REPOSITORY'S VIEWED KEY are new ops, so each
-// row names `op` and its value.
-//
-// THE COMMITS AN ATTEMPT OFFERED are version 5 on a push alone, at `mutation.pushes.offered`; an
-// attempt that offered none carries nothing new and stays at 1.
-//
-// A CHECK'S COUNTS are version 6 on an ending alone: its JUnit report's tests at `mutation.tests`,
-// its output's lines at `mutation.log_lines` and its tail's cut at `mutation.tail_cut`, each a row
-// of its own, a field's version being the field's.
-//
-// THE TRAIN AN EJECTION FAILED ON is version 7, on an eject alone, at `mutation.entries.tested_in`,
-// stamped by the home.
+// format, and the version a reader must be at to apply a record carrying it. A
+// new value of a closed set (an op, a subject kind, a principal kind, a push's
+// way; statelog.VersionedField.Equals) is one too, as is whatever leads an apply
+// to derive new rows. Without its row an older build applies the record short,
+// or fails where it must retain it (DecodeMutation's default arm, Apply's
+// unknown-kind arm). A row comes with [RecordVersion] moved to it, its version
+// constant, a Carrying record in the statelogtest candidate and, for a new op,
+// the op excepted from the stamp test's base-format loop. No row for a record
+// every build reads ([RecordEnvelope.readByEveryBuild]), an estate wire field
+// (internal/estate, wirerule.go), or rows re-derived from rows every data node
+// holds alike ([DerivationVersion]), kept out of the rows a horizon is given.
 var versionedFields = statelog.RecordFields{
+	// The routing's and the payload's own working_for name no op: it means one
+	// thing on every payload, so a later payload carrying it is stamped too.
 	{Name: "ChangeRouting.WorkingFor", Since: WorkingForVersion,
 		Path: []string{"mutation", "routing", "working_for"}},
 	{Name: "PushEntry.Routing.WorkingFor", Since: WorkingForVersion, Op: string(OpPush),
@@ -197,6 +121,9 @@ func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFiel
 // OpKind is what a record does.
 type OpKind string
 
+// Every op is BASE FORMAT ([RecordVersion]) but [OpViewed] and [OpViewedKey]
+// ([ViewedVersion]). None installs a gate but [OpPurge], and an eviction and the
+// activation fence by their kind ([RecordEnvelope.InstallsGate]).
 const (
 	// OpCreate makes a repository: its name claim, its row and its
 	// protection rules, in one record on the NAME's subject.
@@ -244,20 +171,12 @@ const (
 	// OpCompact merges some of a repository's packs into fewer: the outputs'
 	// rows join code_packs and the inputs' leave it for code_packs_retired,
 	// on the repository's own subject ([Compaction]), decided by the
-	// repository's committer alone.
-	//
-	// BASE FORMAT ([RecordVersion]): the domain landed on main with this op,
-	// so every build that meets a compact record reads it. It is no gate: it
-	// removes no repository and drops no record.
+	// repository's committer alone. It removes no repository and drops no record.
 	OpCompact OpKind = "compact"
 
 	// OpRetireSweep removes a repository's retired pack rows at or below a
 	// position the code-retention duty's clock put past RetireGrace, on the
 	// repository's own subject ([RetireSweep]).
-	//
-	// BASE FORMAT ([RecordVersion]): the domain landed on main with this op,
-	// so every build that meets a retire_sweep record reads it. It is no
-	// gate.
 	OpRetireSweep OpKind = "retire_sweep"
 
 	// OpExpungeRequest asks for an expunge of a repository's unreachable
@@ -265,10 +184,6 @@ const (
 	// on the repository's own subject ([ExpungeRequest]): the repository's
 	// maintainer serves it with as many begins and commits as its live packs
 	// need.
-	//
-	// BASE FORMAT ([RecordVersion]): the domain landed on main with this op,
-	// so every build that meets an expunge_request record reads it. It is no
-	// gate.
 	OpExpungeRequest OpKind = "expunge_request"
 
 	// OpExpungeBegin begins an expunge: some of a repository's live packs
@@ -277,8 +192,6 @@ const (
 	// rest DROPPING — while the repository's drop epoch moves and its open
 	// expunge is named, on the repository's own subject ([ExpungeBegin]),
 	// decided by the repository's committer alone.
-	//
-	// BASE FORMAT, as [OpExpungeRequest] is. It is no gate.
 	OpExpungeBegin OpKind = "expunge_begin"
 
 	// OpExpungeCommit ends an expunge: the repository's dropping packs leave
@@ -286,8 +199,6 @@ const (
 	// that landed before the begin made reachable again — joins it live, on
 	// the repository's own subject ([ExpungeCommit]), decided by the
 	// repository's committer alone.
-	//
-	// BASE FORMAT, as [OpExpungeRequest] is. It is no gate.
 	OpExpungeCommit OpKind = "expunge_commit"
 
 	// OpExpungeScan records that a scan on a repository's maintainer's own
@@ -295,50 +206,36 @@ const (
 	// the `expunge_due` listing's weekly arm for ExpungeInterval on every
 	// node, on the repository's own subject, decided by the repository's
 	// committer alone. At most one a repository an ExpungeInterval.
-	//
-	// BASE FORMAT, as [OpExpungeRequest] is. It is no gate.
 	OpExpungeScan OpKind = "expunge_scan"
 
 	// OpImportChunk lands one chunk of a repository's import — packs fetched
 	// from the host it is imported from and the refs they let it set — as a
 	// push row `via import`, on the repository's own subject
 	// ([ImportChunk]), decided by its committer alone, in its turn.
-	//
-	// BASE FORMAT, as [OpExpungeRequest] is. It is no gate.
 	OpImportChunk OpKind = "import_chunk"
 
 	// OpImportDone ends a repository's import, making it active
 	// ([ImportDone]), on the repository's own subject, decided by its
 	// committer alone.
-	//
-	// BASE FORMAT, as [OpExpungeRequest] is. It is no gate.
 	OpImportDone OpKind = "import_done"
 
 	// OpMirrorSync moves a pull mirror onto its source as its home fetched
 	// it, as a push row `via mirror` ([MirrorSync]), on the repository's own
 	// subject, decided by its committer alone — or, carrying no pack and no
 	// command, records only that its home found the source level with it.
-	//
-	// BASE FORMAT, as [OpExpungeRequest] is. It is no gate.
 	OpMirrorSync OpKind = "mirror_sync"
 
 	// OpRename claims a new name for a tool-managed repository on that name's
 	// subject, leaving the old one redirecting to it ([Rename]).
-	//
-	// BASE FORMAT, as [Rename] is. It is no gate.
 	OpRename OpKind = "rename"
 
 	// OpReleaseName frees a renamed repository's old name once its redirect
 	// has ended, on that name's subject ([ReleaseName]).
-	//
-	// BASE FORMAT, as [ReleaseName] is. It is no gate.
 	OpReleaseName OpKind = "release_name"
 
 	// OpHold is a live turn's hold on a scratch repository, or on one seat's
 	// branch of any repository, on the repository's own subject, ordered
 	// against a deletion of what it holds ([Hold]).
-	//
-	// BASE FORMAT, as [Hold] is. It is no gate.
 	OpHold OpKind = "hold"
 
 	// OpChangeOpen opens a change (web!42) on a repository: its row, its
@@ -347,43 +244,30 @@ const (
 	// the same apply advances — on the repository's own subject
 	// ([ChangeOpen]), decided by the repository's committer alone
 	// ([Committer.ProposeChange]).
-	//
-	// BASE FORMAT ([RecordVersion]): the domain landed on main with this op,
-	// so every build that meets a change_open record reads it. It is no gate.
 	OpChangeOpen OpKind = "change_open"
 
 	// OpChangeEdit sets a live change's title, its body or the work item it
 	// carries ([ChangeEdit]), on the repository's own subject, decided by its
 	// committer alone.
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpChangeEdit OpKind = "change_edit"
 
 	// OpChangeDraft makes a live change a draft, or makes a draft ask to be
 	// merged ([ChangeDraft]), on the repository's own subject, decided by
 	// its committer alone.
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpChangeDraft OpKind = "change_draft"
 
 	// OpChangeRetarget moves a live change's target to another live branch
 	// ([ChangeRetarget]), on the repository's own subject, decided by its
 	// committer alone.
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpChangeRetarget OpKind = "change_retarget"
 
 	// OpChangeClose closes a live change without merging it ([ChangeClose]),
 	// on the repository's own subject, decided by its committer alone.
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpChangeClose OpKind = "change_close"
 
 	// OpChangeReopen opens a closed change again ([ChangeReopen]) — with a
 	// revision of its own where its source branch moved while it was closed
 	// — on the repository's own subject, decided by its committer alone.
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpChangeReopen OpKind = "change_reopen"
 
 	// OpChangeLanded records a live change MERGED because its target came to
@@ -391,30 +275,22 @@ const (
 	// that head — as the repository's home Gitlet node found it ([ChangeLanded]),
 	// on the repository's own subject, decided by its committer alone against
 	// the change's head and the target row the home read.
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpChangeLanded OpKind = "change_landed"
 
 	// OpReviewers asks reviewers of a live change, or withdraws the ask
 	// ([ReviewerRequest]), on the CHANGE's own subject ([KindChange]),
 	// written by the repository's committing data node ([ChangeWriter]).
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpReviewers OpKind = "reviewers"
 
 	// OpComment says something on a change — a thread of its own, anchored
 	// to a line of one of its revisions or not, or a reply to a thread
 	// ([Comment]) — on the change's own subject, written by the repository's
 	// committing data node.
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpComment OpKind = "comment"
 
 	// OpThreadResolve marks a thread of a change's comments resolved, or
 	// open again ([ThreadResolve]), on the change's own subject, written by
 	// the repository's committing data node.
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpThreadResolve OpKind = "thread_resolve"
 
 	// OpReview is a review of one revision of a change — a verdict, a
@@ -423,16 +299,12 @@ const (
 	// by the repository's committing data node, ONE RECORD with all its
 	// findings; a review of a later revision than a finding of its
 	// reviewer's supersedes that finding unless it carries it.
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpReview OpKind = "review"
 
 	// OpFindingResolve answers findings of a change — resolved, won't fix
 	// and disputed by an author, dismissed by its raiser, a maintainer or a
 	// person ([FindingResolve]) — on the change's own subject, written by
 	// the repository's committing data node.
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpFindingResolve OpKind = "finding_resolve"
 
 	// OpRevise records one revision's facts on its change — what its head is
@@ -441,8 +313,6 @@ const (
 	// reviews that asks ([Revise]) — on the change's own subject, written by
 	// the repository's committing data node for the home, which asks it and
 	// publishes nothing itself.
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpRevise OpKind = "revise"
 
 	// OpMergeability records whether a change's head revision merges cleanly
@@ -451,8 +321,6 @@ const (
 	// node merged the two commits in a scratch of its own ([Mergeability]),
 	// on the change's own subject, written by the repository's committing
 	// data node for the home, which asks it and publishes nothing itself.
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpMergeability OpKind = "mergeability"
 
 	// OpMergeabilityKept records a re-evaluation of a change's mergeability
@@ -462,8 +330,6 @@ const (
 	// judged at ([MergeabilityKept]). Never asked for: the change writer
 	// forms it in place of the [OpMergeability] its home sent, on the
 	// change's own subject.
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpMergeabilityKept OpKind = "mergeability_kept"
 
 	// OpAsks settles a change's asks for review with its lifecycle — ending
@@ -471,34 +337,24 @@ const (
 	// again those its end left on one reopened ([AskSettle]) — on the
 	// change's own subject, written by the repository's committing data node
 	// for the home, which asks it and publishes nothing itself.
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpAsks OpKind = "asks"
 
 	// OpCheckQueued queues one attempt of one check of one commit, or records
 	// it skipped ([CheckQueued]), on the repository's CHECKS subject
 	// ([KindChecks]), its apply a join (checks.go).
-	//
-	// BASE FORMAT, as the checks subject is (checks.go). It is no gate.
 	OpCheckQueued OpKind = "check_queued"
 
 	// OpCheckStarted claims an attempt for a runner, or names the box its
 	// holder made ([CheckStarted]), on the repository's checks subject.
-	//
-	// BASE FORMAT, as [OpCheckQueued] is. It is no gate.
 	OpCheckStarted OpKind = "check_started"
 
 	// OpCheckFinished ends an attempt ([CheckFinished]), on the repository's
 	// checks subject, and removes the repository's rows past [CheckHistory].
-	//
-	// BASE FORMAT, as [OpCheckQueued] is. It is no gate.
 	OpCheckFinished OpKind = "check_finished"
 
 	// OpChecksSweep removes a repository's check rows past [CheckHistory]
 	// where no check of its own ends to ([ChecksSweep]), on its checks
 	// subject — the code-retention duty's.
-	//
-	// BASE FORMAT, as [OpCheckQueued] is. It is no gate.
 	OpChecksSweep OpKind = "checks_sweep"
 
 	// OpCheckDispatched records a repository's home's reading of a target's
@@ -507,8 +363,6 @@ const (
 	// the repository's checks subject: what the home's due listing converges
 	// on, and code_checks' rows the attempts make, each as a check_queued
 	// record's would (checksdispatch.go).
-	//
-	// BASE FORMAT, as [OpCheckQueued] is. It is no gate.
 	OpCheckDispatched OpKind = "check_dispatched"
 
 	// OpMerge merges a change into its target ([Merge]), on the repository's
@@ -516,22 +370,16 @@ const (
 	// gate from one snapshot ([Committer.ProposeMerge], ADR-0096): ONE
 	// RECORD merges the change, moves the target onto the merge's commit and
 	// lands that move as a push.
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpMerge OpKind = "merge"
 
 	// OpEnqueue puts a change in its target's merge queue ([Enqueue]), on the
 	// repository's own subject, decided by its committer alone through the
 	// change's merge gate ([Committer.ProposeQueue]).
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpEnqueue OpKind = "enqueue"
 
 	// OpDequeue takes a live entry out of its target's merge queue at a
 	// principal's ask ([Dequeue]), on the repository's own subject, decided by
 	// its committer alone.
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpDequeue OpKind = "dequeue"
 
 	// OpMarks moves one person's marks over their code notices by one
@@ -539,8 +387,6 @@ const (
 	// through a position on this log, their primary reasons — on the
 	// person's own subject ([KindPerson]), written by whichever data node
 	// the mark is asked of ([Marks]).
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpMarks OpKind = "marks"
 
 	// OpViewed moves one person's viewed marks on one change's files by one gesture
@@ -556,16 +402,12 @@ const (
 	// tip, each a merge of a batch of them on the one before, and the pack
 	// their objects are stored in — on the repository's own subject, decided
 	// by its committer alone ([Committer.ProposeQueue]).
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpCandidate OpKind = "candidate"
 
 	// OpEject puts live entries out of their queue ([Eject]) — a check failed
 	// on what they were tested in, their merge conflicted, their gate no
 	// longer holds — on the repository's own subject, decided by its
 	// committer alone.
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpEject OpKind = "eject"
 
 	// OpLand lands a queue's entries on their target ([Land]) — a train's
@@ -573,37 +415,27 @@ const (
 	// record whose decide proves every entry's gate again with its enqueuer
 	// as the merger, on the repository's own subject, decided by its
 	// committer alone.
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpLand OpKind = "land"
 
 	// OpGreen moves a protected target's green row onto a landing whose
 	// required checks passed ([Green]), on the repository's own subject.
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpGreen OpKind = "green"
 
 	// OpBroken marks a landing above its target's green row broken, a
 	// required check of it having failed ([Broken]), on the repository's own
 	// subject.
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpBroken OpKind = "broken"
 
 	// OpQueueSweep removes a repository's ended queue entries and its
 	// landings below their target's green row once they outlive
 	// [QueueHistory], where no record of its queues' own does ([QueueSweep])
 	// — the code-retention duty's, on the repository's own subject.
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpQueueSweep OpKind = "queue_sweep"
 
 	// OpCloseSettled settles the closes landed queue entries owe their
 	// changes' work items, each closed or definitively not, every close a
 	// turn of their home ended in one record ([CloseSettled]) — made as each
 	// entry's enqueuer, recorded on the repository's own subject.
-	//
-	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpCloseSettled OpKind = "close_settled"
 )
 
@@ -683,10 +515,7 @@ const (
 	// settings change, an archive or unarchive, a delete, a restore, a
 	// protection, a live turn's hold ([Store.Lifecycle]) — and a reanchor run
 	// through a seat's credential. Recorded as the repository's creator where
-	// it creates one (code_repos.created_by_kind).
-	//
-	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
-	// kind, so every build that meets a record a seat decided reads it.
+	// it creates one (code_repos.created_by_kind). BASE FORMAT ([RecordVersion]).
 	ActorAgent ActorKind = "agent"
 )
 
@@ -700,11 +529,10 @@ func (k ActorKind) Valid() bool { return slices.Contains(ActorKinds(), k) }
 
 // Actor is who decided a record.
 type Actor struct {
-	// ID is who decided it, BARE: an operator's or a seat's name as
-	// iam.ActorFor gives it — a person's human seat, an unbound credential's
-	// login, a seat's handle — or the deciding node's id. NO PREFIX: the
-	// kind is a column of its own, and a name spelled `operator:<name>` is
-	// one no other row in the audit feed calls that party by.
+	// ID is who decided it, BARE: a name as iam.ActorFor gives it (a person's
+	// human seat, an unbound credential's login, a seat's handle) or the
+	// deciding node's id. NO PREFIX: the kind is a column of its own, and no
+	// other row in the audit feed calls that party `operator:<name>`.
 	ID   string
 	Kind ActorKind
 	// OperatorID is the credential the record was made through: REQUIRED of
@@ -729,21 +557,18 @@ func (a Actor) validate() error {
 	return nil
 }
 
-// RecordEnvelope decodes at EVERY version, BEFORE V is consulted.
-//
-// Its EIGHT keys are RESERVED at the top level of the format for its life: a
-// later version may add fields beside them and may never repurpose one — the
-// split the event envelope makes between a known header and an opaque body,
-// for the same reason: a rolling upgrade puts a record this build cannot read
-// on the wire, and dropping it would make every upgrade an outage.
+// RecordEnvelope decodes at EVERY version, BEFORE V is consulted. Its EIGHT
+// keys are RESERVED at the format's top level for its life: a later version may
+// add fields beside them, never repurpose one, as the event envelope splits a
+// known header from an opaque body, since a rolling upgrade puts records this
+// build cannot read on the wire and dropping them would be an outage.
 type RecordEnvelope struct {
 	// V is the record version, refused for the PAYLOAD when unknown and
 	// never for this struct.
 	V int `json:"v"`
 
 	// OpID is the idempotency key, the message id and the ops table's key.
-	// EMPTY on a barrier and on a trimmed record: an op id becomes a message
-	// id, and a duplicate ack is served with no quorum round trip at all.
+	// EMPTY on a barrier and a trimmed record ([EncodeBarrier], [EncodeTrimmed]).
 	OpID string `json:"op_id,omitempty"`
 
 	// Subject is the object this record arbitrates on.
@@ -753,8 +578,8 @@ type RecordEnvelope struct {
 	Op OpKind `json:"op"`
 
 	// CreatedAt is the AUTHORED instant, the writer's own clock: provenance
-	// for an operator reading the log, NEVER ORDERED ON and never written to
-	// a row — every instant this domain stores is the broker's.
+	// only, NEVER ORDERED ON and never written to a row; every instant this
+	// domain stores is the broker's.
 	CreatedAt time.Time `json:"created_at,omitzero"`
 
 	// Gen is the generation the record was decided in, which makes a
@@ -810,14 +635,12 @@ type MutationRecord struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// What is NOT in the envelope, deliberately: the BROKER'S instant. It reaches
-// the applier as an argument ([statelog.ApplyOptions.StoredAt]) rather than as
-// a key in the format, because a field a writer could set is a field a writer
-// could lie about. Stated here so nobody "completes" the envelope by adding it.
+// The BROKER'S instant is deliberately NOT in the envelope: it reaches the
+// applier as [statelog.ApplyOptions.StoredAt], because a field a writer could
+// set is one a writer could lie about.
 
 // ErrFutureVersion reports a record a newer build wrote. It carries the
-// SUBJECT because the caller is the applier's deferral arm, which has to file
-// the record under something.
+// SUBJECT the applier's deferral arm files the record under.
 type ErrFutureVersion struct {
 	Got     int
 	Want    int
@@ -845,17 +668,16 @@ func DecodeEnvelope(payload []byte) (RecordEnvelope, error) {
 		return RecordEnvelope{}, err
 	}
 	if len(env.Scope) == 0 {
-		// A RECORD WITH NO SCOPE KEY AT ALL never reaches the scope's own
-		// decoder, so the widening it makes is made here: absent is the
-		// widest claim, never "touches nothing".
+		// No scope key never reaches the scope's own decoder, so its widening
+		// is made here: absent is the widest claim, never "touches nothing".
 		env.Scope = Scope{DomainPath()}
 	}
 	return env, nil
 }
 
-// Decode is the SECOND pass, and it is the one that may refuse on version. It
-// returns the envelope alongside the error whenever the envelope decoded,
-// because that is the case the applier retains.
+// Decode is the SECOND pass, the one that may refuse on version. It returns
+// the envelope beside the error whenever the envelope decoded: the applier
+// retains that case.
 func Decode(payload []byte) (MutationRecord, error) {
 	env, err := DecodeEnvelope(payload)
 	if err != nil {
@@ -880,12 +702,11 @@ func Decode(payload []byte) (MutationRecord, error) {
 // Encode renders a record, carrying back whatever a newer build wrote, and
 // stamps it with the lowest version that reads it.
 //
-// LOSSLESS IN BOTH DIRECTIONS: a node that read a record it only half
-// understood and republished it must not strip the half it did not. A carried
-// field LOSES to a known one ([encode]). A ZERO VERSION IS "STAMP IT": every
-// writer leaves V unset; a set version is kept and refused when it is below
-// what the record carries; and a record every build must read is refused
-// whenever it carries a versioned field at all.
+// LOSSLESS both ways: a node republishing a record it half understood must not
+// strip the half it did not, and a carried field LOSES to a known one
+// ([encode]). A ZERO V means "stamp it", and every writer leaves it unset; a
+// set version below what the record carries is refused, and so is any
+// versioned field on a record every build must read.
 func Encode(rec MutationRecord) ([]byte, error) { return encodeWith(rec, versionedFields) }
 
 // encodeWith is [Encode] under a named field table — the seam the stamping
@@ -926,18 +747,15 @@ func encodeWith(rec MutationRecord, fields statelog.RecordFields) ([]byte, error
 	return data, nil
 }
 
-// recordFields is every top-level name this build writes. The omitempty names
-// are listed because a zero value does not marshal them, and a name missing
-// here would be decoded into the struct AND carried as unknown — so the next
-// encode would write the stale carried copy back over what the caller set.
+// recordFields is every top-level name this build writes, the omitempty ones
+// included: a name missing here would decode into the struct AND be carried as
+// unknown, so the next encode would write the stale copy over what was set.
 var recordFields = fieldSet(MutationRecord{}, "op_id", "created_at", "gen",
 	"writer", "expect", "mutation", "actor", "actor_kind", "operator_id")
 
-// recordFor encodes one record decided inside a snapshot — the ONE place a
-// writer of this domain stamps a record, so the framework's stamp (Writer,
-// Gen), the actor and the scope check are applied once. The publisher refuses
-// a record without the stamp; this refuses a scope a writer cannot mean.
-// payload == nil writes no mutation.
+// recordFor encodes one record decided inside a snapshot: the ONE place this
+// domain's writers stamp a record (Writer, Gen), name its actor and check its
+// scope. payload == nil writes no mutation.
 func recordFor(stamp statelog.Stamp, subject Subject, op OpKind, scope []string,
 	opID string, actor Actor, payload any, at time.Time) (statelog.Decision, error) {
 
@@ -949,8 +767,7 @@ func recordFor(stamp statelog.Stamp, subject Subject, op OpKind, scope []string,
 	}
 	record := MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			// NO VERSION: the encoder stamps the lowest one that reads
-			// what this record carries.
+			// NO VERSION: [Encode] stamps it.
 			OpID: opID, Subject: subject, Op: op, CreatedAt: at,
 			Gen: stamp.Gen, Writer: stamp.Writer, Scope: Scope(scope),
 		},
@@ -971,13 +788,11 @@ func recordFor(stamp statelog.Stamp, subject Subject, op OpKind, scope []string,
 	return statelog.Decision{Payload: encoded}, nil
 }
 
-// EncodeBarrier renders the read index's payload-free append — the framework
-// owns WHEN a barrier goes out and what its acknowledgement proves, and this
-// domain owns what a record on its log looks like.
-//
-// AN OP ID IS REFUSED: it becomes a message id, and a repeat inside the
-// duplicate window is answered from the dedupe cache with no quorum round trip
-// — a position nothing confirmed, which is the claim a barrier must never fake.
+// EncodeBarrier renders the read index's payload-free append: the framework
+// owns when a barrier goes out and what its ack proves, this domain what a
+// record on its log looks like. AN OP ID IS REFUSED: a message id repeated in
+// the duplicate window is answered from the dedupe cache with no quorum round
+// trip, a position nothing confirmed, the one claim a barrier must never fake.
 func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 	if env.Kind != statelog.BarrierKind {
 		return nil, fmt.Errorf("gitlet: %q is not a barrier envelope", env.Kind)
@@ -997,14 +812,11 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 }
 
 // EncodeTrimmed renders the trim's trimmed record ([statelog.TrimmedEnvelope],
-// ADR-0080) as a record this domain's applier decodes — the barrier's split:
-// the framework decides when one is appended, what it removes and the floor
-// its subject names, and this domain what a record on its log looks like.
-//
+// ADR-0080) with the barrier's split: the framework decides when one is
+// appended, what it removes and its floor, this domain what it looks like.
 // THE WRITER TRAVELS, unlike a barrier's: a trimmed record removes rows, so the
-// eviction gate must be able to drop an evicted node's. NO OP ID, asserted. And
-// the floor is checked here, at the write, rather than in [Subject.Validate],
-// which the read path runs too.
+// eviction gate must be able to drop an evicted node's. NO OP ID. The floor is
+// checked here at the write, not in [Subject.Validate], which reads run too.
 func EncodeTrimmed(env statelog.Envelope) ([]byte, error) {
 	if env.Kind != statelog.TrimmedKind || env.Subject.Kind != statelog.TrimmedKind {
 		return nil, fmt.Errorf("gitlet: a %q envelope on %q is not a trimmed record",

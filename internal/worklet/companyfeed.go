@@ -15,29 +15,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// The tracker's half of the company feed — the completions, the creates and
-// the hand-offs, newest first, as `company_feed` merges them with the pages'
-// changes and the schedules' runs.
+// The tracker's half of the company feed (creates, completions, hand-offs,
+// newest first), which `company_feed` merges with pages and schedules.
 //
-// # Ordered by WHEN, not by the log
+// Ordered by `effective_at` then log position, not by position alone as
+// [Reader.Activity] is: a clock is the only order three domains' logs share.
+// `effective_at` is only ever raised, so a row can move above a cursor already
+// handed out (missed by that scroll) but never below one (repeated).
 //
-// The activity feed ([Reader.Activity]) is ordered by log position because it
-// is one log's account of itself. This page is merged with two other domains'
-// rows, and the only order three logs share is a clock — so it is ordered by
-// `effective_at`, the fleet-agreed instant, with the position breaking a tie,
-// and its cursor is that pair. `effective_at` is only ever RAISED (a late
-// record lifts its successors to its own instant, never lowers anything), so a
-// row not yet paged can move above a cursor already handed out and be missed
-// by that one reader's scroll; nothing can drop below it and repeat.
-//
-// # One classification per row
-//
-// A single commit can create a task already done, or finish one while handing
-// it on. A row is filed under the FIRST of the kinds the caller asked for, in
-// the order created → completed → handoff: a create is the most specific thing
-// that happened to a task, and a completion outranks the reassignment that
-// came with it. A kind the caller did not ask for never hides a row that
-// matches one they did.
+// A row is filed under the FIRST requested kind it matches, in [FeedKinds]
+// order: a create is the most specific thing that happens to a task, and a
+// completion outranks the hand-off that came with it. A kind not asked for
+// never hides a row matching one that was.
 
 // FeedKind is one kind of company-feed row this domain answers.
 type FeedKind string

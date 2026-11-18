@@ -16,16 +16,14 @@ import (
 
 // What these protect: A RUN IS NEVER LOST TO THE SIZE OF ITS OWN LOG.
 //
-// A harness's stdout event stream and its stderr grow with the run, and
-// every path used to read them whole and refuse them past 32 MiB. Each case
-// below is a run the engine used to wedge or destroy for that alone. The fake
-// refuses a whole read past its cap exactly as every real backend does — at
-// the cap [box] gives it, which every case here sizes from — so a case that
-// still read a stream whole would fail here rather than pass.
+// A harness's stdout event stream and its stderr grow with the run, so none
+// is read whole. The fake refuses a whole read past the cap [box] gives it, as
+// every real backend does, and every case sizes from that cap, so a case that
+// still read a stream whole fails here.
 
-// toolStream is an OpenCode stream longer than past bytes: tool events whose
-// state carries each tool's whole output — output bytes of it apiece — which
-// is what makes a real stream grow, ending with the events given.
+// toolStream is an OpenCode stream longer than past bytes, of tool events each
+// carrying output bytes of a tool's output (what makes a real stream grow),
+// ending with the events given.
 func toolStream(output, past int, tail ...string) string {
 	echoed := strings.Repeat("o", output)
 	var b strings.Builder
@@ -49,10 +47,10 @@ func pastTheCap(b *sandbox.FakeSandbox, tail ...string) string {
 // errBoxUnreadable stands in for a box whose file could not be read back.
 var errBoxUnreadable = errors.New("envd: connection reset")
 
-// A DEAD JOB WITH A STREAM PAST THE CAP IS DONE. The poll read the stream whole
-// before it asked whether the job was alive, so the refusal returned first:
-// the waiter read the error as "still running", refreshed the keepalive and
-// kept the seat busy, every tick, for a job whose process group was gone.
+// A DEAD JOB WITH A STREAM PAST THE CAP IS DONE. A refused read must not answer
+// the poll before the liveness probe: the waiter takes the error for "still
+// running", refreshes the keepalive and keeps the seat busy, every tick, for a
+// job whose process group is gone.
 func TestADeadJobWithAStreamPastTheCapIsDone(t *testing.T) {
 	t.Parallel()
 	runner := executor.NewOpenCode()
@@ -67,11 +65,10 @@ func TestADeadJobWithAStreamPastTheCapIsDone(t *testing.T) {
 	}
 }
 
-// A STREAM'S END NEVER ENDS A RUN. Every harness this build drives exits, so the
-// done marker its wrapper writes after it is the end — and an OpenCode run
-// whose final step printed its finish has not yet had its script add the
-// session's usage or write the box's refreshed login back. A live wrapper is
-// a running job, whatever its stream last said.
+// A STREAM'S END NEVER ENDS A RUN: the done marker the wrapper writes after the
+// harness exits is the end. An OpenCode run that printed its finish has not yet
+// had its script add the session's usage or write the refreshed login back, so
+// a live wrapper is a running job, whatever its stream last said.
 func TestAStreamsEndNeverEndsARun(t *testing.T) {
 	t.Parallel()
 	for name, runner := range map[string]*executor.Runner{
@@ -118,9 +115,9 @@ func TestAReadThatFailsNeverSkipsTheLivenessProbe(t *testing.T) {
 	}
 }
 
-// A HARNESS THAT EXITS HAS NO STREAM TO POLL. The done marker is its only signal,
-// and reading its output on every tick was a transfer per box per tick that
-// could never change the answer.
+// A HARNESS THAT EXITS HAS NO STREAM TO POLL: the done marker is its only
+// signal, and reading its output is a transfer per box per tick that cannot
+// change the answer.
 func TestAHarnessThatExitsIsNotPolledThroughItsOutput(t *testing.T) {
 	t.Parallel()
 	for name, runner := range map[string]*executor.Runner{
@@ -143,9 +140,9 @@ func TestAHarnessThatExitsIsNotPolledThroughItsOutput(t *testing.T) {
 	}
 }
 
-// A STREAM PAST THE CAP IS COLLECTED. The collection read it whole and was
-// refused, which settled the run as unreachable and destroyed its turn —
-// although the report file, the result of record, was a few lines long.
+// A STREAM PAST THE CAP IS COLLECTED: a refused whole read would settle the run
+// as unreachable and destroy its turn, though the report file, the result of
+// record, is a few lines long.
 func TestACollectionReadsAStreamPastTheCap(t *testing.T) {
 	t.Parallel()
 	runner := executor.NewOpenCode()
@@ -165,7 +162,7 @@ func TestACollectionReadsAStreamPastTheCap(t *testing.T) {
 	if !res.Success || !strings.HasPrefix(res.Text, "Outcome: succeeded") {
 		t.Errorf("success %v, report %.40q; want the report collected", res.Success, res.Text)
 	}
-	if !strings.Contains(res.Transcript, "[tool] bash: go test ./...") || !strings.Contains(res.Transcript, "All green.") {
+	if !strings.Contains(res.Transcript, "] bash: go test ./...\n[ok ") || !strings.Contains(res.Transcript, "All green.") {
 		t.Errorf("the transcript lost the stream's end: …%q", tailOf(res.Transcript, 200))
 	}
 	if strings.Contains(res.Transcript, "ooooooooo") {
@@ -173,13 +170,12 @@ func TestACollectionReadsAStreamPastTheCap(t *testing.T) {
 	}
 }
 
-// AN OVER-LONG LINE IS SKIPPED AND SAID, never held: one line is read in one
-// piece, so a line past what one piece may be is counted where it was, and
-// the events around it are still read.
+// AN OVER-LONG LINE IS SKIPPED AND SAID, never held: a line is read in one
+// piece, so one past the bound is counted where it was and the events around
+// it are still read.
 //
-// At a line bound of [testLineBound]: the skip, its note and the events
-// around it are the same at any bound, and a line past the real one is
-// 32 MiB built and scanned under -race.
+// At [testLineBound]: the behaviour is the same at any bound, and a line past
+// the real one is 32 MiB built and scanned under -race.
 func TestALinePastTheBoundIsSkippedAndSaid(t *testing.T) {
 	t.Parallel()
 	runner := executor.Bounded(executor.NewOpenCode(), sandbox.MaxFailureBytes, testLineBound)
@@ -197,12 +193,12 @@ func TestALinePastTheBoundIsSkippedAndSaid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	if !strings.Contains(res.Transcript, "1 line(s) of output") || !strings.Contains(res.Transcript, "not read") ||
+	if !strings.Contains(res.Transcript, "[note] 1 line(s) of output") || !strings.Contains(res.Transcript, "not read") ||
 		!strings.Contains(res.Transcript, "past the 64 KiB one line of a run's output may hold") {
 		t.Errorf("the skipped line is not said, with the bound it was past: %q", res.Transcript)
 	}
 	before := strings.Index(res.Transcript, "make build")
-	note := strings.Index(res.Transcript, "1 line(s) of output")
+	note := strings.Index(res.Transcript, "[note] 1 line(s) of output")
 	after := strings.Index(res.Transcript, "Built it.")
 	if before < 0 || after < 0 || before > note || note > after {
 		t.Errorf("the note is not where the line was: %q", res.Transcript)
@@ -213,22 +209,17 @@ func TestALinePastTheBoundIsSkippedAndSaid(t *testing.T) {
 }
 
 // THE ERROR STREAM IS READ FROM ITS END, at most what a condensation can take,
-// and what was not read is said by size. It reaches the run's reviewer as the
-// failure's detail, so its unread start is marked rather than silent; and its
-// end — the line naming what broke — is always there.
+// and its unread start is said by size: it reaches the reviewer as the
+// failure's detail, and its end names what broke.
 //
-// The read itself is held to the bound too, not only what is shown from it:
-// the box is asked for the bound plus the redaction's context and no more, and
-// a run that parsed no transcript of its own carries at most the bound of the
-// stream as one, behind a note naming the size of what it left out. A read to
-// the engine's own ceiling shows the same failure, so the failure alone could
-// not tell that it read and redacted the whole stream.
+// The read itself is held to the bound plus the redaction's context, not only
+// what is shown, and a run with no parsed transcript carries at most the bound
+// of the stream behind a note sizing the rest: a read to the engine's ceiling
+// shows the same failure, so only the request tells. At [testFailureBound],
+// with an error stream two and a half times it.
 //
-// At a failure bound of [testFailureBound], with an error stream two and a
-// half times it, as the five mebibytes this was are of the real one.
-//
-// Mutation: read the error stream's end, or keep it, to
-// [sandbox.MaxFailureBytes] rather than to the runner's bound, and this fails.
+// Mutation: read or keep the end to [sandbox.MaxFailureBytes] rather than the
+// runner's bound, and this fails.
 func TestTheErrorStreamIsReadFromItsEndAndItsStartIsSaid(t *testing.T) {
 	t.Parallel()
 	runner := executor.Bounded(executor.NewClaudeCode(), testFailureBound, executor.MaxLineBytes)
@@ -270,29 +261,17 @@ func TestTheErrorStreamIsReadFromItsEndAndItsStartIsSaid(t *testing.T) {
 }
 
 // THE WHOLE FAILURE IS WHAT ONE CONDENSATION CAN TAKE, not the error stream
-// inside it. The failure opens with the engine's own sentences — a piece it
-// could not read, the exit status, the harness's error — and the error stream used
-// to be read to the compactor's whole input and carried behind them, so every
-// failure built around a long stderr was a few hundred bytes over what the
-// compactor reads, refused before a model was asked, and the run's record
-// carried the uncondensed fallback although a model was configured.
+// inside it: the engine's own sentences (an unreadable piece, the exit status,
+// the harness's error) open it, and a stream sized alone puts the whole past
+// what the compactor reads, refused uncondensed though a model is configured.
 //
-// Every sentence a failure can open with, at once, in front of the longest
-// error stream — in lines, and as one line with no break in it, which is kept
-// by its end on a character and marked: the failure fits
-// ([sandbox.MaxFailureBytes], which leaves the coordinator its own prefix),
-// keeps every sentence and the stream's last line, and says what it left out
-// of the stream.
-//
-// Mutation: carry the error stream as it was read, and the failure is past
-// the bound.
-//
-// EVERYTHING SIZED FROM THE BOUND the runner is given ([testFailureBound]),
-// in the proportions it had to the real one: the error stream half again past
-// it, and the harness's own error about a hundredth of it — small enough that the
-// stream still gets room after the sentences, which is the branch this case
-// is about. A harness error sized for the real bound would fill a small one and
-// leave the stream unshown, a different branch.
+// Every opening sentence at once, before the longest stream, in lines and as
+// one unbroken line (kept by its end on a character and marked): the failure
+// fits the runner's bound, keeps every sentence and the stream's last line, and
+// says what it left out. Sized from [testFailureBound]: the stream half again
+// past it, the harness's error a hundredth of it, so the stream still gets room
+// after the sentences, the branch this case is about. Mutation: carry the
+// stream as it was read, and the failure is past the bound.
 func TestTheWholeFailureIsWhatOneCondensationCanTake(t *testing.T) {
 	t.Parallel()
 	for name, stderr := range map[string]string{
@@ -372,11 +351,9 @@ func TestAFailureWhoseSentencesFillTheBoundSaysItsStreamWasNotShown(t *testing.T
 	}
 }
 
-// A REPORT PAST THE CAP DEGRADES ONLY ITSELF. It is described by its size and
-// the run reads as not succeeded with that as the reason — but the run's
-// tokens, refs and transcript are still there to be charged and published. A
-// refusal used to fail the whole collection, which took the charge and the
-// record with it.
+// A REPORT PAST THE CAP DEGRADES ONLY ITSELF: it is described by its size and
+// the run reads as not succeeded for it, but the run's tokens, refs and
+// transcript are still collected, to be charged and published.
 func TestAReportPastTheCapDegradesOnlyItself(t *testing.T) {
 	t.Parallel()
 	runner := executor.NewClaudeCode()
@@ -460,8 +437,7 @@ func (b *tailReads) asked(path string) []int {
 
 // testFailureBound and testLineBound are the bounds the cases that go past
 // one run their runner at ([executor.Bounded]): 64 KiB each, room for every
-// sentence a failure opens with and a stream behind them, and a thirty-second
-// and a five-hundredth of the real ones respectively.
+// sentence a failure opens with and a stream behind them.
 const (
 	testFailureBound = 64 << 10
 	testLineBound    = 64 << 10

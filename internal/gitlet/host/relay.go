@@ -22,13 +22,8 @@ import (
 // THE HOOK RELAY, the engine's side: a unix socket in a private directory,
 // where every push's proc-receive hook — the engine's own binary, started by
 // receive-pack — names its session by a one-time token and is then served the
-// push's verdict.
-//
-// THE RELAY CANNOT END THE PROCESS. Its accept loop and its connections run
-// outside net/http's per-handler recovery, and what they read — the handshake,
-// git's proc-receive protocol — is bytes a pusher controls; so each
-// connection's goroutine turns a panic into that push's refusal: an error to
-// its hook, the stack logged once, the engine still running.
+// push's verdict. A panic on a connection is that push's refusal, never the
+// process's end (package doc, "The hook relay cannot end the process").
 
 // hookHandshake is the line a hook connection opens with, before its token.
 const hookHandshake = "CREWLET-HOOK 1 "
@@ -58,9 +53,9 @@ type relay struct {
 	conns    sync.WaitGroup
 }
 
-// listen makes the relay's private directory and its socket. The socket's path
-// must fit every platform's sockaddr — TMPDIR names where it is made, so a
-// path past maxSocketPath is refused naming it.
+// listen makes the relay's private directory and its socket. A path past
+// maxSocketPath, which every platform's sockaddr holds, is refused naming
+// TMPDIR, which chose it.
 func listen(s *Server) (*relay, error) {
 	dir, err := os.MkdirTemp("", "crewlet-git-")
 	if err != nil {
@@ -113,14 +108,11 @@ func (r *relay) open(sess *session) {
 	r.sessions[sess.token] = sess
 }
 
-// close unregisters a session whatever became of it — a token never presented
-// is gone with its request — and, if its hook claimed it, ends the session's
-// work and waits for its goroutine, so nothing outlives the request; it
-// reports whether a hook claimed it.
-//
-// One lock decides it against claim: either close removes the token first and
-// no connection can claim it after, or a connection claimed it first and close
-// waits for that connection's session to end.
+// close unregisters a session whatever became of it and, if a hook claimed
+// it, ends its work and waits for its goroutine, so nothing outlives the
+// request; it reports whether a hook claimed it. One lock orders it against
+// claim: either the token is gone before any connection claims it, or close
+// waits for the claiming connection's session to end.
 func (r *relay) close(sess *session) bool {
 	r.mu.Lock()
 	delete(r.sessions, sess.token)
@@ -180,8 +172,8 @@ func (r *relay) handle(conn *net.UnixConn) {
 		return
 	}
 	_ = conn.SetReadDeadline(time.Time{})
-	// DONE CLOSES LAST, after the recovery below has recorded the push as
-	// failed: the request waits on it for the session's result.
+	// Done closes last, after the recovery records the push failed: the
+	// request waits on it for the session's result.
 	defer close(sess.done)
 	defer func() {
 		if p := recover(); p != nil {

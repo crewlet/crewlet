@@ -6,14 +6,11 @@ import (
 	"time"
 )
 
-// Position is where a node stands in one domain's log.
-//
-// A TRIPLE rather than a sequence, and each part answers a question the other
-// two cannot. Stream names the log — a recreated stream restarts sequences at
-// 1, so a bare number from before the recreation compares as if it were
-// current. Generation is that recreation's counter, which makes an old
-// position COMPARABLE and safely stale rather than indistinguishable from a
-// new one. Seq is the broker's own monotonic sequence within the generation.
+// Position is where a node stands in one domain's log: a TRIPLE, not a
+// sequence. Stream names the log (a recreated stream restarts at 1, so a bare
+// number from before compares as current); Generation counts recreations, so
+// an old position is comparable and safely stale; Seq is the broker's
+// sequence within the generation.
 type Position struct {
 	Stream     string `json:"stream"`
 	Generation uint32 `json:"generation"`
@@ -22,57 +19,34 @@ type Position struct {
 
 // DomainPosition is what one node has done with one domain's log.
 //
-// # Why Seq and AppliedThrough are two numbers
-//
-// Seq is the record this node has CONSUMED — its checkpoint, the contiguous
-// prefix it has moved over. AppliedThrough is the prefix it has actually
-// APPLIED, which is lower whenever a record was retained rather than applied
-// (a version this build cannot read). Collapsing them would make a node that
-// is applying nothing while its position advances look identical to one that
-// is fully caught up, and the trim reads the first while a reader's coverage
-// question reads the second.
+// Seq is the record it has CONSUMED (its checkpoint); AppliedThrough the
+// prefix it has APPLIED, lower whenever a record was retained (a version this
+// build cannot read). One number would make a node applying nothing look
+// caught up; the trim reads Seq, a reader's coverage question AppliedThrough.
 type DomainPosition struct {
 	Seq            uint64 `json:"seq"`
 	Generation     uint32 `json:"generation"`
 	AppliedThrough uint64 `json:"applied_through"`
 
 	// StreamCreatedAt is the creation instant of the stream this node's
-	// checkpoint is KEYED TO — the one its rows were derived from, which is
-	// not the one the broker serves while this node knows its log was
-	// rebuilt under it.
-	//
-	// THE THIRD COORDINATE OF A POSITION, and the one a generation cannot
-	// stand in for. A stream deleted and remade keeps the generation and
-	// counts from 1 again, so two rows at one generation are comparable
-	// only if they are about one stream — and a reanchor's guards compare
-	// exactly that: whether a peer went further along the stream this
-	// node's rows came from. Without it every peer still on the lost
-	// stream read as one caught up on the live one, and no node of a
-	// fleet could ever re-anchor.
-	//
-	// ZERO IS UNKNOWN, never "no stream": this build always publishes it — a
-	// runner is always keyed to a stream ([statelog.Runner.KeyedTo]), and a
-	// node whose log reports no creation instant does not run the domain —
-	// so a zero is only the type's zero value, a row nothing can place on a
-	// stream, which a reader never counts as on its own.
+	// checkpoint is KEYED TO, which is not the one the broker serves while
+	// this node knows its log was rebuilt under it. A generation cannot stand
+	// in for it: a stream deleted and remade keeps the generation and counts
+	// from 1, and a reanchor's guards ask whether a peer went further on the
+	// stream this node's rows came from; without it every peer on the lost
+	// stream reads as caught up on the live one, and no node could re-anchor.
+	// ZERO IS UNKNOWN, never "no stream" (this build always publishes it,
+	// [statelog.Runner.KeyedTo]): a reader never counts such a row as on its own.
 	StreamCreatedAt time.Time `json:"stream_created_at,omitzero"`
 
 	// CheckpointStoredAt is the broker's instant for the record at this
-	// node's checkpoint — the one it consumed at Seq — and with Seq it NAMES
-	// that record, which a sequence alone cannot: after a broker restored
-	// from an older copy is written past a node's rows, the same sequence
-	// holds another record in the log than in those rows.
-	//
-	// WHAT IT LETS A PEER ASK is whether this node's history is the log's.
-	// A node whose checkpoint record the log holds is on the log, whatever
-	// its sequence — nothing it holds is lost by a reanchor that follows the
-	// log — while one whose record the log does not hold, or holds another
-	// record at, holds history the log lost; only the second is weighed
-	// against a reanchoring node's own position
-	// ([statelog.ReanchorInputs.Highest]).
-	//
-	// ZERO IS UNKNOWN — a checkpoint naming no record — and a reader weighs
-	// it as history the log may not hold.
+	// node's checkpoint, and with Seq it NAMES that record: after a broker
+	// restored from an older copy is written past a node's rows, one sequence
+	// holds different records in the log and in the rows. A peer asks with it
+	// whether this node's history is the log's: only a node whose record the
+	// log lacks or holds differently is weighed against a reanchoring node's
+	// position ([statelog.ReanchorInputs.Highest]). ZERO IS UNKNOWN, weighed
+	// as history the log may not hold.
 	CheckpointStoredAt time.Time `json:"checkpoint_stored_at,omitzero"`
 
 	// Snapshot is the newest VERIFIED snapshot this node holds, and its
@@ -88,46 +62,30 @@ type DomainPosition struct {
 	// beside AppliedThrough to tell a lagging node from a stalled one.
 	Deferred int `json:"deferred,omitempty"`
 
-	// RecordVersion is the highest record version this node's build reads
-	// on the domain's log — what a writer asks before it publishes a record
-	// no older build can even DEFER.
-	//
-	// Deferral is a rolling upgrade's contract for a record a peer cannot
-	// apply, and it rests on the peer reading the record's ENVELOPE; a kind
-	// a build's envelope refuses stops that build's applier instead. So a
-	// writer about to publish such a kind reads this across every node the
-	// log counts, and waits for the last to advertise a build that reads it.
-	//
-	// ZERO IS "NOT ADVERTISED" — what a reader holds for a node it counts
-	// from its presence before that node's first report — and a reader
-	// weighs it as a build that reads nothing newer, never as one that
-	// reads everything.
+	// RecordVersion is the highest record version this node's build reads on
+	// the domain's log. Deferral, a rolling upgrade's contract for a record a
+	// peer cannot apply, rests on the peer reading the ENVELOPE; a kind the
+	// envelope refuses stops the applier. So a writer about to publish such a
+	// kind waits until every node the log counts advertises a build that
+	// reads it. ZERO IS "NOT ADVERTISED" (a node counted from its presence
+	// before its first report), weighed as a build that reads nothing newer,
+	// never as one that reads everything.
 	RecordVersion int `json:"record_version,omitempty"`
 
 	// LogDiverged reports that the log holds, at this node's checkpoint,
-	// another record than the one it consumed there: a broker restored from
-	// an older copy and written past this node's rows, so they hold history
-	// the log lost and the log holds history they never saw.
-	//
-	// PUBLISHED because it is the one such node the fleet cannot otherwise
-	// see: its position is at or below the log's end, where a lagging node's
-	// is, so nothing else on this row says its rows and the log are two
-	// histories — and every other node on that log refuses its own writes of
-	// it while this says so, as it does for a peer whose position is past the
-	// log's end, until the operator decides which history the fleet keeps.
+	// another record than the one it consumed: a broker restored from an
+	// older copy was written past this node's rows, so each holds history the
+	// other lacks. PUBLISHED because nothing else on the row shows it (its
+	// position is where a lagging node's is), and every other node on that
+	// log refuses its own writes while this says so, as for a peer past the
+	// log's end, until the operator picks the history the fleet keeps.
 	LogDiverged bool `json:"log_diverged,omitempty"`
 }
 
 // NodePositions is one node's row in the register: every domain it runs, and
-// when it last said so.
-//
-// # Why one key per node rather than one bucket per domain
-//
-// A second domain costs a MAP ENTRY here. The alternative — a bucket per
-// domain — costs a bucket, its retention decision, its replica count and a
-// place in every sweep, for a fact that is always read together anyway: the
-// trim asks "what has every data node applied", and it asks it about every
-// domain at once.
+// when it last said so. One key per node, not a bucket per domain: a domain
+// costs a map entry rather than a bucket with its own retention, replicas and
+// sweep, and the trim asks about every domain at once anyway.
 type NodePositions struct {
 	NodeID string `json:"node_id"`
 
@@ -137,168 +95,75 @@ type NodePositions struct {
 	At            time.Time `json:"at"`
 	EngineVersion string    `json:"engine_version,omitempty"`
 
-	// StoredAt is the instant the store took the row this one was read
-	// from, by the STORE's clock — on the KV backend the broker's, which
-	// stamps every entry with its stream leader's clock — filled by every
-	// [PositionRegister.Positions] and never written: a row put with one
-	// stores none, so no writer can say what the broker's clock read.
-	//
-	// WHAT IT IS FOR is the one comparison of machines' clocks the fleet can
-	// make without a read or a write of its own. At is the writer's clock at a
-	// write and StoredAt the store's at the same write, so every row read back
-	// says how far its writer's clock stands from the broker's — off by no
-	// more than the time between its stamp and the write — and, since one
-	// broker clock stores every row, a register's rows together say how far
-	// each node's clock stands from the others'. The engine's `clock_skew`
-	// alarm compares them against their median (internal/engine,
-	// clockskew.go).
-	//
-	// ZERO ON A ROW NOTHING READ BACK — one built in memory — which a reader
-	// takes as nothing measured.
+	// StoredAt is the instant the store took the row this one was read from,
+	// by the STORE's clock (on the KV backend the stream leader's), filled by
+	// every [PositionRegister.Positions] and never written, so no writer can
+	// claim what the broker's clock read. Beside At (the writer's clock at the
+	// same write) every row says how far its writer's clock stands from the
+	// broker's, and since one broker clock stores every row, how far nodes'
+	// clocks stand from each other: the engine's `clock_skew` alarm
+	// (internal/engine, clockskew.go). ZERO ON A ROW NOTHING READ BACK, which a
+	// reader takes as nothing measured.
 	StoredAt time.Time `json:"-"`
 
 	// Domains is this node's position on each log it runs, keyed by the
 	// log's domain name.
 	Domains map[string]DomainPosition `json:"domains"`
 
-	// SnapshotBytes is the size of the artefact those per-domain snapshot
-	// positions came from — the node's one artefact of the replicated
-	// estate.
-	//
-	// ON THE ROW RATHER THAN ON EACH DOMAIN, because a snapshot is ONE
-	// file covering every domain: a byte count per domain would be the
-	// same number written N times, and the first time they disagreed a
-	// reader would have to decide which was the file.
+	// SnapshotBytes is the size of the artefact the per-domain snapshot
+	// positions came from, the node's one artefact of the replicated estate.
+	// On the row, not each domain: a snapshot is ONE file covering every
+	// domain, and N copies of its size could disagree.
 	SnapshotBytes int64 `json:"snapshot_bytes,omitempty"`
 
 	// SnapshotSkip is why this node holds no current snapshot, in its own
-	// loop's words, and empty when it holds one.
-	//
-	// THE OPERATOR'S ANSWER TO "why can this node not donate", which is
-	// the question a failed join raises and the one nothing else on this
-	// row can answer: an absent snapshot position says a node has none and
-	// is silent about whether that is a disk that filled, a node that is
-	// lagging, or a loop that has simply not run yet.
+	// loop's words, empty when it holds one: the operator's answer to "why can
+	// this node not donate" after a failed join, which an absent snapshot
+	// position cannot give (a full disk, a lag, a loop not yet run).
 	SnapshotSkip string `json:"snapshot_skip,omitempty"`
 }
 
 // PositionRegister is the fleet's record of where every node stands.
 //
-// # It has no TTL, and that is the sharpest retention decision in the estate
-//
-// Every other bucket's age answers a question about staleness. This one's
-// would answer a question about DELETION: the trim reads these positions to
-// decide what records every node has finished with, so a key that expired
-// would read as a node that has applied NOTHING — which pins the trim for
-// ever, or, read the other way round, lets it delete records that node still
-// needs.
-//
-// # And no row ever leaves it
-//
-// There is no removal, by a clock or by anybody. An absent node stops pinning
-// the trim through an operator's audited EVICTION, whose tombstone the counted
-// set subtracts from these rows ([statelog.CountedSet], once it is older than
-// the fence window) — never through its row going away. The row is what a
-// READMISSION is judged by (the node's last position against the floor,
-// [statelog.PermitReadmission]), so a register that forgot an evicted node
-// would turn every later readmission of a machine still switched off into a
-// judgement about a node that has never reported anything. A removal verb
-// stood here with no caller, and a register that offers one invites wiring it
-// into the eviction.
-//
-// What bounds the register is the set of node ids a deployment has ever
-// configured: one row per id, replaced wholesale by that node's own
-// heartbeat, so a machine rebuilt under its old id writes over its old row
-// and only an id that is retired for good leaves one behind.
+// NO TTL: the trim reads these rows to decide what every node has finished
+// with, so an expired row reads as a node that applied NOTHING, pinning the
+// trim for ever or letting it delete records that node still needs. And NO ROW
+// EVER LEAVES, by clock or by anybody: an absent node stops pinning the trim
+// through an audited EVICTION's tombstone ([statelog.CountedSet], once older
+// than the fence window), and its row is what a READMISSION is judged by
+// ([statelog.PermitReadmission]), so a removal verb would invite wiring it into
+// the eviction. The register is bounded by the node ids a deployment has ever
+// configured: each node replaces its own row, so only a retired id leaves one.
 type PositionRegister interface {
-	// PutPositions writes this node's row, replacing it wholesale.
-	//
-	// LAST WRITER WINS AND THAT IS CORRECT: the only writer of a node's row
-	// is that node, so there is no race to arbitrate — and a
-	// compare-and-set here would make a heartbeat fail on a value only
-	// this process can have changed.
+	// PutPositions writes this node's row, replacing it wholesale. Last writer
+	// wins, correctly: only the node writes its row, so a compare-and-set
+	// would only fail a heartbeat on a value no other process changes.
 	PutPositions(ctx context.Context, p NodePositions) error
 
 	// Positions reads every node's row, each with the instant the store took
-	// it ([NodePositions.StoredAt]).
-	//
-	// The whole register, because every caller wants it: the trim takes a
-	// minimum across nodes, the fleet view renders a row per node, and a
-	// donor search picks the newest snapshot. A per-node read would be N
-	// round trips for one answer.
+	// it ([NodePositions.StoredAt]). The whole register, because every caller
+	// wants it (the trim's minimum, the fleet view, a donor search); per-node
+	// reads would be N round trips for one answer.
 	Positions(ctx context.Context) ([]NodePositions, error)
 }
 
 // PositionKey is a node's key in the register.
 //
-// THE REGISTER HOLDS TWENTY-ONE KEY CLASSES, and every one needs the same
-// retention, which is NONE.
-//
-// Four are the trim's: this one, [HoldKey] and [BackupPointKey] are its
-// inputs, and [FloorKey] is its published answer. Three are the capacity
-// window's: [MaintenanceKey], whose existence IS the exclusion,
-// [AdmissionKey], which is one node's positive record that it intends to
-// publish, and [MaintenanceAckKey], which is one participant's evidence that
-// its process restarted for one log's window. The eighth is [SeatPauseKey], a person's decision
-// that a seat stops taking work, which an age would lift on a timer nobody
-// set. The ninth and tenth are a model entry's: [ModelRetryKey], a person's request
-// to stop sitting it out, which ages out of meaning by its own stamp, and
-// [DeviceSignInKey], a sign-in in progress, whose lifetime is a field of the
-// record that its readers keep ([DeviceSignIn.Lapsed]) because a bucket age
-// would restart at every update. The eleventh is [SeatAccessKey], the ledger
-// of accounts the engine created at a vendor, which an age would forget while
-// the account still exists there. The twelfth and thirteenth are an MCP server's: [MCPListingKey], one node's listing of
-// one server, which an age would forget while the server lists exactly that,
-// and [MCPDefinitionKey], one tool definition whole, which goes when no listing
-// or accepted definition names it; both are removed by a decision, the node's own or the
-// maintenance sweep's (mcplisting.go). The fourteenth is [MCPRestartKey], a
-// person's request to restart an MCP server, which ages out of meaning by its
-// own stamp as a model retry does (mcprestart.go). The fifteenth is
-// [MCPCheckKey], an MCP server's latest test, which an age would take off the
-// server's page while it is still the latest; the apply that removes the
-// server removes it (mcpcheck.go). The sixteenth and seventeenth are an MCP
-// server's OAuth: [MCPGrantKey], the public half of its grant, good until
-// somebody signs out or removes the server, and [MCPSignInKey], a sign-in in
-// progress, lapsed by its own field as a device sign-in is (mcpoauth.go). The
-// eighteenth is [MCPAcceptedKey], the definition one MCP tool's level was
-// decided on, which an age would put back in front of a person for every tool
-// of a server that changed nothing; the maintenance sweep removes those of a
-// server nothing declares or lists (mcpaccepted.go). The nineteenth is
-// [FeedMarkKey], how far a wake feed's fleet-wide group had acknowledged,
-// which an age would turn into a group never consumed and so a replay of its
-// log's whole retention (feedmarks.go). The twentieth is [ModelCheckKey], a
-// model entry's latest check, lapsed by its own fields as a device sign-in is
-// (modelcheck.go). The twenty-first is [GrantRequestKey], an agent's request
-// for one grant, swept past its own stamp as a model retry ages out of
-// meaning by its own (grantrequests.go).
-//
-// They share a bucket because they share that retention and because a bucket
-// is a stream with a replica count, a place in every sweep and a retention
-// decision of its own. What none of them may have is an AGE: an expiring
-// position reads as a node that has applied nothing, an expiring operation
-// admits every publisher in the fleet, an expiring admission hides one, an
-// expiring acknowledgement un-seals a barrier that has already run, an
-// expiring pause resumes a seat nobody resumed, and an expiring ledger record
-// orphans a live account. A listing over any class
-// filters on the first segment, and that filter is load-bearing rather than
-// tidy: a hold decoded as a positions row is a node id of "" with a domains
-// map of zero values, which the trim reads as a node that has applied nothing
-// and pins the floor at zero for ever.
-//
-// The chat read state wants the same retention and is deliberately NOT a
-// class here: it is the busiest record the fleet writes, and as one
-// every person's flush would be ordered through the one raft group, and every
-// chat screen's read answered by the one leader, that serve the trim's inputs
-// and the capacity window. [ChatReads] has a bucket of its own for that (see
-// chatread.go's "Why a bucket of its own").
+// The register holds every key class whose retention is NONE, and only those:
+// the trim's inputs and answer, the capacity window's records, and records a
+// decision or their own stamp ends (each class's doc says what an age would
+// break). They share one bucket
+// because each bucket costs a replica count, a sweep and a retention decision.
+// A listing over any class MUST filter on the first segment: a hold decoded as
+// a positions row is a node id of "" with zero domains, pinning the trim's
+// floor at zero for ever. The chat read state wants the same retention but is
+// NOT a class here: the busiest record would order every flush through the raft
+// group serving the trim ([ChatReads], chatread.go's "Why a bucket of its own").
 func PositionKey(nodeID string) string { return DocumentKey("node", nodeID) }
 
-// Validate reports why a row cannot be written.
-//
-// A row with no node id is unattributable — it would be written under whatever
-// key the caller passed and read back as somebody else's progress, which is
-// the one error here that corrupts another node's answer rather than this
-// one's.
+// Validate reports why a row cannot be written. A row with no node id would
+// read back as somebody else's progress: the one error here that corrupts
+// another node's answer rather than this one's.
 func (p NodePositions) Validate() error {
 	if p.NodeID == "" {
 		return fmt.Errorf("coord: a positions row needs a node id: an "+

@@ -152,7 +152,8 @@ export function VersionView({
       onLensChange={(next) => setLens(next === "versions" ? "full" : "diff")}
       labels={{ lens: "What to show of this revision", versions: "Full text" }}
       changes={changes}
-      to={full}
+      // ONE VERSION, SO NO PANE HEADING: "rev N" over it only said the title again.
+      versions={full}
       actions={
         <Button size="small" variant="ghost" onClick={onClose}>
           Back to the page

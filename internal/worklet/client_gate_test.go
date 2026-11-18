@@ -11,28 +11,19 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// The lists the dashboard has to keep its own copy of, held against the
-// engine's.
+// The lists the dashboard keeps its own copy of, held against the engine's.
 //
-// Every one is a closed set the engine owns and the dashboard cannot import:
-// it is a separate build in a separate language, so `WorkViewShape`, the
-// grid's and the directory's sort keys, the change kinds and the grouping axes
-// are copies. Every copy in this tree has drifted at least once — see
-// `internal/clientsource`'s own doc — and each drifts silently, so each gate
-// below says which direction it holds and why.
+// Each is a closed set the engine owns and the dashboard, a separate build in
+// a separate language, cannot import. Each copy drifts silently
+// (`internal/clientsource`'s doc), so each gate says which direction it holds
+// and why.
 
 // EVERY SHAPE THE ENGINE MINTS HAS A RENDERER, AND EVERY RENDERER HAS A SHAPE.
 //
-// The strip is built from what [worklet.Views] returns, and the client picks a
-// renderer by the row's `type`. A shape the engine mints that the client does
-// not name is a TAB THAT DRAWS NOTHING: the strip shows it, a reader clicks it
-// and the body is blank, with no error anywhere — the switch simply has no
-// arm. That is what would have happened the day `table` landed if this file
-// had not come with it.
-//
-// The other direction is quieter still: a shape the client names and the
-// engine refuses is a branch nothing can reach, carrying a renderer somebody
-// will maintain for a tab that cannot exist.
+// The strip is built from [worklet.Views] and the client picks a renderer by
+// the row's `type`. A shape the client does not name is a TAB THAT DRAWS
+// NOTHING, with no error anywhere; a shape the engine refuses is a renderer
+// nothing can reach.
 func TestEveryViewShapeTheEngineMintsHasARenderer(t *testing.T) {
 	t.Parallel()
 	engine := worklet.ViewTypeNames()
@@ -64,26 +55,16 @@ func TestEveryViewShapeTheEngineMintsHasARenderer(t *testing.T) {
 
 // AND EVERY COLUMN THE GRID SORTS AT ITS HEAD IS A KEY THE GRAMMAR TAKES.
 //
-// `DataGrid` writes a column's key into `sort=`, the tracker screen sends that
-// key to `work_items`, and [ParseQuery] REFUSES a sort key it does not know
-// rather than dropping it. So a wrong header is not a mis-sorted column: it is
-// a refusal on the click, and the whole board goes with it.
+// `DataGrid` writes a column's key into `sort=` and [ParseQuery] REFUSES a
+// sort key it does not know, so a wrong header refuses the read on the click
+// and takes the whole board with it. One declaration covers the list's and the
+// table's columns; a column with no sort key names a `WorkSummary` field
+// through its cell, a compile error when wrong, so a sort key is the only
+// string a column sends the engine.
 //
-// ONE DECLARATION COVERING BOTH COLUMN SETS. The list and the table are one
-// grid drawn in two sets of columns, and every sortable column in either is
-// keyed to this union — so the list's heads, which could not be sorted at all
-// while it was a hand-rolled panel, are held against the grammar by the same
-// gate the table's always were. What is NOT held here is the rest of a column
-// set: a column that names no sort key names a field of `WorkSummary` through
-// its own cell, which is the dashboard's own typed copy of the wire format and
-// a compile error when it is wrong. Only the strings that reach the engine
-// need a gate, and a sort key is the only one a column mints.
-//
-// One direction only, deliberately. The engine has sort keys the grid has no
-// column for — `rank` is a board's manual order and `spend_tokens` and
-// `status_entered` are not on the row at all — and a column for every key
-// would be a grid nobody asked for. What must never happen is a head that
-// names a key the grammar has never heard of.
+// One direction only: the grid deliberately has no column for `rank` (a
+// board's manual order) or `spend_tokens` and `status_entered` (not on the
+// row).
 func TestEveryGridSortKeyIsOneTheGrammarTakes(t *testing.T) {
 	t.Parallel()
 
@@ -97,10 +78,9 @@ func TestEveryGridSortKeyIsOneTheGrammarTakes(t *testing.T) {
 	}
 
 	for _, key := range client {
-		// THROUGH THE PARSER, not against a copy of its list: what decides
-		// whether a header works is `ParseQuery`'s own answer, and a test
-		// comparing two slices would pass on a key the parser refuses for
-		// some reason other than the list — a bare `f.`, say.
+		// THROUGH THE PARSER, not against a copy of its list: comparing
+		// slices passes a key the parser refuses for another reason (a
+		// bare `f.`, say).
 		if _, err := worklet.ParseQuery(worklet.MapParams(map[string]any{
 			"container": "workspace", "sort": key,
 		}), wednesday, time.UTC); err != nil {
@@ -113,18 +93,12 @@ func TestEveryGridSortKeyIsOneTheGrammarTakes(t *testing.T) {
 
 // AND THE PROJECTS DIRECTORY'S ORDERINGS ARE THE ENGINE'S, IN BOTH DIRECTIONS.
 //
-// Unlike the table's sort keys above, this pair has to match exactly. The
-// directory's answer is a PAGE — the engine stops at [MaxProjectsPerAnswer] —
-// so the ordering is applied by the engine and the grid is told not to re-sort
-// what it was handed; which means the dashboard's list is not a subset of the
-// engine's, it is a second copy of it.
-//
-// Both directions fail silently. A key the directory offers and the engine
-// refuses is not a mis-sorted column: [Reader.Projects] refuses the read, the
-// route answers `bad_params`, and the frame draws that as the SCREEN being at
-// fault with no retry — a whole directory lost to one header. A key the engine
-// grew with no header for it is an ordering nobody can reach, and it is the
-// half that goes unnoticed for as long as nobody misses it.
+// Unlike the grid's sort keys, these match exactly: the directory's answer is
+// a PAGE ([MaxProjectsPerAnswer]) the engine orders and the grid does not
+// re-sort. A key the engine refuses loses the whole directory
+// ([Reader.Projects] answers `bad_params`, drawn as the screen at fault, with
+// no retry); a key the engine grew with no header is an ordering nobody can
+// reach. Both are silent.
 func TestTheProjectsDirectorySortsOnExactlyTheOrderingsTheEngineTakes(t *testing.T) {
 	t.Parallel()
 
@@ -138,9 +112,7 @@ func TestTheProjectsDirectorySortsOnExactlyTheOrderingsTheEngineTakes(t *testing
 	}
 
 	for _, key := range client {
-		// THROUGH THE PARSER, not against a copy of its list — the same
-		// reason the table's gate gives: what decides whether a header
-		// works is the engine's own answer to the key the click sends.
+		// THROUGH THE PARSER, for the grid gate's reason.
 		q, err := worklet.ParseProjectQuery(worklet.MapParams{"sort": key})
 		if err != nil {
 			t.Errorf("the directory offers a %q header and the engine refuses "+
@@ -164,13 +136,10 @@ func TestTheProjectsDirectorySortsOnExactlyTheOrderingsTheEngineTakes(t *testing
 
 // AND EVERY CHANGE KIND THE ENGINE WRITES HAS A MARK AND A PHRASE.
 //
-// The item's history draws a kind as a mark and names it in a phrase, and the
-// dashboard cannot import [worklet.ChangeKinds] (a separate build in a
-// separate language), so it carries its own copy. A kind added in Go and not
-// there is a history row drawing the neutral fallback and reading as a bare
-// word after somebody's name ("ada watchers"), with no error anywhere; a kind
-// named there that the engine never writes is a mark and a sentence nobody can
-// reach. Both are silent, which is why this is a test.
+// The item's history draws a kind as a mark and a phrase from the dashboard's
+// copy of [worklet.ChangeKinds]. A kind missing there draws the neutral
+// fallback and reads as a bare word after somebody's name ("ada watchers"); a
+// kind the engine never writes is unreachable. Both are silent.
 func TestEveryChangeKindTheEngineWritesHasAMarkAndAPhrase(t *testing.T) {
 	t.Parallel()
 	body, err := clientsource.Literal(clientsource.Tree(t), "CHANGES")
@@ -210,14 +179,10 @@ func TestEveryChangeKindTheEngineWritesHasAMarkAndAPhrase(t *testing.T) {
 // AND EVERY GROUPING THE DISPLAY MENU OFFERS IS ONE THE GRAMMAR TAKES — and
 // every grouping the grammar takes is offered, or left out on the record.
 //
-// `GROUP_AXES` is the dashboard's copy of the engine's grouping keys. A value
-// there the parser refuses does not mis-draw a board, it refuses the read and
-// takes the board down with it; a key the engine takes that the menu never
-// lists is an arrangement only a hand-edited URL can reach, which is what
-// `project` was until this gate named it. The keys the menu deliberately does
-// not offer are listed HERE with their reasons, so a grouping added to the
-// grammar has to land in the menu or in this list — and an entry here for a
-// key the grammar no longer takes is stale and fails too.
+// A `GROUP_AXES` value the parser refuses takes the board down with the read;
+// a key the menu never lists is reachable only by a hand-edited URL. The keys
+// the menu leaves out are listed HERE with their reasons, so a new grouping
+// lands in the menu or this list, and a stale entry fails too.
 func TestEveryGroupingTheDashboardOffersIsOneTheGrammarTakes(t *testing.T) {
 	t.Parallel()
 
@@ -231,8 +196,7 @@ func TestEveryGroupingTheDashboardOffersIsOneTheGrammarTakes(t *testing.T) {
 	}
 
 	for _, key := range client {
-		// THROUGH THE PARSER, for the reason the sort gate gives: what
-		// decides whether a row works is ParseQuery's own answer.
+		// THROUGH THE PARSER, for the grid gate's reason.
 		if _, err := worklet.ParseQuery(worklet.MapParams(map[string]any{
 			"container": "workspace", "group_by": key,
 		}), wednesday, time.UTC); err != nil {
@@ -267,17 +231,12 @@ func TestEveryGroupingTheDashboardOffersIsOneTheGrammarTakes(t *testing.T) {
 
 // THE DASHBOARD BOUNDS THE TRACKER'S TEXT WHERE THE ENGINE DOES.
 //
-// The New task sheet, the Save view dialog and the Ask dialog refuse a title,
-// a description, a view's name or a question past the engine's cap before the
-// press — the field is marked and says by how much — because the engine
-// refuses such a value rather than cutting it, and a refusal that arrives
-// after the press lands on no field at all. That only works while the two
-// figures agree: a dashboard cap above the engine's lets through a value the
-// engine refuses, and one below it refuses one the engine would take — which
-// the Save view dialog did, with a `maxLength` of 80 against 128, cutting a
-// pasted name in the browser where nobody saw it. The Ask dialog's option rows
-// are held to the engine's fewest and most options the same way, and every
-// screen's read of the projects to the most one listing answers: fewer, and a
+// The New task sheet and the Save view and Ask dialogs refuse a value past the
+// engine's cap before the press, because the engine refuses rather than cuts
+// and a refusal after the press lands on no field. A dashboard cap above the
+// engine's lets through what the engine refuses; one below refuses what it
+// would take. The Ask dialog's option counts are held the same way, and every
+// screen's projects read to the most one listing answers: fewer, and a
 // company's later projects are missing from every switcher and picker.
 func TestTheDashboardBoundsWorkletTextAtTheEnginesCaps(t *testing.T) {
 	t.Parallel()
@@ -309,15 +268,10 @@ func TestTheDashboardBoundsWorkletTextAtTheEnginesCaps(t *testing.T) {
 
 // AND THE DASHBOARD NAMES EVERY CHAT SURFACE AN INFORM CAN, AND NO OTHER.
 //
-// A structured ask's `inform` reaches the dashboard whole, in every decisions
-// answer, so its surface is one of the engine's closed set
-// ([decision.InformSurfaces]), and the dashboard's protocol type says which from
-// a copy it keeps. The copy drifted the day the engine's own chat became a
-// surface: it went on naming the two vendors alone, so every decision asked on
-// a company running its own chat carried a surface the type said could not
-// occur, and a branch on it type-checked against a set that left `chat` out.
-// Held whole and in the engine's order, so the next surface fails here rather
-// than reaching a screen as a value nothing declared.
+// A structured ask's `inform` reaches the dashboard whole, and its protocol
+// type copies the engine's closed set ([decision.InformSurfaces]). Held whole
+// and in the engine's order, so a new surface fails here rather than reaching
+// a screen as a value the type says cannot occur.
 func TestTheDashboardNamesEveryInformSurface(t *testing.T) {
 	t.Parallel()
 	client, err := clientsource.Union(clientsource.Tree(t), "InformSurface")

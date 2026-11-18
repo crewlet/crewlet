@@ -22,54 +22,39 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// THE ARTIFACTS TOOLS: one tool per action, each named for its authority
-// row (list_artifacts, get_artifact, list_dashboard_sources,
-// get_artifact_format, get_company_brand, create_artifact, publish_artifact, update_artifact,
-// share_artifact, unshare_artifact, upload_artifact_asset,
-// create_artifact_folder, move_artifact, and the five comment tools of
-// artifacts_comments.go). Registered for seats and in the operator catalogue
-// from the hooks below, which [Register] and [OperatorTools] already append.
+// THE ARTIFACTS TOOLS: one per action, each named for its authority row (the
+// constants below, and the comment tools of artifacts_comments.go).
 //
-// Nothing that takes an artifact out of circulation is a tool: trash, restore,
-// purge and transfer are a person's gestures on the HTTP surface, so a
-// prompt-injected agent cannot take a team's sheet offline. Nor is `force`:
-// discarding a colleague's newer version is a present person's decision
-// (`artifacts.publish.force`), so a stale publish is answered with the live
-// version to merge onto and nothing else. Nor is reorganising a team's
-// folders: renaming, moving, removing and unfiling are a folder owner's
-// gestures (`artifacts.folder.*`), and adopting the brand an administrator's
-// (`artifacts.brand.*`). An agent files its own work and creates subfolders
-// inside a tree somebody made.
-//
-// # Every verb is decided twice inside a turn somebody woke
-//
-// The registration gate admits a call on the table's app rows; the stored
-// artifact (its owner, its shares, whether an agent owns it) decides the rest,
-// so each tool reads the row and asks [authz.DecideWithin] on it: the acting
-// principal first, then the principal the turn is acting for (the requester
-// ceiling). The agent never discloses an artifact to a requester who could not
-// open it and never writes for one what they could not write, except the edits
-// it makes to an artifact it owns, which anybody who can message it steers. A
-// caller with no relation at all is told the artifact does not exist, in
-// exactly the words an id nothing holds is answered with.
-//
-// # Every write goes through the one publish pipeline
-//
-// Bytes reach a version only through internal/artifactupload: inline content
-// rides the call (at most [artifacts.MaxInlineBytes] decoded), an executor's
-// box and a project's files are streamed into an upload the pipeline reserved
-// first (a sandbox is never handed a presigned URL), and the pipeline holds
-// every turn to its guardrails ([artifacts.TurnPublishes],
-// [artifacts.TurnPublishesPerArtifact], [artifacts.TurnBytesWritten]) before a
-// byte moves.
-//
-// # Publishing delivers nowhere
-//
-// A person who asked in a chat thread for a review sheet is waiting in that
-// thread: the seat publishes, then posts the `url` every answer carries with
-// its chat tools, and the delivery check sends the turn back if it only
-// published. So no publishing tool declares a delivery surface; a comment
-// and a resolve ([ArtifactCommentWrites]) answer a comment's wake on the artifact.
+// Nothing that takes an artifact out of circulation (trash, restore, purge,
+// transfer) is a tool, so a prompt-injected agent cannot take a team's sheet
+// offline. Nor is `force`, a present person's `artifacts.publish.force`: a
+// stale publish is answered with the live version to merge onto. Nor is
+// renaming, moving, removing or unfiling a team's folders (a folder owner's
+// `artifacts.folder.*`), or adopting the brand (an administrator's
+// `artifacts.brand.*`): an agent files its own work and creates subfolders in
+// a tree somebody made.
+
+// EVERY VERB IS DECIDED TWICE: the registration gate admits a call on the app
+// rows, then each tool reads the stored artifact and asks [authz.DecideWithin]
+// for the acting principal and for the principal the turn acts for (the
+// requester ceiling). So an agent never discloses or writes for a requester
+// what they could not themselves, except its edits to an artifact it owns,
+// which anybody who can message it steers. A caller with no relation is told
+// the artifact does not exist, in the words an unheld id gets
+// ([artifactNotFound]).
+
+// EVERY WRITE GOES THROUGH THE ONE PUBLISH PIPELINE (internal/artifactupload):
+// inline content rides the call (at most [artifacts.MaxInlineBytes] decoded),
+// an executor's box and a project's files stream into an upload the pipeline
+// reserved first (a sandbox is never handed a presigned URL), and every turn
+// is held to [artifacts.TurnPublishes], [artifacts.TurnPublishesPerArtifact]
+// and [artifacts.TurnBytesWritten] before a byte moves.
+
+// PUBLISHING DELIVERS NOWHERE: a person who asked in a chat thread is waiting
+// there, so the seat posts the answer's `url` with its chat tools, and the
+// delivery check sends back a turn that only published. No publishing tool
+// declares a delivery surface; a comment and a resolve
+// ([ArtifactCommentWrites]) answer a comment's wake on the artifact.
 
 // The artifacts tools' names: each is its authority row's action.
 const (
@@ -132,9 +117,9 @@ type ArtifactWriter interface {
 }
 
 // ArtifactPublisher is THE publish pipeline (internal/artifactupload's
-// Service) as these tools call it: every byte a version or an asset holds goes
-// through it, and a file's text is read back through it in the form an edit is
-// written against.
+// Service) as these tools call it: every byte of a version or an asset goes
+// through it, and a file's text is read back in the form an edit is written
+// against.
 type ArtifactPublisher interface {
 	Intend(ctx context.Context, c artifactsdomain.Call, id artifacts.ID, req artifacts.UploadRequest) (artifacts.UploadIntent, error)
 	Transfer(ctx context.Context, c artifactsdomain.Call, upload, path string, body io.Reader, size int64) error
@@ -148,9 +133,8 @@ type ArtifactPublisher interface {
 // that takes its files from it.
 type ArtifactBoxes interface {
 	// Box is the box of the executor working in this turn, attached for
-	// reading while it works: the executor publishes its own build, by
-	// calling. It answers [ErrNoBox] when the turn has none it may read: no
-	// launch, an executor that is not working in its box (parked on a
+	// reading while it works. It answers [ErrNoBox] when the turn has none it
+	// may read: no launch, an executor not working in its box (parked on a
 	// question, collected, its pause reaped), or a box already torn down.
 	Box(ctx context.Context, turn *turnctx.Turn) (ArtifactBox, error)
 }
@@ -160,12 +144,11 @@ type ArtifactBoxes interface {
 // and slash-separated.
 type ArtifactBox interface {
 	// Files lists every regular file under dir, at most max of them. The
-	// listing is the box's and is treated as untrusted: every path is held
-	// to the workspace and the published-path grammar again by the caller.
-	// A dir that names no directory of the workspace — missing, a file or
-	// a link — is [ErrNotADirectory], the caller's to change; a workspace
-	// that is gone is [ErrNoWorkspace]; and a walk that could not read all
-	// of dir is [ErrListIncomplete], never a shorter listing.
+	// listing is untrusted: the caller holds every path to the workspace and
+	// the published-path grammar again. A dir naming no directory of the
+	// workspace is [ErrNotADirectory], a workspace that is gone
+	// [ErrNoWorkspace], and a walk that could not read all of dir
+	// [ErrListIncomplete], never a shorter listing.
 	Files(ctx context.Context, dir string, max int) ([]string, error)
 
 	// Open streams one regular file. A path that names anything else is
@@ -177,9 +160,9 @@ type ArtifactBox interface {
 var ErrNoBox = errors.New("builtin: this turn holds no executor's box to publish from")
 
 // ErrNotADirectory is a directory a publish named that the box's workspace
-// does not hold as one: it is missing, or it is a file or a link,
-// which a listing never follows. The caller's argument, as a path naming no
-// file is ([sandbox.ErrNotRegularFile]), and never a fault of this node.
+// does not hold as one (missing, or a file or a link, which a listing never
+// follows): the caller's argument to change, as [sandbox.ErrNotRegularFile]
+// is, never a fault of this node.
 var ErrNotADirectory = errors.New("builtin: the path is not a directory in the box's workspace")
 
 // ErrNoWorkspace is an executor's box whose workspace is gone: no dir a
@@ -263,10 +246,9 @@ type ArtifactDeps struct {
 	// time ([ArtifactCommentRouter]).
 	Routing ArtifactCommentRouter
 
-	// Set by [Register] and [OperatorTools] from the deps around them; ops,
-	// the one operation rule every family of write tools takes
-	// ([operations]), by [OperatorTools] alone. work carries the surface's
-	// authority decision ([WorkDeps.Authorize], set before work is taken
+	// Set by [Register] and [OperatorTools] from the deps around them; ops
+	// ([operations]) by [OperatorTools] alone. work carries the surface's
+	// authority decision ([WorkDeps.Authorize], set before work is copied
 	// here), which a copy of a project's file asks ([WorkDeps.copyFrom]).
 	work    WorkDeps
 	compact *compact.Compactor
@@ -341,8 +323,8 @@ func artifactOperatorCandidates(deps OperatorDeps) []candidate {
 	if a.Org == nil {
 		a.Org = deps.Org
 	}
-	// AND A PERSON'S MARKS OVER THEIR COMMENT NOTICES, which no seat is given:
-	// a seat is woken, never shown an inbox (artifactmarks.go).
+	// A person's marks over their comment notices, which no seat is given: a
+	// seat is woken, never shown an inbox (artifactmarks.go).
 	return append(artifactToolSet(a), candidate{&artifactMarkInbox{deps: a}, a.serves()})
 }
 
@@ -380,25 +362,21 @@ func artifactAnnotations(name string) (tools.Annotations, bool) {
 	switch name {
 	case ListArtifactsTool, GetArtifactTool, DashboardSourcesTool, ArtifactFormatTool, CompanyBrandTool,
 		ListArtifactCommentsTool, RenderArtifactTool:
-		// Reads, and idempotent. get_artifact may condense a long file a
-		// colleague wrote through the auxiliary model, which is a read's
-		// cost the way query_episodes' condensing is, and writes nothing a
-		// person reads (an administrator's elevated-read record is the
-		// engine's audit, never a shared surface). render_artifact writes
-		// its screenshots into the caller's own box, which nobody else reads.
+		// Reads: get_artifact's condensing through the auxiliary model is a
+		// read's cost, as query_episodes' is, and an administrator's
+		// elevated-read record is the engine's audit, never a shared
+		// surface. render_artifact writes into the caller's own box, which
+		// nobody else reads.
 		return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}, true
 	case CreateArtifactTool, UploadArtifactAssetTool:
-		// Additive, and NOT idempotent as tools: a second call with other
-		// content is a second artifact or a second asset. A re-run turn's
-		// call collapses onto the first, which is the engine's protection
-		// rather than the tool's shape.
+		// NOT idempotent as tools: a second call is a second artifact or
+		// asset. A re-run turn's call collapses onto the first, which is the
+		// engine's protection rather than the tool's shape.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}, true
 	case PublishArtifactTool:
-		// NOT DESTRUCTIVE: every version is kept and a rollback is a
-		// publish of `restore_version`, and a publish over a version
-		// somebody else made in the meantime is refused rather than
-		// discarding it. Not idempotent: a second publish is a second
-		// version.
+		// NOT DESTRUCTIVE: every version is kept (a rollback publishes
+		// `restore_version`), and a publish over somebody's newer version
+		// is refused. Not idempotent: a second publish is a second version.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}, true
 	case UpdateArtifactTool:
 		// DESTRUCTIVE for update_work_item's reason: it replaces a title, a
@@ -427,12 +405,11 @@ func artifactAnnotations(name string) (tools.Annotations, bool) {
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.Yes,
 			Idempotent: mcp.Yes, OpenWorld: mcp.Yes}, true
 	case CreateArtifactFolderTool, MoveArtifactTool:
-		// IDEMPOTENT: a chain that already exists is answered as it is, and
-		// an artifact already in its folder is moved nowhere. NOT
-		// DESTRUCTIVE: a folder is made and nothing removed, and filing
-		// never changes who may open anything (a folder grants nothing), so
-		// the previous place is one more move away. Open-world all the same:
-		// a team finds its work where these put it.
+		// IDEMPOTENT: an existing chain is answered as it is, and an
+		// artifact already in its folder moves nowhere. NOT DESTRUCTIVE: a
+		// folder grants nothing, so filing changes no access and the previous
+		// place is one more move away. Open-world: a team finds its work
+		// where these put it.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.Yes}, true
 	}
@@ -507,13 +484,12 @@ func (d ArtifactDeps) ceilingFor(ctx context.Context, turn *turnctx.Turn,
 }
 
 // operation settles the operation key a write's records derive from, the
-// `op_id` its answer carries, or the refusal of one brought back — by the one
-// rule every family of write tools takes ([operations.bind]), seeded where the
-// call already carries its key ([ArtifactDeps.carriedKey]):
+// `op_id` its answer carries, or the refusal of one brought back
+// ([operations.bind]), seeded where the call carries its key
+// ([ArtifactDeps.carriedKey]):
 //
-//   - IN A TURN, the call's key ([callOpKey], the one derivation every
-//     domain's writes take), so a re-run turn's publish is the first run's
-//     and lands once;
+//   - IN A TURN, the call's key ([callOpKey]), so a re-run turn's publish is
+//     the first run's and lands once;
 //   - OUTSIDE ONE, the key the caller's transport carries, as it was sent;
 //   - on the operator's MCP, which carries none, the `op_id` an earlier answer
 //     handed back for exactly this call, or a fresh one the answer hands out.
@@ -531,9 +507,8 @@ func (d ArtifactDeps) operation(ctx context.Context, turn *turnctx.Turn, tool st
 	return op, op, ""
 }
 
-// carriedKey is the operation key a call derives from what it carries — its
-// turn's ([callOpKey], the one derivation every domain's writes take), or its
-// transport's key as it was sent — or "" where it carries neither.
+// carriedKey is the operation key a call derives from what it carries (its
+// turn's [callOpKey], or its transport's key as sent), or "" for neither.
 func (d ArtifactDeps) carriedKey(ctx context.Context, turn *turnctx.Turn, tool string,
 	args map[string]any) string {
 
@@ -651,20 +626,18 @@ func elevatedUnrecorded(tool string, err error) tools.Result {
 		"is shown. The record could not be written just now. Try again shortly.", tool))
 }
 
-// discloses reports whether this call may hand back what version of h holds,
-// as a refusal's context (the live files a stale publish answers with, the rows
-// a conflicting data write answers with): exactly when reading it would be
-// admitted, for the caller and for whoever the turn is acting for
+// discloses reports whether this call may hand back what version of h holds
+// as a refusal's context (the live files a stale publish answers with, the
+// rows a conflicting data write answers with): exactly when reading it is
+// admitted for the caller and for whoever the turn acts for
 // ([authz.DecideWithin] over the read row, which no steerable exception
 // reaches), with an administrator's override recorded first.
 //
-// A WRITE ADMITTED WITHOUT THE CEILING IS NOT A READ: an agent's edit to its
-// own work skips the requester, and a refusal that inlined the work's content
-// would hand a requester who could not open it exactly what reading it is
-// ceilinged against (D11). So the answer is false for a requester who could
-// not read it, for a turn a stranger woke, for a decision this node could not
-// take, and for an override whose record could not be written; the refusal is
-// then answered with numbers, authors and paths alone.
+// A WRITE ADMITTED WITHOUT THE CEILING IS NOT A READ (D11): an agent's edit to
+// its own work skips the requester, and a refusal inlining the work would hand
+// a requester who could not open it exactly that. On false (also for a
+// decision this node could not take, or an override it could not record) the
+// refusal is answered with numbers, authors and paths alone.
 func (d ArtifactDeps) discloses(ctx context.Context, c artifactCaller, h artifactsdomain.Head,
 	version int) bool {
 
@@ -754,18 +727,12 @@ func artifactNotFound(tool, ref string) tools.Result {
 			"find it with "+ListArtifactsTool+".", tool, clip(ref)))
 }
 
-// artifactTrashed is the answer for a read of an artifact in the trash, to a
-// caller it is disclosed to: its content is not served until a person
-// restores it, so nothing of it is read.
-//
-// THE ARTIFACT'S STATE, A CONFLICT, as every gesture on a trashed artifact is
-// and as the API's `409 artifact_trashed` says — never `not_found`: the
-// artifact is there, and a caller told it is not makes another.
-//
-// THE ARTIFACT AS THE MODEL NAMED IT (ref), the rule [artifactNotFound]
-// keeps: the argument it passed may be a link or a label, and a uuid it never
-// typed is not how it knows the artifact. The owner by their handle, which is
-// how a seat names a colleague.
+// artifactTrashed answers a read of a trashed artifact, to a caller it is
+// disclosed to: nothing of it is served until a person restores it. A
+// conflict, as the API's `409 artifact_trashed` is, never `not_found`: a
+// caller told the artifact is not there makes another. It names the artifact
+// as the model did (ref, as [artifactNotFound] does: a uuid it never typed is
+// not how it knows it), and the owner by handle, as a seat names a colleague.
 func artifactTrashed(tool, ref string, h artifactsdomain.Head) tools.Result {
 	return refusedBy(tools.RefusalConflict, artifactsdomain.ErrTrashed, fmt.Sprintf("%s: "+
 		"artifact %q is in the trash, and its content is not served until its owner (%s) "+

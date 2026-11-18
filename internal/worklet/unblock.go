@@ -8,94 +8,56 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The unblocked repair — today the one path by which a dependent hears it
-// became workable.
+// The unblocked repair is the one path by which a dependent hears it became
+// workable: closing a blocker clears its edges and tells nobody
+// ([Snapshot.Unblocked] is filled by [Writer.TellUnblocked] alone).
 //
-// # Why it is bounded by a POSITION and never by a clock
+// It is bounded by its OWN LOG POSITION, never a clock window: a "last five
+// minutes" query leaves every dependent cleared during a longer outage of the
+// duty untold for ever, while a position catches up a gap of any length.
 //
-// Closing a blocker clears its edge on every dependent and tells none of them:
-// the close's record is about the blocker, and nothing on it names the tasks
-// it held up ([Snapshot.Unblocked] is filled by [Writer.TellUnblocked] alone,
-// below). So until this repair runs — on the maintenance sweep's tick, every
-// fifteen minutes — somebody is waiting on work that is ready and nobody has
-// told them: after an ordinary close, a bulk cancel, a record deferred and
-// applied later, an edge written after the close.
-//
-// The obvious repair is a query over the last five minutes. It has a hole
-// exactly the size of the outage it exists to survive: a duty that did not run
-// for six minutes — a lease flap, a singleton moving, a node restart — leaves
-// every dependent unblocked in that window untold FOR EVER, because nothing
-// ever looks further back.
-//
-// So the repair holds its OWN POSITION and each tick reads the records since
-// it. A gap of any length is caught up on the next tick, and a repair that has
-// never run reads from zero. That is what a durable log makes available and a
-// wall clock does not.
-//
-// # And it reads the EDGES, not a column
-//
-// "When was this task last unblocked" is not a column on the task: it is
-// derived from the dependency edges and the blockers' own rows, which is why
-// there is no `blocked_cleared_at` here to query. The comparison is between
-// two FLEET-AGREED instants — the blocker's effective clearing time and what
-// the dependent was last told — because on authored clocks a sixty-second skew
-// re-issues a late wake for every task cleared in that window, on every tick.
+// "Last unblocked" is derived from the dependency edges, not a column, and is
+// compared between two FLEET-AGREED instants (the blocker's effective clearing
+// time and the dependent's `unblocked_told_at`): on authored clocks a skew
+// re-issues a late wake for every task cleared in it, on every tick.
 
 // Unblock is one dependent that is ready and has not been told.
 type Unblock struct {
 	// Task is the dependent, Key its addressable name, Project its
 	// container and Assignee whoever is waiting on it.
 	//
-	// BOTH THE ID AND THE KEY, because they are read by different things
-	// and neither substitutes for the other: the id is what the record is
-	// written against, and the KEY is what a card shows, what
-	// `tracker_notifications.subject_key` stores and what the prompt tells
-	// the seat to fetch. Carrying only the id put a uuid in all three —
-	// the one row in that column that was not a key, and a prompt asking a
-	// seat to read `3f2a…` by name.
+	// Both id and key: the record is written against the id, while a card,
+	// `tracker_notifications.subject_key` and the prompt all need the key.
 	Task     string
 	Key      string
 	Project  string
 	Assignee string
 
-	// ClearedAt is the effective instant its last blocker finished,
-	// which is what the dependent's own `unblocked_told_at` is compared
-	// against and what the repair stamps once it has told them.
+	// ClearedAt is the effective instant its last blocker finished: what
+	// `unblocked_told_at` is compared against and stamped with once told.
 	ClearedAt int64
 }
 
 // UnblockScan is one tick's worth of repair work, and the position it read to.
 //
-// AN UNASSIGNED DEPENDENT IS SKIPPED, and that is not a narrowing of the
-// repair — it is the repair declining to manufacture a record with no
-// recipient.
-//
-// The notice's only recipient is the dependent's own assignee (the
-// Unblocked party list is what recipients.go routes off), so a repair record
-// for an unassigned task names NOBODY: a full routing snapshot on the durable
-// log, a change-feed delivery and an ack for every node in the company, a
-// parse, a debug line — and no inbox row at the end of it. The duty
-// manufactures one on a timer for every unassigned dependent that becomes
-// workable, for ever.
-//
-// Skipping costs nothing, because the scan's window is bounded by the log
-// position rather than by the told-stamp: "since" advances on every tick
-// whether or not a row produced a notice, so a skipped dependent is simply
-// never found again rather than found repeatedly. Somebody assigned the task
-// afterwards reads its state when they pick it up.
+// AN UNASSIGNED DEPENDENT IS SKIPPED: the notice's only recipient is the
+// assignee (recipients.go routes off the Unblocked party list), so its record
+// would cost the log and every node a delivery and reach no inbox. A skipped
+// dependent is not found again, since the window advances by log position
+// whether or not a row produced a notice; whoever is assigned later reads the
+// task's state.
 type UnblockScan struct {
 	Pending []Unblock
 
 	// Through is the position this scan covered. IT IS ADVANCED ONLY
-	// AFTER THE COMMITS LAND, so a crash mid-tick re-reads the same
-	// records rather than skipping them — a repeated wake is a duplicate
-	// the inbox collapses, and a skipped one is somebody never told.
+	// AFTER THE COMMITS LAND: a crash mid-tick re-reads, and a repeated
+	// wake is a duplicate the inbox collapses where a skipped one is lost.
 	Through uint64
 }
 
 // unblockHorizonStatement is the repair's own horizon: the newest status row
-// past the last one it read. Named, like [unblockedDependentsStatement], so the
-// plan test explains exactly what [ScanUnblocked] issues.
+// past the last one it read. Named so the plan test checks what
+// [ScanUnblocked] issues.
 const unblockHorizonStatement = `
 		SELECT COALESCE(MAX(log_seq), ?) FROM tracker_history
 		WHERE log_seq > ?
@@ -104,16 +66,11 @@ const unblockHorizonStatement = `
 // unblockedDependentsStatement is every ready dependent of a blocker whose
 // status moved between two positions, read by [ScanUnblocked].
 //
-// THE WINDOW DRIVES IT, which is why the dependents are an IN over the
-// window's rows rather than a join beside them: the window's status rows are
-// a range on the repair's own partial index, each blocker's edges a seek on
-// the dependency key, and each dependent one primary-key read. Written as a
-// three-way join, the planner — with no statistics, as on every node — chose
-// to drive from the TASKS instead: a walk of every live task in the company
-// through `tracker_tasks_type_idx`, seeking each one's edges and then the
-// history, on every tick of the duty, and never touching the index replicated
-// 0008 built for this read. An IN also needs no DISTINCT, since each task row
-// is read once whatever number of its blockers moved.
+// THE WINDOW DRIVES IT, so the dependents are an IN over the window's rows
+// rather than a join: a range on the repair's partial index, a seek per
+// blocker's edges, a primary-key read per dependent. As a three-way join the
+// planner (no statistics on any node) drives from the tasks instead, walking
+// every live task each tick. An IN also needs no DISTINCT.
 const unblockedDependentsStatement = `
 		SELECT t.id, t.key, t.project_key, t.assignee,
 		       (SELECT MAX(o.cleared_at) FROM tracker_task_deps o
@@ -136,62 +93,32 @@ const unblockedDependentsStatement = `
 
 // ScanUnblocked finds every dependent that became workable since a position.
 //
-// # The query, and why each clause is there
+// It reads status changes at `log_seq > since` (a range on
+// `tracker_history_status_seq_idx`) on BLOCKERS, and keeps a dependent only
+// when it has no open blocker left and its newest clearing is later than what
+// it was last told; without both, it wakes for work not ready, or twice.
 //
-// It reads status changes at `log_seq > since` — a range on the repair's own
-// partial index, `tracker_history_status_seq_idx` — restricted to subjects
-// that are BLOCKERS, collects their dependents, and keeps a dependent only when
-// it has no open blocker left and the newest clearing among its blockers is
-// later than what it was last told.
-//
-// # THE ROW'S OWN STATUS DELTA DECIDES, NOT ITS KIND
-//
-// A row CARRYING a status delta is a status change, whatever it was filed
-// under — and the kind cannot be trusted for this, for exactly the reason
-// [Applier.stampStatusEntered] is gated on the same predicate. The kind is ONE
-// word a writer chose for a patch that may have moved several things, so a
-// change that moved the status and something else is filed under the something
-// else and was invisible here.
-//
-// The case it exists for is a QUIET CANCEL filed under another word —
-// `StatusCancelled` is in the `done` group, whose own description names this
-// path — so the apply stamps each task finished and clears every edge naming
-// it as a blocker, and its dependents become workable. A quiet record wakes
-// nobody, and nothing outside [Writer.TellUnblocked] ever fills
-// `Snapshot.Unblocked`, so this scan is the ONLY path by which those people
-// hear. Filed under whatever else the patch moved, the join never reached them
-// — and the horizon below, computed from the same predicate, then advanced
-// past the record on the next status row anywhere in the log, so it was never
-// reconsidered. "A gap of any length is caught up on the next tick" does not
-// hold for a row the predicate cannot name.
-//
-// A dependent with any open edge is not ready. A dependent already told about
-// a later clearing is not owed anything. Both are the difference between a
-// repair and a source of duplicate wakes.
+// A status change is a row CARRYING a status delta, never one filed under a
+// status kind, as for [Applier.stampStatusEntered]: the kind is one word for a
+// patch that may move several fields, and a quiet cancel filed under another
+// word would otherwise never be reached, by the rows or by the horizon, so its
+// dependents would never hear.
 func ScanUnblocked(ctx context.Context, db store.ReplicatedReader, since uint64,
 	limit int) (UnblockScan, error) {
 
 	scan := UnblockScan{Through: since}
 	err := db.Read(ctx, func(tx *sql.Tx) error {
-		// THE POSITION FIRST, and from the same transaction as the rows:
-		// a `through` read afterwards would cover records this scan did
-		// not see, and advancing past them is how a wake is lost.
-		// THE HORIZON IS OVER THE SAME PREDICATE AS THE ROWS, which is
-		// what makes advancing it safe: a horizon computed over a WIDER
-		// set steps past records the scan below never looked at.
+		// THE POSITION FIRST, in the rows' transaction and over the
+		// rows' predicate: a horizon read later, or over a wider set,
+		// steps past records the scan never saw, and loses their wakes.
 		if err := tx.QueryRowContext(ctx, unblockHorizonStatement,
 			since, since).Scan(&scan.Through); err != nil {
 			return fmt.Errorf("worklet: read the repair's own horizon: %w", err)
 		}
-		// THE TWO PREDICATES ABOUT THE DEPENDENT ARE SUBQUERIES OVER
-		// ALL ITS EDGES, never aggregates over the window's.
-		//
-		// The window reaches only the blockers whose status changed in
-		// it, so an aggregate over those answers "has every blocker THAT
-		// MOVED cleared" — which is true the moment one of two closes,
-		// and wakes somebody for work they still cannot start. The same
-		// is true of the clearing instant: the newest clearing among the
-		// blockers that moved is not the newest among the blockers.
+		// The dependent's two predicates are subqueries over ALL its
+		// edges, never aggregates over the window's: the window holds only
+		// the blockers that moved, so "all cleared" would hold when one of
+		// two closes, and its newest clearing is not the newest overall.
 		rows, err := tx.QueryContext(ctx, unblockedDependentsStatement,
 			since, scan.Through, limit)
 		if err != nil {
@@ -217,51 +144,33 @@ func ScanUnblocked(ctx context.Context, db store.ReplicatedReader, since uint64,
 
 // TellUnblocked publishes the LATE relations commit for one dependent.
 //
-// # Why it is a record and not a direct wake
-//
-// The wake is derived from a durable record by something that outlives the
-// writer, everywhere else in this design, and a repair is no exception: a
-// notification this duty sent directly would be lost by exactly the failure it
-// exists to repair. The commit carries `Unblocked` filled with the dependent
-// and its assignee, and every node's own change feed turns it into a wake.
-//
-// It stamps the dependent's `unblocked_told_at`, which is a MAX over every
-// applied commit that named it — so it is order-independent and identical on
+// It is a record, not a direct wake: a wake the duty sent itself would be lost
+// by the very failure it repairs, while every node's change feed turns the
+// record's `Unblocked` party into a wake. The apply stamps `unblocked_told_at`
+// as a MAX over every commit naming the task: order-independent, identical on
 // every node, and a redelivery cannot re-issue the wake.
 func (w *Writer) TellUnblocked(ctx context.Context, opID string, u Unblock) (WriteResult, error) {
 	switch {
 	case u.Task == "":
 		return WriteResult{}, fmt.Errorf("worklet: an unblocked notice names no task")
 	case u.Assignee == "":
-		// THE ASSIGNEE IS THE WHOLE RECIPIENT LIST, so a notice without
-		// one tells nobody — and it does not merely waste a record. The
-		// apply stamps `unblocked_told_at` from this notification, and
-		// [ScanUnblocked] selects on that column being older than the
-		// clearing instant: a notice nobody received would mark the task
-		// TOLD and the repair would never look at it again.
-		//
-		// The scan already filters `t.assignee <> ''`, so nothing in the
-		// duty reaches this. That is what makes the guard worth having
-		// rather than redundant: the filter is one query's predicate and
-		// this is the verb's own rule, and a second caller would inherit
-		// the rule rather than have to rediscover the predicate.
+		// THE ASSIGNEE IS THE WHOLE RECIPIENT LIST: a notice nobody
+		// received would still stamp `unblocked_told_at`, and [ScanUnblocked]
+		// would never look at the task again. The scan's own filter
+		// is one query's predicate; this is the verb's rule, for any caller.
 		return WriteResult{}, fmt.Errorf("worklet: the unblocked notice for "+
 			"task %s names no assignee, and the assignee is the only person "+
 			"it tells — publishing it would stamp the task told and stop the "+
 			"repair ever looking at it again", u.Task)
 	}
-	// AN EMPTY PATCH, DELIBERATELY. The repair changes no field of the
-	// task — it tells people the task is ready, which was already true —
-	// and the one durable trace it leaves, `unblocked_told_at`, is
-	// stamped by the APPLIER from this notification rather than carried
-	// as a field: a writer-supplied instant would be one node's clock
-	// where the column has to be a MAX every node computes alike.
+	// AN EMPTY PATCH: the repair changes no field, and the APPLIER stamps
+	// `unblocked_told_at` from this notification, since a writer-supplied
+	// instant would be one node's clock where every node must agree.
 	return w.UpdateTask(ctx, opID, u.Task, u.Project, NoIfMatch, TaskPatch{},
 		ChangeRelations, &Notify{
 			Kind: ChangeRelations,
-			// LATE, and the flag is what tells a reader this wake is a
-			// repair rather than the change itself — a person who receives
-			// it hours after the close should see why.
+			// LATE marks the wake a repair, so whoever gets it hours after
+			// the close sees why.
 			Late: true,
 			Snapshot: Snapshot{
 				Key: u.Key, Project: u.Project,

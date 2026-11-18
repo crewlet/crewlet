@@ -98,7 +98,7 @@ const LEADS: Record<WizardStep, string> = {
   limits:
     "How many harness processes run at once, how long one may go without progress, and its web tools.",
   test: "Run the harness once with these settings before anything is stored. It costs a few tokens.",
-  review: "Everything this saves, as one revision. The engine checks it before you save it.",
+  review: "Everything this saves. The engine checks it first.",
 };
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>

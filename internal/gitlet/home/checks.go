@@ -23,31 +23,22 @@ const WorkerChecks = "checks"
 // ChecksFileRefresh is how long a target's reading of its checks file stands
 // before its home reads the file again at the target's moved tip
 // ([gitlet.ChecksDueQuery.RefreshBefore]): TEN MINUTES, [MergeabilityRefresh]'s.
-// A target moves on every push to it and every landing into it, and its file
-// seldom does; read again at every move, a hot target would cost its home a
-// git read and a record on the code log a push. Only heads ALREADY dispatched
-// wait on it: a head never dispatched is dispatched at the tip it is listed at
-// whatever its target's reading, and its dispatch record moves that reading
-// to the tip it read — so a check a target's file gains reaches a new change
-// at once, and the changes already waiting on the target within the refresh.
-// Ten minutes is how stale a change's page may grow before it says so again
-// — about the time a person takes to read a change — and keeps a hot
-// target's readings to six records an hour. PROVISIONAL, as
-// MergeabilityRefresh is: what moves it is a team that adds a check to a
-// target's file and finds its waiting changes slow to run it.
+// A target moves on every push and landing and its file seldom does, so a read
+// at every move would cost a hot target a git read and a code-log record a
+// push. Only heads ALREADY dispatched wait on it: a new head is dispatched at
+// the tip it is listed at, its dispatch record moving the reading there, so a
+// check the file gains reaches a new change at once and waiting ones within
+// the refresh. Ten minutes is about the time a person takes to read a change,
+// and keeps a hot target to six readings an hour. PROVISIONAL, as
+// MergeabilityRefresh is: a team finding waiting changes slow to run a newly
+// added check moves it.
 const ChecksFileRefresh = 10 * time.Minute
 
-// checks is the home's CHECK WORK, a worker every loop is built with beside
-// the change work: for each live change of a repository whose head owes its
-// checks something — as the `checks_due` listing reads the rows (internal/
-// gitlet's CheckWork) — the head's checks DISPATCHED from the checks file its
-// TARGET'S TIP holds, the attempts its change moved on from cancelled, and an
-// attempt its infrastructure ended queued again; and each target whose
-// branch moved past the tip its checks file was read at READ AGAIN, at the
-// home's pace ([ChecksFileRefresh]). Every write is a record on the
-// repository's checks subject, asked of its committing data node's checks
-// writer (code.checks) and decided there; this worker decides nothing of a
-// row, and the listing it reads next is the rows those records made.
+// checks is the home's CHECK WORK, the worker beside the change work in every
+// loop (package doc, "What a turn of the checks worker does"). Every write is
+// a record on the repository's checks subject, decided by its committing data
+// node's checks writer (code.checks); this worker decides nothing of a row,
+// and the listing it reads next is the rows those records made.
 type checks struct {
 	estate Estate
 	node   string
@@ -82,17 +73,13 @@ func (k *checks) Due(ctx context.Context, floor statelog.Position, cursor string
 }
 
 // Work is one repository's check work, every page: on the first, each target
-// due a reading of its checks file read at its tip; on the first and as many
-// after it as they fill (gitlet.ReadAnswer.TipsNext), each protected target's
-// tip work worked ([checks.tip], tips.go); then each change owing
-// its checks work, worked in the order the listing names them
-// ([checks.change]) — a failure of one left for the next pass while the
-// others are worked — and then the page's dispatches RECORDED, each head's
-// dispatch WITH THE ATTEMPTS IT QUEUES in one record, a target's heads in as
-// few records as [gitlet.MaxDispatchRows] and [gitlet.MaxDispatchBytes] allow:
-// one append a record's worth of heads, never one a check, each landing a
-// head's attempts and its dispatch together. The checks file of each target tip the
-// turn meets is read once, and parsed once a blob ([defsMemo]).
+// due a reading of its checks file read at its tip; on each page the tips fill
+// (gitlet.ReadAnswer.TipsNext), each protected target's tip work ([checks.tip],
+// tips.go); then each change owing check work in listing order
+// ([checks.change], one's failure left for the next pass); then the page's
+// dispatches RECORDED ([checks.record]), each head's dispatch with the
+// attempts it queues in one record. Each target tip's checks file is read once
+// a turn, and parsed once a blob ([defsMemo]).
 func (k *checks) Work(ctx context.Context, repoID string, floor statelog.Position) error {
 	q := gitlet.ReadQuery{Kind: gitlet.ReadChecksDue, Fresh: freshAt(floor), ChecksDue: k.due(repoID)}
 	memo := newDefsMemo()
@@ -147,29 +134,17 @@ func (k *checks) Work(ctx context.Context, repoID string, floor statelog.Positio
 	}
 }
 
-// change is what one change's head owes its checks, in this order:
-//
-//   - its REQUEUES, each the next attempt of a check its infrastructure ended,
-//     under the definition it ran under;
-//   - where its DISPATCH is owed: the attempts its change moved on from
-//     cancelled superseded; then, once its head revision's facts are recorded
-//     for its target, every check the target's tip's checks file defines
-//     that the head holds no attempt of queued — or skipped where those facts
-//     touch none of its paths — as its next attempt where an earlier
-//     dispatch errored it for a file that did not run; and where the file is
-//     none that runs, every name the target's gate requires that the head
-//     holds no attempt of errored defs_invalid.
-//
-// The requeues and the cancellations are written here, each a record of its
-// own — seldom more than one a head. The dispatch is NOT: it answers the
-// checks file the head is dispatched under and the attempts that dispatch
-// queues — nil where it owes none, or none yet, its facts not recorded —
-// which its page records with the head, in one record ([checks.record]).
-//
-// A refusal saying the rows moved — the repository deleted or archived, an
-// attempt already past where this one would follow — is the rows answering,
-// left to the next listing; one that decided nothing for a reason of the
-// writer's or the log's fails the change, listed again by the next pass.
+// change is what one change's head owes its checks: its REQUEUES, each the
+// next attempt of a check its infrastructure ended, under the definition it
+// ran under; and where its DISPATCH is owed, the attempts its change moved on
+// from cancelled superseded, then, once its facts are recorded, what
+// [checks.owed] names. Requeues and cancellations are written here, a record
+// each (seldom more than one a head). The dispatch is NOT: it answers the
+// head's checks file and the attempts it queues (nil where none is owed yet),
+// which the page records with the head in one record ([checks.record]). A
+// refusal that the rows moved (the repository deleted or archived, an attempt
+// already past this one) is left to the next listing; one that decided
+// nothing ([undecidedChecks]) fails the change.
 func (k *checks) change(ctx context.Context, repoID string, due gitlet.ChangeDue, memo *defsMemo,
 	at statelog.Position) (*checksDefs, []gitlet.CheckQueued, error) {
 
@@ -189,14 +164,11 @@ func (k *checks) change(ctx context.Context, repoID string, due gitlet.ChangeDue
 		}
 	}
 	if w.Facts == nil {
-		// NO FACTS RECORDED YET for the head revision against its target:
-		// nothing is queued, whatever the target's file defines. The facts
-		// are what a `paths` check is matched against, and the one word the
-		// home has that the head is NOT in its target — the change work lands
-		// a head its target holds rather than record its facts — so a
-		// dispatch made without them could queue checks at a head nobody
-		// will merge, or skip by paths nobody read. The change work schedules
-		// this worker where it records them ([Loop.follow]).
+		// NO FACTS RECORDED YET: queue nothing. Facts are what a `paths`
+		// check matches, and the home's only word that the head is NOT in
+		// its target (the change work lands such a head instead), so a
+		// dispatch without them could queue checks at a head nobody will
+		// merge, or skip by paths nobody read. [Loop.follow] schedules this worker once they are recorded.
 		k.log.Debug("code_check_dispatch_awaits_facts", "repo", repoID, "change", due.Number,
 			"revision", due.Revision, "target", due.TargetRef)
 		return nil, nil, nil
@@ -234,10 +206,9 @@ func (k *checks) owed(repoID string, due gitlet.ChangeDue, defs *checksDefs) []g
 		Reason: gitlet.QueueDispatch, QueuedAt: k.now().UTC()}
 	var out []gitlet.CheckQueued
 	if defs.invalid != "" {
-		// NO FILE THAT RUNS: every required name the head holds no attempt
-		// of is errored, saying why — a gate waiting on a check nobody can
-		// run says so on the change rather than wait in silence. One an
-		// earlier dispatch errored already says so, and is left.
+		// NO FILE THAT RUNS: error every required name the head holds no
+		// attempt of, so a gate waiting on a check nobody can run says so
+		// rather than wait in silence. One errored already is left.
 		for _, name := range w.Required {
 			if attempt, owed := next(name); !owed || attempt > 1 {
 				continue
@@ -270,9 +241,9 @@ func touches(f gitlet.TouchedPaths, def gitlet.CheckDef) bool {
 	for _, glob := range def.Paths {
 		g, err := gitref.ParsePathGlob(glob)
 		if err != nil {
-			// A DEFINITION'S GLOBS PASSED THE PARSE that read it, which holds
-			// them to this grammar; one that does not is matched to every
-			// path rather than skip a check nobody can tell was skipped.
+			// The parse that read the definition held its globs to this
+			// grammar; one that fails here matches every path rather than
+			// skip a check nobody can tell was skipped.
 			return true
 		}
 		if slices.ContainsFunc(f.Touched, g.Match) {
@@ -463,12 +434,11 @@ type checksDefs struct {
 	invalid string
 }
 
-// defsMemo is one turn's checks files: each tip read once, and each blob
-// parsed once — two tips holding one file, the common case of a target that
-// moved without touching it, share the parse. A TURN'S, never longer: a turn
-// is one repository's, and the rows list a repository's changes again only
-// while they owe work, so a memo kept past the turn would hold files for
-// nobody.
+// defsMemo is one turn's checks files: each tip read once and each blob parsed
+// once, so tips of a target that moved without touching the file share the
+// parse. A TURN'S, never longer: a turn is one repository's, and its changes
+// are listed again only while they owe work, so a memo kept past it would hold
+// files for nobody.
 type defsMemo struct {
 	byTip  map[string]*checksDefs
 	byBlob map[string]*checksDefs
@@ -523,8 +493,7 @@ func parseDefs(f *gitlet.ChecksFileAnswer) *checksDefs {
 		d.invalid = fmt.Sprintf("%s holds a %s at %s, not a checks file", short(f.Commit), f.Type,
 			gitlet.ChecksFilePath)
 	case f.Size > gitlet.MaxChecksFileBytes:
-		// A SIZE ALONE, no bytes, which the parse refuses by: said as it
-		// says it.
+		// Only a size came back, no bytes: say it as the parse would.
 		d.oid = f.OID
 		d.invalid = fmt.Sprintf("%s at %s is %d bytes, past the %d a checks file may hold "+
 			"(gitlet.MaxChecksFileBytes)", gitlet.ChecksFilePath, short(f.Commit), f.Size, gitlet.MaxChecksFileBytes)

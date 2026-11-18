@@ -29,12 +29,10 @@ import (
 // seven days, the committer's and the host's alike.
 const deletedRetention = 7 * 24 * time.Hour
 
-// fleetRing is the keyring every data node signs its records and opens its
-// peers' under: ONE FLEET, ONE KEYRING, as every state log's records are
-// signed (ADR-0031) — so a record one node appended verifies on every other,
-// and a fleet's nodes share this ring whoever started them. A fixture: what
-// the suite is about is what the code domain writes, and the signature's own
-// rules are certified in internal/statelog.
+// fleetRing is the ONE keyring every data node signs and verifies records
+// under (ADR-0031), whoever started it, so a record one node appended verifies
+// on every other. A fixture: the signature's rules are certified in
+// internal/statelog.
 var fleetRing = recordseal.OneKey("gitlettest", "the gitlettest fleet's key material")
 
 // DataOptions configure a data node.
@@ -42,9 +40,8 @@ type DataOptions struct {
 	// ID is the node's id: its consumer's name on the code log, the writer
 	// its records name, and the key its eviction is read by.
 	ID string
-	// Queue is the node's broker client — its own embedded broker
-	// (SoloNode) or a client of its cluster member (a Cluster). The caller
-	// owns it: the node's Kill stops nothing of it.
+	// Queue is the node's broker client (SoloNode's embedded broker, or a
+	// Cluster member's). The caller owns it: Kill stops nothing of it.
 	Queue *js.Queue
 	// Dir is the store's directory; Restart reopens what is here.
 	Dir string
@@ -53,59 +50,52 @@ type DataOptions struct {
 	// Faults is the fleet's script, shared by every node of it; nil is a
 	// fresh one.
 	Faults *gitletfault.Script
-	// LogBytes is the code log's ceiling, the one field of its stream
-	// overridden: an embedded broker in a temporary directory refuses to
-	// reserve the shipped one.
+	// LogBytes is the code log's ceiling, its stream's one overridden field:
+	// an embedded broker in a temporary directory refuses the shipped one.
 	LogBytes int64
-	// Operator is the id an operator's gestures are published under on this
-	// node's log besides its own — a second writer, as a peer would be —
-	// or "" for none (Operator then answers nil).
+	// Operator is a second writer's id, as a peer's would be, that operator
+	// gestures are published under on this node's log; "" for none
+	// (Operator then answers nil).
 	Operator string
-	// WrapApplier wraps the domain's applier, nil for none: the window a
-	// suite's meta-test has to build a node whose applier LIES, which a case
-	// must then fail on (TestTheSuiteCatchesARetirementWithNoGrace).
+	// WrapApplier wraps the domain's applier, nil for none: how a meta-test
+	// builds a node whose applier LIES, which a case must fail on
+	// (TestTheSuiteCatchesARetirementWithNoGrace).
 	WrapApplier func(statelog.Applier) statelog.Applier
-	// SeatRules is the chart and the clock the node's committer judges a
-	// seat's push by — an engine write's among them — and its change writer
-	// a seat's write of a change's conversation and every reviewer an ask
-	// names; nil is the fixture chart on UTC (FixtureSeatRules).
+	// SeatRules is the chart and clock the node's writers judge a seat's
+	// push (an engine write's included), a change's conversation and every
+	// reviewer an ask names by; nil is the fixture chart on UTC
+	// (FixtureSeatRules).
 	SeatRules func() (gitlet.SeatRules, bool)
-	// Current is whether the node serves the company's configuration, as
-	// its committer reads it before it decides a seat's push
-	// (gitlet.CommitterOptions.Current) and its change writer before it
-	// decides a write the chart judges (gitlet.ChangeWriterOptions.Current) —
-	// false is a node confirmed behind it, which decides neither; nil is
-	// current.
+	// Current is whether the node serves the company's configuration,
+	// read before a write the chart judges is decided
+	// (gitlet.CommitterOptions.Current, gitlet.ChangeWriterOptions.Current):
+	// false is a node confirmed behind it, which decides none; nil is current.
 	Current func() bool
 	// People answers who holds each human seat an ask for review names
 	// (gitlet.ChangeWriterOptions.People); nil is every such seat held by an
 	// active person using every app (FixturePeople).
 	People gitlet.People
 	// Clock is the fleet's clock as a case moves it (Shape.Clock): what the
-	// node's lifecycle stores decide by, and the broker's instant on every
-	// record its applier applies past a move; nil is the wall clock, moved
-	// by nothing.
+	// lifecycle stores decide by, and the broker's instant on every record
+	// applied past a move; nil is the unmoved wall clock.
 	Clock *Clock
 	// WrapDriver wraps the driver under the node's store files, nil for none:
-	// the window a meta-test holds the applier's commits through
-	// (storetest.HoldCommits).
+	// how a meta-test holds the applier's commits (storetest.HoldCommits).
 	WrapDriver func(driver.Driver) driver.Driver
 }
 
-// DataNode is one data node's code domain, composed as the engine composes it
-// for one domain (internal/engine's statelog.go): its store, its applier over
-// its OWN durable consumer of the code log, its write authority — handed to
-// the committer and the change writer beside it wrapped by the fault publisher
-// that hits gitletfault.CommitterAfterAppend, so a declaration or an eviction
-// never fires the committer's point — and its read authority with a REAL
-// barrier, so `linearizable` is the read a node serves; and over them the
-// domain's reader, committer, change writer, lifecycle store and retention
-// pass.
+// DataNode is one data node's code domain, composed as internal/engine's
+// statelog.go composes a domain: its store; its applier over its OWN durable
+// consumer of the code log; its write authority, handed to the committer and
+// the writers beside it through faultPublisher only, so a declaration or an
+// eviction never fires gitletfault.CommitterAfterAppend; its read authority
+// with a REAL barrier, so `linearizable` is the read a node serves; and over
+// them the reader, committer, change writer, lifecycle store and retention.
 //
-// ITS LIFETIME IS THE TEST THAT STARTED IT, whatever restarts it: a topology
-// that outlives the case restarting one of its nodes must not lose the node
-// when that case ends, so every context a node runs under is its starter's,
-// and the t a Restart is handed only reports.
+// ITS LIFETIME IS ITS STARTER TEST'S, whatever restarts it: a topology that
+// outlives the case restarting a node must not lose the node when that case
+// ends, so every context it runs under is its starter's, and the t a Restart
+// is handed only reports.
 type DataNode struct {
 	o    DataOptions
 	life context.Context
@@ -138,22 +128,20 @@ type dataIncarnation struct {
 
 	reader    *gitlet.Reader
 	committer *gitlet.Committer
-	// changes is the change writer beside the committer, over the same
-	// fault publisher: a conversation's record appended and its writer dead
-	// before it answered is the committer's point as much as a push's.
+	// changes is the change writer, over the committer's fault publisher: a
+	// conversation's record appended and its writer dead before answering is
+	// the committer's point as much as a push's.
 	changes *gitlet.ChangeWriter
-	// checks is the checks writer beside the committer, over the same fault
-	// publisher, for the change writer's reason.
+	// checks is the checks writer, over the same publisher for the same reason.
 	checks *gitlet.ChecksWriter
-	// marks is the writer of persons' code inbox marks, as the engine builds
-	// it beside the committer.
+	// marks writes persons' code inbox marks, built as the engine builds it.
 	marks     *gitlet.Marks
 	lifecycle *gitlet.Store
 	operator  *gitlet.Store
 
-	// stopping is the committer's stop a Kill began, which waits for every
-	// batch in flight — a crash's among them — and so is waited for only in
-	// the teardown, after the crashes are released.
+	// stopping closes when the writers' stop a Kill began returns. That stop
+	// waits for every batch in flight, a crash's included, so only teardown
+	// waits on it, after releasing the crashes.
 	stopping chan struct{}
 }
 
@@ -171,9 +159,8 @@ func StartDataNode(t testing.TB, o DataOptions) *DataNode {
 	}
 	o.Limits = withDefaults(o.Limits)
 	d := &DataNode{o: o, life: t.Context()}
-	// THE CRASHES ARE RELEASED BEFORE ANYTHING STOPS: whatever waits for
-	// held work — the committer's Stop — waits until then
-	// (internal/gitlet/gitletfault).
+	// teardown RELEASES THE CRASHES BEFORE ANYTHING STOPS: the committer's
+	// Stop waits for held work until then (internal/gitlet/gitletfault).
 	t.Cleanup(d.teardown)
 	d.cur = d.start(t, o.Queue)
 	return d
@@ -200,18 +187,17 @@ func withDefaults(l gitlet.Limits) gitlet.Limits {
 	return l
 }
 
-// start builds one incarnation over the node's files: the code log
-// provisioned (a lookup where it is), the estate, the applier, the write and
-// read authorities, the committer and the lifecycle store — the engine's
-// order.
+// start builds one incarnation over the node's files, in the engine's order:
+// the code log provisioned (a lookup where it exists), the estate, the
+// applier, the write and read authorities, the committer, the lifecycle store.
 func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 	t.Helper()
 	ctx := d.life
 	p := &dataIncarnation{q: q}
 	spec := gitlet.Domain{}.Stream()
 	spec.MaxBytes = d.o.LogBytes
-	// THE DOMAIN'S LARGEST RECORD AS THE BROKER COUNTS A MESSAGE, as the
-	// engine provisions every state log.
+	// MaxMessageBytes is the domain's largest record as the broker counts a
+	// message, as the engine provisions every state log.
 	if err := q.EnsureDomainStream(ctx, js.DomainStream{Name: spec.Name, Subjects: spec.Subjects,
 		MaxBytes: spec.MaxBytes, MaxMessageBytes: spec.MaxAppendBytes(),
 		Duplicates: spec.Duplicates}); err != nil {
@@ -226,7 +212,7 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		t.Fatalf("gitlettest: %s: read the code log: %v", d.o.ID, err)
 	}
 	// THE ESTATE, seeded where none exists and opened as it is where one
-	// does — which is what a restarted process does.
+	// does, as a restarted process does.
 	p.db, p.estate = storetest.OpenEstate(t, filepath.Join(d.o.Dir, "node.db"),
 		store.Options{WrapDriver: d.o.WrapDriver}, 1)
 	checkpoint, _, err := statelog.CheckpointOf(ctx, p.estate.Reader(), spec.Name)
@@ -257,8 +243,8 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		Verifier: verifier, Log: p.log, Node: p.db, DB: p.estate,
 		Checkpoint: checkpoint.At, CheckpointStoredAt: checkpoint.StoredAt,
 		StreamCreatedAt: stats.CreatedAt.UTC(), NodeID: d.o.ID,
-		// WHOM THE FLEET HAS EVICTED, from this node's own rows — the
-		// fence's reading of any writer's row, this node's included.
+		// WHOM THE FLEET HAS EVICTED, from this node's own rows: the fence's
+		// reading of any writer's row, this node's included.
 		Evicted: func(ctx context.Context, node string) (bool, error) {
 			return gitlet.NewFence(p.estate.Reader(), node).Evicted(ctx)
 		},
@@ -328,9 +314,9 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 	if people == nil {
 		people = FixturePeople{}
 	}
-	// THE READER JUDGES BY THE CHART ITS WRITERS DECIDE BY, as a node reads
-	// and writes by one epoch's: a seat's grant, and every change's readiness
-	// whoever reads it — a reader holding none refuses a read of changes.
+	// THE READER JUDGES BY ITS WRITERS' CHART, as a node reads and writes by
+	// one epoch's: a seat's grant and every change's readiness. A reader
+	// holding none refuses a read of changes.
 	roster := func() gitlet.Roster {
 		rules, held := seatRules()
 		if !held {
@@ -346,10 +332,9 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		Publisher: &faultPublisher{inner: pub, faults: d.o.Faults, appends: &d.appends},
 		DB:        p.estate.Reader(), NodeID: d.o.ID, Limits: limits,
 		Retention: func() time.Duration { return deletedRetention },
-		// THE CHART A SEAT'S PUSH IS DECIDED BY — an engine write's, a seat's
-		// own commit landed as a push — the one the Gitlet nodes judge it by
-		// before they build it; and the node's posture, which decides no
-		// seat's push while it is behind the company's configuration.
+		// THE CHART the Gitlet nodes judge a seat's push by before building
+		// it, an engine write's included; Current decides none while the node
+		// is behind the company's configuration.
 		SeatRules: seatRules, Current: d.o.Current,
 	}); err != nil {
 		t.Fatalf("gitlettest: %s: build the committer: %v", d.o.ID, err)
@@ -358,12 +343,10 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		Publisher: &faultPublisher{inner: pub, faults: d.o.Faults, appends: &d.appends},
 		DB:        p.estate.Reader(), NodeID: d.o.ID,
 		Retention: func() time.Duration { return deletedRetention },
-		// THE COMMITTER'S CHART AND POSTURE, as the engine hands the two the
-		// same ones (codeSeatRules, e.admits): a seat's write of a change's
-		// conversation, and every reviewer an ask names, is judged by the
-		// chart a seat's push is, and by no node confirmed behind the
-		// company's configuration, so a node of the suite decides what a node
-		// of the fleet does.
+		// THE COMMITTER'S CHART AND POSTURE, as the engine hands both the
+		// same (codeSeatRules, e.admits): a change's conversation and every
+		// reviewer an ask names are judged as a push is, so a suite node
+		// decides what a fleet node does.
 		SeatRules: seatRules, Current: d.o.Current, People: people,
 	}); err != nil {
 		t.Fatalf("gitlettest: %s: build the change writer: %v", d.o.ID, err)
@@ -384,11 +367,10 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 	}); err != nil {
 		t.Fatalf("gitlettest: %s: build the marks writer: %v", d.o.ID, err)
 	}
-	// THE LIFECYCLE STORE DECIDES A TOOL'S REQUEST as the engine's does: by
-	// the committer's chart and posture, and by the scratch policy of a
-	// company that sets none — so a lifecycle request the fleet's routing asks
-	// is decided here, as a data node of the fleet decides it, rather than
-	// refused as one by a node that decides none.
+	// THE LIFECYCLE STORE DECIDES A TOOL'S REQUEST as the engine's does, by
+	// the committer's chart and posture and the default scratch policy, so a
+	// request the fleet's routing asks is decided as a fleet node decides it,
+	// not refused as by a node that decides none.
 	var now func() time.Time
 	if d.o.Clock != nil {
 		now = d.o.Clock.Now
@@ -487,9 +469,8 @@ func (d *DataNode) Remove(t testing.TB, at time.Time, name string) {
 	}
 }
 
-// Purge runs code-retention passes through this node with the shortest
-// retention there is — the domain refuses a zero one — until every purge they
-// began is done.
+// Purge runs code-retention passes through this node at the shortest
+// retention (the domain refuses zero) until every purge they began is done.
 func (d *DataNode) Purge(t testing.TB) {
 	t.Helper()
 	p := d.proc()
@@ -519,11 +500,10 @@ func scratchPolicy() gitlet.LifecyclePolicy { return gitlet.ScratchOf(config.Cod
 // a pass expires every scratch repository past its idle time.
 func holdsNone(context.Context, []string) (map[string]bool, error) { return map[string]bool{}, nil }
 
-// Retain runs ONE code-retention pass through this node with its clock at now
-// — the instant it judges a retired pack's grace and a deletion's age by — at
-// the retention every topology runs at: a case moves a retirement's grace by
-// the pass's clock, since the broker's instant on the retirement cannot be
-// moved.
+// Retain runs ONE code-retention pass through this node at every topology's
+// retention, its clock at now: a case moves a retired pack's grace and a
+// deletion's age by the pass's clock, since the broker's instant on the
+// retirement cannot move.
 func (d *DataNode) Retain(t testing.TB, now time.Time) gitlet.RetentionReport {
 	t.Helper()
 	p := d.proc()
@@ -548,11 +528,10 @@ func (d *DataNode) Collect(t testing.TB, objects objstore.Backend) collect.Colle
 	return d.CollectAt(t, objects, time.Now().Add(25*time.Hour))
 }
 
-// codeTables is every table the code domain declares in the one list of
-// tables that name objects (internal/objstore/references), whatever its
-// standing: what a collection over the code estate is held to — a live pack's
-// row, a retired one's, a published layer's part's — as the engine's collector
-// is, every declared table shielding what it names.
+// codeTables is every table the code domain declares in
+// internal/objstore/references, whatever its standing (a live pack's, a
+// retired one's, a published layer's part's): the engine's collector is built
+// over every declared table, each shielding what it names, and so is this one.
 var codeTables = func() []objstore.ReferenceTable {
 	var out []objstore.ReferenceTable
 	for _, table := range references.All {
@@ -564,9 +543,7 @@ var codeTables = func() []objstore.ReferenceTable {
 }()
 
 // CollectAt runs one collection of objects over the code estate as this node
-// holds it, with the collector's clock at at — every table the code domain
-// declares shielding what its rows name, as the engine's collector is built
-// over every declared table.
+// holds it, over codeTables, with the collector's clock at at.
 func (d *DataNode) CollectAt(t testing.TB, objects objstore.Backend, at time.Time) collect.CollectionReport {
 	t.Helper()
 	report, err := d.collector(t, objects, at).Collect(t.Context())
@@ -576,10 +553,9 @@ func (d *DataNode) CollectAt(t testing.TB, objects objstore.Backend, at time.Tim
 	return report
 }
 
-// Audit runs the collector's audit of objects over the code estate as this
-// node holds it — what raises objects_missing — every table the code domain
-// declares handed to it, as the engine's collector is built, so a table the
-// audit must leave alone is one it is handed and leaves.
+// Audit runs the collector's audit (what raises objects_missing) over the
+// code estate as this node holds it, handed codeTables as the engine's is, so
+// a table the audit must leave alone is one it is handed and leaves.
 func (d *DataNode) Audit(t testing.TB, objects objstore.Backend) collect.AuditReport {
 	t.Helper()
 	report, err := d.collector(t, objects, time.Now()).Audit(t.Context())
@@ -609,14 +585,13 @@ func (d *DataNode) collector(t testing.TB, objects objstore.Backend, at time.Tim
 	return c
 }
 
-// Evict publishes an operator's eviction of node through this node's log —
-// under DataOptions.Operator where it has one, its own id otherwise — and
-// answers where it landed, applied here.
+// Evict publishes an operator's eviction of node through this node's log,
+// under DataOptions.Operator where set, its own id otherwise, and answers
+// where it landed, applied here.
 //
-// AN OPERATOR'S GESTURE COMES THROUGH ANOTHER WRITER: every record an evicted
-// node publishes is dropped, its own readmission included, so a fleet evicts
-// and readmits a node through a peer — and a node with no peer, through a
-// writer of its own (DataOptions.Operator).
+// AN OPERATOR'S GESTURE COMES THROUGH ANOTHER WRITER: an evicted node's every
+// record is dropped, its readmission included, so a fleet evicts and readmits
+// through a peer, and a lone node through DataOptions.Operator.
 func (d *DataNode) Evict(t testing.TB, node string) statelog.Position {
 	t.Helper()
 	return d.gesture(t, node, (*gitlet.Store).EvictNode, "evict")
@@ -646,10 +621,9 @@ func (d *DataNode) gesture(t testing.TB, node string,
 	res, err := op(s, t.Context(), actor, statelog.NewOpID(time.Now(), name), node)
 	switch {
 	case err == nil && res.Outcome == statelog.OutcomePending:
-		// DURABLE AT ITS POSITION and unresolved here when the store stopped
-		// waiting for its own applier, which a loaded runner gives any write,
-		// and never a failure ([proposeLanded]): the node holds the gesture
-		// once it has applied every record the log held, this one among them.
+		// DURABLE AT ITS POSITION, never a failure ([proposeLanded]): the
+		// store stopped waiting for its loaded applier. The node holds the
+		// gesture once it has applied the whole log.
 		if lerr := d.Level(t.Context()); lerr != nil {
 			t.Fatalf("gitlettest: %s %s through %s was answered pending at %s, and the node never reached it: %v",
 				name, node, d.o.ID, res.Position, lerr)
@@ -670,9 +644,8 @@ func (d *DataNode) WaitApplied(ctx context.Context, at statelog.Position) error 
 	return p.runner.WaitReached(ctx, at)
 }
 
-// Level waits until this node's rows hold every record the code log held when
-// it was asked: its applier has reached the log's end
-// ([statelog.Runner.Reached]), as a reader of them waits for it to.
+// Level waits until this node's applier has reached the code log's end as of
+// the call ([statelog.Runner.Reached]), as a reader of its rows waits.
 func (d *DataNode) Level(ctx context.Context) error {
 	p := d.proc()
 	if p == nil {
@@ -757,13 +730,11 @@ func (d *DataNode) Writer(ctx context.Context, at statelog.Position) (string, er
 	return env.Writer, nil
 }
 
-// LogStats is the code log's stream as the broker holds it — its ends, its
-// records and its BYTES, every record's signed frame included — read through
-// this node's own client: the read its committer's admission makes before
-// every ordinary append (statelog.Reserve), which a fleet's case waits for its
-// members' brokers to answer after a member's death (Cluster.AwaitElection),
-// and what a benchmark reads the bytes a kind of record costs the log off,
-// before and after it appends one.
+// LogStats is the code log's stream as the broker holds it (its ends, records
+// and BYTES, signed frames included), read through this node's own client: the
+// read the committer's admission makes before every ordinary append
+// (statelog.Reserve), which Cluster.AwaitElection waits for after a member's
+// death, and which a benchmark reads a kind of record's cost off.
 func (d *DataNode) LogStats(ctx context.Context) (js.LogStats, error) {
 	p := d.proc()
 	if p == nil {
@@ -774,12 +745,12 @@ func (d *DataNode) LogStats(ctx context.Context) (js.LogStats, error) {
 }
 
 // PauseApplier halts the node's applier until resume, which moves its
-// consumer back to the checkpoint and runs it again — the engine's halt and
+// consumer back to the checkpoint and runs it again: the engine's halt and
 // resume. t reports a resume that could not move the consumer.
 //
-// The node holds, while held, everything it had reached when paused. A halt
-// gives back what the applier reached past its checkpoint (statelog.Runner.Reached),
-// so the checkpoint covers that before the halt.
+// The node keeps, while paused, all it had reached: a halt gives back what the
+// applier reached past its checkpoint (statelog.Runner.Reached), so the
+// checkpoint is awaited up to it first.
 func (d *DataNode) PauseApplier(t testing.TB) (resume func()) {
 	t.Helper()
 	p := d.proc()
@@ -807,13 +778,12 @@ func (d *DataNode) PauseApplier(t testing.TB) (resume func()) {
 	}
 }
 
-// Kill ends the node as a process death does, as far as the store sees it:
-// the committer's stop begun under an ended context — its batches cancelled,
-// and WAITED FOR ONLY IN THE TEARDOWN, because a crash holds one past the
-// node's death (internal/gitlet/gitletfault) — the applier halted, the consumer
-// and the store closed. The queue is the caller's, and so is the order: a
-// caller that must keep every answer the node was serving from reaching its
-// asker stops the node's broker client first.
+// Kill ends the node as a process death does, as the store sees it: the
+// writers' stop begun under an ended context (batches cancelled, and WAITED
+// FOR ONLY IN teardown, since a crash holds one past the node's death;
+// internal/gitlet/gitletfault), the applier halted, the consumer and store
+// closed. The queue is the caller's: one that must keep every answer the node
+// was serving from reaching its asker stops the node's broker client first.
 func (d *DataNode) Kill() {
 	d.mu.Lock()
 	p := d.cur
@@ -852,15 +822,13 @@ func (d *DataNode) Restart(t testing.TB, q *js.Queue) {
 	d.mu.Unlock()
 }
 
-// StopCommitter stops the committer, the change writer and the checks writer
-// the way a graceful stop does — the engine's teardown's first step, before
-// the node stops answering (internal/engine's stopTogether): every one CLOSED
-// FIRST, refusing every new write gitlet.ErrNotServing and answering every
-// queued one so, and counted (Closes); then all of them drained TOGETHER under
-// one bound, statelog.DefaultResolveBudget, the batches in flight finished.
-// Stopped one after another, a writer still open took new work for as long as
-// the committer's drain waited on its batch, and a writer whose turn came
-// after a drain that spent the bound cancelled its own publishes at once.
+// StopCommitter stops the committer, change writer and checks writer as the
+// engine's graceful teardown does first (internal/engine's stopTogether):
+// every one CLOSED FIRST, refusing new and queued writes gitlet.ErrNotServing,
+// and counted (Closes); then all drained TOGETHER under one
+// statelog.DefaultResolveBudget. Stopped in turn, an open writer would take
+// work while the committer drained, and one stopped after a drain spent the
+// bound would cancel its publishes at once.
 func (d *DataNode) StopCommitter() {
 	p := d.proc()
 	if p == nil {
@@ -936,9 +904,9 @@ func (p *dataIncarnation) stopApplier() {
 }
 
 // health is the data node's readiness as the engine assembles it: the
-// applier's position — the reached one, as the engine's read health takes it —
-// whether it has drained, the log's two ends and its lag, the stream's
-// identity, and a floor a fleet that never trimmed publishes.
+// applier's reached position (as the engine's read health takes it), whether
+// it has drained, the log's ends and lag, the stream's identity, and the floor
+// a fleet that never trimmed publishes.
 func (p *dataIncarnation) health(ctx context.Context) (statelog.Health, error) {
 	at := p.runner.Reached()
 	h := statelog.Health{Position: at, AppliedThrough: at.Seq, Drained: p.runner.Drained(),
@@ -969,14 +937,12 @@ func (p *dataIncarnation) health(ctx context.Context) (statelog.Health, error) {
 	return h, nil
 }
 
-// faultPublisher is the committer's write authority with the push path's
-// CommitterAfterAppend point between the append and its result: the durable
-// record the receiver never heard about. Hit here rather than in
-// internal/gitlet, so the domain imports nothing from gitletfault. It counts the
-// records it appended — [DataNode.Appends].
-//
-// AND IT MARKS EVERY PUBLISH [admitting], so the usage reading its admission
-// starts hits gitletfault.CommitterBeforeAdmit.
+// faultPublisher is the writers' write authority with gitletfault's
+// CommitterAfterAppend between the append and its result: the durable record
+// the receiver never heard about. Hit here, not in internal/gitlet, so the
+// domain imports nothing of gitletfault. It counts the records it appended
+// ([DataNode.Appends]) and marks every publish [admitting], so its admission's
+// usage reading hits gitletfault.CommitterBeforeAdmit.
 type faultPublisher struct {
 	inner   gitlet.Publisher
 	faults  *gitletfault.Script

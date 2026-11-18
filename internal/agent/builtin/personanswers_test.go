@@ -108,13 +108,11 @@ func everyLandedAnswer(t *testing.T) map[string]tools.Result {
 	out[worklet.RemoveProjectFileTool] = callWork(t, reg, worklet.RemoveProjectFileTool,
 		map[string]any{"path": "reports/q3.md"})
 
-	// THE COMPANY'S CODE: each write landed on a scratch repository, with the
-	// arguments the hold walk lands it with ([holdingCall]). A PERSON'S VERB
-	// (its authority row human-only: a report of a CI run, an import, a purge)
-	// is refused to every seat by the table before anything is read, so it is
-	// landed the way a person reaches it — the operator catalogue, called by a
-	// person bound to a seat with a fresh proof — on the repository the
-	// person-only cases land on.
+	// THE COMPANY'S CODE: each write landed on a scratch repository with the
+	// arguments [holdingCall] gives. A PERSON'S VERB (a human-only authority
+	// row) is refused to every seat before anything is read, so it is landed
+	// as a person reaches it: the operator catalogue, called by a bound person
+	// with a fresh proof.
 	personArgs := map[string]map[string]any{
 		builtin.CodeReportCheckTool: {"repo": "site", "sha": mainOID, "name": "lint", "status": "failed",
 			"summary": "2 lint errors", "url": "https://ci.example.com/runs/1"},
@@ -267,16 +265,12 @@ func everyLandedAnswer(t *testing.T) map[string]tools.Result {
 // EVERY ANSWER A PERSON CAN BE GIVEN IS WORDED FOR A PERSON (ADR-0060), every
 // write the operator catalogue serves and every partial outcome, not a sample.
 //
-// A tool's answer is written for a model, and a person's surface answers it
-// without its model-only keys and with its caveats in a person's words. A
-// partial outcome (the item landed, its dependencies did not; a move or a
-// removal whose walk stopped) used to ride the receipt as the model's
-// sentence under a key of its own, so a person was told "Created" while a
-// dependency write had failed, and the next screen reading that key would
-// have shown them a model's instructions. This walks every string of every
-// such answer outside the value fields a screen reads as values, so a new key
-// of prose on any tool fails here whatever it is called. A write the catalogue
-// gains without an answer here fails the coverage half.
+// A person's surface answers a tool without its model-only keys and with its
+// caveats in a person's words, and a partial outcome (dependencies not
+// recorded, a walk that stopped) must reach the person as a caveat, not as the
+// model's sentence. This walks every string outside the value fields a screen
+// reads as values, so a new key of prose on any tool fails whatever it is
+// called; a write the catalogue gains without an answer here fails coverage.
 func TestEveryAnswerAPersonCanBeGivenIsWordedForAPerson(t *testing.T) {
 	t.Parallel()
 	answers := everyLandedAnswer(t)

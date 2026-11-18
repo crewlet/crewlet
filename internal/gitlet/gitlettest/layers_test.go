@@ -14,10 +14,10 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
 )
 
-// publishedFleet is a one-git-node fleet holding RepoName, its pushes
-// published in turn — one publication after each group of that many files —
-// and its node, its repository's id and its node's copy's directory, the copy
-// held by the honest check first.
+// publishedFleet is a one-git-node fleet holding RepoName with one
+// publication after each push of groups[i] files; it answers the node, the
+// repository's id and the copy's directory, the copy held by the honest check
+// first.
 func publishedFleet(t *testing.T, groups ...int) (gitlettest.Node, string, string) {
 	t.Helper()
 	f := gitlettest.SoloNode(t, gitlettest.SoloOptions{})
@@ -64,11 +64,10 @@ func publishedFleet(t *testing.T, groups ...int) (gitlettest.Node, string, strin
 	return n, repoID, s.Dir
 }
 
-// A suite whose check passes a liar certifies nothing: the layer half of every
-// case's convergence check (CopyHoldsItsLayers) must catch a copy whose
-// installed layer names a pack the copy does not hold — a layer git would read
-// over a pack it cannot open, which the install's own check of the packs keeps
-// any honest node from placing — and pass the honest copy it was before.
+// The layer half of every case's convergence check (CopyHoldsItsLayers) must
+// catch a copy whose installed layer names a pack the copy does not hold (git
+// would read the layer over a pack it cannot open; the install's own pack
+// check keeps an honest node from placing one), and pass the copy before.
 func TestTheSuiteCatchesALayerOverAPackTheNodeLacks(t *testing.T) {
 	n, repoID, dir := publishedFleet(t, 3)
 	packs, err := filepath.Glob(filepath.Join(dir, "objects", "pack", "pack-*.pack"))
@@ -85,11 +84,10 @@ func TestTheSuiteCatchesALayerOverAPackTheNodeLacks(t *testing.T) {
 	}
 }
 
-// A suite whose check passes a liar certifies nothing: the layer half of every
-// case's convergence check must catch a copy whose chain file lists its layers
-// in another order than the rows' — a layer over the wrong base, which git's
-// own verify passes and the install's canary read refuses — and pass the
-// honest copy it was before.
+// The layer half of the convergence check must catch a copy whose chain file
+// lists its layers out of the rows' order (a layer over the wrong base, which
+// git's own verify passes and the install's canary read refuses), and pass the
+// copy before.
 func TestTheSuiteCatchesAChainOverTheWrongBase(t *testing.T) {
 	n, repoID, dir := publishedFleet(t, 60, 2)
 	chain := filepath.Join(dir, "objects", "pack", "multi-pack-index.d", "multi-pack-index-chain")

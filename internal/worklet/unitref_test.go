@@ -9,15 +9,14 @@ import (
 )
 
 // nimbus is the chart these cases read through: one team with an id, one
-// without. A unit that declares no id is keyed by its name, which is the
-// shape every company has until somebody opts in.
+// without, which is keyed by its name.
 var nimbus = chart{
 	{Key: "plat", Name: "Platform"},
 	{Key: "Product", Name: "Product"},
 }
 
-// askWith runs a query with a chart behind it, which is what every real
-// surface does (see [worklet.Query]'s Units field).
+// askWith runs a query with a chart behind it, as every real surface does
+// (see [worklet.Query]'s Units field).
 func (r *roundTrip) askWith(units worklet.Units, kv map[string]any) worklet.Answer {
 	r.t.Helper()
 	q, err := worklet.ParseQuery(worklet.MapParams(kv), wednesday, berlin)
@@ -35,9 +34,8 @@ func (r *roundTrip) askWith(units worklet.Units, kv map[string]any) worklet.Answ
 	return answer
 }
 
-// unitTask files one task under a stated unit, which is what a create with an
-// explicit `unit` leaves behind: both halves are stamped and the filed one is
-// never rewritten again.
+// unitTask files one task as a create with an explicit `unit` does: both
+// halves stamped, the filed one never rewritten.
 func unitTask(t *testing.T, r *roundTrip, id, unit string) {
 	t.Helper()
 	task := newTask(id)
@@ -50,9 +48,8 @@ func unitTask(t *testing.T, r *roundTrip, id, unit string) {
 }
 
 // A UNIT FILTER NAMES THE TEAM BY ITS ID OR ITS NAME, in any case, and finds
-// the work filed under its key — which is what every write stores. A filter
-// comparing against the one string somebody typed would miss the team a
-// screen had just shown them by name.
+// the work filed under its key, which every write stores. Comparing the typed
+// string would miss the team a screen had just shown by name.
 func TestAUnitFilterResolvesEitherSpellingToTheKey(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -65,8 +62,7 @@ func TestAUnitFilterResolvesEitherSpellingToTheKey(t *testing.T) {
 			t.Errorf("unit=%s answers %v, want the row filed under the key", ref, got)
 		}
 	}
-	// THE ROUTING HALF RESOLVES THE SAME WAY — a re-route stores the key
-	// of whatever the writer named.
+	// THE ROUTING HALF RESOLVES THE SAME WAY: a re-route stores the key.
 	for _, ref := range []string{"plat", "Platform"} {
 		if got := ids(r.askWith(nimbus, map[string]any{"routing_unit": ref})); len(got) != 1 {
 			t.Errorf("routing_unit=%s answers %v, want the one row", ref, got)
@@ -77,17 +73,14 @@ func TestAUnitFilterResolvesEitherSpellingToTheKey(t *testing.T) {
 		got[0] != "other" {
 		t.Errorf("unit=Product answers %v, want only the row filed into it", got)
 	}
-	// A TEAM NOBODY HAS MATCHES NOTHING rather than erroring or widening:
-	// a filter for a unit the chart never had is answerable, and the
-	// answer is that there is no such work.
+	// A TEAM NOBODY HAS MATCHES NOTHING rather than erroring or widening.
 	if got := ids(r.askWith(nimbus, map[string]any{"unit": "Legal"})); len(got) != 0 {
 		t.Errorf("unit=Legal answers %v, want nothing", got)
 	}
 }
 
-// WITH NO CHART THE REFERENCE IS MATCHED LITERALLY, which is the honest
-// answer for a process holding none, the same state [worklet.Units] calls
-// meaningful for rendering. It is not a silent widening and not a failure.
+// WITH NO CHART THE REFERENCE IS MATCHED LITERALLY, neither widening nor
+// failing (the nil resolver [worklet.Units] calls meaningful).
 func TestAUnitFilterWithNoChartMatchesTheLiteral(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -101,12 +94,8 @@ func TestAUnitFilterWithNoChartMatchesTheLiteral(t *testing.T) {
 	}
 }
 
-// A BOARD'S UNIT COLUMN IS HEADED WITH THE TEAM'S NAME.
-//
-// What the rows hold is the unit's KEY, which is an id on any company that
-// gave its units one — a word chosen to survive a rename precisely because
-// nobody reads it. Without the chart behind the axis, opting into ids
-// re-headed every board in the company with a slug.
+// A BOARD'S UNIT COLUMN IS HEADED WITH THE TEAM'S NAME, not the KEY the rows
+// hold, which for a unit with an id is a slug nobody reads.
 func TestAUnitColumnIsHeadedWithTheTeamsName(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -119,21 +108,18 @@ func TestAUnitColumnIsHeadedWithTheTeamsName(t *testing.T) {
 	if got := groupOf(t, answer, "plat"); got.Label != "Platform" {
 		t.Errorf("the plat column is headed %q, want Platform", got.Label)
 	}
-	// A KEY THE CHART CANNOT RESOLVE KEEPS AN EMPTY LABEL, because a
-	// client renders the label or falls back to the key — and the key is
-	// what is in the rows and what a filter on that column takes. A
-	// stand-in word would name a team nobody can search for.
+	// A KEY THE CHART CANNOT RESOLVE KEEPS AN EMPTY LABEL: a client falls
+	// back to the key, which a filter on the column takes; a stand-in word
+	// would name a team nobody can search for.
 	if got := groupOf(t, answer, "dissolved"); got.Label != "" {
 		t.Errorf("a column for a unit the chart has lost is headed %q, want "+
 			"the stored key to stand", got.Label)
 	}
 }
 
-// A COLUMN IS HEADED BY THE UNIT ITS KEY NAMES, never by a unit that merely
-// shares the word. A unit's name is prose, so one unit may be named what
-// another is keyed — and the column holds keys, so the rows filed under `ops`
-// are the unit keyed `ops`, headed with that unit's name. A label resolved by
-// name would head one team's work with another team's.
+// A COLUMN IS HEADED BY THE UNIT ITS KEY NAMES, never by one merely named the
+// same word: the column holds keys, and a label resolved by name would head
+// one team's work with another team's.
 func TestAUnitColumnIsHeadedByTheUnitItsKeyNames(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -158,9 +144,8 @@ func TestAUnitColumnIsHeadedByTheUnitItsKeyNames(t *testing.T) {
 	}
 }
 
-// AND A NARROWING TO THAT COLUMN TAKES EITHER SPELLING, because a caller
-// writes the one it has: a board's own column hands back the key, and a person
-// or a model types the name.
+// AND A NARROWING TO THAT COLUMN TAKES EITHER SPELLING: a board's column hands
+// back the key, a person or a model types the name.
 func TestANarrowingToAUnitColumnTakesEitherSpelling(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -180,9 +165,8 @@ func TestANarrowingToAUnitColumnTakesEitherSpelling(t *testing.T) {
 				ref, len(answer.Groups))
 		}
 	}
-	// A SECOND AXIS NARROWS THE SAME WAY, which is the other caller-supplied
-	// key an axis compares — `subgroup=` reaches the inner axis through the
-	// join-free form rather than through the one above.
+	// A SECOND AXIS NARROWS THE SAME WAY: `subgroup=` reaches the inner axis
+	// through the join-free form, not the one above.
 	lanes := r.askWith(nimbus, map[string]any{
 		"container": "project:ENG", "group_by": "assignee",
 		"group_by2": "unit", "subgroup": "Platform", "show_closed": "true",
@@ -201,8 +185,7 @@ func TestANarrowingToAUnitColumnTakesEitherSpelling(t *testing.T) {
 }
 
 // WITH NO CHART THE COLUMN IS THE STORED VALUE, unchanged: a process holding
-// no org cannot fold what it cannot resolve, and inventing a grouping would be
-// a claim rather than an absence.
+// no org cannot fold what it cannot resolve.
 func TestAUnitColumnWithNoChartIsTheStoredValue(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -223,9 +206,8 @@ func TestAUnitColumnWithNoChartIsTheStoredValue(t *testing.T) {
 	}
 }
 
-// A WORKLOAD NARROWS BY EITHER SPELLING TOO. The screen that asks was handed
-// a unit from somewhere else — a chart, a project row, a URL — and which of
-// the two names it holds is not something the reader can assume.
+// A WORKLOAD NARROWS BY EITHER SPELLING TOO: the screen that asks got its unit
+// from a chart, a project row or a URL, so either spelling may arrive.
 func TestAWorkloadNarrowsByEitherSpelling(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -241,19 +223,16 @@ func TestAWorkloadNarrowsByEitherSpelling(t *testing.T) {
 				"that team owns", ref, ada.Points)
 		}
 	}
-	// AND A TEAM WITH NO WORK IS STILL EMPTY rather than the whole
-	// company: resolving the reference must not drop the filter.
+	// AND A TEAM WITH NO WORK IS STILL EMPTY: resolving must not drop the
+	// filter.
 	if rows := r.workload(worklet.WorkloadQuery{Unit: "Legal", Units: nimbus}).Rows; len(rows) != 0 {
 		t.Errorf("a unit with no work answers %d rows, want none", len(rows))
 	}
 }
 
 // A PROJECT'S STORED UNIT RENDERS AS THE TEAM'S NAME, and is filtered by
-// either spelling.
-//
-// The column is chart-owned and holds the key, so a listing that showed it
-// raw would label every project with a slug — and a filter that compared
-// against it raw would miss the name the screen had just displayed.
+// either spelling: the column holds the key, so raw it would label projects
+// with a slug and a filter would miss the name the screen displayed.
 func TestAProjectsUnitKeyRendersAsItsName(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -280,12 +259,9 @@ func TestAProjectsUnitKeyRendersAsItsName(t *testing.T) {
 	}
 }
 
-// AN ITEM'S OWN PAGE READS THE TEAM'S NAME, whichever spelling its row holds.
-//
-// The document's two strings stay exactly as they were written — they are the
-// record — and the answer carries the chart's reading of them beside it. A
-// screen rendering the document raw showed `plat` where the same company's
-// board column said `Platform`.
+// AN ITEM'S OWN PAGE READS THE TEAM'S NAME, whichever spelling its row holds:
+// the document's two strings stay as written (they are the record), and the
+// answer carries the chart's reading beside them.
 func TestATasksDetailResolvesBothUnitsAgainstTheChart(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -313,8 +289,7 @@ func TestATasksDetailResolvesBothUnitsAgainstTheChart(t *testing.T) {
 			t.Errorf("%s's filed unit resolves to %+v, want Platform",
 				id, got.Units.Filed)
 		}
-		// THE ROW'S OWN SPELLING IS WHAT THE KEY CARRIES, because that is
-		// what the record holds and what a filter link has to send.
+		// THE KEY CARRIES THE ROW'S OWN SPELLING, which a filter link sends.
 		if got.Units.Filed.Key != got.Task.FiledUnit {
 			t.Errorf("%s's filed key is %q, want the stored %q",
 				id, got.Units.Filed.Key, got.Task.FiledUnit)
@@ -329,20 +304,17 @@ func TestATasksDetailResolvesBothUnitsAgainstTheChart(t *testing.T) {
 			t.Errorf("%s's document lost its own unit strings: %+v", id, got.Task)
 		}
 	}
-	// A TEAM THE CHART HAS LOST IS FLAGGED rather than rendered as a team
-	// named nothing: `resolved: false` is the finding.
+	// A TEAM THE CHART HAS LOST IS FLAGGED: `resolved: false` is the finding.
 	if got := detail("gone"); got.Units == nil || got.Units.Filed.Resolved ||
 		got.Units.Filed.Key != "dissolved" || got.Units.Filed.Name != "" {
 		t.Errorf("a task filed against a team the chart has lost reads %+v, "+
 			"want the stored key unresolved", got.Units)
 	}
-	// AND A TASK FILED INTO NO TEAM CARRIES NOTHING, because that is what
-	// its two empty strings already say.
+	// AND A TASK FILED INTO NO TEAM CARRIES NOTHING.
 	if got := detail("none"); got.Units != nil {
 		t.Errorf("a task filed into no unit carries %+v, want no units block", got.Units)
 	}
-	// WITH NO CHART every reference is honestly unresolved rather than
-	// silently blank — the state a process holding no org is in.
+	// WITH NO CHART every reference is unresolved, not silently blank.
 	blind, err := r.reader.Task(t.Context(), "new", worklet.DetailWants{},
 		statelog.Freshness{Level: statelog.ReadStale})
 	if err != nil {
@@ -356,18 +328,11 @@ func TestATasksDetailResolvesBothUnitsAgainstTheChart(t *testing.T) {
 }
 
 // A TEAM'S VIEW STRIP IS ONE STRIP, whichever of the team's two spellings it
-// is asked for by.
-//
-// A container is an ADDRESS, and every other kind is canonical by
-// construction — a project key is upper-cased at the parser, a person is a
-// handle. A unit is the one with two spellings, so a view saved against
-// `unit:Engineering` was invisible from `unit:eng`, and neither surface could
-// tell that from a container nobody has saved a view in.
+// is asked for by (see [worklet.CanonicalContainer]).
 func TestAUnitsViewStripIsOneStripUnderEitherSpelling(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	// SAVED UNDER THE KEY, which is what a save stores
-	// (worklet.CanonicalContainer).
+	// SAVED UNDER THE KEY, as a save stores it.
 	view := aView("v-unit", func(v *worklet.View) {
 		v.Container = worklet.Container{Kind: worklet.ContainerUnit, ID: "plat"}
 	})
@@ -403,8 +368,8 @@ func TestAUnitsViewStripIsOneStripUnderEitherSpelling(t *testing.T) {
 	}
 }
 
-// AND A CONTAINER IS STORED UNDER THE TEAM'S KEY, which is what keeps the
-// strips from splitting again on the next save.
+// AND A CONTAINER IS STORED UNDER THE TEAM'S KEY, which keeps the strips from
+// splitting on the next save.
 func TestACanonicalContainerCarriesTheUnitsKey(t *testing.T) {
 	t.Parallel()
 	for _, ref := range []string{"Platform", "PLAT", "plat"} {
@@ -414,14 +379,13 @@ func TestACanonicalContainerCarriesTheUnitsKey(t *testing.T) {
 			t.Errorf("unit:%s is keyed %q, want plat", ref, got.ID)
 		}
 	}
-	// EVERY OTHER KIND IS LEFT EXACTLY AS IT IS: a project key is already
-	// upper-cased where it is parsed, and a person is a handle.
+	// EVERY OTHER KIND IS LEFT EXACTLY AS IT IS.
 	project := worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"}
 	if got := worklet.CanonicalContainer(nimbus, project); got != project {
 		t.Errorf("a project container became %+v", got)
 	}
-	// AND A TEAM THE CHART HAS LOST KEEPS ITS OWN ADDRESS, because the
-	// strip saved against it is still that strip.
+	// AND A TEAM THE CHART HAS LOST KEEPS ITS OWN ADDRESS: the strip saved
+	// against it is still that strip.
 	gone := worklet.Container{Kind: worklet.ContainerUnit, ID: "dissolved"}
 	if got := worklet.CanonicalContainer(nimbus, gone); got != gone {
 		t.Errorf("an unresolvable unit container became %+v", got)

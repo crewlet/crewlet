@@ -9,23 +9,20 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A CALL NOBODY WAITED FOR: one whose harness had given up on it, or whose
-// job's session had ended, by the time it returned (runner.BridgedCall.Abandoned).
-// It ran and its effect happened, while the session of the job that made it
-// shows it with no outcome or a failed one — and a harness ends its own run once
-// every call it made is answered or given up on, so such a call can land before
-// the read a capture of that session is placed by, and before the read a
-// relaunch takes the job's own copy in its box to hold.
+// A CALL NOBODY WAITED FOR (runner.BridgedCall.Abandoned): its harness had
+// given up on it, or its job's session had ended, by the time it returned. Its
+// effect happened, yet the session shows it unanswered or failed; and since a
+// harness ends its run once every call is answered or given up on, the log can
+// take such a call before the read a capture is placed by, or the read a
+// relaunch holds the job's in-box copy to.
 
 // A CALL NOBODY WAITED FOR IS TOLD PAST EVERY SAVE POINT, UNDER THE LATE CALLS'
 // WORDS. A kept session saved past its number holds every other call at or
-// below the point, and the job's own copy in its box whose harness ended its
-// own run every call of the round: each is told the call all the same, apart,
-// under the words of calls the run that made them stopped waiting for, and
-// nothing they hold. The copy cut off, told every call of
-// the round, tells it there too rather than among the round's other calls. Held
-// at the point, no continuation was told it, and a run shown the call as timed
-// out could make it again.
+// below the point, and the in-box copy whose harness ended its own run every
+// call of the round: each is told this one all the same, apart, under the late
+// calls' heading. The copy cut off, told every call of the round, tells it
+// there too rather than among the others. Held at the point, no continuation
+// is told it, and a run shown it as timed out could make it again.
 //
 // Mutation: hold a call nobody waited for at a save point, or tell it among the
 // calls after the save, and a case goes red.
@@ -71,12 +68,11 @@ func TestACallNobodyWaitedForIsToldPastEverySavePoint(t *testing.T) {
 	}
 }
 
-// NO GUARD COUNTS A LOAD NOBODY WAITED FOR. A skill a call loaded whose harness
-// had given up on it never reached the session that made it, whose harness was
-// told the call timed out: so neither the guard of a relaunch continuing a kept
-// session saved past the call, nor the one of a run continuing its job's own
-// copy in its box after its harness ended its own run, holds the skill, and the
-// tool it covers is refused until the skill is loaded again.
+// NO GUARD COUNTS A LOAD NOBODY WAITED FOR. A skill loaded by a call its
+// harness had given up on never reached the session, which was told the call
+// timed out: neither a relaunch continuing a kept session saved past it nor a
+// run continuing the in-box copy after its harness ended its own run holds the
+// skill, so the tool it covers is refused until it is loaded again.
 //
 // Mutation: count the load of a call nobody waited for as any other's, and the
 // covered tool is let through.

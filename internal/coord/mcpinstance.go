@@ -9,18 +9,15 @@ import (
 
 // AN MCP INSTANCE, as the node running it holds it now.
 //
-// # Who has to agree on it
-//
-// Nobody: it is each node's own memory of the children it runs (a shared
-// server's one child, each held seat's own), read where it lives when a person
-// opens a server's page, as a turn's detail is (ADR-0021). Neither stored nor
-// on the node's status record: its per-server row ([MCPServerStatus]) carries
-// the bounded counts every reader needs, and a row per child would put a
-// company's seat count times its per-agent servers on a record rewritten at
-// least every [ReconcileInterval] to answer a question asked a few times a
-// minute. So this type is a WIRE shape between nodes (internal/engine's
-// mcpinstances.go asks and answers it), declared here beside the row it
-// details because both the engine and the API read it.
+// Nobody else has to agree on it: it is each node's own memory of the children
+// it runs (a shared server's one child, each held seat's own), read where it
+// lives when a person opens a server's page, as a turn's detail is (ADR-0021).
+// Not on the node's status record: [MCPServerStatus] carries the bounded
+// counts, and a row per child would put seats times per-agent servers on a
+// record rewritten every [ReconcileInterval] to answer a question asked a few
+// times a minute. So this is a WIRE shape between nodes (internal/engine's
+// mcpinstances.go), declared beside the row it details because the engine and
+// the API both read it.
 
 // MCPInstanceState is one instance's condition on its node.
 type MCPInstanceState string

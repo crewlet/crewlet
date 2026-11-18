@@ -59,15 +59,11 @@ var authRing = runtoken.Material{ActiveID: "k2", Keys: []runtoken.KeyMaterial{
 	{ID: "k2", Material: "the authenticator cases' second placeholder material"},
 }}
 
-// testAuth is the authenticator of a broker started for cfg — STARTED, so the
-// accounts it binds a connection to are the ones a running server has:
-// nats-server sets its system account only as it starts (server.go Start,
-// v2.15.1), and a server only built answers no system account at all. Nothing
-// connects to it but what a case hands Check itself: a clustered cfg names a
-// peer port nothing listens on, so its route never forms.
-//
-// A ROUTE PORT LOST BEFORE THE START says nothing about the case, so a taken
-// one is asked again on another; anything else is the answer.
+// testAuth is the authenticator of a broker started for cfg — STARTED, because
+// nats-server sets its system account only in Start, so a server only built
+// binds no system account. A clustered cfg names a peer port nothing listens
+// on, so nothing connects but what a case hands Check. A route port lost
+// before the start says nothing about the case, so only that is retried.
 func testAuth(t *testing.T, cfg Config) *brokerAuth {
 	t.Helper()
 	for attempt := 1; ; attempt++ {
@@ -124,27 +120,17 @@ func signerOfUser(t *testing.T, u processUser) signer {
 }
 
 // THE AUTHENTICATOR ADMITS ITS FOUR KINDS AND NOTHING ELSE, binds each to its
-// account, and counts every refusal in its class.
+// account, and counts every refusal under its listener and what it presented.
+// Admitted: a route with a ring key's route credential; a leaf link with a ring
+// key's leaf nkey, and an operator on the client listener with its operator
+// nkey, each signing the nonce; this process's clients in process, as the
+// engine (global account) or membership (system account).
+// Refused: the operator's key in process, the engine's over a socket, a leaf
+// key as an operator, a key off the ring, a failed proof, a username or token.
 //
-// The four: a route presenting a ring key's route credential; a leaf link
-// presenting a ring key's leaf nkey and signing the nonce; an operator on the
-// client listener presenting a ring key's operator nkey and signing it; this
-// process's own clients, in process, as the engine (the global account) or the
-// membership code (the system account). Every other kind, transport and
-// credential is refused — the operator's key in process, the engine's over a
-// socket, a leaf key as an operator, a key the ring does not hold, a held key
-// whose proof fails, a username or a token where an nkey is the credential —
-// and counted under its listener and what it presented.
-//
-// Over a started member whose one peer is a port nothing listens on, so its
-// accounts are the ones a running broker binds to and nothing connects to it
-// but the cases.
-//
-// Mutations: accept the engine key over TCP → its row, red; accept any nkey
-// with a valid signature → the foreign-key rows, red; bind the operator or the
-// system key to the wrong account → their rows, red; accept a leaf key as an
-// operator → its row, red; verify a leaf against the active key only → the k1
-// leaf row, red.
+// Mutations, each red: engine key over TCP; any validly signed nkey; operator
+// or system key on the wrong account; leaf key as operator; leaf checked
+// against the active key only (the k1 row).
 func TestTheAuthenticatorAdmitsOnlyItsFourKinds(t *testing.T) {
 	t.Parallel()
 	member := Config{ServerName: "a", ClusterName: "fleet", StoreDir: brokertest.TempDir(t),
@@ -279,17 +265,15 @@ func TestTheAuthenticatorAdmitsOnlyItsFourKinds(t *testing.T) {
 
 // A REFUSAL IS LOGGED ONCE A MINUTE PER CLASS, AND COUNTED EVERY TIME.
 //
-// A refused peer re-dials every second or so, so a line per attempt is the same
-// cause until nobody reads it. A class's first refusal logs at once; the rest
-// inside the minute log nothing; the first past a minute since that class's
-// last line logs carrying every refusal since, itself included; another class
-// logs at once. And the line names a key only in a shape a key has: a route
-// username of a key tag's shape, never 64 bytes a stranger chose.
+// A refused peer re-dials every second or so. A class's first refusal logs at
+// once, the rest inside the minute log nothing, the first past a minute since
+// that class's last line logs with every refusal since, itself included; another
+// class logs at once. A line names a key only in a key's shape (a route username
+// shaped as a key tag), never 64 bytes a stranger chose.
 //
 // Mutations: drop the limiter → the quiet minute logs, red; key the limiter on
-// the presented key → the second class's row, red (one class, two keys);
-// measure the minute from the first refusal rather than the last line → the
-// third line, red.
+// the presented key → the second class's row, red; time the minute from the
+// first refusal, not the last line → the third line, red.
 func TestARefusalIsLoggedOnceAMinutePerClass(t *testing.T) {
 	t.Parallel()
 	var mu sync.Mutex
@@ -359,10 +343,9 @@ func TestARefusalIsLoggedOnceAMinutePerClass(t *testing.T) {
 // NONE IS COUNTED TWICE OR LOST.
 //
 // The engine installs its counter once the broker has started, and a peer can
-// be refused while it is still starting. So what was counted before reaches the
-// sink on install — one call a class, with its count — and what comes after
-// arrives one at a time. Raced from eight goroutines across the install, under
-// -race, the sum is exactly what was sent.
+// be refused while it starts: the backlog reaches the sink on install, one call
+// a class with its count, then one at a time. Raced from eight goroutines across
+// the install, the sum is exactly what was sent.
 //
 // Mutations: install drops the backlog → the backlog row, red; hand the backlog
 // over without the lock → a racing refusal is counted twice or not at all.

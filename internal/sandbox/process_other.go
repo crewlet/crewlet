@@ -9,18 +9,13 @@ import (
 	"github.com/crewlet/crewlet/internal/procgroup"
 )
 
-// The local backend is POSIX-only, and deliberately so: every local placement
-// property it offers is a POSIX primitive with no equivalent elsewhere —
-// process groups and killpg for reaching a harness's whole tree,
-// SIGSTOP/SIGCONT for the clarification pause, and a process's start time from
-// the kernel's own record for the pid-reuse guard. A partial port would offer
-// the same interface with none of the guarantees, which is worse than not
-// offering it: a box that cannot be paused would silently hold a run open, and
-// one whose teardown reaches only the top process would leave the agent
-// running.
-//
-// So this platform gets a build that compiles and a provider that refuses at
-// construction, naming the reason.
+// The local backend is POSIX-only on purpose: each guarantee it gives is a
+// POSIX primitive — process groups and killpg to reach a harness's whole tree,
+// SIGSTOP/SIGCONT for the clarification pause, the kernel's start time for the
+// pid-reuse guard. A partial port would be worse than none: an unpausable box
+// would silently hold a run open, and a teardown reaching only the top process
+// would leave the agent running. So this platform compiles, and its provider
+// refuses at construction, naming the reason.
 
 const localSupported = false
 

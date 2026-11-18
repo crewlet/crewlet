@@ -39,21 +39,17 @@ func (s *openingAhead) BeginLaunch(ctx context.Context, run sandbox.PendingRun,
 	return s.PendingStore.BeginLaunch(ctx, run, fence)
 }
 
-// A RESUME'S READ REACHES ITS RELAUNCH'S OPENING, through the coordinator, the
-// engine's resumer and the runner. A lost job's round is carried on by a
-// relaunch whose briefs are built from the read the coordinator makes of the
-// round's log as it resumes the turn: the coordinator counts the calls that
-// read saw (sandbox.ResumeRequest.BridgedRead), the engine's resumer hands the
-// count to the turn's runner, the runner hands it to its launch
-// (runner.Continuation.BriefRead), and the launch to the store, whose opening
-// marks late every call of the round the log took after it. So a call of the
-// lost job that lands while the relaunch is readied — after the read and
-// before the opening, as that job's own — is listed late, and the call the
-// read saw is not.
+// A RESUME'S READ REACHES ITS RELAUNCH'S OPENING. A lost job's round is
+// carried on by a relaunch whose briefs come from the coordinator's read of
+// the round's log. The count of calls that read saw travels from the
+// coordinator (sandbox.ResumeRequest.BridgedRead) through the resumer and the
+// runner (runner.Continuation.BriefRead) to the store, whose opening marks
+// late every call the log took after it. So a lost job's call landing after
+// the read and before the opening is listed late, and the call the read saw
+// is not.
 //
 // Mutation: drop the count anywhere between the coordinator's read and the
-// opening — the coordinator's count, or the resumer's copy of it — and the call
-// the read saw is marked late with the rest.
+// opening, and the call the read saw is marked late with the rest.
 func TestAResumesReadReachesItsRelaunchsOpening(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

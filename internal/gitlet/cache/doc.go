@@ -1176,7 +1176,7 @@
 // chain of PUBLISHED LAYERS — git's own incremental layer, its bitmap and the
 // commit-graph layer over the same packs — stored in the object store and
 // named on the code log (gitlet.LayerRef; derived, so no backup carries one and
-// no audit asks after one); every Gitlet node INSTALLS the chain the rows name
+// no audit asks after one: ADR-0091); every Gitlet node INSTALLS the chain the rows name
 // (layers.go): each layer fetched, held to its row (gitlet.CheckLayer) and
 // placed byte for byte, both chain files written by the cache from the rows'
 // order, since a layer's files never name its base. The maintainer's

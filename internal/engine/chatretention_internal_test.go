@@ -23,24 +23,17 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// The chat prune duty's cases.
+// The chat prune duty's cases. They hold that a company keeping its
+// conversation for ever keeps it, that a room's own setting decides, that a
+// tick is bounded and resumes where the last stopped, that two nodes never
+// publish one ladder, and that the rungs are the broker's instants rather than
+// this node's clock.
 //
-// WHAT THEY PROTECT, in one sentence each: that a company which asked to keep
-// its conversation for ever keeps it, that a room's own setting is the one
-// that decides, that a tick is bounded and picks up where the last one
-// stopped, that two nodes never publish one ladder, and that the rungs of that
-// ladder are the BROKER's instants rather than this node's clock — which is
-// the whole reason chat retention is a record and not a sweep.
-//
-// Every case drives [chatPrune.tick] directly against stub seams. The loop
-// around it is a ticker and a claim, and a test of those would be a test of
-// [time.Ticker].
+// Every case drives [chatPrune.tick] directly against stub seams; the loop
+// around it is only a ticker and a claim.
 
-// fakeClock is the duty's clock, movable by the case.
-//
-// Read and written on the test's own goroutine only — these cases call tick
-// synchronously rather than starting the loop — so it carries no mutex, which
-// would otherwise imply a concurrency this harness does not have.
+// fakeClock is the duty's clock, movable by the case. It has no mutex: the
+// cases call tick synchronously, on the test's goroutine.
 type fakeClock struct{ at time.Time }
 
 func (c *fakeClock) now() time.Time { return c.at }
@@ -53,24 +46,20 @@ type prunePublished struct {
 	opID    string
 }
 
-// fakePruner records what was published and models the applier's effect: a
-// prune deletes strictly below its cutoff, so the room's oldest surviving
-// message afterwards is the cutoff itself. That is the DENSEST room — one with
-// a message at every instant — which is the case the per-record bound exists
-// for.
+// fakePruner records what was published and models the applier: a prune
+// deletes strictly below its cutoff, so the room's floor becomes the cutoff
+// itself — the densest room, the case the per-record bound exists for.
 type fakePruner struct {
 	rooms   *fakeRooms
 	calls   []prunePublished
 	outcome statelog.Outcome
 
-	// refuse is the rooms this build cannot write to, by id. A refusal is
-	// per ROOM rather than per call because that is what it is in the write
-	// path: a kind this build cannot classify refuses every gesture in that
-	// room and none anywhere else.
+	// refuse is the rooms this build cannot write to, by id: per room, as in
+	// the write path, where an unclassifiable kind refuses its room only.
 	refuse map[string]error
 
-	// after, when set, is called with the number of records published so
-	// far after each one — where a case lands the tick's deadline.
+	// after, when set, is called with the count published so far after each
+	// record; a case lands the tick's deadline there.
 	after func(calls int)
 }
 
@@ -120,8 +109,7 @@ func (p *fakePruner) channels() []string {
 }
 
 // fakeRooms is the company's rooms as the duty reads them: a page at a time,
-// in room-id order, strictly after the room named — which is the keyset the
-// real statement seeks.
+// in room-id order, strictly after the room named, as the real statement seeks.
 type fakeRooms struct {
 	rooms []chatRoom
 	err   error
@@ -171,18 +159,16 @@ func room(id string, override *int, oldest time.Time) chatRoom {
 	return chatRoom{ID: id, RetentionDays: override, Oldest: oldest}
 }
 
-// override is an addressable retention day count, which is the shape the
-// nullable column has and the reason every carrier of it is a pointer.
+// override is an addressable retention day count: the column is nullable, so
+// every carrier of it is a pointer.
 func override(n int) *int { return &n }
 
-// pruneHarness wires a duty over stubs, holding the duty this node already
-// won so every case is about the sweep rather than about the lease.
+// pruneHarness wires a duty over stubs that already holds the duty, so every
+// case is about the sweep rather than the lease.
 //
-// THE FAKE KEEPS A COPY OF THE ROOMS IT IS HANDED, because an applied prune
-// moves a floor in place ([fakeRooms.advance]) and a case that spreads its own
-// slice (`all...`) hands over that slice's backing array, not its elements:
-// two parallel subtests built over one slice would each move the other's
-// floors — a data race, and a room the other's first page no longer needs.
+// The fake copies the rooms: an applied prune moves a floor in place
+// ([fakeRooms.advance]), and parallel subtests spreading one slice (`all...`)
+// would share its backing array and race on each other's floors.
 func pruneHarness(policy chatRetentionPolicy, now time.Time,
 	rooms ...chatRoom) (*chatPrune, *fakePruner, *fakeRooms) {
 
@@ -200,18 +186,15 @@ func pruneHarness(policy chatRetentionPolicy, now time.Time,
 	}, pruner, source
 }
 
-// anchor is a fixed instant, so a case's arithmetic is readable rather than
-// relative to whenever the suite happened to run.
+// anchor is a fixed instant, so a case's arithmetic is readable.
 var anchor = time.Date(2026, 3, 14, 9, 0, 0, 0, time.UTC)
 
 // A COMPANY THAT KEEPS EVERYTHING FOR EVER PUBLISHES NOTHING.
 //
-// `message_retention_days: 0` is the one setting whose zero means the
-// opposite of what a duration's zero means, and the accessor answers it with a
-// SECOND RETURN for exactly that reason. A duty that read the duration and
-// ignored the bool would subtract nothing from `now` and publish a cutoff of
-// NOW — deleting the company's entire conversation on its first tick, with no
-// inverse.
+// `message_retention_days: 0` means for ever, the opposite of a duration's
+// zero, which is why the accessor answers it with a second return. A duty that
+// ignored it would publish a cutoff of now, deleting the whole conversation on
+// its first tick, with no inverse.
 func TestACompanyWithNoHorizonPublishesNoPrune(t *testing.T) {
 	t.Parallel()
 	ancient := anchor.Add(-5 * 365 * 24 * time.Hour)
@@ -237,14 +220,13 @@ func TestACompanyWithNoHorizonPublishesNoPrune(t *testing.T) {
 
 // A ROOM'S OWN HORIZON DECIDES, IN BOTH DIRECTIONS.
 //
-// The second half is the one an early return on "the company has no horizon"
-// would silently break: a company that keeps everything for ever may still
-// have set thirty days on one room, and [chatlet.HorizonFor] is the single place
-// that decides which setting wins.
+// A company keeping everything may still set thirty days on one room, so an
+// early return on "no company horizon" would break the second half;
+// [chatlet.HorizonFor] alone decides which setting wins.
 func TestARoomsOwnHorizonBeatsTheCompanys(t *testing.T) {
 	t.Parallel()
-	// Below the company's year and below the room's month, so which
-	// horizon is applied decides whether anything is published at all.
+	// Below both the company's year and the room's month, so the horizon
+	// applied decides whether anything is published.
 	floor := anchor.Add(-45 * 24 * time.Hour)
 
 	cases := map[string]struct {
@@ -293,9 +275,8 @@ func TestARoomsOwnHorizonBeatsTheCompanys(t *testing.T) {
 
 // A ROOM ALREADY INSIDE ITS HORIZON IS NOT PUBLISHED FOR.
 //
-// A prune that deletes nothing is not free: it is one more record on the
-// busiest log the company has, every tick, for every room it has ever created
-// — replicated to every node and held for the stream's whole retention window.
+// A prune that deletes nothing still costs a record on the company's busiest
+// log, every tick, for every room, replicated to every node.
 func TestATickWithNothingBelowTheCutoffPublishesNothing(t *testing.T) {
 	t.Parallel()
 	horizon := config.MinMessageRetentionDays
@@ -322,11 +303,9 @@ func TestATickWithNothingBelowTheCutoffPublishesNothing(t *testing.T) {
 
 // ONE TICK IS BOUNDED, AND THE NEXT RESUMES WHERE IT STOPPED.
 //
-// The bound is the reason the prune is a ladder rather than one record: an
-// undivided delete of a company's whole backlog is one transaction holding
-// this node's only writer for the length of it, on every node. The resumption
-// is what makes the bound safe — the rows themselves are the bookmark, so
-// nothing has to remember how far a capped sweep had got.
+// The bound keeps one delete of a whole backlog from holding the only writer
+// on every node; the rows themselves are the bookmark, so nothing has to
+// remember how far a capped sweep got.
 func TestOneTicksPruneRecordsAreBoundedAndResume(t *testing.T) {
 	t.Parallel()
 	const backlogWindows = 2*chatPruneRecordsPerRoom + 3
@@ -351,9 +330,8 @@ func TestOneTicksPruneRecordsAreBoundedAndResume(t *testing.T) {
 		published += got
 	}
 
-	// THE RUNGS ARE CONTIGUOUS WINDOWS ending exactly on the horizon: no
-	// gap (rows left below a cutoff nobody publishes again) and no
-	// overlap (records that delete nothing).
+	// The rungs are contiguous windows ending exactly on the horizon: no gap
+	// (rows left below a cutoff nobody republishes), no overlap (empty records).
 	cutoffs := pruner.cutoffsFor("busy")
 	if len(cutoffs) != backlogWindows {
 		t.Fatalf("published %d cutoffs for a %d-window backlog", len(cutoffs), backlogWindows)
@@ -370,11 +348,10 @@ func TestOneTicksPruneRecordsAreBoundedAndResume(t *testing.T) {
 			"land exactly on the horizon rather than past it", last, horizon)
 	}
 
-	// AND EVERY RUNG IS ITS OWN OPERATION, CARRYING THE INSTANT IT WAS
-	// MINTED: one with none is read as older than every loss the chat
-	// ledger has had, so a node whose ledger ever lost a row would answer
-	// every prune `unknown` and publish none — and retention would stop
-	// with nothing to say why.
+	// Every rung is its own operation carrying its mint instant: one without is
+	// read as older than every loss of the chat ledger, so a node whose ledger
+	// lost a row would answer every prune `unknown` and retention would stop
+	// silently.
 	seen := map[string]bool{}
 	for _, call := range pruner.calls {
 		if _, minted := statelog.OpMintedAt(call.opID); !minted {
@@ -392,11 +369,9 @@ func TestOneTicksPruneRecordsAreBoundedAndResume(t *testing.T) {
 
 // A NODE THAT DOES NOT HOLD THE DUTY PUBLISHES NOTHING, AND READS NOTHING.
 //
-// Two nodes publishing one ladder is not corruption — a range delete below an
-// instant is idempotent — but it is a second copy of every prune record on the
-// company's hottest log, for ever. The claim is also checked BEFORE the rooms
-// are read, so a fleet of twenty nodes costs one company-wide room read a tick
-// rather than twenty.
+// A second publisher is not corruption (a range delete below an instant is
+// idempotent) but doubles every prune record on the hottest log. The claim is
+// checked before the rooms are read, so a fleet reads them once a tick.
 func TestOnlyTheNodeHoldingTheDutyPrunes(t *testing.T) {
 	t.Parallel()
 	floor := anchor.Add(-2 * 365 * 24 * time.Hour)
@@ -429,25 +404,19 @@ func TestOnlyTheNodeHoldingTheDutyPrunes(t *testing.T) {
 
 // THE LADDER'S RUNGS ARE THE BROKER'S INSTANTS, NOT THIS NODE'S CLOCK.
 //
-// This is the property the whole design rests on. A message's `created_at` is
-// the broker's own stored instant, so a cutoff anchored on the oldest message
-// in the room is a number every node computes identically — and one that does
-// not move when a tick runs late, or when two nodes' clocks disagree. Anchor
-// the ladder on `now` instead and every tick publishes a different set of
+// A message's `created_at` is the broker's stored instant, so a rung anchored
+// on a room's oldest message is identical on every node and unmoved by a late
+// tick or skewed clocks; anchored on `now`, every tick would publish new
 // cutoffs for the same rows.
 //
-// THE COMPLEMENT IS ASSERTED TOO, because a test that only shows something
-// standing still passes just as well against a duty that publishes nothing at
-// all: the FINAL rung — the one that brings a room inside its horizon — must
-// move with the clock, since that is what a horizon is.
+// The complement is asserted too, or a duty publishing nothing would pass: the
+// final rung, which brings a room inside its horizon, moves with the clock.
 func TestThePruneCutoffIsTheBrokersInstantAndNotTheDutysClock(t *testing.T) {
 	t.Parallel()
 	horizon := anchor.Add(-config.MinMessageRetentionDays * 24 * time.Hour)
-	// A backlog several windows deep, so the first rung is a step rather
-	// than the horizon itself.
+	// Several windows deep, so the first rung is a step, not the horizon.
 	backlogged := horizon.Add(-5 * chatPruneWindow)
-	// And a room whose whole backlog fits inside one window, so its only
-	// rung IS the horizon.
+	// Within one window, so its only rung is the horizon.
 	shallow := horizon.Add(-chatPruneWindow / 2)
 
 	first := func(now time.Time) (stepped, final time.Time) {
@@ -484,11 +453,10 @@ func TestThePruneCutoffIsTheBrokersInstantAndNotTheDutysClock(t *testing.T) {
 // THE SWEEP REACHES EVERY ELIGIBLE ROOM, IN ROOM-ID ORDER, AND ONE ROOM'S
 // REFUSAL DOES NOT STOP IT.
 //
-// A room whose kind this build cannot classify refuses every write, and a
-// sweep that gave up there would hold the whole company's retention hostage to
-// one row a newer peer wrote. The order is [chatlet.Eligible]'s, so two nodes
-// that read the rooms in different orders publish the same sweep in the same
-// sequence.
+// A room of a kind this build cannot classify refuses every write; giving up
+// there would hold the company's retention hostage to one row a newer peer
+// wrote. The order is [chatlet.Eligible]'s, so every node publishes the same
+// sweep in the same sequence.
 func TestThePruneSweepCoversEveryRoomAndSurvivesOnesRefusal(t *testing.T) {
 	t.Parallel()
 	floor := anchor.Add(-2 * 365 * 24 * time.Hour)
@@ -499,8 +467,8 @@ func TestThePruneSweepCoversEveryRoomAndSurvivesOnesRefusal(t *testing.T) {
 		room("alpha", nil, floor),
 		room("mike", nil, floor),
 	)
-	// The middle room in id order refuses every write, so a sweep that
-	// gave up on a refusal would never reach the last one.
+	// The middle room in id order refuses, so a sweep that gave up on a
+	// refusal never reaches the last.
 	pruner.refuse = map[string]error{
 		"mike": errors.New("that is a kind this build does not know"),
 	}
@@ -527,16 +495,15 @@ func TestThePruneSweepCoversEveryRoomAndSurvivesOnesRefusal(t *testing.T) {
 
 // THE SWEEP PAGES THROUGH EVERY ROOM THE COMPANY EVER MADE.
 //
-// Nothing bounds that set — an archive releases [chatlet.MaxChannels]' slot, a
-// direct conversation is never refused by it, and no room is ever deleted — so a read
-// of all of it is a snapshot and a slice that grow for the life of the
-// deployment. Each read is one page, the next begins after the last room the
-// previous returned, and every room on every page is swept.
+// Nothing bounds that set (an archive frees its [chatlet.MaxChannels] slot, a
+// direct conversation is never refused by it, no room is deleted), so it is
+// read a page at a time, each after the last room of the one before, and every
+// room on every page is swept.
 func TestThePruneSweepPagesThroughEveryRoom(t *testing.T) {
 	t.Parallel()
 	floor := anchor.Add(-2 * 365 * 24 * time.Hour)
-	// Two whole pages and a short one, so a sweep that read once, or that
-	// stopped at the first full page, leaves rooms unpruned.
+	// Two whole pages and a short one, so a sweep that read once or stopped
+	// at the first full page leaves rooms unpruned.
 	const total = 2*chatPruneRoomsPage + 7
 	var all []chatRoom
 	for i := range total {
@@ -564,14 +531,11 @@ func TestThePruneSweepPagesThroughEveryRoom(t *testing.T) {
 
 // A LAP THE DEADLINE CUT IS CONTINUED, NOT RESTARTED.
 //
-// A tick may not outlive its interval, so on a company with enough backlog a
-// lap ends early. Begun at the first room id every time, the lap would spend
-// every tick on the same low ids while the backlog lasted, and the rooms at
-// the tail would keep their messages past the horizon a screen says they are
-// pruned at. So the next tick begins after the last room the cut one
-// finished, reaches the end, comes round from the first room and stops where
-// it began — and a room whose ladder the deadline cut is taken again rather
-// than skipped.
+// A tick may not outlive its interval, so with enough backlog a lap ends
+// early. Restarted at the first room id, every tick would spend itself on the
+// low ids and the tail would keep messages past its horizon. So the next tick
+// begins after the last room finished, comes round and stops where it began;
+// a room whose ladder was cut is taken again, not skipped.
 func TestALapTheDeadlineCutResumesWhereItStopped(t *testing.T) {
 	t.Parallel()
 	floor := anchor.Add(-2 * 365 * 24 * time.Hour)
@@ -584,8 +548,8 @@ func TestALapTheDeadlineCutResumesWhereItStopped(t *testing.T) {
 		chatRetentionPolicy{Chatlet: true, CompanyDays: config.MinMessageRetentionDays},
 		anchor, all...)
 
-	// THE DEADLINE LANDS IN THE MIDDLE OF CHARLIE'S LADDER: two whole
-	// rooms and part of a third.
+	// The deadline lands inside charlie's ladder: two whole rooms and part
+	// of a third.
 	ctx, cancel := context.WithCancel(t.Context())
 	pruner.after = func(calls int) {
 		if calls == 2*chatPruneRecordsPerRoom+3 {
@@ -618,12 +582,9 @@ func TestALapTheDeadlineCutResumesWhereItStopped(t *testing.T) {
 
 // A LAP CUT BETWEEN PAGES IS CONTINUED AFTER THE LAST PAGE IT FINISHED.
 //
-// The other half of the case above: the deadline, the stop or a failed read
-// lands while the next PAGE is being taken rather than inside a room's ladder.
-// That read is most of the time between two pages, so it is where a deadline
-// usually lands, and a lap that answered it by starting again at the first
-// room would be the starvation the resume point exists to end. Every one of
-// the three resumes after the last room of the page the lap finished.
+// A deadline, a stop or a failed read usually lands while the next page is
+// read; restarting at the first room there is the starvation the resume point
+// exists to end. Each resumes after the last room of the finished page.
 func TestALapCutBetweenPagesResumesAfterTheLastPageItFinished(t *testing.T) {
 	t.Parallel()
 	floor := anchor.Add(-2 * 365 * 24 * time.Hour)
@@ -637,8 +598,8 @@ func TestALapCutBetweenPagesResumesAfterTheLastPageItFinished(t *testing.T) {
 
 	for _, tc := range []struct {
 		name string
-		// cut ends the second read: by cancelling the tick's context
-		// inside it, or by failing it outright.
+		// cut ends the second read, by cancelling the tick inside it or
+		// by failing it.
 		cut func(cancel context.CancelFunc) func(context.Context, int) error
 	}{
 		{"the deadline lands inside the read", func(cancel context.CancelFunc) func(context.Context, int) error {
@@ -697,14 +658,13 @@ func TestALapCutBetweenPagesResumesAfterTheLastPageItFinished(t *testing.T) {
 
 // A CUT IS NOT A FAILURE, AND ONLY A FAILED READ IS WARNED ABOUT.
 //
-// `chat_prune_rooms_unread` tells an operator that rooms were left past their
-// horizon because the estate did not answer. A deadline landing inside the
-// read is the tick ending on time, which the next tick continues, and warning
-// about it would put that line in the log of every company with a backlog,
-// once an hour, where it reads as a store that keeps failing.
+// `chat_prune_rooms_unread` says rooms went past their horizon because the
+// estate did not answer. A deadline inside the read is the tick ending on
+// time; warning about it would log, hourly on every backlogged company, what
+// reads as a failing store.
 //
-// NOT PARALLEL: it swaps the process-wide logger, which this package otherwise
-// leaves at its boot default, and a parallel case's lines would be counted.
+// Not parallel: it swaps the process-wide logger, and a parallel case's lines
+// would be counted.
 func TestOnlyAReadThatFailedIsWarnedAbout(t *testing.T) {
 	logs := &stopLineBuffer{}
 	logging.Configure(slog.LevelInfo, logging.FormatJSON, logs)
@@ -744,10 +704,9 @@ func TestOnlyAReadThatFailedIsWarnedAbout(t *testing.T) {
 
 // A TICK THAT ENDS BEFORE ITS FIRST READ KEEPS THE LAP WHERE IT WAS.
 //
-// A claim that took the tick's whole budget, or a stop that arrived with it,
-// leaves nothing read and nothing swept — so the lap the previous tick cut is
-// still the lap to continue, and forgetting it here would restart it at the
-// first room.
+// A claim that took the tick's budget, or a stop with it, swept nothing, so
+// the cut lap is still the one to continue; forgetting it would restart at
+// the first room.
 func TestATickEndedBeforeItsFirstReadKeepsTheLap(t *testing.T) {
 	t.Parallel()
 	floor := anchor.Add(-2 * 365 * 24 * time.Hour)
@@ -772,10 +731,9 @@ func TestATickEndedBeforeItsFirstReadKeepsTheLap(t *testing.T) {
 
 // AN UNSETTLED WRITE ENDS THAT ROOM'S LADDER AND NOBODY ELSE'S.
 //
-// `pending` and `unknown` are not failures — they are the framework's other
-// two answers — but the rungs above were computed from a floor this node has
-// not seen move, so the honest move is to take the rest next tick against a
-// floor that actually changed.
+// `pending` and `unknown` are not failures, but the rungs above were computed
+// from a floor this node has not seen move; the rest waits for a tick against
+// a floor that changed.
 func TestAnUnsettledPruneStopsThatRoomsLadder(t *testing.T) {
 	t.Parallel()
 	floor := anchor.Add(-2 * 365 * 24 * time.Hour)
@@ -807,10 +765,9 @@ func TestAnUnsettledPruneStopsThatRoomsLadder(t *testing.T) {
 
 // THE RECORD IS AUTHORED BY THE ENGINE, NAMING THIS NODE.
 //
-// A prune is machinery rather than a remark. Attributing it to a seat or to an
-// operator token would put a participant's name on a deletion nobody asked
-// for, and [chatlet.Store.Prune] refuses every other author kind in its own
-// decide — so a duty signing as an agent would publish nothing at all.
+// A prune is machinery: a seat's or an operator's name would sit on a deletion
+// nobody asked for, and [chatlet.Store.Prune] refuses every other author kind,
+// so a duty signing as an agent would publish nothing.
 func TestThePruneIsAuthoredBySystemNamingTheNode(t *testing.T) {
 	t.Parallel()
 	floor := anchor.Add(-2 * 365 * 24 * time.Hour)
@@ -836,11 +793,9 @@ func TestThePruneIsAuthoredBySystemNamingTheNode(t *testing.T) {
 // A COMPANY WHOSE ROOMS MOVED TO A VENDOR PUBLISHES NOTHING, EVEN WHERE THE
 // ROWS ARE STILL HERE.
 //
-// The rows a node keeps after a company leaves Chatlet are the archive of
-// a surface nobody writes to any more. Deleting them on a policy the company
-// no longer expresses destroys the only copy of a conversation that has
-// stopped being replaceable — and the rooms are not even read, because there
-// is nothing this duty could do with them.
+// The rows left after a company leaves Chatlet are the only copy of an archive
+// nobody writes to; deleting them on a policy the company no longer expresses
+// is irreversible. The rooms are not even read.
 func TestACompanyOffChatletPrunesNothing(t *testing.T) {
 	t.Parallel()
 	d, pruner, rooms := pruneHarness(
@@ -860,9 +815,8 @@ func TestACompanyOffChatletPrunesNothing(t *testing.T) {
 
 // A ROOM READ THAT FAILED PRUNES NOTHING RATHER THAN GUESSING.
 //
-// The alternative is a sweep that treats an unreadable estate as an empty
-// company, which publishes nothing either — but silently, with no line saying
-// the horizon went unenforced.
+// Read as an empty company, a failed read would publish nothing too, but with
+// no line saying the horizon went unenforced.
 func TestAFailedRoomReadPrunesNothing(t *testing.T) {
 	t.Parallel()
 	d, pruner, rooms := pruneHarness(
@@ -879,9 +833,8 @@ func TestAFailedRoomReadPrunesNothing(t *testing.T) {
 
 // THE POLICY IS THE DOCUMENT'S, WITH THE ACCESSOR'S OWN DEFAULT.
 //
-// Through [config.ChatletConfig.MessageRetention] rather than off the
-// field, so the 365-day default is applied in one place rather than two that
-// can disagree. Which document that is, is the fleet's pointer's, read per
+// Read through [config.ChatletConfig.MessageRetention], so the 365-day
+// default lives in one place. Which document is the fleet pointer's, read per
 // tick (TestTheChatPruneDecidesOnlyOnANodeServingTheFleetsRevision).
 func TestTheChatRetentionPolicyIsTheDocumentsOwn(t *testing.T) {
 	t.Parallel()
@@ -931,16 +884,13 @@ roles:
 // A NODE THAT DOES NOT RUN THE ROOMS ARMS NO DUTY — AND NEITHER DOES ONE THAT
 // MAY NOT PUBLISH.
 //
-// The gate is the STORE rather than the policy: whether this node runs the
-// chat domain is decided once at boot, and a loop armed without it would read
-// tables that are not there once an hour for the life of the process.
+// The gate is the store, decided once at boot, not the policy: armed without
+// it, the loop would read absent tables hourly for the life of the process.
 //
-// AND THE STORE IS THE WRITE SIDE'S ([Engine.writeSide]), never the runtime's
-// own: a node started in `maintenance` or `seal` publishes nothing onto any
-// log, and a prune is a record on chat's. Taken from the runtime, the duty
-// would publish deletions into a capacity window whose whole point — a seal's
-// acknowledgement being evidence — is that nothing is being written. Every
-// other gate on that path is a caller's, so this case holds the duty's own.
+// And it is the write side's store ([Engine.writeSide]), never the runtime's:
+// a node in `maintenance` or `seal` publishes nothing, and a prune published
+// into a seal's capacity window would void its acknowledgement as evidence.
+// Every other gate on that path is a caller's, so this case holds the duty's.
 func TestTheChatPruneIsArmedOnlyWhereTheRoomsAre(t *testing.T) {
 	t.Parallel()
 	node, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
@@ -955,9 +905,8 @@ func TestTheChatPruneIsArmedOnlyWhereTheRoomsAre(t *testing.T) {
 	}
 	noChat := &Engine{mode: statelog.ModeNormal}
 	noChat.native.Store(&native{})
-	// A DATA NODE THAT RUNS NO WORKERS holds the rooms and never claims the
-	// duty, so it arms none: armed, it would ask the fleet's pointer and
-	// warn on every tick about a horizon it could never enforce.
+	// A data node running no workers never claims the duty, so arms none:
+	// armed, it would warn every tick about a horizon it could never enforce.
 	noWorkers := rooms(statelog.ModeNormal)
 	noWorkers.profile = placement.NodeProfile{
 		Roles: placement.Roles(placement.RoleData, placement.RoleSeats)}
@@ -976,14 +925,14 @@ func TestTheChatPruneIsArmedOnlyWhereTheRoomsAre(t *testing.T) {
 				t.Fatal("a chat prune duty was armed on a node that has no rooms, " +
 					"may not publish into them or never claims the duty")
 			}
-			// And the teardown is a no-op rather than a nil dereference,
-			// which is what the boot path's failure arm reaches it as.
+			// The teardown is a no-op, not a nil dereference: the boot
+			// path's failure arm reaches it unarmed.
 			e.stopChatRetention()
 		})
 	}
 
-	// THE CONTROL: the same node, publishing, arms it — or every case
-	// above would pass on a duty that is never armed anywhere.
+	// The control: the same node, publishing, arms it, or every case above
+	// would pass on a duty never armed anywhere.
 	e := rooms(statelog.ModeNormal)
 	e.startChatRetention(t.Context())
 	if e.chatPrune == nil {
@@ -997,16 +946,11 @@ func TestTheChatPruneIsArmedOnlyWhereTheRoomsAre(t *testing.T) {
 
 // THE ROOM READ IS THE ONE PIECE OF THIS DUTY A STUB CANNOT COVER.
 //
-// Every case above drives the ladder against fakes, which is what makes the
-// arithmetic exercisable — but it means the SQL that feeds them is never run.
-// A wrong column name, a lost nullness or a misread instant would then show up
-// only as one `chat_prune_rooms_unread` line an hour on a live company, with
-// the horizon quietly unenforced. So this one runs against the real schema.
-//
-// WHAT IT PROTECTS: that the three settings the nullable column carries
-// survive the read as three (inherit / for ever / a number), and that a room's
-// floor is the OLDEST message in it rather than the newest, the first read or
-// zero.
+// The cases above never run the SQL feeding the ladder; a wrong column, a lost
+// nullness or a misread instant would show only as an hourly
+// `chat_prune_rooms_unread` line, so this runs against the real schema. It
+// holds that the nullable column's three settings (inherit, for ever, a
+// number) survive as three, and that a room's floor is its oldest message.
 func TestTheRoomReadCarriesAllThreeRetentionSettingsAndTheRoomsFloor(t *testing.T) {
 	t.Parallel()
 	db, estate := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
@@ -1030,8 +974,8 @@ func TestTheRoomReadCarriesAllThreeRetentionSettingsAndTheRoomsFloor(t *testing.
 				return err
 			}
 		}
-		// Written NEWEST FIRST, so a read that returned the first row it
-		// saw rather than the minimum would answer with the wrong one.
+		// Newest first, so a read returning the first row rather than the
+		// minimum answers wrong.
 		for i, at := range []time.Time{
 			oldest.Add(48 * time.Hour), oldest.Add(24 * time.Hour), oldest,
 		} {
@@ -1056,9 +1000,8 @@ func TestTheRoomReadCarriesAllThreeRetentionSettingsAndTheRoomsFloor(t *testing.
 		t.Fatalf("PruneRooms: %v", err)
 	}
 
-	// A PAGE IS THE NEXT ROOMS IN ID ORDER, STRICTLY AFTER THE ONE NAMED:
-	// two pages of two cover the four rooms once each, and the second
-	// begins after the first's last.
+	// A page is the next rooms in id order, strictly after the one named:
+	// two pages of two cover the four rooms once each.
 	var paged []string
 	for after := ""; ; {
 		page, pageErr := reader.PruneRooms(t.Context(), after, 2)
@@ -1110,21 +1053,15 @@ func TestTheRoomReadCarriesAllThreeRetentionSettingsAndTheRoomsFloor(t *testing.
 
 // THE ROOM READ SEEKS EACH ROOM'S OLDEST MESSAGE; IT NEVER READS THE CORPUS.
 //
-// The read runs every hour over every room the company ever made, and the
-// answer it needs from `chat_messages` is one row per room — the leading edge
-// of `chat_messages_prune_idx`. The obvious spelling, `MIN(created_at)` in a
-// correlated subquery, is one the planner unnests into a grouped read of that
-// whole index, joined back to the rooms: correct answers, and every message the
-// company has ever kept read once an hour, a cost that grows with its whole
-// history and that no result reveals. So the plan is held, not the rows — and
-// the rewrite is recognised by [storetest.Decorrelated], the one predicate
-// every plan gate asks, rather than by a word of the plan this test chose.
+// The read runs hourly over every room and needs one row per room from
+// `chat_messages`, the leading edge of `chat_messages_prune_idx`. Spelled
+// `MIN(created_at)` in a correlated subquery, the planner unnests it into a
+// grouped read of the whole index: right answers, at a cost growing with the
+// company's history that no result reveals. So the plan is held, not the
+// rows, the rewrite recognised by [storetest.Decorrelated], the predicate
+// every plan gate shares. Never ANALYZEd, because no node is.
 //
-// NEVER ANALYZEd, because no node is: a plan taken over statistics is a plan
-// no deployment runs.
-//
-// Mutation: spell the floor `MIN(m.created_at)` again, and the plan is the
-// unnested grouped read this refuses.
+// Mutation: spell the floor `MIN(m.created_at)` again and this fails.
 func TestTheRoomReadSeeksEachRoomsOldestMessage(t *testing.T) {
 	t.Parallel()
 	db, estate := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
@@ -1136,9 +1073,8 @@ func TestTheRoomReadSeeksEachRoomsOldestMessage(t *testing.T) {
 		t.Errorf("the room read's plan is %q, which never takes %q — each "+
 			"room's oldest message must be one seek of the prune index", plan, seek)
 	}
-	// AND THE PAGE IS A KEYSET SEEK of the rooms' own key, walked in the
-	// order it is stored: a scan, or a sorter, would read every room the
-	// company ever made to answer one page of them.
+	// The page is a keyset seek of the rooms' key in stored order: a scan or
+	// a sorter would read every room to answer one page.
 	const page = "SEARCH c USING INDEX sqlite_autoindex_chat_channels_1 (id>?)"
 	if !slices.Contains(plan, page) {
 		t.Errorf("the room read's plan is %q, which never takes %q — a page "+

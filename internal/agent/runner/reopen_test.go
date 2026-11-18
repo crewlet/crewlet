@@ -18,21 +18,16 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// AN EXECUTOR RUN TAKEN OVER WHILE IT WORKS IS SERVED THE SURFACE IT LEFT. Its
-// box goes on calling the seat's tools after the process that launched it is
-// gone, and the node that takes it over rebuilds that surface from the run's
-// own state: every tool its launch recorded it holding — which is every tool
-// it can reach, so nothing the run did over the bridge adds one — and its place
-// in the run: every call it made counts toward a later call's repeat count, a
-// submission may cite them, and its meter starts from what its row says its
-// bridged calls have cost.
+// AN EXECUTOR RUN TAKEN OVER WHILE IT WORKS IS SERVED THE SURFACE IT LEFT. The
+// taking node rebuilds it from the run's state: every tool the launch recorded
+// (all it can reach, so no bridged call adds one), its calls counted toward a
+// later repeat and citable by a submission, and its meter from its row's
+// bridged cost.
 //
-// Mutation: build the surface without the launch's record, and jira_create is
-// refused as one it does not hold; seed nothing, and a call made after the
-// recovery counts as the run's first of its kind; leave the run's calls out of
-// the submission's record, and a delivery the run made before the recovery
-// cannot be cited; start the meter from zero, and the row's total stays the
-// larger.
+// Mutation: drop the launch's record (jira_create refused), seed nothing (a
+// later call counts as the first of its kind), leave the run's calls out of
+// the submission's record (an earlier delivery cannot be cited), or start the
+// meter at zero (the row's total stays larger).
 func TestARunTakenOverIsServedTheSurfaceItLeft(t *testing.T) {
 	t.Parallel()
 	calls := turnctx.NewCallLog()
@@ -45,7 +40,7 @@ func TestARunTakenOverIsServedTheSurfaceItLeft(t *testing.T) {
 	spent := runner.Bridged{Aux: auxspend.Spent{Input: 900, Output: 90}, Workers: 1,
 		WorkerInput: 4000, WorkerOutput: 400}
 	reopened, err := r.ReopenAgentRun(context.Background(), state, []runner.BridgedCall{
-		// AS THE LOG HOLDS THEM: in the order they finished.
+		// In the order they finished, as the log holds them.
 		{Call: ledger.Call{Name: "jira_create", Args: map[string]any{"summary": "first"},
 			Result: "created"}, Seq: 2},
 		{Call: ledger.Call{Name: "slack_post", Args: map[string]any{"channel": "C1"},
@@ -85,12 +80,10 @@ func TestARunTakenOverIsServedTheSurfaceItLeft(t *testing.T) {
 	}
 }
 
-// A RUN TAKEN OVER IS REFUSED A NO_ACTION ITS RUN ACTED BEFORE. The node that
-// takes a run over serves its submission tool, and the tool reads the calls
-// the run made before the takeover: a run that asked a colleague and then,
-// served by the new node, said nobody was asking is refused while it can
-// still report what it did, as it would have been on the node that launched
-// it.
+// A RUN TAKEN OVER IS REFUSED A NO_ACTION ITS RUN ACTED BEFORE. The taking
+// node's submission tool reads the calls made before the takeover, so a run
+// that asked a colleague is refused "nobody was asking" there as on its
+// launching node.
 //
 // Mutation: the reopen's submission back to decodeWork, and the no_action is
 // accepted.
@@ -120,11 +113,8 @@ func TestARunTakenOverIsRefusedANoActionItsRunActedBefore(t *testing.T) {
 	}
 }
 
-// AND A SKILL THE RUN LOADED STAYS LOADED. A required skill's tools are refused
-// until the skill is loaded, and a box that loaded it before its node went away
-// has its body in its own transcript: a rebuilt guard that did not know would
-// refuse the tools the run had unlocked, and tell its model to load what it can
-// already see.
+// AND A SKILL THE RUN LOADED STAYS LOADED: its body is in the box's transcript,
+// and a rebuilt guard that forgot would refuse the tools it unlocked.
 //
 // Mutation: drop the replay of the run's calls into the guard, and slack_post
 // is refused for a skill the run loaded.

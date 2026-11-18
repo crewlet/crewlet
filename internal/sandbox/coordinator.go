@@ -3120,6 +3120,8 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 			// A direct box's kills are the engine host's domain's, recorded
 			// below and never the run's ending.
 			rec.ErrorKind = types.ExecutorErrorOutOfMemory
+		case result.RoundCapped:
+			rec.ErrorKind = types.ExecutorErrorMaxTurns
 		}
 	}
 	// THE KERNEL'S KILLS FOR MEMORY, on any ending, so a run that survived a

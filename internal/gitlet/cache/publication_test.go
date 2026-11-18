@@ -29,22 +29,18 @@ func objectsOf(pushes []pushed) int64 {
 	return n
 }
 
-// A PUBLICATION IS CHARGED BY ITS LARGEST STEP, each with room for a clone of
-// its whole repository beside it: its steps run one after another in its one
-// slot, so its charge is the largest of the multi-pack-index layer and its
-// bitmap — an amount an object of the WHOLE repository, however few objects
-// the layer adds, since the bitmap walks every commit: PublishBytesPerObject
-// for a root, PublishTailBytesPerObject for a layer over a base — the
-// commit-graph layer — GraphLayerBytesPerObject an object of the layer — and
-// its repack — CompactBytesPerObject an object of what it merges, and the
-// delta window. The layer's fixed part has a case of its own (below): the
-// repository here is a few objects, so the cache drops it (NoFixedParts), as
-// a large repository's steps outweigh it.
+// A PUBLICATION IS CHARGED BY ITS LARGEST STEP, beside room for a clone of its
+// whole repository, since its steps share its one slot in turn: the
+// multi-pack-index layer and its bitmap, which walks every commit and so is
+// charged an object of the WHOLE repository (PublishBytesPerObject for a root,
+// PublishTailBytesPerObject over a base); the commit-graph layer
+// (GraphLayerBytesPerObject an object of it); the repack (CompactBytesPerObject
+// an object merged, and the delta window). The layer's fixed part, outweighing
+// this tiny repository's steps, is dropped (NoFixedParts) and tested below.
 //
-// Mutations: charge the bitmap by the layer's objects, and a layer of one
-// object over a repository of many fits a budget that holds no bitmap of it;
-// charge a layer over a base at the root's figure, and it is refused a budget
-// that holds it.
+// Mutations: charge the bitmap by the layer's objects, and a one-object layer
+// over many fits a budget holding no bitmap of it; charge a layer over a base
+// at the root's figure, and a budget that holds it refuses it.
 func TestAPublicationIsChargedByItsLargestStep(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -74,13 +70,11 @@ func TestAPublicationIsChargedByItsLargestStep(t *testing.T) {
 }
 
 // A PUBLICATION'S GRAPH LAYER IS CHARGED THE TREES ITS FILTERS' DIFFS HOLD:
-// its commit-graph layer computes every changed-path filter of the layer's
-// commits, as the maintainer's own graph does, so beside its figure an
-// object of the layer it is charged that graph's fixed part (GraphBaseBytes,
-// read from the graph's declaration) — the trees git's delta base cache
-// keeps up to its cap, which a layer of a few objects over wide trees fills
-// as a large one does. Over a repository of a few objects that part
-// outweighs every other step.
+// it computes every changed-path filter of the layer's commits, so beside its
+// figure an object of the layer it is charged the graph's fixed part
+// (GraphBaseBytes, from the graph's declaration): the trees git's delta base
+// cache keeps up to its cap, which a few-object layer over wide trees fills as
+// a large one does. Here that part outweighs every other step.
 //
 // Mutation: charge the layer by its objects alone, and a budget a byte under
 // its charge admits it.
@@ -100,9 +94,9 @@ func TestAPublicationsGraphLayerIsChargedTheTreesItsFiltersHold(t *testing.T) {
 	admittedAtItsCharge(t, c, s, "a layer over one object", 0, 1, 0, charge, gitlet.Limits{MaxBlobBytes: 1 << 20})
 }
 
-// admittedAtItsCharge holds a publication — a layer over layer objects on
-// base layers, after a repack of repack — to charge: refused for memory at
-// that charge a byte past the budget, and admitted on a budget of exactly it.
+// admittedAtItsCharge holds a publication (a layer over layer objects on base
+// layers, after a repack of repack) to charge: refused for memory a byte past
+// the budget, and admitted on a budget of exactly it.
 func admittedAtItsCharge(t *testing.T, c *cache.Cache, s cache.Synced, name string, base int,
 	layer, repack, charge int64, limits gitlet.Limits) {
 
@@ -124,15 +118,13 @@ func admittedAtItsCharge(t *testing.T, c *cache.Cache, s cache.Synced, name stri
 }
 
 // AN EXPUNGE'S SCAN IS CHARGED ITS WALK AND WHAT ITS CALLER HOLDS, never its
-// build's: a budget of room for a walk of the whole repository at a
-// transfer's figure an object, beside the bytes the scan holds, admits it,
-// and a byte under refuses it for memory — so a repository found not due
-// costs its maintainer no build's charge, and a node that could not build an
-// expunge of it may still learn it owes none.
+// build's: room for a walk of the whole repository at a transfer's figure an
+// object, beside the bytes the scan holds, admits it and a byte under refuses
+// it for memory, so a node that could not build a repository's expunge may
+// still learn it owes none.
 //
-// Mutation: charge the scan the build's figure an object of what it holds, or
-// leave the held bytes out, and the budget of exactly its charge refuses it,
-// or the budget a byte under admits it.
+// Mutation: charge the scan the build's figure an object, or leave the held
+// bytes out, and the exact budget refuses it, or the one a byte under admits it.
 func TestAnExpungeScanIsChargedItsWalkAndWhatItsCallerHolds(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -159,14 +151,12 @@ func TestAnExpungeScanIsChargedItsWalkAndWhatItsCallerHolds(t *testing.T) {
 	}
 }
 
-// A MAINTAINER IS PLACED BY THE LARGEST CHARGE ITS STEPS ARE ADMITTED AT: a
-// repository's maintenance is placed on a Gitlet node by Cache.MaintenanceCharge
-// of its objects, so a node whose budget is exactly that charge admits every
-// step its maintainer runs over the whole repository — a compaction merging
-// every object with its delta window, an expunge sorting them, a publication
-// whose layer and repack cover them — and a budget a byte under it refuses
-// one of them. Placed by the publication's bitmap alone, a repository under
-// some six million objects went to a node that refused its whole merge.
+// A MAINTAINER IS PLACED BY THE LARGEST CHARGE ITS STEPS ARE ADMITTED AT
+// (Cache.MaintenanceCharge of its objects): a node whose budget is exactly that
+// charge admits every step its maintainer runs over the whole repository (a
+// compaction merging every object with its delta window, an expunge sorting
+// them, a publication whose layer and repack cover them), and a budget a byte
+// under refuses one of them.
 //
 // Mutation: place by the publication's bitmap charge alone, and the node the
 // charge places the repository on refuses its compaction for memory.
@@ -221,12 +211,10 @@ func TestAMaintainerIsPlacedByTheLargestChargeItsStepsAreAdmittedAt(t *testing.T
 }
 
 // A NODE WITH NO CACHE PLACES A MAINTAINER AS THE GITLET NODES DO: the purge's
-// answer names its maintainer from whichever node took the request, an
-// ingress node opening no cache among them, so cache.PlacementCharge — the
-// charge over the declarations this build ships — is exactly what an opened
-// cache's MaintenanceCharge places the repository by, at every size and
-// under every limit; a different figure names a node the maintainers' own
-// loops do not place it on.
+// answer names its maintainer from whichever node took it, an ingress node
+// with no cache among them, so cache.PlacementCharge (over the declarations
+// this build ships) equals an opened cache's MaintenanceCharge at every size
+// and limit; any other figure names a node the maintainers' loops do not.
 //
 // Mutation: charge the placement by the compaction alone → red.
 func TestANodeWithNoCachePlacesAMaintainerAsTheGitletNodesDo(t *testing.T) {
@@ -246,15 +234,13 @@ func TestANodeWithNoCachePlacesAMaintainerAsTheGitletNodesDo(t *testing.T) {
 	}
 }
 
-// A PUBLICATION'S CHARGE MOVES IN ITS OWN SLOT: a publication that plans
-// again over the copy its admission pins — its maintainer replacing a base the
-// object store lost, with a larger layer or a repack its packs now need —
-// holds the new plan's charge in place of the first's, keeping its slot: as
-// the node's budget allows it in that place, refused ErrNoMemory past the
-// budget with its old charge kept, and its release gives back whatever it
-// holds then. A layer over a base planned again as a ROOT — the store lost a
-// part of the chain's root — moves to the root's figure. A compaction's
-// admission, or a released one, holds no publication's charge.
+// A PUBLICATION'S CHARGE MOVES IN ITS OWN SLOT: one that plans again over the
+// copy its admission pins (its maintainer replacing a base the object store
+// lost) holds the new plan's charge in place of the first's, as the budget
+// allows it there, refused ErrNoMemory past it with the old charge kept; its
+// release gives back whatever it holds then. A layer replanned as a ROOT moves
+// to the root's figure. A compaction's admission, or a released one, holds no
+// publication's charge.
 //
 // Mutations: count the old charge beside the new, and a charge the budget
 // holds in its place is refused; keep the base's figure for a plan become a
@@ -319,21 +305,18 @@ func TestAPublicationsChargeMovesInItsOwnSlot(t *testing.T) {
 	}
 }
 
-// A PUBLICATION PAST THE BUDGET IS REFUSED ONCE AND RAISES THE ALARM: a
-// publication's charge alone past what the node gives its background work
-// answers ErrNoMemory — logged code_cache_maintenance_refused with step
-// `publish` and counted once an incarnation however often its maintainer asks
-// — and the charge refused is kept, so every maintainer pass, judging it
-// against the budget it reads, counts the repository on
-// crewlet.code.cache.maintenance.refused{step=publish} and in the reading that
-// raises code_maintenance_refused: a repository its maintainer cannot publish
-// serves every pack pushed since outside every bitmap. A budget given the room
-// clears it at the next pass; a publication admitted, or the rows' chain moved
-// by another node's publication, drops the record.
+// A PUBLICATION PAST THE BUDGET IS REFUSED ONCE AND RAISES THE ALARM: its
+// charge alone past the node's background budget answers ErrNoMemory (logged
+// code_cache_maintenance_refused, step `publish`, once an incarnation) and the
+// refused charge is kept, so every maintainer pass, against the budget it
+// reads, counts it on crewlet.code.cache.maintenance.refused{step=publish} and
+// in the reading that raises code_maintenance_refused. Room clears it at the
+// next pass; an admission, or another node's publication moving the rows'
+// chain, drops the record.
 //
 // Mutations: leave the publication out of the reading, and the alarm never
-// fires for it; keep the record past an admission, or past the chain moving,
-// and the gauge stands for a repository published since.
+// fires; keep the record past an admission or the chain moving, and the gauge
+// stands for a repository published since.
 func TestAPublicationPastTheBudgetIsRefusedOnceAndRaisesTheAlarm(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -415,11 +398,11 @@ func TestAPublicationPastTheBudgetIsRefusedOnceAndRaisesTheAlarm(t *testing.T) {
 	standing(0, "the chain moved by another node's publication")
 }
 
-// A LAYER'S SCRATCH NAMES EXACTLY ITS BASE: NewLayerScratch links every pack
-// file the copy holds and its packed-refs — the same inodes — and the files
-// of the first base layers of the rows' chain, with chain files naming exactly
-// those layers and none above them, and no alternate; a base past what the
-// copy holds installed is refused, and a scratch over no base names no chain.
+// A LAYER'S SCRATCH NAMES EXACTLY ITS BASE: NewLayerScratch links (same
+// inodes) every pack file the copy holds, its packed-refs, and the files of the
+// rows' chain's first base layers, with chain files naming exactly those layers
+// and no alternate; a base past what the copy holds installed is refused, and a
+// scratch over no base names no chain.
 //
 // Mutation: name the whole installed chain in the scratch's chain file, and
 // the scratch over one layer of two names both.
@@ -489,8 +472,8 @@ func TestALayerScratchNamesExactlyItsBase(t *testing.T) {
 // THE CHAIN IS ONE READING, AND A REFUSED LAYER LISTS ITS REPOSITORY DAMAGED:
 // Chain answers the rows' chain, how much of it the copy holds installed and
 // what it refused, read together; Damaged lists every repository whose copy
-// holds a layer it refused — what its maintainer repairs whether or not
-// anything was pushed since — and none whose chain is whole.
+// holds a layer it refused (its maintainer repairs it whether or not anything
+// was pushed since), and none whose chain is whole.
 //
 // Mutation: list a repository damaged by a layer merely pending, and the whole
 // copy is listed.

@@ -19,9 +19,8 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// whoami answers who the call it is running under acts as. It is registered
-// UNGATED, so it reports the identity the bridge handed the surface rather
-// than an authority decision about it.
+// whoami reports who its call acts as. It is registered UNGATED, so it shows
+// the identity the bridge handed the surface, not an authority decision.
 type whoami struct{}
 
 func (whoami) Name() string        { return "whoami" }
@@ -38,25 +37,21 @@ func (whoami) Call(ctx context.Context, _ map[string]any) (tools.Result, error) 
 
 // A BRIDGED CALL IS THE RUN'S SEAT, BEHIND THE REAL GUARD.
 //
-// The route is exempt from the credential guard — the box holds no API token —
-// but the guard still RESOLVES every request, so a box presenting nothing
-// arrives ANONYMOUS, and on a development build started with -dev-principal it
-// arrives as the development principal. The MCP SDK keeps the context of the
-// request that opened a session for that session's whole life, and the turn's
-// own principal defers to any answer already on the context. So every gated
-// builtin a harness called over the bridge was refused as needing a
-// credential: a seat's executor could not read the board, look a colleague up
-// or submit its work.
+// The route is exempt from the credential guard (the box holds no API token),
+// but the guard still RESOLVES every request: a box presenting nothing arrives
+// ANONYMOUS, or as the -dev-principal login on a development build. The MCP SDK
+// keeps the opening request's context for the session's life, and the turn's
+// principal defers to an answer already on it, so unless the bridge replaces
+// it every gated builtin is refused as needing a credential.
 //
-// Mounted here exactly as the app mounts it — the bridge's handler inside the
-// guard's middleware — because a bridge tested on a bare mux never meets the
-// answer the guard attaches, which is the whole of the defect.
+// Mounted as the app mounts it, the bridge's handler inside the guard's
+// middleware: on a bare mux the guard's answer, the whole defect, never appears.
 func TestABridgedCallActsAsTheRunsSeatBehindTheGuard(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		// dev is the -dev-principal login, or empty for an ordinary
-		// posture — the one where every box resolves anonymous.
+		// posture, where every box resolves anonymous.
 		dev string
 	}{
 		{name: "an ordinary posture", dev: ""},
@@ -105,8 +100,8 @@ func TestABridgedCallActsAsTheRunsSeatBehindTheGuard(t *testing.T) {
 			mux := http.NewServeMux()
 			mux.Handle(mcpbridge.PathPrefix+"{token}", bridge.Handler())
 			// THE CONTROL: a handler behind the same guard on the same
-			// exempt prefix sees the answer the bridge must replace. Without
-			// it this case could pass on a guard that attached nothing.
+			// exempt prefix sees the answer the bridge must replace, so the
+			// case cannot pass on a guard that attached nothing.
 			var guardSaw iam.Resolution
 			var guardLogin string
 			mux.HandleFunc("GET "+mcpbridge.PathPrefix+"probe/{x}",

@@ -23,34 +23,28 @@ func TestReviewHeaderCarriesEveryDecisionRule(t *testing.T) {
 	contains(t, p,
 		// Evidence beats narration.
 		"is the evidence", "the agent's own account of itself",
-		// A failed call is not a delivery: a 5xx on a post read as
-		// "delivered" and the reviewer blessed a turn whose side effect
-		// never landed.
+		// A failed call is not a delivery: read as one, the reviewer
+		// blesses a turn whose side effect never landed.
 		"→ error", "did not take effect",
-		// DELIVERY IS SETTLED BEFORE THIS PROMPT EXISTS. Asking a model to
-		// re-derive a fact the engine holds is how a real delivery got
-		// read as no delivery and posted twice.
+		// Delivery is settled before this prompt exists: a model
+		// re-deriving it reads a real delivery as none and posts twice.
 		"already settled", "Judge the work on its merits",
-		// An engine-written outcome carries nobody's commitment, and a
-		// reviewer that grades it as the agent's verdict is grading a
-		// claim nobody made.
+		// An engine-written outcome is nobody's commitment, so it must not
+		// be graded as the agent's verdict.
 		"`incomplete` outcome was written by the engine",
-		// Keyed on target and content, not tool name: keyed on the name it
-		// fired on the in-thread follow-up PriorWorkHeader asks for, and
-		// every corrected turn looped until it terminated failed.
+		// Keyed on target and content: keyed on tool name, it fires on the
+		// in-thread follow-up PriorWorkHeader asks for and loops every
+		// corrected turn to failure.
 		"Duplicates", "target and content",
 		// An agent narrating that it lacks a tool is a self_iterate, not a
 		// failure: the next round can discover and activate it.
 		"missing tool", "discover and activate it",
 		"I don't have access to the tool needed to deliver this",
-		// Blocked on a colleague splits on whether they have BEEN TOLD,
-		// because that is the half the tool log can settle: not yet is the
-		// next round's outreach, already asked is the end of the turn. The
-		// rule named only `self_iterate` once, while saying in the same
-		// breath that the reply re-triggers the agent — so a seat that had
-		// put a question to its founder was sent back to ask again and
-		// ended on the max-iterations guard. Both halves are pinned: drop
-		// the split and the loop returns, drop the async fact and the
+		// Blocked on a colleague splits on whether they have BEEN TOLD, the
+		// half the tool log settles: not yet is the next round's outreach,
+		// already asked ends the turn, since the reply re-triggers the
+		// agent. Drop the split and a seat that asked is sent back to ask
+		// again until the max-iterations guard; drop the async fact and the
 		// reviewer has no reason to stop waiting.
 		"BEEN TOLD", "re-triggers this agent",
 		"still owed a reply where they asked",
@@ -58,11 +52,9 @@ func TestReviewHeaderCarriesEveryDecisionRule(t *testing.T) {
 	// The cross-round half of the duplicate rule is worthless if it can
 	// only see inside one round.
 	contains(t, ReviewHeader, "Earlier rounds")
-	// And the retired instructions must not linger: there is no plan to
-	// re-list tools in, and a reviewer told to demand one sends every
-	// blocked turn back for a phase that does not exist. What a field
-	// carries — `completed_work` — is the field's own description, beside
-	// it in the submission schema.
+	// No retired instruction: a reviewer told to demand a plan sends every
+	// blocked turn back for a phase that does not exist, and what
+	// `completed_work` carries is its own description in the schema.
 	excludes(t, ReviewHeader, "tools_needed", "Plan", "Execute phase", "completed_work")
 }
 
@@ -82,14 +74,11 @@ func TestTheReviewRulesAboutAToolFollowTheSeatsSurface(t *testing.T) {
 	order(t, a2a, "Not yet → `self_iterate`", "`a2a_ask`", "Already asked → `done`")
 }
 
-// THE RUN'S OWN WORK IS IN NO LOG, and every review is told so, because every
-// executor is a harness's own run: its edits, commands, tests and commits
-// happen in its box, and `## What the agent did` holds only the calls it made
-// to the seat's tools. A reviewer that read the log as everything the agent
-// did called a run that pushed its fix a fabrication and sent a delivered turn
-// back until max_iterations ended it.
-//
-// UNCONDITIONAL: the plainest review, with no gate on, carries it.
+// THE RUN'S OWN WORK IS IN NO LOG, and every review is told so: every executor
+// is a harness's own run, whose edits, commands, tests and commits happen in
+// its box, while `## What the agent did` holds only its calls to the seat's
+// tools. Read as everything, the log makes a pushed fix look fabricated.
+// Unconditional: the plainest review, with no gate on, carries it.
 //
 // Mutation: drop the rule from ReviewHeader, and this goes red.
 func TestEveryReviewIsToldTheRunsLocalWorkIsInNoLog(t *testing.T) {
@@ -121,21 +110,17 @@ func TestTheRunsDeliveredRefsReachTheReviewer(t *testing.T) {
 }
 
 // A QUESTION ASKED AGAIN AFTER ITS REPLY WAS REFUSED IS NO DUPLICATE (ADR-0114).
-// A reply too large for the run to take is refused by the engine, which tells
-// the run to ask again with `ask_and_wait` for a shorter form or another way to
-// receive it, or to carry on and say the reply did not reach it — and none of
-// that is in the round's calls, where the question asked again reads as the
-// same question sent twice. So the engine says, beside the log, what it
-// refused (each reply's message count and figures, rounded up, none of its
-// words), what it told the run, and that a question asked again after it is
-// that follow-up, which the duplicate rule does not hold against the agent.
-// Rendered only where a reply was refused, so the header every review carries
-// is unchanged by it.
+// The engine refuses a reply too large for the run and tells it to ask again
+// with `ask_and_wait` for a shorter form, or carry on saying the reply did not
+// reach it; none of that is in the round's calls, where the re-ask reads as a
+// duplicate. So the engine says beside the log what it refused (counts and
+// sizes, rounded up, none of the words), what it told the run, and that the
+// re-ask is that follow-up. Only where a reply was refused, so every other
+// review is unchanged.
 //
 // Mutation: drop the section, and the reviewer judges the re-ask by the
-// duplicate rule alone; drop the section's last sentence, and it says what was
-// refused and nothing of what the duplicate rule makes of the question asked
-// again.
+// duplicate rule alone; drop its last sentence, and it says nothing of what
+// the duplicate rule makes of the re-ask.
 func TestAReviewerIsToldOfARepliedQuestionsRefusal(t *testing.T) {
 	t.Parallel()
 	p := BuildReview(engineer(), ReviewInput{

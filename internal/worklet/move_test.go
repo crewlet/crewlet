@@ -42,8 +42,8 @@ func moveFixture(t *testing.T, kids ...string) *roundTrip {
 // A RETRY OF A MOVE THAT FINISHED IS ANSWERED WITH IT: applied, under the
 // root's key in the target, with nothing appended.
 //
-// The root is already in the target, and the move used to refuse exactly that
-// — "already in OPS", about the project the move itself had put it in.
+// The root is already in the target, which must not be refused as "already in
+// OPS" when this same operation put it there.
 func TestARetryOfAFinishedMoveIsAnsweredWithIt(t *testing.T) {
 	t.Parallel()
 	r := moveFixture(t, "m-kid")
@@ -72,10 +72,8 @@ func TestARetryOfAFinishedMoveIsAnsweredWithIt(t *testing.T) {
 // A RETRY OF A MOVE THAT STOPPED PARTWAY MOVES WHAT IS LEFT, ONCE.
 //
 // The first run carried the root and one child and was refused on the second.
-// The retry's walk is shorter than the first run's, so a step named by its
-// place in the walk answered the child that was LEFT with the record of the
-// child that had already moved — and reported the move finished with that
-// child still in the old project.
+// The retry's walk is shorter, so a step named by its place in the walk would
+// answer the child LEFT with the record of the one already moved.
 func TestARetryOfAStoppedMoveMovesWhatIsLeftOnce(t *testing.T) {
 	t.Parallel()
 	r := moveFixture(t, "m-kid-a", "m-kid-b")
@@ -111,8 +109,7 @@ func TestARetryOfAStoppedMoveMovesWhatIsLeftOnce(t *testing.T) {
 		t.Errorf("m-kid-a was re-keyed from %s to %s by the retry", moved.Key, again.Key)
 	}
 	// ONE RANGE FOR WHAT WAS LEFT, ONE MOVE AND THE MARK COMING DOWN: no
-	// second root record and no second move of the child that had already
-	// gone.
+	// second root record and no second move of the child already gone.
 	if got := r.logEnd(t); got != end+3 {
 		t.Errorf("the retry put %d record(s) on the log, want 3 — a counter "+
 			"for what was left, m-kid-b's move and the root's mark coming "+

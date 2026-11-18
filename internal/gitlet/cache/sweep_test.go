@@ -18,13 +18,11 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// A DELTA SWEEPS NOTHING: the steady-state cost of a sync is proportional to
-// what moved — between two rounds of one process nothing but this package
-// writes the directory, so a delta neither lists nor sweeps it, in either of
-// the sweep's halves. A stray pack (the packs' half), and a stray file at the
+// A DELTA SWEEPS NOTHING, so a sync costs what moved: between two rounds of one
+// process nothing but this package writes the directory, so a delta neither lists nor sweeps it, in
+// either half of the sweep. A stray pack (the packs' half), a stray file at the
 // incarnation's root and a loose ref (the first half), planted after the first
-// round therefore survive a delta, and go with the full first round of the
-// next process.
+// round, survive a delta and go with the next process's full first round.
 func TestADeltaSweepsNothing(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -62,14 +60,11 @@ func TestADeltaSweepsNothing(t *testing.T) {
 
 // A FULL ROUND SWEEPS A DEAD WRITER'S FILES BEFORE ITS INDEX: a maintenance
 // run killed with its node leaves the index's lock and a bitmap's temporary
-// file in objects/pack (git removes them only when it is asked to stop), and
-// no reader of any ref reads either. Left there until the refs were in, the
-// lock refused the round's own index — git writes no index over another
-// writer's lock — and the index's failure path then removed it from under
-// the sweep that had listed it, so the sweep's move failed and the round with
-// it: the first sync of the repository after the crash answered an error. A
-// file of objects/pack that is no pack's goes with the round's first half;
-// only the pack files wait for the refs.
+// file in objects/pack, which no reader reads. Swept only after the refs, the
+// lock refuses the round's own index (git writes none over another writer's
+// lock), whose failure path then removes it from under the sweep that listed
+// it, failing the first sync after the crash. So a file of objects/pack that
+// is no pack's goes with the round's first half; only pack files wait.
 func TestAFullRoundSweepsADeadWritersFilesBeforeItsIndex(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -118,42 +113,17 @@ func TestAFullRoundSweepsADeadWritersFilesBeforeItsIndex(t *testing.T) {
 }
 
 // THE SWEEP KEEPS EXACTLY THE DECLARED IMAGE, and Verify admits exactly what
-// the sweep keeps: one predicate (image.imaged) over the fixed entries and the
-// files the declarations own (derived.go, ADR-0086), so the two never disagree
-// about what a cache is. Over a copy the maintainer has written — the
-// multi-pack-index with its bitmap, the commit-graph — an undeclared entry is
-// planted in every directory of the image, a loose ref among them, and a
-// directory named for an index chain or a graph chain no declaration owns,
-// beside each declaration's files held only while a write runs, with no write
-// running. Verify names every one of them unexpected and nothing else; the
-// first round of a new process moves every one of them into trash/ and
-// nothing else, keeping the real index and its bitmap; and git reads the copy
-// whole after.
-//
-// EVERY FILE OF THE IMAGE IS A REGULAR FILE (ADR-0086): a symbolic link at
-// the commit-graph's name, at config's, at packed-refs', at HEAD's and at the
-// state's, each to a file holding exactly what the cache keeps there, is
-// outside the image whatever it points at. git reads the graph, the
-// configuration or the refs wherever such a link leads, outside the
-// incarnation, the budget and what a rebuild replaces; and it refuses the
-// whole repository when HEAD is a link whose own text is no ref (setup.c,
-// validate_headref) — Verify's fsck says so, every git process in the copy
-// failing until the link is gone. Verify names each link unexpected, and
-// config, HEAD and packed-refs missing; the round moves each into trash/
-// without following it, leaving the file it points at as it was, writes
-// config, HEAD, packed-refs and the state afresh as regular files, and git
-// reads the copy again; and the incarnation records no graph, so the
-// maintainer's next pass writes a regular one in the link's place, after which
-// Verify finds nothing.
-//
-// Mutations: drop the multi-pack-index's owned files from its declaration, and
-// the round trashes the real index and its bitmap; make imaged admit an owned
-// name whatever its kind, and the directory planted at an owned name is kept;
-// make imaged admit a fixed or declared file as anything but a directory, as
-// each directory's grammar did before the grammar was one predicate, and every
-// link is kept and admitted — HEAD's with it, so the copy's fsck fails after
-// the round; give Verify a predicate of its own for objects/info, and the two
-// sets differ.
+// it keeps: one predicate (image.imaged) over the fixed entries and the files
+// the declarations own (derived.go), each a regular file (ADR-0086; package
+// doc, "Derived files", for why a link is outside it). A maintained copy gets
+// an undeclared entry in every directory, a directory at an owned name, each
+// write-time-only file, and links to the cache's own bytes at five names.
+// Verify names exactly those unexpected (and the linked fixed files missing);
+// the next process's first round trashes exactly those, following no link,
+// keeps the index and its bitmap, writes the fixed files afresh; the
+// maintainer then writes a regular graph and Verify finds nothing.
+// Mutations: drop the index's owned files from its declaration; let imaged
+// admit an owned name of any kind or a link; give Verify a predicate of its own.
 func TestTheSweepKeepsExactlyTheDeclaredImage(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -178,11 +148,10 @@ func TestTheSweepKeepsExactlyTheDeclaredImage(t *testing.T) {
 	}
 
 	// Every entry planted outside the image, by its path relative to the
-	// incarnation, each with a base name of its own; true for a directory.
-	// A directory at an owned file's name is outside it too: a derived file
-	// is a file. The installed chain's two directories are the image's — a
-	// copy with no chain installed has neither, and an entry in one that no
-	// declaration owns is outside it.
+	// incarnation, each with its own base name; true for a directory. A
+	// directory at an owned file's name is outside it (a derived file is a
+	// file), as is an entry in the installed chain's directories no declaration
+	// owns.
 	cs := strings.Repeat("ab", 20)
 	planted := map[string]bool{
 		"description":                                     false,
@@ -208,11 +177,9 @@ func TestTheSweepKeepsExactlyTheDeclaredImage(t *testing.T) {
 		}
 		write(t, path, "a stray\n")
 	}
-	// The links: the graph's, config's, packed-refs', HEAD's and the state's,
-	// each to a file outside the incarnation holding exactly what the cache
-	// keeps at its name — the graph's own bytes, the configuration the pool
-	// requires, the copy's refs, its HEAD and its state — so nothing but the
-	// entry's KIND puts any of them outside the image.
+	// The links: each points outside the incarnation at exactly the bytes the
+	// cache keeps at its name, so only the entry's KIND puts it outside the
+	// image.
 	outside := t.TempDir()
 	links := map[string]string{
 		"objects/info/commit-graph": read(t, derived[2]),
@@ -317,8 +284,8 @@ func TestTheSweepKeepsExactlyTheDeclaredImage(t *testing.T) {
 	if _, err := runGit(t, w.pool, s.Dir, "", "fsck", "--connectivity-only", "--no-progress"); err != nil {
 		t.Errorf("fsck after the sweep: %v", err)
 	}
-	// The incarnation records what the sweep left — no graph — so the
-	// maintainer writes one at once (a copy with no graph gets it first).
+	// The incarnation records no graph after the sweep, so the maintainer
+	// writes one at once.
 	if ran := cache.MaintainerPass(c); len(ran) != 1 {
 		t.Fatalf("the maintainer ran %v after the sweep, want the repository: it holds no graph", ran)
 	}
@@ -331,41 +298,18 @@ func TestTheSweepKeepsExactlyTheDeclaredImage(t *testing.T) {
 	}
 }
 
-// A DERIVED FILE FOLLOWS ITS DECLARATION ON EVERY EVENT: a pack added keeps
-// the multi-pack-index and the commit-graph (git reads a pack the index does
-// not cover from the pack's own index, and the graph names commits that are
-// still there), refs moved keep both (a bitmap names the commits it selected,
-// whichever refs point at them), a compaction's retirement drops the index and
-// keeps the graph (X04: a merge drops no commit), and a pack removed drops
-// both (an index naming a missing pack fails every read, a graph may name
-// commits that left with it) — and what the incarnation records it holds
-// follows. The memo's answers, functions of object ids, and the index of
-// pushes are kept by every change to the packs and the refs, and dropped with
-// the history a log gone back replaces. The explicit expectations of today's
-// declarations, each read at the one place its change is made: dropFor in
-// place, and a swap's links (swap.go) where a pack leaves a copy a reader
-// holds — the reader here holding every copy, each event's checked in the
-// copy that answers it. And a published chain PLACED over own mode's files
-// (EventLayersMoved) drops the index, its bitmap and the graph — git reads a
-// whole index and a whole graph before a chain — and keeps the memo; the
-// installed chain's own answer to a change is a CUT to the longest prefix it
-// leaves valid (Prefix): a layer naming a pack that leaves goes with every
-// layer above it, a pack outside the chain cuts nothing, and the chain moving
-// keeps the layers the rows still name in turn — and the node's tip over the
-// chain goes with every one of those changes but a retirement that keeps the
-// whole chain beneath it (tipGoes): a retirement drops no commit (X04), where
-// a pack removed may take commits the tip names and a cut or a chain moved is
-// a base it was not written over — and an expunge's commit keeps every layer,
-// none naming a pack of the dropping view, and takes the tip, which may name
-// a commit it took out (what it does to own mode's files is
-// TestOnlyAnExpungeDropsTheCommitGraph's).
-//
-// Mutations: declare the multi-pack-index dropped on a pack added, and the
-// first delta takes it; declare the graph dropped on a retirement
-// (OnPackRetired), and the compaction's swap leaves it behind; let prefixOf
-// keep a layer above one a removed pack cuts, and the Prefix table's cut is
-// past it; let tipGoes keep the tip over a removed tail pack or an expunged
-// one, or take it on a retired one, and the table's tip column says so.
+// A DERIVED FILE FOLLOWS ITS DECLARATION ON EVERY EVENT, and the incarnation's
+// record follows it (package doc, "Derived files"): a pack added or refs moved
+// keep the index, its bitmap and the graph; a retirement keeps only the graph
+// (X04); a pack removed, or a chain placed over own mode's files
+// (EventLayersMoved), drops all three. The memo and the index of pushes survive
+// all but a log gone back. Each is checked in the copy that answers it (dropFor
+// in place, swap.go's links under a held copy). The installed chain CUTS to the
+// longest valid prefix (Prefix); the node's tip goes with all but a retirement
+// keeping it (tipGoes); an expunge keeps every layer and takes the tip (package
+// doc, "The installed chain"; own mode: TestOnlyAnExpungeDropsTheCommitGraph).
+// Mutations: drop the index on a pack added or the graph on OnPackRetired, or
+// let prefixOf or tipGoes misjudge a removed or retired pack, and this fails.
 func TestADerivedFileFollowsItsDeclarationOnEveryEvent(t *testing.T) {
 	t.Parallel()
 	// THE PREFIX TABLE: a three-layer chain — packs a and b under layer 1, c
@@ -527,18 +471,14 @@ func TestADerivedFileFollowsItsDeclarationOnEveryEvent(t *testing.T) {
 	}
 }
 
-// THE CODE READS THE DECLARATIONS, never a constant beside them: a cache
-// opened over declarations in which the commit-graph is dropped when the refs
-// move drops it on a delta that only moves refs, before the new packed-refs
-// is in, and records that it holds none — where the build's own declarations
-// keep it. So what a declaration says of a change is the declaration's to
-// change: a later part that drops a file on an event changes a value, never a
-// call site.
+// THE CODE READS THE DECLARATIONS, never a constant beside them: over
+// declarations that drop the commit-graph when the refs move, a delta that only
+// moves refs drops it before the new packed-refs is in and records that it
+// holds none, where the build's own keep it. So changing what an event drops
+// changes a value, never a call site.
 //
-// Mutations: drop writeRefs' call to dropFor, and the changed declarations'
-// graph survives; drop dropFor's removal of each dropped declaration's entry
-// (its closing setDerived), and the incarnation still records the graph it
-// no longer holds.
+// Mutations: drop writeRefs' call to dropFor, and the graph survives; drop
+// dropFor's closing setDerived, and the incarnation still records the graph.
 func TestTheCodeReadsTheDeclarations(t *testing.T) {
 	t.Parallel()
 	dropOnRefs := cache.DerivedFiles()
@@ -590,16 +530,14 @@ func TestTheCodeReadsTheDeclarations(t *testing.T) {
 }
 
 // EVERY PACK ADDED READS ITS DECLARATION, whichever path adds it: a round's
-// download, an adoption that takes the repository's write lock itself, and an
-// adoption HANDED to a round that holds it (adopt.go), which the round links
-// in in place of the pack's download. Over declarations in which the
-// multi-pack-index is dropped when a pack is added, each path takes the index
-// and its bitmap before its pack is in, and the incarnation records that it
-// holds none — so what a declaration says of a pack added is read at every
-// place one is added, never at most of them.
+// download, an adoption under its own write lock, and an adoption HANDED to a
+// round that holds it (adopt.go), linked in place of the download. Over
+// declarations that drop the multi-pack-index on a pack added, each path takes
+// the index and its bitmap before its pack is in, and the incarnation records
+// none.
 //
 // Mutation: drop the round's addOnce before a handed pack's links
-// (install.go), and the handed path keeps the index over the pack it added.
+// (install.go), and the handed path keeps the index.
 func TestEveryPackAddedReadsItsDeclaration(t *testing.T) {
 	t.Parallel()
 	dropOnAdd := cache.DerivedFiles()

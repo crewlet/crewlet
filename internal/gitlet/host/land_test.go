@@ -26,18 +26,16 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE ONE LANDING, ASKED BY A BUILDER THAT IS NOT THE RELAY: each case forms a
-// push the way an engine-built write will — its own commits, packed into a
-// scratch by the person's git, with no receive-pack and no hook — and hands it
-// to the landing, which must take it exactly as it takes a push git received.
+// THE ONE LANDING, ASKED BY A BUILDER THAT IS NOT THE RELAY: each case packs
+// its own commits into a scratch with the person's git, no receive-pack or
+// hook, as an engine write does, and the landing must take it exactly as it
+// takes a push git received.
 
-// scratchFor is a landing of RepoName on the case's first node as a builder
-// other than the relay forms one: the node's cache synced through the
-// barrier, a scratch made over it under a fresh push id, and — revs given —
-// ONE pack of revs written into it by the person's own git, with the .idx
-// (version 2) and the .rev a push's bundle carries; its checksum is the
-// pack's. The landing names who pushes, when, and nothing it judged — and that
-// the engine built it (gitlet.ViaEngine), as the builder it stands for will.
+// scratchFor forms a landing of RepoName on the case's first node as a builder
+// other than the relay does: the cache synced, a scratch over it under a fresh
+// push id and, given revs, ONE pack of them written by the person's git with
+// the .idx (version 2) and .rev a bundle carries; checksum is the pack's. It
+// names who pushes, when, and gitlet.ViaEngine, and nothing it judged.
 func scratchFor(t *testing.T, c *gitlettest.Case, p *gitlettest.Person, person, work string,
 	revs ...string) (l host.TestLanding, checksum string) {
 
@@ -94,17 +92,12 @@ func adoptions(node gitlettest.Node, outcome string) uint64 {
 }
 
 // A PUSH THE RELAY NEVER SAW LANDS as a push git received does: applied from
-// its own row, the commits it introduces on that row, its bundle stored whole
-// and sealed as every installing cache holds it — and its pack ADOPTED by the
-// node that built it, so that node's next sync does not download it back. (It
-// would where a round that read the push's row had already begun the pack's GET
-// before the adoption, or where a link fails — cache.Cache.Adopt — and neither
-// happens here: nothing else syncs the repository and the disk takes links.)
-// The adoption is the landing's, not the relay's: kept where only the hook's
-// session reached it, a push built any other way would land and cost its own
-// node a download of what it holds. And its row says how it was built — as
-// its builder named it, the engine — and who pushed: the person's credential
-// as the actor beside the seat they hold, with no run.
+// its own row listing the commits it introduces, its bundle stored whole and
+// sealed, and its pack ADOPTED by the node that built it, so that node's next
+// sync does not download it back (cache.Cache.Adopt; nothing else syncs here
+// and the disk takes links). The adoption is the landing's, not the relay's,
+// or an engine-built push would cost its node a download. Its row names the
+// engine as builder and the person's credential and seat as actor, no run.
 //
 // Mutation: propose the relay's way whatever the landing names (Via: ViaGit in
 // land's proposal) — the row reads git.
@@ -155,9 +148,8 @@ func TestAPushTheRelayNeverSawLands(t *testing.T) {
 		t.Errorf("the landing moved %s{outcome=adopted} by %d (adopted %v), want its one pack", metrics.CodeCacheAdoptions,
 			n, got.Adopted)
 	}
-	// The node's next round reads the push's pack row — and installs the
-	// pack it names with a GET unless the adoption already put it there, so
-	// the count below says something only once a round has run.
+	// A round installs the pack row's pack with a GET unless the adoption put
+	// it there, so the count below means something only after one has run.
 	synced, err := node.Cache().Sync(c.Ctx, c.Rows().Repo.ID, gitlettest.Linearizable)
 	if err != nil {
 		t.Fatalf("sync %s on %s after the landing: %v", gitlettest.RepoName, node.ID(), err)
@@ -191,11 +183,10 @@ func TestAPushTheRelayNeverSawLands(t *testing.T) {
 }
 
 // A BUNDLE ITS OWN SEAL REFUSES is never named by a row: the landing seals the
-// bytes on their way to the store and holds the seal to the pack it laid out,
-// the one rule every installing cache holds a bundle to. The reverse index's
-// magic is the case because only the seal reads it — every size still matches
-// what the object count says (gitlet.PackRef.Check), so the proposal's own check
-// passes it, and a shorter .rev would be refused there instead.
+// bytes on their way to the store and holds the seal to the pack it laid out.
+// The .rev's magic is damaged because only the seal reads it: every size still
+// matches the object count (gitlet.PackRef.Check), and a shorter .rev would be
+// refused by the proposal's check instead.
 func TestALandingRefusesABundleItsSealRefuses(t *testing.T) {
 	var lines logs
 	c := newCase(t, gitlettest.SoloOptions{Logger: lines.logger()}, gitlettest.Settings())
@@ -321,17 +312,13 @@ func TestALandingRefusesARepositoryThatTakesNoPush(t *testing.T) {
 	}
 }
 
-// A PULL MIRROR REFUSES EVERY PUSH, and so does a repository being imported:
-// each moves only by what Gitlet fetches from another host — a
-// mirror's syncs, an import's chunks — so a person's git push is refused at
-// its advertisement, naming the source, and a builder's landing before its
-// bundle is stored, each with the domain's one sentence for the state
-// (gitlet.MirroredDetail, gitlet.ImportingDetail). A fetch is served throughout:
-// a mirror is a repository to read.
+// A PULL MIRROR REFUSES EVERY PUSH, as does a repository being imported: each
+// moves only by what Gitlet fetches, so a person's push is refused at its
+// advertisement and a builder's landing before its bundle is stored, in
+// gitlet.MirroredDetail or gitlet.ImportingDetail. A fetch is served throughout.
 //
-// Mutation: drop the mirror arm from the host's statusRefusal — the landing
-// stores a bundle and asks the committer, and the advertisement admits the
-// push, red; drop the importing arm — the same for the import.
+// Mutation: drop the mirror or the importing arm from statusRefusal — the
+// landing stores a bundle and the advertisement admits the push, red.
 func TestAMirroredRepositoryRefusesEveryPush(t *testing.T) {
 	c := newCase(t, gitlettest.SoloOptions{}, gitlettest.Settings())
 	node := c.Fleet.Nodes()[0]
@@ -344,8 +331,8 @@ func TestAMirroredRepositoryRefusesEveryPush(t *testing.T) {
 	mirrored.MirrorFrom = &gitlet.MirrorSource{URL: "https://forge.example.com/acme/web.git",
 		Credential: "${FORGE_TOKEN}"}
 	c.Fleet.Declare(t, gitlet.Declared{Name: gitlettest.RepoName, Settings: mirrored})
-	// MADE A PULL MIRROR, IT IS IMPORTED FIRST: its import's end lands as its
-	// home lands one once the source's refs are in.
+	// A new pull mirror imports first; its home ends the import once the
+	// source's refs are in, as the proposal below does.
 	if row := c.Rows().Repo; !row.Mirrored || row.Status != gitlet.RepoStatusImporting {
 		t.Fatalf("the repository after its mirror_from is %s mirrored=%v, want a pull mirror importing from "+
 			"its source", row.Status, row.Mirrored)
@@ -403,9 +390,8 @@ func TestAMirroredRepositoryRefusesEveryPush(t *testing.T) {
 		t.Errorf("a person's push to a repository being imported printed %s, want it refused saying %q", res,
 			want)
 	}
-	// REFUSED BEFORE ITS BUNDLE IS STORED, by Gitlet itself: the
-	// committer would refuse it too, from the rows, but only once a bundle
-	// the push never needed is in the object store.
+	// Refused before its bundle is stored: the committer would refuse it
+	// too, but only after an unneeded bundle is in the object store.
 	if n := len(objects(t, c)) - stored; n != 0 {
 		t.Errorf("a push to a repository being imported stored %d objects", n)
 	}
@@ -416,13 +402,11 @@ func TestAMirroredRepositoryRefusesEveryPush(t *testing.T) {
 	}
 }
 
-// A LANDING THAT CANNOT FINISH IS THE PUSH'S, NEVER THE HOOK'S: a step of the
-// landing that fails — here the one after the bundle's upload, so the bundle IS
-// stored — fails the push in the engine's words and is logged
-// code_push_unchecked, naming the repository, the push and why. Logged as
+// A LANDING THAT CANNOT FINISH IS THE PUSH'S, NEVER THE HOOK'S: a landing step
+// failing after the bundle's upload fails the push in the engine's words and
+// logs code_push_unchecked with the repository, the push and why — never
 // code_hook_protocol, which says the hook spoke out of turn and nothing was
-// stored, it sent an operator to the hook for a git deadline on this node and
-// told them a stored bundle did not exist.
+// stored.
 func TestALandingThatCannotFinishIsLoggedAsTheLandings(t *testing.T) {
 	var lines logs
 	c := newCase(t, gitlettest.SoloOptions{Logger: lines.logger()}, gitlettest.Settings())
@@ -454,11 +438,9 @@ func TestALandingThatCannotFinishIsLoggedAsTheLandings(t *testing.T) {
 	}
 }
 
-// A LANDING ITS CLIENT ABANDONED IS NO WARNING: the push's request ending under
-// it — the client hanging up mid-check — ends the landing too, and that is
-// logged at DEBUG, since the handler records the request's own end for what it
-// was and a WARN for every person who presses Ctrl-C hides the one that
-// matters.
+// A LANDING ITS CLIENT ABANDONED IS NO WARNING: a client hanging up mid-check
+// ends the landing, logged at DEBUG; the handler records the request's end,
+// and a WARN for every Ctrl-C would hide the one that matters.
 func TestALandingItsClientAbandonedIsNoWarning(t *testing.T) {
 	var lines logs
 	timing := fast
@@ -511,13 +493,10 @@ func rewriteWithABigBlob(t *testing.T, p *gitlettest.Person, work string) {
 	p.Git().Run(t, work, "commit", "--quiet", "--amend", "-m", "rewritten with a big blob")
 }
 
-// A PUSH THE LANDING HAS ALREADY REFUSED WHOLE IS NEVER SCANNED FOR BLOBS, and
-// a blob past the limit never overwrites a refusal that came first: a
-// `git push --force` of a rewritten, protected main carrying an oversized
-// blob is refused for its force — what the person has to change — never as
-// blob_too_large at a path "(unreachable in this push)", which is what a scan
-// of a push with nothing left to decide walked to, through a read slot and
-// every object of its pack, for an answer that overwrote the right one.
+// A PUSH THE LANDING HAS ALREADY REFUSED WHOLE IS NEVER SCANNED FOR BLOBS: a
+// force-push of a rewritten, protected main carrying an oversized blob is
+// refused for its force, what the person must change, never as blob_too_large
+// "(unreachable in this push)" from a scan with nothing left to decide.
 func TestARefusedPushIsNeverScannedForBlobs(t *testing.T) {
 	path, calls := gittest.Recording(t)
 	c := newCase(t, gitlettest.SoloOptions{GitPath: path,

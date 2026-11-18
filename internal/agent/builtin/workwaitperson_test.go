@@ -12,16 +12,15 @@ import (
 )
 
 // A WAIT ON A PERSON IS AN ASK (ADR-0122): an agent's `wait_until` whose reason
-// names a person, by `@handle` or by the name the chart gives them, is refused
-// naming `ask`, unless the agent holds an open ask to that person on the item.
-// A reason naming nobody, or only an agent, a word that merely contains a
-// handle, a handle or a name used as the common word it also is, a person the
-// directory withholds, a person's own wait, and a wait on a person the agent
-// asked who has not answered are written.
+// names a person, by `@handle` or by the chart's name for them, is refused
+// naming `ask` unless the agent holds an open ask to that person on the item.
+// Written: a reason naming nobody or only an agent, a word containing a handle,
+// a handle or name used as the common word it also is, a withheld person, a
+// person's own wait, and a wait on a person asked who has not answered.
 //
 // Mutation: return nil from checkWaitOnPerson, and an agent's date stands in
-// for the person it waits on, who never hears of it; match a bare handle, and
-// "the release will be cut Friday" is refused as a wait on will.
+// for the person it waits on; match a bare handle, and "the release will be
+// cut Friday" is refused as a wait on will.
 func TestAWaitOnAPersonIsAnAsk(t *testing.T) {
 	t.Parallel()
 	roster := func() []colleague.Seat {

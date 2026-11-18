@@ -27,29 +27,14 @@ func (countedAppender) LastSeq(context.Context, string) (uint64, bool, error) {
 }
 
 // A READ EVERY DATA NODE REFUSES `behind` APPENDS ONE BARRIER AND WAITS ONE
-// READ BUDGET, however many nodes it asks. Every node's copy is a real
-// statelog reader whose applier never reaches the log's end — a fleet one
-// burst put behind together — appending its barriers to one log. The first
-// node asked appends a barrier and waits its whole read budget for it; every
-// node asked after it is handed the read index and the position waited out,
-// so it appends nothing and refuses at once. Asked afresh, each appended a
-// barrier of its own, applied by every node on the log they were all behind
-// on, and waited another whole read budget: one final refusal cost three
-// barriers and six seconds here, and ten seconds on five data nodes.
-//
-// Whether the copies answer requests or lag their logs — so the walk reaches
-// them only as its last resort — and whether the asking node holds a copy of
-// its own, asked first and in-process, or asked in-process LAST, its copy
-// lagging and its peers' refusing: the walk pays the same.
-//
-// COUNTED, NOT TIMED: the barriers the nodes append, and the waits they begin
-// with time left to spend, every one of which runs to its end here. Held to a
-// read budget and a half of wall-clock time, the walk held its other
-// questions — each a signed request and reply over the memory broker, five of
-// them where the copies lag their logs and each is asked twice — to half a
-// budget together beside its one wait, and in a loaded run (race-detector
-// suites of three packages on four cores, beside a second runner's) that walk
-// took 3.95 s with one barrier in it, against those 3 s.
+// READ BUDGET, however many nodes it asks, every copy a real statelog reader
+// that never reaches the end of the one log they append to: the first node
+// appends and waits its budget; each later one is handed the read index and
+// the position waited out, so it appends nothing and refuses at once. Lagging
+// copies (asked only as the last resort) and the asker's own copy, first or
+// lagging last, pay the same. COUNTED, NOT TIMED: barriers appended and waits
+// begun with time left; a wall-clock bound also charged the walk's signed
+// round trips, which a loaded race run exceeds.
 //
 // Mutation: hand the nodes asked after the first a whole read budget of their
 // own for the position it waited out, and every node's wait is counted.
@@ -103,10 +88,8 @@ func TestAReadEveryDataNodeRefusesBehindPaysForOneBarrierAndOneWait(t *testing.T
 // A FLOOR EVERY DATA NODE IS BEHIND IS WAITED FOR ONCE. The asking node's own
 // write is the floor its read carries, and no data node has applied it: the
 // first one asked waits its whole read budget for it and answers `behind`,
-// and every node asked after it checks the floor rather than waiting for it
-// again. Each waited its whole budget before, so a walk of three nodes behind
-// one floor took six seconds to say nobody had it. Counted, not timed, as the
-// read's own waits are ([TestAReadEveryDataNodeRefusesBehindPaysForOneBarrierAndOneWait]).
+// and every node asked after it only checks the floor. Counted, not timed, as
+// the read's own waits are ([TestAReadEveryDataNodeRefusesBehindPaysForOneBarrierAndOneWait]).
 //
 // Mutation: hand the nodes asked after the first a whole read budget of their
 // own for the floor it waited out, and every node's wait is counted.

@@ -1,9 +1,6 @@
 package mcp
 
-import (
-	"maps"
-	"slices"
-)
+import "slices"
 
 // Level is the level a tool of a server runs at, as the server's entry sets
 // it (internal/config's `mcp_servers[].tools`), or as its hints start it
@@ -72,11 +69,4 @@ func (l Levels) Blocks(raw string) bool {
 		return level == LevelBlocked
 	}
 	return l.Default == LevelBlocked
-}
-
-// same reports whether two policies decide every tool alike: the same default,
-// an unset one included (it leaves each tool at its starting level), and the
-// same levels, no levels at all being an empty set of them.
-func (l Levels) same(other Levels) bool {
-	return l.Default == other.Default && maps.Equal(l.Tools, other.Tools)
 }

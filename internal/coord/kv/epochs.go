@@ -12,43 +12,18 @@ import (
 )
 
 // Epochs is the fencing counter of every resource the deployment has ever
-// leased: the crewlet_epochs bucket, with NO TTL, and the placement hints that
-// ride on its records. A record is a COUNTER (coord.CounterResource), which is
-// its resource's own for every class but the taker leases, whose whole class
-// counts on one: a record per resource there would be one per process start,
-// and a record here is never removed.
-//
-// # Why it is a type of its own
-//
-// Because the counter and the lease answer different questions, and on one
-// node only one of them is about peers. A lease answers "who runs this seat",
-// and a single node has nobody to fence against, so its leases are an
-// in-process table (internal/coord/memory) that re-claims everything at boot.
-// The COUNTER answers "is this writer older than the one that wrote this row",
-// and the rows that question is asked of are the fleet store's (the owner_epoch
-// on an executor's row above all), which outlive the process on one node
-// exactly as they do on four. A counter kept beside the in-process leases
-// restarted at 1 on every boot while those rows still carried the token minted
-// before it, so after an ordinary graceful restart the seat's new holder was
-// refused as OLDER than its own previous self on every run it had parked: an
-// answer to a parked run was never recorded, and a run's resume, completion
-// and reap were refused the same way.
-//
-// So the counter is one thing with one home, opened by the KV lease [Store]
-// for its own claims and handed to the in-process leases by the engine on a
-// single node. ONE BUCKET for both, by the same name, which is also what
-// keeps a deployment's tokens monotone across a move from local coordination
-// to a fleet: the fleet's first claim advances the counter the single node
-// left, rather than starting one of its own.
-//
-// Its persistence is the stream's (stream.store_dir), the same as every fleet
-// record the token is compared with: a deployment whose broker keeps nothing
-// on disk loses the rows and the counter together, and never the one without
-// the other.
+// leased: the crewlet_epochs bucket, with NO TTL, and the placement hints on
+// its records (package doc, "Three buckets, and why the epoch needs its own").
+// It is a type of its own because the counter outlives the process even on one
+// node: a single node's leases are in-process (internal/coord/memory), but the
+// rows its tokens are compared with (an executor's owner_epoch) persist, and a
+// counter restarted at boot refuses a seat's new holder as OLDER than its own
+// parked runs. So [Store] opens it for its claims and the engine hands the same
+// bucket to a single node's leases, keeping tokens monotone across a move to a
+// fleet. It persists with the stream (stream.store_dir), as the rows do.
 type Epochs struct {
 	js jetstream.JetStream
-	// kv is the bucket, settled (settle.go) like every other this package
-	// writes.
+	// kv is the bucket, settled (settle.go) like every other this package writes.
 	kv jetstream.KeyValue
 	// read is the bucket's leader read: a counter read off a replica that
 	// is behind would mint a token some tenure already holds.
@@ -116,13 +91,10 @@ func openEpochs(ctx context.Context, js jetstream.JetStream, cfg EpochsConfig) (
 	if err != nil {
 		return nil, fmt.Errorf("coord/kv: open %s: %w", name, err)
 	}
-	// THE SHARPEST RETENTION IN THIS STORE, and until this line nothing
-	// compared it: an epoch bucket with an age at all is a fencing counter
-	// that resets, which hands the next owner of a resource a token a
-	// zombie from the previous tenure is still writing under. A peer that
-	// created it with one is reported here rather than refused, for
-	// [reportRetention]'s reason (a booting node does not rewrite a bucket),
-	// and the remedy it names is the one that fixes this.
+	// THE SHARPEST RETENTION IN THIS STORE: an epoch bucket with any age is a
+	// counter that resets, handing a resource's next owner a token a zombie of
+	// the previous tenure still writes under. A peer's aged bucket is reported,
+	// not refused ([reportRetention]), with the remedy that fixes it.
 	reportRetention(ctx, bucket.Bucket(), 0, facts)
 	read, err := newLeaderReader(js, bucket)
 	if err != nil {
@@ -146,15 +118,12 @@ func (e *Epochs) Next(ctx context.Context, resource string) (int64, error) {
 // Floor raises resource's counter to at least floor, so the next token it
 // mints is above it, and reports whether it moved. It never lowers one.
 //
-// FOR A TOKEN THE COUNTER DID NOT MINT, or minted and lost: a record that
-// carries an epoch from before the counter knew of it. Two things produce one.
-// A deployment whose counter lived in its process (local coordination before
-// it minted from this bucket) left its executors' rows stamped with tokens
-// this bucket never held. And the remedy every retention mismatch names,
-// deleting a bucket while the fleet is down so the next boot re-creates it,
-// empties this one under rows that keep their tokens. Either way the seat's
-// next holder would be older than its own rows, and refused on every one of
-// them.
+// FOR A TOKEN THE COUNTER DID NOT MINT, or minted and lost: a deployment whose
+// counter lived in its process left executor rows stamped with tokens this
+// bucket never held, and deleting a bucket while the fleet is down (the remedy
+// every retention mismatch names) empties this one under rows that keep theirs.
+// Either way the seat's next holder would be older than its own rows, and
+// refused on every one.
 func (e *Epochs) Floor(ctx context.Context, resource string, floor int64) (bool, error) {
 	key := encodeResource(resource)
 
@@ -201,19 +170,15 @@ func (e *Epochs) Floor(ctx context.Context, resource string, floor int64) (bool,
 	return false, contended("floor", resource)
 }
 
-// advance CAS-increments a resource's counter and returns the new token
-// together with the placement hint that now stands.
+// advance CAS-increments resource's counter and returns the new token with the
+// placement hint that now stands. Its caller already holds the resource in the
+// claiming state; the CAS loop is for a claiming record that lapsed while a
+// peer took over. The counter only rises and its record is never deleted: gaps
+// are harmless, resets are not.
 //
-// Called only by a claimant that already holds the resource in the claiming
-// state, so it is normally uncontended. The CAS loop is here for the one case
-// that is not: a claimant whose claiming record lapsed under it while a peer
-// took over. The counter is only ever incremented and the record is never
-// deleted; gaps are harmless, resets are not.
-//
-// A claim that names no node leaves the stored hint alone: the hint records the
-// last DELIBERATE placement, not who happens to hold the resource. That is also
-// how a hint outlives the lease key it was set through: this record has no
-// TTL, and the lease bucket's does the reaping.
+// A claim that names no node leaves the hint alone: it records the last
+// DELIBERATE placement, not the holder, and outlives the lease key it was set
+// through because this record has no TTL.
 func (e *Epochs) advance(ctx context.Context, resource, preferred string) (int64, string, error) {
 	key := encodeResource(resource)
 
@@ -240,9 +205,8 @@ func (e *Epochs) advance(ctx context.Context, resource, preferred string) (int64
 
 		var cur resourceValue
 		if err = json.Unmarshal(kve.Value(), &cur); err != nil {
-			// Restarting the counter at 1 would be the one unrecoverable
-			// mistake this bucket exists to prevent, so an unreadable
-			// record is UNKNOWN and the claim does not proceed.
+			// Restarting the counter at 1 is the one unrecoverable mistake this
+			// bucket prevents, so an unreadable record is UNKNOWN: no claim.
 			return 0, "", fmt.Errorf("%w: decode epoch record for %s: %w",
 				coord.ErrUnavailable, resource, err)
 		}
@@ -273,10 +237,8 @@ func (e *Epochs) pin(ctx context.Context, resource, preferred string) error {
 	for range casAttempts {
 		kve, err := e.read.live(ctx, key)
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			// Only reachable if the persistent record vanished under a
-			// live lease, which nothing in this backend does. The lease
-			// record still carries the new hint, so there is nothing to
-			// fail the claim over.
+			// Only if the record vanished under a live lease, which nothing
+			// here does; the lease record still carries the hint, so no failure.
 			return nil
 		}
 		if err != nil {

@@ -10,16 +10,12 @@ import (
 
 // FOLDING ONE ITEM INTO ANOTHER IS THREE COMMITS AND ALL OF THEM LAND.
 //
-// The sequence had no caller and no test at all, which is why the shape of its
-// second append — the duplicate's own subject, written again after the mark —
-// was never exercised. What it has to leave behind is one state: the duplicate
-// cancelled and linked to the survivor, its children under the survivor, and
-// nothing under a closed parent.
+// What it leaves is one state: the duplicate cancelled and linked to the
+// survivor, its children under the survivor, nothing under a closed parent.
 func TestAMergeClosesTheDuplicateAndMovesItsChildren(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	// THE APPLIER RUNS, because a fold writes the duplicate's own subject
-	// twice and its close waits for its mark. See applyWhileWriting.
+	// THE APPLIER RUNS: a fold's close waits for its mark (applyWhileWriting).
 	r.applyWhileWriting()
 	filedTask(t, r, "keep")
 	filedTask(t, r, "dup")
@@ -56,35 +52,27 @@ func TestAMergeClosesTheDuplicateAndMovesItsChildren(t *testing.T) {
 			"a closed item with no link is one nobody can follow to the work",
 			dup.Task.Relations)
 	}
-	// THE CHILD IS THE HALF NO PATCH CAN DO. A seat can cancel and link by
-	// hand; it cannot move the subtree, and a subtask left under a closed
-	// parent is work that disappears with it.
+	// THE CHILD IS THE HALF NO PATCH CAN DO: a subtask left under a closed
+	// parent disappears with it.
 	if got := parentOf(r.task(t, "kid")); got != "keep" {
 		t.Fatalf("the child's parent is %q, and the item it was under is "+
 			"closed", got)
 	}
-	// AND ONLY THE SUBTASKS MOVE. A grandchild travels UNDER its own
-	// parent, because that is what `move_subtasks` promises and what a
-	// tree is: re-parenting every descendant onto the survivor flattens
-	// the subtree, which nobody asked for and which no later gesture can
-	// reconstruct.
+	// AND ONLY THE SUBTASKS MOVE, as `move_subtasks` promises: a grandchild
+	// stays under its parent, since flattening the subtree cannot be undone.
 	if got := parentOf(r.task(t, "grandkid")); got != "kid" {
 		t.Errorf("the grandchild's parent is %q, want \"kid\" — the merge "+
 			"flattened the subtree onto the survivor rather than moving the "+
 			"subtasks it was asked to move", got)
 	}
-	// AND THE MERGE FLAG IS CLEARED. It is raised by the mark and lowered
-	// by the close, so an item left `merging` is a fold that stopped
-	// halfway — which is exactly what a reader must be able to tell from
-	// one that finished.
+	// AND THE MERGE FLAG IS CLEARED: an item left `merging` is a fold that
+	// stopped halfway, which a reader must tell from one that finished.
 	if dup.Task.Merging {
 		t.Error("the duplicate is still marked merging after the fold closed it")
 	}
-	// AND SO IS THE INTENT IT CARRIED. It describes a walk that is
-	// RUNNING, so "not merging, but re-parenting" is a state the duty
-	// would read as an instruction with nothing to instruct — and the
-	// close names only the marker, so the two go down together or they
-	// drift on the first completed merge.
+	// AND SO IS THE INTENT IT CARRIED: it describes a running walk, and the
+	// close names only the marker, so the two go down together or drift on
+	// the first completed merge.
 	if dup.Task.MergeReparent {
 		t.Error("the finished merge left its re-parent intent standing on the " +
 			"task, which no later marker on that task is the author of")
@@ -95,8 +83,7 @@ func TestAMergeClosesTheDuplicateAndMovesItsChildren(t *testing.T) {
 func TestAMergeLeavesTheChildrenWhenItIsNotAskedToReparent(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	// THE APPLIER RUNS, because a fold writes the duplicate's own subject
-	// twice and its close waits for its mark. See applyWhileWriting.
+	// THE APPLIER RUNS: a fold's close waits for its mark (applyWhileWriting).
 	r.applyWhileWriting()
 	filedTask(t, r, "keep")
 	filedTask(t, r, "dup")
@@ -130,14 +117,12 @@ func TestAMergeLeavesTheChildrenWhenItIsNotAskedToReparent(t *testing.T) {
 
 // A REMOVED ITEM IS NOT FOLDED, and the refusal says what to do about it.
 //
-// The pre-flight is what makes that answerable: both ends are read before the
-// first append, so a fold that cannot complete refuses whole rather than
-// leaving the duplicate marked `merging` with nothing to finish it.
+// Both ends are read before the first append, so a fold that cannot complete
+// refuses whole rather than leaving the duplicate marked `merging`.
 func TestAMergeRefusesARemovedItemAndSaysToRestoreIt(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	// THE APPLIER RUNS, because a fold writes the duplicate's own subject
-	// twice and its close waits for its mark. See applyWhileWriting.
+	// THE APPLIER RUNS: a fold's close waits for its mark (applyWhileWriting).
 	r.applyWhileWriting()
 	filedTask(t, r, "keep")
 	filedTask(t, r, "dup")
@@ -161,15 +146,12 @@ func TestAMergeRefusesARemovedItemAndSaysToRestoreIt(t *testing.T) {
 // A MERGE WITH A SUBTASK IN THE TRASH FINISHES, and leaves that subtask where
 // a restore will look for it.
 //
-// A tombstoned task refuses every write, so a walk that selected it stopped on
-// it — and its re-run, and the duty behind both, selected it again. One
-// removed subtask made a merge impossible to finish, with the duplicate left
-// open and marked for good.
+// A tombstoned task refuses every write, so a walk that selects it would stop
+// there on every re-run, leaving the duplicate open and marked for good.
 func TestAMergeWithASubtaskInTheTrashFinishes(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	// THE APPLIER RUNS, because a fold writes the duplicate's own subject
-	// twice and its close waits for its mark. See applyWhileWriting.
+	// THE APPLIER RUNS: a fold's close waits for its mark (applyWhileWriting).
 	r.applyWhileWriting()
 	filedTask(t, r, "keep")
 	filedTask(t, r, "dup")

@@ -222,8 +222,8 @@ func (w deskWriter) WritePriorities(_ context.Context, opID, _ string, _ []strin
 }
 
 // PlaceTask changes the card's lane and refuses its place, as a drop does when
-// the card moved between its two appends — the refusal is what has to cross
-// with its identity, since the tool classifies it.
+// the card moved between its two appends: the refusal must cross with its
+// identity, since the tool classifies it.
 func (w deskWriter) PlaceTask(_ context.Context, opID string, place worklet.Place,
 	_ *worklet.Notify) (worklet.PlaceResult, error) {
 	lane := w.d.note("place_task", opID, w.a)
@@ -292,12 +292,12 @@ func (w deskPageWriter) RemoveComment(_ context.Context, a doclet.Actor, _, _ st
 }
 
 // EVERY OPERATOR OPERATION CROSSES WHOLE: the reads the dashboard, the REST
-// routes and the operator's MCP ask, and the writes only they make — views,
-// the catalogue, a person's own state, the trash, the purge — reach a data
-// node from a node that holds no data with their arguments,
-// their answers (a revision's found-or-not included) and the operator who
-// made them, the apps their credential uses included (ADR-0109), and the workload is rendered against the SERVING node's chart,
-// which is the one that can cross no wire.
+// routes and the operator's MCP ask, and the writes only they make (views, the
+// catalogue, a person's own state, the trash, the purge), reach a data node
+// from a node holding no data with their arguments, their answers (a
+// revision's found-or-not included) and the operator who made them, their
+// credential's apps included (ADR-0109). The workload renders against the
+// SERVING node's chart, which crosses no wire.
 func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -370,9 +370,9 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 		t.Errorf("a revision the page has none of = (%v, %v), want not found", found, err)
 	}
 
-	// STATED, AS EVERY ACTOR THAT CROSSES THE WIRE ARRIVES: whom an
-	// operator's write is for is nobody but the operator, and the far side
-	// reads what arrived as stated (types.WrittenFor.Received).
+	// STATED, as every actor crossing the wire arrives: an operator's write is
+	// for nobody but the operator, and the far side reads it as stated
+	// (types.WrittenFor.Received).
 	operator := Actor{Handle: "founder", Kind: worklet.AuthorOperator,
 		Provenance: worklet.Provenance{OperatorID: "founder", Apps: []iam.Grant{iam.GrantWorklet},
 			WrittenFor: types.ForNobody()}}
@@ -418,9 +418,9 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 		op    string
 		write func() (worklet.WriteResult, error)
 	}{"place_task", func() (worklet.WriteResult, error) {
-		// A DROP WHOSE PLACE WAS REFUSED crosses with the refusal's
-		// identity, which the tool classifies — an error is an interface
-		// no encoder writes — beside the lane it did change.
+		// A REFUSED PLACE keeps its identity, which the tool classifies, beside
+		// the lane it did change, though an error is an interface no encoder
+		// writes.
 		placed, err := w.PlaceTask(ctx, "op-12", worklet.Place{Task: "t-1", Project: "ENG",
 			After: "t-2"}, nil)
 		if !errors.Is(placed.Unplaced, worklet.ErrStaleVersion) || placed.Version != 12 {

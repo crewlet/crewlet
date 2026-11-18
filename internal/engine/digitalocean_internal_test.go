@@ -141,11 +141,10 @@ func TestADigitalOceanPasteIsRefusedForASeatNotWaiting(t *testing.T) {
 }
 
 // A SEAT'S TOOL CREDENTIAL IS ITS TOOL'S, NEVER OPENCODE'S SIGN-IN. OpenCode
-// reads DIGITALOCEAN_ACCESS_TOKEN as its DigitalOcean provider's key and
-// GITLAB_TOKEN as its GitLab provider's, so the agent's own token, set by
-// Crewlet for doctl or written for glab in its box, reaches the box but is
-// judged out of the run's sign-in: an OpenCode seat with no model key of its
-// own is refused a remote box rather than launched on the agent's tool token.
+// reads DIGITALOCEAN_ACCESS_TOKEN and GITLAB_TOKEN as provider keys, so the
+// agent's token for doctl or glab reaches the box but is judged out of the
+// run's sign-in: an OpenCode seat with no model key of its own is refused a
+// remote box rather than launched on its tool token.
 // Mutation: judge the sign-in on the seat's whole env, and both runs are launched.
 func TestASeatsToolCredentialInTheBoxNeverSignsOpenCodeIn(t *testing.T) {
 	t.Parallel()

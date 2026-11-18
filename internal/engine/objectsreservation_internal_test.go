@@ -74,12 +74,11 @@ func (unreadBudget) StreamBudget(context.Context) (jetstream.StorageBudget, erro
 
 // A BROKER THAT STATES NO LIMIT IS RESERVED FROM THE CAP A SERVER RUNNING ITS
 // DEFAULTS TAKES of the free space this node measured — three quarters
-// ([unstatedLimit]), the figure the logs are sized against too — and not from
-// the whole of it, which the server can never grant: from the whole, the
-// bucket's quarter and the logs' share of what it left came within a
-// thirty-second of a defaults server's cap (TestAnUnstatedServerHoldsTheBucketAndEveryLog).
-// A budget that cannot be read is the same reading, and a volume that cannot
-// be measured leaves the bucket at its smallest.
+// ([unstatedLimit]), the figure the logs are sized against too — never from the
+// whole of it, which the server cannot grant
+// (TestAnUnstatedServerHoldsTheBucketAndEveryLog). A budget that cannot be read
+// is the same reading, and a volume that cannot be measured leaves the bucket
+// at its smallest.
 func TestAnUnstatedBrokersBucketIsReservedFromWhatItCanGrant(t *testing.T) {
 	t.Parallel()
 	const free = 40 * gib
@@ -91,8 +90,7 @@ func TestAnUnstatedBrokersBucketIsReservedFromWhatItCanGrant(t *testing.T) {
 		want   int64
 	}{
 		// A 30 GiB stand-in: a quarter is 7.5 GiB, inside what the logs'
-		// share and the coordination floor leave (10.25 GiB). From the
-		// whole 40 GiB it was 10.
+		// share and the coordination floor leave (10.25 GiB).
 		{"a broker that states no limit", budgetOf{Limit: -1, Source: jetstream.BudgetUnstated},
 			measured, 30 * gib / 4},
 		{"a budget that cannot be read", unreadBudget{}, measured, 30 * gib / 4},

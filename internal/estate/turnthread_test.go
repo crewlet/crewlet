@@ -10,13 +10,11 @@ import (
 )
 
 // A TURN'S THREAD READ THAT NO DATA NODE SERVES FALLS BACK TO THE PLAIN THREAD,
-// AND SAYS SO. A data node of an older build does not declare the turn's own
-// read and answers it unserved, so the facade reads the plain thread, which
-// carries nothing (Carried false): the turn then marks no waiting message as
-// worked through, the safe direction. One read runs, never two. And it falls
-// back on nothing else: a walk in which a node went silent, and a node refusing
-// keys its build does not declare, are returned as they are, with no second
-// walk.
+// AND SAYS SO. An older data node not declaring the turn's read answers it
+// unserved, so the facade reads the plain thread, which carries nothing
+// (Carried false): the turn marks no waiting message worked through, the safe
+// direction. One read runs, never two. A walk in which a node went silent, and
+// a refusal of undeclared keys, are returned as they are, with no second walk.
 //
 // Mutation: fall back on any error, or on a refusal of undeclared keys, or
 // answer the fallback's thread as carried, and a case goes red.
@@ -40,8 +38,7 @@ func TestATurnThreadNoDataNodeServesFallsBackToThePlainThreadAndSaysSo(t *testin
 		for _, node := range f.nodes {
 			node.set(func(n *fakeNode) {
 				n.olderBuild = func(r request) request {
-					// AN OPERATION THE OLDER BUILD DOES NOT DECLARE: its
-					// server looks the name up and finds nothing.
+					// AN OPERATION THE OLDER BUILD DOES NOT DECLARE.
 					if r.Op == opChatTurnThread.spec.name {
 						r.Op += ".undeclared"
 					}
@@ -99,10 +96,9 @@ func TestATurnThreadNoDataNodeServesFallsBackToThePlainThreadAndSaysSo(t *testin
 }
 
 // ONLY AN ESTATE NOBODY SERVED, IN WHICH NOBODY WENT SILENT, IS ONE THE TURN'S
-// READ FALLS BACK FROM. A refusal that is no such thing — a viewer who may not
-// read the room, a thread that is not there — is the answer, and so is a
-// refusal of keys a build does not declare, though it unwraps to the walk it
-// found unserved.
+// READ FALLS BACK FROM. Any other refusal (a viewer who may not read the room,
+// a missing thread) is the answer, and so is a refusal of undeclared keys,
+// though it unwraps to the walk it found unserved.
 //
 // Mutation: fall back on any error, or on a refusal of undeclared keys, and a
 // row goes red.

@@ -27,8 +27,8 @@ import (
 )
 
 // THE READ WIRE: the queries a reader answers and the answers it gives. They
-// cross the estate wire — a node without the code copy asks one that has it —
-// so every field is plain JSON, and the estate's wire gate holds them.
+// cross the estate wire (a node without the code copy asks one that has it), so
+// every field is plain JSON, held by the estate's wire gate.
 
 // ResolveQuery names a repository by its name.
 type ResolveQuery struct {
@@ -51,62 +51,54 @@ type RepoRef struct {
 	Visibility Visibility `json:"visibility"`
 	// Search is how code search reads it ([SearchMode]).
 	Search SearchMode `json:"search"`
-	// Mirrored is a PULL MIRROR ([RepoSettings.MirrorFrom]): it moves only
-	// by its syncs, so a push and a change's every write are refused
-	// repo_mirrored — what Gitlet's admission and an engine write's
-	// landing read of it before the committer is asked. Never the mirror's
-	// URL or credential, which one repository's detail alone serves
-	// ([RepoDetail.Remotes]): every push and fetch reads this row.
+	// Mirrored is a PULL MIRROR ([RepoSettings.MirrorFrom]): it moves only by
+	// its syncs, so Gitlet's admission and an engine write's landing refuse a
+	// push or a change's write repo_mirrored before the committer is asked.
+	// Never the mirror's URL or credential, which only one repository's detail
+	// serves ([RepoDetail.Remotes]): every push and fetch reads this row.
 	//
-	// AN ANSWER'S FIELD, NOT A RECORD'S, so it takes no versionedFields row:
-	// it is read from the row a record wrote. The domain landed on main with
-	// it, as with the mirror's own fields (mirror.go), so every node Gitlet
-	// asks answers it.
+	// An answer's field, read from the row, not a record's, so no
+	// versionedFields row: the domain landed on main with it (mirror.go), so
+	// every node answers it.
 	Mirrored      bool   `json:"mirrored,omitempty"`
 	DefaultBranch string `json:"default_branch"`
 	// Description is what the repository says about itself, a line whoever
 	// created or last changed it chose: somebody's words (ADR-0040).
 	Description string `json:"description,omitempty" untrusted:"name"`
 	// Protections are its rules AS A PUSH IS JUDGED BY THEM ([PushRule]),
-	// sorted by pattern — never a rule's merge gate. This row is what the
-	// admission of every git request reads, every page of a Gitlet node's sync
-	// carries and its cache's state file keeps, and none of them reads a
-	// gate: at the domain's bounds a repository's gates are half a mebibyte
-	// of JSON, which each would decode, ship and write to disk for nothing.
-	// One repository's detail answers them to a read that asks
-	// ([ReadQuery.Gates], [RepoDetail.Gates]).
+	// sorted by pattern, never a rule's merge gate: every git request's
+	// admission, every page of a Gitlet node's sync and its cache's state file
+	// read this row, none reads a gate, and at the domain's bounds a
+	// repository's gates are half a mebibyte of JSON. One repository's detail
+	// answers them on request ([ReadQuery.Gates], [RepoDetail.Gates]).
 	Protections []PushRule `json:"protections,omitempty"`
 	DeletedAt   time.Time  `json:"deleted_at,omitzero"`
 	// LastActivityAt is the broker's instant of the repository's last push,
-	// rename, settings change or restore — its IDLE CLOCK, which a scratch
-	// repository expires by ([Retention]) and a turn's hold decides whether to
-	// record itself by ([HoldRecordAfter]). Never a read, and never a hold. A
-	// session read may be behind and show an older one, which can only make a
-	// hold record itself where it did not need to.
+	// rename, settings change or restore: its IDLE CLOCK, by which a scratch
+	// repository expires ([Retention]) and a turn's hold decides whether to
+	// record itself ([HoldRecordAfter]). Never a read or a hold. A session read
+	// behind it can only make a hold record itself needlessly.
 	LastActivityAt time.Time `json:"last_activity_at,omitzero"`
 	Refs           int64     `json:"refs"`
 	LivePacks      int64     `json:"live_packs"`
 	LiveBytes      int64     `json:"live_bytes"`
-	// LiveObjects is how many objects the live packs hold, kept on the row
-	// beside LiveBytes: the most a fetch request to the repository can
-	// legitimately name, which Gitlet bounds a request it spools by.
+	// LiveObjects is how many objects the live packs hold: the most a fetch
+	// request can legitimately name, which bounds a request Gitlet spools.
 	LiveObjects int64 `json:"live_objects"`
-	// DropEpoch is how many expunges have begun on the repository
-	// ([ExpungeBegin]): what a push carries of the row its receiver checked
-	// it against, and the committer refuses it `expunging` where the
-	// repository's has moved since. Omitted at zero, a repository never
-	// expunged.
+	// DropEpoch counts the expunges begun on the repository ([ExpungeBegin]). A
+	// push carries the epoch of the row its receiver checked it against, and
+	// the committer refuses it `expunging` where it has moved since. Omitted at
+	// zero.
 	DropEpoch int64 `json:"drop_epoch,omitempty"`
-	// Redirect is the repository's current name where the name it was asked
-	// by is an OLD one, still redirecting to it until RedirectUntil after a
-	// rename ([RedirectWindow]) — "" where it was asked by its own. The
-	// redirect lasts exactly as long as the old name's row: the release that
-	// removes it is what ends it, so every node at one position answers one
-	// way, which a comparison with each node's clock would not.
+	// Redirect is the repository's current name where it was asked by an OLD
+	// name, still redirecting until RedirectUntil after a rename
+	// ([RedirectWindow]); "" otherwise. The redirect ends with the release that
+	// removes the old name's row, so every node at one position answers alike,
+	// which comparing each node's clock would not.
 	Redirect      string    `json:"redirect,omitempty"`
 	RedirectUntil time.Time `json:"redirect_until,omitzero"`
-	// Position is the checkpoint the rows were read at — read in the same
-	// transaction as them.
+	// Position is the checkpoint the rows were read at, in the same
+	// transaction.
 	Position statelog.Position `json:"position"`
 }
 
@@ -120,28 +112,23 @@ type StateQuery struct {
 	Fresh statelog.Freshness `json:"fresh"`
 	// Cursor is nil for the first page, and the Next a page answered after.
 	Cursor *StateCursor `json:"cursor,omitempty"`
-	// Pushes asks a DELTA for its pushes phase: every push of the repository
-	// applied in (Since, the snapshot's position], in log order — what a Gitlet
-	// node's cache folds into its index of which push introduced each commit
-	// before the round answers, so the index is level with the copy. Ignored
-	// by a full answer, whose pushes that index reads with the `introduced`
-	// read instead. READ ON THE FIRST PAGE ONLY, as Since is: a later page
+	// Pushes asks a DELTA for its pushes phase: every push applied in (Since,
+	// the snapshot's position], in log order, which a Gitlet node's cache folds
+	// into its index of which push introduced each commit, so the index is
+	// level with the copy. A full answer ignores it (that index reads the
+	// `introduced` read instead). READ ON THE FIRST PAGE ONLY; a later page
 	// carries it in its cursor.
 	Pushes bool `json:"pushes,omitempty"`
-	// RetiredSince asks a FULL answer for the retirements above it — the
-	// caller's own synced position, which a full answer stands in for a
-	// delta from: every pack a record retired in (RetiredSince, the
-	// snapshot's position], so a full round can tell a pack file a
-	// compaction retired from one no row accounts for. Served only when the
-	// reader can serve all of them (Snapshot: on this generation, at or past
-	// the repository's retired mark, and at most MaxFullRetirements of them),
-	// and the answer's RetiredFrom says whether it did. A
-	// delta's retirements are always those above its own Since, but page 1
-	// weighs it against the full answer with what each would serve, so asked
-	// from Since itself — the position the caller holds — the retirements
-	// both carry cancel rather than counting against the delta alone. Zero
-	// asks for none. READ ON THE FIRST PAGE ONLY, as Since is: a later page
-	// carries the floor it decided in its cursor.
+	// RetiredSince, the caller's own synced position, asks a FULL answer for
+	// every pack a record retired in (RetiredSince, the snapshot's position],
+	// so a full round can tell a pack file a compaction retired from one no row
+	// accounts for. Served only when the reader can serve all of them
+	// (Snapshot: this generation, at or past the repository's retired mark, at
+	// most MaxFullRetirements); the answer's RetiredFrom says whether it did.
+	// Page 1 weighs a delta against a full answer by what each would serve, so
+	// asked from Since the retirements both carry cancel rather than counting
+	// against the delta alone. Zero asks for none. READ ON THE FIRST PAGE ONLY;
+	// a later page carries the floor in its cursor.
 	RetiredSince statelog.Position `json:"retired_since,omitzero"`
 }
 
@@ -162,10 +149,9 @@ const (
 // on ([ErrBadCursor] otherwise).
 type StateCursor struct {
 	Full bool `json:"full"`
-	// Phase is "packs", then "refs", then — on a delta whose first page
-	// asked for it — "pushes", then — on a delta, and on a full answer that
-	// serves retirements — "retired", then — on a snapshot of more than one
-	// page — "tail".
+	// Phase runs "packs", "refs", "pushes" (a delta whose first page asked for
+	// it), "retired" (a delta, or a full answer serving retirements), then
+	// "tail" (a snapshot of more than one page).
 	Phase string `json:"phase"`
 	// Pushes is page 1's StateQuery.Pushes on a delta, carried to every
 	// later page; false on a full answer, which serves no pushes phase.
@@ -187,11 +173,10 @@ type StateCursor struct {
 	// Stream is page 1's checkpoint's stream identity: a later page keyed to
 	// another stream answers ErrSnapshotMoved.
 	Stream time.Time `json:"stream"`
-	// DropEpoch is the repository's drop epoch as page 1 read it: a later
-	// page reading another answers ErrSnapshotMoved, so every page of one
-	// snapshot is read at one epoch — the one its Repo carries, which a
-	// push checked against the copy the snapshot synced is decided by
-	// ([Proposal.DropEpoch]).
+	// DropEpoch is the repository's drop epoch as page 1 read it; a later page
+	// reading another answers ErrSnapshotMoved, so every page is read at the
+	// epoch its Repo carries, which a push checked against the synced copy is
+	// decided by ([Proposal.DropEpoch]).
 	DropEpoch int64 `json:"drop_epoch,omitempty"`
 	// After is the last key served in this phase.
 	After string `json:"after"`
@@ -209,37 +194,31 @@ type RepoSnapshot struct {
 	StreamCreated time.Time `json:"stream_created"`
 	Full          bool      `json:"full"`
 	// Layers is the repository's WHOLE published chain as of Position, root
-	// first, served on page 1 when LayersServed — the snapshot's first phase,
-	// read in page 1's own transaction, never continued on a later page: a
-	// chain is at most MaxPublishedLayers rows, which fit beside a page of
-	// packs. Every pack a layer names is live at Position, since nothing
-	// retires a published pack but the record that replaces its layer; a
-	// publication after Position is the next delta's to serve.
+	// first, served on page 1 when LayersServed, in page 1's own transaction
+	// and never continued: a chain is at most MaxPublishedLayers rows, which
+	// fit beside a page of packs. Every pack a layer names is live at Position,
+	// since only the record replacing its layer retires a published pack; a
+	// later publication is the next delta's.
 	Layers []LayerRow `json:"layers,omitempty"`
-	// LayersServed reports that Layers is the whole chain — on every full
+	// LayersServed reports that Layers is the whole chain: on every full
 	// answer, an empty chain included, and on a delta exactly when the chain
-	// changed above its floor. A cache replaces the chain it holds only when
-	// it is set.
+	// changed above its floor. A cache replaces its chain only when it is set.
 	LayersServed bool      `json:"layers_served,omitempty"`
 	Packs        []PackRow `json:"packs,omitempty"`
 	Refs         []RefRow  `json:"refs,omitempty"`
-	// Pushes is the pushes phase's rows on a delta that asked for them:
-	// every push applied in (Since, Position], in log order, each once
-	// across the snapshot's pages — none above Position, which the next
-	// delta serves.
+	// Pushes is the pushes phase's rows on a delta that asked: every push
+	// applied in (Since, Position], in log order, each once across the pages.
 	Pushes []IntroducedRow `json:"pushes,omitempty"`
 	// Retired is the retired phase's rows: every pack a record retired in
 	// (RetiredFrom, Position], in (position, pack id, part) order, each once
-	// across the snapshot's pages — none above Position, whose retirement
-	// the next delta serves. It names what a cache holding the retired pack
-	// drops, and a delta serves a pack added above its floor and retired by
-	// Position too, which its packs never served: a cache that never held
-	// one has nothing to drop.
+	// across the pages. It names what a cache holding the pack drops; a delta
+	// also serves a pack added above its floor and retired by Position, which
+	// its packs never served.
 	Retired []RetiredRow `json:"retired,omitempty"`
 	// RetiredFrom is the floor Retired is complete above, the same on every
-	// page: Since on a delta; on a full answer the StateQuery.RetiredSince
-	// it honoured, or ZERO when it served no retirements — a cache then
-	// reads every pack file no row names as one no row accounts for.
+	// page: Since on a delta; on a full answer the StateQuery.RetiredSince it
+	// honoured, or ZERO when it served none, and a cache then reads every pack
+	// file no row names as one no row accounts for.
 	RetiredFrom statelog.Position `json:"retired_from,omitzero"`
 	Next        *StateCursor      `json:"next,omitempty"`
 }
@@ -261,28 +240,25 @@ type PackRow struct {
 	Kind  PackKind          `json:"kind"`
 	State PackState         `json:"state"`
 	Added statelog.Position `json:"added"`
-	// Content is the position the pack's CONTENT dates from as a purge
-	// reads it: nothing in it reached the repository, or was last judged by
-	// a purge's scan, before it. A push's pack dates from its own position;
-	// a compaction's outputs, an expunge's that keeps what a ref drop left
-	// within a grace and an expunge's rescue from the oldest pack they
-	// replaced, since moving content judges none of it; and a purge's kept
-	// and dropping packs from its scan ([ExpungeBegin.Seen]), where it
-	// judged them. So a purge request is SERVED once no pack of its
-	// repository dates from before it, and a cycle serving one takes the
-	// live packs that do — whenever their rows were added, which a rewrite
-	// moves past the request without judging anything. A read's answer,
-	// never a record's field: no versionedFields row.
+	// Content is the position the pack's CONTENT dates from for a purge:
+	// nothing in it reached the repository, or was last judged by a purge's
+	// scan, before it. A push's pack dates from its own position; a
+	// compaction's outputs, an expunge's kept remainder of a ref drop within a
+	// grace and an expunge's rescue from the oldest pack they replaced, since
+	// moving content judges none of it; a purge's kept and dropping packs from
+	// its scan ([ExpungeBegin.Seen]). So a purge request is SERVED once no pack
+	// dates from before it, and a cycle serving one takes the live packs that
+	// do, whenever their rows were added (a rewrite moves those past the
+	// request without judging anything). A read's answer, not a record's
+	// field: no versionedFields row.
 	Content statelog.Position `json:"content"`
-	// Arrived is the broker instant the pack's NEWEST content arrived at:
-	// nothing in it reached the repository after it. A push's pack and a
-	// merge's arrived at their own record; every rewrite's output — a
-	// compaction's, an expunge's, a rescue — at the latest of the packs it
-	// replaced, since moving content brings none (replicated 0128). An
-	// expunge on its maintainer's schedule keeps a pack that arrived within
-	// [PruneGrace] whole (internal/gitlet/compact). Zero where it is not known:
-	// a pack a cache adopted before a round served its row. A read's
-	// answer, never a record's field: no versionedFields row.
+	// Arrived is the broker instant the pack's NEWEST content arrived: a push's
+	// or a merge's pack at its own record; a rewrite's output (compaction,
+	// expunge, rescue) at the latest of the packs it replaced (replicated
+	// 0128). An expunge on its maintainer's schedule keeps whole a pack that
+	// arrived within [PruneGrace] (internal/gitlet/compact). Zero where
+	// unknown: a pack a cache adopted before a round served its row. A read's
+	// answer: no versionedFields row.
 	Arrived time.Time `json:"arrived,omitzero"`
 }
 
@@ -296,27 +272,21 @@ func (r PackRow) Ref() PackRef {
 }
 
 // Full reports a pack no compaction merges again: its pack section at least
-// [FullPackBytes], or its whole bundle at least [FullBundleBytes] — FullAt at
-// the cut every compaction makes, [CompactPackBytes].
+// [FullPackBytes], or its whole bundle at least [FullBundleBytes] (FullAt at
+// [CompactPackBytes]).
 //
-// THE ONE PREDICATE, read by every party that judges it — the committer's
-// decide of a compaction, which refuses a full input stale, and the plan a
-// compaction is built from (internal/gitlet/compact) — so a plan and the decide
-// that judges it never disagree about a pack. By its bundle as well as its
-// pack section, because an output of a cut scaled down for a dense roll is
-// full by its bundle with its pack section well short of seven eighths of the
-// nominal cut.
+// THE ONE PREDICATE, read by the committer's decide of a compaction (which
+// refuses a full input stale) and by its plan (internal/gitlet/compact), so the
+// two never disagree about a pack. By its bundle too, because an output of a
+// cut scaled down for a dense roll is full by its bundle with its pack section
+// well short of seven eighths of the nominal cut.
 func (r PackRow) Full() bool { return r.FullAt(CompactPackBytes) }
 
-// FullAt is [PackRow.Full] for compactions that cut their outputs at cut
-// rather than at [CompactPackBytes]: both bounds, [FullPackBytes] and
-// [FullBundleBytes], scaled by cut ÷ CompactPackBytes — exactly the two
-// constants at the production cut, which is the one cut anything but a suite
-// makes. A suite builds its compactions over megabytes rather than gibibytes
-// (internal/gitlet/compact's test knob), and an output of its cut has to be
-// full by the same rule, scaled, or every one would be rolled again at the
-// next plan. Defined for a cut in (0, CompactPackBytes], the only cuts a
-// compaction is built at.
+// FullAt is [PackRow.Full] at cut rather than [CompactPackBytes]: both bounds
+// scaled by cut ÷ CompactPackBytes, exactly the constants at the production
+// cut. A suite compacts over megabytes (internal/gitlet/compact's test knob),
+// and its outputs must be full by the same rule or each would be rolled again
+// at the next plan. Defined for cut in (0, CompactPackBytes].
 func (r PackRow) FullAt(cut int64) bool {
 	return r.Ref().PackBytes() >= fullScaled(FullPackBytes, cut) || r.Size >= fullScaled(FullBundleBytes, cut)
 }
@@ -327,9 +297,8 @@ func (r PackRow) FullAt(cut int64) bool {
 func fullScaled(bound, cut int64) int64 { return bound * cut / CompactPackBytes }
 
 // LayerRow is one published layer as the rows hold it: its place in the chain
-// (Seq, 1.. root first and contiguous), the layer — Replaces empty, since a
-// row is a layer rather than a replacement — and the position of the record
-// that added it.
+// (Seq, 1.. root first, contiguous), the layer (Replaces empty, since a row is
+// a layer) and the position of the record that added it.
 type LayerRow struct {
 	Seq   int               `json:"seq"`
 	Layer LayerRef          `json:"layer"`
@@ -343,10 +312,10 @@ type RefRow struct {
 	Position statelog.Position `json:"position"`
 }
 
-// RetiredRow is one pack a record retired, as a snapshot's retired phase
-// serves it: which pack — its id and part, the table's key and the phase's
-// keyset — the git checksum its files are named by, which is what a cache
-// drops, and the instant and the position of the record that retired it.
+// RetiredRow is one pack a record retired, as the retired phase serves it: its
+// id and part (the table's key and the phase's keyset), the git checksum naming
+// its files (what a cache drops), and the instant and position of the retiring
+// record.
 type RetiredRow struct {
 	PackID      string            `json:"pack_id"`
 	Part        string            `json:"part"`
@@ -361,11 +330,9 @@ type OutcomeQuery struct {
 	PushID string `json:"push_id"`
 	// At is the record's position: "not found" is final only at or past it.
 	At statelog.Position `json:"at"`
-	// Change asks, of a push that asked for a change ([Proposal.Change]),
-	// for the change it opened as well ([PushOutcome.Opened]). An estate
-	// request's field and no record's, so it takes no versionedFields row:
-	// the domain landed on main with it ([RecordVersion]), so every node
-	// that serves the read reads it.
+	// Change asks, of a push that asked for a change ([Proposal.Change]), for
+	// the change it opened ([PushOutcome.Opened]). A request's field, landed
+	// with the domain ([RecordVersion]), so no versionedFields row.
 	Change bool `json:"change,omitempty"`
 }
 
@@ -386,18 +353,15 @@ type PushRow struct {
 	RepoID   string            `json:"repo_id"`
 	Position statelog.Position `json:"position"`
 	At       time.Time         `json:"at"`
-	// Actor is who pushed, as the history names it: an operator's credential
-	// — the person's own attribution, as every record a write leaves names
-	// it — or a seat's handle; ActorKind is the principal's kind, and
-	// ActorSeat the seat: the human seat an operator's principal holds, or
-	// the seat itself.
+	// Actor is who pushed: an operator's credential (the person's own
+	// attribution) or a seat's handle; ActorKind is the principal's kind, and
+	// ActorSeat the seat (an operator's human seat, or the seat itself).
 	Actor     string `json:"actor"`
 	ActorKind string `json:"actor_kind"`
 	ActorSeat string `json:"actor_seat,omitempty"`
-	// Via is how the push's pack was built, and Run, for a seat's push, the
-	// turn, the work item and the model behind it — and for a coding box's,
-	// the run that pushed and its harness — each stamped by the engine
-	// from the call or the run that made the push, never read from a commit.
+	// Via is how the pack was built; Run, for a seat's push, the turn, work
+	// item and model (for a coding box, also the run and harness), stamped by
+	// the engine from the call or run, never read from a commit.
 	Via      PushVia       `json:"via"`
 	Run      RunProvenance `json:"run,omitzero"`
 	Node     string        `json:"node,omitempty"`
@@ -408,12 +372,10 @@ type PushRow struct {
 	// a push history's rows ([Reader.pushes]); nil where its record merged none.
 	Change      *ChangeName `json:"change,omitempty"`
 	ChangesMore int         `json:"changes_more,omitempty"`
-	// Omitted is the commands a row read IN BRIEF ([ReadQuery.Brief]) leaves
-	// out of Commands, counted by what became of each — so Commands and
-	// Omitted together are every command the push carried, and a reader says
-	// what it was not shown without asking for it. Absent wherever nothing
-	// is left out: a row read whole, and a brief row of a push of at most
-	// [BriefCommands] commands.
+	// Omitted counts by outcome the commands a row read IN BRIEF
+	// ([ReadQuery.Brief]) leaves out of Commands, so the two together are every
+	// command and a reader says what it was not shown. Absent when nothing is
+	// left out.
 	Omitted         CommandCounts `json:"omitted,omitzero"`
 	PackID          string        `json:"pack_id,omitempty"`
 	PackBytes       int64         `json:"pack_bytes,omitempty"`
@@ -425,13 +387,11 @@ type PushRow struct {
 	ReceivedAt time.Time `json:"received_at"`
 }
 
-// CommandCounts is commands of a push counted by what became of each, in the
-// words a reader is told them in: a ref made, moved, moved by force or
-// removed; asked for the value it already had; or refused. Every command is
-// exactly one, decided in that order ([CommandCounts.add]) — a refusal is a
-// refusal whatever it asked, and an unchanged ref moved nowhere — the order
-// the dashboard's commandWord says one command in. Each count is omitted at
-// zero.
+// CommandCounts counts a push's commands by what became of each, in a reader's
+// words: made, moved, moved by force, removed; asked for the value it had; or
+// refused. Each command is exactly one, decided in that order
+// ([CommandCounts.add]), the order the dashboard's commandWord uses. Each count
+// is omitted at zero.
 type CommandCounts struct {
 	Created   int `json:"created,omitempty"`
 	Moved     int `json:"moved,omitempty"`
@@ -459,15 +419,15 @@ func (n *CommandCounts) add(c Command) {
 	}
 }
 
-// brief is a push row as a history read IN BRIEF serves it
-// ([ReadQuery.Brief]): its introduced commits counted and not listed, and, of
-// a push of more than BriefCommands commands, BriefCommands of them — its
-// refused ones first, each with its reason, then the rest, each part in the
-// order the client sent it — with every command left out counted in Omitted.
+// brief is a push row as a history read IN BRIEF serves it ([ReadQuery.Brief]):
+// its introduced commits counted, not listed, and of a push of more than
+// BriefCommands commands, BriefCommands of them (the refused first, each with
+// its reason, then the rest, each part in the client's order), every command
+// left out counted in Omitted.
 //
-// THE REFUSALS FIRST because what did not happen is what a reader of a push
-// has to act on: a push of a thousand tags with one refused, cut in the order
-// it was sent, would show five that landed and hide the one that did not.
+// THE REFUSALS FIRST because what did not happen is what a reader has to act
+// on: a push of a thousand tags with one refused, cut in send order, would hide
+// the one that did not land.
 func (row PushRow) brief() PushRow {
 	row.Introduced = nil
 	if len(row.Commands) <= BriefCommands {
@@ -480,8 +440,7 @@ func (row PushRow) brief() PushRow {
 		}
 	}
 	keepRefused := min(refusals, BriefCommands)
-	// brief is the commands the brief shows: the refused kept, then the rest
-	// after them, in the room made for the whole of it.
+	// brief is the refused kept, then the rest, in the room left.
 	brief := make([]Command, 0, BriefCommands)
 	rest := make([]Command, 0, BriefCommands-keepRefused)
 	for _, c := range row.Commands {
@@ -500,61 +459,57 @@ func (row PushRow) brief() PushRow {
 }
 
 // PushVia is how a push's pack was built: STAMPED by whoever built it, carried
-// by its proposal and its record's entry, and stored on its push row — never
-// derived from the commits, whose committer header any client may write.
+// by its proposal and record entry, stored on its push row, never derived from
+// the commits, whose committer header any client may write.
 //
-// THE ROW'S COLUMN HAS NO DOMAIN VALUE AS ITS DEFAULT (the empty string, in
-// replicated 0091), and a row naming no way this build knows is refused by
-// every reader of it (scanPush): an apply that forgot the column would
-// otherwise read as one way or the other.
+// The row's column has no domain value as its default (replicated 0091), and
+// every reader refuses a row naming a way this build does not know (scanPush),
+// so an apply that forgot the column cannot read as one way or the other.
 type PushVia string
 
 const (
 	// ViaGit is a push a client's git sent and receive-pack received.
 	ViaGit PushVia = "git"
-	// ViaEngine is a push whose commit and pack the engine built itself, from
-	// a tool's call, rather than one git received — exactly one ref moved,
-	// never --atomic ([Proposal.Validate]).
+	// ViaEngine is a push whose commit and pack the engine built from a tool's
+	// call: exactly one ref moved, never --atomic ([Proposal.Validate]).
 	ViaEngine PushVia = "engine"
 	// ViaMerge is the push a MERGE RECORD lands ([Merge]): its target moved
-	// onto the commit the merge built — and, where it deletes its source, the
-	// source branch deleted — written by the merge's own apply, so the push
-	// history names every move of a branch and who made it. No proposal of a
-	// push names it ([Proposal.Validate]): a merge is decided through its
-	// gate ([Committer.ProposeMerge]), never as a push.
+	// onto the merge's commit (and its source deleted, where the merge deletes
+	// it), written by the merge's own apply so the push history names every
+	// move of a branch and who made it. No push proposal names it
+	// ([Proposal.Validate]): a merge is decided through its gate
+	// ([Committer.ProposeMerge]).
 	//
 	// BASE FORMAT, as merge.go's head says.
 	ViaMerge PushVia = "merge"
 	// ViaExpiry is the ref lifecycle's deletion of seats' idle branches
-	// (retention_expiry.go): a push by the engine's own account
-	// ([PrincipalSystem]) — the one kind it pairs with, both ways — that only
-	// deletes refs in seats' namespaces, carrying no pack
-	// ([Proposal.Validate]), each command's Old the commit its push row keeps
-	// to restore the branch at. Its decide keeps whatever is no longer idle
-	// (rule 4b, [ExpiryRule]); its apply moves no activity clock
-	// (apply_push.go).
+	// (retention_expiry.go): a push by [PrincipalSystem], the one kind it pairs
+	// with both ways, that only deletes refs in seats' namespaces with no pack
+	// ([Proposal.Validate]), each command's Old the commit its row keeps for a
+	// restore. Its decide keeps whatever is no longer idle (rule 4b,
+	// [ExpiryRule]); its apply moves no activity clock (apply_push.go).
 	//
 	// BASE FORMAT ([RecordVersion]): the domain landed on main with it.
 	ViaExpiry PushVia = "expiry"
-	// ViaQueue is a push a LAND RECORD lands ([Land]), one for each change a
-	// merge queue landed: its target moved from what the change before it
-	// left onto the commit the queue built of it — and, where it deletes its
-	// source, the source deleted — naming the change's ENQUEUER, since the
-	// queue never acts on its own account. No proposal of a push names it: a
-	// landing is decided through each change's gate.
+	// ViaQueue is a push a LAND RECORD lands ([Land]), one per change a merge
+	// queue landed: its target moved from what the change before left onto the
+	// commit the queue built (and its source deleted, where it deletes it),
+	// naming the change's ENQUEUER, since the queue never acts on its own
+	// account. No push proposal names it: a landing is decided through each
+	// change's gate.
 	//
 	// BASE FORMAT, as queuerecords.go's head says.
 	ViaQueue PushVia = "queue"
-	// ViaImport is the push an IMPORT CHUNK lands ([ImportChunk]): the refs
-	// it sets, onto objects its home fetched from the host the repository is
-	// imported from, by the engine's own account ([PrincipalSystem]) —
-	// written by the chunk's own apply. No proposal of a push names it.
+	// ViaImport is the push an IMPORT CHUNK lands ([ImportChunk]): the refs it
+	// sets onto objects its home fetched from the import's source host, by
+	// [PrincipalSystem], written by the chunk's own apply. No push proposal
+	// names it.
 	//
 	// BASE FORMAT, as [OpImportChunk] is.
 	ViaImport PushVia = "import"
-	// ViaMirror is the push a PULL MIRROR'S SYNC lands ([MirrorSync]): the
-	// refs it moves onto its source's, by the engine's own account —
-	// written by the sync's own apply. No proposal of a push names it.
+	// ViaMirror is the push a PULL MIRROR'S SYNC lands ([MirrorSync]): the refs
+	// it moves onto its source's, by the engine's own account, written by the
+	// sync's own apply. No push proposal names it.
 	//
 	// BASE FORMAT, as [OpMirrorSync] is.
 	ViaMirror PushVia = "mirror"
@@ -568,17 +523,16 @@ func PushVias() []PushVia {
 // Valid reports a way this build knows.
 func (v PushVia) Valid() bool { return slices.Contains(PushVias(), v) }
 
-// proposedVias is the ways a push PROPOSAL may name — git's, the engine's and
-// the ref expiry's — in [PushVias]' order: a merge's push and a landing's are
-// written by their records alone ([ViaMerge], [ViaQueue]).
+// proposedVias is the ways a push PROPOSAL may name, in [PushVias]' order: a
+// merge's and a landing's pushes are written by their records alone
+// ([ViaMerge], [ViaQueue]).
 func proposedVias() []PushVia { return []PushVia{ViaGit, ViaEngine, ViaExpiry} }
 
 // proposed reports a way a push proposal may name ([proposedVias]).
 func (v PushVia) proposed() bool { return slices.Contains(proposedVias(), v) }
 
-// PushedBy is the push that INTRODUCED a commit, as a Gitlet node's index of
-// which push introduced each commit holds it: which push, where it landed on
-// the log, when, by whom and how.
+// PushedBy is the push that INTRODUCED a commit, as a Gitlet node's introduced
+// index holds it: which push, its log position, when, by whom and how.
 type PushedBy struct {
 	PushID    string            `json:"push_id"`
 	Position  statelog.Position `json:"position"`
@@ -597,8 +551,8 @@ type RefMove struct {
 }
 
 // IntroducedRow is one push as that index is built from it: who made it, the
-// refs it moved, and the commits it introduced — at most [MaxIntroduced] of
-// them listed, Count the whole.
+// refs it moved, and the commits it introduced, at most [MaxIntroduced] listed,
+// Count the whole.
 type IntroducedRow struct {
 	PushedBy
 	Moves      []RefMove `json:"moves,omitempty"`
@@ -606,9 +560,8 @@ type IntroducedRow struct {
 	Count      int       `json:"count,omitempty"`
 }
 
-// introducedOf is a push row as the index is built from it: its principal
-// from the row's actor columns, how it was built from its via, and its ok
-// commands as the refs it moved.
+// introducedOf is a push row as the index is built from it, its ok commands as
+// the refs it moved.
 func introducedOf(row PushRow) IntroducedRow {
 	in := IntroducedRow{
 		PushedBy: PushedBy{PushID: row.PushID, Position: row.Position, At: row.At,
@@ -623,10 +576,8 @@ func introducedOf(row PushRow) IntroducedRow {
 	return in
 }
 
-// principal is who made the push as its row's actor columns name it — the
-// inverse of the push apply's [Principal.Actor]: an operator's credential
-// and the seat it is bound to, or a seat by its handle with the run its push
-// carried.
+// principal inverts the push apply's [Principal.Actor]: an operator's
+// credential and its bound seat, or a seat by its handle with its push's run.
 func (row PushRow) principal() Principal {
 	if PrincipalKind(row.ActorKind) == PrincipalAgent {
 		return Principal{Kind: PrincipalAgent, Seat: row.ActorSeat, Run: row.Run}
@@ -635,9 +586,9 @@ func (row PushRow) principal() Principal {
 }
 
 // IntroducedQuery is one page of a repository's pushes in LOG ORDER: (After,
-// Through] ascending — Through zero meaning the read's own checkpoint — or,
+// Through] ascending, Through zero meaning the read's own checkpoint; or,
 // Descending, everything below Before, newest first, down to the start of the
-// push history the rows keep.
+// kept history.
 type IntroducedQuery struct {
 	RepoID     string            `json:"repo_id"`
 	After      statelog.Position `json:"after,omitzero"`
@@ -646,24 +597,17 @@ type IntroducedQuery struct {
 	Descending bool              `json:"descending,omitempty"`
 }
 
-// RunPushesQuery is the executor a `run_pushes` read lists the pushes of:
-// the run by its launch id, the id its pushes' rows name it by
-// ([RunProvenance.RunID]); the repositories its launch was given, by id — the
-// run could push nowhere else, and the read lists them in this order — and
-// the position on the code log the launch read them at, above which every
-// push the run's box made applied.
+// RunPushesQuery names the executor a `run_pushes` read lists the pushes of:
+// the run by launch id ([RunProvenance.RunID]), the repositories it was given
+// by id (it could push nowhere else; listed in this order), and the code log
+// position its launch read them at, above which its box's pushes applied.
 //
-// THE READ SCANS INSTEAD OF SEEKING AN INDEX OF ITS OWN: each repository's
-// pushes above After, over code_pushes_repo_idx in log order, keeping the
-// run's own — every push made to the run's repositories DURING the run, read
-// once, when the engine collects it, in pages each held to what it READS: at
-// most the query's limit of those pushes and MaxPageBytes of what their rows
-// weigh, as the index says before a row is touched, so a long run or a wide
-// push beside it costs the read more pages and never one page more than
-// that. An index on the run would hold an entry for every box push on every
-// data node for the history's 181 days to serve that one read a run
-// (replicated 0098 says what it would cost); BenchmarkRunPushes measures what
-// the scan costs instead.
+// THE READ SCANS each repository's pushes above After over
+// code_pushes_repo_idx, keeping the run's, once at collection, in pages held to
+// what they READ (limit and MaxPageBytes, weighed by the index before a row is
+// touched), so a long run costs more pages, never a bigger one. An index on the run would hold an entry per box push on
+// every data node for 181 days for one read a run (replicated 0098);
+// BenchmarkRunPushes measures the scan.
 type RunPushesQuery struct {
 	Run   string            `json:"run"`
 	Repos []string          `json:"repos"`
@@ -671,18 +615,16 @@ type RunPushesQuery struct {
 }
 
 // BranchChangesQuery is a `branch_changes` read: the repositories a collected
-// executor was given to push to, one to [MaxRunRepos] of them, each by its
-// id and once, each with the branches of it whose live changes the read
-// answers — each a whole ref under refs/heads/, once, [MaxRefsPerQuery] in
-// all — which the engine names each delivered ref's change by. One seek of
-// code_changes_open_idx a branch, the index partial on the live states that
-// holds at most one change a branch, so the read costs its branches and never
+// executor was given, one to [MaxRunRepos], each by id and once, each with the
+// branches whose live changes the read answers (whole refs under refs/heads/,
+// once, [MaxRefsPerQuery] in all), by which the engine names each delivered
+// ref's change. One seek of code_changes_open_idx a branch (partial on the live
+// states, at most one change a branch), so the read costs its branches, never
 // the repositories' changes.
 //
 // EVERY REPOSITORY IN ONE READ: one transaction at one checkpoint, so a
-// collection names every branch the run delivered with one estate read — one
-// round trip from a node without the data role — where a read a repository
-// was one each.
+// collection is one estate read, one round trip from a node without the data
+// role.
 type BranchChangesQuery struct {
 	Repos []RepoBranches `json:"repos"`
 }
@@ -695,8 +637,8 @@ type RepoBranches struct {
 }
 
 // BranchChange is the live change one branch of a `branch_changes` read heads:
-// the repository and the branch as the query named them, the change's id and
-// its number on its repository.
+// the repository and branch as the query named them, the change's id and its
+// number.
 type BranchChange struct {
 	RepoID   string `json:"repo_id"`
 	Ref      string `json:"ref"`
@@ -704,50 +646,47 @@ type BranchChange struct {
 	Number   int64  `json:"number"`
 }
 
-// ChangesDueQuery is a `changes_due` read: the repositories a home owes
-// change work in, or ONE repository's due change work — the repository by its
-// id, which its home was nudged about or found listed — each judged against
-// the instant the home's recheck of a merge is paced by.
+// ChangesDueQuery is a `changes_due` read: the repositories a home owes change
+// work in, or ONE repository's due change work (by id, which its home was
+// nudged about or found listed), each judged against the instant the home's
+// merge recheck is paced by.
 type ChangesDueQuery struct {
 	// RepoID is "" for the listing of repositories, and otherwise the
 	// repository whose due changes the read pages.
 	RepoID string `json:"repo_id,omitempty"`
 	// RecheckBefore is REQUIRED: a change whose mergeability was recorded
-	// against a tip its target has moved from since, or recorded undecided,
-	// is due again once that record's broker instant is at or before it —
-	// its home's clock less its refresh (internal/gitlet/home's
-	// MergeabilityRefresh) — so a target that moves on every push asks its
-	// changes' merges again at the home's pace, never at its own.
+	// undecided, or against a tip its target has since moved from, is due again
+	// once that record's broker instant is at or before it (the home's clock
+	// less internal/gitlet/home's MergeabilityRefresh), so a target moving on
+	// every push is rechecked at the home's pace, never its own.
 	RecheckBefore time.Time `json:"recheck_before"`
-	// Rechecks is, with a repository, the most changes due such a recheck
-	// the read names on its first page ([ReadAnswer.Rechecks]), the change
-	// whose mergeability is oldest first, 0 to MaxSnapshotItems; none past
-	// its first page, and none without a repository.
+	// Rechecks is, with a repository, the most changes due such a recheck the
+	// read names on its first page ([ReadAnswer.Rechecks]), oldest mergeability
+	// first, 0 to MaxSnapshotItems; none past the first page or without a
+	// repository.
 	Rechecks int `json:"rechecks,omitempty"`
-	// ChartEpoch is the activation of the chart the asking home holds
+	// ChartEpoch is the activation of the asking home's chart
 	// (configplane.ActivationStamp), 0 for none: a change whose stored
 	// readiness an EARLIER chart judged ([Mergeability.ChartEpoch]) is due a
-	// refresh, so a chart apply re-judges every live change once — the one
-	// input of a readiness no record of the log moves. Never negative.
+	// refresh, so a chart apply re-judges every live change once, the one
+	// readiness input no record moves. Never negative.
 	//
-	// BASE FORMAT, as [OpMergeability] is: a field of a read between this
-	// build's nodes, which no record carries.
+	// BASE FORMAT, as [OpMergeability] is: a read's field no record carries.
 	ChartEpoch int64 `json:"chart_epoch,omitempty"`
 }
 
-// ChangeDue is one live change a `changes_due` read names, its target a live
-// branch of its repository, and what its home owes it: its head revision's
-// FACTS where it holds none against the branch it merges into, and its head
-// revision's MERGE where the change holds no mergeability of that revision
-// against that branch — or, named among a read's rechecks, a mergeability its
-// target has moved past, or one undecided, recorded at Checked. The change by
-// its id and number, its head revision and head, its source branch — the
-// listing's order and cursor — and its target with the tip the rows hold for
-// it and the position of the record that moved it there: everything its home
-// reads the revision's facts and merges it against and records them with,
-// from the one snapshot the read was answered from. A `checks_due` read names
-// its changes in the same shape, its tip the one whose checks file its home
-// dispatches by, and owes them neither facts nor a merge.
+// ChangeDue is one live change a `changes_due` read names, targeting a live
+// branch, and what its home owes it: its head revision's FACTS where it holds
+// none against the target, its head revision's MERGE where it holds no
+// mergeability of that revision against that target, or, among a read's
+// rechecks, a mergeability recorded at Checked that is undecided or that its
+// target has moved past. It carries everything the home reads, merges and
+// records with, from the read's one snapshot: the change's id, number, head
+// revision and head; its source branch (the listing's order and cursor); and
+// its target with the rows' tip and the position of the record that moved it
+// there. A `checks_due` read names its changes in the same shape, its tip the
+// one whose checks file its home dispatches by, owing neither facts nor a
+// merge.
 type ChangeDue struct {
 	ID          string            `json:"id"`
 	Number      int64             `json:"number"`
@@ -757,16 +696,14 @@ type ChangeDue struct {
 	TargetRef   string            `json:"target_ref"`
 	Tip         string            `json:"tip"`
 	TipPosition statelog.Position `json:"tip_position"`
-	// FactsDue, MergeDue and RefreshDue say what the home owes a change of a
-	// page of a `changes_due` read's due changes — its head revision's facts,
-	// its merge, and a refresh of the readiness its mergeability holds
-	// ([Mergeability.Refresh]); a recheck owes its merge alone, and says
-	// none, and so does a `checks_due` read's change, which says what it owes
-	// in Checks.
+	// FactsDue, MergeDue and RefreshDue say what the home owes a due change of
+	// a `changes_due` page: its head revision's facts, its merge, and a refresh
+	// of its mergeability's readiness ([Mergeability.Refresh]). A recheck owes
+	// its merge alone and says none; a `checks_due` change says what it owes in
+	// Checks.
 	//
-	// RefreshDue is AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. The domain landed on main with it
-	// ([RecordVersion]).
+	// RefreshDue is an estate answer's field, not a record's: no
+	// versionedFields row ([RecordVersion]).
 	FactsDue   bool `json:"facts_due,omitempty"`
 	MergeDue   bool `json:"merge_due,omitempty"`
 	RefreshDue bool `json:"refresh_due,omitempty"`
@@ -778,91 +715,80 @@ type ChangeDue struct {
 	Checks *CheckWork `json:"checks,omitempty"`
 }
 
-// AskDue is one change whose asks for review its home owes a settling
-// ([AskSettle]): the change, and the state its asks move to — ended for a
-// closed or merged change's asks still waiting, requested for a reopened
-// change's asks its end left.
+// AskDue is one change whose review asks its home owes a settling
+// ([AskSettle]): the change, and the state its asks move to (ended for a closed
+// or merged change's waiting asks, requested for a reopened change's asks its
+// end left).
 type AskDue struct {
 	ChangeID string        `json:"change_id"`
 	State    ReviewerState `json:"state"`
 }
 
-// MaxAskSettlesPerRead is the most changes one `changes_due` read names whose
-// asks are due a settling ([ReadAnswer.AskSettles]), on its first page: what
-// one pass of the repository's home settles at most — SIXTY-FOUR, the figure
-// a pass's merges are held to (internal/gitlet/home's MergeabilityPerPass),
-// here records of a few hundred bytes each, so a repository whose changes end
-// faster than its home's passes settle them is settled at that pace, the rest
-// at the next pass, since each stays due until it is settled.
+// MaxAskSettlesPerRead is the most changes one `changes_due` read's first page
+// names whose asks are due a settling ([ReadAnswer.AskSettles]): what one pass
+// of the home settles at most. SIXTY-FOUR, as a pass's merges are held to
+// (internal/gitlet/home's MergeabilityPerPass), here records of a few hundred
+// bytes; the rest stay due for the next pass.
 const MaxAskSettlesPerRead = 64
 
 // MaxRunRepos is the most repositories one [RunPushesQuery] names: the most an
-// executor is given — each costs a clone before its harness starts,
-// inside its setup budget, and a run that needs more is a task to split — so a
-// read of a run's pushes scans at most this many repositories' pushes above its
-// launch. The bound a run's repositories are held to where they are granted
-// (sandbox.MaxRunRepos) may not pass it: a run given more could not be read
-// whole, and a refused read reaches the run only as the sentence that its
-// pushes were unread — so internal/engine's
-// TestARunGivenItsMostRepositoriesHasItsPushesReadWhole holds the two to each
-// other, the one package that imports both.
+// executor is given (each costs a clone inside its setup budget; a run needing
+// more is a task to split). The granting bound (sandbox.MaxRunRepos) may not
+// pass it: a run given more could not be read whole, and a refused read reaches
+// the run only as the sentence that its pushes were unread. internal/engine's
+// TestARunGivenItsMostRepositoriesHasItsPushesReadWhole holds the two together,
+// the one package importing both.
 const MaxRunRepos = 8
 
-// RefQuery resolves refs of one repository — EVERY ONE IN ONE READ: one
+// RefQuery resolves refs of one repository, EVERY ONE IN ONE READ: one
 // transaction at one checkpoint, so a linearizable resolve of a comparison's
-// two sides pays one barrier and one round trip rather than one each, and
-// compares the two as they stood at the same moment. Each name is answered on
-// its own ([RefAnswer.Refs]).
+// two sides pays one barrier and one round trip and compares them at the same
+// moment. Each name is answered on its own ([RefAnswer.Refs]).
 type RefQuery struct {
 	// Repo is the repository's NAME.
 	Repo string `json:"repo"`
-	// Refs is every ref the read resolves, one to [MaxRefsPerQuery] of
-	// them: each a whole ref (refs/heads/main), a branch or a tag by its
-	// short name — a branch first, then a tag — or [HeadRef], the
-	// repository's default branch, read from the repository's row in the
+	// Refs is every ref the read resolves, one to [MaxRefsPerQuery]: a whole
+	// ref (refs/heads/main), a short name (a branch first, then a tag), or
+	// [HeadRef], the default branch read from the repository's row in the
 	// read's own transaction.
 	//
-	// HEAD IS RESOLVED BY THE READ, NEVER BY ITS ASKER: an asker that read
-	// the row first to learn the default branch paid a second read — on a
-	// node without the estate, a second hop through the router — for the
-	// commonest question a repository is asked, and named a branch a rename
-	// or a settings change may have moved between the two. The domain landed
-	// on main resolving `HEAD` this way ([RecordVersion]), and a query's
-	// meaning is no record's, so it takes no versionedFields row.
+	// HEAD IS RESOLVED BY THE READ, NEVER BY ITS ASKER: reading the row first
+	// cost a second read (a second router hop off the estate) for the commonest
+	// question, and named a branch a rename or settings change may have moved
+	// in between. A query's meaning is no record's, and the domain landed with
+	// it ([RecordVersion]): no versionedFields row.
 	Refs []string `json:"refs"`
-	// Fresh is REQUIRED, as on every code point read: whoever names a ref
-	// names the level it must be read at.
+	// Fresh is REQUIRED, as on every code point read: whoever names a ref names
+	// its read level.
 	Fresh statelog.Freshness `json:"fresh"`
-	// Asker is who resolves them, REQUIRED and held to its grant on the
-	// repository by the node that answers, as a [ReadQuery]'s is.
+	// Asker is who resolves them, REQUIRED and held to its grant by the
+	// answering node, as a [ReadQuery]'s is.
 	Asker Principal `json:"asker"`
-	// CeilingSeat is the seat the asking seat's turn is acting for, whose
-	// grant bounds the resolve as [ReadQuery.CeilingSeat] bounds a read.
+	// CeilingSeat is the seat the asking turn acts for, whose grant bounds the
+	// resolve as [ReadQuery.CeilingSeat] bounds a read.
 	CeilingSeat string `json:"ceiling_seat,omitempty"`
 }
 
-// HeadRef is the name a [RefQuery] gives a repository's default branch, as
-// git's own HEAD names the branch a clone checks out: resolved to
-// refs/heads/<default branch> and never to a tag, whatever else the name
-// could be.
+// HeadRef is the name a [RefQuery] gives the default branch, as git's HEAD
+// names a clone's branch: resolved to refs/heads/<default branch>, never to a
+// tag.
 const HeadRef = "HEAD"
 
-// MaxRefsPerQuery is the most refs one [RefQuery] resolves: what one page of
-// the refs listing answers ([MaxRefsPerPage]), the reader's one bound on the
-// refs a read serves. A name costs at most two point reads of code_refs' key
-// and answers at most two refs of [MaxRefNameBytes] and a sentence, so a full
-// query answers in about a megabyte, inside [MaxPageBytes]. A code tool's call
-// names two at most — a comparison's sides, a commit and its target.
+// MaxRefsPerQuery is the most refs one [RefQuery] resolves: one page of the
+// refs listing ([MaxRefsPerPage]), the reader's one bound on refs a read
+// serves. A name costs at most two point reads of code_refs' key and answers at
+// most two refs of [MaxRefNameBytes] and a sentence, so a full query answers in
+// about a megabyte, inside [MaxPageBytes]. A code tool names two at most.
 const MaxRefsPerQuery = MaxRefsPerPage
 
 // RefAnswer is what a [RefQuery]'s refs resolved to.
 type RefAnswer struct {
 	Repo RepoRef `json:"repo"`
-	// Refs answers the query's Refs, one each and in their order — a name
-	// no live ref holds answered as such beside the rest.
+	// Refs answers the query's Refs, one each in their order, a name no live
+	// ref holds answered as such.
 	Refs []ResolvedRef `json:"refs"`
-	// Position is the checkpoint every ref was read at, read in the read's
-	// own transaction.
+	// Position is the checkpoint every ref was read at, in the read's own
+	// transaction.
 	Position statelog.Position `json:"position"`
 }
 
@@ -870,39 +796,36 @@ type RefAnswer struct {
 type ResolvedRef struct {
 	// Name is the name as the query named it.
 	Name string `json:"name"`
-	// Ref is the whole ref it resolved to and OID the object that ref names
-	// — both empty where no live ref holds the name (Missing).
+	// Ref is the whole ref it resolved to and OID the object it names; both
+	// empty where no live ref holds the name (Missing).
 	Ref string `json:"ref,omitempty"`
 	OID string `json:"oid,omitempty"`
-	// Moved is the position of the record that last moved the ref — the
-	// push that set it to OID, its row's own position — at or before the
-	// answer's Position. WHAT A READ OF OID IS FLOORED AT: OID's objects
-	// landed in that record or an earlier one, so every copy of the
-	// repository at or past Moved holds them, and the target's moves up to
-	// its tip are every move up to Moved. Never the answer's Position, which
-	// a linearizable read takes past its own barrier, so a copy current to
-	// every push still sits below it and a floor there would make a Gitlet
-	// node sync for nothing.
+	// Moved is the position of the record that last moved the ref (its push
+	// row's own), at or before the answer's Position: WHAT A READ OF OID IS
+	// FLOORED AT, since OID's objects landed by then, so every copy at or past
+	// Moved holds them and the target's moves up to its tip are all up to
+	// Moved. Never the answer's Position, which a linearizable read takes past
+	// its own barrier: a copy current to every push still sits below it, and a
+	// floor there would make a Gitlet node sync for nothing.
 	Moved statelog.Position `json:"moved,omitzero"`
-	// At and Seat are the ref's row's broker instant of its last move and the
+	// At and Seat are the ref row's broker instant of its last move and the
 	// seat that set it inside its own namespace ("" for none, [seatOf]), read
-	// in the one lookup that answers OID: what a turn's hold on a seat's
-	// branch decides from whether to record itself ([RefHoldRecordAfter]),
-	// from the same read whose position the hold is decided at.
+	// in the lookup that answers OID: what a turn's hold on a seat's branch
+	// decides from whether to record itself ([RefHoldRecordAfter]), at the same
+	// read's position.
 	//
-	// AN ESTATE ANSWER'S FIELDS, NOT A RECORD'S, so they take no
-	// versionedFields row. The domain landed on main with them
+	// Estate answer's fields, not a record's: no versionedFields row
 	// ([RecordVersion]).
 	At   time.Time `json:"at,omitzero"`
 	Seat string    `json:"seat,omitempty"`
-	// Missing is, for a name no live ref holds, the sentence that says so,
-	// naming every ref tried: what [RefAnswer.Err] refuses it with.
+	// Missing is, for a name no live ref holds, the sentence naming every ref
+	// tried, which [RefAnswer.Err] refuses with.
 	Missing string `json:"missing,omitempty"`
 }
 
-// Err is the refusal of the names no live ref holds — [ErrRefNotFound] in the
-// sentence of each, in the query's order — or nil where every name resolved:
-// what a caller that needs every ref it named refuses its call with.
+// Err refuses the names no live ref holds ([ErrRefNotFound], each one's
+// sentence in query order), or is nil where every name resolved: for a caller
+// needing every ref it named.
 func (a RefAnswer) Err() error {
 	var missing []string
 	for _, r := range a.Refs {
@@ -927,222 +850,192 @@ const (
 	// ReadPushes is one repository's push history, newest first in log
 	// order.
 	ReadPushes ReadKind = "pushes"
-	// ReadRunPushes is ONE EXECUTOR'S PUSHES, oldest first — what its box
-	// delivered to Gitlet: every push row naming the run
-	// ([RunProvenance.RunID]) among those of the repositories the run was
-	// given, above the position it was launched at ([RunPushesQuery]). The
-	// engine's own read, which no principal makes, as `introduced` is: the
-	// engine reads it when it collects the run, for the seat that launched it,
-	// every page to the last — a page held to the pushes it READ may answer
-	// none of the run's and a cursor past them.
+	// ReadRunPushes is ONE EXECUTOR'S PUSHES, oldest first, what its box
+	// delivered: every push row naming the run ([RunProvenance.RunID]) in the
+	// repositories it was given, above its launch position ([RunPushesQuery]).
+	// The engine's own read, no principal's, as `introduced` is, made at
+	// collection for the launching seat, every page to the last: a page held to
+	// the pushes it READ may answer none of the run's and a cursor past them.
 	ReadRunPushes ReadKind = "run_pushes"
 	// ReadRefs is one repository's live refs under a prefix, by name; its
 	// first page carries the repository in detail too.
 	ReadRefs ReadKind = "refs"
 	// ReadChanges lists changes, NEWEST FIRST: one repository's in number
-	// order, or those of every repository the asker may read in the order
-	// the records that opened them landed — narrowed by state, by owner and
-	// by work item ([ReadQuery.State]), each listing walking the one index
-	// its filters lead.
+	// order, or every readable repository's in the order their opening records
+	// landed, narrowed by state, owner and work item ([ReadQuery.State]), each
+	// listing walking the one index its filters lead.
 	ReadChanges ReadKind = "changes"
-	// ReadChange is one change by its number on its repository (web!42):
-	// its row, its description and its authors in detail, and its revisions
-	// newest first, a page at a time — a later page its revisions alone.
+	// ReadChange is one change by its number (web!42): its row, description and
+	// authors in detail, and its revisions newest first, a page at a time (a
+	// later page its revisions alone).
 	ReadChange ReadKind = "change"
 	// ReadChangeRouting is WHOM ONE CHANGE'S RECORDS REACHED (routedread.go):
-	// the change by its number on its repository, as a `change` read names
-	// it, and the records about it that reached anybody, newest first, a
-	// page of whole records at a time — each with every recipient its
-	// notices name (code_notifications, by the change) — held to the grant
-	// on its repository as a `change` read is.
+	// the change by number, as a `change` read names it, and the records about
+	// it that reached anybody, newest first, a page of whole records at a time,
+	// each with every recipient its notices name (code_notifications), held to
+	// the grant as a `change` read is.
 	ReadChangeRouting ReadKind = "change_routing"
-	// ReadReviews is ONE REVIEWER'S REVIEWS (conversationread.go): the
-	// reviews the reviewer [ReadQuery.Reviewer] names gave, newest first, of
-	// every change of the repositories the asker may read, each naming the
-	// change it judged ([ReviewRow.Change]).
+	// ReadReviews is ONE REVIEWER'S REVIEWS (conversationread.go): those
+	// [ReadQuery.Reviewer] gave, newest first, across every repository the
+	// asker may read, each naming its change ([ReviewRow.Change]).
 	ReadReviews ReadKind = "reviews"
 	// ReadIntroduced is one repository's pushes in log order, as a Gitlet
-	// node's index of which push introduced each commit reads them: the
-	// engine's own read, which no principal makes.
+	// node's introduced index reads them: the engine's own read, which no
+	// principal makes.
 	ReadIntroduced ReadKind = "introduced"
 	// ReadCompactionDue is the repositories holding at least
-	// [ReadQuery.MinPacks] live packs, MOST FIRST, each with the version
-	// its row was read at: the listing a Gitlet node's compactor polls for
-	// the repositories a compaction may be due in — the engine's own read,
-	// which no principal makes, as `introduced` is.
+	// [ReadQuery.MinPacks] live packs, MOST FIRST, each with its row's version:
+	// what a Gitlet node's compactor polls. The engine's own read, as
+	// `introduced` is.
 	ReadCompactionDue ReadKind = "compaction_due"
-	// ReadPublicationDue is the repositories whose live packs are past the
-	// ones their last publication's recount found a layer covering — every
-	// one holding a live pack no published layer covers, and one holding
-	// only a pack pushed since that recount that is byte-identical to a
-	// published one, which has nothing to publish ([PublicationCandidate])
-	// — LEAST RECENTLY PUBLISHED FIRST, one never published before any
-	// other, each with what a publication is due by: the listing a
-	// repository's maintainer polls for the repositories a publication may
-	// be due in. None with an expunge open, whose publication rule 6g
-	// refuses until its commit. The engine's own read, as `compaction_due`
-	// is.
+	// ReadPublicationDue is the repositories whose live packs are past those
+	// their last publication's recount found a layer covering (one holding a
+	// live pack no layer covers, or only a pack pushed since that is
+	// byte-identical to a published one, which has nothing to publish:
+	// [PublicationCandidate]), LEAST RECENTLY PUBLISHED FIRST, never-published
+	// first of all, each with what a publication is due by: what a repository's
+	// maintainer polls. None with an expunge open, whose publication rule 6g
+	// refuses until its commit. The engine's own read, as `compaction_due` is.
 	ReadPublicationDue ReadKind = "publication_due"
-	// ReadExpungeDue is the active and archived repositories with an
-	// expunge open or a purge requested, by id, each with what its
-	// maintainer finishes or serves it by — and, asked with
-	// [ReadQuery.ScannedBefore], then every other active or archived
-	// repository last JUDGED at or before that instant or never — its
-	// last expunge's commit or its last clean scan's record
-	// ([ExpungeScan]), whichever came later — least recently judged first,
-	// whose maintainer judges whether an expunge is due on its own
-	// schedule: the listing a repository's maintainer
-	// polls for the expunges it owes. The engine's own read, as
-	// `compaction_due` is.
+	// ReadExpungeDue is the active and archived repositories with an expunge
+	// open or a purge requested, by id, each with what its maintainer finishes
+	// or serves it by; then, asked with [ReadQuery.ScannedBefore], every other
+	// one last JUDGED (its last expunge's commit or clean scan's record,
+	// [ExpungeScan], whichever later) at or before that instant or never, least
+	// recently judged first, whose maintainer decides on its own schedule
+	// whether an expunge is due. What a maintainer polls. The engine's own
+	// read, as `compaction_due` is.
 	ReadExpungeDue ReadKind = "expunge_due"
-	// ReadExpungeTips is the objects one repository's expunge keeps beside
-	// its refs ([ReadQuery.ExpungeTips]), in phases: the object each forced
-	// or deleting command left since an instant (code_ref_drops) — what the
-	// expunge's grace keeps reachable — in the order the drops' key holds
-	// them; then, whatever the instant, what rows hold IN FLIGHT (M6-D2):
-	// every revision head of a draft or open change, every live queue
-	// entry's head, every candidate's tip and every green row, so a purge
-	// keeps the commit a landing moves its target onto and the revisions an
-	// open change's reviewers compare. The engine's own read, which no
-	// principal makes: a repository's maintainer reads it at its scan and at
-	// its rescue (internal/gitlet/compact).
+	// ReadExpungeTips is the objects one repository's expunge keeps beside its
+	// refs ([ReadQuery.ExpungeTips]), in phases: the object each forced or
+	// deleting command left since an instant (code_ref_drops, in its key's
+	// order), which the expunge's grace keeps; then, whatever the instant, what
+	// rows hold IN FLIGHT (M6-D2): every revision head of a draft or open
+	// change, every live queue entry's head, every candidate's tip and every
+	// green row, so a purge keeps the commit a landing moves onto and the
+	// revisions an open change's reviewers compare. The engine's own read: a
+	// maintainer reads it at its scan and rescue (internal/gitlet/compact).
 	ReadExpungeTips ReadKind = "expunge_tips"
-	// ReadImportsDue is the repositories being imported, by id, each with
-	// its source and how many of its chunks have landed
-	// ([ImportCandidate]): the listing a repository's home polls for the
-	// imports it owes. The engine's own read, as `compaction_due` is.
+	// ReadImportsDue is the repositories being imported, by id, each with its
+	// source and its landed chunk count ([ImportCandidate]): what a home polls.
+	// The engine's own read, as `compaction_due` is.
 	ReadImportsDue ReadKind = "imports_due"
 	// ReadMirrorsDue is the repositories with a mirror ([MirrorCandidate]):
 	// every push mirror, by id, then the active pull mirrors LEAST RECENTLY
-	// SYNCED FIRST — so a home that syncs every MirrorInterval reads pages
-	// until one is synced within it, and no further, every sync moving its
-	// mirror's instant, one that found its source level among them
-	// ([MirrorSync.Current]) — the listing a
-	// repository's home polls for the mirrors it keeps. The engine's own
-	// read, as `compaction_due` is.
+	// SYNCED FIRST, so a home syncing every MirrorInterval reads pages until
+	// one is synced within it and no further, every sync (one finding its
+	// source level among them, [MirrorSync.Current]) moving its mirror's
+	// instant. What a home polls. The engine's own read, as `compaction_due`
+	// is.
 	ReadMirrorsDue ReadKind = "mirrors_due"
 	// ReadMirrorPush is ONE repository's push mirror as its home pushes it
-	// ([MirrorPushQuery]): the push mirror its row holds now, as the one
-	// candidate of [ReadAnswer.Mirrors] — none where it has none — and
-	// every green row of the repository ([ReadAnswer.Green]), read in ONE
-	// snapshot, so the target a push dials and the green commits it
-	// publishes are one version's. The engine's own read, as
-	// `expunge_tips` is: a push mirror's seat is judged by its home before
-	// each push ([MirrorSeatRefusal]), never as the asker of a read.
+	// ([MirrorPushQuery]): its current push mirror, as the one candidate of
+	// [ReadAnswer.Mirrors] (none where it has none), and every green row
+	// ([ReadAnswer.Green]) in ONE snapshot, so a push's target and the green
+	// commits it publishes are one version's. The engine's own read, as
+	// `expunge_tips` is: a push mirror's seat is judged by its home before each
+	// push ([MirrorSeatRefusal]), never as a read's asker.
 	ReadMirrorPush ReadKind = "mirror_push"
-	// ReadBranchChanges is the LIVE CHANGE each branch of the repositories it
-	// names heads ([BranchChangesQuery]), in the order the query names the
-	// repositories and their branches, a branch heading none left out. The engine's own read, as
-	// `run_pushes` is, which no principal makes and no grant holds: what it
-	// names each ref a collected executor moved by — the change the run
-	// delivered to — and what tells it whether the change a run asked to
-	// open at its collection is open already.
+	// ReadBranchChanges is the LIVE CHANGE each named branch heads
+	// ([BranchChangesQuery]), in the query's order, a branch heading none left
+	// out. The engine's own read, as `run_pushes` is, held to no grant: how it
+	// names the change each ref a collected executor moved delivered to, and
+	// whether a change the run asked to open is open already.
 	ReadBranchChanges ReadKind = "branch_changes"
 	// ReadChangesDue is the change work a repository's HOME Gitlet node owes
-	// ([ChangesDueQuery]): with no repository, the active repositories
-	// holding a LIVE change whose head revision has no facts or no
-	// mergeability against the branch it merges into, or whose mergeability
-	// is due again, by id; with one, the first two kinds of that repository,
-	// by source branch, each with its target's tip as the rows hold it
-	// ([ChangeDue]), beside the repository's path owners where a change of
-	// the page owes its facts, and the third oldest first. The engine's own read, as `compaction_due` is: what its
-	// home polls and is nudged into reading.
+	// ([ChangesDueQuery]): with no repository, by id, the active repositories
+	// holding a LIVE change whose head revision lacks facts or mergeability
+	// against its target, or whose mergeability is due again; with one, the
+	// first two kinds by source branch, each with its target's tip as the rows
+	// hold it ([ChangeDue]), the repository's path owners where a change of the
+	// page owes its facts, and the third oldest first. The engine's own read,
+	// as `compaction_due` is: what its home polls and is nudged into reading.
 	ReadChangesDue ReadKind = "changes_due"
 	// ReadIndexed is the active and archived repositories searched by index
-	// ([SearchIndexed]), BY NAME, each by its id and name, a page of
-	// MaxSnapshotItems after the [ReadQuery.Cursor] — the last name a page
-	// served, "" from the start: the listing a Gitlet node's indexer polls for
-	// the repositories whose code index it may keep (M6-D12). The engine's
-	// own read, as `compaction_due` is.
+	// ([SearchIndexed]), BY NAME, each by id and name, a page of
+	// MaxSnapshotItems after [ReadQuery.Cursor] (the last name served, "" from
+	// the start): what a Gitlet node's indexer polls (M6-D12). The engine's own
+	// read, as `compaction_due` is.
 	ReadIndexed ReadKind = "indexed"
-	// ReadDefaultTips is the active project repositories, BY NAME, each by
-	// its id, its name, who may read it and its default branch's tip ("" for
-	// an empty one), a
-	// page of MaxSnapshotItems after the [ReadQuery.Cursor], the last name a
-	// page served: the listing the atlas's scan compares with the tips it
-	// last read. The engine's own read, as `indexed` is.
+	// ReadDefaultTips is the active project repositories, BY NAME, each with
+	// its id, name, readers and default branch's tip ("" for an empty one), a
+	// page of MaxSnapshotItems after [ReadQuery.Cursor]: what the atlas's scan
+	// compares with the tips it last read. The engine's own read, as `indexed`
+	// is.
 	ReadDefaultTips ReadKind = "default_tips"
-	// ReadChecks lists attempts of checks ([CheckRow]), held to the asker's
-	// grant: one repository's, newest ended first and every attempt not yet
-	// ended after them; one change's of it, or one commit's, by commit, name
-	// and attempt ([CheckQuery]); or, naming no repository, the WINDOW —
-	// every repository's the asker may read whose attempts ended at or after
-	// [CheckQuery.Since], newest ended first.
+	// ReadChecks lists check attempts ([CheckRow]), held to the asker's grant:
+	// one repository's, newest ended first and the unended after; one change's
+	// or one commit's, by commit, name and attempt ([CheckQuery]); or, naming
+	// no repository, the WINDOW: every readable repository's attempts ended at
+	// or after [CheckQuery.Since], newest ended first.
 	ReadChecks ReadKind = "checks"
-	// ReadCheck is one attempt read whole ([CheckDetail]): its row, its
-	// definition, its tail, the failures its ending named and its kept log —
-	// held to the asker's grant on its repository.
+	// ReadCheck is one attempt read whole ([CheckDetail]): its row, definition,
+	// tail, the failures its ending named and its kept log, held to the asker's
+	// grant.
 	ReadCheck ReadKind = "check"
 	// ReadChecksDue is the check work a repository's HOME Gitlet node owes
-	// ([ChecksDueQuery]): with no repository, the active repositories holding
-	// a LIVE change whose head no dispatch for its target names the checks
-	// file its target's row holds, or whose head's latest attempt of a check
-	// its infrastructure ended below [AutoRequeueAttempts], or a target due a
-	// reading of its checks file again, by id; with one, those changes of
-	// that repository, by source branch, each with its target's tip as the
-	// rows hold it ([ChangeDue]) — the tip whose checks file defines what the
-	// home dispatches — and what it owes ([CheckWork]), and on its first page
-	// the targets due a reading ([CheckTargetDue]). The engine's own read, as
+	// ([ChecksDueQuery]): with no repository, by id, the active repositories
+	// holding a LIVE change whose head no dispatch for its target names its
+	// target row's checks file, or whose head's latest attempt of a check ended
+	// by infrastructure below [AutoRequeueAttempts], or a target due a
+	// re-reading of its checks file; with one, those changes by source branch,
+	// each with its target's tip ([ChangeDue], whose checks file defines what
+	// is dispatched) and what it owes ([CheckWork]), and on the first page the
+	// targets due a reading ([CheckTargetDue]). The engine's own read, as
 	// `changes_due` is (checksdispatch.go).
 	ReadChecksDue ReadKind = "checks_due"
-	// ReadCheckBox is the ONE attempt a check's box's token names, by its key
-	// ([ReadQuery.CheckBox]): its row as the rows hold it, in the answer's
-	// Checks — one row, or none. THE ENGINE'S OWN, as `checks_due` is: the
-	// box's admission to its repository (internal/gitlet/host) reads it on
-	// every request, and a box is no principal — the row it reads is its
-	// authority — so it names no asker and is held to no grant. A kind of its
-	// own rather than a `check` read naming none, so that a principal's read
-	// that forgot its asker is refused rather than answered ungated.
+	// ReadCheckBox is the ONE attempt a check box's token names, by key
+	// ([ReadQuery.CheckBox]): its row, or none, in the answer's Checks. THE
+	// ENGINE'S OWN: the box's admission (internal/gitlet/host) reads it on
+	// every request, and a box is no principal (the row is its authority), so
+	// it names no asker and has no grant. Its own kind rather than a `check`
+	// read naming no asker, so a principal's read that forgot its asker is
+	// refused, not answered ungated.
 	ReadCheckBox ReadKind = "check_box"
 	// ReadChecksQueued is the attempts waiting for a runner whose definitions
 	// name one cell ([ChecksQueuedQuery]), OLDEST QUEUED FIRST, each with its
-	// definition and its repository's name ([RunnableCheck]): a Gitlet node's
-	// CLAIM WALK (internal/gitlet/checkrun),
-	// every repository's whose repository a runner may still claim in. The
-	// engine's own, as `check_box` is: no principal makes it, and it is held
-	// to no grant.
+	// definition and repository name ([RunnableCheck]): a Gitlet node's CLAIM
+	// WALK (internal/gitlet/checkrun) over every repository a runner may still
+	// claim in. The engine's own, as `check_box` is, held to no grant.
 	ReadChecksQueued ReadKind = "checks_queued"
 	// ReadChecksRunning is the attempts runners hold ([ChecksRunningQuery]):
-	// with no repository, the repositories holding a running attempt, by id;
-	// with one, its running attempts ([CheckRow]). The engine's own: what a
-	// repository's HOME sweeps for a runner that is gone.
+	// with no repository, the repositories holding one, by id; with one, its
+	// running attempts ([CheckRow]). The engine's own: what a HOME sweeps for a
+	// runner that is gone.
 	ReadChecksRunning ReadKind = "checks_running"
-	// ReadQueue lists the LIVE entries of merge queues ([QueueRow]), held to
-	// the asker's grant: one repository's in target and queue order — one of
-	// its targets', where [ReadQuery.Target] names one — beside the
-	// candidates of the trains testing its targets ([CandidateRow]); or,
-	// naming no repository, every repository's the asker may read. The queue
-	// work a repository's HOME owes is no kind of this read: its home carries
-	// what it reads into the records it asks next, so it reads it whole or
-	// not at all, through a read of its own ([Reader.QueueDue]).
+	// ReadQueue lists the LIVE merge queue entries ([QueueRow]), held to the
+	// asker's grant: one repository's in target and queue order (one target's,
+	// where [ReadQuery.Target] names it) beside the candidates of the trains
+	// testing them ([CandidateRow]); or, naming no repository, every readable
+	// one's. A HOME's queue work is not this read: it carries what it reads
+	// into the records it asks next, so it reads it whole or not at all
+	// ([Reader.QueueDue]).
 	ReadQueue ReadKind = "queue"
 	// ReadLandings is one protected target's landings above its green
-	// ([LandingRow]), in the order they landed, beside its green row
-	// ([GreenRow]) — held to the asker's grant on its repository.
+	// ([LandingRow]) in landing order, beside its green row ([GreenRow]), held
+	// to the asker's grant.
 	ReadLandings ReadKind = "landings"
-	// ReadGreen is one repository's green rows ([GreenRow]) — each protected
-	// target's newest commit whose required checks passed — or one target's,
+	// ReadGreen is one repository's green rows ([GreenRow]), each protected
+	// target's newest commit whose required checks passed, or one target's,
 	// held to the asker's grant.
 	ReadGreen ReadKind = "green"
 	// ReadCommit is ONE COMMIT'S CHANGES (commitread.go): the repository in
-	// detail, as a `repo` read answers it, and every change the commit
-	// [ReadQuery.Commit] names belongs to — each whose merge it is and each
-	// revision it heads — read in the same snapshot and held to the asker's
-	// grant on the repository.
+	// detail, as a `repo` read answers it, and every change [ReadQuery.Commit]
+	// belongs to (each whose merge it is and each revision it heads), in one
+	// snapshot, held to the asker's grant.
 	ReadCommit ReadKind = "commit"
 	// ReadInbox is ONE PERSON'S CODE INBOX (inboxread.go): their notices,
-	// newest first on the code log, filtered in the scan by their own marks
-	// and the query's narrowing, each marked and carrying what its change
-	// says — held to the asker's grant on each notice's repository.
+	// newest first on the code log, filtered in the scan by their own marks and
+	// the query's narrowing, each marked and carrying what its change says,
+	// held to the asker's grant on each notice's repository.
 	ReadInbox ReadKind = "inbox"
-	// ReadNoticeCards is WHAT THE CARDS OF AN INBOX PAGE DRAW (inboxread.go):
-	// each change [ReadQuery.NoticeCards] names, as a card of a notice about
-	// it reads it — its row, the opening of its description, the agent
-	// findings standing open on it and, while it is live, where its merge
-	// stands, judged for the asker ([NoticeChange]) — held to the asker's
-	// grant on each change's repository. Asked after an inbox page is
-	// composed, for the changes of the code notices the page kept, and only
-	// by a read that draws them: an `inbox` read carries none of it.
+	// ReadNoticeCards is WHAT AN INBOX PAGE'S CARDS DRAW (inboxread.go): each
+	// change [ReadQuery.NoticeCards] names, as its notice's card reads it (its
+	// row, the opening of its description, its open agent findings and, while
+	// live, where its merge stands for the asker: [NoticeChange]), held to the
+	// asker's grant. Asked after an inbox page is composed, for the changes of
+	// its kept code notices, and only by a read that draws them: an `inbox`
+	// read carries none of it.
 	ReadNoticeCards ReadKind = "notice_cards"
 	// ReadCommitMarks is what a history page draws beside its commits
 	// (commitmarks.go): each commit's checks per branch and the changes it landed
@@ -1155,23 +1048,13 @@ const (
 
 // ReadKinds is the closed set.
 //
-// A KIND IS NEW TO A BUILD THAT PREDATES IT, and such a build refuses it as a
-// kind it does not know ([ErrInvalid]) — never answers it as another — so the
-// fields only a newer kind reads ride a request that build refuses whole, and
-// take no versionedFields row: `changes` and `change` are the only kinds that
-// read State, Owner and Work, `change` and `change_routing` the only ones that
-// read [ReadQuery.Change], `changes` and `reviews` the only ones that read
-// [ReadQuery.Reviewer], `run_pushes` the only one
-// that reads [ReadQuery.RunPushes], `expunge_tips` the only one that reads
-// [ReadQuery.ExpungeTips], `branch_changes` the only one that reads
-// [ReadQuery.BranchChanges], `check_box` the only one that reads
-// [ReadQuery.CheckBox], `checks_running` the only one that reads
-// [ReadQuery.ChecksRunning], `queue`, `landings` and `green` the only ones
-// that read [ReadQuery.Target], `commit` the only one that reads
-// [ReadQuery.Commit], `inbox` the only one that reads [ReadQuery.Inbox],
-// `notice_cards` the only one that reads [ReadQuery.NoticeCards],
-// `commit_marks` the only one that reads [ReadQuery.CommitMarks], and
-// `counts` the only one that reads [ReadQuery.Counts].
+// A KIND IS NEW TO A BUILD THAT PREDATES IT, which refuses it whole
+// ([ErrInvalid]), never answering it as another, so a field only newer kinds
+// read takes no versionedFields row: State, Owner, Work (`changes`, `change`);
+// Change (`change`, `change_routing`); Reviewer (`changes`, `reviews`); Target
+// (`queue`, `landings`, `green`); and RunPushes, ExpungeTips, BranchChanges,
+// CheckBox, ChecksRunning, Commit, Inbox, NoticeCards, CommitMarks and Counts,
+// each read by its own kind alone ([ReadQuery]).
 func ReadKinds() []ReadKind {
 	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRunPushes, ReadRefs, ReadChanges, ReadChange,
 		ReadChangeRouting, ReadReviews, ReadCommit,
@@ -1187,496 +1070,394 @@ func (k ReadKind) Valid() bool { return slices.Contains(ReadKinds(), k) }
 // ReadQuery is a person's, a seat's or a surface's read of Gitlet.
 type ReadQuery struct {
 	Kind ReadKind `json:"kind"`
-	// Asker is who reads, REQUIRED for every kind a principal reads — a
-	// zero or invalid one is [ErrInvalid] — and the answer is held to its
-	// grant on the node that serves it: a listing leaves out every
-	// repository the asker may not read, and a read of one answers
-	// [ErrNotPermitted]. Required rather than defaulted, because a default
-	// would be a reader nobody named, and an optional asker is a hole any
-	// caller that forgot it opens. REFUSED on `introduced`, on `run_pushes`
-	// and on the duty listings `compaction_due`, `publication_due`,
-	// `expunge_due`, `changes_due`, `checks_due` and `indexed`, which no
-	// principal makes: an asker there would be judged by nothing.
+	// Asker is who reads, REQUIRED for every kind a principal reads
+	// ([ErrInvalid] when zero or invalid), and the serving node holds the
+	// answer to its grant: a listing leaves out what it may not read, and a
+	// read of one answers [ErrNotPermitted]. Never defaulted: a default would
+	// be a reader nobody named, and an optional asker is a hole any caller that
+	// forgot it opens. REFUSED on `introduced`, `run_pushes` and the duty
+	// listings `compaction_due`, `publication_due`, `expunge_due`,
+	// `changes_due`, `checks_due` and `indexed`, which no principal makes: an
+	// asker there would be judged by nothing.
 	Asker Principal `json:"asker"`
-	// CeilingSeat is the handle of the seat the asking seat's turn is acting
-	// FOR — the colleague whose ask woke it — and "" for a read made for its
-	// asker alone: the REQUESTER CEILING (authz.DecideWithin's) applied to a
-	// repository's grant. The node that answers judges that seat's grant
-	// beside the asker's, from the same chart and the same row ([JudgeRead]),
-	// and serves only what BOTH may read: a listing leaves out what either
-	// may not, and a read the asker's own grant covers and the ceiling's
-	// does not is [ErrAboveCeiling]. Judged where the read is answered, as
-	// the asker's grant is (ADR-0088), and never where the turn runs: a
-	// ceiling judged against the repository a turn resolved once would keep
-	// admitting a seat a later activation shut out of it for the rest of
-	// the turn, while the asker's own grant was judged afresh at every read.
+	// CeilingSeat is the handle of the seat the asking turn acts FOR (whose ask
+	// woke it), "" for its asker alone: the REQUESTER CEILING
+	// (authz.DecideWithin's) on a repository's grant. The answering node judges
+	// it beside the asker from the same chart and row ([JudgeRead]) and serves
+	// only what BOTH may read; beyond it is [ErrAboveCeiling]. Judged where
+	// answered (ADR-0088), never where the turn runs, which would keep
+	// admitting a seat a later activation shut out.
 	//
-	// ONLY A SEAT, AND ONLY BESIDE A SEAT: a person's or a token's read is
-	// its own, which no ceiling bounds, and a seat is the one requester
-	// whose grant reads the chart — a person maintains every repository
-	// (ADR-0085) and a stranger reads none, both settled where the turn runs
-	// before any read is asked. Refused on `introduced`, on `run_pushes` and
-	// on the duty listings `compaction_due`, `publication_due` and
-	// `expunge_due`, which no principal makes.
-	//
-	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. The domain landed on main with it
-	// ([RecordVersion]), so every node that answers a read made for a seat
-	// judges that seat.
+	// ONLY A SEAT, BESIDE A SEAT: a person's or token's read is its own (a
+	// person maintains every repository, ADR-0085). Refused on the reads no
+	// principal makes. A request's field: no versionedFields row
+	// ([RecordVersion]).
 	CeilingSeat string `json:"ceiling_seat,omitempty"`
 	// Repo is the repository's NAME: required for repo, pushes, refs and
-	// change, and for changes the one repository the listing is of — where
-	// it names none, every repository the asker may read.
+	// change; for changes, the one repository listed, or none for every
+	// readable one.
 	Repo string `json:"repo,omitempty"`
 	// Status filters a repos listing; empty is active and archived.
 	Status []RepoStatus `json:"status,omitempty"`
 	// Protected narrows a repos listing to the repositories a rule protects
-	// — at least one row of code_protections, which code_repos.protected
-	// says on the row — walked by the index of those alone
-	// (code_repos_protected_idx, [protectedReposKey]): a page of them costs
-	// what the protected repositories cost, however many the company holds
-	// that no rule protects. Settings › Gitlet's Branch protection card lists
-	// them so; filtered after the read, a protected repository past the
-	// first page of every repository was never shown. Refused on every other
-	// kind, before any kind's own rules.
+	// (code_repos.protected), walked by code_repos_protected_idx
+	// ([protectedReposKey]), so a page costs what the protected ones cost
+	// however many are unprotected: Settings › Gitlet's Branch protection card
+	// lists them so, since filtering after the read never showed one past the
+	// first page. Refused on every other kind, before any kind's own rules.
 	//
-	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. The domain landed on main with it
-	// ([RecordVersion]).
+	// A request's field: no versionedFields row ([RecordVersion]).
 	Protected bool `json:"protected,omitempty"`
-	// Prefix narrows a refs listing to the refs under it: "refs/heads/"
-	// (the default) or "refs/tags/", or a deeper prefix ending in "/" — a
-	// seat's own namespace. It narrows a repositories listing to the names
-	// it begins — a name whole, or the opening of one — read as one range
-	// of the index by name, so a page of them costs what they cost however
-	// many repositories sort before them: what a picker asks with what was
-	// typed into it, since a company's repositories outnumber one page.
+	// Prefix narrows a refs listing to the refs under it: "refs/heads/" (the
+	// default), "refs/tags/" or a deeper prefix ending in "/" (a seat's
+	// namespace). It narrows a repositories listing to the names it begins,
+	// read as one range of the name index so a page costs what it holds however
+	// many names sort before: a picker asks with what was typed, since a
+	// company's repositories outnumber a page.
 	Prefix string `json:"prefix,omitempty"`
-	// RefListing orders, narrows and details a refs listing; nil is today's
-	// listing. An estate request's field: an older data node refuses it
+	// RefListing orders, narrows and details a refs listing; nil is the plain
+	// listing. A request's field: an older data node refuses it
 	// (ErrUnknownKeys) and the router asks the next.
 	RefListing *RefListingQuery `json:"ref_listing,omitempty"`
-	// Brief asks a push history for its rows IN BRIEF: the commits each push
-	// introduced counted and not listed, and the commands of a push of more
-	// than [BriefCommands] cut to that many — its refused ones first, each
-	// with its reason, then the rest in the order its client sent them — with
-	// every command left out counted by what became of it
-	// ([PushRow.Omitted]). A screen draws a push a few lines tall, and an
-	// import's or a mirror's push of up to MaxCommandsPerPush refs, with its
-	// introduced ids, is 140 to 460 kilobytes of row a listing never shows,
-	// sent again on every poll of the page; [ReadQuery.Push] reads one push
-	// whole.
+	// Brief asks a push history for its rows IN BRIEF ([PushRow.brief]): a
+	// screen draws a push a few lines tall, while an import's push of
+	// MaxCommandsPerPush refs is 140 to 460 KB a poll; [ReadQuery.Push] reads
+	// one whole.
 	//
-	// It asks a `change` read's first page for its change IN BRIEF too: the
-	// change's own row ([ReadAnswer.ChangeBrief]) beside the page of its
-	// revisions, and none of what its detail reads besides — no description
-	// (up to [MaxChangeBodyBytes], on rows of its own), no authors, no
-	// conversation, no mergeability and its conflicting paths, and no
-	// readiness, whose judgement is six statements and a chart. A read that
-	// needs a change's state, its revision, its head and its branches — a
-	// seat's read of a revision's files, a patch or the findings, a write of
-	// its conversation — sets it; a read that presents the change, or acts on
-	// its readiness, does not. Beside DetailOnly it answers the change's row
-	// ALONE, no page of its revisions with it — one seek of
-	// code_changes_number_idx — for a read that needs nothing of the change
-	// but its state, its branches, its id and its number: an executor's
-	// launch on a change, which looks up the branch it works on. Refused
-	// beside a part or a cursor, which read no first page of revisions;
-	// refused on every other kind.
-	//
-	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. The domain landed on main with it
-	// ([RecordVersion]), for a push history's read and a change read in brief
-	// alike.
+	// It asks a `change` read's first page for the change's row alone
+	// ([ReadAnswer.ChangeBrief]) beside its revisions, no detail or readiness
+	// (six statements and a chart): for a read needing only its state,
+	// revision, head and branches, never one presenting it or acting on its
+	// readiness. Beside DetailOnly it answers the row ALONE (one seek of
+	// code_changes_number_idx). Refused beside a part or cursor and on other
+	// kinds. A request's field: no versionedFields row ([RecordVersion]).
 	Brief bool `json:"brief,omitempty"`
-	// Push narrows a push history to ONE push, by its id, read whole: every
-	// command it carried and every commit it introduced. A push the
-	// repository's history does not hold — another repository's, or one past
-	// PushHistory — is an answer with no row, as a listing narrowed to it
-	// holds none. Pushes only, and refused beside a cursor, a limit or Brief,
-	// which page or cut a listing it is not.
+	// Push narrows a push history to ONE push by id, read whole: every command
+	// and introduced commit. A push the history does not hold (another
+	// repository's, or past PushHistory) is an answer with no row. Pushes only;
+	// refused beside a cursor, a limit or Brief.
 	//
-	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. The domain landed on main with it
-	// ([RecordVersion]).
+	// A request's field: no versionedFields row ([RecordVersion]).
 	Push string `json:"push,omitempty"`
-	// PushFilter narrows a push history to one pusher's pushes and a window of their instants ([PushFilter]);
-	// refused on every other kind and beside Push. A request field, so an older build refuses it unread.
+	// PushFilter narrows a push history to one pusher's pushes in a window of
+	// instants ([PushFilter]); refused on every other kind and beside Push. A
+	// request field, which an older build refuses unread.
 	PushFilter *PushFilter `json:"push_filter,omitempty"`
-	// Commit is the commit a `commit` read names the changes of, its whole
-	// id; refused on every other kind. A field only that kind reads, which a
-	// build that predates the kind refuses whole ([ReadKinds]).
+	// Commit is the whole commit id a `commit` read names the changes of;
+	// refused on every other kind ([ReadKinds]).
 	Commit string `json:"commit,omitempty"`
-	// PathOwners asks a `repo` read for the repository's PATH OWNERS beside
-	// its detail ([RepoDetail.PathOwners]), and nothing else answers them: a
-	// read of who owns which of its paths sets it — the API's question of one
-	// repository does where its caller asks (`path_owners=true`), the
-	// repository page's Settings tab — and a read that RESOLVES a repository
-	// or reads its row does not: every seat tool's once a turn, a refs
-	// listing's first page, the status and readers questions', the API's
-	// question of one repository asked for its row — a screen's header,
-	// polled every minute. None of those reads a path owner, and at their
-	// bound the path owners are a quarter of a mebibyte of JSON on each — one
-	// more statement on the serving node, and the bytes encoded there,
-	// shipped and decoded to be dropped. Refused on every other kind.
+	// PathOwners asks a `repo` read for the repository's PATH OWNERS beside its
+	// detail ([RepoDetail.PathOwners]); nothing else answers them. A read of
+	// who owns its paths sets it (the API's question of one repository with
+	// `path_owners=true`, the repository page's Settings tab); a read that
+	// RESOLVES a repository or reads its row does not (every seat tool's once a
+	// turn, a refs listing's first page, the status and readers questions, a
+	// screen's header polled every minute): at their bound the path owners are
+	// a quarter mebibyte of JSON each, plus a statement on the serving node,
+	// encoded, shipped and decoded to be dropped. Refused on every other kind.
 	//
-	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. The domain landed on main with it
-	// ([RecordVersion]).
+	// A request's field: no versionedFields row ([RecordVersion]).
 	PathOwners bool `json:"path_owners,omitempty"`
-	// Gates asks a read that answers one repository's DETAIL — a `repo`
-	// read, or a refs listing's first page, which carries it — for the merge
-	// gates of its rules ([RepoDetail.Gates]), and nothing else answers
-	// them: a read that presents a rule's gate sets it — the API's question
-	// of one repository where its caller asks (`gates=true`), code_get_repo —
-	// and a read that resolves a
-	// repository does not, for the path owners' reason: none of those reads
-	// a gate, and at their bound a repository's gates are half a mebibyte of
-	// JSON on each. Refused on every other read, and on a refs listing's
-	// later pages, which carry no detail.
+	// Gates asks a read answering one repository's DETAIL (a `repo` read, or a
+	// refs listing's first page) for its rules' merge gates
+	// ([RepoDetail.Gates]); nothing else answers them. A read presenting a gate
+	// sets it (the API's one-repository question with `gates=true`,
+	// code_get_repo); a read resolving a repository does not, for the path
+	// owners' reason: a repository's gates reach half a mebibyte of JSON.
+	// Refused on every other read and on a refs listing's later pages, which
+	// carry no detail.
 	//
-	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. The domain landed on main with it
-	// ([RecordVersion]).
+	// A request's field: no versionedFields row ([RecordVersion]).
 	Gates bool `json:"gates,omitempty"`
-	// Cards asks a `changes` listing for each listed change's card ([ChangeSummary.Card]);
-	// refused on every other kind. A request field, so an older build refuses it unread.
+	// Cards asks a `changes` listing for each change's card
+	// ([ChangeSummary.Card]); refused on every other kind. A request field,
+	// which an older build refuses unread.
 	Cards bool `json:"cards,omitempty"`
-	// Change is a `change` read's number, and a `change_routing` read's: the
-	// change's on the repository Repo names, web!42's 42 — REQUIRED there,
-	// at least 1, and refused on every other kind.
+	// Change is a `change` or `change_routing` read's number on the repository
+	// Repo names (web!42's 42): REQUIRED there, at least 1, refused on every
+	// other kind.
 	Change int64 `json:"change,omitempty"`
 	// State, Owner and Work narrow a `changes` listing, each refused on every
-	// other kind: the changes in one state; the changes one principal opened,
-	// by the handle their rows name it by — a seat's own, or the human seat a
-	// person holds; and the changes carrying one work item, by its identity
-	// across trackers, `<backend>:<id>` ([types.WorkItem.Ref]). Repo, where
-	// set, narrows the listing to one repository.
+	// other kind: one state; the changes one principal opened, by the handle
+	// their rows name (a seat's own, or a person's human seat); the changes
+	// carrying one work item, `<backend>:<id>` ([types.WorkItem.Ref]). Repo,
+	// where set, narrows to one repository.
 	//
-	// A LISTING NAMES A REPOSITORY, A WORK ITEM, A STATE OR A WINDOW — what
-	// the indexes it walks lead with, beside the reviewer and the need below —
-	// and is refused naming none: there is no index of
-	// every change the company holds, and an owner's changes are kept by
-	// state. It walks the ONE index its filters lead (changeread.go): a work
-	// item's changes; an owner's in a state; a repository's in a state; a
-	// repository's; the company's in a state — and tests every filter that
-	// index does not seek on the rows the page read, so a page is the rows
-	// it READ, never the rows it kept, and may be short, or empty with a
-	// cursor, as a listing of repositories a seat reads little of is.
+	// A LISTING NAMES A REPOSITORY, A WORK ITEM, A STATE OR A WINDOW (what its
+	// indexes lead with, beside reviewer and need below) and is refused naming
+	// none: no index holds every change, and an owner's are kept by state. It
+	// walks the ONE index its filters lead (changeread.go) and tests every
+	// other filter on the rows it read, so a page is the rows it READ, never
+	// those it kept, and may be short or empty with a cursor.
 	State ChangeState `json:"state,omitempty"`
 	Owner string      `json:"owner,omitempty"`
 	Work  string      `json:"work,omitempty"`
-	// Reviewer and Needs narrow a `changes` listing by what its changes ask
-	// of somebody, each refused on every other kind (conversationread.go):
-	// Reviewer, the changes whose ask of that reviewer stands — a seat by
-	// its handle, or a person by the human seat they hold; and Needs, the
-	// LIVE changes waiting on whom it names ([Need]): on a reviewer's review
-	// (review), on their owner's fix (fix), on the asker either way (me), or
-	// on a person (person) — the last names no reviewer, whoever asks. A
-	// listing either names walks the ONE index of who the changes wait on —
-	// a reviewer's standing asks, an owner's changes in a state, the changes
-	// whose stored readiness waits on a person — and tests every other
-	// filter on the rows it read, as every listing does.
+	// Reviewer and Needs narrow a `changes` listing by what it asks of somebody
+	// (conversationread.go), refused on other kinds: Reviewer, the changes
+	// whose ask of that reviewer (a seat's handle, a person's human seat)
+	// stands; Needs, the LIVE changes waiting on whom it names ([Need]): a
+	// review (review), their owner's fix (fix), the asker either way (me), or a
+	// person (person, naming no reviewer). It walks the ONE index of who
+	// changes wait on, testing other filters on the rows read.
 	//
-	// THE DOMAIN LANDED ON MAIN WITH THESE TWO ([RecordVersion]), so no build
-	// ignores them and answers the wider listing they narrow.
-	//
-	// Reviewer is also a `reviews` listing's REQUIRED reviewer — whose
-	// reviews it lists, a seat by its handle or a person by the human seat
-	// they hold — which no build that predates the kind reads, since it
-	// refuses the kind whole.
+	// THE DOMAIN LANDED ON MAIN WITH THESE ([RecordVersion]): no build answers
+	// the wider listing. Reviewer is also a `reviews` listing's REQUIRED
+	// reviewer.
 	Reviewer string `json:"reviewer,omitempty"`
 	Needs    Need   `json:"needs,omitempty"`
-	// Window narrows a `changes` listing to the changes that moved within
-	// it ([ChangeWindow], [ChangeSummary.UpdatedAt]), refused on every other
-	// kind. A listing that names nothing else an index leads by — no
-	// repository, work item, reviewer or need, and no live state — walks the
-	// two indexes of when its changes last moved (changewindow.go), newest
-	// move first, and tests a terminal state and an owner on the rows it
-	// read; one that names any of those walks that one's index, in its order
-	// (a live state's newest opening first), and tests the window on each
-	// row. A live state asked by when its changes moved ([ChangeSortUpdated])
+	// Window narrows a `changes` listing to the changes that moved within it
+	// ([ChangeWindow], [ChangeSummary.UpdatedAt]), refused on every other kind.
+	// A listing naming nothing else an index leads by (no repository, work
+	// item, reviewer, need or live state) walks the two indexes of last move
+	// (changewindow.go), newest first, testing a terminal state and an owner on
+	// the rows; one naming any of those walks its index in its order and tests
+	// the window on each row. A live state sorted by move ([ChangeSortUpdated])
 	// walks by move and reads no change that moved before the window.
 	Window ChangeWindow `json:"window,omitempty"`
-	// ChangeSort orders a `changes` listing ([ChangeSort]); "" is its walk's own order. A request
-	// field, so an older build refuses it unread and the router asks the next node.
+	// ChangeSort orders a `changes` listing ([ChangeSort]); "" is its walk's
+	// own order. A request field: an older build refuses it unread and the
+	// router asks the next node.
 	ChangeSort ChangeSort `json:"change_sort,omitempty"`
-	// Readiness narrows a `changes` listing to the open changes standing in one bucket
-	// ([Readiness.Bucket]); refused on every other kind. A request field, so an older build
-	// refuses it unread and the router asks the next node.
+	// Readiness narrows a `changes` listing to the open changes in one bucket
+	// ([Readiness.Bucket]); refused on every other kind. A request field: an
+	// older build refuses it unread and the router asks the next node.
 	Readiness ReadinessBucket `json:"readiness,omitempty"`
-	// Part is the list a `change` read pages beside the change — its
-	// revisions, which "" names too, its reviewers, its comments, its
-	// reviews, its findings or the asker's own standing findings
-	// ([ChangeParts]) — refused on every other kind.
-	// The change's detail rides a first page of its revisions alone; every
-	// page of another part carries that part's rows, held to the grant again
-	// as every page of a change is. As with Reviewer, the domain landed on
-	// main with it, so no build ignores it.
+	// Text narrows a `changes` listing to the changes whose title or
+	// description holds every word of it (changetext.go); refused on every
+	// other kind. A request field: an older build refuses it unread and the
+	// router asks the next node.
+	Text string `json:"text,omitempty"`
+	// Part is the list a `change` read pages beside the change: revisions (""
+	// too), reviewers, comments, reviews, findings or the asker's own standing
+	// findings ([ChangeParts]); refused on every other kind. The detail rides
+	// only a first page of revisions; every page of another part carries that
+	// part's rows, held to the grant again. As with Reviewer, the domain landed
+	// on main with it, so no build ignores it.
 	Part ChangePart `json:"part,omitempty"`
-	// DetailOnly asks a `change` read for the change's DETAIL ALONE — its
-	// row, description, authors, conversation, mergeability and readiness —
-	// with no page of its revisions beside it, and nothing else answers it:
-	// a read that judges or acts on a change sets it — a merge's and a
-	// rebase's build on the repository's Gitlet node (a merge's read again at
-	// the head of the log before a refusal and once more on every rebuild),
-	// and a seat's write tool resolving the change it names — and a read
-	// that presents its revisions does not. None of those reads a revision, and a
-	// first page of them is up to defaultRevisionLimit (200) revisions, each
-	// carrying its facts' touched paths (up to MaxTouchedPaths) — up to
-	// MaxPageBytes of JSON — read, encoded, shipped from a data node and
-	// decoded to be dropped. Beside Brief it answers the change's row alone
-	// ([ReadQuery.Brief]). Refused on every other kind, and beside a part, a
-	// cursor or a limit, which page a list it does not read.
+	// DetailOnly asks a `change` read for the change's DETAIL ALONE (row,
+	// description, authors, conversation, mergeability, readiness) with no page
+	// of revisions; nothing else answers it. A read judging or acting on a
+	// change sets it (a merge's or rebase's build on the Gitlet node, read
+	// again before a refusal and on every rebuild; a seat's write tool
+	// resolving its change); a read presenting revisions does not. A first page
+	// is up to defaultRevisionLimit (200) revisions with up to MaxTouchedPaths
+	// each, up to MaxPageBytes of JSON shipped to be dropped. Beside Brief it
+	// answers the row alone ([ReadQuery.Brief]). Refused on every other kind
+	// and beside a part, cursor or limit.
 	//
-	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. The domain landed on main with it
-	// ([RecordVersion]).
+	// A request's field: no versionedFields row ([RecordVersion]).
 	DetailOnly bool `json:"detail_only,omitempty"`
 	// Resolve asks a read that names its repository BY NAME and judges the
-	// asker's grant on it — a `change` read, a `changes` or a `checks`
-	// listing naming one repository — for the repository the name RESOLVED
-	// to as well ([ReadAnswer.Resolved]): its row as a `repo` read resolves
-	// it, read in the same snapshot as the answer, and the read a POINT read
-	// of the repository, which a record this node deferred on it refuses, as
-	// a `repo` read is refused. A seat's or a person's assistant's call that
-	// has not yet resolved the repository it names sets it on its first read,
-	// so that read is the resolution too — ONE linearizable read, one barrier
-	// on the code log, where a `repo` read and then the call's own were two
-	// serial barriers, on every call the operator surface makes. Refused on
-	// every other read, and on a listing naming no repository.
+	// grant on it (a `change` read, a `changes` or `checks` listing of one
+	// repository) for the repository the name RESOLVED to
+	// ([ReadAnswer.Resolved]): its row as a `repo` read resolves it, in the
+	// answer's snapshot, the read a POINT read refused, as a `repo` read is, by
+	// a record this node deferred on it. A call that has not yet resolved its
+	// repository sets it on its first read: ONE linearizable read and one code
+	// log barrier where a `repo` read then the call's own were two serial
+	// barriers, on every operator-surface call. Refused on every other read and
+	// on a listing naming no repository.
 	//
-	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. The domain landed on main with it
-	// ([RecordVersion]).
+	// A request's field: no versionedFields row ([RecordVersion]).
 	Resolve bool `json:"resolve,omitempty"`
-	// FindingIDs narrows a `change` read's findings part to the findings it
-	// names, 1 to [MaxFindingsPerReview] of them, each a finding's id once —
-	// what one write names: an apply's suggestions, an answer to findings —
-	// served by one seek of each id's text and narrow row, never a walk of
-	// the part. Findings are paged by id, and ids are time-ordered, so the
-	// findings a write names, the newest review's, are on the part's LAST
-	// page: unnarrowed, every such write read the change's whole review
-	// history to keep at most 64 rows of it. An id the change does not hold
-	// is no row of the answer, as a page holds none of it. The rows come in
-	// id order and are bounded by the page's bytes as a page of the part is,
-	// so a cursor resumes them where findings at their bounds filled one;
-	// refused beside a limit, which the ids are, and on every other part and
-	// kind.
+	// FindingIDs narrows a `change` read's findings part to the 1 to
+	// [MaxFindingsPerReview] findings it names, each once (what one write
+	// names: an apply's suggestions, an answer to findings), served by one seek
+	// per id, never a walk. Findings page by id and ids are time-ordered, so a
+	// write's findings (the newest review's) sit on the part's LAST page:
+	// unnarrowed, every such write read the whole review history for at most 64
+	// rows. An id the change lacks is no row. Rows come in id order, bounded by
+	// the page's bytes, so a cursor resumes them. Refused beside a limit (the
+	// ids are one) and on every other part and kind.
 	//
-	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. The domain landed on main with it
-	// ([RecordVersion]).
+	// A request's field: no versionedFields row ([RecordVersion]).
 	FindingIDs []string `json:"finding_ids,omitempty"`
-	// FindingPaths asks a `change` read for its findings counted by path, state and revision
-	// ([ReadAnswer.FindingPaths]), paged by Limit and Cursor; refused on every other kind and beside
-	// a part, detail_only, brief or finding_ids. A key of its own, so an older build refuses it unread.
+	// FindingPaths asks a `change` read for its findings counted by path, state
+	// and revision ([ReadAnswer.FindingPaths]), paged by Limit and Cursor;
+	// refused on every other kind and beside a part, detail_only, brief or
+	// finding_ids. A key of its own, which an older build refuses unread.
 	FindingPaths bool `json:"finding_paths,omitempty"`
-	// Viewed asks a `change` read for the asker's own viewed marks on its files ([ReadAnswer.Viewed]),
-	// paged by Limit and Cursor in digest order; refused on every other kind and beside a part,
-	// detail_only, brief, finding_ids or finding_paths. A key of its own, so an older build refuses it unread.
+	// Viewed asks a `change` read for the asker's own viewed marks on its files
+	// ([ReadAnswer.Viewed]), paged by Limit and Cursor in digest order; refused
+	// on every other kind and beside a part, detail_only, brief, finding_ids or
+	// finding_paths. A key of its own, which an older build refuses unread.
 	Viewed bool `json:"viewed,omitempty"`
 	// Introduced is an `introduced` read's range: REQUIRED for that kind,
 	// refused on every other.
 	Introduced *IntroducedQuery `json:"introduced,omitempty"`
-	// RunPushes is a `run_pushes` read's run: REQUIRED for that kind,
-	// refused on every other. An estate request's field and no record's, so
-	// it takes no versionedFields row: a node of a build that predates the
-	// kind refuses the read as a kind it does not know (ErrInvalid) — the
-	// run's pushes unread, never answered as none.
+	// RunPushes is a `run_pushes` read's run: REQUIRED there, refused on every
+	// other kind. A request's field, no versionedFields row: a build predating
+	// the kind refuses it (ErrInvalid), the run's pushes unread, never answered
+	// as none.
 	RunPushes *RunPushesQuery `json:"run_pushes,omitempty"`
-	// ChangesDue is a `changes_due` read's own: REQUIRED for that kind and
-	// refused on every other ([ChangesDueQuery]). An estate request's field
-	// and no record's, so it takes no versionedFields row: a node of a build
-	// that predates the kind refuses the read as a kind it does not know
-	// (ErrInvalid) — the home's work waits, never answered as none.
+	// ChangesDue is a `changes_due` read's own ([ChangesDueQuery]): REQUIRED
+	// there, refused on every other kind. A request's field, no versionedFields
+	// row: a build predating the kind refuses it (ErrInvalid), so the home's
+	// work waits, never answered as none.
 	ChangesDue *ChangesDueQuery `json:"changes_due,omitempty"`
-	// Checks narrows a `checks` read to a change's attempts or a commit's,
-	// or bounds its window; and names the one attempt a `check` read is of,
-	// REQUIRED there. Refused on every other kind. ChecksDue is a
-	// `checks_due` read's question, REQUIRED there as ChangesDue is a
-	// `changes_due` read's, and refused on every other kind. Estate request fields and no
-	// record's, so they take no versionedFields row: a node of a build that
-	// predates the kinds refuses the read as a kind it does not know.
+	// Checks narrows a `checks` read to a change's or commit's attempts, or
+	// bounds its window, and names the one attempt a `check` read is of
+	// (REQUIRED there). ChecksDue is a `checks_due` read's question, REQUIRED
+	// there. Each is refused on every other kind. Request fields, no
+	// versionedFields rows: a build predating the kinds refuses them.
 	Checks    *CheckQuery     `json:"checks,omitempty"`
 	ChecksDue *ChecksDueQuery `json:"checks_due,omitempty"`
-	// CheckBox is the attempt a `check_box` read is of, by its KEY — its
-	// repository by id, as the token that names it does: REQUIRED for that
-	// kind, refused on every other. An estate request's field and no
-	// record's, so it takes no versionedFields row: a node of a build that
-	// predates the kind refuses the read as a kind it does not know
-	// (ErrInvalid) — the box refused, never admitted by a row read as none.
+	// CheckBox is the attempt a `check_box` read is of, by KEY (its repository
+	// by id, as the token names it): REQUIRED there, refused on every other
+	// kind. A request's field, no versionedFields row: a build predating the
+	// kind refuses it (ErrInvalid), the box refused, never admitted by a row
+	// read as none.
 	CheckBox *CheckKey `json:"check_box,omitempty"`
-	// ChecksRunning is a `checks_running` read's question, REQUIRED for that
-	// kind and refused on every other: the repositories holding a running
-	// attempt, or one repository's running attempts by its id. An estate
-	// request's field and no record's, so it takes no versionedFields row: a
-	// node of a build that predates the kind refuses the read as a kind it
-	// does not know (ErrInvalid) — the sweep waits, never answered as none.
+	// ChecksRunning is a `checks_running` read's question (the repositories
+	// holding a running attempt, or one repository's by id): REQUIRED there,
+	// refused on every other kind. A request's field, no versionedFields row: a
+	// build predating the kind refuses it (ErrInvalid), so the sweep waits,
+	// never answered as none.
 	ChecksRunning *ChecksRunningQuery `json:"checks_running,omitempty"`
-	// ChecksQueued is a `checks_queued` read's question, REQUIRED for that
-	// kind and refused on every other: the cell the attempts' definitions
-	// name, which a runner's walk reads one at a time for the cells it has
-	// room in. An estate request's field and no record's, so it takes no
-	// versionedFields row: the domain landed on main with it
-	// ([RecordVersion]), so every node that serves the read reads it.
+	// ChecksQueued is a `checks_queued` read's question: the cell the attempts'
+	// definitions name, which a runner's walk reads one at a time for the cells
+	// it has room in. REQUIRED there, refused on every other kind. A request's
+	// field: no versionedFields row ([RecordVersion]).
 	ChecksQueued *ChecksQueuedQuery `json:"checks_queued,omitempty"`
-	// DefaultTips narrows a `default_tips` read to ONE repository by its id,
-	// answered with no row where it is not an active project repository;
-	// nil lists every one. Refused on every other kind. An estate request's
-	// field and no record's, so it takes no versionedFields row.
+	// DefaultTips narrows a `default_tips` read to ONE repository by id, no row
+	// where it is not an active project repository; nil lists every one.
+	// Refused on every other kind. A request's field: no versionedFields row.
 	DefaultTips *DefaultTipsQuery `json:"default_tips,omitempty"`
-	// ExpungeTips is an `expunge_tips` read's repository and instant:
-	// REQUIRED for that kind, refused on every other. An estate request's
-	// field and no record's, so it takes no versionedFields row: a node of a
-	// build that predates the kind refuses the read as a kind it does not
-	// know (ErrInvalid) — the scan unread, never answered as no tips.
+	// ExpungeTips is an `expunge_tips` read's repository and instant: REQUIRED
+	// there, refused on every other kind. A request's field, no versionedFields
+	// row: a build predating the kind refuses it (ErrInvalid), the scan unread,
+	// never answered as no tips.
 	ExpungeTips *ExpungeTipsQuery `json:"expunge_tips,omitempty"`
-	// MirrorPush is a `mirror_push` read's repository: REQUIRED for that
-	// kind, refused on every other. An estate request's field and no
-	// record's, so it takes no versionedFields row: a node of a build that
-	// predates the kind refuses the read as a kind it does not know
-	// (ErrInvalid) — the push waits for another attempt, never answered as
-	// a repository with no green row.
+	// MirrorPush is a `mirror_push` read's repository: REQUIRED there, refused
+	// on every other kind. A request's field, no versionedFields row: a build
+	// predating the kind refuses it (ErrInvalid), so the push waits for another
+	// attempt, never answered as a repository with no green row.
 	MirrorPush *MirrorPushQuery `json:"mirror_push,omitempty"`
-	// ScannedBefore asks an `expunge_due` read for its WEEKLY ARM beside
-	// its open one: after every repository with an expunge open or a purge
-	// requested, every other active or archived repository — a scratch one
-	// as much as a project — last judged at or before it (an expunge
-	// committed in it, or a scan of it found clean, [ExpungeScan]), or
-	// never, least recently judged first; the maintainer asks from its
-	// clock less [ExpungeInterval]. Zero asks the open arm alone. Refused on every
-	// other kind. An estate request's field and no record's, so it takes
-	// no versionedFields row: the domain landed on main with it
-	// ([RecordVersion]), so every node that serves the read reads it.
+	// ScannedBefore asks an `expunge_due` read for its WEEKLY ARM beside its
+	// open one ([ReadExpungeDue]): every other active or archived repository
+	// (scratch or project) last judged at or before it ([ExpungeScan]) or
+	// never, least recently judged first; the maintainer asks from its clock
+	// less [ExpungeInterval]. Zero asks the open arm alone. Refused on every
+	// other kind. A request's field: no versionedFields row ([RecordVersion]).
 	ScannedBefore time.Time `json:"scanned_before,omitzero"`
 	// BranchChanges is a `branch_changes` read's repositories and branches:
-	// REQUIRED for that kind, refused on every other. An estate request's
-	// field and no record's, so it takes no versionedFields row: a node of a
-	// build that predates the kind refuses the read as a kind it does not
-	// know (ErrInvalid) — the run's delivered refs named by no change, never
-	// answered as heading none.
+	// REQUIRED there, refused on every other kind. A request's field, no
+	// versionedFields row: a build predating the kind refuses it (ErrInvalid),
+	// the run's refs named by no change, never answered as heading none.
 	BranchChanges *BranchChangesQuery `json:"branch_changes,omitempty"`
-	// Target narrows a `queue` read of a repository to one of its branches'
-	// queues, and names the protected branch a `landings` read lists and a
-	// `green` read answers — REQUIRED for landings — a branch a change may
-	// name, beside the repository Repo names; refused on every other kind.
-	// An estate request's field and no record's, so it takes no
-	// versionedFields row: a node of a build that predates the kinds refuses
-	// the read as a kind it does not know.
+	// Target narrows a `queue` read of a repository to one branch's queue, and
+	// names the protected branch a `landings` read lists (REQUIRED there) and a
+	// `green` read answers, beside Repo; refused on every other kind. A
+	// request's field, no versionedFields row: a build predating the kinds
+	// refuses them.
 	Target string `json:"target,omitempty"`
-	// Trains asks a `queue` read for its trains and ejections across every repository it
-	// lists, and any queue read for EjectedTotal ([ReadAnswer.EjectedTotal]); refused on every
-	// other kind. A request field, so an older build refuses it unread and the router asks the next.
+	// Trains asks a `queue` read for its trains and ejections across every
+	// repository it lists, and any queue read for EjectedTotal
+	// ([ReadAnswer.EjectedTotal]); refused on every other kind. A request
+	// field: an older build refuses it unread and the router asks the next.
 	Trains bool `json:"trains,omitempty"`
 
 	// Inbox is an `inbox` read's question: whose inbox, and how it is
 	// narrowed ([InboxQuery]). Only that kind reads it.
 	Inbox *InboxQuery `json:"inbox,omitempty"`
-	// NoticeCards is a `notice_cards` read's question: the ids of the
-	// changes whose cards it answers, each once — at most [MaxNoticeCards],
-	// what one composed page of an inbox can name. REQUIRED for that kind
-	// and refused on every other; an estate request's field and no
-	// record's, so it takes no versionedFields row: a node of a build that
-	// predates the kind refuses the read as a kind it does not know.
+	// NoticeCards is a `notice_cards` read's change ids, each once, at most
+	// [MaxNoticeCards] (what one composed inbox page can name). REQUIRED there,
+	// refused on every other kind; a request's field, no versionedFields row: a
+	// build predating the kind refuses it.
 	NoticeCards []string `json:"notice_cards,omitempty"`
-	// CommitMarks is a `commit_marks` read's commits: 1 to [MaxCommitMarks] whole
-	// ids, once each, required for that kind and refused on every other. A request
-	// field, no record's, so no versionedFields row: an older build refuses the kind.
+	// CommitMarks is a `commit_marks` read's commits: 1 to [MaxCommitMarks]
+	// whole ids, once each, required there and refused on every other kind. A
+	// request field, no versionedFields row: an older build refuses the kind.
 	CommitMarks []string `json:"commit_marks,omitempty"`
-	// DayBounds is the asker's day boundaries, a day between each two: on a push history, and with
-	// RepoFacts on a listing of repositories or a read of one ([ReadQuery.validateDayBounds]); refused
-	// on every other kind. A request field, no record's: an older build refuses it unread.
+	// DayBounds is the asker's day boundaries, a day between each two: on a
+	// push history, and with RepoFacts on a repositories listing or one
+	// repository's read ([ReadQuery.validateDayBounds]); refused on every other
+	// kind. A request field: an older build refuses it unread.
 	DayBounds []time.Time `json:"day_bounds,omitempty"`
-	// Counts is a `counts` read's parts, each a key of its own so an older build refuses one
-	// it lacks unread; required there and refused on every other kind. A request field, no record's.
+	// Counts is a `counts` read's parts, each a key of its own so an older
+	// build refuses one it lacks unread; required there, refused on every other
+	// kind. A request field.
 	Counts *CountsQuery `json:"counts,omitempty"`
-	// RepoFacts asks a listing of repositories or a read of one for each one's facts
-	// ([RepoSummary.ChangeCounts], [RepoSummary.Card]) and a first page for its total
-	// ([ReadAnswer.ReposTotal]); refused on every other kind. A request field, no record's.
+	// RepoFacts asks a repositories listing or one repository's read for each
+	// one's facts ([RepoSummary.ChangeCounts], [RepoSummary.Card]) and a first
+	// page for the total ([ReadAnswer.ReposTotal]); refused on every other
+	// kind. A request field.
 	RepoFacts bool `json:"repo_facts,omitempty"`
-	// RepoKind narrows a `repos` listing to one kind ([RepoKind]); "" is every kind. Refused on
-	// every other kind of read. A request field, so an older build refuses it unread.
+	// RepoKind narrows a `repos` listing to one kind ([RepoKind]); "" is every
+	// kind. Refused on every other kind. A request field: an older build
+	// refuses it unread.
 	RepoKind RepoKind `json:"repo_kind,omitempty"`
-	// RepoSort orders a `repos` listing ([RepoSort]); "" is by name. Refused on every other kind
-	// of read. A request field, so an older build refuses it unread.
+	// RepoSort orders a `repos` listing ([RepoSort]); "" is by name. Refused on
+	// every other kind. A request field: an older build refuses it unread.
 	RepoSort RepoSort `json:"repo_sort,omitempty"`
-	// MinPacks is a `compaction_due` read's floor — the repositories
-	// holding at least this many live packs — REQUIRED, at least 1, for that
-	// kind and refused on every other.
+	// MinPacks is a `compaction_due` read's floor of live packs: REQUIRED
+	// there, at least 1, refused on every other kind.
 	MinPacks int    `json:"min_packs,omitempty"`
 	Cursor   string `json:"cursor,omitempty"`
-	// Limit is repos 1..500 (0 = 100), pushes 1..200 (0 = 50), refs
-	// 1..1 000 (0 = 200), changes 1..200 (0 = 50) — the rows a page READS,
-	// whatever its filters keep of them — a change's revisions and its
-	// reviewers 1..1 000 (0 = 200), its comments, its reviews and its
-	// findings 1..200 (0 = 50), the records of a change's routing 1..200
-	// (0 = 50), a reviewer's reviews 1..200 (0 = 50) — the rows a page READS,
-	// as a listing of changes — and the engine's own two reads of pushes in
-	// log order, introduced and run_pushes, 1..MaxSnapshotItems (0 = the
-	// most) — run_pushes' the pushes of its run's repositories a page READS,
-	// whatever few of them name the run; a push history narrowed by PushFilter, the
-	// pushes a page KEEPS, reading at most MaxPushesScanned pushes and MaxPageBytes
-	// of their rows; checks 1..200 (0 = 50), the rows a
-	// page READS, as a listing of changes; checks_queued 1..MaxSnapshotItems
-	// (0 = the most), the attempts a runner's claim walk reads a page; a page
-	// of a duty listing —
-	// `compaction_due`, `publication_due`, `expunge_due`, `changes_due`,
-	// `checks_due` — and of an `expunge_tips` read is MaxSnapshotItems and
-	// names none.
+	// Limit, per kind (min..max, with its zero default):
+	//   - repos 1..500 (100); pushes 1..200 (50); refs 1..1 000 (200)
+	//   - changes 1..200 (50), a change's revisions and reviewers 1..1 000 (200),
+	//     its comments, reviews and findings, its routing's records and a
+	//     reviewer's reviews 1..200 (50); checks 1..200 (50)
+	//   - introduced, run_pushes and checks_queued 1..MaxSnapshotItems (the most)
+	//   - a duty listing (compaction_due, publication_due, expunge_due,
+	//     changes_due, checks_due) and expunge_tips: MaxSnapshotItems, naming none
+	// Each counts the rows a page READS, whatever its filters keep (run_pushes:
+	// its repositories' pushes, however few name the run), except a push history
+	// narrowed by PushFilter: the pushes a page KEEPS, reading at most
+	// MaxPushesScanned pushes and MaxPageBytes of their rows.
 	Limit int                `json:"limit,omitempty"`
 	Fresh statelog.Freshness `json:"fresh"`
 }
 
-// ReadAnswer is a [ReadQuery]'s answer: Changes is a `changes` listing's page;
-// Change a `change` read's detail, on the first page of its revisions alone,
-// and ChangeBrief its row in its place, for a first page read in brief
-// ([ReadQuery.Brief]); Revisions a page of that change's revisions, newest
-// first, on every page of them; Reviewers, Comments, Reviews and Findings a
-// page of the part of its conversation a `change` read names
-// ([ReadQuery.Part]) — Reviews a `reviews` listing's page too, each naming its
-// change; Routed a `change_routing` read's page; Counts a `counts`
-// read's parts; and ReposTotal a first page of repositories' total.
+// ReadAnswer is a [ReadQuery]'s answer: Changes a `changes` page; Change a
+// `change` read's detail, on its first revisions page alone, ChangeBrief its
+// row instead when read in brief ([ReadQuery.Brief]); Revisions a page of its
+// revisions, newest first; Reviewers, Comments, Reviews and Findings a page of
+// the part a `change` read names ([ReadQuery.Part]), Reviews also a `reviews`
+// page, each naming its change; Routed a `change_routing` page; Counts a
+// `counts` read's parts; ReposTotal a first repositories page's total.
 type ReadAnswer struct {
 	Repos []RepoSummary `json:"repos,omitempty"`
 	Repo  *RepoDetail   `json:"repo,omitempty"`
 	// Pushes is a page of a repository's history, newest first, or of one
-	// executor's pushes, oldest first — each repository the run was given
-	// in its query's order, and each one's pushes in log order.
+	// executor's pushes, oldest first (each repository in the query's order,
+	// its pushes in log order).
 	Pushes []PushRow `json:"pushes,omitempty"`
 	// PushScan is on every page of a narrowed push history ([ReadQuery.PushFilter]), and nil on every other.
 	PushScan *PushScan `json:"push_scan,omitempty"`
-	// PushDays is the repository's pushes on each of the asker's days, oldest first, zeros included:
-	// answered on a push history asked with [ReadQuery.DayBounds], whatever the page holds.
+	// PushDays is the repository's pushes on each of the asker's days, oldest
+	// first, zeros included: on a push history asked with
+	// [ReadQuery.DayBounds], whatever the page holds.
 	PushDays []int64  `json:"push_days,omitempty"`
 	Refs     []RefRow `json:"refs,omitempty"`
-	// RefsDetail is a refs page read in detail, in place of Refs, and
+	// RefsDetail is a refs page read in detail, in place of Refs;
 	// ActiveBranches a first page's count of the branches moved since
 	// [RefListingQuery.ActiveSince].
 	RefsDetail     []RefListing    `json:"refs_detail,omitempty"`
 	ActiveBranches *BranchCount    `json:"active_branches,omitempty"`
 	Changes        []ChangeSummary `json:"changes,omitempty"`
 	Change         *ChangeDetail   `json:"change,omitempty"`
-	// ChangeBrief is a `change` read's change IN BRIEF ([ReadQuery.Brief]):
-	// its row, its repository's name and the asker's access, with no
-	// readiness judged — never "no longer live", which a nil readiness says
-	// on a listing's row and a detail.
+	// ChangeBrief is a `change` read's change IN BRIEF ([ReadQuery.Brief]): its
+	// row, its repository's name and the asker's access, with no readiness
+	// judged, never meaning "no longer live", which a nil readiness says on a
+	// listing's row and a detail.
 	//
-	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. The domain landed on main with it, as with
-	// [ReadQuery.Brief].
+	// An answer's field: no versionedFields row, as with [ReadQuery.Brief].
 	ChangeBrief *ChangeSummary `json:"change_brief,omitempty"`
-	// NarrowedTo is, on every page of a `changes` listing narrowed by [ReadQuery.Readiness], the
-	// bucket it was narrowed to: a page without it was read with no such narrowing.
+	// NarrowedTo is, on every page of a `changes` listing narrowed by
+	// [ReadQuery.Readiness], its bucket: a page without it was not so narrowed.
 	NarrowedTo ReadinessBucket `json:"narrowed_to,omitempty"`
-	// Resolved is the repository the read's name resolved to, on a read that
-	// asks for it ([ReadQuery.Resolve]): its row as a `repo` read resolves
-	// it, at the answer's checkpoint, naming the name it redirects from where
-	// the name is one it was renamed from ([RepoRef.Redirect]).
+	// ChangesText is on every page of a `changes` listing narrowed by
+	// [ReadQuery.Text], `{}` where the search was whole: a page without it was
+	// not so narrowed.
+	ChangesText *ChangesText `json:"changes_text,omitempty"`
+	// Resolved is the repository the read's name resolved to, when asked
+	// ([ReadQuery.Resolve]): its row as a `repo` read resolves it, at the
+	// answer's checkpoint, naming the name it redirects from where it was
+	// renamed ([RepoRef.Redirect]).
 	//
-	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. The domain landed on main with it, as with
-	// [ReadQuery.Resolve].
+	// An answer's field: no versionedFields row, as with [ReadQuery.Resolve].
 	Resolved  *RepoRef      `json:"resolved,omitempty"`
 	Revisions []RevisionRow `json:"revisions,omitempty"`
 	Reviewers []ReviewerRow `json:"reviewers,omitempty"`
@@ -1687,8 +1468,8 @@ type ReadAnswer struct {
 	FindingPaths []FindingPathRow `json:"finding_paths,omitempty"`
 	// Viewed is a `viewed` page of a change ([ReadQuery.Viewed]): the asker's own marks.
 	Viewed []ViewedRow `json:"viewed,omitempty"`
-	// ViewedKey is the change's repository's viewed key, beside a Viewed page holding a mark: what the
-	// asker's screen digests the files it shows under, to match the page.
+	// ViewedKey is the repository's viewed key, beside a Viewed page holding a
+	// mark: what the asker's screen digests its files under, to match the page.
 	ViewedKey  ViewedKey              `json:"viewed_key,omitempty"`
 	Routed     *RoutedPage            `json:"routed,omitempty"`
 	Introduced []IntroducedRow        `json:"introduced,omitempty"`
@@ -1700,19 +1481,17 @@ type ReadAnswer struct {
 	Imports []ImportCandidate `json:"imports,omitempty"`
 	Mirrors []MirrorCandidate `json:"mirrors,omitempty"`
 	// DueRepos is a `changes_due` listing's page of repositories, by id;
-	// DueChanges a page of one repository's due changes, by source branch,
-	// beside PathOwners, its path owners as its settings carry them, read in
-	// the same snapshot — what its home matches the touched paths against,
-	// so answered only beside a change owing its facts — and, on its first
-	// page, Rechecks: the changes whose merge is due again,
-	// the oldest recorded first ([ChangesDueQuery.Rechecks]). A `checks_due`
-	// read answers in the same two fields — its repositories in DueRepos, one
-	// repository's heads owing their checks work in DueChanges, each with what
-	// it owes ([ChangeDue.Checks]), with no owners and no rechecks — and, on a
-	// repository's first page, DueTargets: its target branches due a reading
-	// of their checks file again, and DueTips: its protected targets owing
-	// tip work ([TipDue], tipwork.go), paged on pages of their own before its
-	// heads' ([ReadAnswer.TipsNext]).
+	// DueChanges one repository's due changes by source branch, beside
+	// PathOwners (its settings' path owners, in the same snapshot, which the
+	// home matches touched paths against, so only beside a change owing facts)
+	// and, on its first page, Rechecks: changes whose merge is due again,
+	// oldest first ([ChangesDueQuery.Rechecks]).
+	//
+	// A `checks_due` read answers in the same two fields (DueChanges each with
+	// [ChangeDue.Checks], no owners or rechecks) and, on a repository's first
+	// page, DueTargets (targets due a re-reading of their checks file) and
+	// DueTips (protected targets owing tip work, [TipDue], tipwork.go), paged
+	// ahead of its heads ([ReadAnswer.TipsNext]).
 	DueRepos []string `json:"due_repos,omitempty"`
 	// Indexed is an `indexed` listing's page of repositories, by name.
 	Indexed []IndexedRepo `json:"indexed,omitempty"`
@@ -1723,27 +1502,23 @@ type ReadAnswer struct {
 	DueTips     []TipDue         `json:"due_tips,omitempty"`
 	Rechecks    []ChangeDue      `json:"rechecks,omitempty"`
 	PathOwners  []PathOwner      `json:"path_owners,omitempty"`
-	// Gates is, beside PathOwners and on the same pages, the repository's
-	// rules' merge gates, each named by its rule's pattern ([RuleGate]): what
-	// its home matches the touched paths against for the human paths each
-	// change's target is held to ([MatchTargetHumanPaths]).
+	// Gates is, beside PathOwners on the same pages, the repository's rules'
+	// merge gates, each named by its rule's pattern ([RuleGate]): what the home
+	// matches touched paths against for the human paths each change's target is
+	// held to ([MatchTargetHumanPaths]).
 	//
-	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. The domain landed on main with it
-	// ([RecordVersion]).
+	// An answer's field: no versionedFields row ([RecordVersion]).
 	Gates []RuleGate `json:"gates,omitempty"`
-	// AskSettles is, on the first page of one repository's `changes_due`
-	// read, its changes whose asks for review no longer match the change's
-	// state — an ended change's asks still waiting, a reopened change's asks
-	// its end left — at most [MaxAskSettlesPerRead], each with the state its
-	// asks move to, which its home settles ([AskSettle]).
+	// AskSettles is, on the first page of one repository's `changes_due` read,
+	// its changes whose review asks no longer match their state (an ended
+	// change's asks still waiting, a reopened change's asks its end left), at
+	// most [MaxAskSettlesPerRead], each with the state its asks move to, which
+	// the home settles ([AskSettle]).
 	//
-	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, as [ChangeDue.RefreshDue]
-	// is: the domain landed on main with it ([RecordVersion]).
+	// An answer's field, as [ChangeDue.RefreshDue] is ([RecordVersion]).
 	AskSettles []AskDue `json:"ask_settles,omitempty"`
-	// Checks is a page of a `checks` read — and a `check_box` read's one
-	// attempt as its row stands, or none where the rows hold no such attempt
-	// — and Check a `check` read's one attempt whole. A `checks_running`
+	// Checks is a page of a `checks` read, or a `check_box` read's one attempt
+	// (or none); Check a `check` read's one attempt whole. A `checks_running`
 	// read of one repository answers its running attempts in Checks, and of
 	// none the repositories holding one in DueRepos.
 	Checks []CheckRow   `json:"checks,omitempty"`
@@ -1754,61 +1529,57 @@ type ReadAnswer struct {
 	// a runner, oldest queued first.
 	Runnable []RunnableCheck `json:"runnable,omitempty"`
 	// Tips is a page of an `expunge_tips` read: object ids, each once on the
-	// page, in the order of the rows that name them — the drops first, then
-	// the revisions, the queue's entries, its candidates and the green rows
-	// — and an object a later page names again is one more row naming it,
-	// which its reader keeps once.
+	// page, in the order of the rows naming them (drops, revisions, queue
+	// entries, candidates, green rows); a later page may name one again, which
+	// its reader keeps once.
 	Tips []string `json:"tips,omitempty"`
 	// BranchChanges is a `branch_changes` read's answer: each branch's live
-	// change, in the query's order of repositories and branches, a branch
-	// heading none left out.
+	// change in the query's order, a branch heading none left out.
 	BranchChanges []BranchChange `json:"branch_changes,omitempty"`
-	// Queue is a page of a `queue` read's live entries, in queue order;
-	// Trains a `queue` read's candidates of the trains testing the targets
-	// its page reaches, a named repository's always and every repository's
-	// where [ReadQuery.Trains] asks; Ejected, on a first page, the entries a
-	// named repository's queues put out lately, or every repository's where
-	// Trains asks ([EjectedRow]), newest first; Landings a page of a
-	// `landings` read; and Green the target's green row a `landings` read
-	// starts above, or a `green` read's rows.
+	// Queue is a page of a `queue` read's live entries, in queue order; Trains
+	// the candidates of the trains testing the targets its page reaches (a
+	// named repository's always, every repository's where [ReadQuery.Trains]
+	// asks); Ejected, on a first page, the entries a named repository's queues
+	// (or every repository's, where Trains asks) put out lately ([EjectedRow]),
+	// newest first; Landings a `landings` page; Green the target's green row a
+	// `landings` read starts above, or a `green` read's rows.
 	Queue    []QueueRow     `json:"queue,omitempty"`
 	Trains   []CandidateRow `json:"trains,omitempty"`
 	Ejected  []EjectedRow   `json:"ejected,omitempty"`
 	Landings []LandingRow   `json:"landings,omitempty"`
 	Green    []GreenRow     `json:"green,omitempty"`
-	// EjectedTotal counts what Ejected is the newest of, on a first page asked with
-	// [ReadQuery.Trains]; nil where not asked.
+	// EjectedTotal counts what Ejected is the newest of, on a first page asked
+	// with [ReadQuery.Trains]; nil where not asked.
 	EjectedTotal *EjectedTotal `json:"ejected_total,omitempty"`
 	// Commit is a `commit` read's changes of its commit, beside Repo.
 	Commit *CommitChanges `json:"commit,omitempty"`
 	// Inbox is an `inbox` read's page: the person's notices and their marks.
 	Inbox *InboxPage `json:"inbox,omitempty"`
-	// NoticeCards is a `notice_cards` read's answer: what each change it
-	// names says, by id ([NoticeChange]) — none for a change no row holds
-	// any more, or on a repository the asker may not read. AN ESTATE
-	// ANSWER'S FIELD, NOT A RECORD'S, so it takes no versionedFields row:
-	// only that kind answers it, which a build that predates it refuses.
+	// NoticeCards is a `notice_cards` read's answer: what each named change
+	// says, by id ([NoticeChange]); none for a change no row holds or on a
+	// repository the asker may not read. An answer's field, no versionedFields
+	// row: only that kind answers it, which an older build refuses.
 	NoticeCards map[string]*NoticeChange `json:"notice_cards,omitempty"`
 	// CommitMarks is a `commit_marks` read's answer, one mark a commit in the
-	// query's order; an answer's field, no record's.
+	// query's order; an answer's field.
 	CommitMarks []CommitMark `json:"commit_marks,omitempty"`
-	// Counts is a `counts` read's answer, a part each it asked; an answer's field, no record's.
+	// Counts is a `counts` read's answer, a part for each it asked; an answer's
+	// field.
 	Counts *Counts `json:"counts,omitempty"`
 	// ReposTotal is a first page of repositories' whole listing, where [ReadQuery.RepoFacts] asks.
 	ReposTotal *ReposTotal `json:"repos_total,omitempty"`
 	Next       string      `json:"next,omitempty"`
 	// TipsNext is a `checks_due` page of one repository's tip work cut at its
-	// bound: the target it ended at, which the next page goes on after
-	// ([ChecksDueQuery.TipsAfter]) before any head — so a repository whose
+	// bound: the target it ended at, which the next page continues after
+	// ([ChecksDueQuery.TipsAfter]) before any head, so a repository whose
 	// targets' windows fill a page has every one answered within one turn.
 	TipsNext string             `json:"tips_next,omitempty"`
 	Position statelog.Position  `json:"position"`
 	Level    statelog.ReadLevel `json:"level"`
 }
 
-// IndexedRepo is one repository an `indexed` read lists: its id, which its
-// git order and its copy are keyed by, and its name, which the listing's
-// cursor is.
+// IndexedRepo is one repository an `indexed` read lists: its id (keying its git
+// order and its copy) and its name (the listing's cursor).
 type IndexedRepo struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
@@ -1828,26 +1599,22 @@ type DefaultTip struct {
 	Head       string     `json:"head,omitempty"`
 }
 
-// ExpungeCandidate is one repository an `expunge_due` read lists: the expunge
-// open on it and the purge requested of it, whichever it holds — what its
-// maintainer finishes or serves first — or neither, a repository of the
-// listing's weekly arm, when it was last expunged, its live
-// packs, bytes and objects — which a cycle's inputs are cut from, and the last
-// of which places the repository's maintenance on the node that compacts and
-// publishes it too, by its maintenance's charge (internal/gitlet/compact) — and
-// the version its row was read at.
+// ExpungeCandidate is one repository an `expunge_due` read lists: its open
+// expunge and its requested purge, whichever it holds (what the maintainer
+// finishes or serves first), or neither for the weekly arm; when it was last
+// expunged; its live packs, bytes and objects, which a cycle's inputs are cut
+// from and the last of which places its maintenance by charge on the node that
+// compacts and publishes it (internal/gitlet/compact); and its row's version.
 type ExpungeCandidate struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
-	// Open is the expunge begun and not yet committed — its id — and ""
-	// for none: what the maintainer finishes, from the rows, before it
-	// begins another.
+	// Open is the expunge begun and not committed, by id, "" for none: what the
+	// maintainer finishes, from the rows, before beginning another.
 	Open string `json:"open,omitempty"`
-	// Request is the purge requested and not yet served — its id — and
-	// Requested the position its record landed at: a cycle serving it
-	// rewrites the live packs whose content dates from before that position
-	// ([PackRow.Content]), whenever their rows were added. "" and zero for
-	// none.
+	// Request is the purge requested and not served, by id, and Requested its
+	// record's position: a cycle serving it rewrites the live packs whose
+	// content dates from before that ([PackRow.Content]), whenever their rows
+	// were added. "" and zero for none.
 	Request   string            `json:"request,omitempty"`
 	Requested statelog.Position `json:"requested,omitzero"`
 	// ExpungedAt is the last commit's broker instant, zero for a repository
@@ -1859,10 +1626,9 @@ type ExpungeCandidate struct {
 	Version     statelog.Position `json:"version"`
 }
 
-// ImportCandidate is one repository an `imports_due` read lists: a repository
-// being imported, its source — a URL and a ${VAR} reference, never a secret —
-// how many of its chunks have landed (the next is Seq+1) and the version its
-// row was read at.
+// ImportCandidate is one repository an `imports_due` read lists: its source (a
+// URL and a ${VAR} reference, never a secret), how many chunks have landed (the
+// next is Seq+1) and its row's version.
 type ImportCandidate struct {
 	ID      string            `json:"id"`
 	Name    string            `json:"name"`
@@ -1872,15 +1638,13 @@ type ImportCandidate struct {
 }
 
 // MirrorCandidate is one repository a `mirrors_due` read lists: its pull
-// mirror's source (From) or its push mirror's target (To) — a repository
-// with both is listed once in each arm, each naming its own — and, for a pull
-// mirror, when its last sync landed, zero for never, and the version its row
-// was read at: the floor its home syncs its copy at before it fetches, as an
-// import's candidate carries its own, since a copy synced at no floor could
-// still be the one its import left, importing.
+// mirror's source (From) or push mirror's target (To), a repository with both
+// listed once in each arm; and, for a pull mirror, when its last sync landed
+// (zero for never) and its row's version: the floor its home syncs its copy at
+// before fetching, as an import's candidate carries, since a copy synced at no
+// floor could still be the one its import left, importing.
 //
-// AN ESTATE ANSWER'S FIELDS, NOT A RECORD'S, so Version takes no
-// versionedFields row; the domain landed on main with it, as with [CheckWork].
+// Answer fields: Version takes no versionedFields row, as with [CheckWork].
 type MirrorCandidate struct {
 	ID       string            `json:"id"`
 	Name     string            `json:"name"`
@@ -1897,22 +1661,20 @@ type MirrorPushQuery struct {
 }
 
 // ExpungeTipsQuery is an `expunge_tips` read's repository, by id, and the
-// instant from which the drops it lists were left: every code_ref_drops row
-// of the repository whose record's broker instant is at or after Since. An
-// expunge keeping a grace asks from its scan's instant less the grace; one
-// serving a purge, which keeps nothing a drop left, from its scan's instant.
-// What rows hold in flight is listed whatever Since is ([ReadExpungeTips]).
+// instant from which its drops were left: every code_ref_drops row whose
+// record's broker instant is at or after Since. An expunge keeping a grace asks
+// from its scan's instant less the grace; one serving a purge, which keeps
+// nothing a drop left, from its scan's instant. What rows hold in flight is
+// listed whatever Since is ([ReadExpungeTips]).
 type ExpungeTipsQuery struct {
 	RepoID string    `json:"repo_id"`
 	Since  time.Time `json:"since"`
 }
 
-// CompactionCandidate is one repository a `compaction_due` read lists: its id
-// and name, how many live packs it holds and the objects they hold — what a
-// compaction's memory charge is stated by before anything is synced — and the
-// version its row was read at — what a compactor keys its memory of a plan
-// found not due by, so a repository whose row has not moved since is not
-// planned again.
+// CompactionCandidate is one repository a `compaction_due` read lists: its live
+// packs and their objects (what a compaction's memory charge is stated by
+// before anything syncs) and its row's version, which a compactor keys its
+// memory of a not-due plan by so an unmoved row is not planned again.
 type CompactionCandidate struct {
 	ID          string            `json:"id"`
 	Name        string            `json:"name"`
@@ -1921,21 +1683,18 @@ type CompactionCandidate struct {
 	Version     statelog.Position `json:"version"`
 }
 
-// PublicationCandidate is one repository a `publication_due` read lists: what
-// a publication's due rule reads before anything is synced — the live packs
-// and objects beside the published ones, the last push and the last
-// publication with how long its build took, which paces the next — and the
-// version its row was read at.
+// PublicationCandidate is one repository a `publication_due` read lists: what a
+// publication's due rule reads before anything syncs (the live packs and
+// objects beside the published ones, the last push, the last publication and
+// its build time, which paces the next) and its row's version.
 //
-// THEIR DIFFERENCE NEVER FALLS SHORT OF THE PACKS NO LAYER COVERS, AND MAY
-// EXCEED THEM: PublishedPacks and PublishedObjects are the live packs a layer
-// covered, and their objects, as the last publication recounted them, and a
-// push since moves only the live counts — so a pack pushed since then that is
-// byte-identical to a published one (its git checksum one a layer names)
-// counts in the difference until the next publication recounts it. A
-// candidate can therefore have nothing to publish, which only a plan over its
-// packs can tell: a due rule that reads these counts alone would sync and plan
-// it again at every poll.
+// THE LIVE LESS THE PUBLISHED NEVER FALLS SHORT OF THE PACKS NO LAYER COVERS,
+// AND MAY EXCEED THEM: the published counts are the last publication's recount
+// and a push moves only the live ones, so a pack pushed since that is
+// byte-identical to a published one (its git checksum one a layer names) counts
+// until the next recount. A candidate can thus have nothing to publish, which
+// only a plan over its packs tells: a due rule reading these counts alone would
+// sync and plan it at every poll.
 type PublicationCandidate struct {
 	ID               string `json:"id"`
 	Name             string `json:"name"`
@@ -1954,36 +1713,35 @@ type PublicationCandidate struct {
 
 // CompactionProposal is what the node that built a compaction asks the
 // repository's committer to decide ([Committer.ProposeCompaction]): the
-// compaction whole. Its CompactionID is the record's operation id and its
-// Seen the publish's session floor, so it carries nothing beside them.
+// compaction whole, whose CompactionID is the record's operation id and Seen
+// the publish's session floor.
 type CompactionProposal struct {
 	Compaction Compaction `json:"compaction"`
 }
 
 // CompactResult is what became of one compaction.
 type CompactResult struct {
-	// Outcome is applied, pending or unknown for a compaction whose record
-	// was appended, and empty for one refused with none. Applied is answered
-	// only from the output rows the record applied, never from the decision.
+	// Outcome is applied, pending or unknown for a compaction whose record was
+	// appended, empty for one refused with none. Applied is answered only from
+	// the output rows the record applied, never from the decision.
 	Outcome statelog.Outcome `json:"outcome,omitempty"`
 	// Refusal is why it was refused with no record — stale, repo_deleted,
 	// upload_expired, pack_too_large, busy, not_applied or unavailable —
 	// and Detail its one sentence.
 	Refusal Refusal `json:"refusal,omitempty"`
 	Detail  string  `json:"detail,omitempty"`
-	// Position is where its record landed — the outputs' rows' own for an
-	// applied one — and, for a not_applied or repo_deleted refusal the log
-	// made after the append, where that record lies applying nowhere.
+	// Position is where its record landed (the outputs' rows' own for an
+	// applied one) and, for a not_applied or repo_deleted refusal made after
+	// the append, where that record lies applying nowhere.
 	Position statelog.Position `json:"position,omitzero"`
 }
 
 // ExpungeProposal is what an expunge's asker hands the repository's committer
-// to decide ([Committer.ProposeExpunge]): EXACTLY ONE of a person's request, a
+// ([Committer.ProposeExpunge]): EXACTLY ONE of a person's request, a
 // maintainer's begin, its commit and its clean scan, each decided alone as a
-// record of its own op. The set field's own id is the record's operation id —
-// a request's RequestID, a begin's ExpungeID, a commit's CommitID, a scan's
-// ScanID — and a begin's, a commit's or a scan's Seen its publish's session
-// floor, so it carries nothing beside it.
+// record of its own op. The set field's own id (RequestID, ExpungeID, CommitID,
+// ScanID) is the record's operation id, and a begin's, commit's or scan's Seen
+// its publish's session floor.
 type ExpungeProposal struct {
 	Request *ExpungeRequest `json:"request,omitempty"`
 	Begin   *ExpungeBegin   `json:"begin,omitempty"`
@@ -1994,23 +1752,22 @@ type ExpungeProposal struct {
 // ExpungeResult is what became of one expunge proposal.
 type ExpungeResult struct {
 	// Outcome is applied, pending or unknown for a proposal whose record was
-	// appended, and empty for one refused with none. A begin's and a
-	// commit's applied is answered only from the rows of the packs the record
-	// added, never from the decision.
+	// appended, empty for one refused with none. A begin's and a commit's
+	// applied is answered only from the rows of the packs the record added,
+	// never from the decision.
 	Outcome statelog.Outcome `json:"outcome,omitempty"`
 	// Refusal is why it was refused with no record — stale, repo_deleted,
 	// repo_importing, upload_expired, pack_too_large, busy, not_applied or
 	// unavailable — and Detail its one sentence.
 	Refusal Refusal `json:"refusal,omitempty"`
 	Detail  string  `json:"detail,omitempty"`
-	// Position is where its record landed — for one asked again under its
-	// own operation id, the record the ledger found — and, for a not_applied
-	// or repo_deleted refusal the log made after the append, where that
-	// record lies applying nowhere.
+	// Position is where its record landed (asked again under its operation id,
+	// the record the ledger found) and, for a not_applied or repo_deleted
+	// refusal made after the append, where that record lies applying nowhere.
 	Position statelog.Position `json:"position,omitzero"`
 	// Request is the purge a request's answer is about: its own id, the
-	// repository's open request from its record on — until a later request
-	// widens it, or a commit serves it. Empty for a begin and a commit.
+	// repository's open request from its record on until a later request widens
+	// it or a commit serves it. Empty for a begin and a commit.
 	Request string `json:"request,omitempty"`
 }
 
@@ -2032,101 +1789,83 @@ type MirrorSyncProposal struct {
 // mirror sync.
 type SyncResult struct {
 	// Outcome is applied, pending or unknown for a proposal whose record was
-	// appended, and empty for one refused with none. A chunk's and a sync's
-	// applied is answered only from the rows the record applied — its push
-	// row — never from the decision; a sync that moves nothing
-	// ([MirrorSync.Current]) writes no push row, and is answered at its
-	// record's position, as an end is.
+	// appended, empty for one refused with none. A chunk's and a sync's applied
+	// is answered only from the push row the record applied, never from the
+	// decision; a sync moving nothing ([MirrorSync.Current]) writes no push row
+	// and is answered at its record's position, as an end is.
 	Outcome statelog.Outcome `json:"outcome,omitempty"`
-	// Refusal is why it was refused with no record — stale (a sync of a
-	// repository that follows no source among its causes), repo_deleted,
-	// repo_importing (a sync of a mirror not yet imported), repo_archived,
-	// expunging, ref_conflict, repo_refs, repo_size, upload_expired,
-	// pack_too_large, busy, not_applied or unavailable — and Detail its one
-	// sentence.
+	// Refusal is why it was refused with no record (stale, for a sync of a
+	// repository following no source; repo_deleted; repo_importing, for a sync
+	// of a mirror not yet imported; repo_archived; expunging; ref_conflict;
+	// repo_refs; repo_size; upload_expired; pack_too_large; busy; not_applied;
+	// unavailable), and Detail its one sentence.
 	Refusal Refusal `json:"refusal,omitempty"`
 	Detail  string  `json:"detail,omitempty"`
 	// Position is where its record landed and, for a not_applied or
-	// repo_deleted refusal the log made after the append, where that record
-	// lies applying nowhere.
+	// repo_deleted refusal made after the append, where that record lies
+	// applying nowhere.
 	Position statelog.Position `json:"position,omitzero"`
 }
 
 // ChangeProposal is one write of a change's lifecycle as its asker hands it to
-// the repository's committer ([Committer.ProposeChange]): EXACTLY ONE of the
-// six records it may be — an open, an edit, a draft's state, a retarget, a
-// close and a reopen, each its op's payload ([ChangeOps]) — decided alone as a
-// record of its own, beside who asks, the floor they read at and the version
-// they formed it against. Its OpID is the record's operation id, its Seen the
-// publish's session floor. What no asker sends — who wrote it, and an open's
-// and a reopen's head — the committer stamps into the record from its asker
-// and its snapshot.
+// the repository's committer ([Committer.ProposeChange]): EXACTLY ONE of an
+// open, an edit, a draft's state, a retarget, a close and a reopen (each its
+// op's payload, [ChangeOps]), decided alone as a record of its own, beside who
+// asks, their read floor and the version they formed it against. OpID is the
+// record's operation id, Seen the publish's session floor. What no asker sends
+// (who wrote it, an open's and a reopen's head) the committer stamps from its
+// asker and snapshot.
 type ChangeProposal struct {
-	// OpID is the record's operation id, minted once by whoever asks — an
-	// operation id this engine accepts (statelog.CheckCallerOpID) — so the
-	// write asked again under it, of the repository's runner-up after a
-	// committer went silent or by an asker whose answer was lost, is the same
-	// write, collapsed by the operation ledger; an open's change id is
-	// derived from it ([OpenChangeID]).
+	// OpID is the record's operation id, minted once by the asker
+	// (statelog.CheckCallerOpID), so the write asked again under it (of the
+	// runner-up after a silent committer, or after a lost answer) is the same
+	// write, collapsed by the operation ledger; an open's change id derives
+	// from it ([OpenChangeID]).
 	OpID string `json:"op_id"`
-	// Asker is who asks: a person through a credential bound to their human
-	// seat, a seat by its handle, or a token bound to nobody, which the
-	// decide refuses every write. A SEAT'S IS JUDGED FROM THE CHART of the
-	// deciding node's epoch ([CommitterOptions.SeatRules]), so a node that
-	// holds none, or one confirmed behind the company's configuration,
-	// decides none of a seat's — the estate declares the operation to judge
-	// a grant where its asker is a seat. It names no run: a change keeps the
-	// turn and the run that opened it in its own fields. A LANDING NAMES
-	// NONE: it is the repository's home Gitlet node's own write, which no
-	// principal asks and no chart judges.
+	// Asker is a person through a credential bound to their human seat, a seat
+	// by handle, or a token bound to nobody, which the decide refuses every
+	// write. A SEAT'S IS JUDGED FROM THE CHART of the deciding node's epoch
+	// ([CommitterOptions.SeatRules]), so a node holding none, or confirmed
+	// behind the configuration, decides none of a seat's writes. It names no
+	// run: a change keeps its opening turn and run in its own fields. A LANDING
+	// NAMES NONE: it is the home Gitlet node's own write, which no principal
+	// asks and no chart judges.
 	Asker Principal `json:"asker"`
-	// Seen is the code log's position the asker read the repository and the
-	// change at — zero for one that read none. The committer DECIDES AT OR
-	// PAST IT, or refuses `behind` about itself, so the runner-up decides:
-	// from below it the decide would refuse a write formed against what the
-	// asker was shown — an edit stale, an open's branch missing.
+	// Seen is the code log position the asker read the repository and change
+	// at, zero for none. The committer DECIDES AT OR PAST IT, or refuses
+	// `behind` so the runner-up decides: from below it, a write formed against
+	// what the asker was shown would be refused (an edit stale, an open's
+	// branch missing).
 	Seen statelog.Position `json:"seen,omitzero"`
 	// ExpectedVersion is the change's version the write was formed against
-	// (code_changes.version, its records counted from 1 at its open): every
-	// write but an open and a landing names one, and one the change is no
-	// longer at is refused stale — another write, an edit or a push that
-	// moved its head, landed first. An open names none: the change does not
-	// exist yet. A landing names none either: it is guarded by what its home
-	// read — the change's head and target and the target's tip — and an edit
-	// of its title between the read and the landing changes none of those.
+	// (code_changes.version, counted from 1 at its open); a change no longer at
+	// it is refused stale. Every write names one but an open (the change does
+	// not exist yet) and a landing, which is guarded by what its home read (the
+	// change's head, its target and the target's tip), none of which a title
+	// edit in between changes.
 	ExpectedVersion int64 `json:"expected_version,omitempty"`
-	// Ceiling is whom a SEAT'S write is made for inside a turn somebody woke
-	// ([WriteCeiling]), nil for one made for its seat alone or for a person;
-	// never a landing's, which no principal asks. The committer judges it
-	// once the seat's own rules are met (decide_change.go's head): a
-	// colleague held at the least access the write needs, nobody refused —
-	// but for the seat's own work, which whoever woke it steers.
+	// Ceiling is whom a SEAT'S write inside a turn somebody woke is made for
+	// ([WriteCeiling]), nil for one for its seat alone or a person's; never a
+	// landing's. The committer judges it once the seat's own rules are met
+	// (decide_change.go's head): a colleague held at the least access the write
+	// needs, nobody refused, but for the seat's own work, which whoever woke it
+	// steers.
 	//
-	// A proposal is no record — the record is what the committer stamps from
-	// it — so this field takes no versionedFields row; it crosses the
-	// estate's wire to whichever data node decides it, and every node asked
-	// it reads it: the domain landed on main with it ([RecordVersion]).
+	// A proposal is no record, so no versionedFields row: the domain landed on
+	// main with it ([RecordVersion]).
 	Ceiling *WriteCeiling `json:"ceiling,omitempty"`
 	// WrittenFor is whom a SEAT'S write is made for (ADR-0109): whoever the
-	// turn that asks it works for, composed by the engine from the call's own
-	// bound ceiling (internal/agent/builtin), never from a tool's arguments,
-	// and stated nobody for a write made for its seat alone. A person's, a
-	// token's and a landing's state nothing, and carry nobody. Held to the
-	// asker and the ceiling by [writtenForUnder]: by Validate, and against its
-	// chart by the committer that decides it.
+	// asking turn works for, from the call's bound ceiling
+	// (internal/agent/builtin), never a tool's arguments; nobody for its seat
+	// alone; a person's, token's and landing's state nothing. Held to asker and
+	// ceiling by [writtenForUnder]: Validate, and the deciding committer's chart.
 	//
-	// A proposal is no record, so this field takes no versionedFields row; the
-	// record its committer forms carries it, beside the asker on its routing
-	// and, an open's and a reopen's, on its payload ([ChangeRouting.WorkingFor],
-	// [ChangeOpen.WorkingFor]), which take theirs. It crosses the estate's wire
-	// to whichever data node decides it, and a node of a build without it
-	// refuses a proposal carrying somebody, naming args.written_for, so the walk
-	// asks one that reads it, and a node of a build that does not know its
-	// carrier's kind, or an app a credential's carrier names, refuses it alike,
-	// naming args.written_for.kind or args.written_for.apps[]
-	// ([unknownToThisBuild]); one made for nobody sends no member, as such a
-	// build does. What such a build sends arrives stated nobody
-	// ([ChangeProposal.UnmarshalJSONFrom]), decided by its ceiling.
+	// The record carries it ([ChangeRouting.WorkingFor],
+	// [ChangeOpen.WorkingFor]): no versionedFields row. A build lacking it, its
+	// carrier's kind or an app refuses one carrying somebody, naming
+	// args.written_for (.kind, .apps[]; [unknownToThisBuild]), so the walk asks
+	// one reading it; one for nobody sends no member, and an older build's
+	// arrives stated nobody ([ChangeProposal.UnmarshalJSONFrom]), by its ceiling.
 	WrittenFor types.WrittenFor `json:"written_for,omitzero"`
 
 	Open     *ChangeOpen     `json:"open,omitempty"`
@@ -2135,40 +1874,38 @@ type ChangeProposal struct {
 	Retarget *ChangeRetarget `json:"retarget,omitempty"`
 	Close    *ChangeClose    `json:"close,omitempty"`
 	Reopen   *ChangeReopen   `json:"reopen,omitempty"`
-	// Landed is a landing the repository's home Gitlet node asks, with NO
-	// Asker: the engine's own write ([ChangeLanded]).
+	// Landed is a landing the home Gitlet node asks, with NO Asker: the
+	// engine's own write ([ChangeLanded]).
 	Landed *ChangeLanded `json:"landed,omitempty"`
 }
 
 // ChangeResult is what became of one change proposal.
 type ChangeResult struct {
 	// Outcome is applied, pending or unknown for a write whose record was
-	// appended — or, answered from the change's row with no record, applied
-	// and Unchanged — and empty for one refused. Applied is answered only
-	// from the change's row the record wrote, never from the decision.
+	// appended (or applied and Unchanged, answered from the row with no
+	// record), empty for one refused. Applied is answered only from the
+	// change's row the record wrote, never from the decision.
 	Outcome statelog.Outcome `json:"outcome,omitempty"`
-	// ChangeID is the change the write is about — an open's, its derived id.
+	// ChangeID is the change the write is about (an open's derived id).
 	ChangeID string `json:"change_id,omitempty"`
-	// Number is the change's number on its repository (web!42), read from its
-	// row: an open's is the repository's next_change at the apply that opened
-	// it, which no proposal can name before its record lands.
+	// Number is the change's number (web!42), read from its row: an open's is
+	// the repository's next_change at its apply, which no proposal can name in
+	// advance.
 	Number int64 `json:"number,omitempty"`
-	// Version is the change's version once the write applied — what the
-	// asker's next write names as its expectation — and 0 where a later
-	// record has moved the change since this one: the change is then read
-	// again before it is written, rather than answered with a version that
-	// carries writes its asker never saw.
+	// Version is the change's version once the write applied (the asker's next
+	// expectation), 0 where a later record has moved the change since: it is
+	// then read again, rather than answered with a version carrying writes its
+	// asker never saw.
 	Version int64 `json:"version,omitempty"`
-	// Position is where the write's record landed — for one asked again under
-	// its own operation id, the record the ledger found; for an Unchanged
-	// answer, the change's row's own — and, for a not_applied or
-	// repo_deleted refusal the log made after the append, where that record
-	// lies applying nowhere.
+	// Position is where the write's record landed (asked again under its
+	// operation id, the record the ledger found; for Unchanged, the change's
+	// row's own) and, for a not_applied or repo_deleted refusal made after the
+	// append, where that record lies applying nowhere.
 	Position statelog.Position `json:"position,omitzero"`
-	// Unchanged is a write that asked for what the change already says — an
-	// edit to its own values, a draft's state it is in, its own target, a
-	// close of a closed change and a reopen of a live one — answered from its
-	// row with no record, at its version.
+	// Unchanged is a write asking for what the change already says (an edit to
+	// its own values, its own draft state or target, a close of a closed
+	// change, a reopen of a live one), answered from its row with no record, at
+	// its version.
 	Unchanged bool `json:"unchanged,omitempty"`
 	// Refusal is why it was refused with no record, and Detail its one
 	// sentence.
@@ -2178,70 +1915,52 @@ type ChangeResult struct {
 
 // ConversationWrite is one write of a change's conversation as its asker hands
 // it to the repository's committing data node ([ChangeWriter.Converse]):
-// EXACTLY ONE of the records it may be — an ask for review, a comment, a
-// thread's resolution, a review, an answer to findings and a revision's facts,
-// each its op's payload ([ConversationOps]) — decided as a record of its own
-// on the change's subject, beside who asks and the floor they read at. Its
-// OpID is the record's operation id, its Seen the publish's session floor.
-// What no asker sends — who wrote it, a reviewer's kind, a comment's id and
-// thread, a review's id and its findings' — the writer stamps into the record
-// from its asker, the chart and its snapshot.
+// EXACTLY ONE of an ask for review, a comment, a thread's resolution, a review,
+// an answer to findings and a revision's facts (each its op's payload,
+// [ConversationOps]), decided as a record of its own on the change's subject,
+// beside who asks and their read floor. OpID is the record's operation id, Seen
+// the publish's session floor. What no asker sends (who wrote it, a reviewer's
+// kind, a comment's id and thread, a review's and its findings' ids) the writer
+// stamps from its asker, the chart and its snapshot.
 type ConversationWrite struct {
-	// OpID is the record's operation id, minted once by whoever asks — an
-	// operation id this engine accepts (statelog.CheckCallerOpID) — so the
-	// write asked again under it, of the repository's runner-up after a
-	// writer went silent or by an asker whose answer was lost, is the same
-	// write, collapsed by the operation ledger; a comment's id is derived
-	// from it ([CommentID]).
+	// OpID is the record's operation id, as [ChangeProposal.OpID] is; a
+	// comment's id derives from it ([CommentID]).
 	OpID string `json:"op_id"`
-	// Asker is who asks: a person through a credential bound to their human
-	// seat, or a seat by its handle; a token bound to nobody writes nothing,
-	// and a revision's facts, the repository's home Gitlet node's own, name
-	// none. A SEAT'S IS JUDGED FROM THE CHART of the deciding node's epoch
-	// ([ChangeWriterOptions.SeatRules]), and so is every reviewer an ask
-	// names, whoever asks ([ConversationWrite.JudgesChart]): a node that holds
-	// no chart, or one confirmed behind the company's configuration, decides
-	// none of those. It names no run: a comment keeps the turn that said it
-	// in its own field.
+	// Asker is a person through a credential bound to their human seat, or a
+	// seat by handle; a token bound to nobody writes nothing, and a revision's
+	// facts (the home Gitlet node's own) name none. A SEAT'S, and every
+	// reviewer an ask names whoever asks ([ConversationWrite.JudgesChart]), IS
+	// JUDGED FROM THE CHART of the deciding node's epoch
+	// ([ChangeWriterOptions.SeatRules]): a node holding none, or confirmed
+	// behind the configuration, decides none of those. It names no run: a
+	// comment keeps its turn in its own field.
 	Asker Principal `json:"asker"`
-	// Seen is the code log's position the asker read the change at — zero
-	// for one that read none. The writer DECIDES AT OR PAST IT, or refuses
-	// `behind` about itself, so the runner-up decides: from below it the
-	// decide would refuse a write formed against what the asker was shown —
-	// a change it was shown open as missing, a revision it read as unknown.
+	// Seen is the code log position the asker read the change at, zero for
+	// none. The writer DECIDES AT OR PAST IT, or refuses `behind` so the
+	// runner-up decides: from below it, a write formed against what the asker
+	// was shown would be refused (a change shown open as missing, a read
+	// revision as unknown).
 	Seen statelog.Position `json:"seen,omitzero"`
-	// Ceiling is whom a SEAT'S write is made for inside a turn somebody woke
-	// ([WriteCeiling]), nil for one made for its seat alone or for a person;
-	// never a revision's facts' or a mergeability's, which no principal asks.
-	// The writer judges it beside the seat (decide_conversation.go's head): a
-	// colleague held at the least access the write needs — review for a
-	// review, read for every other — nobody refused, but for the seat's own
-	// work, which whoever woke it steers.
+	// Ceiling is whom a SEAT'S write inside a turn somebody woke is made for
+	// ([WriteCeiling]), nil for its seat alone or a person; never a revision's
+	// facts' or mergeability's. The writer judges it beside the seat
+	// (decide_conversation.go's head): a colleague held at the least access the
+	// write needs (review for a review, read otherwise), nobody refused, but
+	// for the seat's own work, which whoever woke it steers.
 	//
-	// A write is no record — the record is what the writer stamps from it —
-	// so this field takes no versionedFields row; it crosses the estate's
-	// wire to whichever data node decides it, and every node asked it reads
-	// it: the domain landed on main with it ([RecordVersion]).
+	// A write is no record, so no versionedFields row: the domain landed on
+	// main with it ([RecordVersion]).
 	Ceiling *WriteCeiling `json:"ceiling,omitempty"`
 	// WrittenFor is whom a SEAT'S write is made for (ADR-0109), as
-	// [ChangeProposal.WrittenFor] is: whoever the turn that asks it works for,
-	// composed by the engine from the call's own bound ceiling, or stated
-	// nobody; a person's states nothing, and the home's own writes, which name
-	// no asker, carry nobody. Held to the asker and the ceiling by
-	// [writtenForUnder]: by Validate, and against its chart by the change
-	// writer that decides it.
+	// [ChangeProposal.WrittenFor] is; a person's states nothing, and the home's
+	// own writes, naming no asker, carry nobody. Held to the asker and ceiling
+	// by [writtenForUnder]: by Validate, and by the deciding writer against its
+	// chart.
 	//
-	// A write is no record, so this field takes no versionedFields row; the
-	// record its writer forms carries it beside the asker on its routing
-	// ([ChangeRouting.WorkingFor]), which takes one. It crosses the estate's
-	// wire to whichever data node decides it, and a node of a build without it
-	// refuses a write carrying somebody, naming args.written_for, so the walk
-	// asks one that reads it, and a node of a build that does not know its
-	// carrier's kind, or an app a credential's carrier names, refuses it alike,
-	// naming args.written_for.kind or args.written_for.apps[]
-	// ([unknownToThisBuild]); one made for nobody sends no member, as such a
-	// build does. What such a build sends arrives stated nobody
-	// ([ConversationWrite.UnmarshalJSONFrom]), decided by its ceiling.
+	// A write is no record, so no versionedFields row; the record carries it on
+	// its routing ([ChangeRouting.WorkingFor]). An older build refuses or reads
+	// it as [ChangeProposal.WrittenFor] says
+	// ([ConversationWrite.UnmarshalJSONFrom]).
 	WrittenFor types.WrittenFor `json:"written_for,omitzero"`
 
 	Reviewers      *ReviewerRequest `json:"reviewers,omitempty"`
@@ -2250,43 +1969,38 @@ type ConversationWrite struct {
 	Review         *Review          `json:"review,omitempty"`
 	FindingResolve *FindingResolve  `json:"finding_resolve,omitempty"`
 	// Revise is a revision's facts, and Mergeability whether the change's head
-	// revision merges into its target's tip, each of which the repository's
-	// home Gitlet node asks with NO Asker: the engine's own writes ([Revise],
-	// [Mergeability]).
+	// revision merges into its target's tip: the home Gitlet node's own writes,
+	// with NO Asker ([Revise], [Mergeability]).
 	Revise       *Revise       `json:"revise,omitempty"`
 	Mergeability *Mergeability `json:"mergeability,omitempty"`
 	// Asks settles the change's asks with its lifecycle, which the home asks
 	// with NO Asker too ([AskSettle]).
 	//
-	// AN ESTATE REQUEST'S FIELD: what it carries rides the code log as the
-	// [OpAsks] record, in the base format, as that op is.
+	// A request's field: it rides the code log as the [OpAsks] record, in the
+	// base format.
 	Asks *AskSettle `json:"asks,omitempty"`
 }
 
 // ConversationResult is what became of one write of a change's conversation.
 type ConversationResult struct {
 	// Outcome is applied, pending or unknown for a write whose record was
-	// appended — or, answered from the rows with no record, applied and
-	// Unchanged — and empty for one refused. Applied is answered only once
-	// the change's conversation holds the record's rows, never from the
-	// decision.
+	// appended (or applied and Unchanged, answered from the rows with no
+	// record), empty for one refused. Applied is answered only once the
+	// conversation holds the record's rows, never from the decision.
 	Outcome statelog.Outcome `json:"outcome,omitempty"`
-	// ID is what the write made that is named apart from its change — a
-	// comment's id ([CommentID]), a review's ([ReviewID]) — and "" for a
-	// write that made none; FindingIDs is a review's findings' ids, in the
-	// order it raised them ([FindingID]).
+	// ID is what the write made that is named apart from its change (a
+	// comment's id, [CommentID]; a review's, [ReviewID]), "" for none;
+	// FindingIDs is a review's findings' ids in the order raised ([FindingID]).
 	ID         string   `json:"id,omitempty"`
 	FindingIDs []string `json:"finding_ids,omitempty"`
-	// Position is where the write's record landed — for one asked again under
-	// its own operation id, the record the ledger found; for an Unchanged
-	// answer, the conversation's last record — and, for a not_applied or
-	// repo_deleted refusal the log made after the append, where that record
-	// lies applying nowhere.
+	// Position is where the write's record landed (asked again under its
+	// operation id, the record the ledger found; for Unchanged, the
+	// conversation's last record) and, for a not_applied or repo_deleted
+	// refusal made after the append, where that record lies applying nowhere.
 	Position statelog.Position `json:"position,omitzero"`
-	// Unchanged is a write that asked for what the conversation already
-	// says — an ask of reviewers already asked and of withdrawals of none
-	// who are, a thread's state it is in — answered from the rows with no
-	// record.
+	// Unchanged is a write asking for what the conversation already says (an
+	// ask of reviewers already asked or withdrawal of none who are, a thread's
+	// current state), answered from the rows with no record.
 	Unchanged bool `json:"unchanged,omitempty"`
 	// Refusal is why it was refused with no record, and Detail its one
 	// sentence.
@@ -2294,54 +2008,41 @@ type ConversationResult struct {
 	Detail  string              `json:"detail,omitempty"`
 }
 
-// ChecksRequest is one write of a repository's checks as its asker hands it to
-// the repository's committing data node ([ChecksWriter.Publish]): EXACTLY ONE
-// of the records it may be — an attempt queued (or recorded skipped), a claim
-// of one or its holder's naming of the box it made, and an attempt's ending —
-// decided as a record of its own on the repository's checks subject, beside
-// the operation id it is asked under and the floor its asker read at. The
-// engine's own: the home queues and requeues, a runner claims and ends, and
-// none of those names a principal.
+// ChecksRequest is one write of a repository's checks handed to its committing
+// data node ([ChecksWriter.Publish]): EXACTLY ONE of an attempt queued (or
+// recorded skipped), a claim or its holder's naming of its box, and an ending,
+// decided as a record of its own on the checks subject, beside its operation id
+// and the asker's read floor. The engine's own: the home queues and requeues, a
+// runner claims and ends, none naming a principal.
 //
-// A CHECKS SWEEP IS NO REQUEST: the code-retention duty's [Store.ChecksSweep]
-// publishes it on the node that holds the duty, deciding only "rows past the
-// history are held", which no other write of the subject races — so the
-// writer that takes a repository's checks one at a time has nothing to order
-// it by.
-//
-// THE CODE DOMAIN'S RECORD FORMAT IS UNTOUCHED: an estate request's type and
-// no record's — what it carries rides the code log as the payloads it names,
-// whose rows are the checks subject's ([KindChecks]) — so it takes no
-// versionedFields row.
+// A CHECKS SWEEP IS NO REQUEST: [Store.ChecksSweep] publishes it on the
+// retention duty's node, deciding only "rows past the history are held", which
+// no other write races, so the per-repository writer has nothing to order it
+// by. The code domain's record format is untouched: a request's type, its
+// payloads the checks subject's rows ([KindChecks]), so no versionedFields row.
 type ChecksRequest struct {
-	// OpID is the record's operation id, minted once by whoever asks — an
-	// operation id this engine accepts (statelog.CheckCallerOpID) — so the
-	// write asked again under it, of the repository's runner-up after a
-	// writer went silent or by an asker whose answer was lost, is the same
-	// write, collapsed by the operation ledger.
+	// OpID is the record's operation id, as [ChangeProposal.OpID] is.
 	OpID string `json:"op_id"`
-	// Seen is the code log's position the asker read the attempt at — a
-	// runner's own claim, for the record naming its box; the home's read, for
-	// a requeue — and zero for one that read none. The writer DECIDES AT OR
-	// PAST IT, or refuses `behind` about itself, so the runner-up decides:
-	// from below it the decide would answer a claim it was shown as no
-	// attempt at all.
+	// Seen is the code log position the asker read the attempt at (a runner's
+	// own claim, for the record naming its box; the home's read, for a
+	// requeue), zero for none. The writer DECIDES AT OR PAST IT, or refuses
+	// `behind` so the runner-up decides: from below it, a claim the asker was
+	// shown would read as no attempt.
 	Seen statelog.Position `json:"seen,omitzero"`
 
 	Queued   *CheckQueued   `json:"queued,omitempty"`
 	Started  *CheckStarted  `json:"started,omitempty"`
 	Finished *CheckFinished `json:"finished,omitempty"`
-	// Dispatched is the home's record of a target's checks file read at its
-	// tip and the heads it dispatched under it (checksdispatch.go). An
-	// estate request's field, no record's: the record it asks for is in the
-	// base format, as the checks subject is (checks.go).
+	// Dispatched is the home's record of a target's checks file read at its tip
+	// and the heads it dispatched under it (checksdispatch.go). A request's
+	// field: its record is in the base format, as the checks subject is
+	// (checks.go).
 	Dispatched *CheckDispatched `json:"dispatched,omitempty"`
-	// Asker, Rerun and Report are a PRINCIPAL'S write — a rerun a seat or a
-	// person asks for, a person's CI's report — decided into one of the
-	// records above by the asker's standing (checkasks.go): the asker is a
-	// seat, or a person through a credential bound to their human seat, and
-	// is zero on every record the engine asks for itself. Estate request
-	// fields, no record's.
+	// Asker, Rerun and Report are a PRINCIPAL'S write (a rerun a seat or person
+	// asks for, a person's CI's report), decided into one of the records above
+	// by the asker's standing (checkasks.go): the asker is a seat, or a person
+	// through a credential bound to their human seat, and zero on every record
+	// the engine asks for itself. Request fields.
 	Asker  Principal      `json:"asker,omitzero"`
 	Rerun  *CheckRerun    `json:"rerun,omitempty"`
 	Report *CheckReported `json:"report,omitempty"`
@@ -2350,51 +2051,44 @@ type ChecksRequest struct {
 // ChecksResult is what became of one write of a repository's checks.
 type ChecksResult struct {
 	// Outcome is applied, pending or unknown for a write whose record was
-	// appended — or, answered from the rows with no record, applied and
-	// Unchanged — and empty for one refused. Applied is answered only once
-	// the attempt's row holds what the record carried, never from the
-	// decision.
+	// appended (or applied and Unchanged, answered from the rows with no
+	// record), empty for one refused. Applied is answered only once the
+	// attempt's row holds what the record carried, never from the decision.
 	Outcome statelog.Outcome `json:"outcome,omitempty"`
-	// Unchanged is a write that asked for what the attempt's row already
-	// says — an attempt queued that is, a claim its holder sends again, an
-	// ending the row's own ending is kept over — answered from the row with
-	// no record.
+	// Unchanged is a write asking for what the attempt's row already says (an
+	// attempt queued that is, a claim its holder resends, an ending the row's
+	// own is kept over), answered from the row with no record.
 	Unchanged bool `json:"unchanged,omitempty"`
 	// Refusal is why it was refused with no record, and Detail its one
 	// sentence.
 	Refusal CheckRefusal `json:"refusal,omitempty"`
 	Detail  string       `json:"detail,omitempty"`
-	// Holder is the runner that holds the attempt as the rows say — on a
-	// claim refused `claimed`, the one that does; on a claim applied, the one
-	// the join kept, which is the claim's own runner unless a claim another
-	// writer published landed with a lower (StartedAt, Runner) — and "" for
-	// an attempt no runner holds. A runner whose claim answered another
-	// holder starts no box.
+	// Holder is the runner holding the attempt as the rows say: on a claim
+	// refused `claimed`, the one that does; on a claim applied, the one the
+	// join kept (the claim's own runner unless another writer's claim landed
+	// with a lower (StartedAt, Runner)); "" for none. A runner whose claim
+	// answered another holder starts no box.
 	Holder string `json:"holder,omitempty"`
-	// Row is the attempt as the rows hold it once the write applied, or as
-	// the refusal or the unchanged answer read it — nil where the repository
-	// holds none.
+	// Row is the attempt as the rows hold it once the write applied, or as the
+	// refusal or unchanged answer read it; nil where the repository holds none.
 	Row *CheckRow `json:"row,omitempty"`
-	// Position is where the write's record landed — for one asked again under
-	// its own operation id, the record the ledger found; for an Unchanged
-	// answer, the row's last record — and, for a not_applied or repo_deleted
-	// refusal the log made after the append, where that record lies applying
-	// nowhere.
+	// Position is where the write's record landed (asked again under its
+	// operation id, the record the ledger found; for Unchanged, the row's last
+	// record) and, for a not_applied or repo_deleted refusal made after the
+	// append, where that record lies applying nowhere.
 	Position statelog.Position `json:"position,omitzero"`
 }
 
-// CheckRow is one attempt of one check of one commit as its row holds it
-// (code_checks): its key and state, and what its queue, its run and its
-// ending say — every column but the wide ones a listing leaves to a read of
-// the one attempt ([CheckDetail]): its definition, its tail and its failures.
+// CheckRow is one attempt of one check of one commit as code_checks holds it:
+// its key, state, and what its queue, run and ending say; every column but the
+// wide ones (definition, tail, failures) a listing leaves to a read of the one
+// attempt ([CheckDetail]).
 type CheckRow struct {
 	CheckKey
-	// Repo is its repository's name, which every read a person or a seat
-	// asks — a listing and a `check` — names, so a reader links the attempt
-	// to its repository, change and commit, each addressed by name; a box
-	// admission's read ([ReadCheckBox]) addresses the row by id and leaves it
-	// out. AN ANSWER'S FIELD, NOT A RECORD'S, so it takes no versionedFields
-	// row: the domain landed on main answering a listing with it
+	// Repo is its repository's name, which every person's or seat's read names
+	// so a reader links the attempt to its repository, change and commit by
+	// name; a box admission's read ([ReadCheckBox]) addresses the row by id and
+	// leaves it out. An answer's field: no versionedFields row
 	// ([RecordVersion]).
 	Repo    string       `json:"repo,omitempty"`
 	State   CheckState   `json:"state"`
@@ -2405,14 +2099,14 @@ type CheckRow struct {
 	Revision    int    `json:"revision,omitempty"`
 	CandidateID string `json:"candidate_id,omitempty"`
 	EntryID     string `json:"entry_id,omitempty"`
-	// Change, SourceRef and ChangeHead are the change the attempt judges, on a standing listing
-	// alone: the live change at a head's commit, or a candidate's entry's, at its enqueued head.
+	// Change, SourceRef and ChangeHead are the change the attempt judges, on a
+	// standing listing alone: the live change at a head's commit, or a
+	// candidate's entry's, at its enqueued head.
 	Change     *ChangeName `json:"change,omitempty"`
 	SourceRef  string      `json:"source_ref,omitempty"`
 	ChangeHead string      `json:"change_head,omitempty"`
-	// Base is what its diff is read against, and DefsOID the checks file its
-	// definition came from — the file of the branch it is checked for, its
-	// key's Target.
+	// Base is what its diff is read against; DefsOID the checks file its
+	// definition came from, of the branch it is checked for (its key's Target).
 	Base    string `json:"base,omitempty"`
 	DefsOID string `json:"defs_oid,omitempty"`
 	// Required reports a check the target's protection requires; RunIn and
@@ -2447,17 +2141,17 @@ type CheckRow struct {
 	Finished statelog.Position `json:"finished,omitzero"`
 }
 
-// CheckDetail is one attempt read whole ([ReadCheck]): its row, the
-// definition it ran under, its output's tail, the failures its ending named,
-// the log a failed run kept, its test counts and its output's lines — each
-// nil or empty where the attempt carries none.
+// CheckDetail is one attempt read whole ([ReadCheck]): its row, its definition,
+// its output's tail, its ending's failures, a failed run's kept log, its test
+// counts and its output's lines, each nil or empty where it carries none.
 type CheckDetail struct {
 	CheckRow
 	Def  *CheckDef `json:"def,omitempty"`
 	Tail string    `json:"tail,omitempty"`
-	// Tests, LogLines and TailCut are its ending's ([CheckFinished]); TailFirstLine is the number of
-	// Tail's first line in the whole output ([TailFirstLine]), 0 where its lines were not counted.
-	// Each is absent from an ending before [CheckCountsVersion].
+	// Tests, LogLines and TailCut are its ending's ([CheckFinished]);
+	// TailFirstLine is Tail's first line's number in the whole output
+	// ([TailFirstLine]), 0 where lines were not counted. Each is absent from an
+	// ending before [CheckCountsVersion].
 	Tests         *CheckTests    `json:"tests,omitempty"`
 	LogLines      int            `json:"log_lines,omitempty"`
 	TailFirstLine int            `json:"tail_first_line,omitempty"`
@@ -2470,128 +2164,104 @@ type CheckDetail struct {
 // commit's, or names the one attempt a `check` read is of — each on the
 // repository the read names ([ReadQuery.Repo]).
 type CheckQuery struct {
-	// Change is a change's number on the repository: the attempts that judge
-	// it — its head's, checked for its target — or, beside OID, that commit's
-	// checked for its target. A `checks` read's alone.
+	// Change is a change's number: the attempts judging it (its head's, checked
+	// for its target), or beside OID that commit's checked for its target. A
+	// `checks` read's alone.
 	Change int64 `json:"change,omitempty"`
-	// OID is a commit's whole id: its attempts — checked for every target,
-	// for the target of the change Change names, or for the Target named
-	// beside it — and the commit a `check` read's attempt is of.
+	// OID is a commit's whole id: its attempts (checked for every target, the
+	// target of Change's change, or the Target beside it), and the commit a
+	// `check` read's attempt is of.
 	OID string `json:"oid,omitempty"`
-	// Target, Name and Attempt are the one attempt a `check` read is of —
-	// the branch it was checked for, the check and the attempt — REQUIRED
-	// there. A `checks` read takes a Target only beside an OID and no
-	// Change — that commit's attempts checked for that branch, a range of
-	// code_checks' key, as a change's are for its own — refuses an Attempt,
-	// and takes a Name as a NARROWING: the attempts of the check of that name
-	// alone.
+	// Target, Name and Attempt are the one attempt a `check` read is of:
+	// REQUIRED there. A `checks` read takes a Target only beside an OID and no
+	// Change (a range of code_checks' key), refuses an Attempt, and takes a
+	// Name as a NARROWING to that check's attempts.
 	Target  string `json:"target,omitempty"`
 	Name    string `json:"name,omitempty"`
 	Attempt int    `json:"attempt,omitempty"`
-	// Latest answers, of a change's or a commit's attempts, each check's
-	// LATEST attempt for each branch it was checked for, and no attempt a
-	// later one reran: what a check STANDS AT, which a merge gate, a queue's
-	// meter and an Inbox card read. Without it a caller rebuilt that from the
-	// whole history, which a page cuts — a check rerun across a page's end
-	// was drawn at its superseded attempt. Refused on a repository's listing
-	// and on the window, which walk the endings in time and hold a check's
-	// attempts anywhere in them, and on a `check` read, which names one.
+	// Latest answers each check's LATEST attempt per branch of a change's or
+	// commit's attempts: what it STANDS AT, which a merge gate, a queue's meter
+	// and an Inbox card read; rebuilt by a caller from a page-cut history, a
+	// rerun across a page's end drew its superseded attempt. Refused on a
+	// repository's listing and the window (which walk endings in time, a
+	// check's attempts anywhere in them) and on a `check` read.
 	//
-	// ONE WALK OF code_checks' KEY, each row kept only where the key holds no
-	// later attempt of its check (one seek of the key's next attempt), so a
-	// page of it is at most one row a check and a target: one checks file
-	// declares at most [MaxChecksPerFile], which is the page a Latest listing
-	// takes where it names no limit ([latestCheckLimit]).
-	//
-	// AN ESTATE REQUEST'S FIELD, as State is: the domain landed on main with
-	// it ([RecordVersion]).
+	// ONE WALK OF code_checks' KEY, keeping a row only where no later attempt
+	// follows (one seek), so a page is at most one row a check and target: a
+	// checks file declares at most [MaxChecksPerFile], an unlimited Latest
+	// listing's page ([latestCheckLimit]). A request's field, as State is
+	// ([RecordVersion]).
 	Latest bool `json:"latest,omitempty"`
-	// State narrows a `checks` read to the attempts in one state; refused on
-	// a `check` read, which names its one attempt whatever its state, and on
-	// the window where it is not an ending ([CheckState.Ended]): the window
-	// lists the attempts that ENDED in it, so it holds no attempt queued or
-	// running, and a repository's listing is where those are narrowed to.
+	// State narrows a `checks` read to one state; refused on a `check` read and
+	// on the window where not an ending ([CheckState.Ended]): the window lists
+	// ENDED attempts.
 	//
-	// THE STATEMENT'S, as Name's narrowing is, and never a filter of the rows
-	// a page read: a page is full wherever the narrowing holds as many rows
-	// after its place, so what it costs follows what it answers rather than
-	// the history around it. A repository's listing and the window SEEK an
-	// index that leads with the narrowing (replicated 0144): the state, or the
-	// check's name and then the state — a name alone is one seek a state,
-	// merged ([narrowedPlaces]). Their writes are what any index on
-	// code_checks costs: the two over a repository's attempts hold every
-	// state, so they move with each of an attempt's three records (queued,
-	// claimed, ended), as code_checks_finished_idx does; the two over the
-	// window's are PARTIAL on the ended rows, as code_checks_recent_idx is,
-	// so each is written once, when an attempt ends, and again only when a
-	// later ending replaces it. A change's and a commit's walks — one
-	// commit's attempts, which their shape bounds — test it inside the walk.
-	//
-	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row — and neither does Name's use as a narrowing. The
-	// domain landed on main with them ([RecordVersion]).
+	// THE STATEMENT'S, never a filter of a page's rows, so a page costs what it
+	// answers. A repository's listing and the window SEEK an index led by the
+	// narrowing (replicated 0144): the state, or the name then state (a name
+	// alone one seek a state, merged: [narrowedPlaces]). The repository's two
+	// move with each of an attempt's three records, as code_checks_finished_idx
+	// does; the window's two are PARTIAL on ended rows, as
+	// code_checks_recent_idx is. A change's and a commit's walks test it
+	// inside. A request's field, as Name's narrowing is ([RecordVersion]).
 	State CheckState `json:"state,omitempty"`
-	// Since bounds a `checks` read of EVERY repository — the window, which
-	// names no repository — to the attempts that ended at or after it; zero
-	// is the whole of what the rows keep ([CheckHistory]). Refused beside a
-	// repository, whose listing is its own attempts newest ended first.
+	// Since bounds a `checks` read of EVERY repository (the window) to the
+	// attempts ended at or after it; zero is all the rows keep
+	// ([CheckHistory]). Refused beside a repository, whose listing is its own
+	// attempts newest ended first.
 	Since time.Time `json:"since,omitzero"`
-	// Until is the window's END: the attempts that ended BEFORE it, so a
-	// window over a past interval is a seek of code_checks_recent_idx from
-	// its end down, as a cursor's next page is from its place, and its first
-	// page is that interval's newest ending — never the newest of every
-	// attempt that ended since, which a reader would page through to reach
-	// it. Zero is no end: up to the newest ending. Refused beside a
-	// repository, as Since is, at or before Since, and on a `check` read.
+	// Until is the window's END: the attempts that ended BEFORE it, so a past
+	// interval is a seek of code_checks_recent_idx from its end down and its
+	// first page is that interval's newest ending, not the newest overall a
+	// reader would page through. Zero is no end. Refused beside a repository,
+	// at or before Since, and on a `check` read.
 	//
-	// AN ESTATE REQUEST'S FIELD, as State is: the domain landed on main with
-	// it ([RecordVersion]).
+	// A request's field, as State is ([RecordVersion]).
 	Until time.Time `json:"until,omitzero"`
-	// Standing lists where each check stands, in its order ([StandingOrder]): each key's latest
-	// attempt of a live change's head, its newest queue entry or a branch's tip, running ones
-	// included; "" is the listing above. A request field, so an older build refuses it unread.
+	// Standing lists where each check stands, in its order ([StandingOrder]):
+	// each key's latest attempt of a live change's head, its newest queue entry
+	// or a branch's tip, running ones included; "" is the listing above. A
+	// request field: an older build refuses it unread.
 	Standing StandingOrder `json:"standing,omitempty"`
 }
 
-// ChecksDueQuery is a `checks_due` read's question, REQUIRED as a
-// `changes_due` read's is: the instant a target's reading of its checks file
-// is due again by, and — for ONE repository's due check work — the repository
-// by its id, which its home was nudged about or found listed.
+// ChecksDueQuery is a `checks_due` read's question, REQUIRED as a `changes_due`
+// read's is: the instant a target's checks file re-reading is due by, and, for
+// ONE repository's due check work, the repository by id, which its home was
+// nudged about or found listed.
 type ChecksDueQuery struct {
 	RepoID string `json:"repo_id,omitempty"`
-	// RefreshBefore is the home's clock less its refresh: a target whose
-	// branch moved past the tip its checks file was read at is due a reading
-	// again once that reading was recorded at or before it — so a target
-	// pushed to on every landing is read at the home's pace, never at its
-	// own.
+	// RefreshBefore is the home's clock less its refresh: a target whose branch
+	// moved past the tip its checks file was read at is due a re-reading once
+	// that reading was recorded at or before it, so a target pushed on every
+	// landing is read at the home's pace, never its own.
 	RefreshBefore time.Time `json:"refresh_before"`
 	// TipsAfter is, for one repository's due check work with no cursor, the
-	// protected target its tip work goes on after: the [ReadAnswer.TipsNext]
-	// of the page before, which ended at it.
+	// protected target its tip work continues after: the previous page's
+	// [ReadAnswer.TipsNext].
 	TipsAfter string `json:"tips_after,omitempty"`
 }
 
 // ChecksRunningQuery is a `checks_running` read's question: the repository
 // whose running attempts it reads, by id in its canonical spelling, or "" for
-// the repositories holding one — the listing a repository's home pages for
-// the attempts it sweeps.
+// the repositories holding one (what a home pages for the attempts it sweeps).
 type ChecksRunningQuery struct {
 	RepoID string `json:"repo_id,omitempty"`
 }
 
 // ChecksQueuedQuery is a `checks_queued` read's question: the cell the queued
-// attempts' definitions name in their run_in — "" for the ones naming none,
-// which run in the company's default cell as the epoch a runner walks under
-// resolves it (config.Company.CheckCell), never as anything stored says.
-// ALWAYS SENT, "" included: it is a cell's name, and none is one.
+// attempts' definitions name in run_in, "" for those naming none, which run in
+// the company's default cell as the runner's epoch resolves it
+// (config.Company.CheckCell), never as anything stored says. ALWAYS SENT, ""
+// included: it is a cell's name.
 type ChecksQueuedQuery struct {
 	RunIn CheckCell `json:"run_in"`
 }
 
-// RunnableCheck is one attempt a `checks_queued` read lists: its row, the
-// name of its repository — the name its box is given the repository under,
-// its clone's directory and its token's — and the definition it was queued
-// under, which is what its box runs, whatever its target's file says now.
+// RunnableCheck is one attempt a `checks_queued` read lists: its row, its
+// repository's name (what its box, clone directory and token name it by) and
+// the definition it was queued under, which its box runs whatever the target's
+// file says now.
 type RunnableCheck struct {
 	CheckRow
 	Repo string    `json:"repo"`
@@ -2599,8 +2269,8 @@ type RunnableCheck struct {
 }
 
 // CheckTargetDue is a target branch whose checks file its home owes a reading
-// at the branch's tip ([ReadAnswer.DueTargets]): the branch, its tip and the
-// position of the record that moved it there.
+// at its tip ([ReadAnswer.DueTargets]): the branch, its tip and the position of
+// the record that moved it there.
 type CheckTargetDue struct {
 	TargetRef   string            `json:"target_ref"`
 	Tip         string            `json:"tip"`
@@ -2610,22 +2280,23 @@ type CheckTargetDue struct {
 // RepoSummary is a repository as a listing renders it.
 type RepoSummary struct {
 	RepoRef
-	// Access is the asker's standing on it ([Grant.Access] by name: read,
-	// review, write or maintain) — never none, since a repository the asker
-	// may not read is not listed at all.
+	// Access is the asker's standing ([Grant.Access] by name: read, review,
+	// write or maintain), never none: an unreadable repository is not listed.
 	Access string `json:"access,omitempty"`
 	// Head is the default branch's oid; empty for an empty repository.
 	Head string `json:"head,omitempty"`
 	// Pushes is pushes EVER.
 	Pushes     int64     `json:"pushes"`
 	LastPushAt time.Time `json:"last_push_at,omitzero"`
-	// Spark is its pushes on each of the asker's days, oldest first, zeros included: Spark[i] those
-	// landed from DayBounds[i] up to DayBounds[i+1]. Answered only where RepoFacts asks with DayBounds.
+	// Spark is its pushes on each of the asker's days, oldest first, zeros
+	// included: Spark[i] those landed in [DayBounds[i], DayBounds[i+1]).
+	// Answered only where RepoFacts asks with DayBounds.
 	Spark []int64 `json:"spark,omitempty"`
 	// ChangeCounts is its changes by state, answered only where [ReadQuery.RepoFacts] asks.
 	ChangeCounts *ChangeCounts `json:"change_counts,omitempty"`
-	// Card is what a listing's row draws of it, where [ReadQuery.RepoFacts] asks: absent from a
-	// build that does not answer it, and each part inside absent where unknown or none.
+	// Card is what a listing's row draws of it, where [ReadQuery.RepoFacts]
+	// asks: absent from a build not answering it, each part absent where
+	// unknown or none.
 	Card *RepoCard `json:"card,omitempty"`
 }
 
@@ -2635,203 +2306,188 @@ type RepoDetail struct {
 	// Branches and Tags are the live refs under refs/heads/ and refs/tags/.
 	Branches int64 `json:"branches"`
 	Tags     int64 `json:"tags"`
-	// Tombstones is the deleted refs the repository still holds as rows, so
-	// a cache syncing a delta learns of each deletion: what its refs hold
-	// beyond Refs, until a push sweeps them RefTombstoneHorizon after the
-	// deletion, or sooner, oldest first, past MaxTombstonesPerRepo.
+	// Tombstones is the deleted refs still held as rows so a cache syncing a
+	// delta learns of each deletion, beyond Refs, until a push sweeps them
+	// RefTombstoneHorizon after the deletion (or sooner, oldest first, past
+	// MaxTombstonesPerRepo).
 	Tombstones int64     `json:"tombstones"`
 	CreatedAt  time.Time `json:"created_at"`
 	// Limits are the SERVING node's epoch's: what an import chunks to.
 	Limits Limits `json:"limits"`
-	// PathOwners are who owns which of its paths, as its settings carry them
-	// ([RepoSettings.PathOwners]): on the detail alone, never on the
-	// [RepoRef] beside it, which every push, fetch and listing reads and
-	// which no path owner changes a thing about — and only to a read that
-	// asks for them ([ReadQuery.PathOwners]), since every resolution of a
-	// repository reads this detail for its row. At their bound
-	// ([MaxPathOwnersBytes]) the detail still fits the room a page beside it
-	// leaves the estate's reply ([MaxPageBytes]; the limits test holds it).
+	// PathOwners are who owns which paths, as its settings carry them
+	// ([RepoSettings.PathOwners]): on the detail alone, never the [RepoRef]
+	// every push, fetch and listing reads, and only to a read that asks
+	// ([ReadQuery.PathOwners]), since every resolution reads this detail for
+	// its row. At their bound ([MaxPathOwnersBytes]) the detail still fits
+	// beside a page in the estate's reply ([MaxPageBytes]; the limits test
+	// holds it).
 	PathOwners []PathOwner `json:"path_owners,omitempty"`
-	// Gates are the merge gates of its rules that carry one, each named by
-	// its rule's pattern and in pattern order ([RuleGate]) — what its row's
-	// rules ([RepoRef.Protections]) never carry — and, as the path owners
-	// are, only to a read that asks ([ReadQuery.Gates]): every resolution of
-	// a repository reads this detail for its row, and at their bound a
+	// Gates are the merge gates of its rules that carry one, each named by its
+	// rule's pattern, in pattern order ([RuleGate]); its row's rules
+	// ([RepoRef.Protections]) never carry them. Only to a read that asks
+	// ([ReadQuery.Gates]), for the path owners' reason: at their bound a
 	// repository's gates are half a mebibyte of JSON. A read that asked and
 	// finds none answers none.
 	Gates []RuleGate `json:"gates,omitempty"`
-	// RuleSources are who set each of its rules and when ([RuleSource]),
-	// every rule's — a gate's or none — in pattern order, and to the read
-	// that asks for the gates alone: the two are a rule in detail, which the
-	// row never carries, read in the same transaction as the rules it does,
-	// so every source names a rule of the row.
+	// RuleSources are who set each rule and when ([RuleSource]), every rule's
+	// in pattern order, to the read asking for gates alone: a rule in detail,
+	// read in the transaction of the row's rules, so every source names a rule
+	// of the row.
 	RuleSources []RuleSource `json:"rule_sources,omitempty"`
-	// Pushers is who pushed to it on the UTC days that begin within the asker's day bounds, most
-	// first: answered only where RepoFacts asks with DayBounds ([Pushers]).
+	// Pushers is who pushed on the UTC days beginning within the asker's day
+	// bounds, most first: answered only where RepoFacts asks with DayBounds
+	// ([Pushers]).
 	Pushers *Pushers `json:"pushers,omitempty"`
-	// Expunge is where the repository's expunges stand ([ExpungeState]):
-	// the one open, the purge a person asked for and not yet served, and the
-	// last one committed — the repository's own row, read with the rest of
-	// it, so a person who asked for a purge reads its progress here.
+	// Expunge is where the repository's expunges stand ([ExpungeState]): the
+	// open one, a person's unserved purge and the last committed, read from its
+	// own row, so a person who asked for a purge reads its progress here.
 	Expunge ExpungeState `json:"expunge,omitzero"`
-	// Remotes is where the repository stands with other hosts
-	// ([RemoteState]): its mirrors as its settings name them, its import's
-	// progress and its pull mirror's last sync — on the detail alone, read
-	// with its expunge in one seek of its row, never on the [RepoRef] every
-	// push and fetch reads, which needs only [RepoRef.Mirrored].
+	// Remotes is where it stands with other hosts ([RemoteState]): its mirrors
+	// as its settings name them, its import's progress and its pull mirror's
+	// last sync, on the detail alone, read with its expunge in one seek of its
+	// row, never on the [RepoRef] every push and fetch reads, which needs only
+	// [RepoRef.Mirrored].
 	Remotes RemoteState `json:"remotes,omitzero"`
-	// Version is the position of the record that last moved the repository's
-	// row (code_repos.version): a read listing what its refs hold floors there.
+	// Version is the position of the record that last moved its row
+	// (code_repos.version): a read listing what its refs hold floors there.
 	Version statelog.Position `json:"version,omitzero"`
 }
 
-// RuleSource is who set one of a repository's rules and when, named by the
-// rule's pattern: the decider of the record that last CHANGED the rule — its
-// push controls or its gate — and that record's instant (code_protections,
-// replicated 0148). A record that carries the rule unchanged, as every
-// settings change carries every rule, leaves its source as it was
-// ([rulesSourced]).
+// RuleSource is who set one of a repository's rules and when, named by its
+// pattern: the decider of the record that last CHANGED the rule (its push
+// controls or gate) and that record's instant (code_protections, replicated
+// 0148). A record carrying the rule unchanged, as every settings change carries
+// every rule, leaves its source ([rulesSourced]).
 //
-// A READ'S ANSWER, never a record's field: the columns are derived from what
-// every record already carries, its envelope's decider and its broker
-// instant, so none of it takes a versionedFields row (0148 states the
-// condition the derivation holds under).
+// A READ'S ANSWER, derived from every record's envelope decider and broker
+// instant, so no versionedFields row (0148 states the condition the derivation
+// holds under).
 type RuleSource struct {
 	Pattern string `json:"pattern"`
 	// SetBy is the decider as the record names it: a seat's handle (SetByKind
-	// agent), a person's human seat or an unbound credential's login
-	// (operator, iam.ActorFor), and "" where the configuration set it
-	// (config), which no principal decides.
+	// agent), a person's human seat or an unbound credential's login (operator,
+	// iam.ActorFor), "" where the configuration set it (config).
 	SetBy     string    `json:"set_by,omitempty"`
 	SetByKind ActorKind `json:"set_by_kind"`
 	SetAt     time.Time `json:"set_at"`
 }
 
-// RemoteState is a repository's other hosts as its row holds them
-// (code_repos, replicated 0123): zero for a repository with no mirror that was
-// never imported. A read's answer, never a record's field, so none of it takes
-// a versionedFields row; the records that write the columns name theirs
-// (mirror.go).
+// RemoteState is a repository's other hosts as its row holds them (code_repos,
+// replicated 0123): zero for one with no mirror, never imported. A read's
+// answer, so no versionedFields row; the records writing the columns name
+// theirs (mirror.go).
 //
-// EVERY CREDENTIAL HERE IS A REFERENCE — one whole ${VAR} the domain refuses
-// any other value for — so serving one to a reader of the repository serves a
-// variable's name, as the company document does to whoever reads it, never a
-// token.
+// EVERY CREDENTIAL HERE IS A REFERENCE, one whole ${VAR} the domain refuses any
+// other value for, so a reader is served a variable's name, as the company
+// document serves it, never a token.
 type RemoteState struct {
 	// MirrorFrom and MirrorTo are the repository's pull and push mirrors as
 	// its settings carry them ([RepoSettings.MirrorFrom]), nil for none.
 	MirrorFrom *MirrorSource `json:"mirror_from,omitempty"`
 	MirrorTo   *MirrorTarget `json:"mirror_to,omitempty"`
-	// Import is the import its create filled it from — its own, or a pull
-	// mirror's first fetch — and how far it went; nil for a repository its
-	// create did not import.
+	// Import is the import its create filled it from (its own, or a pull
+	// mirror's first fetch) and how far it went; nil for none.
 	Import *ImportState `json:"import,omitempty"`
-	// MirrorSyncedAt is the broker instant of a pull mirror's last sync, zero
-	// for one never synced and for a repository that is no pull mirror.
+	// MirrorSyncedAt is a pull mirror's last sync's broker instant, zero for
+	// never and for a repository that is no pull mirror.
 	MirrorSyncedAt time.Time `json:"mirror_synced_at,omitzero"`
 }
 
 // ImportState is one repository's import as its row holds it: its source,
 // how many of its chunks have landed, and how it ended.
 type ImportState struct {
-	// Source is what the create imported from, fixed at the create
+	// Source is what the create imported from, fixed then
 	// ([CreateRepo.Import]).
 	Source ImportSource `json:"source"`
 	// Chunks is how many of its chunks have landed ([ImportChunk.Seq]).
 	Chunks int64 `json:"chunks"`
-	// DoneAt is the broker instant of the record that ended it, zero while
-	// it runs; Error is why it ended short, "" for an import that finished.
+	// DoneAt is the broker instant of the record that ended it, zero while it
+	// runs; Error why it ended short, "" if it finished.
 	DoneAt time.Time `json:"done_at,omitzero"`
 	Error  string    `json:"error,omitempty"`
 }
 
 // ExpungeState is a repository's expunges as its row holds them (code_repos,
-// written by the expunge's three records alone): zero for a repository never
-// expunged, with no expunge open and no purge asked of it.
+// written by the expunge's three records alone): zero for one never expunged,
+// with none open and no purge asked.
 type ExpungeState struct {
-	// Open is the expunge begun and not yet committed — its id — and ""
-	// for none: while it is open, objects no ref reached at its scan are
-	// still served, and no new push may rely on them.
+	// Open is the expunge begun and not committed, by id, "" for none: while
+	// open, objects no ref reached at its scan are still served, and no new
+	// push may rely on them.
 	Open string `json:"open,omitempty"`
-	// Request is the purge a person asked for and its maintainer has not yet
-	// served — its id — and Requested where its record landed: it is served
-	// once no pack holds content from before that position. "" and zero for
-	// none.
+	// Request is a person's unserved purge, by id, and Requested its record's
+	// position: served once no pack holds content from before it. "" and zero
+	// for none.
 	Request   string            `json:"request,omitempty"`
 	Requested statelog.Position `json:"requested,omitzero"`
-	// ExpungedAt is the last commit's broker instant, zero for a repository
-	// never expunged, and DroppedObjects and DroppedBytes what that commit
-	// took out of the repository's live packs.
+	// ExpungedAt is the last commit's broker instant, zero for never;
+	// DroppedObjects and DroppedBytes what that commit took out of the live
+	// packs.
 	ExpungedAt     time.Time `json:"expunged_at,omitzero"`
 	DroppedObjects int64     `json:"dropped_objects,omitempty"`
 	DroppedBytes   int64     `json:"dropped_bytes,omitempty"`
 }
 
-// ChangeRow is a change as its row holds it (code_changes): every column, as
-// every read of one serves it — what a listing renders ([ChangeSummary]) and
-// a read of one change details ([ChangeDetail]).
+// ChangeRow is a change as code_changes holds it: every column, as every read
+// of one serves it (a listing's [ChangeSummary], a detail's [ChangeDetail]).
 type ChangeRow struct {
 	ID     string `json:"id"`
 	RepoID string `json:"repo_id"`
-	// Number is the change's on its repository — web!42's 42 — the
-	// repository's next_change at the apply that opened it.
+	// Number is the change's on its repository (web!42's 42): the repository's
+	// next_change at the apply that opened it.
 	Number int64 `json:"number"`
-	// Title is the line its owner opened it with, or whoever edited it since
-	// chose: somebody's words (ADR-0040).
+	// Title is the line it was opened with, or chosen by whoever edited it
+	// since: somebody's words (ADR-0040).
 	Title string      `json:"title" untrusted:"name"`
 	State ChangeState `json:"state"`
 	// SourceRef is the branch whose head the change proposes, and TargetRef
 	// the branch it proposes it into, each in full (refs/heads/feature).
 	SourceRef string `json:"source_ref"`
 	TargetRef string `json:"target_ref"`
-	// Head is the source branch's head at the change's latest revision, and
-	// Revision that revision's number: how many revisions it has.
+	// Head is the source branch's head at the latest revision; Revision that
+	// revision's number, which is how many it has.
 	Head     string `json:"head"`
 	Revision int64  `json:"revision"`
-	// Owner is who opened it — a seat by its handle, or a person by the
-	// human seat they hold — and OwnerKind which; OwnerOperatorID is the
-	// credential a person opened it with, the change's own attribution as
-	// every record a write leaves names it, and "" for a seat's.
+	// Owner is who opened it (a seat's handle, or a person's human seat) and
+	// OwnerKind which; OwnerOperatorID is the credential a person opened it
+	// with (the change's own attribution), "" for a seat's.
 	Owner           string    `json:"owner"`
 	OwnerKind       PartyKind `json:"owner_kind"`
 	OwnerOperatorID string    `json:"owner_operator_id,omitempty"`
 	// WorkItem is the work item the change carries, nil for none.
 	WorkItem *types.WorkItem `json:"work_item,omitempty"`
-	// CreatedTurn and CreatedRun are the turn and the executor's launch that
-	// opened it, each "" where there was none — a person's open has neither.
+	// CreatedTurn and CreatedRun are the turn and executor launch that opened
+	// it, "" where none (a person's open has neither).
 	CreatedTurn string `json:"created_turn,omitempty"`
 	CreatedRun  string `json:"created_run,omitempty"`
-	// OpenedAt is the broker instant of the record that opened it, and
-	// OpenedPosition where on the code log that record landed: what a listing
-	// across repositories orders its changes by.
+	// OpenedAt is the opening record's broker instant and OpenedPosition its
+	// code log position: what a cross-repository listing orders by.
 	OpenedAt       time.Time         `json:"opened_at"`
 	OpenedPosition statelog.Position `json:"opened_position"`
-	// ClosedAt is set exactly while the change is closed, with CloseReason —
-	// SourceDeleted for one a push closed by deleting its source — and
-	// MergedAt exactly while it is merged, with how (MergedVia) and the commit
-	// its target was merged at (MergeOID).
+	// ClosedAt is set exactly while the change is closed, with CloseReason
+	// (SourceDeleted for one a push closed by deleting its source); MergedAt
+	// exactly while merged, with MergedVia and the commit its target was merged
+	// at (MergeOID).
 	ClosedAt    time.Time `json:"closed_at,omitzero"`
 	CloseReason string    `json:"close_reason,omitempty" untrusted:"name"`
 	MergedAt    time.Time `json:"merged_at,omitzero"`
 	MergedVia   MergedVia `json:"merged_via,omitempty"`
 	MergeOID    string    `json:"merge_oid,omitempty"`
-	// MergedBy is who merged it through its gate — a merge record's
-	// principal ([Merge]): a seat by its handle, or a person by the human
-	// seat they hold — and MergedByKind which; MergedOperatorID the
-	// credential a person merged with; and OverrideReason a person's reason
-	// for merging past the gate. Each "" but on a change a merge record
-	// merged: a push that merged a change names its pusher on its push row.
+	// MergedBy is who merged it through its gate, a merge record's principal
+	// ([Merge]): a seat's handle or a person's human seat, MergedByKind which;
+	// MergedOperatorID the credential a person used; OverrideReason a person's
+	// reason for merging past the gate. Each "" but on a change a merge record
+	// merged: a push that merged one names its pusher on its push row.
 	MergedBy         string    `json:"merged_by,omitempty"`
 	MergedByKind     PartyKind `json:"merged_by_kind,omitempty"`
 	MergedOperatorID string    `json:"merged_operator_id,omitempty"`
 	OverrideReason   string    `json:"override_reason,omitempty"`
-	// BodyBytes is how long its description is, 0 for none: a listing says a
+	// BodyBytes is its description's length, 0 for none: a listing says a
 	// change has one without carrying it ([ChangeDetail.Body]).
 	BodyBytes int64 `json:"body_bytes,omitempty"`
-	// Version counts the records that changed the row — 1 at its open — and
-	// is what a write of the change's lifecycle names as its expectation
-	// ([ChangeProposal.ExpectedVersion]); Position is where the last of them
-	// landed.
+	// Version counts the records that changed the row (1 at its open), what a
+	// lifecycle write names as its expectation
+	// ([ChangeProposal.ExpectedVersion]); Position is where the last landed.
 	Version  int64             `json:"version"`
 	Position statelog.Position `json:"position"`
 }
@@ -2844,37 +2500,30 @@ type ChangeSummary struct {
 	// Ref is [ChangeRef] of the repository's name and the change's number.
 	Ref string `json:"ref"`
 	// Access is the asker's access to the change's repository ([Grant.Access]
-	// by name: read, review, write or maintain) — never none, since a change
-	// of a repository the asker may not read is not listed at all.
+	// by name), never none: a change of an unreadable repository is not listed.
 	Access string `json:"access,omitempty"`
 	// Readiness is whether the change may merge, judged in the read's one
-	// transaction against its one chart ([ReadinessOf]) — every row of a
-	// listing and one change's detail alike, never the answer its last
-	// mergeability stored ([MergeabilityRow.Ready]) — and nil for a change
-	// that is no longer live, which merges nothing. A change read in brief
-	// judges none ([ReadAnswer.ChangeBrief]), and its row carries none.
+	// transaction against its one chart ([ReadinessOf]) on every listing row
+	// and detail alike, never the stored answer ([MergeabilityRow.Ready]); nil
+	// for a change no longer live. A change read in brief judges none
+	// ([ReadAnswer.ChangeBrief]).
 	Readiness *Readiness `json:"readiness,omitempty"`
-	// OpenFindings is how many of the change's findings stand open — none of
-	// its authors has answered them (code_conversations.open_findings) — 0 for
-	// a change nobody has reviewed.
+	// OpenFindings is how many findings stand open, answered by none of its
+	// authors (code_conversations.open_findings); 0 for an unreviewed change.
 	OpenFindings int64 `json:"open_findings"`
-	// UpdatedAt is when the change last moved: the later of the last record
-	// on its repository's subject that changed its row — its open, an edit, a
-	// close, a merge, a push that moved its head — and the last one somebody
-	// wrote about it on its own subject — an ask for review, a comment, a
-	// review, an answer to a finding — never the home's facts (replicated
-	// 0147). What a listing narrowed to a window ([ReadQuery.Window]) keeps.
-	// A change read in brief ([ReadAnswer.ChangeBrief]) reads no
-	// conversation, and carries its lifecycle's last move alone, and no
-	// count of its findings.
+	// UpdatedAt is when the change last moved: the later of the last record on
+	// its repository's subject changing its row (open, edit, close, merge, a
+	// push moving its head) and the last somebody wrote about it on its own
+	// subject (an ask, a comment, a review, an answer to a finding), never the
+	// home's facts (replicated 0147). What a window listing
+	// ([ReadQuery.Window]) keeps. A change read in brief
+	// ([ReadAnswer.ChangeBrief]) reads no conversation: it carries its
+	// lifecycle's last move alone and no findings count.
 	//
-	// These two are an answer's fields, never a record's, and take no
-	// versionedFields row: the domain landed on main with them
-	// ([RecordVersion]), so every build serving the dashboard answers a
-	// listing with them.
+	// These two are answer fields, so no versionedFields row ([RecordVersion]).
 	UpdatedAt time.Time `json:"updated_at"`
-	// Card is what a listing's row draws beside its readiness, where [ReadQuery.Cards]
-	// asks; nil is not answered, never "nothing to say".
+	// Card is what a listing's row draws beside its readiness, where
+	// [ReadQuery.Cards] asks; nil is not answered, never "nothing to say".
 	Card *ChangeCard `json:"card,omitempty"`
 }
 
@@ -2884,30 +2533,28 @@ type ChangeDetail struct {
 	ChangeSummary
 	// Body is its description, "" for none.
 	Body string `json:"body,omitempty" untrusted:"fence"`
-	// Authors is everyone who wrote it — whoever opened it, and everyone whose
-	// push moved its head — by handle.
+	// Authors is everyone who wrote it, by handle: its opener and everyone
+	// whose push moved its head.
 	Authors []ChangeAuthor `json:"authors"`
-	// Conversation is what its conversation counts, nil for a change nobody
-	// has discussed; its rows are read a part at a time ([ReadQuery.Part]).
+	// Conversation is its conversation's counters, nil for an undiscussed
+	// change; its rows are read a part at a time ([ReadQuery.Part]).
 	Conversation *ConversationRow `json:"conversation,omitempty"`
 	// Mergeability is whether its latest merged revision merges into its
-	// target, as its home recorded it — nil for a change its home has merged
-	// no revision of yet. One of an earlier revision than the change's head,
-	// or into another branch, is the home's to merge again.
+	// target, as its home recorded it; nil before the home merged any. One of
+	// an earlier revision or into another branch is the home's to merge again.
 	Mergeability *MergeabilityRow `json:"mergeability,omitempty"`
-	// Participants is who takes part in its conversation (code_participants), by handle, at
-	// most MaxDetailParticipants; nil where not answered.
+	// Participants is who takes part in its conversation (code_participants),
+	// by handle, at most MaxDetailParticipants; nil where not answered.
 	Participants *ParticipantList `json:"participants,omitempty"`
 }
 
-// ConversationRow is a change's conversation's counters
-// (code_conversations): its comments and its reviews; its OPEN findings, which
-// none of its authors has answered; its STANDING BLOCKERS — the blockers that
-// hold it back whatever its authors answered, until their raiser's later
-// review or a dismissal clears them (S40); how many reviewers' latest verdict
-// asks for changes; the version and position of the last record on the
-// change's subject — the floor a read of its parts is asked at; and when
-// somebody last wrote on it.
+// ConversationRow is a change's conversation's counters (code_conversations):
+// its comments and reviews; its OPEN findings, unanswered by its authors; its
+// STANDING BLOCKERS, which hold it back whatever its authors answered until
+// their raiser's later review or a dismissal clears them (S40); how many
+// reviewers' latest verdict asks for changes; the version and position of the
+// last record on the change's subject (the floor a read of its parts is asked
+// at); and when somebody last wrote on it.
 type ConversationRow struct {
 	Comments         int64             `json:"comments"`
 	Reviews          int64             `json:"reviews"`
@@ -2916,22 +2563,21 @@ type ConversationRow struct {
 	ChangesRequested int64             `json:"changes_requested"`
 	Version          int64             `json:"version"`
 	Position         statelog.Position `json:"position"`
-	// SpokenAt is the broker instant of the last record somebody wrote on
-	// the change's subject — an ask for review, a comment, a thread
-	// resolved, a review, an answer to a finding (code_conversations.
-	// updated_at, replicated 0147) — and zero, left out, where every record
-	// on it was the home's or the engine's. Unlike Version, which every
-	// record there moves — a revision's facts and every mergeability its
-	// home records again as the target branch moves among them — it moves
-	// only with what the change's reviews and comments are rows of, so a
-	// reader holding pages of those asks them again only when it moves.
+	// SpokenAt is the broker instant of the last record somebody wrote on the
+	// change's subject (an ask, a comment, a thread resolved, a review, an
+	// answer to a finding; code_conversations.updated_at, replicated 0147),
+	// zero and left out where every record was the home's or the engine's.
+	// Unlike Version, which every record moves (a revision's facts, every
+	// mergeability recorded as the target moves), it moves only with what
+	// reviews and comments are rows of, so a reader holding pages of those asks
+	// again only when it moves.
 	SpokenAt time.Time `json:"spoken_at,omitzero"`
 }
 
-// ReviewRow is one review of a change (code_reviews): the revision it judged,
-// who reviewed — a seat, or a person with the credential they used — its
-// verdict and summary, how many findings it raised, the turn and the model
-// that reviewed, and its record's position and broker instant.
+// ReviewRow is one review of a change (code_reviews): the revision judged, the
+// reviewer (a seat, or a person with the credential used), verdict and summary,
+// findings raised, the reviewing turn and model, and its record's position and
+// broker instant.
 type ReviewRow struct {
 	ID           string            `json:"id"`
 	Revision     int64             `json:"revision"`
@@ -2945,15 +2591,14 @@ type ReviewRow struct {
 	Model        string            `json:"model,omitempty"`
 	Position     statelog.Position `json:"position"`
 	At           time.Time         `json:"at"`
-	// Change is the change it judged, on a `reviews` listing's rows, which
-	// span changes; nil on a `change` read's, which names its change.
+	// Change is the change it judged, on a `reviews` listing's rows, which span
+	// changes; nil on a `change` read's.
 	Change *ChangeName `json:"change,omitempty"`
 }
 
-// ChangeName is a change as a row about it names it where the row is read
-// apart from the change — a review a `reviews` listing found, the change a
-// `change_routing` page is of: its repository by name, its reference
-// (web!42), its title and its state, as the read found its row.
+// ChangeName is a change as a row read apart from it names it (a review a
+// `reviews` listing found, a `change_routing` page's change): its repository by
+// name, its reference (web!42), title and state, as the read found its row.
 type ChangeName struct {
 	Repo  string      `json:"repo"`
 	Ref   string      `json:"ref"`
@@ -2961,40 +2606,36 @@ type ChangeName struct {
 	State ChangeState `json:"state"`
 }
 
-// RoutedPage is a `change_routing` read's page (routedread.go): the change,
-// and a page of the records about it that reached anybody, newest first,
-// each with every recipient it reached — and what the read can say about
-// whom its records reached where it lists none.
+// RoutedPage is a `change_routing` read's page (routedread.go): the change, a
+// page of the records about it that reached anybody, newest first, each with
+// every recipient, and what the read can say of whom its records reached where
+// it lists none.
 type RoutedPage struct {
 	Change ChangeName `json:"change"`
-	// OpenedAt is the broker instant of the record that opened the change:
-	// the oldest record about it, which its Delivery is dated by.
+	// OpenedAt is the opening record's broker instant: the oldest record about
+	// the change, which its Delivery is dated by.
 	OpenedAt time.Time      `json:"opened_at"`
 	Records  []RoutedRecord `json:"records"`
-	// Delivery is what the read can say about whom the change's records
-	// reached ([routing.DeliveryOf]): `reached` where a record is listed —
-	// and on every later page, since its first listed one — and, where
-	// none is, `nobody` for a change opened since RetainedFrom, every one of
-	// whose notices would still be kept, and `swept` for one opened before
-	// it, whose notices a sweep was entitled to take and the applier never
-	// to write. Every record about a change says whom it concerns — its
-	// routing, or none for nobody — so its records always announced:
+	// Delivery is what the read can say of whom the change's records reached
+	// ([routing.DeliveryOf]): `reached` where a record is listed (and on every
+	// later page); where none is, `nobody` for a change opened since
+	// RetainedFrom, all of whose notices would still be kept, and `swept` for
+	// one opened before, whose notices a sweep was entitled to take. Every
+	// record about a change says whom it concerns (its routing, or none), so
 	// `quiet` and `unknown` are never this read's.
 	Delivery routing.Delivery `json:"delivery"`
-	// RetainedFrom is the instant from which every notice is kept, a seat's
-	// and a person's alike: the read's instant less [SeatNoticeHorizon], the
-	// shorter of the two horizons, since a person's — the company's
-	// inbox.retention_days — is never less than thirty days. A record older
-	// than it lists only the persons it reached: a seat's notice of it went
-	// with the turn detail it named.
+	// RetainedFrom is the instant from which every notice, a seat's or a
+	// person's, is kept: the read's instant less [SeatNoticeHorizon], the
+	// shorter horizon, since a person's (inbox.retention_days) is never under
+	// thirty days. An older record lists only the persons it reached: a seat's
+	// notice went with the turn detail it named.
 	RetainedFrom time.Time `json:"retained_from"`
 }
 
-// RoutedRecord is one record about a change and whom it reached: its
-// operation id (code_notifications.record_id), where it landed on the code
-// log and its broker instant, what its notices kept of what it says — an
-// open's description, a comment's body, a review's summary, nothing for a
-// record that says nothing of its own — and every recipient its notices name,
+// RoutedRecord is one record about a change and whom it reached: its operation
+// id (code_notifications.record_id), code log position and broker instant, what
+// its notices kept of what it says (an open's description, a comment's body, a
+// review's summary, or nothing), and every recipient its notices name,
 // addressed first, a fallback last, each group by handle.
 type RoutedRecord struct {
 	RecordID   string            `json:"record_id"`
@@ -3004,11 +2645,11 @@ type RoutedRecord struct {
 	Recipients []RoutedRecipient `json:"recipients"`
 }
 
-// RoutedRecipient is one handle a record reached: a seat's, or the human seat
-// a person holds ([PartyKind] says which, and so which horizon keeps its
-// notice), the ONE reason it heard under ([Reasons]' precedence), whether that
-// asks something of it, and — for a recipient reached only because nobody
-// better was found — which substitute it was.
+// RoutedRecipient is one handle a record reached: a seat's, or a person's human
+// seat ([PartyKind] says which, and so which horizon keeps its notice), the ONE
+// reason it heard under ([Reasons]' precedence), whether that asks something of
+// it, and, for a recipient reached only because nobody better was found, which
+// substitute it was.
 type RoutedRecipient struct {
 	Handle       string    `json:"handle"`
 	Kind         PartyKind `json:"kind"`
@@ -3018,13 +2659,12 @@ type RoutedRecipient struct {
 	FallbackRank int       `json:"fallback_rank,omitempty"`
 }
 
-// FindingRow is one finding on a change (code_findings and its text,
-// code_finding_texts): the review that raised it and who — its raiser — the
-// revision it was raised on, where it points — the path, the side of that
-// revision's diff, its lines, and the commit and the blob they were read in —
-// how much it weighs, what it is about and what it says, the lines it would
-// put in their place where it suggests some, its STATE, and its last answer:
-// the note, who gave it, the commit it names and the record that gave it.
+// FindingRow is one finding on a change (code_findings, its text in
+// code_finding_texts): its review and raiser, the revision it was raised on,
+// where it points (path, diff side, lines, and the commit and blob they were
+// read in), its weight, subject and words, the replacement lines it suggests,
+// its STATE, and its last answer (the note, who gave it, the commit it names
+// and the record that gave it).
 type FindingRow struct {
 	ID               string            `json:"id"`
 	ReviewID         string            `json:"review_id"`
@@ -3053,10 +2693,10 @@ type FindingRow struct {
 	RaisedAt time.Time `json:"raised_at,omitzero"`
 }
 
-// ReviewerRow is one reviewer a change has asked (code_reviewers): a seat by
-// its handle or a person by the human seat they hold, why they were asked,
-// whether the ask stands, who asked with what note, the record that last
-// moved it, and the globs a path owner was asked for.
+// ReviewerRow is one reviewer a change has asked (code_reviewers): a seat's
+// handle or a person's human seat, why asked, whether the ask stands, who asked
+// with what note, the record that last moved it, and the globs a path owner was
+// asked for.
 type ReviewerRow struct {
 	Reviewer        string            `json:"reviewer"`
 	Kind            PartyKind         `json:"kind"`
@@ -3066,21 +2706,23 @@ type ReviewerRow struct {
 	RequestedByKind PartyKind         `json:"requested_by_kind"`
 	Note            string            `json:"note,omitempty"`
 	Position        statelog.Position `json:"position"`
-	// At is when the record at Position landed, read from one of its notices on the change;
-	// zero where none is kept (past the notices' horizon, or a record that told nobody).
+	// At is when the record at Position landed, read from one of its notices on
+	// the change; zero where none is kept (past the notices' horizon, or a
+	// record telling nobody).
 	At time.Time `json:"at,omitzero"`
-	// OwnedPaths is the globs a path owner's ask is for (OwnerAsk.Paths), OwnedPathsOmitted how many
-	// more; none on an ask by name or one recorded before [OwnedPathsVersion].
+	// OwnedPaths is the globs a path owner's ask is for (OwnerAsk.Paths),
+	// OwnedPathsOmitted how many more; none on an ask by name or one recorded
+	// before [OwnedPathsVersion].
 	OwnedPaths        []string `json:"owned_paths,omitempty"`
 	OwnedPathsOmitted int      `json:"owned_paths_omitted,omitempty"`
 }
 
-// CommentRow is one comment on a change (code_comments): its thread — its own
-// id for a thread's first comment, a finding's for a reply to one — the root
-// or the finding it replies to, who said it — a seat, or a person with the
-// credential they used — the line a thread's first comment points at, whether
-// its thread is resolved and by whom, the turn that said it, what it says, and
-// its record's position and broker instant.
+// CommentRow is one comment on a change (code_comments): its thread (its own id
+// for a thread's first comment, a finding's for a reply to one), the root or
+// finding it replies to, its author (a seat, or a person with the credential
+// used), the line a thread's first comment points at, whether and by whom its
+// thread is resolved, the turn that said it, its words, and its record's
+// position and broker instant.
 type CommentRow struct {
 	ID               string            `json:"id"`
 	ThreadID         string            `json:"thread_id"`
@@ -3099,9 +2741,9 @@ type CommentRow struct {
 	At               time.Time         `json:"at"`
 }
 
-// ChangeAuthor is one author of a change (code_change_authors): a seat by its
-// handle or a person by the human seat they hold, from the revision they
-// first wrote. An author's approval of their own change counts for nothing.
+// ChangeAuthor is one author of a change (code_change_authors): a seat's handle
+// or a person's human seat, from the revision they first wrote. An author's
+// approval of their own change counts for nothing.
 type ChangeAuthor struct {
 	Author        string            `json:"author"`
 	Kind          PartyKind         `json:"kind"`
@@ -3110,11 +2752,9 @@ type ChangeAuthor struct {
 }
 
 // RevisionRow is one revision of a change (code_revisions): a move of its
-// source branch's head while it was live — the new head, who moved it and
-// the push that did, empty for a revision an open or a reopen made — where
-// its record landed and the record's broker instant, and the facts the
-// repository's home Gitlet node recorded of it, nil for a revision it has
-// recorded none of yet.
+// source head while live (the new head, who moved it, the push that did, empty
+// for one an open or reopen made), its record's position and broker instant,
+// and the facts the home Gitlet node recorded of it, nil before any.
 type RevisionRow struct {
 	N          int64             `json:"n"`
 	Head       string            `json:"head"`
@@ -3127,16 +2767,14 @@ type RevisionRow struct {
 }
 
 // RevisionFactsRow is a revision's facts as the change's home recorded them
-// (code_revision_facts, [Revise]): the target branch and the tip they were
-// read against with the position that moved it there, the base the change is
-// measured from, the trees of the base and of the head, the id of the change
-// it makes — or that none was taken — the files it touches or that it touches
-// all, the classes of their changes, the Gitlet node that recorded them, the
-// path-owner match — the digest of the owners matched against, those matched
-// and those asked no review of — and the record that wrote them. A revision
-// whose head its target holds has none: its change is merged, and its home
-// lands it. Two revisions whose rows name the same trees hold the same code
-// ([ChangeClassNoCodeChange]).
+// (code_revision_facts, [Revise]): the target branch and tip read against, with
+// the position that moved it there; the base; the base's and head's trees; its
+// patch id, or that none was taken; the files it touches, or that it touches
+// all; their change classes; the recording Gitlet node; the path-owner match
+// (the owners' digest, those matched and those asked no review of); and the
+// writing record. A revision whose head its target holds has none: its change
+// is merged and its home lands it. Two revisions naming the same trees hold the
+// same code ([ChangeClassNoCodeChange]).
 type RevisionFactsRow struct {
 	TargetRef      string            `json:"target_ref"`
 	TargetOID      string            `json:"target_oid"`
@@ -3150,7 +2788,8 @@ type RevisionFactsRow struct {
 	TouchesAll     bool              `json:"touches_all,omitempty"`
 	Classes        RevisionClasses   `json:"classes,omitzero"`
 	Node           string            `json:"node"`
-	// MeasuredAt is when its home read them, by its clock; zero for facts recorded before [OwnedPathsVersion].
+	// MeasuredAt is when its home read them, by its clock; zero for facts
+	// recorded before [OwnedPathsVersion].
 	MeasuredAt      time.Time         `json:"measured_at,omitzero"`
 	OwnersDigest    string            `json:"owners_digest"`
 	RequestedOwners []Owner           `json:"requested_owners,omitempty"`
@@ -3158,166 +2797,139 @@ type RevisionFactsRow struct {
 	Position        statelog.Position `json:"position"`
 }
 
-// THE READS BY OBJECT ID: what a Gitlet node answers about a repository's content
-// — a tree, a file's lines, a diff, a comparison — over its own cache
-// (internal/gitlet/query), never over the rows. They cross the estate wire like
-// every read here, so each is plain JSON and every field is the asker's or the
-// answer's.
+// THE READS BY OBJECT ID: what a Gitlet node answers about content (a tree, a
+// file's lines, a diff, a comparison) from its cache (internal/gitlet/query),
+// never the rows.
 //
-// EVERY REVISION IS AN OBJECT ID, whole or abbreviated ([ValidRev]), and never
-// a ref, a `^`, a `~` or a `:`: an id names the same object on every node at
-// every position, so a read by one needs no level — what a ref points at is a
-// row, which ResolveQuery and its kin answer — and none of git's revision
-// grammar reaches the Gitlet node, whose argument lists carry validated ids and
-// fixed options alone. A PATH is data, never an option: it reaches git on a
-// batch command's standard input, or — for a log and a blame, which read no
-// path there — as the one argument after `--`, a log's as a literal pathspec
+// EVERY REVISION IS AN OBJECT ID, whole or abbreviated ([ValidRev]), never a
+// ref, `^`, `~` or `:`: an id names one object everywhere, needing no level,
+// and no revision grammar reaches git. A PATH is data, never an option: on
+// stdin, or the one argument after `--`, a log's as a literal pathspec
 // (internal/gitlet/query's rule).
 //
-// EVERY ANSWER IS ONE PAGE, at most [MaxGitAnswerBytes] of JSON, with a cursor
-// (GitAnswer.Next) where the next page starts; one item that cannot fit a page
-// is refused [ErrSliceTooLarge] naming the narrowing, never cut.
+// EVERY ANSWER IS ONE PAGE of at most [MaxGitAnswerBytes] JSON with a cursor
+// (GitAnswer.Next); an item too large is refused [ErrSliceTooLarge], never cut.
 
 // MaxGitAnswerBytes is the most one GitAnswer's JSON carries: the 64 KiB a
-// seat's tool answers in (internal/agent/builtin's ToolAnswerBytes) less 8
-// KiB for what a tool wraps around a page — the ids it resolved, the position,
-// the cursor, at their longest — so a page is always one tool answer. Spelled
-// here rather than read from builtin, which imports this package.
+// seat's tool answers in (internal/agent/builtin's ToolAnswerBytes) less 8 KiB
+// for what a tool wraps around a page at its longest, so a page is always one
+// tool answer. Spelled here because builtin imports this package.
 const MaxGitAnswerBytes = 56 << 10
 
-// MaxGitPathBytes is the longest path a read by oid names: 4 KiB, PATH_MAX on
-// Linux and far past any path a source tree holds — a bound on what the asker
-// can make a Gitlet node look up, not a rule about the repository.
+// MaxGitPathBytes is the longest path a read by oid names: 4 KiB, Linux's
+// PATH_MAX, a bound on what the asker can make a Gitlet node look up, not a
+// rule about the repository.
 const MaxGitPathBytes = 4 << 10
 
 // MaxDiffPaths is the most paths one diff's stat is filtered by: a person's or
-// a model's list of the files and directories it cares about, never a
-// repository's listing.
+// model's list of what it cares about, never a repository's listing.
 const MaxDiffPaths = 64
 
 // MinAbbrevDigits is the fewest hex digits an abbreviated object id may have:
-// git's own default abbreviation (core.abbrev), the length of every id a
-// person or a model copies out of a log or a message.
+// git's default core.abbrev, every id a person or model copies from a log or
+// message.
 const MinAbbrevDigits = 7
 
-// maxGitCursorBytes bounds a cursor the asker hands back: every cursor a Gitlet
-// node issues is a kind's letter and up to two decimal numbers, or a tags
-// page's date and tag name, 349 bytes at the widest.
+// maxGitCursorBytes bounds a returned cursor: every cursor a Gitlet node issues
+// is a kind's letter and up to two decimal numbers, or a tags page's date and
+// tag name, 349 bytes at the widest.
 const maxGitCursorBytes = 384
 
-// MaxTouchedPaths is the most paths a revision's facts list as the files its
-// change touches ([RevisionFactsAnswer.Touched]). Past it the facts say the
-// revision TOUCHES ALL, with no list: the safe side for everything that reads
-// one — an interdiff then shows every file its two heads differ in, and
-// anything matched against the paths matches — where a list cut at its bound
-// would leave the files past the cut out of all of it.
+// MaxTouchedPaths is the most paths a revision's facts list as touched
+// ([RevisionFactsAnswer.Touched]). Past it the revision TOUCHES ALL, with no
+// list: the safe side for every reader (an interdiff shows every differing
+// file, every path rule matches), where a cut list would leave the files past
+// the cut out.
 //
-// A THOUSAND: far more than a change a reviewer reads file by file touches,
-// so only the changes nobody reviews that way — a formatter's run, a vendored
-// tree, a move of a whole directory — touch all; and few enough that matching
-// rules against the list on every revision stays cheap. The list's bytes are
-// bounded beside it ([MaxTouchedBytes]), whichever is reached first.
+// A THOUSAND: far more than a change reviewed file by file touches, so only
+// changes nobody reads that way (a formatter run, a vendored tree, a directory
+// move) touch all, and few enough that matching rules on every revision stays
+// cheap. [MaxTouchedBytes] bounds the bytes beside it, whichever comes first.
 const MaxTouchedPaths = 1000
 
-// MaxTouchedBytes is the most the touched list may take AS JSON — its
-// brackets, every path quoted and escaped as encoding/json writes it, the
-// commas between — in a revision's facts and in whatever carries them on:
-// past it, as past [MaxTouchedPaths], the revision touches all.
+// MaxTouchedBytes is the most the touched list may take AS JSON (brackets,
+// every path quoted and escaped as encoding/json writes it, commas) in a
+// revision's facts and whatever carries them on; past it the revision touches
+// all.
 //
 // 48 KiB, SO A FACTS ANSWER IS ALWAYS ONE PAGE: an answer is at most
-// [MaxGitAnswerBytes], 56 KiB, and the facts' ids, flags and the stamps every
-// answer carries — its position, and the push that introduced each commit it
-// names — take the rest with room to spare. Measured as JSON rather than as
-// the paths' own bytes because a path of `<` costs six bytes there: a bound on
-// raw bytes would let such a list run past the page it must fit. A list at
-// the bound is about a twentieth of a record's bytes (MaxRecordBytes), so a
-// record that carries the facts on carries it beside everything else.
+// [MaxGitAnswerBytes], 56 KiB, and the facts' ids, flags and every answer's
+// stamps fit in the rest. As JSON, not raw bytes, because a path of `<` costs
+// six bytes there. At the bound it is about a twentieth of MaxRecordBytes, so a
+// record carrying the facts on fits beside the rest.
 const MaxTouchedBytes = 48 << 10
 
 // MaxReanchors is the most anchors one re-anchoring read places
-// ([ReanchorQuery]). Each is two lines of the read's one check of what it
-// names and at most one pair of its one diff process, and its answer at most
-// a few hundred bytes, so sixty-four keep the read's short check far inside
-// its bound and its answer far inside a page: the findings one review raises
-// at most, placed by one read.
+// ([ReanchorQuery]): each is two lines of the read's one check and at most one
+// pair of its one diff process, its answer a few hundred bytes, so sixty-four
+// (one review's findings at most) keep the check and the answer far inside
+// their bounds.
 const MaxReanchors = 64
 
-// MaxAnchorLine is the last line an anchor's range may name: the most lines a
-// blob holds — a line a byte — at the largest blob code.limits.max_blob_bytes
-// lets any push carry, its ceiling (config.CodeMaxPushBytesCeiling, 1 GiB).
-// A range past it is no file's lines, and a placing moves a range by at most
-// the lines its new file holds, so a range within it is moved within what an
-// int holds rather than wrapped into a line no file has and reported where it
-// was.
+// MaxAnchorLine is the last line an anchor's range may name: a line a byte at
+// the largest blob code.limits.max_blob_bytes allows
+// (config.CodeMaxPushBytesCeiling, 1 GiB). A range past it is no file's, and
+// placing moves a range by at most its new file's lines, so a range within it
+// moves within an int rather than wrapping into a line no file has.
 const MaxAnchorLine = int(config.CodeMaxPushBytesCeiling)
 
-// maxAnchorIDBytes bounds an anchor's id: an opaque name the caller gives
-// each anchor and reads its answer back by — a finding's, a UUID's 36
-// characters. 64 bytes leave room for another naming and keep a
-// re-anchoring's answer inside a page whatever its ids hold: MaxReanchors of
-// them, every byte one JSON writes in six, are 24 KiB of ids, and the whole
-// list, every anchor's numbers at their widest, under 30 KiB — about half a
-// page.
+// maxAnchorIDBytes bounds an anchor's id, the opaque name the caller reads its
+// answer back by (a finding's UUID, 36 characters). 64 bytes leave room and
+// keep a re-anchoring's answer inside a page: MaxReanchors ids, every byte
+// encoded in six, are 24 KiB, the whole list at its widest under 30 KiB.
 const maxAnchorIDBytes = 64
 
-// THE BOUNDS OF A LOG AND A BLAME. Every field git leaves unbounded — a
-// commit's subject, its author's name and address, its parents, a blamed
-// line's text — is DESCRIBED, NEVER CUT, past its bound: answered absent
-// beside its size, so a page never carries half a field read as the whole.
-// Each bound is of the field's ENCODED size — its JSON, every control byte
-// six and every byte that is not UTF-8 six, with the escape the fence a code
-// tool puts it in or beside writes into it — so the widest commit and the
-// widest blamed line with its commit always fit one page with room to spare,
-// however the text is spelled: a subject of 4 KiB of control bytes would
-// otherwise encode to 24 KiB.
+// THE BOUNDS OF A LOG AND A BLAME. Every field git leaves unbounded (a commit's
+// subject, author name and address, parents, a blamed line's text) is
+// DESCRIBED, NEVER CUT, past its bound: answered absent beside its size, so a
+// page never carries half a field read as whole. Each bound is of the ENCODED
+// size (its JSON, every control or non-UTF-8 byte six, with the escape a code
+// tool's fence writes into it), so the widest commit and blamed line always fit
+// one page however spelled: 4 KiB of control bytes would encode to 24 KiB.
 
-// MaxLogLimit is the most commits one log page lists, and DefaultLogLimit how
-// many a read naming none lists. A HUNDRED, a long screen of history, and a
-// page past it is bounded in bytes as well: a page ends before the commit
-// whose encoding — its subject's fence included — would take the answer past
-// MaxGitAnswerBytes, so a hundred subjects of 4 KiB is several pages, never
-// one answer too large to send. TWENTY-FIVE by default: the screen a "when
-// did this change" question reads first.
+// MaxLogLimit is the most commits one log page lists, DefaultLogLimit how many
+// a read naming none lists. A HUNDRED, a long screen of history, and a page
+// also ends before the commit whose encoding (its subject's fence included)
+// would pass MaxGitAnswerBytes, so a hundred 4 KiB subjects take several pages,
+// never one too large. TWENTY-FIVE by default: the screen a "when did this
+// change" question reads first.
 const (
 	MaxLogLimit     = 100
 	DefaultLogLimit = 25
 )
 
 // MaxLogGrepBytes is the longest literal a log is kept to: a few words of a
-// message, which a model looks for — never a document — and short enough that
-// the streaming matcher's table is nothing beside the page.
+// message a model looks for, never a document, short enough that the streaming
+// matcher's table is nothing beside the page.
 const MaxLogGrepBytes = 256
 
-// MaxLogSubjectBytes is the most a commit's SUBJECT may encode to and be
-// answered: the message's first paragraph, as git's %s joins it. 4 KiB holds
-// any subject a person writes, and a page of them at its bound is still a
-// dozen commits; past it the subject is described by its size
-// (LogCommit.SubjectBytes).
+// MaxLogSubjectBytes is the most a commit's SUBJECT (the message's first
+// paragraph, git's %s) may encode to and be answered: 4 KiB holds any human
+// subject, and a page at its bound is still a dozen commits; past it, described
+// by its size (LogCommit.SubjectBytes).
 const MaxLogSubjectBytes = 4 << 10
 
-// MaxLogPersonBytes is the most a commit's author's or committer's name, or
-// address, may encode to and be answered. A JUDGMENT: git and fsck bound
-// neither, RFC 5321 bounds an address at 254 octets, and 1 KiB holds every
-// real name and address with room; past it each is described by its size.
+// MaxLogPersonBytes is the most a commit's author's or committer's name or
+// address may encode to and be answered. A JUDGMENT: git and fsck bound
+// neither, RFC 5321 bounds an address at 254 octets, and 1 KiB holds every real
+// one; past it each is described by its size.
 const MaxLogPersonBytes = 1 << 10
 
-// MaxLogParents is the most parents a commit's answer lists: an octopus
-// merge's, 64 ids of 43 bytes encoded. Past it the parents are described by
-// their count (LogCommit.ParentCount).
+// MaxLogParents is the most parents a commit's answer lists: an octopus merge's
+// 64 ids at 43 encoded bytes each. Past it, described by count
+// (LogCommit.ParentCount).
 const MaxLogParents = 64
 
-// MaxBlameLines is the most lines one blame names, its whole range: a few
-// screens of a file, which its answer pages within. A blame's cost is the
-// walk of the file's history for the lines it names, so a range is bounded
-// rather than the file, and that walk is the read's own git, within its one
-// budget like any other: a range whose walk runs it out is refused naming a
-// narrower one.
+// MaxBlameLines is the most lines one blame names: a few screens, which its
+// answer pages within. A blame's cost is the walk of the history of the lines
+// it names, so the range is bounded rather than the file, and the walk is
+// within the read's one git budget: a range that runs it out is refused naming
+// a narrower one.
 const MaxBlameLines = 500
 
 // MaxBlameLineBytes is the most a blamed line's text may encode to and be
-// answered: twice a subject's bound, since a source line of generated code or
-// minified text runs long; past it the line is described by its size
-// (BlameLine.TextBytes).
+// answered: twice a subject's bound, since generated or minified lines run
+// long; past it, described by its size (BlameLine.TextBytes).
 const MaxBlameLineBytes = 8 << 10
 
 // GitReadKind is what a [GitQuery] asks. A closed set ([GitReadKinds]).
@@ -3327,93 +2939,91 @@ const (
 	// GitTree lists a tree: a commit's root or one of its directories, or a
 	// tree named by its own id; recursively when asked.
 	GitTree GitReadKind = "tree"
-	// GitBlob reads a file's lines, by a commit and a path or by the blob's
-	// own id; a path naming a directory answers its listing (Kind tree), so
-	// one read serves both.
+	// GitBlob reads a file's lines, by a commit and path or by the blob's id; a
+	// path naming a directory answers its listing (Kind tree), so one read
+	// serves both.
 	GitBlob GitReadKind = "blob"
 	// GitDiff is the per-file stat of the difference between two commits
 	// or trees, or one file's patch.
 	GitDiff GitReadKind = "diff"
-	// GitCompare is how two commits relate: their merge base, which
-	// contains which, the commits each has that the other lacks, and the
-	// first page of what head changed since the merge base.
+	// GitCompare is how two commits relate: their merge base, which contains
+	// which, the commits each lacks of the other, and the first page of what
+	// head changed since the base.
 	GitCompare GitReadKind = "compare"
 	// GitTips is many branch heads and tags at once: what each peels to, an
-	// annotated tag's facts, its commit, and how far it is from a base (tips.go).
+	// annotated tag's facts, its commit, and its distance from a base
+	// (tips.go).
 	GitTips GitReadKind = "tips"
 	// GitTags is the copy's tags newest first by their own date, read from its
-	// tag index with no git (tags.go).
+	// tag index without git (tags.go).
 	GitTags GitReadKind = "tags"
-	// GitLandedIn is whether a commit is in a ref's history, and the push
-	// that put it there and kept it there: the one question about history a
-	// seat asks the server rather than a clone.
+	// GitLandedIn is whether a commit is in a ref's history, and the push that
+	// put and kept it there: the one history question a seat asks the server
+	// rather than a clone.
 	GitLandedIn GitReadKind = "landed_in"
-	// GitRevisionFacts is what a change's revision is against its target's
-	// tip: their merge base, the change's patch-id and the files it touches,
-	// and whether its head is in the target already — what the repository's
-	// home Gitlet node records on the change for each revision, or lands it by.
-	// THE ENGINE'S OWN READ ([GitReadKind.EnginesOwn]): every reader of a
-	// revision's facts after the home reads the rows, never git.
+	// GitRevisionFacts is a change's revision against its target's tip: their
+	// merge base, the change's patch-id and touched files, and whether its head
+	// is in the target already, which the home Gitlet node records for each
+	// revision or lands it by. THE ENGINE'S OWN READ
+	// ([GitReadKind.EnginesOwn]): every later reader reads the rows, never git.
 	GitRevisionFacts GitReadKind = "revision_facts"
-	// GitReanchor is where lines anchored in one revision's files — a
-	// finding's, a comment's — are in another revision's: moved by the
-	// lines changed above them, outdated where their own lines changed, gone
-	// with their file.
+	// GitReanchor is where lines anchored in one revision's files (a finding's,
+	// a comment's) are in another's: moved by changed lines above them,
+	// outdated where their own lines changed, gone with their file.
 	GitReanchor GitReadKind = "reanchor"
-	// GitInterdiff is what a change changed between two of its revisions:
-	// the diff of their heads kept to the files either revision's change
-	// touches, its stat or one file's patch, answered as a diff is (Kind
-	// interdiff, its Diff part).
+	// GitInterdiff is what a change changed between two of its revisions: the
+	// diff of their heads kept to the files either revision's change touches,
+	// its stat or one file's patch, answered as a diff is (Kind interdiff, its
+	// Diff part).
 	GitInterdiff GitReadKind = "interdiff"
-	// GitLog is the history of a path — or of every path — from a commit:
-	// the commits that changed it, newest first by generation, a page at a
-	// time, each with its parents, its author, its two dates and its
-	// subject, and optionally only those whose message holds a literal.
+	// GitLog is the history of a path, or of every path, from a commit: the
+	// commits that changed it, newest first by generation, a page at a time,
+	// each with its parents, author, two dates and subject, optionally only
+	// those whose message holds a literal.
 	GitLog GitReadKind = "log"
 	// GitBlame is which commit last changed each line of a file at a commit,
-	// and the line — and the path, where it was another — it had there: at
-	// most MaxBlameLines lines a read, a page at a time.
+	// and the line (and the path, where it was another) it had there: at most
+	// MaxBlameLines lines a read, a page at a time.
 	GitBlame GitReadKind = "blame"
 	// GitTreeCommits is the commit that last changed each entry of a directory
-	// at a commit, as `git log -1 -- <entry>` names it, a page of its listing
+	// at a commit, as `git log -1 -- <entry>` names it, a page of the listing
 	// at a time (treecommits.go).
 	GitTreeCommits GitReadKind = "tree_commits"
-	// GitChecksFile is the checks file a commit holds — [ChecksFilePath] in
-	// its tree — its object's id and type and, for a file within
-	// [MaxChecksFileBytes], its bytes WHOLE: what a repository's home reads a
-	// change's checks' definitions from, at its target's tip (M5-D15). THE
-	// ENGINE'S OWN READ ([GitReadKind.EnginesOwn]), and one answer always: a
-	// file the parse refuses by its size alone is answered by its size, and
-	// the bytes are exact — never lines cut into pages, nor text a JSON
-	// string would replace an invalid byte of, which the parse must see as
-	// git holds it.
+	// GitChecksFile is the checks file a commit holds ([ChecksFilePath]): its
+	// object's id and type and, within [MaxChecksFileBytes], its bytes WHOLE,
+	// which a home reads a change's check definitions from at its target's tip
+	// (M5-D15). THE ENGINE'S OWN READ ([GitReadKind.EnginesOwn]), always one
+	// answer: a file too large to parse is answered by its size, and the bytes
+	// are exact, never paged lines or JSON text replacing an invalid byte,
+	// since the parse must see them as git holds them.
 	GitChecksFile GitReadKind = "checks_file"
-	// GitCodeFiles is a commit's deploy and dependency files: the files of
-	// its tree on the closed list (internal/deployfiles), each by its path,
-	// its blob and its size, or ONE of them whole. THE ENGINE'S OWN READ
-	// ([GitReadKind.EnginesOwn]), which the atlas's scan makes of a default
-	// branch's tip; a path off the list is refused, never read.
+	// GitCodeFiles is a commit's deploy and dependency files on the closed list
+	// (internal/deployfiles), each by path, blob and size, or ONE of them
+	// whole. THE ENGINE'S OWN READ ([GitReadKind.EnginesOwn]), made by the
+	// atlas's scan of a default branch's tip; a path off the list is refused,
+	// never read.
 	GitCodeFiles GitReadKind = "code_files"
-	// GitSearch is the lines of a commit a code search matches — the
-	// default branch's tip through the repository's code index where its Gitlet
-	// node keeps one, and otherwise git grep — at most MaxSearchHits of
-	// them, in one answer with no next page (search.go).
+	// GitSearch is the lines of a commit a code search matches (the default
+	// branch's tip through the code index where its Gitlet node keeps one, git
+	// grep otherwise), at most MaxSearchHits, in one answer with no next page
+	// (search.go).
 	GitSearch GitReadKind = "search"
-	// GitFind is the files of a commit's tree whose path holds a query's characters in
-	// order, case-folded, best first, with how many match (find.go): read over the
-	// tree's memoized listing, so a person typing runs no git after the first query.
+	// GitFind is the files of a commit's tree whose path holds a query's
+	// characters in order, case-folded, best first, with the match count
+	// (find.go): read over the tree's memoized listing, so a person typing runs
+	// no git after the first query.
 	GitFind GitReadKind = "find"
-	// GitExcerpts is the lines around ranges of lines, each read in a blob a change's
-	// revision holds, marked as that revision's diff changes them (excerpts.go).
+	// GitExcerpts is the lines around ranges of lines, each read in a blob a
+	// change's revision holds, marked as that revision's diff changes them
+	// (excerpts.go).
 	GitExcerpts GitReadKind = "excerpts"
 )
 
 // GitReadKinds is the closed set.
 //
-// A KIND IS AN ESTATE REQUEST'S, NEVER A RECORD'S: a GitQuery crosses the
-// estate wire and is answered by a Gitlet node from its cache, and no record of
-// the code log names one, so a kind added here moves no RecordVersion and
-// takes no versionedFields row.
+// A KIND IS A REQUEST'S, NEVER A RECORD'S: a GitQuery is answered by a Gitlet
+// node from its cache and no code log record names one, so a new kind moves no
+// RecordVersion and takes no versionedFields row.
 func GitReadKinds() []GitReadKind {
 	return []GitReadKind{GitTree, GitBlob, GitDiff, GitCompare, GitTips, GitTags, GitLandedIn,
 		GitRevisionFacts, GitReanchor, GitInterdiff, GitLog, GitBlame, GitTreeCommits, GitChecksFile, GitCodeFiles,
@@ -3423,29 +3033,25 @@ func GitReadKinds() []GitReadKind {
 // Valid reports a kind this build answers.
 func (k GitReadKind) Valid() bool { return slices.Contains(GitReadKinds(), k) }
 
-// EnginesOwn reports a kind THE ENGINE ALONE reads — a revision's facts, which
-// the repository's home Gitlet node reads to record them on the change, or to
-// land it, a commit's deploy and dependency files, which it reads for the
-// atlas, and a commit's checks file, which it reads a change's checks'
-// definitions from at its target's tip — so a read of it names NO asker and
-// no seat it reads for, is held to no grant and is recorded as nobody's read:
-// an asker there would be judged for a read it never made, and a
-// `visibility: unit` repository's readers would be told the engine read it.
-// As the duty listings of the rows are ([ReadQuery]'s `compaction_due`), and
-// for the same reason.
+// EnginesOwn reports a kind THE ENGINE ALONE reads: a revision's facts (the
+// home records them or lands by them), a commit's deploy and dependency files
+// (for the atlas) and its checks file (the target tip's check definitions).
+// Such a read names NO asker and no seat it reads for, is held to no grant and
+// recorded as nobody's: an asker would be judged for a read it never made, and
+// a `visibility: unit` repository's readers told the engine read it. As the
+// rows' duty listings ([ReadQuery]'s `compaction_due`), for the same reason.
 func (k GitReadKind) EnginesOwn() bool {
 	return k == GitRevisionFacts || k == GitChecksFile || k == GitCodeFiles
 }
 
-// Unstampable reports a kind whose answer is a PAGE of the repository's content
-// (a listing, a file's lines, a diff, a comparison, many tips, an interdiff, a
-// history, a blame, a directory's last commits or a find), which a read may ask
-// cut and answered with no stamp ([GitQuery.Unstamped]). A find's answer is a
-// function of the tree, the query, the limit and the build, so a browser may
-// keep a find by whole ids for a typing session. Never a landed-in read, whose answer IS what the
-// node's index says of a push; nor a revision's facts, a re-anchoring or a
-// checks file, which the engine and a change's own reads ask, never a question
-// that keeps a page.
+// Unstampable reports a kind whose answer is a PAGE of content (a listing, a
+// file's lines, a diff, a comparison, many tips, an interdiff, a history, a
+// blame, a directory's last commits or a find), which a read may ask cut with
+// no stamp ([GitQuery.Unstamped]). A find is a function of the tree, query,
+// limit and build, so a browser may keep one by whole ids for a typing session.
+// Never a landed-in read, whose answer IS the node's index of pushes; nor a
+// revision's facts, re-anchoring or checks file, which the engine and a
+// change's own reads ask, never keeping a page.
 func (k GitReadKind) Unstampable() bool {
 	switch k {
 	case GitTree, GitBlob, GitDiff, GitCompare, GitTips, GitInterdiff, GitLog, GitBlame, GitTreeCommits,
@@ -3455,17 +3061,15 @@ func (k GitReadKind) Unstampable() bool {
 	return false
 }
 
-// EnginesOwn reports a read THE ENGINE makes on its own account: one of a kind
-// only it reads ([GitReadKind.EnginesOwn]), or one it makes FOR A CHECK
-// ([GitQuery.Check]). Such a read names no asker and no seat it reads for, is
-// held to no grant and is recorded as nobody's read — the Gitlet node's one test
-// of all three.
+// EnginesOwn reports a read THE ENGINE makes on its own account: a kind only it
+// reads ([GitReadKind.EnginesOwn]), or one FOR A CHECK ([GitQuery.Check]). It
+// names no asker or seat, is held to no grant and is recorded as nobody's: the
+// Gitlet node's one test of all three.
 func (q GitQuery) EnginesOwn() bool { return q.Kind.EnginesOwn() || q.Check != nil }
 
 // SeatWork is the unit of the answering node's seat git-work share q's git
-// takes ([GitShare.Take]): the engine's own ([SeatWorkEngine]) for a read the
-// engine makes on its own account, a seat's read ([SeatWorkRead]) for every
-// other.
+// takes ([GitShare.Take]): [SeatWorkEngine] for the engine's own read,
+// [SeatWorkRead] for every other.
 func (q GitQuery) SeatWork() SeatWork {
 	if q.EnginesOwn() {
 		return SeatWorkEngine
@@ -3473,9 +3077,9 @@ func (q GitQuery) SeatWork() SeatWork {
 	return SeatWorkRead
 }
 
-// ReadsIndex reports a read whose page is a function of the node's index of
-// pushes, not of the ids alone ([LogQuery.PushedBy]): never Unstamped, never
-// memoized, never answered Immutable.
+// ReadsIndex reports a read whose page depends on the node's index of pushes,
+// not the ids alone ([LogQuery.PushedBy]): never Unstamped, memoized or
+// answered Immutable.
 func (q GitQuery) ReadsIndex() bool { return q.Kind == GitLog && q.Log != nil && q.Log.PushedBy != "" }
 
 // GitQuery is one read of a repository by object id: exactly the sub-query of
@@ -3484,104 +3088,79 @@ type GitQuery struct {
 	Kind GitReadKind `json:"kind"`
 	// RepoID is the repository's canonical id.
 	RepoID string `json:"repo_id"`
-	// Asker is who reads, REQUIRED — a zero or invalid one is [ErrInvalid] —
-	// and held to the repository's read grant by the Gitlet node that answers,
-	// from its own epoch's chart ([GrantOf]): a seat by its relation to the
-	// repository, a person or a token by ADR-0085's rules, which read no
-	// chart. Never trusted for anything but the grant. REFUSED on a read the
-	// engine makes on its own account ([GitQuery.EnginesOwn]), which names
-	// none.
+	// Asker is who reads, REQUIRED ([ErrInvalid] when zero or invalid), held to
+	// the read grant by the answering Gitlet node from its own epoch's chart
+	// ([GrantOf]): a seat by its relation to the repository, a person or token
+	// by ADR-0085's rules. Trusted for nothing but the grant. REFUSED on the
+	// engine's own read ([GitQuery.EnginesOwn]).
 	Asker Principal `json:"asker"`
-	// Check is the attempt of a check a read is made FOR: a check's box
-	// reading its commit through the API (/box/gitlet/), admitted by the
-	// attempt's row and its token (internal/gitlet/host's AdmitCheck). THE
-	// ENGINE'S OWN READ on the check's behalf ([GitQuery.EnginesOwn]): a
-	// check's box is no principal and the attempt's row is its authority, so
-	// it names no asker, is held to no grant and is recorded as nobody's read
-	// — the check's row is its record. And it reads THE CHECK'S COMMIT ALONE:
-	// a tree or a file at it, or a diff whose head is it — the one commit the
-	// box's token admits it to — which the Gitlet node holds it to as it
-	// validates it, whatever its asker set; a diff's base is the attempt's
-	// row's, which the admission sets. An estate request's field and no
-	// record's, so it takes no versionedFields row: the domain landed on
-	// main with it ([RecordVersion]), so every Gitlet node that serves the
-	// read reads it.
+	// Check is the check attempt a read is made FOR: a check's box reading its
+	// commit through the API (/box/gitlet/), admitted by the attempt's row and
+	// token (internal/gitlet/host's AdmitCheck). THE ENGINE'S OWN READ
+	// ([GitQuery.EnginesOwn]): a box is no principal and the row is its
+	// authority, so no asker, no grant, recorded as nobody's (the row is its
+	// record). It reads THE CHECK'S COMMIT ALONE (a tree or file at it, or a
+	// diff whose head is it, the one commit the token admits), which the node
+	// enforces in validation whatever the asker set; a diff's base is the
+	// row's, set by the admission.
+	//
+	// A request's field: no versionedFields row ([RecordVersion]).
 	Check *CheckKey `json:"check,omitempty"`
-	// CeilingSeat is the seat the asking seat's turn is acting for, whose
-	// grant the Gitlet node judges beside the asker's, from the same chart and
-	// the row its copy holds, as [ReadQuery.CeilingSeat] says.
+	// CeilingSeat is the seat the asking turn acts for, whose grant the Gitlet
+	// node judges beside the asker's from the same chart and its copy's row, as
+	// [ReadQuery.CeilingSeat] says.
 	CeilingSeat string `json:"ceiling_seat,omitempty"`
 	// Turn is the turn a SEAT'S read is made in (turnctx.Turn.RunID): the
 	// principal its one second look at the log's head is charged to, on its
-	// seat's bucket of the answering Gitlet node ([NewResyncs]) — "" for a read
-	// outside a turn, which the seat's bucket alone bounds then. Set only
-	// beside a seat's asker, and never trusted for anything but whose bucket
-	// pays: the asker is judged by who it is, never by what it is doing. An
-	// estate request's field and no record's, so it takes no versionedFields
-	// row: the domain landed on main with it ([RecordVersion]), so every
-	// Gitlet node that serves the read reads it.
+	// seat's bucket of the answering node ([NewResyncs]); "" outside a turn,
+	// bounded by the seat's bucket alone. Set only beside a seat's asker, and
+	// trusted only for whose bucket pays: the asker is judged by who it is,
+	// never what it does. A request's field: no versionedFields row
+	// ([RecordVersion]).
 	Turn string `json:"turn,omitempty"`
-	// Fresh is the asker's floor on the code log, where it holds one: the
-	// answering node's copy is brought to at least it before anything is
-	// read. With no floor the copy is read as it stands — an object id
-	// names the same object at every position — and an id the copy lacks
-	// is looked for once more at the log's head before it is answered
+	// Fresh is the asker's code log floor, where it holds one: the copy is
+	// brought to at least it before anything is read. With none the copy is
+	// read as it stands (an id names one object at every position), and an id
+	// the copy lacks is looked for once more at the log's head before
 	// [ErrObjectNotFound]. A floor on another log is [ErrInvalid].
 	Fresh statelog.Freshness `json:"fresh"`
-	// Head is the code log's head AS THE ASKER READ IT, after it asked —
-	// the position its own linearizable read of the repositories' rows
-	// answered at — where the asker holds one: the read's ONE SECOND LOOK
-	// at the log's head (a refusal judged again on a copy that may be
-	// behind, a ref or an object the copy lacks) brings the copy to it, at
-	// session, in place of a barrier of its own. For a search of many
-	// repositories that is one barrier for the whole search, where each
-	// repository's own second look was a barrier and a linearizable round
-	// of its rows on a data node — thousands for a company-wide search
-	// naming a ref most repositories lack. It is a position every write the
-	// asker could have seen before it asked is at or before, so the look
-	// is as linearizable for the asker as its own barrier; a seat's look is
-	// charged to its turn's bucket all the same. Zero, the read takes its
-	// own barrier. A position on another log is [ErrInvalid]. An estate
-	// request's field and no record's, so it takes no versionedFields row;
-	// the domain landed on main with it ([RecordVersion]).
+	// Head is the code log's head AS THE ASKER READ IT after asking (its own
+	// linearizable read of the rows), where it holds one: the read's ONE SECOND
+	// LOOK at the head (a refusal judged again on a maybe-behind copy, a ref or
+	// object the copy lacks) brings the copy to it at session instead of its
+	// own barrier. A many-repository search then pays one barrier, where each
+	// repository's second look was a barrier and a linearizable round of its
+	// rows (thousands for a company-wide search naming a ref most lack). Every
+	// write the asker could have seen is at or before it, so the look stays
+	// linearizable for the asker; a seat's look is still charged to its turn.
+	// Zero takes its own barrier; another log's position is [ErrInvalid]. A
+	// request's field: no versionedFields row ([RecordVersion]).
 	Head statelog.Position `json:"head,omitzero"`
 	// Cursor is a page's Next, handed back whole; empty for the first page.
-	// Opaque to the asker, and refused [ErrBadCursor] where it is not one the
-	// kind issues.
+	// Opaque; [ErrBadCursor] where it is not one the kind issues.
 	Cursor string `json:"cursor,omitempty"`
-	// Home is set on the attempt a walk makes of the ONE node it lets FILL a
-	// copy it does not hold (ADR-0089): its EFFECTIVE HOME — the first Gitlet
-	// node of the repository's order once the walk's demotions are applied —
-	// and, only where that node answered that no copy serving the read is
-	// coming there ([UnreadyReason.PassesFill]: behind its configuration, a
-	// failure of its own, not serving Gitlet), the next node of the order in its
-	// place; never two at once. A Gitlet node holding no copy of the repository
-	// answers a read without it [ErrGitUnready]{[UnreadyNotHeld]} at once,
-	// having started nothing, because a cold round runs on under the cache's
-	// own lifetime after its read stops waiting: with every node free to
-	// fill, one read of a repository nobody held — the first after its
-	// home's death — began a whole download of it on every Gitlet node the walk
-	// reached. Stamped by the walk on every attempt it makes, over whatever
-	// its caller set, so no caller chooses it. An estate request, not a
-	// record: a build that knows no `home` reads every read as one it may
-	// fill, which is this build's answer without the rule.
+	// Home is set on the walk's attempt of the ONE node it lets FILL a copy it
+	// lacks (ADR-0089): its EFFECTIVE HOME, the first node of the repository's
+	// order after the walk's demotions, or, only where that node answered no
+	// serving copy is coming ([UnreadyReason.PassesFill]), the next one; never
+	// two. A node holding no copy answers a read without it
+	// [ErrGitUnready]{[UnreadyNotHeld]} at once, starting nothing, because a
+	// cold round outlives its read's wait: with every node free to fill, one
+	// read of an unheld repository began a whole download on every node the
+	// walk reached. Stamped by the walk on every attempt, so no caller chooses
+	// it. A request: a build not knowing `home` reads every read as one it may
+	// fill, this build's answer without the rule.
 	Home bool `json:"home,omitempty"`
-	// Unstamped asks for THE PAGE ALONE: its Kind, Rev, Next and the kind's
-	// own part, with none of the fields a Gitlet node stamps on an answer — the
-	// repository, the copy's position, Memo, the push that introduced each
-	// commit and the coverage of the index that says so ([GitAnswer]) — and
-	// CUT AGAINST A ROOM NONE OF THEM TAKES. A stamped page is cut against
-	// the room its stamps leave, so the same page cut where the node's index
-	// holds more of its commits, or at a longer position, holds fewer items
-	// and another Next; an unstamped page is a function of the object ids it
-	// names, its arguments and the build that cuts it, and of nothing a node
-	// or a moment holds — what a question may answer as never changing
-	// (internal/api/queries' Immutable), which a stamped page cannot be. A
-	// node memoizes the two apart, since they are two cuts of one read.
+	// Unstamped asks for THE PAGE ALONE (Kind, Rev, Next and the kind's part)
+	// without the node's stamps (the repository, the copy's position, Memo,
+	// each commit's introducing push and the index's coverage, [GitAnswer]),
+	// CUT AGAINST A ROOM NONE OF THEM TAKES. A stamped page is cut against the
+	// room its stamps leave, so it varies with the node's index and position;
+	// an unstamped page depends only on its ids, arguments and the build, so a
+	// question may answer it as never changing (internal/api/queries'
+	// Immutable). A node memoizes the two apart, as two cuts of one read.
 	//
-	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. The domain landed on main with it
-	// ([RecordVersion]), so every Gitlet node that answers a read honours it.
+	// A request's field: no versionedFields row ([RecordVersion]).
 	Unstamped bool `json:"unstamped,omitempty"`
 
 	Tree          *TreeQuery          `json:"tree,omitempty"`
@@ -3604,15 +3183,14 @@ type GitQuery struct {
 	Excerpts      *ExcerptsQuery      `json:"excerpts,omitempty"`
 }
 
-// CodeFilesQuery reads a commit's deploy and dependency files
-// ([GitCodeFiles]). An estate request's, as every kind's query is.
+// CodeFilesQuery reads a commit's deploy and dependency files ([GitCodeFiles]).
 type CodeFilesQuery struct {
-	// Commit is the commit read at, its whole id: a default branch's tip, as
-	// the scan read it from the rows.
+	// Commit is the whole id read at: a default branch's tip, as the scan read
+	// it from the rows.
 	Commit string `json:"commit"`
-	// File is the one file to read whole, by its path from the root; empty
-	// lists the commit's files instead. A path the closed list does not
-	// admit as a file that is read ([deployfiles.Format.Parsed]) is refused.
+	// File is the one file to read whole, by its root path; empty lists the
+	// commit's files. A path the closed list does not admit as a read file
+	// ([deployfiles.Format.Parsed]) is refused.
 	File string `json:"file,omitempty"`
 }
 
@@ -3633,13 +3211,12 @@ func (q *CodeFilesQuery) validate() error {
 	return nil
 }
 
-// ChecksFileQuery reads the checks file one commit holds ([GitChecksFile]).
-// An estate request's, as every kind's query is ([GitReadKinds]): a Gitlet node of
-// a build that predates it refuses the read as one naming no query of its kind
+// ChecksFileQuery reads the checks file one commit holds ([GitChecksFile]). A
+// build predating it refuses the read as naming no query of its kind
 // (ErrInvalid), and its asker asks the next Gitlet node of the order.
 type ChecksFileQuery struct {
-	// Commit is the commit read at, its whole id — a change's target's tip,
-	// as its home read it from the rows.
+	// Commit is the whole id read at: a change's target's tip, as its home read
+	// it from the rows.
 	Commit string `json:"commit"`
 }
 
@@ -3648,9 +3225,9 @@ type TreeQuery struct {
 	// Rev is a commit's id, a tag's or a tree's, whole or abbreviated.
 	Rev string `json:"rev"`
 	// Path is the directory under Rev's root tree to list; empty lists the
-	// root. PathB64 is the same path as its exact bytes in standard base64,
-	// for a path that is not valid UTF-8, which JSON cannot carry: at most
-	// one of the two is set.
+	// root. PathB64 is the same path's exact bytes in standard base64, for a
+	// path that is not valid UTF-8, which JSON cannot carry; at most one is
+	// set.
 	Path    string `json:"path,omitempty"`
 	PathB64 string `json:"path_b64,omitempty"`
 	// Recursive lists every file below the directory rather than its
@@ -3660,15 +3237,15 @@ type TreeQuery struct {
 
 // BlobQuery reads one file's lines.
 type BlobQuery struct {
-	// Rev is a commit's id (or a tag's) with Path naming the file in it, or
-	// a blob's own id with no Path; whole or abbreviated. A commit with no
-	// Path reads its root, as a listing.
+	// Rev is a commit's (or tag's) id with Path naming the file, or a blob's
+	// own id with no Path; whole or abbreviated. A commit with no Path reads
+	// its root, as a listing.
 	Rev     string `json:"rev"`
 	Path    string `json:"path,omitempty"`
 	PathB64 string `json:"path_b64,omitempty"`
-	// StartLine and EndLine are the lines to read, 1-based and inclusive;
-	// zero is the file's first line and its last. A page ends where the
-	// answer is full, and its Next resumes inside the range.
+	// StartLine and EndLine are the lines to read, 1-based and inclusive; zero
+	// is the first or last. A page ends where the answer is full, and its Next
+	// resumes inside the range.
 	StartLine int `json:"start_line,omitempty"`
 	EndLine   int `json:"end_line,omitempty"`
 }
@@ -3678,21 +3255,22 @@ type DiffQuery struct {
 	// Base and Head are commit, tag or tree ids, whole or abbreviated.
 	Base string `json:"base"`
 	Head string `json:"head"`
-	// Paths filters the stat to files equal to one of them or under one as
-	// a directory, judged by the Gitlet node over git's whole answer — never
-	// handed to git — at most MaxDiffPaths. Only the files they admit are
-	// counted, so naming paths is what narrows a stat of a wide diff.
+	// Paths filters the stat to files equal to or under one of them, judged by
+	// the Gitlet node over git's whole answer (never handed to git), at most
+	// MaxDiffPaths. Only admitted files are counted, so naming paths narrows a
+	// wide diff's stat.
 	Paths []string `json:"paths,omitempty"`
-	// File asks for one file's patch instead of the stat: its path at Head,
-	// or at Base for a file Head deleted. FileB64 is the same path as exact
-	// bytes; at most one of the two is set, and neither beside Paths.
+	// File asks for one file's patch instead of the stat: its path at Head, or
+	// at Base for a file Head deleted. FileB64 is its exact bytes; at most one
+	// is set, and neither beside Paths.
 	File    string `json:"file,omitempty"`
 	FileB64 string `json:"file_b64,omitempty"`
-	// Renames detects a file moved between Base and Head as one renamed
-	// file rather than one deleted and one added.
+	// Renames detects a file moved between Base and Head as one rename rather
+	// than a delete and an add.
 	Renames bool `json:"renames,omitempty"`
-	// Patches asks for every file's patch instead of the stat, a page at a time in the stat's
-	// order ([DiffAnswer.Patches]); refused beside File, kept to Paths where named.
+	// Patches asks for every file's patch instead of the stat, a page at a time
+	// in the stat's order ([DiffAnswer.Patches]); refused beside File, kept to
+	// Paths where named.
 	Patches bool `json:"patches,omitempty"`
 }
 
@@ -3707,46 +3285,44 @@ type CompareQuery struct {
 // landed it there.
 //
 // THE TARGET IS THE ONE THE ASKER WAS SHOWN: the tip it resolved, at the
-// position it read it at, so the Gitlet node judges that tip and pays no barrier
-// of its own — and an answer names what it was judged against, never a tip
-// the asker cannot place.
+// position it read it at, so the Gitlet node judges that tip with no barrier of
+// its own, and an answer names what it was judged against.
 type LandedInQuery struct {
 	// Commit is the commit asked about, whole or abbreviated.
 	Commit string `json:"commit"`
 	// Target is the whole ref asked about (refs/heads/main).
 	Target string `json:"target"`
-	// TargetOID is the commit Target named when the asker resolved it — a
-	// whole id — and At the position of the record that moved Target there
-	// ([ResolvedRef.Moved]): the Gitlet node's copy is brought to At before it
-	// judges, so the moves of Target up to that tip — every move it had when
-	// it was resolved — are in the index it searches.
+	// TargetOID is the whole id Target named when the asker resolved it, and At
+	// the position of the record that moved Target there ([ResolvedRef.Moved]):
+	// the copy is brought to At before judging, so every move of Target up to
+	// that tip is in the index it searches.
 	TargetOID string            `json:"target_oid"`
 	At        statelog.Position `json:"at"`
 }
 
 // THE READS OF A CHANGE'S REVISIONS name every revision by the WHOLE ids its
-// rows recorded — a change's revision heads, its target's tip, a revision's
-// base — never an abbreviation: their asker read them from rows, and an
-// interdiff compares two bases as ids without reading either.
+// rows recorded (revision heads, the target's tip, a revision's base), never an
+// abbreviation: their asker read them from rows, and an interdiff compares two
+// bases as ids without reading either.
 
 // RevisionFactsQuery asks what a change's revision is against its target:
 // the facts of the commit Head against the commit Target.
 type RevisionFactsQuery struct {
-	// Head is the revision's head commit, and Target the tip of the change's
-	// target branch as the asker read it — both whole ids. The facts are a
-	// function of the two commits alone, recorded against them.
+	// Head is the revision's head commit and Target the change's target tip as
+	// the asker read it, both whole ids. The facts are a function of the two
+	// commits alone, recorded against them.
 	Head   string `json:"head"`
 	Target string `json:"target"`
 }
 
 // ReanchorQuery asks where ranges of lines, each read in a blob a revision
-// held, are in another revision of the same change: each anchor is placed in
-// the file at its path in Head where it is on the new side of the change's
-// diff, and in Base where it is on the old side.
+// held, are in another revision of the same change: an anchor is placed in the
+// file at its path in Head where it is on the diff's new side, in Base where on
+// the old.
 type ReanchorQuery struct {
-	// Base and Head are the revision the anchors are placed in: its base
-	// (the merge base its facts record) and its head commit, whole. Base is
-	// required only of a read placing an anchor on the old side.
+	// Base and Head are the revision the anchors are placed in: its base (the
+	// merge base its facts record) and head commit, whole. Base is required only to place an anchor
+	// on the old side.
 	Base string `json:"base,omitempty"`
 	Head string `json:"head"`
 	// Anchors are the ranges to place, 1 to MaxReanchors of them, each id
@@ -3759,8 +3335,8 @@ type ReanchorQuery struct {
 type Side string
 
 const (
-	// SideOld is the base's file: the lines the change deletes, and those
-	// it keeps as they were.
+	// SideOld is the base's file: the lines the change deletes and those it
+	// keeps.
 	SideOld Side = "old"
 	// SideNew is the head's file: the lines the change adds, and those it
 	// keeps.
@@ -3779,44 +3355,43 @@ type LineAnchor struct {
 	// ID names the anchor in the answer: the caller's own, at most 64 bytes
 	// of UTF-8.
 	ID string `json:"id"`
-	// Path is the file's path in the revision the anchor is placed in
-	// (PathB64 its exact bytes, as [GitPath] reads them), and Side which of
-	// that revision's two commits holds it.
+	// Path is the file's path in the revision the anchor is placed in (PathB64
+	// its exact bytes, as [GitPath] reads them), and Side which of its two
+	// commits holds it.
 	Path    string `json:"path,omitempty"`
 	PathB64 string `json:"path_b64,omitempty"`
 	Side    Side   `json:"side"`
-	// BlobOID is the blob the lines were read in, whole, and Start and End
-	// the range, 1-based and inclusive, ending at MaxAnchorLine at most.
+	// BlobOID is the whole blob the lines were read in; Start and End the
+	// range, 1-based and inclusive, ending at MaxAnchorLine at most.
 	BlobOID string `json:"blob_oid"`
 	Start   int    `json:"start"`
 	End     int    `json:"end"`
 }
 
-// InterdiffQuery asks what a change changed between two of its revisions:
-// the diff of their heads, kept to the files either revision's change touches
-// — so the files a rebase between them brought in from the target, which
-// neither revision touches, stay out of it — unless either revision touches
-// all, when it is the heads' whole diff.
+// InterdiffQuery asks what a change changed between two of its revisions: the
+// diff of their heads kept to the files either revision's change touches, so
+// files a rebase brought in from the target stay out, unless either revision
+// touches all, when it is the whole diff.
 type InterdiffQuery struct {
 	// FromBase and FromHead are the earlier revision's base and head as its
-	// facts record them, and ToBase and ToHead the later one's — whole ids, a
-	// base empty where its facts name no merge base. The bases are compared,
-	// never read: two revisions measured from one base differ only in files
-	// one of them touches, so their heads' diff needs no keeping to them.
+	// facts record them, ToBase and ToHead the later one's: whole ids, a base
+	// empty where its facts name no merge base. The bases are compared, never
+	// read: two revisions from one base differ only in files one touches, so
+	// their heads' diff needs no keeping.
 	FromBase string `json:"from_base,omitempty"`
 	FromHead string `json:"from_head"`
 	ToBase   string `json:"to_base,omitempty"`
 	ToHead   string `json:"to_head"`
-	// FromTouched and ToTouched are each revision's touched paths as its
-	// facts list them, and FromTouchesAll and ToTouchesAll whether its facts
-	// say it touches all, beside which it gives no list.
+	// FromTouched and ToTouched are each revision's touched paths as its facts
+	// list them; FromTouchesAll and ToTouchesAll whether it touches all, with
+	// no list.
 	FromTouched    []string `json:"from_touched,omitempty"`
 	FromTouchesAll bool     `json:"from_touches_all,omitempty"`
 	ToTouched      []string `json:"to_touched,omitempty"`
 	ToTouchesAll   bool     `json:"to_touches_all,omitempty"`
-	// File asks for one file's patch instead of the stat: its path at
-	// ToHead, or at FromHead for a file ToHead deleted (FileB64 its exact
-	// bytes), as [DiffQuery.File] is.
+	// File asks for one file's patch instead of the stat: its path at ToHead,
+	// or at FromHead for a file ToHead deleted (FileB64 its exact bytes), as
+	// [DiffQuery.File] is.
 	File    string `json:"file,omitempty"`
 	FileB64 string `json:"file_b64,omitempty"`
 	// Patches asks for every file's patch of the interdiff, as [DiffQuery.Patches] does.
@@ -3828,33 +3403,32 @@ type LogQuery struct {
 	// Rev is the commit the history is read from (or a tag naming one),
 	// whole or abbreviated.
 	Rev string `json:"rev"`
-	// Path is the file or the directory whose history is read, from the
-	// repository's root — its commits are those that changed it, as git's
-	// history simplification keeps them — and none reads every commit.
-	// PathB64 is the same path as its exact bytes in standard base64, for a
-	// path that is not valid UTF-8: at most one of the two is set. A path
-	// the commit does not hold is a history all the same: a file deleted
-	// since was changed by the commits before its deletion.
+	// Path is the file or directory whose history is read, from the root (its
+	// commits those that changed it, as git's history simplification keeps
+	// them); none reads every commit. PathB64 is its exact bytes in standard
+	// base64, for a path not valid UTF-8; at most one is set. A path the commit
+	// lacks still has a history: a deleted file was changed by the commits
+	// before its deletion.
 	Path    string `json:"path,omitempty"`
 	PathB64 string `json:"path_b64,omitempty"`
-	// Grep keeps the commits whose whole message holds it: a LITERAL,
-	// matched case-folded in the Gitlet node's own code over each message as it
-	// streams by, never handed to git — a regular expression from a model is
-	// a runtime nobody bounded, and text on a command line is what a read by
-	// oid never carries. Valid UTF-8, no NUL, at most MaxLogGrepBytes.
+	// Grep keeps the commits whose whole message holds it: a LITERAL, matched
+	// case-folded in the Gitlet node's own code as each message streams by,
+	// never handed to git: a model's regular expression is an unbounded
+	// runtime, and a read by oid carries no text on a command line. Valid
+	// UTF-8, no NUL, at most MaxLogGrepBytes.
 	Grep string `json:"grep,omitempty"`
-	// Since keeps the commits committed at or after it, as git's --since
-	// does: the walk stops at a commit committed before it on each line of
-	// history it reaches, so a commit dated after it whose every line runs
-	// through an older one is not listed. Zero keeps every one.
+	// Since keeps commits committed at or after it, as git's --since does: the
+	// walk stops at an older commit on each line of history, so a newer commit
+	// whose every line runs through an older one is not listed. Zero keeps
+	// every one.
 	Since time.Time `json:"since,omitzero"`
-	// Until keeps the commits committed BEFORE it: a filter of each commit
-	// the walk reaches, not a stop as Since is. Zero keeps every one; else
-	// after the epoch, after Since, and no further ahead than Since may be.
+	// Until keeps commits committed BEFORE it: a filter of each commit reached,
+	// not a stop as Since is. Zero keeps every one; otherwise after the epoch,
+	// after Since, and no further ahead than Since may be.
 	Until time.Time `json:"until,omitzero"`
 	// PushedBy, a seat's handle, keeps the commits whose introducing push in
-	// the node's index of pushes holds that seat ([Principal.Seat]); a commit
-	// the index cannot judge is counted in [LogAnswer.Unjudged].
+	// the node's index holds that seat ([Principal.Seat]); a commit the index
+	// cannot judge counts in [LogAnswer.Unjudged].
 	PushedBy string `json:"pushed_by,omitempty"`
 	// Limit is the most commits a page lists, 1 to MaxLogLimit; zero is
 	// DefaultLogLimit. A page past the answer's bytes holds fewer.
@@ -3870,24 +3444,22 @@ type BlameQuery struct {
 	Path    string `json:"path,omitempty"`
 	PathB64 string `json:"path_b64,omitempty"`
 	// StartLine and EndLine are the range, 1-based and inclusive, at most
-	// MaxBlameLines lines: zero is the file's first line, and the line
-	// MaxBlameLines − 1 past StartLine, or the file's last where that is
-	// sooner. A page ends where the answer is full, and its Next resumes
-	// inside the range.
+	// MaxBlameLines lines: zero is the file's first line, and MaxBlameLines − 1
+	// past StartLine or the file's last, whichever is sooner. A page ends where
+	// the answer is full, and its Next resumes inside the range.
 	StartLine int `json:"start_line,omitempty"`
 	EndLine   int `json:"end_line,omitempty"`
 }
 
-// Range is the blame's range as its git is asked it: its first line and its
-// last, the default end MaxBlameLines − 1 past the first — the file's last
-// line where that is sooner, which git clamps it to.
+// Range is the blame's range as git is asked it: the default end MaxBlameLines
+// − 1 past the first, or the file's last line where sooner, which git clamps it
+// to.
 func (q BlameQuery) Range() (start, end int) {
 	start = max(q.StartLine, 1)
 	end = q.EndLine
 	if end == 0 {
-		// The line MaxBlameLines − 1 past the first, or the last an int
-		// counts to: a range that far out names no line of any file, and is
-		// refused by git's own end of the file rather than by an overflow.
+		// MaxBlameLines − 1 past the first, capped at MaxInt: a range that far
+		// names no line, so git's end of file refuses it, never an overflow.
 		end = start + min(MaxBlameLines-1, math.MaxInt-start)
 	}
 	return start, end
@@ -3895,10 +3467,9 @@ func (q BlameQuery) Range() (start, end int) {
 
 // ValidRev reports whether rev names an object as a read by oid takes it: a
 // whole object id (40 lowercase hex digits, not the zero id), or an
-// ABBREVIATION of one, MinAbbrevDigits to 39 lowercase hex digits. Never a ref,
-// a `^`, a `~` or a `:` — no revision grammar reaches the Gitlet node — and never
-// an abbreviation shorter than git's own default, which would name dozens of
-// objects of any large repository.
+// ABBREVIATION of MinAbbrevDigits to 39 lowercase hex digits. Never a ref, `^`, `~` or `:` (no
+// revision grammar reaches the Gitlet node), and never shorter than git's
+// default, which would name dozens of objects in a large repository.
 func ValidRev(rev string) bool {
 	if gitref.ValidOID(rev) {
 		return rev != ZeroOID
@@ -3914,10 +3485,10 @@ func ValidRev(rev string) bool {
 	return true
 }
 
-// GitPath is the path a read names, from its Path and its PathB64 — the exact
-// bytes, decoded — or [ErrInvalid] naming field: both set, base64 that does
-// not decode, or a path no tree entry can be named by ([validGitPath]). root
-// admits the empty path, a tree's root.
+// GitPath is the path a read names, from its Path or its PathB64 (the exact
+// bytes, decoded), or [ErrInvalid] naming field: both set, base64 that does not
+// decode, or a path no tree entry can have ([validGitPath]). root admits the
+// empty path, a tree's root.
 func GitPath(field, p, b64 string, root bool) (string, error) {
 	if b64 != "" {
 		if p != "" {
@@ -3940,12 +3511,11 @@ func GitPath(field, p, b64 string, root bool) (string, error) {
 }
 
 // validGitPath is why p is no path a read by oid may name, or "": relative and
-// clean — path.Clean's own form, so no leading slash, no trailing one, no
-// empty, `.` or `..` component — at most MaxGitPathBytes, and no NUL, which
-// would end the record git reads it in. The clean form is also what keeps
-// git's object-name grammar out of a path: `<commit>:<path>` reads a path that
-// begins `./` or `../` as one relative to a work tree, which a bare repository
-// has none of, and git then dies over the whole batch.
+// clean (path.Clean's form: no leading or trailing slash, no empty, `.` or `..`
+// component), at most MaxGitPathBytes, and no NUL, which would end git's input
+// record. The clean form also keeps git's object-name grammar out:
+// `<commit>:<path>` reads a `./` or `../` path as relative to a work tree,
+// which a bare repository lacks, and git dies over the whole batch.
 func validGitPath(p string, root bool) string {
 	switch {
 	case p == "":
@@ -3965,10 +3535,9 @@ func validGitPath(p string, root bool) string {
 	return ""
 }
 
-// WirePath is p as an answer carries it: itself where it is valid UTF-8, and
-// otherwise as much of it as JSON can carry — every invalid byte U+FFFD —
-// beside the exact bytes in standard base64, the form a later read names it
-// back by (a PathB64).
+// WirePath is p as an answer carries it: itself where valid UTF-8, otherwise
+// with every invalid byte U+FFFD beside its exact bytes in standard base64,
+// which a later read names it back by (a PathB64).
 func WirePath(p string) (text, b64 string) {
 	if utf8.ValidString(p) {
 		return p, ""
@@ -3976,19 +3545,18 @@ func WirePath(p string) (text, b64 string) {
 	return strings.ToValidUTF8(p, string(utf8.RuneError)), base64.StdEncoding.EncodeToString([]byte(p))
 }
 
-// Validate refuses a read the Gitlet node cannot answer as asked ([ErrInvalid],
-// naming the field): a kind this build does not know, a repository id that is
-// not canonical, an asker no principal is, a turn beside an asker that is no
-// seat or past a turn id's bounds, a sub-query other than its kind's or none, a
-// revision [ValidRev] refuses, tips that are not whole ids, named twice or past
-// MaxTips, or a base [ValidRev] refuses, a tags limit past MaxTagsLimit, a
-// path [GitPath] refuses — or none where a blame names its file — a line
-// range that runs backwards or past a blame's MaxBlameLines, a diff naming
-// both a file and paths, a log whose literal, limit or date no log takes, a
-// find whose query or limit no find takes, and a read made for a check that
-// names an asker or reads anything but its check's commit. A cursor longer
-// than any a Gitlet node issues is [ErrBadCursor]; whether a shorter one is
-// the kind's own is the Gitlet node's to judge.
+// Validate refuses, [ErrInvalid] naming the field, a read the Gitlet node
+// cannot answer as asked: an unknown kind; a non-canonical repository id; an
+// asker no principal is; a turn beside a non-seat asker or past a turn id's
+// bounds; a sub-query other than its kind's, or none; a revision [ValidRev]
+// refuses; tips not whole ids, named twice or past MaxTips, or a base
+// [ValidRev] refuses; a tags limit past MaxTagsLimit; a path [GitPath] refuses
+// (or none where a blame names its file); a line range running backwards or
+// past a blame's MaxBlameLines; a diff naming both a file and paths; a log
+// literal, limit or date no log takes; a find query or limit no find takes; a
+// check's read that names an asker or reads beyond its check's commit. A cursor
+// longer than any a node issues is [ErrBadCursor]; whether a shorter one is the
+// kind's own is the node's to judge.
 func (q GitQuery) Validate() error {
 	if !q.Kind.Valid() {
 		return fmt.Errorf("%w: kind: %q is not one of %s", ErrInvalid, q.Kind, words.Or(GitReadKinds()))
@@ -3996,10 +3564,10 @@ func (q GitQuery) Validate() error {
 	if id, err := uuid.Parse(q.RepoID); err != nil || id.String() != q.RepoID {
 		return fmt.Errorf("%w: repo_id: %q is not a repository's id", ErrInvalid, q.RepoID)
 	}
-	// WHO ASKS IS NAMED, or nothing is read: the answer is held to the
-	// asker's grant, and an absent asker would be judged as somebody nobody
-	// named — but for a read the engine makes on its own account, which names
-	// nobody, an asker there being judged for a read it never made.
+	// WHO ASKS IS NAMED, or nothing is read: the answer is held to the asker's
+	// grant, and an absent asker would be somebody nobody named. The engine's
+	// own read names nobody: an asker there would be judged for a read it never
+	// made.
 	switch {
 	case q.Check != nil:
 		if q.Asker != (Principal{}) || q.CeilingSeat != "" {
@@ -4028,8 +3596,8 @@ func (q GitQuery) Validate() error {
 	if len(q.Cursor) > maxGitCursorBytes {
 		return fmt.Errorf("%w: cursor: %d bytes is no cursor a git read issues", ErrBadCursor, len(q.Cursor))
 	}
-	// THE ASKER'S FLOOR IS ON THE CODE LOG, the one log a copy is brought
-	// along: a position on another names nothing a copy could reach.
+	// THE FLOOR IS ON THE CODE LOG, the one log a copy follows: another's
+	// position names nothing a copy could reach.
 	if err := q.Fresh.OnlyOn(topics.CodeLogStream); err != nil {
 		return fmt.Errorf("%w: fresh: %w", ErrInvalid, err)
 	}
@@ -4104,11 +3672,10 @@ func (q GitQuery) Validate() error {
 	return q.Compare.validate()
 }
 
-// atItsCheck refuses a read made for a check ([GitQuery.Check]) that reads
-// anything but the check's commit — a tree or a file at it, or a diff whose
-// head is it, by its whole id as the attempt's row names it: the one commit a
-// check's box's token admits it to, which the Gitlet node holds the read to
-// whatever the node that asked it built.
+// atItsCheck refuses a check's read ([GitQuery.Check]) of anything but the
+// check's commit (a tree or file at it, or a diff whose head is it) by its
+// whole id as the attempt's row names it: the one commit its box's token
+// admits, enforced by the Gitlet node whatever the asking node built.
 func (q GitQuery) atItsCheck() error {
 	var field, rev string
 	switch q.Kind {
@@ -4130,9 +3697,9 @@ func (q GitQuery) atItsCheck() error {
 }
 
 // ceilingInvalid is why a read may not carry seat as its ceiling beside asker
-// ([ReadQuery.CeilingSeat]), or "" where it may: none at all, or a seat's
-// handle beside a seat's asker. Every query a principal reads by — a read, a
-// resolve, a read by object id — states its ceiling by this one rule.
+// ([ReadQuery.CeilingSeat]), or "" where it may: none, or a seat's handle
+// beside a seat's asker. Every principal's query (a read, a resolve, a read by
+// object id) states its ceiling by this one rule.
 func ceilingInvalid(asker Principal, seat string) string {
 	switch {
 	case seat == "":
@@ -4146,10 +3713,10 @@ func ceilingInvalid(asker Principal, seat string) string {
 	return ""
 }
 
-// turnInvalid is why turn is no turn asker's read may name, or "": a turn on
-// any asker but a seat's — a person's or a token's read is charged to no
-// turn — or one past MaxProvenanceBytes, not UTF-8, or holding a control
-// character, the bounds a push's turn is held to.
+// turnInvalid is why turn is no turn asker's read may name, or "": a turn on a
+// non-seat asker (a person's or token's read is charged to no turn), or one
+// past MaxProvenanceBytes, not UTF-8, or holding a control character: a push's
+// turn's bounds.
 func turnInvalid(asker Principal, turn string) string {
 	switch {
 	case turn == "":
@@ -4168,9 +3735,9 @@ func turnInvalid(asker Principal, turn string) string {
 	return ""
 }
 
-// wholeID is a whole object id as a read of a change's revisions takes it —
-// never an abbreviation, never the zero id — or a refusal naming field; one
-// empty passes where empty says.
+// wholeID refuses, naming field, anything but a whole object id as a read of a
+// change's revisions takes it (no abbreviation, not the zero id); empty passes
+// where empty says.
 func wholeID(field, id string, empty bool) error {
 	switch {
 	case id == "" && empty:
@@ -4355,8 +3922,8 @@ func (q InterdiffQuery) validate() error {
 
 // logSinceAhead is how far past this node's clock a log's Since may be: a day,
 // the most two nodes' clocks or an asker's idea of today may honestly differ
-// by. Past it the asker named a date that is not yet — a year typed wrong —
-// and is told so rather than answered an empty history.
+// by. Past it the date is not yet (a mistyped year), and the asker is told so
+// rather than answered an empty history.
 const logSinceAhead = 24 * time.Hour
 
 func (q LogQuery) validate() error {
@@ -4383,13 +3950,12 @@ func (q LogQuery) validate() error {
 		return fmt.Errorf("%w: log.since: %s is not yet: give a date in the past", ErrInvalid,
 			q.Since.UTC().Format(time.RFC3339))
 	}
-	// Until and PushedBy are judged whatever Since is: the switch above
-	// ends at its first arm that holds, a Since left out included.
+	// Judged whatever Since is: the switch above ends at its first holding arm,
+	// a Since left out included.
 	switch {
 	case q.Until.IsZero():
 	case !q.Until.After(time.Unix(0, 0)):
-		// At the epoch the second before it is -1, which git reads as no
-		// bound at all.
+		// At the epoch the second before it is -1, which git reads as no bound.
 		return fmt.Errorf("%w: log.until: %s is not after 1970-01-01T00:00:00Z: a commit is kept only before an "+
 			"instant after the epoch", ErrInvalid, q.Until.UTC().Format(time.RFC3339Nano))
 	case q.Until.After(time.Now().Add(logSinceAhead)):
@@ -4427,9 +3993,9 @@ func (q BlameQuery) validate() error {
 	return nil
 }
 
-// validTouched refuses a revision's touched paths as an interdiff's asker
-// gives them back: a list beside the word that it touches all, a list past
-// either bound its facts hold one to, or a path no tree entry is named by.
+// validTouched refuses a revision's touched paths as an interdiff's asker gives
+// them back: a list beside touches-all, a list past either facts bound, or a
+// path no tree entry can have.
 func validTouched(field string, touched []string, all bool) error {
 	switch cost := TouchedCost(touched); {
 	case all && len(touched) > 0:
@@ -4449,58 +4015,54 @@ func validTouched(field string, touched []string, all bool) error {
 	return nil
 }
 
-// TouchedCost is what a touched list takes as JSON, as [MaxTouchedBytes]
-// bounds it: the list's own encoding — an empty list its two brackets.
+// TouchedCost is a touched list's JSON encoding length, as [MaxTouchedBytes]
+// bounds it (an empty list its two brackets).
 func TouchedCost(touched []string) int {
 	if touched == nil {
 		touched = []string{}
 	}
 	out, err := json.Marshal(touched)
 	if err != nil {
-		// A list of strings always encodes; reaching here is a broken
-		// encoder, against which no list could be measured.
+		// A list of strings always encodes: reaching here is a broken encoder.
 		panic(fmt.Sprintf("gitlet: encoding a touched list: %v", err))
 	}
 	return len(out)
 }
 
-// GitAnswer answers a [GitQuery]: exactly the field of its Kind is set — a
-// file read whose path names a directory answers Kind tree, an interdiff
-// (Kind interdiff) sets Diff, being one, and a find (Kind find) sets Find. Its
-// JSON is at most MaxGitAnswerBytes.
+// GitAnswer answers a [GitQuery]: exactly its Kind's field is set (a file read
+// naming a directory answers Kind tree, an interdiff sets Diff, a find sets
+// Find). Its JSON is at most MaxGitAnswerBytes.
 type GitAnswer struct {
 	Kind   GitReadKind `json:"kind"`
 	RepoID string      `json:"repo_id"`
-	// Rev is the object a tree, a file or a find read was asked of, as its
-	// whole id — a tag's is the commit or tree it names. A diff, a comparison, an
-	// interdiff and a revision's facts name their commits in their own
-	// answer, and a re-anchoring names none.
+	// Rev is the whole id of the object a tree, file or find read was asked of
+	// (a tag's is the commit or tree it names). A diff, comparison, interdiff
+	// and revision's facts name their commits in their own answer; a
+	// re-anchoring names none.
 	Rev string `json:"rev,omitempty"`
-	// Position is the answering node's copy's: every row up to it is in what
-	// it read, so an asker holding a later floor knows the answer may
-	// predate a push it made — never that an object it names is wrong.
+	// Position is the answering copy's: every row up to it is in what it read,
+	// so an asker holding a later floor knows the answer may predate its push,
+	// never that a named object is wrong.
 	Position statelog.Position `json:"position"`
-	// Memo is set on a page the answering node kept from a read that cut it
-	// before (its cache's memo) rather than cut again: the same page, since a
-	// page is a function of the object ids it names and the read's arguments
-	// alone, answered with no git run.
+	// Memo is set on a page the node kept from an earlier cut (its cache's
+	// memo) rather than cut again: the same page, since a page depends only on
+	// its ids and arguments, answered with no git run.
 	Memo bool `json:"memo,omitempty"`
 	// Next is where the next page starts, handed back as the query's Cursor
 	// with the query otherwise unchanged; empty on the last page.
 	Next string `json:"next,omitempty"`
 	// PushedBy is the push that INTRODUCED each commit the answer names (its
-	// Rev, a diff's or a comparison's commits, every commit a log page lists,
-	// a blame page's lines or a directory's last commits name) by the commit's
-	// whole id, where the answering node's index of which push introduced each
-	// commit holds it. A commit it does not name was introduced outside Coverage, or
-	// by a push that listed more than MaxIntroduced commits.
+	// Rev, a diff's or comparison's commits, a log page's commits, a blame
+	// page's or directory's last commits), by whole id, where the node's
+	// introduced index holds it. A commit it does not name was introduced
+	// outside Coverage, or by a push listing more than MaxIntroduced commits.
 	PushedBy map[string]PushedBy `json:"pushed_by,omitempty"`
-	// Coverage is what that index holds, on every answer of a node that keeps
-	// one: an absent PushedBy means nothing beyond it.
+	// Coverage is what that index holds, on every answer of a node keeping one:
+	// an absent PushedBy means nothing beyond it.
 	Coverage *Coverage `json:"coverage,omitempty"`
-	// Tagged is the tags naming each commit a history's page names, from the
-	// answering node's tag index; absent where it keeps none it can read, which
-	// says nothing of any commit's tags.
+	// Tagged is the tags naming each commit a history page names, from the
+	// node's tag index; absent where it keeps none it can read, which says
+	// nothing of any commit's tags.
 	Tagged *TagMarks `json:"tagged,omitempty"`
 
 	Tree          *TreeAnswer          `json:"tree,omitempty"`
@@ -4523,20 +4085,20 @@ type GitAnswer struct {
 }
 
 // CodeFilesAnswer is a commit's deploy and dependency files: its LISTING, at
-// most [deployfiles.MaxFiles] of them by path with the rest counted, or ONE
-// file ([CodeFilesQuery.File]). Like a checks file's, it is the engine's and
-// never held to [MaxGitAnswerBytes]: a listing at its bound is some 64 KiB of
-// JSON and a file some 88 KiB, far inside the estate's reply ([MaxPageBytes]).
+// most [deployfiles.MaxFiles] by path with the rest counted, or ONE file
+// ([CodeFilesQuery.File]). The engine's, like a checks file's, never held to
+// [MaxGitAnswerBytes]: a listing at its bound is some 64 KiB of JSON and a file
+// some 88 KiB, far inside the estate's reply ([MaxPageBytes]).
 type CodeFilesAnswer struct {
 	// Commit is the commit read at, its whole id.
 	Commit string `json:"commit"`
-	// Files is a listing's files, in path order; More is how many listed
-	// files past the bound the commit holds, none of which is read.
+	// Files is a listing's files in path order; More is how many past the bound
+	// the commit holds, none read.
 	Files []CodeFile `json:"files,omitempty"`
 	More  int        `json:"more,omitempty"`
-	// File is the one file asked for: absent (no OID) where the commit holds
-	// no regular file there. Raw is its bytes, whole, where its size is at
-	// most [deployfiles.MaxFileBytes]; nil otherwise, and for an empty file.
+	// File is the one file asked for: absent (no OID) where the commit holds no
+	// regular file there. Raw is its bytes whole where at most
+	// [deployfiles.MaxFileBytes]; nil otherwise and for an empty file.
 	File *CodeFile `json:"file,omitempty"`
 	Raw  []byte    `json:"raw,omitempty"`
 }
@@ -4550,72 +4112,68 @@ type CodeFile struct {
 
 // ChecksFileAnswer is what a commit holds at [ChecksFilePath]: nothing (no
 // OID), something that is no file (Type tree, or commit for a submodule), or a
-// file — its id and size, and its bytes whole where it is at most
-// [MaxChecksFileBytes]; a file past that carries none, its size being what
-// [ParseChecks] refuses it by. So at most MaxChecksFileBytes of bytes, which
-// the answer's JSON carries in base64 — some 88 KiB, far inside the estate's
-// reply ([MaxPageBytes]) — and never held to [MaxGitAnswerBytes], the bound a
-// seat's tool answer is cut to, which no seat reads this one through.
+// file: its id and size, and its bytes whole where at most
+// [MaxChecksFileBytes]; past that none, its size being what [ParseChecks]
+// refuses it by. So at most some 88 KiB of base64 JSON, far inside the estate's
+// reply ([MaxPageBytes]), and never held to [MaxGitAnswerBytes], a seat tool's
+// bound, since no seat reads this one.
 type ChecksFileAnswer struct {
 	// Commit is the commit read at, its whole id.
 	Commit string `json:"commit"`
-	// OID is the object at the path, and Type its type: blob, tree or
-	// commit. Both are empty where the commit holds nothing there.
+	// OID is the object at the path and Type its type (blob, tree or commit);
+	// both empty where the commit holds nothing there.
 	OID  string `json:"oid,omitempty"`
 	Type string `json:"type,omitempty"`
 	// Size is a blob's bytes.
 	Size int64 `json:"size,omitempty"`
-	// Raw is a blob's bytes, whole, where Size is at most
-	// MaxChecksFileBytes; nil otherwise, and for an empty file.
+	// Raw is a blob's bytes whole where Size is at most MaxChecksFileBytes; nil
+	// otherwise and for an empty file.
 	Raw []byte `json:"raw,omitempty"`
 }
 
 // LogAnswer is one page of a history: the commits that changed the path (or
-// any path), newest first by generation — git's `log --topo-order`, every
-// parent after every child — as many as the page's limit and its bytes hold.
-// The push that introduced each is the answer's PushedBy.
+// any), newest first by generation (git's `log --topo-order`, every parent
+// after every child), as many as the limit and bytes hold. Each one's
+// introducing push is the answer's PushedBy.
 type LogAnswer struct {
-	// Path is the path whose history it is, empty for a whole history
-	// (PathB64 per [WirePath]).
+	// Path is the history's path, empty for a whole history (PathB64 per
+	// [WirePath]).
 	Path    string `json:"path,omitempty"`
 	PathB64 string `json:"path_b64,omitempty"`
 	// Commits is the page, in the walk's order.
 	Commits []LogCommit `json:"commits"`
-	// Scanned is how many commits of the history this page covers — every
-	// one a Grep did not keep included — so the next page begins that many
-	// commits further on.
+	// Scanned is how many commits of the history this page covers, those a Grep
+	// dropped included, so the next page begins that many further on.
 	Scanned int `json:"scanned"`
-	// Complete is set where the walk reached the history's end: there is no
-	// next page. A page the read's budget of git ended is never complete,
-	// and carries what it found and a Next: never a claim that nothing more
-	// matches. Nor is a Grep's page that holds its limit, which ends at its
-	// last match rather than walking on to find one more, so the page after
-	// it may list nothing and be the complete one.
+	// Complete is set where the walk reached the history's end: no next page. A
+	// page the read's git budget ended is never complete: it carries what it
+	// found and a Next, never a claim nothing more matches. Nor is a Grep's
+	// page holding its limit, which ends at its last match rather than walking
+	// on, so the page after may list nothing and be the complete one.
 	Complete bool `json:"complete,omitempty"`
 	// Unjudged is, on a page asked with [LogQuery.PushedBy], how many commits
-	// every other narrowing kept that the node's index could not attribute.
-	// Set, zero included, on every such page; nil on every other.
+	// every other narrowing kept that the node's index could not attribute:
+	// set, zero included, on every such page; nil otherwise.
 	Unjudged *int `json:"unjudged,omitempty"`
 }
 
 // LogCommit is one commit of a history. Every field git leaves unbounded is
-// described, never cut, past its bound (see MaxLogSubjectBytes and its kin).
+// described, never cut, past its bound (MaxLogSubjectBytes and its kin).
 type LogCommit struct {
 	OID string `json:"oid"`
 	// Parents are the commit's parents' ids, none for a root; past
 	// MaxLogParents they are absent and ParentCount is how many there are.
 	Parents     []string `json:"parents,omitempty"`
 	ParentCount int      `json:"parent_count,omitempty"`
-	// Author and AuthorEmail are the commit's author as it states them —
-	// never as a `.mailmap` would rename them, which would make an answer a
-	// function of a file at some branch rather than of the commit — each past
-	// MaxLogPersonBytes absent with its size in AuthorBytes or
-	// AuthorEmailBytes.
+	// Author and AuthorEmail are the author as the commit states them, never
+	// `.mailmap`-renamed (which would make an answer depend on a file at some
+	// branch), each past MaxLogPersonBytes absent with its size in AuthorBytes
+	// or AuthorEmailBytes.
 	Author           string `json:"author,omitempty"`
 	AuthorBytes      int    `json:"author_bytes,omitempty"`
 	AuthorEmail      string `json:"author_email,omitempty"`
 	AuthorEmailBytes int    `json:"author_email_bytes,omitempty"`
-	// Committer and CommitterEmail are who committed it as it states them,
+	// Committer and CommitterEmail are the committer as the commit states them,
 	// each past MaxLogPersonBytes absent with its size in CommitterBytes or
 	// CommitterEmailBytes.
 	Committer           string `json:"committer,omitempty"`
@@ -4623,28 +4181,27 @@ type LogCommit struct {
 	CommitterEmail      string `json:"committer_email,omitempty"`
 	CommitterEmailBytes int    `json:"committer_email_bytes,omitempty"`
 	// EngineCommitted says the committer spells the engine's convention
-	// ([EngineCommitted]), which authenticates nothing. Nil from a build
-	// that names no committer.
+	// ([EngineCommitted]), which authenticates nothing. Nil from a build naming
+	// no committer.
 	EngineCommitted *bool `json:"engine_committed,omitempty"`
 	// AuthoredAt and CommittedAt are the commit's two dates, to the second.
 	AuthoredAt  time.Time `json:"authored_at"`
 	CommittedAt time.Time `json:"committed_at"`
-	// Subject is the message's first paragraph, its lines joined as git's
-	// %s joins them — or, past MaxLogSubjectBytes, absent with SubjectBytes
-	// its size.
+	// Subject is the message's first paragraph, joined as git's %s joins it;
+	// past MaxLogSubjectBytes, absent with SubjectBytes its size.
 	Subject      string `json:"subject,omitempty"`
 	SubjectBytes int    `json:"subject_bytes,omitempty"`
 }
 
-// BlameAnswer is one page of a blame: each line of the page's part of the
-// range, with the commit that last changed it, and each of those commits
-// once. The push that introduced each commit is the answer's PushedBy.
+// BlameAnswer is one page of a blame: each line of the page's part of the range
+// with the commit that last changed it, and each such commit once. Each
+// commit's introducing push is the answer's PushedBy.
 type BlameAnswer struct {
 	// Path is the file blamed (PathB64 per [WirePath]).
 	Path    string `json:"path"`
 	PathB64 string `json:"path_b64,omitempty"`
-	// StartLine and EndLine are the first and the last line THIS page
-	// attributes — both zero for an empty file, which has none.
+	// StartLine and EndLine are the first and last line THIS page attributes;
+	// both zero for an empty file.
 	StartLine int         `json:"start_line"`
 	EndLine   int         `json:"end_line"`
 	Lines     []BlameLine `json:"lines"`
@@ -4655,25 +4212,25 @@ type BlameAnswer struct {
 
 // BlameLine is one line of a blame.
 type BlameLine struct {
-	// Line is its number in the file blamed, and Commit the commit that last
-	// changed it, whole.
+	// Line is its number in the blamed file, and Commit the whole id of the
+	// commit that last changed it.
 	Line   int    `json:"line"`
 	Commit string `json:"commit"`
-	// OrigLine is its number in Commit's version of the file, and OrigPath
-	// that file's path where it was another — a file renamed since (PathB64
-	// per [WirePath]).
+	// OrigLine is its number in Commit's version of the file, and OrigPath that
+	// file's path where it was another, a file since renamed (PathB64 per
+	// [WirePath]).
 	OrigLine    int    `json:"orig_line"`
 	OrigPath    string `json:"orig_path,omitempty"`
 	OrigPathB64 string `json:"orig_path_b64,omitempty"`
-	// Text is the line, without its line feed — or, past
-	// MaxBlameLineBytes, absent with TextBytes its size.
+	// Text is the line without its line feed; past MaxBlameLineBytes, absent
+	// with TextBytes its size.
 	Text      string `json:"text,omitempty"`
 	TextBytes int    `json:"text_bytes,omitempty"`
 }
 
-// BlameCommit is a commit a blame's lines name: its author and its committer
-// as it states them (never a `.mailmap`'s), the date it was authored and its
-// subject, each described past its bound as a LogCommit's is.
+// BlameCommit is a commit a blame's lines name: its author and committer as it
+// states them (never a `.mailmap`'s), its authored date and its subject, each
+// described past its bound as a LogCommit's is.
 type BlameCommit struct {
 	Author           string `json:"author,omitempty"`
 	AuthorBytes      int    `json:"author_bytes,omitempty"`
@@ -4687,10 +4244,9 @@ type BlameCommit struct {
 	CommitterEmailBytes int       `json:"committer_email_bytes,omitempty"`
 	EngineCommitted     *bool     `json:"engine_committed,omitempty"`
 	AuthoredAt          time.Time `json:"authored_at"`
-	// Subject is the message's first LINE, as git's blame names it — not
-	// the first paragraph a log's subject is — absent past
-	// MaxLogSubjectBytes with SubjectBytes its size, and empty for a
-	// commit whose message is.
+	// Subject is the message's first LINE, as git's blame names it (not a log
+	// subject's first paragraph), absent past MaxLogSubjectBytes with
+	// SubjectBytes its size, empty for an empty message.
 	Subject      string `json:"subject,omitempty"`
 	SubjectBytes int    `json:"subject_bytes,omitempty"`
 }
@@ -4701,89 +4257,80 @@ type RevisionFactsAnswer struct {
 	// Head and Target are the query's commits, whole.
 	Head   string `json:"head"`
 	Target string `json:"target"`
-	// MergeBase is their best common ancestor — the BASE the change is
-	// measured from, on the target's side — or empty for histories that
-	// share none, whose change is measured from the empty tree: every file of
-	// Head.
+	// MergeBase is their best common ancestor, the BASE the change is measured
+	// from on the target's side, or empty for unrelated histories, whose change
+	// is measured from the empty tree: every file of Head.
 	MergeBase string `json:"merge_base,omitempty"`
-	// BaseTree and HeadTree are the trees of the base — the empty tree's id
-	// where there is none — and of Head: two revisions holding the same pair
-	// hold the same code, byte for byte, which an approval carries across
-	// whatever their patch ids say ([ChangeClassNoCodeChange]). Empty only
-	// where HeadInTarget, which measures nothing.
+	// BaseTree and HeadTree are the trees of the base (the empty tree's id
+	// where none) and of Head: two revisions holding the same pair hold the
+	// same code, byte for byte, which an approval carries across whatever their
+	// patch ids say ([ChangeClassNoCodeChange]). Empty only where HeadInTarget,
+	// which measures nothing.
 	BaseTree string `json:"base_tree,omitempty"`
 	HeadTree string `json:"head_tree,omitempty"`
-	// PatchID is `git patch-id --verbatim` of the cumulative diff from the
-	// base to Head: the same for two revisions whose changes are the same
-	// lines with the same lines around them, wherever the base put them — a
-	// rebase that moved nothing near them keeps it — and another for any
-	// changed byte, whitespace included. Empty for a revision that changes
-	// nothing, and where PatchIDOmission says why none was taken: an empty id
-	// equals nothing.
+	// PatchID is `git patch-id --verbatim` of the cumulative diff from the base
+	// to Head: the same for two revisions changing the same lines with the same
+	// context wherever the base put them (a rebase that moved nothing near them
+	// keeps it), another for any changed byte, whitespace included. Empty for a
+	// revision changing nothing, and where PatchIDOmission says why none was
+	// taken: an empty id equals nothing.
 	PatchID string `json:"patch_id,omitempty"`
-	// PatchIDOmission is why the Gitlet node took no id of a diff that is not
-	// empty, "" where it took one or there was none to take: the diff is past
-	// the bound on one it identifies (OmittedPastBound, final), or it or its
-	// id ran out what was left of the read's budget of git
-	// (OmittedOutOfTime, not final — [RevisionFactsAnswer.Final]).
+	// PatchIDOmission is why the Gitlet node took no id of a non-empty diff, ""
+	// otherwise: past the bound on a diff it identifies (OmittedPastBound,
+	// final), or out of the read's git budget (OmittedOutOfTime, not final,
+	// [RevisionFactsAnswer.Final]).
 	//
-	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no versionedFields
-	// row (the record carries [Revise.PatchIDOmitted], the final omission
-	// alone). The domain landed on main with it and without the bool it
-	// replaced ([RecordVersion]), so no home reads an answer it cannot.
+	// An answer's field: no versionedFields row (the record carries
+	// [Revise.PatchIDOmitted], the final omission alone). The domain landed on
+	// main with it, without the bool it replaced ([RecordVersion]).
 	PatchIDOmission FactsOmission `json:"patch_id_omission,omitempty"`
-	// Touched is every file the change touches — every path the diff from
-	// the base to Head changes, in git's order — unless TouchesAll: the
-	// change touches more than a list holds ([MaxTouchedPaths],
-	// [MaxTouchedBytes]) or a path JSON cannot carry exactly (bytes that are
-	// not UTF-8), and Touched is empty, to be read as every path.
+	// Touched is every path the diff from the base to Head changes, in git's
+	// order, unless TouchesAll: more than a list holds ([MaxTouchedPaths],
+	// [MaxTouchedBytes]) or a path JSON cannot carry exactly (not UTF-8), when
+	// Touched is empty, read as every path.
 	Touched    []string `json:"touched"`
 	TouchesAll bool     `json:"touches_all,omitempty"`
-	// Classes is the path classes of the touched files' changes, each path
-	// named by its place in Touched ([RevisionClasses]): each touched Go file
-	// changed in place, both of its versions lexed ([ClassifyGo]) within the
-	// bounds a revision's classification keeps to ([MaxClassedBytes]) and
-	// what the read's budget of git left — incomplete past either, and where
-	// the revision touches all.
+	// Classes is the path classes of the touched files' changes, each path by
+	// its place in Touched ([RevisionClasses]): each Go file changed in place,
+	// both versions lexed ([ClassifyGo]) within [MaxClassedBytes] and the
+	// read's remaining git budget; incomplete past either, and where the
+	// revision touches all.
 	Classes RevisionClasses `json:"classes,omitzero"`
-	// ClassesOmission is why Classes are not complete, "" where they are:
-	// past a bound — MaxClassedBytes, or a revision that touches all, whose
-	// paths no list names (OmittedPastBound, final) — or out of what the
-	// read's budget of git left (OmittedOutOfTime, not final). An estate
+	// ClassesOmission is why Classes are incomplete, "" where complete: past a
+	// bound (MaxClassedBytes, or a touches-all revision; OmittedPastBound,
+	// final) or out of the read's git budget (OmittedOutOfTime, not final). An
 	// answer's field, as PatchIDOmission is.
 	ClassesOmission FactsOmission `json:"classes_omission,omitempty"`
-	// HeadInTarget is Head reachable from Target: the change is in its
-	// target already, merged by whatever moved the target there. Its change
-	// is then nothing: no id, no path, no tree.
+	// HeadInTarget is Head reachable from Target: the change is in its target
+	// already, merged by whatever moved it there, and changes nothing: no id,
+	// no path, no tree.
 	HeadInTarget bool `json:"head_in_target,omitempty"`
 }
 
-// Final reports facts that are a function of their two commits alone, as
-// every Gitlet node answers them: nothing in them left out for want of time. A
-// fact left out past a bound is final, the same on every node at every load;
-// one the read's budget of git ran out before is a measure of the node that
-// read it at that moment, so facts holding one are RECORDED BY NOBODY and
-// asked again — never kept as though the commits were unidentifiable, which
+// Final reports facts that depend on their two commits alone, as every Gitlet
+// node answers them: nothing left out for want of time. An omission past a
+// bound is final, alike on every node at every load; one the git budget ran out
+// before measures the node at that moment, so such facts are RECORDED BY NOBODY
+// and asked again, never kept as though the commits were unidentifiable, which
 // would cost every approval carried by the id a re-review exactly when the
 // fleet is busiest.
 func (f *RevisionFactsAnswer) Final() bool {
 	return f.PatchIDOmission != OmittedOutOfTime && f.ClassesOmission != OmittedOutOfTime
 }
 
-// FactsOmission is why a revision's facts left out a part they may leave out
-// — its patch id, or classes of its paths — "" for none. A closed set
-// ([FactsOmissions]).
+// FactsOmission is why a revision's facts left out a part they may (its patch
+// id, or classes of its paths), "" for none. A closed set ([FactsOmissions]).
 type FactsOmission string
 
 const (
-	// OmittedPastBound is a part past a bound of its own: a diff past the
-	// bound on one whose id is taken, Go past the bound a classification
-	// lexes, a revision that touches all. What the bound measures is the two
-	// commits', so every Gitlet node omits the part alike: FINAL.
+	// OmittedPastBound is a part past its own bound (a diff past the patch-id
+	// bound, Go past the classification bound, a touches-all revision). The
+	// bound measures the two commits, so every Gitlet node omits it alike:
+	// FINAL.
 	OmittedPastBound FactsOmission = "past_bound"
-	// OmittedOutOfTime is a part the read's budget of git ran out before:
-	// what the node could do in its budget at that moment — slower under
-	// load, quicker on a node beside it — so NOT FINAL ([RevisionFactsAnswer.Final]).
+	// OmittedOutOfTime is a part the read's git budget ran out before: what the
+	// node could do at that moment, slower under load, quicker on another node,
+	// so NOT FINAL ([RevisionFactsAnswer.Final]).
 	OmittedOutOfTime FactsOmission = "out_of_time"
 )
 
@@ -4798,14 +4345,13 @@ type ReanchorAnswer struct {
 	Anchors []Reanchored `json:"anchors"`
 }
 
-// Reanchored is one anchor placed. Gone: its revision holds no file at its
-// path (deleted, or a directory or a submodule now), so it has no lines
-// there. Otherwise Start and End are where its lines are now — moved by the
-// lines the change added or removed above them — and Outdated says they are
-// not the lines it was written against: one of them was changed or deleted,
-// or lines were inserted between two of them, or the file is binary on
-// either side; Start and End are then where the range would begin and end had
-// only the changes above it moved it.
+// Reanchored is one anchor placed. Gone: its revision holds no file at its path
+// (deleted, or now a directory or submodule). Otherwise Start and End are where
+// its lines are now, moved by lines added or removed above them, and Outdated
+// says they are not the lines it was written against (one changed or deleted,
+// lines inserted between two of them, or the file binary on either side); Start
+// and End are then where the range would be had only the changes above it moved
+// it.
 type Reanchored struct {
 	ID       string `json:"id"`
 	Start    int    `json:"start,omitempty"`
@@ -4814,13 +4360,12 @@ type Reanchored struct {
 	Gone     bool   `json:"gone,omitempty"`
 }
 
-// Coverage is what a Gitlet node's index of which push introduced each commit
-// holds: every push with a position in (From, Through] but those in (GapFrom,
-// GapThrough], a range a full read of the repository passed over and the
-// index has not yet read. Complete is From being the start of the push history
-// the rows keep (PushHistory), so a commit with no push inside complete
-// coverage was introduced by a push that listed more than MaxIntroduced
-// commits, or before that history.
+// Coverage is what a Gitlet node's introduced index holds: every push
+// positioned in (From, Through] but those in (GapFrom, GapThrough], a range a
+// full read passed over and the index has not yet read. Complete is From being
+// the start of the kept push history (PushHistory), so a commit with no push
+// inside complete coverage was introduced by a push listing more than
+// MaxIntroduced commits, or before that history.
 type Coverage struct {
 	From       statelog.Position `json:"from"`
 	Through    statelog.Position `json:"through"`
@@ -4834,32 +4379,29 @@ type Coverage struct {
 type LandedInAnswer struct {
 	// Commit is the commit asked about, whole.
 	Commit string `json:"commit"`
-	// Target is the whole ref, TargetOID the tip it was judged against and
-	// At the position of the record that moved the target there — the
-	// query's own.
+	// Target is the whole ref, TargetOID the tip judged against and At the
+	// position of the record that moved the target there: the query's own.
 	Target    string            `json:"target"`
 	TargetOID string            `json:"target_oid"`
 	At        statelog.Position `json:"at"`
 	// Landed is Commit reachable from TargetOID.
 	Landed bool `json:"landed"`
 	// LandedBy is the push that made Commit reachable from Target and kept it
-	// so — the first of the target's moves after which every move kept it
-	// reachable, which is never one Commit was reachable from before — with
-	// the move it made (Move); nil where the index this node keeps does not
-	// hold that push, which Detail says.
+	// so (the first of the target's moves after which every move kept it
+	// reachable, never one it was reachable from before), with its move (Move); nil
+	// where this node's index lacks that push, which Detail says.
 	LandedBy *PushedBy `json:"landed_by,omitempty"`
 	Move     *RefMove  `json:"move,omitempty"`
-	// IntroducedBy is the push that introduced Commit itself, which may be
-	// another ref's (a branch merged later).
+	// IntroducedBy is the push that introduced Commit itself, maybe to another
+	// ref (a branch merged later).
 	IntroducedBy *PushedBy `json:"introduced_by,omitempty"`
 	// Probes is the ancestry checks the search for the landing ran.
 	Probes int `json:"probes"`
-	// Detail says why LandedBy is nil: the landing predates what the index
-	// holds, falls in a range it has not read yet, or lies past what the
-	// search checked — its bound of checks (internal/gitlet/query's
-	// MaxLandedProbes), the read's budget of git, its answer falling due or
-	// a read lane busy past gitproc.SlotWait — named with the oldest push the
-	// search knows kept the commit.
+	// Detail says why LandedBy is nil: the landing predates the index, falls in
+	// a range not yet read, or lies past what the search checked
+	// (internal/gitlet/query's MaxLandedProbes, the read's git budget, its
+	// answer falling due, or a read lane busy past gitproc.SlotWait), naming
+	// the oldest push the search knows kept the commit.
 	Detail string `json:"detail,omitempty"`
 }
 
@@ -4867,8 +4409,8 @@ type LandedInAnswer struct {
 type TreeAnswer struct {
 	// Tree is the id of the tree listed.
 	Tree string `json:"tree"`
-	// Path is the directory listed, from the repository's root; empty for
-	// the root (PathB64 per [WirePath]).
+	// Path is the directory listed, from the root; empty for the root (PathB64
+	// per [WirePath]).
 	Path    string      `json:"path,omitempty"`
 	PathB64 string      `json:"path_b64,omitempty"`
 	Entries []TreeEntry `json:"entries"`
@@ -4878,8 +4420,8 @@ type TreeAnswer struct {
 
 // TreeEntry is one entry of a listing.
 type TreeEntry struct {
-	// Mode is git's: 040000 a directory, 100644 a file, 100755 an
-	// executable, 120000 a symbolic link, 160000 a submodule.
+	// Mode is git's: 040000 a directory, 100644 a file, 100755 an executable,
+	// 120000 a symbolic link, 160000 a submodule.
 	Mode string `json:"mode"`
 	// Type is tree, blob or commit (a submodule's).
 	Type string `json:"type"`
@@ -4889,24 +4431,24 @@ type TreeEntry struct {
 	Path    string `json:"path"`
 	PathB64 string `json:"path_b64,omitempty"`
 	// Size is a blob's bytes; a directory and a submodule carry none, and an
-	// empty file reads as none too.
+	// empty file reads as none.
 	Size int64 `json:"size,omitempty"`
 }
 
 // BlobAnswer is one page of a file's lines.
 type BlobAnswer struct {
-	// Path is the file's, from the repository's root, where the read named
-	// one (PathB64 per [WirePath]).
+	// Path is the file's, from the root, where the read named one (PathB64 per
+	// [WirePath]).
 	Path    string `json:"path,omitempty"`
 	PathB64 string `json:"path_b64,omitempty"`
 	OID     string `json:"oid"`
 	Size    int64  `json:"size"`
-	// Binary is a file git calls binary — a NUL in its first 8 000 bytes,
-	// git's own test — answered by its size, with no text.
+	// Binary is a file git calls binary (a NUL in its first 8 000 bytes, git's
+	// own test), answered by its size with no text.
 	Binary bool `json:"binary,omitempty"`
 	// Lines is how many lines the whole file has.
 	Lines int `json:"lines"`
-	// StartLine and EndLine are the lines Text holds, whole but where a page
+	// StartLine and EndLine are the lines Text holds, whole unless a page
 	// begins or ends inside a line longer than a page: Text then begins
 	// StartByte bytes into StartLine, and Continues says it ends inside
 	// EndLine.
@@ -4914,36 +4456,36 @@ type BlobAnswer struct {
 	EndLine   int    `json:"end_line,omitempty"`
 	StartByte int    `json:"start_byte,omitempty"`
 	Text      string `json:"text,omitempty"`
-	// Continues is set when Text ends inside line EndLine — a line longer
-	// than a page, served in pieces at rune boundaries — and Next resumes
-	// it. Never a cut: the rest is the next page's.
+	// Continues is set when Text ends inside line EndLine (a line longer than a
+	// page, served in pieces at rune boundaries), and Next resumes it. Never a
+	// cut: the rest is the next page's.
 	Continues bool `json:"continues,omitempty"`
 }
 
 // DiffFile is one file of a diff's stat.
 type DiffFile struct {
-	// Path is the file's at head, or at base for a deleted file (PathB64
-	// per [WirePath]); OldPath is where a renamed file was.
+	// Path is the file's at head, or at base for a deleted file (PathB64 per
+	// [WirePath]); OldPath is where a renamed file was.
 	Path       string `json:"path"`
 	PathB64    string `json:"path_b64,omitempty"`
 	OldPath    string `json:"old_path,omitempty"`
 	OldPathB64 string `json:"old_path_b64,omitempty"`
-	// Status is git's own letter: A added, D deleted, M modified, R
-	// renamed, T its type changed (a file made a link, say).
+	// Status is git's letter: A added, D deleted, M modified, R renamed, T type
+	// changed (a file made a link, say).
 	Status string `json:"status"`
 	// Similarity is a rename's, in percent.
 	Similarity int `json:"similarity,omitempty"`
-	// OldMode and NewMode are git's modes on each side, empty on the side a
-	// file is absent from: a mode alone changing — a script made executable
-	// — is a file modified with no line touched, which only they tell.
+	// OldMode and NewMode are git's modes on each side, empty on a side the
+	// file is absent from: only they tell a mode alone changing (a script made
+	// executable), a modification touching no line.
 	OldMode string `json:"old_mode,omitempty"`
 	NewMode string `json:"new_mode,omitempty"`
 	Added   int    `json:"added"`
 	Deleted int    `json:"deleted"`
 	// Binary is a file git calls binary: no line counts, and no patch.
 	Binary bool `json:"binary,omitempty"`
-	// OldOID and NewOID are the blobs on each side, the side a file is
-	// absent from carrying none.
+	// OldOID and NewOID are the blobs on each side, none on a side the file is
+	// absent from.
 	OldOID string `json:"old_oid,omitempty"`
 	NewOID string `json:"new_oid,omitempty"`
 }
@@ -4953,26 +4495,26 @@ type DiffAnswer struct {
 	// Base and Head are the commits (or trees) compared, as whole ids.
 	Base string `json:"base"`
 	Head string `json:"head"`
-	// Files is a page of the files changed, in git's order (by path); a
-	// patch's answer holds its one file on every page.
+	// Files is a page of the changed files, in git's order (by path); a patch's
+	// answer holds its one file on every page.
 	Files []DiffFile `json:"files"`
-	// Total, Added and Deleted are over the whole diff the query names —
-	// every file Paths admits, on every page.
+	// Total, Added and Deleted are over the whole diff the query names (every
+	// file Paths admits), on every page.
 	Total   int `json:"total"`
 	Added   int `json:"added"`
 	Deleted int `json:"deleted"`
 	// Patch is a page of one file's patch (DiffQuery.File), cut at line
-	// boundaries; its header lines name the paths, as git's own do.
+	// boundaries; its header lines name the paths, as git's do.
 	Patch string `json:"patch,omitempty"`
-	// Patches is a page of every file's patch (DiffQuery.Patches), cut at line boundaries;
-	// Files is empty on such a page, and the totals are the stat's. A diff of no file
-	// answers one page with no patches member.
+	// Patches is a page of every file's patch (DiffQuery.Patches), cut at line
+	// boundaries; Files is empty on such a page, and the totals are the stat's.
+	// A diff of no file answers one page with no patches member.
 	Patches []FilePatch `json:"patches,omitempty"`
 }
 
-// FilePatch is one file's patch, or the part of it a page holds: File its place among the
-// files the diff admits, from 0 in the stat's order, its path and status as the stat names
-// them, and Continues where the next page goes on with it.
+// FilePatch is one file's patch, or the page's part of it: File its place among
+// the files the diff admits, from 0 in stat order, its path and status as the
+// stat names them, and Continues where the next page goes on with it.
 type FilePatch struct {
 	File      int    `json:"file"`
 	Path      string `json:"path"`
@@ -4980,30 +4522,30 @@ type FilePatch struct {
 	Status    string `json:"status"`
 	Patch     string `json:"patch"`
 	Continues bool   `json:"continues,omitempty"`
-	// RestOmitted is a patch that stops before a line longer than one answer holds: the
-	// rest of the file's patch is left out, and the pages go on at the next file.
+	// RestOmitted is a patch stopped before a line longer than one answer
+	// holds: the rest of the file's patch is left out, and the pages continue
+	// at the next file.
 	RestOmitted bool `json:"rest_omitted,omitempty"`
 }
 
 // CompareAnswer is how two commits relate.
 type CompareAnswer struct {
-	// Base and Head are the commits compared, as whole ids; MergeBase is
-	// their best common ancestor, empty for histories that share none.
+	// Base and Head are the whole ids compared; MergeBase their best common
+	// ancestor, empty for unrelated histories.
 	Base      string `json:"base"`
 	Head      string `json:"head"`
 	MergeBase string `json:"merge_base,omitempty"`
-	// BaseIsAncestor is head containing base — a fast-forward from base to
-	// head — and HeadIsAncestor the reverse.
+	// BaseIsAncestor is head containing base (a fast-forward from base to
+	// head); HeadIsAncestor the reverse.
 	BaseIsAncestor bool `json:"base_is_ancestor"`
 	HeadIsAncestor bool `json:"head_is_ancestor"`
 	// Ahead is the commits head has that base lacks, Behind the reverse.
 	Ahead  int `json:"ahead"`
 	Behind int `json:"behind"`
-	// Files is the FIRST page of what head changed since the merge base —
-	// the three-dot reading every code host shows; a diff of the merge base
-	// and head reads the rest, and Total, Added and Deleted are over all of
-	// it. Histories that share no commit have no such change, and none is
-	// listed.
+	// Files is the FIRST page of what head changed since the merge base (the
+	// three-dot reading every code host shows); a diff of the merge base and
+	// head reads the rest, and Total, Added and Deleted are over all of it.
+	// Unrelated histories have no such change, and none is listed.
 	Files   []DiffFile `json:"files"`
 	Total   int        `json:"total"`
 	Added   int        `json:"added"`

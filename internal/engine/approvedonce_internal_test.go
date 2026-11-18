@@ -11,31 +11,18 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A LATER ATTEMPT AT AN ANSWER TELLS THE CALL IT APPROVED ONCE, end to end:
-// through the coordination store's log of the round, the conversion of that
-// log and of the held call the claim read into the runner's terms, and a runner
-// relaunching the round in the asking job's own box. A person allows a held
-// call once; the first attempt at the answer marks the call, makes it and
-// records what it returned, and its relaunch is refused, so its claim is given
-// back and the answer attempted again. The round's log then holds the call
-// under the held call's id, after every call it took, the held call the job
-// parked on — its question, which the bridge logs as it holds it — among them.
-// The later attempt answers the call from its mark, and its lead says what the
-// call returned; the copy in the asking job's box, its harness cut off, is told
-// every other call of the round, the held one included, and that one nowhere
-// else.
+// A LATER ATTEMPT AT AN ANSWER TELLS THE CALL IT APPROVED ONCE, end to end
+// (round log, its conversion to runner terms, a relaunch in the asking box).
+// The first attempt marks, makes and records the call; its relaunch is
+// refused, and the log holds the call under its held id after the held call.
+// The later attempt's lead tells what it returned; the cut-off copy is told
+// every other call of the round, the held one included, once. With a call in
+// flight the approved call (keyed by its held id, no bridge entry) goes after
+// it, the in-flight call told once as unknown, the approved one by the lead.
 //
-// AND WITH A CALL OF THE ROUND STILL IN FLIGHT, its entry written ahead of it
-// and its update not landed: a call a person approved never passes the bridge,
-// so it writes no entry — its identity is on the row before it is made, and its
-// append to the log is keyed by its held call's id — and it is placed after the
-// call in flight, never at its place; the copy is told the call in flight once,
-// as a call whose outcome is unknown, and the approved call by the lead alone.
-//
-// Mutation: drop the held call's id from the calls a resume hands the runner,
-// or from the held call it is handed, or list the lead's approved call among
-// the round's calls, and the call is told twice; place the approved call off
-// the listed calls alone, and it takes the place of the call in flight.
+// Mutation: drop the held id from the resume's calls or held call, or list the
+// lead's call among the round's, and it is told twice; place it off the listed
+// calls alone, and it takes the in-flight call's place.
 func TestALaterAttemptAtAnAnswerTellsTheCallItApprovedOnceOffTheRoundsLog(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -45,8 +32,8 @@ func TestALaterAttemptAtAnAnswerTellsTheCallItApprovedOnceOffTheRoundsLog(t *tes
 	asking := launchBridged(t, turnID, read)
 	asking.call(t, "read_page")
 	launch := asking.row(t, turnID).LaunchID
-	// THE HELD CALL ITSELF, in the round's log as the bridge records a call the
-	// seat's surface held for a person's approval: its arguments withheld.
+	// THE HELD CALL ITSELF, as the bridge logs one held for approval: its
+	// arguments withheld.
 	held := sandbox.BridgeCall{Name: "vendor_post", Seq: 2, StartedAt: time.Now().UTC(), Failed: true,
 		Held: true, Output: "held for a person's approval"}
 	recorded, err := asking.pending.AppendBridgeCall(ctx, turnID, sandbox.BridgeAppend{Launch: launch,
@@ -62,8 +49,7 @@ func TestALaterAttemptAtAnAnswerTellsTheCallItApprovedOnceOffTheRoundsLog(t *tes
 	parkedOnAHeldCall(t, asking.pending, turnID, launch)
 	seal := sandbox.NewCallSeal(valueRing(t, "k1"))
 
-	// THE FIRST ATTEMPT marks the call, makes it and records what it
-	// returned; then its relaunch is refused, and its claim given back.
+	// THE FIRST ATTEMPT: mark, make, record; its relaunch refused, claim given back.
 	if _, ok, err := asking.pending.ClaimForResume(ctx, turnID, sandbox.RecordedAnswerTail(launch),
 		sandbox.Fence{}); err != nil || !ok {
 		t.Fatalf("ClaimForResume = %v, %v", ok, err)
@@ -86,9 +72,8 @@ func TestALaterAttemptAtAnAnswerTellsTheCallItApprovedOnceOffTheRoundsLog(t *tes
 		t.Fatalf("ReleaseClaim = %v, %v", ok, err)
 	}
 
-	// THE LATER ATTEMPT, its claim reading the call as the first left it, and
-	// its read of the round's calls as the coordinator makes it: the job's
-	// log, with the call a person approved that only the row may hold yet.
+	// THE LATER ATTEMPT reads the round's calls as the coordinator does: the
+	// job's log, plus the approved call only the row may hold yet.
 	claimed, ok, err := asking.pending.ClaimForResume(ctx, turnID, sandbox.RecordedAnswerTail(launch),
 		sandbox.Fence{})
 	if err != nil || !ok || claimed.HeldCall == nil || !claimed.HeldCall.Made() {

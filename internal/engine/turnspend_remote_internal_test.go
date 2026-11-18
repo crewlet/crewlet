@@ -24,16 +24,14 @@ import (
 )
 
 // A TURN ON A NODE WITHOUT `data` CHARGES THE TASK THAT WOKE IT, ON A DATA
-// NODE: the spend is a tracker write like any other, so it crosses the estate
-// wire, and what arrives is the task the wake named, one turn, and the tokens
-// its model billed — the cached share among them — under an operation id a
-// repeat collapses on.
+// NODE: the charge is a tracker write, so it crosses the estate wire, and what
+// arrives is the woken task, one turn, and the tokens its model billed (the
+// cached share among them) under an operation id a repeat collapses on.
 //
-// The per-segment arithmetic of a charge is turnspend_internal_test.go's; this
-// is the one thing only a stateless node can show: that the charge is not left
-// behind on a node that keeps no tracker. And the executor's share of it is its
-// run's, collected from the box — the cached share included, which a harness
-// reports beside its tokens and the charge carries like every phase's.
+// The per-segment arithmetic is turnspend_internal_test.go's; only a stateless
+// node can show the charge is not left behind on a node that keeps no tracker.
+// The executor's share is its run's, collected from the box, cached share
+// included.
 //
 // Mutation: leave the job's cached share out of the resumed segment's charge,
 // and CacheRead is the reviewer's alone.

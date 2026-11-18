@@ -123,13 +123,11 @@ func laggingOn(names ...string) copyVerdict {
 // sound is a copy that is not wrong and answers requests.
 func sound(context.Context, *core) copyVerdict { return soundCopy() }
 
-// A DATA NODE'S COPY IS SERVED WITH WHAT IT RUNS: nothing at all before its
-// core is up, so every operation on it is answered "not here" and moves on
-// rather than being refused as an estate nobody serves; the identity directory
-// and no halves once its core runs — every data node runs one from boot, a
-// company or none — so a node without `data` can ask who holds each seat
-// before this one has met a company; and its halves, answering, once a company
-// brings them up.
+// A data node's copy is served with what it runs: nothing before its core is
+// up (so an operation is answered "not here" rather than refused); the
+// identity directory and no halves once the core runs, company or none, so a
+// node without `data` can ask who holds each seat; and its halves, answering,
+// once a company brings them up.
 //
 // Mutation: hand the directory over only with the native halves and the
 // second step serves a data node with no company as one with no directory.
@@ -157,16 +155,11 @@ func TestTheLocalEstateServesItsCopyWithWhatItRuns(t *testing.T) {
 	}
 }
 
-// EVERY COPY THIS NODE SERVES CARRIES ITS CONFIGURATION POSTURE, read when the
-// operation runs: the estate asks a node the control plane has confirmed behind
-// the company's configuration last ([estate.Backend.Current]), and the engine's
-// one gate for that is the one its seats, its schedules and its inbound work
-// are given up by ([Engine.SetAdmits]). A backend that carried none would serve
-// a shed node's stale chart first; one that carried the value it was built
-// with would go on preferring a node the reconcile loop has since moved, until
-// the next copy verdict happened to rebuild it. The copy of a data node with no
-// company is served too — its directory and its usage reads — so it carries
-// the gate as well.
+// Every copy this node serves carries its configuration posture
+// ([estate.Backend.Current]), read from [Engine.SetAdmits]'s gate when the
+// operation runs. Without it a shed node's stale chart is served first; with
+// the value at build time, a node the reconcile loop has since moved stays
+// preferred. A data node with no company carries the gate too.
 func TestEveryCopyThisNodeServesCarriesItsConfigurationPosture(t *testing.T) {
 	t.Parallel()
 	e := &Engine{backends: &Backends{}}
@@ -201,16 +194,10 @@ func TestEveryCopyThisNodeServesCarriesItsConfigurationPosture(t *testing.T) {
 	current("a runtime, converged again", built, true)
 }
 
-// A DOMAIN'S COPY THAT IS WRONG GOES OUT OF SERVICE ALONE, AND THE NODE KEEPS
-// ITS SEATS.
-//
-// A halted applier, an eviction, rows below the log, a checkpoint on another
-// stream, a stalled prefix, a record held past its grace: this node's router
-// no longer answers that domain's operations from its own copy — its seats'
-// calls on it go to the other data nodes, and another node asking is told
-// `out_of_service` — while every other domain's copy keeps answering here, and
-// serviceability, which is about routing, keeps every seat. It serves again
-// the moment a reading finds the copy sound.
+// A wrong domain copy goes out of service alone (its calls go to other data
+// nodes; another node asking is told `out_of_service`), every other domain
+// keeps answering, and the node keeps its seats, since serviceability is about
+// routing. It serves again once a reading finds it sound.
 func TestAWrongCopyStopsServingAndTheSeatsStay(t *testing.T) {
 	t.Parallel()
 	now := time.Unix(1_700_000_000, 0)
@@ -237,8 +224,7 @@ func TestAWrongCopyStopsServingAndTheSeatsStay(t *testing.T) {
 			"service, and the seats read the estate from another data node", reason)
 	}
 
-	// A BLIP DOES NOT BRING IT BACK: a reading that could not read the
-	// faulted log keeps the fault it had.
+	// A reading that could not read the faulted log keeps the fault.
 	now = now.Add(servingRecheck)
 	verdict = unreadOn(registeredNames()...)
 	if _, ok := judged(t.Context(), l, trackerName); ok {
@@ -250,8 +236,7 @@ func TestAWrongCopyStopsServingAndTheSeatsStay(t *testing.T) {
 		t.Fatal("a copy found sound again is still not served")
 	}
 
-	// NOR DOES A BLIP ON ANOTHER LOG KEEP IT OUT: the faulted log was read
-	// and found sound, and only a log that held no fault went unread.
+	// Nor does an unread log that held no fault keep it out.
 	now = now.Add(servingRecheck)
 	verdict = wrongOn(trackerName)
 	if _, ok := judged(t.Context(), l, trackerName); ok {
@@ -265,13 +250,9 @@ func TestAWrongCopyStopsServingAndTheSeatsStay(t *testing.T) {
 	}
 }
 
-// WHETHER A COPY ANSWERS IS READ AT MOST ONCE A RECHECK, and a read that could
-// not reach the broker keeps the verdict before it — while a copy never judged
-// answers nothing.
-//
-// The verdict reads every log's health from the broker, so read per request it
-// would put those round trips in front of every tool call; and one blip must
-// not send every request away from a copy that was answering them.
+// A copy's verdict is read at most once a recheck (it costs broker round
+// trips, which must not precede every tool call), a read that reached no
+// broker keeps the verdict before it, and a copy never judged answers nothing.
 func TestACopysVerdictIsReadOncePerRecheckAndKeptThroughABlip(t *testing.T) {
 	t.Parallel()
 	now := time.Unix(1_700_000_000, 0)
@@ -289,8 +270,7 @@ func TestACopysVerdictIsReadOncePerRecheckAndKeptThroughABlip(t *testing.T) {
 		return l.verdict(t.Context(), c)
 	}
 
-	// A COPY NEVER JUDGED, whose first read found no broker, answers
-	// nothing.
+	// Never judged, and the first read found no broker.
 	verdict = unreadOn(registeredNames()...)
 	if l.verdict(t.Context(), c).answers(trackerName) {
 		t.Fatal("a copy nobody could measure answered")
@@ -318,16 +298,11 @@ func TestACopysVerdictIsReadOncePerRecheckAndKeptThroughABlip(t *testing.T) {
 	}
 }
 
-// A SLOW BROKER NEVER QUEUES THE REQUESTS THAT ASK ABOUT A COPY.
-//
-// Every tool call a data node's seats make and every request another node
-// sends it asks the copy's verdict first, and a read of the broker can take
-// its whole budget. So ONE read runs however many requests found the verdict
-// stale, nobody but a request that finds the copy never judged waits on it, a
-// request that stops waiting leaves when its own context ends — and
-// the read is stamped with the instant it LANDED, so a read slower than the
-// recheck is not stale the moment it is stored and read again by the next
-// request in line.
+// A slow broker never queues the requests that ask a copy's verdict: ONE read
+// runs however many found it stale, only a request on a never-judged copy
+// waits for it, a waiter leaves when its own context ends, and the read is
+// stamped when it LANDED, so a read slower than the recheck is not stale the
+// moment it is stored.
 func TestASlowVerdictReadQueuesNoRequest(t *testing.T) {
 	t.Parallel()
 	var clock atomic.Int64
@@ -341,14 +316,14 @@ func TestASlowVerdictReadQueuesNoRequest(t *testing.T) {
 			reads.Add(1)
 			started <- struct{}{}
 			<-release
-			// SLOWER THAN THE RECHECK, as a broker mid-election is.
+			// Slower than the recheck, as a broker mid-election is.
 			clock.Add(int64(3 * servingRecheck))
 			return soundCopy()
 		})
 	c := &core{log: &stateLog{}}
 
-	// NEVER JUDGED: every request waits on the ONE read, and a request
-	// whose caller gives up leaves without it.
+	// Never judged: every request waits on the one read, and one whose
+	// caller gives up leaves without it.
 	const requests = 8
 	var wg sync.WaitGroup
 	answered := make(chan bool, requests)
@@ -380,16 +355,15 @@ func TestASlowVerdictReadQueuesNoRequest(t *testing.T) {
 	if got := reads.Load(); got != 1 {
 		t.Fatalf("%d concurrent requests read the verdict %d times, want once", requests, got)
 	}
-	// STAMPED WHEN IT LANDED: three rechecks passed during the read, and
-	// the verdict it stored is still fresh.
+	// Three rechecks passed during the read, and its verdict is still fresh.
 	l.verdict(t.Context(), c)
 	landed(l)
 	if got := reads.Load(); got != 1 {
 		t.Fatalf("a verdict read slower than the recheck was stale when stored: %d reads", got)
 	}
 
-	// JUDGED BEFORE: a stale verdict is answered at once from the one
-	// before it while the read that replaces it is in flight.
+	// Judged before: a stale verdict answers at once while its
+	// replacement is read.
 	clock.Add(int64(servingRecheck))
 	stuck := make(chan struct{})
 	l.read = func(context.Context, *core) copyVerdict {
@@ -419,10 +393,10 @@ func TestASlowVerdictReadQueuesNoRequest(t *testing.T) {
 	}
 }
 
-// A NODE KEEPS ITS SEATS WHILE IT CAN ROUTE, and sheds them only once its view
+// A node keeps its seats while it can route, and sheds them only once its view
 // of who serves the estate answers unknown AND was last read longer ago than
-// every decider trusts a cached coordination fact — never before its first
-// listing, when it holds no seat to shed.
+// any decider trusts a cached coordination fact; never before its first
+// listing, when it holds no seat.
 func TestANodeShedsItsSeatsOnlyOnceItCannotRoute(t *testing.T) {
 	t.Parallel()
 	var clock atomic.Int64
@@ -448,8 +422,8 @@ func TestANodeShedsItsSeatsOnlyOnceItCannotRoute(t *testing.T) {
 	if ok, reason := routable(view, now()); !ok {
 		t.Fatalf("a node with a current view shed its seats: %s", reason)
 	}
-	// UNKNOWN, but inside the bound: the view's own trust has lapsed and
-	// the decider's has not.
+	// Unknown, but inside the bound: the view's trust has lapsed, the
+	// decider's has not.
 	store.fail()
 	advance(50 * time.Second)
 	if _, _, err := view.Leases(); err == nil {
@@ -464,9 +438,8 @@ func TestANodeShedsItsSeatsOnlyOnceItCannotRoute(t *testing.T) {
 		t.Fatalf("a node that cannot route kept its seats (%v, %q)", ok, reason)
 	}
 
-	// A VIEW STILL ANSWERING IS ONE THE NODE CAN ROUTE BY, however old its
-	// listing: on a deployment whose leases live five minutes, a listing
-	// ninety seconds old is still an answer, and the router reads it.
+	// A view still answering routes however old its listing: with
+	// five-minute leases, a 90-second-old listing is still an answer.
 	long := &flakyLister{ViewStore: coordmem.New()}
 	patient, err := coord.NewLeaseView(long, coord.ClassNode, coord.ViewOptions{
 		Every: 100 * time.Second, Trust: 300 * time.Second, Now: now,
@@ -487,8 +460,8 @@ func TestANodeShedsItsSeatsOnlyOnceItCannotRoute(t *testing.T) {
 }
 
 // within runs f and answers what it returned, or false when it had not
-// returned within d — for a case whose failure is a caller that never comes
-// back, which must fail the case rather than hang it. f is left running.
+// returned within d, so a caller that never comes back fails the case rather
+// than hangs it. f is left running.
 func within[T any](d time.Duration, f func() T) (T, bool) {
 	done := make(chan T, 1)
 	go func() { done <- f() }()
@@ -517,8 +490,8 @@ func (f *flakyLister) ListLive(ctx context.Context, class coord.Class) ([]coord.
 }
 
 // staleView is a view of the fleet's data nodes that listed once and has since
-// answered unknown for longer than any decider trusts a cached coordination
-// fact — a node that can name no data node at all — on a clock it answers.
+// answered unknown past every decider's trust of a cached coordination fact,
+// and the clock it runs on.
 func staleView(t *testing.T) (*coord.LeaseView, func() time.Time) {
 	t.Helper()
 	var clock atomic.Int64
@@ -571,15 +544,10 @@ type silentAsker struct{}
 
 func (silentAsker) Ask(context.Context, string, []byte, int) ([][]byte, error) { return nil, nil }
 
-// A NODE THAT ANSWERS ITS SEATS FROM ITS OWN COPY ROUTES THEM WITHOUT THE
-// VIEW — the router asks this node first and asks nobody where it answers — so
-// a view gone unknown past the bound sheds none of its seats and withholds
-// none of its claims. That is every data node whose copy is sound: a partial
-// coordination fault that stopped the fleet listing and not the seat renewals
-// used to release a single data node's every seat, and then refuse to claim
-// them back, while its own copy served them all along. A node that must ask
-// another data node still sheds on the same view, since its seats' calls have
-// nowhere it can name to go.
+// A node that answers its seats from its own sound copy routes them without
+// the view (the router asks this node first), so a view unknown past the
+// bound neither sheds its seats nor withholds its claims. A node that must ask
+// another data node still sheds on that view: it can name nowhere to go.
 func TestANodeServingItsSeatsItselfNeedsNoViewToKeepOrClaimThem(t *testing.T) {
 	t.Parallel()
 	view, now := staleView(t)
@@ -600,8 +568,7 @@ func TestANodeServingItsSeatsItselfNeedsNoViewToKeepOrClaimThem(t *testing.T) {
 		t.Fatal("a data node whose own copy admits a seat withheld its claims over a stale view")
 	}
 
-	// ITS COPY OF A DOMAIN A SEAT DEPENDS ON WRONG, it serves its seats
-	// nothing itself: the view decides, and cannot.
+	// With a domain copy wrong, the view decides, and cannot.
 	faulted.Store(true)
 	e.local.mu.Lock()
 	e.local.slot = verdictSlot{}
@@ -614,7 +581,7 @@ func TestANodeServingItsSeatsItselfNeedsNoViewToKeepOrClaimThem(t *testing.T) {
 		t.Fatal("a node whose copy is wrong and whose view cannot name a data node claimed a seat")
 	}
 
-	// A NODE HOLDING NO DATA, on the same view, sheds.
+	// A node holding no data, on the same view, sheds.
 	stateless := &Engine{dataView: view}
 	stateless.remote.Store(&remoteNative{tracker: true})
 	if ok, reason := stateless.serviceable(t.Context(), now()); ok ||
@@ -622,7 +589,7 @@ func TestANodeServingItsSeatsItselfNeedsNoViewToKeepOrClaimThem(t *testing.T) {
 		t.Fatalf("a node holding no data kept its seats over a view that cannot route (%v, %q)",
 			ok, reason)
 	}
-	// AND A COMPANY ENTIRELY ON VENDORS routes nothing, so nothing sheds.
+	// A company entirely on vendors routes nothing, so nothing sheds.
 	vendors := &Engine{dataView: view}
 	vendors.remote.Store(&remoteNative{})
 	if ok, reason := vendors.serviceable(t.Context(), now()); !ok {
@@ -630,18 +597,13 @@ func TestANodeServingItsSeatsItselfNeedsNoViewToKeepOrClaimThem(t *testing.T) {
 	}
 }
 
-// EVERY HALF THE COMPANY RUNS NATIVELY MUST BE SERVED BY THE COPY THAT WILL
-// SERVE THE SEAT, because a seat's tools reach each of them: a node holding no
-// data that admitted a seat on a data node running only the tracker would hand
-// that seat a wiki and rooms whose every call is answered "not here" — and a
-// node admitting on the wiki alone, a tracker the same. A half the company runs
-// on a vendor is not asked for at all, or a company with its pages on
-// Confluence would never admit a seat anywhere. And a company whose ONLY native
-// half is chat — its tracker and its wiki both a vendor's — gates on chat
-// rather than admitting every seat unconditionally.
+// A seat is admitted only where the copy serving it serves every half the
+// company runs natively, since the seat's tools reach each one; a half on a
+// vendor is not asked for, or a company with its pages on Confluence would
+// admit no seat; and a company whose only native half is chat gates on chat.
 //
 // Each step moves the clock past the window [estate.Router.Serves] trusts a
-// data node's answer for, so every step is a fresh ask of the fleet.
+// data node's answer for, so every step asks the fleet afresh.
 //
 // Mutation: drop chat from StateLogHydrated's comparison, or from
 // [halves.any], and the steps where chat alone is missing admit a seat.
@@ -684,8 +646,8 @@ func TestASeatIsAdmittedOnlyWhereEveryHalfItRunsIsServed(t *testing.T) {
 		})
 	}
 
-	// AND THE ANSWER IS ASKED AGAIN once its trust has run out: a data node
-	// that comes to serve the half it lacked admits the next sweep's seat.
+	// Asked again once its trust runs out: a data node that comes to serve
+	// the half it lacked admits the next sweep's seat.
 	e, answer := statelessOver(t)
 	e.remote.Store(&all)
 	answer(estate.Served{Tracker: true, Pages: true})
@@ -698,18 +660,17 @@ func TestASeatIsAdmittedOnlyWhereEveryHalfItRunsIsServed(t *testing.T) {
 	}
 }
 
-// statelessOver is a node holding no data whose router asks one data node,
-// and a function that sets which halves that data node serves — answering
-// admission's ping through the estate's own server, over a broker both share,
-// under one keyring — and moves the router's clock past the trust it holds an
-// answer for.
+// statelessOver is a node holding no data whose router asks one data node
+// (the estate's own server, on a shared broker and keyring), and a function
+// that sets which halves that data node serves and moves the router's clock
+// past its answer's trust.
 func statelessOver(t *testing.T) (*Engine, func(estate.Served)) {
 	t.Helper()
 	var clock atomic.Int64
 	clock.Store(time.Unix(1_700_000_000, 0).UnixNano())
 	broker := memory.NewBroker()
-	// STARTED, as each node's connection is before anything serves or asks
-	// over it: a client is minted stopped, and a stopped one refuses both.
+	// Started: a client is minted stopped, and a stopped one neither
+	// serves nor asks.
 	started := func() *memory.Queue {
 		q := broker.Client()
 		if err := q.Start(t.Context()); err != nil {
@@ -735,9 +696,8 @@ func statelessOver(t *testing.T) (*Engine, func(estate.Served)) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// IN NORMAL MODE, as a node that boots outside a maintenance window is:
-	// [Engine.writers] hands out no writer on any node in another mode, so a
-	// node left at the zero mode would hand its seats no chat half at all.
+	// Normal mode: [Engine.writers] hands out no writer in any other mode,
+	// so the zero mode would give the seats no chat half.
 	return &Engine{router: router, mode: statelog.ModeNormal}, func(served estate.Served) {
 		data.set(served)
 		clock.Add(int64(time.Minute))
@@ -750,10 +710,8 @@ type oneDataNode struct{}
 func (oneDataNode) Holders() ([]string, error) { return []string{"data-1"}, nil }
 func (oneDataNode) Unanswered(string)          {}
 
-// noGitletNodes is the git placement of a fleet with no node with the gitlet role in
-// it: what a router built for a case that asks no repository's git reads is
-// handed, since a router requires one and an empty one is how a fleet says it
-// has none — its listing naming nobody, so nobody in it says anything either.
+// noGitletNodes is the git placement of a fleet with no gitlet node: a router
+// requires one, and an empty listing is how a fleet says it has none.
 type noGitletNodes struct{}
 
 func (noGitletNodes) Holders() ([]string, error)          { return nil, nil }

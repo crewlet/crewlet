@@ -9,18 +9,12 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// A GIT READ IS SERVED UNTIL ITS ANSWER IS DUE. The context a git read is
-// served under ends a reply's margin before its asker's deadline, its cause
-// gitlet.ErrAnswerDue, so the read answers while the asker still listens and
-// can tell that end (AnswerDue) from every other: a caller gone, or an
-// earlier deadline of the context's own, is no answer falling due, and a
-// context still live is none either. A zero deadline is no asker on a wire,
-// and cuts nothing.
-//
-// In a bubble, where a context's deadline ends it at that very instant and
-// the clock moves only while the case waits: the read's context is seen
-// ended at its cut — the asker's deadline less the margin, to the
-// nanosecond — however long the runner takes over what comes after.
+// A GIT READ IS SERVED UNTIL ITS ANSWER IS DUE. Its context ends a reply's
+// margin before the asker's deadline with cause gitlet.ErrAnswerDue, which
+// AnswerDue tells from every other end: a caller gone, an earlier deadline of
+// its own, or a live context is no answer falling due. A zero deadline cuts
+// nothing. In a bubble the context is seen ended at exactly the deadline less
+// the margin, to the nanosecond, however slow the runner.
 //
 // Mutation: cut at the deadline itself rather than a margin before it — red.
 func TestAReadIsServedUntilItsAnswerIsDue(t *testing.T) {

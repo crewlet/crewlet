@@ -82,20 +82,13 @@ func newJiraHookHost(t *testing.T) *jiraHookHost {
 	return h
 }
 
-// THE SETUP ROUTE'S recreate_webhooks REACHES THE JIRA PASS.
+// THE SETUP ROUTE'S recreate_webhooks REACHES THE JIRA PASS as
+// setup.PassInput.Recreate: a caller asking for a fresh secret (the old one
+// leaked) must not get a 200 that leaves the hook and its secret as they were.
 //
-// POST /setup/integrations/{kind}/provision hands its `recreate_webhooks` to
-// the pass as setup.PassInput.Recreate, and the GitHub, GitLab and Confluence
-// passes passed it on. The Jira pass built its options without it, so a
-// caller who asked Jira for a fresh secret — because the old one leaked, say
-// — was answered 200 by a pass that left the hook and its secret exactly as
-// they were, while the route's documentation said it re-registers with a
-// fresh one.
-//
-// Driven through Run, against an instance whose hook is already converged, so
-// that a pass which never hears the flag does nothing at all: one delete and
-// one create are what recreating is, and the secret the new hook is signed
-// with has to be a fresh one, recorded where the engine reads it.
+// Driven through Run against an already converged hook, so a pass that never
+// hears the flag writes nothing: recreating is one delete and one create,
+// signed with a fresh secret recorded where the engine reads it.
 func TestTheSetupRoutesRecreateReachesTheJiraPass(t *testing.T) {
 	t.Parallel()
 	const held = "the-secret-every-node-holds"

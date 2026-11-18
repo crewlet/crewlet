@@ -17,41 +17,24 @@ import (
 )
 
 // A person's notes to a run's turn, in the shapes the harnesses take them.
-//
-// The engine's run inbox (internal/engine, runsteer.go) decides which notes a
-// run's harness is served; what is here is only how each harness
-// is handed them — the shape of a Claude Code hook's answer and how much of it
-// the harness keeps in front of its model, and the id OpenCode admits a note under —
-// because those are facts about the harnesses, measured on them, and this package is
-// where every other such fact lives. And how a harness is set up to ask for them at
-// all: Claude Code's settings with the notes' hooks ([ClaudeCode.WriteConfig]),
-// OpenCode's plugin ([OpenCode.WriteConfig], opencode_steer.js), and the
-// standing instruction that tells a run's model what a note is
-// ([ClaudeCodeSteerInstruction], [OpenCodeSteerInstruction]).
+// Which notes a run is served is the engine's run inbox (internal/engine,
+// runsteer.go); here is only how each harness is handed them and set up to ask
+// ([ClaudeCode.WriteConfig], [OpenCode.WriteConfig], opencode_steer.js),
+// since those are measured facts about the harnesses.
 
-// The standing instruction a run whose harness takes a person's notes between its
-// steps is given, after its report instruction: what a note is, where it
-// appears, and what it is not — ONE PER HARNESS ([ClaudeCodeSteerInstruction],
-// [OpenCodeSteerInstruction]), because where a note appears is the harness's and
-// differs: Claude Code adds it as a hook's context of its own, OpenCode as a
-// message from the user.
+// The standing instruction about notes, given after the report instruction:
+// ONE PER HARNESS ([ClaudeCodeSteerInstruction], [OpenCodeSteerInstruction]),
+// since where a note appears differs (a hook's context; a user message).
 //
-// FACTUAL, NOT A COMMAND. It describes how a note arrives rather than ordering
-// the model to obey whatever arrives, because the vendor warns that a hook's
-// text phrased as an instruction can trip a model's own defences against text
-// that tries to steer it (Claude Code's hooks reference) — and because the
-// one thing a model needs told is how to tell a note from text that imitates
-// one: a note is what the harness adds, never what a tool produced.
+// FACTUAL, NOT A COMMAND: Claude Code's hooks reference warns that hook text
+// phrased as an instruction can trip a model's defences against steering, and
+// what the model needs is to tell a note from a tool's output imitating one.
 //
-// The heading it quotes is the one every note opens with
-// (internal/agent/prompts, SteerMessage), which this package cannot import —
-// the sandbox layer imports nothing of the agent layer — so a test holds the
-// two together.
+// The heading it quotes is internal/agent/prompts' SteerMessage, which the
+// sandbox layer cannot import, so a test holds the two together.
 const (
 	// noteHeadOpen and noteHeadClose are that heading either side of the
-	// note's sender: spelled once, for the instruction that quotes it and for
-	// a captured session's transcript, which tells a note from a brief by it
-	// ([notesIn]).
+	// sender, shared with [notesIn], which tells a note from a brief by it.
 	noteHeadOpen  = "## A note from "
 	noteHeadClose = ", sent while this turn was running"
 
@@ -65,23 +48,18 @@ const (
 		"where it and the task disagree, the note is the later word."
 )
 
-// claudeHookContext is what Claude Code puts before a hook's additional context
-// in what it sends its model, after the event's name: "PostToolBatch hook
-// additional context:" ([ClaudeCodeSteerInstruction]).
+// claudeHookContext follows the event's name in the heading Claude Code puts
+// before a hook's additional context ("PostToolBatch hook additional context:").
 const claudeHookContext = " hook additional context:"
 
 // ClaudeCodeSteerInstruction is the standing instruction about notes a Claude
-// Code run is given — see the harnesses' instructions above.
+// Code run is given.
 //
-// WHERE THE HARNESS PUTS THE NOTE DEPENDS ON THE MODEL. Measured on 2.1.310 with
-// this package's own settings file and hook answers: after a batch, a system
-// message after the batch's tool results on claude-opus-5-5 and
-// claude-sonnet-5, and on claude-sonnet-4-5 a system reminder appended to the
-// content of the batch's last tool result; at the finish, a system reminder in
-// a user message, on all three. Each opens with the event's name and
-// [claudeHookContext]. So the instruction names that heading as the note's
-// carrier and says it can sit at the end of a tool's result — and tells the
-// model apart from a note only what a tool itself produced.
+// WHERE THE NOTE LANDS DEPENDS ON THE MODEL (measured on 2.1.310): after a
+// batch, a system message on claude-opus-5-5 and claude-sonnet-5 but a system
+// reminder appended to the last tool result on claude-sonnet-4-5; at the
+// finish, a system reminder in a user message. Each opens with the event's name
+// and [claudeHookContext], so the instruction names that heading as the carrier.
 const ClaudeCodeSteerInstruction = steerInstructionHead +
 	"Claude Code adds it to the conversation as context of its own, between your " +
 	"steps: once the tool calls of a step have returned, headed \"" +
@@ -91,51 +69,39 @@ const ClaudeCodeSteerInstruction = steerInstructionHead +
 	steerInstructionTail
 
 // OpenCodeSteerInstruction is the standing instruction about notes an OpenCode
-// run is given: OpenCode hands its model a note the notes plugin admitted as a
-// message from the user, after the tool results of the step in flight or after
-// a step that called no tool (opencode_steer.js).
+// run is given; where a note lands is opencode_steer.js's.
 const OpenCodeSteerInstruction = steerInstructionHead +
 	"OpenCode adds it to the conversation between your steps, as a message from " +
 	"the user: after the tool results of a step, or after a step that called no " +
 	"tool. " + steerInstructionTail
 
-// ClaudeHookTimeout is how long Claude Code waits on one of the run's own hooks
-// before it gives up on the hook and goes on.
+// ClaudeHookTimeout is how long Claude Code waits on one of the run's hooks
+// before going on without it.
 //
-// TEN SECONDS, where the vendor's default is six hundred: the harness holds its next
-// model request until the hook answers, at every batch of tool calls the main
-// agent makes, so a bridge that stopped answering would hold the run for ten
-// minutes a step. A healthy engine answers in milliseconds, and the bridge
-// answers within half of this (internal/api/mcpbridge, its take budget), so a
-// note it served reaches the model before the harness gives up; one whose
-// answer comes too late is never read, its job's session showing no pair.
-// Measured on 2.1.310: the field is in seconds, and at it the harness cancels the
-// call and discards a late answer.
+// TEN SECONDS, not the vendor's 600: the harness holds its next model request
+// on the hook at every batch, so a stuck bridge would cost ten minutes a step.
+// The bridge answers within half of this (internal/api/mcpbridge, its take
+// budget), so a note it served arrives in time; one whose answer comes too
+// late is never read, its job's session showing no pair. The field is in
+// seconds, and past it the harness discards a late answer (measured on 2.1.310).
 const ClaudeHookTimeout = 10 * time.Second
 
-// The Claude Code hook events a run's notes are taken at: after a batch of the
-// main agent's tool calls has its results, and as the run is about to finish.
-// The only two where every call of a step has its answer, so a note never
-// sits between a call and its result.
+// The Claude Code hook events a run's notes are taken at: the only two where
+// every call of a step has its result, so a note never splits a call from it.
 const (
 	claudeEventToolBatch = "PostToolBatch"
 	claudeEventFinish    = "Stop"
 )
 
-// claudeNotesSettings is the settings file a Claude Code run wired to its
-// turn's notes is started with on a release that reads them (`--settings`,
-// [Paths.ClaudeNotesSettings], [claudeNotesGate]): the settings of a run that
-// starts a hook of the engine's ([claudeHooksOnSettings]), its hooks, and
-// nothing else.
+// claudeNotesSettings is the `--settings` file of a Claude Code run wired to
+// its turn's notes ([Paths.ClaudeNotesSettings], [claudeNotesGate]): the
+// [claudeHooksOnSettings] and the hooks, nothing else.
 //
-// NO FIELD NEWER THAN THE mcp_tool HOOK (2.1.118 onwards) — a 2.1.150 reads the
-// file whole, measured — because in print mode the harness ignores a settings file
-// that fails its validation WITHOUT A WORD, so a field a harness does not know yet
-// costs every hook in the file, and the retention beside them. Every run's
-// setting is far older (0.2.116 has it), and so is disableAllHooks (1.0.68).
-// What a later release added is what the harness READS of a hook's answer: a
-// Stop hook's additional context reaches the model from 2.1.163, and a run on
-// an older release is started without this file ([claudeNotesFloor]).
+// NO FIELD NEWER THAN THE mcp_tool HOOK (2.1.118): in print mode the harness
+// SILENTLY ignores a settings file that fails validation, so one unknown field
+// costs every hook and the retention beside them. A Stop hook's context reaches
+// the model only from 2.1.163, so an older release gets no file
+// ([claudeNotesFloor]).
 type claudeNotesSettings struct {
 	claudeHooksOnSettings
 
@@ -154,17 +120,12 @@ type claudeHookMatcher struct {
 
 // claudeHook is one hook: a call of a tool on one of the run's MCP servers.
 //
-// AN mcp_tool HOOK, rather than an http or a command one. The call rides the
-// run's existing connection to its tool bridge, under the token it already
-// holds, so there is no new credential, no URL to allow and no program to run
-// in the box; its input is two strings the harness fills in, where an http hook
-// would post every batch's tool calls and their results; and every way it can
-// fail is non-blocking, where a command hook that exits 2 — a shell's answer
-// to a syntax error — ends the run's loop.
-//
-// ITS INPUT IS THE HOOK'S OWN: the notes' hooks hand the bridge a
-// [claudeHookInput], the skill-load hook a [claudeSkillLoad] — each a set of
-// variables the harness fills in.
+// AN mcp_tool HOOK, not http or command: it rides the run's bridge connection
+// and token (no new credential, URL or program in the box), its input is two
+// strings rather than every batch's calls and results, and every failure is
+// non-blocking, where a command hook exiting 2 (a shell syntax error) ends the
+// loop. Input is a [claudeHookInput] or, for the skill-load hook, a
+// [claudeSkillLoad].
 type claudeHook struct {
 	Type    string `json:"type"`
 	Server  string `json:"server"`
@@ -173,18 +134,15 @@ type claudeHook struct {
 	Timeout int    `json:"timeout"`
 }
 
-// claudeHookInput is what the hook hands the tool: the event that fired it and
-// the agent whose loop it fired in, each a variable the harness fills in — the
-// agent id is empty on the main agent's own boundaries, which are the only ones
-// a note is taken at.
+// claudeHookInput is what the hook hands the tool, filled in by the harness.
+// Agent is empty on the main agent's boundaries, the only ones a note is taken at.
 type claudeHookInput struct {
 	Event string `json:"event"`
 	Agent string `json:"agent"`
 }
 
 // claudeSteerSettings is the settings of a run whose notes are reached through
-// w: those of a run that starts a hook of the engine's, and one hook at each
-// event, calling w's tool on w's server; with env as their `env` block
+// w: one hook at each event calling w's tool, with env as the `env` block
 // ([newClaudeSettings]).
 func claudeSteerSettings(w sandbox.SteerWiring, env map[string]string) claudeNotesSettings {
 	hook := []claudeHookMatcher{{Hooks: []claudeHook{{
@@ -201,20 +159,15 @@ func claudeSteerSettings(w sandbox.SteerWiring, env map[string]string) claudeNot
 // ClaudeContextBudget is how much one Claude Code hook answer carries, in
 // UTF-16 code units.
 //
-// 9,000: Claude Code moves a hook's additionalContext longer than 10,000
-// characters — its JavaScript length, which is UTF-16 code units — into a file
-// and shows the model a 2 KB preview it is never asked to read, so a note past
-// that would reach the model as a pointer to itself. The 1,000 below that are
-// margin for the separators and a harness that counts a little differently. One
-// note rendered whole is at most about 4,600 units (2,000 characters of note,
-// each at most two units, and its heading), so every answer carries at least
-// one, and the rest wait for the harness's next boundary.
+// 9,000: Claude Code moves additionalContext past 10,000 UTF-16 units into a
+// file the model only sees a 2 KB preview of; 1,000 is margin for separators
+// and counting differences. One rendered note is at most about 4,600 units
+// (2,000 characters of up to two units each, and its heading), so every
+// answer carries at least one.
 const ClaudeContextBudget = 9000
 
-// UTF16Len is s's length as Claude Code measures it — JavaScript's string
-// length, in UTF-16 code units: a character outside the Basic Multilingual
-// Plane, an emoji among them, is two. A byte that is not UTF-8 counts as one,
-// as the replacement character it decodes to.
+// UTF16Len is s's length as Claude Code (JavaScript) measures it, in UTF-16
+// code units. An invalid UTF-8 byte counts as one, as U+FFFD.
 func UTF16Len(s string) int {
 	n := 0
 	for len(s) > 0 {
@@ -233,8 +186,8 @@ func UTF16Len(s string) int {
 const claudeNoteSeparator = "\n\n"
 
 // ClaudeNotesThatFit is how many of messages, from the first, one hook answer
-// carries within [ClaudeContextBudget] once joined — never fewer than one where
-// there is any, since a note the budget could never carry would wait for ever.
+// carries within [ClaudeContextBudget] — at least one, or an oversized note
+// would wait for ever.
 func ClaudeNotesThatFit(messages []string) int {
 	total := 0
 	for i, msg := range messages {
@@ -250,15 +203,15 @@ func ClaudeNotesThatFit(messages []string) int {
 	return len(messages)
 }
 
-// HookNote is one note a hook answer hands the harness: the message the model reads,
-// and who sent it, which the harness's own transcript line names.
+// HookNote is one note a hook answer hands the harness; By is named in the
+// transcript line.
 type HookNote struct {
 	By      string
 	Message string
 }
 
-// claudeHookAnswer is the shape a Claude Code hook's answer takes: context for
-// the model, and a line for the run's transcript.
+// claudeHookAnswer is a Claude Code hook's answer: context for the model, and
+// a line for the run's transcript.
 type claudeHookAnswer struct {
 	HookSpecificOutput claudeHookOutput `json:"hookSpecificOutput"`
 	SystemMessage      string           `json:"systemMessage"`
@@ -269,18 +222,15 @@ type claudeHookOutput struct {
 	AdditionalContext string `json:"additionalContext"`
 }
 
-// ClaudeHookAnswer is the answer to a Claude Code hook at event that hands its
-// model notes: their messages as the hook's additional context, joined, and a
-// line naming who sent them for the run's transcript, ending in take's token
-// ([claudeTakeToken]), which the live line leaves out. Empty for no notes.
+// ClaudeHookAnswer is the answer to a Claude Code hook at event handing its
+// model notes: their messages joined as additional context, and a transcript
+// line naming the senders, ending in take's token ([claudeTakeToken]), which
+// the live line leaves out. Empty for no notes.
 //
-// NEVER A DECISION: the answer carries no `decision`, `continue` or `reason`,
-// so it can never stop the harness's loop or block a step — what it adds is context
-// the model reads (measured on 2.1.263 and 2.1.310: after a batch, after the
-// batch's tool results — a system message on some models, a system reminder at
-// the end of the last tool result on others, see [ClaudeCodeSteerInstruction];
-// at the run's finish, a continuation of its turn whose answer is the run's).
-// The transcript line reaches only the run's own stream, never a request.
+// NEVER A DECISION: no `decision`, `continue` or `reason`, so it can never stop
+// the loop or block a step; at the finish the model continues its turn, whose
+// answer is the run's (measured on 2.1.263 and 2.1.310). The transcript line
+// reaches only the run's stream, never a request.
 func ClaudeHookAnswer(event, take string, notes []HookNote) string {
 	if len(notes) == 0 {
 		return ""
@@ -308,8 +258,7 @@ func ClaudeHookAnswer(event, take string, notes []HookNote) string {
 	line += " " + claudeTakeToken(take)
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
-	// THE NOTE AS WRITTEN: a person's "<" or "&" reaches the model as itself,
-	// not as an escape the model has to undo.
+	// A person's "<" or "&" reaches the model as itself, not escaped.
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(claudeHookAnswer{
 		HookSpecificOutput: claudeHookOutput{HookEventName: event,
@@ -355,27 +304,22 @@ func withoutTakeToken(said string) string {
 }
 
 // OpenCodeInboxID is the id OpenCode admits a note under for a job: `msg_` and
-// the first 32 hex digits of a hash of the job and the note.
+// 32 hex digits of a hash of the job and the note.
 //
-// UNIQUE TO THE JOB AND THE NOTE, because OpenCode's message ids are unique
-// across the box's whole database, which a relaunch in the same box shares; and
-// STABLE, because OpenCode answers a second admission under an id it already
-// holds with the first one (measured), so a poller that admits a note again —
-// after a reload that polls from the start — admits it once.
+// UNIQUE TO BOTH, since message ids are unique across the box's database, which
+// a relaunch shares; STABLE, since OpenCode answers a repeat admission under a
+// held id with the first (measured), so a reloaded poller admits a note once.
 func OpenCodeInboxID(launch, noteID string) string {
 	sum := sha256.Sum256([]byte("crewlet.steer\x00" + launch + "\x00" + noteID))
 	return "msg_" + hex.EncodeToString(sum[:])[:32]
 }
 
-// openCodeSteerPlugin is the plugin an OpenCode run's server loads to admit the
-// run's notes into its session at its next step: opencode_steer.js, whose
-// header says how. Embedded rather than shipped beside the binary, so the
-// plugin a run is handed is the one this build's bridge answers.
+// openCodeSteerPlugin is the plugin that admits an OpenCode run's notes
+// (opencode_steer.js). Embedded, so it matches this build's bridge.
 //
 //go:embed opencode_steer.js
 var openCodeSteerPlugin []byte
 
-// openCodeSteerEntry is the plugin's file in its directory
-// ([Paths.OpenCodeSteerPlugin]): the `index` module OpenCode loads from a
-// configured plugin directory with no `server` module.
+// openCodeSteerEntry is the plugin's file ([Paths.OpenCodeSteerPlugin]): the
+// `index` module OpenCode loads from a plugin directory with no `server` one.
 const openCodeSteerEntry = "index.js"

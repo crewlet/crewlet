@@ -139,12 +139,10 @@ func codeWake(t *testing.T, item *types.WorkItem) *events.Event {
 	}, events.TraceContext{})
 }
 
-// A CODE WAKE NAMES ITS WORK ITEM (ADR-0097): a change implements the item its
-// owner named, its routing carries it, and every wake about the change names
-// it — so the turn a review request, a mention or a finding's answer starts is
-// charged to the item the change implements, at dispatch, under the trigger
-// rule, whatever backend the item is on. A change that names no item names
-// none, and its wake's turn is on nothing until a sole write says otherwise.
+// A CODE WAKE NAMES ITS WORK ITEM (ADR-0097): every wake about a change names
+// the item it implements, so the turn is charged to it at dispatch under the
+// trigger rule, whatever backend the item is on. A change naming no item gives
+// a turn on nothing until a sole write says otherwise.
 //
 // Mutation: leave gitlet.Prompt out of workItemNamers, or the work item out of
 // the wake's metadata, and the turn is on nothing.
@@ -284,9 +282,8 @@ func TestAnAskInheritsTheAskersItem(t *testing.T) {
 // A RESUMED TURN KEEPS THE ITEM IT PARKED WITH.
 //
 // The event that resumes a run — a box's completion, or a person's answer on
-// chat — names no item, so the row is the only place the item can come from.
-// Read off the event instead, the second half of a turn parked on its
-// executor would be charged to nothing.
+// chat — names no item, so the item comes off the row; read off the event,
+// the second half of a parked turn would be charged to nothing.
 func TestAResumedTurnKeepsTheItemItParkedWith(t *testing.T) {
 	t.Parallel()
 	e, p := starting(t, refusingModels(t))
@@ -331,10 +328,9 @@ func completing(t *testing.T, written []types.WorkItem, res turn.Result) (
 
 // A TURN WOKEN FOR NOTHING THAT WROTE ONE ITEM IS CHARGED TO IT, AT THE END.
 //
-// A founder's "tidy up ENG-7" in chat names no item, and the turn then edits
-// exactly one task: that is what the turn was on, and the completion — the
-// only frame where "exactly one" is a fact — says so, under the basis that
-// tells a reader it was inferred from what the turn did.
+// A founder's "tidy up ENG-7" in chat names no item, and the turn edits
+// exactly one task: the completion, the only frame where "exactly one" is a
+// fact, charges it under the basis that says it was inferred.
 func TestASoleWriteNamesTheItemAtCompletion(t *testing.T) {
 	t.Parallel()
 	summary, done := completing(t, []types.WorkItem{workletTask, workletTask}, turn.Result{})
@@ -386,9 +382,9 @@ func TestASuspensionSaysItIsNotAnEnd(t *testing.T) {
 // THE WRITES BEFORE A PARK COUNT AT THE END.
 //
 // The segment that finishes the turn judges "exactly one" over the whole turn,
-// so what the turn wrote before it detached rides the suspension and seeds the
-// resumed segment's set. Without it a turn that filed its task and then handed
-// the code to a box ended having "written nothing", and was charged to nothing.
+// so what it wrote before it detached rides the suspension and seeds the
+// resumed segment's set; otherwise a turn that filed its task and then handed
+// the code to a box would be charged to nothing.
 func TestTheWritesBeforeAParkCountAtTheEnd(t *testing.T) {
 	t.Parallel()
 	e, p := starting(t, refusingModels(t))
@@ -491,11 +487,10 @@ func TestTheLedgerFiguresBeforeAParkCountAtTheEnd(t *testing.T) {
 // A RESUMED TURN WHOSE PARK NOBODY MEASURED STATES NO TALLY, through the real
 // resume path.
 //
-// A build before the tally parked it, so its conversation carries no `so_far`
-// and what its first segment ran is unknown. Stated from this segment alone,
-// the tally would be read as the whole turn — short of the first segment's span
-// and reviews for good — so the end states none and the usage reader sums the
-// turn from its records, the first segment's included.
+// With no `so_far` on the parked conversation, a tally from this segment alone
+// would be read as the whole turn, short of the first segment's span and
+// reviews, so the end states none and the usage reader sums the turn from its
+// records.
 //
 // Mutation: state the tally on every end that is not a suspension, and this
 // goes red.
@@ -591,11 +586,9 @@ func TestAParkCarriesWhatTheTurnAskedAndSpent(t *testing.T) {
 	if want := asked.Label(); want == nil || !reflect.DeepEqual(state.AskProvenance, want) {
 		t.Errorf("the suspension parks the ask's label %+v, want %+v", state.AskProvenance, want)
 	}
-	// AND WHO SAID IT, each body under the label the turn read it with, for
-	// the segment that finishes the turn: its completed-turn event is the one
-	// the post-turn workers that wait for a settled turn read, and its
-	// refresh_memory calls read who asked off these. That segment re-reads no
-	// trigger.
+	// AND WHO SAID IT, each body under the label the turn read it with: the
+	// finishing segment re-reads no trigger, yet its completed-turn event feeds
+	// the post-turn workers and its refresh_memory calls read who asked.
 	if want := e.interactionsOf([]*events.Event{chatTrigger("D0ANA")}, "swe"); len(want) == 0 ||
 		!reflect.DeepEqual(state.Interactions, want) {
 		t.Errorf("the suspension parks the interactions %+v, want %+v", state.Interactions, want)
@@ -733,12 +726,11 @@ func TestTheTurnContextCarriesWhoWokeIt(t *testing.T) {
 // A SETTLED TURN'S COMPLETION CARRIES WHO SAID WHAT, though the segment that
 // settles it re-reads no trigger.
 //
-// Every agent seat's executor is a detached run, so every such turn parks at
-// its launch and is settled by the segment that collects the run — woken by the
-// run's completion, not by the person who asked. The post-turn workers that
-// wait for a settled turn read that segment's turn_completed, and the persist
-// decider attributes each fact it keeps to the interaction that stated it: a
-// settling event carrying none attributes nothing to anybody, on every turn.
+// Every executor turn parks at launch and is settled by the segment that
+// collects the run, woken by the run's completion rather than the person who
+// asked. The post-turn workers read that segment's turn_completed, and the
+// persist decider attributes each fact to the interaction that stated it: a
+// settling event carrying none attributes nothing to anybody.
 //
 // Mutation: park no interactions, and the settling event carries none.
 func TestASettledTurnCarriesTheInteractionsItParkedWith(t *testing.T) {
@@ -784,10 +776,9 @@ func TestASettledTurnCarriesTheInteractionsItParkedWith(t *testing.T) {
 
 // WHO ASKED REACHES THE TURN CONTEXT ON EVERY SEGMENT, which is what a
 // refresh_memory call tells the memory filter. A dispatch reads them off its
-// interactions; a resumed segment re-reads no trigger, so it reads them off
-// the interactions its turn parked with — without those, every resumed
-// segment told the filter nobody was asking, and a note about one person could
-// be applied to a turn somebody else started.
+// interactions; a resumed segment re-reads no trigger, so it reads the ones
+// its turn parked with — or a note about one person could be applied to a
+// turn somebody else started.
 func TestTheTurnContextCarriesWhoAskedOnEverySegment(t *testing.T) {
 	t.Parallel()
 	e, _ := starting(t, refusingModels(t))

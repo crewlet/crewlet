@@ -13,26 +13,18 @@ import (
 
 // Reading a container's view strip.
 //
-// # Why three views exist without anybody saving one
+// Every project and the workspace HAS its implicit views, none of them an
+// object: a container is never left without a way to look at it, a fresh
+// project needs no setup, and nothing guards deleting the last view.
 //
-// Every project and the workspace HAS a list, a board and a calendar, and none
-// of them is an object. Making all three implicit is what makes "required
-// views" moot: a container can never be left without a way to look at it, a
-// fresh project needs no setup gesture, and nothing has to guard against
-// somebody deleting the last view.
-//
-// # The order is the person's, and it is two orders
-//
-// Saved views carry a [Rank], which is the strip's own arrangement and is
-// shared. A person's PINS are theirs, and a pinned view comes first for THEM
-// and nobody else — which is why the viewer is a parameter of the read rather
-// than a property of the row.
+// Saved views carry a shared [Rank], the strip's own arrangement. A person's
+// PINS are theirs and come first for them alone, which is why the viewer is a
+// parameter of the read rather than a property of the row.
 
 // ViewRow is one entry in a container's strip.
 type ViewRow struct {
-	// ID is empty for an implicit view: it is not an object, so there is
-	// nothing to save, protect, rank or pin. A caller renders it from
-	// [ViewRow.Key] instead.
+	// ID is empty for an implicit view, which is not an object: nothing to
+	// save, protect, rank or pin. A caller renders it from [ViewRow.Key].
 	ID   string   `json:"id,omitempty"`
 	Key  string   `json:"key"`
 	Name string   `json:"name" untrusted:"name"`
@@ -40,8 +32,8 @@ type ViewRow struct {
 
 	Container Container `json:"container"`
 
-	// Builtin marks the implicit views, which cannot be edited or deleted
-	// and are the same on every node without anybody having written one.
+	// Builtin marks the implicit views: never edited or deleted, and the
+	// same on every node without anybody writing one.
 	Builtin bool `json:"builtin"`
 
 	// Owner empty is a SHARED view; a handle makes it personal. Protected
@@ -53,21 +45,19 @@ type ViewRow struct {
 	// it — the applier settles that in the same transaction as the write.
 	Default bool `json:"default,omitempty"`
 
-	// Pinned is THIS VIEWER's, never the row's: it comes from the person's
-	// own record, so the same view is pinned for one reader and not for
-	// another.
+	// Pinned is THIS VIEWER's, from their own person record, never the
+	// row's.
 	Pinned bool `json:"pinned,omitempty"`
 
 	Rank   Rank              `json:"rank,omitempty"`
 	Icon   string            `json:"icon,omitempty"`
 	Params map[string]string `json:"params,omitempty" untrusted:"name"`
 
-	// Count is how many tasks this view selects when it is RUN — the
-	// `total_hint` a `work_items{view, container}` read of it answers, with
-	// the viewer's own `me` — and it is carried only on a row PINNED for
-	// this viewer, and only when [ViewQuery.Counts] asked. Absent is "not
-	// counted", never zero: a pointer, because a pinned view that selects
-	// nothing is the one whose count most needs to be drawn.
+	// Count is how many tasks the view selects when RUN (the `total_hint`
+	// of a `work_items{view, container}` read with the viewer's `me`),
+	// carried only on a row pinned for this viewer when [ViewQuery.Counts]
+	// asked. A pointer: absent is "not counted", never zero, and a pinned
+	// view selecting nothing most needs its count drawn.
 	//
 	// CountCapped says the count stopped at [TotalHintCeiling], for
 	// [Answer.TotalCapped]'s reason.
@@ -75,10 +65,9 @@ type ViewRow struct {
 	CountCapped bool `json:"count_capped,omitempty"`
 
 	// CountRefused is WHY a pinned row asked for a count carries none: the
-	// view no longer compiles against this company — a custom field it
-	// filters on was archived, say. Named rather than left absent, because
-	// an absent count on a pinned row reads as "not asked", and the
-	// reader asked.
+	// view no longer compiles (a custom field it filters on was archived,
+	// say). Named, because an absent count on a pinned row reads as "not
+	// asked".
 	CountRefused string `json:"count_refused,omitempty"`
 }
 
@@ -86,47 +75,42 @@ type ViewRow struct {
 type ViewQuery struct {
 	Container Container
 
-	// Viewer is whose pins order the saved half, and whose personal views
-	// join it. Empty asks for the shared strip: no pins, and no personal
-	// views but the shared ones.
+	// Viewer is whose pins order the saved half and whose personal views
+	// join it. Empty asks for the shared strip: no pins, no personal views.
 	Viewer string
 
-	// Units resolves a UNIT container to its team's KEY, which is what a
-	// save stores ([CanonicalContainer]), so a strip asked for by the
-	// team's name or its key finds the same views — see [Units]. Nil
-	// matches the container as asked, which is the honest answer for a
-	// surface holding no chart.
+	// Units resolves a UNIT container to its team's KEY, what a save stores
+	// ([CanonicalContainer]), so the team's name or key finds the same
+	// views. Nil matches the container as asked, honest for a surface
+	// holding no chart.
 	//
-	// NOT SERIALISED: an interface a JSON encoder writes as `{}` and
-	// cannot decode back. A surface that sends this across a wire has the
-	// far side attach ITS OWN chart — see internal/estate.
+	// NOT SERIALISED: JSON writes an interface as `{}` and cannot decode
+	// it back; the far side of a wire attaches its own chart
+	// (internal/estate).
 	Units Units `json:"-"`
 
 	Level statelog.ReadLevel
 
-	// Session is the caller's own high-water mark, Floors the explicit
-	// floors it names, and MaxLag what a stale read says it will accept —
-	// the three the framework's own query takes, carried through unchanged
-	// so this read makes no freshness decision of its own.
+	// Session is the caller's high-water mark, Floors the floors it names,
+	// and MaxLag what a stale read accepts: the framework's own query
+	// inputs, passed through so this read makes no freshness decision.
 	Session statelog.Position
 	Floors  []statelog.Position
 	MaxLag  time.Duration
 
-	// MaxLagSeq is the same bound counted in RECORDS, which is what
-	// the broker actually answers — the duration above is derived
-	// from it through this node's own drain rate. Both may be set
-	// and the read refuses past whichever is reached first.
+	// MaxLagSeq is the same bound in RECORDS, what the broker answers;
+	// MaxLag derives from it through this node's drain rate. With both
+	// set the read refuses at whichever is reached first.
 	MaxLagSeq uint64
 
-	// Counts asks for [ViewRow.Count] on every row pinned for [Viewer] —
-	// what a sidebar draws beside a pin. It needs a named viewer, since
-	// only a viewer has pins, and it costs one capped count per pin: at
-	// most [MaxPinnedViews], which is the bound that makes it safe to ask
-	// on a poll.
+	// Counts asks for [ViewRow.Count] on every row pinned for [Viewer], for
+	// a sidebar. It needs a named viewer, since only a viewer has pins, and
+	// costs one capped count per pin: at most [MaxPinnedViews], the bound
+	// that makes it safe on a poll.
 	//
-	// Now and Zone are the instant and the company's clock a view's
-	// relative dates are cut on — the pair [ParseQuery] takes — so a
-	// pinned "due this week" counts the week the board it opens draws.
+	// Now and Zone are the instant and the company's clock relative dates
+	// are cut on ([ParseQuery]'s pair), so a pinned "due this week" counts
+	// the week its board draws.
 	Counts bool
 	Now    time.Time
 	Zone   *time.Location `json:"-"`
@@ -144,9 +128,8 @@ type ViewListing struct {
 	Incomplete     *Incomplete        `json:"incomplete,omitempty"`
 }
 
-// The implicit views' keys. STABLE STRINGS rather than positions, because a
-// caller stores which tab it was on and a positional key would move the
-// person's tab whenever the set changed.
+// The implicit views' keys: STABLE STRINGS, because a caller stores which tab
+// it was on and a positional key would move it whenever the set changed.
 const (
 	ViewKeyList     = "list"
 	ViewKeyBoard    = "board"
@@ -158,18 +141,17 @@ const (
 
 // Views answers one container's strip.
 //
-// ONE READ TRANSACTION for the saved rows and the viewer's pins — so the strip
-// describes one instant rather than two reads' worth of them.
+// ONE READ TRANSACTION for the saved rows and the viewer's pins, so the strip
+// describes one instant.
 func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
 	if q.Level == "" {
 		return ViewListing{}, fmt.Errorf("worklet: this view read names no " +
 			"level — a surface resolves an absent read_level to its own " +
 			"default before it reads")
 	}
-	// THE READ REFUSES THE SPELLINGS THE WRITE REFUSES. A strip asked for
-	// under a container the write could never have produced comes back
-	// empty, which reads exactly like a container nobody has saved a view
-	// in — so the mismatch is named here rather than rendered as nothing.
+	// THE READ REFUSES THE SPELLINGS THE WRITE REFUSES: a strip under a
+	// container no write could produce comes back empty, indistinguishable
+	// from one with no saved views, so the mismatch is named instead.
 	switch {
 	case !ValidContainerKind(q.Container.Kind):
 		return ViewListing{}, fmt.Errorf("worklet: %q is not a container a "+
@@ -218,11 +200,8 @@ func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
 		if err != nil {
 			return err
 		}
-		// THE IMPLICIT ONES FIRST, then what somebody saved. Built into
-		// its own slice rather than appended onto `implicit`: appending
-		// to one slice and storing the result in another writes through
-		// whatever spare capacity the first has, which is a bug the day
-		// somebody reads `implicit` after this line.
+		// THE IMPLICIT ONES FIRST, then the saved, in a fresh slice:
+		// appending onto `implicit` would write through its spare capacity.
 		if q.Counts {
 			if err = countPinned(ctx, tx, q, saved); err != nil {
 				return err
@@ -251,18 +230,16 @@ func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
 	return listing, nil
 }
 
-// stripScope is the closure of one strip read, and it is WIDER than the
-// container whenever the read looks past the container's own rows.
+// stripScope is the closure of one strip read, WIDER than the container
+// whenever the read looks past the container's own rows:
 //
-//   - A NAMED VIEWER adds the person family, because the viewer's pins are read
-//     from their person record inside this transaction. The closure was the
-//     container alone, so a node holding a deferred record on somebody's pins
-//     answered a strip ordered by the pins it had before, and called it
+//   - A NAMED VIEWER adds the person family: the pins are read from their
+//     person record in this transaction, and without it a node holding a
+//     deferred pins record would order the strip by stale pins and call it
 //     complete.
-//   - COUNTS widen it to the domain, because a pinned view's count is a task
-//     query whose own closure is not known until the view's row has been read
-//     inside the transaction this scope has to be declared before — and the
-//     domain is the one closure every such query is inside.
+//   - COUNTS widen it to the domain: a pinned view's count is a task query
+//     whose closure is unknown until the view's row is read, after this scope
+//     is declared, and the domain holds every such query.
 func stripScope(q ViewQuery) statelog.ScopeSet {
 	if q.Counts {
 		return statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised()
@@ -278,12 +255,9 @@ func stripScope(q ViewQuery) statelog.ScopeSet {
 // the strip's own transaction.
 //
 // THE COUNT IS THE VIEW'S OWN TOTAL: the rows `work_items` answers when the
-// view is run — its saved parameters, scoped to the container it was saved in,
-// with `me` resolved to the viewer, every task filtered on its own as every
-// surface that runs a view asks ([countView]) — counted by [countHint], the
-// statement that answers that read's `total_hint`. It is not a second
-// definition of what a view selects, and a sidebar number that disagreed with
-// the list it opens would be exactly that.
+// view is run ([countView]), counted by [countHint], the statement behind that
+// read's `total_hint`. A second definition of what a view selects would let a
+// sidebar number disagree with the list it opens.
 func countPinned(ctx context.Context, tx *sql.Tx,
 	q ViewQuery, rows []ViewRow) error {
 
@@ -310,19 +284,17 @@ var errUncountable = errors.New("this view cannot be counted")
 
 // countView counts one view, or says why it cannot be counted.
 //
-// A VIEW THAT NO LONGER COMPILES IS A REFUSAL ON ITS ROW, never a failed
-// strip: the strip is still true, and one stale view must not take a person's
-// every pin with it. A STORE that cannot be read is the read's failure, since
-// nothing else in the answer could be trusted either. The first is wrapped in
-// [errUncountable] and the second is not, which is the whole of how
-// [countPinned] tells them apart.
+// A VIEW THAT NO LONGER COMPILES is a refusal on its row, wrapped in
+// [errUncountable], never a failed strip: one stale view must not take every
+// pin with it. A STORE that cannot be read fails the read unwrapped, since
+// nothing else in the answer could be trusted either; [countPinned] tells the
+// two apart by that wrapping alone.
 func countView(ctx context.Context, tx *sql.Tx,
 	q ViewQuery, view ViewRow) (int, bool, error) {
 
-	// THE CONTAINER THE VIEW WAS SAVED IN, as the caller's key, which is
-	// how a board runs it: `work_items{view, container}`. A unit's or a
-	// person's strip has no container in the query grammar — its own saved
-	// filters are what narrow it — so those run as saved.
+	// THE CONTAINER THE VIEW WAS SAVED IN, as a board runs it:
+	// `work_items{view, container}`. A unit's or person's strip has no
+	// container in the query grammar, so those run as saved.
 	caller := map[string]any{}
 	switch view.Container.Kind {
 	case ContainerWorkspace:
@@ -341,15 +313,12 @@ func countView(ctx context.Context, tx *sql.Tx,
 		return 0, false, fmt.Errorf("%w: %w", errUncountable, err)
 	}
 	parsed.Units = q.Units
-	// FLAT, as every surface that RUNS a view runs it. The dashboard's
-	// shapes send `subtasks=separate` over whatever a view carries (none of
-	// them draws a tree) and `list_work_items` overrules to it for a model
-	// reading a list — so the grammar's default, a root predicate whose
-	// subtree rides along UNFILTERED, is an answer no reader of a pinned view
-	// is ever shown. Counted in it, "open work, org-wide" counted the done
-	// subtasks of every open epic: the sidebar said 39 beside a pin whose
-	// list said 36. OVERRULED rather than defaulted, as those two surfaces
-	// do, because a view saved with a tree mode is still run flat.
+	// FLAT, as every surface that RUNS a view runs it: the dashboard sends
+	// `subtasks=separate` and `list_work_items` overrules to it, so the
+	// grammar's default (a root predicate whose subtree rides along
+	// UNFILTERED) would count rows the pin's own list never shows.
+	// OVERRULED, not defaulted, because a view saved with a tree mode is
+	// still run flat.
 	parsed.Subtasks = SubtasksSeparate
 	fields, err := resolveFields(ctx, tx, parsed)
 	switch {
@@ -366,8 +335,7 @@ func countView(ctx context.Context, tx *sql.Tx,
 	}
 	set, err := compile(parsed, q.Now, fields)
 	if err != nil {
-		// COMPILING IS PURE — it reads nothing — so a failure here is
-		// about the view and never about the store.
+		// COMPILING IS PURE: a failure is the view's, never the store's.
 		return 0, false, fmt.Errorf("%w: %w", errUncountable, err)
 	}
 	return countHint(ctx, tx, set)
@@ -375,11 +343,9 @@ func countView(ctx context.Context, tx *sql.Tx,
 
 // viewScope is the read's closure: the container the strip belongs to.
 //
-// It is [containerScope]'s own rule and not a second copy of it, because a
-// read's closure and a write's scope are compared path against path: two
-// spellings of one container would make a deferred view record invisible to
-// the read that wants it, and such a read reports itself complete while
-// missing the write.
+// It is [containerScope]'s own rule, not a copy: a read's closure and a write's
+// scope are compared path against path, and a second spelling would hide a
+// deferred view record from a read that then reports itself complete.
 func viewScope(container Container) statelog.ScopeSet {
 	return statelog.ScopeSet{Paths: []string{
 		ScopeTerm{Kind: TermContainer, ID: containerScope(container)}.Path(),
@@ -392,33 +358,24 @@ func implicitViews(container Container) []ViewRow {
 		{Key: ViewKeyList, Name: "List", Type: ViewList, Container: container, Builtin: true},
 		{Key: ViewKeyBoard, Name: "Board", Type: ViewBoard, Container: container, Builtin: true},
 		{Key: ViewKeyCalendar, Name: "Calendar", Type: ViewCalendar, Container: container, Builtin: true},
-		// THE TIMELINE SORTS BY START, which is the arrangement its axis
-		// already has: a bar chart down a date axis whose rows arrive in
-		// rank order draws a staircase nobody can read, and re-sorting in
-		// the client would make the ORDER of a page depend on which rows
-		// the page happened to contain.
+		// THE TIMELINE SORTS BY START, its axis's own arrangement: rows in
+		// rank order draw an unreadable staircase, and a client re-sort
+		// would make a page's ORDER depend on which rows it held.
 		{Key: ViewKeyTimeline, Name: "Timeline", Type: ViewTimeline,
 			Container: container, Builtin: true,
 			Params: map[string]string{"sort": "start"}},
 		{Key: ViewKeyTable, Name: "Table", Type: ViewTable, Container: container, Builtin: true},
-		// THE TRASH IS A QUERY, NOT A RENDERING, which is why it is a
-		// builtin VIEW of the table shape rather than a sixth [ViewType]:
-		// what makes it the trash is `removed=true`, and a renderer keyed
-		// on the TYPE would then have a shape whose meaning depended on a
+		// THE TRASH IS A QUERY, NOT A RENDERING: a builtin table VIEW, not
+		// a sixth [ViewType], since `removed=true` makes it the trash and a
+		// type-keyed renderer would hold a shape whose meaning needs a
 		// parameter it could be saved without. Any view carrying that
-		// parameter is a trash listing and a client may treat it as one.
+		// parameter is a trash listing.
 		//
-		// `show_closed` travels with it because a removed task is very
-		// often a finished one, and the group predicate is ANDed
-		// unconditionally otherwise (see [Query.ShowClosed]): without it
-		// the one tab whose whole job is "what did my assistant delete"
-		// hides every deletion of anything already done.
-		//
-		// NO `sort`, deliberately, unlike the timeline: [sortTerms]
-		// already orders a removed listing by `removed_at DESC`, which is
-		// the one order this tab wants and the order its indexes hold.
-		// Naming it here would be a second copy of that decision, and the
-		// two would drift.
+		// `show_closed`, because a removed task is often a finished one and
+		// the group predicate is otherwise ANDed ([Query.ShowClosed]),
+		// hiding every deletion of done work. NO `sort`: [sortTerms]
+		// already orders a removed listing by `removed_at DESC`, and naming
+		// it here would be a second copy to drift.
 		{Key: ViewKeyTrash, Name: "Trash", Type: ViewTable,
 			Container: container, Builtin: true,
 			Params: map[string]string{"removed": "true", "show_closed": "true"}},
@@ -426,31 +383,27 @@ func implicitViews(container Container) []ViewRow {
 	return rows
 }
 
-// savedViews reads the container's own views, ordered pinned-for-this-viewer
-// first and then by rank.
+// savedViews reads the container's own views, pinned-for-this-viewer first,
+// then by rank.
 //
-// A PERSONAL VIEW IS PRIVATE TO ITS OWNER, which is enforced HERE rather than
-// by a scheme: a row whose owner is set and is not the viewer is not in the
-// answer at all. Filtering in SQL rather than after the fact is what stops a
-// personal view riding a page boundary into somebody else's strip.
-//
-// AND A DELETED VIEW IS IN NOBODY'S STRIP: its row stays only to guard its
+// A PERSONAL VIEW IS PRIVATE TO ITS OWNER, enforced HERE: filtered in SQL
+// rather than after the fact, so it cannot ride a page boundary into somebody
+// else's strip. A DELETED VIEW is in nobody's strip; its row only guards its
 // version ([Writer.DeleteView]).
 func savedViews(ctx context.Context, tx *sql.Tx, container Container,
 	units Units, viewer string, pinned map[string]bool) ([]ViewRow, error) {
 
-	// A UNIT CONTAINER IS READ UNDER ITS TEAM'S KEY, which is what a save
-	// stores ([CanonicalContainer]) — so a strip asked for by the team's
-	// name finds the views saved under its id.
+	// A UNIT CONTAINER IS READ UNDER ITS TEAM'S KEY, what a save stores
+	// ([CanonicalContainer]), so the team's name finds views saved under it.
 	ids := []string{container.ID}
 	if container.Kind == ContainerUnit {
 		if keys := unitKeys(units, ids); len(keys) > 0 {
 			ids = keys
 		}
 	}
-	// THE SHARED HALF IS `owner = ''`, and it is all an anonymous strip
-	// gets. The personal half is the viewer's own name — the one a person
-	// saves under, since bound to a seat they write AS it (iam.ActorFor).
+	// THE SHARED HALF IS `owner = ''`, all an anonymous strip gets. The
+	// personal half is the viewer's own name, the one they save under: a
+	// person bound to a seat writes AS it (iam.ActorFor).
 	own := ""
 	args := []any{container.Kind}
 	args = append(args, anyOf(ids)...)
@@ -500,10 +453,9 @@ func savedViews(ctx context.Context, tx *sql.Tx, container Container,
 		return nil, fmt.Errorf("worklet: read %s %s's views: %w",
 			container.Kind, container.ID, err)
 	}
-	// TWO ORDERS, CONCATENATED rather than sorted together: within each
-	// half the rank is the arrangement somebody made, and a single sort
-	// over a pinned flag would silently re-rank the shared strip for one
-	// reader.
+	// TWO ORDERS CONCATENATED, not sorted together: within each half the
+	// rank is somebody's arrangement, and one sort over a pinned flag would
+	// re-rank the shared strip for one reader.
 	return append(first, shared...), nil
 }
 

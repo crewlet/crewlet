@@ -6,44 +6,32 @@ import (
 	"net/http"
 )
 
-// Why is why an executor was not launched, or a box could not be reached: the
-// one fact a caller decides what to say from, classed by WHAT WOULD CLEAR IT
-// rather than by which backend failed.
+// Why is why an executor was not launched, or a box could not be reached,
+// classed by WHAT WOULD CLEAR IT rather than by which backend failed.
 //
-// # Why a class and not the error's text
+// Not the error's text, which is the operator's (an E2B body, a runtime's
+// stderr, a store's transport error) and never says whether a wait clears it.
+// Each backend knows what its failure means where it fails, so it MARKS the
+// failure ([Because]) and whatever tells it to a model or a person reads the
+// mark ([WhyOf]).
 //
-// The error is whatever the chain says — an E2B status and its body, a
-// container runtime's stderr, a coordination store's transport error naming a
-// host — written for whoever runs the node, and nothing in it says whether a
-// wait clears it: a reader guessing that from the words is wrong for every
-// configuration a person has to change. Each backend knows what its failure
-// means at the point it fails (a status, a refused image, a setup command that
-// exited non-zero), and nothing above it does without reading words, so each
-// one MARKS its failure with a Why here and whatever tells the failure, to a
-// model or a person, reads the mark ([WhyOf]). The error itself stays the
-// operator's.
-//
-// AN UNMARKED FAILURE IS NOT GUESSED AT. A launch that failed for a reason no
-// backend classed is the caller's to word as what it is — a condition of the
-// node (a coordination store that did not answer, a context that ran out),
-// or a fault of the node — never filed under the nearest Why.
+// AN UNMARKED FAILURE IS NOT GUESSED AT: the caller words it as what it is (a
+// node condition such as a store that did not answer or a context that ran
+// out, or a node fault), never under the nearest Why.
 type Why string
 
 const (
 	// WhyConfiguration is a run the deployment's configuration cannot
-	// start, which no wait changes and a person does: a node with no
-	// sandbox runtime for the company or no tool bridge its box can dial,
-	// a cell no backend serves, an executor chain with no member a box
-	// can run, a sign-in that cannot follow the run to its cell, a setup
-	// step that exits non-zero with any status but 75
-	// ([WhySetupUnavailable]), a create the provider refuses as malformed
-	// or a template it does not have, a provider domain that does not
-	// resolve or whose certificate does not match it, a container image
-	// the runtime will not start (a pull that failed on a network
-	// blip among them, which only the runtime's own words tell apart), a
-	// mount it cannot share or the box may not write, a probe of the box the
-	// runtime refused to run, or a box that cannot run its shell, or find or
-	// head to list a build.
+	// start, which no wait changes and a person does: no sandbox runtime or
+	// dialable tool bridge, a cell no backend serves, a chain with no member
+	// a box can run, a sign-in that cannot follow the run to its cell, a
+	// setup step exiting non-zero but not 75 ([WhySetupUnavailable]), a
+	// create refused as malformed or for a missing template, a provider
+	// domain that does not resolve or whose certificate does not match, an
+	// image the runtime will not start (a pull failed on a network blip too,
+	// told apart only by the runtime's words), a mount it cannot share or
+	// the box may not write, a probe the runtime refused, or a box that
+	// cannot run its shell, or find or head to list a build.
 	WhyConfiguration Why = "configuration"
 
 	// WhySetupUnavailable is a setup step a command of which exited 75
@@ -113,9 +101,8 @@ type classed interface {
 
 // Because marks err as failing for why. Nil stays nil.
 //
-// A WRAPPER, so the mark costs err nothing: [WhyOf] reads the mark, its text
-// is err's own, and errors.Is and errors.As still reach every sentinel and
-// type err carries, so a caller that checks for one goes on finding it.
+// A WRAPPER, so the mark costs err nothing: its text is err's own, and
+// errors.Is and errors.As still reach every sentinel and type err carries.
 func Because(why Why, err error) error {
 	if err == nil {
 		return nil
@@ -124,14 +111,11 @@ func Because(why Why, err error) error {
 }
 
 // unanswered marks err, a request a provider or a box didn't answer, as
-// [WhyProviderUnavailable], unless the CALLER CANCELLED it.
-//
-// A CANCELLATION IS THE CALLER'S OWN ACT, never the provider failing: a drain,
-// a lease lost or a turn stopped cancels the request, and marked, a reader that
-// can't see the context (runner.ErrorKind, a tool's sentence) told it as the
-// provider not answering and sent an operator to it. A request whose own bound
-// ended it (an idle watchdog cancelling the exchange it guards, a deadline the
-// caller set) is still marked: the provider didn't answer in it.
+// [WhyProviderUnavailable], unless the CALLER CANCELLED it: a drain, a lost
+// lease or a stopped turn is the caller's own act, and marked, a reader that
+// can't see the context (runner.ErrorKind, a tool's sentence) would send an
+// operator to the provider. A request its own bound ended (an idle watchdog, a
+// caller's deadline) is still marked: the provider didn't answer in it.
 func unanswered(ctx context.Context, err error) error {
 	if cancelledBy(ctx) {
 		return err
@@ -159,10 +143,9 @@ func (e *becauseError) why() (Why, bool) { return e.class, true }
 // false for an error nothing classed.
 //
 // A BOX THAT IS GONE OR PAUSED IS NEVER CLASSED HERE: each is its own
-// sentinel ([ErrBoxGone], [ErrBoxPaused]) with its own answer — a gone box is
-// settled at once, a paused one read later — and [boxGone] wraps the E2B 404
-// that found it, which read as a status would be a template the provider does
-// not have.
+// sentinel ([ErrBoxGone], [ErrBoxPaused]) with its own answer (a gone box is
+// settled at once, a paused one read later), and the E2B 404 [boxGone] wraps
+// would otherwise read as a template the provider does not have.
 func WhyOf(err error) (Why, bool) {
 	if err == nil || errors.Is(err, ErrBoxGone) || errors.Is(err, ErrBoxPaused) {
 		return "", false
@@ -206,11 +189,10 @@ func whyIn(err error) (Why, bool) {
 // request can succeed: its credentials refused, its account unpaid or at a
 // limit, its side failing — or nothing this can class, which is false.
 //
-// SHARED by the control plane ([E2BError]) and a box's own agent (envd), which
-// answer the same statuses for the same reasons — except a 401 or 403 from a
-// box's agent, which refuses the box's own access token the engine was handed
-// at its create rather than the company's key, and is no person's to fix:
-// refusedIsKey says which plane answered.
+// SHARED by the control plane ([E2BError]) and a box's own agent (envd), except
+// a 401 or 403 from envd: it refuses the box's access token the engine was
+// handed at create, not the company's key, so no person fixes it. refusedIsKey
+// says which plane answered.
 func statusWhy(status int, refusedIsKey bool) (Why, bool) {
 	switch {
 	case status == http.StatusUnauthorized, status == http.StatusForbidden:

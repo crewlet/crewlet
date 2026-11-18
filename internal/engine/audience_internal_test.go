@@ -108,7 +108,7 @@ func TestAQuestionIsPutToTheSeatsItsLabelNames(t *testing.T) {
 	}
 }
 
-// A RUN OF A SEAT THE CHART NO LONGER HAS is put to nobody, as a fallback —
+// A RUN OF A SEAT THE CHART NO LONGER HAS is put to nobody, as a fallback,
 // never to a guess.
 func TestAQuestionFromASeatTheChartLostIsPutToNobody(t *testing.T) {
 	t.Parallel()
@@ -120,10 +120,8 @@ func TestAQuestionFromASeatTheChartLostIsPutToNobody(t *testing.T) {
 }
 
 // THE HARNESS IS TOLD HOW TO ASK, WITH NAMES THE PARK RESOLVES, AND TO
-// GIVE ITS OPTIONS AS OPTIONS. The roster and the manager it is given are
-// handles, so a `to` copied from either resolves exactly rather than falling
-// back; and a run told only to ask wrote its choices into the question as
-// prose, which a person could not answer with a press.
+// GIVE ITS OPTIONS AS OPTIONS: the roster and manager are handles, so a `to`
+// copied from either resolves exactly, and options are answered with a press.
 func TestTheAskBriefNamesWhomTheParkCanResolve(t *testing.T) {
 	t.Parallel()
 	o := audienceChart(t)
@@ -137,9 +135,8 @@ func TestTheAskBriefNamesWhomTheParkCanResolve(t *testing.T) {
 			t.Errorf("the brief does not tell the harness to fill %s:\n%s", field, brief)
 		}
 	}
-	// AND THE WAY THAT DOES NOT WAIT: a question the run can go on without
-	// is asked with the seat's own tools and answered in its next turn, so a
-	// run told only of the park parks, holding its box, on every question.
+	// AND THE WAY THAT DOES NOT WAIT, without which a run parks, holding its
+	// box, on every question.
 	if !strings.Contains(brief, "`"+builtin.CommentOnWorkTool+"` with `ask`") ||
 		!strings.Contains(brief, runner.SubmitWorkTool) {
 		t.Fatalf("the brief does not tell the harness to ask with its tools and "+
@@ -209,8 +206,7 @@ func TestALaunchedRunRecordsWhoWokeItsTurn(t *testing.T) {
 }
 
 // THE REQUESTER IS KEPT BY ITS SEAT'S HANDLE, and a sender the org does not
-// hold is nobody: a seat the company does not have is nobody to put a question
-// to, and the run's "requester" then resolves to nobody rather than to a name.
+// hold is nobody, so the run's "requester" resolves to nobody, not a name.
 func TestTheRequesterIsKeptByItsSeatsHandle(t *testing.T) {
 	t.Parallel()
 	o := audienceChart(t)

@@ -22,11 +22,10 @@ import (
 // A share names a seat (a person or an agent), a unit (everybody in it and
 // below it, live) or the whole company, and grants one role up to editor: an
 // artifact's owner changes only by a person's transfer. A share never grants
-// above the sharer's own role. And an agent never widens a share to the whole
+// above the sharer's own role. An agent never widens a share to the whole
 // company (D10): a model persuaded by a comment or a row would otherwise
-// broadcast a page to every colleague, so an agent shares with seats and units
-// and a person widens to the company. The tool refuses it before anything is
-// written, and the domain's writer refuses it again whatever surface asks.
+// broadcast a page to every colleague, so only a person does. The tool
+// refuses it before anything is written, and the domain's writer again.
 
 // ---- share_artifact ----------------------------------------------------- //
 
@@ -330,9 +329,8 @@ func (t *uploadArtifactAsset) CallForTurn(ctx context.Context, turn *turnctx.Tur
 	if refusal := files.parseSpec(ctx, name, spec); refusal != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		return *refusal, nil
 	}
-	// AN ASSET IS ALWAYS AN UPLOAD of its own, never carried and never
-	// inline in a record, so inline bytes are streamed through the same
-	// reservation as a box's.
+	// AN ASSET IS ALWAYS ITS OWN UPLOAD, never inline in a record, so
+	// inline bytes stream through the same reservation as a box's.
 	files.files[0] = files.streamedInline(files.files[0])
 	call := t.deps.call(c, dec.Standing.Role, dec.Elevated)
 	upload, _, refusal := files.stage(ctx, call, h.ID, true)

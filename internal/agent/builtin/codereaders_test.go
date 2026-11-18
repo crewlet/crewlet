@@ -27,8 +27,8 @@ type readersAsk struct {
 	pageBytes int
 }
 
-// readersFake is the usage domain's readers of a repository as the readers
-// tool asks them: one scripted page, every ask recorded.
+// readersFake is the usage domain's repository readers: one scripted page,
+// every ask recorded.
 type readersFake struct {
 	mu     sync.Mutex
 	page   estate.RepoReadersAnswer
@@ -62,8 +62,8 @@ func asAdmin() context.Context {
 }
 
 // readersCatalogue is the operator catalogue over host and readers, the
-// company's clock Santiago's at noon of 2026-09-23 — the code reads wired as
-// every surface wires them ([codeDeps]), so the catalogue serves them too.
+// company's clock Santiago's at noon of 2026-09-23, the code reads wired as
+// every surface wires them ([codeDeps]) so the catalogue serves them too.
 func readersCatalogue(host builtin.CodeReader, readers builtin.RepoReaders) map[string]tools.Callable {
 	var wired builtin.CodeDeps
 	if host != nil {
@@ -97,11 +97,10 @@ func readersCatalogueOver(wired builtin.CodeDeps, readers builtin.RepoReaders) m
 }
 
 // WHO READ A REPOSITORY IS A PERSON'S QUESTION, AND AN ADMIN'S: the operator
-// catalogue serves code_repo_readers beside the code reads and on their terms
-// — not without them, nor without the usage domain's readers, nor over
-// Gitlet wired without the requester ceiling's halves, which serves no code read
-// — no seat's registry ever holds it, and a person who is not an admin is
-// refused it at the gate with nothing read.
+// catalogue serves code_repo_readers only beside the code reads and the usage
+// domain's readers (not over Gitlet lacking a requester ceiling half, which
+// serves no code read), no seat's registry holds it, and a non-admin is refused
+// at the gate with nothing read.
 //
 // Mutations: add code_repo_readers to CodeTools, and a seat's registry holds
 // it; offer it over Gitlet alone, and a catalogue serving no code read
@@ -162,13 +161,12 @@ func TestTheReadersToolIsAnAdminsAlone(t *testing.T) {
 }
 
 // THE READERS TOOL ANSWERS WHO READ A UNIT REPOSITORY: the repository is read by
-// name at the seat's level as the caller, and its readers are asked over the
-// range — the thirty company days ending today on the company's clock when the
-// call names none — a page at the tool's own bound, from the cursor the call
-// hands back; the answer is the domain's page whole, the readers the first page
-// left out included. A company repository's readers are not recorded, and its
-// answer says so without asking; a range or a cursor the read cannot take is
-// refused by name before anything is read.
+// name at the seat's level as the caller, and its readers asked over the
+// range (by default the thirty days ending today on the company's clock), a
+// page at the tool's bound from the call's cursor; the answer is the domain's
+// page whole, elided count included. A company repository's readers are not
+// recorded, and its answer says so without asking; a bad range or cursor is
+// refused before anything is read.
 func TestTheReadersToolAnswersWhoReadAUnitRepository(t *testing.T) {
 	t.Parallel()
 	host := newGitletHost()
@@ -176,8 +174,8 @@ func TestTheReadersToolAnswersWhoReadAUnitRepository(t *testing.T) {
 	elided := int64(3)
 	last := usage.RepoReader{PrincipalKind: "operator", Principal: "pat:jane-laptop", Seat: "founder", Via: "git",
 		Reads: 2, Bytes: 1 << 20}
-	// THE CURSOR A PAGE ISSUES, which is what a caller hands back: one no
-	// page issued is refused before the readers are asked (below).
+	// A caller hands back the cursor a page issued; one no page issued is
+	// refused before the readers are asked (below).
 	next := last.Group().Cursor()
 	readers := &readersFake{page: estate.RepoReadersAnswer{
 		Readers: []usage.RepoReader{
@@ -229,8 +227,7 @@ func TestTheReadersToolAnswersWhoReadAUnitRepository(t *testing.T) {
 	} {
 		before := len(readers.asks())
 		got, err := tool.Call(asAdmin(), args)
-		// IN THE CALLER'S WORDS: the domain's sentence past its sentinel,
-		// never a Go package's name for the class.
+		// The domain's sentence past its sentinel, never a Go package's name.
 		if err != nil || !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid ||
 			strings.Contains(got.Output, "usage:") {
 			t.Errorf("%s was answered %v %+v, want an invalid refusal in the caller's words", name, err, got)

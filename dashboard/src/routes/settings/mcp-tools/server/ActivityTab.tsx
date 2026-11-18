@@ -13,6 +13,7 @@ import {
   Tag,
   Text,
   type DataGridColumn,
+  TableEntityCell,
 } from "@crewlethq/ui";
 import type { McpApproval, McpCallRow, McpMemberToolUsage } from "~/contract/mcp.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -21,6 +22,7 @@ import type { ServerDetail } from "../api.ts";
 import type { McpData } from "../data.ts";
 import { approvalWords, OUTCOME } from "../words.ts";
 import { ToolName } from "./ToolsTab.tsx";
+import { plainSeat } from "~/app/frame/cells.tsx";
 
 export function ActivityTab({ detail, data }: { detail: ServerDetail; data: McpData }) {
   const usage = detail.usage;
@@ -71,11 +73,7 @@ export function ActivityTab({ detail, data }: { detail: ServerDetail; data: McpD
     {
       key: "seat",
       header: "Agent",
-      cell: (c) => (
-        <Text as="span" variant="inherit" truncate>
-          {data.seatName(c.seat)}
-        </Text>
-      ),
+      cell: (c) => <TableEntityCell {...plainSeat(data.seat(c.seat))} />,
     },
     { key: "tool", header: "Tool", floor: "16rem", cell: (c) => <ToolName name={c.tool} /> },
     {
@@ -118,11 +116,7 @@ export function ActivityTab({ detail, data }: { detail: ServerDetail; data: McpD
     {
       key: "seat",
       header: "Agent",
-      cell: (a) => (
-        <Text as="span" variant="inherit" truncate>
-          {data.seatName(a.seat)}
-        </Text>
-      ),
+      cell: (a) => <TableEntityCell {...plainSeat(data.seat(a.seat))} />,
     },
     { key: "tool", header: "Tool", floor: "16rem", cell: (a) => <ToolName name={a.tool} /> },
     {

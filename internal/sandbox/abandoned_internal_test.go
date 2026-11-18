@@ -6,14 +6,11 @@ import (
 )
 
 // A LONG RUN'S LOG KEEPS A CALL NOBODY WAITED FOR AS IT KEEPS A LATE ONE, AND
-// COUNTS ONE IT DROPS. Past [MaxBridgeCalls] the log drops from its middle, and
-// a call it drops keeps nothing but its identity — so not the mark that says
-// its harness had stopped waiting for it ([BridgeCall.Abandoned]), which no
-// save point holds, while a save point past its number would hold the call
-// dropped. So the middle gives such a call up only once no ordinary call is
-// left there, as it gives up a late one, and counts each it does give up
-// ([BridgeLog.LateElided]), which every continuation of the round is told past
-// whatever its save point.
+// COUNTS ONE IT DROPS. A call dropped from the middle (past [MaxBridgeCalls])
+// keeps only its identity, losing [BridgeCall.Abandoned], which no save point
+// holds. So the middle gives such a call up only once no ordinary call is left
+// there, and counts each it does ([BridgeLog.LateElided]), which every
+// continuation of the round is told whatever its save point.
 //
 // Mutation: read a call nobody waited for as an ordinary one where the middle
 // drops, and it is the first dropped and is not counted.

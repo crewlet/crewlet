@@ -11,15 +11,10 @@ import (
 // -- Onboarding ----------------------------------------------------------
 
 // The one-time pass points at the team's knowledge-base tools by capability,
-// not by product and not by tool name: on Doclet they are
-// first-party tools to activate, on Confluence an MCP server's, and the same
-// header has to read correctly on either. It once said they were always MCP
-// tools, which on the default backend sent every seat to list a server for a
-// tool it could have activated by name.
-//
-// AND IT DOES NOT SAY HOW THE PASS ENDS: the hint's last step names
-// `mark_onboarded`, and that tool's description says it ends the pass. Both
-// used to say so here too.
+// not by product or tool name: on Doclet they are first-party tools to
+// activate, on Confluence an MCP server's, and the header must read right on
+// either. Nor does it say how the pass ends: the hint and `mark_onboarded`'s
+// description already do.
 func TestOnboardingHeaderIsBackendNeutral(t *testing.T) {
 	t.Parallel()
 	contains(t, OnboardingHeader,
@@ -57,10 +52,9 @@ func TestSubagentPromptAppendsTheMandatedPreamble(t *testing.T) {
 	order(t, p, parent, SubagentPreamble)
 }
 
-// The two prohibitions are structural: a worker that could delegate has no
-// depth bound, and one that could contact colleagues would put a short-lived
-// worker's half-formed conclusions on a teammate's desk under the parent's
-// name.
+// The two prohibitions are structural: a delegating worker has no depth bound,
+// and one contacting colleagues puts half-formed conclusions on a teammate's
+// desk under the parent's name.
 func TestSubagentPreambleStatesTheInvariants(t *testing.T) {
 	t.Parallel()
 	contains(t, SubagentPreamble,
@@ -68,10 +62,8 @@ func TestSubagentPreambleStatesTheInvariants(t *testing.T) {
 		"Do not contact colleagues")
 }
 
-// A WORKER IS TOLD HOW TO DISCOVER ONLY BESIDE SOMETHING TO DISCOVER. A worker
-// with no discovery tools, or with nothing left to reach, told to call
-// activate_tool is told to call a tool that can only refuse it — and the
-// preamble used to say so to every worker, frozen ones included.
+// A WORKER IS TOLD HOW TO DISCOVER ONLY BESIDE SOMETHING TO DISCOVER: with
+// nothing to reach, activate_tool can only refuse it.
 func TestAWorkerIsToldToDiscoverOnlyWhenItCan(t *testing.T) {
 	t.Parallel()
 	with := BuildSubagent(engineer(), SubagentInput{
@@ -85,11 +77,9 @@ func TestAWorkerIsToldToDiscoverOnlyWhenItCan(t *testing.T) {
 	contains(t, without, SubagentPreamble)
 }
 
-// HOW A WORKER ENDS depends on whether it HAS a submission tool, and the two
-// rules must not be interchangeable: telling a worker to call submit_result
-// when its name collided with a granted tool costs it a round to discover
-// that, and telling one that has the tool to answer in prose loses the
-// structured answer the parent asked for.
+// HOW A WORKER ENDS depends on whether it HAS a submission tool: told to call
+// a submit_result it lacks costs it a round, and told to answer in prose when
+// it has one loses the parent's structured answer.
 func TestAWorkerIsToldHowToEndTheWayItActuallyCan(t *testing.T) {
 	t.Parallel()
 	withTool := BuildSubagent(engineer(), SubagentInput{
@@ -128,8 +118,7 @@ func TestSubagentPromptOrdersParentThenSkillsThenDiscoverableThenPreamble(t *tes
 
 // -- Phase user message --------------------------------------------------
 
-// The common single-pass turn keeps its exact pre-ledger shape, so nothing
-// shifts for the turns that never self_iterate — which is most of them.
+// A turn that never self_iterates, most of them, gets the bare task.
 func TestPhaseUserMessageWithoutLedgersIsJustTheTask(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ task, want string }{
@@ -149,19 +138,17 @@ func TestPhaseUserMessageReadsChronologically(t *testing.T) {
 		PriorWork:       "PRIOR-WORK",
 		Endings:         endingsHeader + "\n\nHOW-EARLIER-TURNS-ENDED",
 	}).Text
-	// How this conversation's earlier turns ended, then the ask, then
-	// earlier rounds of THIS turn — which happened after the ask arrived. The
-	// newest thing said sits nearest the model's answer.
+	// Earlier turns' endings, the ask, then this turn's rounds: the newest
+	// sits nearest the model's answer.
 	order(t, msg, "HOW-EARLIER-TURNS-ENDED", "THE-ASK", "PRIOR-WORK")
 	if !strings.HasPrefix(msg, endingsHeader) {
 		t.Error("how the conversation's earlier turns ended must lead the message")
 	}
 }
 
-// A NOTE THE TURN HAS READ IS IN THE BRIEF, after everything the turn already
-// had, each its own section. A run is a fresh session with nowhere else to
-// read it, so without this a turn sent back after a person corrected it
-// launches its next run on the task as it was before the correction.
+// A NOTE THE TURN HAS READ IS IN THE BRIEF, last, each its own section: a run
+// is a fresh session with nowhere else to read it, so a turn sent back after a
+// correction would otherwise run on the uncorrected task.
 func TestPhaseUserMessageCarriesTheNotesTheTurnHasRead(t *testing.T) {
 	t.Parallel()
 	first := SteerMessage("founder", "post to #staging, not #general")
@@ -187,11 +174,9 @@ func TestPhaseUserMessageCarriesTheNotesTheTurnHasRead(t *testing.T) {
 	}
 }
 
-// A NOTE READS THE SAME WHEREVER IT LANDS. It reaches a model at the opening of
-// a run of the engine's loop, in an executor's brief, and inside its run, where
-// its harness places a hook's context — so it names who sent it and through what,
-// says it arrived while the work was under way and is the later word, and says
-// nothing about where it arrived, which would be false in every place but one.
+// A NOTE READS THE SAME WHEREVER IT LANDS (a loop run's opening, an executor's
+// brief, a hook's context in its run): it names who sent it and through what,
+// that it is the later word, and never where it arrived, false in all but one.
 // The note itself is last and verbatim.
 func TestASteerMessageIsFactualWhereverItLands(t *testing.T) {
 	t.Parallel()
@@ -246,13 +231,10 @@ func TestPhaseUserMessageCarriesTheLedgerRules(t *testing.T) {
 	if !strings.HasPrefix(withPrior, "## Task\npost the summary") {
 		t.Error("the ask must lead when no earlier turn's ending is told")
 	}
-	// The rule that actually prevents the double-post — and the same rule for
-	// the calls a record counts by tool rather than lists, the only line a
-	// round a park dropped is drawn with, held to its own words for a call it
-	// says has an unknown outcome: the `→ error` rule says the same "check
-	// whether it did before making it again", so those words alone would hold
-	// the counted line to nothing, and without its clause the header would say
-	// such a call ALREADY RAN.
+	// The rule that prevents the double-post, and its counted-by-tool form
+	// (the line a parked round leaves), checked with its unknown-outcome
+	// clause in full: the `→ error` rule shares the "check whether it did"
+	// words, and without the clause such a call would read as ALREADY RAN.
 	contains(t, withPrior, "Already done earlier in this turn", "### Iteration 1", "ALREADY RAN",
 		"**A line counting calls by tool**", "those it does not count as failed ALREADY RAN",
 		"one it says has an unknown outcome may have taken effect: check whether it did before making it again")

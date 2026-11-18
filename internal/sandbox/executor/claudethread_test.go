@@ -867,36 +867,22 @@ func ctSidechain(h threadHead) string {
 	return fmt.Sprint(*h.Sidechain)
 }
 
-// EVERY WHOLE LINE IS DECODED INTO ITS HEAD BEFORE ANYTHING READS IT: a line
-// that is not one record (two values, one cut short, a value that is no
-// object) or one whose head key is of the wrong type (`type`, `subtype` and
-// `agentId` strings, `parentUuid` null or a string, `isSidechain` a boolean,
-// and a user record's `replacesSpan` a boolean, as the brief's here) is a
-// *threadLineError naming its line, whatever keywords it holds, and the reader
-// reads on to the next line; and a whole record's head is what it says. None
-// of these lines holds a key a reader of hooks or calls looks for. Each such
-// error says how Claude Code's load reads its line, the kind of record a
-// refused head's type names where it names one the load reads, and how many
-// bytes the line takes, its break included.
-//
-// Mutation: decode only the lines that name a hook or a call, and every
-// broken line here reads as a record, and the records' heads as nothing; read
-// replacesSpan by its text alone, and one that is a string or null reads as a
-// record; read every refused line as one that yields the load nothing, and
-// the lines cut short, followed by more or led by a NUL read so; or hold a
-// refused head's type off the seven kinds the load reads, and a type that is
-// a number names one.
-func TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything(t *testing.T) {
-	t.Parallel()
+// ctRefusal is a line the layer reads as no record, and how Claude Code's load
+// reads it: its fault, and the kind of record its refused head names.
+type ctRefusal struct {
+	line  string
+	fault lineFault
+	kind  recordKind
+}
+
+// ctBrokenLines is the lines that are not one record, or one whose head key
+// is of the wrong type, as [TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything]
+// reads them among records, by name.
+func ctBrokenLines() map[string]ctRefusal {
 	brief := ctBrief(ctUUID(1))
 	summary := ctSummary(ctUUID(1), ctUUID(2))
 	prompt := ctSubagentPrompt(ctUUID(3))
-	type refusal struct {
-		line  string
-		fault lineFault
-		kind  recordKind
-	}
-	broken := map[string]refusal{
+	return map[string]ctRefusal{
 		"two values":                         {ctDequeue + ctDequeue, faultTrailing, ""},
 		"two values a carriage return parts": {ctDequeue + "\r" + ctDequeue, faultTrailing, ""},
 		"a value cut short":                  {brief[:len(brief)/2], faultPrefix, ""},
@@ -927,6 +913,33 @@ func TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything(t *testing.T) {
 		"NULs before a break":                    {"\x00\x00\x00", faultLead, ""},
 		"a record behind a byte that is no JSON": {"\x00" + ctDequeue, faultLead, ""},
 	}
+}
+
+// EVERY WHOLE LINE IS DECODED INTO ITS HEAD BEFORE ANYTHING READS IT: a line
+// that is not one record (two values, one cut short, a value that is no
+// object) or one whose head key is of the wrong type (`type`, `subtype` and
+// `agentId` strings, `parentUuid` null or a string, `isSidechain` a boolean,
+// and a user record's `replacesSpan` a boolean, as the brief's here) is a
+// *threadLineError naming its line, whatever keywords it holds, and the reader
+// reads on to the next line; and a whole record's head is what it says. None
+// of these lines holds a key a reader of hooks or calls looks for. Each such
+// error says how Claude Code's load reads its line, the kind of record a
+// refused head's type names where it names one the load reads, and how many
+// bytes the line takes, its break included.
+//
+// Mutation: decode only the lines that name a hook or a call, and every
+// broken line here reads as a record, and the records' heads as nothing; read
+// replacesSpan by its text alone, and one that is a string or null reads as a
+// record; read every refused line as one that yields the load nothing, and
+// the lines cut short, followed by more or led by a NUL read so; or hold a
+// refused head's type off the seven kinds the load reads, and a type that is
+// a number names one.
+func TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything(t *testing.T) {
+	t.Parallel()
+	brief := ctBrief(ctUUID(1))
+	summary := ctSummary(ctUUID(1), ctUUID(2))
+	prompt := ctSubagentPrompt(ctUUID(3))
+	broken := ctBrokenLines()
 	names := slices.Sorted(maps.Keys(broken))
 	lines := make([]string, 0, 2*len(names)+3)
 	for _, name := range names {
@@ -1006,6 +1019,45 @@ func fewestAllocations(read func()) uint64 {
 // asks for less than the cost of what it refutes.
 const fewestCalls = 2000
 
+// ctDeep is a user record whose one key holds lists nested to levels in all.
+func ctDeep(levels int) string {
+	return `{"type":"user","x":` + strings.Repeat("[", levels-1) + strings.Repeat("]", levels-1) + `}`
+}
+
+// ctRefusedLines is a line of every way a line is no record, as
+// [TestALineThatIsNoRecordSaysHowTheLoadReadsIt] reads each alone, by name.
+func ctRefusedLines(t *testing.T) map[string]ctRefusal {
+	t.Helper()
+	brief := ctBrief(ctUUID(1))
+	return map[string]ctRefusal{
+		"a record a later write tore into":       {brief[:60] + ctDequeue, faultSyntax, ""},
+		"white space alone":                      {" \t ", faultSyntax, ""},
+		"a list of numbers":                      {"[1,2]", faultNotObject, ""},
+		"a list ended by a carriage return":      {"[1,2]\r", faultNotObject, ""},
+		"a queue operation of a numeric agentId": {`{"type":"queue-operation","agentId":5}`, faultHead, ""},
+		"a summary of a string isSidechain": {`{"type":"summary","isSidechain":"no","leafUuid":"` + ctUUID(5) + `"}`,
+			faultHead, ""},
+		"a checkpoint of a numeric agentId": {ctReplace(t, ctLastPrompt, `"type":"last-prompt"`,
+			`"type":"last-prompt","agentId":5`), faultHead, recordLastPrompt},
+		"a progress record of a null isSidechain": {`{"type":"progress","isSidechain":null,"uuid":"` + ctUUID(6) +
+			`"}`, faultHead, recordProgress},
+		"a fork's reference of a numeric subtype": {`{"type":"fork-context-ref","subtype":1}`, faultHead,
+			recordForkContextRef},
+		"a content replacement of a numeric agentId": {ctReplace(t, ctReplacement(ctAgent, ctReplaced(ctCall)),
+			`"agentId":"`+ctAgent+`"`, `"agentId":5`), faultHead, recordContentReplacement},
+		"a reply of a string isSidechain": {ctReplace(t, ctAssistant(ctUUID(3), ctUUID(4), ctUseContent),
+			`"isSidechain":false`, `"isSidechain":"false"`), faultHead, recordAssistant},
+		"an attachment of a numeric parentUuid": {ctReplace(t, ctAttachment(ctUUID(3), ctUUID(4), ctTokens,
+			ctTokensRendered), `"parentUuid":"`+ctUUID(3)+`"`, `"parentUuid":3`), faultHead, recordAttachment},
+		"a value cut at the break":           {brief[:len(brief)-9], faultPrefix, ""},
+		"a record followed by a number":      {ctDequeue + " 7", faultTrailing, ""},
+		"a record followed by a record":      {ctDequeue + ctDequeue, faultTrailing, ""},
+		"a record led by a NUL":              {"\x00" + ctDequeue, faultLead, ""},
+		"a record led by a byte order mark":  {"\xef\xbb\xbf" + ctDequeue, faultLead, ""},
+		"a record nested 10,001 levels deep": {ctDeep(10001), faultDepth, ""},
+	}
+}
+
 // A LINE THAT IS NO RECORD SAYS HOW THE LOAD READS IT: a line whose JSON fails
 // before any whole value (a record a later write tore into, a line of white
 // space alone) yields Claude Code's load nothing, faultSyntax; one whole value
@@ -1039,41 +1091,7 @@ const fewestCalls = 2000
 // line, refused or not, and a line the decode takes costs the classifier's
 // decoder too.
 func TestALineThatIsNoRecordSaysHowTheLoadReadsIt(t *testing.T) {
-	brief := ctBrief(ctUUID(1))
-	deep := func(levels int) string {
-		return `{"type":"user","x":` + strings.Repeat("[", levels-1) + strings.Repeat("]", levels-1) + `}`
-	}
-	for name, tc := range map[string]struct {
-		line  string
-		fault lineFault
-		kind  recordKind
-	}{
-		"a record a later write tore into":       {brief[:60] + ctDequeue, faultSyntax, ""},
-		"white space alone":                      {" \t ", faultSyntax, ""},
-		"a list of numbers":                      {"[1,2]", faultNotObject, ""},
-		"a list ended by a carriage return":      {"[1,2]\r", faultNotObject, ""},
-		"a queue operation of a numeric agentId": {`{"type":"queue-operation","agentId":5}`, faultHead, ""},
-		"a summary of a string isSidechain": {`{"type":"summary","isSidechain":"no","leafUuid":"` + ctUUID(5) + `"}`,
-			faultHead, ""},
-		"a checkpoint of a numeric agentId": {ctReplace(t, ctLastPrompt, `"type":"last-prompt"`,
-			`"type":"last-prompt","agentId":5`), faultHead, recordLastPrompt},
-		"a progress record of a null isSidechain": {`{"type":"progress","isSidechain":null,"uuid":"` + ctUUID(6) +
-			`"}`, faultHead, recordProgress},
-		"a fork's reference of a numeric subtype": {`{"type":"fork-context-ref","subtype":1}`, faultHead,
-			recordForkContextRef},
-		"a content replacement of a numeric agentId": {ctReplace(t, ctReplacement(ctAgent, ctReplaced(ctCall)),
-			`"agentId":"`+ctAgent+`"`, `"agentId":5`), faultHead, recordContentReplacement},
-		"a reply of a string isSidechain": {ctReplace(t, ctAssistant(ctUUID(3), ctUUID(4), ctUseContent),
-			`"isSidechain":false`, `"isSidechain":"false"`), faultHead, recordAssistant},
-		"an attachment of a numeric parentUuid": {ctReplace(t, ctAttachment(ctUUID(3), ctUUID(4), ctTokens,
-			ctTokensRendered), `"parentUuid":"`+ctUUID(3)+`"`, `"parentUuid":3`), faultHead, recordAttachment},
-		"a value cut at the break":           {brief[:len(brief)-9], faultPrefix, ""},
-		"a record followed by a number":      {ctDequeue + " 7", faultTrailing, ""},
-		"a record followed by a record":      {ctDequeue + ctDequeue, faultTrailing, ""},
-		"a record led by a NUL":              {"\x00" + ctDequeue, faultLead, ""},
-		"a record led by a byte order mark":  {"\xef\xbb\xbf" + ctDequeue, faultLead, ""},
-		"a record nested 10,001 levels deep": {deep(10001), faultDepth, ""},
-	} {
+	for name, tc := range ctRefusedLines(t) {
 		got := ctRead(ctThread(tc.line), threadPlainMax)
 		if len(got.lines) != 0 || len(got.broken) != 1 {
 			t.Errorf("%s reads as %d records and %d lines that are none; want one that is none", name,
@@ -1090,7 +1108,7 @@ func TestALineThatIsNoRecordSaysHowTheLoadReadsIt(t *testing.T) {
 				"break dropped", name, e.Bytes.Len(), e.Bytes.Head(), len(tc.line))
 		}
 	}
-	if got := ctRead(ctThread(deep(10000)), threadPlainMax); len(got.lines) != 1 || len(got.broken) != 0 {
+	if got := ctRead(ctThread(ctDeep(10000)), threadPlainMax); len(got.lines) != 1 || len(got.broken) != 0 {
 		t.Errorf("a record nested 10,000 levels deep reads as %d records and %d lines that are none; want one record",
 			len(got.lines), len(got.broken))
 	}

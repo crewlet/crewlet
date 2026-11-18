@@ -128,14 +128,13 @@ func (r deepRig) started(t *testing.T) sandbox.RunRequest {
 
 // A RUN IS THE DEEP ENTRY'S HARNESS'S OWN RUN, REACHING CREWLET ONLY THROUGH THE
 // TURN'S SURFACE: its job is the entry's harness on the entry's model with the
-// brief and standing instructions it was handed, the bridge its one MCP
-// server; a call over that bridge reaches the surface decided as NOBODY, so
-// the request's identity reaches none of it; the attachments are in its
-// inputs and its outbox comes back; its token is useless once it ends. No
-// engine credential is in its environment. Its box waits for a call as long as
-// its bridge can take to answer one, as a seat's does. Mutation: decide bridged
-// calls as the request and the identity reads resolved; hand its bridge's
-// server no wait, and its box waits on the harness's own default.
+// brief and standing instructions it was handed, its bridge its one MCP server,
+// whose calls are decided as NOBODY; its attachments are in its inputs, its
+// outbox comes back, its token dies with it, no engine credential is in its
+// environment, and its box waits for a call as long as its bridge can take to
+// answer one. Mutation: decide bridged calls as the request and the identity
+// reads resolved; hand its bridge's server no wait, and its box waits on the
+// harness's own default.
 func TestADeepRunReachesCrewletOnlyThroughItsSurface(t *testing.T) {
 	t.Parallel()
 	rig := newDeepRig(t)

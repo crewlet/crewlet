@@ -51,11 +51,9 @@
 // acknowledged before, and each table's consumer reads the table's subjects
 // and the barrier's: it delivers in the stream's order, so its copy hands over
 // the table's rows below the barrier and then the barrier, once it has applied
-// it. Once a barrier at or past the hydration's has arrived, a racing
-// hydration's included, the replay publishes an END BARRIER and reads on to
-// it, so a row replaced before the replay reached it is read as its
-// replacement, which lies below the end barrier; the copy's running count of
-// what follows decides nothing (replay.go). Nothing a hydration asks is
+// it. The replay then reads on to an END BARRIER it publishes, so a row
+// replaced before the replay reached it is read as its replacement ("The end
+// barrier"). Nothing a hydration asks is
 // answered with a row but its pulls, and its barriers are the one thing it
 // writes, so a broker that refuses this node's writes refuses its hydrations
 // ([Syncer.Hydrate]).
@@ -64,16 +62,17 @@
 // hydration takes what its bytes take: time refuses it only when a pull hears
 // nothing for its stall, or no copy it is placed on delivers anything for a
 // minute, and a replay whose copy is behind is placed again on another, past
-// the last sequence it received (replay.go).
+// the last sequence it received ("What progress is", "A copy behind is placed
+// again").
 //
 // A PULL AT A TIME, bounded in messages and in bytes, each pull's rows written
 // in one transaction: at most fetchBatch messages, which sets a table's round
 // trips where its rows are small, and at most one message at the transport's
 // limit and the room the broker counts beside it ([Syncer.pullBytes]), which
 // is what a hydration holds of the changelog's rows at once; across a link, a
-// window the floor carries within the node's lease heartbeat, so a lease
-// renewal crosses behind its pull in time ([Syncer.pullBound], which says
-// what it does not cover). Bounded by its count
+// window the floor carries within a request's term less its own round trip, so
+// a request sent behind its pull is answered in time ([Syncer.pullBound]; what
+// it does not cover is below). Bounded by its count
 // alone, one pull held up to 256 rows of up to 8 MiB each
 // (crewlet/crewlet#1052). A row larger than this node's pull is refused by
 // name, never read as a copy that stalled.
@@ -110,6 +109,140 @@
 // it sends, so a cycle partway through a seat as its release begins stops at
 // its next row (crewlet/crewlet#511).
 //
+// # The end barrier
+//
+// A replay reads until a barrier at or past the hydration's (B,
+// [Syncer.barrier]) arrives: at or past, because a racing hydration's
+// barriers replace this one's on the seat's one subject; one below B is an
+// earlier hydration's on a copy that has not applied this one, and is read
+// past. It then publishes the seat's barrier again and reads on to a barrier
+// at or past that one's sequence (E). A row whose version the changelog
+// acknowledged before B either arrives, or was removed by a later version
+// first; that version was applied on the copy before B arrived, so before E
+// was proposed, and raft orders the log, so it lies below E and arrives
+// before it, and the same holds for any later version. A row is missed only
+// where it was republished twice inside one table's replay, around B and
+// again after E was proposed: two holders of the seat at once,
+// crewlet/crewlet#511's window, whose newest version stays on the changelog.
+//
+// The copy's running count of what follows a delivery decides nothing: it
+// runs low where a replacement's signal has not reached the copy, and high
+// where a delivery skipped a row its removal had not yet taken off
+// (nats-server consumer.go, checkNumPending), so an end read from it misses
+// both versions of a row in the first case and waits for a message never
+// sent in the second. A writer that never stops cannot hold the replay open:
+// E is one publish, made once, and nothing after the first barrier at or
+// past it is read.
+//
+// # A copy behind is placed again
+//
+// A replay is an R1 consumer the server places on a RANDOM member
+// (nats-server jetstream_cluster.go, createGroupForConsumer), delivering out
+// of that member's copy. No consumer can be placed on the leader instead (its
+// configuration names no placement), and a read of the leader answers a row
+// base64-encoded in JSON, a third larger, past the 8 MiB a leaf carries, on
+// which a leaf closes its whole link, lease renewals with it (nats-server
+// leafnode.go, processLeafMsgArgs).
+//
+// The barrier lies past the WHOLE changelog as the leader held it, so a copy
+// behind the leader (a member catching up after a restart) holds the replay
+// until it has applied all of it. A replay whose copy holds nothing for
+// [copyBehindWait] while its barrier is owed is placed again: its consumer
+// deleted and made again from one past the last sequence it received, which
+// the broker places afresh, preferring members its metadata leader counts
+// caught up, so a draw holds the barrier at least one time in three on three
+// members. So is a consumer the broker said is gone or whose pull it refused,
+// one that never got its pull (up to [jsapi.FirstPullRemakes] times in a
+// row), and one whose delivery the link lost. A placement that delivered
+// nothing is followed by the next no sooner than [copyBehindWait] after it
+// ([tableReplay.again]).
+//
+// NOTHING IS SKIPPED: every message at or below where a placement begins was
+// received, or removed by a later version past it, and sequences are the
+// stream's, so this holds across copies. NOTHING IS READ TWICE: a placement
+// delivers nothing at or below where it begins, and the upsert is idempotent
+// anyway. Whatever ends a pull, its rows are written in its transaction
+// before the replay is placed again or refused, so a transaction the store
+// fails fails the hydration: a replay placed again past rows that never
+// committed would carry the seat without them.
+//
+// # What progress is
+//
+// A DELIVERED MESSAGE, a row or a barrier: the client hands a message over
+// only whole (nats.go's processMsg), and a leaf's compressed link decodes a
+// flush as one block, so nothing finer proves bytes arrived. A heartbeat is
+// no progress (a copy behind sends them for ever); it tells "the copy holds
+// nothing for me now" from "nothing heard", and serves two clocks:
+//
+//   - SILENCE runs from the pull's send, from the last word on its inbox (a
+//     delivery, a heartbeat, a status), and from the end of the replay's own
+//     end-barrier publish, which holds it from its inbox. Past the pull's
+//     stall ([Syncer.stall]) the seat is refused rather than placed again: a
+//     dead link fails a new placement too, and nothing tells a dead server
+//     from a pull still crossing at the floor. It refuses only once the inbox
+//     is empty ([jsapi.Pulls.Ready]), so a word that arrived while the
+//     replay's own request held it is heard first. A probe's answer
+//     ([jsapi.Pulls.Quiet]) decides what a quiet replay does next, never how
+//     long it may stay quiet: a consumer that keeps saying a delivery is on
+//     its way while none arrives is held to the stall like any other.
+//   - BEHIND runs from the first word that a copy holds nothing while the
+//     barrier is owed, or from the first placement again for any cause,
+//     whichever comes first since the last delivery, across placements and
+//     the time spent making them; any delivery resets it. Behind for
+//     [copyBehindWait] on one copy places the replay again
+//     ([tableReplay.place]); nothing delivered for [behindWait] across every
+//     placement, whatever each copy said (behind, gone, refusing its pulls,
+//     never pulled, losing a delivery), refuses the seat
+//     ([tableReplay.behind]).
+//
+// # What silence is
+//
+// ACROSS A LINK, THE LINK'S. A replay's words cross a link behind whatever
+// else it carries (the node's own downloads, an event or fleet record of
+// megabytes, which no window bounds), and neither broker nor client sees any
+// of a message until its last byte is in, so a replay behind an 8 MiB message
+// at the floor hears nothing for four minutes from a copy that answered at
+// once. Only the link's own socket meter ([Config.Link]) tells that from a
+// copy or link that stopped answering. So at the end of a pull's stall with
+// nothing heard ([tableReplay.judge]):
+//
+//   - a link that did not move over the stall, or none metered (a member's
+//     connection among them), is SILENCE, and refuses the seat;
+//   - a link that moved holds the replay, judged again every [quietWait] with
+//     its consumer probed before each, so a link that falls still ends the
+//     wait within a stall and a second of its last byte;
+//   - once the link has read [Syncer.quietBytes] since the replay last heard
+//     anything, the replay is placed again ([placedQuiet]), which the behind
+//     clock neither arms nor reads, since the link may hold a word past a
+//     minute;
+//   - once no copy has said anything for [Syncer.quietCap], the seat is
+//     refused whatever the link does ([tableReplay.creeping]).
+//
+// Every request a hydration hedges is held the same way while the link moves
+// ([Syncer.waits]). Only a copy that answers nothing at all, on a link other
+// traffic keeps moving, is refused later than the stall: it waits for the
+// caps. A consumer that is gone or never got its pull still answers the probe
+// behind that traffic, and is placed again sooner.
+//
+// # A window across a link
+//
+// A replay's pull window ([pullWindow]) is the hydration's own, and bounds
+// only what crosses the link toward the node. Until crewlet/crewlet#1035 puts
+// one window across the link, both directions and the object store's
+// downloads inside it, the object store's upload window is another, for what
+// crosses outbound (internal/objstore/natsobj, linkWindow), so a request
+// whose bytes cross behind an upload and whose reply crosses behind a pull
+// waits behind both: 7.75 seconds at the floor beyond its own round trip,
+// past its term, a lease renewal sent there among them. (A node hydrates one
+// seat at a time: the seat host's placement pass claims them one after
+// another.) And nothing windows the rest of what crosses toward the node: a
+// download holds four of the object store's 128 KiB messages in hand
+// (natsobj, readAhead), fifteen seconds at the floor, for each download in
+// flight, and an event delivered to one of the node's seats crosses whole, so
+// a request whose reply queues behind them waits for all of it. A replay's
+// next row queued there refuses no seat: across a metered link the replay
+// waits while the link moves ("What silence is").
+//
 // # What is deliberately not replicated
 //
 // DELETES. The lifecycle drops rows constantly — mid-state turns, tool-free
@@ -145,28 +278,21 @@ var log = logging.Get("learning.memsync")
 
 // Row is one memory row on the wire.
 //
-// The table travels WITH the row as well as in its subject, so a replay can
-// hold a row to the subjects it read it on: a replay reads one table's
-// subjects and writes each row as that table's, and a row whose own table is
-// another is refused rather than written in that table's turn
-// ([tableReplay.receive]).
+// The table travels in the row as well as in its subject, so a replay refuses
+// a row whose table is not the one whose subjects it read ([tableReplay.receive]).
 type Row struct {
 	Table string `json:"table"`
 
-	// Values is the row, column name to value. JSON rather than a
-	// positional tuple so a build whose table has gained a column can read
-	// one written before it: the missing column takes its default rather
-	// than shifting every value after it.
+	// Values is the row, column name to value: a map rather than a positional
+	// tuple, so a row written before a column was added leaves that column its
+	// default instead of shifting every value after it.
 	Values map[string]any `json:"values"`
 }
 
-// exported is one row a page read, with its value of the table's watermark
-// column: the mark a publish moves the seat's to once the changelog has
-// acknowledged the row.
-//
-// THE MARK IS NOT PART OF THE ROW, so it never reaches the wire: the column
-// is this node's own (node migration 0041), and its values mean nothing on a
-// peer.
+// exported is one row a page read, with its watermark value: the mark a
+// publish moves the seat's to once the changelog acknowledges the row. The mark
+// stays off the wire: the column is this node's own (node migration 0041) and
+// means nothing on a peer.
 type exported struct {
 	row  Row
 	mark int64
@@ -175,21 +301,13 @@ type exported struct {
 // exportPage reads one page of a seat's rows of a watermark table: the rows
 // strictly above after, in the watermark's order, until their carried values
 // hold exportPageBytes, and always at least one. It says whether the budget
-// stopped the page; a page the budget did not stop is the table's last.
+// stopped the page; one it did not stop is the table's last.
 //
-// A PAGE, NOT THE BACKLOG. [Syncer.PublishOwn] and [Syncer.PublishBacklog]
-// send a page a row at a time, moving the mark with each row the changelog
-// acknowledges, and read the next page above the last, so what a publish
-// holds is one page whatever lies behind it. The read ends where the page
-// does: the driver steps a statement only as its rows are asked for, and the
-// plan hands them over in the index's order as it finds them, with no sort to
-// read the rest first (TestTheIncrementalExportIsARangeSeekNotASort), so
-// closing the statement leaves the rest unread.
-//
-// One of THREE READERS, rather than one taking a mark it ignores for half the
-// registry and an end half the rest ignore: [exportBacklogPage] reads a page
-// of a seat's backlog, which ends at its boundary, and [exportWhole] reads the
-// tables that have no watermark.
+// A publish holds one page whatever lies behind it, and closing the statement
+// leaves the rest unread: the driver steps only as rows are asked for, and the
+// plan is a range seek with no sort (TestTheIncrementalExportIsARangeSeekNotASort).
+// [exportBacklogPage] and [exportWhole] are the other two readers, rather than
+// one taking bounds half the registry ignores.
 func exportPage(ctx context.Context, db *sql.DB, t table, seat seatRef, after int64) ([]exported, bool, error) {
 	return readPage(ctx, db, t, pageStatement(t), seat.value(t), after)
 }
@@ -203,10 +321,9 @@ func exportBacklogPage(ctx context.Context, db *sql.DB, t table, seat seatRef,
 	return readPage(ctx, db, t, backlogStatement(t), seat.value(t), after, through)
 }
 
-// readPage is the one read a page is, whichever of a seat's ranges it is of:
-// statement's rows, asked with args, in the watermark's order, until their
-// carried values hold exportPageBytes, and always at least one. It says
-// whether the budget stopped the page.
+// readPage reads statement's rows, asked with args, until their carried values
+// hold exportPageBytes, and always at least one, saying whether the budget
+// stopped the page.
 func readPage(ctx context.Context, db *sql.DB, t table, statement string,
 	args ...any) ([]exported, bool, error) {
 
@@ -225,10 +342,8 @@ func readPage(ctx context.Context, db *sql.DB, t table, statement string,
 			return nil, false, err
 		}
 		page = append(page, exported{row: Row{Table: t.name, Values: values}, mark: mark})
-		// SPENT AFTER THE ROW IS TAKEN, so a page always holds one: a row
-		// past the budget ends the page it is read into, where a page that
-		// stopped short of it would read the same nothing for ever, and
-		// leave every row after it behind.
+		// Spent after the row is taken, so a page always holds one: stopping
+		// short of a row past the budget would read the same empty page forever.
 		if held += size; held >= exportPageBytes {
 			return page, true, nil
 		}
@@ -262,37 +377,34 @@ func exportWhole(ctx context.Context, db *sql.DB, t table, seat seatRef) ([]Row,
 	return out, nil
 }
 
-// pageStatement is what a page of a watermark table is read with: the seat's
-// rows strictly above a mark, in the watermark's order, the watermark first.
-// A function of its own, so the plan gate plans the text that runs.
+// pageStatement reads the seat's rows strictly above a mark, in the
+// watermark's order, the watermark first. A function of its own, so the plan
+// gate plans the text that runs.
 func pageStatement(t table) string {
 	return "SELECT " + t.watermark + ", " + strings.Join(t.columns, ", ") +
 		" FROM " + t.name + " WHERE " + t.seatCol + " = ? AND " + t.watermark + " > ?" +
 		" ORDER BY " + t.watermark
 }
 
-// backlogStatement is what a page of a seat's backlog of a watermark table is
-// read with: the seat's rows strictly above a mark and at or below its
-// boundary, in the watermark's order, the watermark first. A function of its
-// own, so the plan gate plans the text that runs: the second bound is on the
-// last column of the same (seat, change_seq) index, so it narrows the seek and
-// changes nothing else about it.
+// backlogStatement reads the seat's rows strictly above a mark and at or below
+// its boundary, in the watermark's order, the watermark first. A function of its
+// own, so the plan gate plans the text that runs; the second bound is on the
+// same (seat, change_seq) index, so it only narrows the seek.
 func backlogStatement(t table) string {
 	return "SELECT " + t.watermark + ", " + strings.Join(t.columns, ", ") +
 		" FROM " + t.name + " WHERE " + t.seatCol + " = ? AND " + t.watermark + " > ? AND " +
 		t.watermark + " <= ? ORDER BY " + t.watermark
 }
 
-// wholeStatement is what a wholeEachCycle table is read with: every one of
-// the seat's rows, in the order they were written.
+// wholeStatement reads every one of the seat's rows of a wholeEachCycle table,
+// in the order they were written.
 func wholeStatement(t table) string {
 	return "SELECT " + strings.Join(t.columns, ", ") + " FROM " + t.name +
 		" WHERE " + t.seatCol + " = ? ORDER BY rowid"
 }
 
-// scanRow reads one row's carried columns, after the destinations lead takes
-// first, into the values the wire carries, and says how many bytes those
-// values hold ([carriedBytes]).
+// scanRow reads one row's carried columns, after lead's destinations, into
+// wire values, and says how many bytes they hold ([carriedBytes]).
 func scanRow(rows *sql.Rows, t table, lead ...any) (map[string]any, int, error) {
 	cells := make([]any, len(t.columns))
 	into := make([]any, 0, len(lead)+len(t.columns))
@@ -313,9 +425,8 @@ func scanRow(rows *sql.Rows, t table, lead ...any) (map[string]any, int, error) 
 	return values, size, nil
 }
 
-// carriedBytes is what one encoded cell holds: a text its length, a blob the
-// base64 it travels as. A number or a NULL is a few bytes at most beside a
-// row's text and its vector, and is not counted.
+// carriedBytes is what one encoded cell holds: a text its length, a blob its
+// base64. A number or a NULL is negligible beside a row's text and vector.
 func carriedBytes(cell any) int {
 	switch cell := cell.(type) {
 	case string:
@@ -329,20 +440,16 @@ func carriedBytes(cell any) int {
 
 // encodeCell makes one scanned value safe to carry as JSON.
 //
-// The driver hands back []byte for both TEXT and BLOB, and the two must not
-// be confused: a TEXT column re-inserted as bytes changes the stored type,
-// and a BLOB re-inserted as text stores an embedding as its own base64
-// spelling — which reads back as a vector of nothing and breaks that row's
-// recall silently. The registry says which is which, and this is where that
-// declaration is spent.
+// The driver returns []byte for both TEXT and BLOB, so the registry decides:
+// a TEXT re-inserted as bytes changes its stored type, and a BLOB re-inserted
+// as text stores an embedding as its base64 spelling, silently breaking recall.
 func encodeCell(t table, column string, cell any) any {
 	raw, isBytes := cell.([]byte)
 	if !isBytes {
 		return cell
 	}
 	if t.isBlob(column) {
-		// Marked so the decode side can tell a genuine blob from a
-		// string that merely looks like base64.
+		// Marked so decode tells a blob from a string that looks like base64.
 		return map[string]any{"$blob": base64.StdEncoding.EncodeToString(raw)}
 	}
 	return string(raw)
@@ -351,12 +458,8 @@ func encodeCell(t table, column string, cell any) any {
 // decodeCell reverses encodeCell.
 func decodeCell(cell any) (any, error) {
 	if number, isNumber := cell.(json.Number); isNumber {
-		// JSON HAS ONE NUMBER TYPE and Go's default decoding makes it a
-		// float64, which carries 53 bits: an int64 past 2^53 comes back
-		// changed, silently, and column affinity then stores the wrong
-		// value rather than refusing it. Decoding through json.Number
-		// and preferring the integer reading removes the cliff instead
-		// of documenting where it is.
+		// The integer reading first: a float64 holds 53 bits, so an int64
+		// past 2^53 would come back silently changed and be stored as such.
 		if whole, err := number.Int64(); err == nil {
 			return whole, nil
 		}
@@ -382,18 +485,12 @@ func decodeCell(cell any) (any, error) {
 	return raw, nil
 }
 
-// subject is the row's address on the changelog.
+// subject is the row's durable address on the compacted changelog.
 //
-// THE SEAT IS ITS AGENT ID, the UUIDv5 over (org name, handle) (ADR-0013).
-// The changelog is COMPACTED — one message retained per subject — so the
-// subject IS a row's durable address, and the id is a fixed-width token that
-// carries no character a subject cannot.
-//
-// The table is readable; the key is HASHED. A natural key can be anything a
-// counterparty is called on a chat platform — with dots, spaces, wildcards —
-// and every one of those is a token separator or a pattern character in a
-// subject. Hashing makes the address total, and the row carries its own
-// values anyway, so nothing needs to read it back out.
+// The seat is its agent id (ADR-0013), a fixed-width token a subject can hold.
+// The key is hashed: a natural key can be anything a chat platform calls a
+// counterparty, dots, spaces and wildcards included, which are subject syntax.
+// Nothing reads the key back out; the row carries its own values.
 func (t table) subject(seat string, values map[string]any) string {
 	parts := make([]string, 0, len(t.key))
 	for _, column := range t.key {
@@ -404,66 +501,42 @@ func (t table) subject(seat string, values map[string]any) string {
 }
 
 // tableFilter matches every subject [table.subject] builds for one seat's rows
-// of the table named: the filter a table's replay reads beside the seat's
-// barrier, and the one a retired table's count and purge take.
+// of the table named: what a table's replay reads beside the seat's barrier,
+// and what a retired table's count and purge take.
 func tableFilter(seat, name string) string {
 	return topics.MemoryPrefix + seat + "." + name + ".>"
 }
 
-// barrierSubject is the seat's barrier on the changelog: the one subject of the
-// seat's that is no table's, which a hydration publishes to before it replays
-// the seat and each table's replay reads to ([Syncer.replay]).
+// barrierSubject is the seat's one subject that is no table's, which a
+// hydration publishes to before its replay and each table's replay reads to
+// ([Syncer.replay]).
 //
-// FOUR TOKENS where a row's subject has five, and a last token no table can be
-// named (topics.MemoryBarrierToken), so no [tableFilter] matches it and a
-// replay's two filters never overlap, as nats-server requires of a consumer's
-// filter subjects. No row is ever published here: a publish carries the
-// registry's tables ([Syncer.PublishOwn], [Syncer.PublishBacklog]), and the
-// barrier is none of them.
+// Four tokens where a row's subject has five, and a last token no table can be
+// named (topics.MemoryBarrierToken), so no [tableFilter] matches it: nats-server
+// refuses a consumer whose filter subjects overlap. No row is published here.
 func barrierSubject(seat string) string {
 	return topics.MemoryPrefix + seat + "." + topics.MemoryBarrierToken
 }
 
-// upsert writes one carried row into this node's store.
+// upsert writes one carried row into this node's store, on conflict over the
+// natural key, so hydrating a seat twice carries its memory once.
 //
-// ON CONFLICT over the NATURAL key, so hydrating a seat twice — a re-acquire,
-// a redelivery, a node that restarts mid-replay — carries its memory once.
-//
-// WHAT THE CONFLICT DOES IS THE TABLE'S OWN ANSWER, and it is the same split
-// table.wholeEachCycle already makes. An append-only row is immutable once
-// written, so a row already here is that row and DO NOTHING is exact — but for
-// the one column pair a holder fills afterwards, a diary note's or an
-// episode's vector, which the carry takes over a stored vector of no model or
-// another (table.fillsVector, [table.fillVector]). A wholeEachCycle row is one
-// whose UPDATE IS THE CONTENT — a counterparty profile rewritten as the seat
-// learns, a skill archived, an onboarding marker flipped — and DO NOTHING
-// there discards precisely what the table is republished every cycle to
-// carry. A node that held the seat, lost it while a peer kept learning, and
-// took it back would keep its own stale profile and then publish it back over
-// the peer's, regressing the seat's memory for the whole fleet.
-//
-// Last writer wins is safe rather than merely convenient while ONE node at a
-// time publishes the seat, which is what holding it means: the changelog's
-// latest value for a subject is then the value its current owner wrote. A node
-// publishes a seat only under its holding there ([Syncer.PublishOwn],
-// [Syncer.Releasing]), so neither a cycle the releasing node began before the
-// release, nor a successor still taking the seat, nor the release of a seat
-// whose hydration failed publishes an older copy after the newer one. Two
-// things still can: the one row a cycle was sending as the release began,
-// which can land after the flush's copy of it, and two nodes holding the seat
-// at once, a node whose lease lapsed under it still carrying the seat while
-// the next holder writes it (crewlet/crewlet#511).
+// The conflict follows table.wholeEachCycle. An append-only row is immutable,
+// so DO NOTHING is exact, but for the vector a holder fills afterwards
+// ([table.fillVector]). A wholeEachCycle row's update IS its content, so DO
+// NOTHING would keep a returning node's stale copy, which it then republishes
+// over the peer's. Last writer wins is safe while one node publishes the seat
+// (package doc, "How it is fixed"); it still loses to the row
+// a cycle was sending as the release began and to two nodes holding the seat at
+// once (crewlet/crewlet#511).
 func upsert(ctx context.Context, tx *sql.Tx, t table, row Row) error {
 	columns := make([]string, 0, len(t.columns))
 	values := make([]any, 0, len(t.columns))
 	for _, column := range t.columns {
 		cell, present := row.Values[column]
 		if !present {
-			// A row written by a build that did not have this column
-			// yet — this one's, read by a successor that adds it.
-			// Omitted so the column's own default applies, which is the
-			// additive-evolution rule the event envelope holds to: the
-			// row is readable, not rejected.
+			// Written before the column existed: omitted, so its default
+			// applies and the row is read rather than rejected.
 			continue
 		}
 		decoded, err := decodeCell(cell)
@@ -488,12 +561,9 @@ func upsert(ctx context.Context, tx *sql.Tx, t table, row Row) error {
 // parentHeld reports whether this store holds the row a carried row of t
 // belongs to ([table.parent]), and true where t has no parent.
 //
-// LOOKED UP BEFORE THE WRITE, never left to the foreign key. The key's refusal
-// is an error like any other a write can meet, and telling it apart would mean
-// matching the driver's text; and the transaction would then have to go on
-// past a statement the store refused, which is the driver's business rather
-// than this package's. A lookup asks neither of it, and keeps one orphan from
-// costing the fetch's every row, and the seat.
+// Looked up rather than left to the foreign key, whose refusal could only be
+// told apart by the driver's text and would leave the transaction past a failed
+// statement: one orphan would cost the fetch's every row, and the seat.
 func (t table) parentHeld(ctx context.Context, tx *sql.Tx, row Row) (bool, error) {
 	if t.parent == nil {
 		return true, nil
@@ -515,18 +585,15 @@ func (t table) parentHeld(ctx context.Context, tx *sql.Tx, row Row) (bool, error
 	return true, nil
 }
 
-// seatRef is one seat, in both spellings the schema uses for it: its handle,
-// which the handle-keyed tables (episodes, counterparty profiles, the two
-// skill tables) hold, and the agent id derived from
-// it, which the changelog's subjects and the id-keyed tables are built from.
-// Both are stable across nodes because a handle is immutable (ADR-0013).
+// seatRef is one seat in both spellings the schema uses: its handle, for the
+// handle-keyed tables, and the agent id derived from it, for the changelog's
+// subjects and the id-keyed tables. Both are stable across nodes because a
+// handle is immutable (ADR-0013).
 type seatRef struct {
 	Handle string
 
-	// AgentID is the derived UUIDv5 over (org name, handle).
-	// Derived rather than looked up, so every node computes the same value
-	// with no database and no running instance — which is exactly what
-	// makes a row written on one node addressable from another.
+	// AgentID is the UUIDv5 over (org name, handle), derived rather than looked
+	// up so every node computes the same address with no database.
 	AgentID string
 }
 
@@ -547,16 +614,11 @@ func encode(row Row) ([]byte, error) {
 	return body, nil
 }
 
-// decode reads a row off the wire.
-//
-// The table it names is held to the table whose subjects carried it by the
-// replay that read it ([tableReplay.receive]), never looked up here: a
-// hydration replays the tables this build carries, one at a time, so a row of
-// a table it does not carry, a newer build's, is never read at all.
+// decode reads a row off the wire. Its table is checked by the replay that read
+// it ([tableReplay.receive]); a newer build's table is never replayed at all.
 func decode(body []byte) (Row, error) {
 	var row Row
-	// UseNumber, so decodeCell sees the digits rather than a float64 that
-	// has already lost them — see there for why that matters.
+	// UseNumber, so decodeCell sees the digits rather than a lossy float64.
 	reader := json.NewDecoder(bytes.NewReader(body))
 	reader.UseNumber()
 	if err := reader.Decode(&row); err != nil {
@@ -565,26 +627,16 @@ func decode(body []byte) (Row, error) {
 	return row, nil
 }
 
-// onConflict is what an import does to a row that will not simply insert.
+// onConflict is what an import does to a row that will not simply insert
+// (upsert says why the two kinds of table differ). The SET list is the columns
+// carried, not the registry's, so an older build's row leaves columns it never
+// had alone rather than nulling them.
 //
-// See upsert for why the two tables of answer differ on the NATURAL key. The
-// SET list is built from the columns actually CARRIED rather than from the
-// registry, so a row written by a build whose table had fewer columns — this
-// one's, read by a successor that adds one — updates what it knew and leaves
-// the rest alone instead of nulling columns it never had.
-//
-// The TRAILING BARE CLAUSE is the other half, and it is not decoration.
-// SQLite's upsert only handles the constraint its target names — a carried
-// row that collides on any OTHER unique index RAISES. Two of these tables have
-// one: episodes is unique on (agent_handle, work_key), synthesized_skills on
-// (agent_handle, name). Every one of those collisions is ordinary fleet
-// history — a node that died mid-turn and a peer that re-ran the work record
-// two rows for one work key under two ids, and both reach the changelog.
-// Without this clause a node replaying that seat
-// raises, and because hydration runs inside seat acquisition the raise REFUSES
-// THE SEAT: one duplicated episode would make a seat unplaceable anywhere in
-// the fleet. Skipping is also the right answer on its own terms — the index
-// says one row per work key, and the row already here is one.
+// The trailing bare clause skips a collision on another unique index, which
+// SQLite's targeted upsert would raise: episodes (agent_handle, work_key) and
+// synthesized_skills (agent_handle, name) collide in ordinary fleet history,
+// such as a re-run of a dead node's work, and a raise inside hydration refuses
+// the seat everywhere (TestARowCollidingOnAnUntargetedIndexIsSkippedNotRaised).
 func (t table) onConflict(carried []string) string {
 	skip := " ON CONFLICT DO NOTHING"
 	if !t.wholeEachCycle {
@@ -598,9 +650,8 @@ func (t table) onConflict(carried []string) string {
 		assignments = append(assignments, column+" = excluded."+column)
 	}
 	if len(assignments) == 0 {
-		// Every carried column is part of the key, so there is nothing
-		// an update could change. DO UPDATE SET with an empty list is a
-		// syntax error rather than a no-op.
+		// Every carried column is key: DO UPDATE SET with an empty list is a
+		// syntax error, not a no-op.
 		return skip
 	}
 	return " ON CONFLICT (" + strings.Join(t.key, ", ") + ") DO UPDATE SET " +
@@ -611,14 +662,11 @@ func (t table) onConflict(carried []string) string {
 // the holder filled, over a stored row whose vector is of no model or of
 // another (see [table.fillsVector]). Empty for a table that fills none.
 //
-// EVERYTHING ELSE ABOUT THE ROW STAYS WHAT IS HERE — its retrieval
-// bookkeeping is this node's — and the carried vector is taken only when it is
-// a whole one: the row must carry both columns, set, so a carried copy written
-// before the fill never erases the vector the fill gave this node. ONLY A
-// DIFFERENT SPACE is a change — another model, or the same model at another
-// width, which a restart can leave behind: the same model's vector of the same
-// immutable text at the same width is the same vector, and rewriting it would
-// be churn.
+// The rest of the row stays this node's, retrieval bookkeeping included. The
+// carried vector is taken only when both columns are set, so a copy from
+// before the fill never erases this node's vector, and only into a different
+// space (another model, or another width a restart can leave behind): the same
+// space's vector of immutable text is the same vector.
 func (t table) fillVector(carried []string) string {
 	if !t.fillsVector || !slices.Contains(carried, "embedding") ||
 		!slices.Contains(carried, "embedding_model") {

@@ -20,15 +20,14 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// sessionHarness is a stand-in `claude` for the cases about a run's session, run in
-// a real box: it answers `--version` with release, records its argv and its
-// environment in the box's home, and files the session it was started in where
-// the pinned layout names — its transcript, its sidecar directory and its task
-// list, as Claude Code does — beside what a capture must never take: the
-// session's file-edit snapshots, the harness's own state, a login, auto memory and
-// another session. A session it is asked to resume must already be filed, in
-// any project directory, as Claude Code's must from 2.1.223 ("No conversation
-// found"). It ends on a successful result naming its session.
+// sessionHarness is a stand-in `claude` of release for a run's session cases in a
+// real box: it answers `--version`, records its argv and environment in the box's
+// home, and files its session where the pinned layout names (transcript, sidecar
+// directory, task list) beside what a capture must never take: file-edit
+// snapshots, the harness's own state, a login, auto memory and another session.
+// It refuses to resume a session not filed in some project directory, as Claude
+// Code does from 2.1.223 ("No conversation found"), and ends on a success naming
+// its session.
 func sessionHarness(release string) string {
 	return `#!/bin/sh
 if [ "$1" = --version ]; then echo '` + release + ` (Claude Code)'; exit 0; fi
@@ -106,24 +105,21 @@ func argvOf(t *testing.T, box sandbox.Sandbox) []string {
 	return strings.Split(strings.TrimSuffix(boxFile(t, box, box.Home()+"/argv"), "\n"), "\n")
 }
 
-// transcriptOf is where a session's transcript lies in box under the pinned
-// layout.
+// transcriptOf is where the pinned layout puts session's transcript in box.
 func transcriptOf(box sandbox.Sandbox, session string) string {
 	return executor.PathsFor(box).ClaudeConfigDir() + "/projects/" + executor.ClaudeProjectDir + "/" +
 		session + ".jsonl"
 }
 
-// THE WRAPPER PINS WHERE CLAUDE CODE KEEPS ITS SESSIONS, over whatever set it.
-// CLAUDE_CONFIG_DIR is the box home's `.claude`, CLAUDE_CODE_PROJECT_DIR_NAME
-// the one constant every run files its sessions under, and auto memory is off —
-// exported by the wrapper after it unsets the variables that switch hooks off,
-// and before the harness, so a value the seat's environment, the image or a profile
-// the login shell sources gave any of them is replaced. On a real box, with the
-// seat's environment naming another of each: the harness sees the pinned ones.
+// THE WRAPPER PINS WHERE CLAUDE CODE KEEPS ITS SESSIONS, over whatever set it:
+// CLAUDE_CONFIG_DIR (the box home's `.claude`), CLAUDE_CODE_PROJECT_DIR_NAME (one
+// constant for every run) and auto memory off, exported inside the login shell
+// after the unsets of the variables that switch hooks off and before the harness,
+// so no value from the seat's environment, the image or a profile survives.
 //
-// Mutation: export the pins before the unsets' statement, or drop one, and the
-// order or the seat's value reaches the harness; export them around the shell
-// rather than in it, and a profile replaces them.
+// Mutation: export the pins before the unsets, or drop one, and the order or the
+// seat's value reaches the harness; export them outside the shell, and a profile
+// replaces them.
 func TestTheWrapperPinsClaudeCodesSessionLayout(t *testing.T) {
 	t.Parallel()
 	runner := executor.NewClaudeCode()
@@ -167,8 +163,8 @@ func TestTheWrapperPinsClaudeCodesSessionLayout(t *testing.T) {
 }
 
 // THE PROJECT DIRECTORY'S NAME IS ONE CLAUDE CODE TAKES: it holds the name to
-// `^[A-Za-z0-9_-]{1,64}$` (2.1.316), and ignores one past it, which would file
-// every session under the box's working directory again.
+// `^[A-Za-z0-9_-]{1,64}$` (2.1.316) and ignores one past it, filing every
+// session under the box's working directory instead.
 func TestTheProjectDirectoryIsANameClaudeCodeTakes(t *testing.T) {
 	t.Parallel()
 	name := executor.ClaudeProjectDir
@@ -180,22 +176,17 @@ func TestTheProjectDirectoryIsANameClaudeCodeTakes(t *testing.T) {
 }
 
 // A FRESH RUN STARTS UNDER THE SESSION ITS START NAMED, AND A CONTINUED ONE
-// RESUMES ITS OWN — NEVER BOTH. The id a fresh run is started under is minted
-// before the harness starts and returned by Start, so a run killed before its result
-// line still names its session; a run that continues one is started with
-// `--resume` alone, since the harness refuses `--session-id` beside it unless the
-// session is forked. A session the box holds is resumed wherever a release
-// filed it — under the pinned project directory, or under the one an older
-// release named after the box's working directory — and one the box does not
-// hold is never resumed: the run starts the session minted for it instead —
-// the one its start named as the session it starts of its own — says why on
-// its error stream and in what it reports, and reports that it did not
-// continue.
+// RESUMES ITS OWN — NEVER BOTH. A fresh run's id is minted before the harness
+// starts and returned by Start, so a run killed before its result line still
+// names its session; a continuing run passes `--resume` alone, as the harness
+// refuses `--session-id` beside it unless forked. A held session is resumed
+// under the pinned project directory or an older release's, named after the
+// working directory; an unheld one never is: the run starts its start's fresh
+// session, and its report and error stream say it did not continue and why.
 //
-// Mutation: pass --session-id beside --resume, resume a session the box does
-// not hold, look for it under the pinned directory alone, report no reason, or
-// name in the run's handle a session of its own other than the one it falls
-// back to, and a row goes red.
+// Mutation: pass --session-id beside --resume, resume an unheld session, look
+// only under the pinned directory, report no reason, or name a fresh session in
+// the handle other than the fallback's, and a row goes red.
 func TestAFreshRunNamesItsSessionAndAContinuedOneResumesIt(t *testing.T) {
 	t.Parallel()
 	const asked = "0f1e2d3c-4b5a-4968-8776-655443322110"
@@ -244,9 +235,8 @@ func TestAFreshRunNamesItsSessionAndAContinuedOneResumesIt(t *testing.T) {
 				t.Errorf("Start named the session %q, want the one it was asked to continue, %q",
 					handle.SessionID, asked)
 			}
-			// AND THE SESSION ITS SCRIPT STARTS OF ITS OWN in the continued
-			// one's place, which only a run that continues one names: the one
-			// a run that fell back was started under.
+			// AND THE FRESH SESSION only a continuing run's start names: the
+			// one a run that fell back was started under.
 			switch {
 			case tc.resume == "" && handle.FreshSessionID != "":
 				t.Errorf("a fresh run's start named a second session, %q", handle.FreshSessionID)
@@ -273,21 +263,17 @@ func TestAFreshRunNamesItsSessionAndAContinuedOneResumesIt(t *testing.T) {
 }
 
 // A RESUMED RUN RENDERS ITS SYSTEM PROMPT AFRESH, FROM THE RELEASE THAT TAKES
-// THE OPTION. By default a conversation records the system prompt its first
-// request rendered and sends that record on every resume until it is
-// compacted, whatever a later launch appends — so every resumed run is started
-// with `--system-prompt-snapshot off`, its own box's included; but 2.1.263, a
-// release boxes were measured on, refuses the option as unknown, so the script
-// passes it from 2.1.267 alone. A fresh run records its own, and is started
-// without it. The transcript's trim is the same kind of gate: on from 2.1.304,
-// whose trim loses nothing, and UNSET before it, whatever the seat set. A
-// version that is not three parts reads as a current release, as the engine's
-// own reading takes it. Under every sh a box may run the script with.
+// THE OPTION. Otherwise a conversation resends its first request's prompt on
+// every resume until compacted, whatever a later launch appends, so every
+// resumed run, the same box's too, gets `--system-prompt-snapshot off`: from
+// 2.1.267 alone, as 2.1.263 rejects it. A fresh run, recording its own, goes
+// without. The transcript's trim is gated likewise: on from 2.1.304, whose trim
+// loses nothing, and UNSET before it whatever the seat set. A version not three
+// parts reads as current, as the engine reads it. Under every sh a box may have.
 //
-// Mutation: pass the option whatever the release, or only on a carried
-// session, and the 2.1.263 or the same-box rows go red; export the trim
-// whatever the release, and the 2.1.303 row does; read the parts once cut,
-// and the two-part row reads as an old release.
+// Mutation: pass the option whatever the release, or only on a carried session,
+// and the 2.1.263 or same-box rows go red; export the trim whatever the release,
+// and the 2.1.303 row does; read the parts once cut, and the two-part row reads old.
 func TestASnapshotIsTurnedOffOnEveryResumedRunFromTheReleaseThatTakesIt(t *testing.T) {
 	t.Parallel()
 	const session = "4b8e1f20-9c1d-4e5f-8a7b-6c5d4e3f2a10"
@@ -317,8 +303,7 @@ printf '%s' "${CLAUDE_CODE_TRANSCRIPT_LOCAL_GC-unset}" > "$FAKE_DIR/gc"
 				dir := t.TempDir()
 				bin := filepath.Join(dir, "bin")
 				p := executor.Paths{Home: filepath.Join(dir, "home")}
-				// The box holds the session a resumed run continues, as
-				// the one its last run ran in does.
+				// The box holds the session a resumed run continues.
 				transcript := p.ClaudeConfigDir() + "/projects/" + executor.ClaudeProjectDir + "/" + session + ".jsonl"
 				for _, d := range []string{bin, p.WorkDir(), filepath.Dir(transcript)} {
 					if err := os.MkdirAll(d, 0o700); err != nil {
@@ -394,18 +379,17 @@ func archiveMembers(t *testing.T, r io.Reader) map[string]string {
 	}
 }
 
-// THE CAPTURE IS THE SESSION AND NOTHING ELSE. Once the harness has exited, the run
-// packs the session it ran into one gzipped tar, moved into place whole: its
-// transcript, its sidecar directory (the subagents' transcripts and the tool
-// results spilled to files) and its task list, named relative to the harness's
-// configuration directory — and never the login beside them, the harness's own
-// state, the session's file-edit snapshots, auto memory or another session. The
-// collection is told where it is, which session it holds, the release that
-// wrote it and its size, and is handed it as a stream.
+// THE CAPTURE IS THE SESSION AND NOTHING ELSE. Once the harness exits, the run
+// packs its session into one gzipped tar, moved into place whole: transcript,
+// sidecar directory (subagents' transcripts, spilled tool results) and task list,
+// named relative to the harness's configuration directory, never the login, the
+// harness's state, file-edit snapshots, auto memory or another session. The
+// collection is told its path, session, writing release and size, and
+// OpenCapture streams it.
 //
-// Mutation: pack the configuration directory, or the project directory, and
-// the login, the state or the other session is in the archive; drop the task
-// list or the sidecars, and the session comes back without them.
+// Mutation: pack the configuration or project directory, and the login, the
+// state or the other session is in it; drop the task list or the sidecars, and
+// the session comes back without them.
 func TestTheCapturePacksTheSessionAndNothingElse(t *testing.T) {
 	t.Parallel()
 	runner, b := sessionBox(t, "2.1.310")
@@ -453,17 +437,16 @@ func TestTheCapturePacksTheSessionAndNothingElse(t *testing.T) {
 	}
 }
 
-// A SESSION CARRIED INTO A FRESH BOX IS RESTORED THERE AND RESUMED. The run's
-// capture, streamed out of the box it ran in, is handed to a run in another box
-// that continues the same session: written in as the run starts, restored by the
-// run's script under the pinned layout before the harness starts — the transcript,
-// its sidecars and its task list — and resumed there with its system prompt
-// rendered afresh. The archive is removed once restored, and the run reports
-// that it continued the session.
+// A SESSION CARRIED INTO A FRESH BOX IS RESTORED THERE AND RESUMED. One run's
+// capture, streamed out of its box, is handed to a run in another box continuing
+// the session: written in as the run starts, restored by its script under the
+// pinned layout (transcript, sidecars, task list) before the harness starts,
+// removed once restored, and resumed with its system prompt rendered afresh; the
+// run reports it continued.
 //
-// Mutation: write the archive before the clear, restore it anywhere but the
-// pinned project directory, or leave the resume to a box that already held the
-// session, and the second run starts a session of its own.
+// Mutation: write the archive before the clear, restore it outside the pinned
+// project directory, or resume only a session the box already held, and the
+// second run starts a session of its own.
 func TestACarriedSessionIsRestoredIntoAFreshBoxAndResumed(t *testing.T) {
 	t.Parallel()
 	first, a := sessionBox(t, "2.1.310")
@@ -495,8 +478,7 @@ func TestACarriedSessionIsRestoredIntoAFreshBoxAndResumed(t *testing.T) {
 			t.Errorf("%s was not restored", restored)
 		}
 	}
-	// The transcript carried two lines: the first run's, and the second's,
-	// which the harness appended to the one it resumed.
+	// Two lines: the carried run's, and the one the resumed harness appended.
 	if n := strings.Count(boxFile(t, b, transcriptOf(b, ran.SessionID)), "\n"); n != 2 {
 		t.Errorf("the resumed transcript has %d lines, want the carried one and the resumed run's", n)
 	}
@@ -505,14 +487,13 @@ func TestACarriedSessionIsRestoredIntoAFreshBoxAndResumed(t *testing.T) {
 	}
 }
 
-// A BOX WHOSE COPY HOLDS THE CARRIED ARCHIVE IS NEVER WRITTEN OVER. A reused
-// box packed that archive itself — its digest is among the box's own — and ran
-// on past it, so its copy of the session is newer than the archive, and an
-// archive of it carried back in — an older capture, the last one having
-// failed — is not restored over it: the run resumes the box's own, which keeps
-// every line the archive lacks.
+// A BOX WHOSE COPY HOLDS THE CARRIED ARCHIVE IS NEVER WRITTEN OVER. A reused box
+// that packed the archive (its digest is among the box's own) and ran on past it
+// holds a copy newer than that archive, an older capture carried back after the
+// last one failed: the run resumes the box's own copy, keeping every line the
+// archive lacks.
 //
-// Mutation: restore whatever the box holds, or compare by id and not by the
+// Mutation: restore whatever the box holds, or compare by id rather than the
 // archive's digest, and the box's own line is lost.
 func TestABoxWhoseCopyHoldsTheCarriedArchiveIsNotOverwritten(t *testing.T) {
 	t.Parallel()
@@ -539,13 +520,11 @@ func TestABoxWhoseCopyHoldsTheCarriedArchiveIsNotOverwritten(t *testing.T) {
 	}
 }
 
-// A BOX WHOSE COPY DOES NOT HOLD THE CARRIED ARCHIVE HAS IT REPLACED. The
-// session went on in another box after this one's copy: box A packed it, box B
-// restored that and ran on, and B's capture is carried back into A. A's copy
-// holds only the earlier point, so the archive is restored over it — the
-// transcript, its sidecars and its task list — and the run continues the
-// session as B left it, keeping the archive's digest as one A's copy now
-// holds.
+// A BOX WHOSE COPY DOES NOT HOLD THE CARRIED ARCHIVE HAS IT REPLACED. Box A
+// packed the session, box B restored it and ran on, and B's capture is carried
+// back into A, whose copy holds only the earlier point: the archive is restored
+// over it (transcript, sidecars, task list), the run continues the session as B
+// left it, and A keeps the archive's digest as one its copy now holds.
 //
 // Mutation: keep any copy the box holds, whatever was carried, and the run
 // resumes A's older copy, without B's turn.
@@ -589,15 +568,13 @@ func TestABoxWhoseCopyDoesNotHoldTheCarriedArchiveHasItReplaced(t *testing.T) {
 	}
 }
 
-// A CARRIED SESSION THE BOX CANNOT RESTORE IS NEVER RESUMED. A box whose harness is
-// older than the release that continues a carried session, and an archive that
-// holds no transcript, each start the session minted for the run in its place,
-// say why on the run's error stream and in what the run reports, and report
-// that the run did not continue.
+// A CARRIED SESSION THE BOX CANNOT RESTORE IS NEVER RESUMED. A box whose harness
+// is below the carry floor, and an archive holding no transcript, each start the
+// session minted for the run instead, say why on the error stream and in the
+// report, and report that the run did not continue.
 //
 // Mutation: resume whatever the restore did, and the harness fails the run on a
-// session it does not hold; record no reason, and the report says nothing of
-// why.
+// session it does not hold; record no reason, and the report says nothing of why.
 func TestACarriedSessionTheBoxCannotRestoreStartsANewOne(t *testing.T) {
 	t.Parallel()
 	first, a := sessionBox(t, "2.1.310")
@@ -644,10 +621,10 @@ func TestACarriedSessionTheBoxCannotRestoreStartsANewOne(t *testing.T) {
 	}
 }
 
-// A RUN HANDED A SESSION IT CANNOT RESTORE IS REFUSED BEFORE ANYTHING STARTS: an
-// archive another harness wrote, or another format lays out, one that is not the
-// session the run continues, and one with no bytes — a run that could only
-// start a session of its own would be answered as if it remembered.
+// A RUN HANDED A SESSION IT CANNOT RESTORE IS REFUSED BEFORE ANYTHING STARTS:
+// another harness's or format's archive, one not the session the run continues,
+// and one with no bytes. A run that could only start afresh would be answered as
+// if it remembered.
 //
 // Mutation: drop a check from refuseCarried, and its row starts.
 func TestAStartRefusesACarriedSessionItCannotRestore(t *testing.T) {
@@ -698,16 +675,14 @@ func versionBox(printed string, code int, errText string, asked *[]string) *sand
 	return b
 }
 
-// THE CONTINUATION CHECK READS THE BOX HARNESS'S RELEASE, AND HOLDS IT TO THE
-// FLOORS. A session carried from another box is continued only by the harness that
-// wrote it, in the format this build restores, on a box whose harness is at or
-// after its floor — Claude Code 2.1.310, OpenCode 2.0.32 — never older than the
-// release that wrote the session, and, for Claude Code, written by 2.1.300 or
-// later. A release that cannot be read is taken for a current one. The release
-// the box printed is returned whatever the answer, for the run's record; a box
-// whose harness does not answer is no continuation, and one that cannot be asked is
-// an error. Read with one login-shell exec, the box's bin directory first on
-// its PATH.
+// THE CONTINUATION CHECK READS THE BOX HARNESS'S RELEASE AND HOLDS IT TO THE
+// FLOORS. A carried session is continued only by the harness that wrote it, in
+// the format this build restores, on a box at or past its floor (Claude Code
+// 2.1.310, OpenCode 2.0.32) and no older than the writing release; for Claude
+// Code, only a session 2.1.300 or later wrote. An unreadable release counts as
+// current. The printed release is returned for the run's record whatever the
+// answer; a harness that does not answer is no continuation, a box that cannot
+// be asked an error. One login-shell exec reads it, the bin directory first on PATH.
 //
 // Mutation: compare against the writer's floor alone, let an older box take a
 // newer writer's session, or read an unreadable release as too old, and a row
@@ -776,18 +751,16 @@ func TestTheContinuationCheckHoldsTheBoxsReleaseToTheFloors(t *testing.T) {
 	}
 }
 
-// WHAT THE RUN DID IS ITS SCRIPT'S RECORD. The record names the session the harness
-// ran — the result's where its harness reported none — whether it continued the one
-// it was asked to, why it did not where it was asked, and the harness's release,
-// read off what `--version` printed; a capture the box holds is described for
-// the record's session. Only a record's first line of each key is its own,
-// since the release is written last as the harness printed it and may run on, and
-// an id no harness mints is no id — the record's, or one the harness reported,
-// whose output is as much the box's as the record is.
+// WHAT THE RUN DID IS ITS SCRIPT'S RECORD: the session the harness ran (the
+// result's, else the record's), whether it continued the one asked, why not, and
+// the release `--version` printed; a capture the box holds is described for that
+// session. Only a key's first line counts, since the release is written last as
+// printed and may run on, and an id no harness mints is no id, the record's or
+// the harness's, whose output is as much the box's as the record is.
 //
-// Mutation: read the last line of a key, take the record's id over the harness's
-// own, take the harness's whatever it is, drop the reason, or read a release
-// of any length, and a case goes red.
+// Mutation: read a key's last line, prefer the record's id over the harness's,
+// take the harness's whatever it is, drop the reason, or read a release of any
+// length, and a case goes red.
 func TestWhatTheRunDidIsItsScriptsRecord(t *testing.T) {
 	t.Parallel()
 	runner := executor.NewClaudeCode()
@@ -822,8 +795,8 @@ func TestWhatTheRunDidIsItsScriptsRecord(t *testing.T) {
 		t.Errorf("the run reads session %q (%v), want its harness's own", res.SessionID, err)
 	}
 
-	// BUT ONLY ONE A HARNESS MINTS: a word the harness's output names that is
-	// no session id gives way to the record's.
+	// BUT ONLY ONE A HARNESS MINTS: an id in the output no harness mints gives
+	// way to the record's.
 	for _, named := range []string{"../../.credentials.json", strings.Repeat("s", 129)} {
 		b.Put(p.Result(), `{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"`+
 			named+`"}`)
@@ -854,7 +827,7 @@ func TestWhatTheRunDidIsItsScriptsRecord(t *testing.T) {
 	}
 
 	// A RELEASE PAST WHAT THE EXECUTOR LOG RECORDS is none, on the run and on
-	// the capture it describes, which names its release for the log.
+	// its capture's description.
 	b.Put(p.SessionRecord(), "id 9a8b7c6d-0000-4000-8000-000000000001\ncontinued yes\nwhy \nrelease "+
 		strings.Repeat("2", 1<<10)+".1.310 (Claude Code)\n")
 	if res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}); err != nil || res.HarnessVersion != "" ||
@@ -880,9 +853,9 @@ func TestWhatTheRunDidIsItsScriptsRecord(t *testing.T) {
 }
 
 // A BOX WITHOUT TAR AND GZIP PACKS NOTHING, SAYS SO, AND THE RUN IS ITS HARNESS'S.
-// The capture is the run's last step and never its outcome: on a box whose
-// image carries neither, the session is not packed, the run's error stream says
-// so, and the run's status is the harness's own.
+// The capture is the run's last step and never its outcome: without them the
+// session is not packed, the error stream says so, and the run's status is the
+// harness's own.
 //
 // Mutation: let the pack's failure be the script's status, or pack silently,
 // and the case goes red.
@@ -926,12 +899,11 @@ exit 3
 }
 
 // A BOX WITHOUT FIND RESUMES ITS SESSION, ITS THREADS AS THEY WERE, AND SAYS
-// SO. A resume cuts back the torn last line of every subagent's thread under
-// the session's sidecar directory, which it walks with find; on a box whose
-// image has none, the run still resumes the session — its transcript cut back
-// as on every box, which takes no find — leaves every thread as it was, and
-// says on its error stream that it cut back none of them, rather than hand the
-// harness threads it may have left torn without a word.
+// SO. A resume cuts back each subagent thread's torn last line, walking the
+// session's sidecar directory with find; without find the run still resumes
+// (the transcript's own cut takes no find), leaves every thread as it was, and
+// says on its error stream that it cut none back, rather than silently hand the
+// harness threads that may be torn.
 //
 // Mutation: walk the threads without asking the box for find, or say nothing
 // where it has none, and the case goes red.
@@ -955,8 +927,7 @@ func TestABoxWithoutFindResumesItsSessionAndSaysItCutNoThread(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// THE BOX'S PATH holds the harness and the tools the transcript's own cut
-	// reads and moves it with, and no find.
+	// THE BOX'S PATH holds the harness and the transcript cut's tools, and no find.
 	for _, tool := range []string{"mkdir", "rm", "mv", "tail", "wc", "head"} {
 		if path, err := exec.LookPath(tool); err != nil || os.Symlink(path, filepath.Join(bin, tool)) != nil {
 			t.Fatalf("%s for the box: %v", tool, err)
@@ -989,19 +960,17 @@ for a; do printf '%s\n' "$a"; done > `+shQuote(argv)+"\n")
 }
 
 // A TORN TRANSCRIPT A PACK PADDED WITH NULS IS CUT BACK WHEN IT IS RESTORED,
-// under every sh a box may have. GNU tar pads a file that shrank while it read
-// it with NULs to the size it first saw (measured on 1.35), and a session's
-// transcript can shrink as a pack of its job, still working, reads it: 2.1.310
-// rewrites it in place to withdraw a message (read in its shipped code).
-// Restored from such an archive, the transcript ends in the torn line tar read
-// and its padding — a last line with no newline, like any torn one — and is
-// cut back to its last whole line before the harness resumes it, though a
-// shell's command substitution drops a NUL, so a test of the last byte by its
-// text reads the padding as a whole last line.
+// under every sh a box may have. GNU tar NUL-pads a file that shrank while it
+// read it to the size it first saw (measured on 1.35), and a transcript can
+// shrink while a pack of its still-working job reads it: 2.1.310 rewrites it in
+// place to withdraw a message. Restored, it ends in the torn line and its
+// padding with no newline, and is cut back to its last whole line before the
+// resume; the cut counts the last byte's newline, since command substitution
+// drops a NUL and a test of the byte's text reads the padding as a whole line.
 //
-// Mutation: read the last byte as text rather than count its newline, or cut
-// no transcript at all, and the padded line is resumed as it was, the
-// harness's next record written onto it.
+// Mutation: read the last byte as text rather than count its newline, or cut no
+// transcript, and the padded line is resumed, the harness's next record written
+// onto it.
 func TestATornTranscriptAPackPaddedWithNULsIsCutBackWhenItIsRestored(t *testing.T) {
 	t.Parallel()
 	const cutOff = `{"type":"assistant","message":{"content":[{"type":"tool_us`

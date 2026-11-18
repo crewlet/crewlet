@@ -24,13 +24,10 @@ import (
 )
 
 // The asking half: the seams every node's tools are handed, each answered by a
-// data node whose copy of the operation's domain serves — this one where it
-// does (ADR-0079).
-//
-// Each method has the signature of the in-process one it stands in for, so
-// the tool layer is handed these on every node and cannot tell which node
-// answered — which is the point: a tool that behaved differently on a node
-// holding no data would be two tools, and only one of them tested.
+// data node whose copy of the operation's domain serves, this one where it
+// does (ADR-0079). Each method keeps the in-process signature it stands in
+// for, so a tool cannot tell which node answered: one that behaved differently
+// on a node holding no data would be two tools, only one of them tested.
 
 // Work is the tracker's read side.
 type Work struct{ r *Router }
@@ -172,7 +169,7 @@ func (w Work) CarriedProject(ctx context.Context, q worklet.ProjectDetailQuery) 
 }
 
 // Search is the tracker's ranked search, answered by a data node's index. A
-// search no node could run is its error, never an empty answer: "nothing
+// search no node could run is an error, never an empty answer: "nothing
 // matched" would send the seat off to file what it was looking for.
 func (w Work) Search(ctx context.Context, q worklet.SearchQuery) (worklet.SearchAnswer, error) {
 	if !q.Mode.Valid() {
@@ -252,7 +249,7 @@ type WorkWriter struct {
 func (r *Router) WriterAs(actor Actor) WorkWriter { return WorkWriter{r: r, actor: actor} }
 
 // settled raises the session floor to what a write reported, so the next
-// read — on whichever node answers it, this one included — includes it.
+// read, on whichever node answers it, includes it.
 func (w WorkWriter) settled(res statelog.Result) { w.r.Observe(res.Position) }
 
 // CreateTask files a task.
@@ -298,8 +295,9 @@ func (w WorkWriter) UpdateTask(ctx context.Context, opID, id, project string, if
 	return out, err
 }
 
-// Depend writes a dependency. The lead map is the SERVING node's — see the
-// package doc — so the one passed here does not cross.
+// Depend writes a dependency. The lead map passed here does not cross: the
+// serving node's own is used (package doc, "What does not cross the wire, and
+// who supplies it").
 func (w WorkWriter) Depend(ctx context.Context, opID string, change worklet.DependencyChange,
 	_ worklet.Leads) (worklet.DependencyResult, error) {
 	out, err := call(ctx, w.r, opDepend, &w.actor, dependArgs{OpID: opID, Change: change})
@@ -424,8 +422,8 @@ func (w WorkWriter) WriteFields(ctx context.Context, opID string, fields []workl
 }
 
 // MarkInbox applies one gesture to a person's inbox, under the authority the
-// caller's table decided, held to seen — how far the caller read the Worklet's
-// log — on whichever holder decides it.
+// caller's table decided, held to seen (how far the caller read the Worklet's
+// log) on whichever holder decides it.
 func (w WorkWriter) MarkInbox(ctx context.Context, opID, handle string, seen statelog.Position,
 	gesture inbox.Gesture[worklet.Reason], authority worklet.PersonAuthority) (worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opMarkInbox, &w.actor, markInboxArgs{
@@ -501,8 +499,8 @@ func (w WorkWriter) RemoveTask(ctx context.Context, opID, id, project string, su
 	return out, err
 }
 
-// RestoreTask brings a task back out of the trash — alone, refused with
-// [worklet.ErrRestoresOthers] when its removal took others, if alone is set.
+// RestoreTask brings a task back out of the trash; with alone set, it is
+// refused with [worklet.ErrRestoresOthers] when its removal took others.
 func (w WorkWriter) RestoreTask(ctx context.Context, opID, id, project string,
 	alone bool, notify *worklet.Notify) (worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opRestoreTask, &w.actor, restoreTaskArgs{
@@ -561,10 +559,9 @@ func (p Pages) TurnsMovedPages(ctx context.Context, q doclet.TurnsMovedQuery) (m
 	return call(ctx, p.r, opPageTurnsMoved, nil, q)
 }
 
-// LinkedFrom answers which pages and tasks link to a page, by its id — from a
-// data node whose copies of both the knowledge base and the tracker serve —
-// or [search.ErrIndexBuilding] from one whose index has not finished its
-// first lap.
+// LinkedFrom answers which pages and tasks link to a page, by its id, from a
+// data node whose copies of both the knowledge base and the tracker serve, or
+// [search.ErrIndexBuilding] where its index has not finished its first lap.
 func (p Pages) LinkedFrom(ctx context.Context, pageID string) (search.Backlinks, error) {
 	return call(ctx, p.r, opLinkedFrom, nil, linkedFromArgs{PageID: pageID})
 }
@@ -577,10 +574,10 @@ func (p Pages) Revision(ctx context.Context, pageID string, version int,
 	return out.Revision, out.Found, err
 }
 
-// Create writes a new page. Never repeated when unanswered — see
-// [ErrOutcomeUnknown] — unless its actor carries the caller's operation key,
-// under which a repeat is the same operation ([op.repeatableWhen]). So for
-// every page write below; a comment may carry its turn's key instead.
+// Create writes a new page. Like every page write below, it is never repeated
+// when unanswered ([ErrOutcomeUnknown]) unless its actor carries the caller's
+// operation key, under which a repeat is the same operation
+// ([op.repeatableWhen]); a comment may carry its turn's key instead.
 func (p Pages) Create(ctx context.Context, actor doclet.Actor, in doclet.NewPage) (doclet.Written, error) {
 	out, err := call(ctx, p.r, opCreatePage, nil, createPageArgs{Actor: actor, Page: in})
 	p.r.Observe(out.Outcome.Position)
@@ -661,17 +658,14 @@ func (p Pages) RemoveComment(ctx context.Context, actor doclet.Actor, pageID, co
 // Chat is the engine's own chat, read and written: every read answered for one
 // viewer, every write as the actor it names.
 //
-// THE KNOWLEDGE BASE'S SHAPE rather than the tracker's, because it is the
-// store's own: one node's chat serves every seat and every person through one
-// store, so the party a write acts as — and the caller's key it carries
-// ([chatlet.Actor.OpKey]) — travels per call rather than being derived into a
-// writer ([WorkWriter]).
+// The actor, and the caller's key it carries ([chatlet.Actor.OpKey]), travel
+// per call as on [Pages] rather than being bound into a writer as on
+// [WorkWriter], because one node's chat store serves every seat and person.
 //
-// EVERY WRITE RAISES THIS NODE'S FLOOR ON THE CHAT LOG to the position it
-// reported, an error included — an unvouched or a refused answer can still
-// carry the position the next read must include — so the seat's next chat read,
-// on whichever node answers it, includes what it just wrote, and nothing it
-// reads of the tracker or the knowledge base waits on it.
+// Every write raises this node's floor on the chat log to the position it
+// reported, an error included: an unvouched or refused answer can still carry
+// a position the next read must include. Tracker and knowledge reads never
+// wait on it.
 type Chat struct{ r *Router }
 
 // Chat answers the engine's own chat.
@@ -690,17 +684,14 @@ func (c Chat) Channel(ctx context.Context, viewer, channelID string,
 		chatChannelArgs{Viewer: viewer, ChannelID: channelID, Fresh: fresh})
 }
 
-// ChannelHere is [Chat.Channel] asked of THIS node's own copy first, even
-// while that copy lags its log — see [callHere].
-//
-// FOR THE LIVE CHANNEL'S DECISION ABOUT A RECORD THIS NODE'S APPLIER HAS JUST
-// COMMITTED: whether one viewer may be shown it. That copy holds the record by
-// construction, while the ordinary walk would ask a peer first whenever the
-// copy lags — during the very burst that makes it lag — turning every
-// decision into a round trip to a node that may not have applied the record
-// yet. A copy out of service is passed over as ever, and the caller's floor
-// ([statelog.Freshness.Floors]) holds whichever copy answers to the
-// record being announced.
+// ChannelHere is [Chat.Channel] asked of this node's own copy first, even
+// while it lags its log ([callHere]), for the live channel's decision whether
+// a viewer may be shown a record this node's applier just committed. That copy
+// holds the record by construction; the ordinary walk would ask a peer first
+// whenever the copy lags, during the very burst that makes it lag, and that
+// peer may not have applied the record yet. A copy out of service is still
+// passed over, and the caller's floor ([statelog.Freshness.Floors]) holds
+// whichever copy answers to the announced record.
 func (c Chat) ChannelHere(ctx context.Context, viewer, channelID string,
 	fresh statelog.Freshness) (chatlet.ChannelDetail, error) {
 	return callHere(ctx, c.r, opChatChannel, nil,
@@ -726,17 +717,14 @@ func (c Chat) Thread(ctx context.Context, viewer string, q chatlet.ThreadQuery,
 	return call(ctx, c.r, opChatThread, nil, chatThreadArgs{Viewer: viewer, Query: q, Fresh: fresh})
 }
 
-// TurnThreads is the engine's own turn-start thread read, over the router: a
-// thread with whom each of its messages was written for
-// ([chatlet.TurnThread]), by which a turn works through only the waiting
-// messages written for whom it works for (ADR-0109).
+// TurnThreads is the engine's own turn-start thread read: a thread with whom
+// each message was written for ([chatlet.TurnThread]), so a turn works through
+// only the waiting messages written for whom it works for (ADR-0109).
 //
-// A FACADE OF ITS OWN, never a method on [Chat]: the API, the assistant and
-// the agents' tools hold [Chat], so a method there would leave every reader's
-// surface one call away from whom a message was written for, which no reader
-// may see. Only the engine builds it, and the engine-class guard in this
-// package's tests refuses it, and every road to it, in the packages that serve
-// a person or a model.
+// A facade of its own, never a method on [Chat]: the API, the assistant and
+// the agents' tools hold [Chat], and no reader may see whom a message was
+// written for. The engine-class guard in this package's tests refuses it, and
+// every road to it, in the packages that serve a person or a model.
 type TurnThreads struct{ r *Router }
 
 // TurnThreads is the engine's own turn-start thread read ([TurnThreads]).
@@ -745,23 +733,17 @@ func (r *Router) TurnThreads() TurnThreads { return TurnThreads{r: r} }
 var _ chatlet.ThreadSource = TurnThreads{}
 
 // TurnThread answers one thread with whom each of its messages was written
-// for.
+// for, falling back to the plain thread where no data node ran the turn's read
+// and none went silent ([servedByNobody]): an older data node in a rolling
+// upgrade answers the undeclared operation unserved. The plain thread says it
+// carried nothing ([chatlet.TurnThread.Carried]), so the turn marks no waiting
+// message worked through. Every other refusal is returned as it is.
 //
-// AND FALLS BACK TO THE PLAIN THREAD where no data node ran the turn's own read
-// and none went silent: an older data node, during a rolling upgrade, does not
-// declare the operation and answers it unserved. The plain thread says it
-// carried nothing ([chatlet.TurnThread.Carried]), and the turn marks no waiting
-// message as worked through. Never on any other refusal: a viewer who may not
-// read the room, a thread that is not there, a walk in which a node went silent,
-// or a node refusing keys its build does not declare is returned as it is, and
-// nothing is asked again.
-//
-// BROADER THAN THE ROLL IT IS FOR, and said so: an unserved refusal carries no
-// structured reason, and an older node reports an operation it does not
-// declare as unserved in words, so this cannot tell "no node knows the
-// operation" from "every node is behind or out of service". In a degraded
-// estate the second walk is asked too, and is usually refused too. At most one
-// read RUNS either way: the second is asked only after no node ran the first.
+// The fallback is broader than the roll: an unserved refusal carries no
+// structured reason, so this cannot tell "no node knows the operation" from
+// "every node is behind or out of service", and a degraded estate is asked
+// twice. At most one read runs: the second is asked only after none ran the
+// first.
 func (t TurnThreads) TurnThread(ctx context.Context, viewer string, q chatlet.ThreadQuery,
 	fresh statelog.Freshness) (chatlet.TurnThread, error) {
 
@@ -778,9 +760,8 @@ func (t TurnThreads) TurnThread(ctx context.Context, viewer string, q chatlet.Th
 }
 
 // servedByNobody reports whether err is a walk in which no data node ran the
-// operation and none went silent ([ErrUnserved]), refused for nothing else:
-// never one inside a refusal of keys a node's build does not declare
-// ([ErrUnknownKeys]), which unwraps to the walk it found unserved.
+// operation and none went silent ([ErrUnserved]), and nothing else: never an
+// [ErrUnknownKeys], which unwraps to the walk it found unserved.
 func servedByNobody(err error) bool {
 	var unknown *ErrUnknownKeys
 	if err == nil || errors.As(err, &unknown) {
@@ -805,11 +786,10 @@ func (c Chat) Directory(ctx context.Context, viewer string,
 // settled raises the session floor to what a chat write reported.
 func (c Chat) settled(w chatlet.Written) { c.r.Observe(w.Outcome.Position) }
 
-// CreateChannel opens a room. Never repeated when unanswered — see
-// [ErrOutcomeUnknown] — unless its actor carries the caller's operation key,
-// under which a repeat is the same operation ([op.repeatableWhen]). So for every
-// chat write below but the erase and the prune, which take the caller's
-// operation id.
+// CreateChannel opens a room. Like every chat write below but the erase and the
+// prune (which take the caller's operation id), it is never repeated when
+// unanswered ([ErrOutcomeUnknown]) unless its actor carries the caller's
+// operation key ([op.repeatableWhen]).
 func (c Chat) CreateChannel(ctx context.Context, actor chatlet.Actor, in chatlet.NewChannel) (
 	chatlet.Written, error) {
 	out, err := call(ctx, c.r, opChatCreateChannel, nil, chatCreateChannelArgs{Actor: actor, Channel: in})
@@ -948,8 +928,8 @@ func (c Chat) SetRetention(ctx context.Context, actor chatlet.Actor, channelID s
 	return out, err
 }
 
-// Erase removes messages for good, under the operation id the caller derived —
-// repeated under it when unanswered, as a purge is.
+// Erase removes messages for good, under the operation id the caller derived,
+// repeated under it when unanswered as a purge is.
 func (c Chat) Erase(ctx context.Context, actor chatlet.Actor, opID, channelID string,
 	messageIDs []string, reason string) (chatlet.Written, error) {
 	out, err := call(ctx, c.r, opChatErase, nil, chatEraseArgs{
@@ -978,19 +958,16 @@ type ChatSearch struct{ r *Router }
 func (r *Router) ChatSearch() ChatSearch { return ChatSearch{r: r} }
 
 // Search ranks the company's chat for one viewer, over the rooms that viewer
-// may read.
-//
-// AN ERROR, NEVER AN EMPTY ANSWER, where no data node could run it — unlike the
-// knowledge search, which is best effort by its seam's own contract. Nothing
-// here is best effort: a seat told "nobody said that" acts on it, and a person
-// searching a screen is shown the refusal rather than an empty list. An index
-// still catching up says so on the answer ([ChatSearchAnswer.Building]).
+// may read. Where no data node could run it, it is an error, never an empty
+// answer as the best-effort knowledge search gives: a seat told "nobody said
+// that" acts on it. An index still catching up says so
+// ([ChatSearchAnswer.Building]).
 func (s ChatSearch) Search(ctx context.Context, q ChatQuery) (ChatSearchAnswer, error) {
 	return call(ctx, s.r, opChatSearch, nil, q)
 }
 
-// Identity is the identity directory's read side, answered by a data node:
-// what a node holding no data asks of it — see [IdentityReader].
+// Identity is the identity directory's read side, answered by a data node for
+// a node holding no data ([IdentityReader]).
 type Identity struct{ r *Router }
 
 // Identity answers the identity directory's reads.
@@ -998,11 +975,9 @@ func (r *Router) Identity() Identity { return Identity{r: r} }
 
 // BindingByLogin answers the directory row a login binds, narrowed to the
 // binding ([Binding]), and how far the node that answered could vouch for it.
-// A login nobody holds is the zero binding and no error.
-//
-// THE VOUCH IS THE ANSWERING NODE'S, which is the node whose rows the binding
-// was read from: a lag or a retained record there is what the caller's own
-// table weighs, exactly as it weighs this node's where it reads its own.
+// A login nobody holds is the zero binding and no error. The vouch is the
+// answering node's, whose rows the binding was read from, and the caller's
+// table weighs it as it would its own.
 func (i Identity) BindingByLogin(ctx context.Context, login string) (Binding,
 	iamdomain.Vouch, error) {
 	out, err := call(ctx, i.r, opIdentityBinding, nil, bindingArgs{Login: login})
@@ -1017,38 +992,26 @@ func (i Identity) SeatHolders(ctx context.Context) ([]iamdomain.SeatHolder, erro
 }
 
 // Requester answers who holds one seat, with the holder's grants, and whether
-// anybody does, read in one snapshot on the node that answered —
-// [Identity.SeatHolders]' answer for that seat alone, as two seeks rather than
-// the whole directory, and the person a seat's turn is acting for is composed
-// from it. An error is UNKNOWN, never a seat nobody holds; a node that does not
-// know the question leaves it unserved, and none that answers is an error.
+// anybody does, read in one snapshot on the node that answered:
+// [Identity.SeatHolders]' answer for that seat alone, as two seeks. A seat's
+// turn composes the person it acts for from it. An error is UNKNOWN, never a
+// seat nobody holds; a node that does not know the question leaves it
+// unserved, and none answering is an error.
 func (i Identity) Requester(ctx context.Context, seat string) (iamdomain.Requester, bool, error) {
 	out, err := call(ctx, i.r, opRequester, nil, seatArgs{Seat: seat})
 	return out.Requester, out.Held, err
 }
 
-// MachineToken answers the row a presented machine token is checked against —
-// [credential.CheckToken]'s input — as a data node holds it, for a node that
-// holds no identity rows of its own.
-//
-// THE PRESENTED TOKEN STAYS HERE. What is asked is its id, a nonce drawn for
-// this question alone and the keyring entry to MAC under; what comes back is
-// the row with its verifier withheld and a MAC over it ([TokenFacts]); and the
-// verifier set on the answer is the one presented implies, only where that MAC
-// confirms it is the stored one. So the table decides here exactly what it
-// decides on a data node, and neither the secret nor the verifier crosses. A
-// token named by its id alone — a view ticket's, whose secret the request that
-// minted it proved — is answered with no verifier, which [credential.CheckHeld]
-// never reads.
-//
-// THE VOUCH IS THE ANSWERING NODE'S, as a binding's is
-// ([Identity.BindingByLogin]): the applied position an absent row is weighed
-// against, and the lag and the deferral the coverage is judged on, are the
-// rows'.
-//
-// AN ERROR IS THE UNKNOWN ARM, always: a row no data node could read, no data
-// node answering, and this node holding no key to check an answer under are
-// all "cannot say", never "no such token".
+// MachineToken answers the row a presented machine token is checked against
+// ([credential.CheckToken]'s input), as a data node holds it, for a node that
+// holds no identity rows of its own. The presented token stays here: only its
+// id, a fresh nonce and the keyring entry cross, and the row comes back with a
+// MAC in its verifier's place ([TokenFacts]) (package doc, "What does not
+// cross the wire, and who supplies it"). A token named by id alone, a view
+// ticket's, is answered with no verifier, which [credential.CheckHeld] never
+// reads. The vouch is the answering node's, as [Identity.BindingByLogin]'s is.
+// An error is always the unknown arm: no row read, no node answering, or no
+// key here to check an answer under is "cannot say", never "no such token".
 func (i Identity) MachineToken(ctx context.Context, presented credential.Token) (
 	credential.TokenRow, error) {
 
@@ -1082,21 +1045,15 @@ var _ knowledge.Searcher = Knowledge{}
 // Backend is Doclet's, searched on a node that holds it.
 func (Knowledge) Backend() string { return doclet.Backend }
 
-// CanSearch is the no-I/O pre-gate, and on Doclet every seat can
-// read every page — so it is true, and a data node that answers nothing is
-// the empty result a best-effort search already is.
+// CanSearch is the no-I/O pre-gate: always true, since on Doclet every seat
+// can read every page.
 func (Knowledge) CanSearch(*org.Role, *org.Organization) bool { return true }
 
-// Search is BEST EFFORT, as the seam requires: a failure is logged and
-// answers no hits, because a turn must not die because the node holding the
-// index — this one or another — was slow.
-//
-// AND IT SAYS IT DID NOT RUN, which is not "nothing matched": a search no data
-// node could answer serves NO mode and covers NONE of the corpus's buckets, so
-// every reader of the outcome — the search tool, the turn-start block, a screen
-// — tells the seat the knowledge base could not be searched rather than that
-// the company has written nothing down, which it would act on by writing a
-// duplicate of a page that exists.
+// Search is best effort, as the seam requires: a failure is logged and answers
+// no hits, so a turn does not die because the node holding the index was slow.
+// But it says it did not run ([notSearched]), never "nothing matched": a seat
+// told the company wrote nothing down would write a duplicate of a page that
+// exists.
 func (k Knowledge) Search(ctx context.Context, q knowledge.Query) knowledge.Result {
 	args := knowledgeArgs{Text: q.Text, Limit: q.Limit, Mode: q.Mode, Scoped: q.Org != nil,
 		Prefetch: q.Prefetch}
@@ -1117,8 +1074,8 @@ func (k Knowledge) Search(ctx context.Context, q knowledge.Query) knowledge.Resu
 }
 
 // notSearched is the answer to a knowledge search no data node ran: no hits,
-// no mode served, and every bucket of the corpus missing — the outcome every
-// reader already renders as "could not be searched".
+// no mode served and every bucket missing, which every reader renders as
+// "could not be searched".
 func notSearched() knowledge.Result {
 	return knowledge.Result{Outcome: knowledge.Outcome{
 		Coverage: knowledge.Coverage{
@@ -1127,16 +1084,15 @@ func notSearched() knowledge.Result {
 	}}
 }
 
-// Building reports whether the index a search reads is still building, which
-// is what turns an empty block into "still indexing" rather than "the company
-// has written nothing down". False when nothing answers.
+// Building reports whether the index a search reads is still building, so an
+// empty block reads "still indexing". False when nothing answers.
 func (k Knowledge) Building(ctx context.Context) bool {
 	building, err := call(ctx, k.r, opKnowledgeBuilding, nil, struct{}{})
 	return err == nil && building
 }
 
 // Usage is the usage domain's reads (ADR-0020), answered by a data node whose
-// usage copy is in service — this node's own where it is one (ADR-0079).
+// usage copy is in service, this node's own where it is one (ADR-0079).
 type Usage struct{ r *Router }
 
 // Usage answers the usage domain.
@@ -1187,11 +1143,11 @@ func (u Usage) PageReads(ctx context.Context, q usage.PageReadsQuery) ([]usage.P
 	})
 }
 
-// allPages reads every page of one paged read, in order — each page its own
-// routed call, so a failover between pages resumes on another data node from
-// the same group, since every data node pages by the one rule ([usage.Fill]).
-// A page that does not end AFTER the one before it is refused: a node paging
-// another way would otherwise loop for ever.
+// allPages reads every page of one paged read, in order, each page its own
+// routed call: a failover between pages resumes on another data node from the
+// same group, since every data node pages by one rule ([usage.Fill]). A page
+// that does not end after the one before is refused, or a node paging another
+// way loops for ever.
 func allPages[R any](ctx context.Context,
 	page func(ctx context.Context, after usage.Group) (usage.Page[R], error)) ([]R, error) {
 
@@ -1245,8 +1201,7 @@ type RepoReadersAnswer struct {
 	Readers []usage.RepoReader
 
 	// Elided is how many readers the per-day cap dropped over the range on
-	// every node — on the FIRST page alone, the one a reader starts from; nil
-	// on every page after it, which a cursor already ties to that answer.
+	// every node, on the first page alone; nil on every later page.
 	Elided *int64
 
 	// Next is the cursor of the page after this one, "" on the last.
@@ -1254,14 +1209,10 @@ type RepoReadersAnswer struct {
 }
 
 // RepoReaders answers one page of a repository's readers over a range of
-// company days, cut at pageBytes and resuming at cursor — "" for the first
-// page, and otherwise a page's own [RepoReadersAnswer.Next] — and with the
-// first page how many readers the per-day cap dropped over the range.
-//
-// A PAGE A ROUTED CALL: each is asked of whichever data node serves the usage
-// copy now, and every data node cuts and resumes by the one rule
-// ([usage.Fill]), so a reader walked across a failover reads every reader once.
-// A cursor or a range the read cannot take is refused naming why
+// company days, cut at pageBytes and resuming at cursor ("" for the first
+// page, else a page's [RepoReadersAnswer.Next]), with the first page's elided
+// count. Each page is its own routed call, as in [allPages], so a walk across
+// a failover reads every reader once. A bad cursor or range is refused
 // ([usage.ErrBadCursor], [usage.ErrBadRange]).
 func (u Usage) RepoReaders(ctx context.Context, q usage.RepoReadsQuery, cursor string,
 	pageBytes int) (RepoReadersAnswer, error) {
@@ -1295,38 +1246,25 @@ func (u Usage) RepoReaders(ctx context.Context, q usage.RepoReadsQuery, cursor s
 	return out, nil
 }
 
-// CodeSeam is Gitlet's reach into the estate, from every node: a push's
-// proposal, a compaction's, an expunge record's and a change's to their
-// repository's committer, a write of a change's conversation to the change
-// writer beside it and a write of a repository's checks to the checks writer
-// beside it, and the reads the host's admission, a cache's sync and the
-// REST routes make — each answered by a data node whose copy of the code log
-// serves, this one where it does — and a repository's read by object id and its
-// engine write, each asked of the repository's home Gitlet node ([GitCopy]). Its
-// consumers declare what they call of it.
+// CodeSeam is Gitlet's reach into the estate, from every node: proposals to a
+// repository's committer and writes to the change and checks writers beside
+// it, and the reads admission, a cache's sync and the REST routes make, each
+// answered by a data node whose code log copy serves; and a read by object id
+// or an engine write, asked of the repository's home Gitlet node ([GitCopy]).
 //
-// ONLY THIS NODE'S OWN WRITES RAISE ITS FLOOR: a proposal that landed — a
-// push's, a compaction's, an expunge record's or a change's — a push this
-// node proposed found landed, a write of a change's conversation or of a
-// repository's checks that landed, and an engine write this node asked that
-// landed. A read's position is
-// somebody else's writes, and observing it would hold every later read this
-// node routes — a `stale` one included — behind the newest linearizable read
-// anybody on the node made, which is the tracker's and the knowledge base's
-// rule too. Each such write raises two floors: the session's, on the whole
-// code log, which every operation this node routes to a data node carries;
-// and the floor of the REPOSITORY it wrote ([CodeSeam.FloorOf]), which a read
-// of that repository's content by object id carries to its Gitlet node — and a
-// read of any other repository does not. A conversation's write and a check's
-// move no git content, and raise the session's alone.
+// Only this node's own writes that landed raise its floors: a read's position
+// is somebody else's writes, and observing it would hold every later read this
+// node routes, `stale` included, behind the newest linearizable one. A write
+// raises the session's floor on the code log and, where it moved git content,
+// the floor of the repository it wrote ([CodeSeam.FloorOf]); a conversation's
+// write and a check's raise the session's alone.
 type CodeSeam struct{ r *Router }
 
 // Code answers Gitlet.
 func (r *Router) Code() CodeSeam { return CodeSeam{r: r} }
 
 // Propose asks the repository's committer to decide a push, and raises this
-// node's floors past the record it landed in — this node's own write, which
-// its next read of the repository must see on whichever node answers.
+// node's floors past the record it landed in ([CodeSeam]).
 func (c CodeSeam) Propose(ctx context.Context, p gitlet.Proposal) (gitlet.ProposeResult, error) {
 	out, err := call(ctx, c.r, opCodePropose, nil, p)
 	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
@@ -1336,9 +1274,8 @@ func (c CodeSeam) Propose(ctx context.Context, p gitlet.Proposal) (gitlet.Propos
 }
 
 // Compact asks the repository's committer to decide a compaction, and raises
-// this node's floors past the record it landed in — this node's own write,
-// which the compactor's next listing and the cache's sync after it must see on
-// whichever data node answers them.
+// this node's floors past the record it landed in, which the compactor's next
+// listing and the cache's sync after it must see.
 func (c CodeSeam) Compact(ctx context.Context, p gitlet.CompactionProposal) (gitlet.CompactResult, error) {
 	out, err := call(ctx, c.r, opCodeCompact, nil, p)
 	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
@@ -1347,10 +1284,9 @@ func (c CodeSeam) Compact(ctx context.Context, p gitlet.CompactionProposal) (git
 	return out, err
 }
 
-// Expunge asks the repository's committer to decide an expunge record — a
-// person's purge request, or a maintainer's begin or commit — and raises this
-// node's floors past the record it landed in — this node's own write, which
-// its next read of the repository must see on whichever node answers it.
+// Expunge asks the repository's committer to decide an expunge record (a
+// person's purge request, or a maintainer's begin or commit), and raises this
+// node's floors past the record it landed in.
 func (c CodeSeam) Expunge(ctx context.Context, p gitlet.ExpungeProposal) (gitlet.ExpungeResult, error) {
 	out, err := call(ctx, c.r, opCodeExpunge, nil, p)
 	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
@@ -1359,10 +1295,9 @@ func (c CodeSeam) Expunge(ctx context.Context, p gitlet.ExpungeProposal) (gitlet
 	return out, err
 }
 
-// Import asks the repository's committer to decide one step of its import — a
-// chunk or the import's end — and raises this node's floors past the record it
-// landed in: this node's own write, which its home's next read of the
-// repository must see on whichever node answers it.
+// Import asks the repository's committer to decide one step of its import (a
+// chunk or the import's end), and raises this node's floors past the record it
+// landed in.
 func (c CodeSeam) Import(ctx context.Context, p gitlet.ImportProposal) (gitlet.SyncResult, error) {
 	out, err := call(ctx, c.r, opCodeImport, nil, p)
 	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
@@ -1382,11 +1317,9 @@ func (c CodeSeam) MirrorSync(ctx context.Context, p gitlet.MirrorSyncProposal) (
 }
 
 // Change asks the repository's committer to decide a write of a change's
-// lifecycle, and raises this node's floors past the record it landed in — this
-// node's own write, which its next read of the change must see on whichever
-// node answers it. A write answered UNCHANGED landed no record, and raises
-// nothing: the position it names is the change's last record, somebody else's
-// write.
+// lifecycle, and raises this node's floors past the record it landed in. A
+// write answered UNCHANGED raises nothing: the position it names is the
+// change's last record, somebody else's write.
 func (c CodeSeam) Change(ctx context.Context, p gitlet.ChangeProposal) (gitlet.ChangeResult, error) {
 	out, err := call(ctx, c.r, opCodeChange, nil, p)
 	if !out.Unchanged && (out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending) {
@@ -1396,9 +1329,7 @@ func (c CodeSeam) Change(ctx context.Context, p gitlet.ChangeProposal) (gitlet.C
 }
 
 // Queue asks the repository's committer to decide a write of a target's merge
-// queue, and raises this node's floors past the record it landed in — this
-// node's own write, which its next read of the change and the queue must see
-// on whichever node answers it.
+// queue, and raises this node's floors past the record it landed in.
 func (c CodeSeam) Queue(ctx context.Context, p gitlet.QueueProposal) (gitlet.QueueResult, error) {
 	out, err := call(ctx, c.r, opCodeQueue, nil, p)
 	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
@@ -1408,9 +1339,7 @@ func (c CodeSeam) Queue(ctx context.Context, p gitlet.QueueProposal) (gitlet.Que
 }
 
 // Merge asks the repository's committer to decide a change's merge, and raises
-// this node's floors past the record it landed in — this node's own write,
-// which its next read of the change, its branches and its history must see on
-// whichever node answers it.
+// this node's floors past the record it landed in.
 func (c CodeSeam) Merge(ctx context.Context, p gitlet.MergeProposal) (gitlet.MergeResult, error) {
 	out, err := call(ctx, c.r, opCodeMerge, nil, p)
 	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
@@ -1421,12 +1350,9 @@ func (c CodeSeam) Merge(ctx context.Context, p gitlet.MergeProposal) (gitlet.Mer
 
 // Converse asks the repository's committing data node to decide a write of a
 // change's conversation, and raises this node's SESSION floor past the record
-// it landed in — this node's own write, which its next read of the change
-// must see on whichever node answers it. NEVER THE REPOSITORY'S OWN FLOOR,
-// which a read of the repository's git objects carries as its Gitlet node's sync
-// level: a conversation moves no ref and no pack, and raising it would make
-// that node sync for nothing on the repository's next read. A write answered
-// UNCHANGED landed no record, and raises nothing.
+// it landed in. Never the repository's own floor, a git read's sync level: a
+// conversation moves no ref and no pack, so raising it would make the Gitlet
+// node sync for nothing. A write answered UNCHANGED raises nothing.
 func (c CodeSeam) Converse(ctx context.Context, w gitlet.ConversationWrite) (gitlet.ConversationResult, error) {
 	out, err := call(ctx, c.r, opCodeConversation, nil, w)
 	if !out.Unchanged && (out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending) {
@@ -1436,11 +1362,9 @@ func (c CodeSeam) Converse(ctx context.Context, w gitlet.ConversationWrite) (git
 }
 
 // Mark asks a data node to decide a person's gesture over their own code
-// notices, and raises this node's SESSION floor past the record it landed in —
-// the person's own write, which their next read of their inbox must see on
-// whichever node answers it. A mark answered UNCHANGED landed no record, and
-// raises nothing. A gesture over the files of one change they read
-// (gitlet.MarkWrite.Files) is asked the same way.
+// notices, or over the files of one change they read (gitlet.MarkWrite.Files),
+// and raises this node's SESSION floor past the record it landed in. A mark
+// answered UNCHANGED raises nothing.
 func (c CodeSeam) Mark(ctx context.Context, w gitlet.MarkWrite) (gitlet.MarkResult, error) {
 	out, err := call(ctx, c.r, opCodeMark, nil, w)
 	if !out.Unchanged && (out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending) {
@@ -1451,10 +1375,8 @@ func (c CodeSeam) Mark(ctx context.Context, w gitlet.MarkWrite) (gitlet.MarkResu
 
 // Checks asks the repository's committing data node to decide a write of the
 // repository's checks, and raises this node's SESSION floor past the record it
-// landed in — this node's own write, which its next read of the attempt must
-// see on whichever node answers it. NEVER THE REPOSITORY'S OWN FLOOR, for a
-// conversation's reason: a check moves no ref and no pack. A write answered
-// UNCHANGED landed no record, and raises nothing.
+// landed in; never the repository's own, for [CodeSeam.Converse]'s reason. A
+// write answered UNCHANGED raises nothing.
 func (c CodeSeam) Checks(ctx context.Context, r gitlet.ChecksRequest) (gitlet.ChecksResult, error) {
 	out, err := call(ctx, c.r, opCodeChecks, nil, r)
 	if !out.Unchanged && (out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending) {
@@ -1480,8 +1402,8 @@ func (c CodeSeam) RepoState(ctx context.Context, q gitlet.StateQuery) (gitlet.Re
 	return call(ctx, c.r, opCodeRepoState, nil, q)
 }
 
-// PushOutcome answers whether a push this node proposed landed — and, where it
-// did, raises this node's floors past it, for [CodeSeam.Propose]'s reason.
+// PushOutcome answers whether a push this node proposed landed and, where it
+// did, raises this node's floors past it, as [CodeSeam.Propose] does.
 func (c CodeSeam) PushOutcome(ctx context.Context, q gitlet.OutcomeQuery) (gitlet.PushOutcome, error) {
 	out, err := call(ctx, c.r, opCodePushOutcome, nil, q)
 	if out.Found {
@@ -1490,24 +1412,22 @@ func (c CodeSeam) PushOutcome(ctx context.Context, q gitlet.OutcomeQuery) (gitle
 	return out, err
 }
 
-// Read answers a read of Gitlet: a person's or a surface's, and the
-// engine's own that no principal makes — a cache's `introduced` backfill, a
-// compactor's `compaction_due` listing, a collected executor run's `run_pushes`.
+// Read answers a read of Gitlet: a person's or a surface's, and the engine's
+// own that no principal makes (a cache's `introduced` backfill, a compactor's
+// `compaction_due` listing, a collected executor run's `run_pushes`).
 func (c CodeSeam) Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	return call(ctx, c.r, opCodeRead, nil, q)
 }
 
 // QueueDue answers a page of the queue work a repository's home owes, read
-// whole or refused ([opCodeQueueDue]): the home's merge queue's read. It never
-// raises this node's floor: a read's position is somebody else's writes.
+// whole or refused ([opCodeQueueDue]): the home's merge queue's read. It
+// raises no floor.
 //
-// THE ENGINE'S ALONE, though every holder of the facade could call it: its
-// answer hands over whom each entry's enqueue was made for
+// The engine's alone: its answer names whom each enqueue was made for
 // (gitlet.QueueWorkEntry.WorkingFor), which no reader of a queue may see, so
-// the engine-class guard in this package's tests refuses it, and every road
-// to it, in the packages that serve a person or a model, as it refuses
-// [TurnThreads]. A surface lists a queue through [CodeSeam.Read]'s `queue`
-// kind, whose rows leave it out.
+// the engine-class guard refuses it as it refuses [TurnThreads]. A surface
+// lists a queue through [CodeSeam.Read]'s `queue` kind, whose rows leave it
+// out.
 func (c CodeSeam) QueueDue(ctx context.Context, q gitlet.QueueDueQuery) (gitlet.QueueDueAnswer, error) {
 	return call(ctx, c.r, opCodeQueueDue, nil, q)
 }
@@ -1518,13 +1438,11 @@ func (c CodeSeam) TurnsMovedCode(ctx context.Context, q gitlet.TurnsMovedQuery) 
 	return call(ctx, c.r, opCodeTurnsMoved, nil, q)
 }
 
-// Lifecycle asks a data node to decide one lifecycle request — a tool's
-// create, rename, settings change, archive, unarchive, delete, restore or
-// protection, or a live turn's hold — and raises this node's floors past the
-// record it landed in where it APPLIED or is PENDING: this node's own write,
-// which its next read of the repository must see on whichever node answers.
-// Never for a refusal, nor for an answer that needed no record, whose
-// position is the rows somebody else wrote.
+// Lifecycle asks a data node to decide one lifecycle request (a tool's create,
+// rename, settings change, archive, unarchive, delete, restore or protection,
+// or a live turn's hold), and raises this node's floors past the record it
+// landed in where it APPLIED or is PENDING. Never for a refusal, nor for an
+// answer that needed no record, whose position is somebody else's rows.
 func (c CodeSeam) Lifecycle(ctx context.Context, r gitlet.LifecycleRequest) (gitlet.LifecycleResult, error) {
 	out, err := call(ctx, c.r, opCodeLifecycle, nil, r)
 	wrote := out.Refusal == "" && !out.Position.IsZero() && out.Repo.ID != "" &&
@@ -1536,8 +1454,7 @@ func (c CodeSeam) Lifecycle(ctx context.Context, r gitlet.LifecycleRequest) (git
 }
 
 // ResolveRef answers one ref of one repository at the level the query names.
-// It never raises this node's floor: a read's position is somebody else's
-// writes.
+// It raises no floor.
 func (c CodeSeam) ResolveRef(ctx context.Context, q gitlet.RefQuery) (gitlet.RefAnswer, error) {
 	return call(ctx, c.r, opCodeResolveRef, nil, q)
 }
@@ -1550,39 +1467,27 @@ func (c CodeSeam) GitRead(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAns
 	return call(ctx, c.r, opCodeGitRead, nil, q)
 }
 
-// MergePreview asks the repository's home Gitlet node what merging q.Head into
-// q.Base would do — by the merge the home records a change's mergeability by
-// — and its runner-up when the home cannot answer (ADR-0089), as a read by
-// object id is asked. Its floor is the query's own
-// (gitlet.MergePreviewQuery.Fresh), which [CodeSeam.FloorOf] supplies where the
-// asker's own pushes must be in the copy it merges. It never raises this
-// node's floor: a preview writes nothing.
+// MergePreview asks the repository's home Gitlet node, and its runner-up when
+// the home cannot answer (ADR-0089), what merging q.Head into q.Base would do,
+// by the merge the home records a change's mergeability by. Its floor is the
+// query's own (gitlet.MergePreviewQuery.Fresh), as [CodeSeam.GitRead]'s is. It
+// raises no floor: a preview writes nothing.
 func (c CodeSeam) MergePreview(ctx context.Context, q gitlet.MergePreviewQuery) (gitlet.MergePreviewAnswer, error) {
 	return call(ctx, c.r, opCodeMergePreview, nil, q)
 }
 
 // GitWrite asks the repository's home Gitlet node to build one engine write and
-// land it as a push (ADR-0092), and its runner-up with the same write — the
-// same push — where the home ran nothing or went silent (ADR-0089). Its floor
-// is the write's own (gitlet.EngineWrite.Fresh), as a read's is.
+// land it as a push (ADR-0092), and its runner-up with the same push where the
+// home ran nothing or went silent (ADR-0089). Its floor is the write's own
+// (gitlet.EngineWrite.Fresh). A write gitlet.EngineWrite.Validate refuses is
+// gitlet.ErrInvalid here, before any Gitlet node spends a round trip on an
+// answer every node gives alike; except a value naming whom it is made for
+// that this build does not know (gitlet.IsUnknownToThisBuild): Validate meets
+// it before any other rule, so only a node that knows it can judge the write,
+// malformed or not; it is asked, and answered as the wire does ([unreadHere]).
 //
-// THE ROUTER THAT CARRIES A WRITE HOLDS IT TO THE ONE RULE every party to it
-// does (gitlet.EngineWrite.Validate): one it refuses is gitlet.ErrInvalid, naming
-// the field, before any Gitlet node is asked — never a round trip, a sync and a
-// slot of a Gitlet node's lane for an answer every node would give alike. But
-// NOT A VALUE WHOM IT IS MADE FOR NAMES THAT THIS BUILD DOES NOT KNOW
-// (gitlet.IsUnknownToThisBuild), which is no answer every node gives alike: a
-// node of the build that knows it judges the write — a refusal as malformed
-// included, since Validate meets that value before any other rule — so it is
-// asked, and the walk answers it as the wire does ([unreadHere]).
-//
-// It raises this node's floors past the push's record where the write APPLIED
-// or is PENDING — this node's own write, which its next read of the
-// repository must see on whichever node answers, as a push it proposed does —
-// a write answered from the row an earlier ask of it landed included, since
-// that push is this one. Never for a refusal, of the change or of the push,
-// which landed nothing, nor for an outcome UNKNOWN, whose record may not
-// exist.
+// It raises this node's floors where the write APPLIED or is PENDING, an
+// answer from an earlier ask's row included; never on a refusal or UNKNOWN.
 func (c CodeSeam) GitWrite(ctx context.Context, w gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
 	if err := w.Validate(); err != nil && !gitlet.IsUnknownToThisBuild(err) {
 		return gitlet.EngineWriteResult{}, err
@@ -1594,18 +1499,15 @@ func (c CodeSeam) GitWrite(ctx context.Context, w gitlet.EngineWrite) (gitlet.En
 	return out, err
 }
 
-// FloorOf is this node's floor on repository repoID — the furthest of its own
-// writes TO THAT REPOSITORY it has been told landed — or the zero position
-// where it holds none: what a reader hands a read by object id of the
-// repository as its Fresh, so the home's copy is brought to this node's own
-// pushes there before it is read, since a git operation carries no floor of
-// the router's ([GitCopy]).
+// FloorOf is this node's floor on repository repoID: the furthest of its own
+// writes to that repository it has been told landed, or the zero position. A
+// reader hands it to a read by object id as its Fresh, so the home's copy
+// holds this node's own pushes before it is read; a git operation carries no
+// floor of the router's ([GitCopy]).
 //
-// NEVER THE SESSION'S FLOOR, which is the furthest of this node's writes
-// anywhere on the code log: a push to one repository would floor every later
-// read by object id of every other, whose home's copy — current to every push
-// of ITS repository — would sit below that floor and run a sync round for
-// nothing, on every read, for as long as this node goes on writing anywhere.
+// Never the session's floor, which spans the whole code log: a push to one
+// repository would put every other repository's home copy below it, and each
+// read would run a sync round for nothing.
 func (c CodeSeam) FloorOf(repoID string) statelog.Position {
 	return c.r.codeWrites.floor(repoID)
 }

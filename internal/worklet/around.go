@@ -10,64 +10,34 @@ import (
 	"github.com/crewlet/crewlet/internal/keyset"
 )
 
-// Where one task sits in an answer: `around=<key>`.
+// Where one task sits in an answer: `around=<key>`. A task page holds the
+// board's question, not its rows, so the engine places the task over the
+// whole answer: stepping through the rows a client loaded stops at their end.
 //
-// A task page opened from a board says "3 of 18" and steps to the task before
-// and after it — and a page holds ONE task, not the board it came from. What
-// it holds is the board's QUESTION (the same parameters), so the answer to
-// "where is this one in it" has to come from the engine, over the whole
-// answer rather than the page the board happened to have loaded: a peek that
-// stepped only through the rows a client held would stop dead at row fifty of
-// a four-hundred-task column and call it the end.
-//
-// # The order is the DRAWING order
-//
-// Flat, it is the answer's own sort — the very order a cursor pages through,
-// so the neighbours are the rows paging would have shown next to it. Grouped,
-// it is the board read left to right: every column in the answer's own column
-// order, and within a column its rows in the row order — then, with swimlanes,
-// every lane of a column in lane order before the next column. A column or a
-// lane the answer did not draw ([Answer.GroupsDropped], [Group.SubgroupsDropped])
-// is not in it, because a person stepping through a board steps through what
-// is on the screen. Under a priority list it is the list's own order, which is
-// the order the rows are drawn in there.
-//
-// # A label board counts CELLS
-//
-// On an axis where one task is on several columns — `group_by=tag` — the
-// drawing order holds it once per column, so [Around.TotalHint] is the number
-// of cards on the board rather than the number of tasks, and a task is placed
-// at the FIRST column it appears in. That is what "3 of 18" means on a board
-// where 18 cards are drawn; the answer's own `total_hint` counts tasks, and
-// `groups_overlap` already says the two differ.
-//
-// # Absent is null, never an error
-//
-// A task the question does not match — filtered out, finished under an
-// open-work board, removed, or in a column the board did not draw — answers
-// `around: null`. That is the ordinary case of somebody opening a task that
-// has just moved off the board they came from, and a refusal would take the
-// page down with it.
+// The order is the DRAWING order: flat, the answer's sort (what paging shows
+// beside it); grouped, columns in the answer's order, then lanes, then rows,
+// leaving out what was not drawn ([Answer.GroupsDropped],
+// [Group.SubgroupsDropped]); under a priority list, the list's. A label board
+// (`group_by=tag`) counts CELLS: a task sits at its first column. A task the
+// question does not match answers `around: null`, never an error: it has
+// just moved off the board, and a refusal would take the page down.
 
 // Around is one task's place in an answer's drawing order.
 type Around struct {
-	// Position is 1-based, and NULL when it lies past [TotalHintCeiling]:
-	// counting the rows ahead of a task is the same scan an exact total is,
-	// and the answer bounds it at the same ceiling for the same reason — a
-	// task page polls.
+	// Position is 1-based, and NULL past [TotalHintCeiling]: counting the
+	// rows ahead is the scan an exact total is, bounded for the same reason (a
+	// task page polls).
 	Position *int `json:"position"`
 
-	// Prev and Next are the ADDRESSES of the neighbours ([ItemAddress]),
-	// null at either end: the key a task page's address carries, or the id
-	// of a neighbour whose key another task claimed first — stepping to
-	// that key would open the claimant, which is not on this board.
+	// Prev and Next are the neighbours' ADDRESSES ([ItemAddress]), null at
+	// either end: a neighbour whose key another task claimed first is
+	// addressed by id, since its key would open the claimant.
 	Prev *string `json:"prev"`
 	Next *string `json:"next"`
 
-	// TotalHint is how long the drawing order is, capped at
-	// [TotalHintCeiling] with TotalCapped set exactly as the answer's own
-	// is. Equal to the answer's `total_hint` everywhere except a label
-	// board, where it counts cards — see the package doc above.
+	// TotalHint is the drawing order's length, capped at [TotalHintCeiling]
+	// with TotalCapped as the answer's own: the answer's `total_hint` except
+	// on a label board, where it counts cards.
 	TotalHint   int  `json:"total_hint"`
 	TotalCapped bool `json:"total_capped,omitempty"`
 }
@@ -82,9 +52,8 @@ type segment struct {
 	Clause string
 	Args   []any
 
-	// Count is how many rows the run holds, from the answer's own column
-	// and lane counts — exact, because a GROUP BY is — and unused for a
-	// flat answer, whose one run is the answer.
+	// Count is the run's rows, from the answer's own (exact) column and
+	// lane counts; unused for a flat answer.
 	Count int
 }
 
@@ -140,18 +109,16 @@ func readAround(ctx context.Context, tx *sql.Tx, q Query,
 	}
 	seg := segments[at]
 
-	// THE TASK'S OWN SORT VALUES, which the "before" and "after" predicates
-	// compare against — the same keyset a cursor minted on this row would
-	// carry, so a neighbour here is exactly the row a page boundary on it
-	// would have resumed at.
+	// The task's own sort values: the keyset a cursor minted on this row
+	// carries, so a neighbour is the row a page boundary here resumes at.
 	keys, err := sortValuesOf(ctx, tx, terms, id)
 	if err != nil {
 		return nil, err
 	}
 	after, before := aroundSides(terms, keys)
 
-	// THE ROWS AHEAD ARE THE BEFORE ARMS' COUNTS SUMMED, the arms being
-	// disjoint, and each stops one past the ceiling — so the sum does too.
+	// Rows ahead: the before arms' counts summed (the arms are disjoint);
+	// each stops one past the ceiling, so the sum does too.
 	counted := 0
 	for _, arm := range before {
 		n, countErr := segmentCount(ctx, tx, seg, terms, set, arm.clause,
@@ -168,8 +135,8 @@ func readAround(ctx context.Context, tx *sql.Tx, q Query,
 		out.Position = &position
 	}
 
-	// EACH NEIGHBOUR IS THE FIRST ROW OF THE NEAREST ARM THAT HOLDS ONE, read
-	// in the order for the next and the order reversed for the previous.
+	// Each neighbour is the first row of the nearest arm that holds one, in
+	// the order for the next and reversed for the previous.
 	forward, reverse := renderOrder(terms), renderReverse(terms)
 	for _, arm := range after {
 		if out.Next, err = segmentFirst(ctx, tx, seg, terms, set, arm.clause,
@@ -228,11 +195,10 @@ func aroundListed(rows []TaskRow, id string) *Around {
 
 // drawingOrder is the answer's runs, in the order a person reads them.
 //
-// FROM THE ANSWER'S OWN COLUMNS, never recounted: the columns and lanes were
-// counted, capped and ordered by [readGroups] in this transaction, and a
-// second reading of the same rules here would be the one place "which columns
-// a board draws" could come out differently. A run that holds nothing is
-// skipped, which is every column [fillColumns] minted empty.
+// Taken from the answer's own columns, never recounted: [readGroups] counted,
+// capped and ordered them in this transaction, and a second reading would be
+// a second place "which columns a board draws" could disagree. Empty runs,
+// every column [fillColumns] minted, are skipped.
 func drawingOrder(q Query, fields map[string]resolvedField,
 	answer *Answer) ([]segment, error) {
 
@@ -284,19 +250,14 @@ func (a groupAxis) run(key string, count int) segment {
 
 // aroundSides is the two sides of one task in an order, given its own sort
 // values, as the reads each is taken through ([armReads]): the rows after it,
-// nearest first — the arms a cursor minted on it resumes through — and the
+// nearest first (the arms a cursor minted on it resumes through), and the
 // rows before it, nearest first with the order reversed ([keyset.Before]).
 //
-// BEFORE IS ITS OWN ARMS, the mirror of after's: the row's values with an
-// earlier id, then an earlier last column, out to an earlier first one —
-// every NULL being after a value, the rows before a NULL are every value and
-// the NULLs with an earlier id. It was "not after and not this row", which is
-// exact and which no planner can seek: the negation of a bound bounds
-// nothing, so the rows ahead of a task were counted by walking the run from
-// its start, and its previous neighbour was found by walking the run from its
-// far end to it. Arm by arm, the next and the previous are each one seek of
-// the index the run is read in, from the task outwards, and the count is the
-// arms' counts summed.
+// Before is its own arms, never "not after and not this row": a negated bound
+// bounds nothing, so no planner can seek it. Arm by arm, each neighbour is one
+// index seek outwards from the task and the count is the arms' counts summed.
+// NULL sorts after every value, so the rows before a NULL are every value and
+// the NULLs with an earlier id.
 func aroundSides(terms []sortTerm, keys []any) (after, before []armRead) {
 	order := keysetTerms(terms)
 	return armReads(terms, keyset.After(order, keys)),
@@ -342,11 +303,9 @@ func segmentHolds(ctx context.Context, tx *sql.Tx, seg segment, set taskSet,
 
 // segmentHoldsStatement is [segmentHolds]' probe, named for the plan test.
 //
-// ONE TASK, READ BY ITS KEY ([taskSet.byKey]), because the probe names the
-// task it asks about. Read through the set's own source it was not: a trash's
-// set names the trash's index ([taskSource]), which has no id to seek, and
-// asking which run held one removed task walked every removal in scope once
-// per run of the answer.
+// It reads the one task by its key ([taskSet.byKey]), not through the set's
+// own source: a trash's set names the trash's index ([taskSource]), which has
+// no id to seek, so the probe would walk every removal in scope per run.
 func segmentHoldsStatement(seg segment, set taskSet, id string) (string, []any) {
 	from, bound := segmentFrom(seg, nil, set.byKey(), "t.id = ?", []any{id})
 	return "SELECT 1" + from + " LIMIT 1", bound
@@ -441,16 +400,13 @@ func sortValuesStatement(terms []sortTerm, id string) (string, []any) {
 // renderReverse is [renderOrder] read backwards — the order "the row before
 // this one" is the first row of.
 //
-// THE NULLS MOVE TOO. The forward order puts an absent value LAST in both
-// directions, so reversed they come FIRST in both, and a bare flip of ASC and
-// DESC would not do that: SQLite's own default puts NULL first ascending and
-// last descending, which is right for exactly one of the two. The leading
-// `IS NULL` term states it rather than relying on either default, and it is
-// written only on a column that can be NULL, for the planner reason
-// [renderOrder] gives — which is why the trash's removal, never NULL inside a
-// removed listing ([sortTerms]), reads backwards as its index does, where
-// written NULL-able it led the reversed order with a term no index holds and
-// a task's previous neighbour in the trash sorted the whole trash.
+// The NULLs move too: forward puts an absent value last in both directions,
+// so reversed it comes first in both, which a bare ASC/DESC flip would not do
+// (SQLite puts NULL first ascending, last descending). The leading `IS NULL`
+// term states it, written only on a NULL-able column for the planner reason
+// [renderOrder] gives: the trash's removal, never NULL in a removed listing
+// ([sortTerms]), reads backwards as its index does rather than leading with a
+// term no index holds.
 func renderReverse(terms []sortTerm) string {
 	rendered := make([]string, 0, len(terms))
 	for _, term := range terms {

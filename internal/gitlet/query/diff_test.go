@@ -17,13 +17,11 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/query"
 )
 
-// A DIFF'S STAT IS FILTERED BY PATHS HERE, OVER GIT'S WHOLE RAW ANSWER. No
-// path reaches git's command line — the stat's walk is the same diff-tree
-// whatever the filter — and the filter admits a file equal to one of its
-// paths or under one as a directory, on either side of a rename. The files,
-// their statuses, ids and counts are git's own (the person's git's numstat of
-// the same commits is the oracle); the totals are over every file the filter
-// admits; and paged at a small knob, the pages concatenate to the stat, each
+// A DIFF'S STAT IS FILTERED BY PATHS HERE, OVER GIT'S WHOLE RAW ANSWER: no
+// path reaches git's command line, and the filter admits a file equal to or
+// under one of its paths, on either side of a rename. Files, statuses, ids and
+// counts are git's own (the person's numstat is the oracle), the totals cover
+// every admitted file, and pages at a small knob concatenate to the stat, each
 // carrying the totals.
 func TestADiffStatIsFilteredByPathsInGo(t *testing.T) {
 	t.Parallel()
@@ -71,8 +69,7 @@ func TestADiffStatIsFilteredByPathsInGo(t *testing.T) {
 			if d.Base != base || d.Head != head {
 				t.Errorf("base %s head %s, want %s %s", d.Base, d.Head, base, head)
 			}
-			// A PAGE OF NO FILE IS A PAGE: an empty list, never null, as
-			// every answer's list is.
+			// A PAGE OF NO FILE IS A PAGE: an empty list, never null.
 			if d.Files == nil {
 				t.Errorf("filter %v: the stat's files are null, want a page (empty where the filter admits "+
 					"nothing)", tc.paths)
@@ -134,19 +131,15 @@ func TestADiffStatIsFilteredByPathsInGo(t *testing.T) {
 	})
 }
 
-// A FILTERED STAT COUNTS ONLY THE FILES ITS PATHS ADMIT. What a stat costs is
-// its line counts — git diffs the text of every pair it counts — so a stat
-// naming paths has git count the files they admit and no other: the walk of
-// the two trees (diff-tree's raw records, which count nothing) is filtered
-// here, and the admitted records alone go to ONE diff-pairs on its standard
-// input, so a stat of one directory of a wide diff costs git that directory's
-// diffs rather than the whole diff's. The counts are git's own — the person's
-// numstat of the same commits is the oracle — a stat naming no paths is still
-// the one diff-tree that writes both halves, and a filter admitting nothing
-// counts nothing at all.
+// A FILTERED STAT COUNTS ONLY THE FILES ITS PATHS ADMIT. A stat's cost is its
+// line counts (git diffs every pair it counts), so the walk of the two trees
+// (diff-tree's raw records, which count nothing) is filtered here and only the
+// admitted records go to ONE diff-pairs on stdin. Counts are git's own (the
+// person's numstat is the oracle); a stat naming no paths is still the one
+// diff-tree writing both halves; a filter admitting nothing counts nothing.
 //
-// Mutation: count the stat's lines over every record the walk read — git is
-// handed files the paths do not admit, red.
+// Mutation: count over every record the walk read — git is handed files the
+// paths do not admit, red.
 func TestAFilteredStatCountsOnlyTheFilesItAdmits(t *testing.T) {
 	t.Parallel()
 	rec := &recording{}
@@ -229,19 +222,15 @@ func TestAFilteredStatCountsOnlyTheFilesItAdmits(t *testing.T) {
 	})
 }
 
-// A STAT THE DEADLINE ENDS NAMES WHAT NARROWS IT. A stat's process the read's
-// deadline ended is gitlet.ErrSliceTooLarge naming the narrowing — never
-// unready, since another node would take as long — and the narrowing named is
-// one that does narrow it: a stat naming no paths is told to name some, since
-// a stat that names them counts the files they admit and no other; a
-// filtered stat whose count ran out, to name fewer; a filtered stat's walk of
-// the two trees, which no path narrows, to diff commits closer together; and
-// a comparison, whose stat is of its merge base and head, to diff those two
-// naming paths.
+// A STAT THE DEADLINE ENDS NAMES WHAT NARROWS IT: gitlet.ErrSliceTooLarge,
+// never unready (another node would take as long), naming a narrowing that
+// works. A stat naming no paths is told to name some (it then counts only what
+// they admit); a filtered stat's count, to name fewer; a filtered stat's walk,
+// which no path narrows, to diff commits closer together; a comparison, whose
+// stat is of its merge base and head, to diff those two naming paths.
 //
-// Mutation: refuse every stat "diff commits closer together", as the stat did
-// before it counted only what its paths admit — the stat naming no paths and
-// the comparison are red.
+// Mutation: refuse every stat "diff commits closer together" — the stat naming
+// no paths and the comparison are red.
 func TestAStatTheDeadlineEndsNamesWhatNarrowsIt(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -278,9 +267,9 @@ func TestAStatTheDeadlineEndsNamesWhatNarrowsIt(t *testing.T) {
 	}
 }
 
-// deadlined is a query.Pool on which every process ends picks answers as one
-// its deadline ended does — gitproc.ErrDeadline, having run nothing — and
-// every other runs on the pool beneath.
+// deadlined is a query.Pool answering every process ends picks as its
+// deadline ending it (gitproc.ErrDeadline, having run nothing), and running
+// every other on the pool beneath.
 type deadlined struct {
 	query.Pool
 	ends func(args []string) bool
@@ -337,17 +326,13 @@ func (r *recording) on(x *fixture, i int) query.Pool {
 	return r
 }
 
-// A FILE'S PATCH IS GIT'S OWN PATCH OF THE COMMITS FOR IT. The person's own
-// `git diff --full-index` of the two commits, for the one file, is the oracle,
-// byte for byte: a file modified (hunks under a header naming the paths),
-// added and deleted (against /dev/null, with git's `\ No newline at end of
-// file`), made executable alone (no hunk), a binary pair and a binary file
-// added (git's one line), an empty file added, a file made a symbolic link
-// (the deletion and the creation git prints for a change of type), paths git
-// quotes and a UTF-8 path it writes as it is, and a submodule added, moved to
-// another commit and removed. The patch's counts are its own lines', paged at
-// a small knob it concatenates to the whole, and a file the diff does not
-// touch has no patch.
+// A FILE'S PATCH IS GIT'S OWN PATCH OF THE COMMITS FOR IT, byte for byte
+// against the person's `git diff --full-index` of the one file: modified, added
+// and deleted (with git's `\ No newline at end of file`), a mode change alone
+// (no hunk), binary pairs and additions, an empty file, a change of type (a
+// deletion and a creation), quoted and UTF-8 paths, and a submodule added,
+// moved and removed. Its counts are its own lines', paged at a small knob it
+// concatenates to the whole, and a file the diff does not touch has no patch.
 func TestAFilesPatchNamesItsPaths(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -453,10 +438,9 @@ func TestAFilesPatchNamesItsPaths(t *testing.T) {
 }
 
 // A RENAME IS FOUND WHEN ASKED, AND ONLY THEN. Without Renames a file moved
-// with an edit is one deleted and one added, as diff-tree's plumbing answers;
-// with it, one renamed file naming where it was, its similarity, and its patch
-// git's own rename header and hunk — and a stat filtered by where the file was
-// still finds it, its counts the rename's.
+// with an edit is one deleted and one added (diff-tree's plumbing); with it,
+// one renamed file naming where it was and its similarity, its patch git's own,
+// and a stat filtered by its old path still finds it, with the rename's counts.
 func TestARenameIsFoundWhenAsked(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())

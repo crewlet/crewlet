@@ -34,24 +34,19 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
-// The benchmarks below are the figures the package doc's "Measured" section
-// records, and the ones a change to the boot or to the write path is compared
-// by (make bench, six counts on each tree, benchstat).
+// These benchmarks are the package doc's "Measured" figures; compare a change
+// to the boot or the write path by them (make bench, six counts a tree,
+// benchstat).
 
-// BenchmarkBoot is a warm Gitlet node's boot of its cache: Prepare — its reading
-// of repos/ and Layout.Held — then Open and Stop, over repos repositories of
-// packs packs each (a pack is three files; one push stores one until its
-// repository's home merges them, which holds a busy repository near
-// gitlet.CompactTargetPacks and under gitlet.MaxPacksPerRepo, so 100 and 1 000
-// packs are a repository its compactions keep up with and one falling behind
-// them). With a state in every incarnation, what each holds is the state's to
-// say, so a boot reads one small file a repository and stats none of its
-// packs: the figure follows repos and not packs. states=false is the same
-// tree with no state anywhere — what a boot pays for an incarnation it must
-// walk, and what every boot paid when Held was a walk of repos/.
+// BenchmarkBoot is a warm Gitlet node's boot of its cache (Prepare, then Open
+// and Stop) over repos repositories of packs packs each: 100 and 1 000 packs
+// are a repository its compactions keep near gitlet.CompactTargetPacks and one
+// falling behind them. A boot reads one small state a repository and stats no
+// pack, so the figure follows repos, not packs; states=false has no state
+// anywhere, so every incarnation is walked.
 //
-// The pack files are empty: nothing a boot does reads their bytes, and a
-// fixture of millions of real packs would measure the disk filling up.
+// The pack files are empty: a boot reads none of their bytes, and millions of
+// real packs would measure the disk filling up.
 func BenchmarkBoot(b *testing.B) {
 	quiet(b)
 	gittest.RequireNode(b)
@@ -70,9 +65,8 @@ func BenchmarkBoot(b *testing.B) {
 			if err != nil {
 				b.Fatalf("Prepare: %v", err)
 			}
-			// The pool is built once over the HOME the first Prepare names;
-			// every later Prepare moves HOME aside, which a pool built
-			// already never looks at again.
+			// Built once over the first Prepare's HOME: a later Prepare moves
+			// HOME aside, which a built pool never looks at again.
 			pool, err := gitproc.New(b.Context(), gitproc.Options{Home: first.Home, MaxProcesses: 2})
 			if err != nil {
 				b.Fatalf("gitproc.New: %v", err)
@@ -94,9 +88,8 @@ func BenchmarkBoot(b *testing.B) {
 				}
 				c.Stop(context.Background())
 
-				// The boot's own moves into trash/ are the janitor's to
-				// remove, and this loop starts none: emptied with the timer
-				// stopped, so every boot finds what a warm node's does.
+				// No janitor empties the boot's trash/ here: empty it untimed,
+				// so every boot finds what a warm node's does.
 				b.StopTimer()
 				emptyTrash(b, dir)
 				b.StartTimer()
@@ -152,12 +145,10 @@ func emptyTrash(b *testing.B, dir string) {
 	}
 }
 
-// BenchmarkPlace prices the durability rule (durable.go): a step that renames
-// files files, each staged and already durable, into one directory — a
-// round's packs into objects/pack — made durable by a sync of the directory
-// after EVERY rename (sync=each) against ONE sync after the step (sync=once).
-// Each sync is a journal commit, which is why the rule syncs a step's
-// directory once.
+// BenchmarkPlace prices the durability rule (durable.go): a step renaming files
+// staged, durable files into one directory, with a directory sync after every
+// rename (sync=each) against one after the step (sync=once). Each sync is a
+// journal commit, which is why the rule syncs a step's directory once.
 func BenchmarkPlace(b *testing.B) {
 	const files = 300
 	for _, each := range []bool{true, false} {
@@ -210,14 +201,12 @@ func BenchmarkPlace(b *testing.B) {
 	}
 }
 
-// BenchmarkBundleFiles prices a cold sync's own disk work for a bundle, apart
-// from its GET and its hashing: the bundle's three files created in tmp/ and
-// written at a median push's sizes, closed, made durable and renamed into one
-// pack directory, .idx last — placePack's order — by width workers at once:
-// one, and FetchConcurrency. sync=together syncs a bundle's three files at
-// once, as placePack does; sync=none leaves them unsynced, to show what the
-// syncs add. create-us is what a bundle's three creates took, so the figure
-// names its own terms.
+// BenchmarkBundleFiles prices a cold sync's disk work for a bundle, without its
+// GET or hashing: its three files created in tmp/, written at a median push's
+// sizes, closed, synced and renamed into one pack directory .idx last
+// (placePack's order), by width workers (one, and FetchConcurrency).
+// sync=together syncs the three at once, as placePack does; sync=none skips the
+// syncs to show what they add. create-us is a bundle's three creates.
 func BenchmarkBundleFiles(b *testing.B) {
 	const bundles = 400
 	sizes := []int{medianPush, 1_200, 100}
@@ -274,10 +263,8 @@ func BenchmarkBundleFiles(b *testing.B) {
 	}
 }
 
-// bundleFiles is one bundle's file work for BenchmarkBundleFiles: bundle i's
-// three files created in tmp, written from data at sizes, closed, synced at
-// once when durable, and renamed into dest, the .idx last. The creates' time
-// is added to created.
+// bundleFiles is BenchmarkBundleFiles' work for bundle i, synced only when
+// durable; the creates' time is added to created.
 func bundleFiles(tmp, dest string, i int, data []byte, sizes []int, durable bool, created *atomic.Int64) error {
 	exts := []string{".pack", ".idx", ".rev"}
 	began := time.Now()
@@ -327,15 +314,13 @@ func bundleFiles(tmp, dest string, i int, data []byte, sizes []int, durable bool
 	return nil
 }
 
-// BenchmarkAdvertise is a push's advertisement — receive-pack --stateless-rpc
-// --advertise-refs, through the pool — over a repository of refs refs:
-// in=cache runs it in the incarnation itself, the floor; in=view in an
-// advertisement view with no configuration of its own, where receive-pack
-// also lists its alternate's refs — the incarnation's, the same packed-refs —
-// for the .have lines it then has none of to print; in=view-config in the
-// view with Cache.AdvertiseConfig, which is how the host runs it. The three
-// print the same bytes (checked once an arm), so the figures differ by the
-// alternate's listing alone. refs=100000 is gitlet.MaxRefsPerRepo.
+// BenchmarkAdvertise is a push's advertisement (receive-pack --stateless-rpc
+// --advertise-refs) over a repository of refs refs: in=cache in the incarnation
+// itself, the floor; in=view in an advertisement view with no configuration,
+// where receive-pack also lists its alternate's refs for .have lines it then
+// has none of to print; in=view-config with Cache.AdvertiseConfig, as the host
+// runs it. All three print the same bytes (checked once an arm), so they differ
+// by the alternate's listing alone. refs=100000 is gitlet.MaxRefsPerRepo.
 func BenchmarkAdvertise(b *testing.B) {
 	quiet(b)
 	for _, refs := range []int{10_000, 100_000} {
@@ -391,80 +376,68 @@ func syncDirectory(b *testing.B, dir string) {
 	}
 }
 
-// quiet keeps a benchmark's output to its figures: an info line in the middle
-// of benchmark output is a line benchstat cannot read.
+// quiet keeps a benchmark's output to its figures: benchstat cannot read an
+// info line among them.
 func quiet(b *testing.B) {
 	logging.SetVerbosity(slog.LevelWarn, logging.FormatConsole)
 	b.Cleanup(func() { logging.SetVerbosity(slog.LevelInfo, logging.FormatConsole) })
 }
 
-// THE CACHE'S BYTE PATH, MEASURED: what a node pays the first time it serves
-// a repository (BenchmarkColdSync), what every node pays after every push
-// (BenchmarkDeltaSync), what indexing a repository's packs costs
-// (BenchmarkMidx), and what one object lookup costs across many packs with
-// and without that index (BenchmarkPackLookup). Every fixture is real git — a
-// history fast-imported, each push's objects packed alone as the bundle a
-// receiving node's receive-pack stores, its row in the fake log — built with
-// the timer stopped. The arms whose fixture takes minutes and gigabytes — the
-// cold syncs of gitlet.MaxPacksPerRepo and of 10 000 pushes, a repository of
-// 10 000 packs, a 5 GB index — run only under gittest.LargeEnv.
+// THE BYTE PATH: BenchmarkColdSync (a node's first sync of a repository),
+// BenchmarkDeltaSync (every node's sync after every push), BenchmarkMidx
+// (indexing a repository's packs) and BenchmarkPackLookup (an object lookup
+// across many packs). Every fixture is real git, built untimed: a history
+// fast-imported, each push's objects packed alone as receive-pack stores them,
+// its row in the fake log. Arms whose fixture takes minutes and gigabytes run
+// only under gittest.LargeEnv.
 
-// benchWorkers is how many of a fixture's pushes are packed and stored at
-// once: a push's pack is mostly a git process starting, and its put to a
-// bucket a round trip away mostly waiting, so sixteen keep four cores busy
-// and the round trips overlapped.
+// benchWorkers is how many fixture pushes are packed and stored at once: a pack
+// is mostly a git process starting and a put mostly waiting on a round trip, so
+// sixteen keep four cores busy.
 const benchWorkers = 16
 
-// medianPush is what the median push adds (master §2.9), in bytes: every
-// push of a cold sync's history but a tail's first, and every push a delta
-// sync downloads.
+// medianPush is the median push's bytes (master §2.9).
 const medianPush = 150_000
 
-// benchIdent and benchEpoch are every imported commit's committer and the
-// first one's time, each later commit a second on, so a fixture is the same
-// history — and the same packs — on every run.
+// benchIdent and benchEpoch are every imported commit's committer and the first
+// one's time, each later commit a second on, so a fixture is the same history
+// and packs on every run.
 const (
 	benchIdent = "Crewlet Bench <bench@example.com>"
 	benchEpoch = 1_767_225_600 // 2026-01-01T00:00:00Z
-	// nextEpoch is the first nextPush's time: past every history's last
-	// commit, so a push lands on top of a history in time as well.
+	// nextEpoch is the first nextPush's time: past every history's last commit,
+	// so a push lands on top in time too.
 	nextEpoch = benchEpoch + 100_000_000
 )
 
-// providerFirstByte is how long the S3 fake waits before it answers each
-// request in BenchmarkColdSync's every shape: 30 ms, the floor of what S3
-// answers in, and the arm the cache's figures were first taken at. Every GET
-// pays it whatever its size, which is what makes a cold sync bound by its GET
-// count — sixteen at once at the 33 ms each takes allow about 480 bundles a
-// second, and a round at FetchConcurrency reaches about 450 — and what a fake
-// on loopback, answering thousands a second, could never show.
+// providerFirstByte is the S3 fake's wait before answering each request in
+// every BenchmarkColdSync shape: 30 ms, the floor of S3's. Every GET pays it
+// whatever its size, which bounds a cold sync by its GET count (sixteen at once
+// at about 33 ms a GET allow some 480 bundles a second); a loopback fake
+// answering thousands a second could never show that.
 const providerFirstByte = 30 * time.Millisecond
 
-// s3FirstBytes is the first byte BenchmarkColdSync's fake also answers its
-// pack-count shapes at — the compacted repository's, the pack bound's and the
-// uncompacted one's: 100 and 200 ms, the range AWS's performance guidelines
-// give for S3's first byte, at which a GET holds its slot three to six times
-// as long as at providerFirstByte — so a cold sync's rate at a real bucket is
-// MEASURED at each end of it, never computed from the 30 ms arm.
+// s3FirstBytes are the first bytes BenchmarkColdSync's pack-count shapes also
+// run at: 100 and 200 ms, S3's range per AWS's performance guidelines, so a
+// cold sync's rate at a real bucket is measured at each end, never computed
+// from the 30 ms arm.
 var s3FirstBytes = []time.Duration{100 * time.Millisecond, 200 * time.Millisecond}
 
 // The pack counts BenchmarkColdSync reads a repository at, each a push of
 // medianPush bytes a pack.
 const (
-	// compactedPacks is a repository its home compacts: gitlet.CompactTargetPacks,
-	// the live packs a compaction holds one near — what a cold sync of every
-	// compacted repository costs.
+	// compactedPacks is a repository its home compacts, held near
+	// gitlet.CompactTargetPacks live packs.
 	compactedPacks = gitlet.CompactTargetPacks
 
-	// uncompactedPacks is a repository of 10 000 pushes that NOTHING
-	// compacted, one live pack a push — the before: a repository of
-	// Gitlet's first build, five times the pack bound (gitlet.MaxPacksPerRepo)
-	// that refuses such a history's pushes now until its home has merged them.
+	// uncompactedPacks is 10 000 pushes NOTHING compacted, one pack a push:
+	// five times gitlet.MaxPacksPerRepo, which refuses such pushes until the
+	// home merges them. It is the uncompacted baseline beside compactedPacks.
 	uncompactedPacks = 10_000
 )
 
-// providerConnBytes is the most a second the S3 fake sends one connection of
-// an object's bytes: 80 MB/s, the low end of what one S3 connection carries.
+// providerConnBytes is the most the S3 fake sends one connection a second: 80
+// MB/s, the low end of one S3 connection.
 const providerConnBytes = 80_000_000
 
 // commitsOf is ref's commits in src, oldest first.
@@ -473,10 +446,9 @@ func commitsOf(b *testing.B, client *gittest.Client, src, ref string) []string {
 	return strings.Fields(client.Run(b, src, "rev-list", "--reverse", ref))
 }
 
-// chacha is a fixture's random bytes and draws for the n'th of what a domain
-// generates: the same on every run, and different for every (domain, n) — so
-// no two pushes of a long arm carry the same bytes, which a later push of
-// bytes an earlier one stored would not download at all.
+// chacha is a fixture's seeded bytes and draws for the n'th item of a domain:
+// the same every run and different for every (domain, n), since a push of bytes
+// an earlier one stored would download nothing.
 func chacha(domain byte, n uint64) (*rand.ChaCha8, *rand.Rand) {
 	var key [32]byte
 	key[0] = domain
@@ -544,11 +516,10 @@ func splitPushes(commits []string, n int) []pushRange {
 	return out
 }
 
-// storePushes packs each push's objects alone out of src — the bundle a
-// receiving node's receive-pack stores — puts it in w's store, and answers
-// every push's row in order and the bytes they name. benchWorkers pushes at
-// once, each pack's files removed once stored, so the disk holds a worker's
-// pack at a time.
+// storePushes packs each push's objects alone out of src, as a receiving node's
+// receive-pack stores them, puts each bundle in w's store, and answers every
+// push's row in order and their bytes: benchWorkers at once, each pack's files
+// removed once stored, so the disk holds one pack a worker.
 func (w *syncWorld) storePushes(b *testing.B, src string, pushes []pushRange) ([]gitlet.PackRow, int64) {
 	b.Helper()
 	scratch := b.TempDir()
@@ -598,10 +569,9 @@ func (w *syncWorld) logRepo(n int) string {
 	return id
 }
 
-// writePushes writes each push to repo in w's log as the record that landed
-// it: its pack's row, main moved to its tip, and its row naming the tip as a
-// commit it introduced — so every delta's fold builds commit records, as a
-// real push's does.
+// writePushes writes each push to repo in w's log as the record that landed it:
+// its pack's row, main moved to its tip, and the tip as a commit it introduced,
+// so every delta's fold builds commit records as a real push's does.
 func (w *syncWorld) writePushes(repo string, pushes []pushRange, rows []gitlet.PackRow) {
 	for i, p := range pushes {
 		w.log.writePushes(repo, fakePush{packs: []gitlet.PackRow{rows[i]},
@@ -609,11 +579,9 @@ func (w *syncWorld) writePushes(repo string, pushes []pushRange, rows []gitlet.P
 	}
 }
 
-// coldCache prepares and opens a cache in a directory of its own under root
-// — a node that has never served the repository — over w's rows, store and
-// recorder (each mutate applied after), its pool a slot a core as a node's
-// is, a round fetching fetch bundles at once. drop stops it and removes its
-// directory, so a loop of cold syncs holds one cache on the disk at a time.
+// coldCache is a node that has never served the repository: bootCache over a
+// directory of its own under root. drop stops it and removes the directory, so
+// a loop of cold syncs holds one cache on disk at a time.
 func (w *syncWorld) coldCache(b *testing.B, root string, n, fetch int, mutate ...func(*cache.Options)) (
 	_ *cache.Cache, drop func()) {
 
@@ -629,13 +597,11 @@ func (w *syncWorld) coldCache(b *testing.B, root string, n, fetch int, mutate ..
 }
 
 // keptCache is a node RESTARTED OVER THE CACHE IT KEPT, in a directory of its
-// own under root: a first boot syncs every repository of ids, linearizably and
-// all at once with no cap on its full reads, and stops; a second boots over
-// the same directory (each mutate applied to it) — every repository's copy
-// and state where the last process left them, and none converged in this
-// one, so each one's first round reads its rows whole and has nothing to
-// download (cache.Options.Objects is the caller's to hold to that). drop
-// stops it and removes its directory.
+// own under root: a first boot syncs every repository of ids (linearizable, all
+// at once, full reads uncapped) and stops; a second boots over the same
+// directory with mutate applied, so each repository's first round reads its
+// rows whole and has nothing to download (holding cache.Options.Objects to that
+// is the caller's). drop stops it and removes the directory.
 func (w *syncWorld) keptCache(b *testing.B, root string, n int, ids []string, mutate ...func(*cache.Options)) (
 	_ *cache.Cache, drop func()) {
 
@@ -667,11 +633,10 @@ func (w *syncWorld) keptCache(b *testing.B, root string, n int, ids []string, mu
 	}
 }
 
-// bootCache prepares and opens a cache over dir as it finds it — a node's
-// boot — reading w's rows, store and recorder (each mutate applied after),
-// its pool a slot a core as a node's is, a round fetching fetch bundles at
-// once. stop stops it and lets the directory go with everything it holds: a
-// node going down, its cache's volume kept.
+// bootCache is a node's boot over dir as it finds it: a cache over w's rows,
+// store and recorder (each mutate applied after), its pool a slot a core, a
+// round fetching fetch bundles at once. stop is the node going down with its
+// cache's volume kept.
 func (w *syncWorld) bootCache(b *testing.B, dir string, fetch int, mutate ...func(*cache.Options)) (
 	_ *cache.Cache, stop func()) {
 
@@ -713,8 +678,8 @@ func (s coldShape) size(i int) int64 {
 	return medianPush
 }
 
-// coldWorld is a sync world over the bucket a cold-sync arm names — the S3
-// fake answering every request firstByte after it arrives.
+// coldWorld is a sync world over the bucket a cold-sync arm names, the S3 fake
+// answering each request firstByte after it arrives.
 func coldWorld(b *testing.B, bucket string, firstByte time.Duration) *syncWorld {
 	b.Helper()
 	switch bucket {
@@ -753,63 +718,18 @@ func (w *syncWorld) coldRepo(b *testing.B, shape coldShape) (string, int64, []gi
 	return repo, total, rows, commits
 }
 
-// BenchmarkColdSync is a Gitlet node's FIRST sync of a repository it has never
-// served — a clone on a node that just joined, a rebuild, a repository the
-// budget evicted — from linearizable rows to an answer: every push's bundle
-// read from the object store, verified, split and renamed in, the round's
-// multi-pack-index, packed-refs and the state. Over a history of packs
-// pushes, each one commit adding medianPush seeded random bytes, read by a
-// FRESH cache (prepared and opened with the timer stopped) fetching fetch
-// bundles at once. The pack counts are a compacted repository's
-// (compactedPacks, 50), 200, the pack bound's (gitlet.MaxPacksPerRepo, 2 048:
-// exactly the most a repository may hold) and an uncompacted repository's
-// (uncompactedPacks, 10 000: the before); the last two only under
-// CREWLET_BENCH_LARGE=1.
-//
-//   - bucket=memobj is the store in process: the node's own side alone —
-//     SHA-256 over every byte, the disk.
-//   - bucket=fake is the S3 fake over HTTP at the production part size, 80
-//     MB/s a connection (providerConnBytes) and firstbyte to every
-//     request's first byte: 30 ms for every shape (providerFirstByte), and
-//     100 and 200 ms — S3's own range (s3FirstBytes) — for the compacted
-//     repository's and the bound's at the cache's two widths, fetch=16 and
-//     fetch=32, and for the uncompacted one's.
-//   - bucket=real is the bucket CREWLET_BENCH_S3_* names
-//     (s3fake.RealBucket), and skips when none is named.
-//   - shape=tail is the same 200 pushes with the first 512 MiB — an
-//     import's first step — whose download is the round's tail, shortened
-//     only by reading one object's ranges at once (s3obj).
-//
-// fetch=1 is one GET at a time; fetch=16 is FetchConcurrency, half the
-// node's; fetch=32 is NodeFetches, the whole node given to one repository,
-// which the share gives up. The uncompacted shape runs at FetchConcurrency
-// alone, a repository's own width, on every bucket: it is the before beside
-// the compacted shape's after, and at the other widths it is ten thousand
-// GETs that tell nothing the bound's 2 048 do not — one at a time, six
-// minutes a count of first bytes in a row at 30 ms. packs/s at 200 and at
-// 2 048 pushes is one rate when a cold sync is bound by its GETs rather than
-// by the node; at a first byte f, fetch GETs in flight bound it near fetch/f a
-// second. get-ms is one GET as the cache sees it, from its open to its close;
-// dl-s is a sync's DOWNLOADS, from its first GET's open to its last GET's
-// close — what gitlet.MaxPacksPerRepo is held to at the bound (27 s, half the
-// spool wait, at 200 ms and fetch=16), apart from the whole round (ns/op),
-// which adds the read of the rows, the round's index and its peel and is held
-// to the spool wait itself; cpu-ms/pack is the process's CPU a bundle, user
-// and system — the S3 fake's server's among it, since it runs in the process
-// and on the same cores, which a real bucket's does not.
-//
-// A PUBLISHED repository's (coldLayered, at S3's 100 and 200 ms and fetch=16):
-// layers=chain is the compacted shape and the bound's under one root layer
-// the maintainer published, and layers=chain21 the compacted shape under the
-// twenty-one layers the default repo_max_bytes' chain reaches — the round
-// installing the chain before it answers, its parts in the same download
-// queue as its packs: packs/op and parts/op its GETs, ns/op its answer, and
-// count-s and clone-s the first count of every object through the bitmap
-// and the first clone after it — beside the same shape's arm above, which
-// publishes nothing. install=catchup is the node's INSTALLER placing one
-// one-part layer on each of 1 000 repositories (10 000 under
-// CREWLET_BENCH_LARGE=1) whose copies it already holds — a restore's
-// catch-up (catchUp).
+// BenchmarkColdSync is a node's FIRST sync of a repository it never served,
+// from linearizable rows to an answer, by a fresh cache fetching fetch bundles
+// at once (1; FetchConcurrency; NodeFetches, the whole node). Shapes are
+// compactedPacks, 200, gitlet.MaxPacksPerRepo and uncompactedPacks pushes of
+// medianPush (the last two under CREWLET_BENCH_LARGE=1, uncompacted at
+// FetchConcurrency only), and shape=tail, 200 behind a 512 MiB first push whose
+// download only s3obj's ranged reads shorten. bucket=memobj is the node's side
+// alone, fake the S3 fake at providerConnBytes and firstbyte, real the
+// CREWLET_BENCH_S3_* bucket. dl-s (first GET's open to last GET's close) is
+// what gitlet.MaxPacksPerRepo is held to: 27 s, half the spool wait, at 200 ms
+// and fetch=16, and ns/op to the whole wait. cpu-ms/pack includes the
+// in-process fake's CPU. layers=… is coldLayered; install=catchup is catchUp.
 func BenchmarkColdSync(b *testing.B) {
 	quiet(b)
 	type arm struct {
@@ -916,10 +836,8 @@ func BenchmarkColdSync(b *testing.B) {
 	}
 }
 
-// timedObjects is the cache's object store with every read timed from its
-// open to its close: what one GET of a cold sync takes as the cache sees it,
-// and the span from the earliest open to the latest close since reset — the
-// sync's downloads, whatever else its round does.
+// timedObjects times every read from open to close (get-ms) and keeps the span
+// from the earliest open to the latest close since reset (dl-s).
 type timedObjects struct {
 	inner      cache.Objects
 	took, gets atomic.Int64
@@ -986,8 +904,8 @@ func (r *timedRead) Close() error {
 	return err
 }
 
-// processCPU is the CPU time this process has spent, user and system: every
-// goroutine's, the S3 fake's server among them, since it runs in the process.
+// processCPU is this process's user and system CPU time, the in-process S3
+// fake's among it.
 func processCPU(b *testing.B) time.Duration {
 	b.Helper()
 	var ru syscall.Rusage
@@ -997,45 +915,15 @@ func processCPU(b *testing.B) time.Duration {
 	return time.Duration(ru.Utime.Nano() + ru.Stime.Nano())
 }
 
-// BenchmarkColdJoin is Gitlet nodes BRINGING UP MANY REPOSITORIES AT ONCE, every
-// repository asked of each at the same moment — a balancer moving traffic
-// onto them, CI fetching through them — against ONE data node (coldLane):
-// the queue.ConcurrentAnswers answers its shared lane gives code.repo_state
-// beside every other read of the fleet (estate's laneShared), a request past
-// them waiting its turn in arrival order, and inside each answer one of the
-// coldReaderConns reader connections its store scans a page on. Each node is
-// asked for 500 repositories of one pack and one ref and reads their rows
-// through the data node with its full reads capped at rounds, while the
-// lane's OTHER traffic (a seat's tracker read, a page write, the
-// code.resolve every git request is admitted by) arrives every
-// coldOtherEvery and holds its answer and its reader coldOtherServe. Two
-// events, each the cap's cost shown another way:
-//
-//   - cache=fresh, FOUR NODES JOINING a fleet together with caches that have
-//     never served a repository: every round downloads its pack beside its
-//     read, so the reads' time is hidden behind the downloads of repositories
-//     of more than a handful of packs (NodeFetches a node) — and what the cap
-//     is for, the other traffic's wait behind four nodes' full reads, shows.
-//     rounds is MaxFullRounds' candidates 4 to 32, and 500, a cap no node
-//     asked for 500 repositories meets: the node without one.
-//   - cache=kept, ONE NODE RESTARTED over the cache it kept — a rolling
-//     restart of a Gitlet node whose gitlet.cache_dir is on a volume the restart
-//     keeps (keptCache): every repository's first round in the new process
-//     is a full read, and it has nothing to download, so the reads ARE how
-//     long the node takes to come up. rounds is 4 to 32, 64 — the lane's
-//     every answer — and 500.
-//
-// THE DATA NODE IS A MODEL: every page holds its answer and its reader
-// coldPageServe, a full page's cost, whatever the fake log's page holds — so
-// each repository's read is one page at that cost — and a reader given back
-// goes to a waiting read drawn at random, as database/sql's pool hands one
-// out (coldReaders); the cache's own work (the pack's GET from a store in the
-// process, its files, packed-refs and the state, and on a restart the
-// hashing of every index file a previous process left) is real. wait-p99-ms
-// and wait-max-ms are the other traffic's wait for its answer and its reader
-// — what the cap is for; up-s is how long the last of the nodes' syncs took:
-// on a join the estate's share of it, its downloads coming on top; on a
-// restart the whole of it.
+// BenchmarkColdJoin is nodes BRINGING UP 500 REPOSITORIES AT ONCE through one
+// data node (coldLane), full reads capped at rounds (MaxFullRounds), while the
+// lane's other traffic arrives every coldOtherEvery: wait-p99-ms and
+// wait-max-ms are that traffic's wait, what the cap is for, and up-s the last
+// node's time to come up. cache=fresh is four nodes joining with empty caches,
+// each round downloading beside its read; rounds=500 is no cap. cache=kept is
+// one node restarted over the cache it kept (keptCache): every first round is a
+// full read with nothing to download, so the reads are all of up-s. The data
+// node is a model (coldPageServe, coldReaders); the cache's own work is real.
 func BenchmarkColdJoin(b *testing.B) {
 	quiet(b)
 	const repos = 500
@@ -1044,9 +932,8 @@ func BenchmarkColdJoin(b *testing.B) {
 	tip, row := w.commit(b, src, nil, "")
 	ids := make([]string, repos)
 	for i := range ids {
-		// One object every row names, under a pack id of each repository's
-		// own, as a push mints one: the store holds the bytes once, and every
-		// node installs them for every repository it is asked for.
+		// One object under a pack id of each repository's own, as a push mints
+		// one: stored once, installed for every repository.
 		ids[i] = w.logRepo(i + 1)
 		row.PackID = uuid.Must(uuid.NewV7()).String()
 		w.log.write(ids[i], []gitlet.PackRow{row}, map[string]string{"refs/heads/main": tip})
@@ -1137,19 +1024,14 @@ func BenchmarkColdJoin(b *testing.B) {
 	}
 }
 
-// The data node BenchmarkColdJoin models. coldPageServe is how long a page
-// holds its answer and its reader: 59 ms, what gitlet's
-// BenchmarkServeASnapshotPage measured a full page of refs to take to serve
-// (gitlet.MaxSnapshotItems of a repository of gitlet.MaxRefsPerRepo, nearly all
-// of it the driver's scan), and a millisecond for the estate's crossing —
-// what a push proposed through another member pays over one proposed at its
-// committer (internal/gitlet/gitletcluster's package doc). coldReaderConns is the
-// ordinary reader connections its store opens: max(8, GOMAXPROCS) (store's
-// defaultReaderConns), so eight on a data node of eight cores or fewer — the
-// fewest any data node has, and the most full pages such a node scans at
-// once. coldOtherEvery and coldOtherServe are the lane's other traffic: two
-// hundred reads a second, each a millisecond's crossing and a millisecond's
-// read.
+// The data node BenchmarkColdJoin models. coldPageServe is a page's hold on its
+// answer and reader: gitlet's BenchmarkServeASnapshotPage measured 59 ms for a
+// full page of refs (gitlet.MaxSnapshotItems of a gitlet.MaxRefsPerRepo
+// repository), plus a millisecond for the estate's crossing
+// (internal/gitlet/gitletcluster's package doc). coldReaderConns is store's
+// defaultReaderConns, max(8, GOMAXPROCS), on the smallest data node.
+// coldOtherEvery and coldOtherServe are the lane's other traffic: 200 reads a
+// second, each a millisecond's crossing and a millisecond's read.
 const (
 	coldPageServe   = 60 * time.Millisecond
 	coldReaderConns = 8
@@ -1157,14 +1039,12 @@ const (
 	coldOtherServe  = 2 * time.Millisecond
 )
 
-// coldLane is ONE DATA NODE in front of the rows, as a read reaches it: its
-// shared lane's answers, a request past them waiting its turn first come,
-// first served, as a registration's requests wait in the broker's order for
-// a slot (queue.EventQueue.Serve); then, inside the answer, one of the node's
-// reader connections, since every page is ONE read transaction
-// (statelog.Reader.Read) and every other read of the lane is too — so a page
-// holds both for coldPageServe, and the node scans at most coldReaderConns
-// pages at once, however many answers it gives.
+// coldLane is ONE DATA NODE in front of the rows: its shared lane's
+// queue.ConcurrentAnswers answers, a request past them waiting first come,
+// first served (queue.EventQueue.Serve), then inside the answer one of its
+// reader connections, since every page is one read transaction
+// (statelog.Reader.Read). A page holds both for coldPageServe, so the node
+// scans at most coldReaderConns pages at once.
 type coldLane struct {
 	inner   cache.Fetcher
 	answers *semaphore.Weighted
@@ -1191,13 +1071,10 @@ func (l *coldLane) RepoState(ctx context.Context, q gitlet.StateQuery) (gitlet.R
 	return l.inner.RepoState(ctx, q)
 }
 
-// Read is the backfill's read of a repository's push rows (code.read), which
-// a data node answers as it answers code.repo_state: on the same shared lane,
-// and as ONE read transaction (statelog.Reader.Read) on one of its reader
-// connections, so it holds one of each for as long as the rows take to
-// answer, with no cost of its own, since the model prices only a snapshot's
-// page. A cold join's caches are never started, so no backfill reads through
-// the lane here and nothing the benchmark reports moves.
+// Read is the backfill's read of push rows (code.read), held to the same lane
+// and reader as a page (statelog.Reader.Read) at no cost of its own: the model
+// prices only a snapshot's page. A cold join's caches are never started, so no
+// backfill reads here.
 func (l *coldLane) Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	if err := l.answers.Acquire(ctx, 1); err != nil {
 		return gitlet.ReadAnswer{}, err
@@ -1208,9 +1085,9 @@ func (l *coldLane) Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAns
 	return l.inner.Read(ctx, q)
 }
 
-// traffic starts the lane's other traffic, a read every coldOtherEvery, and
-// answers what stops it — which answers how long each read waited for its
-// answer and its reader, once every one has had both.
+// traffic starts the lane's other traffic, a read every coldOtherEvery; stop
+// ends it and answers each read's wait for its answer and reader, once all have
+// had both.
 func (l *coldLane) traffic() (stop func() []time.Duration) {
 	var (
 		mu    sync.Mutex
@@ -1253,20 +1130,18 @@ func (l *coldLane) traffic() (stop func() []time.Duration) {
 	}
 }
 
-// coldReaders is the modeled data node's reader connections, handed out as
-// database/sql hands out its pool's: a read past them waits, and a
-// connection given back goes to a waiting read CHOSEN AT RANDOM
-// (connRequestSet.TakeRandom), never the one that has waited longest — so
-// once full pages queue for a node's readers, every other read's wait is a
-// draw among them, and its tail is many pages long.
+// coldReaders is the modeled reader connections, handed out as database/sql
+// hands out its pool's: a returned connection goes to a waiting read CHOSEN AT
+// RANDOM (connRequestSet.TakeRandom), not the longest waiting, so once full
+// pages queue, another read's wait is a draw among them with a tail many pages
+// long.
 type coldReaders struct {
 	mu      sync.Mutex
 	free    int
 	waiting []chan struct{}
 }
 
-// take waits for a connection. No modeled read gives up waiting: every one
-// is the benchmark's own, and each arm waits for all of them.
+// take waits for a connection, never giving up: each arm waits for every read.
 func (r *coldReaders) take() {
 	r.mu.Lock()
 	if r.free > 0 {
@@ -1297,9 +1172,8 @@ func (r *coldReaders) give() {
 	close(turn)
 }
 
-// timedLog is a Fetcher that keeps how long its log took to answer, so a
-// benchmark can name the share of each operation that is the fake's own work
-// rather than the cache's.
+// timedLog is a Fetcher timing its log's answers, so a benchmark can name the
+// fake's share of each operation.
 type timedLog struct {
 	inner cache.Fetcher
 	took  atomic.Int64
@@ -1343,17 +1217,14 @@ func (w *syncWorld) nextPush(b *testing.B, src, branch, repo, tip string, n int,
 	return next
 }
 
-// BenchmarkDeltaSync is the sync every Gitlet node runs after every push, on a
-// WARM cache: one new pack (a commit adding medianPush bytes) and main moved,
-// read as a delta, downloaded and renamed in, packed-refs rewritten with the
-// move and the state after it — on a repository already holding packs packs
-// and refs refs. refs=100000 is gitlet.MaxRefsPerRepo, where packed-refs is
-// about 6.6 MB written whole on every push that moves a ref.
+// BenchmarkDeltaSync is the sync every node runs after every push on a WARM
+// cache: one new pack of medianPush and main moved, read as a delta, downloaded
+// and renamed in, packed-refs and the state rewritten, over packs packs and
+// refs refs. At refs=100000 (gitlet.MaxRefsPerRepo) packed-refs is about 6.6 MB
+// written whole each push.
 //
-// log-ns/op is the share of each operation the fake log took to answer: it
-// walks every ref for a delta where the reader's statement reads one index
-// range, so at a hundred thousand refs it is a cost the real read does not
-// have, and the cache's own figure is ns/op less it.
+// log-ns/op is the fake log's share: it walks every ref for a delta where the
+// real read scans one index range, so the cache's own figure is ns/op less it.
 func BenchmarkDeltaSync(b *testing.B) {
 	quiet(b)
 	for _, packs := range []int{100, 10_000} {
@@ -1363,16 +1234,15 @@ func BenchmarkDeltaSync(b *testing.B) {
 			}
 			w := newSyncWorld(b, onMemory)
 			src := gittest.Empty(b)
-			// The history's pushes are small: what a delta sync is claimed
-			// not to depend on is how many packs there are, not their bytes.
+			// Small pushes: the claim under test is that a delta sync does not
+			// depend on the pack count.
 			gittest.FastImport(b, w.client, src, pushStream(packs, func(int) int64 { return 1 << 10 }))
 			commits := commitsOf(b, w.client, src, "main")
 			pushes := eachPush(commits)
 			rows, _ := w.storePushes(b, src, pushes)
 			root := b.TempDir()
 			for i, refs := range []int{1_000, 100_000} {
-				// The repository and its warm cache are built here, once,
-				// and every count of the arm pushes onto them.
+				// Built once; every count of the arm pushes onto them.
 				repo := w.logRepo(i + 1)
 				w.writePushes(repo, pushes, rows)
 				tip := commits[len(commits)-1]
@@ -1440,14 +1310,13 @@ func (w *syncWorld) midxRepo(b *testing.B, size int64) (repo, src string, commit
 // enough to read what each one costs as a slope.
 var staleArms = []int{0, 8, 32, 128}
 
-// stalePushBytes is what each of those pushes adds: one small file, so the
-// clone they make dearer is dearer for the walk the bitmap no longer saves
-// and not for the bytes it sends.
+// stalePushBytes is each stale push's one small file, so the clone they make
+// dearer pays for the walk the bitmap no longer saves, not for bytes.
 const stalePushBytes = 4 << 10
 
-// packOut is pack-objects in dir as upload-pack runs it for a request — under
-// ServeConfig, in the read lane, its bytes discarded — over revs: what a
-// clone or a fetch is served.
+// packOut is pack-objects in dir as upload-pack runs it for a request
+// (ServeConfig, the read lane, bytes discarded) over revs: what a clone or a
+// fetch is served.
 func packOut(b *testing.B, pool *gitproc.Pool, c *cache.Cache, dir string, revs ...string) {
 	b.Helper()
 	packOutFiltered(b, pool, c, dir, "", revs...)
@@ -1475,49 +1344,18 @@ func packOutFiltered(b *testing.B, pool *gitproc.Pool, c *cache.Cache, dir, filt
 	}
 }
 
-// BenchmarkMidx is what indexing a repository's packs costs, and what the
-// maintainer's index stops saving as pushes land outside it — in OWN mode,
-// the node's own index, and in CHAIN mode, the layers a repository's
-// maintainer publishes for every Gitlet node (layers_bench_test.go).
-//
-//   - index=round is the multi-pack-index a full round writes before it
-//     answers once it leaves MidxRoundPacks packs or more: no bitmap, a
-//     merge of the packs' own indexes, in the read lane — what a cold
-//     request waits for before its first byte.
-//   - index=maintainer is one maintenance run: the index with its bitmap,
-//     then the commit-graph, in the maintenance lane at one thread — the
-//     run MidxMinInterval and MidxDutyCycle pace, and
-//     gitproc.PackWorkDeadline bounds.
-//   - memory/step=… (100MB and 1GB) is the memory a clone and a check hold
-//     over the whole repository — the figures its memory budget charges a
-//     transfer and a check by (memoryArms says which); step=whole/write=…
-//     is its writes'.
-//   - lookup=on|off (1GB, and 5GB under CREWLET_BENCH_LARGE) is the
-//     maintainer's bitmap written with its lookup table (ServeConfig's
-//     pack.writeBitmapLookupTable) and without it, the maintainer run again
-//     between the two with the timer stopped: op=blob is the pack a
-//     blobless clone's lazy fetch of one blob is served (its --filter
-//     included), op=fetch the pack a fetch of main's newest commit is
-//     (main~1..main) — two requests that open the bitmap to answer a few
-//     objects.
-//   - step=…, stale=k/mode=chain, share=… and tail=… are the published
-//     layers' arms (layerArms.run): every step a maintainer, a publisher and
-//     a node serving a chain runs, each over a scratch of the history's
-//     packs.
-//   - stale=k/mode=own (100MB and 1GB) is once k pushes of stalePushBytes
-//     have landed outside the maintainer's index: op=count counts main's
-//     objects from the bitmap, the walk a bitmap that many pushes behind
-//     leaves a clone to do, and op=clone is the pack a clone of main is
-//     served — the price MidxPacks weighs against a run.
-//
-// Each over a repository of 64 packs of the history above, the previous
-// index and graph removed with the timer stopped. size is the packs' bytes,
-// about; objects and commits are what they hold. size=10MB, some 36 000
-// objects, is a repository under the sizes whose figures the charges an
-// object are read from: what its step=whole and step=publish hold is the
-// part of their memory no count of objects charges — the fixed part a
-// charge an object alone would admit a small repository's write without.
-// Neither the memory arms nor the own-mode stale arms run at it.
+// BenchmarkMidx is indexing a repository's 64 packs, in OWN mode (the node's
+// index) and CHAIN mode (the layers a maintainer publishes,
+// layers_bench_test.go). index=round is the full round's index with no bitmap
+// (MidxRoundPacks), what a cold request waits for; index=maintainer is one
+// maintenance run, index and bitmap then commit-graph, paced by MidxMinInterval
+// and MidxDutyCycle. memory/step=… are the memory a clone and a check hold
+// (memoryArms); lookup=on|off is the bitmap with and without its lookup table
+// (lookupArms); step=…, stale=k/mode=chain, share=… and tail=… are the
+// published layers' (layerArms.run); stale=k/mode=own is a count and a clone
+// once k pushes landed outside the maintainer's index, the price MidxPacks
+// weighs. size=10MB, under the per-object charges' sizes, prices the fixed part
+// of step=whole's and step=publish's memory.
 func BenchmarkMidx(b *testing.B) {
 	quiet(b)
 	for _, arm := range []struct {
@@ -1536,8 +1374,8 @@ func BenchmarkMidx(b *testing.B) {
 			c := w.open(b, clk.on, func(o *cache.Options) { o.MaxBytes, o.Logger = 1<<40, nil })
 			s := w.sync(b, c, repo)
 			defer func() { s.Release() }()
-			// Its 64 packs are under MidxRoundPacks: what the arm prices is
-			// the round's index over the history, whatever count writes it.
+			// The 64 packs are under MidxRoundPacks; the arm prices the round's
+			// index whatever count triggers it.
 			cache.SetRoundPacks(c, 1)
 			clk.Add(cache.MidxDebounce)
 			for _, index := range []string{"round", "maintainer"} {
@@ -1572,10 +1410,9 @@ func BenchmarkMidx(b *testing.B) {
 			// packs.
 			newLayerArms(b, w, c, s, src, commits, rows, arm.bytes).run(b)
 			if !stale {
-				// No memory arms over 5 GB: its bitmap holds some 10 GB
-				// beside the history the in-memory store already holds,
-				// past what a machine that runs the rest has. Nor at 10 MB,
-				// whose figures are the published layers' fixed parts.
+				// No memory arms at 5 GB, whose bitmap holds some 10 GB beside
+				// the in-memory store's history, nor at 10 MB, which prices
+				// only the layers' fixed parts.
 				return
 			}
 			w.memoryArms(b, c, s, repo, objects)
@@ -1614,26 +1451,16 @@ func BenchmarkMidx(b *testing.B) {
 	}
 }
 
-// BenchmarkVerify is an operator's check of a repository this node holds
-// (Cache.AdmitVerify, then Verification.Run), the figures a check's bound is
-// set from (CheckBudget):
-//
-//   - op=check is a check of a copy that is whole: its sync answered at
-//     once, the listing, every bundle hashed against its row, packed-refs,
-//     and git's connectivity check.
-//   - op=repair is the same with one pack damaged before each run — its
-//     largest, the last bytes of its last object overwritten with the timer
-//     stopped — so the check finds it, the rebuild links every other pack in
-//     and downloads that one from a store in the process, and the rebuilt
-//     copy is checked again.
-//   - op=hash is the hashing alone: every bundle's three files back to back,
-//     the share of a check VerifyHashPerMiB charges by the mebibyte, beside
-//     the connectivity check's own gitproc.PackWorkDeadline.
-//
-// size=small is five pushes of medianPush, a repository a team began this
-// week; size=100MB and size=1GB are BenchmarkMidx's source composition — every
-// commit four files of one directory, 64 packs — the gigabyte only under
-// CREWLET_BENCH_LARGE=1. ms/MiB is the operation over the copy's bytes.
+// BenchmarkVerify is an operator's check of a held repository
+// (Cache.AdmitVerify, then Verification.Run), the figures CheckBudget is set
+// from. op=check checks a whole copy: every bundle hashed against its row,
+// packed-refs, git's connectivity check. op=repair first damages the largest
+// pack untimed, so the check finds it, the rebuild links the rest and downloads
+// that pack, and the copy is checked again. op=hash is the hashing alone, what
+// VerifyHashPerMiB charges beside the connectivity check's
+// gitproc.PackWorkDeadline. size=small is five medianPush pushes; 100MB and 1GB
+// are BenchmarkMidx's composition (1GB under CREWLET_BENCH_LARGE=1). ms/MiB is
+// the operation over the copy's bytes.
 func BenchmarkVerify(b *testing.B) {
 	quiet(b)
 	for _, arm := range []struct {
@@ -1659,9 +1486,8 @@ func BenchmarkVerify(b *testing.B) {
 					b.Fatal(err)
 				}
 			}
-			// THE CLOCK STANDS STILL, so the maintainer never finds the
-			// repository due and no run of its own shares the disk with a
-			// check.
+			// THE CLOCK STANDS STILL, so no maintainer run shares the disk with
+			// a check.
 			clk := newClock()
 			c := w.open(b, clk.on, func(o *cache.Options) { o.MaxBytes, o.Logger = 1<<40, nil })
 			s, err := c.Sync(b.Context(), repo, linearizable)
@@ -1750,17 +1576,14 @@ func damageLargestPack(b *testing.B, dir string) {
 	}
 }
 
-// lookupArms are BenchmarkMidx's lookup=off|on arms over repo, synced in s:
-// the maintainer's bitmap written without its lookup table and with it, each
-// by a maintainer pass, and under each the two requests a node serves most
-// that open the bitmap to answer a handful of objects — a blobless clone's
-// lazy fetch of one blob, and a fetch of main's newest commit.
+// lookupArms are BenchmarkMidx's lookup=off|on arms over repo, synced in s: the
+// maintainer's bitmap without its lookup table and with it, and under each a
+// blobless clone's lazy fetch of one blob and a fetch of main's newest commit,
+// the requests that open the bitmap for a handful of objects.
 //
-// EACH ARM'S SETUP IS ITS OWN SUB-BENCHMARK'S, so a -bench pattern that
-// selects neither arm pays for neither maintainer run — a minute at the
-// gigabyte and five at 5 GB of setup nobody reads — and the production
-// setting is put back however many arms ran: every arm after these writes its
-// own bitmap, under the setting every node runs with.
+// EACH ARM'S SETUP IS ITS OWN SUB-BENCHMARK'S, so a -bench pattern selecting
+// neither skips a maintainer run (minutes at 1 and 5 GB), and the production
+// setting is put back after, since every later arm writes its own bitmap.
 func (w *syncWorld) lookupArms(b *testing.B, c *cache.Cache, s cache.Synced, repo string) {
 	b.Helper()
 	defer cache.SetBitmapLookupTable(c, true)
@@ -1806,11 +1629,10 @@ func (w *syncWorld) lazyBlob(b *testing.B, c *cache.Cache, s cache.Synced) strin
 	return strings.TrimSpace(string(res.Stdout))
 }
 
-// memorySteps are what BenchmarkMidx's memory arms price, in the order they
-// run: each git process a cache runs over a whole repository, with what it
-// finds in the incarnation when it starts. Its WRITES — the index, its bitmap
-// and the commit-graph — are step=whole's (layers_bench_test.go), over every
-// pack after a tail of pushes, as a maintainer writes them.
+// memorySteps are what BenchmarkMidx's memory arms price, in order: each git
+// process a cache runs over a whole repository, with what it finds in the
+// incarnation. Its writes (the index, its bitmap, the commit-graph) are
+// step=whole's (layers_bench_test.go).
 var memorySteps = []struct {
 	name string
 	// args is the process; none is a clone (packOut), run in the read lane as
@@ -1829,21 +1651,15 @@ var memorySteps = []struct {
 }
 
 // memoryArms are BenchmarkMidx's memory/step=… arms over repo, synced in s:
-// the memory a clone and a check of the whole repository hold — the figures
-// the node's memory budget charges a transfer and a check by
-// (gitproc.TransferBytesPerObject, FsckBytesPerObject). Each is the peak
-// ANONYMOUS memory of the one git process, sampled every millisecond from
-// /proc (gittest.PeakAnon; Linux only — elsewhere only the times are
-// reported), divided by the objects the packs hold: the packs' own pages it
-// maps in are not counted, since the kernel takes those back under pressure
-// rather than killing anybody. The state each starts from is written by the
-// maintainer's declared writes (cache.DerivedFiles).
-//
-//   - step=clone-walk and step=clone are the pack a clone of main is served
-//     (packOut) with only the index without a bitmap and with the
-//     maintainer's bitmap — what one transfer of the repository holds beside
-//     a run.
-//   - step=fsck is Verify's connectivity check.
+// what a clone and a check of the whole repository hold, the figures
+// gitproc.TransferBytesPerObject and FsckBytesPerObject are set from. Each is
+// the git process's peak ANONYMOUS memory, sampled every millisecond from /proc
+// (gittest.PeakAnon; Linux only, elsewhere only times), over the objects:
+// mapped pack pages are not counted, since the kernel reclaims them rather than
+// killing anybody. Each step starts from the maintainer's declared writes
+// (cache.DerivedFiles). step=clone-walk and step=clone are a clone of main
+// served (packOut) with the plain index and with the bitmap; step=fsck is
+// Verify's connectivity check.
 func (w *syncWorld) memoryArms(b *testing.B, c *cache.Cache, s cache.Synced, repo string, objects int64) {
 	b.Helper()
 	run := func(b *testing.B, args []string) {
@@ -1896,11 +1712,10 @@ func (w *syncWorld) memoryArms(b *testing.B, c *cache.Cache, s cache.Synced, rep
 	}
 }
 
-// lookupSizes are the histories BenchmarkPackLookup splits into packs, each of
-// the composition above: 100 MB — about 300 000 objects and 42 000 commits, a
-// repository of a size the default limits hold many of — at every pack count,
-// and a gigabyte at the counts around MidxRoundPacks, so the threshold is
-// measured at two sizes rather than assumed to hold at the second.
+// lookupSizes are the histories BenchmarkPackLookup splits into packs: 100 MB
+// (about 300 000 objects, 42 000 commits) at every pack count, and a gigabyte
+// at the counts around MidxRoundPacks, so the threshold is measured at two
+// sizes rather than assumed.
 var lookupSizes = []struct {
 	name  string
 	bytes int64
@@ -1914,38 +1729,18 @@ var lookupSizes = []struct {
 // fetch asks for: a push's worth, what a CI fetch after one is served.
 const lookupFetch = 4
 
-// BenchmarkPackLookup is what a cache holding packs packs pays per request
-// with no multi-pack-index, with the round's own and with the maintainer's,
-// and what writing the round's costs — the figures MidxRoundPacks is set
-// from. A push stores one pack, so packs is how many pushes a repository has
-// had since its home last compacted them — up to gitlet.MaxPacksPerRepo, past
-// which a push is refused until a compaction merges them, and 10 000 an
-// uncompacted repository's, Gitlet's first build; every arm of a size
-// splits the same history. The gigabyte and 10 000 packs run only under
-// CREWLET_BENCH_LARGE=1.
-//
-//   - write=round is the round's index written over the packs (IndexRound,
-//     the threshold lowered to one so every arm writes it): what a full
-//     round of that many packs makes its request wait for.
-//   - index=none, index=round and index=maintainer are the requests below
-//     served with no index, with the round's (no bitmap) and with the
-//     maintainer's (its bitmap and the commit-graph): a joining node's
-//     cold request, the requests until the maintainer's index lands, and
-//     every one after.
-//   - op=missing is Missing of 1 000 commits drawn from the whole history —
-//     from every pack, up to a thousand of them — a fetch's question
-//     before it is served; ns/lookup includes starting the cat-file the
-//     thousand share.
-//   - op=fetch is the pack a fetch of the newest lookupFetch commits is
-//     served: the request after a push.
-//   - op=clone is the pack a clone of main is served — pack-objects over the
-//     whole history: the request a cold cache was synced for, and the first
-//     an executor's fresh sandbox makes.
-//
-// layers=… (100MB) is the same history under a PUBLISHED chain of that many
-// layers, cut as compact's planner keeps one (layerLookupArms): what a lookup
-// pays per layer of a chain a node installs, which gitlet.MaxPublishedLayers
-// bounds.
+// BenchmarkPackLookup is what a cache of packs packs pays a request with no
+// multi-pack-index, the round's and the maintainer's, and the round's write:
+// the figures MidxRoundPacks is set from. packs runs to gitlet.MaxPacksPerRepo
+// and uncompactedPacks' 10 000 (with the gigabyte, under
+// CREWLET_BENCH_LARGE=1), a size's arms splitting one history. write=round is
+// IndexRound over the packs. index=none|round|maintainer serve a cold request,
+// those until the maintainer's index lands, and every one after: op=missing is
+// Missing of 1 000 commits drawn from every pack (ns/lookup includes the shared
+// cat-file's start), op=fetch the newest lookupFetch commits, op=clone main
+// whole. layers=… (100MB) is the history under a published chain cut as
+// compact's planner keeps one (layerLookupArms), bounded by
+// gitlet.MaxPublishedLayers.
 func BenchmarkPackLookup(b *testing.B) {
 	quiet(b)
 	for _, size := range lookupSizes {
@@ -2064,13 +1859,11 @@ func tagStream(n int) func(*bufio.Writer) error {
 	}
 }
 
-// BenchmarkPeel is the peel a full round runs over the tags it sets — one
-// cat-file asking every tag's object, as refs.go peels packed-refs — across
-// packs packs of one commit and one annotated tag each, the repository every
-// one of whose pushes tagged a release: write=round is the round's index over
-// them, and index=none and index=round the peel without it and with it. The
-// round writes its index BEFORE the peel, so what the index saves here it
-// saves the cold request it was written for.
+// BenchmarkPeel is a full round's peel of the tags it sets, one cat-file asking
+// every tag's object as refs.go peels packed-refs, over packs packs of one
+// commit and one annotated tag each: write=round is the round's index,
+// index=none and index=round the peel without it and with it. The round writes
+// its index BEFORE the peel, so what it saves here it saves the cold request.
 func BenchmarkPeel(b *testing.B) {
 	quiet(b)
 	w := newSyncWorld(b, onMemory)
@@ -2140,14 +1933,11 @@ func BenchmarkPeel(b *testing.B) {
 }
 
 // BenchmarkMemoTrim is the janitor's pass that drops the memo's oldest cohort
-// (trim), over copies copies of a warm node whose memos hold cohorts cohorts
-// each — a state each recording its memo, booted and listed: one walk of the
-// node's copies and one rename of the cohort's directory in each, and the
-// removal from trash/ of what was renamed there, which the same pass makes.
-// The trim reads no answer, so the figure follows the copies and not the
-// answers: each cohort holds one, an empty file, whose bytes the state says.
-// list is the pass a boot's first janitor pass is: every copy's tree listed
-// once, its cohorts' names read and none of its answers.
+// (trim) over copies warm copies of cohorts cohorts each: a walk of the copies,
+// a rename of the cohort's directory in each, and the removal from trash/ of
+// what was renamed. A trim reads no answer, so the figure follows the copies;
+// each cohort holds one empty answer, whose bytes the state records. list is a
+// boot's first janitor pass: every copy's cohorts' names, no answers.
 func BenchmarkMemoTrim(b *testing.B) {
 	quiet(b)
 	gittest.RequireNode(b)

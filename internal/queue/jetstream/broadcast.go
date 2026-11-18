@@ -12,13 +12,11 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
-// THE BROADCAST VERBS RUN ON CORE NATS, for every reason the scatter verbs do
-// (see scatter.go): a heartbeat on a stream would be retained for the event
-// retention window, audited by the publish listener, replayed to a consumer
-// restarted after its moment, and provisioned a stream per subject. Core
-// publish and subscribe keep nothing: a message with no subscriber is gone,
-// and a subscriber that falls behind is told so by the client and loses the
-// overflow, which is what at most once means.
+// THE BROADCAST VERBS RUN ON CORE NATS, for the scatter verbs' reasons (see
+// scatter.go): on a stream a heartbeat would be retained, audited, replayed
+// after its moment and given a stream per subject. Core NATS keeps nothing: a
+// message with no subscriber is gone, and a subscriber that falls behind loses
+// the overflow, which is what at most once means.
 
 // Broadcast publishes payload to every current listener of subject.
 func (q *Queue) Broadcast(ctx context.Context, subject string, payload []byte) error {
@@ -32,17 +30,14 @@ func (q *Queue) Broadcast(ctx context.Context, subject string, payload []byte) e
 		return fmt.Errorf("broadcast %s: %d bytes exceeds the %d-byte limit: %w",
 			subject, len(payload), queue.MaxPayloadBytes, queue.ErrTooLarge)
 	}
-	// NOT INTO A CONNECTION THAT IS DOWN, for Ask's reason: the client would
-	// hold the message in its reconnect buffer and send it once the
-	// connection came back, a frame delivered after its moment to listeners
-	// that have since been told otherwise.
+	// NOT INTO A CONNECTION THAT IS DOWN, for Ask's reason: the reconnect
+	// buffer would deliver the frame after its moment.
 	if err := q.reachable(); err != nil {
 		return fmt.Errorf("broadcast %s: %w", subject, err)
 	}
 	if err := q.nc.Publish(subject, payload); err != nil {
 		// TOO LARGE FOR THIS SERVER inside the contract's ceiling, as for
-		// Ask: a server announcing less than the contract may since have
-		// been reached, and the refusal is the same permanent one.
+		// Ask: the same permanent refusal.
 		if errors.Is(err, nats.ErrMaxPayload) {
 			return fmt.Errorf("%s: %w: %w", tooLarge(q.nc, "broadcast", subject,
 				len(payload)), queue.ErrTooLarge, err)
@@ -68,15 +63,11 @@ func (q *Queue) Listen(ctx context.Context, pattern string, h queue.ListenFunc) 
 		return nil, ErrClosed
 	}
 
-	// stopped and the gate together are what make the withdrawal's promise
-	// true: a message can already be in the client's callback path when the
-	// caller unsubscribes, so stopped refuses one that has not started, and
-	// the gate is waited on for one that has. The gate is the scatter's
-	// ([queue.AnswerGate]), shared by both backends for the same rule, and
-	// bounded at ONE ANSWER, the bound the subscription's delivery already
-	// has: the client runs this callback one message at a time, so the gate
-	// counts at most the one in hand, and a wider bound would state a
-	// concurrency this registration never has.
+	// stopped and the gate keep the withdrawal's promise: a message may
+	// already be in the callback path when the caller unsubscribes, so
+	// stopped refuses one not yet started and the gate ([queue.AnswerGate])
+	// is waited on for one that has. Bounded at ONE because the client runs
+	// this callback one message at a time.
 	gate, err := queue.NewAnswerGate(1)
 	if err != nil {
 		return nil, fmt.Errorf("listen %s: %w", pattern, err)
@@ -86,12 +77,10 @@ func (q *Queue) Listen(ctx context.Context, pattern string, h queue.ListenFunc) 
 	// callback carries no context, and the caller's is a registration scope.
 	serving, retire := context.WithCancel(context.WithoutCancel(ctx))
 	// THE CLIENT'S OWN GOROUTINE RUNS THE HANDLER, one message at a time,
-	// which is the contract's ordering: an async subscription delivers on
-	// one goroutine per subscription. Unlike Serve's answers there is
-	// nothing to reply to, so nothing here is worth a goroutine per
-	// message. The package doc says what that rests on, and
-	// TestAHandlerRunsInlineOnTheGoroutineThatTookItsDelivery holds the
-	// call below to it.
+	// which is the contract's ordering; with nothing to reply to, nothing is
+	// worth a goroutine per message (package doc, "A handler runs inline on
+	// the goroutine that took its delivery";
+	// TestAHandlerRunsInlineOnTheGoroutineThatTookItsDelivery).
 	sub, err := q.nc.Subscribe(pattern, func(msg *nats.Msg) {
 		if stopped.Load() || !gate.Enter(serving) {
 			return
@@ -103,9 +92,8 @@ func (q *Queue) Listen(ctx context.Context, pattern string, h queue.ListenFunc) 
 		retire()
 		return nil, fmt.Errorf("listen %s: %w", pattern, q.brokerFailed(ctx, err))
 	}
-	// FLUSHED BEFORE RETURNING, for Serve's reason: the interest is
-	// registered when it reaches the server, and a broadcast sent through
-	// this server straight after the call would otherwise race past it.
+	// FLUSHED BEFORE RETURNING, for Serve's reason: a broadcast sent right
+	// after the call would otherwise race past the interest.
 	if err := q.flush(ctx); err != nil {
 		retire()
 		_ = sub.Unsubscribe()

@@ -16,136 +16,30 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// WHAT THE CHAIN COSTS AT ITS BOUNDS, in time and in memory: the figures
-// [threadChain]'s THE BOUNDS states, End's time among them, and the ground of
-// [chainCheckEvery]; and what the chain costs in a node's collection, beside
-// the resumed count ([resumedReading]) in the one walk the collection reads
-// its job's main thread in (THE COLLECTION'S PASS). Each case writes its
-// thread to a file first and reads it from there a line at a time, in that
-// one walk ([walkThread]) into the chain as a reader does (every whole line to
-// See or Unread, End at the file's end, the message See hands back for a line
-// held until the next, and the last one's through End), and where the case
-// says so the count after the chain on every line, so what a case holds is
-// the chain's, the count's and the read's, never the file's. It reports the
-// thread's MiB and the records the chain filed; End's own milliseconds; the
-// longest End ran between two looks at its context, from its start to its
-// return (look-ms: how long it runs on once its caller gives it up); the MiB
-// live as End starts, after a collection the timer leaves out
-// (filed-MiB), and what End allocates (end-alloc-MiB), which bounds what End
-// adds to it, since End lets go of nothing the chain filed before it returns;
-// and the MiB live once End decided, the chain and the last message held,
-// after a collection forced (live-MiB), each less what was live before the
-// read. What the read holds at its most is read off the runtime's GC trace
-// (GODEBUG=gctrace=1), one case a process, between the two lines the case
-// writes to standard error around its read, since a sampling ticker would be
-// a clock in test code. Each cycle's line there reads `start->end->live MB`
-// (MiB): what is HELD AT MOST, [threadChain]'s THE BOUNDS' figure, is the
-// largest live heap, the third figure, of a cycle between the two lines with
-// the collector at GOGC=10, which runs a cycle at every tenth of the heap's
-// growth, so no growth goes long unsampled; and the PEAK is the largest heap
-// at a cycle's start or end, the first two figures, at the default GOGC,
-// which adds the collector's headroom. Each case holds the chain, and the
-// count where it reads, to the answer its thread is built for, so a change
-// that turns a case into a cheaper answer fails it rather than measure that.
-//
-//	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkAThreadChainAtItsBounds$/^<case>$' -benchtime 1x -benchmem
-//	GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkAThreadChainAtItsBounds$/^<case>$' -benchtime 1x -benchmem
-//
-// The first gives what is held at most and the second the peak; End's
-// end-ms and look-ms come from either.
-//
-// A THREAD OF MORE THAN 5,242,880 BYTES IS MODELLED ONLY WHERE IT IS PATH-FREE
-// ([threadChain], THE LARGE FILE), and every thread at the records bound is
-// past it (5,242,880 bytes are 40 a line over 2^17 lines, and a record's uuid
-// takes 45 with its key alone), so each case at a bound is one the large-file
-// readers read as the small path does: its records' lines begin
-// `{"parentUuid":`, it holds no compaction's boundary, and in the main thread
-// the dispatch from its last record alone reaches every record. A step that
-// rule keeps from any main thread past 5,242,880 bytes is measured where it
-// runs: in a subagent's thread, which no reader starts a walk in, or at the
-// most records a thread under that size holds.
-//
-// The cases:
-//
-//   - records_at_the_bound: [threadChainMaxRecords] replies, each of its own id
-//     making one call of its own id, so the uuid index, the reply ids and the
-//     call ids are each at their bound; all but the first and the last naming
-//     a parent written after them, so End resolves every parent late, and the
-//     walk from the last record takes every one;
-//   - leaf_set_at_the_bound: [threadChainMaxRecords] attachments, each under
-//     the one written at half its place, so half of them are terminals, and
-//     none a user's or an assistant's record: the single path from the last
-//     finds no turn, the leaf set walks up from every terminal, and, empty,
-//     falls back to the newest record of all. records_at_the_bound's single
-//     path finds its leaf, as every start whose walk up meets a user or
-//     assistant record does, so the leaf set needs a case of its own;
-//   - calls_at_the_bound: [threadChainMaxCalls] call blocks, every id its own,
-//     in replies of 1,024 calls and records of 1,024 results under them, which
-//     answer none of them, so the results' check by call id (whyResultByCall)
-//     reads every one;
-//   - retractions_and_kept_at_the_bound: the records bound filled half by
-//     records, a quarter by retraction prefixes, each its own, and a quarter by
-//     the uuids the newest of two compactions' boundaries lists, each list a
-//     quarter of the bound, so the earlier list and the newer are both held as
-//     the newer is filed. A boundary makes no thread path-free, so End answers
-//     whyLargeFile at its first step: the case measures the filing;
-//   - every_variant_distinct: the most distinct orders the chain hands, four: a
-//     user record's retraction list, which 2.1.322 reads and 2.1.310 does not,
-//     naming a quarter of the bound in prefixes, beside a tail two deep whose
-//     times interleave, so each release's records part into warm_mochi's order
-//     and the order without it, at the records bound. Not six: q1t moves the
-//     leaf only where no record hangs off the checkpoint (2.1.322 @293812260,
-//     `ke.parentUuid===r`), so the leaf it moves from has no tails, and its
-//     variants hand one order; and past 5,242,880 bytes a leaf q1t moves is off
-//     the last record's walk, so no such thread is path-free;
-//   - past_five_mebibytes: the records bound past 5,242,880 bytes, half of it
-//     replies on the walk and half attachments the dispatch reaches off it,
-//     each line holding a nested `"uuid":"` its time follows before its own,
-//     so the large-file byte facts take their every step on each line, and the
-//     dispatch's coverage passes every record;
-//   - fallback_at_the_bound: a subagent's thread of the records bound, every
-//     parent naming no record and every time the same, so the walk takes the
-//     fallback at every record, through its next-unmet pointers. A main thread
-//     so is never path-free: the prune, walking from its last record alone,
-//     keeps no other;
-//   - newer_row_at_the_size_bound: the most records a thread of 5,242,880 bytes
-//     holds, every one below the last row and the newest the deepest, so the
-//     newer-row rule marks every record under the last row. A main thread past
-//     that size whose last row has a record below it is never path-free: the
-//     dispatch hands a record only under a parent written before it;
-//   - windows_merging_at_the_bound: the records bound with a walk of
-//     [threadChainMaxSpread] records, the longest the recovery spreads, whose
-//     replies' records interleave so that every window opens before the one
-//     before it ends: 10,922 windows, each recovering six records of its reply
-//     off the walk, written so that each window's fall before the ones already
-//     merged, and hanging a hook's chain off a walked attachment its window
-//     ends at, every window rescanning the walked attachments of the ones
-//     before it;
-//   - the_reading_line_beside_it: records_at_the_bound's thread, then a line at
-//     [threadLineMax] of the smallest results a message holds, the reading's
-//     worst line, which See decodes beside the chain at both bounds before the
-//     line passes them: the coincident worst of the reading and the chain;
-//   - a_collections_read: a main thread to within a mebibyte of
-//     [threadPlainMax], of lines of the 2,053 bytes probe P6 measured a real
-//     main thread's average, a call and its result in turn, read by the chain
-//     alone;
-//   - a_collections_pass: a_collections_read's thread read by the chain and the
-//     count in the one walk, as a node's collection reads it;
-//   - the_reading_line_beside_the_count: the_reading_line_beside_it's thread
-//     read so, the chain's own worst line in that walk;
-//   - the_counts_id_line_beside_it, the_counts_iteration_line_beside_it and
-//     the_counts_edit_line_beside_it: records_at_the_bound's thread read so,
-//     its last record, the one that fills both bounds, a reply at
-//     [threadLineMax] whose id, whose usage's one iteration's type, or whose
-//     one applied context edit's type fills the line with bytes no UTF-8
-//     holds, each of which the layer's decode of a string reads as U+FFFD,
-//     three bytes: the count's own worst lines, each a string it decodes,
-//     read as the chain holds all it filed;
-//   - what_the_count_keeps_beside_it: what the count keeps from line to line
-//     at its most, a restart's uuid and a run's id each filling a line so,
-//     then a sidechain's replies to both bounds, which the count reads as no
-//     main thread's, and the reading's worst line, read so.
+// BenchmarkAThreadChainAtItsBounds measures [threadChain] at THE BOUNDS, the
+// ground of [chainCheckEvery] among them, and, where a case sets count, beside
+// the resumed count ([resumedReading]) in the one walk ([walkThread]) a node's
+// collection reads its main thread in. Each case reads its thread from a file,
+// so what it holds is the read's, and its check holds the chain to the answer
+// its thread is built for, so a change to a cheaper answer fails rather than be
+// measured. Run one case a process under GODEBUG=gctrace=1 (the commands are
+// above the cases): between the two lines a case writes to stderr around its
+// read, HELD AT MOST is the largest live heap (`start->end->live MB`'s third
+// figure) at GOGC=10, a cycle every tenth of the heap's growth so none goes
+// unsampled; the PEAK is the largest start or end at the default GOGC. A
+// sampling ticker would be a clock in test code.
 func BenchmarkAThreadChainAtItsBounds(b *testing.B) {
+	// A thread past 5,242,880 bytes is modelled only path-free ([threadChain],
+	// THE LARGE FILE), and every thread at the records bound is past it (40
+	// bytes a line at 2^17 lines; a record's uuid and key take 45). So a case
+	// at a bound begins every line `{"parentUuid":`, holds no compaction
+	// boundary, and in a main thread reaches every record by the dispatch from
+	// its last; a step that rule keeps out is measured in a subagent's thread
+	// or at the most records a thread under that size holds. Each case's
+	// thread is described at its writer.
+	//
+	//	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkAThreadChainAtItsBounds$/^<case>$' -benchtime 1x -benchmem
+	//	GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkAThreadChainAtItsBounds$/^<case>$' -benchtime 1x -benchmem
 	for _, bc := range []struct {
 		name  string
 		agent string
@@ -173,8 +67,8 @@ func BenchmarkAThreadChainAtItsBounds(b *testing.B) {
 	} {
 		b.Run(bc.name, func(b *testing.B) {
 			t := benchWrite(b, filepath.Join(b.TempDir(), "thread.jsonl"), bc.write)
-			// WHAT WRITING THE THREAD LEFT is collected before the read starts,
-			// so the trace's heaps after it are the read's own.
+			// Collect what writing the thread left, so the trace's heaps after
+			// this line are the read's own.
 			var before, after runtime.MemStats
 			runtime.GC()
 			runtime.ReadMemStats(&before)
@@ -188,8 +82,11 @@ func BenchmarkAThreadChainAtItsBounds(b *testing.B) {
 			runtime.GC()
 			runtime.ReadMemStats(&after)
 			fmt.Fprintf(os.Stderr, "chain-bench %s: the read ends\n", bc.name)
-			// REPORTED ONCE THE TIMER IS RESET, which deletes every metric
-			// reported before it.
+			// Reported after ResetTimer, which deletes every metric reported
+			// before it. look-ms is [benchLooks]'s longest stretch; filed-MiB
+			// is live as End starts and live-MiB once it decided, each less
+			// what was live before the read; end-alloc-MiB bounds what End
+			// adds ([benchReadThread]).
 			b.ReportMetric(float64(t.bytes)/(1<<20), "thread-MiB")
 			b.ReportMetric(float64(read.c.handles), "records")
 			b.ReportMetric(float64(read.end.Microseconds())/1000, "end-ms")
@@ -203,15 +100,14 @@ func BenchmarkAThreadChainAtItsBounds(b *testing.B) {
 	}
 }
 
-// benchThread is a thread a case writes to its file, a line at a time, and
-// what the case's check needs of it.
+// benchThread is a thread a case writes to its file, and what its check needs.
 type benchThread struct {
 	file  string
 	w     *bufio.Writer
 	bytes int64
-	// records is how many records the case wrote, blocks the results its last
-	// line holds where that is the reading's worst line, and handles the
-	// records the case names by their place in the file.
+	// records counts the records written; blocks is the results in the last
+	// line where that is the reading's worst line; handles are records the
+	// case's check names.
 	records, blocks int
 	handles         []chainHandle
 }
@@ -223,8 +119,8 @@ func (t *benchThread) line(s string) {
 	t.bytes += int64(len(s)) + 1
 }
 
-// record writes s, the thread's next record, and answers its handle: every
-// line a case writes is a record, so a record's handle is its line's number.
+// record writes s as the next record and answers its handle: every line a
+// case writes is a record, so a handle is its line's number.
 func (t *benchThread) record(s string) chainHandle {
 	t.line(s)
 	t.records++
@@ -251,10 +147,9 @@ func benchWrite(b *testing.B, file string, write func(t *benchThread)) *benchThr
 }
 
 // benchRead is a thread read into a chain: the chain, the message See handed
-// back for the last line, as a reader that reads its facts at End holds it,
-// End's time, the longest End ran between two looks at its context, the heap
-// live as End started, and what End allocated; and, where the case reads the
-// thread as a node's collection does, the count read beside the chain.
+// back for the last line (held as a reader that reads its facts at End holds
+// it), End's time and longest stretch without a look, the heap live as End
+// started, what End allocated, and the count where the case reads one.
 type benchRead struct {
 	c               *threadChain
 	held            threadMessage
@@ -265,10 +160,9 @@ type benchRead struct {
 	escalated bool
 }
 
-// benchChain is the chain as a reading of the one walk ([walkThread]): every
-// whole line to See, the message it hands back held until the next, as a
-// reader that reads its facts at End holds it, and every line the layer
-// refuses to Unread.
+// benchChain reads the walk ([walkThread]) into the chain: every whole line to
+// See, holding the message it hands back until the next, and every refused
+// line to Unread.
 type benchChain struct {
 	c    *threadChain
 	held threadMessage
@@ -290,12 +184,10 @@ func (r *benchChain) end(_ bool, err error) { r.err = err }
 // base ([recordKeeper]).
 func (r *benchChain) records() int { return r.c.handles }
 
-// benchReadThread reads the thread in file into a chain of agent's in the ONE
-// walk of its whole lines ([walkThread]), End at its end; and, where count
-// asks, the resumed count ([resumedReading]) in the same walk after the
-// chain, as a node's collection reads its job's main thread. THE CHAIN FIRST:
-// the message See hands back is held while the count reads the same line, so
-// the line costs both at once, the order a reader holding both pays most for.
+// benchReadThread reads file into a chain of agent's in one walk, then End;
+// where count is set, the resumed count reads the same walk after the chain,
+// as a node's collection does. The chain goes first so the message See hands
+// back is held while the count reads the same line: the costlier order.
 func benchReadThread(b *testing.B, file, agent string, count bool) benchRead {
 	b.Helper()
 	f, err := os.Open(file)
@@ -318,9 +210,9 @@ func benchReadThread(b *testing.B, file, agent string, count bool) benchRead {
 		b.Fatalf("the thread reads to %v", chain.err)
 	}
 	read.held = chain.held
-	// WHAT THE CHAIN FILED is what is live once a collection the timer leaves
-	// out has run, and what End adds to it at most is what it allocates: it
-	// lets go of nothing the chain filed before it returns.
+	// What the chain filed is what is live after a collection outside the
+	// timer; End adds at most what it allocates, since it frees nothing the
+	// chain filed before it returns.
 	var filed, ended runtime.MemStats
 	b.StopTimer()
 	runtime.GC()
@@ -338,17 +230,16 @@ func benchReadThread(b *testing.B, file, agent string, count bool) benchRead {
 	return read
 }
 
-// benchLooks is End's context, keeping the longest stretch End runs between
-// two looks at it, the one from its start to its first look and the one from
-// its last look to its return among them: how long End runs on once its
-// caller gives it up.
+// benchLooks is End's context, keeping the longest stretch End runs without a
+// look at it, from its start and to its return included: how long End runs on
+// once its caller gives it up.
 type benchLooks struct {
 	context.Context
 	start, last time.Time
 	longest     time.Duration
 }
 
-// Err is the context's error, a look End takes at it.
+// Err is a look End takes at its context.
 func (l *benchLooks) Err() error {
 	now := time.Now()
 	stretch := now.Sub(l.last) //fixedwait:measure End's stretch between two looks, reported, deciding nothing
@@ -356,8 +247,7 @@ func (l *benchLooks) Err() error {
 	return l.Context.Err()
 }
 
-// ended is End's time and the longest stretch it ran without a look, once it
-// returned.
+// ended is End's time and longest stretch without a look, once it returned.
 func (l *benchLooks) ended() (end, look time.Duration) {
 	now := time.Now()
 	end = now.Sub(l.start) //fixedwait:measure End's time, reported, deciding nothing
@@ -365,8 +255,8 @@ func (l *benchLooks) ended() (end, look time.Duration) {
 	return end, max(l.longest, look)
 }
 
-// benchModelled holds the chain to a thread it models, handing orders
-// distinct orders, and answers them.
+// benchModelled holds the chain to modelling its thread in orders distinct
+// orders, and answers them.
 func benchModelled(b *testing.B, c *threadChain, orders int) []chainOrder {
 	b.Helper()
 	if why, unknown := c.Unknown(); unknown {
@@ -383,10 +273,9 @@ func benchModelled(b *testing.B, c *threadChain, orders int) []chainOrder {
 	return got
 }
 
-// benchHolds holds the chain to what each case at a bound shares: it filed
-// every record the case wrote, the records bound filled as the case means it
-// (filed, every record and every prefix and listed uuid), the leaf it walked
-// from leaf (none for 0), and whether it is path-free.
+// benchHolds holds the chain to what each case at a bound shares: every record
+// written filed, filed items in all (records, prefixes and listed uuids), the
+// walk from leaf (unchecked for noChainRecord), and path-free as anySize.
 func benchHolds(b *testing.B, c *threadChain, t *benchThread, filed int, leaf chainHandle, anySize bool) {
 	b.Helper()
 	if c.handles != t.records || c.filed != filed {
@@ -400,8 +289,8 @@ func benchHolds(b *testing.B, c *threadChain, t *benchThread, filed int, leaf ch
 	}
 }
 
-// The keys a record says its side by right after its parent: a main
-// thread's, and ctAgent's own in its subagent's thread.
+// A record's side keys, right after its parent: a main thread's, and
+// ctAgent's own in its subagent's thread.
 const (
 	benchMain = `"isSidechain":false,`
 	benchOwn  = `"isSidechain":true,"agentId":"` + ctAgent + `",`
@@ -410,10 +299,10 @@ const (
 // benchRoot is the parent of a record that roots a chain.
 const benchRoot = "null"
 
-// benchRecord is record n, as Claude Code writes one and every large-file
-// reader takes it for a slot keyed by its own uuid: its parent as written
-// (benchRoot, or a quoted uuid), its side, its type and its keys, each ending
-// in a comma, then its uuid and its time, ms after rcBase.
+// benchRecord is record n as Claude Code writes it, which every large-file
+// reader keys by its own uuid: parent as written (benchRoot or a quoted uuid),
+// side, type and keys, each ending in a comma, then uuid and time, ms after
+// rcBase.
 func benchRecord(parent, side, kind, keys string, n, ms int) string {
 	return `{"parentUuid":` + parent + `,` + side + `"type":"` + kind + `",` + keys + `"uuid":"` + rcUUID(n) +
 		`","timestamp":"` + rcAt(ms) + `","version":"2.1.310"}`
@@ -422,8 +311,8 @@ func benchRecord(parent, side, kind, keys string, n, ms int) string {
 // benchOf is the parent naming record n.
 func benchOf(n int) string { return `"` + rcUUID(n) + `"` }
 
-// benchNowhere is n's number past every record a case writes, one each n, so
-// its uuid ([rcUUID]) is one no record carries.
+// benchNowhere is a number past every record a case writes, one per n, so its
+// uuid ([rcUUID]) names no record.
 func benchNowhere(n int) int { return 1<<26 + n }
 
 // benchReply is a reply's keys: its id and its content, a JSON list.
@@ -443,18 +332,16 @@ const (
 	benchNote   = `"attachment":{"type":"total_tokens_reminder","text":"tokens left"},`
 )
 
-// benchAtTheBound writes threadChainMaxRecords replies, each of its own id and
-// making one call under an id of its own: the first roots the chain, the last
-// names the second as its parent, each reply from the second the one written
-// after it, and the one before the last the first, so the walk from the last
-// takes every record, root first the first, then the one before the last back
-// to the second, then the last.
+// benchAtTheBound writes records_at_the_bound: threadChainMaxRecords replies,
+// each of its own id making one call of its own id, so the uuid index, reply
+// ids and call ids each reach their bound. Most name a parent written after
+// them ([benchAtTheBoundParent]), so End resolves parents late, and the walk
+// from the last takes every record.
 func benchAtTheBound(t *benchThread) {
 	benchAtTheBoundTo(t, threadChainMaxRecords+1)
 }
 
-// benchAtTheBoundTo writes records_at_the_bound's records up to and not
-// including record last, each as benchAtTheBound writes it.
+// benchAtTheBoundTo writes records_at_the_bound's records before record last.
 func benchAtTheBoundTo(t *benchThread, last int) {
 	for k := 1; k < last; k++ {
 		t.record(benchRecord(benchAtTheBoundParent(k), benchMain, "assistant", benchReply(fmt.Sprintf("msg_%08d", k),
@@ -462,7 +349,10 @@ func benchAtTheBoundTo(t *benchThread, last int) {
 	}
 }
 
-// benchAtTheBoundParent is the parent records_at_the_bound's record k names.
+// benchAtTheBoundParent is the parent records_at_the_bound's record k names:
+// the first roots the chain, the one before the last names the first, the
+// last the second, and every other the one written after it, so the walk
+// hands 1, n-1 back to 2, then n.
 func benchAtTheBoundParent(k int) string {
 	switch n := threadChainMaxRecords; k {
 	case 1:
@@ -475,8 +365,8 @@ func benchAtTheBoundParent(k int) string {
 	return benchOf(k + 1)
 }
 
-// benchAtTheBoundRead holds records_at_the_bound's chain to its thread: every
-// record handed, root first, from the last.
+// benchAtTheBoundRead holds records_at_the_bound's chain to every record
+// handed, root first, walking from the last.
 func benchAtTheBoundRead(b *testing.B, read benchRead, t *benchThread) {
 	n := threadChainMaxRecords
 	o := benchModelled(b, read.c, 1)[0]
@@ -488,8 +378,12 @@ func benchAtTheBoundRead(b *testing.B, read benchRead, t *benchThread) {
 	}
 }
 
-// benchLeafSet writes threadChainMaxRecords attachments, the first rooting
-// the thread and each other under the one written at half its place.
+// benchLeafSet writes leaf_set_at_the_bound: threadChainMaxRecords
+// attachments, the first the root and each other under the one at half its
+// place, so half are terminals. With no user or assistant record the single
+// path from the last finds no turn, so the leaf set walks up from every
+// terminal and, empty, falls back to the newest record. records_at_the_bound's
+// single path finds its leaf, so the leaf set needs this case.
 func benchLeafSet(t *benchThread) {
 	t.record(benchRecord(benchRoot, benchMain, "attachment", benchNote, 1, 1))
 	for k := 2; k <= threadChainMaxRecords; k++ {
@@ -497,9 +391,8 @@ func benchLeafSet(t *benchThread) {
 	}
 }
 
-// benchLeafSetRead holds leaf_set_at_the_bound's chain to its thread: the
-// leaf set empty, so the leaf the newest record, the last, and the walk up
-// from it, one record at each halving of its place, handed root first.
+// benchLeafSetRead holds leaf_set_at_the_bound's chain to the newest record as
+// its leaf and the walk up from it, one record per halving, root first.
 func benchLeafSetRead(b *testing.B, read benchRead, t *benchThread) {
 	n := threadChainMaxRecords
 	o := benchModelled(b, read.c, 1)[0]
@@ -511,14 +404,13 @@ func benchLeafSetRead(b *testing.B, read benchRead, t *benchThread) {
 	}
 }
 
-// benchEach is how many calls, or results, calls_at_the_bound's records each
-// hold.
+// benchEach is the calls, or results, each of calls_at_the_bound's records holds.
 const benchEach = 1 << 10
 
-// benchCalls writes a prompt, then replies of benchEach calls each, each
-// answered by a record of benchEach results under it whose ids are none of
-// its calls', every id its own and every record on one chain, to
-// threadChainMaxCalls call blocks.
+// benchCalls writes calls_at_the_bound: a prompt, then replies of benchEach
+// calls, each under a record of benchEach results answering none of them, so
+// the check by call id (whyResultByCall) reads every one; every id its own,
+// every record on one chain, to threadChainMaxCalls call blocks.
 func benchCalls(t *benchThread) {
 	t.record(benchRecord(benchRoot, benchMain, "user", benchPrompt, 1, 0))
 	uses, results := make([]string, benchEach), make([]string, benchEach)
@@ -536,8 +428,8 @@ func benchCalls(t *benchThread) {
 	}
 }
 
-// benchCallsRead holds calls_at_the_bound's chain to its thread: every record
-// handed, every call filed.
+// benchCallsRead holds calls_at_the_bound's chain to every record handed and
+// every call filed.
 func benchCallsRead(b *testing.B, read benchRead, t *benchThread) {
 	o := benchModelled(b, read.c, 1)[0]
 	benchHolds(b, read.c, t, t.records, chainHandle(t.records), true)
@@ -547,11 +439,12 @@ func benchCallsRead(b *testing.B, read benchRead, t *benchThread) {
 	}
 }
 
-// benchRetractionsAndKept writes a prompt, a retry whose retraction list
-// names a quarter of the records bound, each entry of a prefix its own; two
-// compactions' boundaries, each listing a quarter of the bound in uuids no
-// record carries, the newer's in place of the older's; and records on a chain
-// to half the bound.
+// benchRetractionsAndKept writes retractions_and_kept_at_the_bound: a prompt;
+// a retry whose retraction list names a quarter of the records bound, each
+// prefix its own; two compactions' boundaries, each listing a quarter in uuids
+// no record carries, so both lists are held as the newer is filed; and records
+// on a chain to half the bound. A boundary makes no thread path-free, so End
+// answers whyLargeFile at its first step: the case measures the filing.
 func benchRetractionsAndKept(t *benchThread) {
 	n := threadChainMaxRecords
 	quarter := n / 4
@@ -575,8 +468,7 @@ func benchRetractionsAndKept(t *benchThread) {
 }
 
 // benchRetractionsAndKeptRead holds retractions_and_kept_at_the_bound's chain
-// to its thread: the records bound filled, not passed, and the thread, which
-// holds a boundary, whyLargeFile.
+// to the records bound filled, not passed, and the thread whyLargeFile.
 func benchRetractionsAndKeptRead(b *testing.B, read benchRead, t *benchThread) {
 	if why, _ := read.c.Unknown(); why != whyLargeFile || read.c.past || read.c.filed != threadChainMaxRecords ||
 		t.records != threadChainMaxRecords/2 {
@@ -586,13 +478,17 @@ func benchRetractionsAndKeptRead(b *testing.B, read benchRead, t *benchThread) {
 	}
 }
 
-// benchEveryVariant writes a prompt, a chain of replies, a reply the retry
-// after it takes back with a quarter of the records bound's worth of the
-// replies before it, the leaf, a reply under the retry, and three tails under
-// the leaf, two deep with their times interleaved: one under the leaf written
-// 3 s after it, one 2 s after, and one under that 5 s after, so warm_mochi's
-// walk by depth hands them 2 s, 5 s, 3 s, and the walk by breadth sorted by
-// time 2 s, 3 s, 5 s. Records and prefixes fill the records bound.
+// benchEveryVariant writes every_variant_distinct, the most distinct orders
+// the chain hands, four: a prompt, a chain of replies, a reply the retry after
+// it takes back with a quarter of the records bound's worth of the replies
+// before it (a list 2.1.322 reads and 2.1.310 does not), the leaf, a reply
+// under the retry, and three tails under it: 3 s after, 2 s after, and one
+// 5 s after under that, so warm_mochi's depth walk hands 2, 5, 3 and the
+// breadth walk by time 2, 3, 5. Records and prefixes fill the records bound.
+// Not six: q1t moves the leaf only where no record hangs off the checkpoint
+// (2.1.322 @293812260, `ke.parentUuid===r`), a leaf with no tails, so its
+// variants hand one order; past 5,242,880 bytes a leaf q1t moves is off the
+// last record's walk, so never path-free.
 func benchEveryVariant(t *benchThread) {
 	n := threadChainMaxRecords
 	quarter := n / 4
@@ -617,9 +513,9 @@ func benchEveryVariant(t *benchThread) {
 	t.record(rcAttach(leaf+2, leaf+3, leaf+5000, rcNote))
 }
 
-// benchEveryVariantRead holds every_variant_distinct's chain to its thread:
-// four orders, one for warm_mochi's variants and one for the rest of each
-// release's, the retraction taking a quarter of the bound out of 2.1.322's.
+// benchEveryVariantRead holds every_variant_distinct's chain to four orders,
+// warm_mochi's and the rest per release, the retraction taking a quarter of
+// the bound out of 2.1.322's.
 func benchEveryVariantRead(b *testing.B, read benchRead, t *benchThread) {
 	orders := benchModelled(b, read.c, 4)
 	benchHolds(b, read.c, t, threadChainMaxRecords, t.handles[0], true)
@@ -637,17 +533,17 @@ func benchEveryVariantRead(b *testing.B, read benchRead, t *benchThread) {
 	}
 }
 
-// benchNested is the keys of a nested object's uuid that its time follows, a
-// uuid no record carries: a reader keys a line holding it by the uuid at its
-// object's depth one, its own, found by a scan of its bytes.
+// benchNested is a nested object's uuid, which no record carries, and its
+// time: a reader must key the line by the depth-one uuid its byte scan finds.
 func benchNested(n int) string {
 	return `"uuid":"` + rcUUID(benchNowhere(n)) + `","timestamp":"` + rcAt(n) + `",`
 }
 
-// benchPastFive writes threadChainMaxRecords records: half replies on one
-// chain, the first rooting it, and half attachments the dispatch reaches off
-// it, one under each reply but the last and two under the first, each line
-// holding a nested uuid its time follows before its own.
+// benchPastFive writes past_five_mebibytes: threadChainMaxRecords records,
+// half replies on one chain and half attachments the dispatch reaches off it
+// (one under each reply but the last, two under the first), each line holding
+// a nested uuid before its own, so the large-file byte facts take every step
+// on each line and the dispatch's coverage passes every record.
 func benchPastFive(t *benchThread) {
 	replies := threadChainMaxRecords / 2
 	reply := func(parent string, k int) chainHandle {
@@ -673,8 +569,8 @@ func benchPastFive(t *benchThread) {
 	t.handles = []chainHandle{last}
 }
 
-// benchPastFiveRead holds past_five_mebibytes's chain to its thread: past the
-// small path's bound, path-free, the replies handed.
+// benchPastFiveRead holds past_five_mebibytes's chain to path-free past the
+// small path's bound, the replies handed.
 func benchPastFiveRead(b *testing.B, read benchRead, t *benchThread) {
 	o := benchModelled(b, read.c, 1)[0]
 	benchHolds(b, read.c, t, threadChainMaxRecords, t.handles[0], true)
@@ -684,8 +580,11 @@ func benchPastFiveRead(b *testing.B, read benchRead, t *benchThread) {
 	}
 }
 
-// benchFallback writes threadChainMaxRecords replies of ctAgent's own, each of
-// its own id, each naming a parent no record is and all written at one time.
+// benchFallback writes fallback_at_the_bound: threadChainMaxRecords replies of
+// ctAgent's own, each of its own id, naming a parent no record is, all at one
+// time, so the walk takes the fallback at every record. A subagent's, since a
+// main thread so is never path-free: the prune, from its last record, keeps
+// no other.
 func benchFallback(t *benchThread) {
 	for k := 1; k <= threadChainMaxRecords; k++ {
 		t.record(benchRecord(benchOf(benchNowhere(k)), benchOwn, "assistant",
@@ -693,9 +592,8 @@ func benchFallback(t *benchThread) {
 	}
 }
 
-// benchFallbackRead holds fallback_at_the_bound's chain to its thread: every
-// record an own leaf, the first the leaf, and the walk taking the next in the
-// file at each, so every record handed, the last first.
+// benchFallbackRead holds fallback_at_the_bound's chain to every record an own
+// leaf, the first the leaf, and every record handed, the last first.
 func benchFallbackRead(b *testing.B, read benchRead, t *benchThread) {
 	n := threadChainMaxRecords
 	o := benchModelled(b, read.c, 1)[0]
@@ -706,9 +604,12 @@ func benchFallbackRead(b *testing.B, read benchRead, t *benchThread) {
 	}
 }
 
-// benchNewerRow writes as many prompts as 5,242,880 bytes hold, each naming as
-// its parent the one written after it and the last rooting the chain, so
-// every record is below the last row; the first, the deepest, is the newest.
+// benchNewerRow writes newer_row_at_the_size_bound: as many prompts as
+// 5,242,880 bytes hold, each under the one written after it, the last the
+// root, and the first, the deepest, the newest, so the newer-row rule marks
+// every record under the last row. Not past that size: a main thread whose
+// last row has a record below it then is never path-free, since the dispatch
+// hands a record only under a parent written before it.
 func benchNewerRow(t *benchThread) {
 	prompt := func(parent string, n, ms int) string {
 		return benchRecord(parent, benchMain, "user", `"message":{"role":"user","content":"x"},`, n, ms)
@@ -726,8 +627,8 @@ func benchNewerRow(t *benchThread) {
 	}
 }
 
-// benchNewerRowRead holds newer_row_at_the_size_bound's chain to its thread:
-// the newer row leads, so every record is handed, the last row first.
+// benchNewerRowRead holds newer_row_at_the_size_bound's chain to every record
+// handed, the last row first.
 func benchNewerRowRead(b *testing.B, read benchRead, t *benchThread) {
 	m := t.records
 	o := benchModelled(b, read.c, 1)[0]
@@ -738,23 +639,22 @@ func benchNewerRowRead(b *testing.B, read benchRead, t *benchThread) {
 	}
 }
 
-// The shape of windows_merging_at_the_bound: how many records of its reply
-// each window recovers, and how many records each hangs.
+// windows_merging_at_the_bound's records each window recovers of its reply,
+// and the length of each hook's chain.
 const (
 	benchSiblings = 6
 	benchHung     = 3
 )
 
-// benchWindows writes windows_merging_at_the_bound's thread: a prompt; m
-// replies' first records, each making a call; six more records of each reply
-// under its first, written round by round, each round from the last reply to
-// the first; then each reply's second record, a walked attachment under it,
-// and a hook's chain of three attachments under that, the next reply's
-// second record under the walked attachment; and the leaf, a reply under the
-// last walked attachment. The walk is the prompt, the first records, each
-// second record with its walked attachment, and the leaf, threadChainMaxSpread
-// records; the last walked attachment's chain takes what the records bound
-// leaves.
+// benchWindows writes windows_merging_at_the_bound: a prompt; m replies' first
+// records, each making a call; six more records of each under its first, round
+// by round from the last reply to the first, so each window's fall before
+// those already merged; each reply's second record, a walked attachment under
+// it bearing a hook's chain, and the next second record under that; and the
+// leaf under the last walked attachment. The walk is threadChainMaxSpread
+// records, the longest the recovery spreads, in m windows that each open
+// before the one before ends and rescan the earlier ones' walked attachments.
+// The last hook's chain takes what the records bound leaves.
 func benchWindows(t *benchThread) {
 	m := (threadChainMaxSpread - 2) / 3
 	id := func(k int) string { return fmt.Sprintf("msg_%05d", k) }
@@ -789,8 +689,8 @@ func benchWindows(t *benchThread) {
 	t.handles = []chainHandle{record(under, "assistant", benchReply("msg_leaf", rcSaid("done")))}
 }
 
-// benchWindowsRead holds windows_merging_at_the_bound's chain to its thread:
-// the records bound filled and every record handed, from the leaf.
+// benchWindowsRead holds windows_merging_at_the_bound's chain to the records
+// bound filled and every record handed, from the leaf.
 func benchWindowsRead(b *testing.B, read benchRead, t *benchThread) {
 	o := benchModelled(b, read.c, 1)[0]
 	benchHolds(b, read.c, t, threadChainMaxRecords, t.handles[0], true)
@@ -800,16 +700,17 @@ func benchWindowsRead(b *testing.B, read benchRead, t *benchThread) {
 	}
 }
 
-// benchReadingLine writes records_at_the_bound's thread, then the reading's
-// worst line under its last reply ([benchReadingLineLast]).
+// benchReadingLine writes the_reading_line_beside_it: records_at_the_bound's
+// thread, then the reading's worst line ([benchReadingLineLast]), which See
+// decodes beside the chain at both bounds before the line passes them.
 func benchReadingLine(t *benchThread) {
 	benchAtTheBound(t)
 	benchReadingLineLast(t)
 }
 
-// benchReadingLineLast writes a user record under the record that fills the
-// records bound, of the smallest results a message holds, as many as a line
-// at threadLineMax holds.
+// benchReadingLineLast writes, under the record that fills the records bound,
+// a user record of as many of the smallest results as a line at threadLineMax
+// holds.
 func benchReadingLineLast(t *benchThread) {
 	n := t.records + 1
 	head := `{"parentUuid":"` + rcUUID(threadChainMaxRecords) + `","isSidechain":false,"type":"user",` +
@@ -820,8 +721,8 @@ func benchReadingLineLast(t *benchThread) {
 	t.record(head + strings.Repeat(block+",", t.blocks-1) + block + tail)
 }
 
-// benchReadingLineRead holds the_reading_line_beside_it's chain to its thread:
-// the line passes the chain's bound after See decoded it, every result held.
+// benchReadingLineRead holds the_reading_line_beside_it's chain to whyBound
+// after See decoded the line, every result held.
 func benchReadingLineRead(b *testing.B, read benchRead, t *benchThread) {
 	if why, _ := read.c.Unknown(); why != whyBound || read.c.handles != threadChainMaxRecords ||
 		len(read.held.Calls()) != t.blocks {
@@ -830,10 +731,10 @@ func benchReadingLineRead(b *testing.B, read benchRead, t *benchThread) {
 	}
 }
 
-// benchCollection writes a main thread to within a mebibyte of threadPlainMax
-// of lines of 2,053 bytes, a real main thread's average (probe P6), break
-// included: a prompt, then a reply making a call and a record of its result
-// in turn, each on the one chain.
+// benchCollection writes a_collections_read's thread: to within a mebibyte of
+// threadPlainMax, lines of 2,053 bytes with the break, a real main thread's
+// average (probe P6): a prompt, then a call and its result in turn, on one
+// chain.
 func benchCollection(t *benchThread) {
 	const line = 2053
 	fill := strings.Repeat("the harness's own words, as a tool answered them and the model read them. ", line/32)
@@ -860,8 +761,8 @@ func benchCollection(t *benchThread) {
 	}
 }
 
-// benchCollectionRead holds a_collections_read's chain to its thread: within
-// the plaintext's bound, path-free, every record handed.
+// benchCollectionRead holds a_collections_read's chain to path-free within the
+// plaintext's bound, every record handed.
 func benchCollectionRead(b *testing.B, read benchRead, t *benchThread) {
 	o := benchModelled(b, read.c, 1)[0]
 	benchHolds(b, read.c, t, t.records, chainHandle(t.records), true)
@@ -871,8 +772,8 @@ func benchCollectionRead(b *testing.B, read benchRead, t *benchThread) {
 	}
 }
 
-// benchCountRead holds the count read beside the chain to the thread it read:
-// read whole, a chained line among it.
+// benchCountRead holds the count beside the chain to reading the thread whole,
+// a chained line among it.
 func benchCountRead(b *testing.B, read benchRead) {
 	b.Helper()
 	if read.count == nil || read.count.unread || !read.count.chained {
@@ -880,24 +781,21 @@ func benchCountRead(b *testing.B, read benchRead) {
 	}
 }
 
-// benchReadingLineCountRead holds the_reading_line_beside_the_count to its
-// thread: the chain as the_reading_line_beside_it holds it, and the count read
-// whole.
+// benchReadingLineCountRead holds the_reading_line_beside_the_count as
+// the_reading_line_beside_it, the count read whole.
 func benchReadingLineCountRead(b *testing.B, read benchRead, t *benchThread) {
 	benchReadingLineRead(b, read, t)
 	benchCountRead(b, read)
 }
 
-// benchInvalid is n bytes no UTF-8 holds, each of which the layer's decode of
-// a string reads as U+FFFD, three bytes ([threadDecoding]): the most a string
-// a line holds grows as it is decoded.
+// benchInvalid is n bytes no UTF-8 holds, each decoded as U+FFFD, three bytes
+// ([threadDecoding]): the most a line's string grows as it is decoded.
 func benchInvalid(n int) string { return strings.Repeat("\xff", n) }
 
-// benchCountsReply writes record n of records_at_the_bound as a reply at
-// threadLineMax making its call, under the parent that record names, whose
-// message's other keys are keys, with bytes no UTF-8 holds filling the line
-// where keys holds "@": the last record the chain files at both bounds, read by
-// the count as the chain holds all it filed.
+// benchCountsReply writes records_at_the_bound's last record, which fills both
+// bounds, as a reply at threadLineMax with message keys keys, invalid UTF-8
+// filling the line at keys's "@": the count's own worst lines, each a string
+// it decodes, read as the chain holds all it filed.
 func benchCountsReply(t *benchThread, keys string) {
 	n := threadChainMaxRecords
 	head, tail, _ := strings.Cut(benchRecord(benchAtTheBoundParent(n), benchMain, "assistant", `"message":{`+keys+
@@ -932,9 +830,8 @@ func benchIDLine(t *benchThread) {
 	benchCountsReply(t, `"id":"@","model":"claude-sonnet-4-5","usage":{`+benchUsage+`}`)
 }
 
-// benchCountsLineRead holds the count's line's chain and count to their
-// thread: the chain at both bounds, not past them, and the count anchored on
-// the last line's usage, so the count read the line by its every rule.
+// benchCountsLineRead holds the chain at both bounds, not past them, and the
+// count anchored on the last line's usage, so it read the line by every rule.
 func benchCountsLineRead(b *testing.B, read benchRead, t *benchThread) {
 	benchCountRead(b, read)
 	if read.c.handles != threadChainMaxRecords || read.c.past || len(read.c.occurs) != threadChainMaxCalls ||
@@ -945,13 +842,12 @@ func benchCountsLineRead(b *testing.B, read benchRead, t *benchThread) {
 	}
 }
 
-// benchCountKeeps writes what the count keeps across a thread at its most
-// beside the chain at both bounds and the reading's worst line: a record of a
-// result whose uuid fills a line, the thread's first chained record, under a
-// parent no record is, so a restart; a reply whose id fills a line, the
-// count's run from it on; replies of a sidechain's, each of its own id making
-// a call of its own, to the records bound, which the count reads as no main
-// thread's reply; and the reading's worst line.
+// benchCountKeeps writes what_the_count_keeps_beside_it, the most the count
+// keeps from line to line: a result record whose uuid fills a line, the first
+// chained record, under a parent no record is, so a restart; a reply whose id
+// fills a line, the count's run; a sidechain's replies, each of its own id and
+// call, to the records bound, no main thread's to the count; and the reading's
+// worst line.
 func benchCountKeeps(t *benchThread) {
 	head, tail, _ := strings.Cut(`{"parentUuid":"`+rcUUID(benchNowhere(0))+`","isSidechain":false,"type":"user",`+
 		`"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_00000001","content":"ok"}]},`+
@@ -967,10 +863,10 @@ func benchCountKeeps(t *benchThread) {
 	benchReadingLineLast(t)
 }
 
-// benchCountKeepsRead holds what_the_count_keeps_beside_it to its thread: the
-// chain past its bound at the reading's line, every result of it held, and
-// the count read whole, keeping of the restart's uuid and of the run's id no
-// more than a uuid's bytes and a digest.
+// benchCountKeepsRead holds what_the_count_keeps_beside_it to the chain past
+// its bound at the reading's line, every result held, and the count read
+// whole, keeping of the restart's uuid and the run's id at most a uuid's bytes
+// and a digest.
 func benchCountKeepsRead(b *testing.B, read benchRead, t *benchThread) {
 	benchCountRead(b, read)
 	if read.c.handles != threadChainMaxRecords || !read.c.past || len(read.held.Calls()) != t.blocks ||
@@ -982,8 +878,8 @@ func benchCountKeepsRead(b *testing.B, read benchRead, t *benchThread) {
 	}
 }
 
-// benchCollectionPassRead holds a_collections_pass to its thread: the chain
-// as a_collections_read holds it, and the count read whole.
+// benchCollectionPassRead holds a_collections_pass as a_collections_read, the
+// count read whole.
 func benchCollectionPassRead(b *testing.B, read benchRead, t *benchThread) {
 	benchCollectionRead(b, read, t)
 	benchCountRead(b, read)

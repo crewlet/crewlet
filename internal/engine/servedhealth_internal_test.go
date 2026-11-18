@@ -15,17 +15,13 @@ import (
 )
 
 // A HELD VALUE IS SERVED, AND REFRESHED OFF THE READ'S PATH, ONE READ AT A
-// TIME.
-//
-// Nothing held: the first read waits for the value. Younger than the recheck:
-// answered as held, nothing asked. Older: answered as held at once while ONE
-// read replaces it, however many reads find it old — none of them waits on a
-// broker that has stopped answering. Past the stale bound with nobody able to
-// refresh it: no answer at all, the failure the refresh met. And a value that
-// does not describe what is asked (a log's ends read at another generation) is
-// never answered: the read waits for one that does. The stale bound is the
-// VALUE'S, so the same held value is answered under a long bound and refused
-// under a short one.
+// TIME. Nothing held: the first read waits. Younger than the recheck: answered,
+// nothing asked. Older: answered at once while ONE read replaces it, however
+// many reads find it old, none waiting on a silent broker. Past the stale bound
+// with nobody able to refresh it: the refresh's failure. A value that does not
+// describe what is asked (ends at another generation) is never answered. The
+// stale bound is the VALUE'S, so one held value is answered under a long bound
+// and refused under a short one.
 func TestAHeldValueIsServedAndRefreshedOffTheReadsPath(t *testing.T) {
 	t.Parallel()
 	var clock atomic.Int64
@@ -95,8 +91,8 @@ func TestAHeldValueIsServedAndRefreshedOffTheReadsPath(t *testing.T) {
 	})
 
 	// PAST THE STALE BOUND with nobody able to refresh it: no answer. The
-	// bound is the caller's, so a value inside a minute's bound is still
-	// answered while the ends' few seconds have already refused it.
+	// bound is the caller's: a minute's still answers, the ends' few seconds
+	// refuse.
 	mu.Lock()
 	fail = errors.New("the broker does not answer")
 	mu.Unlock()
@@ -127,9 +123,7 @@ func TestAHeldValueIsServedAndRefreshedOffTheReadsPath(t *testing.T) {
 // A READ ASKS THE BROKER NOTHING, on a real node: a few hundred reads of the
 // tracker's read authority, at the stale level that promises "no broker call
 // at all", send next to nothing on the node's broker connection and read the
-// published floors and the log's ends at most once a recheck. Before, every
-// read listed the coordination bucket's floors and asked the stream's leader
-// for its info — a few hundred reads were a few hundred of each.
+// published floors and the log's ends at most once a recheck.
 func TestAReadAsksTheBrokerNothing(t *testing.T) {
 	t.Parallel()
 	e, _, q := bootRejoinNode(t)
@@ -161,23 +155,15 @@ func TestAReadAsksTheBrokerNothing(t *testing.T) {
 	if got := running.ends.reads.Load() - ends; got > rechecks {
 		t.Errorf("%d reads asked the log for its ends %d times, want at most %d", reads, got, rechecks)
 	}
-	// THE CONNECTION'S OWN COUNT, which no wrapper chose what to count, set
-	// against what the same connection sends with nobody reading, over as
-	// long again. The node's appliers and feeds pull on it whatever anybody
-	// reads, about a dozen messages a second when idle, so a bound on the
-	// reads' count alone measured how long they took: on a loaded machine
-	// whose reads took a few seconds the background alone passed it (65
-	// messages against 60, with every read served from memory). What is
-	// left past the background is the reads' own traffic and the start-up
-	// burst the reads may overlap; a request per read would be hundreds.
+	// THE CONNECTION'S OWN COUNT, set against what it sends with nobody
+	// reading over as long again: appliers and feeds send about a dozen
+	// messages a second idle, so a bound on the reads' count alone measured
+	// how long they took. What is left is the reads' traffic plus the
+	// start-up burst they may overlap.
 	//
-	// HALF THE READS of allowance for that burst, because the burst is a
-	// start-up's and grows with the logs a node runs, while what this case
-	// exists to catch, a request per read, sends at least reads — twice the
-	// allowance. A fifth of the reads was a score of messages over eight
-	// logs; over the ten a node runs with the assistant's and chat's, CI run
-	// 41343149799 measured 68 sent against 0 idle, every read served from
-	// memory, and the fifth failed it.
+	// HALF THE READS of allowance for that burst, which grows with the logs a
+	// node runs (a fifth was too tight over ten logs), while a request per
+	// read sends at least reads, twice the allowance.
 	idle := q.Conn().Stats().OutMsgs
 	time.Sleep(took)
 	idle = q.Conn().Stats().OutMsgs - idle
@@ -219,17 +205,12 @@ func BenchmarkAReadsReadiness(b *testing.B) {
 }
 
 // A BOUNDED READ IS NEVER CHECKED AGAINST ENDS NOBODY COULD REFRESH, on a real
-// node. The tracker's ends are held, the node's clock moves past the oldest a
-// working refresh leaves them, and the one refresh in flight fails — a stream
-// leader that stopped answering. A read declaring `max_lag_seq` must refuse:
-// served the held ends, it would be checked against a lag nobody had measured
-// since, which under a partial partition is a node thousands of records
-// behind served as inside its caller's bound. Before the ends had a bound of
-// their own they were served for the floor's whole minute.
-//
-// And it refuses `broker_unreachable`, naming the refresh's failure: what
-// could not be read is the stream's leader, never the trim floor — folded into
-// a zero health, it reached the caller as a floor "never read on this node".
+// node. The tracker's ends are held, the clock moves past [endsStale], and the
+// refresh in flight fails (a silent stream leader). A read declaring
+// `max_lag_seq` must refuse: served the held ends, a node thousands of records
+// behind under a partial partition would pass as inside its caller's bound.
+// It refuses `broker_unreachable` naming the refresh's failure, never as a
+// floor "never read on this node".
 func TestABoundedReadIsNeverCheckedAgainstEndsNobodyCouldRefresh(t *testing.T) {
 	t.Parallel()
 	e, _, _ := bootRejoinNode(t)
@@ -249,11 +230,9 @@ func TestABoundedReadIsNeverCheckedAgainstEndsNobodyCouldRefresh(t *testing.T) {
 
 // A FLOOR NOBODY COULD REFRESH IS REFUSED AS UNKNOWN, NAMING ITS AGE, on a real
 // node. The published floors are held, the node's clock moves past
-// [statelog.FloorCacheStale], and the refresh in flight fails — coordination
-// that stopped answering. A read refuses `floor_unknown`, exactly as the alarm
-// of that name says, and the detail says how long ago the floor was last
-// read. Before, a floors failure was an error folded into a zero health,
-// whose floor read as never read at all.
+// [statelog.FloorCacheStale], and the refresh in flight fails (silent
+// coordination). A read refuses `floor_unknown`, exactly as the alarm of that
+// name says, and the detail says how long ago the floor was last read.
 func TestAFloorNobodyCouldRefreshIsRefusedAsUnknownNamingItsAge(t *testing.T) {
 	t.Parallel()
 	e, _, _ := bootRejoinNode(t)
@@ -282,18 +261,13 @@ func TestAFloorNobodyCouldRefreshIsRefusedAsUnknownNamingItsAge(t *testing.T) {
 // that refresh rather than answering from the old value, and then fails the
 // refresh with why. It returns the read's refusal.
 //
-// THE MEMO IS FROZEN FOR THE CASE, because the node goes on reading it: every
-// read of its health may start a refresh, and every fresh read made elsewhere
-// (the heartbeat's, the copy's verdict) stores what it read. So the held
-// instant and the memo's clock both move an hour AHEAD of the wall, the value
-// exactly as old as the case says by the memo's own clock, and a store stamped
-// with the wall clock landed before it and replaces nothing ([memo.store]);
-// and the refresh's slot stays the case's, failed, until the case ends, so no
-// other refresh starts in its place. The slot used to be given back with the
-// failure: a real refresh the node's next read started then landed at the
-// moved clock before the case's read looked again, and that read was answered
-// from it, or refused naming an age of nothing — four runs in sixty of the
-// two cases on one CPU.
+// THE MEMO IS FROZEN FOR THE CASE, because the node goes on reading it and
+// fresh reads elsewhere (the heartbeat's, the copy's verdict) store into it.
+// So the held instant and the memo's clock move an hour AHEAD of the wall, and
+// a store stamped by the wall clock lands before it and replaces nothing
+// ([memo.store]). The refresh's slot stays the case's, failed, until the case
+// ends: given back, a real refresh the node's next read started would land
+// before the case's read looked again and answer it.
 func refusedOverAFailedRefresh[T any](t *testing.T, running *runningLog, m *memo[T],
 	stale time.Duration, q statelog.Query, why string) *statelog.Refused {
 

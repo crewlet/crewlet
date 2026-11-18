@@ -11,13 +11,10 @@ import (
 
 // A CLAIM ANSWERED AS HELD KEEPS EVERY PEER OUT THROUGH ITS EXCLUSIVE WINDOW.
 //
-// The window is what a holder may count on without asking again: work it does
-// inside the window is work no other node can be doing under the same lease,
-// because no other node can have claimed it yet. So at the window's last
-// instant a peer's claim is still refused, and the window ends before the
-// lease does — by the margin the holder named — while a peer is let in only
-// once the lease itself has run out. A margin as long as the TTL leaves no
-// window at all.
+// Work inside the window is work no other node can be doing under the same
+// lease. So a peer is still refused at the window's last instant, the window
+// ends the holder's margin before the lease does, a peer gets in only once the
+// lease has run out, and a margin as long as the TTL leaves no window at all.
 func TestAConfirmedClaimKeepsAPeerOutThroughItsExclusiveWindow(t *testing.T) {
 	t.Parallel()
 	var (

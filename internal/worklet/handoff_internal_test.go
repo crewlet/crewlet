@@ -6,11 +6,10 @@ import (
 )
 
 // EVERY KIND A FIELD MOVES HAS A NOUN TO BE TOLD BY, AND NO OTHER: the change
-// line names a write's other moves by [movedNoun] ([changeLead]), and the
-// prompt reads back only the kinds it can name ([metaMoved]), so a kind given
-// a field without a noun would vanish from every line that lists a write's
-// moves, and a noun for a kind that moves no field would name a move nothing
-// records.
+// line names a write's other moves by [movedNoun] ([changeLead]) and the prompt
+// reads back only kinds it can name ([metaMoved]), so a nounless kind would
+// vanish from every list of a write's moves, and a noun for a kind that moves
+// no field would name a move nothing records.
 //
 // Mutation: drop one noun — its kind fails; give `fields` one — it fails.
 func TestEveryKindAFieldMovesHasANoun(t *testing.T) {
@@ -51,13 +50,11 @@ func TestATrimmedCardKeepsTheFieldsARouteReads(t *testing.T) {
 }
 
 // THE PARENT'S ASSIGNEE IS NAMED ONLY ACROSS THE FINISHED EDGE, by the write's
-// own restatement ([Notify.restated]), whatever kind its record ends with: a
-// status move within the open groups, or an edit that moved no status, names
-// nobody for the parent, so the router, which reads the field wherever it is
-// filled, tells the parent of the one transition it is told of. Each record
-// here is an `assignee` one, as a hand-off that also closes the task would be
-// filed by a writer that ranked the assignee first.
-//
+// own restatement ([Notify.restated]), whatever kind its record ends with: the
+// router tells the parent wherever the field is filled, so a move within the
+// open groups, or no status move, names nobody. Each record is an `assignee`
+// one, as a hand-off that also closes the task is filed by a writer ranking
+// the assignee first.
 // Mutation: drop the edge from the gate — the open move and the edit name pa;
 // gate it on kind `status` as well — nothing names pa.
 func TestTheParentIsNamedOnlyAcrossTheFinishedEdge(t *testing.T) {

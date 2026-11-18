@@ -10,29 +10,20 @@ import (
 	"unicode/utf8"
 )
 
-// A THREAD LINE'S FACTS, READ OFF ITS WHOLE DECODE.
-//
-// The producer of a line's facts ([lineFacts]) that reads the line whole: ONE
-// decode of the line into the raw of every key the layer reads
-// ([threadWire], [decodeThreadLine]), the head held to its types ([headOf]),
-// and then each frame its record's type reads, walked by the layer's own
-// walks ([eachElement]) and read by each reader's rule ([factsOf]). Every
-// rule it reads a small value by is the layer's one rule of that value
-// (a block's [blockCallOf], a send's [sendTargetOf], a leg's answer's
-// [answerOf], a list's entries' [replacedID], [batchEntryID],
-// [threadRetracted.entry] and [threadPreserved.list]...), and every text it
-// reads a property of is read by the automaton that reads it as it streams
-// ([textSays], [textNotice], [textHandback], [textResult], [textUnits],
-// [textTakes]), so what it fills is any reading's of the line by those rules.
-//
-// A line it refuses is classed by how Claude Code's load reads it
-// ([refusedFault]), which reads the line again, and only a refused line.
+// A line's facts ([lineFacts]) are filled off ONE decode of the whole line
+// ([threadWire], [decodeThreadLine]): the head held to its types ([headOf]),
+// then each frame its record's type reads, walked by [eachElement] ([factsOf]).
+// Every small value is read by the layer's one rule of it ([blockCallOf],
+// [sendTargetOf], [answerOf], [replacedID], [batchEntryID],
+// [threadRetracted.entry], [threadPreserved.list]...), and every text property
+// by its streaming automaton (claudelinetext.go), so what is filled is what any
+// reading by those rules fills. Only a refused line is read again, to class it
+// ([refusedFault]).
 
-// threadWire is a whole line as its one decode ([wireDecode]) leaves it: every
-// key this layer reads, by its exact name and raw, so a key that is absent is
-// nil and one that is null holds the bytes `null`. Each is held to its type
-// where it is read: the head's by [headOf], every other by the rule its
-// facts are read by ([factsOf]) or by its accessor.
+// threadWire is a whole line as [wireDecode] leaves it: the raw of every key
+// this layer reads, by its exact name, so an absent key is nil and a null one
+// holds `null`. Each is held to its type where it is read: by [headOf],
+// [factsOf] or its accessor.
 type threadWire struct {
 	Type          json.RawMessage `json:"type"`
 	Subtype       json.RawMessage `json:"subtype"`
@@ -63,19 +54,17 @@ type threadWire struct {
 	Version       json.RawMessage `json:"version"`
 }
 
-// decodeThreadLine decodes whole line n, raw (its break dropped), into its
-// head and its facts: ONE decode of the whole line ([wireDecode]), which
-// holds every byte of it to JSON, then the head's keys held to their types,
-// then the facts its accessors read ([factsOf]); and reads its byte facts
-// ([lineBytesOf]), a refused line's too; asked is the take tokens its reader
-// asks of a hook's words ([threadReader.Asking]). Nothing reads a
-// line before this has: no keyword decides which lines are decoded, since a
-// line no keyword marks can still be no record (a write that tore into
-// another), and a reader that passed it unread would decide from the thread
-// around it as though it were whole.
+// decodeThreadLine decodes whole line n, raw (its break dropped), into its head
+// and its facts ([factsOf]) by ONE decode that holds every byte to JSON
+// ([wireDecode]), and reads its byte facts ([lineBytesOf]), a refused line's
+// too; asked is the take tokens its reader asks of a hook's words
+// ([threadReader.Asking]). Every line is decoded before anything reads it, with
+// no keyword prefilter: a line no keyword marks can still be no record (a
+// write that tore into another), and a reader that passed it unread would
+// decide from the thread around it as though it were whole.
 func decodeThreadLine(n int, raw []byte, asked []string) (threadLine, error) {
-	// HELD TO AN OBJECT BEFORE IT IS DECODED: a JSON null decodes into a struct
-	// as nothing at all, with no error, and would pass for a record of no keys.
+	// HELD TO AN OBJECT FIRST: a JSON null decodes into a struct as nothing,
+	// with no error, and would pass for a record of no keys.
 	if trimmed := bytes.TrimLeft(raw, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '{' {
 		return threadLine{}, &threadLineError{N: n, Err: errNotOneRecord, Fault: refusedFault(raw), Size: len(raw) + 1,
 			Bytes: lineBytesOf(raw)}
@@ -94,21 +83,19 @@ func decodeThreadLine(n int, raw []byte, asked []string) (threadLine, error) {
 		f: factsOf(&w, head, asked)}, nil
 }
 
-// head is the line's head, its keys held to their types by the head's rule
-// ([headOf]).
+// head is the line's head, its keys held to their types by [headOf].
 func (w threadWire) head() (threadHead, error) {
 	return headOf(headKeys{typ: headKeyOf(w.Type), subtype: headKeyOf(w.Subtype), agentID: headKeyOf(w.AgentID),
 		parent: headKeyOf(w.ParentUUID), sidechain: headKeyOf(w.IsSidechain),
 		replacesSpan: headKeyOf(w.ReplacesSpan)})
 }
 
-// factsOf is what a line's accessors read of w, its whole decode, h its head
-// ([lineFacts]): its small values as written, and each frame its record's
-// type reads, read by each reader's rule. A frame the type does not read is
-// left empty, so a record of another type never pays for reading a frame it
-// carries, an api-request-blob's whole request among them, though the line's
-// decode ([wireDecode]) still copies that frame's bytes. asked is the take
-// tokens its reader asks of a hook's words ([threadReader.Asking]).
+// factsOf is the facts ([lineFacts]) of w, a line's whole decode with head h:
+// its small values as written, and each frame its record's type reads. A frame
+// the type does not read is left empty, so a record never pays for reading one
+// it carries (an api-request-blob's whole request), though [wireDecode] still
+// copies its bytes. asked is the take tokens its reader asks of a hook's words
+// ([threadReader.Asking]).
 func factsOf(w *threadWire, h threadHead, asked []string) *lineFacts {
 	f := &lineFacts{
 		uuid: w.UUID, version: w.Version, origin: w.Origin, apiError: w.APIError,
@@ -141,10 +128,9 @@ func factsOf(w *threadWire, h threadHead, asked []string) *lineFacts {
 	return f
 }
 
-// messageOf is a user or assistant record's `message`, raw, read once: its
-// kind, its small values as written, and its content, its blocks of kind
-// call its calls ([messageContent]). ONE DECODE of the message's object,
-// which every accessor of the message reads.
+// messageOf reads a user or assistant record's `message`, raw, by ONE decode
+// of its object that every accessor of the message reads; its blocks of kind
+// call are its calls ([messageContent]).
 func messageOf(raw json.RawMessage, call string) messageFacts {
 	m := messageFacts{kind: kindOfValue(raw)}
 	if m.kind != '{' {
@@ -167,20 +153,18 @@ func messageOf(raw json.RawMessage, call string) messageFacts {
 	return m
 }
 
-// toolResultOf is what a user record's own `toolUseResult`, raw, says: whether
-// it carries a handback ([carriesHandback]), and what it says of a subagent's
-// leg ([agentAnswer]).
+// toolResultOf is what a user record's own `toolUseResult`, raw, says
+// ([carriesHandback], [agentAnswer]).
 func toolResultOf(raw json.RawMessage) toolResultFacts {
 	r := toolResultFacts{handsBack: carriesHandback(raw)}
 	r.completed, r.agent, r.refused = agentAnswer(raw)
 	return r
 }
 
-// attachmentOf is an attachment record's `attachment`, raw, read once: its
-// kind, its small values as written, what each attachment's shape rule asks
-// of its lists ([threadLine.AttachmentWellFormed]), every rule's at once, so
-// the accessor picks by the attachment's type, and which of the asked take
-// tokens its words name ([takesOf]).
+// attachmentOf reads an attachment record's `attachment`, raw, once, answering
+// every attachment type's shape rule at once, so the accessor picks by the
+// attachment's type ([threadLine.AttachmentWellFormed]), and which of the
+// asked take tokens its words name ([takesOf]).
 func attachmentOf(raw json.RawMessage, asked []string) attachmentFacts {
 	a := attachmentFacts{kind: kindOfValue(raw)}
 	if a.kind != '{' {
@@ -232,10 +216,9 @@ func takesOf(raw json.RawMessage, asked []string) uint64 {
 	return takes.bits
 }
 
-// compactOf is a compaction's boundary's `compactMetadata`, raw, read once
-// ([threadLine.Preserved]): its kind, its `preservedMessages`' kind and, where
-// that is there and not null, the list's answer ([preservedList]), and its
-// `preservedSegment` as written.
+// compactOf reads a compaction boundary's `compactMetadata`, raw, once
+// ([threadLine.Preserved]); the list's answer ([preservedList]) only where
+// `preservedMessages` is present and not null.
 func compactOf(raw json.RawMessage) compactFacts {
 	c := compactFacts{kind: kindOfValue(raw)}
 	if c.kind != '{' {
@@ -255,10 +238,10 @@ func compactOf(raw json.RawMessage) compactFacts {
 	return c
 }
 
-// retractedOf is a record's `retractedMessageUuids`, raw, read once
-// ([threadLine.Retracted]): nothing where it is absent; else each entry, a
-// string, read by its rule ([threadRetracted.entry]), in order, up to the
-// first that is no string, with that entry's error, or the list's own.
+// retractedOf reads a record's `retractedMessageUuids`, raw, once
+// ([threadLine.Retracted]): nothing where absent; else each entry by
+// [threadRetracted.entry], in order, up to the first that is no string, with
+// that entry's error, or the list's own.
 func retractedOf(raw json.RawMessage) (threadRetracted, error) {
 	var r threadRetracted
 	if raw == nil {
@@ -269,7 +252,7 @@ func retractedOf(raw json.RawMessage) (threadRetracted, error) {
 		if err != nil {
 			return err
 		}
-		r.entry(entry)
+		r.entry(chainPrefix(entry))
 		return nil
 	})
 	if err != nil {
@@ -278,17 +261,15 @@ func retractedOf(raw json.RawMessage) (threadRetracted, error) {
 	return r, nil
 }
 
-// replacementsOf is a content-replacement record's `replacements`, raw, read
-// once: its kind and, of a list, every element counted, and each entry before
-// the first its rule refuses read by it ([replacedID]), in order, with that
-// entry's error ([threadLine.ReplacedResults], [threadLine.ReplacementCount]).
+// replacementsOf reads a content-replacement record's `replacements`, raw,
+// once: of a list, every element counted, and each entry up to the first its
+// rule ([replacedID]) refuses read, with that entry's error.
 func replacementsOf(raw json.RawMessage) replacementFacts {
 	r := replacementFacts{kind: kindOfValue(raw)}
 	if r.kind != '[' {
 		return r
 	}
-	// EVERY ELEMENT IS COUNTED, and each read by its rule until one fails it:
-	// the count is of the list, whatever its entries hold.
+	// The walk goes on past a refused entry: the count is of the whole list.
 	walked := eachElement(raw, func(element json.RawMessage, _ int) error {
 		r.count++
 		if r.err == nil {
@@ -302,16 +283,15 @@ func replacementsOf(raw json.RawMessage) replacementFacts {
 		}
 		return nil
 	})
-	// The walk itself meets no error of a list the line's decode read, but
-	// one it met is the list's, never read past.
+	// A list the line's decode read walks clean, but an error met is the list's.
 	if walked != nil && r.err == nil {
 		r.err = walked
 	}
 	return r
 }
 
-// replacementEntry is element, one entry of a content-replacement record's
-// list, raw, read by the entry's rule ([replacedID]).
+// replacementEntry is element, one raw entry of a content-replacement record's
+// list, read by [replacedID].
 func replacementEntry(element json.RawMessage) (id string, replaced bool, err error) {
 	var entry struct {
 		Kind      json.RawMessage `json:"kind"`
@@ -325,10 +305,9 @@ func replacementEntry(element json.RawMessage) (id string, replaced bool, err er
 	return replacedID(kindOfValue(element), entry.Kind, entry.ToolUseID)
 }
 
-// batchOf is an assistant record's `batchToolUses`, raw, read once: whether it
-// is there, and each entry's id before the first entry its rule refuses
-// ([batchEntryID]), in order, with that entry's error, or the list's own
-// ([threadLine.BatchToolUses]).
+// batchOf reads an assistant record's `batchToolUses`, raw, once
+// ([threadLine.BatchToolUses]): whether present, and each entry's id up to the
+// first [batchEntryID] refuses, with that entry's error, or the list's own.
 func batchOf(raw json.RawMessage) batchFacts {
 	b := batchFacts{present: raw != nil}
 	if !b.present {
@@ -354,18 +333,15 @@ func batchOf(raw json.RawMessage) batchFacts {
 }
 
 // refusedFault is how Claude Code's load reads raw, a whole line its decode
-// refused before it read the line's head ([lineFault]), with ONE
-// jsontext.Decoder over the line, under the layer's own options, in this
-// order: a leading NUL or byte order mark; a value cut at the line's end; a
-// value nested past the decoder's bound; any other failure before a whole
-// value; a whole value followed by more; and a whole value that is no object.
+// refused before reading its head ([lineFault]), by ONE jsontext.Decoder under
+// the layer's options, in order: a leading NUL or byte order mark; a value cut
+// at the line's end; one nested past the decoder's bound; any other failure
+// before a whole value; a whole value followed by more; a whole value that is
+// no object.
 //
-// ONLY A REFUSED LINE IS READ AGAIN, and only here: [decodeThreadLine] calls
-// this from its refusals alone, so a line it takes is decoded once, and what
-// it takes and refuses is what it took and refused before lines said how the
-// load reads them. The decoder reads the line where it lies, from a
-// bytes.Buffer, which jsontext reads with no copy, so a refused line costs
-// what its decoder's state costs and never a copy of the line.
+// Only [decodeThreadLine]'s refusals call it, so a line taken is decoded once.
+// The decoder reads a bytes.Buffer, which jsontext reads with no copy, so a
+// refused line costs its decoder's state, never a copy of the line.
 func refusedFault(raw []byte) lineFault {
 	if len(raw) > 0 && raw[0] == 0 || bytes.HasPrefix(raw, utf8ByteOrderMark) {
 		return faultLead
@@ -387,23 +363,21 @@ func refusedFault(raw []byte) lineFault {
 	if value.Kind() != '{' {
 		return faultNotObject
 	}
-	// One object the decode refused, which no decode under these options
-	// does: no fault, which every reader reads as a line whose load it cannot
-	// say, never as one that yields the load nothing.
+	// An object the decode refused, which these options never do: no fault,
+	// read as a line whose load cannot be said, never as one yielding nothing.
 	return ""
 }
 
 // utf8ByteOrderMark is the byte order mark UTF-8 writes ([refusedFault]).
 var utf8ByteOrderMark = []byte{0xef, 0xbb, 0xbf}
 
-// jsontextMaxDepth is what encoding/json/jsontext says of a value nested past
-// its bound ([faultDepth]), an error it does not export: held to it by
-// [TestALineThatIsNoRecordSaysHowTheLoadReadsIt], which fails where a release
-// of Go says it otherwise.
+// jsontextMaxDepth is the unexported error text encoding/json/jsontext gives a
+// value nested past its bound ([faultDepth]);
+// [TestALineThatIsNoRecordSaysHowTheLoadReadsIt] fails where a Go release
+// words it otherwise.
 const jsontextMaxDepth = "exceeded max depth"
 
-// kindOf is raw, a refused record's `type`, as the kind of record Claude
-// Code's load reads where it is a string naming one ([recordKind]), the
+// kindOf is raw, a refused record's `type`, as the [recordKind] it names, the
 // layer's own string; the zero kind for anything else, so no string the box
 // wrote is held.
 func kindOf(raw json.RawMessage) recordKind {
@@ -430,8 +404,7 @@ func messageContent(content json.RawMessage, call string) (threadMessage, error)
 		if err := wireDecode(content, &text); err != nil {
 			return threadMessage{}, fmt.Errorf("content: %w", err)
 		}
-		// READ AS IT WILL STREAM ([textSays], [textNotice], [textHandback]),
-		// a piece at a time, until all three are decided.
+		// READ AS IT WILL STREAM, in pieces, until all three are decided.
 		var (
 			says     textSays
 			notice   textNotice
@@ -448,13 +421,12 @@ func messageContent(content json.RawMessage, call string) (threadMessage, error)
 		m.notification.agent, m.notification.leg, m.notification.ok = notice.notice()
 		return m, nil
 	}
-	// A BLOCK AT A TIME ([eachElement]), and the calls grown from what was
-	// accepted, never sized from the list's length, which only a whole decode
-	// knows: a list refused at its first block costs that block. Every other
-	// block is counted ([threadBlocks]), and held as nothing more.
+	// A BLOCK AT A TIME ([eachElement]), the calls grown as accepted, never
+	// sized from the list's length, which only a whole decode knows: a list
+	// refused at its first block costs that block. Other blocks are only
+	// counted ([threadBlocks]).
 	var m threadMessage
-	// said is the block's text, unquoted into the one buffer every block
-	// reuses, where a block's text may still change what the message says.
+	// said is the one buffer every block's text is unquoted into.
 	var said []byte
 	if err := eachElement(content, func(raw json.RawMessage, _ int) error {
 		b, text, err := contentBlock(raw)
@@ -466,9 +438,8 @@ func messageContent(content json.RawMessage, call string) (threadMessage, error)
 			m.calls = append(m.calls, b)
 		}
 		if !m.saysText && (b.Kind == blockText || !m.saysAny) && len(text) > 0 && text[0] == '"' {
-			// The block's text was read whole with its line, so unquoting it
-			// meets no error but a lone surrogate's or invalid UTF-8's, each
-			// written as U+FFFD, as the layer's decode reads it.
+			// The line's decode already read it, so the only errors are a lone
+			// surrogate or invalid UTF-8, each written as U+FFFD as it reads them.
 			said, _ = jsontext.AppendUnquote(said[:0], text)
 			var says textSays
 			if says.write(said); says.any {
@@ -483,9 +454,8 @@ func messageContent(content json.RawMessage, call string) (threadMessage, error)
 	return m, nil
 }
 
-// contentBlock is one block of a message's content, raw, its kind and, for a
-// call block, its call, by the one rule of a block ([blockCallOf]); and the
-// block's `text`, raw, which [threadMessage.Says] reads of every block
+// contentBlock is one raw block of a message's content as [blockCallOf] reads
+// it, and its raw `text`, which [threadMessage.Says] reads of every block
 // whatever its type, valid only while the block's walk runs.
 func contentBlock(raw json.RawMessage) (threadCall, json.RawMessage, error) {
 	if !wireObject(raw) {
@@ -506,9 +476,8 @@ func contentBlock(raw json.RawMessage) (threadCall, json.RawMessage, error) {
 		return threadCall{}, nil, err
 	}
 	keys := blockKeys{typ: b.Type, id: b.ID, name: b.Name, toolUseID: b.ToolUseID, isError: b.IsError}
-	// A TARGET AND A TEXT ONLY WHERE THE BLOCK CARRIES WHAT MAKES THEM: an
-	// input, a content. The rule keeps the target of a tool_use and the text
-	// of a tool_result alone.
+	// A target only from an input, a text only from a content; [blockCallOf]
+	// keeps a tool_use's target and a tool_result's text alone.
 	if b.Input != nil {
 		keys.to = sendTarget(b.Input)
 	}
@@ -522,9 +491,8 @@ func contentBlock(raw json.RawMessage) (threadCall, json.RawMessage, error) {
 	return c, b.Text, nil
 }
 
-// sendTarget is the subagent a SendMessage call's input, raw, sends to, by the
-// rule of a send's target ([sendTargetOf]): its `to`, matched exactly and a
-// key written twice by its last value.
+// sendTarget is the subagent a SendMessage call's input, raw, sends to, by
+// [sendTargetOf].
 func sendTarget(input json.RawMessage) string {
 	if !wireObject(input) {
 		return ""
@@ -538,10 +506,9 @@ func sendTarget(input json.RawMessage) string {
 	return sendTargetOf('{', wire.To)
 }
 
-// resultTextOf is a tool_result's content, raw, as the reading compares it
-// with a log's output: its text ([resultText]) read as it will stream
-// ([textResult]), a piece at a time, into its length and its digests; no
-// text, the zero value, where the content holds none.
+// resultTextOf is a tool_result's content, raw, as a [threadResultText]: its
+// text ([resultText]) streamed through [textResult]; the zero value where the
+// content holds none.
 func resultTextOf(content json.RawMessage) threadResultText {
 	text, ok := resultText(content)
 	if !ok {
@@ -559,14 +526,11 @@ func resultTextOf(content json.RawMessage) threadResultText {
 // block ([resultText]).
 var errNotOneText = errors.New("not one text block")
 
-// resultText is the text a tool_result's content, raw, holds: a JSON string, or
-// a list of exactly one element, an object whose `type` is "text" and whose
-// `text` is a string, other keys passed over, each key matched exactly and a
-// key written twice read by its last value ([wireDecode]); false for every
-// other content, absent and null among it.
-//
-// THE LIST IS READ NO FURTHER THAN ITS SECOND ELEMENT ([eachElement]), so a
-// list a line long costs what its first two elements do.
+// resultText is the text a tool_result's content, raw, holds: a JSON string,
+// or a list of exactly one object whose `type` is "text" and whose `text` is a
+// string, other keys passed over; false for any other content, absent and null
+// included. The list is read no further than its second element
+// ([eachElement]), so a long one costs what its first two do.
 func resultText(content json.RawMessage) (string, bool) {
 	if len(content) > 0 && content[0] == '"' {
 		var text string
@@ -591,17 +555,15 @@ func resultText(content json.RawMessage) (string, bool) {
 		if !resultElementIsText('{', block.Type, kindOfValue(block.Text)) {
 			return errNotOneText
 		}
-		// A STRING, which the rule held it to: decoded as one, with no check
-		// of its own beside the rule's.
+		// [resultElementIsText] held it to a string: no check of its own here.
 		return wireDecode(block.Text, &text)
 	})
 	return text, err == nil && blocks == 1
 }
 
 // agentAnswer is what a leg's result record's own toolUseResult, raw, says of
-// the leg, read by its exact keys and a key written twice by its last value,
-// by the rule of a leg's answer ([answerOf]). A result of another shape says
-// none of it: no answer, and no refusal.
+// the leg, by [answerOf]. A result of another shape says nothing: no answer,
+// and no refusal.
 func agentAnswer(raw json.RawMessage) (completed bool, agent string, refused bool) {
 	if !wireObject(raw) {
 		return false, "", false
@@ -618,19 +580,15 @@ func agentAnswer(raw json.RawMessage) (completed bool, agent string, refused boo
 }
 
 // carriesHandback reports whether a leg's result record's own toolUseResult,
-// raw, carries a handback: a `handback` or a `handbackReport` key, any value,
-// read by its exact key.
+// raw, carries a handback: a `handback` or a `handbackReport` key, any value.
 //
-// A HANDBACK ANSWERS NO LEG. Under a handback contract, which both releases
-// arm on a run of a subagent behind a flag on by default (2.1.322's BFt
-// @288117159, 2.1.310's p_t @245867640, armed @302126445), the subagent
-// delivers its report through a call of its own ([claudeToolHandback]), and
-// its completion drops the text of its last reply and answers its caller
-// with words of the harness's own in its place: that the report was delivered
-// as a message, that it has not reported yet, or that none was delivered
-// (2.1.322's pkn @302170267, `if(r!==void 0){Z=[];...}`, 2.1.310's Owr
-// @255311767). A call's own answer then carries the `handback` key beside
-// that text (`...ee!==void 0&&{handback:ee}`, spread into its result at
+// A HANDBACK ANSWERS NO LEG. Under a handback contract (both releases arm it on
+// a subagent behind a flag on by default: 2.1.322's BFt @288117159, 2.1.310's
+// p_t @245867640, armed @302126445) the subagent delivers its report by a call
+// of its own ([claudeToolHandback]), and its completion swaps its last reply's
+// text for the harness's own words (2.1.322's pkn @302170267,
+// `if(r!==void 0){Z=[];...}`, 2.1.310's Owr @255311767). Its answer carries
+// the `handback` key beside them (`...ee!==void 0&&{handback:ee}`,
 // @302347284), so no answer of the leg is the subagent's report.
 func carriesHandback(raw json.RawMessage) bool {
 	if !wireObject(raw) {
@@ -651,10 +609,10 @@ func carriesHandback(raw json.RawMessage) bool {
 // ([everyElement]).
 var errNotEvery = errors.New("an element fails its test")
 
-// everyElement reports whether raw is a list, and every element of it passes
-// keep, as JavaScript's Array.isArray and every() read one: a list of none
-// passes. Walked an element at a time ([eachElement]), stopping at the
-// first that fails, so a long list costs its reader one element at a time.
+// everyElement reports whether raw is a list whose every element passes keep,
+// as JavaScript's Array.isArray and every() read one: a list of none passes.
+// It walks an element at a time ([eachElement]), stopping at the first that
+// fails.
 func everyElement(raw json.RawMessage, keep func(element json.RawMessage) bool) bool {
 	if len(raw) == 0 || raw[0] != '[' {
 		return false
@@ -667,9 +625,9 @@ func everyElement(raw json.RawMessage, keep func(element json.RawMessage) bool) 
 	}) == nil
 }
 
-// withheldEntryKept reports whether entry, one of a withheld_memory
-// attachment's entries, raw, is of the shape Claude Code's resume keeps the
-// attachment with, by the rule of such an entry ([withheldKept]).
+// withheldEntryKept reports whether entry, one raw entry of a withheld_memory
+// attachment, has the shape Claude Code's resume keeps the attachment with
+// ([withheldKept]).
 func withheldEntryKept(entry json.RawMessage) bool {
 	var e struct {
 		Path        json.RawMessage `json:"path"`
@@ -683,12 +641,11 @@ func withheldEntryKept(entry json.RawMessage) bool {
 }
 
 // skillNamesKept reports whether names, a skill_listing attachment's raw
-// `names`, is of the shape Claude Code's resume keeps the attachment with:
+// `names`, has the shape Claude Code's resume keeps the attachment with:
 // absent, or a list of at most [skillListingMaxNames] strings, each at most
-// [skillListingMaxNameUnits] UTF-16 code units long, its length checked
-// before its names, as the harness checks them. An error where the answer
-// turns on a name the layer cannot count as the harness does
-// ([threadLine.AttachmentWellFormed]).
+// [skillListingMaxNameUnits] UTF-16 code units, its length checked before its
+// names as the harness does. An error where the answer turns on a name the
+// layer cannot count as the harness does ([threadLine.AttachmentWellFormed]).
 func skillNamesKept(names json.RawMessage) (bool, error) {
 	if names == nil {
 		return true, nil
@@ -706,9 +663,8 @@ func skillNamesKept(names json.RawMessage) (bool, error) {
 		if count > skillListingMaxNames || name[0] != '"' {
 			return errNotEvery
 		}
-		// Read whole with its line, the name unquotes with no error but a lone
-		// surrogate's or invalid UTF-8's, each written as U+FFFD, as the
-		// layer's decode reads it.
+		// The line's decode already read it, so the only errors are a lone
+		// surrogate or invalid UTF-8, each written as U+FFFD as it reads them.
 		unquoted, _ = jsontext.AppendUnquote(unquoted[:0], name)
 		var units textUnits
 		units.write(unquoted)
@@ -723,16 +679,15 @@ func skillNamesKept(names json.RawMessage) (bool, error) {
 		return false, nil
 	}
 	if unreadable {
-		return false, errors.New("a skill's name holds a byte that is no UTF-8, so its length in UTF-16 code units " +
-			"is not one the layer can count as Claude Code does")
+		return false, errSkillNameUnmeasured
 	}
 	return true, nil
 }
 
 // preservedList is what a compaction's `preservedMessages`, raw, says it kept
-// ([threadLine.Preserved]): named whatever it lists, and kept where it lists
-// any, since a resume relinks by a list of none no record, and still drops by
-// it every record before the last boundary.
+// ([threadLine.Preserved]): named whatever it lists, and kept only where it
+// lists any, since a resume relinks no record by an empty list yet still drops
+// every record before the last boundary.
 func preservedList(raw json.RawMessage) (threadPreserved, error) {
 	if !wireObject(raw) {
 		return threadPreserved{}, fmt.Errorf("compactMetadata.preservedMessages is %s, not an object", wireKind(raw))
@@ -754,7 +709,7 @@ func preservedList(raw json.RawMessage) (threadPreserved, error) {
 		if entryErr != nil {
 			return entryErr
 		}
-		p.list(entry)
+		p.list(uuidBytes(entry))
 		return nil
 	})
 	if err != nil {

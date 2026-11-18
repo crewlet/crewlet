@@ -23,9 +23,8 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// probeInbox is a run's note inbox as the bridge serves it: one note from ada,
-// answered at every boundary of the main agent's loop it is asked at, and each
-// event it was asked at recorded.
+// probeInbox answers one note from ada at every boundary it is asked at, and
+// records each event.
 type probeInbox struct {
 	mu    sync.Mutex
 	takes []string
@@ -74,8 +73,8 @@ func (l *probeLedger) Record(_ context.Context, _ string, c mcpbridge.Call) erro
 	return nil
 }
 
-// probeBridge serves a real tool bridge over HTTP with one run's session open,
-// its inbox inbox, and answers the run's endpoint.
+// probeBridge serves a real tool bridge over HTTP with one run's session open
+// on inbox, and answers the run's endpoint.
 func probeBridge(t *testing.T, inbox mcpbridge.SteerInbox, ledger mcpbridge.Ledger) string {
 	t.Helper()
 	server := httptest.NewServer(http.NotFoundHandler())
@@ -104,24 +103,14 @@ func probeBridge(t *testing.T, inbox mcpbridge.SteerInbox, ledger mcpbridge.Ledg
 	return endpoint
 }
 
-// A REAL BOX'S HOOKS REACH THE BRIDGE'S TOOL.
+// A REAL BOX'S HOOKS REACH THE BRIDGE'S TOOL: the settings a run in a real
+// `direct` box was named are played as the harness plays them, over a real MCP
+// client against a real bridge, so the file and the bridge are held to each
+// other rather than to copies of each other's names.
 //
-// The one place the run's settings, the box and the bridge meet: a Claude Code
-// run in a real `direct` box, its `claude` a stand-in that records the argv,
-// the environment and the stdin it was started with and keeps the settings file
-// it was named. Then each hook in that file is played as the harness plays it — a
-// call of its tool, over a real MCP client, on the server the run's MCP config
-// names under the hook's own server name, with ${hook_event_name} and
-// ${agent_id} filled in — against a real bridge serving the run's session, so
-// what the file names and what the bridge serves are held to each other rather
-// than each to a copy of the other's names.
-//
-// What it holds: the brief reaches the harness on stdin and nowhere on its argv;
-// --settings names the file holding the hooks; the two variables that switch
-// hooks off are gone from the harness's environment though the seat's
-// environment set them; each of the main agent's two boundaries is answered
-// with the note, as the hook's additional context for that event; and a
-// subagent's boundary takes nothing.
+// It holds: the brief is on stdin, never argv; --settings names the hooks'
+// file; the variables that switch hooks off never reach the harness; each main
+// agent boundary is answered with the note; a subagent's takes nothing.
 //
 // Mutation: rename the hook input's `event` key and no boundary takes the note;
 // drop Output.Unset and the variables reach the harness.
@@ -161,8 +150,7 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"done","ter
 	if argv[0] != "-p" || slices.Contains(argv, brief) {
 		t.Errorf("the brief is on the harness's argv: %q", argv)
 	}
-	// The notes' settings as their pinned copy, which the stand-in's 2.1.310
-	// takes ([claudePinGate]): it holds the same hooks.
+	// The pinned copy, which the stand-in's 2.1.310 takes ([claudePinGate]).
 	if got := after(argv, "--settings"); got != p.ClaudeNotesSettingsPinned() {
 		t.Errorf("--settings names %q, want %q", got, p.ClaudeNotesSettingsPinned())
 	}

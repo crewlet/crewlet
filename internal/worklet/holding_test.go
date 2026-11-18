@@ -203,8 +203,7 @@ func TestHoldingUpCountsTheAgentWorkWaitingOnAPerson(t *testing.T) {
 
 // AN ITEM HELD BY A QUESTION IS HELD SINCE THE QUESTION WAS PUT: the person
 // was asked, not handed the item, so no change of its assignee says when they
-// came to hold it, and an item nobody was ever assigned has none at all. It
-// read the zero instant, which a reader drew as "held for 739,933 days"; and
+// came to hold it, and an item nobody was ever assigned has none at all; and
 // where nothing is recorded the row says nothing rather than year 1.
 //
 // Mutation: read the hand-over for an asked row too, and q reads zero.

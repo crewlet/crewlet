@@ -10,14 +10,12 @@ import (
 	"github.com/crewlet/crewlet/internal/seat"
 )
 
-// TakerLeases is the coordination store as a coordinator holds its own TAKER
-// LEASE in it and reads another process's ([coord.ClassTaker]; see session.go,
-// "A capture whose taker stopped is settled from the log, not waited out"):
-// four methods of [coord.Backend], named by the consumer as this package uses
-// them. Three-valued by construction, as every answer of the store is: a lease
-// held, none held, and an error that says nothing is known — which a fence
-// reads as no lease and a settle as no answer, each the direction that keeps
-// a capture from being refused under a taker still keeping it.
+// TakerLeases is the coordination store as a coordinator holds its own taker
+// lease in it and reads another process's ([coord.ClassTaker]; session.go, "A
+// capture whose taker stopped is settled from the log, not waited out"). Its
+// answers are three-valued: an error, nothing known, reads as no lease to a
+// fence and no answer to a settle, each the direction that never refuses a
+// capture under a taker still keeping it.
 type TakerLeases interface {
 	TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error)
 	Renew(ctx context.Context, resource, owner string, epoch int64, ttl time.Duration) (bool, error)
@@ -26,33 +24,17 @@ type TakerLeases interface {
 }
 
 // takerLease is this process's taker lease: claimed as its coordinator is
-// built, renewed every renewal interval, claimed again at a new epoch once it
-// lapses, and released by [Coordinator.Stop] once the last keep has ended.
+// built, renewed every interval, claimed again at a new epoch once it lapses,
+// and released by [Coordinator.Stop] once the last keep has ended.
 //
-// ITS TTL IS THE SEAT LEASE TTL THE DEPLOYMENT CONFIGURES, so a taker that
-// stopped is read as gone within one TTL of its last renewal — the bound a dead
-// node's seats already move in. Shorter would fence a healthy node's keeps on
-// a store blip; longer is how long a stopped taker's capture holds the turn's
-// end and a relaunch. HELD TO [coord.MaxDutyTTL], the longest lease the store
-// keeps outside seats and presence ([coord.CheckLeaseTTL]), which only a seat
-// lease TTL past three hours reaches: asked for more, the store refused every
-// claim, and no capture was begun anywhere in the deployment.
-//
-// RENEWED [coord.KeptRenewals] TIMES A TTL, not on presence's three: a keep goes
-// on only inside the window its process's last confirmed renewal covers
-// (below), and renewed a third of a TTL apart that window held two intervals,
-// so the renewal after one the store did not answer was asked as the window
-// closed — one blip, a leader election, refused every take and fenced every
-// keep under a lease no peer could yet read as lapsed. A quarter apart, the
-// renewal after an unanswered one is asked inside the window with a whole
-// interval to answer in.
-//
-// WHAT IT HOLDS IS ITS OWN WORD on the tenure: the epoch its last confirmed
-// claim or renewal answered, and the exclusive window that renewal certifies
-// (coord.ExclusiveThrough, measured from the asking on this process's clock,
-// one renewal interval its margin). No store is read to answer it, so a fence
-// costs nothing and a store that stops answering closes the window rather than
-// keeping it open.
+// Its TTL is the deployment's seat lease TTL, the bound a dead node's seats
+// move in (shorter fences healthy keeps on a store blip; longer holds a
+// stopped taker's turn end and relaunch), capped at [coord.MaxDutyTTL], past
+// which the store refuses every claim. It renews [coord.KeptRenewals] times a
+// TTL, not presence's three, so the renewal after an unanswered one is asked
+// inside the exclusive window with an interval to spare. That window
+// ([coord.ExclusiveThrough] from the last confirmed renewal, on this clock) is
+// its own word: a fence reads no store, and a silent store closes it.
 type takerLease struct {
 	leases   TakerLeases
 	holder   string
@@ -64,9 +46,8 @@ type takerLease struct {
 
 	// life is the renewals' own lifetime, from the claim to
 	// [takerLease.stop], which ends it (end), waits for the renewal under way
-	// (done) and releases the tenure held — once (stopped), however often it
-	// is asked. Not the coordinator's lifetime, which its stop ends first:
-	// the lease is held until the last keep has ended, after it.
+	// (done) and releases the tenure once (stopped). Not the coordinator's:
+	// the lease outlives its stop until the last keep has ended.
 	life    context.Context
 	end     context.CancelFunc
 	done    chan struct{}
@@ -96,15 +77,12 @@ const takerUnheld = "this node holds no taker lease whose last renewal still cov
 	"renewals went unanswered — so a capture it began could not be told apart from one whose taker " +
 	"stopped, and none is begun"
 
-// newTakerLease claims holder's taker lease in leases at ttl — zero takes
-// [seat.SeatLeaseTTL], and nothing is asked past [coord.MaxDutyTTL] — and goes
-// on renewing it on its own goroutine until [takerLease.stop].
-//
-// THE FIRST CLAIM BEFORE IT RETURNS, bounded by one renewal interval as every
-// beat is: a coordinator begins no capture before its lease is held, so one
-// built holding it begins its first at once, where a claim left to the
-// goroutine refused every take the coordinator was asked for meanwhile. A
-// store that does not answer leaves the claim to the next beat.
+// newTakerLease claims holder's taker lease in leases at ttl (zero takes
+// [seat.SeatLeaseTTL], capped at [coord.MaxDutyTTL]) and renews it on its own
+// goroutine until [takerLease.stop]. The first claim is made before it returns,
+// bounded by one interval, so the coordinator's first takes are not refused
+// while a goroutine claims; a store that does not answer leaves it to the next
+// beat.
 func newTakerLease(leases TakerLeases, holder string, ttl time.Duration) *takerLease {
 	if ttl <= 0 {
 		ttl = seat.SeatLeaseTTL
@@ -131,9 +109,8 @@ func (t *takerLease) hold(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			// A STOP THAT CAME WITH THE TICK ends the renewals here: the
-			// select takes either at random, and a beat begun under a stop
-			// is cut mid-call.
+			// A stop that came with the tick ends the renewals here: select
+			// picks at random, and a beat begun under a stop is cut mid-call.
 			if ctx.Err() != nil {
 				return
 			}
@@ -143,17 +120,14 @@ func (t *takerLease) hold(ctx context.Context) {
 }
 
 // beat renews the tenure held, or claims one where none is. A renewal the store
-// answers NO to is a lease that lapsed, never renewed again, only claimed at a
-// new epoch — at once, in the same beat, since every keep under the old one is
-// fenced from then on. A renewal or a claim the store does not answer changes
-// nothing held: the window of the last confirmed renewal closes on its own.
-// Each call is bounded by one interval, so a store that hangs never delays the
-// next beat.
+// refuses is a lapsed lease, claimed again at a new epoch in the same beat,
+// since every keep under the old one is fenced from then on. An unanswered
+// call changes nothing held: the last confirmed window closes on its own. Each
+// call is bounded by one interval, so a hung store never delays the next beat.
 //
-// A CALL THE STOP CUT says nothing of the store, and is not said to: the stop
-// ends ctx while a beat may be under way, and that beat's call fails on ctx
-// rather than on the store. A claim the store answered held all the same is
-// confirmed, so the stop's release gives it back.
+// A call the stop cut says nothing of the store and is not logged as if it
+// did; a claim the store answered held all the same is confirmed, so the
+// stop's release gives it back.
 func (t *takerLease) beat(ctx context.Context) {
 	call, cancel := context.WithTimeout(ctx, t.every)
 	defer cancel()
@@ -197,8 +171,8 @@ func (t *takerLease) beat(ctx context.Context) {
 	case err == nil && lease != nil:
 		t.confirm(lease.Epoch, asked)
 	case ctx.Err() != nil:
-		// CUT BY THE STOP: what the store made of the claim is unknown, and a
-		// tenure no answer named is no keep's to stamp — it lapses on its TTL.
+		// Cut by the stop: a tenure no answer named is no keep's to stamp;
+		// it lapses on its TTL.
 	case err != nil:
 		log.WarnContext(ctx, "executor_taker_lease_unanswered", "taker", t.holder, "error", err.Error(),
 			"detail", "the coordination store did not answer this node's taker lease claim; no capture is "+
@@ -230,10 +204,9 @@ func (t *takerLease) held() (takerHold, bool) {
 }
 
 // fence is the end of the window a keep of capture may go on in now, and why it
-// may go no further — "" where it may: this process holds the lease at the
-// epoch the capture's stamp names, inside the window of its last confirmed
-// renewal, which ends at the instant answered. Never a store read — see the
-// type doc.
+// may go no further ("" where it may: this process holds the lease at the
+// epoch the capture's stamp names, inside its last confirmed window). Never a
+// store read ([takerLease]).
 func (t *takerLease) fence(capture SessionCapture) (time.Time, string) {
 	hold, ok := t.held()
 	switch {
@@ -268,19 +241,14 @@ func (t *takerLease) stop() {
 	})
 }
 
-// release gives the tenure held back, on ctx — the renewals' own lifetime,
-// ended by then — with its cancellation removed and one renewal interval as
-// its bound.
+// release gives the tenure held back on ctx (the renewals' own lifetime, ended
+// by then) with its cancellation removed, bounded by one renewal interval.
 //
-// A STEP OF THE STOP IN AN ENGINE, where the lease store the lease was claimed
-// in draws every give-back made once the teardown has begun from the stop's
-// one allowance (internal/engine's holdLeases): no stop's context reaches this
-// one, which was made when the coordinator was built, so the frame that holds
-// both the store and the stop bounds it there, and a node whose store has gone
-// spends that one allowance rather than this release's interval beside it.
-// The interval bounds a coordinator stopped outside an engine's stop. A
-// release the store does not answer within it falls back to the lapse at the
-// TTL, which is what a crash leaves anyway.
+// No stop's context reaches it, since ctx was made when the coordinator was
+// built: in an engine the lease store bounds every give-back after teardown
+// begins by the stop's one allowance (internal/engine's holdLeases), and the
+// interval bounds a coordinator stopped outside one. An unanswered release
+// falls back to the lapse at the TTL, as a crash does.
 func (t *takerLease) release(ctx context.Context) {
 	t.mu.Lock()
 	epoch := t.epoch
@@ -320,10 +288,10 @@ func (c *Coordinator) keepFence(stamp SessionCapture) func() (time.Time, string)
 }
 
 // fenceKeep ends a keep its own taker lease no longer covers, at step, with the
-// outcome it knows — refused where no record was sent, unresolved where one was
-// and went unanswered — stamped and said, as every keep's outcome is
-// ([Coordinator.finishCapture], `executor_session_not_kept`), and the fence
-// besides (`executor_session_fenced`); nothing more is uploaded or recorded.
+// outcome it knows (refused where no record was sent, unresolved where one went
+// unanswered), stamped and said as every keep's is ([Coordinator.finishCapture],
+// `executor_session_not_kept`) plus `executor_session_fenced`; nothing more is
+// uploaded or recorded.
 func (c *Coordinator) fenceKeep(ctx context.Context, run PendingRun, stamp SessionCapture, step string,
 	outcome CaptureState, why string) *SessionKept {
 
@@ -341,11 +309,10 @@ func (c *Coordinator) fenceKeep(ctx context.Context, run PendingRun, stamp Sessi
 	return c.finishCapture(ctx, time.Time{}, run, stamp, outcome, why)
 }
 
-// takerGone reports whether capture's taker is gone ([takerLease.gone]): a
-// begun capture whose stamp names a taker, read through the store this
-// coordinator holds its own lease in. False for anything else — a stamp an
-// older build wrote, and a coordinator with no lease store, wait by age — and
-// an error, never gone, where the store cannot say.
+// takerGone reports whether capture's taker is gone ([takerLease.gone]), for a
+// begun capture whose stamp names a taker. False for anything else (a stamp
+// naming none, or a coordinator with no lease store, waits by age), and an
+// error, never gone, where the store cannot say.
 func (c *Coordinator) takerGone(ctx context.Context, capture SessionCapture) (bool, error) {
 	if c.taker == nil || capture.State != CaptureBegun || capture.Taker == "" {
 		return false, nil

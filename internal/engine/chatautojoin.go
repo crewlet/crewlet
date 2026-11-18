@@ -7,31 +7,16 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 )
 
-// THE AUTO-JOIN ROOMS: a public room an administrator set to take in
-// everybody the company takes on ([chatlet.Channel.AutoJoin]).
+// applyAutoJoinRooms hands the activated chart's whole seat list to every
+// auto-join room ([chatlet.Channel.AutoJoin]); the room takes in each seat it
+// has not accounted for ([chatlet.Store.AutoJoin]). Turning the setting on
+// accounted for every seat then, and a seat put in is accounted for by the
+// same record, so a newcomer who leaves is not put back.
 //
-// # When a seat joins the company
-//
-// A seat joins the company when an activation's org chart holds it, so this
-// runs where the unit rooms are staffed, at every published company, with the
-// chart's whole seat list. The room decides who of them is new: every seat it
-// has not accounted for, since turning the setting on accounted for every seat
-// the company had then ([chatlet.Store.AutoJoin]). A seat put in is accounted
-// for by the same record, so the next activation decides nothing for it, and a
-// newcomer who leaves the room is not put back.
-//
-// # Why no lease, and why every node
-//
-// For [Engine.applyUnitRooms]' reason: each room's write arbitrates on the
-// room, so two nodes running this race at the broker and the loser finds the
-// newcomers accounted for and decides nothing. The worst a second node costs
-// is a refused record.
-//
-// # Behind the same two gates
-//
-// Chatlet's alone, and only for a company an activation named: a company that
-// moved to a vendor surface writes nothing into this log, and a chart nobody
-// activated is not the company's yet.
+// No lease, and every node runs it, for [Engine.applyUnitRooms]' reason: each
+// write arbitrates on the room, so a second node costs a refused record.
+// Chatlet only, and only for an activated company: a vendor-chat company
+// writes nothing into this log, and an unactivated chart is not the company's.
 func (e *Engine) applyAutoJoinRooms(ctx context.Context, c *Company) {
 	rooms := e.ChatStore()
 	if rooms == nil || c == nil || c.Org == nil || c.Config == nil ||
@@ -48,12 +33,9 @@ type autoJoinWriter interface {
 		seats []string) (chatlet.Written, []string, error)
 }
 
-// applyAutoJoin puts the chart's newcomers in every auto-join room, logging
-// each room it took somebody into and each it could not bring into line.
-//
-// BEST EFFORT, retried by the next published company, as the unit rooms are:
-// a room whose write failed takes its newcomers in at the next activation or
-// restart, because they are still not accounted for.
+// applyAutoJoin puts the chart's newcomers in every auto-join room. BEST
+// EFFORT, as for the unit rooms: a room whose write failed takes them in at the
+// next activation or restart, because they are still not accounted for.
 func applyAutoJoin(ctx context.Context, rooms autoJoinWriter, seats []string) {
 	ids, err := rooms.AutoJoinRooms(ctx)
 	if err != nil {
@@ -62,9 +44,8 @@ func applyAutoJoin(ctx context.Context, rooms autoJoinWriter, seats []string) {
 				"could not be listed; the next config apply or restart retries")
 		return
 	}
-	// THE ENGINE NARRATING, as for the unit rooms: the line says the
-	// newcomers joined, and attributing it to a seat or a token would make
-	// the engine a participant in a room it only staffed.
+	// THE ENGINE NARRATES, as for the unit rooms: attributing the join to a
+	// seat or a token would make it a participant in a room it only staffed.
 	actor := chatlet.Actor{Handle: chatAutoJoinActor, Kind: chatlet.AuthorSystem}
 	for _, id := range ids {
 		_, added, err := rooms.AutoJoin(ctx, actor, id, seats)

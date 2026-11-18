@@ -8,14 +8,10 @@ import (
 )
 
 // AN EVICTION IS WRITTEN TO THIS LOG BY ITS OWN STORE, AND READ BACK FROM THIS
-// LOG'S OWN ROWS — install, lift, and install again.
-//
-// The code log claims identity, so the trim counts its nodes on it, and an
-// eviction the node gate wrote only to the other two identity logs would
-// leave the node pinning this log's floor for ever. [gitlet.Domain.Evictions]
-// is what the trim reads, and [statelog.EvictedOnLog] what a node a peer
-// re-anchored past reads, so what both answer after each step is the
-// contract.
+// LOG'S OWN ROWS: install, lift, install again. The trim counts this log's
+// nodes, so without its own gate an evicted node would pin its floor for ever; [gitlet.Domain.Evictions] (what the
+// trim reads) and [statelog.EvictedOnLog] (what a re-anchored node reads)
+// after each step are the contract.
 func TestAnEvictionIsWrittenToThisLogAndReadBackFromIt(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

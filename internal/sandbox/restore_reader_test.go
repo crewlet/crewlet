@@ -22,26 +22,17 @@ func endedHead(now time.Time) executordomain.Session {
 }
 
 // WHAT A READER IS TOLD OF AN ENDED TURN'S SESSION IS THE NEXT TURN'S OWN
-// DECISION. An ended turn's session is continued by its conversation's next
-// turn, and only where it is the conversation's HEAD as the read that answered
-// the row named it — decided by the decision that turn's first launch takes of
-// the head its dispatch reads, of the member the node holding the seat would
-// launch it on, asked by no turn: continued in any box where that member's
-// runner restores it; not where it refuses it, where the seat has no member,
-// or where the company keeps no session; undecided, never a no, where what it
-// is launched on cannot be said, or where the read named no head beside the
-// row. A row that is not the head names the head the next turn is handed; one
-// that names no session says which of three reasons; and a turn that served no
-// conversation is continued by no launch at all — and is the one ended row
-// about which no launch is said. Only the head asks the node holding the seat
-// anything.
+// DECISION: its first launch's, on the member the seat's holder would pick,
+// whom only the head asks, by no turn. Only the read's head continues: where
+// that runner restores it; not where it refuses, the seat has no member or the
+// company keeps no session; undecided, never a no, where the target cannot be
+// said or the read named no head. Any other row names the head its next turn
+// gets, or which of three reasons it has no session; no conversation, no launch.
 //
-// Mutation: decide an ended row by a relaunch's decision, as a turn of no
-// conversation, by its own turn's target, or by anything but the head the
-// read named; read an unknown head or target as a no; ask the holder about a
-// row that is not the head, or by the head's own turn; or say a released
-// session was released by the budget whatever its end said, and a case goes
-// red.
+// Mutation: decide by a relaunch's decision, as a turn of no conversation, by
+// the row's own target or any head but the read's; read an unknown head or
+// target as a no; ask the holder of a non-head row or by the head's turn; or
+// blame every release on the budget whatever its end said: a case goes red.
 func TestWhatAReaderIsToldOfAnEndedTurnIsTheNextTurnsOwnDecision(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
@@ -96,9 +87,9 @@ func TestWhatAReaderIsToldOfAnEndedTurnIsTheNextTurnsOwnDecision(t *testing.T) {
 		"a session the seat's budget released": {head: "t-head", target: restores, by: ContinuedByNextTurn,
 			decided: true, why: "budget released", row: func(s *executordomain.Session) {
 				s.Object = objstore.Object{}
-				// AN UNKEPT CAPTURE NO NEWER THAN THE ONE THE ROW KEPT, as a
-				// capture of the very attempt that landed after all leaves
-				// it: the end released nothing, and the budget did.
+				// AN UNKEPT CAPTURE NO NEWER THAN THE ONE THE ROW KEPT (the
+				// very attempt that landed after all): the end released
+				// nothing, and the budget did.
 				s.Ending.Unkept = &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 1, Reason: "unanswered"}
 			}},
 	} {
@@ -130,9 +121,9 @@ func TestWhatAReaderIsToldOfAnEndedTurnIsTheNextTurnsOwnDecision(t *testing.T) {
 	}
 }
 
-// begunTurn is swe's live turn t-begun, which froze the head t-head as its base
-// and whose row on the log holds it, having landed no capture, and whose first
-// job was lost with its box before anything of it was kept.
+// begunTurn is swe's live turn t-begun, which froze the head t-head as its base,
+// held by its row on the log, landed no capture, and whose first job was lost
+// with its box before anything of it was kept.
 func begunTurn(now time.Time) (executordomain.Session, PendingRun) {
 	base := endedHead(now)
 	frozen := baseSessionOf(base.Kept())
@@ -145,20 +136,16 @@ func begunTurn(now time.Time) (executordomain.Session, PendingRun) {
 
 // A RELAUNCH OF A TURN THAT HAS KEPT NOTHING IS SAID TO CONTINUE THE SESSION
 // ITS FIRST LAUNCH WAS HANDED, as the relaunch's own question decides it. The
-// turn's own row names no session, so it is not continuable, saying why — and
-// where the run froze a base, the row still holds it on the log, and the
-// member a relaunch is launched on restores it, the row says a relaunch in a
-// box of its own continues that session instead. Not where the turn has kept a
-// session of its own, nor where its row holds no base (its begin found the
-// session gone, or never landed), nor where the company keeps no session or the
-// runner refuses the base, nor for a round lost a second time — unless its
-// resumed turn collects what the job submitted, whose review's send-back does
-// continue it. The holder is asked about the base's archive, which is the one
-// such a relaunch takes up, by the turn's own id.
+// row names no session, so it is not continuable, saying why; where the run
+// froze a base the row still holds and the relaunch's member restores it, it
+// says a relaunch in a box of its own continues that base. Not where the turn
+// kept a session, its row holds no base, the company keeps none, the runner
+// refuses the base, or the round was lost a second time, unless its resumed turn
+// collects the job's submission, whose review's send-back continues it. The
+// holder is asked about the base's archive, by the turn's own id.
 //
 // Mutation: drop the base's half, claim it whatever the row holds or the run
-// kept, or ask the holder about the row's own empty archive, and a case goes
-// red.
+// kept, or ask the holder about the row's empty archive, and a case goes red.
 func TestARelaunchOfATurnThatKeptNothingIsSaidToContinueItsBase(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
@@ -215,12 +202,10 @@ func TestARelaunchOfATurnThatKeptNothingIsSaidToContinueItsBase(t *testing.T) {
 }
 
 // A LIVE TURN WHOSE RUN IS OVER OR ENDING IS THE NEXT TURN'S, NOT YET DECIDED.
-// No relaunch of a turn whose run is over, or whose ending is decided, follows;
-// whether its conversation's next turn continues the session its row names is
-// the conversation's head's to say once the turn's end is on the log, which the
-// row as read does not show — so it is undecided, never a no, and asks the
-// node holding the seat nothing. A turn of no conversation is decided: no
-// launch continues it.
+// No relaunch follows; whether the next turn continues the row's session is the
+// conversation head's to say once the turn's end is on the log, which the row as
+// read does not show: undecided, never a no, and the seat's holder is not asked.
+// A turn of no conversation is decided: no launch continues it.
 //
 // Mutation: answer such a row as a relaunch's no, as decided, or ask the holder
 // about it, and a case goes red.
@@ -251,13 +236,12 @@ func TestALiveTurnWhoseRunIsOverOrEndingIsTheNextTurnsUndecided(t *testing.T) {
 }
 
 // A SCHEDULE'S SESSION IS TOLD OF ITS NEXT FIRE. A schedule is a conversation
-// of each seat that runs it, every fire a turn of it, so an ended fire's row is
-// decided by the decision any conversation's is — its next fire's first
-// launch's — and answered as the schedule's next fire, in the schedule's words:
-// the head continued in any box; an older fire's row naming the fire the next
-// one is handed instead; a fire whose end is not on the log yet undecided until
-// it is; and a live fire that kept nothing, whose relaunch continues the last
-// fire's session. Whatever else a caller passes is the next turn's.
+// of each seat that runs it, every fire a turn, so a fire's row is decided as any
+// conversation's is and answered as the next fire, in the schedule's words: the
+// head continued in any box; an older fire naming the fire the next is handed;
+// one whose end is not on the log undecided; a live fire that kept nothing
+// continued by its relaunch from the last fire's session. Any other launch a
+// caller passes is the next turn's.
 //
 // Mutation: answer a schedule's row as the next turn's, word it as a
 // conversation's, or read an unknown launch as the next fire, and a check goes

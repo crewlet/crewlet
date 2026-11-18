@@ -11,14 +11,13 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// AN AGENT'S REVIEW NAMES ITS REVIEWER (ADR-0124): moving an item it keeps into
-// review names `reviewer`. A colleague seat is handed the item, as an
-// assignment; a person needs the agent's open ask to them on the item, which
-// is how the review reaches their Inbox, and the item stays with the agent.
-// Handing the item to a colleague seat names its reviewer by itself. The agent
-// itself, a person handed the item with no question, a reviewer beside a
-// different assignee, and a reviewer of an item left out of review are refused
-// before anything is written. A person's own move is theirs.
+// AN AGENT'S REVIEW NAMES ITS REVIEWER (ADR-0124). A colleague seat is handed
+// the item as an assignment, and handing it to one names it by itself; a person
+// needs the agent's open ask on the item, which reaches their Inbox, and the
+// item stays with the agent. The agent itself, a person handed the item with
+// no question, a reviewer beside a different assignee, and a reviewer of an
+// item left out of review are refused before anything is written. A person's
+// own move is theirs.
 //
 // Mutation: return nil from holdReview and every self-submitted review is held
 // by nobody; drop the open-ask check and a person is named reviewer of a review

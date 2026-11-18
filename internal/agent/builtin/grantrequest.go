@@ -1,7 +1,6 @@
 package builtin
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/seataccess"
@@ -19,12 +19,11 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// request_access's second form: one permission at an integration beside the
-// agent's level, from the integration's live catalogue (a Cloudflare
-// permission group). The engine stores the request, posts it as a decision
-// whose grant options carry the request's id, and a person answers by
-// previewing and saving the grant; the agent is told its new access on its
-// next turn, and its credential keeps its value.
+// request_access's second form: one permission beside the agent's level, from
+// the integration's live catalogue. The engine stores the request and posts it
+// as a decision whose grant options carry its id; a person answers by saving
+// the grant, the agent learns its new access next turn, and its credential
+// keeps its value.
 
 // GrantDesk is the engine's half of an agent's request for one grant and of
 // its answer.
@@ -60,7 +59,8 @@ func (t *requestAccess) requestGrant(ctx context.Context, turn *turnctx.Turn, ar
 	lane := seataccess.Lane(strings.TrimSpace(argString(args, "integration")))
 	permission := strings.TrimSpace(argString(args, "permission"))
 	scope := argStrings(args, "scope")
-	hours := argInt(args, "hours", seataccess.DefaultGrantHours)
+	hours, hoursGiven := argIntValue(args["hours"])
+	target := strings.TrimSpace(argString(args, "target"))
 	person := strings.TrimSpace(argString(args, "ask"))
 	why := strings.TrimSpace(argString(args, "why"))
 	handle := turn.Seat.Handle()
@@ -74,9 +74,12 @@ func (t *requestAccess) requestGrant(ctx context.Context, turn *turnctx.Turn, ar
 	case permission == "":
 		return failed(RequestAccessTool + " needs `permission`: the permission you lacked, as the " +
 			"integration's catalogue names it."), nil
-	case hours < seataccess.MinGrantHours || hours > seataccess.MaxGrantHours:
+	case hoursGiven && (hours < seataccess.MinGrantHours || hours > seataccess.MaxGrantHours):
 		return failed(fmt.Sprintf("%s: `hours` is %d; ask for %d to %d.", RequestAccessTool, hours,
 			seataccess.MinGrantHours, seataccess.MaxGrantHours)), nil
+	case target != "" && !config.SeatGrantTarget(target):
+		return failed(RequestAccessTool + ": `target` is one resource's name as the integration " +
+			"names it, with no space or quote, such as a bucket's name."), nil
 	}
 	if refused := askable(turn, person, why); refused != nil {
 		return *refused, nil
@@ -88,7 +91,7 @@ func (t *requestAccess) requestGrant(ctx context.Context, turn *turnctx.Turn, ar
 	}
 	name := seataccess.LaneName(lane)
 	entry, listed := opts.Grantable(permission)
-	asked := seataccess.Grant{Permission: permission, Scope: scope}
+	asked := seataccess.Grant{Permission: permission, Scope: scope, Target: target}
 	switch {
 	case opts.Managed == seataccess.ManagedExternal:
 		return failed(fmt.Sprintf("%s: your company manages agents' %s access outside Crewlet, so it "+
@@ -110,21 +113,37 @@ func (t *requestAccess) requestGrant(ctx context.Context, turn *turnctx.Turn, ar
 	}):
 		return failed(fmt.Sprintf("%s: you already hold %s there; read Your access.", RequestAccessTool,
 			entry.Name)), nil
+	case entry.OneChange() && target == "":
+		return failed(fmt.Sprintf("%s: %s is granted for one change; name what that change changes in "+
+			"`target` (a bucket's name, say) and the change itself in `why`.", RequestAccessTool,
+			entry.Name)), nil
+	case entry.OneChange() && hours > entry.MaxHours:
+		return failed(fmt.Sprintf("%s: %s is granted for one change, for at most %d hours; ask for %d "+
+			"to %d.", RequestAccessTool, entry.Name, entry.MaxHours, seataccess.MinGrantHours,
+			entry.MaxHours)), nil
+	}
+	switch {
+	case hoursGiven:
+	case entry.OneChange():
+		hours = seataccess.MinGrantHours
+	default:
+		hours = seataccess.DefaultGrantHours
 	}
 	check := opts
 	if entry.Unavailable != "" {
-		// STILL ASKED, saying what the provisioner must hold first: the
-		// person who grants it is the one who can add it at the vendor.
+		// STILL ASKED, naming what the provisioner must hold first: the person
+		// who grants it can add it at the vendor.
 		i := slices.IndexFunc(check.Grants, func(e seataccess.GrantEntry) bool { return e.ID == permission })
 		check.Grants = slices.Clone(check.Grants)
 		check.Grants[i].Unavailable = ""
 	}
+	asked.ExpiresAt = time.Now().UTC().Add(time.Duration(hours) * time.Hour)
 	if refusal := grantRefusal(check, want.Level, asked); refusal != "" {
 		return failed(RequestAccessTool + ": " + refusal + "."), nil
 	}
 	req := seataccess.GrantRequest{
 		ID: seataccess.NewRequestID(), Kind: lane.Kind(), Lane: lane, Handle: handle,
-		Permission: permission, Scope: scope, Hours: hours, Reason: why,
+		Permission: permission, Scope: scope, Hours: hours, Reason: why, Target: target,
 		Item: argString(args, "item"), Ask: person, AskedAt: time.Now().UTC(),
 	}
 	if ferr := desk.File(ctx, req); ferr != nil {
@@ -133,11 +152,11 @@ func (t *requestAccess) requestGrant(ctx context.Context, turn *turnctx.Turn, ar
 	}
 	res, _, err := tools.Invoke(decision.WithEngineOptions(ctx), tools.Invocation{
 		Name: CommentOnWorkTool, Tool: t.comment,
-		Args:   tools.ArgsOf(t.comment, false, grantDecision(turn.Seat, req, entry, name)),
+		Args:   tools.ArgsOf(t.comment, false, grantAsk(turn.Seat, req, entry)),
 		AsSeat: true, Turn: turn, Where: RequestAccessTool,
 	})
 	if err != nil || res.Failed {
-		// NOTHING ASKED, so nothing kept: a stored request nobody can answer
+		// Nothing asked, so nothing kept: a stored request nobody can answer
 		// would only wait out its month.
 		if werr := desk.Withdraw(context.WithoutCancel(ctx), req.ID); werr != nil {
 			err = errors.Join(err, werr)
@@ -174,54 +193,17 @@ func askable(turn *turnctx.Turn, person, why string) *tools.Result {
 	return &refused
 }
 
-// grantDecision is the request as the engine's own decision: grant for this
-// change (recommended), for good, or not now. The question and the options
-// are the engine's words; the agent's reason is the rationale.
-func grantDecision(seat *org.Role, req seataccess.GrantRequest, entry seataccess.GrantEntry,
-	vendor string) map[string]any {
-
-	reach := grantReach(entry, req.Scope, seataccess.GrantTermsOf(req.Lane))
-	question := fmt.Sprintf("Grant %s %s on %s at %s?", seat.Name, entry.Name, reach, vendor)
-	note := ""
-	if entry.Write {
-		note += " It can change things there, so granting it asks you to sign in again."
+// grantAsk is the comment_on_work_item arguments that post req as the
+// engine's own decision ([seataccess.RequestAsk]), in the wire form the tool reads.
+func grantAsk(seat *org.Role, req seataccess.GrantRequest, entry seataccess.GrantEntry) map[string]any {
+	body, asked := seataccess.RequestAsk(seat.Name, req, entry)
+	options := make([]any, 0, len(asked.Options))
+	for _, o := range asked.Options {
+		options = append(options, map[string]any{"id": o.ID, "label": o.Label, "detail": o.Detail})
 	}
-	if entry.Unavailable != "" {
-		note += fmt.Sprintf(" %s must first give the company's own credential %s.", vendor,
-			words.And(entry.Missing))
-	}
-	return map[string]any{
-		"item": req.Item, "body": req.Reason, "ask": req.Ask, "asks": true,
-		"decision": map[string]any{
-			"question": question, "role": string(decision.RoleApprover),
-			"recommended": seataccess.GrantOptionTemporary(req.ID), "rationale": req.Reason,
-			"options": []any{
-				map[string]any{"id": seataccess.GrantOptionTemporary(req.ID),
-					"label": fmt.Sprintf("Grant for this change (expires in %d hours)", req.Hours),
-					"detail": fmt.Sprintf("%s can use %s on %s for %d hours from when you grant it. You "+
-						"review the exact change first.%s", seat.Name, entry.Name, reach, req.Hours, note)},
-				map[string]any{"id": seataccess.GrantOptionPermanent(req.ID),
-					"label": "Add to this agent permanently",
-					"detail": fmt.Sprintf("%s keeps %s on %s until somebody removes it on the Agents tab. "+
-						"You review the exact change first.%s", seat.Name, entry.Name, reach, note)},
-				map[string]any{"id": declineOption, "label": "Not now",
-					"detail": "Nothing changes, and the agent is told."},
-			},
-		},
-	}
-}
-
-// grantReach is where a grant would apply, as the question says it: its
-// entries, or what the lane's grant reaches naming none ([seataccess.GrantTerms]).
-func grantReach(entry seataccess.GrantEntry, scope []string, w seataccess.GrantTerms) string {
-	switch {
-	case len(scope) > 0:
-		return strings.Join(scope, ", ")
-	case entry.ScopeKind == seataccess.GrantScopeAccount:
-		return cmp.Or(w.Account, "the account")
-	default:
-		return cmp.Or(w.Whole, "every "+string(entry.ScopeKind)+" the company's agents reach")
-	}
+	return map[string]any{"item": req.Item, "body": body, "ask": req.Ask, "asks": true,
+		"decision": map[string]any{"question": asked.Question, "role": string(asked.Role),
+			"recommended": asked.Recommended, "rationale": asked.Rationale, "options": options}}
 }
 
 // grantLaneTerms is one sentence part per lane an agent may ask a grant on:

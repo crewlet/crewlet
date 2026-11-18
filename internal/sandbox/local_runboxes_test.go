@@ -10,10 +10,9 @@ import (
 )
 
 // A LOCAL BOX RECORDS THE RUN IT WAS MADE FOR, and its host lists it by that
-// run — every box under the root, whichever of the two local cells made it,
-// each under the cell its own record names, and each once however many
-// backends share the root. A box made for no run is not listed: nothing can
-// say whose it is. Nor is one whose record cannot be read.
+// run: every box under the root, under the cell its record names, once however
+// many backends share the root. A box made for no run, or whose record cannot
+// be read, is not listed: nothing can say whose it is.
 //
 // Mutation: list a box whatever its record says, and the box made for no run
 // is listed; list it by the backend that found it, and the container box is
@@ -21,7 +20,7 @@ import (
 func TestAHostListsItsBoxesByTheRunEachWasMadeFor(t *testing.T) {
 	t.Parallel()
 	direct := newDirect(t)
-	// THE SECOND CELL ON THE SAME ROOT, as a catalogue's two local cells
+	// The second cell on the same root, as a catalogue's two local cells
 	// share providers.sandbox.local.state_dir.
 	container := &Local{opts: LocalOptions{Placement: Container}, root: direct.root}
 

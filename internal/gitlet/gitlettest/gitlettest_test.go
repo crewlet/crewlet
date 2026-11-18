@@ -39,10 +39,9 @@ const inRefusedRun = "GITLETTEST_RUNFLEET_OVER_TWO_MEMBERS"
 
 // A FLEET SUITE HANDED TWO MEMBERS REFUSES TO RUN, saying why: two members have
 // no quorum without each other, so the first case that kills one would leave a
-// code log nobody can write, and every case after it would fail for that one.
-// RunFleet refuses through t.Fatal, which ends the test that calls it — so
-// the call is made in a child run of this binary, whose failure and words are
-// what the case reads.
+// code log nobody can write and fail every case after it. RunFleet refuses
+// through t.Fatal, so the call runs in a child run of this binary, whose
+// failure and words the case reads.
 func TestRunFleetRefusesTwoMembers(t *testing.T) {
 	if os.Getenv(inRefusedRun) != "" {
 		gitlettest.RunFleet(t, gitlettest.EveryFleetCase, func(*testing.T) gitlettest.Cluster { return twoMembers{} })
@@ -65,8 +64,8 @@ func TestRunFleetRefusesTwoMembers(t *testing.T) {
 }
 
 // okOnPending is a host's estate that LIES: a proposal the committer answered
-// pending — durable, applied nowhere — is reported applied, every command ok,
-// as a host that answered git from the decision rather than from the row.
+// pending (durable, applied nowhere) is reported applied, every command ok, as
+// a host answering git from the decision rather than the row would.
 type okOnPending struct{ host.Estate }
 
 func (e okOnPending) Propose(ctx context.Context, p gitlet.Proposal) (gitlet.ProposeResult, error) {
@@ -112,9 +111,8 @@ func (e okOnPendingWrite) Propose(ctx context.Context, p gitlet.Proposal) (gitle
 	return okOnPending(e).Propose(ctx, p)
 }
 
-// A suite whose check passes a liar certifies nothing: OkOnlyFromARow must
-// catch a host that answers an engine write applied from a decision, its
-// pushes answered honestly — the half of the check that holds a write.
+// OkOnlyFromARow must catch a host that answers an engine write applied from
+// a decision while answering its pushes honestly: the check's write half.
 func TestTheSuiteCatchesAWriteAnsweredOkWithoutARow(t *testing.T) {
 	liar := gitlettest.SoloOptions{Shape: gitlettest.Shape{
 		WrapEstate: func(e host.Estate) host.Estate { return okOnPendingWrite{e} }}}
@@ -125,11 +123,10 @@ func TestTheSuiteCatchesAWriteAnsweredOkWithoutARow(t *testing.T) {
 	}
 }
 
-// A suite whose check passes a liar certifies nothing:
 // NothingButSyncWritesACache must catch an engine write whose build writes
-// into the cache it leans on — here a git that, asked to hash a write's files
-// in its scratch, writes an object into the scratch's alternate too — the
-// mutation of running a build's writer in the copy rather than beside it.
+// into the cache it leans on: here a git that, hashing a write's files in its
+// scratch, also writes an object into the scratch's alternate, as a build's
+// writer run in the copy rather than beside it would.
 func TestTheSuiteCatchesAnEngineWriteIntoACache(t *testing.T) {
 	git := gittest.Wrap(t, `if [ "${1-}" = hash-object ] && [ -f "${GIT_DIR-}/objects/info/alternates" ]; then
 	cache=$(sed -n 1p "$GIT_DIR/objects/info/alternates")
@@ -142,11 +139,10 @@ fi`)
 	}
 }
 
-// graceless is a data node's applier that LIES about a retirement: every
-// record it applies leaves no row in code_packs_retired, as an applier that
-// moved a compaction's inputs out of code_packs without keeping them for their
-// grace would — so nothing shields a retired pack's object from the collector
-// once its upload's own grace has passed.
+// graceless is a data node's applier that LIES about a retirement: it leaves
+// no row in code_packs_retired, as one that dropped a compaction's inputs from
+// code_packs without keeping them for their grace would, so nothing shields a
+// retired pack's object from the collector past its upload's own grace.
 type graceless struct{ statelog.Applier }
 
 func (a graceless) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
@@ -163,10 +159,9 @@ func (a graceless) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 	return rows + int(gone), err
 }
 
-// A suite whose check passes a liar certifies nothing:
 // ARetiredPackOutlivesItsLongestRead (C4) must catch a topology whose applier
-// keeps no retired row — the first collection past every input's upload grace
-// deletes the objects a reader may still be reading — and pass an honest one.
+// keeps no retired row, so the first collection past the inputs' upload grace
+// deletes objects a reader may still be reading, and pass an honest one.
 func TestTheSuiteCatchesARetirementWithNoGrace(t *testing.T) {
 	t.Run("honest", func(t *testing.T) {
 		if err := gitlettest.ARetiredPackOutlivesItsLongestRead(t, gitlettest.Solo(gitlettest.SoloOptions{}, nil)); err != nil {
@@ -184,11 +179,10 @@ func TestTheSuiteCatchesARetirementWithNoGrace(t *testing.T) {
 }
 
 // droppingDeleted is a data node's applier that LIES about an expunge's
-// commit: the dropping packs it retires leave code_packs_retired at once, as
-// a commit that deleted them rather than retiring them would — so nothing
-// shields their objects from the collector once their uploads' own grace has
-// passed, while a reader that opened one before the commit may still be on
-// it.
+// commit: the dropping packs it retires leave code_packs_retired at once, as a
+// commit deleting them would, so nothing shields their objects from the
+// collector past their uploads' grace while a reader that opened one before
+// the commit may still be on it.
 type droppingDeleted struct{ statelog.Applier }
 
 func (a droppingDeleted) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
@@ -220,11 +214,10 @@ func (a droppingDeleted) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Rec
 	return rows, nil
 }
 
-// A suite whose check passes a liar certifies nothing:
 // ExpungeRetiredPackOutlivesItsLongestRead (F50) must catch a topology whose
-// expunge commit deletes the dropping packs' rows rather than retiring them —
-// the first collection past their uploads' grace deletes what a reader may
-// still be reading — and pass an honest one.
+// expunge commit deletes the dropping packs' rows rather than retiring them,
+// so the first collection past their uploads' grace deletes what a reader may
+// still be reading, and pass an honest one.
 func TestTheSuiteCatchesAnExpungeThatDeletesWhatItDrops(t *testing.T) {
 	t.Run("honest", func(t *testing.T) {
 		if err := gitlettest.ExpungeRetiredPackOutlivesItsLongestRead(t, gitlettest.Solo(gitlettest.SoloOptions{}, nil)); err != nil {
@@ -244,8 +237,8 @@ func TestTheSuiteCatchesAnExpungeThatDeletesWhatItDrops(t *testing.T) {
 }
 
 // intruder is a host's estate that WRITES INTO A CACHE: after every applied
-// push it leaves a loose ref in every repository directory of every cache —
-// something a sync never writes.
+// push it leaves a loose ref, which a sync never writes, in every repository
+// directory of every cache.
 type intruder struct {
 	host.Estate
 	mu   *sync.Mutex
@@ -269,9 +262,8 @@ func (e intruder) Propose(ctx context.Context, p gitlet.Proposal) (gitlet.Propos
 	return res, err
 }
 
-// A suite whose check passes a liar certifies nothing:
-// NothingButSyncWritesACache must catch a cache something other than its
-// sync wrote into, and pass one only the sync wrote.
+// NothingButSyncWritesACache must catch a cache something other than its sync
+// wrote into, and pass one only the sync wrote.
 func TestTheSuiteCatchesAWriteIntoACache(t *testing.T) {
 	t.Run("honest", func(t *testing.T) {
 		if err := gitlettest.NothingButSyncWritesACache(t, gitlettest.Solo(gitlettest.SoloOptions{}, nil)); err != nil {

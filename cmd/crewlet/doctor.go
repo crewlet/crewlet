@@ -90,33 +90,64 @@ func renderFindings(w io.Writer, a advisor.Answer, withWords bool) {
 		return
 	}
 	subjects := ordinals(a.Findings)
+	if withWords {
+		for i, f := range a.Findings {
+			subjects[i] = subjectHandles(f.Subject)
+		}
+	}
+	rows := folded(a.Findings)
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "#\tSEVERITY\tACTOR\tCLASS\tSUBJECT\tEVIDENCE")
-	for i, f := range a.Findings {
-		subject := subjects[i]
-		if withWords {
-			subject = subjectHandles(f.Subject)
+	for i, row := range rows {
+		f := a.Findings[row[0]]
+		var who, facts []string
+		for _, j := range row {
+			who = append(who, subjects[j])
+			facts = append(facts, factsText(a.Findings[j].Evidence))
 		}
-		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\n", i+1, f.Severity, f.Actor, f.Class, subject, factsText(f.Evidence))
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\n", i+1, f.Severity, f.Actor, f.Class,
+			strings.Join(who, ","), strings.Join(facts, "; "))
 	}
 	_ = tw.Flush()
 	if withWords {
 		fmt.Fprintln(w)
-		for i, f := range a.Findings {
-			// A finding worded alike for every subject names its specifics apart.
-			line := f.Title + " " + f.Why
-			if f.Item != "" {
-				line += " (" + f.Item + ")"
+		for i, row := range rows {
+			f := a.Findings[row[0]]
+			fmt.Fprintf(w, "%d. %s %s\n", i+1, f.Title, f.Why)
+			// A CLASS SAYS ONE THING; each subject's specifics are listed under it.
+			for _, j := range row {
+				g := a.Findings[j]
+				line := "   " + subjects[j]
+				if g.Item != "" {
+					line += ": " + g.Item
+				}
+				if len(g.Names) > 0 {
+					line += " (" + words.And(g.Names) + ")"
+				}
+				fmt.Fprintln(w, line)
 			}
-			if len(f.Names) > 0 {
-				line += " " + words.And(f.Names) + "."
-			}
-			fmt.Fprintf(w, "%d. %s\n", i+1, line)
 		}
 	}
 	fmt.Fprintf(w, "\nAt revision %s. An owner finding's fix is sent from the dashboard or with "+
 		"PUT /config; an engine finding is a pattern the engine is reducing.\n", a.Revision)
 	renderUnread(w, a.Unread)
+}
+
+// folded is the findings as rows, one per class, words, cost and fix kind, as
+// Settings › Advisor folds them: a class said for several subjects is one row.
+func folded(findings []advisor.Finding) [][]int {
+	var rows [][]int
+	at := map[[5]string]int{}
+	for i, f := range findings {
+		key := [5]string{string(f.Class), f.Title, f.Why, string(f.Severity), string(f.Fix.Kind)}
+		if r, ok := at[key]; ok {
+			rows[r] = append(rows[r], i)
+			continue
+		}
+		at[key] = len(rows)
+		rows = append(rows, []int{i})
+	}
+	return rows
 }
 
 // renderUnread names what the node could not read, so a short list never

@@ -14,38 +14,22 @@ import (
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
-// In-sandbox telemetry, without handing the box a secret.
+// In-sandbox telemetry without handing the box a secret. Pointing a box at the
+// real backend with its long-lived ingest credential in
+// OTEL_EXPORTER_OTLP_HEADERS puts that credential in the least trusted thing
+// in the deployment, so the box exports to the ENGINE, which adds the real
+// auth on the trusted side and forwards.
 //
-// # The problem this exists for
-//
-// A harness inside a sandbox emits OpenTelemetry, and the obvious wiring
-// — point OTEL_EXPORTER_OTLP_ENDPOINT at the real backend and set
-// OTEL_EXPORTER_OTLP_HEADERS to its ingest credential — puts that credential
-// inside a box running generated code. It is the company's telemetry backend,
-// the header is long-lived, and the box is the least trusted thing in the
-// deployment.
-//
-// So the box exports to the ENGINE, which forwards. The engine adds the real
-// auth on the trusted side, and the box holds nothing worth stealing.
-//
-// # Why the token is in the PATH and signed rather than stored
-//
-// The box needs to authenticate itself, and every header it could carry is a
-// header a leaked box carries too. So the credential is a per-run,
-// trace-scoped, short-lived token in the URL — which means the exporter needs
-// no header configuration at all.
-//
-// The token itself is [runtoken], which is where the format, the signature
-// and the expiry live — the MCP bridge carries the same credential shape for
-// the same reason, and two copies would have to agree about five decisions
-// nothing compares.
+// The box authenticates with a per-run, trace-scoped, short-lived token in the
+// URL PATH: any header it could carry a leaked box carries too, and a path
+// needs no exporter header configuration. The token is [runtoken]'s, shared
+// with the MCP bridge so one format, signature and expiry serve both.
 
 // OtelTokens mints and validates per-run OTLP tokens.
 //
-// A thin type over the shared signer, kept because the SUBJECT is this
-// receiver's own: an OTLP token is scoped to a TRACE, and naming that at the
-// type boundary is what stops a caller passing a run id and getting a token
-// the receiver will happily validate into the wrong thing.
+// A thin type over the shared signer because its SUBJECT is a TRACE: naming
+// that at the type boundary stops a caller minting, from a run id, a token the
+// receiver would validate into the wrong thing.
 type OtelTokens struct{ signer *runtoken.Signer }
 
 // OtelTokenOptions configure [NewOtelTokens]. See [runtoken.Options].
@@ -93,37 +77,31 @@ type OtelReceiverOptions struct {
 	// box that is not on this node's host.
 	BaseURL string
 
-	// HostURL is where a box on THIS NODE'S OWN HOST — the `direct` cell —
-	// exports: the node's own listener that serves the receiver, on
-	// loopback, e.g. "http://127.0.0.1:8080". The same address the tool
-	// bridge hands such a box (internal/api/mcpbridge's Options.HostURL),
-	// derived by the process that bound the listener and PREFERRED to
-	// BaseURL for such a box, because loopback never leaves the host. Set
-	// only by [BuildOtelReceiver] on a node that forwards — see there.
+	// HostURL is where a box on THIS NODE'S OWN HOST (the `direct` cell)
+	// exports: the node's own listener on loopback, e.g.
+	// "http://127.0.0.1:8080", as internal/api/mcpbridge's Options.HostURL.
+	// PREFERRED to BaseURL for such a box, since loopback never leaves the
+	// host. Set only by [BuildOtelReceiver], on a node that forwards.
 	HostURL string
 
 	// Tokens mints and verifies. Required.
 	Tokens *OtelTokens
 
-	// UpstreamEndpoint is the real OTLP backend. Empty accepts and drops,
-	// which is a working configuration rather than a broken one: the
-	// engine's own per-turn span still carries the trace, and a deployment
-	// with no backend should not have every export fail.
+	// UpstreamEndpoint is the real OTLP backend. Empty accepts and drops, a
+	// working configuration: the engine's per-turn span still carries the
+	// trace, and a deployment with no backend should not fail every export.
 	UpstreamEndpoint string
 
 	// UpstreamHeaders is the backend's ingest credential, applied HERE and
-	// never handed to the sandbox. That is the whole point of the hop.
+	// never handed to the sandbox: the point of the hop.
 	UpstreamHeaders map[string]string
 
 	HTTP *http.Client
 }
 
-// OtelForwardTimeout bounds one forwarded payload.
-//
-// SHORT. Telemetry is the least important thing in flight, and a slow backend
-// must not hold the receiver's handlers open — the exporter inside the box
-// retries anyway, so a dropped batch costs a gap in a trace rather than data
-// nobody can reconstruct.
+// OtelForwardTimeout bounds one forwarded payload. SHORT: a slow backend must
+// not hold the receiver's handlers open, and the box's exporter retries, so a
+// dropped batch costs only a gap in a trace.
 const OtelForwardTimeout = 10 * time.Second
 
 // NewOtelReceiver builds the receiver.
@@ -155,14 +133,12 @@ func NewOtelReceiver(opts OtelReceiverOptions) (*OtelReceiver, error) {
 	}, nil
 }
 
-// Reaches is the base URL a box exports to — this node's own listener for a
-// box on its host where it has one ([OtelReceiverOptions.HostURL]), and
-// [OtelReceiverURLVar]'s address otherwise — or "" where it has none.
-//
-// THE BRIDGE'S RULE, cell for cell (internal/api/mcpbridge's Bridge.Reaches):
-// a `container` box is not on this host's loopback, whatever its runtime
-// delivers, and dials the fleet's address alone, which [EngineAddress] then
-// writes as that box reaches it.
+// Reaches is the base URL a box exports to: this node's own listener for a
+// box on its host where it has one ([OtelReceiverOptions.HostURL]), else
+// [OtelReceiverURLVar]'s address, or "" for neither. The rule is
+// internal/api/mcpbridge's Bridge.Reaches, cell for cell: a `container` box is
+// not on this host's loopback whatever its runtime delivers, so it dials the
+// fleet's address alone, which [EngineAddress] rewrites as that box reaches it.
 func (r *OtelReceiver) Reaches(onHost bool) string {
 	if onHost && r.host != "" {
 		return r.host
@@ -170,12 +146,10 @@ func (r *OtelReceiver) Reaches(onHost bool) string {
 	return r.base
 }
 
-// EndpointFor mints one run's OTLP endpoint, for a box on this node's host or
-// elsewhere ([OtelReceiver.Reaches]), or "" where no address reaches that box;
-// an error where its token cannot be minted ([OtelTokens.Mint]).
-//
-// The token is IN THE PATH, so the box's exporter needs no headers — which is
-// what lets OTEL_EXPORTER_OTLP_HEADERS stay empty inside the sandbox.
+// EndpointFor mints one run's OTLP endpoint for a box on this node's host or
+// elsewhere ([OtelReceiver.Reaches]), "" where no address reaches that box, or
+// an error where its token cannot be minted ([OtelTokens.Mint]). The token is
+// IN THE PATH, so OTEL_EXPORTER_OTLP_HEADERS stays empty inside the box.
 func (r *OtelReceiver) EndpointFor(traceID string, onHost bool, ttl time.Duration) (string, error) {
 	base := r.Reaches(onHost)
 	if base == "" {
@@ -196,19 +170,14 @@ const otelTokenPath = "/otlp/"
 // Validate reports the trace a token is scoped to, or empty.
 func (r *OtelReceiver) Validate(token string) string { return r.tokens.Validate(token) }
 
-// Forwards reports whether an accepted payload goes anywhere.
-//
-// The receiver with no upstream is a real configuration — accept and drop —
-// so this is what an operator surface asks rather than inferring it from a
-// nil.
+// Forwards reports whether an accepted payload goes anywhere: no upstream
+// (accept and drop) is a real configuration an operator surface asks about.
 func (r *OtelReceiver) Forwards() bool { return r.upstream != "" }
 
 // Forward sends a validated payload to the real backend.
 //
-// FAILURES ARE LOGGED, NEVER RETURNED as something the caller reports to the
-// box. An exporter that gets a 5xx retries, and retries against a backend
-// that is down turn one outage into two: the box's own traffic
-// multiplies while nothing it carries is recoverable anyway.
+// FAILURES ARE LOGGED, NEVER RETURNED for the box: its exporter retries a 5xx,
+// multiplying traffic against a backend that is down for nothing recoverable.
 func (r *OtelReceiver) Forward(ctx context.Context, signal string, body []byte, contentType string) {
 	if r.upstream == "" {
 		return
@@ -239,21 +208,16 @@ func (r *OtelReceiver) Forward(ctx context.Context, signal string, body []byte, 
 	}
 }
 
-// OtelSignals are the OTLP paths this receiver accepts.
-//
-// NAMED rather than taking whatever the last path segment says: the segment
-// is forwarded into an upstream URL, so an unchecked one is a caller choosing
-// part of the address the engine's own credential is sent to.
+// OtelSignals are the OTLP paths this receiver accepts. NAMED, because the
+// segment goes into the upstream URL: unchecked, a caller chooses part of the
+// address the engine's credential is sent to.
 var OtelSignals = []string{"traces", "metrics", "logs"}
 
 // ValidSignal reports a signal this receiver forwards.
 func ValidSignal(signal string) bool { return slices.Contains(OtelSignals, signal) }
 
-// ParseOtelHeaders reads the OTEL_EXPORTER_OTLP_HEADERS `k=v,k2=v2` form.
-//
-// It is the UPSTREAM backend's auth, added on the trusted side. Parsed here
-// rather than passed through as a string so the one place it is read is the
-// one place it is understood.
+// ParseOtelHeaders reads the OTEL_EXPORTER_OTLP_HEADERS `k=v,k2=v2` form: the
+// UPSTREAM backend's auth, added on the trusted side.
 func ParseOtelHeaders(raw string) map[string]string {
 	out := map[string]string{}
 	for pair := range strings.SplitSeq(raw, ",") {
@@ -266,40 +230,23 @@ func ParseOtelHeaders(raw string) map[string]string {
 	return out
 }
 
-// OtelKeyDomain separates this endpoint's tokens from the tool bridge's.
-//
-// Without a domain, a token minted for one would validate at the other: both
-// are HMACs over the same fleet key, and the subject is just a string.
+// OtelKeyDomain separates this endpoint's tokens from the tool bridge's: both
+// are HMACs over the same fleet key, so without it one would validate at the
+// other.
 const OtelKeyDomain = "crewlet.otlp.v1"
 
-// RunEnv is the OTel environment one run's box receives.
+// RunEnv is the OTel environment one run's box receives. The endpoint carries
+// the run's token, so OTEL_EXPORTER_OTLP_HEADERS is set EMPTY, not left unset:
+// an image, an E2B template or a `-e` in `local.run_args` may bake in a value
+// the exporter would otherwise present (the engine hands a box none of its
+// own; internal/hostbox). The resource attributes (turn, seat) file a box's
+// spans under its turn, and TRACEPARENT nests them under the engine's per-turn
+// span rather than in an unrelated trace.
 //
-// # What is in it, and what deliberately is not
-//
-// The ENDPOINT carries the run's own token in its path, so
-// OTEL_EXPORTER_OTLP_HEADERS stays EMPTY — set explicitly rather than left
-// unset, because an exporter reads it from its ambient environment otherwise,
-// and a box's ambient environment is not only what the engine hands it. The
-// engine hands a box none of its own (see internal/hostbox), but an image or
-// an E2B template may bake in a value of its own, and so may a `-e` an
-// operator put in `local.run_args`. An empty value is the difference between
-// "no credential" and one this run's exporter was never meant to present —
-// the endpoint's token is the whole of what it needs.
-//
-// The RESOURCE ATTRIBUTES are non-secret routing facts — which turn, which
-// seat — so a span from inside a box lands under the turn that started it
-// rather than free-floating.
-//
-// TRACEPARENT is what nests them: the engine's per-turn span is the parent,
-// and without it the box's spans form a second, unrelated trace that nobody
-// finds.
-//
-// onHost is whether the run's box is on this node's own host, which picks the
-// address it exports to ([OtelReceiver.Reaches]). A box no address reaches
-// gets NOTHING, not an environment naming an endpoint it cannot dial: its
-// exporter then exports nowhere, which is what a box with no receiver did all
-// along. A trace id no token can carry redacted is refused with an error
-// ([OtelTokens.Mint]), and the launch with it.
+// onHost picks the address ([OtelReceiver.Reaches]); a box no address reaches
+// gets NO environment rather than an endpoint it cannot dial. A trace id no
+// token can carry redacted is an error ([OtelTokens.Mint]) that fails the
+// launch.
 func (r *OtelReceiver) RunEnv(traceID, spanID, turnID, handle string, onHost bool,
 	ttl time.Duration,
 ) (map[string]string, error) {
@@ -329,22 +276,17 @@ func (r *OtelReceiver) RunEnv(traceID, spanID, turnID, handle string, onHost boo
 	return env, nil
 }
 
-// The environment the receiver is configured from.
-//
-// ENV RATHER THAN TIER A, and deliberately: the receiver's address is a
-// property of the DEPLOYMENT's network — which host a sandbox can reach the
-// engine on — rather than of the company or of this node's identity, and the
-// upstream pair is the standard OTel spelling every collector's own
-// documentation uses. An operator wiring a collector should not have to
-// translate it into a Crewlet-shaped block.
+// The environment the receiver is configured from. ENV RATHER THAN TIER A:
+// the receiver's address is a property of the DEPLOYMENT's network (which host
+// a sandbox reaches the engine on), not of the company or the node, and the
+// upstream pair is the standard OTel spelling every collector documents.
 const (
-	// OtelReceiverURLVar is the engine API base a SANDBOX can reach: the
-	// fleet's address for the receiver, for a box that is not on its
-	// launching node's host. Unset, such a box gets no in-box telemetry,
-	// which is the ordinary configuration — and a box on the host gets its
-	// node's own listener where the node forwards ([BuildOtelReceiver]).
-	// Set, it is an absolute http or https URL with a host ([ParseBoxURL]),
-	// or the node refuses to boot.
+	// OtelReceiverURLVar is the fleet's engine API base for a SANDBOX not on
+	// its launching node's host. Unset, the ordinary configuration, such a
+	// box gets no in-box telemetry (a box on the host still gets its node's
+	// listener where the node forwards: [BuildOtelReceiver]). Set, it is an
+	// absolute http or https URL with a host ([ParseBoxURL]), or the node
+	// refuses to boot.
 	OtelReceiverURLVar = "CREWLET_SANDBOX_OTEL_RECEIVER_URL"
 
 	// OtelUpstreamEndpointVar and OtelUpstreamHeadersVar are the real
@@ -358,45 +300,18 @@ const (
 // box to the receiver instead ([OtelReceiver.RunEnv]).
 const otelBoxEndpointVar = "OTEL_EXPORTER_OTLP_ENDPOINT"
 
-// BuildOtelReceiver is THE construction path, called by every engine.
+// BuildOtelReceiver is THE construction path, called by every engine. The
+// launching node mints and whichever node the box exports to verifies, so all
+// build from the same environment and Tier A keyring (material; never the
+// database, which an endpoint reachable without other credentials must not
+// depend on). A keyring that cannot sign for the fleet is refused: a
+// per-process key would answer 401 at every other node, config looking whole.
 //
-// A run's endpoint is minted by the engine that launched it, and the token is
-// verified by whichever node the box exports to, which on a fleet need not be
-// the same one. So every node builds its receiver from the same environment
-// and the same Tier A keyring: a node keyed differently from the one that
-// minted answers 401 to every export while its config looks complete, which is
-// the failure the signed, stateless token exists to prevent.
-//
-// hostURL is where a box on this node's own host reaches this node's listener
-// on loopback ([OtelReceiverOptions.HostURL]), derived by whoever bound it, ""
-// where nothing was bound. It is taken ONLY WHERE THIS NODE FORWARDS — where
-// [OtelUpstreamEndpointVar] names a backend — because the node a box on the
-// host exports to is this one, and what reaches a node with no upstream is
-// accepted and dropped: deriving it there would turn on an export from every
-// box on the host that goes nowhere, and would send a box away from a fleet
-// address the operator set ([OtelReceiverURLVar]) whose node does forward.
-// So the deployment that sets OTEL_EXPORTER_OTLP_ENDPOINT for the engine's
-// own spans — the standard variable, which this node already reads — has its
-// direct boxes' telemetry beside them, with no address to publish.
-//
-// A node with neither the variable nor a host address it forwards from builds
-// none, and its route is absent rather than refusing.
-//
-// The address is read through [ParseBoxURL], so a value that is set and that
-// a box's exporter cannot use — no scheme, a scheme other than http or https,
-// no host or one the box's URL parser refuses, a port outside 1 to 65535,
-// user information, a query or a fragment — is an error naming the variable,
-// which the engine refuses its boot on. Handed on as it was, it
-// minted every run an endpoint the box's exporter could not dial, and the
-// run's telemetry went nowhere with nothing to say so.
-//
-// material is the Tier A keyring, which every process already loads — FROM THE
-// KEYRING, the one secret every Crewlet process holds, and never from the
-// database, which a token check on an endpoint reachable without other
-// credentials must not depend on. One that cannot sign for the fleet is
-// refused rather than given a per-process key: that key would validate at the
-// minting node and nowhere else, so a box exporting to any other node would be
-// refused with its config looking complete.
+// hostURL (loopback, [OtelReceiverOptions.HostURL]; "" for none) is taken ONLY
+// WHERE THIS NODE FORWARDS ([OtelUpstreamEndpointVar] set): on a node that
+// drops, it would turn on exports that go nowhere and pull boxes off a fleet
+// address ([OtelReceiverURLVar]) that forwards. With neither, it builds none.
+// [ParseBoxURL] fails the boot on an address a box's exporter cannot dial.
 func BuildOtelReceiver(env func(string) string, material runtoken.Material,
 	hostURL string,
 ) (*OtelReceiver, error) {

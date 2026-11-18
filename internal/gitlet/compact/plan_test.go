@@ -16,9 +16,8 @@ import (
 )
 
 // row is a live pack row named id, of objects objects and a pack section of
-// packBytes, with the indexes a version-2 index and a version-1 reverse index
-// of that count take: what a plan weighs (gitlet.PackRow, as the cache's live
-// set answers it).
+// packBytes, with the version-2 index and version-1 reverse index that count
+// takes: what a plan weighs.
 func row(id string, objects, packBytes int64) gitlet.PackRow {
 	idx, rev := gitlet.IndexBytesFor(objects), gitlet.ReverseBytesFor(objects)
 	return gitlet.PackRow{PackID: id, Size: packBytes + idx + rev, IndexBytes: idx, ReverseBytes: rev,
@@ -42,13 +41,12 @@ func inputIDs(p compact.Planned) []string {
 	return ids
 }
 
-// A FULL PACK IS NEVER MERGED AGAIN: neither one whose pack section is at
-// seven eighths of the cut nor one whose whole bundle is, though its pack
-// section is short of it — what a dense roll's scaled cut writes — however
-// LIGHT it is, so the geometric split, which weighs a pack by its objects,
-// would otherwise roll a few large blobs up with the small packs below them.
-// And a repository holding nothing but full packs is never due, whatever their
-// number: what a later published layer names stays valid until an expunge.
+// A FULL PACK IS NEVER MERGED AGAIN, full by its pack section (seven eighths
+// of the cut) or by its whole bundle alone (what a dense roll's scaled cut
+// writes), however LIGHT: the geometric split weighs by objects and would roll
+// a few large blobs up with the small packs below them. A repository of only
+// full packs is never due: what a published layer names stays valid until an
+// expunge.
 //
 // Mutation: drop the full filter from plan, and the light full packs are rolled
 // up with the small ones, and the repository of full packs is due.
@@ -97,11 +95,9 @@ func TestThePlanNeverTakesAFullPack(t *testing.T) {
 }
 
 // THE PLAN LEAVES EVERY PUBLISHED PACK OUT: a node's chain loads only over
-// every pack a layer of it names, so the decide refuses a compaction retiring
-// one stale — and the plan never builds one: the packs a layer names are out
-// of the roll before it is split or counted against the target, so a roll's
-// small packs that a layer covers and two more are no compaction, where the
-// same packs unpublished are one.
+// every pack its layers name, so the decide refuses a compaction retiring one;
+// the plan drops them before the split and the target count, so small packs a
+// layer covers plus two more are no compaction, where unpublished they are.
 //
 // Mutation: plan over every live pack, and the published packs are merged.
 func TestThePlanLeavesEveryPublishedPackOut(t *testing.T) {
@@ -136,9 +132,8 @@ func TestThePlanLeavesEveryPublishedPackOut(t *testing.T) {
 // Mutation: drop the target rule, and the progression of sixty is never due.
 func TestARepositoryPastTheTargetAlwaysShrinks(t *testing.T) {
 	t.Parallel()
-	// A PROGRESSION BY OBJECTS, every pack a kibibyte whatever its count —
-	// weights doubling sixty times are no repository's, and indexes sized
-	// by them would make every heavy pack full by its bundle, which is
+	// A PROGRESSION BY OBJECTS, every pack a kibibyte: indexes sized by weights
+	// doubling sixty times would make every heavy pack full by its bundle,
 	// another rule's case.
 	progression := func(n int) []gitlet.PackRow {
 		out := make([]gitlet.PackRow, n)
@@ -172,13 +167,11 @@ func TestARepositoryPastTheTargetAlwaysShrinks(t *testing.T) {
 	}
 }
 
-// A ROLL IS CAPPED AT ITS OUTPUTS: whatever a repository's packs, one
-// compaction merges at most compact.InputByteCap of their pack bytes — half
-// gitlet.MaxCompactOutputs cuts, the lightest first, since a cut writes outputs
-// a little under it and a delta whose base went to an earlier output whole —
-// and at most gitlet.MaxCompactInputs of their rows. And a proposal of more
-// outputs than one compaction writes is refused before any committer decides
-// it, naming them.
+// A ROLL IS CAPPED AT ITS OUTPUTS: one compaction merges at most
+// compact.InputByteCap of a repository's pack bytes, lightest first, and at
+// most gitlet.MaxCompactInputs of its rows; and a proposal of more outputs
+// than one compaction writes is refused before any committer decides it,
+// naming them.
 //
 // Mutation: drop the byte cap, and the forty packs of 0.8 GiB are merged in
 // one roll; drop the row cap, and the 1 100 rows are.
@@ -211,10 +204,9 @@ func TestARollIsCappedAtItsOutputs(t *testing.T) {
 			gitlet.MaxCompactInputs)
 	}
 
-	// TWO FILES NAMING MORE ROWS THAN ONE COMPACTION RETIRES are no roll: a
-	// plan never names more rows than its record may, even where the two
-	// lightest alone would, or every poll would build what its committer
-	// refuses.
+	// TWO FILES NAMING MORE ROWS THAN ONE COMPACTION RETIRES are no roll, even
+	// where the two lightest alone would be, or every poll would build what its
+	// committer refuses.
 	var dup []gitlet.PackRow
 	for _, f := range []string{"a", "b"} {
 		for i := range gitlet.MaxCompactInputs/2 + 1 {

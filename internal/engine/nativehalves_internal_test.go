@@ -24,18 +24,13 @@ import (
 
 // EVERY READER OF WHICH HALVES A NODE RUNS AGREES, because each reads them
 // from [Engine.nativeHalves] rather than from the two runtime pointers itself.
-//
-// Nine places ask the question, the seats' chat seams among them. Five of
-// the eight there were before chat — the seats' tracker and knowledge-base
-// seams, the inbound parsers, the knowledge searcher and the
-// skill source — loaded the pointers on their own, and one of those, the
-// parsers, counted a data node's halves by its WRITERS where the rest counted
-// its readers. The same fact while one block
-// builds both, and two facts the first time a runtime is built with one and
-// not the other: a node would then route a half's changes to seats that are
-// handed no tool for it, or hand tools for a half whose changes wake nobody.
-// So this walks every shape a node's runtime takes — none, a data node's own
-// with each half, a node without `data` with each half — and asks each reader.
+// Readers that disagree route a half's changes to seats handed no tool for it,
+// or hand tools for a half whose changes wake nobody, once a runtime is built
+// with one half and not the other. So this walks every shape a node's runtime
+// takes (none, a data node's own with each half, a node without `data` with
+// each half) and asks each reader: the operator, the seats' tracker,
+// knowledge-base and chat seams, the inbound parsers, the knowledge searcher
+// and the skill source.
 func TestEveryReaderOfTheNativeHalvesAgrees(t *testing.T) {
 	t.Parallel()
 	router := halvesRouter(t)
@@ -114,10 +109,10 @@ func TestEveryReaderOfTheNativeHalvesAgrees(t *testing.T) {
 			for _, p := range parsers {
 				routed = append(routed, p.Source())
 			}
-			// THE ALARMS' WAKES ROUTE ON EVERY NODE, whatever halves it
-			// runs: a transition is routed by the chart alone.
-			// AND THE ACCESS REVIEWS, which name their seat and read no row,
-			// and a comment on an artifact, whose record carries its routing.
+			// THE ALARMS' WAKES ROUTE ON EVERY NODE, whatever halves it runs
+			// (routed by the chart alone), AND THE ACCESS REVIEWS (which name
+			// their seat and read no row) and artifact comments (whose record
+			// carries its routing).
 			want := []string{alarmwake.Source, accessreview.Source, atlaswake.Source, artifactsdomain.Source}
 			if tc.tracker {
 				want = append(want, worklet.Source)
@@ -211,25 +206,16 @@ func codeRuntime(n *native) *native {
 }
 
 // A NODE IN A MODE THAT PUBLISHES NOTHING HANDS OUT NO WRITER, WHATEVER IT
-// HOLDS — and goes on serving its reads.
-//
-// The mode is this node's promise that it starts nothing that writes
-// ([statelog.MaintenanceMode.Publishes]), and a write it routes to a data node
-// is one it starts. A node without `data` used to be exempt, on the reading
-// that the data node's mode was that node's to answer for: restarted into the
-// mode for a capacity window, which puts every data node in it too, it handed
-// its operator surfaces the router's writer, so a file's upload streamed up to
-// a gibibyte into the object store before a data node refused its row — as
-// `unavailable`, which a client retries — and left an object the collector,
-// which stands down in the mode, could not free until the window closed. Every
-// writer surface is handed its writer through the two seams asked here
-// ([Engine.trackerHalves], [Engine.pageHalves]) or the two operator accessors
-// over them, so each is asked of both kinds of node in every mode — normal
-// included, the control in which both hand their writers out.
-//
-// And a data node hands out only the writers its own write side holds, in any
-// mode: a half is counted by its reader, so a runtime holding a half's reader
-// and not its writer runs the half and writes none of it.
+// HOLDS, and goes on serving its reads. The mode promises the node starts
+// nothing that writes ([statelog.MaintenanceMode.Publishes]), and a write it
+// routes to a data node is one it starts: a node without `data` would stream an
+// upload into the object store before a data node refused its row, leaving an
+// object the collector, stood down in the mode, cannot free. Writers reach
+// every surface through [Engine.trackerHalves], [Engine.pageHalves] or the
+// operator accessors over them, so each is asked of both kinds of node in
+// every mode, normal included as the control. And a data node hands out only the writers
+// its write side holds: a half counts by its reader, so a reader alone writes
+// none of it.
 func TestANodeInAMaintenanceModeHandsOutNoWriterWhateverItHolds(t *testing.T) {
 	t.Parallel()
 	router := halvesRouter(t)
@@ -287,14 +273,12 @@ func TestANodeInAMaintenanceModeHandsOutNoWriterWhateverItHolds(t *testing.T) {
 
 // EVERY FIRST-PARTY SOURCE THE ENGINE ROUTES IS ONE IT DECLARES, AND NO OTHER.
 //
-// The notification service passes a first-party delivery from a source this
-// build does not declare to a peer, as a newer build's (notify.DeferNewerSource),
-// and acknowledges one from a declared source this company does not run. So
-// the declared sources must be exactly the sources the engine's own producers
-// write under: one routed and not declared is passed round its group for ten
-// minutes and waits in the dead letters for a build that already runs; one
-// declared and never routed is a newer build's source acknowledged away. Read
-// off a node running every half, whose parsers are every source there is.
+// The notification service passes a delivery from an undeclared first-party
+// source to a peer as a newer build's (notify.DeferNewerSource), and
+// acknowledges one from a declared source this company does not run. So one
+// routed and not declared circles its group for ten minutes, then waits in the
+// dead letters for a build that already runs; one declared and never routed is
+// a newer build's acknowledged away. Read off a node running every half.
 //
 // Mutation: leave a source out of declaredInboundSources, or add one no parser
 // routes, and the two sets differ.

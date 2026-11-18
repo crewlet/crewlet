@@ -80,9 +80,8 @@ func TestAnItemWaitsUntilItsDateAndSaysWhy(t *testing.T) {
 	}
 
 	// A WAIT ENDED BY ITS START'S CLEAR takes its reason with it: the clear is
-	// the patch's flag, with no StartAt for the writer to see. Mutation: the
-	// writer clearing a reason only beside a StartAt leaves this one standing
-	// with no date to wait until.
+	// the patch's flag, with no StartAt for the writer to see. Mutation:
+	// clearing a reason only beside a StartAt leaves this one with no date.
 	again := later.Add(24 * time.Hour)
 	if err := patch("op-wait-again", app, worklet.TaskPatch{StartAt: &again, WaitReason: &reason}); err != nil {
 		t.Fatalf("wait again: %v", err)

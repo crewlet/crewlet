@@ -20,15 +20,11 @@ import (
 
 // A TURN'S END FOLLOWS ITS COST: every in-turn auxiliary record, its card's
 // rewrite the last of them, is on the stream before agent_turn_completed.
-//
-// The Turn screen asks for the turn again when the seat leaves it, which the
-// completion is what moves; a record the ledger published after the completion
-// was missing from that answer, nothing asked again, and the page's tokens
-// stood below the turn list's for the same turn. The card is the case that
-// shows it: its rewrite used to be made after the completion, inside the
-// charge's write, so it could not be on the stream before it whatever the
-// ledger did. Driven through a real runTurn on a Worklet task, whose account is
-// past what a card holds.
+// The Turn screen asks for the turn again only when the completion moves the
+// seat, so a record published after it is missing from that answer and the
+// page's tokens stand below the turn list's. Driven through a real runTurn on
+// a Worklet task whose account is past what a card holds, so its card is
+// rewritten.
 func TestATurnsEndFollowsEveryInTurnRecord(t *testing.T) {
 	t.Parallel()
 	e, served := spendingEngine(t)
@@ -82,14 +78,10 @@ func endingCharge(t *testing.T, served *servedWriter) worklet.TurnRecord {
 }
 
 // A TURN'S END IS WHERE ITS SEGMENT ENDED, NOT WHERE ITS END WAS PUBLISHED.
-//
-// The card is rewritten before the completion goes out, so the publish can
-// come seconds after the segment's work did — and a completion that read its
-// own clock there measured the rewrite into the turn's duration, which then
-// disagreed with the task's turn row, stamped a moment earlier, for the same
-// segment. Both are measured to the one instant the segment ended. Driven
-// through a real runTurn on a Worklet task whose card needs a rewrite, with a
-// rewrite slow enough to show in either figure.
+// The card is rewritten before the completion goes out, so a completion
+// reading its own clock would measure the rewrite into its duration and
+// disagree with the task's turn row for the same segment. Driven through a
+// real runTurn on a Worklet task with a rewrite slow enough to show.
 //
 // Mutation: let the completion read its own clock again, and duration_ms
 // exceeds the task's wall_ms by the rewrite.
@@ -149,8 +141,8 @@ func slowRewriteModel(delay time.Duration) phasedHarness {
 }
 
 // swapModel puts one provider behind every chain the spending engine's seat
-// resolves — its phases and its auxiliary model alike — ahead of the entry its
-// executor launches on, which it keeps.
+// resolves (phases and auxiliary model), ahead of the executor's entry, which
+// it keeps.
 func swapModel(t *testing.T, e *Engine, p llm.Provider) {
 	t.Helper()
 	c := *e.Company()

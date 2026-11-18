@@ -21,16 +21,14 @@ import (
 
 // THE PUBLISHED LAYERS AS A CASE READS THEM (ADR-0091): every cache synced at
 // the log's head holds an installed chain that is a PREFIX of the rows' chain,
-// in the rows' order, every installed layer's files passing the check every
-// Gitlet node holds a layer to (gitlet.CheckLayer) over packs the copy holds — M2's
-// rows invariant, extended to the layers, which every case's convergence check
-// asks of every copy (cacheHolds).
+// in the rows' order, each installed layer's files passing gitlet.CheckLayer
+// over packs the copy holds. Every case's convergence check asks it of every
+// copy (cacheHolds).
 
-// layerSettle is how long a convergence check waits for a copy's installer to
-// place, or refuse, every layer the rows name past the copy's installed prefix:
-// a delta hands a new layer to the installer and answers at once, and the
-// installer fetches it behind the serving — seconds here, so a minute is room
-// for a loaded machine.
+// layerSettle bounds a convergence check's wait for a copy's installer to
+// place or refuse every layer the rows name past its installed prefix: the
+// installer fetches a new layer behind the serving, in seconds here, so a
+// minute is room for a loaded machine.
 const layerSettle = time.Minute
 
 // The files of an installed chain, relative to a copy's directory.
@@ -81,14 +79,12 @@ func chainSettled(ch cache.Chain) bool {
 	return refused
 }
 
-// LayersHold reports what is wrong with the published chain the copy at dir
-// holds installed, as ch says it holds it: its multi-pack-index-chain must list
-// exactly the rows' installed prefix in the rows' order, its
-// commit-graph-chain must begin with those layers' graph layers (the node's
-// own tip may follow), and every installed layer's three files must pass
-// gitlet.CheckLayer over packs the copy holds byte for byte — a layer placed
-// over a pack the copy lacks, or a chain file listing the layers in another
-// order, is a copy git reads wrongly. nil when it all holds.
+// LayersHold reports what is wrong with the published chain installed in the
+// copy at dir, as ch says: its multi-pack-index-chain must list exactly the
+// rows' installed prefix in the rows' order, its commit-graph-chain must begin
+// with those layers' graph layers (the node's own tip may follow), and each
+// installed layer's three files must pass gitlet.CheckLayer over packs the copy
+// holds byte for byte; git reads any other copy wrongly. nil when it all holds.
 func LayersHold(ctx context.Context, dir string, ch cache.Chain) error {
 	installed := ch.Rows[:ch.Installed]
 	var errs []error
@@ -219,9 +215,8 @@ func chainOn(c *Case, n Node) cache.Chain {
 }
 
 // publicationOf is RepoName as the publication due listing through node n
-// names it — or, for a repository the listing does not name, holding no pack
-// outside its chain (a REPAIR's), as its rows stand, which a maintainer's pass
-// reads off its own cache.
+// names it, or, when the listing does not (no pack outside its chain: a
+// REPAIR's), as its rows stand.
 func publicationOf(c *Case, n Node) gitlet.PublicationCandidate {
 	c.T.Helper()
 	a, err := n.Read(c.Ctx, gitlet.ReadQuery{Kind: gitlet.ReadPublicationDue, Fresh: Linearizable})
@@ -260,28 +255,24 @@ func maintainerOf(c *Case) Node {
 }
 
 // maintains is whether n's compactor takes itself for cand's maintainer, asked
-// as each of its passes asks: by its maintenance's charge, off one listing of
-// the Gitlet nodes for every repository it judges.
+// as each of its passes asks: by its maintenance's charge.
 func maintains(n Node, cand gitlet.PublicationCandidate) (bool, error) {
 	yes, err := n.Maintainers().MaintainerOf(map[string]int64{cand.ID: n.Compactor().PlacedBy(cand.LiveObjects)})
 	return yes[cand.ID], err
 }
 
-// publishAtMaintainer is one publication of RepoName by its maintainer — the
-// unit a pass runs — asked again while it answers busy (a maintenance slot
-// the maintainer holds a moment) or waiting (a layer of the chain its own
-// installer has not placed yet), for a minute at the most; it answers the
-// maintainer and the outcome.
+// publishAtMaintainer is one publication of RepoName by its maintainer (the
+// unit a pass runs), through publishOn; it answers the maintainer and the
+// outcome.
 func publishAtMaintainer(c *Case) (Node, compact.Outcome) {
 	c.T.Helper()
 	n := maintainerOf(c)
 	return n, publishOn(c, n)
 }
 
-// tryPublishOn is node n's publication of cand asked again while it answers
-// busy — the node's maintainer keeps the one maintenance slot a publication
-// takes for a moment at a time — for a minute at the most: for a goroutine a
-// fault point holds, so it reports through nothing but its answer.
+// tryPublishOn is node n's publication of cand, asked again while busy as
+// publishOn asks; it reports through nothing but its answer, for a goroutine a
+// fault point holds.
 func tryPublishOn(ctx context.Context, n Node, cand gitlet.PublicationCandidate) (compact.Outcome, error) {
 	deadline := time.Now().Add(time.Minute)
 	for {
@@ -293,8 +284,9 @@ func tryPublishOn(ctx context.Context, n Node, cand gitlet.PublicationCandidate)
 	}
 }
 
-// publishOn is node n's publication of RepoName, asked again while it answers
-// busy or waiting, for a minute at the most.
+// publishOn is node n's publication of RepoName, asked again for a minute at
+// most while it answers busy (the maintainer holds the one maintenance slot a
+// moment at a time) or waiting (its installer has not placed a layer yet).
 func publishOn(c *Case, n Node) compact.Outcome {
 	c.T.Helper()
 	deadline := time.Now().Add(time.Minute)
@@ -325,8 +317,7 @@ func mustPublish(c *Case) Node {
 func chainRows(c *Case, n Node) []gitlet.LayerRow { return chainOn(c, n).Rows }
 
 // loseLayerPart deletes part i of the top layer of RepoName's chain from the
-// object store — a store that lost what a publication stored — and answers the
-// layer.
+// object store, as a store that lost it, and answers the layer.
 func loseLayerPart(c *Case, n Node, i int) gitlet.LayerRef {
 	c.T.Helper()
 	rows := chainRows(c, n)
@@ -341,8 +332,8 @@ func loseLayerPart(c *Case, n Node, i int) gitlet.LayerRef {
 }
 
 // spoilLayerPart flips one byte of part i of the top layer of RepoName's
-// chain in the object store — a store that hands back other bytes than it
-// took, which its hash check refuses — and answers the layer.
+// chain in the object store, as a store handing back other bytes than it took
+// (its hash check refuses them), and answers the layer.
 func spoilLayerPart(c *Case, n Node, i int) gitlet.LayerRef {
 	c.T.Helper()
 	rows := chainRows(c, n)
@@ -373,11 +364,10 @@ func spoilLayerPart(c *Case, n Node, i int) gitlet.LayerRef {
 }
 
 // freshNode is node n killed, its cache directory removed and restarted: a
-// Gitlet node that joins the fleet with nothing, whose first round of each
-// repository is a full one. A topology that kills and restarts its Gitlet nodes
-// together (one process's, SoloFleet) restarts every other node too, so a
-// handle to any node taken before it names a node that is gone: a case
-// resolves such a handle again by its id (nodeByID).
+// Gitlet node joining with nothing, whose first round of each repository is a
+// full one. A topology restarting its Gitlet nodes together (SoloFleet)
+// restarts the others too, so a case resolves any node handle taken before it
+// again by id (nodeByID).
 func freshNode(c *Case, n Node) Node {
 	c.T.Helper()
 	id, dir := n.ID(), n.CacheDir()

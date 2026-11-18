@@ -13,13 +13,11 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// THE ONE TYPE EVERY READER OF AN OPENCODE EXPORT TAKES READS WHAT A STEP'S
-// REQUEST MEASURED AND THE FAILURE IT ENDED ON, off the export each release
-// this build drives printed (testdata/opencode, whose session the suite's
-// openCodeExportFixture describes): every
-// step that ended without a failure carries its request's prompt — the part no
-// cache served, and the cache's reads — and the step its provider refused, and
-// each step the session was interrupted in, carries the failure it ended on.
+// AN OPENCODE MESSAGE READS WHAT ITS STEP MEASURED AND THE FAILURE IT ENDED
+// ON, off each driven release's export (testdata/opencode, described by
+// openCodeExportFixture): a step that ended without a failure carries its
+// prompt's uncached input and its cache reads; the step its provider refused
+// and each step the session was interrupted in carry their failure.
 //
 // Mutation: spell `type`, `tokens`, `input`, `cache`, `read` or `error`
 // otherwise than OpenCode 2 writes it, and a step reads as one that measured
@@ -63,21 +61,13 @@ func TestAnOpenCodeMessageReadsWhatItsStepMeasuredAndTheFailureItEndedOn(t *test
 	}
 }
 
-// A LINE OF MANY NOTE OPENINGS COSTS WHAT ITS BYTES COST, however long the
-// line: finding a captured session's notes in a quarter of a mebibyte of
-// openings written as one line costs what it does in the same openings on
-// lines of four KiB — openings that are no heading, and openings on a line
-// that closes as a heading does. Every opening used to look for its line's end
-// again, and every opening on a line that closed as a heading was a note of
-// its own whose next was looked for the same way: a line of a record runs to
-// [maxLineBytes], and one written as nothing but openings cost the openings
-// times the line — tens of minutes of a core, past every bound a read has and
-// every check of its caller, for one line a box's own agent can write.
-//
-// A COMPARISON, NOT A CLOCK, timed as internal/redact's linear cases are
-// ([withinFactor]): read linearly the two cost the same; read an opening at a
-// time to its line's end, the one line costs fifty to a hundred times the
-// short ones. Four times is allowed.
+// A LINE OF MANY NOTE OPENINGS COSTS WHAT ITS BYTES COST: a quarter mebibyte
+// of openings on one line reads as fast as on lines of 4 KiB, whether or not
+// the line closes as a heading. A line runs to [maxLineBytes] and a box's own
+// agent can write one, so a read quadratic in the line costs tens of minutes
+// of a core, past every bound of the read and its caller. A comparison, not a
+// clock, as internal/redact's linear cases ([withinFactor]): quadratic, the
+// one line costs fifty to a hundred times the short ones; four is allowed.
 //
 // Mutation: look for the line's end from every opening, or for the next
 // heading from the opening after the one found rather than from its line's
@@ -117,17 +107,15 @@ func TestALineOfManyNoteOpeningsCostsWhatItsBytesCost(t *testing.T) {
 const costFloor = 20 * time.Millisecond
 
 // withinFactor reports whether read costs at most factor times as much over
-// long as over short — the same bytes laid out otherwise — and what each cost:
-// the fastest of five samples of each, taken in turn after a warm-up read of
-// each, so a runner busy for a moment slows both or neither. Each sample is as
-// many reads as it takes the short text's to reach twice [costFloor]. A
-// comparison that fails is measured again, three times in all, and fails only
-// if every measurement does: that only ever turns a failure into a pass, so
-// what this guards has to cost far more than the factor every time, as a read
-// that is quadratic in a line does. A long sample past the factor times the
-// calibrated short one fails its round at once, so a regression's cost — its
-// samples are the costliest thing here — is paid once a round rather than five
-// times.
+// long as over short (the same bytes laid out otherwise), and what each cost:
+// the fastest of five interleaved samples after a warm-up, so a briefly busy
+// runner slows both or neither; a sample is as many reads as short needs to
+// reach twice [costFloor]. A failing comparison is measured again, three
+// rounds in all, and fails only if every round does: that only turns failures
+// into passes, so it catches only what costs far more than factor every time,
+// as a read quadratic in a line does. A long sample past factor times the
+// calibrated short one ends its round, so a regression's samples are paid once
+// a round, not five times.
 func withinFactor(read func(string), short, long string, factor int) (bool, time.Duration, time.Duration) {
 	timed := func(text string, reps int) time.Duration {
 		start := time.Now()
@@ -175,25 +163,18 @@ func logLines(text string, n int) string {
 	return b.String()
 }
 
-// AN ENTRY'S TEXT IS AN OPENING OF WHAT ITS WHOLE TEXT REDACTS TO, whatever the
-// text holds and wherever the bound falls in it: never a byte the whole text's
-// redaction would not hand out, and cut, marked, within the bound.
+// AN ENTRY'S TEXT IS AN OPENING OF WHAT ITS WHOLE TEXT REDACTS TO, wherever
+// the bound falls: never a byte the whole text's redaction would not hand out,
+// and cut, marked, within the bound. The cases:
 //
-//   - Key blocks ahead of a token the window cuts. Twenty-one private keys,
-//     each a marker once redacted, and a GitHub token straddling where a window
-//     of the bound and a key block past it ends: the window redacted to less
-//     than the bound, and the token it had cut came through as its first
-//     twenty characters, which no rule matches.
-//   - A token across the bound, at every offset: begun inside the bound, it is
-//     read whole and redacted as one, never cut first.
-//   - A key whose body is read back from its END, which is many KiB past the
-//     bound: a line of prose straight after its BEGIN ends what a read forward
-//     from the armour takes, so only the END reaches the body inside the bound.
+//   - key blocks that redact to markers, shrinking the window, ahead of a
+//     GitHub token it cuts, whose first twenty characters match no rule;
+//   - a token across the bound at every offset, redacted whole, never cut first;
+//   - a key, prose after its BEGIN, its body read back by an END past the bound.
 //
-// Mutation: cut what the window redacts by its bytes alone, and the token's
-// opening is handed out; cut the text before redacting it, and the token
-// across the bound is; read a window short of a key block past the bound, and
-// the body the END reads back is.
+// Mutation: cut the window's redaction by bytes alone, and the token's opening
+// is handed out; cut before redacting, and the token across the bound is; read
+// a window short of a key block past the bound, and the END's body is.
 func TestAnEntryIsAnOpeningOfWhatItsWholeTextRedactsTo(t *testing.T) {
 	t.Parallel()
 	key := "-----BEGIN RSA PRIVATE KEY-----\n" + strings.Repeat(keyLine+"\n", 50) +
@@ -250,13 +231,11 @@ func sharesBytes(s, whole string) bool {
 }
 
 // AN ENTRY HOLDS ONLY ITS OWN BYTES, and a read remembers no call by more than
-// a name's. A short note read out of a value of four MiB, its thread and its
-// tool — each a piece of a string the read decoded — come out of the shaping
-// that hands them out as bytes of their own, as an opening and as a match's
-// window alike: kept on the page, a piece held the whole value until the
-// answer was sent. And a call whose id or tool's
-// name runs past the bound a name has is not remembered for its result, which
-// names no tool, where a harness's call is.
+// a name's. A short note's text, thread and tool, sliced from a decoded value
+// of four MiB, come out of the shaping (an opening and a match's window alike)
+// as bytes of their own: a slice kept on the page holds the whole value alive
+// until the answer is sent. A call whose id or tool's name runs past a name's
+// bound is not remembered for its result; a harness's call is.
 //
 // Mutation: hand an entry out as the redaction and the cut left it, and its
 // text, thread and tool are the decoded value's own bytes; remember every
@@ -267,7 +246,6 @@ func TestAnEntryHoldsOnlyItsOwnBytes(t *testing.T) {
 	decoded := opening + "\n" + strings.Repeat("x", 4<<20)
 	b := &transcriptBuilder{bounds: TranscriptReadBounds(), entries: []TranscriptEntry{},
 		calls: map[string]string{}}
-	// AN OPENING, and A MATCH'S WINDOW, each shaped of its own bytes.
 	matched := &transcriptBuilder{bounds: SeatTranscriptBounds(), entries: []TranscriptEntry{},
 		calls: map[string]string{}, filter: TranscriptFilter{Terms: []string{"target"}}}
 	for shaping, by := range map[string]*transcriptBuilder{"an opening": b, "a match's window": matched} {

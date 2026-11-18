@@ -5,10 +5,8 @@ import (
 	"testing"
 )
 
-// THE READ HEADER IS NO LONGER THAN THE HEADER IT REPLACES. A brief told by a
-// reading heads its calls after the point with [readHeader] in place of
-// [calledSinceHeader]: no longer, so the exact telling's header never makes its
-// brief outgrow the cut-off one's for its own words.
+// THE READ HEADER IS NO LONGER THAN THE HEADER IT REPLACES ([calledSinceHeader]),
+// so the exact telling never makes a brief outgrow the cut-off one's.
 //
 // Mutation: lengthen the read header past 471 bytes, and this goes red.
 func TestTheReadHeaderIsNoLongerThanTheHeaderItReplaces(t *testing.T) {
@@ -19,12 +17,11 @@ func TestTheReadHeaderIsNoLongerThanTheHeaderItReplaces(t *testing.T) {
 	}
 }
 
-// A LIST A READING THINNED SAYS THE SESSION HOLDS SOME LEFT OUT. Its calls are
-// headed by words true of a list a reading thinned: the session may show some
-// of them, a call shown both is one call, and the list leaves out the calls the
-// reading found the session holding and the ones listed below; never that they
-// are every call since the point, which the cut-off header says and which is
-// false of it. A cut-off list a reading did not thin keeps the cut-off header.
+// A LIST A READING THINNED SAYS THE SESSION HOLDS SOME LEFT OUT: the session
+// may show some, a call shown both is one call, the list leaves out what the
+// reading found held or lists below, and never that they are every call since
+// the point, which the cut-off header says and is false of it. A cut-off list
+// no reading thinned keeps the cut-off header.
 //
 // Mutation: head a thinned list with the cut-off header, and this goes red.
 func TestAListAReadingThinnedSaysTheSessionHoldsSomeLeftOut(t *testing.T) {
@@ -52,15 +49,12 @@ func TestAListAReadingThinnedSaysTheSessionHoldsSomeLeftOut(t *testing.T) {
 	}
 }
 
-// A SUBAGENT'S CALLS ARE TOLD UNDER ITS NAME. The calls a reading found in the
-// threads of subagents whose report the session does not hold are told in a
-// section of their own, after the calls after the point and before the calls
-// listed again and the late ones: under one header, then per subagent a
-// heading naming it (its agent id alone where it has no name), its calls, and,
-// where a successful `submit_work` is among them, that it does not stand. A
-// subagent with no call listed has no heading, and a brief with none has no
-// section. The header claims nothing of the session, never that a call is
-// shown twice.
+// A SUBAGENT'S CALLS ARE TOLD UNDER ITS NAME, in their own section after the
+// calls after the point and before those shown again and the late ones: per
+// subagent a heading (its agent id alone where nameless), its calls, and, after
+// a successful `submit_work`, that it does not stand. No call listed, no
+// heading; none at all, no section. The header claims nothing of the session,
+// never that a call is shown twice.
 //
 // Mutation: drop the section, place it anywhere else, head a nameless subagent
 // with an empty name, or drop a subagent's submission line, and this goes red.

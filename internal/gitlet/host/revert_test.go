@@ -29,13 +29,11 @@ func (c *mergeCase) mainTip() string {
 }
 
 // A REVERT OPENS A CHANGE (M5-D25): a change merged by each method — a merge
-// commit, a squash, and a fast-forward of two commits — reverted by pat, is
-// ONE commit on main's tip, on the new branch revert-<n>, whose tree is
-// main's before the merge, whatever the method: the merge commit's first
-// parent, the squash's parent, and the fast-forward's whole range from its
-// recorded base (its head's first parent is the change's own first commit, so
-// a plain revert would leave it in). The push's record opens "Revert
-// <repo>!<n>" from that branch into main, at that commit; main does not move.
+// commit, a squash, a fast-forward of two commits — reverted by pat is ONE
+// commit on main's tip, on the new branch revert-<n>, whose tree is main's
+// before the merge (for the fast-forward, its whole range from its recorded
+// base). The push's record opens "Revert <repo>!<n>" from that branch into
+// main at that commit; main does not move.
 //
 // Mutations: revert a fast-forward against its merge_oid's first parent →
 // the first commit's file survives, red; open no change in the push → red.

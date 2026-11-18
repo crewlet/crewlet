@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -137,6 +138,13 @@ func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 					"does not use it", index)
 			}
 			claimed[index] = true
+		})
+	}
+	for name, st := range searchReads() {
+		t.Run(name, func(t *testing.T) {
+			for _, index := range held(t, name, st) {
+				used[index] = true
+			}
 		})
 	}
 	for _, index := range storetest.IndexesOn(t, db, covered) {
@@ -1091,6 +1099,8 @@ func registeredStatements() map[string]statement {
 			[]string{"SCAN json_each AS j", "code_queue_change_idx (change_id=?)"}},
 		"changes named": {changesNamedSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
 			[]string{"SCAN json_each AS j", changeKey + " (id=?)"}},
+		"changes moved past a position": {changesMovedPastSQL, []any{int64(0), 101},
+			[]string{changesPositionKey + " (position>?)"}},
 		// A QUEUE BUILD'S DESCRIPTIONS (queuework.go): its changes' bodies
 		// and authors, each driven from the list by its table's key.
 		"queued changes' bodies": {changeBodiesNamedSQL,
@@ -1947,6 +1957,27 @@ func claimedReads() map[string]statement {
 		"code_notifications_inbox_idx": {`SELECT record_id FROM code_notifications
 			WHERE recipient = ? ORDER BY log_seq DESC LIMIT ?`, []any{"founder", 50},
 			[]string{"code_notifications_inbox_idx (recipient=?)"}},
+	}
+}
+
+// searchReads is internal/search's reads of this package's tables, by name: each the exported
+// statement the search package runs (its rule for a read of another domain's table), held to its exact
+// seek and no sort here and judged for scans by the read gate, as a registered statement is.
+func searchReads() map[string]statement {
+	reach, reachArgs := search.ChangeReachRead(0, search.ChangeIndexBatchRows)
+	batch, batchArgs := search.ChangeBatchRead(0, 1<<40)
+	repos, reposArgs := search.ChangeReposRead([]string{"repo-1", "repo-2"})
+	backReach, backReachArgs := search.ChangeBackReachRead("~", search.ChangeIndexBatchRows)
+	backBatch, backBatchArgs := search.ChangeBackBatchRead("~", "", 1<<40)
+	return map[string]statement{
+		"the index of changes' words' reach": {reach, reachArgs,
+			[]string{changesPositionKey + " (position>?)"}},
+		"the index of changes' words' batch": {batch, batchArgs,
+			[]string{changesPositionKey + " (position>? AND position<=?)", bodyKey + " (change_id=?)"}},
+		"the index of changes' words' repositories": {repos, reposArgs, []string{repoKey + " (id=?)"}},
+		"the first build's reach":                   {backReach, backReachArgs, []string{changeKey + " (id<?)"}},
+		"the first build's batch": {backBatch, backBatchArgs,
+			[]string{changeKey + " (id<? AND id>=?)", bodyKey + " (change_id=?)"}},
 	}
 }
 

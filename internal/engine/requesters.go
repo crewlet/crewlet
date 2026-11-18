@@ -14,61 +14,32 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// turnRequesters composes the principal a seat's turn is acting for, as the
-// authority table decides it — the requester ceiling every call a seat makes
-// inside a turn somebody woke is decided against (builtin.Requesters): the app
-// every app verb asks, and the relation the artifacts tools, their
-// datastore's and the code tools ask beside it. ONE value for all of them, so
-// a requester is one principal whichever tool decides for it.
+// turnRequesters composes the principal a seat's turn acts for: the requester
+// ceiling every call in a turn somebody woke is decided against
+// (builtin.Requesters). ONE value answers the app verbs and the relations the
+// artifacts, datastore and code tools ask, so a requester is one principal
+// whichever tool decides. Admin is never in a ceiling: an administrator asking
+// an agent for somebody's private artifact asks as a colleague.
 //
-// AN AGENT SEAT is the seat principal its own turn acts as (every app, never
-// admin). A PERSON'S SEAT is the person bound to it, at their stage, holding
-// the apps their own grants name and never admin: the routed identity
-// directory answers who holds the seat, at what stage and with what grants —
-// that ONE seat's requester, asked by its handle — so the ceiling bounds an
-// agent by the apps the requester uses (ADR-0109), by their RELATIONS to what
-// it reads — an artifact's shares, units and leads, a repository's grant for a
-// seat — and by whether they may act at all. Admin is never part of a
-// ceiling: an administrator who asks an agent for somebody's private artifact
-// asks it as a colleague, and uses every app because admin includes them.
-//
-// A PERSON NO DIRECTORY ROW BINDS — a seat the chart knows by its contacts
-// alone, a removal — holds no app: a permission is a person's (ADR-0033), and
-// a seat nobody holds has nobody to hold one. An administrator creates the
-// person on the seat, with the apps they use, to have agents act for them; the
-// create lands them active, and they need never sign in.
-//
-// A CREDENTIAL ACTING AS NO SEAT is the machine principal THIS node resolves
-// its login to now ([turnRequesters.Credential]), holding the apps its grants
-// name and never admin — which the ceiling narrows again to the apps its
-// write carried.
+// An agent seat is the seat principal (every app). A person's seat is the
+// person the routed identity directory binds to it, at their stage, with the
+// apps their grants name (ADR-0109); a seat no row binds holds no app, since a
+// permission is a person's (ADR-0033). A credential acting as no seat is
+// [turnRequesters.Credential].
 type turnRequesters struct{ engine *Engine }
 
 // Credential is a credential acting as no seat, by its login, as THIS node
-// resolves it now (builtin.Requesters.Credential): a machine principal holding
-// the apps its grants name, never admin, and whether this node can place it.
+// resolves it now (builtin.Requesters.Credential): a machine principal with
+// the apps its declaration's grants name, never admin, the same on every node
+// whatever its admin posture.
 //
-// BY ITS LOGIN'S NAMESPACE, and only there. A `token:` login is a Tier A token
-// of this node's own configuration and nothing else: a token another node
-// declares is nobody here, and a directory row that happens to carry the same
-// login — a binding the identity directory enrols under it — never stands in
-// for the configuration. That row is read for one fact alone, whether it binds
-// the token to a seat, which makes the token's writes the person's: such a
-// login never reaches here as a credential acting as itself, so it is placed
-// as nobody. Any other login is a service account of the identity directory
-// and nothing else: active or suspended, never removed, and bound to no seat.
-//
-// THE DECLARATION'S APPS, NOT THE ADMIN POSTURE'S CLAMP: the posture takes
-// admin alone away, which no ceiling carries, so the apps are the same on
-// every node — one that serves no API, whose zero posture confers nothing on
-// a request, included.
-//
-// Not placed — false with no error — for a login neither names, a token bound
-// to a seat, and a service account removed, suspended, bound or not a machine:
-// nobody the company knows as a requester, whom the turn is worked for as a
-// stranger. An error is a directory this node could not read or vouch for,
-// which is UNKNOWN: never a stranger, whom a lagging copy could otherwise make
-// of an account still active, nor a credential it might have removed.
+// By the login's namespace alone: a `token:` login is a Tier A token of this
+// node's own configuration (a directory row under it is read only for whether
+// it binds the token to a seat, making it a person's), any other a directory
+// service account. Not placed (false, no error; a stranger): a login neither
+// names, a bound token, or an account removed, suspended, bound or not a
+// machine. An error, a directory unread or unvouched, is UNKNOWN: neither a
+// stranger (perhaps active) nor a credential (perhaps removed).
 func (r turnRequesters) Credential(ctx context.Context, login string) (iam.Principal, bool, error) {
 	dir, ok := r.engine.identityDirectory()
 	if !ok {
@@ -151,11 +122,9 @@ func (r turnRequesters) Requester(ctx context.Context, handle string) (iam.Princ
 	if r.engine.router == nil {
 		return iam.Principal{}, errors.New("engine: this node reaches no identity directory")
 	}
-	// ONE SEAT'S REQUESTER, never the directory: this runs at most once a
-	// call of a tool that decides an app or a relation for somebody, so it is
-	// the routed point read (two seeks and one document's decode on the data
-	// node that answers), whose cost does not grow with the people the company
-	// has hired or ever removed.
+	// ONE SEAT'S REQUESTER, never the whole directory: this runs on a call
+	// of any tool that decides for somebody, so it is the routed point read,
+	// whose cost does not grow with everyone the company ever hired or removed.
 	h, held, err := r.engine.router.Identity().Requester(ctx, seat.Handle)
 	switch {
 	case err != nil:

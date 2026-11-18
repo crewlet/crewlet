@@ -12,31 +12,26 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A HELD CALL A TOLD CALL COULD BE TAKEN FOR IS LISTED AGAIN. A brief tells a
-// session that may already show some of its told calls, and every late call,
-// that a call shown both in the session and in a list is ONE call, made once.
-// Where a call the session may show and a told call name one tool with
-// arguments neither line tells apart, value by value, a model reading both can
-// take the told call for the held one and lose it. So the held call is listed again,
-// under words that say the session may show it and that the told call could
-// be taken for it and is one of its own (runner's calledAfter,
-// prompts.AfterSave.Shown).
+// A HELD CALL A TOLD CALL COULD BE TAKEN FOR IS LISTED AGAIN. Where a held
+// call the session may show and a told call name one tool with arguments
+// neither line tells apart, a model can take the told call for the held one
+// and lose it; so the held call is listed again, under words saying the told
+// call is one of its own (runner's calledAfter, prompts.AfterSave.Shown).
 
 // listedAgainHeading heads the calls the session may show that a brief lists
 // again (prompts.AfterSave.Shown).
 const listedAgainHeading = "## Calls the session above may show, listed again"
 
-// listedAgainHeader is the whole header of the calls a brief lists again, its
-// heading and its words (prompts' shownAgainHeader), whatever the reason a
-// call is listed.
+// listedAgainHeader is the whole header over the calls a brief lists again,
+// its heading and its words (prompts' shownAgainHeader), whatever the reason.
 const listedAgainHeader = listedAgainHeading +
 	"\nThe session above may show each of these calls. Each is listed again because a call in another list" +
 	" of this message names the same tool and could be taken for it: that one is a call of its own, made as" +
 	" well as this one, never this one shown twice."
 
-// digested is call as its run's call log admitted it, digested by its whole
-// arguments, as every call this build's log takes is: its arguments known
-// whole, so they read alike to another call's only as its line shows them.
+// digested is call with the digest of its whole arguments, as this build's
+// call log admits every call: its arguments known, so they read alike another
+// call's only as its line shows them.
 func digested(call runner.BridgedCall) runner.BridgedCall {
 	call.Digest = turnctx.ArgsDigest(call.Args)
 	return call
@@ -84,12 +79,10 @@ func post(text string, seq int) runner.BridgedCall {
 }
 
 // A HELD CALL A TOLD CALL COULD BE TAKEN FOR IS LISTED AGAIN. A cut-off
-// capture saved at the round's first call holds that call; the call after its
-// save names the same tool with the same arguments, and the brief tells it as a
-// call the session may already show, under words that say a call shown both in
-// the session and in the list is ONE call. So the held call is listed again,
-// after the calls since the save and before the late calls, under words that
-// say the session may show it; and no section of the brief is an empty one.
+// capture saved at the round's first call holds it, and the next call, the
+// same tool and arguments, is told as one the session may show. The held call
+// is listed again, after the calls since the save and before the late calls;
+// and no section of the brief is empty.
 //
 // Mutation: list nothing again, and the brief tells the call once.
 func TestAHeldCallAToldCallCouldBeTakenForIsListedAgain(t *testing.T) {
@@ -119,14 +112,11 @@ func TestAHeldCallAToldCallCouldBeTakenForIsListedAgain(t *testing.T) {
 }
 
 // A WRITE WHOSE ARGUMENTS READ ALIKE IS LISTED AGAIN, DIGESTS APART. Two
-// writes to one path whose contents differ past the ledger's budget have
-// different digests, and different results; but the told write's line shows
-// its content as a rewrite or omitted by its size, never as itself, and no
-// result, so all a model can compare is its path, which is the held write's.
-// It is listed again.
+// writes to one path whose contents differ past the ledger's budget differ in
+// digest and result, but the told line shows neither content nor result, so a
+// model can compare only the path. The held write is listed again.
 //
-// Mutation: compare digests alone, or compare results too, and the held write
-// is not listed again.
+// Mutation: compare digests alone, or results too, and it is not.
 func TestAWriteWhoseArgumentsReadAlikeIsListedAgain(t *testing.T) {
 	t.Parallel()
 	held := digested(numbered("write_file", map[string]any{"path": "notes.md",
@@ -145,14 +135,12 @@ func TestAWriteWhoseArgumentsReadAlikeIsListedAgain(t *testing.T) {
 	}
 }
 
-// A CALL WHOSE SHOWN ARGUMENTS DIFFER IS NOT LISTED AGAIN. A told write to
-// another path shows that path whole, so a model reading it never takes it for
-// the held write; and a told call with a key the held call lacks, or lacking
-// one it has, shows that key, whatever its value. Neither is listed again.
+// A CALL WHOSE SHOWN ARGUMENTS DIFFER IS NOT LISTED AGAIN: a told write to
+// another path shows that path whole, and a key one call has and the other
+// lacks shows, whatever its value.
 //
 // Mutation: read a value the line shows whole as one that may equal anything,
-// or read a key one call has and the other lacks as alike, and a case lists
-// the held call again.
+// or a key only one call has as alike, and a case lists the held call again.
 func TestACallWhoseShownArgumentsDifferIsNotListedAgain(t *testing.T) {
 	t.Parallel()
 	write := func(path, fill string, seq int) runner.BridgedCall {
@@ -178,12 +166,10 @@ func TestACallWhoseShownArgumentsDifferIsNotListedAgain(t *testing.T) {
 }
 
 // A VALUE EITHER LINE SHOWS AS A PIECE READS ALIKE ANYTHING. The session may
-// show the held call, too, only as a line (a fresh brief's prior work, the
-// calls an earlier brief told), and a line shows a value past the ledger's
-// budget as a rewrite or omitted by its size, never as itself. So a held write
-// whose content is past the budget and a told write to its path whose short
-// content the told line shows whole read alike, and the held write is listed
-// again; a told write to another path, which both lines show whole, is not.
+// show the held call only as a line too, and a line shows a value past the
+// ledger's budget as a rewrite or by its size. So a held write with long
+// content and a told write to its path with short content read alike; a told
+// write to another path does not.
 //
 // Mutation: judge a value by the told line alone, dropping the held line's
 // ShowsWhole, and the held write to the told write's path is not listed again.
@@ -208,21 +194,15 @@ func TestAValueEitherLineShowsAsAPieceReadsAlikeAnything(t *testing.T) {
 }
 
 // A VALUE A RECORD LEFT OUT READS ALIKE ANYTHING, AND THE REST IS COMPARED. A
-// run's record keeps a call's arguments past its budget with their largest
-// values left out, each replaced by a marker naming its size and digest, or
-// the whole as {"not_kept": marker} (kept.Record.Args), and says how much it
-// kept beside them (BridgedCall.ArgsBytes). A marker names a value it does not
-// show, so it reads alike any value, at the top of the arguments or inside an
-// object, a leaf's or a container's; but the values the record kept are the
-// call's own and are compared as any are, so a told write kept in part to
-// another path than the held write's is not listed again, where reading the
-// whole call as unknown listed it. Arguments left out whole read alike every
-// call of their tool.
+// record past its budget replaces its largest values with markers, or the
+// whole as {"not_kept": marker} (kept.Record.Args, BridgedCall.ArgsBytes). A
+// marker, at the top or inside an object, a leaf's or a container's, reads
+// alike any value; the values kept are compared as any are. Arguments left
+// out whole read alike every call of their tool.
 //
-// Mutation: read a call its record kept in part as one whose arguments are all
-// unknown, and the cases that read apart are listed; compare a marker as its
-// text at the top or inside an object, and the cases alike there are not;
-// compare arguments left out whole key by key, and no held call is listed.
+// Mutation: read a call kept in part as wholly unknown, and the cases that
+// read apart are listed; compare a marker as its text, and the cases alike are
+// not; compare arguments left out whole key by key, and no held call is listed.
 func TestAValueARecordLeftOutReadsAlikeAnythingAndTheRestIsCompared(t *testing.T) {
 	t.Parallel()
 	marker := kept.Record("the run's record").LeftOut([]byte(`"` + strings.Repeat("b", 9000) + `"`))
@@ -286,19 +266,16 @@ func TestAValueARecordLeftOutReadsAlikeAnythingAndTheRestIsCompared(t *testing.T
 	}
 }
 
-// A VALUE READS AS THE VALUE IT IS, NEVER AS ITS SPELLING. The run's record
-// keeps a number as its literal's text, so a held call and a told call can
-// carry one value spelled two ways, and a model reading the told line beside
-// the session takes them for one: 7 and 7.0, 100 and 1e2, a key null in one
-// call and absent in the other, a number and a string that spells it, the
-// same within an object. Each such held call is listed again. Values a reader
-// tells apart are not: two numbers that differ, two strings that differ
-// however alike their numbers, arrays of different lengths, a key in one
-// object and not the other.
+// A VALUE READS AS THE VALUE IT IS, NEVER AS ITS SPELLING. The record keeps a
+// number as its literal's text, so one value can be spelled two ways (7 and
+// 7.0, 100 and 1e2, null and absent, a number and the string spelling it, the
+// same within an object), which a model takes for one: listed again. Values a
+// reader tells apart are not: differing numbers, differing strings however
+// alike their numbers, arrays of different lengths, a key in one object only.
 //
-// Mutation: compare decoded values as Go values (reflect.DeepEqual), and the
-// alike cases go red; read null as a value of its own, and the null cases go
-// red; read two strings by their numbers, and the strings case goes red.
+// Mutation: compare decoded values with reflect.DeepEqual, and the alike cases
+// go red; read null as a value of its own, and the null cases go red; read two
+// strings by their numbers, and the strings case goes red.
 func TestAValueReadsAsTheValueItIsNeverAsItsSpelling(t *testing.T) {
 	t.Parallel()
 	n := func(text string) json.Number { return json.Number(text) }
@@ -346,27 +323,21 @@ func TestAValueReadsAsTheValueItIsNeverAsItsSpelling(t *testing.T) {
 	}
 }
 
-// A CALL WHOSE ARGUMENTS ARE NOT KNOWN IS LISTED BESIDE EVERY CALL OF ITS TOOL.
-// Nothing says arguments not known read apart from any: a told call's
-// withheld, in flight, recorded with no digest or in text the engine could not
-// read back, or a held call's not read back. So the held call is listed again
-// beside a told call of its tool whose arguments, as far as they are known,
-// differ. (Arguments a record kept less than whole are known but for the
-// values it left out, which TestAValueARecordLeftOutReadsAlikeAnythingAndTheRestIsCompared
-// reads.) A call whose record did not read back is marked so
-// (ledger.Call.ArgsUnread), and its line says so in place of its arguments,
-// never `slack_post()`, the tool called with none; marked, it reads so
-// whatever arguments it carries, as a withheld call does, since its line
-// shows none of them; and a record of an older build, which marks no call,
-// leaves its arguments nil, which read so too.
+// A CALL WHOSE ARGUMENTS ARE NOT KNOWN IS LISTED BESIDE EVERY CALL OF ITS TOOL:
+// a told call's withheld, in flight, undigested or not read back, or a held
+// call's not read back. (Arguments kept in part are known but for what was
+// left out: TestAValueARecordLeftOutReadsAlikeAnythingAndTheRestIsCompared.)
+// A call marked ledger.Call.ArgsUnread reads unknown whatever arguments it
+// carries, since its line shows none, saying so rather than `slack_post()`;
+// an older build's record, marking none, leaves them nil, which reads unknown
+// too.
 //
-// Mutation: read a call whose arguments were not read back as one whose
-// arguments are known, and its cases go red; read the mark by the arguments it
-// leaves nil alone, and the marked calls carrying arguments do.
+// Mutation: read a call not read back as known, and its cases go red; read the
+// mark by nil arguments alone, and the marked calls carrying arguments do.
 func TestACallWhoseArgumentsAreNotKnownIsListedBesideEveryCallOfItsTool(t *testing.T) {
 	t.Parallel()
-	// WITHHELD, though it carries arguments and their digest, which no record
-	// keeps for a withheld call: its line draws them sealed whatever it holds.
+	// WITHHELD, though it carries arguments and a digest no record keeps for one:
+	// its line draws them sealed.
 	withheld := post("told", 2)
 	withheld.Withheld = true
 	undigested := numbered("slack_post", map[string]any{"channel": "C1", "text": "told"}, 2, 2)
@@ -376,8 +347,8 @@ func TestACallWhoseArgumentsAreNotKnownIsListedBesideEveryCallOfItsTool(t *testi
 	unreadHeldCall.Args, unreadHeldCall.ArgsUnread = nil, true
 	olderUnreadHeldCall := post("hi", 1)
 	olderUnreadHeldCall.Args = nil
-	// MARKED, though it carries arguments and their digest: its line says its
-	// arguments did not read back whatever it holds.
+	// MARKED, though it carries arguments and a digest: its line says they did
+	// not read back.
 	markedToldCall := post("told", 2)
 	markedToldCall.ArgsUnread = true
 	markedHeldCall := post("hi", 1)
@@ -413,17 +384,13 @@ func TestACallWhoseArgumentsAreNotKnownIsListedBesideEveryCallOfItsTool(t *testi
 	}
 }
 
-// EVERY REASON A CALL IS LISTED AGAIN IS HEADED BY THE SAME WORDS. A held call
-// is listed again wherever the engine cannot rule out that a told call is
-// taken for it (runner's readAlike): their lines do not tell their arguments
-// apart, or either call's arguments are not comparable, in flight, sealed for
-// a person's approval, with no digest or recorded in text that did not read
-// back. The words over the section are one header on every such
-// path, and true on each: that the session may show each call listed, that
-// the told call could be taken for it, and that the told call is one of its
-// own. None says the session shows it, which a point's claim does not make
-// true of a session read back, or that their arguments read alike, which is
-// false of every case but the first.
+// EVERY REASON A CALL IS LISTED AGAIN IS HEADED BY THE SAME WORDS. Whatever
+// path lists a held call (runner's readAlike: lines alike, or arguments in
+// flight, sealed, undigested or not read back), one header heads it, true on
+// each: the session MAY show the call, and the told call is one of its own.
+// It never says the session shows it, which a point's claim does not make true
+// of a session read back, nor that the arguments read alike, false but for
+// the first case.
 //
 // Mutation: word the header as calls the session shows, or as calls whose
 // arguments read alike, and every case goes red.
@@ -458,9 +425,8 @@ func TestEveryReasonACallIsListedAgainIsHeadedByTheSameWords(t *testing.T) {
 }
 
 // THE CALLS LISTED AGAIN ARE DEFUSED UNDER THE TURN'S TOKEN. A held call's
-// arguments are a model's words, and a told call of its tool whose arguments
-// are not comparable reads alike it, so it is listed again: its words reach
-// the brief with no live marker, as every list's do.
+// arguments are a model's words, and reach the brief with no live marker, as
+// every list's do.
 //
 // Mutation: list the calls listed again without defusing them, and the brief
 // carries a live marker.
@@ -480,13 +446,11 @@ func TestTheCallsListedAgainAreDefusedUnderTheTurnsToken(t *testing.T) {
 	}
 }
 
-// A HELD CALL LIKE A LATE CALL IS LISTED AGAIN, FOR EVERY HARNESS. The copy a
-// job's box holds where its harness ended its own run holds every call of the
-// round but the late ones, and is told those under words that say each is ONE
-// call. Where one names the tool and arguments of a held call, the held call is
-// listed again, for an OpenCode job's copy as for a Claude Code one's: and the
-// brief is the one the same round gets where its held call reads apart, plus
-// exactly that section, before the late calls.
+// A HELD CALL LIKE A LATE CALL IS LISTED AGAIN, FOR EVERY HARNESS. The copy in
+// a box whose harness ended its own run holds every call but the late ones;
+// where a late call matches a held one, the held call is listed again, for
+// OpenCode as for Claude Code: the brief is the reads-apart brief plus exactly
+// that section, before the late calls.
 //
 // Mutation: leave the late calls out of the calls a held call is matched
 // against, and nothing is listed again.
@@ -520,15 +484,12 @@ func TestAHeldCallLikeALateCallIsListedAgainForEveryHarness(t *testing.T) {
 }
 
 // THE CALL A PERSON APPROVED THAT THE LEAD TELLS IS LISTED NOWHERE, HELD OR NOT.
-// A later attempt at an answer tells the call the person allowed in its lead,
-// once. Where the point holds that call (the copy whose harness ended its own
-// run, which holds every call but the late ones; a kept capture cut off past
-// it; a kept capture its harness ended, placed past it), it is still no call
-// the session shows, and withheld, so it reads alike every told call of its
-// tool: beside a late call of that tool it is never listed again, so the brief
-// tells it once, by the lead. The call the run held for the person's approval,
-// its question, is a call the session shows, withheld too, so it is listed
-// again beside that late call.
+// A later attempt's lead tells the approved call once. Where the point holds it
+// (the copy whose harness ended its own run; a kept capture cut off, or ended
+// by its harness, past it), it is still no call the session shows: withheld,
+// it reads alike every told call of its tool, yet is never listed again. The
+// run's question, the call held for approval, is one the session shows, so it
+// is.
 //
 // Mutation: put the call the lead tells on the held side wherever the point
 // holds it, and every case lists it again.
@@ -568,12 +529,10 @@ func TestTheApprovedCallTheLeadTellsIsNeverListedAgain(t *testing.T) {
 	}
 }
 
-// A CALL THE WORDS SAY THE SESSION LACKS BRINGS NO LISTING. A session whose
-// harness ended its own run is told the calls after its save under words that
-// say they are not in it, so no call there is shown twice and none is taken for
-// a held one; and an owed read is told under words that say an earlier message
-// counted it, a read the session may run again. Neither lists a held call
-// again, alike or not.
+// A CALL THE WORDS SAY THE SESSION LACKS BRINGS NO LISTING: neither calls told
+// as made after a save the session ends at (not in it, so never shown twice)
+// nor an owed read (one an earlier message counted, which may run again) lists
+// a held call again, alike or not.
 //
 // Mutation: match a held call against the calls after the save whatever their
 // words, and the first case lists it again.
@@ -607,19 +566,15 @@ func TestACallTheWordsSayTheSessionLacksBringsNoListing(t *testing.T) {
 	}
 }
 
-// AN OPENCODE RELAUNCH WITH NO CALLS ALIKE IS TOLD AS MAIN TELLS IT. Listing a
-// held call again changes a brief only where a held call and a told call read
-// alike: of a relaunch whose held and told calls name one tool with arguments
-// that read apart, every byte of the brief is what main handed before the
-// listing existed, for a cut-off kept capture (its call after the save point
-// and its late call beside the held one) and for the copy whose harness ended
-// its own run (its late call beside the held one). The literals were rendered
-// by main's own telling, before a call was ever listed again, and no change of
-// this package's telling may move them without moving this test.
+// AN OPENCODE RELAUNCH WITH NO CALLS ALIKE IS TOLD AS MAIN TELLS IT. Listing
+// again changes a brief only where calls read alike: with held and told calls
+// of one tool whose arguments read apart, the brief is byte for byte what main
+// rendered before the listing existed, for a cut-off kept capture and for the
+// copy whose harness ended its own run. No change of this package's telling
+// may move the literals without moving this test.
 //
-// Mutation: list a held call again beside every told call of its tool, read
-// alike or not, or render the group of calls listed again where it is empty,
-// and both cases go red.
+// Mutation: list a held call again beside every told call of its tool, or
+// render an empty group of calls listed again, and both cases go red.
 func TestAnOpenCodeRelaunchWithNoCallsAlikeIsToldAsMainTellsIt(t *testing.T) {
 	t.Parallel()
 	late := digested(numbered("slack_post", map[string]any{"channel": "C1", "text": "a late post"}, 3, 3))
@@ -648,10 +603,9 @@ func TestAnOpenCodeRelaunchWithNoCallsAlikeIsToldAsMainTellsIt(t *testing.T) {
 	}
 }
 
-// mainKeptOpenCode is the brief main hands a cut-off OpenCode capture whose
-// held call, call after its save point and late call name one tool with
-// arguments that read apart, as main told it before a held call was ever
-// listed again.
+// mainKeptOpenCode is main's brief, from before listing again existed, for a
+// cut-off OpenCode capture whose held call, call after the save and late call
+// name one tool with arguments that read apart.
 const mainKeptOpenCode = "## Your previous segment was cut off\n" +
 	"\n" +
 	"You were working on this task when its host was drained, so you stopped mid-step, before you " +
@@ -682,10 +636,9 @@ const mainKeptOpenCode = "## Your previous segment was cut off\n" +
 	"have, so check whether it did before making it again.\n" +
 	"- slack_post({\"channel\":\"C1\",\"text\":\"a late post\"}) → success"
 
-// mainInPlaceOpenCode is the brief main hands the copy an OpenCode job's box
-// holds where its harness ended its own run, whose held call and late call
-// name one tool with arguments that read apart, as main told it before a held
-// call was ever listed again.
+// mainInPlaceOpenCode is main's brief, from before listing again existed, for
+// an OpenCode copy whose harness ended its own run and whose held and late
+// calls name one tool with arguments that read apart.
 const mainInPlaceOpenCode = "## Your question was answered\n" +
 	"\n" +
 	"You stopped to ask: which branch?\n" +

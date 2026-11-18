@@ -14,33 +14,16 @@ import (
 
 // Prompt is what a change to a task asks of the seat it reached.
 //
-// # It tailors to the ROUTING REASON, not to the change kind
+// It tailors to the routing reason the parser stamped, not the change kind:
+// one assignment reaches the assignee, watchers and perhaps the unit lead,
+// each owing something different, and a prompt keyed on the kind tells all
+// three the weakest thing. The eighteen reasons collapse to three frames
+// (somebody is asking you, this is your work, this is activity you follow):
+// eighteen openers would be eighteen places for one sentence to drift.
 //
-// One assignment reaches the new assignee, several watchers and possibly the
-// unit lead, and it asks each of them for something different: the assignee
-// owns the work, a watcher is following it, and the lead is there only because
-// nobody else was named. A prompt keyed on the change kind would have to tell
-// all three the same thing, which in practice means telling all three the
-// weakest thing. The parser already decided which a copy is and stamped it, so
-// this reads that back rather than re-deriving a judgement the router made
-// with more information.
-//
-// # Eighteen reasons, THREE FRAMES
-//
-// The router distinguishes eighteen reasons because the routing rules
-// genuinely differ — a blocker's dependent and a task's watcher are reached by
-// different paths. What a RECIPIENT needs to be told collapses to three:
-// somebody is asking you, this is your work, or this is activity you follow. A
-// prompt with eighteen openers would be eighteen places for one sentence to
-// drift, and the reason itself is rendered in the header either way.
-//
-// # This prompt DOES name tools, and that is the exception rather than a lapse
-//
-// The tool-capabilities doctrine says the engine must not name tools, because
-// a deployed MCP server's names are not knowable by the engine. That reasoning
-// does not reach here: these tools are shipped by this build, registered by
-// this build under names this build chose, and present on every seat that can
-// read this notification at all.
+// It names tools, the exception to the tool-capabilities doctrine: this build
+// ships and registers them, under names it chose, on every seat that can read
+// this notification.
 type Prompt struct{}
 
 var _ notify.Prompt = Prompt{}
@@ -48,17 +31,11 @@ var _ notify.Prompt = Prompt{}
 // Source implements [notify.Prompt].
 func (Prompt) Source() string { return Source }
 
-// RequiresRecon implements [notify.Prompt].
-//
-// TRUE FOR A POINTER, FALSE FOR PROSE, and the split matters more than it
-// looks: the flag suppresses the turn-start relevance filtering AND the
-// personal-memory and episode recall that go with it, so setting it on a wake
-// that already carries what it means costs the seat its own context for
-// nothing.
-//
-// A COMMENT CARRIES ITS TEXT — the excerpt is what somebody actually said — so
-// the seat can begin reasoning from the trigger. A bare transition carries no
-// prose at all and is a pointer at a task the seat must read first.
+// RequiresRecon implements [notify.Prompt]: true for a pointer, false for
+// prose. The flag also suppresses personal-memory and episode recall, so
+// setting it on a wake that carries its meaning costs the seat its context for
+// nothing. A comment carries what somebody said; a bare transition is a
+// pointer at a task the seat must read first.
 func (Prompt) RequiresRecon(n notify.Inbound) bool {
 	if metaAddress(n.Metadata) == "" {
 		return false
@@ -67,16 +44,9 @@ func (Prompt) RequiresRecon(n notify.Inbound) bool {
 	case ChangeComment, ChangeCommentEdited:
 		return strings.TrimSpace(n.Body) == ""
 	case ChangePrioritised:
-		// NOT A POINTER. A `prioritised` wake names the task, the person
-		// who put it there and the position — so the seat can begin
-		// reasoning from the trigger, and turning the recon on would cost
-		// it the personal memory and episode recall that the flag
-		// suppresses, for a fetch of something it was already told.
-		//
-		// `prioritised` reaches this switch at all only because it is the
-		// one non-task wake that DOES carry a task key: the task at the
-		// top of the list. Without this arm the key alone would have
-		// turned it into a pointer.
+		// Not a pointer: it names the task, who put it there and the position.
+		// It reaches this switch only as the one non-task wake carrying a task
+		// key (the top of the list), which alone would make it a pointer.
 		return false
 	}
 	return true
@@ -87,30 +57,36 @@ func (Prompt) RequiresRecon(n notify.Inbound) bool {
 // at all.
 func (Prompt) SubjectIsLabel(notify.Inbound) bool { return false }
 
-// Addressed implements [notify.Prompt]: somebody is waiting on THIS seat.
-//
-// The eight primary reasons and no others. A watcher is following the task
-// rather than being asked about it, and a fallback is the task landing
-// somewhere rather than on somebody — a seat obliged to answer either would
-// comment on every field change in its unit's projects.
+// Addressed implements [notify.Prompt]: somebody is waiting on THIS seat —
+// the eight primary reasons only. A watcher follows the task and a fallback is
+// the task landing somewhere; a seat obliged to answer either would comment on
+// every field change in its unit's projects.
 func (Prompt) Addressed(n notify.Inbound) bool {
 	return Reason(n.Metadata[MetaVia]).Addressed()
 }
 
+var _ notify.LaneRule = Prompt{}
+
+// PersonWaits implements [notify.LaneRule]: a person's comment waits on a
+// reply; a task they filed, assigned or moved is the seat's work, which the
+// work pickup hands in its order (ADR-0159).
+func (Prompt) PersonWaits(n notify.Inbound) bool {
+	switch ChangeKind(n.EventType) {
+	case ChangeComment, ChangeCommentEdited:
+		return strings.TrimSpace(n.Body) != ""
+	}
+	return false
+}
+
 // Owes is the chat surface a wake OBLIGES its seat to post on, or "".
 //
-// ONE WAKE AND ONE ONLY: the answer to a decision whose asker said it would
-// report the outcome somewhere ([Decision.Inform]), reaching that asker under
-// `answered`. Every other copy of the same record — a watcher's, the item's
-// assignee's — carries the inform in its metadata too, and owes nothing,
-// because the promise was the asker's.
-//
-// A SURFACE, never a channel: the engine enforces the obligation by holding
-// the turn open until a tool on that surface has delivered
-// ([turn.DeliveredTo]), and a tool reports the surface it reached rather than
-// the channel it posted in — so the channel is the prompt's to name and the
-// asker's to honour. Read from the metadata the parser stamped, so the parser
-// ([Parser.Parse]) and the partition key below answer from one rule.
+// Only the answer to a decision whose asker promised to report the outcome
+// ([Decision.Inform]), reaching that asker under `answered`; every other copy
+// carries the inform too and owes nothing, since the promise was the asker's.
+// A surface, never a channel: the engine holds the turn open until a tool on
+// that surface delivers ([turn.DeliveredTo]), and a tool reports the surface,
+// not the channel. Read from the parser's metadata so [Parser.Parse] and the
+// partition key answer from one rule.
 func Owes(metadata map[string]string) string {
 	if Reason(metadata[MetaVia]) != ReasonAnswered {
 		return ""
@@ -129,14 +105,10 @@ func Owes(metadata map[string]string) string {
 const owedPartition = "#owes:"
 
 // PartitionKey implements [notify.Prompt]: the task is the conversation, and
-// a wake that owes a chat surface is a finer cut of it.
-//
-// THE FINER CUT IS WHAT KEEPS AN OBLIGATION WHOLE THROUGH A MERGE. A turn owes
-// at most ONE surface ([turn.Reply] names one), and a coalesced trigger is one
-// turn: two answers on one item informing two different surfaces, merged,
-// would have had to drop one of the two promises. Partitioned apart, every
-// partition owes one surface or none, and the merge carries it
-// ([notify.Coalesce]).
+// a wake that owes a chat surface is a finer cut of it. The cut keeps an
+// obligation whole through a merge: a turn owes at most one surface
+// ([turn.Reply]), so two answers informing two surfaces, coalesced, would drop
+// a promise; apart, each partition owes one or none ([notify.Coalesce]).
 func (p Prompt) PartitionKey(metadata map[string]string, subject string) string {
 	key := p.ConversationIdentity(metadata, subject)
 	if surface := Owes(metadata); surface != "" && key != "" {
@@ -146,47 +118,22 @@ func (p Prompt) PartitionKey(metadata map[string]string, subject string) string 
 }
 
 // ConversationIdentity implements [notify.Prompt]: the TASK is the
-// conversation, and it is named by its ID. The partition key above is this,
-// or a finer cut of it — the invariant [notify.Prompt.ConversationIdentity]
-// requires.
+// conversation, named `task:<id>`. The partition key is this or a finer cut
+// of it, as [notify.Prompt.ConversationIdentity] requires.
 //
-// # The id and never the key
-//
-// A key is an ADDRESS — what a person pastes into chat and types into a tool
-// call — and an address is not one task for the life of the deployment:
-//
-//   - TWO TASKS CAN HOLD ONE KEY. A counter restored beside newer work mints
-//     numbers those tasks already hold, and the applier flags every holder but
-//     the claimant `key_collision` rather than refuse a record the broker
-//     committed. Keyed on the key, wakes about the two coalesced into ONE
-//     digest and their turns shared ONE ledger, so a seat woken about the
-//     duplicate was handed the claimant's thread as its own history.
-//   - A KEY MOVES. A cross-project move re-keys the task (ENG-7 becomes OPS-3),
-//     and keyed on the key its conversation started over under the new one:
-//     the ledger of every turn the seat had taken on it was filed where its
-//     next turn never looked, and an executor parked on a question asked
-//     from the task could not be matched by the answer posted on it.
-//
-// The id is the one name a task never shares and never gives up. The key was
-// chosen once so "a chat thread about ENG-42 and the tracker activity on it
-// land in one ledger" — which never happened: the spine namespaces every
-// source-local key ([notify.Namespaced]), so `work:ENG-42` and a chat
-// thread's key were never one string.
-//
-// `task:<id>`, IN THE GRAMMAR A NON-TASK WAKE'S OBJECT ALREADY USES, so the two
-// can never collide, and a task-subject wake keys exactly as its own object
-// would. The id is the one the WAKE points at ([Snapshot.TaskID]) rather than
-// the subject's: a `prioritised` wake is written on a person and is about the
-// task at the top of their list, so it joins that task's conversation, as it
-// did while both keyed on the task's key.
+// The id, never the key: a key is an address. Two tasks can hold one (a
+// restored counter re-mints numbers, flagged `key_collision`), so their wakes
+// would share one digest and ledger; and a cross-project move re-keys a task,
+// orphaning its ledger and any question parked on it. A non-task wake's
+// object uses the same `<object>:<id>` grammar, so the two never collide. The
+// id is the one the wake points at ([Snapshot.TaskID]), so a `prioritised`
+// wake, written on a person, joins the task at the top of their list.
 func (Prompt) ConversationIdentity(metadata map[string]string, _ string) string {
 	if id := metadata[MetaTaskID]; id != "" {
 		return ItemConversation(id)
 	}
-	// A NON-TASK WAKE KEYS ON ITS OWN OBJECT. Falling through to an empty
-	// key would put every person-scoped wake in the company into ONE
-	// ledger — a conversation key is what separates threads, and a shared
-	// empty one merges them all.
+	// A non-task wake keys on its own object: a shared empty key would merge
+	// every person-scoped wake in the company into one ledger.
 	if id := metadata[MetaObjectID]; id != "" {
 		return metadata[MetaObject] + ":" + id
 	}
@@ -194,12 +141,9 @@ func (Prompt) ConversationIdentity(metadata map[string]string, _ string) string 
 }
 
 // WorkItem is the task a wake is about, which is the item the turn it wakes
-// is charged to.
-//
-// THE TASK ID IS THE IDENTITY, read off [MetaTaskID] — the snapshot's task,
-// which the parser writes only when the wake is genuinely about one. A wake
-// about a person's own list names no task and so names no item: charging that
-// turn to the object id would charge it to a handle.
+// is charged to: [MetaTaskID], which the parser writes only when the wake is
+// about a task. A wake about a person's own list names no item, since
+// charging it to the object id would charge it to a handle.
 func (Prompt) WorkItem(metadata map[string]string) (types.WorkItem, bool) {
 	id := metadata[MetaTaskID]
 	if id == "" {
@@ -211,40 +155,28 @@ func (Prompt) WorkItem(metadata map[string]string) (types.WorkItem, bool) {
 	}, true
 }
 
-// WakesActor implements [notify.Prompt].
-//
-// ONE REASON DOES, and it is the one the router already names: a person who
-// closed a blocker learns from this that the task it was blocking is now
-// workable, which is a CONSEQUENCE of their own write rather than a repeat of
-// it. Every other change here is something the actor already knows.
-//
-// READ OFF THE ROUTING REASON this recipient's copy carries ([MetaVia]), never
-// the event type: the unblocked notice to the actor and every other copy of the
-// same status change share one event type (`status`), and only the reason the
-// parser stamped per recipient tells them apart — the reason [Route] already
-// let through by the same rule ([Reason.WakesActor]).
+// WakesActor implements [notify.Prompt]: only for the reason that tells an
+// actor a consequence of their own write, a closed blocker's task becoming
+// workable ([Reason.WakesActor], the rule [Route] lets it through by). Read
+// off this copy's routing reason ([MetaVia]), never the event type: every
+// copy of that status change shares the type `status`.
 func (Prompt) WakesActor(n notify.Inbound) bool {
 	return Reason(n.Metadata[MetaVia]).WakesActor()
 }
 
-// Provenance implements [notify.Prompt]: what the parser stated — the comment,
-// the description or the change note the body is, by the change's author
-// ([notify.StatedHosted]) — and, for a wake built without the parser, the
-// surface the change kind produces. HOSTED, because only company principals
-// write the engine's own tracker: a change whose record names nobody is read
-// as a colleague's, as every other door this text comes through reads it
+// Provenance implements [notify.Prompt]: what the parser stated (the comment,
+// description or change note, by the change's author; [notify.StatedHosted]),
+// or for a wake built without the parser, the surface its change kind
+// produces. Hosted, because only company principals write the engine's own
+// tracker, so a record naming nobody reads as a colleague's
 // ([provenance.TrustForHosted]).
 func (Prompt) Provenance(n notify.Inbound, parties notify.Parties) notify.Provenance {
 	return notify.StatedHosted(n, parties, ExcerptSource(ChangeKind(n.EventType)))
 }
 
 // DigestBody implements [notify.Prompt]: comments keep their text, field and
-// status changes collapse to their lead.
-//
-// A comment is something a person SAID and each one is different. A field
-// change's body is a delta line the digest's own lead already states, so five
-// of them in a coalesced trigger is the same sentence five times, burying the
-// comment underneath.
+// status changes collapse to their lead. Each comment differs; a field
+// change's body repeats the digest's lead, and five of them bury the comment.
 func (Prompt) DigestBody(eventType, body string) string {
 	switch ChangeKind(eventType) {
 	case ChangeComment, ChangeCommentEdited:
@@ -256,14 +188,10 @@ func (Prompt) DigestBody(eventType, body string) string {
 // Build implements [notify.Prompt].
 func (Prompt) Build(n notify.Inbound, parties notify.Parties) string {
 	meta := n.Metadata
-	// THE OBJECT DECIDES THE FRAME, before the reason does. Every opener
-	// below says "A task…", the header is labelled **Task:** and the
-	// context block sends the reader to get_work_item — none of which is
-	// true of a person's priority list.
-	//
-	// A TASK IS THE DEFAULT FRAME: every other object kind names itself in
-	// `object`, which the parser always sets — so a wake built without the
-	// key, by hand rather than by the parser, renders as a task.
+	// The object decides the frame before the reason: the task frame's
+	// openers, **Task:** header and get_work_item pointer are untrue of a
+	// priority list. A task is the default, since the parser always sets
+	// `object`; a hand-built wake without it renders as a task.
 	if kind := ObjectKind(meta[MetaObject]); kind != "" && kind != KindTask {
 		return buildObjectPrompt(kind, n, parties)
 	}
@@ -283,31 +211,19 @@ func (Prompt) Build(n notify.Inbound, parties notify.Parties) string {
 }
 
 // isFallback reports a reason that reached this seat because nobody else was
-// named, rather than because of anything about them.
-//
-// ONE REASON, and it is named rather than derived from the candidate's own
-// FallbackOnly flag: the flag is gone by the time a prompt runs — routing
-// resolved it and stamped what survived — so the prompt reads the reason it
-// was told, which is the only thing it has.
+// named, rather than because of anything about them. Named, not derived from
+// the candidate's FallbackOnly flag, which routing has resolved before a
+// prompt runs.
 func isFallback(reason Reason) bool { return reason == ReasonLeadFallback }
 
 // promptOpener writes the one sentence that says why this seat is reading
 // this, and — for the reasons that are ABOUT something somebody said — the
 // text itself.
 //
-// ONE SWITCH, and the shape is deliberate. This was three functions chosen by
-// [Reason.Primary], and that split put six arms where their own reason could
-// never reach them: `blocking` was written in the "following" half while
-// Primary sends it to the "owned" one, and `unblocked` and `collaborator` the
-// other way round — so a blocker's assignee read "a task you are named on
-// changed" and somebody whose work had just become startable read "a task you
-// are watching changed". Each arm looked right beside the others in its own
-// function, and nothing could see the pairing was wrong.
-//
-// EVERY REASON HAS AN ARM, and the default is the honest sentence for one a
-// newer build routed that this one does not know: a rolling upgrade puts such
-// a wake on the wire, and "a task you are named on changed" is true of every
-// reason there is.
+// One switch, not one function per [Reason.Primary] half: split, arms sat
+// where their reason could never reach them and nothing showed the mispairing.
+// The default is for a reason a newer peer routed during a rolling upgrade:
+// "a task you are named on changed" is true of every reason.
 func promptOpener(b *strings.Builder, n notify.Inbound, parties notify.Parties,
 	reason Reason) {
 
@@ -335,10 +251,9 @@ func promptOpener(b *strings.Builder, n notify.Inbound, parties notify.Parties,
 		case ChangeRemoved:
 			b.WriteString("A task you were assigned to was removed.")
 		default:
-			// HANDED TO YOU BY WHATEVER WRITE MOVED THE ASSIGNEE, which the
-			// record's one kind does not say ([MetaMoved]): a hand-off
-			// written with a status is a `status` record, and a
-			// reassertion to the seat that holds the task hands it nothing.
+			// Read off [MetaMoved], not the record's kind: a hand-off written
+			// with a status is a `status` record, and a reassertion to the
+			// holder hands it nothing.
 			if slices.Contains(metaMoved(n.Metadata), ChangeAssignee) {
 				b.WriteString("A task was assigned to you.")
 			} else {
@@ -353,10 +268,8 @@ func promptOpener(b *strings.Builder, n notify.Inbound, parties notify.Parties,
 		b.WriteString("A task you are waiting on is now workable — every " +
 			"blocker on it has finished.")
 	case ReasonBlocking:
-		// THE BLOCKER'S OWN ASSIGNEE, and the sentence has to say whose
-		// problem it is: this seat holds the task somebody else is now
-		// waiting for, which is a call on THEIR time rather than news
-		// about somebody else's work.
+		// The blocker's own assignee: say that somebody waits on this seat's
+		// task, a call on its time rather than news.
 		b.WriteString("Somebody's work now waits on a task of yours.")
 	case ReasonRoutedTo:
 		b.WriteString("Work routes to your team now: a task was pointed at it.")
@@ -371,9 +284,8 @@ func promptOpener(b *strings.Builder, n notify.Inbound, parties notify.Parties,
 	case ReasonUnwatched:
 		b.WriteString("Somebody removed your watch on a task.")
 	case ReasonPurged:
-		// NOT "changed". The task and everything on it were destroyed,
-		// and a reader who opens this expecting an edit goes looking for
-		// what moved — on a row that is gone.
+		// Not "changed": a reader expecting an edit looks for what moved, on a
+		// row that is gone.
 		b.WriteString("A task in your project was permanently destroyed.")
 	case ReasonLeadFallback:
 		b.WriteString("A task in your team's project has activity and nobody " +
@@ -382,13 +294,10 @@ func promptOpener(b *strings.Builder, n notify.Inbound, parties notify.Parties,
 		b.WriteString("A task you are named on changed.")
 	}
 	promptHeader(b, n, parties)
-	// A COMMENT IS QUOTED WHATEVER BROUGHT IT HERE. The four reasons above
-	// are ABOUT something somebody said, but a remark reaches a task's
-	// assignee, reporter and watchers too, and to them the change IS the
-	// remark: [promptChanged] leaves a comment's body to this opener, and
-	// [Prompt.RequiresRecon] reports a comment wake as carrying its text —
-	// so a copy that rendered only "a comment was added" sent its seat to
-	// read the task for words the trigger was built to hand it.
+	// A comment is quoted whatever brought it here: to an assignee, reporter
+	// or watcher the change IS the remark. [promptChanged] leaves a comment's
+	// body to this opener and [Prompt.RequiresRecon] reports it as carried,
+	// so dropping it would send the seat to read the task for it.
 	switch ChangeKind(n.EventType) {
 	case ChangeComment, ChangeCommentEdited:
 		quoted = true
@@ -406,18 +315,11 @@ func promptOpener(b *strings.Builder, n notify.Inbound, parties notify.Parties,
 // promptDecision renders a structured ask to the person asked, and the choice
 // to the person who asked.
 //
-// THE ANSWERING CALL IS WRITTEN OUT WHOLE, ids included, because every part
-// of it is something a seat otherwise has to go and find: the ask's comment id
-// is in a thread it would read for no other reason, and an option's id is
-// typed back exactly or refused. A seat told "answer with `choice`" and not
-// shown the call spends a round reading the item to learn what it was already
-// holding.
-//
-// ONLY FOR THE TWO REASONS THE DECISION IS ADDRESSED TO. A watcher on the item
-// sees the question in the comment like any other remark; the options are for
-// the person who owes the answer, and the choice for the person waiting on it.
-// A decision that does not decode renders nothing rather than half a block —
-// the comment above still carries what was said.
+// The answering call is written out whole, ids included: the ask's comment id
+// sits in a thread the seat has no other reason to read, and an option id is
+// typed back exactly or refused. Only for the two reasons the decision is
+// addressed to; a watcher sees the question as a comment. An undecodable
+// decision renders nothing rather than half a block.
 func promptDecision(b *strings.Builder, meta map[string]string, reason Reason) {
 	switch reason {
 	case ReasonAsked:
@@ -473,10 +375,9 @@ func promptAskedDecision(b *strings.Builder, meta map[string]string, d decision.
 		b.WriteString("**Where the outcome goes:** the asker will report it in " +
 			d.Inform.Channel + " on " + string(d.Inform.Surface) + ".\n")
 	}
-	// THE RECOMMENDED OPTION IN THE EXAMPLE, because it is the one the
-	// asker thought most likely — and the first when there is none. The
-	// sentence after the call says it is an example to change, and the
-	// list of ids beside it is what the choice is checked against.
+	// The recommended option in the example, as the asker's likeliest, else
+	// the first; the text after the call says to change it, and the id list
+	// beside it is what the choice is checked against.
 	choice := d.Recommended
 	if choice == "" {
 		choice = d.Options[0].ID
@@ -505,11 +406,9 @@ type answeringCall struct {
 	Body    string `json:"body"`
 }
 
-// promptAnsweredDecision is the choice block the asker reads.
-//
-// IT SAYS WHAT HAPPENS NEXT, because the asker is the one that stopped: the
-// escalation guidance tells a seat to end its turn blocked on the branch it
-// asked about, and this wake is what that branch was waiting for.
+// promptAnsweredDecision is the choice block the asker reads. It says what
+// happens next: the escalation guidance ended the asker's turn blocked on this
+// branch, and this wake is what it was waiting for.
 func promptAnsweredDecision(b *strings.Builder, meta map[string]string) {
 	var option decision.Option
 	chose := meta[MetaChoice] != "" &&
@@ -560,25 +459,19 @@ func promptHeader(b *strings.Builder, n notify.Inbound, parties notify.Parties) 
 		b.WriteString("\n**Assignee:** " + assignee)
 	}
 	if meta[MetaLate] == "true" {
-		// WHY THEY ARE HEARING THIS NOW. A repair reaches somebody hours
-		// after the change, and a reader who cannot tell that from a
-		// fresh event re-reads a thread looking for what just moved.
+		// A repair arrives hours after the change; unmarked, it sends the
+		// reader through the thread for what just moved.
 		b.WriteString("\n**Note:** this notice is a repair — the change " +
 			"itself happened earlier and the wake for it did not reach you.")
 	}
 	b.WriteString("\n")
 }
 
-// changeLead names what happened in one line.
-//
-// Worth stating plainly because the kind alone does not: a seat that had to
-// infer "assigned to you" from a delta map would guess.
-//
-// EVERY KIND OF CHANGE THE WRITE MADE, read off [MetaMoved] rather than the
-// record's one kind: "assign it to ana and set it to todo" is a `status`
-// record, and its line used to say only that the status changed. The record's
-// own kind leads, where its field moved or it names an event of its own (a
-// move, a checklist), and the write's other moves follow it.
+// changeLead names what happened in one line, since a seat inferring
+// "assigned to you" from a delta map would guess. It names every kind of
+// change the write made ([MetaMoved]), not only the record's one kind ("assign
+// it to ana and set it to todo" is a `status` record): the record's kind leads
+// where its field moved or it names its own event, and the others follow.
 func changeLead(meta map[string]string, actor string) string {
 	by := ""
 	if actor != "" {
@@ -586,10 +479,9 @@ func changeLead(meta map[string]string, actor string) string {
 	}
 	kind, moved := ChangeKind(meta[MetaChangeKind]), metaMoved(meta)
 	if kind.MovedFields() != nil && !slices.Contains(moved, kind) {
-		// A FIELD KIND WHOSE FIELD DID NOT MOVE: a reassertion beside the
-		// move the write made, which is what happened — another kind's, or
-		// an edit no kind names (a priority, a date, a custom value). A
-		// record that moved nothing at all keeps its kind's own line.
+		// A field kind whose field did not move is a reassertion beside the
+		// write's real move, another kind's or an unnamed edit (a priority, a
+		// date). A record that moved nothing keeps its kind's own line.
 		switch {
 		case len(moved) > 0:
 			kind = moved[0]
@@ -696,8 +588,7 @@ func kindLead(kind ChangeKind, by string) string {
 		return "A pull request this task waits on was merged or closed. Update the task: " +
 			"its status, what is left, or what follows."
 	case ChangePurged:
-		// THE ONE WITH NO INVERSE, and the line says so: every other kind
-		// here describes something a reader could undo or answer.
+		// The one with no inverse, and the line says so.
 		return "The task and everything on it were permanently destroyed" +
 			by + ". This cannot be undone."
 	}
@@ -705,16 +596,9 @@ func kindLead(kind ChangeKind, by string) string {
 }
 
 // promptChanged renders the deltas the record already carries, and the excerpt
-// beside them.
-//
-// NOT ON A COMMENT, whose body is the comment itself and is rendered by the
-// asked opener — repeating it under a "What changed" heading reads as two
-// different things having happened.
-//
-// THE DELTAS FIRST, THE EXCERPT AFTER. The excerpt is prose about the change
-// (a purge's reason, a new task's description); the deltas are the change. A
-// seat reads the heading for what moved and the paragraph for why, which is
-// the order it would ask the two questions in.
+// beside them. Not on a comment, whose body the opener renders; repeating it
+// here reads as two things having happened. Deltas first: they are what moved,
+// and the excerpt (a purge's reason, a description) is why.
 func promptChanged(b *strings.Builder, n notify.Inbound) {
 	switch ChangeKind(n.EventType) {
 	case ChangeComment, ChangeCommentEdited:
@@ -737,37 +621,16 @@ func promptChanged(b *strings.Builder, n notify.Inbound) {
 }
 
 // changedText is one `field: from → to` line per delta, in the engine's own
-// field names.
+// field names: without it the seat must spend a `get_work_item` round, which
+// cannot recover the FROM side.
 //
-// WHY THIS EXISTS AT ALL. [Notify.Fields] is documented as the deltas a card
-// renders and no card rendered it: the wake said "The status changed by ada."
-// and stopped, so the seat's only route to the value was a `get_work_item`
-// round — which cannot recover the side it moved FROM, because that side is
-// nowhere on the task. A wake that names the kind and not the move is the
-// same failure the history rows were fixed for, one surface along.
-//
-// THE STORED TEXT, NOT A RENDERING. `deltas.go` says a value's presentation
-// belongs to a surface that knows the reader's zone and the company's live
-// vocabulary; this surface knows neither — a prompt is assembled on whichever
-// node won the delivery — and a model reads `in_review` and a whole RFC3339
-// instant perfectly well. What it must never do is invent a label, because
-// the seat's own tools answer in these same names.
-//
-// SORTED BY FIELD NAME, because a map's range order differs between
-// iterations: two nodes rendering one record, or one node rendering a
-// redelivery of it, would otherwise build two different prompts from one
-// change — and a prompt is kept in the event store exactly as the model saw
-// it, so the difference is permanent and unexplainable.
-//
-// BOUNDED BY CONSTRUCTION: [MaxDeltas] caps the entries at the write, a value
-// side is whole only up to [MaxDeltaValue] and described by its size past it,
-// and a set's entry names only what joined and what left — so the block cannot
-// outgrow its prompt and nothing here needs a cut of its own. Fields the card
-// had no room for are counted on a line of their own.
-//
-// A SET IS ITS MOVES — "watchers: added ada, bob; removed carol" — because
-// that is what the commit changed, and a model handed both whole sides has to
-// diff them itself to find it.
+// The stored text, not a rendering: this node knows neither the reader's zone
+// nor the live vocabulary (`deltas.go`), and an invented label would not match
+// the seat's own tools. Sorted by field name, since a prompt is stored as the
+// model saw it and two renderings of one record must agree. Bounded at the
+// write ([MaxDeltas], [MaxDeltaValue]), so no cut is needed here; fields the
+// card omitted are counted. A set is its moves ("watchers: added ada; removed
+// carol"), so the model need not diff two whole sides.
 func changedText(fields map[string]Delta, omitted int) string {
 	if len(fields) == 0 && omitted == 0 {
 		return ""
@@ -791,9 +654,8 @@ func changedText(fields map[string]Delta, omitted int) string {
 			b.WriteString("- " + name + ": " + strings.Join(moves, "; ") + "\n")
 			continue
 		}
-		// AN EMPTY SIDE IS AN EM DASH, which is what every other surface
-		// draws for one: "assignee:  → ada" reads as a rendering fault
-		// where "assignee: — → ada" reads as an assignment.
+		// An empty side is an em dash, as on every other surface:
+		// "assignee:  → ada" reads as a rendering fault.
 		b.WriteString("- " + name + ": " + orDash(delta.From) + " → " +
 			orDash(delta.To) + "\n")
 	}
@@ -813,22 +675,17 @@ func orDash(value string) string {
 
 // metaAddress is the reference that opens the task a wake points at: its key,
 // or its id where another task claimed the key first ([ItemAddress]). Empty for
-// a wake that points at no task.
-//
-// EVERY REFERENCE A PROMPT HANDS A SEAT IS BUILT HERE, because a seat acts on
-// what it is shown: a wake about the duplicate of a key that named the key
-// sent the seat to read — and comment on, and reassign — the task that
-// claimed it.
+// a wake that points at no task. Every reference a prompt hands a seat is built
+// here, since a seat acts on what it is shown and a collided key opens the
+// claimant.
 func metaAddress(meta map[string]string) string {
 	return ItemAddress(meta[MetaTaskID], meta[MetaTaskKey],
 		meta[MetaKeyCollision] == "true")
 }
 
 // promptCollision says, under the task's own name, why a wake names it by its
-// id: its key is one another task claimed first, and opens that task.
-//
-// SAID RATHER THAN LEFT TO THE ID, because a seat that sees an id where it is
-// used to a key, and the key in the deltas or the title, reaches for the key.
+// id: its key opens another task that claimed it first. Said outright, since a
+// seat seeing an id where it expects a key, with the key nearby, reaches for it.
 func promptCollision(b *strings.Builder, meta map[string]string) {
 	if meta[MetaKeyCollision] != "true" || meta[MetaTaskKey] == "" {
 		return
@@ -847,10 +704,8 @@ func promptContext(b *strings.Builder, meta map[string]string) {
 	}
 	switch ChangeKind(meta[MetaChangeKind]) {
 	case ChangeRemoved, ChangePurged:
-		// NOTHING TO FETCH. Sending a seat to read a task that no longer
-		// exists costs it a round and a failed tool call — and on a
-		// purge the row is not in the trash either, so the tool answers
-		// `not_found` rather than offering a restore.
+		// Nothing to fetch: the read would fail, and a purged row is not in the
+		// trash, so the tool answers `not_found` with no restore.
 		return
 	}
 	b.WriteString("\n## Get full context" +
@@ -862,13 +717,10 @@ func promptContext(b *strings.Builder, meta map[string]string) {
 	}
 }
 
-// promptWhyYou is the delegate / take it / escalate decision.
-//
-// REACHED ONLY FROM A FALLBACK ROUTING. A directed routing carries its own
-// signal — being assigned or named says what is wanted — while a fallback says
-// only that nobody else here was available, which is a fact about the org
-// chart rather than about the work. Left unexplained, a lead reads it as "this
-// is mine" and quietly absorbs every unowned task in their project.
+// promptWhyYou is the delegate / take it / escalate decision, for a fallback
+// routing only: a directed one says what is wanted, while a fallback says only
+// that nobody else was available, and unexplained a lead absorbs every unowned
+// task in their project.
 func promptWhyYou(b *strings.Builder, project string) {
 	where := "this project"
 	if project != "" {
@@ -889,24 +741,15 @@ func promptWhyYou(b *strings.Builder, project string) {
 		CommentOnWorkTool + "` and `asks: true`, or reassign it to them.\n")
 }
 
-// promptHandling is the mechanics block.
-//
-// Tracker conventions only — what a shared multi-agent surface needs that a
-// model would not assume: who stays out when nobody asked, the status and
-// assignee that tell everyone the work started, one summary rather than a
-// running log, and how a seat hands back a task it holds.
-// Role-specific behaviour — ownership, tone, the quality bar — belongs in the
-// role's behavioural guidelines, and repeating it here would put one team's
-// standards on every seat. Generic diligence (read the comments first, ask
-// rather than guess) is the model's own and is not restated.
+// promptHandling is the mechanics block: tracker conventions a model would not
+// assume on a shared surface (who stays out, the status and assignee that show
+// work started, one summary not a running log, how to hand a task back).
+// Role-specific behaviour belongs in the role's guidelines, and generic
+// diligence is the model's own.
 func promptHandling(b *strings.Builder, meta map[string]string, reason Reason) {
 	if ChangeKind(meta[MetaChangeKind]) == ChangePurged {
-		// A DIFFERENT INSTRUCTION FROM A REMOVAL, because the remedies
-		// differ: a removed task is in the trash and `restore_task`
-		// brings it back, and a purged one is gone from every data node
-		// with no gesture that returns it. Telling a lead to "record any
-		// progress worth keeping" is right in both; telling them the
-		// task can come back is right in only one.
+		// Not a removal's instruction: a removed task is in the trash and
+		// `restore_task` returns it; a purged one is gone from every data node.
 		b.WriteString("\n## How to handle this" +
 			"\nThe task, its comments, its history and its turn records were" +
 			" destroyed on every node, and nothing restores them. Stop any" +
@@ -924,19 +767,15 @@ func promptHandling(b *strings.Builder, meta map[string]string, reason Reason) {
 		return
 	}
 	if isFallback(reason) {
-		// The delegate / take it / escalate block above already IS this
-		// seat's instruction, and a second list under a second heading
-		// makes a lead read two sets of steps and follow neither.
+		// The fallback block above is this seat's instruction; a second list
+		// makes a lead follow neither.
 		return
 	}
 
 	b.WriteString("\n## How to handle this")
 	if !reason.Addressed() {
-		// STAYING OUT IS FOR A WAKE NOBODY IS WAITING ON. On an addressed
-		// one the delivery check refuses a silent end, so telling that
-		// seat to stay silent — because the task, as it usually is on a
-		// question or a mention, is a colleague's — is an instruction the
-		// engine sends straight back for a second round.
+		// Staying out is for a wake nobody waits on: on an addressed one the
+		// delivery check refuses a silent end and sends it back for a second round.
 		b.WriteString("\n- If its assignee is neither you nor on your team," +
 			" stay silent unless you hold information that blocks their" +
 			" decision.")
@@ -950,15 +789,10 @@ func promptHandling(b *strings.Builder, meta map[string]string, reason Reason) {
 		" you are done. Other people read this surface: no running" +
 		" commentary, acknowledgements or agreement-only comments.")
 	if holdsTask(reason) {
-		// THE DECLINE GESTURE, AND ONLY FOR THE TASK'S HOLDER. That an
-		// addressed wake may not end in silence is the decoder's refusal,
-		// and that a decline names the right owner on the surface the ask
-		// came from is the executor's contract, so neither is restated;
-		// what only the tracker knows is that a task the seat HOLDS is
-		// declined by moving it. Every other reason is about a
-		// task that is ordinarily somebody else's — the person asked,
-		// mentioned or answered, the reporter, a thread participant — and
-		// telling that seat to reassign it hands a colleague's work away.
+		// The decline gesture, for the task's holder only: the decoder refuses a
+		// silent end and the executor's contract names the owner, so only the
+		// tracker's part is said. Other reasons are about a colleague's task,
+		// which reassigning would hand away.
 		b.WriteString("\n- If the work is not yours, reassign it to the" +
 			" right teammate — your manager if you cannot tell.")
 	}
@@ -966,22 +800,16 @@ func promptHandling(b *strings.Builder, meta map[string]string, reason Reason) {
 }
 
 // holdsTask reports the reasons whose seat holds the task the wake is about,
-// which are the two a task-level decline — reassigning it — is open to.
-//
-// `blocking` IS ONE: its only handle is the blocker's own assignee, and the
-// wake is written on the blocker, so the task in the prompt is this seat's.
-// Both are addressed ([Reason.Addressed]); nothing outside that set is offered
-// a decline, because a seat nobody is waiting on has nothing to decline.
+// the only ones a decline by reassignment is open to. `blocking` is one: the
+// wake is written on the blocker and goes to its assignee. Both are
+// [Reason.Addressed]; a seat nobody waits on has nothing to decline.
 func holdsTask(reason Reason) bool {
 	return reason == ReasonAssignee || reason == ReasonBlocking
 }
 
-// promptSender renders the actor as a colleague.
-//
-// Through the party registry first, because the actor is a HANDLE here and a
-// handle is not what a person is called — a prompt rendering "eng" where a
-// reader expects "Engineer (eng)" makes the roster and the notification look
-// like two different companies.
+// promptSender renders the actor as a colleague: through the party registry
+// first, since the actor is a handle ("eng") and the roster calls them
+// "Engineer (eng)".
 func promptSender(n notify.Inbound, parties notify.Parties) string {
 	actor := n.Metadata[notify.ActorField]
 	if actor == "" {

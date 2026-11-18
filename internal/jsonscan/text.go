@@ -59,6 +59,18 @@ func (s *Scanner) Read(p []byte) (int, error) {
 	return 0, io.EOF
 }
 
+// InvalidUTF8 reports whether the text Read has handed of the current Name or String held a byte that begins
+// no UTF-8 character, which Read hands as U+FFFD: once Read has answered io.EOF, utf8.Valid of the text as
+// written is false exactly where this is true. An escape, a lone surrogate's among them, is no such byte, nor
+// a U+FFFD written as such. False at every other token, and for text passed over unread.
+//
+// THE DECODED TEXT CANNOT SAY SO: a byte that begins no character, a U+FFFD written as such and an escape
+// that stands for one all read as the same U+FFFD, so a reader whose rule turns on the bytes as written (the
+// thread layer's skill listing, whose long name that is no UTF-8 no reader can measure) asks here.
+func (s *Scanner) InvalidUTF8() bool {
+	return s.invalid
+}
+
 // passText passes over what of the current token's text is still unread, validating it.
 func (s *Scanner) passText() error {
 	switch s.text {
@@ -142,6 +154,7 @@ func (s *Scanner) readString(p []byte) (int, error) {
 				}
 				n += copy(p[n:], replacement)
 				s.pos++
+				s.invalid = true
 				continue
 			}
 			if width > len(p)-n {

@@ -269,6 +269,179 @@
 // watch acknowledges nothing: what that pull keeps standing ahead of its
 // reader holds nothing back from anybody.
 //
+// # A message too large for a leader's reply is read raw
+//
+// A stream leader's read of one message (STREAM.MSG.GET, jsapi.Leader; a
+// domain log allows no direct get) answers in JSON with the message
+// base64-encoded inside it, a third larger than the message
+// (jsapi.ReplyBytes): about 11.2 MB for a record of
+// statelog.MaxTransportRecordBytes. A leaf's server closes its WHOLE link on
+// any message past its max_payload, the transport's eight mebibytes
+// (nats-server v2.15.2, leafnode.go's processLeafMsgArgs →
+// maxPayloadViolation), cutting off every lease and mailbox the node holds
+// across it, and a retry over the redialled link closes it again. So a
+// connection across a leaf's link (link.leaf) reads such a message RAW, from
+// a consumer's delivery, which carries it as stored ([copyRead]), and only
+// such a message: one whose reply the leaf's server carries is the leader's
+// read, given its reply's arrival at the link's pace ([Queue.leaderCarries],
+// jsapi.Leader.Carrying). Every other connection keeps the leader's read:
+// nothing else it crosses holds a message to a max_payload (nats-server
+// checks one only on a client's publish and on a leaf's message), and there
+// the leader's read is one request where a copy read is a stream's info plus
+// consumers the metadata leader makes and deletes — about six metadata
+// proposals on a state log's write path ([DomainLog.LastSeq]), failing while
+// the metadata group elects a leader.
+//
+// A DOMAIN LOG decides at open ([DomainLog.copies]), from whether a leaf's
+// link stands between and its records may be that large. Its LastSeq reads
+// the subject's newest from its headers alone ([copyRead.last]), no record
+// crossing; its At finds what the position holds from its headers
+// ([copyRead.at]), then takes the leader's read where the leaf's server
+// carries that record's reply, given its arrival ([DomainLog.replyArrival]),
+// and otherwise reads it raw ([copyRead.message]). Elsewhere the leader's read
+// is given its reply's arrival beyond the read term and the lookup ceiling
+// ([DomainLog.At], jsprovision.Timing.Arriving). No node opens a state log
+// across a leaf's link today: every log is opened by a data node
+// (internal/engine's startCore), and a node without `data` is the one that
+// joins the members as a leaf.
+//
+// FROM THE LEADER'S OWN COPY. A replica behind the leader can read an entry
+// that exists as gone and one a peer dropped as held, and cannot say how far
+// behind it is (filestore.go's LoadNextMsg answers sequence 0 for a match it
+// did not find, so "nothing yet" and "nothing any more" look alike). So a
+// copy read asks which server leads the stream (jsapi.Leader.Leading) and
+// keeps a consumer — one replica, in memory, acknowledging nothing
+// ([Queue.throwaway]) — only where its create answer names that server
+// ([hosted]; an unclustered server names none and holds the one copy); one
+// placed elsewhere is deleted and made again ([copyRead.onLeader]). The
+// broker shuffles the live replicas and puts first those its metadata leader
+// counts as caught up (raft.go's IsFollowerCaughtUp): uniform in a healthy
+// cluster, but just after a metadata election, or while the stream's leader
+// lags the metadata leader by three heartbeats, every consumer lands off it.
+// So past one draw the read waits a metadata heartbeat before each
+// ([placementPause]), and after [placements] of them fails as
+// [queue.ErrUnavailable].
+//
+// EXACTLY THE MESSAGE AT THAT SEQUENCE AND SUBJECT. The consumer's NumPending,
+// counted on the leader's copy as it is made, says whether anything is at or
+// past the sequence; a delivery before it is refused ([atOrPast]) and only one
+// at exactly it is taken. The payload is read from a consumer filtered to the
+// subject a headers-only probe found there (a subject never changes), under a
+// byte bound the probed message fits and a larger one does not
+// ([copyAt.delivered]). Where a peer removed the message since the probe and
+// a larger one follows on its subject, the broker answers with the bound
+// rather than carry it for nothing, and the sequence is probed again
+// ([copyRead.message]).
+//
+// ONE INBOX, AND A QUIET PULL SETTLED BY THE CONSUMER'S WORD. A read's pulls
+// share an inbox held for the whole read (jsapi.Pulls), so a delivery queued
+// on the link behind other bytes still lands. A pull quiet for [letterQuiet]
+// asks the consumer what it says of itself (jsapi.Pulls.Quiet), given the
+// message's crossing time, since that answer crosses behind it. A cluster
+// routinely drops a new consumer's first pull: one that holds no pull and
+// delivered nothing is made again, up to jsapi.FirstPullRemakes times, as
+// internal/objstore/natsobj's reads do; one that holds the pull or has
+// delivered is being read however slowly — a whole message at the floor
+// takes minutes — and is waited on, on the same inbox.
+//
+// ONE BOUND FOR THE WHOLE READ. Every request runs under one context
+// ([copyRead.bounded]): the caller's, so a caller that goes — a node's
+// shutdown among them — stops the read; where it set no deadline, the lookup
+// ceiling (jsprovision.LookupBudget) plus the message's raw crossing at the
+// link's pace (jsapi.Sending). Not the client's five seconds for one request:
+// a copy read is several, and a delivery may wait behind a whole message on
+// the link.
+//
+// # Dead letters
+//
+// Dead letters live in one stream, CREWLET_DLQ, which every subscription's
+// delivery budget writes to, kept by age (the event stream's
+// `stream.event_retention_hours`) and never by interest, so an entry stays
+// until it ages out whether or not anybody reads it. An entry's keeper header
+// is one message header ([letterHeader]) and its body the payload, so a
+// reader that needs only what is kept skips the payload: a wake feed's entry
+// is a record's whole sealed frame, and the alarm lists the feeds' subjects
+// on every data node's beat.
+//
+// Three reads, each the cheapest that is honest for its reader. A LISTING
+// ([Queue.DeadLettersOn]) is one ephemeral headers-only consumer filtered to
+// the subject, read until it says nothing is pending and then deleted; the
+// broker states the payload's size in its place (nats-server v2.15.2
+// consumer.go, convertToHeadersOnly). The pinned server has no headers-only
+// read of a single message — STREAM.MSG.GET offers only `no_hdr`
+// (jetstream_api.go, JSApiMsgGetRequest) and a direct get always sends the
+// payload (stream.go) — so a listing reads the replica the broker placed its
+// consumer on (jetstream_cluster.go, createGroupForConsumer), which can be
+// behind the leader: it can miss an entry kept a moment ago or show one
+// dropped a moment ago, but never hides one that replica holds. THE MARKS
+// ([Queue.DeadLetterMarks]) are the leader's: one STREAM.INFO with a subjects
+// filter (jsapi.Leader.SubjectsSince) that counts each subject and states the
+// last sequence. A reader that needs its listing current holds it to them:
+// internal/engine's deadLetterWatch lists again only when the marks move, and
+// accepts a listing only when its counts match them. A FRAME
+// ([Queue.DeadLetterFrame]) is the one read that moves a payload. Its one
+// caller, a feed's replay, acts on it, so it never reports an entry gone
+// because a replica had not heard of it: it is the leader's STREAM.MSG.GET
+// wherever that reply reaches this node, and across a leaf's link it is found
+// from its headers on the leader's own copy ([copyRead.at]) and read as "A
+// message too large for a leader's reply is read raw" says.
+//
+// ONE ENTRY PER IDENTITY. A keep names an identity
+// ([queue.EventQueue.KeepDeadLetter]), carried as the message's Nats-Msg-Id
+// ([letterID]). The stream's duplicate window is [queue.DeadLetterWindow], set
+// where the stream is declared ([engineStreams]); the broker refuses the
+// stream if its retention is shorter, and Tier A refuses it first. Within the
+// window a second keep of one identity is acknowledged as a duplicate: the
+// contract's "already kept". The delivery budget's dead letter
+// ([Queue.deadLetter]), on poison's or the unhandled deliveries' subject
+// ([queue.RetiredTo]), names one too: the stored message's stream, sequence
+// and instant ([letterOf]). A failed keep goes back for the next delivery to
+// retry, and the broker's backstop outlasts the budget for that
+// ([keepRetries]); a keep that stored its entry but lost its answer counts as
+// failed, and the identity makes its retry come to nothing. A copy too large
+// to carry the identity header is kept without one, so it may be kept twice
+// at worst.
+//
+// A DROP ([Queue.DropDeadLetter]) checks which subject the sequence is on
+// before the leader deletes it. Where the leader's read reaches this node the
+// check is that read, moving the one payload being removed, since the server
+// has no read of a subject alone; across a leaf's link it reads the entry's
+// headers alone on the leader's own copy ([copyRead.at]). Never a replica's
+// copy, where an entry the replica had not heard of would read as gone and
+// the drop would answer done having removed nothing.
+//
+// # A domain consumer is held to its node's rows
+//
+// A node's domain consumer is kept at open only when it hands over exactly
+// what a fresh one at the checkpoint's next record would ([driftOf]); it can
+// disagree with the SQL checkpoint four ways ([consumerDrift] has their
+// causes). ACKNOWLEDGED PAST: the broker never delivers those records again,
+// so the loop waits for ever. On a strict log the node stays unhydrated,
+// writes on the missing subjects refuse `behind`, and the heartbeat's
+// below-floor check never fires because the records are still on the log; on
+// a compacted log nothing checks contiguity, so the node applies what comes
+// next and reports itself caught up with those rows absent. DELIVERED PAST: a
+// strict log waits behind the first of them in its reorder buffer until the
+// ack window ends, and the ack floor is only a lower bound, so records
+// acknowledged one by one above it may never return. IN FLIGHT at or below
+// the checkpoint: harmless records, but a full in-flight ceiling hands over
+// nothing new for the ack window. BEHIND: costs the redeliveries between for
+// the applier to drop; a node that adopted a snapshot at boot has everything
+// from the log's first surviving record up to the artefact's position, and
+// nothing else on the boot path moves it.
+//
+// Every drift is rebuilt (one replicated delete and create, what every node
+// pays on its first boot), and the rebuild touches only this node: the
+// consumer is named after it, no peer reads through it, and no retention term
+// reads its acknowledgements (the trim takes the SQL positions the heartbeat
+// publishes). When the rebuild fails, behind and in flight keep whichever
+// consumer the broker holds, with a warning, since failing a boot over an
+// optimisation's metadata write is worse than not rebuilding; the two drifts
+// ahead of the rows fail the open, as does a broker that holds no consumer
+// afterwards or cannot say which it holds, because a handle kept on a guess
+// fails every fetch while the boot reports success
+// ([DomainConsumer.afterFailedRebuild]).
+//
 // # Every connection presents a key
 //
 // ADR-0094. Every embedded broker this package starts — a solo member, a
@@ -409,21 +582,14 @@ const (
 
 // maxDeliver is the delivery budget before a message is dead-lettered.
 //
-// It covers poison, node-death AND HANDOFF — the last because a deferred
-// delivery returns via Nak and that increments the count (measured), which
-// is why this is 25 rather than the ~10 a broker with a free handoff needs.
-// 25 leaves ample headroom: a message is
-// normally handled in seconds, seat migrations are rate-limited, and a
-// message would have to be in flight across 25 of them to exhaust the
-// budget — a fleet thrashing that hard has a louder problem.
-//
-// The honest caveat stands and no cap solves it: a fast crash-loop is
-// indistinguishable from poison.
+// It covers poison, node death AND handoff: a deferred delivery returns via
+// Nak, which counts, hence 25 rather than the ~10 a free handoff needs. A
+// message would have to be in flight across 25 rate-limited seat migrations to
+// exhaust it. No cap tells a fast crash-loop from poison.
 const maxDeliver = 25
 
-// budgetFor resolves the delivery budget for a queue, letting a test shrink
-// it. The dead-letter assertions need a small budget; running them against
-// the production default would mean dozens of handler invocations each.
+// budgetFor resolves a queue's delivery budget, which a test shrinks so the
+// dead-letter assertions do not need dozens of handler invocations each.
 func budgetFor(cfg Config) int {
 	if cfg.MaxDeliver > 0 {
 		return cfg.MaxDeliver
@@ -431,156 +597,97 @@ func budgetFor(cfg Config) int {
 	return maxDeliver
 }
 
-// keepRetries is how many deliveries past its budget the broker still makes
-// of a subscription's message ([backstopFor]): the deliveries a dead letter's
-// keep has to land in once the budget is spent.
+// keepRetries is how many deliveries past its budget the broker still makes of
+// a subscription's message ([backstopFor]), for a dead letter's keep to retry
+// in. The loop retires a message at its budget by keeping its copy, then
+// terminating it (attachment.retire); a keep can fail with nothing wrong with
+// the message (a stop, a killed node, a leader election), and a backstop AT the
+// budget left it no delivery to retry in. A retry keeps under the message's own
+// identity, so one after a keep that stored but lost its answer stores nothing.
 //
-// WHY THE BROKER'S BACKSTOP STANDS PAST THE BUDGET. The consume loop retires a
-// message at its budget's delivery by keeping its copy and then terminating it
-// (attachment.retire), and a keep can fail for nothing wrong with the message
-// — a stop that closes the connection under it, a node killed while it
-// crosses, a dead-letter stream electing its leader. With the backstop AT the
-// budget that delivery was the broker's last, so a failed keep had nothing to
-// fall back on: terminated, the copy was gone; left unacknowledged, the broker
-// dropped it at its acknowledgement window. Past it, the message goes back and
-// its next delivery — a handler's first, which may handle it — keeps the copy
-// under the message's own identity, so a keep that had stored its entry and
-// lost its answer is stored as nothing.
-//
-// FIVE: each comes back at the failure path's ceiling, about thirty seconds,
-// so five span two and a half minutes of keeps — an election of the
-// dead-letter stream's leader many times over, and the redelivery of a
-// message a stopped or killed node held, which comes back once, at the end
-// of its acknowledgement window ([DefaultAckWait]). A dead-letter stream that
-// refuses every keep for longer refuses for a reason no retry answers — full,
-// or an external account's limits — and the keep at the backstop's own
-// delivery then says the copy is lost.
+// Five: each returns at the failure path's ~30 s ceiling, so five span 2.5
+// minutes, many elections over, plus the one redelivery, at [DefaultAckWait],
+// of a message a stopped node held. No retry answers a full stream or an
+// external account's limits; the keep at the backstop reports the copy lost.
 const keepRetries = 5
 
-// backstopFor is the broker's own MaxDeliver for a subscription's consumer:
-// its budget, and [keepRetries] past it. The consume loop retires a message at
-// its budget, never the broker, so this bounds only how often a keep that
-// failed is made again, and a bug in that path cannot circle a message for
-// ever.
+// backstopFor is the broker's own MaxDeliver for a subscription's consumer: its
+// budget plus [keepRetries]. The consume loop, never the broker, retires a
+// message at its budget, so this bounds only retried keeps, and a bug there
+// cannot circle a message forever.
 func backstopFor(cfg Config) int { return budgetFor(cfg) + keepRetries }
 
-// DefaultAckWait bounds how long a fetched-unacked message stays invisible.
+// DefaultAckWait bounds how long a fetched-unacked message stays invisible: a
+// wait behind a running turn plus one worst-case turn. A backstop, not the
+// handoff path: a seat that loses its lease Naks explicitly.
 //
-// Sized to a wait behind a running turn plus one worst-case turn. It is a
-// backstop, not the handoff path: a seat that loses its lease Naks
-// explicitly and the successor sees the message in about a millisecond.
-//
-// EXPORTED because it is the longest a delivery a node that died was holding
-// stays silent before it is redelivered, which another package's clock is
-// sized against: internal/maintenance's ChannelIdleTimeout, which must not
-// close the channel of a colleague's ask that is about to come round again
+// Exported because it is how long a dead node's delivery stays silent before
+// redelivery, which internal/maintenance's ChannelIdleTimeout is sized against
+// so it does not close the channel of an ask about to come round again
 // (internal/engine holds the order between the two).
 const DefaultAckWait = 30 * time.Minute
 
-// defaultEventRetention bounds the audit/event stream.
-//
-// An event store with no retention sweep, leaning on the database engine's
-// own partition management, is the one table that grows without policy. Here
-// the stream's own age limit is the authority and the local materialized index
-// mirrors it.
+// defaultEventRetention bounds the event stream. The stream's age limit is the
+// authority, and the local materialized index mirrors it.
 const defaultEventRetention = 30 * 24 * time.Hour
 
 // streamSpec describes the stream carrying a subject namespace.
 //
-// Retention is the interesting field, and it differs by PURPOSE rather than
-// by taste:
+// Retention differs by purpose: agent inboxes and notification work queues
+// use INTEREST, the engine's mailbox semantic (kept while an unacked durable
+// consumer exists; a subject no subscription covers drops it, which is why
+// EnsureSubscription runs before anything publishes). The event stream uses
+// LIMITS with an age bound, for consumers that fall behind and catch up.
 //
-//   - Agent inboxes and the notification work queues use INTEREST retention,
-//     which is precisely the engine's mailbox semantic: a message is kept
-//     while a durable consumer that has not acked it exists, and publishing
-//     to a subject no subscription covers drops it. The contract states that
-//     behaviour explicitly, so the broker enforcing it is a feature — and it
-//     is exactly why EnsureSubscription must run before anything publishes.
-//
-//   - The event stream uses LIMITS retention with an age bound, because its
-//     consumers are ephemeral dashboards and per-node materializers that
-//     must be able to fall behind, disconnect, and catch up.
-//
-// # Every field is CLASSIFIED, and the classification is exhaustive
-//
-// A stream this process did not create is a stream some other node created,
-// possibly from a different Tier A file. What a boot does about a difference
-// depends entirely on WHICH field differs, and the four answers are not
-// interchangeable — see [specFieldClass] and [classifyStreamSpec]. The
-// classification is derived by reflection over this struct so that adding a
-// field and forgetting to classify it fails a test rather than silently
-// joining the class whose default it happens to match.
+// A stream another node created, perhaps from a different Tier A file, may
+// differ; what a boot does depends on WHICH field differs ([specFieldClass],
+// [classifyStreamSpec]), and TestEveryStreamSpecFieldIsClassified fails a
+// field nobody classified.
 type streamSpec struct {
 	name      string
 	subjects  []string
 	retention jetstream.RetentionPolicy
 	maxAge    time.Duration
 
-	// maxPerSubject retains only the newest message on each subject,
-	// turning the stream from a log into a keyed table. Zero means
-	// unlimited, which is what every stream but the memory changelog
-	// wants.
+	// maxPerSubject keeps only the newest message on each subject, turning
+	// a log into a keyed table. Zero is unlimited.
 	maxPerSubject int
 
-	// maxBytes caps the stream's size on disk. Zero means unlimited.
-	//
-	// CAPACITY rather than safety: two nodes disagreeing about how big a
-	// log may grow is an operator question, and a boot that refused over
-	// it would take a fleet down for a number nobody is losing data to.
+	// maxBytes caps the stream's size on disk; zero is unlimited. CAPACITY:
+	// a boot refusing over a disagreement would take a fleet down for a
+	// number nobody is losing data to.
 	maxBytes int64
 
-	// maxMsgSize is the largest message the stream stores — headers and
-	// body, never the subject. Zero means unlimited, the server's own -1.
-	//
-	// CAPACITY, for maxBytes' reason: a stream created by a build that
-	// declared none, or a different one, loses no record over it — a
-	// record past it is REFUSED, loudly, as too large — so a boot that
-	// refused to run over the difference would take a fleet down for a
-	// number nobody is losing data to.
+	// maxMsgSize is the largest message stored, headers and body, never the
+	// subject; zero is unlimited (the server's -1). CAPACITY, for maxBytes'
+	// reason: a record past it is refused loudly, never lost.
 	maxMsgSize int32
 
-	// discard decides what a full stream does. DiscardNew REFUSES the
-	// append; DiscardOld drops the oldest message to make room.
-	//
-	// SAFETY, and the sharpest one here. A log whose records are the
-	// company's own state cannot silently drop its oldest record to
-	// accept a new one: the append is refused loudly instead, and the
-	// operator raises the ceiling. A stream created with the wrong
-	// discard policy would lose durable state with nothing reporting it.
+	// discard decides what a full stream does: DiscardNew refuses the
+	// append, DiscardOld drops the oldest message. SAFETY, the sharpest
+	// here: a log of the company's state refuses loudly and the operator
+	// raises the ceiling, rather than silently dropping its oldest record.
 	discard jetstream.DiscardPolicy
 
 	// duplicates is the window in which a repeated Nats-Msg-Id is
-	// collapsed rather than appended twice.
-	//
-	// CAPACITY: it costs memory on the server and bounds how long a retry
-	// stays idempotent. A shorter window than a publisher's retry budget
-	// is a correctness question for the PUBLISHER, which is why the
-	// framework derives its own budget from this value rather than
-	// asserting the stream's.
+	// collapsed. CAPACITY: a window shorter than a publisher's retry budget
+	// is the PUBLISHER's problem, so the framework derives its budget from
+	// this value rather than asserting the stream's.
 	duplicates time.Duration
 
-	// denyDelete refuses the delete-message API on this stream.
-	//
-	// TRUE for anything holding durable state, and it is not optional: a
-	// KV bucket gets DenyDelete and DenyPurge for free and a plain stream
-	// does not, so a log built as a stream is deletable by any client with
-	// the API unless it says otherwise. SAFETY.
+	// denyDelete refuses the delete-message API. SAFETY, true for anything
+	// holding durable state: a KV bucket gets it free, a plain stream not.
 	denyDelete bool
 
-	// allowRollup permits a publisher to replace a stream's whole history
-	// with one message.
-	//
-	// FALSE for a log, for the same reason denyDelete is true: a rollup is
-	// a delete of everything below it, spelled as a publish. SAFETY.
+	// allowRollup lets a publisher replace the whole history with one
+	// message. SAFETY, false for a log: a rollup is a delete spelled as a
+	// publish.
 	allowRollup bool
 
-	// allowDirect and mirrorDirect let a client read a message from a
-	// FOLLOWER rather than the leader.
-	//
-	// SAFETY, and false for anything the framework reads a last-message
-	// answer from: a direct get is served from replica state that may be
-	// behind an acknowledged write, so a discriminator built on it would
-	// answer "no message here" for a message the quorum has.
+	// allowDirect and mirrorDirect let a client read from a FOLLOWER.
+	// SAFETY, false wherever the framework reads a last-message answer: a
+	// follower may be behind an acknowledged write and answer "no message
+	// here" for a message the quorum has.
 	allowDirect  bool
 	mirrorDirect bool
 }
@@ -588,38 +695,30 @@ type streamSpec struct {
 // specFieldClass is what a boot does when the running stream's value for a
 // field differs from this node's spec.
 //
-// THE REPLICATION FACTOR IS NOT ONE OF THESE, and its absence is the point: a
-// boot has a fourth answer for durability — see [Queue.observeStream] — but
-// the factor is Tier A's, identical for every stream on the node, so it is not
-// a [streamSpec] field and there is nothing here to classify. A class declared
-// for it would be a value no map entry could ever carry.
+// The replication factor has no class: it is Tier A's, identical for every
+// stream on the node, so not a [streamSpec] field; a boot answers for
+// durability in [Queue.observeStream].
 type specFieldClass int
 
 const (
-	// classIdentity names the stream. A difference here is not a
-	// difference at all — it is a different stream.
+	// classIdentity names the stream: a difference is a different stream.
 	classIdentity specFieldClass = iota
 
-	// classSafety is a field whose value changes what the stream MEANS.
-	// A mismatch REFUSES TO RUN, naming the field, the observed value and
-	// the expected one: a node that carried on would be publishing durable
-	// records into a stream that drops them, replays them at wall-clock
-	// speed, or lets any client delete them.
+	// classSafety changes what the stream MEANS. A mismatch REFUSES TO RUN,
+	// naming the field and the observed and expected values: carrying on
+	// would publish durable records into a stream that drops them, replays
+	// them at wall-clock speed, or lets any client delete them.
 	classSafety
 
-	// classCapacity is a ceiling. REPORTED and not acted on: it is an
-	// operator's question, the operator has a verb for it, and a boot that
-	// refused over a number would take a fleet down for a difference
-	// nobody is losing data to.
+	// classCapacity is a ceiling: REPORTED, not acted on. It is the
+	// operator's question, with its own verb, and refusing to boot over it
+	// would take a fleet down for a number nobody is losing data to.
 	classCapacity
 )
 
-// classifyStreamSpec is the one place a spec field's class is decided.
-//
-// KEYED ON THE STRUCT FIELD NAME and asserted EXHAUSTIVE by reflection, which
-// is what a hand-written list of nine could not do: `retention` and `subjects`
-// were both missing from that list, and both are fields whose difference
-// changes what every message on the stream means.
+// classifyStreamSpec is the one place a spec field's class is decided, keyed
+// on the struct field name and held exhaustive by
+// TestEveryStreamSpecFieldIsClassified.
 func classifyStreamSpec() map[string]specFieldClass {
 	return map[string]specFieldClass{
 		"name": classIdentity,
@@ -664,11 +763,10 @@ func engineStreams(eventRetention time.Duration) []streamSpec {
 			maxAge:    eventRetention,
 		},
 		{
-			// Config nudges are explicitly best-effort — losing one costs
-			// a poll interval, never a revision, because the
-			// authoritative path polls the epoch pointer. A short age
-			// bound keeps a restarted node from replaying a week of
-			// stale activation announcements.
+			// Config nudges are best-effort: a lost one costs a poll
+			// interval, never a revision, since the authoritative path
+			// polls the epoch pointer. The short age keeps a restarted
+			// node from replaying stale activation announcements.
 			name:      streamConfig,
 			subjects:  []string{topics.ConfigPrefix + ">"},
 			retention: jetstream.LimitsPolicy,
@@ -676,26 +774,16 @@ func engineStreams(eventRetention time.Duration) []streamSpec {
 		},
 		{
 			// A seat's memory, one subject per row, ONE MESSAGE PER
-			// SUBJECT. That is what makes this a keyed table rather
-			// than a log: the stream holds the current value of every
-			// row, so a node acquiring a seat reads each row once, a
-			// table at a time, and gets the memory as it stands rather
-			// than every write that ever produced it.
+			// SUBJECT: a keyed table, so a node acquiring a seat reads
+			// the memory as it stands, not every write that produced it.
 			//
-			// No maxAge. A seat's memory has no horizon here — what
-			// bounds it is the learning subsystem's own lifecycle,
-			// which is where the decision about what a seat should
-			// still remember belongs. An age bound on this stream
-			// would silently delete memory the seat still holds
-			// locally, and the two would disagree about the past.
-			//
-			// Nor a byte or a message-count limit, for the same
-			// reason and one more: the discard policy is old, so
-			// either would drop the oldest row to make room for any
-			// message, a hydration's barrier among them, where the
-			// limit of one per subject drops only the message a newer
-			// one on its own subject replaces
-			// (topics.MemoryBarrierToken).
+			// No age bound: what a seat still remembers is the learning
+			// subsystem's decision, and expiry here would delete memory
+			// the seat still holds locally. No byte or count limit
+			// either: with discard old, one would drop the oldest row
+			// for any message, a hydration's barrier among them
+			// (topics.MemoryBarrierToken), where one per subject drops
+			// only what a newer message on that subject replaces.
 			name:          streamMemory,
 			subjects:      []string{topics.MemoryPrefix + ">"},
 			retention:     jetstream.LimitsPolicy,
@@ -703,33 +791,28 @@ func engineStreams(eventRetention time.Duration) []streamSpec {
 		},
 		{
 			// A stateless node's events on their way into one data
-			// node's log. INTEREST retention, because it is a mailbox:
-			// a batch is kept until the custody group has taken it,
-			// whether or not a data node is attached at that moment.
-			//
-			// AND THE EVENT LOG'S AGE, because a batch nobody has taken
-			// within it holds events past the horizon every log reads
-			// to — keeping it longer keeps what no node would store.
+			// node's log. INTEREST: a mailbox, kept until the custody
+			// group takes it, whether or not a data node is attached.
+			// The event log's age, because a batch older than that holds
+			// events past the horizon every log reads to.
 			name:      streamCustody,
 			subjects:  []string{topics.CustodyPrefix + ">"},
 			retention: jetstream.InterestPolicy,
 			maxAge:    eventRetention,
 		},
 		{
-			// Dead letters are kept by age, not by interest: nothing
-			// consumes them automatically, and an operator investigating
-			// poison needs them to still be there.
+			// Kept by age, not interest: nothing consumes dead letters
+			// automatically, and an operator investigating poison needs
+			// them.
 			//
-			// AND A KEEP OF ONE IDENTITY IS ONE ENTRY: a keep carries its
-			// identity as its message id (letterMsg), and this window is
-			// the contract's (queue.DeadLetterWindow, fifteen minutes) —
-			// the longest a keep waits, at the transport's ceiling across a
-			// link at the floor, is the request term and a crossing of
-			// eight mebibytes at thirty seconds a mebibyte for each of the
-			// three sends a write may make, 5 s + 3 × 240 s, about twelve
-			// minutes, so a second copy still crossing when the first
-			// landed is stored as nothing. A retention shorter than the
-			// window is refused by the broker, and by Tier A before it.
+			// One identity is one entry: a keep carries its identity as
+			// its message id (letterMsg), and this window
+			// (queue.DeadLetterWindow, 15 min) outlasts a keep's longest
+			// wait across a link at the floor, the request term plus
+			// three sends of 8 MiB at 30 s/MiB (5 s + 3 × 240 s, ~12
+			// min), so a second copy still crossing is stored as nothing.
+			// The broker, and Tier A before it, refuse a retention
+			// shorter than the window.
 			name:       streamDeadLetter,
 			subjects:   []string{topics.DeadLetterPrefix + ">"},
 			retention:  jetstream.LimitsPolicy,
@@ -739,11 +822,10 @@ func engineStreams(eventRetention time.Duration) []streamSpec {
 		{
 			// Which of a subscription's messages failed as themselves at
 			// a delivery: an empty mark per message, ONE PER SUBJECT, so
-			// whether a message is marked is one read of its subject's
-			// newest message (failuremarks.go). By the event stream's
-			// age, as the dead letters it decides the subject of: a
-			// mark nobody deleted — its message settled by a member that
-			// never wrote it — goes with them.
+			// a check is one read of its subject's newest message
+			// (failuremarks.go). Aged like the dead letters it decides
+			// the subject of, so a mark nobody deleted (its message
+			// settled by a member that never wrote it) goes with them.
 			name:          streamFailures,
 			subjects:      []string{failurePrefix + ">"},
 			retention:     jetstream.LimitsPolicy,
@@ -753,21 +835,14 @@ func engineStreams(eventRetention time.Duration) []streamSpec {
 	}
 }
 
-// specForSubject reports which stream carries a subject.
+// specForSubject reports which stream carries a subject: the engine's own
+// subjects get their purposeful stream, anything else a stream named for its
+// leading segment, provisioned on demand with interest retention (the mailbox
+// semantic the contract promises everywhere).
 //
-// Subjects the engine defines get their purposeful stream. Anything else
-// gets a stream named for its leading segment, provisioned on demand.
-//
-// Provisioning rather than refusing is deliberate. The stream topology is
-// this backend's business; the SUBJECT SPACE is the engine's, and an
-// extension or a test that publishes under its own namespace is using the
-// contract correctly. A whitelist here would make the backend the authority
-// on what the engine may name — and the special case the whitelist needed
-// for dead letters was the smell that said so.
-//
-// The mailbox semantic (interest retention) is the default for a derived
-// namespace: a subject nobody subscribes to drops its messages, which is
-// what the contract already promises everywhere.
+// Provisioning, not refusing: the SUBJECT SPACE is the engine's, and an
+// extension or test publishing under its own namespace uses the contract
+// correctly. A whitelist would make the backend the authority on names.
 func specForSubject(subject string, eventRetention time.Duration) (streamSpec, error) {
 	if subject == "" {
 		return streamSpec{}, fmt.Errorf("%w: empty subject", ErrSubject)
@@ -776,9 +851,8 @@ func specForSubject(subject string, eventRetention time.Duration) (streamSpec, e
 		return streamSpec{}, fmt.Errorf("%w: %q contains whitespace", ErrSubject, subject)
 	}
 	if strings.Contains(subject, "..") || strings.HasPrefix(subject, ".") || strings.HasSuffix(subject, ".") {
-		// An empty segment is what an unroutable handle produces
-		// (crewlet.agent..inbox). It is a real subject nobody subscribes
-		// to, so it would swallow events silently.
+		// An unroutable handle produces one (crewlet.agent..inbox): a
+		// real subject nobody subscribes to, swallowing events silently.
 		return streamSpec{}, fmt.Errorf("%w: %q has an empty segment", ErrSubject, subject)
 	}
 
@@ -821,18 +895,11 @@ var namespaceName = regexp.MustCompile(`^[a-z0-9_]+$`)
 
 // streamNameFor maps a subject's namespace onto a legal stream name.
 //
-// It VALIDATES rather than sanitizes. JetStream forbids dots, spaces and
-// wildcards in stream names, and the previous version rewrote every such
-// character to an underscore — which is lossy, and a lossy map ALIASES:
-// namespaces `a-b` and `a_b` both became `A_B`, so provisioning the second
-// replaced the first's subject list and the first namespace's events stopped
-// being captured by anything.
-//
-// Refusing is the honest answer and the one the contract allows: a backend
-// may decline a name it cannot represent, the way it declines a TTL it cannot
-// honour. It must not accept two distinct names and quietly merge them.
-// Every subject the engine publishes to has a namespace in this shape
-// already, so the rule costs nothing and closes the alias.
+// It VALIDATES rather than sanitizes: JetStream forbids dots, spaces and
+// wildcards in stream names, and a lossy rewrite ALIASES (`a-b` and `a_b`
+// would both become `A_B`, and provisioning the second would take the first's
+// subjects). The contract lets a backend decline a name it cannot represent,
+// and every namespace the engine publishes to already has this shape.
 func streamNameFor(ns string) (string, error) {
 	if !namespaceName.MatchString(ns) {
 		return "", fmt.Errorf(
@@ -847,24 +914,16 @@ func streamNameFor(ns string) (string, error) {
 // in a `nats consumer ls` listing.
 const consumerNameMax = 180
 
-// consumerName maps a (topic, group) pair onto a durable consumer name.
+// consumerName maps a (topic, group) pair onto a durable consumer name, and it
+// must be INJECTIVE. Durable names forbid dots, spaces and wildcards, so the
+// readable part is a lossy rewrite, and lossy alone aliases: topics `a.b` and
+// `a_b` in one group would share a mailbox (the conformance suite's
+// distinct_pairs_never_share_a_subscription holds this).
 //
-// It must be INJECTIVE, and making it so is the whole reason it is not just
-// a string join. JetStream durable names may not contain dots, spaces or the
-// wildcard characters, so the readable part has to be a lossy rewrite of both
-// halves — and lossy alone aliases: topic `a.b` and topic `a_b` in one group
-// produced ONE consumer, so two subscriptions shared a mailbox and each
-// received the other's events. Measured by the conformance suite's
-// distinct_pairs_never_share_a_subscription, which found it because it was
-// the first case to SEND a pair differing only in a rewritten character —
-// no amount of mutating this backend could have revealed it, because the
-// input never arrived.
-//
-// So the readable part is for operators and the HASH is the identity. It is
-// taken over the raw pair joined by a NUL, which cannot occur in either half,
-// so no two distinct pairs share a digest. Forty-eight bits leaves a
-// collision probability below one in ten million for a company with ten
-// thousand subscriptions, against a real ceiling in the hundreds.
+// So the readable part is for operators and the HASH is the identity: over the
+// raw pair joined by NUL, which neither half can contain. Forty-eight bits put
+// a collision below one in ten million at ten thousand subscriptions, against
+// a real ceiling in the hundreds.
 func consumerName(topic, group string) string {
 	sum := sha256.Sum256([]byte(group + "\x00" + topic))
 	id := hex.EncodeToString(sum[:consumerDigestBytes])
@@ -893,15 +952,12 @@ func consumerNameSafe(s string) string {
 	return strings.NewReplacer(".", "_", "*", "_", ">", "_", " ", "_").Replace(s)
 }
 
-// DomainStream is the stream a statelog domain declares, in the vocabulary a
-// domain owns rather than the broker's.
+// DomainStream is the stream a statelog domain declares, in the domain's
+// vocabulary rather than the broker's.
 //
-// A NARROW SURFACE ON PURPOSE. A domain says what its log IS — its name, its
-// subject space, how big it may grow and what a full log does — and every
-// safety field below is the framework's, identical for every domain, because
-// they are the fields that decide whether an ordered log is an ordered log.
-// A domain that could set them could build one that drops its oldest record
-// to accept a new one.
+// Narrow on purpose: a domain says what its log IS (name, subject space, how
+// big it may grow), and the safety fields are the framework's, identical for
+// every domain, so no domain can build a log that drops its oldest record.
 type DomainStream struct {
 	// Name is the stream. Conventionally CREWLET_<DOMAIN>_LOG.
 	Name string
@@ -913,12 +969,10 @@ type DomainStream struct {
 	// wants: a log with no ceiling fills the volume instead of refusing.
 	MaxBytes int64
 
-	// MaxMessageBytes is the largest message the stream stores, its
-	// headers included — a domain's largest record plus what a stored
-	// record carries beside it. Zero is unlimited, which no shipped domain
-	// wants: the broker's refusal is what holds a PEER to the declaration,
-	// since this build's publisher refuses a larger record before it is
-	// sent and a peer on another build may not.
+	// MaxMessageBytes is the largest message the stream stores, headers
+	// included. Zero is unlimited, which no shipped domain wants: this
+	// build's publisher refuses a larger record before sending, but only
+	// the broker's refusal holds a peer on another build to it.
 	MaxMessageBytes int64
 
 	// Duplicates is the window a repeated Nats-Msg-Id is collapsed in. It
@@ -926,37 +980,27 @@ type DomainStream struct {
 	// takes longer than the window appends the record twice.
 	Duplicates time.Duration
 
-	// MaxPerSubject turns the stream from a log into a KEYED TABLE by
-	// keeping only the newest message on each subject. Zero is a log; one
-	// is the compacted shape a derived, recomputable domain uses.
-	//
-	// It is the domain's because it is what the domain IS, and it is the
-	// one field here that changes what replay means: keeping one message
-	// per subject removes an INTERIOR sequence, so a loop that treats
-	// contiguity as an invariant stalls on the first ordinary write. The
-	// framework refuses the mismatch rather than inferring the loop.
+	// MaxPerSubject keeps only the newest message per subject: zero is a
+	// log, one the KEYED TABLE a derived, recomputable domain uses. It
+	// changes what replay means: compaction removes INTERIOR sequences, so
+	// a loop treating contiguity as an invariant stalls on the first
+	// ordinary write; the framework refuses the mismatch rather than
+	// inferring the loop.
 	MaxPerSubject int
 
-	// MaxAge bounds how long a message is kept, and it is legitimate on
-	// exactly one shape: a compacted stream whose rows are durable in SQL
-	// on every node anyway, so an expired message deletes nothing.
-	//
-	// ZERO ON A LOG, always. An age bound on a log deletes records a node
-	// has not applied, and there is no node whose word it takes.
+	// MaxAge bounds how long a message is kept, legitimate only on a
+	// compacted stream whose rows are durable in SQL on every node, so
+	// expiry deletes nothing. ZERO ON A LOG: an age bound deletes records
+	// a node has not applied.
 	MaxAge time.Duration
 
-	// Replicas is unused here and named to say so: the replication factor
-	// is Tier A's, identical for every stream on the node, and a domain
-	// choosing its own would be a domain choosing its own durability.
+	// No replicas field: the replication factor is Tier A's, identical for
+	// every stream on the node, so a domain cannot choose its durability.
 	//
-	// REPLAY IS NOT HERE EITHER, and that is a correction rather than an
-	// omission: replay is a CONSUMER policy in this client
-	// (jetstream.ReplayPolicy on ConsumerConfig, not on StreamConfig), so
-	// a stream cannot carry it and a spec field for it could never have
-	// been applied. It is set where it exists — on the replication
-	// consumer the framework creates — and `ReplayInstantPolicy` is the
-	// client's zero value, so the guard that matters is the one asserting
-	// nothing sets it to ReplayOriginal rather than one setting it here.
+	// No replay either: it is a CONSUMER policy (jetstream.ReplayPolicy on
+	// ConsumerConfig), set on the replication consumer the framework
+	// creates, where the zero value is ReplayInstantPolicy and the guard
+	// that matters asserts nothing sets ReplayOriginal.
 }
 
 // spec renders the domain's declaration as the broker-level spec, with every
@@ -968,37 +1012,26 @@ func (d DomainStream) spec() streamSpec {
 		retention: jetstream.LimitsPolicy,
 		maxBytes:  d.MaxBytes,
 
-		// CHECKED AT THE DOOR ([Queue.EnsureDomainStream]), which is
-		// the only caller, so this conversion never wraps.
+		// Checked at the door ([Queue.EnsureDomainStream]), the only
+		// caller, so this conversion never wraps.
 		maxMsgSize: int32(d.MaxMessageBytes),
 
-		// REFUSE THE APPEND rather than drop the oldest record. The
-		// records here are the company's own state, so a full log is an
-		// operator's problem and a dropped record is nobody's until the
-		// day somebody reads the gap.
+		// Refuse the append, never drop a record (streamSpec.discard).
 		discard: jetstream.DiscardNew,
 
 		duplicates: d.Duplicates,
 
-		// A LOG IS NOT DELETABLE and not roll-uppable. A KV bucket gets
-		// both of these for free; a plain stream does not, so without
-		// them any client holding the API can delete a committed record
-		// or replace the whole history with one message.
+		// Not deletable, not roll-uppable (streamSpec.denyDelete).
 		denyDelete:  true,
 		allowRollup: false,
 
-		// NO DIRECT GETS. The framework asks the broker for a subject's
-		// last message to decide whether a write raced, and a direct get
-		// is served from replica state that may be behind an
-		// acknowledged write — so the discriminator would answer "no
-		// message here" for a message the quorum already has.
+		// No direct gets: the framework reads a subject's last message to
+		// decide whether a write raced (streamSpec.allowDirect).
 		allowDirect:  false,
 		mirrorDirect: false,
 
 		// A log keeps every record until the trim moves the floor; a
-		// compacted stream keeps one per subject and may bound its own
-		// age, because its rows are durable in SQL on every data node and
-		// an expired message therefore deletes nothing.
+		// compacted stream may bound its age (DomainStream.MaxAge).
 		maxAge:        d.MaxAge,
 		maxPerSubject: d.MaxPerSubject,
 	}

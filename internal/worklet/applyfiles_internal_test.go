@@ -8,13 +8,10 @@ import (
 )
 
 // A FILE RECORD THAT IS NOT THE FILE ITS SUBJECT ARBITRATED IS REFUSED, and so
-// is one naming an object beside a digest no reader could check it against:
-// the first would leave the arbitrated path held by nothing, the second a row
-// the backup refuses to read, stopping every backup for good.
-//
-// AND A LIVE FILE NAMES ITS OBJECT: only a removal names none. Every put
-// this build writes names one, so a live row naming nothing would be a file
-// listed with content nobody can read.
+// is one naming an object without a digest a reader could check: the first
+// leaves the arbitrated path held by nothing, the second a row the backup
+// refuses, stopping every backup for good. AND A LIVE FILE NAMES ITS OBJECT
+// (only a removal names none), or it lists content nobody can read.
 func TestTheApplierRefusesAFileThatIsNotItsSubject(t *testing.T) {
 	t.Parallel()
 	h := objstore.HashOf([]byte("content"))

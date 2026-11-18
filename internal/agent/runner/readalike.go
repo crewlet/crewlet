@@ -11,38 +11,18 @@ import (
 	"github.com/crewlet/crewlet/internal/kept"
 )
 
-// readAlike reports whether a model reading the lines a brief and the session
-// it continues show of a and b, two calls rendered under opts, could take one
-// for the other: the same tool, and arguments their lines do not tell apart.
-// Symmetric, so neither call is the held one or the told one to it. Results are
-// never compared: a successful call's line carries none, and two calls of one
-// tool whose arguments read alike read alike whatever they returned.
+// readAlike reports whether a model reading the lines a brief and its session
+// show of a and b, two calls rendered under opts, could take one for the other:
+// the same tool, and arguments their lines do not tell apart. Symmetric; results
+// are never compared, since a successful call's line shows none.
 //
-// PER VALUE, AS THE LINES SHOW IT, never by the calls' digests alone. A line
-// shows a value as itself only where it fits the ledger's budget
-// ([ledger.ShowsWhole]); a longer one is a rewrite or omitted by its size, so
-// two writes to one path whose contents differ past the budget read alike in
-// their lines, digests apart. And the session may show EITHER call only as a
-// line (a fresh brief's prior work, the calls an earlier brief told), so a
-// value either line shows as a piece may equal anything; and so may a value a
-// record left out in place ([kept.IsLeftOut], [valuesAlike]), at any depth.
-// The calls read apart only where some key is in one and not the other (a key
-// a line shows is seen, whatever its value) or both lines show a key's value
-// whole and the two are not alike. A key whose value is null is read as
-// absent, on both sides: `"thread_ts":null` and no thread_ts at all say the
-// same to a reader.
-//
-// ALIKE WHEREVER EITHER CALL'S ARGUMENTS ARE NOT COMPARABLE ([argsComparable]):
-// withheld, in flight, in text the engine could not read (recorded so, or
-// never parsed), with no digest or nil, or left out whole by their record. Nothing says they read
-// apart, and the one direction that costs anything is reading two calls apart
-// that a model takes for one: listing a call again that no told call could be
-// taken for costs a line, while leaving one out loses the told call.
-//
-// NEVER BY HOW MUCH A RECORD KEPT ([BridgedCall.ArgsBytes]): a record that kept
-// a call's arguments less than whole says so in them, each value it left out a
-// marker or the whole {"not_kept": marker} ([kept.Record.Args]), so the values
-// it kept are compared as any are, and only what it left out reads as anything.
+// PER VALUE, AS THE LINES SHOW IT, never by digest alone: a value past the
+// ledger's budget ([ledger.ShowsWhole]) is not shown whole, and either call may
+// appear only as a line, so a value not shown whole, or left out by its record
+// ([kept.IsLeftOut]), may equal anything. Calls read apart only on a key in one
+// and not the other (null reads as absent) or a key both show whole with values
+// not alike. Calls whose arguments are not comparable ([argsComparable]) read
+// alike: reading apart two a model takes for one loses the told call.
 func readAlike(a, b ledger.Call, opts ledger.FormatOptions) bool {
 	switch {
 	case a.Name != b.Name:
@@ -68,42 +48,29 @@ func readAlike(a, b ledger.Call, opts ledger.FormatOptions) bool {
 }
 
 // argsComparable reports whether call's arguments are ones a line shows value
-// by value: neither withheld nor in flight, read back from their record and
-// digested where they were admitted, and not left out whole by it
-// ([kept.IsNotKept]). A value left out within them reads alike whatever it was
-// ([valuesAlike]).
+// by value: not withheld, unfinished or unread, digested, non-nil, and not left
+// out whole by their record ([kept.IsNotKept]).
 //
-// WITHHELD IS ITS OWN TEST, never left to the arguments and digest a withheld
-// call's record clears (sandbox's keptCall): its line draws its arguments as
-// sealed whatever the call carries ([ledger.Call.Withheld]), so a reader
-// compares none of them, and were a record ever to keep some, comparing them
-// would read apart two calls whose lines read alike, the one direction that
-// loses a call. NOT READ IS ITS OWN TEST for the same reason: its line says
-// its arguments could not be read whatever the call carries
-// ([ledger.Call.ArgsUnread]). NIL ARGUMENTS stay a test of their own: a call
-// made with none reads back nil (the log spells its arguments as no text), so
-// it reads alike every call of its tool, which costs a line where a told call
-// of the tool shows arguments and never loses a call.
+// Withheld and unread are tested on their own flags, not on what the record
+// cleared (sandbox's keptCall): their lines show no arguments whatever the call
+// carries ([ledger.Call.Withheld], [ledger.Call.ArgsUnread]), so comparing any
+// would read apart calls whose lines read alike. Nil arguments (a call made with
+// none) read alike every call of the tool, which costs a line, never a call.
 func argsComparable(call ledger.Call) bool {
 	return !call.Withheld && !call.Unfinished && !call.ArgsUnread && call.Digest != "" && call.Args != nil &&
 		!kept.IsNotKept(call.Args)
 }
 
 // valuesAlike reports whether a reader could take h and t, two argument values
-// as the run's record decoded them ([tools.ReadArgs], numbers kept as their
-// literal's text), for one value: equal as JSON values, never as their
-// spellings. So a number reads alike another of the same value however it is
-// written (7 and 7.0, 100 and 1e2, 0 and -0); an object reads alike one with
-// the same keys, a key whose value is null read as absent, each value alike;
-// an array one of its length, each element alike; and a string reads alike a
-// number or a boolean it spells (`"7"` and 7, `"true"` and true), the safe
-// reading of a value a model compares by its characters. Two strings read
-// alike only where they are the same text.
+// as the record decoded them ([tools.ReadArgs], numbers as literal text), for
+// one: equal as JSON values, not spellings (7 and 7.0, 0 and -0), null keys read
+// as absent, and a string alike the number or boolean it spells (`"7"` and 7),
+// the safe reading for a model comparing characters.
 //
-// A VALUE A RECORD LEFT OUT ([kept.IsLeftOut]) READS ALIKE ANY, at any depth:
-// a leaf or a container replaced by its marker names a value it does not show,
-// which may have been the other. Compared as the text it is, the marker would
-// read apart two calls whose left-out values may have been one.
+// A value left out by its record ([kept.IsLeftOut]) reads alike any, at any
+// depth: compared as its marker text, it would read apart values that may have
+// been one. [BridgedCall.ArgsBytes] decides nothing: the markers say what a
+// record left out, and the values it kept compare as any.
 func valuesAlike(h, t any) bool {
 	if kept.IsLeftOut(h) || kept.IsLeftOut(t) {
 		return true
@@ -144,8 +111,7 @@ func valuesAlike(h, t any) bool {
 			return hs == ts
 		}
 	}
-	// A NUMBER OR A BOOLEAN, either of them perhaps a string spelling one,
-	// read as the scalar is.
+	// A number or boolean, either perhaps a string spelling one.
 	if hn, ok := numberOf(h); ok {
 		tn, ok := numberOf(t)
 		return ok && hn == tn
@@ -157,10 +123,8 @@ func valuesAlike(h, t any) bool {
 	return reflect.DeepEqual(h, t)
 }
 
-// numberOf is v's value as a number, in a canonical text two numbers share
-// exactly where they are equal ([canonicalNumber]): a decoded number
-// (json.Number, or a Go number a caller built the arguments with), or a string
-// whose whole text is a JSON number literal.
+// numberOf is v as a number in canonical text ([canonicalNumber]): a decoded
+// number (json.Number or a Go number), or a string that is a JSON number literal.
 func numberOf(v any) (string, bool) {
 	var text string
 	switch n := v.(type) {
@@ -190,16 +154,13 @@ func numberOf(v any) (string, bool) {
 	return canonicalNumber(text)
 }
 
-// canonicalNumber is text, a JSON number literal, as a sign, its significant
-// digits and a decimal exponent, the one text every literal of its value
-// shares ("7", "7.0", "70e-1" and "0.7E1" all "7e0"), and false where text is
-// no JSON number literal (strconv's "+7", "Inf" or "0x10" among them).
+// canonicalNumber is text, a JSON number literal, as sign, significant digits
+// and decimal exponent, shared by every literal of its value ("7", "7.0" and
+// "0.7E1" all "7e0"); false where text is no JSON literal ("+7", "Inf", "0x10").
 //
-// EXACT AND LINEAR IN THE TEXT, never a big.Rat or a float: a float rounds two
-// 19-digit ids to one value, which reads two calls alike that differ only
-// there (the safe direction, but no rule), and big.Rat.SetString computes the
-// power an exponent names, so a model's 1e999999999 would cost a
-// billion-digit number to compare. The exponent is a big.Int, which only adds.
+// Exact and linear in the text, never a float or big.Rat: a float rounds two
+// 19-digit ids to one, and big.Rat.SetString computes the power, so 1e999999999
+// would cost a billion-digit number. The exponent is a big.Int, which only adds.
 func canonicalNumber(text string) (string, bool) {
 	rest, negative := strings.CutPrefix(text, "-")
 	whole, rest := leadingDigits(rest)
@@ -251,8 +212,7 @@ func leadingDigits(s string) (digits, rest string) {
 	return s[:end], s[end:]
 }
 
-// boolOf is v as a boolean: a decoded boolean, or a string whose whole text is
-// a JSON boolean literal.
+// boolOf is v as a boolean: a decoded one, or a string "true" or "false".
 func boolOf(v any) (value, ok bool) {
 	switch b := v.(type) {
 	case bool:

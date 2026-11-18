@@ -38,13 +38,11 @@ type BoxURLs struct {
 // ReadBoxURLs reads every engine address a box dials back to the engine from
 // getenv, each through [sandbox.ParseBoxURL].
 //
-// ONE READING FOR TWO READERS: [New], which refuses its boot on any refusal
-// here ([BoxURLs.Refusal]) before anything is opened, and `crewlet llm
-// doctor`, which a deploy script gates on before a node takes seats and which
-// reports every one of these the boot would refuse — whatever cell
-// (`run_in`) each of the company's providers runs in, since a node that
-// refuses to boot runs no seat at all. Listed once here, a URL a later change gives boxes is one neither
-// reader can leave out.
+// ONE READING FOR TWO READERS: [New] refuses its boot on any refusal here
+// ([BoxURLs.Refusal]) before opening anything, and `crewlet llm doctor`, which
+// a deploy script gates on, reports the same refusals whatever cell (`run_in`)
+// each provider runs in, since a node that refuses to boot runs no seat. A URL
+// a later change gives boxes is then one neither reader can leave out.
 func ReadBoxURLs(getenv func(string) string) BoxURLs {
 	read := func(variable string) BoxURL {
 		url, err := sandbox.ParseBoxURL(variable, getenv(variable))

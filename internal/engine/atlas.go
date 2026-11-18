@@ -19,11 +19,9 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// AtlasToolDeps is what the atlas tools read on this node: the settings it
-// runs, read per call, their revision and the deployment's addresses, and
-// every record source it reaches, what people recorded in the atlas's log
-// included. Gitlet comes through the code tools' own half, as the caller
-// (ADR-0127).
+// AtlasToolDeps is what the atlas tools read on this node: its settings, read
+// per call, and every record source it reaches, the atlas's log included.
+// Gitlet comes through the code tools' own half, as the caller (ADR-0127).
 func AtlasToolDeps(e *Engine) builtin.AtlasDeps {
 	if e == nil {
 		return builtin.AtlasDeps{}
@@ -31,10 +29,10 @@ func AtlasToolDeps(e *Engine) builtin.AtlasDeps {
 	return builtin.AtlasDeps{Settings: e.atlasSettings, Records: e.atlasRecords, Log: e.atlasLog, Sources: e}
 }
 
-// AtlasRefreshToolDeps is what a person asks for a read of one atlas source
-// through on this node: the coordination store, where the node holding the
-// collect duty reads the ask. Who asks is the surface's, set per call. The
-// zero value where this node has no coordination store.
+// AtlasRefreshToolDeps is what a person asks a read of one atlas source
+// through: the coordination store, where the collect duty's holder reads the
+// ask. Who asks is set per call. The zero value where this node has no
+// coordination store.
 func AtlasRefreshToolDeps(e *Engine) builtin.AtlasRefreshDeps {
 	if e == nil || e.backends == nil || e.backends.Fleet == nil {
 		return builtin.AtlasRefreshDeps{}
@@ -52,11 +50,10 @@ func (e *Engine) atlasLog(context.Context) (builtin.AtlasLogReads, bool) {
 	return reads, true
 }
 
-// atlasRecords is every record source of the engine's the atlas reads, as
-// this node reaches it: the replicated reads through the estate router, so a
-// node without the data role answers them too, and the coordination store's
-// directly. A source this node reaches none of is left nil, and the read
-// reports it as unread rather than empty.
+// atlasRecords is every record source the atlas reads, as this node reaches
+// it: replicated reads through the router, so a node without the data role
+// answers too, the coordination store's directly. A source it cannot reach is
+// left nil, which the read reports as unread rather than empty.
 func (e *Engine) atlasRecords(ctx context.Context) gather.Sources {
 	var src gather.Sources
 	if e.backends != nil {
@@ -85,17 +82,16 @@ func (e *Engine) atlasRecords(ctx context.Context) gather.Sources {
 		src.Usage = e.UsageReads()
 	}
 	src.Alarms = e
-	// AND WHAT PEOPLE RECORDED, through the router, so every read folds it.
+	// What people recorded, so every read folds it.
 	if reads, ok := e.AtlasReads(); ok {
 		src.Log = reads
 	}
 	return src
 }
 
-// AtlasWriteToolDeps is what the atlas's write tools change it through on this
-// node: the log, read and written through the router, so a person's write from
-// a node without data is a data node's. Who writes and the chart an owner is
-// named from are the surface's, set per call. The zero value where this node
+// AtlasWriteToolDeps is what the atlas's write tools change it through: the
+// log through the router, so a write from a node without data lands on a
+// data node. Who writes is set per call. The zero value where this node
 // reaches no copy of the log.
 func AtlasWriteToolDeps(e *Engine) builtin.AtlasWriteDeps {
 	if e == nil {
@@ -113,11 +109,10 @@ func AtlasWriteToolDeps(e *Engine) builtin.AtlasWriteDeps {
 // in, by the seat's derived agent id, as its token counter is keyed.
 func atlasRecordBucket(agentID string) string { return "atlas-records:" + agentID }
 
-// AtlasRecordToolDeps is what an agent's atlas records are made through on
-// this node (ADR-0132): the log's writer through the router, so a seat held
-// on a node without data records too, and the fleet's shared counter, a UTC
-// day wide, so a seat's allowance holds whichever node runs its turns. The
-// zero value where this node reaches no writer or no counter.
+// AtlasRecordToolDeps is what an agent's atlas records are made through
+// (ADR-0132): the log's writer through the router, and the fleet's shared
+// counter, a UTC day wide, so a seat's allowance holds whichever node runs its
+// turns. The zero value where this node reaches no writer or no counter.
 func AtlasRecordToolDeps(e *Engine) builtin.AtlasRecordDeps {
 	if e == nil || e.backends == nil || e.backends.Fleet == nil {
 		return builtin.AtlasRecordDeps{}
@@ -160,8 +155,8 @@ func (e *Engine) atlasSettings(ctx context.Context) (builtin.AtlasSettings, bool
 }
 
 // runningRevision is the revision the epoch c was applied from, or "" where
-// this node cannot tell: the fleet's pointer names it only while it names the
-// activation c was applied from, never one this node has not applied yet.
+// this node cannot tell: the fleet's pointer counts only while it names c's
+// own activation, never one this node has not applied yet.
 func (e *Engine) runningRevision(ctx context.Context, c *Company) string {
 	if e.backends == nil || e.backends.Fleet == nil {
 		return ""
@@ -188,10 +183,9 @@ func revisionRunning(target coord.Activation, found bool, c *Company) string {
 }
 
 // turnReadsAtlas reports whether a turn of the seat handle may read the atlas
-// within whom it works for (ADR-0109): the atlas tools' decision, made with
-// the ceiling the turn's every tool call is held to, composed by the one
-// composer, before its prompt is built. Undecidable is false, logged: a
-// prompt that cannot tell shows no entry.
+// within whom it works for (ADR-0109): the atlas tools' decision under the
+// turn's ceiling, made before its prompt is built. Undecidable is false,
+// logged: a prompt that cannot tell shows no entry.
 func (e *Engine) turnReadsAtlas(ctx context.Context, company *Company, handle string, tel turnTelemetry) bool {
 	seat := company.Org.AgentSeatByHandle(handle)
 	if seat == nil {
@@ -213,11 +207,10 @@ func (e *Engine) turnReadsAtlas(ctx context.Context, company *Company, handle st
 	return d.Allowed
 }
 
-// atlasSystems is the atlas a turn's prompt names entries from: settings and
-// records as the seat reads them, a private address only within its own
-// reach. Gitlet's repositories are read by the atlas tools, as the seat and
-// with its ceiling, which a prompt built before the turn's first call has no
-// caller for.
+// atlasSystems is the atlas a turn's prompt names entries from, as the seat
+// reads it, a private address only within its own reach. Gitlet's
+// repositories are left to the atlas tools: they read as the seat under its
+// ceiling, which a prompt built before the first call has no caller for.
 type atlasSystems struct{ engine *Engine }
 
 func (s atlasSystems) Systems(ctx context.Context, r prefetch.Request) (atlas.View, bool, error) {

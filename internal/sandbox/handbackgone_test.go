@@ -15,17 +15,14 @@ import (
 // A RETRIED RESUME THAT FINDS ITS RUN GONE HANDS THE REPLY BACK EXACTLY ONCE,
 // ACROSS A CRASH AT EACH STEP.
 //
-// The answer was recorded and its delivery acknowledged; the inline resume
-// failed, and the retry's resume fails too — and so does handing the claim
-// back, which ENDS the run. Nothing else will ever bring the person's reply to
-// the seat, so it goes back to the seat's inbox as the ordinary message it is.
-// It used to be published straight off the retry AFTER the ending had deleted
-// the row, the only record of it, so a process that stopped between the two
-// lost it. Now it is recorded on the claimed row as owed before the ending,
-// and the ending publishes what the row owes before it deletes the row. Each
-// case stops the node at one step — by refusing that step and then handing
-// the seat to a successor over the same store — and counts what the seat was
-// given.
+// The answer was recorded and its delivery acknowledged; the inline resume and
+// the retry's both fail, and so does handing the claim back, which ENDS the run.
+// Nothing else will bring the person's reply to the seat, so it goes back to the
+// seat's inbox as an ordinary message: recorded on the claimed row as owed before
+// the ending, and published by the ending before it deletes the row, the reply's
+// only record. Each case stops the node at one step, by refusing that step and
+// handing the seat to a successor over the same store, and counts what the seat
+// was given.
 
 // owedAnAnswerWhoseRunEnds records R1 on t1, fails its inline resume, and arms
 // the retry so that its resume fails too and handing the claim back is refused
@@ -167,9 +164,9 @@ func TestARetryWhoseRunEndsStoppedBeforeTheDeleteHandsNothingBackTwice(t *testin
 // A ROW THAT CANNOT RECORD THE REPLY IS NOT ENDED until it can: the ending is
 // kept, with the answer still on the row and the seat's inbox held behind it,
 // and nothing is announced yet. Once the store takes the let-go, the reply is
-// handed back once, the run ended, and the loss announced once. The reply used
-// to be published straight off the refusal instead — and lost, with the row
-// deleted under it, when the broker refused that publish too.
+// handed back once, the run ended, and the loss announced once. Published
+// straight off the refusal, it would be lost with the row deleted under it
+// whenever the broker refused that publish too.
 func TestARetryWhoseRunEndsKeepsItsEndingUntilTheReplyIsRecorded(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -240,10 +237,9 @@ func (s releaseLandsThenFails) ReleaseClaim(ctx context.Context, turnID string, 
 // lands — the run is answered again, R1 still on it — and the store reports a
 // failure. The claim's own ending is licensed for the claim alone, so it finds
 // the run no longer the claim and leaves it: the next retry resumes it with R1,
-// nothing is handed back, and nothing is announced lost. It used to end the run
-// on every status — its box reclaimed and R1's delivery recorded as worked —
-// and, refusing to let R1 go from a run that no longer read as the claim,
-// delete the run with R1 on it.
+// nothing is handed back, and nothing is announced lost. Ending it on every
+// status would reclaim its box, record R1's delivery as worked, and delete the
+// run with R1 on it.
 func TestARetryWhoseReleaseLandedAndFailedIsResumedWithItsReply(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -301,10 +297,9 @@ func TestARetryWhoseReleaseLandedAndFailedIsResumedWithItsReply(t *testing.T) {
 // The retry that finishes it finds the run answered again on the same launch,
 // R1 still on it: no longer the claim, so the ending declines, and the run is
 // owed exactly the resume this series is for. It is resumed with R1, nothing
-// is handed back and nothing is announced lost. Settled as an ending that
-// merely had nothing left to do, as it was, the series stopped there and the
-// answered run waited — its seat's inbox held behind it — for a resume
-// nothing would ever start.
+// is handed back and nothing is announced lost. Settled as an ending with
+// nothing left to do, the answered run would wait, its seat's inbox held behind
+// it, for a resume nothing starts.
 func TestAKeptEndingWhoseClaimWasHandedBackResumesTheRun(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -368,9 +363,8 @@ func TestAKeptEndingWhoseClaimWasHandedBackResumesTheRun(t *testing.T) {
 // the row cannot be read, so the run is ended while it is still the claim —
 // record first, box second — and the reply on it cannot be let go of, so that
 // ending is kept. The retry that finishes it hands the reply back, deletes the
-// record, and reclaims the box the record named. Finished without the reclaim,
-// as it was, the kept ending deleted the only record of a paused box and left
-// it billed, named by nothing, until its provider's TTL.
+// record, and reclaims the box the record named: without the reclaim, a paused
+// box would lose its only record and stay billed until its provider's TTL.
 func TestAKeptClaimEndingReclaimsItsBoxWhenItIsFinished(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -416,11 +410,10 @@ func TestAKeptClaimEndingReclaimsItsBoxWhenItIsFinished(t *testing.T) {
 }
 
 // A DELETE THE STORE DID NOT TAKE IS FINISHED BY THIS NODE. The run's turn came
-// back and its ending could not delete the record, which was a claim — and a
-// claim holds its seat on every recount. It used to be left for the seat's next
-// recovery pass, which comes only when the seat moves, so the seat took no mail
-// until it did. The ending is kept and retried instead, and the seat is free
-// the moment the delete lands.
+// back and its ending could not delete the record, a claim, which holds its
+// seat on every recount. The ending is kept and retried, so the seat is free
+// the moment the delete lands, rather than taking no mail until the seat moves
+// and its next recovery pass runs.
 func TestAnEndingWhoseDeleteTheStoreRefusedIsFinishedByThisNode(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -457,8 +450,8 @@ func TestAnEndingWhoseDeleteTheStoreRefusedIsFinishedByThisNode(t *testing.T) {
 // its claim back has said nothing it did reached anybody, and the retry would
 // hand the reply to a turn of its own. But the claim cannot be given back, so no
 // retry will ever come, and the run is ended. Read as "a turn took it", the
-// reply went with the run; the claim's own ending lets it go back however it
-// was taken.
+// reply would go with the run; the claim's own ending lets it go back however
+// it was taken.
 func TestARetryWhoseTurnGaveItsClaimBackHandsTheReplyBackWhenTheClaimCannotGoBack(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)

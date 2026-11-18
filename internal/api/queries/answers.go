@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/advisor/analyst"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/livestate"
@@ -267,6 +268,11 @@ type Sources struct {
 	// Insights is the fleet's record of the operating insights the company
 	// shares (ADR-0119); nil leaves `diagnostics_insights` unregistered.
 	Insights coord.InsightRecords
+
+	// Analysis is the fleet's records of the advisor's analyst and Analyst
+	// what it runs on (ADR-0157); either nil leaves `advisor_analysis` unregistered.
+	Analysis analyst.Records
+	Analyst  analyst.Models
 
 	// MCPChecks reads each MCP server's latest test, which a server's
 	// detail answers. Nil answers none.
@@ -1193,6 +1199,9 @@ func Register(r *Registry, s Sources) {
 		// WHAT THE SETUP COSTS AND HOW TO FIX IT, read off the same
 		// document, so the administrator's as the document is.
 		r.Register("advisor", Requires(iam.GrantAdmin), s.advisor)
+		if s.Analysis != nil && s.Analyst != nil {
+			r.Register("advisor_analysis", Requires(iam.GrantAdmin), s.advisorAnalysis)
+		}
 		// WHAT EACH AGENT MAY DO AND WHERE IT RUNS, as its next turn is told:
 		// the go-live check's review. Admin's, as the advisor is.
 		if s.AgentAccess != nil {

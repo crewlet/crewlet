@@ -8,10 +8,8 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// AN ASSIGNMENT'S REASON IS THE CHANGE'S EXCERPT, so it reaches both the wake
-// the new assignee is woken with and the history row beside the hand-off —
-// with no field of its own on the record, because the excerpt is already the
-// line both of them carry.
+// AN ASSIGNMENT'S REASON IS THE CHANGE'S EXCERPT, the line both the new
+// assignee's wake and the history row carry, so it needs no field of its own.
 func TestAReassignmentReasonReachesTheWakeAndTheHistory(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -66,10 +64,9 @@ func TestAnAssignmentReasonIsBoundedAndOnlyBesideAnAssignee(t *testing.T) {
 	}
 }
 
-// A CHECKLIST CHANGE TRAVELS AS A GESTURE, never as the collection: this tool
-// read the item in one transaction and the write lands in another, so a whole
-// collection formed here would discard every tick and every line somebody
-// else wrote in between.
+// A CHECKLIST CHANGE TRAVELS AS A GESTURE, never as the collection: the read
+// and the write are separate transactions, so a collection formed here would
+// discard whatever somebody else wrote in between.
 func TestAChecklistChangeIsAGestureNotACollection(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -115,12 +112,9 @@ func TestAChecklistChangeIsAGestureNotACollection(t *testing.T) {
 	}
 }
 
-// TWO DIFFERENT UPDATES IN ONE TURN ARE TWO OPERATIONS.
-//
-// The operation id was the seed and the task alone, so a turn that ticked two
-// items — or set the status and then assigned the item — wrote its second
-// change under the first one's id, and the broker collapsed it as a
-// redelivery and answered `applied` for a change that never landed.
+// TWO DIFFERENT UPDATES IN ONE TURN ARE TWO OPERATIONS: sharing an id, the
+// broker would collapse the second as a redelivery and answer `applied` for
+// a change that never landed.
 func TestTwoDifferentUpdatesInOneTurnAreTwoOperations(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()

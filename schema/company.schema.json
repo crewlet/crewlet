@@ -119,6 +119,78 @@
         "null"
       ]
     },
+    "Advisor": {
+      "additionalProperties": false,
+      "properties": {
+        "analyst": {
+          "$ref": "#/$defs/AdvisorAnalyst",
+          "description": "The advisor's analyst: a run on the company's own models that reads the week's records and lists problems no rule names, each with the records and numbers it rests on. Absent = off."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AdvisorAnalyst": {
+      "additionalProperties": false,
+      "properties": {
+        "cadence": {
+          "description": "How often it runs on its own: daily (the default), weekly (on Mondays) or off. Run now on Settings, Advisor runs it whatever this says.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "hour": {
+          "description": "The hour of the company clock a scheduled run starts at, 0 to 23. Absent = 6.",
+          "maximum": 23,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "llm": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              },
+              "type": "array"
+            }
+          ],
+          "description": "The providers.llm entries the analyst runs on, the first first, each held to Ask Crewlet's rules for a member (the harness's local and web tools denied). Absent = the analyst is off."
+        },
+        "max_tokens": {
+          "description": "The most tokens one run may spend, every round together, charged to the company's budget and no seat's; a run that reaches it stops and lists what it grounded so far. Absent = 200000; at least 20000.",
+          "minimum": 20000,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "Assistant": {
       "additionalProperties": false,
       "properties": {
@@ -3884,7 +3956,7 @@
         },
         "avatar": {
           "$ref": "#/$defs/RoleAvatar",
-          "description": "Agent seats: the Crewlet character and colour the seat is drawn as. Absent = the original Crewlet, in purple."
+          "description": "Agent seats: the Crewlet character and colour the seat is drawn as. Absent = a character and colour picked from the seat's handle."
         },
         "backstory": {
           "description": "Who this seat is; reaches its prompt.",
@@ -4410,7 +4482,7 @@
       "additionalProperties": false,
       "properties": {
         "character": {
-          "description": "The Crewlet character this agent seat is drawn as. Absent = crewlet, the original.",
+          "description": "The Crewlet character this agent seat is drawn as. Absent = one picked from the seat's handle.",
           "enum": [
             "crewlet",
             "hexlet",
@@ -4447,7 +4519,7 @@
           ]
         },
         "color": {
-          "description": "The colour this agent seat is drawn in. Absent = purple.",
+          "description": "The colour this agent seat is drawn in. Absent = one picked from the seat's handle.",
           "enum": [
             "purple",
             "cyan",
@@ -6111,6 +6183,23 @@
             "array",
             "null"
           ]
+        },
+        "target": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,254}$"
+            },
+            {
+              "const": ""
+            }
+          ],
+          "description": "What the change the agent asked the grant for changes, as the integration names it (a Scaleway bucket), which the engine copies from the request; absent for one a person added.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
       "type": [
@@ -6907,6 +6996,10 @@
   "properties": {
     "access_history": {
       "$ref": "#/$defs/AccessHistory"
+    },
+    "advisor": {
+      "$ref": "#/$defs/Advisor",
+      "description": "The setup advisor's own settings: its analyst, which reads the week's records with a model and lists only what it can cite."
     },
     "artifacts": {
       "$ref": "#/$defs/CompanyArtifacts"

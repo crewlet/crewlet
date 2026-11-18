@@ -12,65 +12,36 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE MERGE RATE (M5-D28): what raises code_merge_rate_over_capacity — a
-// queue asked to land more changes within [gitlet.MergeRateWindow] than it can
-// land in it — measured by the queue worker of the repository's
-// HOME, from the two figures only it holds together:
-//
-//   - WHAT IT WAS ASKED, from the rows: every page of its queue work counts
-//     the target's enqueues within the window, live and ended alike
-//     (gitlet.QueueDue.Enqueued), so an asking it cannot see — past the 64
-//     entries a page carries, or enqueued and dequeued between two turns —
-//     is counted all the same;
-//   - HOW FAST IT LANDS, from the rounds it timed: a round is one of its
-//     trains, from the record that built it applying to the record that
-//     landed its green prefix applying, and the mean of those that ended
-//     within the window is the round its capacity is priced at
-//     (config.LandingCapacity at the target's depth and batch). A train
-//     still testing counts as one more round, at its age so far, once it
-//     has outlasted that mean — a queue whose checks have stopped finishing
-//     lands nothing, and must not be priced at the rounds it ran before.
-//
-// THE QUEUE'S OWN CAPACITY IS THE THRESHOLD (ADR-0015), so the alarm fires at
-// any count and the framework holds no rate of its own: a deep queue's
-// ordinary hour and a depth-one queue with hour-long checks are each judged by
-// what they can land.
-//
-// NODE-LOCAL, as the compactor's last pass is: only the home builds a
-// queue's trains, so only it can time them, and a home new to a queue — the
-// last one gone, or the placement moved — judges it from the first train it
-// builds, the quiet direction. A figure stands until a turn of its
-// repository's queue work reads every target and no longer meets it — the
-// queue drained — or for one window at most, after which it counts nothing
-// the current window asked: what an old home holds once its repository moved
-// on lapses with it, and the next reading forgets it ([mergeRate.reading]).
-//
-// KEYED BY REPOSITORY, then by target: a turn's [mergeRate.seen] walks only
-// its own repository's targets, so a pass over the R repositories with a
-// queue costs each turn its own targets. A flat map keyed by the pair made
-// every turn's seen walk every target this node holds, under the lock every
-// concurrent turn's measure takes: R turns of N targets each, a pass.
+// THE MERGE RATE (M5-D28) raises code_merge_rate_over_capacity: a queue asked
+// to land more within [gitlet.MergeRateWindow] than it can land in it. Only the
+// home builds a queue's trains, so its queue worker alone holds both figures
+// and the rate is node-local; a new home judges from its first train (the quiet
+// direction). ASKED is the target's enqueues in the window, live and ended
+// (gitlet.QueueDue.Enqueued), so one past a page's 64 entries or dequeued
+// between turns still counts. CAPACITY is config.LandingCapacity at the mean
+// round (build record applied to land record applied) ended in the window; a
+// train testing past that mean counts as one more round at its age, so a queue
+// whose checks stopped finishing is not priced at its earlier rounds. The
+// queue's own capacity is the threshold (ADR-0015): the alarm holds no rate.
 type mergeRate struct {
 	mu sync.Mutex
-	// targets is each repository's targets by their ref. An inner map is
-	// never left empty, so the outer one holds only the repositories with a
-	// target timed or measured.
+	// targets is each repository's targets by ref, keyed by repository so a
+	// turn's [mergeRate.seen] walks only its own targets under mu, not every
+	// target the node holds. An inner map is never left empty.
 	targets map[string]map[string]*rateTarget
 }
 
 // rateTarget is one target's timing and its last measurement.
 type rateTarget struct {
-	// train is the train this node last built onto the target and built
-	// when its record applied: the round under way, "" for none.
+	// train is the round under way ("" for none): the train this node last
+	// built onto the target, built when its record applied.
 	train string
 	built time.Time
-	// rounds are the rounds this node timed, oldest first: each a train's
-	// build to its landing, and when it landed.
+	// rounds are the rounds this node timed, oldest first.
 	rounds []timedRound
-	// name, asked, capacity, round and at are the last measurement — the
-	// target by its branch and repository, its enqueues within the window,
-	// what it can land in it at round, and when it was taken — zero at for
-	// none.
+	// name, asked, capacity, round and at are the last measurement (zero at
+	// for none): the target by branch and repository, its enqueues in the
+	// window, what it can land in it at round, and when it was taken.
 	name     string
 	asked    int
 	capacity int
@@ -102,10 +73,9 @@ func (r *mergeRate) target(repoID, target string) *rateTarget {
 	return t
 }
 
-// built records train built onto repoID's target at at: the round it
-// begins. abandoned is an earlier train of this node's it replaces, which
-// ended without landing — a target moved under it, a train its rows still
-// held that a new one gives up.
+// built records train built onto repoID's target at at, beginning its round.
+// abandoned reports it replaces an earlier train of this node's that ended
+// without landing.
 func (r *mergeRate) built(repoID, target, train string, at time.Time) (abandoned bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -115,9 +85,8 @@ func (r *mergeRate) built(repoID, target, train string, at time.Time) (abandoned
 	return abandoned
 }
 
-// landed records train's green prefix landed on repoID's target at at: the
-// round it ends, timed where this node built it — took, and timed true, for
-// a train this node built; nothing for one it did not.
+// landed records train's green prefix landed on repoID's target at at, ending
+// its round: took and timed true for a train this node built, else nothing.
 func (r *mergeRate) landed(repoID, target, train string, at time.Time) (took time.Duration, timed bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -132,9 +101,8 @@ func (r *mergeRate) landed(repoID, target, train string, at time.Time) (took tim
 }
 
 // ended records train ended on repoID's target WITHOUT LANDING, by an eject
-// the worker itself appended — a bisect's culprit, or entries its landing
-// would not land: no round is timed (the queue landed nothing in it), and
-// [mergeRate.measure] does not count it again as abandoned.
+// the worker itself appended: no round is timed (the queue landed nothing),
+// and [mergeRate.measure] does not count it again as abandoned.
 func (r *mergeRate) ended(repoID, target, train string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -143,12 +111,11 @@ func (r *mergeRate) ended(repoID, target, train string) {
 	}
 }
 
-// measure takes d's merge rate at now, from repoID's queue work d: its
-// enqueues within the window against its capacity at the mean round this
-// node timed — none where it has timed no round, and none for a target whose
-// gate requires no check, which has no queue to price. abandoned is a train
-// this node built that d no longer holds and nothing this node appended
-// ended ([mergeRate.ended]): a round that ended without a landing.
+// measure takes the merge rate of repoID's queue work d at now: its enqueues
+// in the window against its capacity at the mean round this node timed; none
+// where no round is timed, nor where the gate requires no check (no queue to
+// price). abandoned reports a train this node built that d no longer holds and
+// that nothing this node appended ended ([mergeRate.ended]).
 func (r *mergeRate) measure(repoID string, d gitlet.QueueDue, now time.Time) (abandoned bool) {
 	if len(d.Required) == 0 {
 		return false
@@ -189,10 +156,8 @@ func (r *mergeRate) measure(repoID string, d gitlet.QueueDue, now time.Time) (ab
 	return abandoned
 }
 
-// seen drops every target of repoID a turn that read all of its queue work
-// did not meet: a target with no live entry left, whose queue has drained.
-// It walks repoID's own targets alone, and drops the repository once none is
-// left.
+// seen drops every target of repoID that a turn reading all of its queue work
+// did not meet (its queue drained), and the repository once none is left.
 func (r *mergeRate) seen(repoID string, met []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -210,17 +175,14 @@ func (r *mergeRate) seen(repoID string, met []string) {
 	}
 }
 
-// reading fills out's merge-rate half at now: how many targets were asked past
-// their capacity by their last measurement within the window, and the one
-// asked furthest past it — by the ratio of the two, so a small queue far
-// behind outranks a large one barely past.
+// reading fills out's merge-rate half at now: how many targets their last
+// measurement in the window found asked past capacity, and the one furthest
+// past by ratio, so a small queue far behind outranks a large one barely past.
 //
-// It also FORGETS every target neither measured nor building a train within
-// the window: one whose repository's queue work this node no longer turns —
-// its home moved to another node, or the repository was deleted — which
-// [mergeRate.seen] never reaches, since only a turn of the repository calls
-// it. Without that, a long-lived Gitlet node would keep an entry for every
-// target it was ever home to.
+// It also FORGETS every target neither measured nor building a train in the
+// window (its home moved, or the repository was deleted), which
+// [mergeRate.seen] never reaches; otherwise a long-lived node would keep an
+// entry for every target it was ever home to.
 func (r *mergeRate) reading(now time.Time, out *statelog.Reading) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -256,11 +218,10 @@ func (r *mergeRate) reading(now time.Time, out *statelog.Reading) {
 	out.CodeMergeRateWindow = gitlet.MergeRateWindow
 }
 
-// furtherPast reports a asked further past its capacity than b — the greater
-// ratio of enqueues to capacity, compared as integer products (each asked
-// past its capacity, so a capacity is under [gitlet.MergeRateScan] and neither
-// product overflows) — and on a tie the name first, so a reading names one
-// target whatever order the map is walked in.
+// furtherPast reports a asked further past its capacity than b, comparing the
+// ratios as integer products (each is asked past its capacity, so that is under
+// [gitlet.MergeRateScan] and neither overflows), and on a tie the name first,
+// so a reading names one target whatever order the map is walked in.
 func furtherPast(a, b *rateTarget) bool {
 	l, r := int64(a.asked)*int64(max(1, b.capacity)), int64(b.asked)*int64(max(1, a.capacity))
 	if l != r {

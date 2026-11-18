@@ -37,40 +37,15 @@ const members = 3
 
 // clusterTiming is how long every member's router waits on a data node.
 //
-// THE READ ATTEMPT is two seconds against production's ten: a serving node
-// fits its waits into whatever attempt it is handed and answers `behind` a
-// reply's margin short of it (estate.Timing), so a shorter attempt costs only
-// that a member whose applier a case holds says so sooner — which is every read
-// F13 sends its paused member.
-//
-// THE WRITE ATTEMPT is what a push asked of a member that never answers — F1's
-// committer, killed after appending — costs before the runner-up is asked, and
-// it also bounds how long a push may queue at a committer: the committer
-// answers a queued push busy once less than gitlet.CommitBudget and
-// gitlet.ReplyMargin are left of its asker's attempt. So it is the shortest the
-// router accepts — a floor wait, a commit budget and the reply margin, 33 s —
-// and twelve seconds more, the queue F19 builds: its committer's first record
-// is held until every one of forty-eight pushes has uploaded, about three
-// seconds measured for fifty pushes on four cores under the race detector.
-// Production's sixty would cost each of the two backends' F1 and committer
-// crash a quarter of a minute more of waiting on a dead member.
-//
-// THE ADMISSION BUDGET is the read attempt's: no case asks it.
-//
-// THE GIT READ ATTEMPT is production's (estate.GitReadAttempt): no case wedges
-// a Gitlet node for a read, and a member that is killed or stopped costs a git
-// read no wait at all — nothing serves its subjects, and the broker's ask ends
-// at once.
-//
-// THE GIT WRITE ATTEMPT is production's (estate.GitWriteAttempt) too, though
-// it is what F41's home — killed after its write's proposal, its answer never
-// sent — costs before the runner-up is asked, on each backend: a Gitlet node
-// uploads a write's bundle only while the upload's allowance and the
-// proposal's own attempt are still left (gitlet.WriteUploadAllowance and
-// gitlet.MinProposeAttempt, 63 s together, internal/gitlet/host's deadline rule),
-// so an attempt short of production's by its sync and build budgets would
-// answer a write that synced or built slowly on a loaded runner busy — a case
-// failing for the suite's timing rather than Gitlet's.
+// ReadAttempt is 2 s, not production's 10: a serving node answers `behind` a
+// margin short of its attempt (estate.Timing), so F13's paused member says so
+// sooner. WriteAttempt is the router's floor (floor wait + gitlet.CommitBudget
+// + gitlet.ReplyMargin, 33 s) plus 12 s for F19's queue: a committer answers a
+// queued push busy once less than budget and margin is left, and 48 pushes
+// take ~3 s to upload under race. No case asks AdmissionAsk. The git attempts
+// are production's: a dead member costs a read no wait, and a write uploads
+// only while gitlet.WriteUploadAllowance and gitlet.MinProposeAttempt (63 s,
+// internal/gitlet/host's deadline rule) are left, so less fails a slow write.
 var clusterTiming = estate.Timing{
 	ReadAttempt:     2 * time.Second,
 	WriteAttempt:    statelog.ReadBudget + gitlet.CommitBudget + gitlet.ReplyMargin + 12*time.Second,
@@ -94,11 +69,10 @@ var clusterEnvelopes = func() *estate.Envelopes {
 // cluster, F19's and F21's included, where each record is small.
 const codeLogBytes = 256 << 20
 
-// bucketBytes is the broker bucket's byte reservation, which every bucket
-// must hold (natsobj.Config.MaxBytes): a gibibyte, the least
-// store.objects.nats_max_bytes takes and far past every pack bundle one
-// cluster's cases push, each a few kilobytes, so a push is never refused as
-// the bucket filling.
+// bucketBytes is the broker bucket's required byte reservation
+// (natsobj.Config.MaxBytes): a gibibyte, the least store.objects.nats_max_bytes
+// takes and far past the few kilobytes each case's bundles take, so no push is
+// refused as the bucket filling.
 const bucketBytes = 1 << 30
 
 // transfers is each Gitlet node's transfer lane: F19's sixteen pushes through
@@ -188,10 +162,9 @@ type member struct {
 var _ gitlettest.Cluster = (*cluster)(nil)
 
 // startCluster starts the topology over backend: "nats", the broker's own
-// object store, one bucket every member reaches through its own client as a
-// deployment's do; or "s3", one S3 bucket in process. Its brokers decline the
-// fsync per write, which the suite's claims do not turn on and which would
-// only slow them.
+// object store, one bucket each member reaches through its own client as a
+// deployment's do; or "s3", one in-process S3 bucket. Its brokers skip the
+// per-write fsync, which no suite claim turns on.
 func startCluster(t testing.TB, backend string) *cluster {
 	t.Helper()
 	return startClusterOf(t, backend, js.Config{})
@@ -320,13 +293,12 @@ func (m *member) route(t testing.TB) {
 	m.withdraw = withdraw
 }
 
-// gitletNodeOf is the Gitlet node of the member id names — nil for an id the
-// cluster holds no member for, and for a member whose Gitlet node is not started
-// yet — whose presence row the routers' git placement reads what it says its
-// cache gives its background work off (gitlettest.GitPlacement), as the
-// engine's presence row carries it beside its status: a member not started
-// yet is not saying, a stopped one is not listed (placement), and a killed
-// one says what its last beat did, as its presence lease runs on.
+// gitletNodeOf is the Gitlet node of the member id names, nil when there is
+// none or it is not started yet. The routers' git placement reads off it what
+// its cache gives background work (gitlettest.GitPlacement), as the engine's
+// presence row carries it: a member not started says nothing, a stopped one is
+// not listed (placement), and a killed one says what its last beat did while
+// its presence lease runs on.
 func (c *cluster) gitletNodeOf(id string) *gitlettest.GitletNode {
 	for _, m := range c.members {
 		if m.id == id {
@@ -343,11 +315,10 @@ func (m *member) gitletNode() *gitlettest.GitletNode {
 	return m.git
 }
 
-// memberGit is the member's git half as its router and its serving
-// registration ask for it (estate.LocalGit): its Gitlet node's query server and
-// host, read again at every request — the Gitlet node is started after the
-// registration, and a restart builds new ones — its reads counted, so a case
-// can tell which member answered a read (member.gitAnswered).
+// memberGit is the member's git half (estate.LocalGit) as its router and
+// serving registration ask for it: its Gitlet node's query server and host,
+// read again at every request because the node starts after the registration
+// and a restart builds new ones, its reads counted (member.gitAnswered).
 type memberGit struct{ m *member }
 
 func (g memberGit) Git() (estate.GitServer, bool) {
@@ -420,11 +391,10 @@ func (m *member) expunge(ctx context.Context, p gitlet.ExpungeProposal) (gitlet.
 }
 
 // memberMaintainers is which repositories the member maintains, as its
-// compactor asks once a pass: its own router — the incarnation's, read again
-// at every question — but for a repository whose maintainer a case split the
-// fleet's view of (SplitMaintainers), of which every member it named takes
-// itself for the maintainer; and none, whatever a split says, of the
-// repositories that existed when the running case began (ConfineMaintenance).
+// compactor asks once a pass: its router's answer (the current incarnation's,
+// loaded at every question), except that every member a split names maintains
+// the split repository (SplitMaintainers), and none a confined one, whatever a
+// split says (ConfineMaintenance).
 type memberMaintainers struct{ m *member }
 
 func (h memberMaintainers) MaintainerOf(charges map[string]int64) (map[string]bool, error) {
@@ -494,14 +464,12 @@ func (e memberEstate) Queue(ctx context.Context, p gitlet.QueueProposal) (gitlet
 	return e.m.router.Load().Code().Queue(ctx, p)
 }
 
-// memberCopy is the member's own copy of the estate as its router and its
-// serving half ask it: the code half its data node serves (gitlet.Served, the
-// adapter the engine hands the router), its applier's wait, whether the copy
-// answers — the state log's own judgement of its health — and whether the
-// member serves the company's configuration (member.current). A held applier
-// makes a LAGGING copy, asked last, never a wrong one; a member a case left
-// behind a revision (Revoke) is a node behind the configuration, asked last
-// and judging no grant.
+// memberCopy is the member's own copy of the estate as its router and serving
+// half ask it: its data node's code half (gitlet.Served, as the engine hands
+// it), its applier's wait, whether the copy answers (the state log's health)
+// and whether the member is current (member.current). A held applier makes a
+// LAGGING copy, asked last, never a wrong one; a member left behind a revision
+// (Revoke) is asked last and judges no grant.
 type memberCopy struct{ m *member }
 
 func (c memberCopy) For(context.Context, string) (estate.Backend, bool) {
@@ -566,16 +534,12 @@ func (c *cluster) Revoke(t testing.TB, seat, behind string) (restore func()) {
 // live, as the engine's watched presence view lists them, and how often a
 // router has reported each one unanswered.
 //
-// A KILLED MEMBER STAYS LISTED, because a process that dies gives nothing back:
-// its presence lease runs on until its TTL ends, and until then every peer's
-// router asks it, hears nothing — no member serves its subjects — and reports
-// it, which is the walk a dead committer costs (F20). A member restarted
-// inside that window is the same listing, so a kill leaves the placement
-// alone until the restart. A STOPPED member gives its presence back FIRST, as
-// the engine's drain does before its teardown begins, and is listed again
-// when it is restarted. How the engine's view learns of either is the
-// engine's to test; this suite's subject is the router's walk over what the
-// view lists.
+// A KILLED MEMBER STAYS LISTED: a dead process gives no presence back, so
+// until its lease's TTL ends every router asks it, hears silence and reports
+// it, the walk a dead committer costs (F20); a restart inside that window is
+// the same listing. A STOPPED member gives its presence back FIRST, as the
+// engine's drain does, and is listed again on restart. How the view learns of
+// either is the engine's to test; this suite tests the router's walk over it.
 type placement struct {
 	mu         sync.Mutex
 	listed     []string
@@ -882,11 +846,9 @@ func (c *cluster) WaitedOut(node string) int {
 
 // waitedOutAsker is a member's router's queue, counting every proposal the
 // router waits out on a member (gitlettest.Cluster.WaitedOut): an ask of the
-// member's proposal lane whose attempt ends at its DEADLINE rather than by the
-// router's cancel once it moved on. Counted as the attempt ends, so a wait is
-// counted whoever made it — the broker's for an answer that never came, or the
-// router's own after one; a caller that hung up cancels the attempt, and is
-// no member's silence.
+// member's proposal lane whose attempt ends at its DEADLINE, whether the
+// broker or the router waited. A cancel (the router moving on, or a caller
+// hanging up) is no member's silence.
 type waitedOutAsker struct {
 	estate.Asker
 	c *cluster
@@ -930,13 +892,10 @@ func (c *cluster) Settle(ctx context.Context) error {
 }
 
 // drained waits until every running member's applier has DRAINED the code log
-// once since it started — what makes its copy one that answers requests
-// (statelog.Health.Serving) rather than one asked only once no other copy will
-// take a request. An applier latches it once the broker says nothing follows
-// what it has committed, which a member just restarted or just started has not
-// heard yet, and a push to a repository whose committer has not would be
-// decided by whichever member happened to be level at that instant — the
-// router's rule for a lagging copy, and not the order a case is checking.
+// once since it started, which makes its copy one that answers requests
+// (statelog.Health.Serving) rather than a last resort. Until a repository's
+// committer has, a push to it is decided by whichever member happens to be
+// level (the router's rule for a lagging copy), not the order a case checks.
 func (c *cluster) drained(ctx context.Context) error {
 	for _, m := range c.writers() {
 		for !m.data.Drained() {
@@ -951,11 +910,9 @@ func (c *cluster) drained(ctx context.Context) error {
 }
 
 // AwaitElection reads the code log's state through every running member's own
-// client until each is answered (gitlettest.Cluster) — a member whose applier
-// a case holds among them, since its committer decides as one whose applier
-// runs does, so never through writers, which leaves it out. A read the broker
-// answers 503 or not at all while the elections a member's death caused run
-// is asked again.
+// client until each is answered (gitlettest.Cluster), retrying a 503 or silence
+// while a death's elections run. Not through writers: a member whose applier a
+// case holds still runs a committer that decides.
 func (c *cluster) AwaitElection(ctx context.Context) error {
 	for _, m := range c.members {
 		if !m.isRunning() {
@@ -1059,11 +1016,9 @@ func (c *cluster) splitOf(repoID string) ([]string, bool) {
 }
 
 // ConfineMaintenance has no member maintain, until the case ends, any
-// repository that exists now — read through the first running member, every
-// status (gitlettest.Cluster). A member's compactor asks who maintains a
-// repository at every pass, of its compactions, publications and expunges
-// alike (memberMaintainers), so the case's passes meet the repositories it
-// makes and none an earlier case left on the cluster.
+// repository that exists now, of every status (gitlettest.Cluster). Every
+// compactor pass asks memberMaintainers, so the case's passes meet only the
+// repositories it makes, none an earlier case left.
 func (c *cluster) ConfineMaintenance(t testing.TB) {
 	t.Helper()
 	m, err := c.first()
@@ -1270,11 +1225,9 @@ func (c *cluster) Level(ctx context.Context, node string) error {
 }
 
 // Kill is the member's process dying: its Gitlet node killed, its broker client
-// closed FIRST — a process that dies sends nothing more, so no answer it was
-// in the middle of reaches its asker, which hears silence — its estate
-// subjects withdrawn, its data node killed, its broker member stopped. It
-// STAYS IN THE PLACEMENT: a process that dies gives no presence back
-// (placement).
+// closed FIRST so no answer in progress reaches its asker, which hears silence,
+// then its estate subjects withdrawn, its data node killed and its broker
+// member stopped. It STAYS IN THE PLACEMENT (placement).
 func (c *cluster) Kill(t testing.TB, node string) {
 	t.Helper()
 	m := c.member(t, node)
@@ -1305,25 +1258,17 @@ func (c *cluster) down(m *member) {
 	c.brokers.StopMember(m.i)
 }
 
-// Stop is a graceful stop in the engine's order (engine.Engine.Stop: the drain,
-// then the teardown):
+// Stop is a graceful stop in the engine's order (engine.Engine.Stop):
 //
-//  1. Its presence given back, which the engine's drain begins with: its
-//     peers' routers stop listing it.
-//  2. Its Gitlet node drained and stopped — the API's listener, which the engine
-//     closes before its teardown, finishing what it let through, then the
-//     teardown's first step, stopGitletHost — so the member takes no push and
-//     appends no sync's barrier once its committer refuses: every push in
-//     flight there proposes, and every sync appends, through the estate.
-//  3. Its committer refusing — every proposal queued at it answered "not
-//     serving", which its asker takes to the repository's runner-up, and the
-//     batch in flight finished.
-//  4. Its estate subjects no longer answered, the answers in flight waited
-//     for. A member that stopped answering before its committer refused
-//     would leave every push it held answered with the withdrawal's
-//     cancellation, a final failure for a push its batch might yet land.
-//  5. The rest as Kill takes it: its broker client, its data node and its
-//     broker member.
+//  1. Its presence given back, so its peers' routers stop listing it.
+//  2. Its Gitlet node drained, then stopped (stopGitletHost), so it takes no
+//     push and appends no sync barrier once its committer refuses.
+//  3. Its committer refusing: each queued proposal answered "not serving",
+//     which its asker takes to the runner-up, and the batch in flight finished.
+//  4. Its estate subjects withdrawn, answers in flight waited for. Withdrawn
+//     before the committer refused, each push it held would fail on the
+//     cancellation though its batch might yet land.
+//  5. The rest as Kill takes it.
 func (c *cluster) Stop(t testing.TB, node string) {
 	t.Helper()
 	m := c.member(t, node)

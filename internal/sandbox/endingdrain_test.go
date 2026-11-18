@@ -16,9 +16,8 @@ import (
 // it says of one it stops waiting for (drain.go).
 
 // landsOnWatch is a run store that lands a call's update the moment a wait
-// opens its watch of the run's log — as the node still running the call makes
-// it, another node for all the collecting one knows — so the update is on the
-// log for a reader that waited for the call, and for no reader that did not.
+// watches the run's log, as another node running the call would: only a
+// reader that waited sees it.
 type landsOnWatch struct {
 	PendingStore
 	land func()
@@ -99,16 +98,10 @@ func (e *endingCalls) seen() []RunCalls {
 }
 
 // EVERY ENDING WAITS FOR A CALL IN FLIGHT BEFORE IT DECIDES THE TURN'S END. A
-// person's stop and a loss whose box is reclaimed each decide the turn's end on
-// the run's log — the engine's account of whether the turn replied, and of what
-// it changed ([CoordinatorOptions.CloseStopped], [CoordinatorOptions.TurnLost])
-// — before the ending deletes the run's record. A call the job's harness left
-// running is on the log by its entry, and its update lands once it returns, on
-// whichever node runs it: so the ending, made by this node's own retry
-// ([errAskAway]), waits on the run's log until the entry is gone, and only then
-// reads — and the turn's end is handed the call finished, with the work item it
-// filed. The update is made through the store the moment the wait watches the
-// log, as another node makes it, so only an ending that waited holds it.
+// person's stop and a reclaimed loss decide the turn's end on the run's log
+// ([CoordinatorOptions.CloseStopped], [CoordinatorOptions.TurnLost]), so the
+// ending (this node's retry, [errAskAway]) waits until no call is in flight,
+// and the turn's end gets the call finished, with the work item it filed.
 //
 // Mutation: decide the turn's end without waiting for the calls in flight
 // (ending-decides-without-the-drain), and the engine is handed the call still
@@ -161,14 +154,12 @@ func TestEveryEndingWaitsForACallInFlightBeforeItDecidesTheTurnsEnd(t *testing.T
 }
 
 // A CALL STILL IN FLIGHT AT THE TURN'S CAP IS NAMED, NEVER DROPPED UNSEEN. A
-// run whose turn's wall-clock cap passed is collected and ended at once
-// ([Coordinator.completeAtDeadline]): the cap bounds every wait for its calls,
-// so a call its harness left running is waited for no longer — named at
-// warning as the collection stops waiting (`sandbox_calls_unfinished`, why: the
-// turn's cap passed), handed to the turn's end as a call still in flight, its
-// outcome unknown, and named again as the ending deletes the run's record
-// (`sandbox_run_deleted_with_calls_in_flight`), whose update then finds no
-// record. Not parallel: the lines are read off the process's own logger.
+// run past its cap is ended at once ([Coordinator.completeAtDeadline]): a call
+// still running is named as the collection stops waiting
+// (`sandbox_calls_unfinished`), handed to the turn's end as in flight, and
+// named again as the record is deleted
+// (`sandbox_run_deleted_with_calls_in_flight`). Not parallel: the lines are
+// read off the process's own logger.
 //
 // Mutation: delete the record without naming what it still holds in flight
 // (delete-names-nothing), and the call that ran leaves no line as its record
@@ -178,8 +169,7 @@ func TestACappedRunNamesACallInFlightAtOnceAndAsItsRecordGoes(t *testing.T) {
 	rig := newCoordRig(t)
 	read := &endingCalls{}
 	rig.coordinator.turnLost = read.lost
-	// A SEAT THAT TAKES NO TURN NOW, its model at its limit: past the cap its
-	// completion is collected and ended rather than kept for the limit.
+	// Its model at its limit: past the cap the completion is ended, not kept.
 	rig.coordinator.gate = func(context.Context, string, ResumeRoute) (context.Context, func(), error) {
 		return nil, nil, weeklyLimit(rig.now.Add(time.Hour))
 	}

@@ -50,15 +50,13 @@ func realBoxUnder(t *testing.T, sh boxShell) (*executor.Runner, sandbox.Sandbox)
 }
 
 // runsUnder has every run's script in box run under sh, behind sh's prelude
-// and then prelude, rather than under the sh on PATH: a box image's sh is the
-// image's, and the cases about a run's end are to hold under every one a box
-// may have ([boxShells]).
+// and then prelude, rather than under the sh on PATH, so the cases about a
+// run's end hold under every sh a box image may have ([boxShells]).
 //
-// A STAND-IN `sh` IN THE BOX'S BIN DIRECTORY, which the wrapper's PATH puts
-// first for the script's `sh -c`, and which EXECS the shell asked for — so the
-// pid the script publishes for its end request is the shell's own, as a box
-// whose sh is that shell publishes. Anything but a script handed to `-c` goes
-// to the sh this machine has, untouched.
+// It is a stand-in `sh` in the box's bin directory, first on the wrapper's
+// PATH, that execs the shell asked for on a `-c` script, so the pid the script
+// publishes for its end request is that shell's own; anything else goes to
+// this machine's sh.
 func runsUnder(t *testing.T, box sandbox.Sandbox, sh boxShell, prelude string) {
 	t.Helper()
 	argv := sh.argv
@@ -93,19 +91,16 @@ var steerWiring = sandbox.SteerWiring{Server: "crewlet", Tool: "steer_take",
 
 // CLAUDE'S COMMAND CARRIES NO BRIEF, AND NAMES ITS SETTINGS.
 //
-// The brief is the prompt `-p` reads on stdin: a brief carries every note the
-// turn has read, one argument is capped at 128 KiB, and a command line is
-// readable by every account on a direct box's host. So no part of it — a quote
-// included — is on the command line at all. Every run names one settings file,
-// the settings every run has unless a gate names others: a run wired to its
-// notes names the settings holding its hooks too, for its release to choose
-// between, and one that is not never names them. And nothing that drops the
-// repository's own settings (--setting-sources, which also drops its CLAUDE.md)
-// or doubles the stream (--include-hook-events) is ever passed.
+// The brief is the prompt `-p` reads on stdin, no part of it on the command
+// line: it can pass one argument's 128 KiB cap, and a direct box's command
+// line is readable by every account on its host. Every run is started with one
+// settings file, every run's unless a gate names another; only one wired to its
+// notes names the hooked settings, for its release to choose between. Nothing that drops the repository's own
+// settings and CLAUDE.md (--setting-sources) or doubles the stream
+// (--include-hook-events) is passed.
 //
-// Mutation: put the brief back after -p and the first row goes red; name the
-// hooked settings whatever the request and the unwired row does; drop
-// --settings from the run's arguments and both do.
+// Mutation: put the brief back after -p (first row), name the hooked settings
+// whatever the request (unwired row), or drop --settings (both): a row goes red.
 func TestClaudesCommandCarriesNoBriefAndNamesItsSettings(t *testing.T) {
 	t.Parallel()
 	p := executor.Paths{Home: "/box"}
@@ -120,15 +115,14 @@ func TestClaudesCommandCarriesNoBriefAndNamesItsSettings(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			cmd := commandOf(claude(), sandbox.RunRequest{Brief: brief, Steer: tc.steer}, p, "")
-			// The brief's own words, never the script's: the script removes
-			// files of its own with an `rm -rf` of a quoted path.
+			// The brief's own words, not the script's own `rm -rf` of a quoted path.
 			for _, piece := range []string{"BRIEF-MARKER", "rm -rf / #", "fix it"} {
 				if strings.Contains(cmd, piece) {
 					t.Fatalf("the brief is on the command line (%q):\n%s", piece, cmd)
 				}
 			}
-			// EVERY RUN is one script, which reads the harness's version before it
-			// starts it ([claudeRelease]), the harness on a line of its own.
+			// Every run is one script that reads the harness's version first
+			// ([claudeRelease]), the harness on a line of its own.
 			cmd = scriptOf(t, cmd)
 			if !strings.Contains(cmd, "\nclaude -p --output-format stream-json --verbose ") {
 				t.Errorf("-p is not the bare print flag, with the prompt left to stdin:\n%s", cmd)
@@ -150,9 +144,9 @@ func TestClaudesCommandCarriesNoBriefAndNamesItsSettings(t *testing.T) {
 	}
 }
 
-// CLAUDE'S BRIEF IS READ FROM STDIN: the runner writes it to the brief's file,
-// whole, and the wrapper points the harness's standard input at that file rather
-// than at /dev/null — which still ends, so a headless run never waits on input.
+// CLAUDE'S BRIEF IS READ FROM STDIN: the runner writes it whole to the brief's
+// file, and the wrapper points the harness's stdin there rather than at
+// /dev/null; a file still ends, so a headless run never waits on input.
 //
 // Mutation: drop BriefOnStdin from Claude's Output and the harness reads nothing.
 func TestClaudesBriefIsReadFromStdin(t *testing.T) {
@@ -170,25 +164,23 @@ func TestClaudesBriefIsReadFromStdin(t *testing.T) {
 	if want := `< '\''` + p.Brief() + `'\''`; !strings.Contains(script, want) {
 		t.Errorf("the harness's stdin is not the brief's file (%s):\n%s", want, script)
 	}
-	// THE HARNESS'S OWN STDIN: the version the script reads first is asked with
-	// none, which is no prompt at all, and so is the pack after the harness has
-	// exited; the harness's own line names none.
+	// The version read before the harness and the pack after it take no stdin;
+	// the harness's own line must not close it.
 	_, line, _ := strings.Cut(script, "claude -p")
 	if line, _, _ = strings.Cut(line, "\n"); strings.Contains(line, "< /dev/null") {
 		t.Errorf("the harness's stdin is closed, so it runs no prompt:\n%s", script)
 	}
 }
 
-// THE WRAPPER UNSETS THE VARIABLES THAT SWITCH HOOKS OFF, as a statement of its
-// own before the harness's: bare mode (CLAUDE_CODE_SIMPLE) drops every hook, and
-// safe mode (CLAUDE_CODE_SAFE_MODE) drops hooks and the --mcp-config bridge;
-// either can come from the seat's environment, the image or a profile the login
-// shell sources, and only the script, which runs after all three, reaches every
-// one. For every Claude run — the bridge is every run's tools — and for no
-// other harness, whose environment those names mean nothing to.
+// THE WRAPPER UNSETS THE VARIABLES THAT SWITCH HOOKS OFF, in a statement before
+// the harness's: bare mode (CLAUDE_CODE_SIMPLE) drops every hook, and safe mode
+// (CLAUDE_CODE_SAFE_MODE) drops hooks and the --mcp-config bridge. Either can
+// come from the seat's environment, the image or a login-shell profile, and
+// only the script runs after all three. Every Claude run (the bridge is every
+// run's tools), and no other harness.
 //
-// Mutation: drop Unset from Claude's Output, or emit it after the harness, and this
-// goes red.
+// Mutation: drop Unset from Claude's Output, or emit it after the harness, and
+// this goes red.
 func TestTheWrapperUnsetsTheVariablesThatSwitchHooksOff(t *testing.T) {
 	t.Parallel()
 	for name, req := range map[string]sandbox.RunRequest{
@@ -214,22 +206,17 @@ func TestTheWrapperUnsetsTheVariablesThatSwitchHooksOff(t *testing.T) {
 	}
 }
 
-// EVERY CLAUDE CODE RUN STARTS OUTSIDE ITS HOSTED MODE, a fresh one and a
-// resumed one alike, under every sh a box may run the script with.
-// CLAUDE_CODE_REMOTE marks Anthropic's own hosted environment, which no box
-// is: switched on, a resume's load gives a record whose parent the transcript
-// does not hold an earlier record as its parent, picked by timestamp, so the
-// run would continue a conversation its session never recorded. It can come
-// from the seat's environment, the image or a profile the login shell sources,
-// and the wrapper unsets it after all three, on every run: unset on a resume
-// alone, a relaunch would not run as the job it continues ran. Played on a
-// real box whose seat's environment and profile both switch it on, the harness
-// a stand-in that records the environment it started with.
+// EVERY CLAUDE CODE RUN STARTS OUTSIDE ITS HOSTED MODE, fresh or resumed, under
+// every sh a box may have. CLAUDE_CODE_REMOTE marks Anthropic's hosted
+// environment, which no box is: with it set, a resume's load gives a record
+// whose parent the transcript lacks an earlier one picked by timestamp,
+// continuing a conversation its session never recorded. The wrapper unsets it after the seat's environment,
+// the image and the login-shell profile, on every run, so a relaunch runs as
+// the job it continues ran. Played on a real box whose seat's environment and
+// profile both set it, the harness a stand-in recording its environment.
 //
-// Mutation: drop CLAUDE_CODE_REMOTE from the wrapper's unsets and both runs
-// start with it; unset it on the resume alone, and the fresh run does; unset
-// it around the login shell rather than in it, and the profile's value reaches
-// both.
+// Mutation: drop it from the wrapper's unsets, unset it on the resume alone, or
+// unset it around the login shell rather than in it, and a run starts with it.
 func TestEveryClaudeCodeRunStartsOutsideItsHostedMode(t *testing.T) {
 	t.Parallel()
 	forEachShell(t, func(t *testing.T, sh boxShell) {
@@ -239,9 +226,8 @@ func TestEveryClaudeCodeRunStartsOutsideItsHostedMode(t *testing.T) {
 			t.Fatalf("write the profile: %v", err)
 		}
 		seat := map[string]string{"CLAUDE_CODE_REMOTE": "true"}
-		// outside reads the environment the run's harness started with, which
-		// the stand-in records afresh on every run, and clears the record for
-		// the next one, so a harness that never started reads as none.
+		// outside reads the environment the run's harness started with and
+		// clears the record, so a harness that never started reads as none.
 		outside := func(run string) {
 			t.Helper()
 			env := boxFile(t, b, b.Home()+"/env")
@@ -268,16 +254,13 @@ func TestEveryClaudeCodeRunStartsOutsideItsHostedMode(t *testing.T) {
 }
 
 // THE SETTINGS FILES ARE THE MEASURED SHAPES, and nothing more. Every run's
-// holds the harness's own retention sweep off and nothing else; a run handed
-// skills has them again with `disableAllHooks` written false (a repository's
-// own true otherwise switches every hook off without a word, the skills'
-// plugin's among them); a run wired to its notes has those with its hooks: one
-// mcp_tool hook at PostToolBatch and one at Stop, each calling the tool the
-// launch named on the server it named, with the event and the agent id the
-// harness fills in, under a ten-second timeout. No field newer than the oldest
-// release each is handed — print mode ignores a file it cannot validate, hooks,
-// retention and all — which the whole-document comparisons hold: a key added is
-// a key this case did not measure.
+// holds the harness's retention sweep off; a run handed skills has that with
+// `disableAllHooks` false (a repository's own true would silently switch off
+// every hook, the skills' plugin's among them); a run wired to its notes has
+// those plus one mcp_tool hook each at PostToolBatch and Stop, calling the
+// launch's tool on its server with the event and agent id, under a ten-second
+// timeout. No key is newer than the oldest release each is handed (print mode
+// ignores a file it cannot validate), so an unmeasured key goes red.
 //
 // Mutation: tag disableAllHooks omitempty and the hooked documents lose it;
 // write the hooks into every run's settings and the unwired document gains
@@ -326,10 +309,9 @@ func TestTheSettingsFilesAreTheMeasuredShapes(t *testing.T) {
 		t.Errorf("the hook timeout is %v, and the file says ten seconds", executor.ClaudeHookTimeout)
 	}
 
-	// A RUN WIRED TO NO NOTES WRITES NO HOOKS, AND ONE HANDED NO SKILLS
-	// SWITCHES NONE ON: the assistant's deep work has no inbox, and hooks
-	// calling a tool its bridge does not serve would be a call at every step
-	// for nothing. It has every run's settings all the same.
+	// A run wired to no notes writes no hooks, and one handed no skills switches
+	// none on: hooks calling a tool its bridge does not serve would be a call at
+	// every step for nothing. It still has every run's settings.
 	plain := sandbox.NewFakeSandbox("box-2")
 	if _, err := (executor.ClaudeCode{}).WriteConfig(t.Context(), plain,
 		sandbox.RunRequest{Brief: "x"}, executor.PathsFor(plain)); err != nil {
@@ -345,13 +327,12 @@ func TestTheSettingsFilesAreTheMeasuredShapes(t *testing.T) {
 }
 
 // THE SETTINGS FILES ARE WRITTEN PRIVATE, UNDER THE BOX'S WORK DIRECTORY, on a
-// real box: outside the checkout, which a commit carries and the run edits, and
-// written afresh at the mode a box writes every file with even where a previous
-// run left one wider — the run's artefacts are cleared before it starts, and a
-// box write replaces a file whole rather than keeping the replaced one's mode.
+// real box: outside the checkout, which the run edits and a commit carries, and
+// at a box's file mode even where a previous run left one wider, since a run's
+// artefacts are cleared first and a box write replaces a file whole.
 //
 // Mutation: drop the settings from ClearArtifacts and write a local box's file
-// in place (O_TRUNC), and the previous run's wide files keep their mode — either
+// in place (O_TRUNC), and the previous run's wide files keep their mode; either
 // alone still holds it.
 func TestTheSettingsFilesAreWrittenPrivateUnderTheWorkDir(t *testing.T) {
 	t.Parallel()
@@ -394,12 +375,10 @@ func TestTheSettingsFilesAreWrittenPrivateUnderTheWorkDir(t *testing.T) {
 	}
 }
 
-// A HOOK-STOPPED RUN FAILS, AND SAYS WHY. Measured on 2.1.263 and 2.1.310: a
-// repository's own hook that exits 2 ends the loop as subtype success, no error
-// and an empty result, its terminal reason hook_stopped — which, read as it
-// reports itself, was a run that succeeded and said nothing. A run whose loop
-// completed, and a result from a harness that reports no terminal reason, stay
-// successful.
+// A HOOK-STOPPED RUN FAILS, AND SAYS WHY. On 2.1.263 and 2.1.310 a repository's
+// hook that exits 2 ends the loop as subtype success with no error, an empty
+// result and terminal reason hook_stopped: read as reported, a silent success.
+// A completed loop, and a result with no terminal reason, stay successful.
 //
 // Mutation: drop the terminal reason from succeeded() and the stopped rows go
 // green as successes.
@@ -427,7 +406,7 @@ func TestAHookStoppedRunFailsWithItsReason(t *testing.T) {
 	if absent := claude().Parse(`{"type":"result","subtype":"success","is_error":false,"result":"done"}`); !absent.Success {
 		t.Errorf("a result with no terminal reason read as failed: %+v", absent)
 	}
-	// THE TRANSCRIPT SAYS IT TOO, from the stream's own last line.
+	// The transcript says it too, from the stream's own last line.
 	dec := claude().Events()
 	dec.Line([]byte(fixture(t, "2.1.310", "result-hook-stopped.json")))
 	if got := dec.Result().Transcript; !strings.Contains(got, "[error] the run ended: a hook in the run stopped its loop") {
@@ -443,9 +422,8 @@ func TestClaudeCodeReadsNotes(t *testing.T) {
 	}
 }
 
-// OpenCode READS NOTES, through its plugin, and says so to the runner it is
-// driven by — so its runs are told notes arrive, and one that never asked for
-// them is said at its collection.
+// OpenCode READS NOTES, through its plugin, and says so to its runner, so its
+// runs are told notes arrive and one that never asked is said at collection.
 func TestOpenCodeReadsNotes(t *testing.T) {
 	t.Parallel()
 	if !executor.NewOpenCode().ReadsNotes() {
@@ -548,21 +526,17 @@ for a in "$@"; do printf '%s\n' "$a"; done > "$FAKE_DIR/argv"
 }
 
 // A CLAUDE CODE OLDER THAN ITS NOTE FLOOR STARTS WITHOUT THE HOOKS, AND IS NOT
-// TOLD OF NOTES. From 2.1.118 a release runs a settings file's mcp_tool hooks,
-// and before 2.1.163 it drops what a Stop hook answers: a note taken as the run
-// finishes would be recorded read, and published delivered, by a run that never
-// saw it. So a run wired to its notes reads the box's version first and names
-// the settings holding its hooks, and the standing instructions told of notes,
-// only on 2.1.163 or later; an older release is handed the settings every run
-// has and the standing instructions alone, and the run's error stream says why
-// — its notes then wait for the review, and its collection says it never asked.
-// A version it cannot read is taken for a current release. Under every sh a
-// box may run the script with. From 2.1.310 the file the hooks decide is
-// handed as its pinned copy ([pinnedOf]).
+// TOLD OF NOTES. Releases from 2.1.118 run mcp_tool hooks but before 2.1.163
+// drop a Stop hook's answer, so a note taken as the run finishes would be
+// recorded read by a run that never saw it. The script reads the box's version
+// and only on 2.1.163 or later names the hooked settings and the system text
+// told of notes; an older release gets every run's settings and the plain
+// text, its error stream says why, and its notes wait for the review. An
+// unreadable version is taken for current; from 2.1.310 the file is its pinned
+// copy ([pinnedOf]). Under every sh a box may have.
 //
 // Mutation: name the hooked settings whatever the version, compare the patch
-// alone, or hand an older release the instructions told of notes, and this
-// goes red.
+// alone, or tell an older release of notes, and this goes red.
 func TestAClaudeCodeOlderThanItsNoteFloorStartsWithoutTheHooks(t *testing.T) {
 	t.Parallel()
 	p := executor.Paths{Home: "/box"}
@@ -587,8 +561,8 @@ func TestAClaudeCodeOlderThanItsNoteFloorStartsWithoutTheHooks(t *testing.T) {
 		} {
 			t.Run(tc.version, func(t *testing.T) {
 				args, stderr := scriptArgv(t, sh, script, tc.version)
-				// ONE SETTINGS FILE, the one the hooks decide: with them
-				// where they are read, every run's where they are not.
+				// One settings file: the hooks' where they are read, every
+				// run's where not.
 				settings := p.ClaudeSettings()
 				if tc.hooks {
 					settings = p.ClaudeNotesSettings()
@@ -605,8 +579,8 @@ func TestAClaudeCodeOlderThanItsNoteFloorStartsWithoutTheHooks(t *testing.T) {
 					t.Errorf("on %q the run's error stream said it ran without its hooks: %v, want %v\n%s",
 						tc.version, said, !tc.hooks, stderr)
 				}
-				// ONE SYSTEM TEXT, the one the hooks decide: told of notes
-				// where they are read, as it stands where they are not.
+				// One system text: told of notes where hooks are read, plain
+				// where not.
 				want := p.System()
 				if tc.hooks {
 					want = p.ClaudeNotesSystem()
@@ -622,16 +596,13 @@ func TestAClaudeCodeOlderThanItsNoteFloorStartsWithoutTheHooks(t *testing.T) {
 }
 
 // EVERY CLAUDE CODE RUN IS STARTED WITH ITS BOX'S SWEEP HELD OFF: whatever its
-// release and whatever it is wired to, the settings file its harness is handed
-// holds `cleanupPeriodDays` at a hundred years — a run wired to its notes on a
-// release that reads them in the file with its hooks, and every other run, one
-// below the note floor among them, in the file every run has. The box's Claude
-// Code sweeps its configuration directory about five seconds into every run,
-// by each file's own mtime, and a session carried into the box keeps the
-// mtimes it was packed with: at the harness's default of thirty days a
-// continued conversation's turn lost its oldest tool results and its task list
-// to its own box (measured on 2.1.310). Played on a real box, the harness a
-// stand-in that keeps the file its --settings names.
+// release and wiring, the settings file its harness is handed holds
+// `cleanupPeriodDays` at a hundred years. The harness sweeps its configuration
+// directory by each file's mtime seconds into every run, and a carried session
+// keeps the mtimes it was packed with, so the default thirty days would strip
+// a continued conversation's oldest tool results and task list (measured on
+// 2.1.310). Played on a
+// real box, the harness a stand-in that keeps the file its --settings names.
 //
 // Mutation: drop cleanupPeriodDays from every run's settings, embed no
 // retention in the hooked ones, or start a run below the floor or wired to
@@ -708,15 +679,13 @@ func startOn(t *testing.T, release string, req sandbox.RunRequest) startedOn {
 	return startedOn{argv: argv, paths: p, named: after(argv, "--settings"), settings: settings}
 }
 
-// A RUN THAT CARRIES THE ENGINE'S SKILL HOOK SWITCHES HOOKS ON: on a release
-// that runs its skills' plugin (2.1.118 onwards), the settings its harness is
-// handed write `disableAllHooks` false beside the retention — the settings
-// that keep that hook on, or the notes' where it starts those, which hold the
-// same. The plugin's hook reports each load a required skill's tools are
-// unlocked by, and a repository's own `disableAllHooks: true` switches every
-// hook off without a word, a plugin's among them, where an explicit false in
-// the run's settings wins over it. Played on a real box, the harness a
-// stand-in that keeps the file its --settings names.
+// A RUN THAT CARRIES THE ENGINE'S SKILL HOOK SWITCHES HOOKS ON: from 2.1.118,
+// which runs the skills' plugin, the settings its harness is handed (the
+// skills', or the notes' where it starts those) write `disableAllHooks` false
+// beside the retention. The plugin's hook reports each load that unlocks a
+// required skill's tools, and a repository's own true would silently switch
+// it off; an explicit false in the run's settings wins. Played on a real box,
+// the harness a stand-in that keeps the file its --settings names.
 //
 // Mutation: name every run's settings at the skills' gate, or write the
 // skills' settings without the key, and a row goes red.
@@ -761,12 +730,10 @@ func TestARunThatCarriesTheEnginesSkillHookSwitchesHooksOn(t *testing.T) {
 }
 
 // A RUN THAT CARRIES NO HOOK OF THE ENGINE'S LEAVES HOOKS AS THE REPOSITORY SETS
-// THEM: the settings its harness is handed hold the retention and no
-// `disableAllHooks`, which would switch the repository's own hooks on for no hook
-// of the engine's to run — a run handed no skills and wired to none, one
-// wired to its notes on a release that does not read them, and one whose
-// skills are advisory on a release older than the skills' floor, which starts
-// without them.
+// THEM: its settings hold the retention and no `disableAllHooks`, which would
+// switch the repository's own hooks on for nothing. Such a run is handed no
+// skills and wired to none, wired to its notes on a release that does not
+// read them, or handed advisory skills below the skills' floor.
 //
 // Mutation: write disableAllHooks into every run's settings, or name the
 // skills' settings whatever the release, and a row goes red.
@@ -823,38 +790,32 @@ func (b *writesRecorded) WriteFile(ctx context.Context, path string, content []b
 }
 
 // claudeSettingsSince is, for each key a run's settings may hold, the oldest
-// Claude Code release read whose shipped settings schema declares it — the
-// first that does, where the release before it was read as well.
+// Claude Code release read whose shipped settings schema declares it (the
+// first that does, where the release before it was read too).
 var claudeSettingsSince = map[string]string{
-	// Declared, a whole number at least 0, in the shipped schema of 0.2.116,
-	// the oldest read (its changelog introduces it in 0.2.117): far older
-	// than any file's floor, so no older release needs reading.
+	// A whole number ≥ 0 in the schema of 0.2.116, the oldest read (its
+	// changelog adds it in 0.2.117): older than any file's floor.
 	"cleanupPeriodDays": "0.2.116",
-	// Declared, a boolean, in the shipped schema of 1.0.68 and in no
-	// earlier one: 1.0.67's has no such key.
+	// A boolean in 1.0.68's schema; 1.0.67's has no such key.
 	"disableAllHooks": "1.0.68",
-	// The key is older. What the engine writes under it is mcp_tool hooks
-	// alone (held below), which 2.1.118 is the first to run (its changelog:
+	// The key is older, but the engine writes only mcp_tool hooks under it
+	// (held below), which 2.1.118 first runs (its changelog:
 	// "Hooks can now invoke MCP tools directly via `type: \"mcp_tool\"`").
 	"hooks": "2.1.118",
-	// Declared ("Environment variables to set for Claude Code sessions") in the
-	// shipped schema of 2.1.310, the oldest read for it, and 2.1.322. Only the
-	// pinned copies hold it, which are handed from 2.1.310 alone
-	// (executor.ClaudeSettingsPinFloor), so no older release needs reading.
+	// In the schemas of 2.1.310, the oldest read for it, and 2.1.322. Only the
+	// pinned copies hold it, handed from 2.1.310 alone
+	// (executor.ClaudeSettingsPinFloor).
 	"env": "2.1.310",
 }
 
-// NO SETTINGS FILE HOLDS A KEY NEWER THAN THE OLDEST RELEASE IT IS HANDED. A
-// file holding a key its harness does not know is ignored whole in print mode,
-// without a word, the retention with it. Every run's settings are handed to
-// every release from 1.0.61, the first with --settings — no older one starts a
-// run at all, since every run is handed --append-system-prompt-file, which
-// 1.0.61 does not know (both read in its shipped code); the skills' from the
-// release that first runs their hook; the notes' from the one that first reads
-// a Stop hook's answer; and each one's pinned copy from the later of its own
-// floor and the pin's. Every key of every settings file a run's configuration
-// writes is held to the first release that declares it, and a key or a file
-// this case knows no release of goes red too.
+// NO SETTINGS FILE HOLDS A KEY NEWER THAN THE OLDEST RELEASE IT IS HANDED:
+// print mode silently ignores a file holding a key it does not know, the
+// retention with it. Every run's file is handed from 1.0.61, the first with
+// --settings (none up to it starts a run, lacking --append-system-prompt-file,
+// both read in its shipped code); the skills' from the first that runs their
+// hook; the notes' from the first that reads a Stop hook's answer; each pinned
+// copy from the later of its file's floor and the pin's. A key or file this
+// case knows no release of goes red too.
 //
 // Mutation: write disableAllHooks or the pin's env block into every run's
 // settings, lower the skills' floor below 1.0.68, or the pin's below 2.1.310,
@@ -954,22 +915,16 @@ func pinnedOf(p executor.Paths, file string) string {
 }
 
 // EVERY SETTINGS FILE HAS A PINNED COPY THAT HOLDS THE ENGINE'S COMPACTION
-// POINT OVER THE REPOSITORY'S. Claude Code assigns every settings source's
-// `env` block to its own environment once it has started, a checkout's own
-// `.claude/settings.json` before the run's --settings, so a repository that
-// sets CLAUDE_CODE_AUTO_COMPACT_WINDOW, CLAUDE_AUTOCOMPACT_PCT_OVERRIDE or
-// CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE would move the point the run compacts at
-// after the wrapper pinned it. So each settings file the configuration writes
-// (every run's, the skills' and the notes') has a pinned copy holding the same
-// settings and an `env` block of exactly the pin: those three, the window the
-// wrapper pins for the run's model and the two overrides blank, which the
-// harness reads as none, and the two switches a resume is started without,
-// blank too (the next case's). The file itself holds no `env`, since a release
-// older than the pin's floor is handed it.
+// POINT OVER THE REPOSITORY'S. Claude Code applies each settings source's `env`
+// once started, a checkout's `.claude/settings.json` before the run's
+// --settings, so a repository could move the compaction point the wrapper
+// pinned. Each file written has a pinned copy with the same settings and an
+// `env` of exactly the pin: the model's window, the two overrides blank (read
+// as none) and the resume's two switches blank (the next case's). The file
+// itself holds no `env`, since a release below the pin's floor is handed it.
 //
-// Mutation: write one file's pinned copy without the block or with another
-// window, leave an override or a switch out rather than blank, or write the
-// block into the file itself, and this goes red.
+// Mutation: drop or change a pinned copy's block, leave a name out rather than
+// blank, or write the block into the file itself, and this goes red.
 func TestEverySettingsFileHasAPinnedCopyHoldingTheEnginesCompactionPoint(t *testing.T) {
 	t.Parallel()
 	b := sandbox.NewFakeSandbox("box-1")
@@ -1018,15 +973,12 @@ func TestEverySettingsFileHasAPinnedCopyHoldingTheEnginesCompactionPoint(t *test
 
 // EVERY PINNED SETTINGS COPY BLANKS WHAT MOVES WHAT A RESUME HANDS ITS MODEL.
 // A resumed run's script unsets CLAUDE_CODE_RESUME_INTERRUPTED_TURN and
-// CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP before its harness starts, but Claude Code
-// assigns every settings source's `env` block to its own environment before
-// print mode resumes the session, a checkout's own `.claude/settings.json`
-// among them, so a repository that sets either would switch it on again: the
-// turn its last process was cut off in run again before the brief, or a
-// transcript past 5 MiB read by another rule. So every pinned copy the
-// configuration writes (every run's, the skills' and the notes') names both in
-// its `env` block, each as the empty string: a name left out leaves the
-// repository's value standing, and both releases read the empty string as off.
+// CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP, but Claude Code applies every settings
+// source's `env`, a checkout's `.claude/settings.json` among them, before print
+// mode resumes, so a repository setting either would rerun the cut-off turn
+// before the brief, or read a transcript past 5 MiB by another rule. Every
+// pinned copy names both as the empty string, which both releases read as off;
+// a name left out leaves the repository's value standing.
 //
 // Mutation: leave either name out of the pin, or write it with a value of its
 // own, and this goes red.
@@ -1062,12 +1014,10 @@ func TestEveryPinnedSettingsCopyBlanksWhatMovesWhatAResumeHandsItsModel(t *testi
 }
 
 // A RELEASE THAT TAKES THE PIN IS HANDED THE PINNED COPY OF THE FILE ITS GATES
-// CHOSE. The run's script reads the box's version and, at 2.1.310 or later,
-// names the pinned copy of whichever settings file the skills' and the notes'
-// gates chose (every run's, the skills' or the notes'). An older release is
-// handed the file itself, which it can validate. A version the script cannot
-// read is taken for a current release. Under every sh a box may run the script
-// with.
+// CHOSE: at 2.1.310 or later, or a version the script cannot read, the script
+// names the pinned copy of whichever settings file the skills' and notes'
+// gates chose; an older release gets the file itself, which it can validate.
+// Under every sh a box may have.
 //
 // Mutation: drop the pin's gate, lower its floor, or drop one file's arm, and a
 // row goes red.
@@ -1150,13 +1100,11 @@ func TestAContextExhaustedRunIsToldByTheHarnesssField(t *testing.T) {
 	}
 }
 
-// CLAUDE CODE'S FILE-HISTORY IS NAMED FILE-EDIT SNAPSHOTS, NEVER CHECKPOINTS.
-// What a session's archive never holds is said beside the pack that takes a
-// session out of its box, where "checkpoint" is the word a reader would take
-// for one of the engine's own takes of a session while it works: so every
-// passage that speaks of Claude Code's `file-history/` — the pack's own doc,
-// the sandbox's list of what an archive never holds, and the page that
-// documents the pack — names it file-edit snapshots, and none says checkpoint.
+// CLAUDE CODE'S FILE-HISTORY IS NAMED FILE-EDIT SNAPSHOTS, NEVER CHECKPOINTS,
+// a word a reader would take for the engine's own take of a session while it
+// works: every passage on `file-history/` (the pack's doc, the sandbox's list
+// of what an archive never holds, and the page documenting the pack) names it
+// file-edit snapshots, and none says checkpoint.
 //
 // Mutation: put "checkpoint" back in any of the three passages, or take
 // file-history out of one, and this goes red.
@@ -1222,11 +1170,11 @@ func passages(text string, goSource bool) []string {
 	return out
 }
 
-// A REQUEST THE PROVIDER REFUSED AS BUILT IS TOLD BY ITS STATUS: the harness
-// answers it as its result's text, under its failure flag and the status the
-// provider gave. Such a run failed, its error is the provider's message, and it
-// is named apart from every other failure; a spent plan, an outage and a
-// conversation past its context are not it.
+// A REQUEST THE PROVIDER REFUSED AS BUILT IS TOLD BY ITS STATUS, which the
+// harness reports beside its failure flag and the provider's message as its
+// result: such a run failed with that message as its error, named apart from
+// every other failure. A spent plan, an outage and a context past its model's
+// are not it.
 //
 // Mutation: read the sentence instead of the status, or drop the context
 // exception, and a case goes red.

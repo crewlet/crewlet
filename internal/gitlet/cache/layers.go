@@ -28,92 +28,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE INSTALLED CHAIN. A repository's MAINTAINER — one Gitlet node — writes its
-// multi-pack-index as a CHAIN OF PUBLISHED LAYERS, each git's own incremental
-// layer with its bitmap and the commit-graph layer over the same packs,
-// stores each layer's bytes in the object store and names it on the code log
-// (gitlet.LayerRef, ADR-0081's Derived standing); every Gitlet node INSTALLS that
-// chain: each layer fetched, held to its row (gitlet.CheckLayer), and placed
-// byte for byte as the maintainer's git wrote it, both chain files written by
-// this cache from the rows' order. No node writes a multi-pack-index layer of
-// its own: on the node pin a bitmapped layer costs the walk of the WHOLE
-// history however few objects it adds (BenchmarkMidx's step=tip, a layer over
-// 64 pushes of a few objects on a published root: 0.65 s and 88 MiB over
-// 100 MB and 15.1 s and 254 MiB over a gigabyte, against 0.94 s and 158 MiB
-// and 11.5 s and 812 MiB for the whole index and its bitmap — its memory
-// following the history, never the few hundred objects it adds), and
-// a layer without its bitmap turns off every bitmap beneath it — so a chain of
-// node-local tips would be the whole rewrite paid more often. So the packs
-// that arrived since the last publication stay OUTSIDE the chain, the TAIL,
-// which git reads beside it (0.03–0.35 s of walk at 1 to 16 packs outside
-// it, nothing a clone measures). Their commits are the one thing the node
-// writes over the chain: its own TIP commit-graph layer (maintain.go), git's
-// split write of just the commits the installed layers lack, over exactly
-// them, so a walk into the tail goes by generation too — a commit-graph
-// layer, unlike a multi-pack-index layer, costs its new commits alone and
-// turns nothing beneath it off.
-//
-// TWO MODES, PER INCARNATION, NEVER BOTH. An incarnation holding a non-empty
-// installed chain is in CHAIN mode; one holding none is in OWN mode — the
-// maintainer's whole index and graph of derived.go's DerivedMidx and
-// DerivedGraph. git refuses the mix every way: it reads a whole
-// multi-pack-index before a chain, a whole write deletes every layer and the
-// chain file (midx-write.c's clear_midx_files), it loads a whole commit-graph
-// before the chain, and a whole graph write unlinks the chain and expires its
-// layers. So a chain placed drops own mode's files first (EventLayersMoved),
-// the maintainer plans no own-mode write while a chain is installed — only
-// the tip over it (maintain.go) — a round writes no index of its own beside
-// one (indexRound's indexed), and a chain cut to nothing leaves the copy in
-// own mode, its index the maintainer's to write. The tip goes with every
-// change to the chain beneath it and with every pack removed, and stays
-// across a retirement that keeps the whole chain (tipGoes).
-//
-// A FULL ROUND INSTALLS THE CHAIN BEFORE IT ANSWERS: it keeps the longest
-// prefix of the chain the copy holds whole and sound — every file there at its
-// row's sizes, held to its Check (CheckLayers) by the round's check, which a
-// previous process's files meet at the copy's first round — and fetches the
-// rest, every part of every layer queued in the round's ONE download queue
-// behind its packs (install.go), so a cold node's first answer serves with a
-// bitmap at the cost of the layers' bytes overlapped with the packs', never a
-// first byte a layer in series. A DELTA NEVER DOWNLOADS A LAYER: a root layer
-// of the largest repository the defaults admit is some 2.6 GB, and inside a
-// delta it would hold every fetch waiting on that round on every Gitlet node; it
-// hands the new rows to the INSTALLER, one goroutine a cache started by
-// Start, and answers at once. Correctness never waits on a layer: without one
-// git reads every pack's own index.
-//
-// THE CHAIN HOLDS ITS PACKS. A publication's repack retires packs its own new
-// layer replaces, so between the delta that brings it and the installer's
-// placement every pack an INSTALLED layer names stays in the copy, whether or
-// not a live row still names it — a round never takes one out (apply's live
-// set, packStrays, Verify's strays) — and leaves with the layer that held it.
-// Dropped at the delta, they would cut the chain, and the bitmap with it,
-// until the replacement was fetched. The longest such a pack stays is the
-// installer's retry ceiling, installRetryCap, past which the stale layer is
-// cut.
-//
-// A PLACEMENT IS A SWAP on an incarnation a reader may hold (swap.go's layer
-// step: the kept layers linked, the fetched renamed in, the chain files
-// written, every live pack and every pack the new chain names linked), and in
-// place on one nobody holds (a boot's first round, a rebuild's product); and
-// before the chain is visible a CANARY reads through its bitmap. A layer file
-// does not name its base — the chain's order does — so a layer placed over
-// the wrong base passes `multi-pack-index verify` and fails the first read
-// that uses the bitmap ("invalid MIDX object position, MIDX is likely
-// corrupt"), which CheckLayer, reading each file alone, cannot see; the
-// canary is one bitmapped walk, 0.004 s with no tail and 0.35 s with sixteen
-// packs outside the chain. Its verdict is git's alone: a canary that read
-// nothing of the chain — the read lane full past SlotWait, its deadline —
-// refuses nothing, and what it was to judge is tried again.
-//
-// A LAYER MISSING, CORRUPT OR FROM A NEWER GIT IS REFUSED, never an error: the
-// copy serves from the prefix below it, or in own mode, and the layer and every
-// one above it wait for the maintainer's next publication, which replaces
-// what its own cache refused (code_layer_refused, crewlet.code.cache.layers).
-// A missing part is asked about once at the log's head first — a publication
-// may have replaced the layer since the rows were read, and the store
-// collected its parts — and a refusal is kept in memory while the rows name
-// that very record, so a restart tries once more.
+// THE INSTALLED CHAIN (package doc, "The installed chain"). Two modes per
+// incarnation, never both: CHAIN mode holds an installed chain, OWN mode the
+// maintainer's DerivedMidx and DerivedGraph. git refuses the mix every way (a
+// whole write deletes every layer and the chain file, midx-write.c's
+// clear_midx_files; a whole graph write unlinks the graph chain), so a placed
+// chain drops own mode's files first (EventLayersMoved). A delta never
+// downloads a layer (a root layer may be some 2.6 GB, and every fetch waiting
+// on the round would wait on it): the installer does, behind the serving. THE
+// CHAIN HOLDS ITS PACKS: a pack an installed layer names stays in the copy,
+// its row retired or not (apply's live set, packStrays, Verify's strays),
+// until the layer leaves, at most installRetryCap later; dropped at the delta,
+// it would cut the chain and its bitmap until the replacement landed.
 
 // layersFile is this file as the declarations name their writer
 // (Writer.File): the writers gate holds the install writes of DerivedLayers
@@ -158,11 +84,10 @@ const (
 var layerOutcomes = []layerOutcome{layerInstalled, layerAdopted, layerKept, layerCut, layerMissing, layerCorrupt,
 	layerNewerGit, layerFailed}
 
-// layerRefusal is one layer of the rows' chain this node will not try to
-// install again while the rows name it at the record that added it: what
-// refused it, and that record's position — a publication of the same bytes
-// again, under a new record and new parts (the maintainer's repair of a layer
-// the store lost), is another try.
+// layerRefusal is a layer of the rows' chain this node will not try again
+// while the rows name it at the record that added it (added): the same bytes
+// republished under a new record (the maintainer's repair of a lost layer) are
+// another try. Kept in memory only, so a restart tries once more.
 type layerRefusal struct {
 	outcome layerOutcome
 	added   statelog.Position
@@ -213,10 +138,9 @@ func chainText(ids []string) []byte {
 }
 
 // sameLayer reports whether a and b are one layer of one chain: the same
-// multi-pack-index layer — named by its own checksum, so the same bytes — and
-// the same commit-graph layer over the same base. Another record publishing
-// the same bytes again (new parts, a new position) is the same layer: a copy
-// holding it holds what the rows name.
+// multi-pack-index layer (named by its checksum, so the same bytes) and the
+// same commit-graph layer over the same base. A republication under another
+// record is the same layer.
 func sameLayer(a, b gitlet.LayerRow) bool {
 	return a.Layer.LayerID == b.Layer.LayerID && a.Layer.GraphID == b.Layer.GraphID && a.Layer.BaseID == b.Layer.BaseID
 }
@@ -244,13 +168,12 @@ func layerPacks(rows []gitlet.LayerRow) map[string]bool {
 	return out
 }
 
-// prefixOf is how many layers of installed a change ev keeps, as d details
-// it — THE ONE CUT, which both chains, the swap and every placement read, so
-// the multi-pack-index chain and the commit-graph chain are never cut at two
-// places: the longest prefix whose every layer names none of d's packs, has no
-// file d names failing, and — for EventLayersMoved — is, layer for layer, the
-// chain d wants. A layer is valid only over its exact base, so nothing above
-// the first layer cut is kept.
+// prefixOf is how many layers of installed a change ev keeps, as d details it:
+// THE ONE CUT both chains, the swap and every placement read, so the two chain
+// files are never cut at two places. It is the longest prefix naming none of
+// d's packs, with no layer in d.failing and, for EventLayersMoved, layer for
+// layer d.want; nothing above the first cut layer is kept, since a layer is
+// valid only over its exact base.
 func prefixOf(installed []gitlet.LayerRow, ev Event, d eventDetail) int {
 	for i, l := range installed {
 		if d.failing[l.Layer.LayerID] {
@@ -268,18 +191,12 @@ func prefixOf(installed []gitlet.LayerRow, ev Event, d eventDetail) int {
 	return len(installed)
 }
 
-// recordInstalled makes rows what inc holds of the chain — its in-memory
-// record and the declarations' records the state persists — keeping the
-// cache's total in step through setDerived; e.mu is held. THE ONE WRITE OF
-// AN INCARNATION'S INSTALLED CHAIN: each declaration's record lists the ids
-// its chain file lists (derivedState.Layers) and counts its files' bytes from
-// the rows — every layer's sections and the chain file — so a boot restores
-// both halves of what the copy holds without measuring a file, and a
-// declaration with no layer has no entry. held is the packs the copy holds,
-// by checksum, at the figures their rows count — every pack rows names is
-// among them, since nothing is installed over a pack the copy lacks
-// (installable) — and the packs the chain then holds keep those figures
-// whatever becomes of their rows (incarnation.installedPacks).
+// recordInstalled makes rows what inc holds of the chain, then its records
+// (recordChains): THE ONE WRITE OF AN INCARNATION'S INSTALLED CHAIN; e.mu is
+// held. held is the packs the copy holds, by checksum, at their rows' figures;
+// every pack rows names is among them (nothing is installed over a pack the
+// copy lacks, installable), and the chain keeps those figures whatever becomes
+// of the rows (incarnation.installedPacks).
 func (c *Cache) recordInstalled(inc *incarnation, rows []gitlet.LayerRow, held map[string]livePack) {
 	was := inc.installedPacks
 	inc.installed = slices.Clone(rows)
@@ -288,26 +205,21 @@ func (c *Cache) recordInstalled(inc *incarnation, rows []gitlet.LayerRow, held m
 		inc.installedPacks[cs] = held[cs]
 	}
 	if !maps.EqualFunc(was, inc.installedPacks, func(livePack, livePack) bool { return true }) {
-		// The packs the chain names moved, and the tail is every live pack
-		// it does not name.
+		// The tail is every live pack the chain does not name.
 		recountTail(inc)
 	}
 	c.recordChains(inc)
 }
 
-// recordChains makes the declarations' records of inc's chain what it holds
-// — its installed rows and its tip — keeping the cache's total in step through
-// setDerived; e.mu is held. Each record lists the ids its chain file lists
-// (derivedState.Layers, and the graph's Tip) and counts its files' bytes —
-// every installed layer's sections from its row, the tip's file as the write
-// that made it found it, and the chain file — so a boot restores both halves
-// of what the copy holds without measuring a file, and a declaration with no
-// file has no entry. The graph's record is made by the install where a layer
-// carries a graph, and by the tip's write where only the tip does
-// (StepTipGraph): its Step is the write of its chain file's first line. It
-// also carries the digest of the tail the last write covered (TipOver), so
-// the next boot knows the tip it keeps needs no write while the tail is the
-// same.
+// recordChains makes the declarations' records of inc's chain what it holds,
+// its installed rows and its tip, keeping the cache's total in step
+// (setDerived); e.mu is held. Each record lists its chain file's ids
+// (derivedState.Layers, the graph's Tip) and counts its files' bytes from the
+// rows and the tip's write, so a boot restores the chain without measuring a
+// file; a declaration with no file has no entry. Where no layer carries a
+// graph, the graph's record is the tip's (StepTipGraph). It carries the digest
+// of the tail the tip covered (TipOver), so a boot over the same tail owes the
+// tip no write.
 func (c *Cache) recordChains(inc *incarnation) {
 	midx, graph := chainIDs(inc.installed)
 	var midxBytes, graphBytes int64
@@ -376,10 +288,9 @@ func heldPacks(inc *incarnation) map[string]livePack {
 	return out
 }
 
-// packFigures is the packs snap places in objects/pack, by checksum, at the
-// figures their rows count: what a full round's copy holds there once its
-// install has run — what a layer may name, and what an index covers, neither
-// of which ever reaches the dropping view.
+// packFigures is the packs snap places in objects/pack, by checksum, at their
+// rows' figures: what a full round's copy holds there once installed, what a
+// layer may name and an index covers. Never the dropping view.
 func (s snapshot) packFigures() map[string]livePack {
 	places := s.places()
 	out := make(map[string]livePack, len(s.packs))
@@ -452,23 +363,20 @@ func tipRel(id string) string {
 	return filepath.Join(filepath.FromSlash(graphLayersDir), "graph-"+id+".graph")
 }
 
-// dropTip takes inc's tip off what it records: none held, and none written
-// over any tail, so the maintainer writes one at once (GRAPH FIRST) over what
-// is left of the tail — its file and its chain line the caller's to take out,
-// its declaration's record the caller's to write again (recordChains). e.mu is
-// held.
+// dropTip takes inc's tip off its record: none held and none written over any
+// tail, so the maintainer writes one at once (GRAPH FIRST). Its file and chain
+// line are the caller's to take out, and its record to write again
+// (recordChains). e.mu is held.
 func dropTip(inc *incarnation) {
 	inc.tip, inc.tipOver, inc.tipWritten = tipLayer{}, tailDigest{}, false
 }
 
-// tipGoes reports whether a change ev the installed chain answers Prefix,
-// keeping k of installed's layers, takes the node's tip with it — every one
-// but a retirement that keeps the whole chain beneath it: a layer cut is a
-// base gone, the chain moving is a base the tip was not written over, a pack
-// removed may take commits the tip names, an expunge's commit takes the
-// commits it expunged out of the repository, and a file found failing is cut
-// with the tip above it, where a retirement merges packs and drops no commit,
-// and the tip names commits by id (X04).
+// tipGoes reports whether a change ev that keeps k of installed's layers takes
+// the node's tip: every change but a retirement keeping the whole chain. A cut
+// layer is a base gone, a moved chain a base the tip was not written over, a
+// removed pack or an expunge may take commits the tip names, and a failing
+// file is cut with the tip above it; a retirement merges packs and drops no
+// commit, and the tip names commits by id (X04).
 func tipGoes(installed []gitlet.LayerRow, k int, ev Event) bool {
 	return k < len(installed) || ev != EventPackRetired
 }
@@ -487,10 +395,9 @@ func markChain(inc *incarnation) chainMark {
 }
 
 // chainStill reports whether inc's chain files stood still from m to now: no
-// in-place write of them was in flight at m, and none has begun or ended
-// since (incarnation.chainSeq). A chain file's verdict reached between the two
-// is the file's; otherwise it is no verdict, the expectation and the file
-// perhaps of two different moments. e.mu is held.
+// in-place write in flight at m, and none begun or ended since. Otherwise a
+// chain file's verdict is none, the file and its expectation perhaps of two
+// moments. e.mu is held.
 func chainStill(inc *incarnation, m chainMark) bool {
 	return !m.writing && inc.chainSeq == m.seq
 }
@@ -507,12 +414,10 @@ func chainWrite(inc *incarnation) func() {
 	}
 }
 
-// bootInstalled is the chain inc holds as its record names it, read against
-// the rows' chain: the longest prefix of chain whose every layer is, in turn,
-// the next the multi-pack-index record lists and — where it carries one — the
-// next the commit-graph record lists. What a boot's copy holds is known by
-// its ids alone until the rows name them; a layer the rows no longer name is
-// held by nobody's account, and its files go with the round's placement
+// bootInstalled is the chain inc's record names, read against the rows' chain:
+// the longest prefix of chain whose every layer is, in turn, the next id each
+// record lists (the graph's only where the layer carries one). A boot's copy is known by ids alone; a layer the rows no
+// longer name is nobody's, and the round's placement removes its files
 // (cutChain). e.mu is held.
 func bootInstalled(inc *incarnation, chain []gitlet.LayerRow) []gitlet.LayerRow {
 	midx, graph := inc.derived[DerivedLayers].Layers, inc.derived[DerivedGraphLayers].Layers
@@ -533,16 +438,13 @@ func bootInstalled(inc *incarnation, chain []gitlet.LayerRow) []gitlet.LayerRow 
 	return out
 }
 
-// setChain records chain as the rows' published chain of inc, as a snapshot
-// served it (gitlet.RepoSnapshot.LayersServed), and drops every refusal of a
-// layer the rows no longer name at the record that added it — and, where the
-// chain moved, the publication the node's memory refused: a publication
-// landed, so the repository has a maintainer that holds it, and this node's
-// next try of it, if it is still the maintainer, is judged again. e.mu is
-// held. The generation moves only where chain is not the chain inc read
-// before: every full round serves the chain, and one serving the very chain an
-// installer's plan was made over is no move of it — counted as one, it threw
-// away whatever the plan had fetched.
+// setChain records chain as inc's rows' chain, as a snapshot served it
+// (gitlet.RepoSnapshot.LayersServed), and drops every refusal the rows no
+// longer name at its record and, where the chain moved, the node's refusal to
+// publish: a publication landed, so this node's next try is judged again. e.mu
+// is held. The generation moves only for another chain than inc read: a round
+// serving the very chain an installer's plan was made over is no move, and
+// counting it as one throws away what the plan fetched.
 func setChain(inc *incarnation, chain []gitlet.LayerRow) {
 	if !inc.chainRead || !sameRows(inc.chain, chain) {
 		inc.chainGen++
@@ -590,24 +492,20 @@ func (c *Cache) observeInstall(outcome layerOutcome, took time.Duration) {
 	}
 }
 
-// chainPlan is what a round or the installer decided of one incarnation's
-// chain before a byte moves: what it holds (installed), the longest prefix of
-// the rows' chain it holds whole and sound (kept), and the layers above it to
-// fetch, in chain order (want) — stopping at the first that is refused, from
-// a newer git, or over a pack the copy does not hold, since nothing is
-// installed over a base it lacks.
+// chainPlan is what a round or the installer decided of an incarnation's chain
+// before a byte moves: what it holds (installed), the longest prefix of the
+// rows' chain it holds whole and sound (kept), and the layers to fetch above
+// it in chain order (want), stopping at the first refused, from a newer git,
+// or over a pack the copy lacks.
 type chainPlan struct {
 	installed, kept, want []gitlet.LayerRow
 	// failing is the layers with a file a check or a scrub found failing that
 	// is still the file found so, by id: cut, and fetched again.
 	failing map[string]bool
-	// rewrite: a chain file is not what the incarnation's record says — it
-	// failed its check, or is absent where layers are installed, or present
-	// where none are — so the chain files are written again even where
-	// nothing else of the chain moves. dropTip: the node's tip the copy holds
-	// is no file to serve — failing, gone, or not the one checked — and goes,
-	// the chain files written again without it, even where nothing else
-	// moves.
+	// rewrite: a chain file is not the record's (failed its check, absent under
+	// installed layers, or present with none), so both are written again even
+	// where nothing else moves. dropTip: the tip the copy holds is no file to
+	// serve (failing, gone, or not the one checked), and goes likewise.
 	rewrite, dropTip bool
 	// held is the packs the copy holds once the round's install has run, by
 	// checksum, at the figures their rows count: the snapshot's. tips is the
@@ -644,28 +542,16 @@ func (p chainPlan) moves(rows []gitlet.LayerRow, fetched []*stagedLayer) bool {
 	return p.rewrite || p.dropTip || len(fetched) > 0 || !sameChain(rows, p.installed)
 }
 
-// placeChain is a FULL round's placement of the chain it planned (planChain),
-// once its install has fetched what it could (layers, in chain order): the
-// kept prefix and every layer fetched up to the first that was not — a layer
-// is valid only over its exact base, so whatever was fetched above a failure
-// goes from tmp/ — and nothing where that is what the copy holds already.
-//
-//   - Chain files alone not the record's, or a tip alone that goes, are
-//     written again IN PLACE, even on a copy a reader may hold — one rename
-//     each — and anything of the two directories no layer kept names goes,
-//     the tip's file with it (cutChain).
-//   - Any other change to a copy a reader may hold is answered as a SWAP's
-//     layer step (swap.go): the step returned, which the round's swap takes.
-//   - On one nobody holds — a boot's first round, a rebuild's product — it is
-//     placed IN PLACE (placeInPlace), the canary reading it first.
-//
-// A layer the round could not fetch is the installer's: bytes not its row's
-// are refused at once (corrupt); a part the store does not hold is asked of
-// the log's head by the installer's own try (refuseFailed), since the round
-// holds the repository a read at the head would queue behind; anything else
-// is the installer's to try again behind its wait. It answers the swap's
-// step, or whether it wrote into the copy here. e.mu is not held; the round's
-// write lock is.
+// placeChain is a FULL round's placement of its plan (planChain) once its
+// install fetched what it could (layers, in chain order): the kept prefix and
+// every layer up to the first not fetched (a layer is valid only over its
+// exact base, so whatever was fetched above a failure goes), or nothing where
+// the copy holds that already. Chain files or a tip alone are written again IN
+// PLACE, even under a reader, one rename each (cutChain); any other change to
+// a copy a reader may hold is a SWAP's layer step, returned for the round's
+// swap; a copy nobody holds is placed in place (placeInPlace). A layer it
+// could not fetch is roundLayerFailed's. It answers the swap's step, or
+// whether it wrote into the copy. e.mu is not held; the round's write lock is.
 func (c *Cache) placeChain(ctx context.Context, e *entry, inc *incarnation, p chainPlan,
 	layers []layerFetch) (*layerStep, bool, error) {
 
@@ -711,13 +597,11 @@ func (c *Cache) placeChain(ctx context.Context, e *entry, inc *incarnation, p ch
 	return nil, true, err
 }
 
-// roundLayerFailed is a full round's layer it could not fetch, as its install
-// answered it (placeChain): refused at once where its bytes are not its row's,
-// and otherwise the installer's — which the round's end kicks, since the copy
-// then wants it (installDue) — where a part the store does not hold is asked
-// of the log's head, and anything else tried again behind its wait, counted
-// failed as the installer's tries are. Logged code_layer_install_failed either
-// way.
+// roundLayerFailed is a full round's layer it could not fetch (placeChain),
+// logged code_layer_install_failed: bytes not its row's are refused at once;
+// anything else is the installer's, which the round's end kicks (installDue),
+// a missing part asked of the log's head by its try (refuseFailed), since the
+// round holds the repository a head read would queue behind.
 func (c *Cache) roundLayerFailed(e *entry, inc *incarnation, f layerFetch) {
 	if f.err == nil {
 		return
@@ -736,15 +620,12 @@ func (c *Cache) roundLayerFailed(e *entry, inc *incarnation, f layerFetch) {
 }
 
 // planChain is a FULL round's plan for inc's chain, the snapshot's chain made
-// the incarnation's own (setChain): kept is the longest prefix of that chain
-// the incarnation holds, its every file present at its row's size, held to
-// its Check by the round's check — which vouches every file it finds sound,
-// and hashes every one this process has not vouched — and named failing by no
-// finding still at the identity it failed at (found: the round's check's and
-// every scrub's waiting on the repair mark, which a scrub makes of a file this
-// process had vouched); want is installable above it. On a boot's copy what
-// it holds is its record's, read against the rows' chain (bootInstalled), and
-// made the incarnation's, so the placement cuts what the record held past it.
+// inc's (setChain). kept is the longest prefix inc holds, every file present
+// at its row's size, vouched by the round's check (which hashes every file
+// this process has not vouched), and named failing by no finding still at the
+// identity it failed at (found: the round's check's and every scrub's waiting
+// on the repair mark); want is installable above it. A boot's copy holds its
+// record's chain (bootInstalled), so the placement cuts what lies past it.
 // e.mu is NOT held.
 func (c *Cache) planChain(e *entry, inc *incarnation, snap snapshot, found []checkedFile) chainPlan {
 	p := chainPlan{failing: map[string]bool{}, held: snap.packFigures(), at: time.Now()}
@@ -755,8 +636,8 @@ func (c *Cache) planChain(e *entry, inc *incarnation, snap snapshot, found []che
 			p.tips = append(p.tips, r.OID)
 		}
 	}
-	// What the files are now, read before the lock: a finding still at the
-	// identity it failed at, and every file of the rows' chain.
+	// Read before the lock: findings still at the identity they failed at, and
+	// every file of the rows' chain.
 	failingFiles := map[string]bool{}
 	for _, f := range found {
 		if i, _ := c.image.owner(f.rel); i >= 0 && c.image.decls[i].chained() &&
@@ -772,8 +653,7 @@ func (c *Cache) planChain(e *entry, inc *incarnation, snap snapshot, found []che
 			}
 		}
 	}
-	// The node's tip the copy holds — a boot's copy's as its record names it —
-	// and its file as it is now.
+	// The tip the copy holds (a boot's, as its record names it) and its file now.
 	e.mu.Lock()
 	tipID := recordedTip(inc)
 	e.mu.Unlock()
@@ -788,19 +668,17 @@ func (c *Cache) planChain(e *entry, inc *incarnation, snap snapshot, found []che
 	first := !inc.chainRead
 	setChain(inc, snap.layers)
 	if first && len(inc.installed) == 0 {
-		// A BOOT'S COPY holds what its record names, as far as the rows'
-		// chain names it in turn and the copy holds every pack each layer
-		// names: a layer is valid only over its exact base and its packs.
+		// A BOOT'S COPY holds its record's chain as far as the rows' chain agrees and
+		// the copy holds each layer's packs: a layer is valid only over its exact base
+		// and packs.
 		boot := bootInstalled(inc, inc.chain)
 		if i := slices.IndexFunc(boot, func(r gitlet.LayerRow) bool { return !holds(r) }); i >= 0 {
 			boot = boot[:i]
 		}
-		// And the node's tip its record names, where the copy keeps every
-		// layer the tip was written over and holds its file: a tip is valid
-		// only over its exact base. Held to its check by the round's check
-		// like every file a previous process left, and dropped below where it
-		// failed. With it, the tail the last write covered (TipOver), so a
-		// tail the restart left as it was owes the tip nothing.
+		// And its record's tip, where the copy keeps every layer it was written over
+		// and holds its file: a tip is valid only over its exact base. The round's
+		// check holds it like any file a previous process left (dropped below where it
+		// failed); TipOver comes with it, so an unchanged tail owes the tip nothing.
 		_, graph := chainIDs(boot)
 		rec := inc.derived[DerivedGraphLayers]
 		if len(boot) == len(inc.derived[DerivedLayers].Layers) && slices.Equal(graph, rec.Layers) &&
@@ -815,10 +693,10 @@ func (c *Cache) planChain(e *entry, inc *incarnation, snap snapshot, found []che
 		}
 		c.setInstalled(e, inc, boot, p.held)
 	}
-	// THE NODE'S TIP stays only as the file this process wrote or its round's
-	// check found sound, still at that identity and named failing by no
-	// finding; any other is dropped, with the chain files written again over
-	// what the copy keeps, and the maintainer writes the tip again at once.
+	// THE NODE'S TIP stays only as a file this process wrote or its round's check
+	// found sound, still at that identity and failing no finding; else it goes,
+	// the chain files are written again without it, and the maintainer writes it
+	// again at once.
 	if inc.tip.id != "" {
 		rel := tipRel(inc.tip.id)
 		p.dropTip = failingFiles[rel] || !vouchedAt(inc, rel, tipFile)
@@ -846,9 +724,8 @@ func (c *Cache) planChain(e *entry, inc *incarnation, snap snapshot, found []che
 }
 
 // layerSound reports whether inc holds every file of row at its row's size,
-// as files this process wrote or checked at the identity they have now (ids,
-// read by the caller before it took e.mu) — what the round's check leaves
-// vouched of a sound layer. e.mu is held.
+// vouched at the identity it has now (ids, read before e.mu was taken). e.mu
+// is held.
 func layerSound(inc *incarnation, row gitlet.LayerRow, ids map[string]fileID) bool {
 	sizes := row.Layer.Sections()
 	for i, rel := range layerRels(row.Layer) {
@@ -883,11 +760,10 @@ func chainFilesAre(dir string, wants map[string][]byte) bool {
 	return true
 }
 
-// installable is the layers of above — the rows' chain past what inc keeps —
-// this node may fetch, in chain order: up to the first refused while the rows
-// name it at the same record, written by a git newer than this node's (refused
-// newer_git, before a byte moves), or naming a pack holds says the copy will
-// not hold. Nothing is installed over a base the copy lacks. e.mu is held.
+// installable is the layers of above (the rows' chain past what inc keeps)
+// this node may fetch, in chain order, up to the first refused at the same
+// record, written by a git newer than this node's (refused newer_git before a
+// byte moves), or naming a pack holds says the copy lacks. e.mu is held.
 func (c *Cache) installable(e *entry, inc *incarnation, above []gitlet.LayerRow, holds func(cs string) bool) []gitlet.LayerRow {
 	var out []gitlet.LayerRow
 	for _, row := range above {
@@ -909,11 +785,10 @@ func (c *Cache) installable(e *entry, inc *incarnation, above []gitlet.LayerRow,
 	return out
 }
 
-// stagedLayer is one layer's files in tmp/ — fetched from the object store
-// and held to their row, or linked from the maintainer's own (AdoptLayer) —
-// until a placement renames them in: tmp/layer-<id>-<v7>/{midx,bitmap,graph}.
-// Whatever of it no placement takes is removed, and counted out of tmp/'s
-// bytes.
+// stagedLayer is one layer's files in tmp/layer-<id>-<v7>/{midx,bitmap,graph},
+// fetched and held to their row or linked from the maintainer's own
+// (AdoptLayer), until a placement renames them in; whatever no placement takes
+// is removed and counted out of tmp/'s bytes.
 type stagedLayer struct {
 	row gitlet.LayerRow
 	dir string
@@ -923,10 +798,9 @@ type stagedLayer struct {
 	adopted bool
 	// base is the commit-graph layers the layer was checked over, root first.
 	base []string
-	// at is when it was staged, on Options.Now's clock: an adoption no
-	// round's chain names within objstore.RecordWithin is discarded. began is
-	// the same moment as a time.Now() reading: how long its install took, to
-	// its placement, is measured from it (crewlet.code.cache.layer.install).
+	// at is when it was staged, on Options.Now's clock: an adoption no round's
+	// chain names within objstore.RecordWithin is discarded. began is the same
+	// moment by time.Now(), what crewlet.code.cache.layer.install measures from.
 	at, began time.Time
 }
 
@@ -1002,11 +876,10 @@ func (st *stagedLayer) remove(c *Cache) {
 	st.dir = ""
 }
 
-// fetchParts reads every part of st's layer from the object store into the
-// files it cuts (gitlet.FetchLayerPart: each part through the store's verified
-// read, laid back where StoreLayer took it from) — ALL AT ONCE, one goroutine
-// a part, each taking its GET's slot from slot and giving it back the moment
-// its read ends — and answers the first failure, which ends the rest.
+// fetchParts reads every part of st's layer from the object store into its
+// files (gitlet.FetchLayerPart, through the store's verified read) ALL AT
+// ONCE, a goroutine a part, each holding its GET's slot from slot only while
+// its read runs, and answers the first failure, which ends the rest.
 func (c *Cache) fetchParts(ctx context.Context, st *stagedLayer, files [3]*os.File,
 	slot func(ctx context.Context) ([]byte, func(), error)) error {
 
@@ -1044,15 +917,12 @@ func (c *Cache) fetchParts(ctx context.Context, st *stagedLayer, files [3]*os.Fi
 	return errors.Join(errs...)
 }
 
-// finishLayer makes st's files durable — every sync in flight at once, as a
-// pack's three are (syncStaged) — closes them, and holds them to the row
-// over the commit-graph layers base names below it (gitlet.CheckLayer): the
-// one rule the maintainer's adoption and every install share, hashed a
-// piece at a time in a slot of the read lane hold takes — a round's, as its
-// check of the files a copy keeps is (gitproc.Pool.HoldRead), or the
-// installer's, in its one share of the lane (installHold) — and stopped with
-// ctx. Then the layer is fetched and checked and nothing is placed: the fault
-// point InstallAfterFetch.
+// finishLayer makes st's files durable (every sync at once, as syncStaged does
+// a pack's), closes them, and holds them to the row over base
+// (gitlet.CheckLayer): the one rule adoption and every install share, hashed a
+// piece at a time in a read-lane slot hold takes (a round's,
+// gitproc.Pool.HoldRead, or the installer's, installHold), stopped with ctx.
+// Fault point InstallAfterFetch: fetched and checked, nothing placed.
 func (c *Cache) finishLayer(ctx context.Context, st *stagedLayer, files [3]*os.File, base []string,
 	hold func(context.Context) (func(), error)) error {
 
@@ -1119,10 +989,9 @@ func baseOf(chain []gitlet.LayerRow, i int) []string {
 	return graph
 }
 
-// layerFailure is what a layer's fetch failing says of the layer: missing, a
-// part the store holds no object for; corrupt, bytes that are not its row's
-// or files CheckLayer refuses — both definite — and failed for anything else,
-// the store failing to answer or this node's disk, tried again.
+// layerFailure classifies a fetch's failure: missing (no object for a part)
+// and corrupt (bytes not the row's, or files CheckLayer refuses) are definite;
+// failed (the store not answering, this node's disk) is tried again.
 func layerFailure(err error) layerOutcome {
 	switch {
 	case errors.Is(err, objstore.ErrNotFound):
@@ -1145,21 +1014,16 @@ type layerFetch struct {
 	took time.Duration
 }
 
-// placeInPlace makes rows the chain inc holds, IN PLACE: on an incarnation
-// nobody holds — a boot's first round, a rebuild's product — and only there,
-// since a pack taken out under a reader would be met half way. In order: own
-// mode's files go and the chain is cut below the first layer of what it holds
-// that rows does not keep as it is — one fetched again included, whose files
-// the fetch replaces (dropFor, EventLayersMoved: before anything of the new
-// chain is visible); every fetched layer's files are renamed in; both chain
-// files are written over rows; and, where the placement added a layer the copy
-// did not hold, the CANARY reads through the chain's bitmap — its verdict that
-// the chain is unsound refuses every layer it added as corrupt, a canary that
-// read nothing of it leaves them to the installer, and either puts the chain
-// back to the layers below the first of them, before any reader is handed the
-// incarnation. It answers the chain placed. held is the packs the copy holds,
-// by checksum, with their rows' figures (recordInstalled). e.mu is not held;
-// the round's write lock is.
+// placeInPlace makes rows inc's chain IN PLACE, only on an incarnation nobody
+// holds (a boot's first round, a rebuild's product): a pack taken out under a
+// reader would be met half way. Own mode's files go and the chain is cut below
+// the first layer rows does not keep as is, refetched ones included (dropFor,
+// before anything new is visible); fetched files are renamed in; both chain
+// files are written; and where a layer was added the CANARY reads the chain
+// before any reader is handed it: on its verdict every added layer is refused
+// corrupt, where it read nothing they are the installer's, and either way the
+// chain is put back below them. It answers the chain placed. held is as
+// recordInstalled's. e.mu is not held; the round's write lock is.
 func (c *Cache) placeInPlace(ctx context.Context, e *entry, inc *incarnation, rows []gitlet.LayerRow,
 	fetched []*stagedLayer, held map[string]livePack, tail int64, tips []string) ([]gitlet.LayerRow, error) {
 
@@ -1192,12 +1056,9 @@ func (c *Cache) placeInPlace(ctx context.Context, e *entry, inc *incarnation, ro
 	added := (&layerStep{rows: rows}).adds(installed)
 	if len(added) > 0 {
 		if err := c.canary(ctx, e, inc, inc.dir, tail, tips); err != nil {
-			// A layer above its base is valid only over that base, so every
-			// layer from the first added up goes with it: refused as corrupt
-			// where the canary found the chain unsound, and otherwise — a
-			// canary that read nothing of it — the installer's to try again,
-			// which the round's end kicks (installDue) while the round
-			// answers from the layers below.
+			// Every layer from the first added goes, each valid only over its base:
+			// refused corrupt on the canary's verdict, else the installer's to retry
+			// (installDue kicks it at the round's end).
 			first := slices.IndexFunc(rows, func(r gitlet.LayerRow) bool { return sameLayer(r, added[0]) })
 			outcome := layerFailed
 			if errors.Is(err, errChainUnsound) {
@@ -1239,11 +1100,10 @@ func (c *Cache) placeInPlace(ctx context.Context, e *entry, inc *incarnation, ro
 	return rows, nil
 }
 
-// placed records rows as the chain inc holds once a placement made it so in
-// place: every file of rows vouched at the identity it has now — written by
-// this process from files held to their rows, or checked by its round — and
-// the chain files with them, the incarnation's record set (setInstalled),
-// and every staged layer of fetched gone from tmp/. e.mu is not held.
+// placed records rows as inc's chain once placed in place: every file of rows
+// and the chain files vouched at their identity now (written here from files
+// held to their rows, or checked by its round), the record set
+// (setInstalled), and fetched's staging gone from tmp/. e.mu is not held.
 func (c *Cache) placed(e *entry, inc *incarnation, rows []gitlet.LayerRow, fetched []*stagedLayer,
 	held map[string]livePack) {
 
@@ -1276,11 +1136,10 @@ func (c *Cache) placed(e *entry, inc *incarnation, rows []gitlet.LayerRow, fetch
 	c.installedLayers(e.id, in)
 }
 
-// moveLayerIn renames st's files into the incarnation (or the staged one) at
-// dir, under the names git opens them by, and answers the paths it placed,
-// relative to dir. The directories are made where missing; each is synced
-// before anything names what landed: by the chain files' write that follows
-// in place, and with the rest of a swap's staging (syncStaged).
+// moveLayerIn renames st's files into the incarnation (or staged one) at dir
+// under git's names and answers the paths placed, relative to dir. Each
+// directory is synced before anything names what landed: by the chain files'
+// write in place, or with a swap's staging (syncStaged).
 func (c *Cache) moveLayerIn(st *stagedLayer, dir string) ([]string, error) {
 	var placed []string
 	for i, rel := range layerRels(st.row.Layer) {
@@ -1321,10 +1180,9 @@ func (c *Cache) linkLayerIn(row gitlet.LayerRow, from, to string) ([]string, err
 	return linked, nil
 }
 
-// trashRels moves the files at rels, relative to dir, into trash/: what a
-// placement that did not complete had renamed in. A file already gone is no
-// failure, and one that will not move is logged — the next full round's
-// placement makes the chain directories exactly the chain's again.
+// trashRels moves the files at rels under dir into trash/: what an unfinished
+// placement renamed in. A file already gone is no failure; one that will not
+// move is logged, and the next full round's placement clears it.
 func (c *Cache) trashRels(dir string, rels []string) {
 	for _, rel := range rels {
 		path := filepath.Join(dir, rel)
@@ -1335,10 +1193,9 @@ func (c *Cache) trashRels(dir string, rels []string) {
 	}
 }
 
-// writeChains writes both chain files of the incarnation (or the staged one)
-// at dir over rows — the commit-graph's ending in the node's tip where tip
-// names one (a swap carrying it, maintain.go) — each by writeChain. sync is
-// writeChain's.
+// writeChains writes both chain files of the incarnation (or staged one) at
+// dir over rows by writeChain, the graph's ending in tip where one is named (a
+// swap carrying it, maintain.go).
 func (c *Cache) writeChains(dir string, rows []gitlet.LayerRow, tip string, sync func(dir string) error) error {
 	midx, graph := chainIDs(rows)
 	if c.knobs != nil && c.knobs.chainLines != nil {
@@ -1353,17 +1210,14 @@ func (c *Cache) writeChains(dir string, rows []gitlet.LayerRow, tip string, sync
 	return c.writeChain(dir, graphChainRel, graph, sync)
 }
 
-// writeChain writes the chain file at rel of the incarnation (or the staged
-// one) at dir listing ids, a line each — staged in tmp/, durable, renamed in
-// — or, for none, removes it and its directory where that is left empty: an
-// incarnation with no chain holds no file of one. sync makes the directory
-// the chain file lands in durable, before the file is renamed in — so every
-// layer file renamed into it before is durable before a chain file names it
-// — and after: syncDir for an incarnation a reader may open now or once it is
-// current, and unsynced for a swap's staging, which nothing reads before its
-// rename and which syncs every directory it wrote in once, with the rest of
-// it (syncStaged), and for the node's tip's chain written over the layers
-// installed (maintain.go's writeTip), which names nothing new.
+// writeChain writes the chain file at rel under dir listing ids, staged in
+// tmp/, durable and renamed in; for no ids it removes it, and its directory if
+// left empty, since a chainless incarnation holds no chain file. sync makes
+// the directory durable before the rename (so every layer file renamed in
+// before is durable before a chain file names it) and after it. It is syncDir for
+// an incarnation a reader may open, and a no-op for a swap's staging
+// (syncStaged syncs it once) and for the tip's chain over the installed layers
+// (maintain.go's writeTip), which names nothing new.
 func (c *Cache) writeChain(dir, rel string, ids []string, sync func(dir string) error) error {
 	path := filepath.Join(dir, rel)
 	if len(ids) == 0 {
@@ -1388,9 +1242,8 @@ func (c *Cache) writeChain(dir, rel string, ids []string, sync func(dir string) 
 	if err != nil {
 		return err
 	}
-	// The layers' files renamed in before the chain file are made durable
-	// by this sync of their directory too: the rule "what a file names is
-	// durable before that file is renamed in" (durable.go).
+	// What a file names is durable before it is renamed in (durable.go): this
+	// sync covers the layer files renamed in before.
 	if err = sync(filepath.Dir(path)); err != nil {
 		return removeStaged(staged, err)
 	}
@@ -1400,38 +1253,26 @@ func (c *Cache) writeChain(dir, rel string, ids []string, sync func(dir string) 
 	return sync(filepath.Dir(path))
 }
 
-// cutChain cuts inc's installed chain to its first k layers IN PLACE — the
-// chain files written over what is kept first, so no reader opening them
-// from then on names what goes, then every file of the two chain directories
-// that no kept layer owns moved into trash/ (what a layer above the cut held,
-// the node's tip, and anything a crash or a previous process left there under
-// a layer's name that no record accounts for) — and records what is kept.
-// e.mu is not held; the caller holds the repository's write lock, and has
-// stopped a maintenance run writing the chain (dropFor; a full round stops
-// every run). dropFor's one cut, for every change a chain answers Prefix.
-//
-// THE NODE'S TIP GOES WITH EVERY CUT (tipGoes): a layer cut takes the base it
-// stood on, a chain placed over the kept ones is a base it was not written
-// over, a pack removed may take commits it names, and chain files written
-// again are a repair, in which a node-written tip is the one file worth
-// nothing to keep — the maintainer writes it again at once, over the tail
-// alone.
-//
-// THE CUT IS MARKED IN FLIGHT (chainWrite) from before its chain files are
-// written to after its record names what they list: a check, a scrub or
-// Verify of a copy a reader holds reads that record and hashes the chain
-// files beside the cut, holding no lock it takes, and a file of one moment
-// held to a record of the other would be named damaged, its repair a round
-// that writes again what was sound.
+// cutChain cuts inc's installed chain to its first k layers IN PLACE, dropFor's
+// one cut: the chain files written over what is kept first, so no reader
+// opening them names what goes, then every file of the two chain directories
+// no kept layer owns moved into trash/ (layers above the cut, the tip,
+// leftovers no record accounts for). The caller holds the write lock and has
+// stopped any maintenance run writing the chain; e.mu is not held. THE TIP
+// GOES WITH EVERY CUT (tipGoes): in a repair it is the one file worth nothing
+// to keep, rewritten at once over the tail. THE CUT IS MARKED IN FLIGHT
+// (chainWrite) until its record names what the files list: a check, scrub or
+// Verify reads the record and hashes the files without its lock, and a file of
+// one moment held to a record of another would read as damage, whose repair
+// rewrites what was sound.
 func (c *Cache) cutChain(e *entry, inc *incarnation, k int, why Event) error {
 	e.mu.Lock()
 	installed := slices.Clone(inc.installed)
 	ended := chainWrite(inc)
 	e.mu.Unlock()
-	// What the chain files name from their write on is what the record names
-	// however the cut ends: no tip, and no tail a tip covers. Ended under the
-	// same lock as that record, so no reader takes the record's word without
-	// its mark.
+	// From the write on, the files name no tip and no tail a tip covers, however
+	// the cut ends; the mark ends under the record's lock, so no reader takes the
+	// record without it.
 	written := false
 	defer func() {
 		e.mu.Lock()
@@ -1500,39 +1341,18 @@ func (c *Cache) cutChain(e *entry, inc *incarnation, k int, why Event) error {
 	return nil
 }
 
-// canary is the read a placement makes through the chain's bitmap before any
-// reader is handed it: one bitmapped walk of every object, in the read lane,
-// under the read's bound plus a walk of the tail the chain leaves outside
-// (gitproc.HistoryWalk of tail objects) — `rev-list --objects
-// --use-bitmap-index --count`, from every ref of dir (--all) or, where tips is
-// given, from those object ids (--stdin): a full round places its chain in
-// place before it writes the refs it read, so its walk starts from the rows'
-// tips, every object of which its install has just put in the copy. A layer
-// file names no base, so one placed over the wrong base passes
-// `multi-pack-index verify` and fails the first bitmapped read ("invalid MIDX
-// object position, MIDX is likely corrupt"): what this reads, and what
-// gitlet.CheckLayer, reading each file alone, cannot.
-//
-// ITS VERDICT IS GIT'S, AND ONLY GIT'S: errChainUnsound where git read the
-// chain and exited with a status that is not its answer (gitproc.ExitError)
-// or named damage (gitproc.Result.Damage), and nil where it read it whole.
-// Any other failure — no read slot within SlotWait while the requests the
-// lane serves fill it, the deadline, the cache stopping — is no verdict: git
-// never finished a read of the chain, and what stopped it says nothing of the
-// layers. The placement then places none of what it added — a swap fails at
-// this step as at a write its disk failed, and a placement in place puts the
-// chain back below them — and they are the installer's to try again behind
-// its wait. Taken for a verdict, they were refused corrupt: kept off the node
-// until the maintainer's next publication or a restart, a busy node's layers
-// counted as damage, and a copy whose root went that way left in own mode,
-// its whole index the maintainer's to write on a node already short of cores.
-//
-// WHAT IT REPORTS IS THE PLACEMENT'S: it runs naming a reader of inc
-// (gitproc.Cmd.Repairer) whose reports the observer holds rather than makes
-// inc's scrub due, and which this consumes — the placement it judges is the
-// answer to whatever it met. Run at dir, inc's own directory for a placement
-// in place or a swap's staged one, which the observer routes to inc as the
-// swap's (swapAt).
+// canary reads through the chain's bitmap at dir (inc's, or a swap's staged
+// one the observer routes to inc, swapAt) before any reader is handed it: one
+// bitmapped `rev-list --count` in the read lane, bounded by the read deadline
+// plus a walk of the tail, from every ref or, for a full round that has not
+// written the refs it read, from tips. A layer over the wrong base passes
+// `multi-pack-index verify` and CheckLayer and fails here ("invalid MIDX
+// object position, MIDX is likely corrupt"). ITS VERDICT IS GIT'S ALONE:
+// errChainUnsound for an exit status or reported damage; anything else (no
+// slot within SlotWait, the deadline) is no verdict, and the added layers are
+// retried, never refused, or a busy node's layers would count as damage. It
+// runs as a reader of inc (gitproc.Cmd.Repairer) whose reports it consumes:
+// the placement is their answer.
 func (c *Cache) canary(ctx context.Context, e *entry, inc *incarnation, dir string, tail int64,
 	tips []string) error {
 
@@ -1548,12 +1368,10 @@ func (c *Cache) canary(ctx context.Context, e *entry, inc *incarnation, dir stri
 	if c.knobs != nil && c.knobs.canaryRunning != nil {
 		defer c.knobs.canaryRunning(dir)()
 	}
-	// Each argument list a literal at its run, so the writers gate reads it.
-	// THROUGH THE DROPPING VIEW where dir holds one: the walk reads what the
-	// refs reach, as every reader the chain serves does, and a ref a push
-	// revived onto a dropping object before its expunge's begin reaches one
-	// (heldView) — read without it, the layer would be refused for an object
-	// the copy holds.
+	// Each argument list a literal at its run, for the writers gate. Through the
+	// dropping view (heldView), as every reader the chain serves: a ref a push
+	// revived onto a dropping object reaches one, and without it the layer would
+	// be refused for an object the copy holds.
 	deadline := gitproc.ReadDeadline + gitproc.HistoryWalk(tail)
 	view := heldView(dir)
 	var res gitproc.Result
@@ -1608,26 +1426,23 @@ type Chain struct {
 	// Rows is the rows' chain as of the copy's last round — the layers this
 	// node may not have installed among them.
 	Rows []gitlet.LayerRow
-	// Installed is how many of Rows, from the root, the copy holds installed
-	// over exactly the base below each: the prefix a layer may be written
-	// over (Cache.NewLayerScratch). Between a publication's round and the
-	// installer's placement of its layer, the copy still holds the layer the
-	// publication replaced, which is no layer of Rows, so the prefix ends
-	// below it.
+	// Installed is how many of Rows, from the root, the copy holds over exactly
+	// the base below each: the prefix a layer may be written over
+	// (Cache.NewLayerScratch). Until the installer places a publication's layer,
+	// the copy holds the replaced one, so the prefix ends below it.
 	Installed int
-	// Refused is the layers of Rows this node will not try to install again
-	// while the rows name them at the records that added them, by id, each
-	// with the outcome that refused it: `missing`, `corrupt` or `newer_git`.
-	// A layer above a refused one is neither installed nor refused — none is
-	// installed over a base the copy lacks.
+	// Refused is the layers of Rows this node will not try again while the rows
+	// name them at the records that added them, by id, with the outcome:
+	// `missing`, `corrupt` or `newer_git`. A layer above a refused one is neither
+	// installed nor refused.
 	Refused map[string]string
 }
 
-// Chain is the published chain the incarnation s pins holds ([Chain]), read
-// under its entry's lock as ONE reading — so a publication planned over it
-// never pairs an installation with a refusal of another moment: what a
-// repository's maintainer plans a publication over, beside the packs
-// ([Cache.Packs]). The zero Chain for a Synced this cache did not hand out.
+// Chain is the published chain the incarnation s pins holds ([Chain]), read as
+// ONE reading under its entry's lock, so a publication planned over it never
+// pairs an installation with a refusal of another moment; the maintainer plans
+// over it beside [Cache.Packs]. The zero Chain for a Synced this cache did not
+// hand out.
 func (c *Cache) Chain(s Synced) Chain {
 	if c.handedOut(s, "a read of the published chain") != nil {
 		return Chain{}
@@ -1652,14 +1467,12 @@ func chainOf(inc *incarnation) Chain {
 	return out
 }
 
-// Damaged is every repository whose CURRENT copy on this node holds a layer of
-// its rows' chain this node refused — missing from the store, corrupt, or
-// from a newer git — read from memory, as the repository's row the copy's last
-// round read: what a maintainer REPAIRS by publishing again over the base it
-// holds, whether or not any pack was pushed since (internal/gitlet/compact). An
-// idle repository whose layer the store lost is listed by no due listing,
-// since nothing is left to publish by its rows, so its first Gitlet node to be
-// its maintainer finds it here. Sorted by id.
+// Damaged is every repository whose CURRENT copy here holds a refused layer of
+// its rows' chain (missing, corrupt, or from a newer git), from memory, as the
+// row the copy's last round read: what a maintainer REPAIRS by publishing over
+// the base it holds, pushes or none (internal/gitlet/compact). No due listing
+// names an idle repository whose layer the store lost, so its next maintainer
+// finds it here. Sorted by id.
 func (c *Cache) Damaged() []gitlet.RepoRef {
 	var out []gitlet.RepoRef
 	c.mu.Lock()
@@ -1675,60 +1488,23 @@ func (c *Cache) Damaged() []gitlet.RepoRef {
 	return out
 }
 
-// THE INSTALLER: one goroutine a cache, started by Start, that installs the
-// layers a delta named and the copy does not hold — behind the serving, since
-// no reader waits on a layer.
-//
-//   - IT HOLDS EACH REPOSITORY ONCE, in one of three places: DUE a try, in
-//     the order it became so — kicked by a round whose chain moved or by an
-//     adoption, or its wait ended — WAITING out a backoff, the earliest end
-//     first, or RUNNING. A pass moves every wait that has ended among the due
-//     and takes up the due while a task is free, so it costs what it moves
-//     and takes up, never what the installer holds: a burst of publications
-//     over thousands of repositories, or a store's outage, holds thousands,
-//     and a pass runs at every kick — every task's end and every round of a
-//     repository held, one waiting out its backoff included — under the lock
-//     every round's kick and every full round's install waits on. A walk of
-//     every repository held at every pass drained 10 000 in about Q²/32
-//     steps, three million, and took ten thousand more in hand at every kick
-//     of one waiting.
-//   - IT FETCHES AT MOST FetchConcurrency PARTS AT ONCE ACROSS THE
-//     REPOSITORIES it installs, taking the next from the queue whenever one
-//     ends, through the node's fetch slots (NodeFetches): half the node's
-//     fetches for background installs and the other half for the rounds a
-//     reader waits on — the round's own share, FetchConcurrency — never one
-//     repository at a time: most layers are ONE part (a layer over a tail of
-//     a few tens of thousands of objects is some 37 bytes an object, a few
-//     MiB), so a node catching up after a restore, or after a burst of
-//     publications over thousands of repositories, would wait a first byte
-//     (100–200 ms on S3) and a placement a repository in series — 10 000
-//     one-part installs are 17 to 33 minutes that way, about a minute
-//     sixteen wide.
-//   - ITS WORK IN THE READ LANE IS ONE SLOT AT A TIME ACROSS THEM ALL FOR
-//     EACH KIND (installReadSlots): the pieces of its layers' checks in one,
-//     its placements' canaries in the other. Sixteen tasks keep sixteen GETs
-//     in flight; they were never sixteen cores of hashing to take from the
-//     requests that lane serves.
-//   - ONE REPOSITORY IS INSTALLED BY ONE TASK AT A TIME, its layers fetched in
-//     chain order and placed together, by a swap, under the repository's write
-//     lock: a round queues behind it, and it behind a round.
-//   - A FAILURE: a part the store does not hold is asked about once at the
-//     log's head (a linearizable sync) and refused `missing` only while the
-//     rows still name the layer; bytes that are not the row's are refused
-//     `corrupt`; anything else — a miss whose read at the head failed among
-//     it, which decided nothing — waits 1 minute, doubling to
-//     installRetryCap, and the repository's next round that serves its chain
-//     clears the wait.
-//     A layer the rows no longer name — one a publication replaced — keeps
-//     serving, its packs held, while its replacement cannot be placed, and is
-//     cut once that has lasted installRetryCap.
+// layerInstaller is THE INSTALLER (package doc, "The installed chain"): one
+// goroutine a cache, started by Start, installing behind the serving what a
+// delta named and the copy lacks. It holds each repository ONCE: DUE in order,
+// WAITING out a backoff (a heap by its end) or RUNNING, so a pass costs what
+// it moves and takes up, never what it holds: a burst or a store outage holds
+// thousands, and a pass runs at every kick under the lock every round's kick
+// waits on. It fetches a round's share of parts at once ACROSS repositories
+// through the node's fetch slots (NodeFetches), never one repository at a
+// time: most layers are one part of a few MiB, and 10 000 in series at a first
+// byte of 100-200 ms on S3 take 17 to 33 minutes. One task installs a
+// repository, its layers fetched in chain order and placed by one swap under
+// its write lock (installRepo); its read-lane work is installReadSlots.
 type layerInstaller struct {
-	// share is the parts in flight across every repository it installs, and
-	// tasks the repositories it installs at once: both a round's share, since
-	// a task fetches at least a part. checks and canaries are its shares of
-	// the node's read lane, installReadSlots each, which every task's work
-	// there takes in turn: its checks' pieces the first, its placements'
-	// canaries the second.
+	// share is the parts in flight across every repository, and tasks the
+	// repositories installed at once: both a round's share, since a task fetches
+	// at least a part. checks and canaries are its read-lane shares
+	// (installReadSlots): its checks' pieces, and its placements' canaries.
 	share    *semaphore.Weighted
 	tasks    int
 	checks   *semaphore.Weighted
@@ -1736,16 +1512,12 @@ type layerInstaller struct {
 	kicks    chan struct{}
 
 	mu sync.Mutex
-	// repos is every repository the installer holds, each with its place and
-	// its backoff: due is the DUE in order, waiting the WAITING by when each
-	// one's wait ends, and running counts the RUNNING. staged is the layers
-	// staged in tmp/ for a placement to take in place of a GET, by repository
-	// and layer id: those the repositories' maintainer handed this node
-	// (AdoptLayer), and those the installer fetched for a placement that
-	// found the copy moved (holdFetched) — each over the base it was held to,
-	// until a placement takes it, a plan of its repository no longer wants
-	// the installer's own (dropFetched), or the janitor discards it
-	// (expireStagedLayers).
+	// repos is every repository held, each with its place and backoff: due in
+	// order, waiting by when each wait ends, running counted. staged is the layers
+	// staged in tmp/ for a placement to take instead of a GET, by repository and
+	// layer id: the maintainer's (AdoptLayer) and the installer's own fetches a
+	// moved placement kept (holdFetched), each over the base it was held to, until
+	// placed, dropped (dropFetched) or expired (expireStagedLayers).
 	repos   map[string]*installEntry
 	due     installQueue
 	waiting installWaits
@@ -1846,21 +1618,15 @@ func (in *layerInstaller) hold(e *installEntry, now time.Time) {
 	in.due.push(e)
 }
 
-// installWait is one repository's place in the installer's backoff: the
-// failures in a row, when the next try may be made (Options.Now's clock), and
-// every layer of its copy's installed chain the rows no longer named at its
-// last try, each with since when it has stood in for a replacement that could
-// not be placed.
-//
-// A STALE LAYER'S CLOCK IS ITS OWN, keyed by the row it was installed from
-// (sameRow), never the repository's: an episode can end where the
-// installer does not see it — a full round placing the replacement itself, a
-// cut, the rows naming the layer again — and a clock kept for the repository
-// outlived it, so the next publication's stale layer was cut at its first
-// failed fetch, by an episode hours over: a root replacement then dropped the
-// copy to own mode, bitmapless and its whole index the maintainer's to write.
-// Keyed by the layer, a clock no layer of the installed chain still answers to
-// is no clock, and each one runs from the try that first saw its layer stale.
+// installWait is one repository's backoff: failures in a row, when the next
+// try may be made (Options.Now's clock), and each installed layer the rows no
+// longer named at its last try, with since when it has stood in for a
+// replacement not placed. A STALE LAYER'S CLOCK IS ITS OWN, keyed by its row
+// (sameRow), never the repository's: an episode can end unseen by the
+// installer (a full round placing the replacement, a cut, the rows naming the
+// layer again), and a repository's clock would outlive it and cut the next
+// publication's stale layer at its first failed fetch, a root replacement
+// dropping the copy to own mode. A clock no installed layer answers to is none.
 type installWait struct {
 	failures int
 	retryAt  time.Time
@@ -1894,24 +1660,21 @@ func (w *installWait) staleSince(stale []gitlet.LayerRow, now time.Time) (time.T
 	return oldest, clocks
 }
 
-// installRetryBase is the installer's first wait after a try that failed for
-// a reason that may pass — the store failing to answer, this node's disk —
-// doubled after each one in a row, to installRetryCap: A MINUTE, since a
-// layer's absence costs a copy speed and never correctness, so nothing is
-// gained by asking a failing store sooner, and a store back within a minute
-// costs one wait.
+// installRetryBase is the installer's first wait after a try that failed for a
+// reason that may pass, doubled per failure in a row to installRetryCap. A
+// MINUTE: a missing layer costs a copy speed, never correctness, so asking a
+// failing store sooner gains nothing, and a store back within a minute costs
+// one wait.
 const installRetryBase = time.Minute
 
-// installRetryCap is the most the installer waits between tries of one
-// repository, and how long a layer the rows no longer name may keep serving
-// while its replacement cannot be placed: THIRTY MINUTES (a decision, not a
-// measurement). A layer refused here is replaced by its maintainer's next
-// publication, which reaches this node as new rows through a delta — a round,
-// which ends the wait (kickInstall's fresh) — rather than through this retry,
-// so the retry serves only a store that failed to answer: at most one GET a
-// repository a node every half hour, about 5.6 a second at 10 000
-// repositories; and a retired pack a stale layer holds stays at most this
-// long past its retirement before the stale layer is cut.
+// installRetryCap is the installer's longest wait between tries of a
+// repository, and how long a layer the rows no longer name may serve while its
+// replacement cannot be placed: THIRTY MINUTES, a decision rather than a
+// measurement. A refused layer's replacement arrives as new rows through a
+// round, which ends the wait (kickInstall's fresh), so this retry serves only
+// a store that failed to answer: at most one GET a repository a node every
+// half hour, about 5.6 a second at 10 000 repositories. A retired pack a stale
+// layer holds stays at most this long.
 const installRetryCap = 30 * time.Minute
 
 // installWindow is the wait after n tries in a row that failed:
@@ -1925,35 +1688,18 @@ func installWindow(n int) time.Duration {
 	return min(w, installRetryCap)
 }
 
-// installReadSlots is how many slots of the node's read lane each kind of the
-// installer's own work holds at once, across every repository it installs:
-// the pieces of its layers' checks (CheckPieceBytes in a
-// gitproc.Pool.HoldRead), and its placements' canaries (a git read) — ONE
-// each, as the scrub holds one, the cache's other work behind the serving.
-// The read lane is a core a slot for the work requests wait on — a seat's git
-// read, a fetch's check of its wants (Missing), a round's check of the files
-// a copy keeps — and the installer's sixteen tasks are there to keep sixteen
-// GETs in flight, not to hash on sixteen cores: bounded by its tasks alone,
-// its checks and canaries held up to sixteen slots — the whole lane of a node
-// of sixteen cores or fewer — through a mass install (a burst of root
-// publications, the republish after a restore, when every node installs every
-// root), each request queued behind a piece of up to 0.54 s read cold. One
-// slot hashes about a gigabyte a second (BenchmarkVerify's 0.95–1.08 ms a
-// mebibyte), about what sixteen GETs bring at the S3 fake's 80 MB/s a
-// connection (FetchConcurrency's measurement), so it paces a node's installs
-// about as its downloads do.
-//
-// A SLOT FOR EACH KIND, never one for both: a canary runs inside its
-// placement's swap, under the repository's write lock, which every round of
-// the repository waits for — the sync a fetch after a push waits on among
-// them. In one slot with the checks it waited behind up to fifteen other
-// tasks' pieces, about a second warm and several read cold, with that lock
-// held. In its own it waits only behind other placements' canaries, 0.004 s
-// each over a chain with no tail.
-//
-// A JUDGMENT CALL, not a measurement: a node of many cores with a link far
-// wider than sixteen connections bring would install faster with more, at the
-// price of what its requests wait for.
+// installReadSlots is how many read-lane slots each kind of the installer's
+// own work holds at once across all repositories: its checks' pieces
+// (CheckPieceBytes in a gitproc.Pool.HoldRead) and its canaries. ONE each, as
+// the scrub holds one: the lane is a core a slot for work requests wait on,
+// and the tasks keep GETs in flight rather than hash; bounded by tasks alone,
+// a mass install held up to sixteen slots, each request behind a piece of up
+// to 0.54 s read cold. One slot hashes about a GB/s (BenchmarkVerify), about
+// what sixteen GETs bring (FetchConcurrency), so installs pace as downloads
+// do. A SLOT FOR EACH KIND: a canary runs under the repository's write lock,
+// which every round waits for, and behind checks it waited up to seconds. A
+// judgment call: a many-core node with a far wider link would install faster
+// with more, at its requests' cost.
 const installReadSlots = 1
 
 // newLayerInstaller is an installer of nothing yet, fetching at most share
@@ -1967,14 +1713,12 @@ func newLayerInstaller(share int) *layerInstaller {
 	}
 }
 
-// takeInstallRead takes the installer's share of the node's read lane for its
-// own work about to run there — its canaries' share where canary says the
-// work is a placement's canary, else its checks' (installReadSlots) — waiting
-// in turn with every other task's work of the kind, and answers the call that
-// gives it back, once however often it is called. It holds no slot of the
-// lane itself: a piece's hold takes one after it (installHold), and a
-// canary's git is admitted to one as it starts, so the installer never holds
-// a slot while it waits for its share.
+// takeInstallRead takes the installer's read-lane share for its work about to
+// run there (canaries' where canary, else checks', installReadSlots), in turn
+// with every other task's work of the kind, and answers its idempotent
+// release. It holds no lane slot itself (a piece's hold takes one after it,
+// installHold; a canary's git is admitted as it starts), so the installer
+// never holds a slot while it waits for its share.
 func (c *Cache) takeInstallRead(ctx context.Context, canary bool) (func(), error) {
 	in, kind := c.installer, c.installer.checks
 	if canary {
@@ -2014,13 +1758,11 @@ func (c *Cache) installHold(ctx context.Context) (func(), error) {
 	}), nil
 }
 
-// kickInstall holds id for the installer and wakes it: due at once where it
-// held none of it, as it was where it holds it — waiting out its backoff, or
-// due — and once more as its task ends where one runs it. fresh says a round
-// of the repository served its chain, which ends its wait (a new chain is a
-// new try): a waiting one is due at once, and a running one's next try
-// waits for nothing. O(log n) at most, never a walk of what the installer
-// holds. Its lock is a leaf: called with an entry's mu held or not.
+// kickInstall holds id for the installer and wakes it: due at once where not
+// held, left where it is (waiting or due), or held once more as a running
+// task ends. fresh says a round served its chain, which ends its wait (a new
+// chain is a new try). O(log n) at most. Its lock is a leaf: callable with an
+// entry's mu held or not.
 func (c *Cache) kickInstall(id string, fresh bool) {
 	in := c.installer
 	in.mu.Lock()
@@ -2045,11 +1787,10 @@ func (c *Cache) kickInstall(id string, fresh bool) {
 	}
 }
 
-// installDue reports whether inc has work for the installer: a converged copy
-// holding a layer the rows' chain no longer names there, or one whose next
-// layer of the rows' chain above what it holds is not refused while the rows
-// name it at that record. A copy whose chain stops at a refused layer has none
-// until the rows move. e.mu is held.
+// installDue reports whether inc has installer work: a converged copy holding
+// a layer the rows' chain no longer names there, or whose next layer above
+// what it holds is not refused at that record. A chain stopping at a refused
+// layer has none until the rows move. e.mu is held.
 func installDue(inc *incarnation) bool {
 	if inc == nil || inc.retired || !inc.converged || !inc.chainRead {
 		return false
@@ -2109,14 +1850,12 @@ func (c *Cache) runInstaller(ctx context.Context) {
 	}
 }
 
-// installPass moves every repository whose wait has ended among the due, then
-// starts a task (installRepo, then settleInstall) for each of the due in
-// order while fewer than its tasks run, and answers when the earliest wait
-// still holding one back ends — zero when none does — the repositories it
-// took up, and the tasks it started, which end as they finish. It takes in
-// hand only what it moves and takes up. The tasks run on goroutines of their
-// own, registered as the cache's work (enter), so Stop waits for them; the
-// loop waits for none.
+// installPass moves every ended wait among the due, starts a task
+// (installRepo, then settleInstall) for each due in order while fewer than
+// tasks run, and answers when the earliest remaining wait ends (zero for
+// none), the repositories taken up and their tasks. It touches only what it
+// moves and takes up. Tasks are registered as the cache's work (enter), so
+// Stop waits for them; the loop does not.
 func (c *Cache) installPass(ctx context.Context) (next time.Time, started []string, tasks *sync.WaitGroup) {
 	in, now := c.installer, c.now()
 	tasks = &sync.WaitGroup{}
@@ -2172,48 +1911,28 @@ type installEnd struct {
 	// moved: the placement found the copy or its chain moved since the plan
 	// — due again at once, its wait as it was.
 	moved bool
-	// stop is the fetch that stopped the chain, nil where none did;
-	// undecided the read at the log's head that failed where a missing part
-	// could not be decided; swapFailed a placement whose swap failed at a
-	// step — a write this node's disk failed, or a canary that read nothing;
-	// and stale the layers of the installed chain the rows no longer name
-	// still standing in, as installed.
+	// stop is the fetch that stopped the chain, nil for none; undecided the
+	// failed read at the log's head that left a missing part undecided;
+	// swapFailed a placement whose swap failed at a step (a disk write, or a
+	// canary that read nothing); stale the installed layers the rows no longer
+	// name still standing in.
 	stop       *layerFetch
 	undecided  error
 	swapFailed bool
 	stale      []gitlet.LayerRow
 }
 
-// installRepo is one repository's install, in four steps:
-//
-//  1. THE PLAN, of the copy current now, pinned (no use, as the maintainer's
-//     pin is none): the prefix of its chain the rows still name, kept, and
-//     what is installable above it (installable).
-//  2. EACH LAYER of it fetched in chain order, every part at once, holding
-//     no lock — or taken from what is staged for it (claimStagedLayer: the
-//     maintainer's adoption, or an earlier try's fetch), no GET — stopping
-//     at the first that fails. A fetch an earlier try staged that the plan
-//     does not install goes (dropFetched).
-//  3. THE PLACEMENT, under the repository's write lock: the copy still
-//     current and its chain the one planned for, else the downloads are
-//     staged for the next plan (holdFetched) and the repository is due
-//     again; then a SWAP (swap.go's layer step) to the kept prefix and what
-//     was fetched — a layer the rows no longer name is cut by it — the
-//     canary reading the staged chain.
-//  4. THE FAILURE, if one stopped the fetches: a part the store does not hold
-//     is asked about at the log's head once, refused `missing` while the rows
-//     still name it there; bytes not its row's are refused `corrupt`; and
-//     anything else — a miss the head could not be read about included — is
-//     tried again after its wait. A layer the rows no longer name that has
-//     stood in for its replacement for installRetryCap with nothing fetched
-//     is cut.
-//
-// It answers how the try ended, for its task to settle. A copy gone, or with
-// nothing due, ends the repository's wait with the try: whatever it waited
-// out — failures in a row, a stale layer's clock — was an episode now over,
-// ended where the installer does not see it (a full round placing the chain,
-// a cut, an eviction), and a wait kept would be the next episode's from its
-// first try.
+// installRepo is one repository's try: THE PLAN over the current copy, pinned
+// (as no use, like the maintainer's pin): the prefix the rows still name,
+// kept, and what is installable above it; EACH LAYER fetched in chain order
+// holding no lock, or claimed from staging (claimStagedLayer), stopping at the
+// first failure; THE PLACEMENT by swap under the write lock, or the fetches
+// staged for the next plan (holdFetched) where the copy or its chain moved;
+// and THE FAILURE decided (refuseFailed). A stale layer that stood in
+// installRetryCap with nothing fetched is cut. A copy gone or with nothing due
+// ends the repository's wait: whatever it waited out was an episode that ended
+// unseen (a full round's placement, a cut, an eviction), and a wait kept would
+// be charged to the next episode's first try.
 func (c *Cache) installRepo(ctx context.Context, id string) installEnd {
 	c.mu.Lock()
 	e := c.entries[id]
@@ -2270,9 +1989,8 @@ func (c *Cache) installRepo(ctx context.Context, id string) installEnd {
 		fetched = append(fetched, f.staged)
 	}
 
-	// THE PLACEMENT: what was fetched over what is kept, a stale layer cut
-	// by it — or, with nothing fetched, the stale layers cut alone once the
-	// oldest of them has stood in for its replacement for installRetryCap.
+	// With nothing fetched, the stale layers are cut alone once the oldest has
+	// stood in installRetryCap.
 	cut := len(stale) > 0 && len(fetched) == 0 && c.stuckFor(id, stale, c.now()) >= installRetryCap
 	swapFailed := false
 	if len(fetched) > 0 || cut {
@@ -2282,8 +2000,7 @@ func (c *Cache) installRepo(ctx context.Context, id string) installEnd {
 		}
 		switch c.placeBySwap(ctx, e, inc, gen, rows, fetched) {
 		case placementMoved:
-			// Planned over a copy or a chain no longer there: planned again,
-			// what was fetched staged for that plan.
+			// Planned over a copy or chain gone: plan again, the fetches staged for it.
 			c.holdFetched(id, fetched)
 			fetched = nil
 			return installEnd{moved: true}
@@ -2292,23 +2009,18 @@ func (c *Cache) installRepo(ctx context.Context, id string) installEnd {
 			fetched = nil
 			stale = nil
 		case placementRefused:
-			// The canary refused what it added — every layer the installer
-			// fetches is one its copy does not hold — which is definite: the
-			// next plan stops below it.
+			// Definite: the canary refused layers the copy did not hold, and the next
+			// plan stops below them.
 		default:
-			// A step of the swap failing — this node's disk failing a write,
-			// or the canary reading nothing of the chain (no read slot within
-			// SlotWait, its deadline), which is no verdict — logged
-			// code_cache_swap_failed by it, and every layer it was to place
-			// counted failed there: tried again behind the wait.
+			// A swap step failed (a disk write, or a canary that read nothing: no
+			// verdict), logged code_cache_swap_failed and counted failed there: retried
+			// behind the wait.
 			swapFailed = true
 		}
 	}
 
-	// WHAT IS LEFT: a definite failure decided, and the repository queued
-	// again behind its wait — a failure that may pass (a miss the log's head
-	// could not decide among them), a placement that did not, or a stale
-	// layer still standing in for a replacement — or nothing.
+	// A definite failure is decided here; one that may pass, a failed placement
+	// or a stale layer still standing in is settleInstall's to queue.
 	end := installEnd{stop: stop, swapFailed: swapFailed, stale: stale}
 	if stop != nil && stop.outcome != layerFailed {
 		end.undecided = c.refuseFailed(ctx, e, *stop)
@@ -2316,10 +2028,10 @@ func (c *Cache) installRepo(ctx context.Context, id string) installEnd {
 	return end
 }
 
-// stuckFor is how long the oldest of stale — the layers of id's installed
-// chain the rows no longer name — has stood in for a replacement the
-// installer could not place, by the clock each was given at the try that
-// first saw it stale (installWait.staleSince): zero for a layer no try has.
+// stuckFor is how long the oldest of stale (id's installed layers the rows no
+// longer name) has stood in for a replacement, by each layer's own clock
+// (installWait.staleSince), which starts at the try that first saw it stale:
+// zero for a layer no earlier try saw so.
 func (c *Cache) stuckFor(id string, stale []gitlet.LayerRow, now time.Time) time.Duration {
 	in := c.installer
 	in.mu.Lock()
@@ -2332,28 +2044,17 @@ func (c *Cache) stuckFor(id string, stale []gitlet.LayerRow, now time.Time) time
 	return now.Sub(since)
 }
 
-// settleInstall records how id's try ended (end), its task done: the
-// repository let go — its wait forgotten — or held once more, among the due or
-// behind a wait; held once more at once, whatever else, where a kick came
-// while the task ran (again), its wait ended where that kick was fresh.
-//
-//   - Planned over a copy or a chain that moved (end.moved): due again, its
-//     wait as it was.
-//   - The copy gone or nothing due (end.forget), or done — nothing stopped
-//     it, no swap failed, no stale layer left — let go.
-//   - A try that failed for a reason that may pass waits installWindow of its
-//     failures in a row: the store or this node's disk failing (the stop's
-//     outcome failed), a swap that did not complete, or a part the store does
-//     not hold while the read at the log's head that decides it failed
-//     (end.undecided, that read's error) — nothing was decided, and taken up
-//     again at once the repository would cost a GET, a staging and a failed
-//     round at every pass for as long as the head cannot be read.
-//   - A definite refusal is due again at once, the refused layer now blocking.
-//   - The layers the rows no longer name still standing in for their
-//     replacement (end.stale, as installed) wait until the oldest of them has
-//     stood installRetryCap, when their cut is due — each by its own clock,
-//     kept from the try that first saw it stale, and a clock for a layer no
-//     longer stale dropped.
+// settleInstall settles how id's try ended: let go, its wait forgotten, or
+// held again, due or behind a wait; held again at once whatever else where a
+// kick came while it ran (again), its wait ended if that kick was fresh.
+// Moved (end.moved) is due again, its wait as it was. Forgotten or done
+// (nothing stopped, no swap failed, no stale layer) is let go. A failure that
+// may pass waits installWindow (settleWait): the store or disk, an unfinished
+// swap, or a missing part the head could not decide, which retried at once
+// would cost a GET, a staging and a failed round every pass while the head is
+// unreadable. A definite refusal is due again at once, the refused layer now
+// blocking. Stale layers wait until the oldest has stood installRetryCap,
+// when their cut is due.
 func (c *Cache) settleInstall(id string, end installEnd) {
 	in, now := c.installer, c.now()
 	in.mu.Lock()
@@ -2411,10 +2112,9 @@ func (c *Cache) settleWait(id string, w *installWait, end installEnd, now time.T
 	}
 }
 
-// fetchForInstall is one layer of the installer's: the maintainer's adoption
-// of it when one is registered for this very layer, else fetched — every part
-// at once, each a unit of the installer's share and one of the node's fetch
-// slots — and held to its row over base.
+// fetchForInstall is one layer of the installer's: the staging claimed for
+// this very layer, else every part fetched at once, each holding a unit of
+// the installer's share and a node fetch slot, and held to its row over base.
 func (c *Cache) fetchForInstall(ctx context.Context, id string, row gitlet.LayerRow, base []string) layerFetch {
 	if st := c.claimStagedLayer(id, row, base); st != nil {
 		return layerFetch{row: row, staged: st}
@@ -2456,16 +2156,13 @@ func (c *Cache) fetchForInstall(ctx context.Context, id string, row gitlet.Layer
 	return layerFetch{row: row, staged: st}
 }
 
-// refuseFailed decides a definite failure the installer met: a part the store
-// does not hold is asked about once at the log's head — a linearizable sync,
-// a round like any other — and refused `missing` on the copy current then
-// only while its rows still name the layer at the same record (a publication
-// that replaced it since leaves nothing to refuse); bytes that are not the
-// row's are refused `corrupt` while the rows name it. It answers nil once it
-// decided — a refusal, or none to make — and the head read's failure where it
-// could not: a miss the head did not decide is neither refused nor cleared,
-// and its try is one that may pass (settleInstall), asked again after its
-// wait.
+// refuseFailed decides a definite failure: a missing part is asked about once
+// at the log's head (a linearizable sync) and refused `missing` on the then
+// current copy only while its rows still name the layer at the same record (a
+// publication may have replaced it and the store collected its parts); bytes
+// not the row's are refused `corrupt` while the rows name it. It answers nil
+// once decided, or the head read's failure, leaving the miss neither refused
+// nor cleared: a try that may pass (settleInstall).
 func (c *Cache) refuseFailed(ctx context.Context, e *entry, f layerFetch) error {
 	if f.outcome == layerMissing {
 		s, err := c.Sync(ctx, e.id, statelog.Freshness{Level: statelog.ReadLinearizable})
@@ -2502,14 +2199,12 @@ const (
 	placementRefused
 )
 
-// placeBySwap places rows as the chain of inc by a swap into its next
-// incarnation (swap.go's layer step), under the repository's write lock, and
-// answers what became of it: made, the copy or its chain moved under the
-// install since it planned at gen — which leaves the downloads unplaced — the
-// canary refusing what it added, or the swap failing. The lock is waited for
-// under ctx, as the swap runs: the installer's, which Stop ends with the
-// cache's lifetime (runInstaller), so a wait outliving it would only hold a
-// placement no swap could make.
+// placeBySwap places rows as inc's chain by a swap into its next incarnation
+// (swap.go's layer step) under the repository's write lock, and answers what
+// became of it; placementMoved where the copy or its chain moved since the
+// plan at gen, leaving the downloads unplaced. The lock is waited for under
+// ctx, the installer's, which Stop ends (runInstaller): a wait outliving it
+// would hold a placement no swap could make.
 func (c *Cache) placeBySwap(ctx context.Context, e *entry, inc *incarnation, gen uint64, rows []gitlet.LayerRow,
 	fetched []*stagedLayer) chainPlacement {
 
@@ -2543,12 +2238,10 @@ func sameChain(a, b []gitlet.LayerRow) bool {
 	return slices.EqualFunc(a, b, sameLayer)
 }
 
-// layerStep is a placement a swap makes (swap.go): the chain the next
-// incarnation holds, root first — the layers it keeps of the one it leaves,
-// linked, and those fetched, renamed in from tmp/ — and whether it is the
-// installer's, whose canary runs in the installer's share of the read lane
-// for canaries (takeInstallRead) rather than as a round's, which a reader
-// waits on.
+// layerStep is a placement a swap makes (swap.go): the next incarnation's
+// chain, root first (kept layers linked, fetched ones renamed in from tmp/),
+// and whether it is the installer's, whose canary takes the installer's
+// canary share (takeInstallRead) rather than running as a round's.
 type layerStep struct {
 	rows      []gitlet.LayerRow
 	fetched   []*stagedLayer
@@ -2574,10 +2267,9 @@ func (s *layerStep) adds(installed []gitlet.LayerRow) []gitlet.LayerRow {
 	return out
 }
 
-// claimStagedLayer takes the layer staged for row — registered for this
-// repository, this very layer over this very base: the maintainer's adoption,
-// or the installer's own fetch a moved placement held — for an install, a
-// round's or the installer's, which places it in place of a GET; or nil.
+// claimStagedLayer takes the layer staged for row (this repository, this
+// layer, this base: an adoption, or a fetch a moved placement kept) for an
+// install to place instead of a GET; nil for none.
 func (c *Cache) claimStagedLayer(id string, row gitlet.LayerRow, base []string) *stagedLayer {
 	in := c.installer
 	in.mu.Lock()
@@ -2594,18 +2286,13 @@ func (c *Cache) claimStagedLayer(id string, row gitlet.LayerRow, base []string) 
 	return st
 }
 
-// holdFetched stages the layers the installer fetched for id's copy, which a
-// placement that found the copy or its chain moved since its plan did not
-// place, for the plan that follows it: the next try's, or a full round's
-// install, which claims each it still wants over the same base
-// (claimStagedLayer) rather than downloading it again — a root layer of the
-// largest repository the defaults admit is some 2.6 GB, and a busy
-// repository's compactions swap its copy a few tens of seconds apart, so
-// thrown away at every move it was downloaded again and again. Where the very
-// layer over the very base is staged already (an adoption that came while it
-// downloaded), that one is kept and the fetched copy goes; anything else
-// staged under its id is the older staging, and goes for it, as an adoption
-// replaces an older one.
+// holdFetched stages the layers id's moved placement did not place for the
+// next plan (a try's or a full round's install), which claims each it still
+// wants over the same base (claimStagedLayer) rather than downloading it
+// again: a root layer may be some 2.6 GB, and a busy repository's compactions
+// move its copy every few tens of seconds. Where the same layer over the same
+// base is staged already (an adoption that came meanwhile), that one stays and
+// the fetch goes; any other staging under its id is older and goes.
 func (c *Cache) holdFetched(id string, fetched []*stagedLayer) {
 	in := c.installer
 	var gone []*stagedLayer
@@ -2630,12 +2317,10 @@ func (c *Cache) holdFetched(id string, fetched []*stagedLayer) {
 	}
 }
 
-// dropFetched takes out of tmp/ every layer the installer fetched for id's
-// copy and staged for a later plan (holdFetched) that the plan made now —
-// want, each layer over the base beside it — does not install: the rows
-// moved past it, or the copy holds it already. The maintainer's adoptions
-// stay: a copy's chain may not have read their rows yet, and the janitor
-// discards one no round's chain named in time.
+// dropFetched removes every installer fetch staged for id (holdFetched) that
+// the plan made now, want over bases, does not install. Adoptions stay: a
+// copy's chain may not have read their rows yet, and the janitor discards one
+// no round named in time (expireStagedLayers).
 func (c *Cache) dropFetched(id string, want []gitlet.LayerRow, bases [][]string) {
 	wanted := func(st *stagedLayer) bool {
 		for i, row := range want {
@@ -2664,12 +2349,10 @@ func (c *Cache) dropFetched(id string, want []gitlet.LayerRow, bases [][]string)
 	}
 }
 
-// expireStagedLayers discards every staged layer no placement has taken
-// within objstore.RecordWithin of its staging: an adoption no round's chain
-// named in that time is a function of a record that never applied — the
-// publication refused, or its node gone before it — whose parts are the
-// collector's, and a fetch a moved placement held that long has outlived
-// every plan of its copy. The janitor's, at every pass.
+// expireStagedLayers, run by the janitor every pass, discards every staged
+// layer not placed within objstore.RecordWithin of its staging: an adoption
+// no round named by then is of a record that never applied (its parts the
+// collector's), and a held fetch that old has outlived every plan.
 func (c *Cache) expireStagedLayers() {
 	in, now := c.installer, c.now()
 	in.mu.Lock()

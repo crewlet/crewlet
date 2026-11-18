@@ -292,12 +292,12 @@ const PAGE: KeyRow[] = [
     whileTyping: true,
   },
   { id: "tab", scope: "object", presses: DIGITS, does: "Go to that tab", by: "dashboard" },
-  // A REPOSITORY'S GO TO FILE (`routes/gitlet/repo/GoToFile.tsx`): the field it focuses.
+  // GO TO FILE (a repository's `repo/GoToFile.tsx`, a change's files `change/Files.tsx`): the field it focuses.
   {
     id: "code.find",
     scope: "object",
     presses: [{ key: "t" }],
-    does: "Go to a file in a repository",
+    does: "Go to a file",
     by: "dashboard",
     service: "code",
   },

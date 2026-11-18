@@ -13,11 +13,10 @@ import (
 // the compactor its workers condense a dependency's answer through, on the
 // same tally; and the spend its delegated workers report into, under mu.
 //
-// EVERY SURFACE THE RUNNER BUILDS NAMES ONE, because which segment pays for a
-// tool call is decided where the surface is built and nowhere later. Every
-// surface but the executor's is the runner's own ([Runner.ownMeter]): its
-// calls run inside this segment, which charges what they cost when it ends.
-// The executor's is not — see [BridgedSpend].
+// Every surface the runner builds names one, because which segment pays for a
+// tool call is decided where the surface is built and nowhere later. All but
+// the executor's use [Runner.ownMeter], charged when this segment ends; the
+// executor's uses [BridgedSpend].
 type meter struct {
 	turn    *turnctx.Turn
 	compact compact.Bound
@@ -34,13 +33,9 @@ func (r *Runner) ownMeter() meter {
 // auxiliary calls the seat's tools made for the harness and the workers
 // it delegated to.
 //
-// ITS OWN METER, because those calls happen after the segment that launched
-// the run has ended. The harness calls the seat's tools over the bridge for as long
-// as it runs — minutes or hours, often on a node that is not the one the turn
-// resumes on — while the launching segment charged what it had spent the
-// moment it parked. Counted on that segment's tally, every bridged call
-// added to a number nothing read again, and the task the turn was on was never
-// charged for any of them. Counted here, the bridge writes the running total to
+// Its own meter, because those calls happen after the launching segment has
+// parked and charged its spend, often on another node: on that segment's
+// tally they would go uncharged. Here, the bridge writes the running total to
 // the run's row with each call it records, and the segment that resumes from
 // the run pays it.
 //
@@ -59,11 +54,9 @@ func NewBridgedSpend() *BridgedSpend { return &BridgedSpend{aux: auxspend.NewTal
 // have already cost: the meter of an executor run a node takes over while it
 // works ([Runner.ReopenAgentRun]).
 //
-// FROM THE TOTAL, NEVER FROM ZERO, because the run's row keeps the NEWEST total
-// a session reports — the larger, figure by figure — and not a sum: a meter
-// that started again from zero would report totals the row already holds
-// larger ones of, and every call it served would go uncharged until it had
-// cost as much again as the run cost before the recovery.
+// From the total, never from zero: the run's row keeps the larger total
+// figure by figure, not a sum, so a meter restarted at zero would go
+// uncharged until it had cost as much again as the run had before.
 func NewBridgedSpendFrom(so Bridged) *BridgedSpend {
 	b := NewBridgedSpend()
 	b.aux.Add(so.Aux)

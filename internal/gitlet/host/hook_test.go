@@ -59,8 +59,8 @@ func TestAnEngineThatGoesAwayFailsTheHook(t *testing.T) {
 	}
 }
 
-// The argv that STARTS the hook is the argv that is RECOGNISED as it: one
-// spelling, so an upgrade cannot rename one and fail every push.
+// The argv that starts the hook is the argv recognised as it: one spelling,
+// so a rename cannot fail every push.
 func TestTheHookIsRecognisedByTheArgvThatStartsIt(t *testing.T) {
 	argv := host.HookCommand("/bin/crewlet")
 	if argv[0] != "/bin/crewlet" {
@@ -70,8 +70,8 @@ func TestTheHookIsRecognisedByTheArgvThatStartsIt(t *testing.T) {
 	if !ok || !slices.Equal(rest, []string{"proc-receive"}) {
 		t.Errorf("HookArgs(%q) = (%q, %v), want ([proc-receive], true)", argv[1:], rest, ok)
 	}
-	// The command's spelling before it was Gitlet's is not the hook: a cache
-	// rewrites the hook at every open, so nothing still execs it (hookArgv).
+	// `code hook` is the pre-Gitlet spelling, deliberately unrecognised
+	// (hookArgv).
 	for _, args := range [][]string{
 		{"gitlet", "status"}, {"hook", "proc-receive"}, {"gitlet"}, {"code", "hook", "proc-receive"}, nil,
 	} {
@@ -81,10 +81,9 @@ func TestTheHookIsRecognisedByTheArgvThatStartsIt(t *testing.T) {
 	}
 }
 
-// §5.16: the hook's budget is its steps — three scans of the largest pack one
-// push may store, its put at the pace floor, two write attempts and the
-// pending grace — and at the defaults it and the receive-pack deadline it
-// sits in are the figures the documentation states.
+// The hook's budget is its steps (three scans of the largest storable pack,
+// its put at the pace floor, two write attempts and the pending grace), and at
+// the defaults it and its receive-pack deadline are the documented figures.
 func TestTheHookBudgetIsItsSteps(t *testing.T) {
 	steps := 3*gitproc.PackWorkDeadline(gitlet.MaxPackBytes) + objstore.ReadBase +
 		objstore.PaceFor(gitlet.MaxPackBytes) + host.ProposeBudget + host.Production.PendingGrace
@@ -99,19 +98,14 @@ func TestTheHookBudgetIsItsSteps(t *testing.T) {
 	}
 }
 
-// A BALANCER IN FRONT OF A CLIENT WITHOUT SIDE-BAND IS SIZED BY THE SESSION'S
-// OWN BOUNDS: such a client hears nothing from the end of its upload to its
-// report, so docs/guides/deployment.md's idle timeout is what the session may
-// take before it gives a push up — the proposal's two write attempts and the
-// pending grace whatever the push's size, and for a large push the pack's own
-// work: git's indexing and the hook's three scans at gitproc.PackWorkDeadline
-// each, and the put at the pace floor; and for a large repository each walk
-// of its history (gitproc.HistoryWalk), which a commit dated before its
-// parent may make whatever the push's size. A figure stated beside the
-// constants rather than from them was 60 s, under the three minutes a
-// one-commit push may be silent when its committer fails over or its row
-// resolves pending, and a balancer at it cut exactly the pushes whose outcome
-// may already be durable.
+// A balancer's idle timeout before a client without side-band is sized by
+// the session's own bounds, since such a client hears nothing from upload to
+// report: docs/guides/deployment.md states, from the constants, the two write
+// attempts and pending grace of any push, a large push's pack work (git's
+// indexing and three scans at gitproc.PackWorkDeadline, the put at the pace
+// floor), and a large repository's history walks (gitproc.HistoryWalk),
+// which a commit dated before its parent makes at any push size. A lower
+// timeout cuts exactly the pushes whose outcome may already be durable.
 //
 // Mutation: change ProposeBudget, the pending grace, PackWorkPerMiB, the pace
 // floor or WalkPerObject, and the page no longer says what the session takes.
@@ -127,8 +121,6 @@ func TestTheIdleTimeoutForAClientWithoutSideBandIsTheSessionsBounds(t *testing.T
 		t.Fatalf("ProposeBudget (%v) and the pending grace (%v) are no longer the whole minutes the page "+
 			"says: say there what they are, and here", host.ProposeBudget, host.Production.PendingGrace)
 	}
-	// What the session does after the pack is indexed, by its own budget:
-	// three scans, the put at the floor, the proposal and the pending wait.
 	if got, want := host.HookBudget(host.Production), 3*gitproc.PackWorkDeadline(gitlet.MaxPackBytes)+
 		objstore.ReadBase+objstore.PaceFor(gitlet.MaxPackBytes)+fixed; got != want {
 		t.Fatalf("HookBudget is %v and the page's steps sum to %v: say there what the hook does", got, want)
@@ -188,9 +180,9 @@ func TestTheIdxReaderAgreesWithShowIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = f.Close() }()
-	// Inside the repository: outside one, git 2.47's show-index never sets
-	// up the hash algorithm it reads by and dies of a segmentation fault —
-	// measured on 2.47.3, Debian trixie's, where 2.43 and 2.56 answer.
+	// Run inside the repository: outside one, git 2.47's show-index never
+	// sets up its hash algorithm and segfaults (seen on 2.47.3; 2.43 and 2.56
+	// answer).
 	shown, stderr, err := c.Try(t, bare, f, "show-index")
 	if err != nil {
 		t.Fatalf("git show-index: %v\n%s", err, stderr)
@@ -251,12 +243,10 @@ func TestTheCommandSectionIsBounded(t *testing.T) {
 		{name: "the probe", body: "0000", empty: true},
 		{name: "a thousand commands", body: many(gitlet.MaxCommandsPerPush) + "0000", commands: gitlet.MaxCommandsPerPush},
 		{name: "a thousand and one", body: many(gitlet.MaxCommandsPerPush+1) + "0000", err: host.ErrTooManyCommands},
-		// PAST A MEBIBYTE: a thousand commands naming refs the engine takes
-		// — at most gitlet.MaxRefNameBytes — come to about 340 KiB, so a
-		// section past it holds lines no count bounds, or refs the engine
-		// refuses bad_ref, of which seventeen of the longest a pkt-line
-		// carries are enough. Either way it is refused whole, and no push
-		// the engine would have taken is.
+		// A thousand commands of refs within gitlet.MaxRefNameBytes come to
+		// about 340 KiB, so a section past a mebibyte holds uncounted lines
+		// or refs refused bad_ref anyway (seventeen of the longest suffice):
+		// refusing it whole refuses no push the engine would take.
 		{name: "past a mebibyte", body: strings.Repeat(pkt("shallow "+oid('c')+"\n"),
 			host.MaxCommandSectionBytes/53+1) + "0000", err: host.ErrSectionTooLarge},
 		{name: "refs past the longest, past a mebibyte", body: first +
@@ -264,16 +254,16 @@ func TestTheCommandSectionIsBounded(t *testing.T) {
 			err: host.ErrSectionTooLarge},
 		{name: "a shallow line passes uncounted", body: pkt("shallow "+oid('c')+"\n") + first + "0000", commands: 1},
 		{name: "the capabilities of the first", body: first + command("refs/heads/x") + "0000", commands: 2},
-		// A REF PAST THE LONGEST IS STILL A COMMAND — the push's to refuse
-		// bad_ref — and its line's capabilities are the push's.
+		// A ref past the longest is still a command, for the push to refuse
+		// bad_ref, and its line's capabilities are the push's.
 		{name: "a ref past the longest, first", body: pkt(oid('a')+" "+oid('b')+" refs/heads/"+
 			strings.Repeat("y", gitlet.MaxRefNameBytes)+"\x00report-status atomic agent=git/2.43.0\n") +
 			command("refs/heads/x") + "0000", commands: 2},
-		// ANY LINE BUT A LONE FLUSH IS A PUSH, not the probe: a line no
-		// command parses from is one receive-pack dies on, in its own words.
+		// Any line but a lone flush is a push, not the probe; receive-pack
+		// dies on an unparsable line in its own words.
 		{name: "a line no command parses from", body: pkt("not a command\n") + "0000"},
-		// A DELIMITER ENDS THE SECTION, as it ends receive-pack's reading of
-		// commands: what follows is the pack's, for git to read.
+		// A delimiter ends the section, as it ends receive-pack's commands;
+		// what follows is the pack's.
 		{name: "a delimiter", body: "0001" + "0000", raw: "0001"},
 		{name: "a command after a delimiter is none", body: first + "0001" + command("refs/heads/x") + "0000",
 			commands: 1, raw: first + "0001"},
@@ -282,9 +272,8 @@ func TestTheCommandSectionIsBounded(t *testing.T) {
 		{name: "an empty ref", body: pkt(oid('a')+" "+oid('b')+" \n") + "0000", commands: 1},
 		{name: "a push certificate", body: pkt("push-cert\x00report-status\n") + pkt("certificate version 0.1\n") +
 			"0000", err: host.ErrPushCertificate},
-		// THE OPTIONS AFTER THE COMMANDS, of a client that asked for them:
-		// receive-pack reads them before the pack, so they are the section's,
-		// to its own bound.
+		// Options after the commands, when asked for, are read by
+		// receive-pack before the pack, so the section's, to its own bound.
 		{name: "options after the commands", body: optioned + "0000" + pkt("change") + pkt("change.title=x") +
 			"0000" + "PACK", commands: 1, raw: optioned + "0000" + pkt("change") + pkt("change.title=x") + "0000"},
 		{name: "options past a mebibyte with the commands", body: optioned + "0000" +
@@ -324,21 +313,15 @@ func TestTheCommandSectionIsBounded(t *testing.T) {
 	}
 }
 
-// THE COMMAND SECTION IS READ AS RECEIVE-PACK READS IT, measured against real
-// git: each section, followed by an empty pack, is handed to `git receive-pack
-// --stateless-rpc` in a bare repository holding one commit and NO HOOK, under
-// the receive configuration's receive.advertisePushOptions, so git creates
-// every ref it queued that its own rules take. What git created is held to
-// what the reader read: every ref git creates is a command the reader read —
-// so no check the receiver makes before receive-pack runs is skipped for a
-// command git acts on — the reader's capabilities are the ones git answered
-// with (its report, and its side-band), and the bytes the reader takes for the
-// section are the section's whole, the push's options after its commands
-// among them, so what receive-pack reads before the pack is what the
-// receiver bounded. Each row pins git's side as well as the reader's, so a
-// git that changes its reading fails here rather than in a push. A section
-// the reader refuses is one git acts on regardless, which is why it is
-// refused.
+// The command section is read as real receive-pack reads it: each section
+// plus an empty pack goes to `git receive-pack --stateless-rpc` in a bare
+// repository with NO HOOK (receive.advertisePushOptions on), so git creates
+// every ref its own rules take. Every ref git creates must be a command the
+// reader read, so no pre-receive-pack check is skipped; the reader's
+// capabilities match git's report and side-band; and the reader's section is
+// the whole of what receive-pack reads before the pack, options included.
+// Each row pins git's side too, so a git that changes its reading fails here.
+// A refused section is one git would act on regardless.
 func TestTheCommandSectionIsReadAsReceivePackReadsIt(t *testing.T) {
 	c := gittest.NewClient(t)
 	work := c.Init(t)
@@ -391,8 +374,8 @@ func TestTheCommandSectionIsReadAsReceivePackReadsIt(t *testing.T) {
 			pkt(create(head, "refs/heads/ce")) + pkt("rt3\n") + pkt("push-cert-end\n") + "0000",
 			created: []string{"refs/heads/cert1", "refs/heads/cert2", "refs/heads/cert3"},
 			err:     host.ErrPushCertificate},
-		// THE OPTIONS AFTER THE COMMANDS, which receive-pack reads before the
-		// pack once a line asked for push-options — the first or a later one.
+		// Receive-pack reads options before the pack once any line asked
+		// for push-options.
 		{name: "options after the commands", section: pkt(create(head, "refs/heads/opt")+
 			"\x00report-status push-options\n") + "0000" + pkt("change") + pkt("change.title=Retry") + "0000",
 			created: []string{"refs/heads/opt"}, read: []string{"refs/heads/opt"}},

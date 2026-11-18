@@ -8,51 +8,43 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE BACKFILL'S SCHEDULE: which copies have a step of the backfill due, and
-// in what order the loop takes them (backfill.go), KEPT AS THE STEPS FALL DUE
-// rather than found by a walk. Picked by a walk of every copy the cache holds,
-// under the cache-wide lock every request takes to find its copy, each step
-// cost every copy — its runs' paths built, its merge rule judged twice — and
-// steps come with every push: each fold kicks the backfill, and a merge goes
-// on to the next step at once. Measured at 10 000 copies (config.CodeMaxRepos), one
-// walk took 56 to 127 ms and a request waited up to 280 ms behind walks run
-// back to back; after a restart every copy's first round opens a gap, so the
-// warm-up was quadratic in the copies.
+// THE BACKFILL'S SCHEDULE: which copies have a backfill step due, and in what
+// order the loop (backfill.go) takes them, KEPT AS THE STEPS FALL DUE rather
+// than found by a walk of every copy under the cache-wide lock every request
+// takes: steps come with every push, and at config.CodeMaxRepos copies a walk
+// per step held requests up for hundreds of milliseconds and made a restart's
+// warm-up quadratic in the copies.
 //
-// So every change that can make a copy's work due — or no longer due — MARKS
-// IT (backfillDirty): a change to its index's record, which every change goes
-// through (setRecord), and its files' drop (dropFor); its runs' vouches as a
-// check, a scrub or a reader's mapping changes them; its history wanted; the
-// copy converged, read whole, made current, retired or rebuilt; and each step
-// the backfill takes of it. The next pick looks again at the marked copies
-// alone (backfillDue), each under its own lock, and places each in ONE queue:
-// a due queue of the kind of step it has first due, the most recently used
-// on top — every use of a queued copy moves it (touch) — or the later queue,
-// soonest on top, keyed by when its next step falls due by time alone (its
-// horizon). A pick then takes the top of the first due queue that has one,
-// O(log n) in the copies, holding the schedule's lock alone, and looks once
-// more at that copy under its lock before it pins it: the look is the
-// authority, the queues only an order, so a copy whose look says otherwise is
-// placed again and the pick goes on.
-//
+// So every change that can make a copy's work due, or no longer due, MARKS IT
+// (backfillDirty): its index's record (setRecord, which every change goes
+// through), its files' drop (dropFor), its runs' vouches, its history wanted,
+// the copy converged, read whole, made current, retired or rebuilt, and each
+// step the backfill takes of it.
+
+// The next pick looks again at the marked copies alone (backfillDue), each
+// under its own lock, and places each in ONE queue: the due queue of the kind
+// of step it has first due, most recently used on top (touch), or the later
+// queue, keyed by when its next step falls due by time alone, soonest on top.
+// A pick takes the top of the first non-empty due queue, O(log n), holding
+// the schedule's lock alone, and looks once more under the copy's lock before
+// it pins it: the look is the authority, the queues only an order, so a copy
+// the look disagrees with is placed again and the pick goes on.
+
 // A MARK IS TAKEN IN THE SAME HOLD OF THE COPY'S LOCK AS THE CHANGE IT
-// ANSWERS. Every input of the look (backfillDue) changes under the copy's
-// lock, and the mark goes with the change, so under that lock a copy's look
-// and its place in the schedule agree, or the copy is marked — at any moment,
-// a round, a scrub or a step half way through included. Marked once the
-// change's work was done instead — a drop's after its directory's sync, an
-// apply's after it returned — a look in between found a copy queued for work
-// it no longer had and unmarked, which is what BackfillAudit holds the
-// schedule to (crewlet#794). The pick never needed it: the look is its
-// authority. What needs it is any reading of the schedule beside the look.
+// ANSWERS, so under that lock a copy's look and its place in the schedule
+// agree, or the copy is marked, at any moment, a step half way through
+// included. A mark taken after the change's work let a look in between find
+// the copy queued for work it no longer had, and unmarked: what BackfillAudit
+// holds the schedule to (crewlet#794). The pick needs none of it, its look
+// being its authority; any other reading of the schedule does.
 //
-// crewlet.code.cache.provenance.behind is the schedule's own count of the
-// copies it has placed as behind, moved as each is placed.
-//
-// LOCK ORDER: the schedule's mu is a LEAF — taken under an entry's mu (a mark,
-// a touch), and nothing is taken under it — and pick serialises picks, taken
-// before any entry's mu, so a placement made from one look never lands over
-// the placement made from a later one.
+// crewlet.code.cache.provenance.behind counts the copies placed as behind,
+// moved as each is placed.
+
+// LOCK ORDER: the schedule's mu is a LEAF, taken under an entry's mu (a mark,
+// a touch) with nothing taken under it; pick serialises picks and is taken
+// before any entry's mu, so a placement from one look never lands over one
+// from a later look.
 
 // schedule is a cache's backfill schedule.
 type schedule struct {

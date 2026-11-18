@@ -18,27 +18,17 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// Who a parked executor's question is put to.
-//
-// The harness names its audience in its own words — `requester`,
-// `manager`, `team`, or a colleague's name — and until this existed nothing
-// resolved that label: every parked question in the company was visible to
-// everybody and none of them said whose it was. So the park resolves it once,
-// against the chart, into the seats the question waits on, and records
-// whether those seats are what the run asked for or a FALLBACK because the
-// label named nobody this chart has.
-//
-// THE FALLBACK IS THE SEAT'S LEAD CHAIN — its managers, nearest first, or,
-// for a seat nobody manages, the leads of the units above it. A question is
-// never parked waiting on nobody while somebody in the chart is answerable
-// for the seat that asked; a question that reached a person only because
-// nobody else could be named says so, and a reader can tell the two apart.
+// Who a parked executor's question is put to. The harness names its audience
+// in its own words (`requester`, `manager`, `team`, or a colleague's name); the
+// park resolves that label once, against the chart, into the seats the question
+// waits on, and records whether they are what the run asked for or a FALLBACK
+// because the label named nobody this chart has. The fallback is the seat's
+// lead chain ([leadChain]), so a question never waits on nobody while somebody
+// is answerable for the seat, and says it fell back.
 
-// audienceResolver resolves a run's audience against the live chart.
-//
-// THE LIVE EPOCH, read per park: the park happens when the job finishes,
-// which may be hours after the launch, and the people a question is put to
-// are the ones the company has when it is asked.
+// audienceResolver resolves a run's audience against the live epoch, read per
+// park: the park may come hours after the launch, and a question is put to the
+// people the company has when it is asked.
 type audienceResolver struct{ engine *Engine }
 
 var _ sandbox.AudienceResolver = audienceResolver{}
@@ -69,11 +59,9 @@ func (r audienceResolver) MayAnswer(ctx context.Context, seat string) (bool, err
 // holder as the authority table composed it: an agent seat the chart holds
 // answers; a human seat answers only where a person holds it and may act now.
 //
-// NOT A SEAT NOBODY HOLDS, though the authority table lets such a seat's
-// contacts keep its shares: a question put to a seat is put to the person
-// holding it, and with nobody holding it there is nobody to have answered.
-// NOT A SEAT THE CHART LOST, which is nobody's (errNoSuchSeat). Any other
-// error is the directory that could not say, which is UNKNOWN.
+// Not a seat nobody holds, though the authority table lets its contacts keep
+// its shares: a question is put to the person holding the seat. Not a seat the
+// chart lost (errNoSuchSeat). Any other error is UNKNOWN.
 func holderMayAnswer(p iam.Principal, err error) (bool, error) {
 	switch {
 	case errors.Is(err, errNoSuchSeat):
@@ -96,26 +84,19 @@ const (
 )
 
 // exactTiers are the colleague match methods a NAMED audience may resolve
-// through. Only these, never a substring or a fuzzy match: a question is put
-// to a person on a harness's say-so, and a guessed person is somebody
-// else's question in their inbox. A name that resolves only approximately is
-// a name the chart does not have, and the question falls back.
+// through, never a substring or fuzzy match: a question is put to a person on a
+// harness's say-so, and a guessed person gets somebody else's question. An
+// approximate name is one the chart does not have, so the question falls back.
 var exactTiers = []colleague.Method{
 	colleague.MethodExactHandle, colleague.MethodExternalID,
 	colleague.MethodExactRole, colleague.MethodCaseInsensitive,
 }
 
 // resolveAudience is the rule itself, over a chart value so it is exercised
-// without an engine.
-//
-// lookup resolves the chart's `${VAR}` contact ids, which a name may be
-// ([builtin.Corpus]): the node's own chain, from the engine.
-//
-// withheld is the party registry's withholding ([Engine.WithheldContacts]): a
-// person a free name matches whose seat the identity directory withholds — a
-// suspended or departed holder — is somebody an inbound message would not be
-// attributed to, so a question is not put to them by name either, the same
-// rule a seat's own colleague lookup takes. Nil withholds nobody.
+// without an engine. lookup resolves the chart's `${VAR}` contact ids, which a
+// name may be ([builtin.Corpus]). withheld is [Engine.WithheldContacts]: a
+// suspended or departed holder is not put a question by name, as a seat's own
+// colleague lookup does not find them; nil withholds nobody.
 func resolveAudience(o *org.Organization, lookup org.EnvLookup, withheld func(handle string) bool,
 	run sandbox.PendingRun, label string) sandbox.Audience {
 	seat := o.SeatByHandle(run.AgentHandle)
@@ -135,9 +116,8 @@ func namedAudience(o *org.Organization, lookup org.EnvLookup, withheld func(hand
 	case "":
 		return nil
 	case audienceRequester:
-		// WHO WOKE THE TURN, recorded at the launch — the one frame that
-		// saw the trigger — by its seat's handle. A seat the org no
-		// longer has is nobody.
+		// WHO WOKE THE TURN, recorded at the launch (the one frame that saw
+		// the trigger) by its seat's handle; a seat the org lost is nobody.
 		if found := o.Role(run.Requester); found != nil {
 			return []string{found.Handle()}
 		}
@@ -161,9 +141,8 @@ func namedAudience(o *org.Organization, lookup org.EnvLookup, withheld func(hand
 }
 
 // teamOf is the unit a seat sits in, as a question can be put to it: the
-// unit's lead, and the PEOPLE who sit in it beside the seat. Agents are left
-// out — a teammate agent that knew the answer is one the seat could have asked
-// itself — and so is the seat that asked.
+// unit's lead and the PEOPLE beside the seat. Agents are left out, since the
+// seat could have asked a teammate agent itself, and so is the seat.
 func teamOf(o *org.Organization, seat *org.Role) []string {
 	if seat == nil {
 		return nil
@@ -216,27 +195,14 @@ func leadChain(o *org.Organization, seat *org.Role) []string {
 }
 
 // askBrief is the standing instruction that tells an executor run how to get
-// a person's answer, and whom it can name when it asks.
-//
-// TWO WAYS, and which one turns on whether the run can go on without it. A
-// question that only shapes what comes next is asked with the seat's own
-// tools (a comment on the work item that puts it to somebody, its `ask`, or a
-// message where the run was asked) and the run finishes its turn as usual:
-// the answer wakes the seat's next turn like any other message, and nothing
-// waits. A question the work cannot proceed without parks the run through
-// `ask_and_wait` (ADR-0068), and the answer resumes that same run. Told only
-// of the park, a run parked on every question, holding its box for one a
-// teammate could have answered in the next turn; told of neither, it guessed.
-//
-// THE OPTIONS ARE ASKED FOR AS OPTIONS. A run told only to ask wrote its
-// choices into the question as prose, and the person answering read a wall of
-// text with "(A) [recommended] ..." somewhere in it and nothing to press. The
-// tool's arguments carry them, and this says to use them.
-//
-// THE NAMES ARE THE ONES THE PARK RESOLVES. The roster is the seat's unit by
-// handle and the manager is the seat's manager by handle, so a `to` that
-// copies either resolves through the exact tiers [resolveAudience] accepts
-// rather than falling back.
+// a person's answer, and whom it can name when it asks. It gives TWO WAYS: a
+// question the run can go on without is asked with the seat's own tools and
+// answered in its next turn, and only one the work cannot proceed without parks
+// the run through `ask_and_wait` (ADR-0068); a run told only of the park holds
+// its box on every question, and told of neither it guesses. It asks for
+// OPTIONS as the tool's options, never prose a person cannot answer with one
+// press. The roster and manager are handles, so a `to` copying either resolves
+// through [exactTiers] rather than falling back.
 func askBrief(o *org.Organization, seat *org.Role) string {
 	var roster []string
 	manager := ""

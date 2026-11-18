@@ -17,15 +17,12 @@ import (
 
 // A WRITE FENCE'S FLOOR READ THAT A MEMBER DROPS IS ASKED AGAIN.
 //
-// The state-log zero fence reads its domain's trim floor on every write at an
-// expectation of zero, from the positions bucket's stream LEADER, under the
-// write's own context — which carries no deadline, so the client's five
-// seconds were the read's whole bound. Sent as one request, a read a member
-// dropped across an election waited them out for a reply nobody would send,
-// and the write was refused floor_unknown with the floor perfectly readable.
-// It is the same leader read every single-key read here makes ([getLatest]),
-// asked again as a metadata read is ([jsprovision.ReadBoundedWith]) after a
-// dropped request.
+// The state-log zero fence reads its domain's trim floor from the positions
+// bucket's stream LEADER under a write's context, which carries no deadline.
+// Asked once, a read a member dropped across an election waited out the
+// client's default, and the write was refused floor_unknown with the floor
+// readable. It is [getLatest]'s leader read, asked again as
+// [jsprovision.ReadBoundedWith] asks.
 func TestAFloorReadAMemberDropsIsAskedAgain(t *testing.T) {
 	t.Parallel()
 	ns, nc := embeddedServer(t)
@@ -55,12 +52,10 @@ func TestAFloorReadAMemberDropsIsAskedAgain(t *testing.T) {
 // — the certified listing's key index, the lease gate's barrier and every
 // lease decision's store clock alike.
 //
-// Each was one request held for its caller's whole context, and a member that
-// still believes in a leader its group has just lost answers a stream info no
-// more than it answers a message read: every listing on the node, every gated
-// claim and every lease renewal's clock read went unavailable for the seconds
-// it took to notice the leader was gone. They are one read ([leaderInfo]),
-// asked as every leader read is.
+// A member that still believes in a lost leader drops a stream info as it
+// drops a message read; asked once and held for the caller's context, every
+// listing, gated claim and lease clock read on the node stalled until the
+// loss was noticed. They are one read, [leaderInfo].
 func TestAStreamInfoAMemberDropsIsAskedAgain(t *testing.T) {
 	t.Parallel()
 	t.Run("the_key_index", func(t *testing.T) {
@@ -69,9 +64,8 @@ func TestAStreamInfoAMemberDropsIsAskedAgain(t *testing.T) {
 		f := openFleetForTest(t, nc, fmt.Sprintf("f%d", bucketSeq.Add(1)))
 		putBudget(t.Context(), t, f.channels, "org", 1)
 		held := jsapitest.DropFirst(t, ns, jsapitest.StreamInfo(bucketStream(f.channels)), 1)
-		// THE TAP counts what reached the leader once the drop was
-		// released: the index is ONE request a page, never a stream
-		// handle's own info and then the index on it.
+		// THE TAP counts requests after the drop: the index is ONE request
+		// a page, never a stream handle's info and then the index.
 		tap, err := nc.SubscribeSync(jsapitest.StreamInfo(bucketStream(f.channels)))
 		if err != nil {
 			t.Fatal(err)
@@ -98,10 +92,9 @@ func TestAStreamInfoAMemberDropsIsAskedAgain(t *testing.T) {
 				"released (%v), want the 1 request of its one page", n, err)
 		}
 	})
-	// EACH READ ON AN INTERCEPTION OF ITS OWN, dropping exactly its first
-	// request: two reads behind one interception that drops two requests
-	// prove only the first read, since its own re-ask is the second request
-	// dropped and the read after it is never dropped at all.
+	// EACH READ ON AN INTERCEPTION OF ITS OWN, dropping just its first
+	// request: one dropping two proves only the first read, whose re-ask is
+	// the second one dropped.
 	t.Run("the_gate_barrier", func(t *testing.T) {
 		t.Parallel()
 		ns, nc := embeddedServer(t)
@@ -138,13 +131,9 @@ func TestAStreamInfoAMemberDropsIsAskedAgain(t *testing.T) {
 
 // A LISTING'S CERTIFYING READ THAT A MEMBER DROPS IS ASKED AGAIN.
 //
-// A certified listing reads every key its pass delivered as a delete marker
-// again from the stream LEADER ([certify]), because a replica behind a
-// re-creation serves one for a key live throughout. That read is a leader
-// read like any other: dropped across an election and held for the listing's
-// whole context, it made the listing unavailable — every lease and every
-// presence read on the node with it — for a key the leader would have
-// answered a second later.
+// [certify] rereads each delete marker a pass delivered from the stream
+// LEADER. Asked once and dropped across an election, it held the listing, and
+// every lease and presence read on the node, for the listing's whole context.
 func TestAListingsCertifyingReadAMemberDropsIsAskedAgain(t *testing.T) {
 	t.Parallel()
 	ns, nc := embeddedServer(t)
@@ -175,23 +164,14 @@ func TestAListingsCertifyingReadAMemberDropsIsAskedAgain(t *testing.T) {
 // CLIENT'S OWN DEFAULT — asked again inside it, and never stretched to the
 // lookup ceiling ([leaderInfo]).
 //
-// The lease gate's barrier and the store clock were each one request the
-// client held for its five seconds where the caller set none, and a lease
-// decision's whole cost was sized against that: hedged, a read asks again
-// inside the bound, and a broker that never answers costs a renewal no more
-// than it did. The client here is given a default of 3.9 seconds — just
-// short of a third request, at four — so the read is asked at none and two,
-// twice, where a read held to the five seconds of a default it did not take
-// from its client is asked three times, and one held to the thirty-second
-// ceiling fifteen.
+// A lease decision's cost is sized against the client's default. Here it is
+// 3.9 seconds, just short of a third request at four: asked at zero and two,
+// where a 5-second default not its client's asks three times, and the
+// 30-second ceiling fifteen.
 //
-// THE READ RUNS IN A SYNCTEST BUBBLE, and the broker outside it, so its timers
-// fire at exactly their instants: on the machine's clock the bound and the
-// third request were a tenth of a second apart, and the verdict turned on how
-// late a loaded runner woke — natsobj's twin of this case failed on CI with
-// the third sent past the bound, which the hedge no longer does
-// ([jsprovision.ReadBoundedWith]). The requests are counted behind a fence on
-// the read's own connection ([jsapitest.Held.Fence]).
+// THE READ RUNS IN A SYNCTEST BUBBLE, the broker outside it, so timers fire at
+// their instants rather than at a loaded runner's whim. Requests are counted
+// behind a fence on the read's own connection ([jsapitest.Held.Fence]).
 func TestAStreamInfoNobodyAnswersEndsAtTheClientsDefault(t *testing.T) {
 	t.Parallel()
 	const bound = 3900 * time.Millisecond

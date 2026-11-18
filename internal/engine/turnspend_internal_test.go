@@ -42,21 +42,18 @@ func segmentSpend(scale int) runner.Spend {
 	}
 }
 
-// rollupOf is what a segment's own published records add up to: its phases'
-// tokens, its workers', its judge's, its in-turn auxiliary calls' (the
-// `turn`-stage auxiliary_spend records filed under its run) and the job it
-// collected. The per-seat history and the turn's cost on every screen are
-// built from these same records, so no charge to a task may ever come to
-// more than they do.
+// rollupOf is what a segment's own published records add up to: its phases',
+// workers', judge's and in-turn auxiliary tokens (the `turn`-stage
+// auxiliary_spend records under its run) and the job it collected. The seat
+// history and every screen's turn cost are built from these records, so no
+// charge to a task may exceed them.
 func rollupOf(s runner.Spend, aux auxspend.Spent, jobIn, jobOut int) int {
 	return s.Total() + s.WorkerTokens() + s.JudgeTokens() + aux.Tokens() + jobIn + jobOut
 }
 
 // jobEngineSpend is what the engine spent on a collected job outside every
-// segment: its bridged calls' auxiliary spend and workers, and the
-// condensation of its collection. Published as `turn`-stage auxiliary_spend
-// records under the run and as the workers' own phase records, so it is part
-// of the rollup like everything else.
+// segment (its bridged calls' auxiliary spend and workers, its collection's
+// condensation), published under the run and so part of the rollup.
 var jobEngineSpend = sandbox.EngineSpend{
 	Aux:     sandbox.AuxTokens{Input: 640, Output: 45, CacheRead: 200, CacheWrite: 12},
 	Workers: 1, WorkerInput: 2100, WorkerOutput: 180,
@@ -103,13 +100,11 @@ func resumeTel(item *types.WorkItem, carried *execstate.Uncharged, jobIn, jobOut
 
 // A TASK'S SPEND NEVER EXCEEDS THE ROLLUP.
 //
-// What a turn charges its work item is a SHARE of what the turn's own records
-// state it spent — the phases, the workers, the judge, the auxiliary calls made
-// inside it and the launches it collected — and, across every segment of a
-// turn, never more than their sum.
-// Folding anything in twice (a resumed phase's pre-park half, a worker counted
-// inside its host phase and again beside it) would show a task costing more
-// than the company paid for it.
+// Across every segment of a turn, what it charges its work item never exceeds
+// what its records state it spent (phases, workers, judge, in-turn auxiliary
+// calls, collected launches). Folding anything in twice (a resumed phase's
+// pre-park half, a worker inside its host phase and beside it) would show a
+// task costing more than the company paid.
 func TestTaskSpendNeverExceedsTheRollup(t *testing.T) {
 	t.Parallel()
 	ended := time.Unix(1_700_000_060, 0).UTC()
@@ -135,9 +130,8 @@ func TestTaskSpendNeverExceedsTheRollup(t *testing.T) {
 
 			resume := resumeTel(tc.item, parked.carry, jobIn, jobOut)
 			resume.auxSpent.Add(segmentAux(3))
-			// AND WHAT THE ENGINE SPENT ON THE JOB BETWEEN THE TWO — its
-			// bridged calls, its collection's condensation — which no
-			// segment was running to tally, and which the resume pays.
+			// AND THE ENGINE'S SPEND ON THE JOB BETWEEN THE TWO, which no
+			// segment tallied and the resume pays.
 			resume.jobEngine = jobEngineSpend
 			if tc.sole != nil {
 				resume.written = turnctx.WrittenFrom([]types.WorkItem{*tc.sole}, false)
@@ -171,12 +165,10 @@ func TestTaskSpendNeverExceedsTheRollup(t *testing.T) {
 
 // A RESUMED SEGMENT PAYS WHAT THE ENGINE SPENT ON ITS JOB.
 //
-// Between the segment that launched the executor and the one that resumes from
-// it, the engine spends on the job with no segment running: a run's bridged
-// calls — the auxiliary rewrites its tools asked for, the workers it delegated
-// to — and the condensation of the run's account at collection.
-// The resume request carries it, and the resumed segment's charge adds each
-// figure where its own of the same kind goes.
+// Between launch and resume the engine spends on the job with no segment
+// running (the run's bridged auxiliary calls and workers, its condensation at
+// collection). The resume request carries it, and the resumed segment's charge
+// adds each figure beside its own of the same kind.
 //
 // Mutation: leave the job's engine spend out of chargeFor, and every figure
 // below comes up short.
@@ -188,10 +180,7 @@ func TestAResumedSegmentPaysWhatTheEngineSpentOnItsJob(t *testing.T) {
 	spend := segmentSpend(1)
 	got := resume.chargeFor(spend, turn.Result{Decision: phase.Done}, nil, ended).record.Spend
 
-	// Every figure the job's engine spend carries lands where the segment's
-	// own of the same kind does: workers beside its workers, auxiliary
-	// tokens beside its own auxiliary calls, the cache shares as a
-	// breakdown of the input they came with.
+	// The cache shares break down the input they came with.
 	aux, job := jobEngineSpend.Aux, jobEngineSpend
 	if want := spend.InputTokens + spend.WorkerInput + spend.JudgeInput +
 		job.WorkerInput + aux.Input; got.Input != want {
@@ -217,10 +206,9 @@ func TestAResumedSegmentPaysWhatTheEngineSpentOnItsJob(t *testing.T) {
 
 // A SUSPENDED TURN IS COUNTED ONCE AND PAID IN FULL.
 //
-// One turn, two segments, one turn on the task: only the dispatch segment
-// counts a turn, the resumed segment pays for the launch it collected, and
-// a turn charged by its sole write — which a parked segment cannot conclude —
-// is paid for its first half by the segment that finishes it.
+// Only the dispatch segment counts a turn, the resumed segment pays for the
+// launch it collected, and a turn charged by its sole write (which a parked
+// segment cannot conclude) has its first half paid by the finishing segment.
 func TestASuspendedTurnIsCountedOnceAndPaidInFull(t *testing.T) {
 	t.Parallel()
 	ended := time.Unix(1_700_000_060, 0).UTC()
@@ -367,11 +355,10 @@ func TestAnUnwritableChargeIsLoggedNotRaised(t *testing.T) {
 
 // A SEGMENT'S OPERATION ID IS IN THE GRAMMAR, minted at the run's start.
 //
-// The tracker's ledger reads the instant an id was minted to decide whether it
-// can vouch for it; an id that carries none is answered `unknown` and never
-// published on a node whose ledger has lost a row, so a segment's spend would
-// silently go uncharged. And the instant is the RUN's — a resumed segment
-// minutes later shares it — never the segment's or the call's.
+// The tracker's ledger vouches for an id by the instant it was minted; an id
+// carrying none is answered `unknown` and never published on a node whose
+// ledger lost a row, so the segment's spend would go uncharged. The instant is
+// the RUN's, shared by a later resumed segment, never the segment's or call's.
 //
 // Mutation: go back to `turn/<run>/<segment>`, or mint at the segment's start,
 // and this fails.
@@ -397,11 +384,10 @@ func TestASegmentsOperationIDIsMintedAtTheRunsStart(t *testing.T) {
 // A REBASED SEGMENT MINTS AT ITS REBASE (ADR-0029), and every attempt that
 // carries the same rebase derives the same id.
 //
-// A segment that comes longer after its run began than the operation ledger
-// remembers — a resume a month after its launch — is minted at the instant
-// [rebaseFor] chose for the attempt, or its charge is answered `unknown` on
-// every node and the segment's spend is lost. And the id is still the
-// segment's: a retry carrying the recorded rebase reaches the same one.
+// A segment coming longer after its run began than the operation ledger
+// remembers (a resume a month after launch) is minted at the instant
+// [rebaseFor] chose, or its charge is answered `unknown` everywhere and its
+// spend lost. A retry carrying the recorded rebase reaches the same id.
 //
 // Mutation: ignore rebasedTo in [segmentOpID] and this fails.
 func TestARebasedSegmentIsMintedAtItsRebase(t *testing.T) {
@@ -438,11 +424,10 @@ func TestARebasedSegmentIsMintedAtItsRebase(t *testing.T) {
 
 // A TASK'S TURN RECORD SAYS WHAT THE SEGMENT DID.
 //
-// The task page's turn card is read off the tracker's own row, which outlives
-// the event history and answers on any node — so the summary, the send-back's
-// request and the tools have to ride the record. The text rides WHOLE until
-// the write, where [turnCard] fits it (an overlong one is refused, not cut,
-// by the writer).
+// The task page's turn card reads the tracker's own row, which outlives the
+// event history and answers on any node, so the summary, the send-back's
+// request and the tools ride the record. The text rides WHOLE until the write,
+// where [turnCard] fits it (the writer refuses an overlong one, never cuts it).
 func TestATurnRecordSaysWhatTheSegmentDid(t *testing.T) {
 	t.Parallel()
 	ended := time.Unix(1_700_000_060, 0).UTC()
@@ -475,9 +460,9 @@ func TestATurnRecordSaysWhatTheSegmentDid(t *testing.T) {
 }
 
 // A FAILED SEGMENT NAMES THE PHASE THAT BROKE, and only a failed one does: a
-// card ticking every phase that ran beside a "failed" pill could not say which
-// step broke, and a phase name beside a turn that ended otherwise — a person's
-// stop is not a failure — would claim a failure that did not happen.
+// card ticking every phase that ran beside a "failed" pill cannot say which
+// broke, and a phase named beside a turn that ended otherwise (a person's stop
+// is not a failure) claims a failure that did not happen.
 func TestAFailedSegmentNamesThePhaseThatBroke(t *testing.T) {
 	t.Parallel()
 	ended := time.Unix(1_700_000_060, 0).UTC()
@@ -540,10 +525,9 @@ func TestATurnCardIsWholeRewrittenOrPointedAway(t *testing.T) {
 }
 
 // A TURN'S CARD IS PAID FOR BY ITS TASK. The card is rewritten after the
-// segment's charge was decided — the segment's tally already summed — so the
-// rewrite tallies on its own and is added as the charge is written: a long
-// account condensed for its card is part of what the turn cost the task, like
-// every other auxiliary call the turn made, and is filed under the turn.
+// segment's tally was summed, so the rewrite tallies on its own and is added
+// as the charge is written, filed under the turn like its other auxiliary
+// calls.
 func TestACardsRewriteIsChargedToItsTask(t *testing.T) {
 	t.Parallel()
 	seat := &org.Role{Name: "Dev"}
@@ -584,12 +568,11 @@ func TestACardsRewriteIsChargedToItsTask(t *testing.T) {
 
 // A TURN THE BUDGET ENDED STILL GETS ITS CARD.
 //
-// The turn's meter holds every call of the turn once a window is full, its
-// auxiliary calls included, because what they would buy feeds a round that is
-// never sent. The card is not such a call: it is written after the segment's
-// last round, as the task's record of the turn — and the turn a budget ended
-// is the one a person most needs the card of. So the card's rewrite is not
-// asked of the meter, and a long account is condensed for it as on any turn.
+// Once a window is full the turn's meter holds every call of the turn, since
+// what they buy feeds a round never sent. The card is not such a call: it is
+// the task's record of the turn, written after the last round, and a turn a
+// budget ended is the one a person most needs it for. So its rewrite is not
+// asked of the meter.
 func TestATurnTheBudgetEndedStillGetsItsCard(t *testing.T) {
 	t.Parallel()
 	seat := &org.Role{Name: "Dev", TokenBudget: org.TokenCeilings{period.Day: 100}}
@@ -635,11 +618,10 @@ func (p *cardRewriter) Complete(context.Context, llm.Request) (*llm.Completion, 
 	return &llm.Completion{Model: "aux", Content: p.answer, InputTokens: p.in, OutputTokens: p.out}, nil
 }
 
-// A RESUMED SEGMENT'S END COUNTS THE WORKERS ITS RUN DELEGATED TO. A run's
-// workers ran over the tool bridge while no segment was running, so the
-// segment that resumes from the run is the one that pays for them — and its
-// completion is the one record of the turn that can say they ran, beside the
-// workers it delegated to itself.
+// A RESUMED SEGMENT'S END COUNTS THE WORKERS ITS RUN DELEGATED TO. They ran
+// over the tool bridge while no segment was running, so the resuming segment
+// pays for them, and its completion is the one record of the turn that can say
+// they ran, beside its own.
 //
 // Mutation: leave the job's workers out of the completion, and this goes red.
 func TestAResumedSegmentsEndCountsItsRunsWorkers(t *testing.T) {
@@ -667,15 +649,14 @@ func TestAResumedSegmentsEndCountsItsRunsWorkers(t *testing.T) {
 // included.
 //
 // The usage domain reads a turn's statistics off that one record, because the
-// turn's other records are not all on one node — a stateless node's are kept a
-// batch at a time by whichever data node won each claim, and a turn resumed on
-// another node leaves its first segment behind. So the segment that parks hands
-// its span, its reviews and its MCP tool calls on with the conversation, the
-// segment that ends the turn adds its own and says whether the turn failed, and
-// a segment that only parked states nothing: the turn has not ended.
+// turn's other records are not all on one node (a stateless node's are kept by
+// whichever data node won each claim; a turn resumed elsewhere leaves its first
+// segment behind). So a parking segment hands on its span, reviews and MCP
+// calls, the ending segment adds its own and whether the turn failed, and a
+// segment that only parked states nothing: the turn has not ended.
 //
-// Mutation: leave the carried measurement out of the end, or the carried tool
-// calls, or state one on a parked segment, and this goes red.
+// Mutation: leave the carried measurement or tool calls out of the end, or
+// state one on a parked segment, and this goes red.
 func TestTheRecordThatEndsATurnStatesTheWholeTurn(t *testing.T) {
 	t.Parallel()
 	start := time.Unix(1_700_000_000, 0).UTC()
@@ -737,11 +718,10 @@ func TestTheRecordThatEndsATurnStatesTheWholeTurn(t *testing.T) {
 		})
 	}
 
-	// A TURN WHOSE PAST NOBODY MEASURED — resumed from a park a build before
-	// the tally made, so its conversation carried no measurement — states
-	// none and hands none on: neither its end nor a park of its own can say
-	// what its first segment ran, and a tally of the rest would be read as
-	// the whole turn. Its end is then summed from its records.
+	// A TURN WHOSE PAST NOBODY MEASURED (its conversation carried no
+	// measurement) states none and hands none on: neither its end nor a park
+	// can say what its first segment ran, and a tally of the rest would read
+	// as the whole turn. Its end is then summed from its records.
 	//
 	// Mutation: drop the guard from either the end or the park, and this
 	// names which.
@@ -765,15 +745,11 @@ func TestTheRecordThatEndsATurnStatesTheWholeTurn(t *testing.T) {
 
 // A STOP THAT CLOSES A TURN AT ITS PARK CHARGES ONLY WHAT THE PARK LEFT UNPAID.
 //
-// A person's stop can land between a launch and its park: the segment that
-// would have parked has ended and charged, and the frame then closes the turn
-// as stopped with a segment of its own. Built from the parking segment's
-// telemetry, that close charged the item the segment's job, its bridged spend,
-// its auxiliary calls and its wall time a second time, under the stop's own
-// operation id, which the tracker's ledger does not collapse; and a turn the
-// park charged to nothing lost the segment's whole spend, since only the park
-// the stop refused would have carried it on. Across the park and the close, the
-// item is charged everything the turn spent, once, and its turn counted once.
+// A person's stop can land between a launch and its park: the parking segment
+// has charged, and the frame closes the turn as stopped with a segment of its
+// own, under the stop's operation id, which the tracker's ledger does not
+// collapse. Across the park and the close the item is charged everything the
+// turn spent, once, and its turn counted once.
 //
 // Mutation: close with the parking segment's telemetry, and the two charges add
 // up to more than the turn spent on an item, and to none of the park's spend on

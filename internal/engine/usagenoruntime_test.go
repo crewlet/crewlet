@@ -14,16 +14,11 @@ import (
 // A DATA NODE WITH NO NATIVE RUNTIME ANSWERS ITS SPEND SCREENS from the estate
 // it holds open from boot, as every data node does whatever its company runs.
 //
-// A company on vendors for both its tracker and its knowledge base runs no
-// state log, so no data node of it has a native runtime — and neither has a
-// data node that booted with no company, which is the node here. With the
-// usage reads tied to the runtime, every data node answered every one of them
-// "no native backend here", so the router refused each as an estate nobody
-// served, and the query surface turned that into 503 `unavailable` with a
-// Retry-After: a spend window, a seat's activity and a page's readers each
-// asked the screen to retry, for ever, a read the open file could answer.
-// Through the very reads the API is handed (Engine.UsageReads), every read of
-// the usage domain answers, and the questions built on them are not refused.
+// A company on vendors for both tracker and knowledge base runs no state log,
+// so its data nodes have no native runtime, like this node booted with no
+// company. Usage reads tied to the runtime were refused as unserved, a 503 the
+// screen retried for ever. Through the reads the API is handed
+// (Engine.UsageReads), every usage read and the questions built on them answer.
 func TestADataNodeWithNoRuntimeAnswersItsUsageReads(t *testing.T) {
 	t.Parallel()
 	e := unconfiguredEngine(t)
@@ -57,9 +52,8 @@ func TestADataNodeWithNoRuntimeAnswersItsUsageReads(t *testing.T) {
 
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Usage: u})
-	// ASKED AS A CREDENTIAL THAT MAY ASK BOTH, so a refusal here can only be
-	// the one this case is about — the estate answering unserved — and never
-	// the caller's authority.
+	// ASKED AS A CREDENTIAL THAT MAY ASK BOTH, so a refusal can only be the
+	// estate answering unserved, never the caller's authority.
 	asker := iam.WithPrincipal(ctx, iam.Principal{
 		ID: uuid.New(), Login: iam.TokenLogin("test"), Kind: iam.KindMachine,
 		Stage: iam.StageActive, Grants: iam.AllGrants,

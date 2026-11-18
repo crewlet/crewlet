@@ -15,47 +15,26 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A project's tag set — the one catalogue any seat may add to.
+// A project's tag set: the one catalogue any seat may add to.
 //
-// # Adding is a SEAT's, and archiving and renaming are not
+// Adding is open to every seat: a tag groups work for a week, and tags only a
+// person could declare would never be declared. A rename or an archive is the
+// lead's: it reaches every task filed under the tag and everybody's board.
 //
-// A tag is how work is grouped for a week: a seat filing a task under
-// `regression` while it triages a run of them is the tag set doing its job,
-// and a company whose tags could only be declared by a person would be a
-// company whose tags were never declared. So an ADD is open to every seat.
+// An archive is one-way, like a field's: the tasks keep the tag and filters
+// still answer, but no new work is filed under it. Bringing one back means
+// declaring it again, not re-admitting work against a meaning nobody checked.
 //
-// A RENAME and an ARCHIVE are not, and the difference is who they reach: a
-// rename changes the word on every task already filed under it, and an archive
-// takes a filter out of everybody's board. Both are decisions about how the
-// company groups its work rather than about one task, which is exactly the
-// line the lead rule draws.
-//
-// # An archive is one-way, like a field's
-//
-// The tasks keep the tag and every filter on it still answers — what an
-// archive buys is a tag that takes no NEW work, which is what stops a
-// deprecated grouping quietly accumulating. Un-archiving is refused for the
-// reason a field's is: a tag that came back would silently re-admit work filed
-// against a meaning nobody has looked at in a year, and bringing one back
-// means declaring it again under its own name.
-//
-// # Why the tag set is its OWN object rather than a field of the project
-//
-// Because of who writes each. Any seat adds a tag, and only a lead edits a
-// project's field declarations — so on one object every
-// tag add would contend with every policy edit on one subject, and the gate
-// could only ever be "may you write the whole thing". Two subjects make the
-// two authorities two arbitration units.
+// The tag set is its own subject, not a field of the project, so a seat's add
+// and a lead's policy edit are two arbitration units rather than one.
 
 // TagEdit is one change to a project's tag set.
 //
-// THREE FACETS RATHER THAN A WHOLE SET, for that same reason one level down: a
-// verb that took the set would make every add a rewrite of everybody else's
-// tags, and a seat's add would silently revert a lead's archive.
+// Three facets rather than a whole set: a verb taking the set would make every
+// add a rewrite of everybody else's tags, and could revert a lead's archive.
 type TagEdit struct {
 	// Add declares tags that do not exist. Naming one that does is not an
-	// error — it is the ordinary outcome of two seats reaching for the
-	// same word, and the set already has it.
+	// error: two seats reaching for the same word is the ordinary case.
 	Add []Tag
 
 	// Rename changes a tag's LABEL, keyed by slug. The slug is immutable:
@@ -72,24 +51,14 @@ func (e TagEdit) Empty() bool {
 	return len(e.Add) == 0 && len(e.Rename) == 0 && len(e.Archive) == 0
 }
 
-// TagClash is an add — or a rename — refused because its label is already
-// another tag's label or slug in the project: two groupings a person cannot
-// tell apart, which the work would then split between at random.
+// TagClash is an add or a rename refused because its label is already another
+// tag's label or slug in the project: two groupings a person cannot tell
+// apart, which the work would split between at random.
 //
-// # Why a type
-//
-// Because a caller several steps away has to say what to do about it. A
-// cross-project move declares its subtree's tags in the target as its first
-// append, and one label shared by two projects' different tags refused the
-// whole move with a sentence the tool rendered as "the change was NOT made" —
-// nothing a seat could act on. The fields are what an answer names: the tag
-// being declared, the one it clashes with, and the project.
-//
-// A REFUSAL LIKE ANY OTHER as well: it is [ErrTaken] under [errors.Is] — the
-// collision it is, which another label avoids now and which the same label
-// meets until the other tag gives it up — and [Sentence] reads it without the
-// package prefix, so a caller that does not look for the type still classes and
-// words it as every collision here.
+// A type so a caller several steps away (a cross-project move declaring its
+// subtree's tags) can name the tag, the one it clashes with and the project.
+// It is [ErrTaken] under [errors.Is], and [Sentence] reads it without the
+// package prefix, so a caller ignoring the type still words it as a collision.
 type TagClash struct {
 	Project string
 	// Slug and Label are the tag the add declared, or the rename gave.
@@ -103,9 +72,8 @@ func (e *TagClash) Error() string { return "worklet: " + e.sentence() }
 // Unwrap classes the clash as the collision it is.
 func (e *TagClash) Unwrap() error { return ErrTaken }
 
-// sentence names the tag that holds the label and the two ways past it. Two
-// tags a person cannot tell apart split the work between them at random, which
-// is the whole rule, so it is the remedy rather than the reason that is said.
+// sentence names the tag that holds the label and the two ways past it: the
+// remedy, not the reason.
 func (e *TagClash) sentence() string {
 	return fmt.Sprintf("%s already has a tag labelled %q (%s). Use that tag if "+
 		"it means the same, or give %s a label of its own", e.Project,
@@ -131,29 +99,23 @@ func (e *TagsFull) sentence() string {
 		"Archive one it no longer files under first", e.Project, MaxTagsPerProject)
 }
 
-// TagAuthority is what a caller may do to a tag set.
-//
-// A VALUE RATHER THAN A BOOL ON THE WRITER, for the reason the other authority
-// values are: "may I archive this project's tags" is a question about a PAIR —
-// who is asking and about which project — and the answer for one pair says
-// nothing about another.
-//
-// IT STATES THE DECISION rather than its inputs, for the reason and with the
-// history [ProjectAuthority] records.
+// TagAuthority is what a caller may do to a tag set: a value rather than a
+// bool on the writer, since the answer is about a pair (who asks, about which
+// project), and it states the decision rather than its inputs, as
+// [ProjectAuthority] does.
 type TagAuthority struct {
 	// Policy reports a caller authorized to RENAME or ARCHIVE a tag of
-	// this project: its lead, or an admin. Adding one is open
-	// to every colleague and takes nothing — a zero value is what an
-	// inline declare passes, and it cannot reach the gate below.
+	// this project: its lead, or an admin. Adding takes nothing: the zero
+	// value is what an inline declare passes.
 	Policy bool
 }
 
 // WriteTags applies one edit to a project's tag set.
 //
-// The caveats it returns are the near-duplicates the edit declared, and they
-// are ADVISORY: a lead can merge two tags and a refusal with no override would
-// block `apis` behind `api` for ever. THE APPLY MUST NEVER DEPEND ON ONE:
-// every data node applies the same record, and only this node saw the caveat.
+// The caveats it returns (the near-duplicates it declared) are ADVISORY: a
+// refusal with no override would block `apis` behind `api` for ever. The apply
+// must never depend on one: every data node applies the record, and only this
+// node saw the caveat.
 func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 	edit TagEdit, authority TagAuthority) (WriteResult, error) {
 
@@ -166,9 +128,8 @@ func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 			"renames and archives nothing", project)
 	case !authority.Policy &&
 		(len(edit.Rename) > 0 || len(edit.Archive) > 0):
-		// THE REFUSAL NAMES WHO CAN, because a seat that hit it was
-		// tidying up and the answer is "ask the lead" rather than
-		// "you cannot".
+		// The refusal names who can: the seat was tidying up, and the
+		// answer is "ask the lead".
 		return WriteResult{}, forbidden("renaming or archiving a tag of %s is "+
 			"the project lead's, or a person's own: it changes the word on "+
 			"every task already filed under it, and takes a filter off "+
@@ -190,10 +151,9 @@ func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 				return statelog.Decision{}, err
 			}
 			if !held {
-				// A MISSING TAG SET IS AN EMPTY ONE, not a refusal:
-				// `EnsureProjects` does not write it and the first
-				// write self-heals it, exactly as a key counter's
-				// first mint does.
+				// A missing tag set is an empty one: `EnsureProjects`
+				// does not write it, and the first write self-heals it,
+				// as a key counter's first mint does.
 				current = TagSet{V: DocumentVersion, Project: project}
 			}
 			next, added, warned, changed, err := applyTagEdit(current, edit,
@@ -201,17 +161,13 @@ func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			// BOTH ARE TAKEN FROM THE WINNING ATTEMPT, and assigned
-			// rather than appended: a re-decide against another
-			// writer's set finds a shorter add list and possibly a
-			// near-duplicate the first pass did not, and what the
-			// caller is told has to be what actually landed.
+			// Assigned from the winning attempt, not appended: a
+			// re-decide may find a shorter add list or another
+			// near-duplicate, and the caller is told what landed.
 			caveats, declared = warned, added
 			if !changed {
-				// NOTHING TO SAY. Two seats reaching for the same word
-				// is the ordinary case, and the second one's add is a
-				// no-op rather than a conflict — an empty decision is
-				// a legitimate outcome.
+				// Nothing changed (two seats adding one word is the
+				// ordinary case): an empty decision, not a conflict.
 				return statelog.Decision{}, nil
 			}
 			decision, err := w.decide(ctx, tx, stamp, subject, OpPatch, ChangeTags, scope, opID,
@@ -228,21 +184,13 @@ func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 	return result, err
 }
 
-// applyTagEdit is the whole rule, as a pure function over one set.
-//
-// PURE, so every refusal is testable without a broker: the collisions this
-// enforces — a label another tag already uses, a label that is another tag's
-// slug — are what a seat meets most often, and a rule only reachable through a
-// published record is a rule nobody re-measures.
+// applyTagEdit is the whole rule, as a pure function over one set, so every
+// refusal is testable without a broker.
 //
 // It reports the next set, the slugs it DECLARED, the advisory caveats, and
-// whether anything changed.
-//
-// The declared list is what a caller is told it created, and it comes from
-// here rather than from a read before the write for the reason the whole
-// package is built on: two seats reaching for the same word is the ordinary
-// case, so a list computed outside the snapshot names tags somebody else
-// declared a moment earlier.
+// whether anything changed. The declared list comes from here, inside the
+// snapshot, not from a read before the write: a list computed outside it names
+// tags somebody else declared a moment earlier.
 func applyTagEdit(current TagSet, edit TagEdit, actor string, at time.Time) (
 	TagSet, []string, []caveat.Caveat, bool, error) {
 
@@ -253,10 +201,8 @@ func applyTagEdit(current TagSet, edit TagEdit, actor string, at time.Time) (
 		next.V = DocumentVersion
 	}
 
-	// ONE INDEX OVER BOTH SPELLINGS. A new tag's label may collide with
-	// another tag's LABEL or with another tag's SLUG, and both collisions
-	// are the same failure: two groupings a person cannot tell apart, that
-	// the work then splits between at random.
+	// One index over labels and slugs: a new label colliding with either is
+	// the same failure, two groupings a person cannot tell apart.
 	taken := map[string]int{}
 	bySlug := map[string]int{}
 	for i, tag := range next.Tags {
@@ -294,10 +240,9 @@ func applyTagEdit(current TagSet, edit TagEdit, actor string, at time.Time) (
 				"the title off the screen", slug, len(label), MaxTagLabel)
 		}
 		if _, exists := bySlug[slug]; exists {
-			// ALREADY THERE IS NOT AN ERROR. Two seats reaching for the
-			// same word on the same afternoon is the ordinary case, and
-			// refusing the second would make a tag set something every
-			// seat has to read before it can file anything.
+			// Already there is not an error: refusing the second of two
+			// seats reaching for one word would make every seat read the
+			// set before it could file anything.
 			continue
 		}
 		if other, clash := taken[strings.ToLower(label)]; clash {
@@ -323,10 +268,8 @@ func applyTagEdit(current TagSet, edit TagEdit, actor string, at time.Time) (
 		changed = true
 	}
 
-	// SORTED, so a rename map — which Go iterates in a random order —
-	// refuses and warns the same way on every node and on every run. A
-	// two-rename edit that collided would otherwise name a different tag
-	// in its refusal each time it was retried.
+	// Sorted, so a rename map (random iteration order) refuses and warns the
+	// same way on every node and every retry.
 	for _, raw := range sortedKeys(edit.Rename) {
 		slug := TagSlug(raw)
 		at, exists := bySlug[slug]
@@ -355,9 +298,8 @@ func applyTagEdit(current TagSet, edit TagEdit, actor string, at time.Time) (
 		}
 		delete(taken, strings.ToLower(next.Tags[at].Label))
 		taken[strings.ToLower(label)] = at
-		// THE SLUG STAYS TAKEN. A rename never frees the old label for
-		// re-use by a different tag in the same edit, because the slug
-		// it still answers to is that word.
+		// The slug stays taken: a rename never frees the old word for
+		// another tag, since the slug still answers to it.
 		taken[next.Tags[at].Slug] = at
 		next.Tags[at].Label = label
 		changed = true
@@ -380,9 +322,8 @@ func applyTagEdit(current TagSet, edit TagEdit, actor string, at time.Time) (
 	if !changed {
 		return current, declared, warnings, false, nil
 	}
-	// THE VERSION MOVES ON EVERY CHANGE, because it is what a task's own
-	// tag rows are stamped with: the applier re-explodes a task's tags
-	// against the set, and a set that changed without saying so would leave
+	// The version moves on every change: a task's tag rows are stamped with
+	// it and re-exploded against the set, so a silent change would leave
 	// every task carrying the old spelling.
 	next.TagsVersion = current.TagsVersion + 1
 	next.UpdatedAt = at
@@ -408,13 +349,9 @@ func sortedStrings(in []string) []string {
 
 // TagSlug normalises what somebody typed into what the column stores.
 //
-// ONE SPELLING, because a tag reaches the rows through `tracker_task_tags.slug`
-// and a filter compares it exactly: `Regression` and `regression` are one
-// grouping, and two spellings of it are two columns on a board.
-//
-// IT NORMALISES AND NEVER TRUNCATES. A slug past the grammar's own 64
-// characters is refused naming it rather than silently cut, because a cut slug
-// is a DIFFERENT tag that looks like the one somebody asked for.
+// One spelling, because a filter compares `tracker_task_tags.slug` exactly. It
+// normalises and never truncates: a slug past the grammar's 64 characters is
+// refused, since a cut slug is a different tag that looks like the asked one.
 func TagSlug(raw string) string {
 	out := make([]rune, 0, len(raw))
 	for _, r := range strings.ToLower(strings.TrimSpace(raw)) {
@@ -422,17 +359,13 @@ func TagSlug(raw string) string {
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
 			out = append(out, r)
 		case r == ' ', r == '_', r == '.', r == '/':
-			// A SEPARATOR BECOMES A HYPHEN rather than vanishing, so
-			// "needs design" and "needsdesign" are not one tag: a tag
-			// somebody typed with a space is a two-word grouping.
-			// Underscore is here because the OTHER slug grammar uses
-			// it, and a model that typed a status-shaped slug should
-			// get the tag it meant rather than one word.
+			// A separator becomes a hyphen, so "needs design" and
+			// "needsdesign" stay two tags. Underscore too: the other slug
+			// grammar uses it, and a status-shaped slug gets its tag.
 			out = append(out, '-')
 		}
 	}
-	// COLLAPSED, so "needs  design" and "needs design" are one tag rather
-	// than two that differ by a character nobody can see.
+	// Collapsed, so a doubled separator nobody can see makes no new tag.
 	collapsed := make([]rune, 0, len(out))
 	for i, r := range out {
 		if r == '-' && i > 0 && out[i-1] == '-' {
@@ -446,25 +379,21 @@ func TagSlug(raw string) string {
 // NearTagDistance is how close a new slug has to be to an existing one to be
 // worth saying something about.
 //
-// TWO, which is the distance a typo travels: a transposition and a doubled
-// letter are one edit each, and `api`/`apis` — the pair the advisory rule
-// exists for — is one. Three would put every three-letter tag within reach of
-// every other, and one would miss `received` beside `received`.
+// Two, the distance a typo travels: `api`/`apis` is one edit and a
+// transposition two, which one would miss; three would put every three-letter
+// tag within reach of every other.
 const NearTagDistance = 2
 
 // NearTagsNamed is how many a warning lists.
 //
-// THREE, the same as every other "nearest" this surface reports — a project
-// refusal names three keys and a catalogue refusal three slugs — because a
-// list somebody is meant to act on immediately is a list they can hold.
+// Three, as every other "nearest" this surface reports: a list to act on at
+// once is one a person can hold.
 const NearTagsNamed = 3
 
 // nearTags is the tags a new slug is within a typo of, nearest first.
 //
-// OVER THE SLUGS AND NOT THE LABELS, because a slug is what a filter compares
-// and what a task's row holds: two labels that read differently but slug the
-// same are already refused above, and two labels a person would not confuse
-// are not what splits a board.
+// Over the slugs, not the labels: a slug is what a filter compares and a row
+// holds, and labels that slug the same are already refused.
 func nearTags(tags []Tag, slug string) []string {
 	type near struct {
 		slug string
@@ -473,9 +402,8 @@ func nearTags(tags []Tag, slug string) []string {
 	var found []near
 	for _, tag := range tags {
 		if tag.Archived {
-			// AN ARCHIVED TAG IS NOT A NEAR MISS. It takes no new work
-			// by design, so declaring something beside it is the
-			// ordinary way a renamed grouping starts.
+			// An archived tag is no near miss: declaring beside it is how
+			// a renamed grouping starts.
 			continue
 		}
 		if d := editDistance(tag.Slug, slug, NearTagDistance); d > 0 {
@@ -501,13 +429,10 @@ func nearTags(tags []Tag, slug string) []string {
 // editDistance is Levenshtein, bounded: it answers -1 rather than the true
 // distance once the distance is known to exceed max.
 //
-// BOUNDED BECAUSE THE ANSWER IS A THRESHOLD. Every caller asks "is this within
-// two edits", never "how far is it", so the length check below discards most
-// candidates without allocating at all — which is what keeps a declare against
-// a 512-tag set from being 512 full matrices.
-//
-// TWO ROWS RATHER THAN A MATRIX for the same reason: the recurrence reads only
-// the previous row, so the full matrix is a table nobody looks at.
+// Every caller asks "within two edits", so the length check discards most
+// candidates without allocating (a declare against a 512-tag set is not 512
+// matrices), and two rows replace the matrix: the recurrence reads only the
+// previous one.
 func editDistance(a, b string, max int) int {
 	ar, br := []rune(a), []rune(b)
 	if len(ar) < len(br) {
@@ -533,9 +458,8 @@ func editDistance(a, b string, max int) int {
 			best = min(best, curr[j])
 		}
 		if best > max {
-			// EVERY REMAINING ROW IS AT LEAST THIS BIG, because a
-			// row's minimum never decreases: the recurrence only ever
-			// adds. So the answer is already out of range.
+			// A row's minimum never decreases, so the answer is
+			// already out of range.
 			return -1
 		}
 		prev, curr = curr, prev
@@ -549,11 +473,8 @@ func editDistance(a, b string, max int) int {
 // normaliseTags turns what a caller typed into what the rows store, and
 // refuses a set too long to render.
 //
-// PURE AND BEFORE THE SNAPSHOT, because it is about the ARGUMENT rather than
-// about the project: `Regression`, `regression` and ` regression ` are one tag
-// however the company declared it, and a caller that sent all three sent one.
-// The declared check is separate and has to read, which is why the two are not
-// one function.
+// Pure and before the snapshot: it is about the argument, not the project.
+// The declared check has to read, so it is separate ([declaredTags]).
 func normaliseTags(project string, raw []string) ([]string, error) {
 	out, err := tagSlugs(raw)
 	if err != nil {
@@ -568,13 +489,10 @@ func normaliseTags(project string, raw []string) ([]string, error) {
 }
 
 // tagSlugs is every tag a caller named, as the rows hold it ([TagSlug]), each
-// once and in the order first named — or the content refusal ([invalid]) of
-// the first that is not a tag.
-//
-// ONE RULE FOR WHAT A TAG IS, read by a write ([normaliseTags]) and by a
-// filter ([Query.parseTags]) alike: the rows hold what this answers, and a
-// filter that normalised a value another way, or refused one a write would
-// store, would answer about tags no task carries.
+// once and in the order first named, or the content refusal ([invalid]) of
+// the first that is not a tag. A write ([normaliseTags]) and a filter
+// ([Query.parseTags]) share it, so a filter never answers about tags no task
+// could carry.
 func tagSlugs(raw []string) ([]string, error) {
 	out := make([]string, 0, len(raw))
 	seen := map[string]bool{}
@@ -590,9 +508,8 @@ func tagSlugs(raw []string) ([]string, error) {
 				"starts with a letter or a digit and carries lowercase "+
 				"letters, digits and hyphens, up to 64 characters", slug)
 		case seen[slug]:
-			// A DUPLICATE IS DROPPED RATHER THAN REFUSED. `API` beside
-			// `api` is one tag typed twice, and refusing it would make
-			// a caller normalise before it could write.
+			// A duplicate is dropped, not refused: `API` beside `api` is
+			// one tag typed twice.
 			continue
 		}
 		seen[slug] = true
@@ -603,22 +520,12 @@ func tagSlugs(raw []string) ([]string, error) {
 
 // declaredTags refuses a task carrying a tag its project has not declared.
 //
-// # Why a task write does not just create the tag
-//
-// Because the two failures look identical at the call and are opposite in
-// effect. A seat that MEANT to declare `regression` and a seat that typo'd
-// `regresion` both send one unknown slug, and a write that declared whichever
-// arrived would fill a board's filter strip with every misspelling anybody ever
-// typed — which is exactly what happened to the task TYPE catalogue before
-// [declaredType] existed, leaving `Bug`, `bugfix` and `BUG` beside `bug`.
-//
-// So an unknown tag is refused, and the refusal names both ways out: declare it
-// deliberately, or say so at the write. Adding one is open to every seat — this
-// is a check on INTENT and never on authority.
-//
-// AN ARCHIVED TAG IS REFUSED FOR NEW WORK and left alone on old, which is what
-// archiving a tag is FOR: the tasks already under it still render and still
-// filter.
+// A task write does not just create the tag: a meant `regression` and a typo'd
+// `regresion` look identical at the call, and declaring whichever arrived
+// fills the filter strip with misspellings (why [declaredType] exists). The
+// refusal names both ways out: declare it, or say so at the write. It checks
+// intent, never authority. An archived tag is refused for new work and left
+// alone on old, which is what archiving is for.
 func declaredTags(ctx context.Context, tx *sql.Tx, project string, tags []string) error {
 	if len(tags) == 0 {
 		return nil
@@ -664,13 +571,10 @@ func declaredTags(ctx context.Context, tx *sql.Tx, project string, tags []string
 	if len(near) > 0 {
 		hint = fmt.Sprintf(" Did you mean %s?", words.Or(near))
 	}
-	// ONE SENTENCE FOR BOTH READERS, as every content refusal here is: a
-	// model reads it in a tool's answer and a person on a write surface
-	// reads it as it stands, so the remedy names the two ARGUMENTS that
-	// declare a tag (the body a person's surface sends is the tool's own
-	// arguments) and agrees in number with what it is about. It used to say
-	// "Declare one with write_project(tags.add) … declare it" for several
-	// tags, naming an argument nothing reads.
+	// One sentence for both readers, as every content refusal here: a model
+	// reads it in a tool's answer and a person on a write surface as it
+	// stands, so the remedy names the two arguments that declare a tag and
+	// agrees in number with what it is about.
 	named, it := "the tag "+words.And(unknown), "it"
 	if len(unknown) > 1 {
 		named, it = "the tags "+words.And(unknown), "them"
@@ -700,15 +604,13 @@ func declaredTags(ctx context.Context, tx *sql.Tx, project string, tags []string
 		project, named, its, hint, it, project, it)
 }
 
-// EnsureTags declares the tags a write is about to use that the project lacks.
+// EnsureTags declares the tags a write is about to use that the project lacks:
+// the inline half of [declaredTags]'s rule. It returns the slugs it actually
+// created, so a tool can report them: an unexpected create is a typo the
+// caller can still fix.
 //
-// THE INLINE HALF of the rule [declaredTags] states: a seat that meant to
-// declare a grouping says so at the write and gets it, and a seat that typo'd
-// is refused. It returns the slugs it actually created, so a tool can report
-// them — a create the caller did not expect is a typo they can still fix.
-//
-// ONE APPEND FOR THE WHOLE SET, before the task's own: a record per new tag
-// would contend N times on the one subject every seat in the project writes.
+// One append for the whole set, before the task's own: a record per tag would
+// contend N times on the subject every seat in the project writes.
 func (w *Writer) EnsureTags(ctx context.Context, opID, project string,
 	tags []string) ([]string, []caveat.Caveat, error) {
 
@@ -731,24 +633,17 @@ func (w *Writer) EnsureTags(ctx context.Context, opID, project string,
 			continue
 		}
 		have[slug] = true
-		// THE SLUG IS THE LABEL. A tag declared inline was typed as a
-		// word rather than chosen from a list, so there is no other
-		// spelling of it to carry — and a lead renaming it later moves
-		// the label without touching what the rows hold.
+		// The slug is the label: an inline tag was typed as a word, and a
+		// lead's later rename moves the label without touching the rows.
 		add = append(add, Tag{Slug: slug, Label: slug})
 		created = append(created, slug)
 	}
 	if len(add) == 0 {
 		return nil, nil, nil
 	}
-	// AUTHORITY IS THE ADD's, which every seat holds. An inline declare
-	// renames and archives nothing, so it can never reach the lead gate.
-	//
-	// AN UNKNOWN DECLARATION IS A STEP THAT DID NOT RESOLVE ([resolved]),
-	// never a declaration that created nothing. The write this one comes
-	// before is refused over a tag that is not declared, so reading
-	// `unknown` as "nothing new" sent the caller a refusal telling it to
-	// pass the flag it had passed — about a tag that may have landed.
+	// Authority is the add's, which every seat holds. An unknown outcome is
+	// a step that did not resolve ([resolved]), never "nothing new": the
+	// write after this would then be refused over a tag that may have landed.
 	result, err := w.WriteTags(ctx, opID, project, TagEdit{Add: add},
 		TagAuthority{})
 	if err = resolved(fmt.Sprintf("the declaration of %s in %s", words.And(created),
@@ -756,11 +651,9 @@ func (w *Writer) EnsureTags(ctx context.Context, opID, project string,
 		return nil, nil, fmt.Errorf("worklet: declare %s in %s: %w",
 			words.And(created), project, err)
 	}
-	// WHAT THE WRITE DECLARED, never what the read above guessed: the read
-	// is outside any snapshot, so a colleague declaring the same word in
-	// between would leave this call claiming to have created a tag it
-	// found. The pre-read's only job is to skip the publish entirely when
-	// nothing is missing.
+	// What the write declared, never what the read above guessed: that read
+	// is outside any snapshot, and only skips the publish when nothing is
+	// missing.
 	return result.Declared, result.Caveats, nil
 }
 

@@ -9,10 +9,9 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// shortestLines is a search's answer of n of the shortest lines that carry
-// text (a one-byte repository and path, and one byte of text, fenced, which
-// matched) of a search that stopped at them, each with context one-byte
-// lines on each side.
+// shortestLines is a truncated search's answer of n of the shortest lines
+// carrying text (one-byte repository, path and matched text), each with
+// context one-byte lines on each side.
 func shortestLines(n, context int) codesearch.Answer {
 	a := codesearch.Answer{Tips: map[string]string{"a": strings.Repeat("c", 40)},
 		Coverage: codesearch.Coverage{Searched: 1, Truncated: true}}
@@ -28,18 +27,14 @@ func shortestLines(n, context int) codesearch.Answer {
 }
 
 // A PAGE OF code_search ASKS FOR WHAT ONE PAGE HOLDS (searchPageHits, and
-// searchContextPageHits for a page asking three lines of context): one tool
-// answer, as sent, holds at least that many of the shortest lines that carry
-// text, each with its match, and fewer than a twentieth more, so the search
-// is never asked for lines no page of them can carry, nor cut into pages
-// shorter than an answer holds; and a page that holds every line its search
-// answered, the search having stopped at them, names the page after it:
+// searchContextPageHits with context): one tool answer, as sent, holds at
+// least that many of the shortest lines carrying text, and under a twentieth
+// more; and a full page of a search that stopped names a next page, since
 // lines may follow.
 //
-// Mutations: ask for gitlet.MaxSearchHits — one answer holds far fewer, red;
-// name the next page only where the page was cut (searchPage's Truncated) —
-// the full page of a search that stopped names none, and paging ends with
-// lines unread, red.
+// Mutations: ask for gitlet.MaxSearchHits, red; name the next page only where
+// the page was cut (searchPage's Truncated), so paging ends with lines unread,
+// red.
 func TestCodeSearchAsksForWhatOnePageHolds(t *testing.T) {
 	t.Parallel()
 	search := codeindex.Query{Text: "x", Mode: codeindex.ModeLiteral}

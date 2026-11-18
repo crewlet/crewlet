@@ -41,11 +41,10 @@ func (f *FleetStore) SeatPause(ctx context.Context, seat uuid.UUID) (coord.SeatP
 
 // ListSeatPauses returns every pause, ordered by seat id.
 //
-// A DECODE FAILURE IS RAISED, not skipped: a pause dropped from this listing is
-// a paused seat every node reads as free to work. A KEY that names no seat id
-// is skipped instead — this build files no pause under one, so no seat it
-// runs is paused by it, and raising would let one stray key unpause nothing
-// while stopping every node from reading the pauses that do exist.
+// A DECODE FAILURE IS RAISED, not skipped: a dropped pause is a paused seat
+// every node reads as free. A KEY naming no seat id is skipped: this build
+// files no pause under one, and raising would let one stray key stop every
+// node reading the pauses that exist.
 func (f *FleetStore) ListSeatPauses(ctx context.Context) ([]coord.SeatPause, error) {
 	var out []coord.SeatPause
 	err := f.eachUnder(ctx, f.positions, coord.DocumentFilter(coord.SeatPauseClass),
@@ -72,11 +71,10 @@ func (f *FleetStore) ListSeatPauses(ctx context.Context) ([]coord.SeatPause, err
 
 // CreateSeatPause writes a pause for a seat that has none.
 //
-// Create rather than Put, so the first writer wins and every other is told the
-// seat was already paused. A key a resume purged is created again through
-// [createKey], which asks the stream leader what the key holds rather than
-// conditioning on a marker a sweep may already have removed, and reports a
-// racing creator that won as the one shape, [jetstream.ErrKeyExists].
+// Create rather than Put, so the first writer wins. A purged key is created
+// again through [createKey], which asks the stream leader rather than
+// conditioning on a marker a sweep may have removed, and reports a racing
+// winner as [jetstream.ErrKeyExists].
 func (f *FleetStore) CreateSeatPause(ctx context.Context, p coord.SeatPause) (coord.SeatPause, bool, error) {
 	if err := p.Validate(); err != nil {
 		return coord.SeatPause{}, false, err
@@ -147,17 +145,13 @@ func (f *FleetStore) DeleteSeatPause(ctx context.Context, seat uuid.UUID, versio
 
 // WatchSeatPauses streams every pause, the marker, then every change.
 //
-// A KV watcher over the class filter, so the broker sends this class and no
-// other of the ten sharing the register. Deletes are NOT ignored — a purge
-// is exactly what a resume looks like on the wire. The answer and the changes
-// are [watchRecords]': the first answer certified, so a pause missing from it
-// is never a hold a node lifts and a seat it lets take work, and a change the
-// consumer delivers late filtered by revision.
-//
-// That lag is carried rather than closed. Confirming each change with a leader
-// read would close it too, at a read per change on every node; it is not
-// done, because a pause is a person's gesture and a moment's lag in honouring
-// one moves no work that a fence does not already stop.
+// A KV watcher over the class filter, so the broker sends only this class of
+// the ten sharing the register. Deletes are NOT ignored: a purge is what a
+// resume looks like. [watchRecords] certifies the first answer, so a missing
+// pause is never a hold lifted, and filters a late change by revision. That
+// lag is carried: a leader read per change on every node would close it, but a
+// pause is a person's gesture, and a moment's lag moves no work a fence does
+// not already stop.
 func (f *FleetStore) WatchSeatPauses(ctx context.Context) (<-chan coord.SeatPauseUpdate, error) {
 	return watchRecords(ctx, f, f.positions, coord.DocumentFilter(coord.SeatPauseClass),
 		recordWatch[coord.SeatPauseUpdate]{

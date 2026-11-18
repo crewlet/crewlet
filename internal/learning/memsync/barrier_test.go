@@ -19,12 +19,11 @@ import (
 //
 // A hydration publishes a barrier on the seat's barrier subject before its
 // first table, and each table's replay reads the table's subjects and that one
-// through one consumer, until it has received a barrier at or past its
-// hydration's, and then its own end barrier. The cases below hold what a
-// replay does with a barrier, on the package's broker.
+// through one consumer until it has received a barrier at or past its
+// hydration's, then its own end barrier.
 
 // barrierMessage is the seat's barrier as the changelog holds it now, read
-// through a consumer as a replay delivers it, metadata and all.
+// through a consumer as a replay receives it, metadata and all.
 func barrierMessage(t *testing.T, conn *nats.Conn) jetstream.Msg {
 	t.Helper()
 	client := jsOn(t, conn)
@@ -56,9 +55,9 @@ func barrierMessage(t *testing.T, conn *nats.Conn) jetstream.Msg {
 	return barrier
 }
 
-// seatMessages is what the changelog holds on the seat's subjects: its rows,
-// the messages on a carried or a retired table's subjects, and every other
-// message of the seat's, which is a barrier however it is spelled.
+// seatMessages counts the changelog's messages on the seat's subjects: rows
+// on a carried or retired table's subjects, and barriers, every other one
+// however it is spelled.
 func seatMessages(t *testing.T, conn *nats.Conn) (rows, barriers int) {
 	t.Helper()
 	stream, err := jsOn(t, conn).Stream(t.Context(), topics.MemoryStream)
@@ -88,17 +87,12 @@ func seatMessages(t *testing.T, conn *nats.Conn) (rows, barriers int) {
 
 // A BARRIER BELOW THE HYDRATION'S DOES NOT END A REPLAY.
 //
-// The changelog keeps one message per subject, so its leader holds one barrier
-// of the seat's, the newest hydration's. A copy behind the leader may still
-// hold an earlier hydration's, and hands it over before the rows past it that
-// the copy has not applied yet: taken for the end, it ended the replay short
-// of those rows, the table's newest. A replay ends only at a barrier at or
-// past the one its own hydration published, so it goes past an earlier one,
-// waits for its copy, and carries the rest. Here an earlier hydration of the
-// seat left its barrier on the changelog, the seat's holder then wrote a note,
-// and a later hydration's copy of the diary holds the earlier barrier and
-// lacks the note and the later barrier until it catches up, half a second
-// later, played on a bubble's clock over the model changelog
+// The leader holds one barrier of the seat's, the newest hydration's, but a
+// copy behind it may still hand over an earlier one before rows it has not
+// applied yet; taken for the end, it would cut the replay short of the
+// table's newest rows. Here the diary's copy holds an earlier hydration's
+// barrier and lacks a later note and barrier until it catches up half a
+// second later, on a bubble's clock over the model changelog
 // (copyfake_test.go).
 //
 // Mutation: end a replay at any barrier, not only one at or past its
@@ -112,8 +106,7 @@ func TestABarrierBelowTheHydrationsDoesNotEndAReplay(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		log := newFakeChangelog()
 		onto(log, published)
-		// THE EARLIER HYDRATION'S BARRIER, and the note the seat's holder
-		// wrote after it.
+		// THE EARLIER HYDRATION'S BARRIER, and the note written after it.
 		earlier := log.publish(barrierSubject(seat.AgentID), nil)
 		note := noteOfSize(t, "newest", 512)
 		body, err := encode(note)
@@ -137,11 +130,9 @@ func TestABarrierBelowTheHydrationsDoesNotEndAReplay(t *testing.T) {
 // EVERY HYDRATION OF A SEAT LEAVES IT ONE BARRIER, AND A PUBLISH NONE.
 //
 // The barrier is the seat's one subject that is no row's, and the changelog
-// keeps one message per subject, so a hydration's barrier replaces the one
-// before it and takes nothing else's place: however often a seat is hydrated,
-// the changelog holds one barrier of it and every row it held. A publish of
-// the seat's memory writes none. Here a seat is published and then hydrated
-// three times, each time onto a store that never held it.
+// keeps one message per subject, so a hydration's barrier replaces only the
+// one before it. A publish writes none. Here a seat is published, then
+// hydrated three times onto stores that never held it.
 //
 // Mutation: keep more than one message per subject on the changelog, and this
 // goes red.
@@ -171,14 +162,11 @@ func TestEveryHydrationOfASeatLeavesItOneBarrier(t *testing.T) {
 
 // TWO HYDRATIONS OF A SEAT RACING EACH OTHER BOTH END.
 //
-// A seat can be hydrated on two nodes at once while it moves
-// (crewlet/crewlet#511's window). Each publishes a barrier to the seat's one
-// subject, so the later replaces the earlier, and the earlier hydration's copy
-// then holds the later barrier and never its own again: its replays end at a
-// barrier at or past their hydration's, so they end at the later one, as the
-// later hydration's do, and the changelog holds one barrier of the seat. Here
-// a second hydration of the seat runs whole between the first's barrier and
-// its first pull.
+// A seat can be hydrated on two nodes at once while it moves. The later
+// barrier replaces the earlier on the seat's one subject, so the earlier
+// hydration's replays never see their own again: they end at a barrier at or
+// past their hydration's, the later one. Here a second hydration runs whole
+// between the first's barrier and its first pull.
 //
 // Mutation: end a replay only at its own hydration's barrier, and this goes
 // red: the first hydration waits for a barrier the changelog no longer holds.
@@ -218,14 +206,11 @@ func TestTwoHydrationsOfASeatRacingEachOtherBothEnd(t *testing.T) {
 
 // A BARRIER PUSHES NO ROW OUT.
 //
-// A hydration's barrier is one more message on the changelog, and the
-// changelog's discard policy is old: under any limit but its one message per
-// subject, a full changelog would drop its oldest row to take the barrier. It
-// has no other, as the queue provisions it: no age, no byte, message-count or
-// message-size limit, and the one per subject dropping only the older of two
-// messages on one subject, never refusing the newer, so a barrier replaces the
-// seat's previous barrier and nothing else. Read here off the changelog the
-// package's broker provisions, as the queue provisions it.
+// The changelog's discard policy is old, so under any limit but its one
+// message per subject a full changelog would drop its oldest row to take a
+// barrier. As the queue provisions it there is no age, byte, message-count or
+// message-size limit, and the per-subject limit drops the older message,
+// never refusing the newer.
 //
 // Mutation: give the changelog a byte limit, and this goes red.
 func TestABarrierPushesNoRowOut(t *testing.T) {
@@ -251,12 +236,9 @@ func TestABarrierPushesNoRowOut(t *testing.T) {
 // THE BARRIER IS NEVER A ROW.
 //
 // A hydration's barrier is a message of no bytes on the seat's one subject
-// that is no table's, and every table's replay receives it. It is read for its
-// sequence alone: never decoded — no bytes are no row — never written, and
-// never counted in what the hydration reports. Here a seat with one row in
-// every table hydrates onto a store that never held it: the hydration reports
-// the seat's rows and no more, the store holds them and no more, and the
-// changelog holds the barrier beside them, of no bytes.
+// that is no table's, and every table's replay receives it. It is read for
+// its sequence alone: never decoded (no bytes are no row), written or counted
+// in what the hydration reports.
 //
 // Mutation: read the barrier as a row, or count the messages a pull delivered
 // rather than the rows its transaction wrote, and this goes red.
@@ -287,15 +269,12 @@ func TestTheBarrierIsNeverARow(t *testing.T) {
 
 // A ROW WRITTEN PAST THE BARRIER IS READ TOO.
 //
-// A replay is done once it has received a barrier at or past its hydration's
-// and then its own end barrier, never at the barrier alone: a publish racing
-// the hydration — a releasing node's last flush still landing, say — writes
-// rows past the barrier, and every row stored before the end barrier lies
-// below it, so the replay reads it before it ends, whatever the copy's count
-// said as the barrier arrived. Here a seat with nothing on the changelog has
-// a note published as the diary's replay sends its first pull, after its
-// barrier. A pull that delivered a barrier alone delivered a message, so it is
-// no row past the pull's bytes either.
+// A replay ends at its own end barrier after the hydration's, never at the
+// hydration's alone: a racing publish (a releasing node's last flush) writes
+// rows past the barrier, and every row stored before the end barrier is read,
+// whatever the copy's count said as the barrier arrived. Here a note is
+// published as the diary's replay sends its first pull. A pull that delivered
+// only a barrier still delivered a message, not the end of the table.
 //
 // Mutation: end a replay at its barrier, or take a pull that delivered no row
 // for one that delivered nothing, and this goes red.
@@ -322,15 +301,13 @@ func TestARowWrittenPastTheBarrierIsReadToo(t *testing.T) {
 
 // THE BARRIER'S TOKEN IS NO TABLE'S NAME, AND NONE CAN EVER TAKE IT.
 //
-// The barrier is the seat's one subject that is no row's,
-// crewlet.memory.<seat>.<token>: four tokens where a row's subject has five,
-// so no table's filter matches it and a replay's two filters never overlap,
-// as nats-server requires of a consumer's. Its token is no name a table could
-// take, either: a memory table's name is a SQL identifier, written unquoted
-// into every statement that reads or writes it, and the token is none. Held
-// here for every table this build carries and every one it has retired, whose
-// filter is the one a retired table's count and purge take, so neither ever
-// reaches the barrier.
+// The barrier is crewlet.memory.<seat>.<token>: four tokens where a row's
+// subject has five, so no table's filter matches it and a replay's two
+// filters never overlap, as nats-server requires of a consumer's. The token
+// is no SQL identifier, which every memory table's name is (written unquoted
+// into its statements). Held for every carried and retired table, whose
+// filter a retired table's count and purge take, so neither reaches the
+// barrier.
 //
 // Mutation: name the token as a table could be named, and this goes red.
 func TestTheBarrierTokenIsNoTablesName(t *testing.T) {

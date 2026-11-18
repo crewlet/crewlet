@@ -5,10 +5,9 @@ import (
 	"testing"
 )
 
-// A RUN THAT DID NOT SUCCEED SAYS WHY, even when it also wrote a report. The
-// reviewer judges the run on this text — whether to send it back, what the
-// requester still needs — and it used to be handed the report under "did NOT
-// fully succeed" with the reason dropped whenever a report existed.
+// A RUN THAT DID NOT SUCCEED SAYS WHY, even when it also wrote a report: the
+// reviewer judges the run on this text, whether to send it back and what the
+// requester still needs.
 func TestARunsReportSaysWhyItDidNotSucceed(t *testing.T) {
 	t.Parallel()
 	failed := runReport(PendingRun{}, Result{
@@ -33,7 +32,7 @@ func TestARunsReportSaysWhyItDidNotSucceed(t *testing.T) {
 		t.Errorf("a successful run was given a reason it failed:\n%s", ok)
 	}
 
-	// And a run with no report says its error, as it always did.
+	// And a run with no report says its error.
 	bare := runReport(PendingRun{}, Result{Error: "the harness produced no output"})
 	if !strings.Contains(bare, "Error: the harness produced no output") {
 		t.Errorf("a run with only an error reads:\n%s", bare)

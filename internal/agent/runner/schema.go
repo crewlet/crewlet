@@ -5,21 +5,15 @@ import (
 	"github.com/crewlet/crewlet/internal/kept"
 )
 
-// The JSON Schemas the two structured-output tools publish.
+// The JSON Schemas the two structured-output tools publish, hand-written
+// rather than reflected off the payload structs: the descriptions are the
+// model's contract for each field and enum value, and generating them from
+// struct tags would bury that prose where it cannot be read or reviewed.
 //
-// Hand-written rather than reflected off the payload structs, deliberately.
-// The DESCRIPTIONS are the contract with the model: what each field and each
-// enum value means, which reaches the model beside the field on every round.
-// Generating them from tags would put that prose in struct tags, where it
-// cannot be read, reviewed or wrapped.
-//
-// ONE COPY OF EACH RULE between these and the phase's system prompt. A fact
-// about a field — what an outcome means, that `deliveries` is checked, what
-// `completed_work` carries — lives here, on the field; a rule about the turn —
-// act with tool calls, finish the arc, how to judge a blocked round — lives in
-// the prompt (internal/agent/prompts). They were three copies once, prompt,
-// tool description and field, and the copies drifted until the review
-// schema asked the reviewer about delivery in words its prompt had retired.
+// ONE COPY OF EACH RULE: a fact about a field (what an outcome means, that
+// `deliveries` is checked, what `completed_work` carries) lives here, on the
+// field; a rule about the turn lives in the prompt (internal/agent/prompts).
+// Copies drift (TestEachSubmissionRuleLivesOnItsField).
 //
 // The struct tags and these schemas must agree; the tests assert a submission
 // shaped by the schema decodes into the struct.
@@ -73,11 +67,9 @@ var workSchema = map[string]any{
 }
 
 // reviewDecisionEnum is the submission schema's copy of what a reviewer may
-// decide, taken from [phase.ReviewDecisions] rather than spelled again.
-//
-// Spelled again is what it was. A schema offering a value the decoder refuses
-// bounces a model that did exactly what it was told, and nothing in either
-// list can see the other.
+// decide, taken from [phase.ReviewDecisions] rather than spelled again: a
+// schema offering a value the decoder refuses bounces a model that did exactly
+// what it was told.
 func reviewDecisionEnum() []any {
 	out := make([]any, 0, len(phase.ReviewDecisions()))
 	for _, d := range phase.ReviewDecisions() {
@@ -122,15 +114,9 @@ var reviewSchema = map[string]any{
 
 // The two submission tools' descriptions: what the call is and when to make
 // it, and nothing a field's own description or the phase's system prompt
-// already says.
-//
-// That a tool call is how anything gets done, and how to discover a tool, is
-// the executor's header; that `deliveries` is checked is that field's. The
-// reviewer's rules are its header; what each decision means is the `decision`
-// field's. Each rule was written here as well, and the review copy had kept
-// asking the reviewer whether the answer was delivered — the question its
-// prompt says is settled before it runs, and the one whose re-derivation once
-// read a real delivery as none and posted it twice.
+// (each phase's header) already says. The review copy never asks whether the
+// answer was delivered, which is settled before the reviewer runs
+// (TestTheReviewContractNeverAsksWhetherTheAnswerWasDelivered).
 const submitWorkDescription = "Report what you did and end the turn. Call " +
 	"exactly once, when the work is finished or you are blocked."
 

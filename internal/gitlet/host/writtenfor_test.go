@@ -19,13 +19,12 @@ import (
 )
 
 // WHOM AN ENGINE WRITE IS MADE FOR, THROUGH THE GITLET NODE (ADR-0109): the
-// node holds the carrier a seat's write states to its ceiling on its own chart
-// before anything is built, and hands it on, as the write stated it, to what
-// it lands the write as.
+// node bounds the write's carrier by its ceiling on its own chart before
+// building anything, and lands the write carrying it as stated.
 
 // carriers is a host's estate that records whom each push, merge and enqueue
-// it is asked is made for — by the push's id, the merge's push id, the entry
-// an enqueue makes — and asks each of the estate it wraps.
+// it is asked is made for (by push id, merge's push id, enqueue's entry id),
+// then asks the estate it wraps.
 type carriers struct {
 	host.Estate
 
@@ -85,9 +84,9 @@ func (e *carriers) Queue(ctx context.Context, p gitlet.QueueProposal) (gitlet.Qu
 	return e.Estate.Queue(ctx, p)
 }
 
-// applied is a data node's applier that keeps each record it applies — its
-// version and its payload, and for a merge what its push row keeps of whom the
-// merge was made for, read in the record's own transaction.
+// applied is a data node's applier that keeps each record it applies: its
+// version, its payload, and for a merge its push row's working_for, read in
+// the record's own transaction.
 type applied struct {
 	statelog.Applier
 
@@ -152,17 +151,13 @@ func (a *applied) find(is func(payload any) (*types.WorkingFor, bool)) (appliedR
 }
 
 // AN ENGINE WRITE LANDS CARRYING WHOM IT WAS MADE FOR: the Gitlet node hands
-// whom a seat's engine write is made for (gitlet.EngineWrite.WrittenFor) on to
-// what it lands the write as — the push a commit lands as, the merge record a
-// merge lands as, and the enqueue a merge onto a queue target is — as the write
-// stated it, never stated anew. alice's commit, merge and enqueue made for pat's
-// seat each reach the committer made for pat, and each lands carrying pat: the
-// commit's push entry, the merge record and the push row it lands, and the
-// enqueue record, each stamped version 2. Each made for nobody reaches it made
-// for nobody and lands carrying nothing, at version 1. The estate's refusal
-// before asking catches a request that states nothing, and the committer a
-// carrier its asker may not state; neither sees a node that states nobody in
-// place of the carrier it was handed, which only this does.
+// gitlet.EngineWrite.WrittenFor, as the write stated it, never stated anew, to
+// the commit's push entry, the merge record and its push row, and the enqueue
+// record. Made for pat's seat, each reaches the committer made for pat and
+// lands carrying pat at gitlet.WorkingForVersion; made for nobody, it
+// reaches it made for nobody and lands carrying nothing at version 1. The estate's refusal catches a request stating
+// nothing, and the committer a carrier its asker may not state; only this
+// catches a node stating nobody in place of the carrier it was handed.
 //
 // Mutations: the landing's proposal, the merge's or the enqueue's stating
 // nobody in place of the write's carrier, red.
@@ -179,9 +174,8 @@ func TestAnEngineWriteLandsCarryingWhomItWasMadeFor(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			want := tc.writtenFor.Carrier()
-			// version is what every record that carries it is stamped, and
-			// row what a push row keeps of it: the carrier's own version and
-			// its JSON, or the base and NULL for nobody.
+			// version is every carrying record's stamp, row a push row's
+			// working_for: the carrier's version and JSON, or 1 and NULL.
 			version, row := 1, sql.NullString{}
 			if want != nil {
 				encoded, err := json.Marshal(want)
@@ -276,19 +270,15 @@ func TestAnEngineWriteLandsCarryingWhomItWasMadeFor(t *testing.T) {
 // A GITLET NODE REFUSES A WRITE WHOSE CARRIER ITS CEILING DOES NOT BOUND, ON
 // ITS OWN CHART, BEFORE ANYTHING IS BUILT (ADR-0109; gitlet.EngineWrite's
 // WrittenForOn): only the chart tells a person's seat, which bounds nothing,
-// from a colleague's, whose ceiling the write must carry. So alice's commit
-// made for the seat lead — an agent's — with no ceiling, and one made for pat's
-// seat — a person's — under pat's ceiling, are each refused naming written_for,
-// with no push recorded and no object stored; made for pat with no ceiling,
-// and for lead under lead's, each lands. And a Gitlet node holding no chart
-// yet judges no carrier: a merge made for somebody there — which reads no
-// chart of its own where it carries no ceiling — is answered unready, about
-// that node, so a Gitlet node holding one builds it; made for nobody it is
-// judged as ever, and refused for a change the repository does not hold.
+// from a colleague's (an agent's, like lead's), whose ceiling the write must
+// carry. So a commit for lead with no ceiling, or for pat under pat's, is
+// refused naming written_for, recording no push and storing no object; for
+// pat with no ceiling, or lead under lead's, it lands. A node holding no chart
+// judges no carrier: a merge made for somebody is answered unready (no chart),
+// so a node holding one builds it; made for nobody, change_not_found as ever.
 //
-// Mutations: the Gitlet node skipping the chart's half — the commit for lead
-// with no ceiling, and the one for pat under pat's, land, red; a node with no
-// chart judging the carrier on none — the merge for pat is judged there, red.
+// Mutations, each red: skip the chart's half (the commits for lead with no
+// ceiling and pat under pat's land); judge the carrier with no chart.
 func TestAGitletNodeRefusesAWriteWhoseCarrierItsCeilingDoesNotBound(t *testing.T) {
 	t.Parallel()
 	c := newWriteCase(t, gitlettest.SoloOptions{}, map[string]string{"README.md": "one\n"})

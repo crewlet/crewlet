@@ -50,10 +50,9 @@ func blobOf(text string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// rawCommit is a commit on parent of parent's tree with files added, carrying
-// header lines extra and message exactly as given — hash-object writes a
-// commit's bytes with no rewrite, where commit-tree would rewrite a message
-// that is no UTF-8 — under a branch pushed to the repository as name.
+// rawCommit is a commit on parent of parent's tree plus files, carrying header
+// lines extra and message byte for byte, pushed as branch name. hash-object,
+// because commit-tree rewrites a message that is no UTF-8.
 func rawCommit(t *testing.T, c *writeCase, name, parent, extra, message string, files map[string]string) string {
 	t.Helper()
 	git := c.p.Git()
@@ -80,13 +79,12 @@ func rawCommit(t *testing.T, c *writeCase, name, parent, extra, message string, 
 	return commit
 }
 
-// A REVERT IS GIT'S REVERT: its tree and its message are what `git revert
-// --no-edit` makes of the same commit at the same head — a root commit's
-// among them, and a revert of a revert, which git calls a reapply — while a
-// merge commit is refused, merge_commit, since reverting one needs a mainline;
-// and a commit written in an encoding other than UTF-8 gives no message of
-// git's this engine can write, so its revert is refused asking for one, and
-// lands with one given.
+// A REVERT IS GIT'S REVERT: its tree and message are what `git revert
+// --no-edit` makes of the same commit at the same head, a root commit and a
+// revert of a revert (a reapply) among them. A merge commit is refused
+// merge_commit (reverting one needs a mainline); a commit encoded other than
+// UTF-8 has no git message the engine can write, so its revert is refused
+// asking for one, and lands with one given.
 func TestARevertIsGitsRevert(t *testing.T) {
 	t.Parallel()
 	c := newWriteCase(t, gitlettest.SoloOptions{}, map[string]string{"root.txt": "root\n"})
@@ -143,11 +141,10 @@ func TestARevertIsGitsRevert(t *testing.T) {
 	}
 }
 
-// A CHERRY-PICK IS GIT'S CHERRY-PICK -x: its tree and its message are what
-// `git cherry-pick -x` makes of the same commit at the same head — the footer
-// joined to a trailer block git recognises and set apart by a blank line from
-// anything else, the message cleaned of trailing white space, and a message
-// that is no UTF-8 written as git writes it.
+// A CHERRY-PICK IS GIT'S CHERRY-PICK -x: its tree and message are what `git
+// cherry-pick -x` makes of the same commit at the same head: the footer joined
+// to a trailer block git recognises, else set apart by a blank line; trailing
+// white space cleaned; a message that is no UTF-8 written as git writes it.
 func TestACherryPickIsGitsCherryPick(t *testing.T) {
 	t.Parallel()
 	c := newWriteCase(t, gitlettest.SoloOptions{}, map[string]string{"base.txt": "base\n"})
@@ -184,12 +181,11 @@ func TestACherryPickIsGitsCherryPick(t *testing.T) {
 	}
 }
 
-// A CONFLICT ANSWERS ITS STAGES AND STORES NOTHING: a revert that conflicts in
-// three hundred and one files answers as many as fit gitlet.MaxGitAnswerBytes
-// encoded — each with its three stage blobs, merge-tree's word for it and the
-// start of its file as merge-tree wrote it, markers in, cut at
-// gitlet.ConflictMarkedBytes — and counts the rest; nothing is uploaded and
-// nothing proposed.
+// A CONFLICT ANSWERS ITS STAGES AND STORES NOTHING: a revert conflicting in
+// 301 files answers as many as fit gitlet.MaxGitAnswerBytes encoded (each with
+// its three stage blobs, merge-tree's word for it and the start of its marked
+// file, cut at gitlet.ConflictMarkedBytes) and counts the rest; nothing is
+// uploaded or proposed.
 func TestAConflictAnswersItsStagesAndStoresNothing(t *testing.T) {
 	t.Parallel()
 	e := &recording{}
@@ -255,18 +251,17 @@ func longText(v string) string {
 	return b.String()
 }
 
-// AN ENGINE WRITE IS HELD TO THE RELAY'S FSCK: the objects it makes are
-// checked as receive-pack checks a person's push of them (index-pack --strict,
-// receive.fsckObjects) — a .gitmodules whose url git refuses, written as text
-// or named by an existing blob, and a .gitattributes past git's line bound are
-// rejected_object naming git's own message, which the relay refuses a person's
-// push of too; a component git reads as `.git` on NTFS is refused by name
-// before anything is read. None stores a byte or proposes anything.
+// AN ENGINE WRITE IS HELD TO THE RELAY'S FSCK: its objects are checked as
+// receive-pack checks a person's push (index-pack --strict,
+// receive.fsckObjects). A .gitmodules whose url git refuses, as text or named
+// by an existing blob, and a .gitattributes past git's line bound are
+// rejected_object naming git's message, as a person's push is refused; a
+// component NTFS reads as `.git` is refused by name before anything is read.
+// None stores or proposes anything.
 //
-// Mutations: index the pack with pack-objects' own index and no index-pack
-// --strict — the content rows land, red; drop the `:` rule from
-// ValidTreePath — the stream row reaches index-pack and is answered
-// rejected_object hasDotgit instead of the named refusal, red.
+// Mutations: index the pack without index-pack --strict: the content rows
+// land, red; drop the `:` rule from ValidTreePath: the stream row is answered
+// rejected_object hasDotgit, not the named refusal, red.
 func TestAnEngineWriteIsHeldToTheRelaysFsck(t *testing.T) {
 	t.Parallel()
 	e := &recording{}
@@ -307,12 +302,11 @@ func TestAnEngineWriteIsHeldToTheRelaysFsck(t *testing.T) {
 	}
 }
 
-// A LINK TAKES ITS TARGET AS TEXT: a put of mode 120000 naming a blob is
-// refused naming the field — a blob_oid would carry any blob, unread, as a
-// target — and one carrying its target as content lands a link whose blob is
-// that text.
+// A LINK TAKES ITS TARGET AS TEXT: a mode-120000 put naming a blob is refused
+// naming the field (a blob_oid would carry any blob, unread, as the target);
+// one carrying its target as content lands a link whose blob is that text.
 //
-// Mutation: admit blob_oid for a link — the first write lands, red.
+// Mutation: admit blob_oid for a link: the first write lands, red.
 func TestALinkTakesItsTargetAsText(t *testing.T) {
 	t.Parallel()
 	c := newWriteCase(t, gitlettest.SoloOptions{}, map[string]string{"README.md": "one\n"})
@@ -334,14 +328,14 @@ func TestALinkTakesItsTargetAsText(t *testing.T) {
 var hex40 = regexp.MustCompile(`[0-9a-f]{40}`)
 
 // AN ENGINE COMMIT READS NO WHOLE TREE (ADR-0092's anchor): a commit_files of
-// three files at depth three, in a repository whose sibling directories hold
-// ten files each and in one whose siblings hold ten thousand, runs the same
-// processes — never read-tree, write-tree, update-index, ls-tree or diff-tree
-// — handing them the same requests but for the ids: the touched prefixes, the
-// touched directories and the edit's file, nothing about a sibling.
+// three files at depth three runs the same processes (never read-tree,
+// write-tree, update-index, ls-tree or diff-tree) with the same requests but
+// for ids in a repository whose sibling directories hold ten files each and in
+// one whose siblings hold ten thousand: the touched prefixes and directories
+// and the edit's file, nothing of a sibling.
 //
-// Mutation: list the base tree with ls-tree -r — the forbidden process runs,
-// and its listing grows with the siblings, red.
+// Mutation: list the base tree with ls-tree -r: the forbidden process runs,
+// its listing growing with the siblings, red.
 func TestAnEngineCommitReadsNoWholeTree(t *testing.T) {
 	t.Parallel()
 	var runs [][]string
@@ -380,8 +374,8 @@ func TestAnEngineCommitReadsNoWholeTree(t *testing.T) {
 				"pack-objects", "index-pack", "rev-list", "merge-base"}, in.Args[0]) {
 				t.Errorf("the write ran %v, no process a commit's build or its landing runs", in.Args)
 			}
-			// The scratch's own path, which names the push and the fleet's
-			// directory, is no request about the repository.
+			// The scratch's path names the push and the fleet's directory,
+			// nothing of the repository.
 			stdin := strings.ReplaceAll(string(in.Stdin), in.Dir, "<scratch>")
 			if in.Args[0] == "pack-objects" || in.Args[0] == "index-pack" {
 				stdin = "" // its objects, as many in either repository
@@ -396,13 +390,12 @@ func TestAnEngineCommitReadsNoWholeTree(t *testing.T) {
 	}
 }
 
-// AN ENGINE WRITE NEVER WRITES IN A CACHE: every process of a build that
-// writes objects — hash-object, mktree, commit-tree, merge-tree, pack-objects,
-// index-pack — runs in the write's own scratch, named its push id, with the
-// copy as its alternate, for a commit and for a revert alike.
+// AN ENGINE WRITE NEVER WRITES IN A CACHE: every object-writing process of a
+// build (hash-object, mktree, commit-tree, merge-tree, pack-objects,
+// index-pack) runs in the write's own scratch, named its push id, with the
+// copy as its alternate, for a commit and a revert alike.
 //
-// Mutation: run any of them in the copy itself — its directory is the
-// incarnation's, red.
+// Mutation: run any of them in the copy, the incarnation's directory, red.
 func TestAnEngineWriteNeverWritesInACache(t *testing.T) {
 	t.Parallel()
 	c := newWriteCase(t, gitlettest.SoloOptions{}, map[string]string{"f.txt": "1\n"})

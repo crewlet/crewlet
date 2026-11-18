@@ -13,9 +13,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// introducing is entries of a push each: one before the group, sixty-four in
-// ONE record — sharing its position, so a page boundary falls inside it — and
-// one after; and every push id in log order.
+// introducing pushes one entry, then MaxPushesPerRecord in ONE record (one
+// position, so a page boundary falls inside it), then one more; it answers
+// every push id in log order and each record's position.
 func introducing(t *testing.T, n *node, id string) (want []string, positions []statelog.Position) {
 	t.Helper()
 	lone := func(push string) gitlet.PushEntry {
@@ -43,16 +43,15 @@ func introducing(t *testing.T, n *node, id string) (want []string, positions []s
 }
 
 // INTRODUCED PAGES IN POSITION ORDER: a repository's pushes in log order,
-// ascending over (After, Through] or descending below Before, a limit at a
-// time — sixty-four pushes in one record and a page boundary inside it, none
-// repeated and none skipped — each row the push as a Gitlet node's index is
-// built from it: who, where, when, the refs it LANDED and the commits it
-// introduced. A gap's range reads its pushes alone, and a read at session
-// waits for the position it names.
+// ascending over (After, Through] or descending below Before, with a page
+// boundary inside a record of sixty-four, none repeated or skipped; each row
+// is what a Gitlet node's index is built from: who, where, when, the refs it
+// LANDED and the commits it introduced. A gap's range reads its pushes alone,
+// and a session read waits for the position it names.
 //
 // Mutations: the keyset after a cursor without its push id (position > ?
-// alone) → a page boundary inside the record skips the rest of it; the
-// refused command kept as a move → the first push moves main.
+// alone) → a boundary inside the record skips the rest of it; the refused
+// command kept as a move → the first push moves main.
 func TestIntroducedPagesInPositionOrder(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -179,16 +178,14 @@ func TestAnIntroducedReadIsTheEnginesOwn(t *testing.T) {
 }
 
 // A DELTA SERVES THE PUSHES IT COVERS: asked for its pushes phase, a delta from
-// Since serves every push applied in (Since, its position] — here three pushes
-// in two records — each ONCE across pages of one row, in log order; never the
-// push AT Since, which the round before folded, and never one applied after
-// page 1's position, even while the snapshot is read, which the next delta
-// serves. A delta not asking serves none, and neither does a full answer,
-// whose pushes the backfill reads.
+// Since serves every push in (Since, page 1's position] — here three in two
+// records — each ONCE across one-row pages, in log order: never the push AT
+// Since (the round before folded it), nor one applied after page 1 while the
+// snapshot is read (the next delta's). A delta not asking serves none, nor
+// does a full answer, whose pushes the backfill reads.
 //
-// Mutation: the pushes phase reading position >= Since → p1, the push at
-// Since, is served again; bounded by each page's own checkpoint rather than
-// page 1's → p5 is served.
+// Mutation: the pushes phase reading position >= Since → p1 is served again;
+// bounded by each page's own checkpoint rather than page 1's → p5 is served.
 func TestADeltaServesThePushesItCovers(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -244,13 +241,12 @@ func TestADeltaServesThePushesItCovers(t *testing.T) {
 }
 
 // A PAGE OF PUSHES ENDS AT WHAT IT READS: a push row stores every command its
-// client sent, a refused one too, and the `introduced` read and a delta's
-// pushes phase send each push condensed to the refs it LANDED — so a push of
-// one branch beside sixty refused refs of the longest a push records is a few
-// hundred bytes as sent and some 24 KB as read. Each page ends at its byte
-// budget counting the commands it read as well as the rows it sends, about
-// three such pushes a page here, and paging still serves every push once and
-// in log order: ascending, descending and in a delta.
+// client sent, refused ones too, while the `introduced` read and a delta's
+// pushes phase send only the refs it LANDED: one branch beside sixty refused
+// refs of MaxRefNameBytes is a few hundred bytes sent and some 24 KB read.
+// Each page's byte budget counts the commands it read as well as the rows it
+// sends (about three such pushes a page here), and paging still serves every
+// push once, in log order: ascending, descending and in a delta.
 //
 // Mutation: either read counting a push by the row it sends alone → its first
 // page serves every push, reading all of their commands for one page's budget.

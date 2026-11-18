@@ -5,12 +5,11 @@ import (
 	"testing"
 )
 
-// A RUN'S CHARGE MOVES IN ITS PLACE: recharge holds a run in flight to a new
-// charge without a second slot — its own old charge out of the count — at
-// once where the new one is no larger, and otherwise as admit would admit it
-// beside every other run in flight and the room the latest pass kept
-// standing; a refusal keeps the old charge, and a run no longer in flight is
-// refused.
+// A RUN'S CHARGE MOVES IN ITS PLACE: recharge moves a run in flight to a new
+// charge without a second slot, its old charge out of the count: at once where
+// the new one is no larger, otherwise as admit would admit it beside every
+// other run and the room the latest pass kept standing. A refusal keeps the
+// old charge, and a run no longer in flight is refused.
 //
 // Mutations: count the old charge beside the new, and a charge the budget
 // holds in its place is held back; drop the old charge on a refusal, and the

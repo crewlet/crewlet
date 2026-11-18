@@ -20,14 +20,11 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// The item search's mode, through the wiring this package owns.
-//
-// `internal/search` certifies that a fan-out fuses the rankers a mode names,
-// and the query layer certifies that it hands the mode down. Neither reaches
-// the one line between them — [itemRanker.RankItems] building the fan-out's
-// query — so every `work_search`, and the dashboard's mode control over it,
-// could rank hybrid whatever was asked while both suites stayed green. These
-// cases stand the real chain up: a [worklet.Searcher] over [itemRanker] over a
+// The item search's mode, through the wiring this package owns:
+// [itemRanker.RankItems] builds the fan-out's query between what
+// `internal/search` and the query layer each certify, so a search ranking
+// hybrid whatever was asked passes both suites. These cases stand the real
+// chain up — a [worklet.Searcher] over [itemRanker] over a
 // [search.FanOut] with a [search.NodeScanner] on an indexed task corpus.
 
 const (
@@ -206,11 +203,10 @@ func TestWorkSearchHonoursTheModeThroughTheFanOut(t *testing.T) {
 // WITH NO PROVIDER, SEMANTIC SERVES NOTHING AND SAYS WHY — even while the
 // lexical index is still building.
 //
-// The building gate is the LEXICAL index's state. A semantic search never read
-// that index, so an empty semantic answer on a building node is not "wait for
-// the index": it is "there is nothing to rank meaning with", and answering the
-// first threw the second away. A hybrid search on the same node DID read the
-// lexical index, and its empty answer is still refused as building.
+// The building gate is the LEXICAL index's state, which a semantic search never
+// reads: its empty answer means "nothing to rank meaning with", not "wait for
+// the index". A hybrid search does read it, so its empty answer is still
+// refused as building.
 func TestASemanticWorkSearchWithNoProviderSaysSoEvenWhileBuilding(t *testing.T) {
 	t.Parallel()
 	db := modeTestStore(t)
@@ -298,10 +294,9 @@ func (failingEmbedder) Embed(context.Context, string) ([]float32, error) {
 	return nil, errors.New("the provider is rate limiting")
 }
 
-// A HIT SAYS HOW MUCH IT MATTERS. The command palette draws a ranked task
-// with the Board's priority bars, and a hit that carried no priority drew
-// every result at the same weight — an urgent outage beside a nice-to-have,
-// indistinguishable on the one surface a person searches from.
+// A HIT SAYS HOW MUCH IT MATTERS: the command palette draws a ranked task with
+// the Board's priority bars, and a hit without one draws every result at the
+// same weight.
 func TestAWorkSearchHitCarriesItsOwnPriority(t *testing.T) {
 	t.Parallel()
 	db := modeTestStore(t)

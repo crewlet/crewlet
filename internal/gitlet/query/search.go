@@ -19,50 +19,18 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 )
 
-// A SEARCH ([gitlet.GitSearch], M6-D12, M6-D13) reads a commit two ways, and
-// both answer RE2's matches, the same lines in the same order:
-//
-//   - THE INDEX PATH, where this node's copy keeps a code index answering for
-//     the commit searched (cache.Cache.IndexTip): the plan's candidates in
-//     every segment, kept where the tip map names them at a path the query's
-//     filter admits, read through one cat-file in path order and confirmed
-//     line by line (codeindex.Plan.Confirm).
-//   - THE GREP PATH, for everything else: git grep -E over one alternation
-//     of the escaped strings of the plan's most selective clause
-//     (codeindex.Plan.Grep), every line it
-//     answers confirmed the same way, and every file past
-//     gitlet.MaxIndexedFileBytes dropped by its size from ls-tree, as the index
-//     skips it.
-//
-// The FIRST of a `search: indexed` repository's two index holders, asked as
-// its walk's home, whose index does not yet answer for the default branch's
-// tip answers gitlet.UnreadyIndexBuilding, so the walk asks the next node in
-// the order — the second holder, which answers through its index where it
-// has it and greps where not — rather than reading on the slow path a node a
-// moment from its index. Only the first, and only as the home: every node
-// after it in the walk answers, so a search is never left unanswered while
-// both indexes catch up with a push, and a fleet of one Gitlet node, whose one
-// holder has none after it, greps at once (cache.IndexedTip.PassesOn).
-//
-// ONE BUDGET, gitlet.SearchBudget, bounds the whole search after the read's
-// share is taken: a search that runs it out answers what it found, in order,
-// Truncated, and memoizes nothing — its page is no function of its
-// arguments. One that stops at its limit of hits, or at the answer's bound,
-// is, and is memoized under the commit it read. The grep path's context pass
-// alone runs past it, until the read's answer falls due or its git runs out:
-// a pass either ends answers the files it read, Truncated, memoizing nothing.
-//
-// A SEARCH CONTINUED AFTER A PLACE (gitlet.SearchQuery.After) drops every line
-// at or before the place before its limit counts it, so a later page of a
-// long search answers the lines past it alone; the index path asks cat-file
-// for no file whose path sorts before the place's, and git grep, which reads
-// the commit whole, has those files' lines dropped as they stream.
-//
-// A FILE'S HITS ARE EMITTED AT ITS END (flush), with their matches, their
-// file's total where per_file asks it, and the lines around them where
-// context asks them: from the blob in hand through the index, and from one
-// cat-file after git grep ends (withHeldContext), since git grep's own context
-// lines cannot be told from its matches.
+// A SEARCH ([gitlet.GitSearch], M6-D12, M6-D13) answers RE2's matches, the
+// same lines in the same order, by either path, confirming every line
+// (codeindex.Plan.Confirm). THE INDEX PATH, where the copy's code index answers
+// for the commit (cache.Cache.IndexTip), reads the plan's candidates through
+// one cat-file in path order; THE GREP PATH greps the plan's one alternation
+// (codeindex.Plan.Grep), dropping files past gitlet.MaxIndexedFileBytes as the
+// index skips them. Only the first index holder, asked as the walk's home,
+// passes on (gitlet.UnreadyIndexBuilding) while its index lags the default
+// branch's tip, not grepping a moment before its index is ready; later nodes
+// answer, a lone holder by grep (cache.IndexedTip.PassesOn). Run out of
+// gitlet.SearchBudget (past the read's share), it answers its finds Truncated,
+// unmemoized (no function of its arguments); at its limit or bound, memoized.
 
 // searchTipKey and searchRefKey are a search's places in the map a memo key
 // reads whole ids from (read.memoKey): the commit searched and the whole ref
@@ -170,13 +138,9 @@ func (r *read) searchRead(ctx context.Context) (gitlet.GitAnswer, error) {
 	return a, nil
 }
 
-// searchTarget is a search's steps 5 and 7 — its grant judged and the commit
-// it reads resolved (searchTip) — with objects' ONE second look at the log's
-// head: NO REFUSAL IS CONCLUDED FROM A COPY THAT MAY BE BEHIND THE LOG, so a
-// grant the copy's row refuses, or a ref or commit the copy lacks, is judged
-// again once on a copy synced there, that look charged as objects charges it
-// and a refusal past the bucket saying it was not judged again
-// (gitlet.NotRejudged).
+// searchTarget is a search's steps 5 and 7 — its grant judged and its commit
+// resolved (searchTip) — with the one second look at the log's head that
+// objects takes, for objects' reason and charged as objects charges it.
 func (r *read) searchTarget(ctx context.Context) (ref, tip string, err error) {
 	for {
 		refused := r.grant()
@@ -211,9 +175,8 @@ func (r *read) searchTarget(ctx context.Context) (ref, tip string, err error) {
 }
 
 // searchTip is the whole ref the search names — the default branch's where
-// it names none, empty for a commit's id — and the commit it reads: the
-// copy's, at its position; absent where the copy holds no commit there,
-// which searchTarget looks for once more at the log's head.
+// it names none, empty for a commit's id — and the commit the copy holds
+// there; absent where it holds none, for searchTarget's second look.
 func (r *read) searchTip(ctx context.Context) (ref, tip string, absent bool, err error) {
 	name := r.q.Search.Ref
 	switch {
@@ -263,9 +226,8 @@ type searching struct {
 	limit int
 	// context and perFile are the query's (gitlet.SearchQuery.Context, PerFile).
 	context, perFile int
-	// readCtx is the read's own context, ending when its answer falls due: the
-	// grep path's context pass runs under it, so a search its own budget ended
-	// still answers its hits whole.
+	// readCtx is the read's own context, ending when its answer falls due:
+	// withHeldContext runs under it.
 	readCtx context.Context
 	// passCut is that the answer's due instant or the read's git ended the
 	// context pass: what it read is the answer, as a budget's end is.
@@ -335,8 +297,8 @@ func (s *searching) add(ctx context.Context, text []byte, line int) error {
 		f.matched++
 		switch {
 		case s.after.answered(f.path, n):
-			// AN EARLIER PAGE'S LINE, left out before the limit counts it:
-			// counted in its file's total alone.
+			// An earlier page's line: counted in its file's total, never
+			// against the limit.
 			return true
 		case s.perFile > 0 && f.matched > s.perFile:
 			return true
@@ -437,8 +399,7 @@ func (s *searching) viaIndex(ctx context.Context, view *cache.CodeIndexView) err
 	var files []indexedFile
 	for i := range view.Map.Len() {
 		path := string(view.Map.Path(i))
-		// A FILE BEFORE THE PLACE IS NEVER READ: no cat-file of it, and no
-		// line of it confirmed — an earlier page's.
+		// A file before the place is an earlier page's: never read.
 		if s.after.before(path) || !s.filter.Match(path) {
 			continue
 		}
@@ -458,8 +419,8 @@ func (s *searching) viaIndex(ctx context.Context, view *cache.CodeIndexView) err
 	for i, f := range files {
 		ids[i] = f.blob.String()
 	}
-	// One answer a line asked, in the order asked: a blob two paths hold is
-	// asked, read and confirmed once for each, as git grep reads it.
+	// A blob two paths hold is read and confirmed once per path, as git grep
+	// reads it, so catBlobs gets one id per file.
 	return s.catBlobs(ctx, "cat-file of the search's candidates", ids, func(i int, body []byte) error {
 		s.open(files[i].path, ids[i])
 		err := s.add(ctx, body, 0)
@@ -539,16 +500,15 @@ func (s *searching) viaGrep(ctx context.Context, tip string) error {
 	}
 	tail = append(tail, "--end-of-options", tip)
 	out := &grepStream{prefix: tip + ":", each: func(path string, line int, text []byte) error {
-		// git grep reads the commit whole; a line before the place is
-		// dropped here, before it is confirmed or counted, but for one of
-		// the place's own file, which counts in its total where per_file
-		// asks it.
+		// git grep reads the commit whole: a line before the place is
+		// dropped unconfirmed, save the place's own file's where per_file
+		// counts its total.
 		if large[path] || s.after.before(path) || s.perFile == 0 && s.after.answered(path, line) ||
 			!s.filter.Match(path) {
 			return nil
 		}
 		if path != s.file.path {
-			// git grep answers a file's lines together: one of another path
+			// git grep answers a file's lines together, so another path
 			// ends the file before it, read whole.
 			s.flush(nil)
 			if s.full {
@@ -593,11 +553,12 @@ func (s *searching) viaGrep(ctx context.Context, tip string) error {
 }
 
 // withHeldContext reads the grep path's held files (flush) through one
-// cat-file, attaching to each file's hits the lines around them and emitting
-// them in order. It runs under the read's own context, not the search's
-// budget, so a search its budget ended still answers its hits whole; a pass
-// the answer's due instant or the read's git ends (passCut) emits no file past
-// the first whose bytes did not arrive, and searchRead answers what it read.
+// cat-file, since git grep's own context lines cannot be told from its
+// matches, and emits each file's hits in order with the lines around them. It
+// runs under the read's own context, not the search's budget, so a search its
+// budget ended still answers its hits whole; a pass the answer's due instant
+// or the read's git ends (passCut) emits no file past the first whose bytes
+// did not arrive, and searchRead answers what it read.
 func (s *searching) withHeldContext() error {
 	held := s.held
 	s.held = nil
@@ -751,12 +712,11 @@ func withContext(body []byte, hits []gitlet.SearchHit, next, context int) {
 	}
 }
 
-// run runs one git of the search over the copy — git, which spells its own
-// Cmd where it meets the pool, so the writers gate reads every argument
-// list a search hands git — its deadline what is left of the read's budget
-// of git; done, where set, is what its stdout's reader says of the end of
-// the stream. A run the search stopped itself (errSearchFull, stopped)
-// answered all it needs.
+// run runs one git of the search, its deadline what is left of the read's
+// budget of git. git spells its own Cmd where it meets the pool, so the
+// writers gate reads every argument list a search hands git; done, where set,
+// is its stdout reader's verdict on the stream's end. A run the search
+// stopped itself (errSearchFull, stopped) answered all it needs.
 func (s *searching) run(ctx context.Context, what string, git func(deadline time.Duration) (gitproc.Result, error),
 	done func() error) error {
 

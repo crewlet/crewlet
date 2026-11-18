@@ -19,14 +19,10 @@ type sharedFleet = coord.Fleet
 // racedKey is the name the race cases mint.
 const racedKey = "iam/test-company-key"
 
-// racingFleet reproduces the interleaving that split a company's key: the
-// FIRST write of the key is held back until a second write has landed (or a
-// short grace passes), so the first writer's value is the one the store keeps
-// while the second writer has already read its own back.
-//
-// Without an exclusion around the mint, two minters both reach the write and
-// that ordering is certain. With one, a second write never comes, and the
-// grace lets the only writer through.
+// racingFleet forces the interleaving that splits a key under last-write-wins:
+// the FIRST write of the raced key waits until a second has landed (or a short
+// grace passes, letting a lone writer through), so the second writer has read
+// its own value back before the first lands.
 type racingFleet struct {
 	sharedFleet
 
@@ -47,8 +43,7 @@ func (f *racingFleet) PutSecret(ctx context.Context, rec coord.SecretRecord) err
 	return err
 }
 
-// CreateSecret is held back exactly as a put is, so a mint written either way
-// meets the same interleaving.
+// CreateSecret is held back exactly as a put is.
 func (f *racingFleet) CreateSecret(ctx context.Context, rec coord.SecretRecord) (bool, error) {
 	return f.race(ctx, rec.Name, func() (bool, error) {
 		return f.sharedFleet.CreateSecret(ctx, rec)
@@ -128,11 +123,9 @@ func mintConcurrently(t *testing.T, nodes []*Engine, fleet coord.Fleet) ([]strin
 
 // TWO NODES THAT FIND A COMPANY KEY ABSENT AT ONCE END UP WITH ONE KEY.
 //
-// The store is last-write-wins, and the read-back the mint used to rely on did
-// not make that harmless: a node that read its own write back before the other
-// node's landed went on deriving under a key the store no longer held — and a
-// blind is opaque, so nothing reports it. A fleet booting every node at once is
-// exactly when this happens.
+// The store is last-write-wins: a node that read its own write back before the
+// other's landed would derive
+// under a key the store no longer holds, and nothing reports it.
 func TestACompanyKeyIsMintedOnceWhenTwoNodesRaceForIt(t *testing.T) {
 	t.Parallel()
 	fleet := newRacingFleet()
@@ -152,13 +145,9 @@ func TestACompanyKeyIsMintedOnceWhenTwoNodesRaceForIt(t *testing.T) {
 
 // AND WHEN THE HOLD KEEPS NOBODY APART, THE STORE STILL DOES.
 //
-// The hold is a lease, and a lease cannot fence a write: a holder paused past
-// it — a GC stop, a coordination write that hangs and then lands — writes after
-// a second holder has minted and read its own key back. Two nodes with no
-// coordination store between them are that state with the timing removed: each
-// holds, each mints, and the first write lands after the second. A mint that
-// PUT its key split the company there; a mint that CREATES it leaves the second
-// write refused and both nodes deriving under the one key the store holds.
+// A lease cannot fence a write (a holder paused past it still writes). Two
+// nodes with no coordination store are that state without the timing: each
+// holds and mints, and only the CREATE refuses the later write.
 func TestACompanyKeyIsMintedOnceWhenTheHoldKeepsNobodyApart(t *testing.T) {
 	t.Parallel()
 	fleet := newRacingFleet()
@@ -179,9 +168,8 @@ func TestACompanyKeyIsMintedOnceWhenTheHoldKeepsNobodyApart(t *testing.T) {
 	}
 }
 
-// AND TWO GOROUTINES OF ONE NODE. The fleet's hold does not keep them apart —
-// a claim by the owner that already holds it answers yes — so the in-process
-// gate is the half that does.
+// AND TWO GOROUTINES OF ONE NODE: the fleet's hold answers yes to its own
+// holder again, so the in-process gate keeps them apart.
 func TestTwoCallersOnOneNodeMintOneKey(t *testing.T) {
 	t.Parallel()
 	fleet := newRacingFleet()

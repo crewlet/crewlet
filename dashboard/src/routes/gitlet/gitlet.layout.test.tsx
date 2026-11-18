@@ -393,28 +393,30 @@ test("a coloured diff's band holds its numbers, and a changed run keeps its unde
     ];
   };
   const heights = () =>
-    [...document.querySelectorAll<HTMLElement>(".diff-view__line")].map(
+    [...document.querySelectorAll<HTMLElement>(".crewlet-diff-view__line")].map(
       (line) => line.getBoundingClientRect().height,
     );
   for (const layout of ["unified", "split"] as const) {
-    mount(<DiffView hue="code" hunks={hunks} layout={layout} />);
+    mount(<DiffView hunks={hunks} layout={layout} />);
     const plain = await eventually(() => {
-      if (layout === "split") expect(document.querySelector(".diff-view--split")).not.toBeNull();
+      if (layout === "split")
+        expect(document.querySelector(".crewlet-diff-view--split")).not.toBeNull();
       const drawn = heights();
       expect(drawn.length).toBeGreaterThan(0);
       return drawn;
     });
     flushSync(() => root?.unmount());
     host?.remove();
-    mount(<DiffView hue="code" hunks={hunks} layout={layout} tokens={tokens} />);
+    mount(<DiffView hunks={hunks} layout={layout} tokens={tokens} />);
     const changed = await eventually(() => {
       const found = [
         ...document.querySelectorAll<HTMLElement>(
-          '.diff-view--code .diff-view__line:is([data-kind="add"], [data-kind="remove"])',
+          '.crewlet-diff-view__line:is([data-kind="add"], [data-kind="remove"])',
         ),
       ];
       expect(found).toHaveLength(3);
-      if (layout === "split") expect(document.querySelector(".diff-view--split")).not.toBeNull();
+      if (layout === "split")
+        expect(document.querySelector(".crewlet-diff-view--split")).not.toBeNull();
       return found;
     });
     for (const line of changed) {
@@ -422,9 +424,9 @@ test("a coloured diff's band holds its numbers, and a changed run keeps its unde
       const band = Number(/(-?[\d.]+)px/.exec(style.boxShadow)?.[1]);
       expect(band, `${layout}: ${style.boxShadow}`).toBeGreaterThan(0);
       const left = line.getBoundingClientRect().left + parseFloat(style.borderLeftWidth);
-      const numbers = line.querySelectorAll(".diff-view__number");
+      const numbers = line.querySelectorAll(".crewlet-diff-view__number");
       const last = numbers[numbers.length - 1]!.getBoundingClientRect();
-      const mark = line.querySelector(".diff-view__mark")!.getBoundingClientRect();
+      const mark = line.querySelector(".crewlet-diff-view__mark")!.getBoundingClientRect();
       expect(left + band, `${layout}: the band holds the numbers`).toBeGreaterThanOrEqual(
         last.right - 0.5,
       );
@@ -434,8 +436,8 @@ test("a coloured diff's band holds its numbers, and a changed run keeps its unde
     }
     expect(document.querySelectorAll(".code-syn-comment").length).toBeGreaterThan(0);
     expect(heights(), `${layout}: each line keeps its plain height`).toEqual(plain);
-    expect(document.querySelector('.diff-view__run [class*="code-syn-"]')).toBeNull();
-    const runs = document.querySelectorAll(".diff-view--code .diff-view__run");
+    expect(document.querySelector('.crewlet-diff-view__run [class*="code-syn-"]')).toBeNull();
+    const runs = document.querySelectorAll(".crewlet-diff-view__run");
     expect(runs.length, `${layout}: the edited line draws its runs`).toBeGreaterThan(0);
     for (const run of runs) {
       const style = getComputedStyle(run);

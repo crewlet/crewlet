@@ -83,19 +83,14 @@ func TestTheBoxIsListedThroughItselfAndBounded(t *testing.T) {
 	}
 }
 
-// A LISTING IS TOLD BY ITS EXIT, through a real shell, under both shells a box
-// runs commands in (a local box's sh and an E2B box's bash): a dir the
-// workspace holds lists its files, one it does not hold as a directory
-// (missing, a file, a link) is the caller's to name again
-// ([builtin.ErrNotADirectory]), and a workspace that is gone is said as that
-// ([builtin.ErrNoWorkspace]). A missing dir listed as empty, because find's
-// failure was lost in a pipeline whose status is head's, and a missing
-// workspace was told as a dir the caller named wrong.
-//
-// FIND'S OWN EXIT IS READ: a walk that stops partway is
-// [builtin.ErrListIncomplete] and never the part it printed, unless head cut
-// the output first; a box with no find is its image. And a dir whose name is a
-// find expression is a start point: `-delete` deleted the whole workspace.
+// A LISTING IS TOLD BY ITS EXIT, through a real shell, under sh (a local box)
+// and bash (an E2B box): a dir the workspace holds lists its files, one it does
+// not hold as a directory (missing, a file, a link) is [builtin.ErrNotADirectory]
+// and a gone workspace [builtin.ErrNoWorkspace], never an empty list from a
+// pipeline whose status is head's. FIND'S OWN EXIT IS READ: a walk stopped
+// partway is [builtin.ErrListIncomplete], never the part it printed, unless head
+// cut the output first, and a box with no find is its image. A dir named `-delete` is a start point, never
+// an expression that deletes the workspace.
 //
 // Mutation: drop the directory check, the workspace's own exit, the `./` before
 // the start point or the carried find status, or read find's failure under a
@@ -215,15 +210,11 @@ func sandboxWhy(err error) sandbox.Why {
 // writeTool writes an executable shell script named name into dir, where no
 // fork of this process can hold it open.
 //
-// A SCRIPT WRITTEN TO RUN AT ONCE CAN BE REFUSED THE RUN (ETXTBSY). os.WriteFile
-// closes its own descriptor, but a goroutine that forked while it was open
-// handed its child a copy, and Linux refuses to exec a file any process holds
-// open for writing. The listing's cases fork shells side by side and run the
-// tool the moment it is written, and a shell refused it exits 126, which a
-// listing reads as a box with no tools: the case fails on a class it never
-// asked about. syscall.ForkLock is what a fork takes for writing, so holding
-// it for reading while the file is open keeps every fork of this process out
-// of that window: no child can inherit the descriptor at all.
+// Linux refuses to exec a file any process holds open for writing (ETXTBSY),
+// and a goroutine forking while os.WriteFile's descriptor is open hands its
+// child a copy; a refused shell exits 126, which a listing reads as a box with
+// no tools. A fork takes syscall.ForkLock for writing, so holding it for
+// reading while the file is open keeps every child from inheriting it.
 func writeTool(t *testing.T, dir, name, body string) {
 	t.Helper()
 	syscall.ForkLock.RLock()
@@ -234,9 +225,8 @@ func writeTool(t *testing.T, dir, name, body string) {
 }
 
 // A TOOL RUNS THE MOMENT writeTool HANDS IT OVER, with goroutines of this
-// process forking beside it, as the listing's own shells do. The guard for
-// [writeTool]: the forkers are the point, since the descriptor that does the
-// refusing is one a fork of THIS process inherits.
+// process forking beside it: the forkers are the point, since the descriptor
+// that refuses the exec is one a fork of THIS process inherits.
 //
 // Mutation: take the fork lock out of writeTool and probes are refused.
 func TestAToolRunsTheMomentItIsWritten(t *testing.T) {
@@ -277,12 +267,11 @@ func TestAToolRunsTheMomentItIsWritten(t *testing.T) {
 }
 
 // ANY OTHER EXIT IS THE BOX'S, classed by what clears it: a box that cannot run
-// the shell tools every box has is its image, a setup somebody changes, and
-// one that timed the command out, killed it or answered an exit the command
-// never gives is the box failing on its side. A file check the box timed out
-// is never a path the caller named wrong, and neither is a 1: test's own
-// false, but also what a container runtime's CLI exits with when it fails
-// itself. Unclassed, each was told as a fault of this node.
+// the shell tools every box has is its image, a setup somebody changes; one
+// that timed the command out, killed it or answered an exit the command never
+// gives is the box failing on its side. A timed-out file check is never a path
+// the caller named wrong, and neither is a 1: test's own false, but also what a
+// container runtime's CLI exits with when it fails itself.
 //
 // Mutation: answer every exit as configuration, read a timed-out check or a 1
 // as a path that names no file, or drop the class, and a row goes red.
@@ -319,15 +308,14 @@ func TestABoxCommandsOtherExitsAreTheBoxs(t *testing.T) {
 	}
 }
 
-// ONLY THE RUN WORKING IN ITS BOX READS IT. A seat's executor is its harness's own
-// run in the box, and every call naming a box source is that run's, made while
-// it works: a row that is another seat's, has no box yet, is launching, parked
-// on a question, collected or reaped is no box. And the run's own box, read
-// while it works, is the one a publish reads.
+// ONLY THE RUN WORKING IN ITS BOX READS IT. A seat's executor is its harness's
+// own run in the box, and every call naming a box source is that run's, made
+// while it works: a row that is another seat's, has no box yet, is launching,
+// parked on a question, collected or reaped is no box.
 //
-// Mutation: admit the collected record again (StatusResumed), and the
-// collected case reads a box; refuse the running record, and the run's own
-// build is refused, which is what left every executor's `from_sandbox` dead.
+// Mutation: admit the collected record (StatusResumed), and the collected case
+// reads a box; refuse the running record, and the run's own `from_sandbox`
+// publish is refused.
 func TestOnlyTheRunWorkingInItsBoxIsABox(t *testing.T) {
 	t.Parallel()
 	turn := turnFor(t, "analyst")
@@ -454,10 +442,10 @@ func TestAnArtifactsLinkIsItsDashboardAddress(t *testing.T) {
 	t.Parallel()
 	id := artifacts.IDFor("op")
 	e := &Engine{externalBase: "https://crewlet.example.com"}
-	if got, want := e.artifactLink(id), "https://crewlet.example.com/dashboard#/artifacts/"+id.String(); got != want {
+	if got, want := e.ArtifactLink(id), "https://crewlet.example.com/dashboard#/artifacts/"+id.String(); got != want {
 		t.Errorf("link = %q, want %q", got, want)
 	}
-	if got := (&Engine{}).artifactLink(id); got != "" {
+	if got := (&Engine{}).ArtifactLink(id); got != "" {
 		t.Errorf("a deployment with no external url linked %q", got)
 	}
 	if deps := ArtifactToolDeps(&Engine{}); deps.Reader != nil {
@@ -471,7 +459,7 @@ func TestAnArtifactsLinkIsItsDashboardAddress(t *testing.T) {
 // node's own host is read.
 //
 // Mutation: drop the host check, and the turn reads a box this node cannot
-// reach — here, the double's, which every node of a test shares.
+// reach (here the double's, which every node of a test shares).
 func TestARunsBoxOnAnotherNodesHostIsNoBoxHere(t *testing.T) {
 	t.Parallel()
 	turn := turnFor(t, "analyst")

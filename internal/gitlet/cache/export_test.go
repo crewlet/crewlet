@@ -31,13 +31,12 @@ import (
 // synchronously, the moments a case must hold still, and what the cache
 // holds in memory read back.
 
-// JanitorPass runs one janitor pass between its ticks — a kicked one —
-// synchronously, as work of the cache's own (a stopped cache runs none).
+// JanitorPass runs one kicked (untimed) janitor pass synchronously, as the
+// cache's own work (a stopped cache runs none).
 func JanitorPass(c *Cache) { JanitorPassUnder(context.Background(), c) }
 
-// JanitorPassUnder is JanitorPass under ctx, as the janitor runs its passes
-// under the context Start was given: a case ends ctx part way through a pass,
-// as the engine stopping does.
+// JanitorPassUnder is JanitorPass under ctx, standing for Start's context: a
+// case cancels it mid-pass, as the engine stopping does.
 func JanitorPassUnder(ctx context.Context, c *Cache) {
 	if c.enter() {
 		c.janitorPass(ctx, false)
@@ -45,9 +44,9 @@ func JanitorPassUnder(ctx context.Context, c *Cache) {
 	}
 }
 
-// JanitorTick runs one of the janitor's TICKED passes, synchronously: the pass
-// JanitorPass runs, every repository's last use stamped, and the state of
-// every copy whose memo moved since it was last written written again.
+// JanitorTick runs one TICKED janitor pass synchronously: JanitorPass's work,
+// plus every last use stamped and every copy whose memo moved rewriting its
+// state.
 func JanitorTick(c *Cache) {
 	if c.enter() {
 		c.janitorPass(context.Background(), true)
@@ -55,10 +54,8 @@ func JanitorTick(c *Cache) {
 	}
 }
 
-// JanitorKicked reports whether a kick is waiting for the janitor, and takes
-// it, as MaintainerKicked does the maintainer's: in a cache never started
-// nothing else takes one, so a kick stays where it was sent until the case
-// reads it, and a case sees each one once.
+// JanitorKicked reports whether a kick waits for the janitor, and takes it: in
+// a cache never started nothing else takes one, so a case sees each once.
 func JanitorKicked(c *Cache) bool {
 	select {
 	case <-c.kicks:
@@ -102,9 +99,9 @@ func BeforeRemoving(o *Options, f func(path string)) {
 	o.knobs.removing = f
 }
 
-// BeforeMeasuring makes the janitor's measures call f as each is about to
-// list a directory: scratch/ itself, then each directory a listing under it
-// named; and each memo cohort a copy's listing measures.
+// BeforeMeasuring makes the janitor's measures call f before listing each
+// directory: scratch/, each directory listed under it, and each memo cohort a
+// copy's listing measures.
 func BeforeMeasuring(o *Options, f func(dir string)) {
 	if o.knobs == nil {
 		o.knobs = &knobs{}
@@ -112,9 +109,8 @@ func BeforeMeasuring(o *Options, f func(dir string)) {
 	o.knobs.measuring = f
 }
 
-// BeforeStatingMemo makes a copy's memo listing call f with each entry of a
-// cohort it measures as it is about to stat it, the cohort's listing having
-// named it; an error f answers is that stat's.
+// BeforeStatingMemo makes a copy's memo listing call f with each listed entry
+// of a cohort before stating it; an error f answers is that stat's.
 func BeforeStatingMemo(o *Options, f func(path string) error) {
 	if o.knobs == nil {
 		o.knobs = &knobs{}
@@ -131,9 +127,8 @@ func BeforeTrimming(o *Options, f func(dir string)) {
 	o.knobs.trimming = f
 }
 
-// TicksFrom makes the janitor take its ticks from ticks, in place of a
-// ticker of EvictInterval: a tick is delivered by a send, and a channel
-// nothing sends on is a janitor that never ticks.
+// TicksFrom makes the janitor tick on each send on ticks, in place of an
+// EvictInterval ticker; a channel nothing sends on never ticks it.
 func TicksFrom(o *Options, ticks <-chan time.Time) {
 	if o.knobs == nil {
 		o.knobs = &knobs{}
@@ -164,8 +159,7 @@ func BeforeRoundEnds(o *Options, f func(repo string)) {
 func KickPending(c *Cache) bool { return len(c.maintKicks) > 0 }
 
 // AfterSweep makes every full round call f with the incarnation's directory
-// once its sweep has made it the image, before what it left is held to the
-// pool's shape check.
+// once its sweep made it the image, before the pool's shape check.
 func AfterSweep(o *Options, f func(dir string)) {
 	if o.knobs == nil {
 		o.knobs = &knobs{}
@@ -242,18 +236,17 @@ func AdoptionSyncsCounted(o *Options, mu *sync.Mutex, n *int) {
 	}
 }
 
-// MaintainerPass runs one maintainer pass as work of the cache's own (a
-// stopped cache runs none), waits for every run it started to end, and
-// answers the repositories whose runs ran every step to its end.
+// MaintainerPass runs one maintainer pass as the cache's own work (a stopped
+// cache runs none), waits out every run it started, and answers the
+// repositories whose runs ran every step.
 func MaintainerPass(c *Cache) []string {
 	_, wait := StartMaintainerPass(c)
 	return wait()
 }
 
-// StartMaintainerPass runs one maintainer pass as work of the cache's own,
-// and answers the repositories it started runs on, sorted, as soon as it has
-// started them — the runs go on — with a wait that answers, once every one
-// has ended, those that ran every step to its end.
+// StartMaintainerPass runs one maintainer pass as the cache's own work and
+// answers, sorted, the repositories it started runs on without waiting for
+// them; wait answers, once every run has ended, those that ran every step.
 func StartMaintainerPass(c *Cache) (started []string, wait func() []string) {
 	if !c.enter() {
 		return nil, func() []string { return nil }
@@ -278,9 +271,8 @@ func StartMaintainerPass(c *Cache) (started []string, wait func() []string) {
 }
 
 // IndexRound runs a full round's index step (indexRound) on repoID's current
-// incarnation over packs — the rows a full round would have read — holding
-// the repository's write lock as a round does, and reports whether it wrote
-// an index.
+// incarnation over packs, standing for the rows a round reads, under the
+// write lock as a round holds it, and reports whether it wrote an index.
 func IndexRound(c *Cache, repoID string, packs []gitlet.PackRow) bool {
 	e := lookup(c, repoID)
 	if err := c.acquireWrite(context.Background(), e); err != nil {
@@ -297,12 +289,11 @@ func IndexRound(c *Cache, repoID string, packs []gitlet.PackRow) bool {
 	return c.indexRound(context.Background(), e, inc, snap)
 }
 
-// ForgetMaintenance takes every maintenance output — the multi-pack-index
-// with its bitmap and reverse index, the commit-graph — out of repoID's
-// current incarnation, off the disk and out of what the cache holds of it,
-// as if no index had been written there and no run had ever ended: the
-// maintainer's next pass finds it due, and a full round's index step finds
-// no index in its way. With nothing running on the repository.
+// ForgetMaintenance removes every maintenance output (the multi-pack-index
+// with its bitmap and reverse index, the commit-graph) from repoID's current
+// incarnation, on disk and in memory, as if no run had ever ended: the next
+// pass finds it due, and a full round's index step finds no index in its way.
+// Nothing may be running on the repository.
 func ForgetMaintenance(c *Cache, repoID string) error {
 	e := lookup(c, repoID)
 	e.mu.Lock()
@@ -322,11 +313,10 @@ func ForgetMaintenance(c *Cache, repoID string) error {
 	return nil
 }
 
-// SetBitmapLookupTable sets whether a bitmap the maintainer writes from now
-// on carries its lookup table (ServeConfig's pack.writeBitmapLookupTable): on
-// in production, off for BenchmarkMidx's arm without it. A bitmap already
-// written keeps what it was written with; ForgetMaintenance and a pass write
-// it again.
+// SetBitmapLookupTable sets whether bitmaps the maintainer writes from now on
+// carry their lookup table (ServeConfig's pack.writeBitmapLookupTable): on in
+// production, off for BenchmarkMidx's arm without it. A written bitmap keeps
+// its own until ForgetMaintenance and a pass rewrite it.
 func SetBitmapLookupTable(c *Cache, on bool) { c.noLookupTable.Store(!on) }
 
 // SetMaintenanceMemory sets what the maintenance runs beside the largest may
@@ -337,9 +327,8 @@ func SetMaintenanceMemory(c *Cache, n int64) { c.maintMemory = n }
 // charged at together.
 func MaintenanceMemory(c *Cache) int64 { return c.maintMemory }
 
-// SetNodeMemory makes every later read of the node's memory — each
-// maintainer pass's first step — answer bytes, from the case rather than the
-// pool.
+// SetNodeMemory makes every later read of the node's memory (each maintainer
+// pass's first step) answer bytes, in place of the pool's.
 func SetNodeMemory(c *Cache, bytes int64) {
 	c.memMu.Lock()
 	defer c.memMu.Unlock()
@@ -354,10 +343,9 @@ func NodeMemoryUnreadable(c *Cache, err error) {
 	c.memSource = func() (gitproc.Memory, error) { return gitproc.Memory{}, err }
 }
 
-// SetMaintenanceBudget makes the node's memory what leaves its background
-// work a budget of n — what the reserve fixed at Open plus n — from now on:
-// what everything in flight is held to together, and what one step's charge
-// may never exceed. Between passes.
+// SetMaintenanceBudget sets the node's memory to the reserve Open fixed plus
+// n, leaving background work a budget of n: what everything in flight is held
+// to together, and what no one step's charge may exceed. Between passes.
 func SetMaintenanceBudget(c *Cache, n int64) {
 	bytes := n + c.memReserve
 	SetNodeMemory(c, bytes)
@@ -367,21 +355,19 @@ func SetMaintenanceBudget(c *Cache, n int64) {
 	c.maint.setBudget(n)
 }
 
-// MemoryReserve is what a node of memory bytes whose git pool admits
-// transfers transfers and has cores read slots keeps of its memory for
-// everything but its background work.
+// MemoryReserve is what a node of memory bytes, whose git pool admits
+// transfers transfers and has cores read slots, keeps from background work.
 func MemoryReserve(transfers, cores int, memory int64) int64 {
 	return memoryReserve(transfers, cores, memory)
 }
 
-// MemoryReserved is what c keeps of the node's memory for everything but its
-// background work, as Open fixed it.
+// MemoryReserved is what c keeps of the node's memory from background work,
+// as Open fixed it.
 func MemoryReserved(c *Cache) int64 { return c.memReserve }
 
-// BitmapCharge, IndexCharge, GraphCharge and FsckCharge are the memory each
-// step over repoID's current incarnation is charged at against the node's
-// budget: its own figure an object, its fixed part, and room beside it for
-// one transfer of the repository.
+// BitmapCharge, IndexCharge, GraphCharge and FsckCharge are each step's
+// charge against the node's budget over repoID's current incarnation: its
+// per-object figure, its fixed part, and room for one transfer beside it.
 func BitmapCharge(c *Cache, repoID string) int64 { return chargeOf(c, repoID, BitmapBytesPerObject, 0) }
 
 // IndexCharge is the index without a bitmap's charge (BitmapCharge).
@@ -418,9 +404,8 @@ func ObjectsOf(c *Cache, repoID string) int64 {
 	return e.current.objects
 }
 
-// Indexed is what repoID's current incarnation holds of the maintainer's:
-// how many packs its multi-pack-index covers (0, none), whether it has its
-// bitmap, and whether the commit-graph is there.
+// Indexed is what repoID's current incarnation holds of the maintainer's: the
+// packs its multi-pack-index covers (0 for none), its bitmap, its commit-graph.
 func Indexed(c *Cache, repoID string) (packs int, bitmap, graph bool) {
 	e := lookup(c, repoID)
 	e.mu.Lock()
@@ -429,8 +414,8 @@ func Indexed(c *Cache, repoID string) (packs int, bitmap, graph bool) {
 }
 
 // HoldOther charges mem against the node's budget as a process beside the
-// maintenance runs — a round's index, a check — would be, and answers
-// whether it was admitted and a function taking it back out of flight.
+// maintenance runs (a round's index, a check), and answers whether it was
+// admitted and a release.
 func HoldOther(c *Cache, mem int64) (bool, func()) {
 	if c.maint.admitOther(mem) != admitted {
 		return false, func() {}
@@ -484,9 +469,9 @@ func QueueRebuild(c *Cache, repoID string) {
 	c.queueRebuild(e, e.current, RebuildShape, nil)
 }
 
-// StartMaintenanceOf asks for a run of repo as a pass asks of a candidate its
-// walk found runnable (startMaintenance), whatever has happened to the
-// repository since, and answers whether one started.
+// StartMaintenanceOf asks for a run of repo as a pass does of a runnable
+// candidate (startMaintenance), whatever has happened to it since, and answers
+// whether one started.
 func StartMaintenanceOf(c *Cache, repo string) bool {
 	lane := c.git.Slots(gitproc.ClassMaintenance)
 	m, _, _ := c.startMaintenance(context.Background(), lookup(c, repo), maintenanceRuns(lane), lane,
@@ -494,8 +479,8 @@ func StartMaintenanceOf(c *Cache, repo string) bool {
 	return m != nil
 }
 
-// MaintainerKicked reports whether a kick is waiting for the maintainer, and
-// takes it: a case that answers the kicks itself sees each one once.
+// MaintainerKicked reports whether a kick waits for the maintainer, and takes
+// it: a case answering kicks itself sees each once.
 func MaintainerKicked(c *Cache) bool {
 	select {
 	case <-c.maintKicks:
@@ -517,16 +502,14 @@ func Maintaining(c *Cache, repoID string) bool {
 }
 
 // RebuildWindow is how long after the last rebuild attempt the next is
-// refused, for an incarnation n attempts in a row stand behind.
+// refused, after n attempts in a row.
 func RebuildWindow(n int) time.Duration { return rebuildWindow(n) }
 
-// RebuildWhole is the last step of a request's repair alone (rebuild.go): the
-// whole rebuild of the incarnation failed was handed out of — joined,
-// refused by the same rules and counted as an ask of the incarnation's line,
-// as Cache.escalate asks it — seeded with no pack, so every pack is
-// downloaded. What the cases of the whole rebuild's own rules drive: a
-// request reaches it only once its in-place round and its scrub repaired
-// nothing, and then seeded with what the scrub found whole.
+// RebuildWhole is a request repair's last step alone (rebuild.go): a whole
+// rebuild of the incarnation failed was handed out of, joined, refused and
+// counted as Cache.escalate asks it, but seeded with no pack, so every pack
+// downloads. A request reaches it only after its in-place round and scrub
+// repaired nothing, seeded with what the scrub found whole.
 func RebuildWhole(ctx context.Context, c *Cache, failed Synced, f Failure) (Synced, error) {
 	if err := c.handedOut(failed, "a rebuild"); err != nil {
 		return Synced{}, err
@@ -541,8 +524,7 @@ func Total(c *Cache) int64 { return c.total() }
 // SetMaxBytes sets the cache's budget. Between syncs, with nothing running.
 func SetMaxBytes(c *Cache, n int64) { c.maxBytes = n }
 
-// NewHeat is a Heat counting on now from its first reading, as Open builds the
-// cache's own.
+// NewHeat is a Heat on now's clock from its first reading, as Open builds one.
 func NewHeat(now func() time.Time) *Heat { return newHeat(newHeatClock(now)) }
 
 // BuffersOut is the copy buffers the node's download slots hold now, and the
@@ -559,8 +541,8 @@ func InHand(c *Cache) (now, most int64) { return c.fetches.held.Load(), c.fetche
 // HandWaiters is how many of the node's downloads wait for a pack in hand.
 func HandWaiters(c *Cache) int64 { return c.fetches.handWaiting.Load() }
 
-// FileSyncWith makes the cache Open builds make every downloaded file
-// durable through fn in place of (*os.File).Sync.
+// FileSyncWith makes the cache Open builds sync every downloaded file through
+// fn in place of (*os.File).Sync.
 func FileSyncWith(fn func(f *os.File) error) func(*Options) {
 	return func(o *Options) {
 		if o.knobs == nil {
@@ -571,7 +553,7 @@ func FileSyncWith(fn func(f *os.File) error) func(*Options) {
 }
 
 // StagedWith makes the cache Open builds call fn with a bundle's object once
-// its round has made the bundle's files, as it hands the pack to its worker.
+// its round made the bundle's files, as it hands the pack to its worker.
 func StagedWith(fn func(object objstore.Key)) func(*Options) {
 	return func(o *Options) {
 		if o.knobs == nil {
@@ -581,9 +563,8 @@ func StagedWith(fn func(object objstore.Key)) func(*Options) {
 	}
 }
 
-// StagedWriteFails makes every write into a bundle's staged files, while the
-// cache Open builds downloads it, answer fn's error for the bundle's object
-// (nil to write).
+// StagedWriteFails makes every write to a bundle's staged files during a
+// download answer fn's error for the bundle's object (nil to write).
 func StagedWriteFails(fn func(object objstore.Key) error) func(*Options) {
 	return func(o *Options) {
 		if o.knobs == nil {
@@ -593,8 +574,8 @@ func StagedWriteFails(fn func(object objstore.Key) error) func(*Options) {
 	}
 }
 
-// AskingWith makes the cache Open builds call fn with a bundle's object as
-// its worker is about to ask for its GET, the bundle's files made.
+// AskingWith makes the cache Open builds call fn with a bundle's object just
+// before its worker asks for its GET, the bundle's files made.
 func AskingWith(fn func(object objstore.Key)) func(*Options) {
 	return func(o *Options) {
 		if o.knobs == nil {
@@ -696,8 +677,8 @@ func Retire(c *Cache, repoID string) bool {
 	return true
 }
 
-// Persist writes repoID's current incarnation's state from its in-memory
-// fields, as a round (round) or the maintainer does.
+// Persist writes repoID's current incarnation's state from memory, as a
+// round (round) or the maintainer does.
 func Persist(ctx context.Context, c *Cache, repoID string, round bool) error {
 	e := lookup(c, repoID)
 	e.mu.Lock()
@@ -706,19 +687,18 @@ func Persist(ctx context.Context, c *Cache, repoID string, round bool) error {
 	return c.persist(ctx, e, inc, round)
 }
 
-// MergeRefs merges moves onto the packed-refs in dir — one this cache wrote,
-// whose digest is digest — writing the merged file to w as a delta round's
-// refs step does, and answers how many refs it wrote.
+// MergeRefs merges moves onto dir's packed-refs (this cache's, of digest
+// digest) into w as a delta round's refs step does, and answers the refs
+// written.
 func MergeRefs(dir string, moves []gitlet.RefRow, digest string, w io.Writer) (int, error) {
 	var out refsFile
 	err := mergeDelta(dir, w, moves, nil, digest, &out)
 	return out.refs, err
 }
 
-// RoundPacksAt makes the cache Open builds write its round's own
-// multi-pack-index once a full round leaves n packs — MidxRoundPacks in
-// production — so a case exercises the round's index without pushing
-// hundreds of packs.
+// RoundPacksAt makes a full round write its own multi-pack-index once it
+// leaves n packs, in place of MidxRoundPacks, so a case reaches it without
+// pushing hundreds of packs.
 func RoundPacksAt(n int) func(*Options) {
 	return func(o *Options) {
 		if o.knobs == nil {
@@ -728,10 +708,9 @@ func RoundPacksAt(n int) func(*Options) {
 	}
 }
 
-// MidxPacksAt makes the cache Open builds find a repository due again once n
-// packs have gathered beside the maintainer's index — MidxPacks in
-// production — so a case reaches a run over that index without pushing
-// dozens of packs.
+// MidxPacksAt makes a repository due again once n packs gather beside the
+// maintainer's index, in place of MidxPacks, so a case reaches a run over that
+// index without pushing dozens of packs.
 func MidxPacksAt(n int) func(*Options) {
 	return func(o *Options) {
 		if o.knobs == nil {
@@ -742,7 +721,7 @@ func MidxPacksAt(n int) func(*Options) {
 }
 
 // OnRoundIndex makes the cache Open builds call fn with the incarnation's
-// directory every time a full round writes its own multi-pack-index there.
+// directory each time a full round writes its own multi-pack-index there.
 func OnRoundIndex(fn func(dir string)) func(*Options) {
 	return func(o *Options) {
 		if o.knobs == nil {
@@ -756,9 +735,8 @@ func OnRoundIndex(fn func(dir string)) func(*Options) {
 // its own multi-pack-index. Between rounds, with nothing running.
 func SetRoundPacks(c *Cache, n int) { c.roundPacks = n }
 
-// SetFetchConcurrency sets how many downloads one round runs at once — and
-// the installer's share of the node's, which is a round's (layers.go). Before
-// any sync.
+// SetFetchConcurrency sets how many downloads one round runs at once, which
+// is also the installer's share of the node's (layers.go). Before any sync.
 func SetFetchConcurrency(c *Cache, n int) {
 	c.fetchConcurrency = n
 	c.installer = newLayerInstaller(n)
@@ -772,8 +750,8 @@ func SetNodeFetches(c *Cache, n int64) { c.fetches = newFetchSlots(n) }
 // has against the estate at once. Before any sync.
 func SetMaxFullRounds(c *Cache, n int64) { c.full = newFullRounds(n, c.metrics) }
 
-// FullRounds is how many full reads hold one of the node's slots now, the
-// most that have at once, and how many wait for one.
+// FullRounds is how many full reads hold a node slot now, the most at once,
+// and how many wait for one.
 func FullRounds(c *Cache) (running, most, waiting int64) {
 	c.full.mu.Lock()
 	defer c.full.mu.Unlock()
@@ -790,8 +768,8 @@ func SetInstallHook(c *Cache, fn func(stage, packDir string)) { c.installHook = 
 // (ConfirmHint).
 func SetHashHook(c *Cache, fn func(pack string, bound time.Duration)) { c.hashHook = fn }
 
-// WriteLockHeld reports whether something holds repoID's write lock whole —
-// a round, or a check's listing — at this instant (entry.write).
+// WriteLockHeld reports whether something (a round, a check's listing) holds
+// repoID's write lock whole at this instant (entry.write).
 func WriteLockHeld(c *Cache, repoID string) bool {
 	e := lookup(c, repoID)
 	if !e.write.TryAcquire(1) {
@@ -823,8 +801,8 @@ func Waiting(c *Cache, repoID string) int {
 	return n
 }
 
-// Converged reports whether repoID's current incarnation has had a full
-// round in this process.
+// Converged reports whether repoID's current incarnation had a full round in
+// this process.
 func Converged(c *Cache, repoID string) bool {
 	e := lookup(c, repoID)
 	if e == nil {
@@ -841,9 +819,8 @@ func lookup(c *Cache, repoID string) *entry {
 	return c.entries[repoID]
 }
 
-// HashPacks hashes every pack in the incarnation directory dir as a check
-// does — each bundle's .pack, .idx and .rev back to back (hashBundle) —
-// answering the bytes it read: the share of a check BenchmarkVerify's
+// HashPacks hashes every pack bundle in the incarnation at dir as a check
+// does (hashBundle) and answers the bytes read: what BenchmarkVerify's
 // step=hash times.
 func HashPacks(ctx context.Context, dir string) (int64, error) {
 	packs, err := filepath.Glob(filepath.Join(dir, "objects", "pack", "pack-*.pack"))
@@ -870,8 +847,7 @@ func HashPacks(ctx context.Context, dir string) (int64, error) {
 
 // MarkWhole marks repoID's current incarnation to be read whole in place for
 // reason (dropping drops, for RebuildDerived), as a request's in-place repair
-// does before its round runs (markWhole) — and nothing more: no round is
-// asked.
+// does (markWhole), but asks no round.
 func MarkWhole(c *Cache, repoID string, reason RebuildReason, drops gitproc.Part) {
 	e := lookup(c, repoID)
 	e.mu.Lock()
@@ -880,8 +856,8 @@ func MarkWhole(c *Cache, repoID string, reason RebuildReason, drops gitproc.Part
 }
 
 // Reread marks every current incarnation to be read whole for reason, as a
-// code log recreated or gone back under the node does (Cache.reread) — and
-// nothing more: no round is asked.
+// code log recreated or rewound under the node does (Cache.reread), but asks
+// no round.
 func Reread(c *Cache, reason RebuildReason) {
 	c.reread(reason, func(*incarnation) bool { return true })
 }
@@ -904,9 +880,8 @@ func IndexRepair(c *Cache, repoID string) bool {
 	return e.current != nil && e.current.indexRepair
 }
 
-// Vouched is the paths, relative to the incarnation, of every file of
-// repoID's current incarnation this process vouches for at the identity it
-// has now (check.go), sorted.
+// Vouched is every file of repoID's current incarnation this process vouches
+// for at its current identity (check.go), by relative path, sorted.
 func Vouched(c *Cache, repoID string) []string {
 	e := lookup(c, repoID)
 	e.mu.Lock()
@@ -920,8 +895,8 @@ func Vouched(c *Cache, repoID string) []string {
 	return out
 }
 
-// VouchMemory is what holding the vouches of n packs — each pack's .idx and
-// .rev — costs the heap, as an incarnation holds them.
+// VouchMemory is the heap cost per pack of an incarnation's vouches for n
+// packs' .idx and .rev.
 func VouchMemory(n int) (perPack float64) {
 	inc := &incarnation{}
 	var key [hashTrailer]byte
@@ -941,9 +916,9 @@ func VouchMemory(n int) (perPack float64) {
 	return float64(after.HeapAlloc-before.HeapAlloc) / float64(n)
 }
 
-// CheckPiecesOf makes every hash read a file n bytes a slot, in place of
-// CheckPieceBytes, and tell f each piece's path once it is read, its slot still
-// held (held), and again once the slot is given back.
+// CheckPiecesOf makes every hash read n bytes a slot, in place of
+// CheckPieceBytes, and tell f each piece's path once read with its slot held
+// (held), and again once the slot is given back.
 func CheckPiecesOf(o *Options, n int64, f func(path string, held bool)) {
 	if o.knobs == nil {
 		o.knobs = &knobs{}
@@ -951,10 +926,9 @@ func CheckPiecesOf(o *Options, n int64, f func(path string, held bool)) {
 	o.knobs.checkPiece, o.knobs.pieceRead = n, f
 }
 
-// WantIndex makes repoID's current incarnation want the maintainer's
-// bitmapped index again over the packs it holds — as if its index had been
-// written without a bitmap — and its last run long ago, so the next pass runs
-// the index step over an index that has not changed.
+// WantIndex makes repoID's current incarnation want a bitmapped index again,
+// as if its index lacked a bitmap, and its last run long ago, so the next pass
+// runs the index step over an unchanged index.
 func WantIndex(c *Cache, repoID string) {
 	e := lookup(c, repoID)
 	e.mu.Lock()
@@ -976,10 +950,9 @@ func testImage() *image {
 	return im
 }
 
-// recordedChains is what the state at dir records each chain file of an
-// installed chain holds (chainWants), for a helper with no cache open: the
-// ids its two chains' records list, which is what a boot's first round holds
-// the chain files to.
+// recordedChains is what the state at dir records each installed chain file
+// holds (chainWants), for a helper with no cache open: what a boot's first
+// round holds the chain files to.
 func recordedChains(dir string) map[string][]byte {
 	inc := &incarnation{}
 	if raw, err := os.ReadFile(filepath.Join(dir, stateName)); err == nil {
@@ -991,10 +964,9 @@ func recordedChains(dir string) map[string][]byte {
 	return chainWants(inc)
 }
 
-// Unsound is every file of the incarnation at dir a scrub holds to its
-// checksum — each pack's .idx, .pack and .rev, and every derived file
-// (scrub.go), a chain file to what its state records — that fails it, by its
-// path relative to dir.
+// Unsound is every file of the incarnation at dir that fails a scrub's
+// checksum (scrub.go: each pack's files and every derived file, a chain file
+// against what its state records), by path relative to dir.
 func Unsound(dir string) ([]string, error) {
 	p := pieces{buf: make([]byte, copyBuffer), size: CheckPieceBytes}
 	files, wants, err := scrubFiles(testImage(), dir, recordedChains(dir))
@@ -1014,11 +986,10 @@ func Unsound(dir string) ([]string, error) {
 	return out, nil
 }
 
-// DeclareCheck makes c's declaration name declare check, after Open held
-// the declarations to Validate: a Check no reader of this build knows, which
-// Validate refuses — what a case sets to show that every reader of a derived
-// file's bytes reads its declaration's Check rather than holding every file
-// to a trailer. Nothing of c may be running.
+// DeclareCheck makes c's declaration name declare check after Open validated
+// it: a Check no reader knows, which Validate refuses, so a case shows every
+// reader of a derived file's bytes follows its declaration's Check rather than
+// assuming a trailer. Nothing of c may be running.
 func DeclareCheck(c *Cache, name DerivedName, check Check) {
 	for i := range c.image.decls {
 		if c.image.decls[i].Name == name {
@@ -1027,9 +998,9 @@ func DeclareCheck(c *Cache, name DerivedName, check Check) {
 	}
 }
 
-// ScrubListing is what a scrub of repoID's current incarnation would hold to
-// its bytes (scrubFiles) over c's own declarations, by path relative to the
-// incarnation — or the error the scrub would stop at before reading a byte.
+// ScrubListing is what a scrub of repoID's current incarnation would hash
+// (scrubFiles) under c's declarations, by relative path, or the error it would
+// stop at before reading a byte.
 func ScrubListing(c *Cache, repoID string) ([]string, error) {
 	e := lookup(c, repoID)
 	e.mu.Lock()
@@ -1065,8 +1036,7 @@ func ScrubbedFiles(dir string) (bytes int64, pieces int, err error) {
 }
 
 // Report hands the cache's observer one run, as the pool does after every
-// run (Cache.observe): what a case uses to report a run at the moment it
-// chooses.
+// run (Cache.observe), at the moment a case chooses.
 func Report(c *Cache, ran gitproc.Ran) { c.observe(ran) }
 
 // Settled reports whether repoID has no round running or queued, and its
@@ -1078,9 +1048,9 @@ func Settled(c *Cache, repoID string) bool {
 	return e.running == nil && e.next == nil && (e.current == nil || !e.current.repair.pending())
 }
 
-// HeldOff reports whether repoID has no round running or queued, and its
-// current incarnation's repair mark asks nothing a round can do now: every
-// finding left is a pack whose download is held off (repairMark.fetchFailed).
+// HeldOff reports whether repoID has no round running or queued and its
+// repair mark asks nothing a round can do now: every finding left is a pack
+// whose download is held off (repairMark.fetchFailed).
 func HeldOff(c *Cache, repoID string) bool {
 	e := lookup(c, repoID)
 	e.mu.Lock()
@@ -1098,9 +1068,8 @@ func RepairPending(c *Cache, repoID string) bool {
 	return e.current != nil && e.current.repair.pending()
 }
 
-// GraphFailed reports whether repoID's current incarnation's commit-graph
-// waits for the ordinary rules rather than being written first
-// (incarnation.graphFailed).
+// GraphFailed reports whether repoID's commit-graph waits for the ordinary
+// rules rather than being written first (incarnation.graphFailed).
 func GraphFailed(c *Cache, repoID string) bool {
 	e := lookup(c, repoID)
 	e.mu.Lock()
@@ -1108,10 +1077,9 @@ func GraphFailed(c *Cache, repoID string) bool {
 	return e.current != nil && e.current.graphFailed
 }
 
-// ScrubPass runs every scrub due now, one after another, as the scrubber's
-// pass does, and answers the repositories it scrubbed in order: what a case
-// runs instead of starting the scrubber, whose wake it would otherwise wait
-// for.
+// ScrubPass runs every scrub due now in turn, as the scrubber's pass does, and
+// answers the repositories scrubbed, in order, so a case need not wait for the
+// scrubber's wake.
 func ScrubPass(c *Cache) []string {
 	if !c.enter() {
 		return nil
@@ -1140,9 +1108,9 @@ func ScrubDue(c *Cache, repoID string) (why string, running bool) {
 	return why, e.current.scrubbing
 }
 
-// Scrubbed is when repoID's current incarnation's last scrub ended and
-// whether it found anything (zero and false before its first), and when its
-// bytes were last held to their checksums, which its interval runs from.
+// Scrubbed is when repoID's last scrub ended and whether it found anything
+// (zero and false before its first), and when its bytes were last checksummed,
+// which its interval runs from.
 func Scrubbed(c *Cache, repoID string) (at time.Time, found bool, base time.Time) {
 	e := lookup(c, repoID)
 	if e == nil {
@@ -1156,9 +1124,8 @@ func Scrubbed(c *Cache, repoID string) (at time.Time, found bool, base time.Time
 	return e.current.scrubbedAt, e.current.scrubFound, e.current.scrubBase
 }
 
-// Findings is the files a round's check or a scrub found failing that
-// repoID's repair mark still holds (repairMark.found), by their paths
-// relative to the incarnation, sorted.
+// Findings is the failing files repoID's repair mark still holds
+// (repairMark.found), by relative path, sorted.
 func Findings(c *Cache, repoID string) []string {
 	e := lookup(c, repoID)
 	if e == nil {
@@ -1177,11 +1144,10 @@ func Findings(c *Cache, repoID string) []string {
 	return out
 }
 
-// ScrubFor is the scrub a repair's step 3 asks of repoID's current
-// incarnation (scrubFor, as Cache.escalate asks it for callers whose failures
-// began at an unknown instant): what it answers failing, by path relative to
-// the incarnation, and the packs it answers whole — what a rebuild past it
-// links rather than downloads — both sorted.
+// ScrubFor is a repair's step-3 scrub of repoID's current incarnation
+// (scrubFor, as Cache.escalate asks it when failures began at an unknown
+// instant): the failing files by relative path, and the whole packs a rebuild
+// past it links rather than downloads, both sorted.
 func ScrubFor(c *Cache, repoID string) (damaged, whole []string, err error) {
 	e := lookup(c, repoID)
 	if e == nil {
@@ -1203,15 +1169,15 @@ func ScrubFor(c *Cache, repoID string) (damaged, whole []string, err error) {
 }
 
 // KickScrubber wakes the scrubber as a copy's first use since its scrub, a
-// report or an inherited copy's first round does: a case's kick while it
-// waits, which has it pass again and arm its wake anew.
+// report or an inherited copy's first round does: it passes again and re-arms
+// its wake.
 func KickScrubber(c *Cache) { c.kickScrubber() }
 
-// ScrubWakesWith makes the scrubber ask f for its wake at the next interval's
-// end — next, on the cache's clock — in place of a timer, which the channel
-// fires as: once that clock reaches next, and at once where it has
-// (clock.At). A case on a clock of its own sees when the scrubber means to
-// wake, and wakes it by moving the clock there.
+// ScrubWakesWith makes the scrubber ask f for its wake at next, the next
+// interval's end on the cache's clock, in place of a timer; the channel fires
+// once that clock reaches next, at once if it has (clock.At). A case on its
+// own clock sees when the scrubber means to wake, and wakes it by
+// moving the clock there.
 func ScrubWakesWith(o *Options, f func(next time.Time) <-chan time.Time) {
 	if o.knobs == nil {
 		o.knobs = &knobs{}
@@ -1219,9 +1185,8 @@ func ScrubWakesWith(o *Options, f func(next time.Time) <-chan time.Time) {
 	o.knobs.scrubWake = f
 }
 
-// ReadFails makes every hash a check or a scrub makes ask f before each piece
-// it reads, an error f answers being that read's: a disk failing under one
-// file.
+// ReadFails makes every check or scrub hash ask f before each piece it reads,
+// an error f answers being that read's: a disk failing under one file.
 func ReadFails(o *Options, f func(path string) error) {
 	if o.knobs == nil {
 		o.knobs = &knobs{}
@@ -1245,14 +1210,12 @@ func Quiet(c *Cache, repoID string) bool {
 	return e.running == nil && e.next == nil
 }
 
-// ValidateDerived is the check Open holds a build's declarations to
-// (validateAll): every declaration's Validate, and what holds only across
-// them.
+// ValidateDerived is Open's check of a build's declarations (validateAll):
+// each one's Validate, plus what holds only across them.
 func ValidateDerived(decls []Derived) error { return validateAll(decls) }
 
-// OwnersOf is every declaration of the build's whose Owns names rel — a path
-// relative to an incarnation, slash-separated — in declaration order: one
-// for a derived file, none for any other.
+// OwnersOf is every declaration whose Owns names rel (incarnation-relative,
+// slash-separated), in declaration order: one for a derived file, else none.
 func OwnersOf(rel string) []DerivedName {
 	dir, name := filepath.Split(filepath.FromSlash(rel))
 	dir = filepath.Clean(dir)
@@ -1267,8 +1230,8 @@ func OwnersOf(rel string) []DerivedName {
 	return out
 }
 
-// HoldersOf is every declaration of the build's a write of which holds rel
-// only while it runs (Write.Holds), in declaration order.
+// HoldersOf is every declaration with a write that holds rel only while it
+// runs (Write.Holds), in declaration order.
 func HoldersOf(rel string) []DerivedName {
 	dir, name := filepath.Split(filepath.FromSlash(rel))
 	dir = filepath.Clean(dir)
@@ -1283,15 +1246,13 @@ func HoldersOf(rel string) []DerivedName {
 	return out
 }
 
-// NoFixedParts opens a cache over DerivedFiles() with every write's fixed part
-// dropped (Write.BaseBytes: the index's IndexBaseBytes and every
-// commit-graph's GraphBaseBytes, which a publication's graph layer is charged
-// too, read from the graph's declaration), so a case's repositories of a few
-// objects are charged in the order a large repository's are — the bitmap the
-// largest of its steps, the graph the smallest — as MidxPacksAt lowers a
-// threshold: the case reaches one step refused beside the others without
-// pushing the two hundred thousand objects past which a real repository is.
-// A case about a fixed part itself opens a cache without it.
+// NoFixedParts opens a cache over DerivedFiles() with every Write.BaseBytes
+// dropped (IndexBaseBytes, and GraphBaseBytes, a publication's graph layer's
+// included), so a few-object repository's steps are charged in a large one's
+// order (bitmap largest, graph smallest): like MidxPacksAt, it lets a case
+// reach one step refused beside the others without pushing the ~200,000
+// objects a real repository needs for that order. A case about a fixed part
+// opens a cache without it.
 func NoFixedParts() func(*Options) {
 	decls := DerivedFiles()
 	for i := range decls {
@@ -1303,7 +1264,7 @@ func NoFixedParts() func(*Options) {
 	return WithDerived(decls)
 }
 
-// WithDerived opens a cache over decls in place of DerivedFiles(): a case
+// WithDerived opens a cache over decls in place of DerivedFiles(), so a case
 // proves the code reads the declarations by changing one.
 func WithDerived(decls []Derived) func(*Options) {
 	return func(o *Options) {
@@ -1314,9 +1275,8 @@ func WithDerived(decls []Derived) func(*Options) {
 	}
 }
 
-// StatingWith tells f the path, relative to its incarnation and
-// slash-separated, of every directory entry the cache stats to count its
-// bytes (image.sizes).
+// StatingWith tells f the incarnation-relative, slash-separated path of every
+// entry the cache stats to count its bytes (image.sizes).
 func StatingWith(f func(rel string)) func(*Options) {
 	return func(o *Options) {
 		if o.knobs == nil {
@@ -1326,10 +1286,9 @@ func StatingWith(f func(rel string)) func(*Options) {
 	}
 }
 
-// WriteCharge is what w is admitted at over repoID's current incarnation:
-// its own memory an object of what it covers — the repository, or the tail
-// for the node's tip — and the room for one transfer of the repository
-// beside it.
+// WriteCharge is w's admission charge over repoID's current incarnation: its
+// per-object memory over what it covers (the repository, or the tail for the
+// node's tip), plus room for one transfer beside it.
 func WriteCharge(c *Cache, repoID string, w Write) int64 {
 	if w.Step == StepTipGraph {
 		return TipCharge(c, repoID)
@@ -1338,13 +1297,12 @@ func WriteCharge(c *Cache, repoID string, w Write) int64 {
 }
 
 // PublishStep is a publication's `step` on the maintenance refusals' count and
-// gauge: background work of the maintainer's, beside its declared writes.
+// gauge: maintainer work beside its declared writes.
 const PublishStep = stepPublishName
 
-// BackfillStep takes the backfill's next step due and does it, synchronously
-// and owing no pace, as work of the cache's own: "check", "merge", "gap",
-// "history" or "horizon" for the step it took, "" when none was due — and the
-// error of a page the estate did not serve.
+// BackfillStep does the backfill's next due step synchronously, unpaced, as
+// the cache's own work: it answers the step ("check", "merge", "gap",
+// "history", "horizon", or "" when none was due) and a page's estate error.
 func BackfillStep(c *Cache) (string, error) {
 	if !c.enter() {
 		return "", ErrStopped
@@ -1358,9 +1316,9 @@ func BackfillStep(c *Cache) (string, error) {
 var workNames = map[backfillWork]string{workCheck: "check", workMerge: "merge", workGap: "gap",
 	workHistory: "history", workHorizon: "horizon"}
 
-// BackfillPick is the backfill's choice of its next step — the repository it
-// would take, "" for none — made and let go with the step not taken: the pick
-// alone, which a case runs beside the cache's readers so the two meet.
+// BackfillPick is the backfill's pick alone: the repository its next step
+// would take ("" for none), released untaken, for a case to race against the
+// cache's readers.
 func BackfillPick(c *Cache) (string, error) {
 	if !c.enter() {
 		return "", ErrStopped
@@ -1377,12 +1335,10 @@ func BackfillPick(c *Cache) (string, error) {
 	return t.e.id, nil
 }
 
-// SyntheticCopies adds n copies to c that hold no file — each a converged
-// incarnation whose index holds five vouched runs too far apart in size to
-// merge and whose next horizon is a day off, the first due of them with a gap
-// for the backfill to read — and marks each for the backfill's schedule, the
-// copy used most recently first: what BenchmarkBackfillPick picks among. It
-// answers their ids.
+// SyntheticCopies adds n file-less copies to c, each converged with five
+// vouched runs too unequal to merge and its next horizon a day off, the first
+// due of them with a gap to backfill, marks each for the schedule (most
+// recently used first), and answers their ids: BenchmarkBackfillPick's field.
 func SyntheticCopies(c *Cache, n, due int) []string {
 	now := c.now()
 	base := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 1}.Packed()
@@ -1414,11 +1370,10 @@ func SyntheticCopies(c *Cache, n, due int) []string {
 	return ids
 }
 
-// PickAndSettle is one pick of c's backfill among synthetic copies
-// (SyntheticCopies) and its step taken as done: the copy's gap closed — or
-// left open where keep, so the copy is due again, as a busy repository's
-// folds keep it — and the copy marked, as a step's end marks it. It answers
-// the copy picked, "" for none.
+// PickAndSettle picks among synthetic copies (SyntheticCopies) and settles the
+// step as done: the gap closed, or left open where keep so the copy stays due
+// as a busy repository's does, and the copy marked as a step's end marks it.
+// It answers the copy picked, "" for none.
 func PickAndSettle(c *Cache, keep bool) string {
 	t, _ := c.nextBackfill()
 	if t == nil {
@@ -1437,29 +1392,17 @@ func PickAndSettle(c *Cache, keep bool) string {
 }
 
 // BackfillAudit is every copy c's backfill schedule holds otherwise than a
-// look at it says (backfillDue): in another queue than its first step due,
-// under another key, or counted otherwise as behind — leaving out the copies
-// marked since the last pick, which the next pick looks at again. None for a
-// schedule every change to a copy's work has reached: a change no mark
-// follows is one the backfill never takes up, or takes up in the wrong order.
-//
-// EACH PLACE IS HELD TO A LOOK AS OF AN INSTANT IT STANDS FOR, never to how
-// far a clock has moved since it was made. A copy in a due queue, or in none,
-// is looked at as of c's now, which no later instant changes: a step fallen
-// due stays due. A copy in the LATER QUEUE is looked at as of the last instant
-// before its key — when its next step falls due, as the look that placed it
-// computed — since a look at or past that instant says what has fallen due by
-// then, which is the pick's to find as it takes the copy out of the queue,
-// and nothing of the place. Left out once c's clock had reached its key, as
-// it once was, such a copy passed the audit with any change no mark followed
-// whenever the clock had moved that far since the placement: on the machine's
-// clock, as far as a runner lost between the two — a retry window, five
-// seconds.
-//
-// AT ANY MOMENT: each copy's look and its place are read in one hold of its
-// lock, and every change to a copy's work is marked in the hold that makes it
-// (schedule.go), so a round, a scrub or a step half way through is no reason
-// to wait before asking.
+// look says (backfillDue): queued for another step than its first due, under
+// another key, or counted otherwise as behind; copies marked since the last
+// pick are left out, for the next pick to look at. Each is a change to a
+// copy's work no mark followed, which the backfill skips or takes out of order.
+// A copy in a due queue, or none, is looked at as of c's now (a due step stays
+// due); one in the later queue as of the instant before its key, since a look
+// at or past it finds what has fallen due, the pick's to find. Skipping it
+// once the clock passed its key would pass a missing mark whenever the clock
+// moved that far. Callable at any moment: each copy's look and place are read
+// in one hold of its lock, and every change to its work is marked in the hold
+// that makes it (schedule.go).
 func BackfillAudit(c *Cache) []string {
 	s := &c.sched
 	s.pick.Lock()
@@ -1473,9 +1416,8 @@ func BackfillAudit(c *Cache) []string {
 	for _, e := range entries {
 		held[e] = true
 	}
-	// Every copy a queue holds is one the cache holds, or one marked since
-	// it left — evicted or purged — which the next pick takes out; and the
-	// copies counted behind are those.
+	// A queued copy is one the cache holds, or one marked since it was evicted
+	// or purged, which the next pick takes out; the behind count covers both.
 	behind := 0
 	s.mu.Lock()
 	pending := map[*entry]bool{}
@@ -1538,12 +1480,11 @@ func BackfillAudit(c *Cache) []string {
 	return problems
 }
 
-// BackfillPass takes backfill steps until none is due, and answers every step
-// it took, in order: what a case runs in place of starting the backfill,
-// whose pace it would otherwise wait out. A step that fails is answered among
-// them, its error joined to the pass's, and the pass goes on to the other
-// repositories' steps, as the backfill does while the failing one waits out
-// its window — the pass, waiting nothing out, ends there.
+// BackfillPass takes backfill steps until none is due and answers them in
+// order, so a case need not wait out the backfill's pace. A failed step is
+// answered too, its error joined, and the pass goes on to other repositories'
+// steps as the backfill does while the failing one waits out its window, which
+// the pass does not wait.
 func BackfillPass(c *Cache) ([]string, error) {
 	var (
 		steps []string
@@ -1562,9 +1503,9 @@ func BackfillPass(c *Cache) ([]string, error) {
 	return steps, errors.Join(append(errs, errors.New("cache: the backfill never ran out of steps"))...)
 }
 
-// BackfillWakesWith makes the backfill ask f for each wait — after a page,
-// after a failure, or until the next horizon falls due — in place of a timer
-// of d: a case sees how long the backfill means to wait, and wakes it.
+// BackfillWakesWith makes the backfill ask f for each wait (after a page, a
+// failure, or until the next horizon) in place of a timer of d: a case sees
+// how long it means to wait, and wakes it.
 func BackfillWakesWith(o *Options, f func(d time.Duration) <-chan time.Time) {
 	if o.knobs == nil {
 		o.knobs = &knobs{}
@@ -1581,8 +1522,8 @@ func CountDecodes(o *Options, n *atomic.Int64) {
 	o.knobs.decodes = n
 }
 
-// IndexState is repoID's current incarnation's index of pushes as its record
-// holds it — every position packed — with the bytes its entry counts.
+// IndexState is a current incarnation's index of pushes as its record holds
+// it, every position packed, with the bytes its entry counts.
 type IndexState struct {
 	From, Through, GapFrom, GapThrough, Oldest int64
 	Complete                                   bool
@@ -1618,10 +1559,9 @@ func Index(c *Cache, repoID string) (IndexState, bool) {
 // RunRel is run n's path relative to its incarnation.
 func RunRel(n uint64) string { return runRel(n) }
 
-// AroundDropping makes every drop of a derived file (dropFor) call before
-// with the file's path relative to its incarnation once the file is in
-// trash/, and after once the incarnation's record of it has changed: a case
-// holds a drop on either side of that change.
+// AroundDropping makes every derived file's drop (dropFor) call before with
+// its relative path once it is in trash/, and after once the incarnation's
+// record changed: a case holds a drop on either side of that change.
 func AroundDropping(o *Options, before, after func(rel string)) {
 	if o.knobs == nil {
 		o.knobs = &knobs{}
@@ -1647,8 +1587,7 @@ func RunViaCodes() map[gitlet.PushVia]uint8 { return maps.Clone(runViaCodes) }
 // RunKindCodes: see RunViaCodes.
 func RunKindCodes() map[gitlet.PrincipalKind]uint8 { return maps.Clone(runKindCodes) }
 
-// MergesWith tells f how many runs each merge of an index of pushes the cache
-// Open builds stores merged.
+// MergesWith tells f how many runs each merge of an index of pushes merged.
 func MergesWith(o *Options, f func(runs int)) {
 	if o.knobs == nil {
 		o.knobs = &knobs{}
@@ -1656,9 +1595,9 @@ func MergesWith(o *Options, f func(runs int)) {
 	o.knobs.merged = f
 }
 
-// StateWriteFails makes every write of a repository's state by the cache Open
-// builds ask f first — round says whether a round writes it — and fail with
-// what it answers (nil to write).
+// StateWriteFails makes every write of a repository's state ask f first
+// (round: whether a round writes it) and fail with what it answers (nil to
+// write).
 func StateWriteFails(o *Options, f func(repo string, round bool) error) {
 	if o.knobs == nil {
 		o.knobs = &knobs{}
@@ -1666,8 +1605,8 @@ func StateWriteFails(o *Options, f func(repo string, round bool) error) {
 	o.knobs.stateWrite = f
 }
 
-// MappedRunsAt bounds the runs the cache Open builds holds mapped at once at
-// n, in place of the process's map count's share.
+// MappedRunsAt bounds the runs held mapped at once at n, in place of the
+// process's map-count share.
 func MappedRunsAt(n int) func(*Options) {
 	return func(o *Options) {
 		if o.knobs == nil {
@@ -1680,11 +1619,10 @@ func MappedRunsAt(n int) func(*Options) {
 // MappedRuns is how many runs c holds mapped now, and the most it may.
 func MappedRuns(c *Cache) (now, most int) { return c.maps.count(), c.maps.most }
 
-// MappedRunsOf is the bound on mapped runs a process whose map count is count
-// holds itself to.
+// MappedRunsOf is the mapped-run bound of a process whose map count is count.
 func MappedRunsOf(count int) int { return mappedRunsOf(count) }
 
-// FoldTimes tells f what each round's fold of its delta's pushes into the
+// FoldTimes tells f how long each round's fold of its delta's pushes into the
 // index of pushes took (foldPushes).
 func FoldTimes(o *Options, f func(took time.Duration)) {
 	if o.knobs == nil {
@@ -1693,12 +1631,11 @@ func FoldTimes(o *Options, f func(took time.Duration)) {
 	o.knobs.folded = f
 }
 
-// SyntheticIndex is an index of pushes holding pushes synthetic pushes in
-// runs runs of as many each — every push moving one branch and introducing
-// perPush commits of ids drawn as git's are, uniformly — each run built,
-// written and read back in memory as a Gitlet node's are: what
-// BenchmarkProvenance's lookup arm searches. It answers the index and the
-// bytes its runs hold.
+// SyntheticIndex is an index of pushes synthetic pushes split evenly over runs
+// runs, each push moving one branch and introducing perPush uniformly drawn
+// commits, every run built, written and read back in memory as a Gitlet
+// node's: BenchmarkProvenance's lookup arm. It answers the index and its runs'
+// bytes.
 func SyntheticIndex(tb testing.TB, runs, pushes, perPush int) (Provenance, int64) {
 	tb.Helper()
 	base := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 1}.Packed()
@@ -1722,10 +1659,9 @@ func SyntheticIndex(tb testing.TB, runs, pushes, perPush int) (Provenance, int64
 	return Provenance{runs: files, from: base - 1, indexed: true}, size
 }
 
-// SyntheticMerge is two adjacent runs of pushes synthetic pushes each — every
-// push moving one branch, or with eachRef a ref of its own, and introducing
-// one commit — built, written and read back in memory as a Gitlet node's are,
-// and a merge of the two into w: what BenchmarkProvenance's merge arm times.
+// SyntheticMerge is two adjacent in-memory runs of pushes synthetic pushes
+// each (one commit per push, on one branch or with eachRef a ref each) and a
+// merge of the two into w: what BenchmarkProvenance's merge arm times.
 func SyntheticMerge(tb testing.TB, pushes int, eachRef bool) func(w io.Writer) error {
 	tb.Helper()
 	base := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 1}.Packed()
@@ -1754,16 +1690,16 @@ func DrawnOID(name string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// MemoBytes is what the memo holds node-wide: the running total the janitor
-// holds to its share (MemoShare).
+// MemoBytes is the memo's node-wide running total, which the janitor holds to
+// its share (MemoShare).
 func MemoBytes(c *Cache) int64 { return c.memoBytes.Load() }
 
-// MemoStaged is what every read's run has staged for the memo and not yet
-// placed or given back: counted against its share with MemoBytes.
+// MemoStaged is what reads' runs have staged for the memo and not yet placed
+// or given back, counted against its share with MemoBytes.
 func MemoStaged(c *Cache) int64 { return c.memoStaged.Load() }
 
-// EvictToBudget runs the janitor's eviction step alone, synchronously — no
-// trim of the memo before it — and answers how many repositories it evicted.
+// EvictToBudget runs the janitor's eviction step alone (no memo trim first),
+// synchronously, and answers how many repositories it evicted.
 func EvictToBudget(c *Cache) int {
 	if !c.enter() {
 		return 0
@@ -1814,8 +1750,8 @@ func MemoTree(dir string) string { return filepath.Join(dir, memoRel) }
 // MemoCohortDir is cohort n's directory in the memo of the incarnation at dir.
 func MemoCohortDir(dir string, n uint64) string { return cohortDir(dir, n) }
 
-// MemoEntryFile is the file entry k of the copy s holds is in — in whichever
-// of its cohorts holds it, newest first — and "" where none does.
+// MemoEntryFile is the file holding entry k of s's copy, searched newest
+// cohort first, or "" where none does.
 func MemoEntryFile(s Synced, k MemoKey) string {
 	s.entry.mu.Lock()
 	cs := s.inc.derived[DerivedMemo].Cohorts
@@ -1837,8 +1773,8 @@ func exists(path string) bool {
 // MemoNewest is the node's newest cohort: where the next answer is placed.
 func MemoNewest(c *Cache) uint64 { return c.memoNewest.Load() }
 
-// MemoCohortsFile is the reservation of the memo's cohorts in the cache whose
-// root is dir: the newest cohort any of its processes may have placed in.
+// MemoCohortsFile is the cohort reservation of the cache rooted at dir: the
+// newest cohort any of its processes may have placed in.
 func MemoCohortsFile(dir string) string { return filepath.Join(dir, cohortsName) }
 
 // MemoCohortsPerShare is how many cohorts a memo at its share holds.
@@ -1855,8 +1791,8 @@ const MemoMaxTail = memoMaxTail
 // as the memo counts it.
 func MemoEntryBytes(n int) int64 { return memoBytesOf(int64(memoHeader + n)) }
 
-// MemoStagedBytes is what a page of a body of n bytes holds staged, before its
-// tail: its file's length, as the memo's share counts it.
+// MemoStagedBytes is a staged page's file length for an n-byte body, before
+// its tail, as the memo's share counts it.
 func MemoStagedBytes(n int) int64 { return int64(memoHeader + n) }
 
 // LinkWith makes every hard link a swap makes (swap.go) go through f in place
@@ -1870,9 +1806,8 @@ func LinkWith(f func(oldname, newname string) error) func(*Options) {
 	}
 }
 
-// SyncingWith makes the cache Open builds tell fn every directory a swap or
-// a state's write is about to sync (knobs.syncing): a case counts what a
-// swap's durability costs.
+// SyncingWith tells fn every directory a swap or a state write is about to
+// sync (knobs.syncing), so a case counts a swap's durability cost.
 func SyncingWith(fn func(dir string)) func(*Options) {
 	return func(o *Options) {
 		if o.knobs == nil {
@@ -1883,11 +1818,11 @@ func SyncingWith(fn func(dir string)) func(*Options) {
 }
 
 // Leaving is what is leaving repoID's current incarnation
-// (incarnation.leaving): each pack's files it holds where the rows no longer
-// place them, by the directory they are in joined with the checksum they are
-// named by — objects/pack/<cs>, or objects-dropping/pack/<cs> for the dropping
-// view — or with the file's name, where it carries none, each with the event
-// that took it out; nil when nothing is, or the cache holds no copy of repoID.
+// (incarnation.leaving): each pack the rows no longer place, keyed by its
+// directory joined with its checksum (objects/pack/<cs>, or
+// objects-dropping/pack/<cs> for the dropping view) or with its file name
+// where it has none, with the event that took it out; nil when nothing is, or
+// the cache holds no copy of repoID.
 func Leaving(c *Cache, repoID string) map[string]Event {
 	e := lookup(c, repoID)
 	if e == nil {
@@ -1905,10 +1840,9 @@ func Leaving(c *Cache, repoID string) map[string]Event {
 	return out
 }
 
-// Maintained is when the last run of the maintainer the duty cycle counts
-// ended on repoID's current incarnation, and how long it took
-// (incarnation.maintained): zero before its first, or where the cache holds
-// no copy of repoID.
+// Maintained is when the last duty-cycle-counted maintainer run on repoID's
+// current incarnation ended and how long it took (incarnation.maintained):
+// zero before its first, or where the cache holds no copy.
 func Maintained(c *Cache, repoID string) (time.Time, time.Duration) {
 	e := lookup(c, repoID)
 	if e == nil {
@@ -1923,8 +1857,7 @@ func Maintained(c *Cache, repoID string) (time.Time, time.Duration) {
 }
 
 // LayerOutcomes is every outcome of crewlet.code.cache.layers, from the
-// installer's own list, so a test asking for each one is asked for an
-// outcome the day the installer gains it.
+// installer's own list, so a test covering each covers a new one at once.
 func LayerOutcomes() []string {
 	out := make([]string, len(layerOutcomes))
 	for i, o := range layerOutcomes {

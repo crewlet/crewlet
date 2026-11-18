@@ -12,27 +12,23 @@ import (
 )
 
 // artifactsRegistrations is the artifacts domain's entry in the register
-// ([register]): its declaration, applier, write seams, barrier, generation
-// record, node gate and Tier A ceiling (`stream.artifacts_log_max_bytes`, read
-// through config.Stream.ArtifactsMaxBytes).
+// ([register]), with its Tier A ceiling `stream.artifacts_log_max_bytes`
+// (config.Stream.ArtifactsMaxBytes).
 //
-// A STRICT, IDENTITY-CLAIMING DOMAIN like the tracker's, the pages' and the
-// identity estate's, so it states a barrier (a `linearizable` read of an
-// artifact is a quorum-committed position), its own generation record, and the
-// node gate's writer: the trim counts nodes on this log, so one the gate could
-// not write would keep an evicted node counted here for ever. And its wake
-// feed: a comment record carries whom it wakes, and the feed derives each wake
-// from the committed record (ADR-0012, ADR-0154).
-// It keeps an inbox too: a comment record tells the people it concerns.
+// A STRICT, IDENTITY-CLAIMING DOMAIN like the tracker's, so it states a barrier
+// (a `linearizable` read is a quorum-committed position), its own generation
+// record, and the node gate's writer: the trim counts nodes on this log, and a
+// log the gate could not write would count an evicted node for ever. Its wake
+// feed derives each comment's wake from the committed record (ADR-0012,
+// ADR-0154), and its inbox tells the people a comment concerns.
 func artifactsRegistrations() []registration {
 	return []registration{{
 		Domain: artifactsdomain.Domain{},
 		Inbox:  true,
 		NewApplier: func(s *stateLog) (statelog.Applier, error) {
-			// WHAT EACH COMMITTED BATCH MOVED, told to every listener on this
-			// node: the serving origin's authorization cache and the socket
-			// hub, each of which serves only this node's own requests, so
-			// the apply on every data node is what reaches each of them.
+			// WHAT EACH COMMITTED BATCH MOVED, told to this node's listeners (the
+			// origin's authorization cache, the socket hub), which serve only
+			// this node's requests, so every data node's apply reaches its own.
 			return artifactsdomain.NewApplier(s.nodeID, s.artifactsMoved,
 				s.inboxFor(artifactsdomain.Domain{})), nil
 		},
@@ -52,11 +48,10 @@ func artifactsRegistrations() []registration {
 				Gates: artifactsdomain.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 		},
 		Barrier: artifactsdomain.EncodeBarrier,
-		// THE REFERENCE COMPANY'S WHOLE RATE, for the tracker's reason: a
-		// seat's artifact tools read at `linearizable`
-		// (statelog.ReadLevelDefaults), and the census does not say how a
-		// company's reads split between the logs a seat reads.
-		Trimmed:    artifactsdomain.EncodeTrimmed,
+		Trimmed: artifactsdomain.EncodeTrimmed,
+		// THE REFERENCE COMPANY'S WHOLE RATE, as the tracker's: artifact tools
+		// read at `linearizable` (statelog.ReadLevelDefaults), and the census
+		// does not say how reads split between the logs a seat reads.
 		Reads:      &statelog.ReadModel{PerSeatDay: statelog.LinearizableReadsPerSeatDay},
 		Generation: artifactsdomain.GenerationRecord{},
 		NewGate: func(s *stateLog, _ *runningLog,
@@ -64,9 +59,8 @@ func artifactsRegistrations() []registration {
 
 			w, err := artifactsdomain.NewWriter(artifactsdomain.WriterDeps{
 				Publisher: publisher, DB: s.estate().Reader(),
-				// THE GATE NEVER TRANSFERS: an eviction names a machine,
-				// and the writer's seat resolver is for a transfer's new
-				// owner, which this writer is never asked to record.
+				// THE GATE NEVER TRANSFERS: an eviction names a machine, and the
+				// seat resolver serves only a transfer's new owner.
 				SeatKind: func(context.Context, string) (iam.ActorKind, error) {
 					return "", errGateTransfers
 				},
@@ -77,8 +71,7 @@ func artifactsRegistrations() []registration {
 			return func(ctx context.Context, by iam.Principal, opID, node string,
 				readmit bool) (statelog.Result, error) {
 
-				// AS THE PRINCIPAL, recorded the way every write on this
-				// log names its author.
+				// AS THE PRINCIPAL, as every write on this log names its author.
 				actor := iam.ActorFor(by)
 				if readmit {
 					return w.ReadmitNode(ctx, actor, opID, node)
@@ -87,9 +80,9 @@ func artifactsRegistrations() []registration {
 			}, nil
 		},
 		OpsRetention: statelog.OpsRetention,
-		// THE WAKE FEED, over the log's own fleet-wide group: a comment's
-		// wake is derived from the committed record, never published by the
-		// writer's goroutine. See domainfeed.go.
+		// THE WAKE FEED, over the log's fleet-wide group: a comment's wake is
+		// derived from the committed record, never published by the writer
+		// (domainfeed.go).
 		Feed: func(_ *Engine, records domainFeed) (changefeed.Translator, changefeed.Opener) {
 			return artifactsdomain.NewTranslator(), artifactsdomain.FeedSource{Log: records}
 		},

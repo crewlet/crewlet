@@ -5,17 +5,12 @@ import (
 	"testing"
 )
 
-// EVERY DECODER ON THIS PATH READS THROUGH json.Number, so that is the shape a
-// model's number actually arrives in — the tool session's server does it for
-// every phase on this host (internal/toolsession), and the bridge serves the
-// executor's run through the same server.
-//
-// These readers only knew float64, and the failure was SILENT in both
-// directions: a `limit` fell through to its fallback, so a search quietly
-// returned the default page rather than the one the model asked for, and a
-// `points` was refused as "not a number" on a call that carried one. Nothing
-// logged either, because "the model did not send it" and "the model sent it in
-// a shape nobody reads" are the same branch.
+// EVERY DECODER ON THIS PATH READS THROUGH json.Number (internal/toolsession,
+// which the bridge serves the executor's run through too), so that is the shape
+// a model's number arrives in. A reader that misses it fails SILENTLY: a
+// `limit` falls to its fallback and a `points` is refused as "not a number",
+// and nothing logs it, since "not sent" and "sent in a shape nobody reads" are
+// the same branch.
 func TestNumericArgumentsArriveAsJSONNumbers(t *testing.T) {
 	args := map[string]any{
 		"limit":  json.Number("10"),
@@ -28,16 +23,15 @@ func TestNumericArgumentsArriveAsJSONNumbers(t *testing.T) {
 	if got := argFloat(args, "points"); got != 2.5 {
 		t.Errorf("argFloat = %v, want 2.5", got)
 	}
-	// A NUMBER WHERE A STRING BELONGS is a thing models do constantly, and
-	// this reader already tolerated the float64 spelling of it.
+	// A NUMBER WHERE A STRING BELONGS is common from models, and is read as
+	// its text in either spelling.
 	if got := argString(args, "name"); got != "42" {
 		t.Errorf("argString = %q, want %q", got, "42")
 	}
 }
 
-// AN ID PAST 2^53 is the whole reason the decoders read through json.Number,
-// and a reader that went via float64 would hand the rounded one back — the
-// exact defect the text form of a recorded call exists to prevent.
+// AN ID PAST 2^53 is why the decoders read through json.Number: a reader via
+// float64 would hand back the rounded one.
 func TestAWideIDReadsExactly(t *testing.T) {
 	args := map[string]any{"id": json.Number("9007199254740993")}
 	if got := argInt(args, "id", 0); got != 9007199254740993 {
@@ -48,11 +42,10 @@ func TestAWideIDReadsExactly(t *testing.T) {
 	}
 }
 
-// THE PRESENCE-REPORTING READERS KEEP THEIR OWN DISCIPLINE, whichever spelling
-// the number arrived in: a fraction is not a whole number of minutes — nor of
-// decimal places — and NaN and the infinities are not sizes a total can be
-// summed from. A json.Number is read as the decimal text it is, by the same
-// rule as a string.
+// THE PRESENCE-REPORTING READERS KEEP THEIR OWN DISCIPLINE in either spelling:
+// a fraction is not a whole number of minutes or decimal places, and NaN and
+// the infinities are not sizes. A json.Number is read as its decimal text, by
+// the rule a string is.
 func TestPresenceReportingReadersKeepTheirDisciplineOnJSONNumbers(t *testing.T) {
 	if n, ok := argIntValue(json.Number("15")); !ok || n != 15 {
 		t.Errorf("argIntValue(15) = %d, %v; want 15, true", n, ok)

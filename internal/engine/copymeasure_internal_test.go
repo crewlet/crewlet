@@ -10,11 +10,9 @@ import (
 )
 
 // A RESUME READS WHAT THE JOB'S COPY CARRIED, off the job's own record, whatever
-// that record says the figure came from: the job's own request as its
-// collection read it, or a figure carried along the copy's lineage where the
-// job made none (a capture's, a source a later build names), since a relaunch
-// that continues the copy in the job's box sends that copy's whole context
-// again before its brief either way. A record that holds none hands none.
+// source the record names (its own request, a capture's, a later build's): a
+// relaunch continuing the copy in the job's box resends that whole context
+// before its brief either way. A record that holds none hands none.
 //
 // Mutation: leave the record's measure out of the resume (runnerResume not
 // reading it), and every row but the last goes red.
@@ -39,15 +37,12 @@ func TestAResumeReadsWhatTheJobsCopyCarried(t *testing.T) {
 	}
 }
 
-// AN IN-BOX CONTINUATION IS HELD TO ITS COPY'S MEASURE, end to end, in a company
-// that keeps no session, where no capture measures the copy: the job's record
-// holds what its collection found its newest request carried
-// (sandbox.LaunchRecord.Context), the resume an answer drives reads it
-// ([runnerResume]), the relaunch carrying the round on in the job's box hands
-// its launch that copy's context (runner.Continuation.ContextTokens), and the
-// launch's floor for the copy is that context with the brief that continues it,
-// never the static floor beside the brief alone, which the copy's first request
-// would overrun by its whole context.
+// AN IN-BOX CONTINUATION IS HELD TO ITS COPY'S MEASURE, end to end, in a
+// company that keeps no session, where no capture measures the copy: the record's measure (sandbox.LaunchRecord.Context)
+// reaches the resume ([runnerResume]), the relaunch's
+// runner.Continuation.ContextTokens, and the launch's floor, which is that
+// context with the brief — never the static floor with the brief alone, which
+// the copy's first request would overrun by its whole context.
 //
 // Mutation: leave the record's measure out of the resume, and the copy is held
 // to the static floor with its brief.
@@ -67,8 +62,7 @@ func TestAnInBoxContinuationIsHeldToItsCopysMeasure(t *testing.T) {
 	}
 	logged := asking.calls(t, turnID)
 	resumed := asking.row(t, turnID)
-	// THE JOB'S RECORD AS ITS COLLECTION WROTE IT: a harness that ended its own
-	// run, whose newest request carried a context near a window's whole.
+	// The record as collection wrote it: an own-run end, a near-full window.
 	const copied = 150_000
 	resumed.Launch.HarnessEnd = sandbox.HarnessEndOwnRun
 	resumed.Launch.Context = &sandbox.SessionMeasure{Tokens: copied, Source: sandbox.MeasureRequest,

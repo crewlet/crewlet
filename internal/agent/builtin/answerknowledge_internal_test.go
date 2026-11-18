@@ -44,8 +44,8 @@ func TestACacheHitIsACopy(t *testing.T) {
 	}
 }
 
-// THE PLAN'S SIZE, pinned: 256 answers per node, which is what a cache asked
-// for no particular size holds.
+// THE CACHE'S SIZE, pinned: 256 answers per node, which is what a cache of no
+// stated size holds.
 func TestTheAnswerCacheHoldsTwoHundredFiftySixPerNode(t *testing.T) {
 	t.Parallel()
 	if AnswerCacheEntries != 256 {

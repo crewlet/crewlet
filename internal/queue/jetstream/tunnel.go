@@ -23,125 +23,71 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
-// tunnelDial bounds the tunnel's own dial to a member, its lookup included
-// ([memberDialer]): a request's term ([jsapi.RequestTerm]), because the dial
-// crosses the link, whose bottleneck every request across it is sized to
-// wait behind — up to four seconds of its rate across its two directions
-// together, and a round trip (crewlet/crewlet#1035) — and a connection's SYN
-// and SYN-ACK queue there like any other packet. The handshake behind it is
-// given a term too ([leafHandshakeTerm]).
+// tunnelDial bounds the tunnel's dial to a member, lookup included
+// ([memberDialer]), to a request's term ([jsapi.RequestTerm]): the dial
+// crosses the link, and its SYN and SYN-ACK queue at the bottleneck every
+// request across it is sized to wait behind. The handshake behind it has its
+// own term ([leafHandshakeTerm]).
 const tunnelDial = jsapi.RequestTerm
 
-// tunnelConnectTerm bounds a leaf's whole CONNECT exchange with its tunnel —
-// the dial to it, the request, and the tunnel's answer, its own dial to the
-// member inside it (nats-server's Proxy.Timeout): the tunnel's dial
-// ([tunnelDial]) and a read's term ([jsprovision.ReadTerm]) beside it, so a
-// dial that failed reaches the leaf as the tunnel's 502 naming why, inside
-// the leaf's term, where a term no longer than the dial would cut the leaf
-// first and leave it only a timeout to log. Left to nats-server it is the
-// leaf's dial timeout, one second, and a leaf whose link dropped could not
-// dial again while other flows kept the link's queue deep.
+// tunnelConnectTerm bounds a leaf's whole CONNECT exchange with its tunnel
+// (nats-server's Proxy.Timeout), the tunnel's dial to the member inside it:
+// that dial ([tunnelDial]) plus a read's term ([jsprovision.ReadTerm]), so a
+// failed dial reaches the leaf as the tunnel's 502 naming why. A term no
+// longer than the dial cuts the leaf first, leaving it only a timeout to log;
+// nats-server's default, a one-second dial timeout, leaves a leaf whose link
+// dropped unable to dial again while other flows keep the link's queue deep.
 const tunnelConnectTerm = tunnelDial + jsprovision.ReadTerm
 
-// tunnelCredentialTerm bounds how long the tunnel waits for a connection's
-// CONNECT, up to its credential: a read's term ([jsprovision.ReadTerm]). The
-// leaf writes its request the moment its dial to the tunnel returns, on
-// loopback, so it is read within microseconds; a caller that sends nothing
-// is closed a second later rather than at the leaf's whole connect term.
+// tunnelCredentialTerm bounds the wait for a connection's CONNECT: a read's
+// term ([jsprovision.ReadTerm]). The leaf writes its request as its loopback
+// dial returns, so a caller that sends nothing is closed a second later
+// rather than at the leaf's whole connect term.
 const tunnelCredentialTerm = jsprovision.ReadTerm
 
-// tunnelHeaderMax bounds a CONNECT request the tunnel reads, request line and
-// headers together: nats-server's is a request line naming a host and port,
-// a Host header and the Proxy-Authorization header, under 300 bytes for the
-// longest DNS name, so 4 KiB is room for any it sends and refuses a stream of
-// anything else at once.
+// tunnelHeaderMax bounds a CONNECT request, request line and headers
+// together: nats-server's is under 300 bytes for the longest DNS name, so
+// 4 KiB fits any it sends and refuses a stream of anything else at once.
 const tunnelHeaderMax = 4 << 10
 
 // tunnelHandshakes is how many connections the tunnel holds before they have
-// shown its credential. At that many, the next connection the tunnel takes
-// closes the OLDEST of them, never the new one: a caller that opens
-// connections and sends nothing — anything that reaches the loopback port,
-// a box sharing it among them — holds no place a leaf's attempt then needs.
-// The leaf's connection carries its CONNECT as it is taken, and leaves the
-// places once its credential is read ([tunnel.handshake]), so it is closed
-// only where the tunnel takes this many more connections between taking it
-// and reading the request already waiting in its socket. 64 makes that a
-// flood of connections at a pace that already starves any loopback
-// listener's backlog, and holds 64 descriptors and goroutines, for a second
-// each ([tunnelCredentialTerm]), at most: nothing a node can measure, where
-// the leaf itself needs two (an attempt beside the one it abandoned).
+// shown its credential. At that many, the next one taken closes the OLDEST,
+// never the new one, so callers on the loopback port that send nothing hold
+// no place a leaf's attempt needs: the leaf's carries its CONNECT as it is
+// taken and leaves its place once read ([tunnel.handshake]), so it is closed
+// only if this many more arrive first. 64 makes that a flood that already
+// starves any loopback listener's backlog, and costs at most 64 descriptors
+// and goroutines for a second each ([tunnelCredentialTerm]); the leaf needs
+// two (an attempt beside the one it abandoned).
 const tunnelHandshakes = 64
 
 // tunnelBuffer is what each direction of a tunnelled link is copied through:
-// one buffer of 32 KiB, which reads no more ahead of what its far side has
-// taken.
+// one 32 KiB buffer, reading no further ahead of what its far side took. The
+// back-pressure a direct socket gives is spread over two more sockets' kernel
+// buffers, which nothing the engine bounds counts: a window ends at a
+// stream's acknowledgement or a piece's arrival, both past them.
 const tunnelBuffer = 32 << 10
 
-// tunnelAcceptBackoff and tunnelAcceptBackoffMax bound the wait before the
-// tunnel accepts again after a failed accept — a process out of descriptors,
-// a connection reset before it was taken — doubling from the first to the
-// second, as net/http's server does.
+// tunnelAcceptBackoff and tunnelAcceptBackoffMax bound the wait before
+// accepting again after a failed accept (a process out of descriptors, a
+// connection reset before it was taken), doubling as net/http's server does.
 const (
 	tunnelAcceptBackoff    = 5 * time.Millisecond
 	tunnelAcceptBackoffMax = time.Second
 )
 
 // tunnel is a leaf's way to the members: an HTTP CONNECT proxy on loopback,
-// in the engine's own process, that the leaf's link to the members dials
-// through (nats-server's leaf remote Proxy option), so the link's upstream
-// socket is the engine's to read ([LinkMeter]).
+// in the engine's process, that the leaf's link dials through (nats-server's
+// leaf remote Proxy option, the one supported way onto a path whose dialer is
+// unexported), so the upstream socket is the meter's (package doc, "What a
+// link carries is read at its socket"). The leaf still signs the member's
+// nonce through it, so the keyed link (ADR-0094) is unchanged.
 //
-// # Why a tunnel
-//
-// A leaf's link is dialled by nats-server, which gives an embedding process
-// no way to reach the socket — its dialer is unexported — and no counter it
-// keeps moves before a whole message has crossed. Its Proxy option is the one
-// supported way to put the engine on the path: every attempt the leaf makes,
-// at a configured URL or one a member advertised, goes through the proxy, and
-// the bytes a member sends with the proxy's answer are kept. The leaf still
-// presents its nkey and signs the member's nonce, through the tunnel, so the
-// keyed link (ADR-0094) is unchanged; the link carries no TLS for the tunnel
-// to see.
-//
-// # What it does
-//
-// It listens on 127.0.0.1, takes one CONNECT a connection, and admits only
-// one that presents its credential: a user and password minted at each start
-// that only the in-process leaf server holds. It FORWARDS WHEREVER ITS
-// CREDENTIAL'S HOLDER ASKS, which is why nothing else holds it — a box
-// sharing the host's loopback reaches the port, and is answered 407. A
-// caller that connects and says nothing is closed a second later, and the
-// oldest such is closed at once when [tunnelHandshakes] are held, so no
-// number of idle connections keeps the leaf's own from being served. It
-// dials the host the CONNECT names as the external dial does
-// ([memberDialer]): resolved, its addresses shuffled, the budget shared. A
-// dial that fails is answered 502 with the dial's own error, so the leaf's
-// log says why. Then it copies each direction through one 32 KiB buffer,
-// and the upstream socket is the meter's.
-//
-// A CLOSE AT EITHER END CLOSES BOTH, at once: a member that went away is
-// seen by the leaf as its link closing, and it dials again, rather than
-// believing the link up until its own pings give it up four minutes later.
-//
-// IT LIVES AND DIES WITH THE LEAF SERVER: started before it, closed after
-// it, and a listener that stops accepting in between is the broker's death
-// ([Death]), so the node stops rather than run a leaf that can never link
-// again. A failed accept is otherwise tried again after a backoff.
-//
-// WHAT IT CHANGES ON THE PATH: one loopback hop, and the back-pressure a
-// direct socket's would give is spread over two more sockets' buffers, which
-// the kernel autotunes. Nothing the engine bounds counts those buffers: a
-// window ends at a stream's acknowledgement or a piece's arrival, both past
-// them. Its upstream socket keeps no TCP keepalive, as nats-server's own
-// dial of a leaf link keeps none (v2.15.2, util.go natsDialTimeout, which
-// leaves liveness to the protocol's pings, for links that pay per packet):
-// the leaf's pings find a member that vanished, as they do without the
-// tunnel.
-//
-// WHAT IT CANNOT CARRY: a link that upgrades to TLS. nats-server closes a
-// proxied remote whose member requires TLS (v2.15.2, leafnode.go), so a
-// leaf link that ever takes TLS takes it through an https proxy, or not
-// through this one.
+// It FORWARDS WHEREVER ITS CREDENTIAL'S HOLDER ASKS, so only the in-process
+// leaf server holds that credential, minted at each start; anything else on
+// loopback is answered 407. IT LIVES AND DIES WITH THE LEAF SERVER: started
+// before it, closed after it. A link needing TLS takes an https proxy, since
+// nats-server refuses TLS on a proxied remote (v2.15.2, leafnode.go).
 type tunnel struct {
 	ln          net.Listener
 	user, pass  string
@@ -185,8 +131,8 @@ func startTunnel(ctx context.Context, death *Death) (*tunnel, error) {
 			"the pod's lo is up and the process is not out of file descriptors", err)
 	}
 	dialer := newMemberDialer(tunnelDial)
-	// NO KEEPALIVE, as nats-server dials a leaf link: see [tunnel]'s "What
-	// it changes on the path".
+	// NO KEEPALIVE, as nats-server's own leaf dial keeps none (v2.15.2,
+	// util.go natsDialTimeout): the leaf's pings find a member that vanished.
 	dialer.connect = (&net.Dialer{KeepAlive: -1}).DialContext
 	t := newTunnel(context.WithoutCancel(ctx), ln, dialer, newLinkMeter(), death)
 	t.start()
@@ -258,8 +204,9 @@ func (t *tunnel) close() {
 }
 
 // accept takes connections until the listener closes: tried again after a
-// backoff on a failed accept, and the broker's death where the listener
-// closed before the tunnel was.
+// backoff on a failed accept, and the broker's death ([Death]) where the
+// listener closed before the tunnel did, so the node stops rather than run a
+// leaf that can never link again.
 func (t *tunnel) accept() {
 	defer t.wg.Done()
 	backoff := time.Duration(0)
@@ -373,8 +320,9 @@ func (t *tunnel) serve(down net.Conn) {
 		t.drop(down)
 		return
 	}
-	// Each direction until either ends, and then both are closed: see
-	// [tunnel]'s "A close at either end closes both".
+	// A CLOSE AT EITHER END CLOSES BOTH, so the leaf sees a member that went
+	// away as its link closing and dials again, rather than trust the link
+	// until its pings give it up four minutes later.
 	var once sync.Once
 	end := func() {
 		once.Do(func() {
@@ -394,8 +342,9 @@ func (t *tunnel) serve(down net.Conn) {
 }
 
 // handshake reads the CONNECT on down and, where it presents the credential,
-// dials the member it names: up is the metered upstream socket, and pending
-// what down sent after its request that the read took in with it.
+// dials the member it names as the external dial does ([memberDialer]): up is
+// the metered upstream socket, and pending what down sent after its request
+// that the read took in with it.
 func (t *tunnel) handshake(down net.Conn) (up net.Conn, pending io.Reader, ok bool) {
 	// THE REQUEST WITHIN A READ'S TERM, and held to its bound, so a
 	// connection that sends nothing, or anything but a CONNECT, holds

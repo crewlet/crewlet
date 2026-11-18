@@ -10,14 +10,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// The chat surface's own wiring guards.
-//
-// THE REGRESSION THESE EXIST FOR: the nine chat tools were written, tested,
-// catalogued and documented, and `equip` never assigned `deps.Chat` — so every
-// one of them was gated off against a zero [builtin.ChatDeps]. A company on
-// `chat.backend: chatlet` ran the domain, applied its records and woke its
-// seats about messages they had no tool to answer with, and nothing anywhere
-// went red. The same omission had already cost this surface its operator half.
+// The chat surface's own wiring guards: unless `equip` assigns `deps.Chat`,
+// every chat tool is gated off against a zero [builtin.ChatDeps] while a
+// Chatlet company's seats are still woken about messages they have no tool to
+// answer with, and nothing else goes red.
 
 // roomsNode is a publishing data node running Chatlet, with a router.
 func roomsNode(t *testing.T) *Engine {
@@ -112,15 +108,13 @@ func TestChatDepsAreEmptyWhereNoRoomsAreServed(t *testing.T) {
 	}
 }
 
-// THE SEARCH FOLLOWS THE COMPANY'S CHAT, NOT THIS NODE'S INDEX.
-//
-// The index a search reads is the serving data node's, beside the rooms that
-// node resolves the viewer's set from ([estate.ChatQuery]) — so a node holding
-// no data, which has no index at all, still offers its operator surface the
-// search, and so does a data node in a maintenance mode: the facade is a read,
-// and whether a surface hands it out there is that surface's decision (its
-// seats get no chat tools — [TestChatDepsAreEmptyWhereNoRoomsAreServed] — and
-// the operator's catalogue serves the log on the wiki's terms). A company whose
+// THE SEARCH FOLLOWS THE COMPANY'S CHAT, NOT THIS NODE'S INDEX: the index read
+// is the serving data node's, beside the rooms it resolves the viewer's set
+// from ([estate.ChatQuery]). So a node holding no data, and a data node in a
+// maintenance mode, still offer the operator surface the search: the facade is
+// a read, and whether a surface hands it out there is that surface's decision
+// (seats get no chat tools, [TestChatDepsAreEmptyWhereNoRoomsAreServed]; the
+// operator's catalogue serves the log on the wiki's terms). A company whose
 // chat is a vendor's has nothing to search.
 func TestChatSearchFollowsTheCompanysChat(t *testing.T) {
 	t.Parallel()

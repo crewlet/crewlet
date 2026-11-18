@@ -13,8 +13,8 @@ import (
 // servers, the repository's .mcp.json, a plugin's and the signed-in account's
 // connectors load, as they do for a person running Claude Code.
 //
-// Mutation: append --strict-mcp-config beside every file of servers, as the
-// runner used to, and this fails.
+// Mutation: append --strict-mcp-config beside every file of servers, and this
+// fails.
 func TestASeatsClaudeCodeRunStartsItsOwnMCPServersToo(t *testing.T) {
 	t.Parallel()
 	cmd := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x"}, executor.Paths{}, "/box/.crewlet/mcp.json"))
