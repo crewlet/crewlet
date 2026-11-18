@@ -49,6 +49,7 @@ import {
   type CodeChangeDetail,
   type CodeCommentRow,
   type CodeExcerpt,
+  type CodeFindingPathRow,
   type CodeFindingRow,
   type CodeReviewRow,
   type CodeReviewerRow,
@@ -66,7 +67,15 @@ import {
 export const CHANGE_POLL_MS = 60_000;
 /** A part of a change, as the page asks for it. */
 export type ChangePartName =
-  "reviewers" | "comments" | "reviews" | "findings" | "excerpts" | "standing" | "files" | "diff";
+  | "reviewers"
+  | "comments"
+  | "reviews"
+  | "findings"
+  | "excerpts"
+  | "standing"
+  | "files"
+  | "diff"
+  | "finding_paths";
 
 /** What a part's question is asked with: the change, the part, its page's bound where it lists, and `extra`. */
 export function changePartParams(
@@ -107,8 +116,9 @@ export function changePartParams(
 export function partMovedBy(change: CodeChangeDetail, part: ChangePartName | "said"): string {
   if (part === "files" || part === "diff") return String(change.version);
   const conversation = change.conversation;
-  // A FINDING ROW is raised or superseded by a review and moved by an answer: each speaks.
-  if (part === "said") {
+  // A FINDING ROW is raised or superseded by a review and moved by an answer: each
+  // speaks, and the findings counted by path move with them.
+  if (part === "said" || part === "finding_paths") {
     const { spoken_at = "", reviews = 0, open_findings = 0 } = conversation ?? {};
     return `${spoken_at}/${reviews}/${open_findings}`;
   }
@@ -171,6 +181,8 @@ const commentsOf = (a: CodeChangeAnswer) => a.comments ?? [];
 const findingsOf = (a: CodeChangeAnswer) => a.findings ?? [];
 const reviewersOf = (a: CodeChangeAnswer) => a.reviewers ?? [];
 const excerptsOf = (a: CodeChangeAnswer) => Object.values(a.excerpts ?? {});
+const findingPathsOf = (a: CodeChangeAnswer) => a.finding_paths ?? [];
+const findingPathId = (row: CodeFindingPathRow) => `${row.path}\n${row.state}\n${row.revision}`;
 const rowId = (row: { id: string }) => row.id;
 // A REVIEWER IS ASKED ONCE A CHANGE: the engine keys its row by the handle.
 const reviewerId = (row: CodeReviewerRow) => `${row.kind}:${row.reviewer}`;
@@ -187,7 +199,7 @@ const partNext = (a: CodeChangeAnswer) => a.next ?? "";
  */
 function usePagedPart<T>(
   change: CodeChangeDetail,
-  part: "reviews" | "comments" | "findings" | "excerpts" | "reviewers",
+  part: "reviews" | "comments" | "findings" | "excerpts" | "reviewers" | "finding_paths",
   pick: (a: CodeChangeAnswer) => readonly T[],
   idOf: (row: T) => string,
   extra: Readonly<Record<string, string | number | undefined>>,
@@ -252,6 +264,29 @@ export function usePagedFindings(
   moved: string,
 ): Paged<CodeFindingRow, CodeChangeAnswer> {
   return usePagedPart(change, "findings", findingsOf, rowId, { revision }, moved);
+}
+
+/**
+ * A change's findings counted by path, state and revision, followed to its last
+ * page as it arrives: its rows are few, and a badge from a partial read would
+ * undercount without saying so.
+ */
+export function usePagedFindingPaths(
+  change: CodeChangeDetail,
+): Paged<CodeFindingPathRow, CodeChangeAnswer> {
+  const paged = usePagedPart(
+    change,
+    "finding_paths",
+    findingPathsOf,
+    findingPathId,
+    {},
+    partMovedBy(change, "finding_paths"),
+  );
+  const { more, paging, pageError, next } = paged;
+  useEffect(() => {
+    if (more && !paging && pageError === null) next();
+  }, [more, paging, pageError, next]);
+  return paged;
 }
 
 /**

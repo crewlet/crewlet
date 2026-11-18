@@ -5,6 +5,7 @@
 import {
   Fragment,
   memo,
+  useCallback,
   useDeferredValue,
   useEffect,
   useMemo,
@@ -25,7 +26,7 @@ import {
 import { KINDS, type Grammar, type Kind, type State, type Token } from "~/lib/syntax/types.ts";
 import { codeRest } from "~/lib/useCodeQuery.ts";
 import type { DiffHunk, DiffSpan } from "~/components/DiffView.tsx";
-import type { CodeBlobAnswer, CodeDiffFile } from "~/protocol/index.ts";
+import { QueryError, type CodeBlobAnswer, type CodeDiffFile } from "~/protocol/index.ts";
 import "~/styles/gitlet-code.css";
 
 /** The one place a token's class is written (`styles/codehost.test.ts`). */
@@ -335,7 +336,7 @@ function hunkStates(grammar: Grammar, hunks: readonly DiffHunk[], side: Side): M
 }
 
 /** One side's grammar, its blob's states when read under the bound, and whether it is known yet. */
-interface SideRead {
+export interface SideRead {
   grammar: Grammar | null;
   lines: readonly string[] | null;
   states: readonly State[] | null;
@@ -354,19 +355,17 @@ function useSideRead(repo: string, path: string, oid: string | null, read: boole
   return { grammar, lines: blob.lines, states, fresh: blob.over || blob.failed };
 }
 
-/**
- * A diff's spans for DiffView: each side's line from its blob's state under the
- * bound, else from its hunk's start; plain while a blob is being read.
- */
-export function useDiffTokens(args: {
-  repo: string;
-  file: CodeDiffFile | undefined;
-  hunks: readonly DiffHunk[];
-}): ((side: Side, n: number) => readonly DiffSpan[] | null) | undefined {
-  const { repo, file, hunks } = args;
-  const binary = file?.binary === true;
+/** Both sides of a diff's file, read once and shared by its spans and its expansion. */
+export interface DiffSides {
+  before: SideRead;
+  after: SideRead;
+}
+
+/** Each side's blob of `file`, by its whole id, where it has a grammar and lines to colour. */
+export function useDiffSides(args: { repo: string; file: CodeDiffFile | undefined }): DiffSides {
+  const { repo, file } = args;
   // A PURE RENAME OR A MODE CHANGE has no lines, so no blob is read for it.
-  const read = !binary && (file?.added ?? 0) + (file?.deleted ?? 0) > 0;
+  const read = file?.binary !== true && (file?.added ?? 0) + (file?.deleted ?? 0) > 0;
   // A RENAME MAY CHANGE A FILE'S LANGUAGE, so each side takes its own path's.
   const before = useSideRead(
     repo,
@@ -375,6 +374,21 @@ export function useDiffTokens(args: {
     read,
   );
   const after = useSideRead(repo, file?.path ?? "", file?.new_oid ?? null, read);
+  return { before, after };
+}
+
+/**
+ * A diff's spans for DiffView: each side's line from its blob's state under the
+ * bound, else from its hunk's start; plain while a blob is being read.
+ */
+export function useDiffTokens(args: {
+  sides: DiffSides;
+  file: CodeDiffFile | undefined;
+  hunks: readonly DiffHunk[];
+}): ((side: Side, n: number) => readonly DiffSpan[] | null) | undefined {
+  const { sides: read, file, hunks } = args;
+  const binary = file?.binary === true;
+  const { before, after } = read;
   const { grammar: gb, lines: lb, states: sb, fresh: fb } = before;
   const { grammar: ga, lines: la, states: sa, fresh: fa } = after;
   const present = file !== undefined;
@@ -436,4 +450,66 @@ export function useHunkTokens(
         .tokens.map((t) => ({ end: t.end, className: t.kind ? SYNTAX_CLASS[t.kind] : null }));
     };
   }, [grammar, hunks]);
+}
+
+/** The lines of one blob a reader expands: from the copy held, else read by range and kept. */
+export interface ExpandLines {
+  line: (n: number) => string | undefined;
+  /** The blob's lines, once known. */
+  total: number | null;
+  /** Make lines `from` to `to` readable, saying the blob's length; a refusal says its sentence ("" for none). */
+  read: (from: number, to: number) => Promise<LinesRead>;
+}
+
+/** What a read of a blob's lines came to: refused, or readable with the blob's length where known. */
+export type LinesRead = { failed: string } | { failed: null; total: number | null };
+
+/** Expand a diff's gaps from blob `oid`: `held` its whole lines where the syntax read holds them. */
+export function useExpandLines(
+  repo: string,
+  oid: string | null,
+  held: readonly string[] | null,
+): ExpandLines {
+  const kept = useRef(new Map<string, { lines: Map<number, string>; total: number | null }>());
+  const [version, readNew] = useState(0);
+  const at = oid ? kept.current.get(oid) : undefined;
+  // ONE FUNCTION UNTIL A READ LANDS, so a host's memo over it holds.
+  const line = useCallback(
+    (n: number) => (held ? held[n - 1] : oid ? kept.current.get(oid)?.lines.get(n) : undefined),
+    [held, oid, version],
+  );
+  const total = held ? held.length : (at?.total ?? null);
+  const read = async (from: number, to: number): Promise<LinesRead> => {
+    if (held) return { failed: null, total: held.length };
+    if (!oid) return { failed: "" };
+    const range = kept.current.get(oid) ?? { lines: new Map<number, string>(), total: null };
+    kept.current.set(oid, range);
+    let want = from;
+    while (want <= to && range.lines.has(want)) want++;
+    if (want > to) return { failed: null, total: range.total };
+    try {
+      let text = "";
+      let cursor = "";
+      do {
+        const answer = await codeRest.query("code_blob", {
+          name: repo,
+          ref: oid,
+          start_line: want,
+          end_line: to,
+          ...(cursor ? { cursor } : {}),
+        });
+        const page = answer.blob;
+        if (!page || page.binary) return { failed: "" };
+        range.total = page.lines;
+        text += page.text ?? "";
+        cursor = answer.next ?? "";
+      } while (cursor);
+      linesOf(text).forEach((t, i) => range.lines.set(want + i, t));
+      readNew((n) => n + 1);
+      return { failed: null, total: range.total };
+    } catch (err) {
+      return { failed: err instanceof QueryError ? (err.detail ?? "") : "" };
+    }
+  };
+  return { line, total, read };
 }

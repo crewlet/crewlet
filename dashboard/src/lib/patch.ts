@@ -20,12 +20,12 @@
 import type { DiffHunk, DiffLine } from "~/components/DiffView.tsx";
 
 /** A hunk's header: where it starts on each side, and how many lines it spans there. */
-const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+export const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
 
 /** One file's patch, as hunks with their lines numbered on both sides. */
 export function parsePatch(patch: string): DiffHunk[] {
-  const hunks: { lines: DiffLine[]; skipped: number }[] = [];
-  let current: { lines: DiffLine[]; skipped: number } | null = null;
+  const hunks: { lines: DiffLine[]; skipped: number; header: string }[] = [];
+  let current: { lines: DiffLine[]; skipped: number; header: string } | null = null;
   let before = 0;
   let after = 0;
   // WHERE THE LAST HUNK ENDED in the older text: the line after its last.
@@ -40,7 +40,7 @@ export function parsePatch(patch: string): DiffHunk[] {
       // saying "before the first line".
       before = oldLines === 0 ? oldStart + 1 : oldStart;
       after = newStart === 0 ? 1 : newStart;
-      current = { lines: [], skipped: Math.max(0, before - ended) };
+      current = { lines: [], skipped: Math.max(0, before - ended), header: raw };
       ended = before + oldLines;
       hunks.push(current);
       continue;

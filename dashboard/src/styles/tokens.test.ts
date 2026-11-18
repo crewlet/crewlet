@@ -55,6 +55,11 @@ const SCRIPT_DECLARED: { name: string; by: string; why: string }[] = [
     by: "routes/spend/Budgets.tsx",
     why: "TRACKS, the one track list the company's budget row and the seats' table are both handed, set on .budget-row",
   },
+  {
+    name: "--code-gap-digits",
+    by: "routes/gitlet/change/FileStack.tsx",
+    why: "the digits of a diff's longest line number, set on .code-gap so its controls fill the numbers' gutter the kit's DiffView draws",
+  },
 ];
 
 /** Every stylesheet under `dashboard/src`, wherever a screen keeps one. */
