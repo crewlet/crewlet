@@ -38,10 +38,9 @@ func seedSegments(t *testing.T, log *store.EventLog, id string, at time.Time, se
 	}
 }
 
-// selfIterated is the shape of a turn whose first execute ran out of rounds:
-// it parked at each launch, its middle segment carries the review that sent
-// the work back, and its last the review that accepted the redone work. Each
-// earlier account sorts above the last byte for byte, as on the live turns.
+// selfIterated is a turn whose first execute ran out of rounds: its middle segment's review
+// sent the work back and its last accepted the redo. Each earlier account sorts above the
+// last byte for byte.
 var selfIterated = map[string][]segment{
 	"nothing landed": {
 		{summary: "", item: "", suspended: true},
@@ -60,12 +59,9 @@ var selfIterated = map[string][]segment{
 	},
 }
 
-// A TURN'S SUMMARY IS ITS END: the newest completion's account, never the
-// greatest text among its segments', which listed a turn that delivered as one
-// that landed nothing. The work item follows the same rule.
-//
-// Mutation: take the maximum of the plain text again, and every case reads its
-// middle segment.
+// A TURN'S SUMMARY IS ITS END: the newest completion's account, never the greatest text
+// among its segments'. The work item follows the same rule.
+// Mutation: take the maximum of the plain text again, and every case reads its middle segment.
 func TestATurnsSummaryIsItsNewestCompletions(t *testing.T) {
 	t.Parallel()
 	for name, segs := range selfIterated {
@@ -98,11 +94,9 @@ func newestItem(segs []segment) string {
 	return ""
 }
 
-// A TURN RESUMED ON ANOTHER NODE ENDS WHERE ITS LAST SEGMENT RAN: the fleet's
-// fold of two logs' partials reads the newest completion across both.
-//
-// Mutation: combine the summaries by their plain text, and the turn reads the
-// first node's account.
+// A TURN RESUMED ON ANOTHER NODE ENDS WHERE ITS LAST SEGMENT RAN: the fleet's fold of two
+// logs' partials reads the newest completion across both.
+// Mutation: combine the summaries by their plain text, and the turn reads the first node's.
 func TestAFleetsTurnSummaryIsItsNewestCompletionAcrossLogs(t *testing.T) {
 	t.Parallel()
 	segs := selfIterated["nothing landed"]

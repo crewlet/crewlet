@@ -1307,9 +1307,7 @@ describe("the pane", () => {
     expect(pane.textContent).toContain("https://evil.example.net/c?q=secret");
   });
 
-  // A CITED ARTIFACT OPENS IN THE DASHBOARD: the engine stores the address a
-  // publish answered as the artifact, so it is a link on any deployment's URL.
-  //
+  // A CITED ARTIFACT OPENS IN THE DASHBOARD, on any deployment's URL.
   // Mutation: leave the kind unhandled, and the evidence draws nothing.
   test("a cited artifact links to the artifact", async () => {
     location.hash = "#/inbox?row=ask%3Ac-12";

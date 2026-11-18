@@ -585,12 +585,9 @@ func TestAnAgentsRequestThatNamesAPersonIsAnAsk(t *testing.T) {
 	}
 }
 
-// A DECISION CITING THE URL A PUBLISH ANSWERED CITES THE ARTIFACT (ADR-0160),
-// whatever the deployment's scheme: only that exact address is read as one, so
-// the same id under another host stays a url, held to https.
-//
-// Mutation: match the id's path on any host, and the foreign address is stored
-// as this engine's artifact.
+// A DECISION CITING THE URL A PUBLISH ANSWERED CITES THE ARTIFACT (ADR-0160), on any
+// scheme; the same id under another host stays a url, held to https.
+// Mutation: match the id's path on any host, and a foreign address becomes this engine's.
 func TestADecisionCitingAPublishedArtifactsURLCitesTheArtifact(t *testing.T) {
 	t.Parallel()
 	const id = "0f2a6c3e-6b1d-4e0a-9d6f-2b4c8a1e7f30"

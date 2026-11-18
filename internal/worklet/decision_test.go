@@ -542,10 +542,7 @@ func TestOnlyAnApproverChoosesAnActsApprovingOption(t *testing.T) {
 }
 
 // A URL THIS ENGINE HANDED OUT FOR ONE OF ITS ARTIFACTS IS CITED AS THE ARTIFACT
-// (ADR-0160): on a deployment reached over http it is not https, and a decision
-// citing the link a publish just answered was refused. Any other http address
-// is still refused.
-//
+// (ADR-0160), even over http; any other http address is still refused.
 // Mutation: drop the resolution, and the engine's own link is refused.
 func TestAnArtifactLinkThisEngineHandedOutIsCitedAsTheArtifact(t *testing.T) {
 	t.Parallel()

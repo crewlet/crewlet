@@ -645,10 +645,9 @@ type TurnPartial struct {
 	// DurationMS is the SUM of the completions' own measurements.
 	DurationMS int `json:"duration_ms"`
 
-	// Summary and WorkItem are RANKED TEXT, the newest completion's value
-	// behind its instant ([newestKey]), so a maximum across logs is the
-	// turn's end as within one; WorkItem's value is JSON text, decoded in
-	// [TurnPartial.Turn]. Trigger is the maximum of its values.
+	// Summary and WorkItem are RANKED TEXT, the newest completion's value behind its
+	// instant ([newestKey]), so a maximum across logs is the turn's end as within one;
+	// WorkItem's value is JSON, decoded in [TurnPartial.Turn]. Trigger is the maximum.
 	Summary  string `json:"summary,omitempty"`
 	WorkItem string `json:"work_item,omitempty"`
 	Trigger  string `json:"trigger,omitempty"`

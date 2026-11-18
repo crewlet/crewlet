@@ -1444,12 +1444,9 @@ test("the rail's phase strip says when the engine decided for the reviewer", asy
   expect(screen.queryByText("sent the turn back for another round")).toBeNull();
 });
 
-// A TURN THAT PARKED IS READ AT ITS END. Every executor launch parks the turn,
-// so one turn completes once per segment, oldest first; the page reads the
-// newest, never the middle segment whose review sent the work back.
-//
-// Mutation: read the first completion of each type, and the page says nothing
-// landed.
+// A TURN THAT PARKED IS READ AT ITS END: it completes once per segment, and the page
+// reads the newest, never a middle segment whose review sent the work back.
+// Mutation: read the first completion of each type, and the page says nothing landed.
 test("a parked turn's outcome and account are its last segment's", async () => {
   const segment = (at: string, outcome: string, summary: string, suspended: boolean) => [
     event({

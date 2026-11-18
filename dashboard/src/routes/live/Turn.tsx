@@ -189,10 +189,7 @@ interface TurnRecord {
   learning: EventRecord | undefined;
 }
 
-/**
- * The turn's own measured length: its ending record's whole tally, else every
- * segment's own `duration_ms` summed, as the turn list sums them.
- */
+/** The turn's length: its ending record's whole tally, else each segment's `duration_ms` summed. */
 function turnDuration(events: EventRecord[], last: EventRecord | undefined): number | null {
   const whole = (field(last, "turn") as { duration_ms?: unknown } | undefined)?.duration_ms;
   if (typeof whole === "number") return whole;
