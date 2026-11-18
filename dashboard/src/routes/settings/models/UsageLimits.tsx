@@ -64,7 +64,10 @@ function usedWords(l: ModelLimit): string {
   );
 }
 
-/** One window as the kit draws it, named by its whole sentence. */
+/**
+ * One window as the kit draws it, named by its whole sentence: one line, with
+ * no reset note, which only the model page's card has room for.
+ */
 export function limitWindow(l: ModelLimit, now: number): LimitWindow {
   const label = limitLabel(l);
   const when = whenWords(l, now, true);
@@ -74,7 +77,6 @@ export function limitWindow(l: ModelLimit, now: number): LimitWindow {
     state: LIMIT_METER[l.state],
     used: l.used ?? undefined,
     figure: l.used === null ? LIMIT_STATE[l.state] : undefined,
-    note: whenWords(l, now, false),
     name: [
       `${label} limit`,
       STATE_WORDS[l.state],
@@ -94,23 +96,32 @@ function staleCaption(limits: readonly ModelLimit[], now: number): string | unde
   return `as of ${ago(stale.sort()[0], now, { since: true })}`;
 }
 
-/** Every window's exact figures, one line each. */
+/**
+ * Every window's use and exact reset, one line each (the tooltip's `lines`),
+ * then when they were heard: once where all agree, else on each line.
+ */
 function LimitDetail({ limits, now }: { limits: readonly ModelLimit[]; now: number }) {
+  const heard = new Set(limits.map((l) => ago(l.seen, now)));
+  const each = heard.size > 1;
   return (
-    <span className="models-limits-detail">
+    <>
       {limits.map((l) => (
         <span key={`${l.window}/${l.model ?? ""}`}>
-          <strong>{limitLabel(l)}</strong>: {usedWords(l)}
-          {whenWords(l, now, true) ? `, ${whenWords(l, now, true)}` : ""}. Heard {ago(l.seen, now)}.
+          <strong>{limitLabel(l)}</strong>:{" "}
+          {[usedWords(l), whenWords(l, now, true), each ? `heard ${ago(l.seen, now)}` : ""]
+            .filter(Boolean)
+            .join(", ")}
         </span>
       ))}
-    </span>
+      {each ? null : <span>Heard {[...heard][0]}</span>}
+    </>
   );
 }
 
 /**
- * The list's cell: one bar per window, the exact figures on hover and as the
- * link's description. A raised link to the model's page, as Used by's is.
+ * The list's cell: one line per window, the exact figures and reset times on
+ * hover and as the link's description. A raised link to the model's page, as
+ * Used by's is.
  */
 export function UsageLimitsCell({ model }: { model: ModelView }) {
   const now = useNow();
@@ -119,7 +130,7 @@ export function UsageLimitsCell({ model }: { model: ModelView }) {
   if (limits.length === 0)
     return <LimitMeters label={`Usage limits of ${model.key}`} windows={[]} empty={NO_LIMITS} />;
   return (
-    <Tooltip content={<LimitDetail limits={limits} now={now} />} placement="top">
+    <Tooltip lines content={<LimitDetail limits={limits} now={now} />} placement="top">
       <a
         className="models-limits"
         href={href(["settings", "models", model.key])}
@@ -138,7 +149,10 @@ export function UsageLimitsCell({ model }: { model: ModelView }) {
   );
 }
 
-/** The model page's card: the bars, and every window's exact figures beneath. */
+/**
+ * The model page's card: the bars, each with when it resets beneath, and every
+ * window's exact figures under them.
+ */
 export function UsageLimitsCard({ model }: { model: ModelView }) {
   const now = useNow();
   const limits = model.entry.limits;
@@ -157,7 +171,10 @@ export function UsageLimitsCard({ model }: { model: ModelView }) {
           <div className="models-limits-card">
             <LimitMeters
               label={`Usage limits of ${model.key}`}
-              windows={limits.map((l) => limitWindow(l, now))}
+              windows={limits.map((l) => ({
+                ...limitWindow(l, now),
+                note: whenWords(l, now, false),
+              }))}
               caption={staleCaption(limits, now)}
             />
             <DescriptionList
