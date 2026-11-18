@@ -16,9 +16,8 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE COMPACTION'S APPLY AND DECIDE, case by case, over one node's estate with
-// no broker between: records built here, and the decide run in a snapshot of
-// the rows a case seeds.
+// THE COMPACTION'S APPLY AND DECIDE over one node's estate, no broker: records
+// built here, the decide run in a snapshot of the rows a case seeds.
 
 // outputOf is output n of compaction cid, a bundle of objects objects whose
 // key was minted at minted — as a builder lays one out ([LayBundle]).
@@ -41,17 +40,15 @@ func compactOf(t testing.TB, id, cid string, retire []string, add ...PackRef) bu
 }
 
 // A COMPACTION RETIRES ITS INPUTS AND ADDS ITS OUTPUTS, in one record: the
-// inputs' rows leave code_packs for code_packs_retired, keeping every column
-// they had and stamped with the record's position and broker instant; the
-// outputs join code_packs as live packs of kind `compact`; and the
-// repository's live-pack counters move by exactly that. Applied again — a
-// second record of the same compaction, which the ledger would have collapsed
-// — it finds nothing to retire and nothing to add, and moves nothing.
+// inputs move from code_packs to code_packs_retired with every column, stamped
+// with the record's position and broker instant; the outputs join code_packs as
+// live packs of kind `compact`; the live-pack counters move by exactly that.
+// Applied again (a second record the ledger would have collapsed), it moves
+// nothing.
 //
-// Mutation: drop the apply's finding that a record applied already, and the
-// record applied again moves the repository's version though it moved no
-// row; stamp the retired rows with the position their packs were added at,
-// and they read as retired long before the compaction.
+// Mutation: drop the apply's already-applied finding, and the second record
+// moves the version though no row moved; stamp retired rows with their added
+// position, and they read as retired long before the compaction.
 func TestACompactionRetiresItsInputsAndAddsItsOutputs(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -117,9 +114,9 @@ func TestACompactionRetiresItsInputsAndAddsItsOutputs(t *testing.T) {
 
 // A COMPACTION THAT NAMES A PACK TWICE, OR ONE ALREADY GONE, COUNTS WHAT IT
 // FINDS: a record no committer of this build forms is still applied as the
-// rows it finds and writes, so the counters stay the rows' and the log does not
-// stop — an input named twice moves once, an input another record took first
-// is passed over, and an output named twice is written once.
+// rows it finds, so the counters stay the rows' and the log does not stop: an
+// input named twice moves once, one another record took is passed over, an
+// output named twice is written once.
 //
 // Mutation: retire by the record's list rather than the rows found, and the
 // input named twice is counted out twice.
@@ -160,10 +157,9 @@ func compactionDecidedIn(t testing.TB, e *estate, c Compaction, now time.Time) (
 
 // A COMPACTION OUTPUT PAST THE BUNDLE RULE IS REFUSED, and one inside it is
 // decided whatever its pack section: the decide holds every output to
-// [PackRef.Check] — the bundle WHOLE, its pack and both indexes, within
-// MaxPackBytes, the one rule every holder of a row applies — never to the cut a
-// builder cuts its packs at, which an output of a dense roll's scaled cut or a
-// delta written whole may pass by a little.
+// [PackRef.Check] (the whole bundle within MaxPackBytes, the one rule every
+// row holder applies), never to the builder's cut, which a dense roll's scaled cut or a delta written whole may
+// pass by a little.
 //
 // Mutation: hold an output to CompactPackBytes, and the output at the cut and
 // a mebibyte is refused.
@@ -195,13 +191,10 @@ func TestACompactionOutputPastTheBundleRuleIsRefused(t *testing.T) {
 	}
 }
 
-// AN OUTPUT UPLOADED TOO LONG AGO IS REFUSED UPLOAD_EXPIRED, by the push's one
-// rule and sentence: a key minted objstore.RecordWithin before the decision may
-// already have been judged unnamed and deleted by a collection, so no record
-// may name it.
-//
-// Its compaction was planned long before either output's upload began, which
-// is nothing to the rule: an output is judged by its own key.
+// AN OUTPUT UPLOADED TOO LONG AGO IS REFUSED UPLOAD_EXPIRED, by the push's
+// rule and sentence: a key minted objstore.RecordWithin before the decision
+// may already be collected, so no record may name it. An output is judged by
+// its own key, however long before its upload the compaction was planned.
 //
 // Mutation: drop the rule from the compaction's decide, and an output whose
 // key is twelve hours old is decided.
@@ -234,20 +227,17 @@ func TestACompactionOutputUploadedTooLongAgoIsRefused(t *testing.T) {
 	}
 }
 
-// A COMPACTION PAST THE ROW BUDGET IS REFUSED BEFORE ITS RECORD: the committer
-// takes no more than MaxCompactInputs inputs and MaxCompactOutputs outputs —
-// Validate refuses one more of either, naming it — and the largest compaction
-// it takes fits one record whole, in rows (compactDecidedRows within
-// MaxRecordRows, the framework's transaction budget) and in bytes. So does
-// the widest PUBLICATION it takes — those inputs and outputs, and a layer of
-// MaxPacksPerRepo packs in MaxLayerParts parts replacing MaxPublishedLayers −
-// 1 layers, its record under 200 KiB — and one more replaced layer or one more
-// part is refused, naming it.
+// A COMPACTION PAST THE ROW BUDGET IS REFUSED BEFORE ITS RECORD: Validate
+// refuses one input past MaxCompactInputs or output past MaxCompactOutputs,
+// naming it, and the largest compaction taken fits one record in rows
+// (compactDecidedRows within MaxRecordRows) and bytes. So does the widest
+// PUBLICATION: those, plus a layer of MaxPacksPerRepo packs in MaxLayerParts
+// parts replacing MaxPublishedLayers − 1 layers, under 200 KiB; one more
+// replaced layer or part is refused, naming it.
 //
 // Mutation: raise MaxCompactInputs past the row budget, and the largest
-// compaction the committer takes no longer fits its record; let Validate take
-// as many replaced layers as a chain holds, and the arm naming layer.replaces
-// passes.
+// compaction no longer fits its record; let Validate take as many replaced
+// layers as a chain holds, and the layer.replaces arm passes.
 func TestACompactionPastTheRowBudgetIsRefusedBeforeItsRecord(t *testing.T) {
 	t.Parallel()
 	if rows := compactDecidedRows(MaxCompactInputs, MaxCompactOutputs, nil); rows > MaxRecordRows {

@@ -13,24 +13,17 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// BenchmarkQueueSweepListing times ONE PASS'S LISTING of the queue sweep —
-// every page of queueSweepDueSQL, the walk of the repositories by their key —
-// over config.CodeMaxRepos repositories, every repository a company may hold,
-// with NOTHING DUE: each holds an entry its queue ended and two protected
-// branches' green rows, each with a landing below it, all inside the history,
-// so the walk seeks every repository's ended entries and both its targets'
-// oldest landings below green, and lists none — what a fleet of working
-// queues pays every RetentionInterval.
+// BenchmarkQueueSweepListing times ONE PASS'S LISTING of the queue sweep, every
+// page of queueSweepDueSQL, over config.CodeMaxRepos repositories with NOTHING
+// DUE: each holds an ended entry and two protected branches' green rows with a
+// landing below each, all inside the history, so the walk makes every seek and
+// lists none, what a fleet of working queues pays every RetentionInterval.
 //
-// THE DECISION RULE, the ref expiry listing's (BenchmarkExpiryListing): the
-// walk's cost follows the repositories, not the history that is due, and a
-// stale read holds no write lane. Past a tenth of gitlet.RetentionPassBudget
-// (6 s) at this size, the listing moves to seeks of the due rows by instant
-// across repositories — an index (ended_at, repo_id) partial on the ended
-// states, and the landings strictly below a green row marked so they can be
-// indexed by instant — in a migration of its own; under it, the walk stays.
-// Measured with -benchtime 3x -count 1 on the runner's two E-cores; the
-// figure and the decision are in queue_sweep.go's queueSweepDue.
+// The decision rule is the ref expiry listing's (BenchmarkExpiryListing): past
+// a tenth of gitlet.RetentionPassBudget (6 s) at this size, the listing moves
+// to seeks of the due rows by instant, an index (ended_at, repo_id) partial on
+// the ended states and the landings below green marked to be indexed. Run with
+// -benchtime 3x -count 1; the figure and decision are in queueSweepDue.
 func BenchmarkQueueSweepListing(b *testing.B) {
 	n := newNode(b)
 	ctx := context.Background()

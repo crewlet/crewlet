@@ -6,50 +6,31 @@ import (
 )
 
 // Served is a data node's code half as the estate serves it: the committer's
-// writes and the reader's reads, so the engine and the multi-node suite hand
-// the router ONE adapter rather than each writing its own (ADR-0008).
+// writes and the reader's reads, one adapter the engine and the multi-node
+// suite both hand the router (ADR-0008). Store decides a tool's lifecycle
+// requests.
 //
-// Committer is nil on a node that does not publish — a node in a maintenance
-// mode, which may append nothing — and a proposal, a push's, a compaction's,
-// an expunge record's or a change's, is then refused [ErrNotServing], which the router reads
-// as a node that ran nothing and asks the repository's runner-up with the same
-// operation id. Handing a maintenance-mode node's committer to peers would be
-// the publish the mode exists to rule out.
-//
-// Reader is what every read is answered from. A Served with none — its zero
-// value — runs NOTHING rather than panicking on the goroutine that serves the
-// estate: every operation is refused [ErrNotServing], and the router asks the
-// next data node.
-//
-// Store is the lifecycle store a tool's lifecycle request is decided by, nil
-// on a node that publishes nothing — refused [ErrNotServing] like a
-// proposal there, and asked of the next data node.
+// Every writer (Committer, ChangeWriter, ChecksWriter, Marks, Store) is nil on
+// a node that does not publish: a maintenance mode may append nothing, and
+// handing peers its committer would be the publish the mode rules out. Each
+// write there is refused [ErrNotServing], which the router reads as a node that
+// ran nothing and asks the next data node (a repository's runner-up) with the
+// same operation id. With no Reader (the zero value) every operation is refused
+// so, rather than panicking on the estate's serving goroutine.
 type Served struct {
 	Committer *Committer
-	// ChangeWriter is the writer of changes' conversations, beside the
-	// committer on every node that publishes, and nil where the committer is:
-	// a write of a change's conversation is then refused [ErrNotServing], as
-	// a proposal is.
+	// ChangeWriter writes changes' conversations.
 	ChangeWriter *ChangeWriter
-	// ChecksWriter is the writer of repositories' checks, beside the
-	// committer on every node that publishes, and nil where the committer
-	// is: a write of a repository's checks is then refused [ErrNotServing],
-	// as a proposal is.
+	// ChecksWriter writes repositories' checks.
 	ChecksWriter *ChecksWriter
 	Reader       *Reader
 	Store        *Store
-	// Marks is the writer of persons' own marks on the code log, their
-	// inbox's and the files they viewed, beside the committer on every node
-	// that publishes, and nil where the committer is: a mark is then refused
-	// [ErrNotServing], as a proposal is, and the router asks the next data
-	// node.
+	// Marks writes persons' own marks on the code log: their inbox's and the
+	// files they viewed.
 	Marks *Marks
 }
 
-// Mark decides one gesture over a person's code notices on this node's marks
-// writer — see [Marks.Mark] — and, on a node that publishes nothing, refuses
-// it as a proposal is refused there: the router asks the next data node with
-// the same operation id.
+// Mark decides one gesture over a person's code notices — see [Marks.Mark].
 func (s Served) Mark(ctx context.Context, w MarkWrite) (MarkResult, error) {
 	if s.Marks == nil {
 		return MarkResult{}, fmt.Errorf("%w: this node publishes nothing, so it writes no person's marks",
@@ -58,8 +39,7 @@ func (s Served) Mark(ctx context.Context, w MarkWrite) (MarkResult, error) {
 	return s.Marks.Mark(ctx, w)
 }
 
-// Lifecycle decides one lifecycle request on this node's lifecycle store —
-// see [Store.Lifecycle].
+// Lifecycle decides one lifecycle request — see [Store.Lifecycle].
 func (s Served) Lifecycle(ctx context.Context, req LifecycleRequest) (LifecycleResult, error) {
 	if s.Store == nil {
 		return LifecycleResult{}, fmt.Errorf("%w: this node publishes nothing, so it decides no "+
@@ -68,7 +48,7 @@ func (s Served) Lifecycle(ctx context.Context, req LifecycleRequest) (LifecycleR
 	return s.Store.Lifecycle(ctx, req)
 }
 
-// Propose decides one push on this node's committer — see [Committer.Propose].
+// Propose decides one push — see [Committer.Propose].
 func (s Served) Propose(ctx context.Context, p Proposal) (ProposeResult, error) {
 	if s.Committer == nil {
 		return ProposeResult{}, fmt.Errorf("%w: this node publishes nothing, so it decides "+
@@ -77,10 +57,7 @@ func (s Served) Propose(ctx context.Context, p Proposal) (ProposeResult, error) 
 	return s.Committer.Propose(ctx, p)
 }
 
-// ProposeCompaction decides one compaction on this node's committer — see
-// [Committer.ProposeCompaction] — and, on a node that publishes nothing,
-// refuses it as a push is refused there: the router asks the repository's
-// runner-up with the same compaction id.
+// ProposeCompaction decides one compaction — see [Committer.ProposeCompaction].
 func (s Served) ProposeCompaction(ctx context.Context, p CompactionProposal) (CompactResult, error) {
 	if s.Committer == nil {
 		return CompactResult{}, fmt.Errorf("%w: this node publishes nothing, so it decides "+
@@ -89,10 +66,8 @@ func (s Served) ProposeCompaction(ctx context.Context, p CompactionProposal) (Co
 	return s.Committer.ProposeCompaction(ctx, p)
 }
 
-// ProposeImport decides one import record — a chunk or the import's end — on
-// this node's committer — see [Committer.ProposeImport] — and, on a node that
-// publishes nothing, refuses it as a push is refused there: the router asks
-// the repository's runner-up with the same proposal.
+// ProposeImport decides one import record, a chunk or the import's end — see
+// [Committer.ProposeImport].
 func (s Served) ProposeImport(ctx context.Context, p ImportProposal) (SyncResult, error) {
 	if s.Committer == nil {
 		return SyncResult{}, fmt.Errorf("%w: this node publishes nothing, so it decides no import", ErrNotServing)
@@ -100,9 +75,8 @@ func (s Served) ProposeImport(ctx context.Context, p ImportProposal) (SyncResult
 	return s.Committer.ProposeImport(ctx, p)
 }
 
-// ProposeMirrorSync decides one pull mirror's sync on this node's committer —
-// see [Committer.ProposeMirrorSync] — and, on a node that publishes nothing,
-// refuses it as a push is refused there.
+// ProposeMirrorSync decides one pull mirror's sync — see
+// [Committer.ProposeMirrorSync].
 func (s Served) ProposeMirrorSync(ctx context.Context, p MirrorSyncProposal) (SyncResult, error) {
 	if s.Committer == nil {
 		return SyncResult{}, fmt.Errorf("%w: this node publishes nothing, so it decides no mirror sync",
@@ -111,11 +85,8 @@ func (s Served) ProposeMirrorSync(ctx context.Context, p MirrorSyncProposal) (Sy
 	return s.Committer.ProposeMirrorSync(ctx, p)
 }
 
-// ProposeExpunge decides one expunge record — a person's request, or a
-// maintainer's begin or commit — on this node's committer — see
-// [Committer.ProposeExpunge] — and, on a node that publishes nothing, refuses
-// it as a push is refused there: the router asks the repository's runner-up
-// with the same operation id.
+// ProposeExpunge decides one expunge record, a person's request or a
+// maintainer's begin or commit — see [Committer.ProposeExpunge].
 func (s Served) ProposeExpunge(ctx context.Context, p ExpungeProposal) (ExpungeResult, error) {
 	if s.Committer == nil {
 		return ExpungeResult{}, fmt.Errorf("%w: this node publishes nothing, so it decides "+
@@ -124,10 +95,8 @@ func (s Served) ProposeExpunge(ctx context.Context, p ExpungeProposal) (ExpungeR
 	return s.Committer.ProposeExpunge(ctx, p)
 }
 
-// ProposeChange decides one write of a change's lifecycle on this node's
-// committer — see [Committer.ProposeChange] — and, on a node that publishes
-// nothing, refuses it as a push is refused there: the router asks the
-// repository's runner-up with the same operation id.
+// ProposeChange decides one write of a change's lifecycle — see
+// [Committer.ProposeChange].
 func (s Served) ProposeChange(ctx context.Context, p ChangeProposal) (ChangeResult, error) {
 	if s.Committer == nil {
 		return ChangeResult{}, fmt.Errorf("%w: this node publishes nothing, so it decides "+
@@ -136,10 +105,8 @@ func (s Served) ProposeChange(ctx context.Context, p ChangeProposal) (ChangeResu
 	return s.Committer.ProposeChange(ctx, p)
 }
 
-// ProposeQueue decides one write of a target's merge queue on this node's
-// committer — see [Committer.ProposeQueue] — and, on a node that publishes
-// nothing, refuses it as a push is refused there: the router asks the
-// repository's runner-up with the same operation id.
+// ProposeQueue decides one write of a target's merge queue — see
+// [Committer.ProposeQueue].
 func (s Served) ProposeQueue(ctx context.Context, p QueueProposal) (QueueResult, error) {
 	if s.Committer == nil {
 		return QueueResult{}, fmt.Errorf("%w: this node publishes nothing, so it decides "+
@@ -148,10 +115,7 @@ func (s Served) ProposeQueue(ctx context.Context, p QueueProposal) (QueueResult,
 	return s.Committer.ProposeQueue(ctx, p)
 }
 
-// ProposeMerge decides one merge of a change on this node's committer — see
-// [Committer.ProposeMerge] — and, on a node that publishes nothing, refuses it
-// as a push is refused there: the router asks the repository's runner-up with
-// the same operation id.
+// ProposeMerge decides one merge of a change — see [Committer.ProposeMerge].
 func (s Served) ProposeMerge(ctx context.Context, p MergeProposal) (MergeResult, error) {
 	if s.Committer == nil {
 		return MergeResult{}, fmt.Errorf("%w: this node publishes nothing, so it decides "+
@@ -160,10 +124,8 @@ func (s Served) ProposeMerge(ctx context.Context, p MergeProposal) (MergeResult,
 	return s.Committer.ProposeMerge(ctx, p)
 }
 
-// Converse decides one write of a change's conversation on this node's change
-// writer — see [ChangeWriter.Converse] — and, on a node that publishes
-// nothing, refuses it as a push is refused there: the router asks the
-// repository's runner-up with the same operation id.
+// Converse decides one write of a change's conversation — see
+// [ChangeWriter.Converse].
 func (s Served) Converse(ctx context.Context, w ConversationWrite) (ConversationResult, error) {
 	if s.ChangeWriter == nil {
 		return ConversationResult{}, fmt.Errorf("%w: this node publishes nothing, so it writes no change's "+
@@ -172,10 +134,8 @@ func (s Served) Converse(ctx context.Context, w ConversationWrite) (Conversation
 	return s.ChangeWriter.Converse(ctx, w)
 }
 
-// PublishChecks decides one write of a repository's checks on this node's
-// checks writer — see [ChecksWriter.Publish] — and, on a node that publishes
-// nothing, refuses it as a push is refused there: the router asks the
-// repository's runner-up with the same operation id.
+// PublishChecks decides one write of a repository's checks — see
+// [ChecksWriter.Publish].
 func (s Served) PublishChecks(ctx context.Context, r ChecksRequest) (ChecksResult, error) {
 	if s.ChecksWriter == nil {
 		return ChecksResult{}, fmt.Errorf("%w: this node publishes nothing, so it writes no repository's "+

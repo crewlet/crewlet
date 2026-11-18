@@ -35,11 +35,11 @@ func stampOf(t *testing.T, body []byte) int {
 	return env.V
 }
 
-// A CODE RECORD IS STAMPED WITH THE LOWEST VERSION THAT READS IT — the
-// tracker's rule: a set version below that is refused, and the base version
-// is what everything carrying nothing new gets, through the production encoder
-// as much as under a stand-in table. A new op is its own versioned field, so a
-// viewed record and a viewed key's are stamped ViewedVersion, never the base.
+// A CODE RECORD IS STAMPED WITH THE LOWEST VERSION THAT READS IT, the
+// tracker's rule: a set version below that is refused, and everything carrying
+// nothing new gets the base version, through the production encoder as under a
+// stand-in table. A new op is its own versioned field, so a viewed record and a
+// viewed key's are stamped ViewedVersion, never the base.
 //
 // Mutation: drop either op's versionedFields row and it is stamped the base,
 // red.
@@ -92,9 +92,9 @@ func TestACodeRecordIsStampedWithTheLowestVersionThatReadsIt(t *testing.T) {
 
 // A RECORD EVERY BUILD MUST READ NEVER CARRIES A VERSIONED FIELD — a gate (an
 // eviction, a purge, the activation fence), the read index's barrier, the
-// trimmed record and a reanchor's generation, stamped or pinned. Each is what
-// an older node cannot afford to hold back, so a field one of them would need
-// is refused at the encoder rather than stamped above what every build reads.
+// trimmed record and a reanchor's generation, stamped or pinned. An older node
+// cannot afford to hold one back, so a field one would need is refused at the
+// encoder rather than stamped above what every build reads.
 func TestARecordEveryBuildReadsRefusesAVersionedField(t *testing.T) {
 	t.Parallel()
 	everyOp := statelog.RecordFields{

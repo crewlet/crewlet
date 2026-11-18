@@ -14,9 +14,10 @@ import (
 
 // BenchmarkARepositoryListingAnswersItsSparks is the read a listing's sparks add: a page of
 // MaxSparkReposPerPage repositories (`listing`; `listing-500` is MaxReposPerPage, which it is held
-// under), each with a day row for every one of the 16 UTC days a MaxListingDaySpan touches and every
-// quarter-hour counted, folded at the listing's widest bounds; and a detail's spark and pushers at
-// MaxDayBounds bounds over 33 days of twenty pushers (`detail`). `max-read-ms` is held against a tenth of statelog.ReadBudget, the page rule runPushes keeps.
+// under), each with a day row for each of the 16 UTC days a MaxListingDaySpan touches, every
+// quarter-hour counted, folded at the widest bounds; and a detail's spark and pushers at
+// MaxDayBounds bounds over 33 days of twenty pushers (`detail`). `max-read-ms` is held against a
+// tenth of statelog.ReadBudget, the page rule runPushes keeps.
 func BenchmarkARepositoryListingAnswersItsSparks(b *testing.B) {
 	quiet(b)
 	ctx := context.Background()
@@ -91,9 +92,9 @@ func BenchmarkARepositoryListingAnswersItsSparks(b *testing.B) {
 }
 
 // BenchmarkRederiveThePushActivity is the push activity's pass of the applier's re-derivation over
-// 100 000 push rows of ten repositories, each pushed on 182 UTC days by twenty pushers: `upgrade`
-// writes every row from empty tables, as a node's first boot of a build that adds them does, and
-// `kept` reads every push row and writes nothing. `ns/push` extrapolates to any history.
+// 100 000 push rows of ten repositories, pushed on 182 UTC days by twenty pushers: `upgrade` writes
+// every row from empty tables (a node's first boot of a build that adds them), `kept` reads every
+// push row and writes nothing. `ns/push` extrapolates to any history.
 func BenchmarkRederiveThePushActivity(b *testing.B) {
 	quiet(b)
 	ctx := context.Background()

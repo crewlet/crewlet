@@ -13,160 +13,93 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A QUEUE'S OWN RECORDS: what a target's merge queue does with the entries an
-// enqueue made (queue.go), each a record on the REPOSITORY's own subject that
-// its committer decides alone ([Committer.ProposeQueue]) from one snapshot,
-// as an enqueue is — the queue's work is the repository's home's (M4's home
-// Gitlet node builds what they record), its decisions the committer's:
-//
-//   - a CANDIDATE ([Candidate]) records a queue's TRAIN: the
-//     candidates its home built of the target's live entries onto the
-//     target's tip — each a batch of entries merged on the candidate before
-//     it, its tip what the queue's checks then run on — and the one pack the
-//     commits they built are stored in, so a candidate is ROWS
-//     (code_candidates) and a pack row, never a ref (M5-D12). A target holds
-//     one train at most: a candidate ABANDONS the target's earlier one, its
-//     candidates removed and its entries waiting again.
-//   - an EJECT ([Eject]) puts live entries out of their queue — a required
-//     check failed on what they were tested in, their merge conflicted, their
-//     gate no longer holds, their head moved, a fast-forward that is not one,
-//     their repository a pull mirror — naming the checks or the paths, and
-//     abandons the train each was in.
-//   - a LAND ([Land]) lands entries on their target in ONE record: a train's
-//     tested PREFIX — its candidates from the first, up to one whose tip
-//     every required check passed on. ITS DECIDE PROVES EVERY ENTRY'S GATE
-//     AGAIN, from its own snapshot, with the entry's ENQUEUER as the merger
-//     (M5-D8): an enqueue is the gate, and a landing is the record that
-//     moves the branch, which the ADR binds. Its apply merges each entry's
-//     change first and lands ONE PUSH ROW AN ENTRY, `via queue`, naming its
-//     enqueuer — the queue never acts on its own account — so which push
-//     landed a commit names each change's own landing.
-//   - a GREEN ([Green]) moves a protected target's green row onto a landing
-//     record whose required checks passed on its tip — a landing no queue
-//     tested first, a person's override merge or push; a BROKEN ([Broken])
-//     marks a landing above the green row whose required check failed. Green
-//     only ever advances on green: no record moves it on red, and none moves
-//     it back.
-//   - a QUEUE_SWEEP ([QueueSweep], [Store.QueueSweep]) removes an IDLE
-//     repository's ended entries and its landings below their target's green
-//     row past [QueueHistory], which its own candidates', ejections' and
-//     landings' horizons remove while its queues work (M5-D34).
-//   - a CLOSE_SETTLED ([CloseSettled]) settles the closes landed entries owe
-//     their changes' work items (code_queue.close_op, which the land sets
-//     where the enqueue asked it): its home closes each item AS ITS ENQUEUER
-//     on whichever turn first reads the owed close, and records how the
-//     turn's closes ended, in one record — a landing answered pending, a
-//     home that stopped between the landing and the close, a tracker that
-//     could not answer: each leaves the close owed for the next turn on any
-//     home, never lost.
-//
-// # A train and a landing are built at a drop epoch
-//
-// A candidate's commits are built by the home over its copy of the
-// repository, and a landing moves the target onto commits its train built
-// so: each proposal carries the drop epoch that copy held
-// ([QueueProposal.DropEpoch]), and its decide refuses it `expunging` where an
-// expunge has begun since ([MergeRefusalExpunging]), before every rule of its
-// own, as a push's and a merge's are — a build before a begin may
-// rely on objects the begin left dropping. And what the queue holds in flight
-// an expunge keeps, as it keeps a ref's tip: every live entry's head, every
-// candidate's tip and every target's green row are among the objects its
-// scan walks from (the `expunge_tips` read), so a purge never drops the
-// commit a landing moves its target onto.
-//
-// # Base format
-//
-// Every op, payload and field here is in the base format, as queue.go's head
-// says: the domain landed on main with them, with a land's apply setting
-// code_queue.close_op, and with the values they add to closed sets
-// (`merged_via` queue on a change's row, `via` queue on a push's and `kind`
-// queue on a landing's). None is a gate. An ejection's `tested_in` is version
-// 7 ([TestedInVersion]); an eject carrying none is base format.
+// A queue's own records: what a target's merge queue does with the entries an
+// enqueue made (queue.go), each on the repository's subject, decided by its
+// committer alone from one snapshot ([Committer.ProposeQueue]) and built by its
+// home Gitlet node. A [Candidate] records a target's one TRAIN as rows and a
+// pack, never a ref (M5-D12), abandoning its earlier train; an [Eject] puts
+// entries out and abandons their train; a [Land] lands a train's tested prefix
+// in ONE record, its decide proving each entry's gate again with the entry's
+// ENQUEUER as merger, since the landing moves the branch (M5-D8), and its apply
+// writes one push row an entry, `via queue`, naming that enqueuer: the queue
+// never acts on its own account. A [Green] advances a protected target's green
+// row onto a landing no queue tested whose checks passed (never on red, never
+// back), and a [Broken] marks one above it that failed.
+
+// A train and a landing are built at a drop epoch: each proposal carries its
+// home copy's ([QueueProposal.DropEpoch]) and its decide refuses it
+// [MergeRefusalExpunging] where an expunge has begun since, before its own
+// rules, as a push's and a merge's do, since a build before a begin may rely on
+// objects the begin left dropping. An expunge walks from every live entry's
+// head, candidate's tip and target's green row (`expunge_tips`), so a purge
+// never drops the commit a landing moves its target onto.
+
+// Base format, as queue.go's head says: every op, payload and field here, a
+// land's apply setting code_queue.close_op, and the values they add to closed
+// sets (queue as `merged_via`, a push's `via` and a landing's `kind`). None is
+// a gate. An ejection's `tested_in` alone is version 7 ([TestedInVersion]).
 
 // The queue's bounds.
 const (
-	// MaxCandidateEntries is the most entries one train holds: a target's
-	// deepest queue's candidates, each its largest batch — MaxQueueDepth ×
-	// MaxQueueBatch, 64 — so one candidate record carries every candidate a
+	// MaxCandidateEntries is the most entries one train holds, MaxQueueDepth ×
+	// MaxQueueBatch (64), so one candidate record carries every candidate a
 	// queue tests at once.
 	MaxCandidateEntries = MaxQueueDepth * MaxQueueBatch
 
-	// MaxLandEntries is the most entries one land record lands: 64,
-	// [MaxPushesPerRecord], since it lands one push row an entry — the
-	// committer's group commit's shape — which a train's whole tested
-	// prefix, at most [MaxCandidateEntries] (also 64), fits in. MEASURED,
-	// a record of all 64, each deleting its source, holds the write lane
-	// 33 ms, and one of a single entry 5.7 ms (BenchmarkApplyALandRecord,
-	// doc.go's measured section): under the third of
-	// statelog.ApplyTxTimeBudget the domain's records are sized to, so a
-	// train's whole prefix lands as one.
+	// MaxLandEntries is the most entries one land record lands:
+	// [MaxPushesPerRecord] (64), since it lands one push row an entry, and a
+	// train's whole tested prefix ([MaxCandidateEntries], also 64) fits. A
+	// record of all 64, each deleting its source, holds the write lane 33 ms
+	// (BenchmarkApplyALandRecord, doc.go's measured section), under the third
+	// of statelog.ApplyTxTimeBudget the domain's records are sized to.
 	MaxLandEntries = MaxPushesPerRecord
 
 	// MaxEjectedPaths is the most paths one ejection names of a conflicted
-	// merge: [MaxConflictPaths], the most a change's mergeability names of
-	// the same conflict, within [MaxConflictBytes] — the one list a person
-	// reads first.
+	// merge: [MaxConflictPaths], as a change's mergeability names of the same
+	// conflict, within [MaxConflictBytes].
 	MaxEjectedPaths = MaxConflictPaths
 
 	// QueueHistory is how long a queue's ended entries and its target's
-	// landings below its green row are kept: thirty days, [CheckHistory] —
-	// what a change's page and a target's history cite are the checks they
-	// were judged by, which are kept that long.
+	// landings below its green row are kept: [CheckHistory], thirty days, as
+	// long as the checks they were judged by, which they cite.
 	QueueHistory = CheckHistory
 
-	// QueueSweepGrace is how long past [QueueHistory] a repository's ended
-	// entries or landings outlive it before the code-retention duty sweeps
-	// them: a day, [CheckSweepGrace], for its reason — a repository whose
-	// queues keep working removes its own history with every candidate,
-	// ejection and landing, so its rows never outlive the history by the
-	// grace and the duty never appends what one of its own records would.
+	// QueueSweepGrace is how long past [QueueHistory] a repository's queue
+	// history outlives it before the code-retention duty sweeps it: a day,
+	// [CheckSweepGrace], for its reason. A working queue's own records remove
+	// its history, so the duty never appends what one of them would.
 	QueueSweepGrace = CheckSweepGrace
 
-	// QueueSweepRows is the most rows one queue_sweep record removes: every
-	// row a record's apply may touch (MaxRecordRows) but the repository's
-	// own, which it moves the version of, as a retired-pack sweep's
-	// ([RetireSweepRows]). It bounds a sweep of NARROW rows — a landed or
-	// dequeued entry, a landing — and [QueueSweepBytes] the ejections among
-	// them.
+	// QueueSweepRows is the most rows one queue_sweep record removes:
+	// MaxRecordRows but the repository's own, whose version it moves, as
+	// [RetireSweepRows]. It bounds NARROW rows (an ended entry, a landing);
+	// [QueueSweepBytes] bounds the ejections among them.
 	QueueSweepRows = MaxRecordRows - 1
 
 	// QueueSweepBytes is how many BYTES of ejections one queue_sweep record
-	// removes beside QueueSweepRows' count: its ended entries are taken
-	// oldest first, each weighed by what its ejection's JSON takes
-	// (code_queue.ejected_bytes), until their bytes reach it — always at
-	// least one, and at most one past it — and a step whose entries it cut
-	// takes no landing, which waits for the next.
-	//
-	// A ROW COUNT BOUNDS A SWEEP'S TIME ONLY FOR NARROW ROWS, as it does a
-	// purge part's ([PurgePartBytes]): an ejection holds its failed checks
-	// and up to [MaxEjectedPaths] conflicted paths within [MaxConflictBytes],
-	// some 16 KiB at its widest, and deleting it frees its overflow pages.
-	// Bounded by QueueSweepRows alone, a step of the widest ejections
-	// removed about 64 MiB; bounded here it removes 2 058 of them, and its
-	// record holds the write lane 64 ms, against 44 ms for QueueSweepRows
-	// narrow entries (BenchmarkApplyAQueueSweep, doc.go's measured section),
-	// both under the third of statelog.ApplyTxTimeBudget the domain's
-	// deletes are sized to. [PurgePartBytes], because it is the bytes of
-	// wide rows a delete takes in that third, measured, and these are the
-	// same deletes of overflow pages.
+	// removes beside QueueSweepRows' count: ended entries oldest first, each
+	// weighed by its ejection's JSON (code_queue.ejected_bytes), until they
+	// reach it (at least one, at most one past it); a step whose entries it cut
+	// takes no landing. A row count bounds a delete's time only for narrow
+	// rows: an ejection is up to some 16 KiB of overflow pages, so rows alone
+	// let a step remove some 64 MiB. Bounded here, a step of the widest holds
+	// the write lane 64 ms, against 44 ms for QueueSweepRows narrow entries
+	// (BenchmarkApplyAQueueSweep, doc.go's measured section), both under the
+	// third of statelog.ApplyTxTimeBudget: [PurgePartBytes], the measured bytes
+	// of the same overflow-page deletes.
 	QueueSweepBytes = PurgePartBytes
 
 	// queueHorizonRows is the most rows one candidate, eject or land record
-	// removes of its repository's queue history past [QueueHistory] — ended
-	// entries first, then landings below their green row: twice
-	// [MaxLandEntries], since a land ends at most that many entries and
-	// writes at most that many landings, so a working queue's history keeps
-	// pace with what its records add, and the sweep only reaches an idle
-	// one.
+	// removes of its repository's queue history past [QueueHistory], ended
+	// entries, then landings: twice [MaxLandEntries], since a land ends that many
+	// entries and writes that many landings at most, so a working queue's
+	// history keeps pace and the sweep only reaches an idle one.
 	queueHorizonRows = 2 * MaxLandEntries
 
-	// queueHorizonBytes is how many bytes of ejections one candidate, eject
-	// or land record removes beside queueHorizonRows' count, weighed as
-	// [QueueSweepBytes] weighs them: [HorizonBytesPerRecord], MaxRecordBytes,
-	// for its reason — an eject's ejections are its record's own, so no
-	// record adds more ejection bytes than that, and the history's removal
-	// keeps pace with its growth in bytes as in rows, inside the hot records
-	// at the cost of one record's bytes of deletes.
+	// queueHorizonBytes is how many bytes of ejections one candidate, eject or
+	// land record removes beside queueHorizonRows' count, weighed as
+	// [QueueSweepBytes] weighs them: [HorizonBytesPerRecord], since no record
+	// adds more ejection bytes than its own, so removal keeps pace in bytes.
 	queueHorizonBytes = HorizonBytesPerRecord
 )
 
@@ -218,14 +151,10 @@ const (
 	// what was before it.
 	EjectNotFastForward QueueEndReason = "not_fast_forward"
 	// EjectRepoMirrored is the entry's repository a PULL MIRROR
-	// ([RepoRef.Mirrored]), which nothing merges into: it moves only by its
-	// syncs, so a candidate and a landing on it are refused repo_mirrored,
-	// and its home puts every live entry out rather than build, on every
-	// turn, a train no landing could land — its enqueuer and its change's
-	// authors told why. Its decide holds the reason to the rows: refused
-	// stale on a repository that is not a pull mirror ([decideEject]).
-	//
-	// BASE FORMAT, as this file's head says.
+	// ([RepoRef.Mirrored]), which moves only by its syncs: a candidate and a
+	// landing on it are refused repo_mirrored, so its home ejects every live
+	// entry rather than build, every turn, a train no landing could land. The
+	// decide refuses it stale on a repository that is not one ([decideEject]).
 	EjectRepoMirrored QueueEndReason = "repo_mirrored"
 )
 
@@ -237,16 +166,12 @@ func EjectReasons() []QueueEndReason {
 
 // MergedViaQueue is how a change a land record merged reached its target
 // ([MergedVia]): its queue landed it, tested merged on its target first.
-//
-// BASE FORMAT, as this file's head says.
 const MergedViaQueue MergedVia = "queue"
 
-// Candidate records a queue's TRAIN on one target: its candidates,
-// built by the repository's home onto the target's tip, and the pack the
-// commits they built are stored in — the record of op candidate on the
-// repository's subject.
-//
-// BASE FORMAT, as this file's head says.
+// Candidate records a queue's TRAIN on one target: its candidates, built by
+// the repository's home onto the target's tip, and the pack their commits are
+// stored in. A target holds one train: a candidate abandons the earlier one,
+// its entries waiting again. The record of op candidate.
 type Candidate struct {
 	RepoID    string `json:"repo_id"`
 	TargetRef string `json:"target_ref"`
@@ -274,37 +199,35 @@ type TrainCandidate struct {
 	TipOID      string           `json:"tip_oid"`
 }
 
-// Eject puts live entries out of their queue: the record of op eject on the
-// repository's subject.
-//
-// BASE FORMAT but [Ejection.TestedIn], as this file's head says.
+// Eject puts live entries out of their queue and abandons the train each was
+// in: the record of op eject.
 type Eject struct {
 	RepoID  string     `json:"repo_id"`
 	Entries []Ejection `json:"entries"`
-	// Routing is whom the record concerns, a routing an entry's change in
-	// the entries' order — its authors told it left the queue, or that its
-	// merge conflicted, and its enqueuer — STAMPED BY THE COMMITTER and
-	// kept within the record's room ([keptRoutings]).
+	// Routing is whom the record concerns (its change's authors and its
+	// enqueuer), one an entry in order, STAMPED BY THE COMMITTER and kept
+	// within the record's room ([keptRoutings]).
 	Routing []ChangeRouting `json:"routing,omitempty"`
 }
 
-// Ejection is one entry an eject puts out: why ([EjectReasons]), and what of
-// it a person reads first — the required checks that failed on what it was
-// tested in, or the paths its merge conflicted on. A bisected culprit's
-// ejection also names the train it failed on.
+// Ejection is one entry an eject puts out: why ([EjectReasons]) and the
+// required checks that failed on it or the paths its merge conflicted on. A
+// bisected culprit's ejection also names the train it failed on.
 type Ejection struct {
 	EntryID string         `json:"entry_id"`
 	Reason  QueueEndReason `json:"reason"`
 	Checks  []string       `json:"checks,omitempty"`
 	Paths   []string       `json:"paths,omitempty"`
-	// TestedIn is the train a bisected culprit's checks failed on, stamped by its home, since the
-	// train's rows go with the eject; nil on every other ejection and before [TestedInVersion].
+	// TestedIn is the train a bisected culprit's checks failed on, stamped by
+	// its home since the train's rows go with the eject; nil otherwise and
+	// before [TestedInVersion].
 	TestedIn *EjectionTrain `json:"tested_in,omitempty"`
 }
 
-// EjectionTrain is the train an ejection's checks failed on: its candidate, the commit that
-// candidate was merged onto (the target's tip, for a train's first) and the commit the checks
-// failed on, the candidate's merge up to the entry. VERSION 7 ([TestedInVersion]).
+// EjectionTrain is the train an ejection's checks failed on: its candidate,
+// the commit it merged onto (the target's tip, for a train's first) and the
+// commit the checks failed on, its merge up to the entry. VERSION 7
+// ([TestedInVersion]).
 type EjectionTrain struct {
 	CandidateID string `json:"candidate_id"`
 	BaseOID     string `json:"base_oid"`
@@ -312,9 +235,7 @@ type EjectionTrain struct {
 }
 
 // Land lands a queue's entries on their target in one record: the record of op
-// land on the repository's subject.
-//
-// BASE FORMAT, as this file's head says.
+// land. Its decide proves each entry's gate again ([Committer.ProposeQueue]).
 type Land struct {
 	RepoID string `json:"repo_id"`
 	// LandID is [QueueLandID] of the proposal's operation id: what each
@@ -336,10 +257,9 @@ type Land struct {
 	// asked to — each push row's node and received_at.
 	Node       string    `json:"node"`
 	ReceivedAt time.Time `json:"received_at"`
-	// Routing is whom the record concerns, a routing an entry's change in
-	// the entries' order — its authors told it merged, its enqueuer, who
-	// merged it, not — STAMPED BY THE DECIDE and kept within the record's
-	// room ([keptRoutings]).
+	// Routing is whom the record concerns, one an entry's change in order:
+	// its authors, not its enqueuer, who merged it. STAMPED BY THE DECIDE and
+	// kept within the record's room ([keptRoutings]).
 	Routing []ChangeRouting `json:"routing,omitempty"`
 }
 
@@ -349,18 +269,15 @@ type LandEntry struct {
 	EntryID  string `json:"entry_id"`
 	ChangeID string `json:"change_id"`
 	Commit   string `json:"commit"`
-	// DeleteSource is STAMPED BY THE DECIDE: the entry asked its source
-	// deleted and a push deleting it as its enqueuer would be taken — so the
-	// apply deletes the change's source, read from its row, with no rule
-	// matched; the source is kept otherwise, as a merge asked keeping it.
+	// DeleteSource is STAMPED BY THE DECIDE when the entry asked its source
+	// deleted and its enqueuer's push deleting it would be taken, so the apply
+	// deletes the source with no rule matched; otherwise the source is kept.
 	DeleteSource bool `json:"delete_source,omitempty"`
 }
 
 // Green moves a protected target's green row onto the tip of a landing record
-// whose required checks passed on it: the record of op green on the
-// repository's subject.
-//
-// BASE FORMAT, as this file's head says.
+// whose required checks passed on it, a landing no queue tested first (a
+// person's override merge or push): the record of op green.
 type Green struct {
 	RepoID    string `json:"repo_id"`
 	TargetRef string `json:"target_ref"`
@@ -371,10 +288,7 @@ type Green struct {
 }
 
 // Broken marks a landing above its target's green row broken, the named
-// required checks having failed on its commit: the record of op broken on the
-// repository's subject.
-//
-// BASE FORMAT, as this file's head says.
+// required checks having failed on its commit: the record of op broken.
 type Broken struct {
 	RepoID    string `json:"repo_id"`
 	TargetRef string `json:"target_ref"`
@@ -385,54 +299,41 @@ type Broken struct {
 	OID      string            `json:"oid"`
 	// Checks are the required checks that failed on OID.
 	Checks []string `json:"checks"`
-	// Routing is whom the record concerns ([ChangeRouting]) — the authors
-	// of the change the landing merged, its enqueuer and the effective lead
-	// of the repository's owner — STAMPED BY THE COMMITTER; nil for a
-	// landing no change made.
+	// Routing is whom the record concerns ([ChangeRouting]): the landed
+	// change's authors, its enqueuer and the repository owner's effective
+	// lead. STAMPED BY THE COMMITTER; nil for a landing no change made.
 	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
-// QueueSweep removes repository RepoID's ended queue entries and its landings
+// QueueSweep removes an IDLE repository's ended queue entries and its landings
 // below their target's green row from before Through, the duty holder's clock
-// less [QueueHistory]: the record of op queue_sweep on the repository's
-// subject ([Store.QueueSweep]).
-//
-// BASE FORMAT, as this file's head says.
+// less [QueueHistory] (M5-D34; a working queue's records remove them): the
+// record of op queue_sweep ([Store.QueueSweep]).
 type QueueSweep struct {
 	RepoID  string    `json:"repo_id"`
 	Through time.Time `json:"through"`
 }
 
 // CloseSettled settles the closes landed entries owe their changes' work
-// items (M5-D27, code_queue.close_op): the record of op close_settled on the
-// repository's subject, which the repository's home asks once each close as
-// its entry's enqueuer has ENDED — the item closed, or definitively not —
-// never while the tracker's answer is still unknown, which leaves that close
-// owed for the next turn on whichever home holds the repository.
-//
-// EVERY CLOSE A TURN ENDED, IN ONE RECORD: a close is one tracker write of
-// its enqueuer's, but how it ended is the home's to record, and a landing of
-// [MaxLandEntries] changes asking their items closed would otherwise cost the
-// code log as many appends, one after another inside one queue turn, each a
-// decide and an acknowledgement of the committer's. A not_closed close still
-// names its change in a notice of its own: the record carries a routing a
-// change ([CloseSettled.Routing]), as an eject's and a land's do. An entry
-// another settle already cleared is SKIPPED by the decide, never a refusal
-// of the rest; a record none of whose entries owes a close any more is
-// refused stale.
-//
-// BASE FORMAT, as this file's head says.
+// items (M5-D27, code_queue.close_op, set by the land): the record of op
+// close_settled. The home asks it once each close, made as the entry's
+// enqueuer, has ENDED (closed, or definitively not); one whose tracker answer
+// is unknown, or whose home stopped first, stays owed to the next turn on any
+// home, never lost. Every close a turn ended goes in ONE record, so a landing
+// of [MaxLandEntries] changes costs one append, not one each in the turn; a
+// not_closed close still gets its own notice ([CloseSettled.Routing]). The
+// decide SKIPS an entry another settle cleared, never refusing the rest, and
+// refuses stale a record none of whose entries still owes a close.
 type CloseSettled struct {
 	RepoID string `json:"repo_id"`
 	// Settled is how each close ended, an entry once, at most
-	// [MaxOwedCloses] — as the committer records it, only the entries its
-	// snapshot found still owing their close.
+	// [MaxOwedCloses]; the committer records only the entries its snapshot
+	// found still owing their close.
 	Settled []SettledClose `json:"settled"`
-	// Routing is whom the record's not_closed closes tell — for each, the
-	// change's authors and its enqueuer, under `merged`, the detail beside it
-	// ([ChangeRouting.NotClosed]) — a routing a change in Settled's order,
-	// STAMPED BY THE COMMITTER and kept within the record's room
-	// ([keptRoutings]); none for a closed one, which tells nobody.
+	// Routing is whom the not_closed closes tell (the change's authors and
+	// its enqueuer, under `merged`, with [ChangeRouting.NotClosed]), one a
+	// change in Settled's order, STAMPED BY THE COMMITTER and kept within the
+	// record's room ([keptRoutings]); a closed one tells nobody.
 	Routing []ChangeRouting `json:"routing,omitempty"`
 }
 
@@ -440,10 +341,8 @@ type CloseSettled struct {
 type SettledClose struct {
 	EntryID string       `json:"entry_id"`
 	Outcome CloseOutcome `json:"outcome"`
-	// Detail is why a close that ended not_closed was not — the engine's
-	// own sentence (a vendor's item it does not write, an enqueuer the chart
-	// no longer lets update it, the tracker's refusal) — at most
-	// [MaxCloseDetail] bytes; "" for a closed one.
+	// Detail is the engine's own sentence why a not_closed close was not, at
+	// most [MaxCloseDetail] bytes; "" for a closed one.
 	Detail string `json:"detail,omitempty"`
 }
 
@@ -469,15 +368,10 @@ func CloseOutcomes() []CloseOutcome { return []CloseOutcome{CloseClosed, CloseNo
 func (o CloseOutcome) Valid() bool { return slices.Contains(CloseOutcomes(), o) }
 
 // MaxCloseDetail is the most bytes a not_closed settle's detail holds:
-// [MaxNoticeExcerpt], since the detail is what its notice keeps of it — one
-// sentence a person reads in their Inbox, never a log.
+// [MaxNoticeExcerpt], what its notice keeps: one sentence, never a log.
 const MaxCloseDetail = MaxNoticeExcerpt
 
-// validate refuses a settle no home asks: no close or more than
-// [MaxOwedCloses], an entry that is no bare UUIDv7 or is named twice, an
-// outcome none of [CloseOutcomes], a closed one carrying a detail or a
-// not_closed one none, a detail past [MaxCloseDetail], a routing its asker
-// set.
+// validate refuses a settle no home asks, a routing its asker set among them.
 func (c CloseSettled) validate() error {
 	if err := validRepoID("close_settled.repo_id", c.RepoID); err != nil {
 		return err
@@ -527,12 +421,7 @@ func (c CloseSettled) entries() []string {
 }
 
 // validate refuses a candidate record no home builds ([ErrInvalidProposal],
-// naming the field): its train not [QueueTrainID] of opID; no candidate or
-// more than [MaxQueueDepth]; a candidate out of order, misnamed, empty or past
-// [MaxQueueBatch]; an entry that is no bare UUIDv7 or named twice; a commit or
-// a tip that is no whole object id, a tip that is not its candidate's last
-// commit; a pack whose row is no bundle's, past [MaxWritePackBytes] or not
-// named for the train.
+// naming the field).
 func (c Candidate) validate(opID string) error {
 	if err := validRepoID("candidate.repo_id", c.RepoID); err != nil {
 		return err
@@ -591,12 +480,8 @@ func (c Candidate) validate(opID string) error {
 	return checkQueuePack("candidate.pack", c.Pack, c.Train)
 }
 
-// validate refuses an eject record no home forms: no entry or more than
-// [MaxLandEntries]; an entry that is no bare UUIDv7 or named twice; a reason
-// not one of [EjectReasons]; checks named but for a failed check — at most
-// MaxRequiredChecks, each a check's name — and paths but for a conflict, at
-// most [MaxEjectedPaths] within [MaxConflictBytes], each one a record carries;
-// a train named but for a failed check naming its checks, or not whole.
+// validate refuses an eject record no home forms, a routing its asker set
+// among them.
 func (e Eject) validate() error {
 	if err := validRepoID("eject.repo_id", e.RepoID); err != nil {
 		return err
@@ -655,9 +540,7 @@ func (e Eject) validate() error {
 	return nil
 }
 
-// validate refuses a train x names that no home stamps: one beside any reason but a failed
-// check or naming no checks, a candidate that is no bare UUIDv7, an object id that is not whole,
-// or a commit that is its own base. A nil train is valid.
+// validate refuses a train x names that no home stamps. A nil train is valid.
 func (t *EjectionTrain) validate(field string, x Ejection) error {
 	switch {
 	case t == nil:
@@ -682,13 +565,8 @@ func (t *EjectionTrain) validate(field string, x Ejection) error {
 	return nil
 }
 
-// validate refuses a land record no home builds: its id not [QueueLandID] of
-// opID; a target that is no branch; a base or a tip that is no whole object
-// id, a tip that is not its last entry's commit; a train that is no bare
-// UUIDv7; no entry or more than [MaxLandEntries]; an entry or a change that
-// is no bare UUIDv7 or named twice, a commit that is no whole object id or the
-// base; no node, or no instant it was asked at; and a field the decide stamps
-// set by its asker.
+// validate refuses a land record no home builds, a field the decide stamps set
+// by its asker among them.
 func (l Land) validate(opID string) error {
 	if err := validRepoID("land.repo_id", l.RepoID); err != nil {
 		return err
@@ -754,8 +632,7 @@ func (l Land) validate(opID string) error {
 	return nil
 }
 
-// validate refuses a green record: a target that is no branch, an object id
-// that is no whole one, a position that is none on the code log.
+// validate refuses a green record no home asks.
 func (g Green) validate() error {
 	if err := validRepoID("green.repo_id", g.RepoID); err != nil {
 		return err
@@ -769,9 +646,8 @@ func (g Green) validate() error {
 	return onCodeLog("green.through", g.Through)
 }
 
-// validate refuses a broken record: a target that is no branch, a landing key
-// that is none, an object id that is no whole one, no check or more than a gate
-// requires, a name that is no check's.
+// validate refuses a broken record no home asks, a routing its asker set
+// among them.
 func (b Broken) validate() error {
 	if err := validRepoID("broken.repo_id", b.RepoID); err != nil {
 		return err
@@ -824,9 +700,8 @@ func onCodeLog(field string, p statelog.Position) error {
 }
 
 // checkQueuePack refuses a queue record's pack whose row is no bundle's
-// ([PackRef.Check]), past what an engine-built pack may store
-// ([MaxWritePackBytes]) — the home's build's own bound, a merge's — or not
-// named id, the record's own derived id.
+// ([PackRef.Check]), past [MaxWritePackBytes] (the home's build's own bound,
+// as a merge's) or not named id, the record's own derived id.
 func checkQueuePack(field string, pack *PackRef, id string) error {
 	if pack == nil {
 		return nil

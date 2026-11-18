@@ -14,18 +14,15 @@ import (
 )
 
 // A CHANGE'S WRITE IS HELD TO WHOEVER ITS SEAT'S TURN WORKS FOR (M4-decisions
-// D30 under M3-decisions U40 (a)): a colleague seat must hold the write's
-// least access on the repository and nothing beyond it — the relation, who
-// owns the change or wrote it, is the seat's own to meet — and nobody (a
-// stranger, a person who may not act) steers only the seat's own work: a
-// change it owns, or any change of a repository it owns. A write for nobody
-// in particular, nil, is the seat's alone.
+// D30 under M3-decisions U40 (a)): a colleague must hold the write's least access
+// on the repository and nothing beyond it (owning or authoring the change is the
+// seat's own to meet); nobody (a stranger, a person who may not act) steers only
+// the seat's own work, a change it owns or any change of a repository it owns. A
+// nil ceiling is the seat's alone.
 //
-// Mutations: the own-change spare dropped — plat-lead's own change refused
-// for nobody, red; the own-repository spare dropped — dev's scratch
-// repository's change refused for nobody, red; nobody admitted — Platform's
-// change lands for nobody, red; the colleague's access compared against read
-// whatever the write needs — reader admitted to a review, red.
+// Mutations: drop the own-change or own-repository spare (that write refused for
+// nobody), admit nobody (Platform's change lands), or compare the colleague's
+// access against read (reader admitted to a review): each red.
 func TestAChangeWriteIsHeldToWhoeverItsTurnWorksFor(t *testing.T) {
 	t.Parallel()
 	r := testChart()
@@ -71,23 +68,18 @@ func TestAChangeWriteIsHeldToWhoeverItsTurnWorksFor(t *testing.T) {
 	}
 }
 
-// A CHANGE'S WRITE IS DECIDED AGAIN FOR WHOEVER WOKE THE TURN, where it is
-// decided: the committer and the change writer judge the ceiling a seat's
-// write carries (ChangeProposal.Ceiling, ConversationWrite.Ceiling) from their
-// own chart, once the seat itself may make the write, and a refusal appends
-// nothing. cto — Engineering's lead, who maintains web — retitles dev's change
-// for reader, who reads web, and not for a colleague the chart lacks nor for
-// nobody; dev retitles its own for nobody. dev opens a change of its own
-// namespace for nobody, and of release only for a colleague who reads web.
-// plat-lead reviews dev's change for dev — its author, who could never review
-// it — and not for reader, who reads and does not review. reader comments for
-// vp-sales and not for nobody; dev comments on its own for nobody. A ceiling
-// on a write no seat asks, or naming the seat that asks, is refused before it
-// is queued.
+// A CHANGE'S WRITE IS DECIDED AGAIN FOR WHOEVER WOKE THE TURN, where it is decided:
+// the committer and the change writer judge a seat's write's ceiling
+// (ChangeProposal.Ceiling, ConversationWrite.Ceiling) on their own chart, once the
+// seat itself may make the write, and a refusal appends nothing. plat-lead reviews
+// dev's change for dev, its author, who could never review it itself, and not for
+// reader, who only reads; dev's own namespace and own change are its own work, made
+// for nobody. A ceiling on a write no seat asks, or naming its own asker, is
+// refused before it is queued.
 //
-// Mutations: either decide skipping the ceiling — the refusals land, red; the
-// open's own-namespace spare dropped — dev's namespace open refused, red; the
-// conversation holding a review at read — reader's review lands, red.
+// Mutations: either decide skipping the ceiling (the refusals land), the open's
+// own-namespace spare dropped, or the conversation holding a review at read
+// (reader's review lands): each red.
 func TestAChangeWriteIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -189,45 +181,18 @@ func TestAChangeWriteIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 	}
 }
 
-// A CODE WRITE WHOSE CARRIER AND CEILING DISAGREE IS REFUSED (ADR-0109), by
-// every node that decides one — the committer a change's lifecycle and a
-// dequeue, the change writer its conversation, the Gitlet node an engine write
-// (the rule it holds one to: gitlet.EngineWrite.Validate, and WrittenForOn
-// against its chart): the engine composes whom a seat's write is made for and
-// its ceiling from one bound ceiling, so a request whose two disagree — a
-// colleague's ceiling beside another colleague or a credential, nobody's
-// beside a seat, a seat the chart holds as an agent's with no ceiling, a
-// credential with no ceiling, a person's seat bounded as though it were a
-// colleague's — was sent by a site that dropped one, and is refused naming
-// written_for with nothing appended. A seat the deciding chart does not place,
-// with no ceiling, is held as a colleague's and refused so too, its refusal
-// naming the seat and saying this node's chart does not place it, so a chart
-// that lags the company's reads as one. So is a stranger's carrier, for whom
-// no code write is made, and a carrier on a person's own write — those two on
-// the requests no ceiling rides on as well, a push, a merge and an enqueue,
-// each built from a write its builder held to that write's ceiling already,
-// whose own rule holds the carrier to its asker alone and admits every other
-// row's. What agrees is made: a person's seat with no ceiling, a colleague
-// with its own ceiling, a credential with nobody's, and nobody. And a ceiling
-// that comes with no carrier — what a seat or a Gitlet node of a build before
-// the carrier sends, its member absent, which arrives stated nobody — is
-// decided by its ceiling as ever: a colleague's grant still bounds it, and
-// nobody's still spares only the seat's own work; and its record carries
-// nobody, at version 1, its routing waking a seat though it does. A carrier
-// on the payload itself — an open's, a reopen's, a merge's or an enqueue's,
-// which the committer stamps from the request — is refused when its asker
-// sets one, naming that payload's working_for, as an asker-set principal is.
+// A CODE WRITE WHOSE CARRIER AND CEILING DISAGREE IS REFUSED (ADR-0109) by every node
+// deciding one (committer, change writer, the Gitlet node's EngineWrite.Validate and
+// WrittenForOn), naming written_for and appending nothing: the engine composes both
+// from one bound ceiling, so a disagreement means a site dropped one. A seat the
+// deciding chart does not place, with no ceiling, is refused as a colleague's but
+// says the chart does not place it, so a lagging chart reads as one. A carrier no
+// ceiling makes right, a stranger's or one on a person's own write, is refused
+// everywhere; a ceiling with no carrier (an older sender's) is decided by its ceiling.
 //
-// Mutations: the agreement skipped — the colleague, credential and nobody rows
-// made, red; a stranger's carrier admitted — the push, the merge and the
-// enqueue made for one admitted, red; a ceiling with no carrier refused — the
-// older sender's rows refused, red; a decide skipping the chart's half — the
-// agent seat with no ceiling and the person's seat under its ceiling made
-// there, red; a credential with no ceiling admitted — refused only by the
-// chart's half, saying it does not place a seat, red; a seat the chart does
-// not place refused as an agent's — its refusal not saying the chart does not
-// place it, red; an open's asker-set carrier admitted — the open is not
-// refused, red.
+// Mutations: skip the agreement or the chart's half of a decide, admit a stranger's
+// carrier or a credential with no ceiling, refuse a ceiling with no carrier or an
+// unplaced seat as an agent's, or admit an asker-set payload carrier: each red.
 func TestACodeWriteWhoseCarrierAndCeilingDisagreeIsRefused(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -245,15 +210,13 @@ func TestACodeWriteWhoseCarrierAndCeilingDisagreeIsRefused(t *testing.T) {
 	credential := types.ForTurn(&types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
 		Apps: []iam.Grant{iam.GrantGitlet}})
 	stranger := types.ForTurn(&types.WorkingFor{Kind: types.WorkingForStranger})
-	// older is whom a request a build before the carrier sends is made for,
-	// as that build sends it: no member at all.
+	// older is the carrier a build before the carrier sends: no member at all.
 	var older types.WrittenFor
 	const (
 		made = iota
 		refused
-		// refusedAlone is refused whatever ceiling rides beside it, and on
-		// the requests no ceiling rides on too: a carrier no ceiling makes
-		// right.
+		// refusedAlone is a carrier no ceiling makes right: refused on the
+		// requests no ceiling rides on too.
 		refusedAlone
 		bounded
 	)
@@ -263,10 +226,9 @@ func TestACodeWriteWhoseCarrierAndCeilingDisagreeIsRefused(t *testing.T) {
 		asker      gitlet.Principal
 		ceiling    *gitlet.WriteCeiling
 		writtenFor types.WrittenFor
-		// want is whether the write is made, refused naming written_for —
-		// where a ceiling rides, or wherever it is carried — and saying says
-		// where it is set, or refused by its ceiling, saying says of a
-		// change's edit.
+		// want is made, refused naming written_for (where a ceiling rides;
+		// refusedAlone wherever carried) and saying says where set, or bounded:
+		// refused by its ceiling, saying says of a change's edit.
 		want int
 		says string
 	}{
@@ -311,8 +273,7 @@ func TestACodeWriteWhoseCarrierAndCeilingDisagreeIsRefused(t *testing.T) {
 			version = res.Version
 		}
 
-		// THE CHANGE WRITER, a comment on it, naming plat-lead, a seat it
-		// wakes.
+		// THE CHANGE WRITER, a comment on it waking plat-lead.
 		before = n.end()
 		comment := saying(repo, change, tc.asker, "", "by "+tc.name)
 		comment.Comment.Mentions = []string{"plat-lead"}
@@ -326,8 +287,8 @@ func TestACodeWriteWhoseCarrierAndCeilingDisagreeIsRefused(t *testing.T) {
 			requireConversationRefused(t, n, before, said, err, gitlet.ConversationRefusalNotPermitted, "may not")
 		default:
 			requireConversed(t, said, err)
-			// AN OLDER SENDER'S WRITE IS MADE FOR NOBODY on its record too,
-			// at version 1, its routing waking plat-lead though it does.
+			// AN OLDER SENDER'S WRITE RECORDS NOBODY, at version 1, though its
+			// routing still wakes plat-lead.
 			if v, _, carried := carriedRecord(t, n, said.Position); !tc.writtenFor.Stated() &&
 				(v != 1 || len(carried) != 1 || carried[0] != nil) {
 				t.Errorf("the comment made for %s records %v at version %d, want a routing carrying nobody at "+
@@ -335,8 +296,8 @@ func TestACodeWriteWhoseCarrierAndCeilingDisagreeIsRefused(t *testing.T) {
 			}
 		}
 
-		// THE COMMITTER again, a dequeue: of no entry, which a dequeue it
-		// decides at all is refused for.
+		// THE COMMITTER again, a dequeue of no entry: decided at all, it is
+		// refused not_queued.
 		before = n.end()
 		out := dequeueing(repo, uuid.Must(uuid.NewV7()).String(), tc.asker)
 		out.Ceiling, out.WrittenFor = tc.ceiling, tc.writtenFor
@@ -371,10 +332,9 @@ func TestACodeWriteWhoseCarrierAndCeilingDisagreeIsRefused(t *testing.T) {
 			t.Errorf("the engine write made for %s: %v, want it admitted", tc.name, err)
 		}
 
-		// THE REQUESTS NO CEILING RIDES ON — a push, a merge and an enqueue:
-		// each is built from a write its builder held to that write's ceiling
-		// already, so its own rule holds the carrier to the asker alone,
-		// refusing what no ceiling could make right and admitting the rest.
+		// THE REQUESTS NO CEILING RIDES ON — a push, a merge, an enqueue — are
+		// each built from a write already held to its ceiling, so their rule
+		// refuses only what no ceiling could make right.
 		cmd := update("refs/heads/carried", gitlet.ZeroOID, oidOf("carried"))
 		push := proposal(repo, cmd)
 		if tc.asker.Kind == gitlet.PrincipalAgent {
@@ -402,11 +362,10 @@ func TestACodeWriteWhoseCarrierAndCeilingDisagreeIsRefused(t *testing.T) {
 		}
 	}
 
-	// A CARRIER ON A PAYLOAD THE ASKER SET: the committer stamps whom an open,
-	// a reopen, a merge and an enqueue were made for from the request, so one
-	// an asker sends is refused naming the payload's own working_for, as an
-	// asker-set principal or routing is, by every node that holds the request
-	// — the committer appending nothing.
+	// A CARRIER ON A PAYLOAD THE ASKER SET: the committer stamps an open's,
+	// reopen's, merge's and enqueue's from the request, so one an asker sends
+	// is refused naming the payload's working_for, as an asker-set principal
+	// is, the committer appending nothing.
 	madeFor := forSeat("founder")
 	open := opening(repo, releaseRef, mainRef, cto)
 	open.WrittenFor, open.Open.WorkingFor = madeFor, madeFor.Carrier()
@@ -433,32 +392,18 @@ func TestACodeWriteWhoseCarrierAndCeilingDisagreeIsRefused(t *testing.T) {
 	}
 }
 
-// WHOM A CODE WRITE IS MADE FOR IS A SEAT OR A CREDENTIAL, WELL FORMED
-// (ADR-0109): a seat by its handle and nothing beside it; a credential acting
-// as no seat by its coloned machine login, with the apps its turn was held to
-// — each an app, none twice, at least one, since a credential naming none is a
-// stranger's to every reader — and no seat; and nothing of another kind: not
-// the zero, which names none. So what a record carries of one is a handle or a
-// login and a few apps, bounded. Anything else is refused by the rule every
-// node holds a request to, naming the member.
+// WHOM A CODE WRITE IS MADE FOR IS A SEAT OR A CREDENTIAL, WELL FORMED (ADR-0109): a
+// seat by its handle alone; a credential acting as no seat by its coloned machine
+// login and the apps its turn was held to, none twice and at least one (naming none,
+// it is a stranger's to every reader); never the zero kind. So a record's carrier
+// stays bounded; anything else is refused naming the member. A kind or app this
+// build does not know is a newer build's, not malformed: Validate and
+// EngineWrite.WrittenForOn answer it as unknown, never ErrInvalidProposal or
+// ErrInvalid, so the walk asks a node that knows it (internal/estate's
+// TestAnInProcessCommitterAnswersAStoredCarriersUnknownAppAsAnotherBuild).
 //
-// AND A KIND OR AN APP THIS BUILD DOES NOT KNOW IS NO MALFORMED CARRIER, but a
-// newer build's: the request's Validate answers it, here in process, as its
-// decoder does off the wire — a name the build does not declare, never
-// ErrInvalidProposal — so the walk asks a node of the build that knows it
-// (internal/estate's TestAnInProcessCommitterAnswersAStoredCarriersUnknownAppAsAnotherBuild,
-// and TestACodeWriteForACredentialMovesOffANodeThatDoesNotKnowItsApp off the
-// wire). So does the rule itself, whoever holds a request to it: the chart's
-// check of an engine write (gitlet.EngineWrite.WrittenForOn) answers the same
-// value the same way, never ErrInvalid, though every holder that asks it now
-// asks the request's Validate first.
-//
-// Mutations: a name that is no app admitted — the credential naming admin is
-// made, red; the zero kind admitted as a seat's — the carrier naming no kind is
-// made, red; a value this build does not know refused as malformed — the kind
-// and the app this build does not know answered ErrInvalidProposal, red; the
-// rule's own check of such a value dropped, or its refusal wrapped as
-// malformed (refusedCarrier) — the chart's check answers ErrInvalid, red.
+// Mutations: admit admin as an app or the zero kind, refuse an unknown value as
+// malformed, or drop or wrap (refusedCarrier) the rule's check of one: each red.
 func TestWhomACodeWriteIsMadeForIsWellFormed(t *testing.T) {
 	t.Parallel()
 	nobody := &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingNobody}
@@ -521,9 +466,8 @@ func TestWhomACodeWriteIsMadeForIsWellFormed(t *testing.T) {
 	}
 }
 
-// arrived is v as the node it is asked of decodes it: through the decoder it is
-// handed, as the estate's wire reads every request, so a carrier its sender
-// left off — nobody, or no member at all from a build before the carrier —
+// arrived is v as a node decodes it off the estate's wire, so a carrier its
+// sender left off (nobody, or no member at all from a build before the carrier)
 // arrives stated nobody.
 func arrived[T any](t *testing.T, v T) T {
 	t.Helper()

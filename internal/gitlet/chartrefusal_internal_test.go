@@ -16,22 +16,16 @@ import (
 )
 
 // A CHART'S REFUSAL OF WHOM A WRITE IS MADE FOR IS LOGGED AS THE RACE IT IS,
-// AND EVERY OTHER AS A SENDER'S BUG (ADR-0109). Each decide that judges a
-// seat's write on its epoch's chart — the committer's of a change's lifecycle
-// and of a dequeue, the change writer's of a conversation — refuses from that
-// chart alone a seat's carrier with no ceiling that the chart does not place or
-// holds as an agent's, and a person's seat under that seat's ceiling: a chart
-// that moved under the turn, or under its run, with no sender at fault, which
-// the node logs at WARN, naming the seat. A carrier no chart makes right — an
-// agent's write that states nothing, a credential with no ceiling, a
-// colleague's ceiling beside another colleague, nobody's beside a seat — it
-// logs at ERROR. Either is refused as no proposal a committer can decide, the
-// class every refusal of the rule keeps, with no refusal of the answer's own.
+// AND EVERY OTHER AS A SENDER'S BUG (ADR-0109). The committer's change and
+// dequeue decides and the change writer's conversation decide refuse, from the
+// chart alone, a seat's carrier with no ceiling that the chart does not place
+// or holds as an agent's, and a person's seat under that seat's ceiling: the
+// chart moved under the turn or its run, no sender at fault, logged at WARN
+// naming the seat. A carrier no chart makes right is logged at ERROR. Either
+// is refused ErrInvalidProposal, with no refusal of the answer's own.
 //
-// Mutations: a log site at ERROR whatever the cause — the change's, the
-// conversation's or the dequeue's chart rows at ERROR, red; every refusal at
-// WARN — the sender's rows at WARN, red; the chart's refusal of a person's seat
-// under its ceiling left untyped — that row at ERROR, red.
+// Mutations, each red: every log site at ERROR whatever the cause; every
+// refusal at WARN; the person's-seat refusal left untyped (logged at ERROR).
 func TestAChartsRefusalOfWhomAWriteIsForIsLoggedAsARaceAndEveryOtherAsABug(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)

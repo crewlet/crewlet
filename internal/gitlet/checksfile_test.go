@@ -24,10 +24,9 @@ type wantFault struct {
 	line int
 }
 
-// faultsOf is a refused file's faults, holding the refusal to its contract on
-// the way: a join of *config.Fault that IS gitlet.ErrInvalid, every fault one of
-// config's classified kinds — so `crewlet validate -json` reports each one as a
-// config document's problem, never as `invalid`.
+// faultsOf is a refused file's faults, holding the refusal to its contract: a
+// join of *config.Fault that IS gitlet.ErrInvalid, every fault a kind config
+// classifies, so `crewlet validate -json` never reports one as `invalid`.
 func faultsOf(t *testing.T, err error) []*config.Fault {
 	t.Helper()
 	var joined interface{ Unwrap() []error }
@@ -63,8 +62,7 @@ func faultsOf(t *testing.T, err error) []*config.Fault {
 }
 
 // listAtTheBound is a file of one valid check whose key holds a flow list of
-// the items item spells, as many as fit in MaxChecksFileBytes: the most items
-// one list of a file can hold.
+// as many items as fit in MaxChecksFileBytes, each spelled by item.
 func listAtTheBound(key string, item func(i int) string) string {
 	var b strings.Builder
 	b.WriteString("checks:\n  - name: unit\n    run: make test\n    timeout_seconds: 600\n    " + key + ": [")
@@ -82,21 +80,16 @@ func listAtTheBound(key string, item func(i int) string) string {
 	return b.String()
 }
 
-// A CHECKS FILE PARSES STRICTLY: every check of a whole file reads into the
-// definition it spells, and every way a file can say something other than
-// what a reader takes it to say is refused — at its authored path, as the kind
-// of mistake it is, on its line — and every fault in a file is reported, not
-// the first: up to MaxChecksFileFaults of them, and a count of the rest.
+// A CHECKS FILE PARSES STRICTLY: a whole file reads into the definitions it
+// spells, and every way a file can say something other than what a reader takes
+// it to say is refused at its path, as its kind of mistake, on its line; every
+// fault is reported, up to MaxChecksFileFaults and a count of the rest. A list
+// past its bound is ONE fault, its count, however many items it packs.
 //
-// And a parse costs no more than the file's bound: a list past its bound is
-// ONE fault, its count, whatever it holds and however many items a 64 KiB file
-// packs into it — none of them read, judged or compared with another.
-//
-// Mutation: accept an unknown key of a check (drop its fault) and "an unknown
-// key" goes red; let a key written twice through and "a key written twice"
-// does; read a list's items before its count, and "numbers past the paths'
-// bound" gets a fault an item; list every fault, and "faults past the listed
-// ones" lists them all.
+// Mutation: drop an unknown key's fault and "an unknown key" goes red; let a key
+// written twice through and "a key written twice" does; read a list's items
+// before its count, and "numbers past the paths' bound" gets a fault an item;
+// list every fault, and "faults past the listed ones" lists them all.
 func TestAChecksFileParsesStrictly(t *testing.T) {
 	t.Parallel()
 	const whole = `# The repository's checks.
@@ -146,9 +139,8 @@ checks:
 	for i := range cone {
 		cone[i] = fmt.Sprintf("dir%02d", i)
 	}
-	// MORE FAULTS THAN A REFUSAL LISTS: a key the grammar does not know,
-	// fifty more times than the refusal lists — each one listed in its turn
-	// up to the bound, and the rest counted by one fault at no field.
+	// More faults than a refusal lists: unknown keys, fifty past the bound,
+	// each listed up to it and the rest counted by one fault at no field.
 	var unknown strings.Builder
 	var listed []wantFault
 	unknown.WriteString(valid)
@@ -233,18 +225,16 @@ checks:
 		{"text that is no YAML", "checks: [unit\n", []wantFault{{"", config.ErrShape, 0}}},
 		{"a file past its bytes", "checks: []\n#" + strings.Repeat("x", gitlet.MaxChecksFileBytes),
 			[]wantFault{{"", config.ErrOutOfRange, 0}}},
-		// EVERY FAULT, NOT THE FIRST — a typo'd key does not hide a name
-		// outside the grammar in the same check, nor a fault in the next.
+		// Every fault, not the first: a typo'd key hides neither a bad name in
+		// the same check nor a fault in the next.
 		{"every fault in a file", "checks:\n  - name: Unit\n    run: make\n    timeout_seconds: 60\n" +
 			"    timout: 5\n  - name: lint\n    run: make lint\n    timeout_seconds: 99999\n",
 			[]wantFault{{"checks[0].timout", config.ErrUnknownField, 5},
 				{"checks[0].name", config.ErrUnknownValue, 2},
 				{"checks[1].timeout_seconds", config.ErrOutOfRange, 8}}},
 		{"faults past the listed ones", unknown.String(), listed},
-		// A LIST PAST ITS BOUND IS ITS COUNT, at the most items a file holds:
-		// numbers, each a fault of its own were it read; names no shell
-		// takes, each a fault were it judged; and a cone of directories
-		// outside the repository.
+		// A list past its bound is its count, at the most items a file holds,
+		// each item a fault of its own were it read.
 		{"numbers past the paths' bound", listAtTheBound("paths", strconv.Itoa),
 			[]wantFault{{"checks[0].paths", config.ErrOutOfRange, 5}}},
 		{"names past the env's bound", listAtTheBound("env", func(i int) string { return fmt.Sprint(i, "x") }),
@@ -274,15 +264,14 @@ checks:
 }
 
 // A DIRECT CHECK IS REFUSED (U1 a): a check runs a change's own code, which
-// `direct` would run as the engine's own user on the engine host. It is
-// refused by name, with why, at its field — in a file and on a definition a
-// record carries alike — while every cell a check runs in parses.
-// And the cells are the sandbox's own placements that need a backend, less
-// direct, BOTH WAYS, so a placement the sandbox adds is a decision here.
+// `direct` would run as the engine's own user on the engine host. It is refused
+// by name, with why, at its field, in a file and on a record's definition alike,
+// while every check cell parses. And the cells are exactly the sandbox's
+// placements less direct, BOTH WAYS, so a placement the sandbox adds is a
+// decision here.
 //
-// Mutation: drop direct from config.CodeCheckCellRefusal and it is refused as
-// an unknown value with no reason — red; add direct to config.CodeCheckCells
-// and it parses — red.
+// Mutation: drop direct from config.CodeCheckCellRefusal and it is refused with
+// no reason — red; add direct to config.CodeCheckCells and it parses — red.
 func TestADirectCheckIsRefused(t *testing.T) {
 	t.Parallel()
 	const why = "engine host"
@@ -307,8 +296,7 @@ func TestADirectCheckIsRefused(t *testing.T) {
 			t.Errorf("a check in %s was refused: %v", cell, err)
 		}
 	}
-	// Every placement is a cell a box is built for (config.Placements, each
-	// of which needs a backend); a check runs in each but the engine host's own.
+	// A check runs in every placement but the engine host's own.
 	for _, p := range config.Placements {
 		runs := p != config.PlacementDirect
 		if gitlet.CheckCell(p).Valid() != runs {
@@ -364,11 +352,9 @@ func checksYAML(t *testing.T, file gitlet.ChecksFile) []byte {
 	return out
 }
 
-// ANY BYTES, ONE OF TWO ANSWERS: a file every check of which holds to the
-// grammar — each name once, each definition one Validate passes — and which
-// reads back as itself once written out again; or a refusal holding at least
-// one classified fault. Never a panic, never a file with a check no reader
-// may run.
+// ANY BYTES, ONE OF TWO ANSWERS: a file whose checks are named once, each
+// passing Validate, that reads back as itself once written out; or a refusal of
+// classified faults. Never a panic, never a check no reader may run.
 func FuzzParseChecks(f *testing.F) {
 	for _, seed := range []string{
 		"checks: []\n",
@@ -413,21 +399,15 @@ func FuzzParseChecks(f *testing.F) {
 	})
 }
 
-// BenchmarkParseChecks is ONE PARSE of a checks file at its bound — what the
-// home Gitlet node pays for the file on every change it dispatches, and what
-// `crewlet validate` pays for it on a laptop:
+// BenchmarkParseChecks is one parse of a checks file at its bound, what the home
+// Gitlet node pays on every change it dispatches:
 //
-//   - whole: the most a VALID file makes a parse judge — as many checks as
-//     fit in MaxChecksFileBytes, each with every list at its bound (32 path
-//     globs, a cone of 64 directories, 32 variable names), every item read
-//     and judged;
-//   - paths, env and cone: one list holding as many items as fit in
-//     MaxChecksFileBytes — numbers where globs belong, names no shell takes,
-//     directories outside the repository — each refused by its count alone;
-//   - keys: a check of as many keys the grammar does not know as fit in the
-//     file, the refusal listing MaxChecksFileFaults of them.
-//
-// checksfile.go's package doc records the figures.
+//   - whole: the most a VALID file makes a parse judge, as many checks as fit
+//     in MaxChecksFileBytes, each with every list at its bound;
+//   - paths, env and cone: one list of as many bad items as fit, each refused
+//     by its count alone;
+//   - keys: as many unknown keys as fit, the refusal listing
+//     MaxChecksFileFaults of them.
 func BenchmarkParseChecks(b *testing.B) {
 	// list is n items, the i-th spelled as format spells i, as a flow list.
 	list := func(n int, format string) string {

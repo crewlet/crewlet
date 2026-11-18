@@ -12,118 +12,12 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// applyPush applies a batch of pushes to one repository: each entry IN ORDER,
-// a later entry seeing an earlier one's refs, inside the repository's
-// horizons — its expired push history removed before the refs are written,
-// its due tombstones after, and its ref drops past their grace last.
-//
-// # Two reads for the whole record, never one per entry or per command
-//
-// The apply transaction holds the replicated estate's write lock — each log
-// has its own pinned writer, but they are writers of ONE file, so every other
-// domain's applier on the node waits behind this transaction — and a record
-// the committer fills carries nearly four thousand commands. So the push ids
-// the record's entries carry are read in ONE statement over their primary key,
-// the refs their ok commands name in ONE statement over the repository's
-// primary-key range, and the ref state is carried across the entries IN
-// MEMORY: the last value of a ref is the whole truth, since every row a record
-// writes carries the record's one position and instant. (The repository's
-// tombstone count is one more read, of one row by its key.)
-//
-// # The tombstones are bounded exactly, and refuse nobody
-//
-// A repository holds at most MaxTombstonesPerRepo tombstones after EVERY
-// record, by two moves, each a pure function of the record and the rows. The
-// sweep ([Applier.sweepTombstones]) takes the oldest past the bound as well
-// as those past their horizon, within what the record's row budget leaves it:
-// 3 995 rows behind a one-command push, and behind any record the committer
-// forms at least one for every deletion the record carries, since the
-// committer keeps a row in a record's bound for the old tombstone each
-// deletion's new one may need swept ([commandRows]) — and none at all behind
-// a record it filled to the row bound with creations,
-// which makes no tombstone. A record that would leave the count further past
-// the bound than its sweep can take — a record no committer of this build
-// forms, a newer build's or one formed by hand — writes its deletions as
-// REMOVALS instead: each deleted ref's row is deleted rather than emptied,
-// which is the one row its tombstone would have cost, so the budget and the
-// counters stay exact, and the count after it is at most the count before.
-// Its mark rises to its own position, since a cache synced below it would
-// otherwise be handed a delta missing those deletions; such a cache — every
-// one on every Gitlet node, since none has synced the record yet — reads the
-// repository whole, which is why the committer leaves no record of its own
-// needing it. Decided BEFORE a ref is written, from the counter and the
-// record — never from a count a write already moved.
-//
-// # The counters are the rows, kept as the rows move
-//
-// code_repos counts what the repository's refs hold — live refs, the branches
-// and tags among them, and tombstones — so no read counts them by walking a
-// namespace: a hundred thousand refs is tens of milliseconds a COUNT, on every
-// detail read, on whichever node answers. Each counter moves by the difference
-// between every named ref's state before the record and after it, which is
-// exact however many entries moved the ref in between.
-//
-// # What a forced update or a deletion left is recorded
-//
-// Every command the record applies that moves its ref OFF an object — a
-// forced update or a deletion ([leavesObject]) — writes a code_ref_drops row:
-// the ref, the object it held (Old) and the record's position and broker
-// instant. No ref names that object any more, and the drops are how anything
-// dropping the repository's unreachable objects tells what such a push left,
-// which it keeps for [PruneGrace], from what nothing has reached for longer:
-// the refs no longer say, and the push history would be 181 days of rows to
-// read for it. A fast-forward leaves nothing — its old object is behind its
-// new one — and neither does a create. ONE RECORD MAY LEAVE SEVERAL OBJECTS ON
-// ONE REF, when its entries move the ref in turn, each seeing the one before:
-// every one is a row, keyed by the object as well, and an object one record
-// leaves twice is written once. The record's expiry removes its repository's
-// drops past the grace LAST, with whatever its budget still holds once the
-// tombstones have had theirs ([Applier.expireRefDrops]).
-//
-// THE PUSH RECORD'S FORMAT DOES NOT MOVE ([RecordVersion]): the domain landed
-// on main with these rows, so every build that meets a push record writes
-// them, and no record carries anything new for them.
-//
-// # An applied push never applies twice
-//
-// A push id already in code_pushes — a redelivery, a failover's second record,
-// or a repeat inside this record, which no decide forms — is skipped rather
-// than allowed to abort the insert on its primary key, which would stall the
-// log on every node.
-//
-// # The changes its pushes move are its own rows
-//
-// A push that moves a live change's source branch writes the change's next
-// revision and makes its pusher an author; one that sets a change's target to
-// exactly its head merges it; one that deletes its source closes it; and one
-// whose entry carries the change its decide opened from the push's options
-// opens it, numbered the repository's next — each in this record, from the
-// change rows it finds, in its entries' order ([applyChangeMoves],
-// revisions.go). Their rows are the record's own, written
-// before any horizon and counted in its rows: the decide admitted each entry
-// only while they fit with its own, counted by the same model this writes them
-// from ([changeBook]).
-//
-// # A seat's pushes are counted on its company day
-//
-// Every seat's entry the record applies is counted on the day its decide
-// stamped on it, in code_seat_days, the counter the decide holds a seat's
-// pushes_per_seat_day to — a row a seat and day, two statements a record, and
-// the rows they touch counted in the record's before any horizon takes what
-// is left ([countSeatDays]).
-//
-// # Its pushes are counted by day and by pusher
-//
-// Every push row it inserts is counted in its UTC day's quarter-hour and its
-// pusher's day, and every row its horizon deletes is counted out, in one move
-// none of the horizons is given ([countPushActivity]).
-//
-// # Whom each push was made for is kept on its rows
-//
-// A seat's entry carries whom its push was made for ([PushEntry.WorkingFor]),
-// which the push's row and every revision its moves add keep
-// (code_pushes.working_for, code_revisions.working_for), from a record at
-// [WorkingForVersion] or above alone ([keptCarrier]).
+// applyPush applies a batch of pushes to one repository through
+// [Applier.landPushes], each entry keeping whom its push was made for
+// ([PushEntry.WorkingFor]) only from a record at [WorkingForVersion] or above
+// ([keptCarrier]). THE PUSH RECORD'S FORMAT DOES NOT MOVE ([RecordVersion]):
+// every build that meets one writes the rows landPushes writes, and no record
+// carries anything new for them.
 func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p PushBatch) (int, error) {
 	entries := make([]PushEntry, len(p.Pushes))
 	for i, e := range p.Pushes {
@@ -142,20 +36,26 @@ type recordPacks struct {
 	kind  PackKind
 }
 
-// landPushes is the one apply of pushes ([Applier.applyPush]) — a push
-// record's batch, and the push a merge record lands ([Applier.applyMerge]) —
-// after spent rows the record's apply already wrote, which its horizons leave
-// to it: what it answers is the rows it wrote itself. ONE APPLY, so a merge's
-// move of its target is a push in every sense the history, the counters, the
-// tombstones and the changes it moves read — never a second spelling of what
-// a push does to a repository (ADR-0008).
-//
+// landPushes is the one apply of pushes — a push record's batch
+// ([Applier.applyPush]) and a merge record's push ([Applier.applyMerge]) — so
+// a merge's move of its target is a push to every reader of the history, the
+// counters, the tombstones and the changes (ADR-0008). Each entry applies IN
+// ORDER, seeing an earlier one's refs. spent is the rows the record's apply
+// already wrote, which its horizons leave to it; it answers the rows it wrote.
 // extra is packs the record lands beside its entries' own ([recordPacks]),
-// written and counted with them — and with nothing, where every entry was
-// applied already.
+// written with them, and not at all where every entry was applied already.
+//
+// The horizons (doc.go's "Five horizons") run inside the repository in one
+// order: the expired push history before a ref is written, the due tombstones
+// after, the ref drops past their grace last.
 func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p PushBatch, extra recordPacks,
 	spent int) (int, error) {
 
+	// TWO READS FOR THE WHOLE RECORD, never one per entry or command: the
+	// apply holds the estate's one write lock, which every other domain's
+	// applier waits behind, and a full record carries nearly 4 000 commands.
+	// The ref state is then carried IN MEMORY: every row a record writes
+	// carries its one position and instant, so a ref's last value is the truth.
 	ids := make([]string, 0, len(p.Pushes))
 	for _, e := range p.Pushes {
 		ids = append(ids, e.PushID)
@@ -196,6 +96,9 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 		packBytes   int64
 		packObjects int64
 	)
+	// A PUSH ID ALREADY APPLIED — a redelivery, a failover's second record, a
+	// repeat inside this record — is skipped: its primary-key insert would
+	// abort and stall the log on every node.
 	for _, e := range p.Pushes {
 		if applied[e.PushID] {
 			continue
@@ -254,10 +157,10 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	}
 	rows += counted
 
-	// THE CHANGES THE RECORD MOVES, before any horizon too: their rows are
-	// the record's own, which its decide counted as this writes them
-	// (revisions.go) — each entry in order, each change one version.
-	// THE TALLY ROWS STAY OUT OF rows: a horizon is given what an older build's rows leave it (record.go).
+	// THE CHANGES THE RECORD MOVES, before any horizon too: their rows are the
+	// record's own, which its decide admitted by the model this writes them
+	// from ([changeBook]). THE TALLY ROWS STAY OUT OF rows: a horizon is given
+	// what an older build's rows leave it (record.go).
 	changed, tallied, err := applyChangeMoves(ctx, tx, at, p.RepoID, pushRows)
 	if err != nil {
 		return 0, err
@@ -272,11 +175,9 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	}
 	rows += landedRows
 
-	// THE PUSH HISTORY FIRST, before any ref is written: what it removes is
-	// rows of the record's budget the tombstones cannot have, and the
-	// tombstones' removal backstop is decided from that budget before the
-	// refs it changes are written. The budget is what the record's rows
-	// leave of MaxRecordRows: a merge record's own rows (spent) among them.
+	// THE PUSH HISTORY FIRST: what it removes the tombstones cannot have, and
+	// the removal backstop below is decided from what is left. The budget is
+	// MaxRecordRows less the record's rows, a merge record's own (spent) too.
 	budget := MaxRecordRows - spent
 	expired, gone, err := a.expirePushes(ctx, tx, at, p.RepoID, budget-rows)
 	if err != nil {
@@ -290,9 +191,15 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	if err != nil {
 		return 0, fmt.Errorf("gitlet: read the tombstones the push at %s finds: %w", at.position, err)
 	}
-	// HOW FAR PAST ITS BOUND the record would leave the tombstones were its
-	// deletions tombstones: more than the sweep can take, and they are
-	// removals.
+	// THE TOMBSTONES ARE BOUNDED EXACTLY, decided here from the counter and
+	// the record, never from a count a write already moved. A record leaving
+	// them past MaxTombstonesPerRepo by more than the sweep can take — none
+	// this build's committer forms, which keeps a row for each deletion's
+	// sweep ([commandRows]) — writes its deletions as REMOVALS, each row
+	// deleted rather than emptied, so the count ends no higher. It raises the
+	// mark to its own position (below), since a delta would miss those
+	// deletions, so every cache reads the repository whole: why the committer
+	// forms none.
 	over := held + moves(prior, final, false).tombstones - MaxTombstonesPerRepo
 	removal := over > max(sweep, 0)
 	moved := moves(prior, final, removal)
@@ -326,12 +233,10 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 			return 0, fmt.Errorf("gitlet: remove the refs deleted at %s: %w", at.position, err)
 		}
 	}
-	// A PUSH'S PACK DATES ITS CONTENT FROM ITS OWN POSITION ([PackRow.Content]):
-	// what a push brings reaches the repository here — a base a thin pack was
-	// completed with among it, which a ref reached when the push was checked —
-	// so a purge requested before it asks nothing about it. And it ARRIVED
-	// at the record's broker instant ([PackRow.Arrived]): an expunge on its
-	// maintainer's schedule keeps it whole for gitlet.PruneGrace after that.
+	// A PUSH'S PACK DATES ITS CONTENT FROM ITS OWN POSITION ([PackRow.Content]),
+	// a thin pack's completing base among it, so a purge requested before it
+	// asks nothing about it; and it ARRIVED at the record's broker instant
+	// ([PackRow.Arrived]), which the maintainer's expunge keeps for PruneGrace.
 	if _, err = store.InsertRows(ctx, tx, at.maxVariables,
 		`INSERT INTO code_packs (repo_id, pack_id, part, object, hash, size, index_bytes,
 			reverse_bytes, git_checksum, objects, kind, state, added_position, content_position,
@@ -356,11 +261,10 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 		}
 	}
 	// WHO PUSHED, AS THE HISTORY NAMES THEM (Principal.Actor): an operator's
-	// credential beside the seat it is bound to, or a seat's own handle as
-	// both — and how the push was built and, for a seat's, the run behind it
-	// (a coding box's naming its run and harness too) and whom it was made
-	// for, each written as the record carries it; a landing's whom, as its
-	// entry's row keeps it ([Land.pushes]).
+	// credential beside its bound seat, or a seat's handle as both — with how
+	// the push was built, a seat's run behind it and whom it was made for, as
+	// the record carries them; a landing's whom as its entry's row keeps it
+	// ([Land.pushes]).
 	if _, err = store.InsertRows(ctx, tx, at.maxVariables,
 		`INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, actor_seat,
 			via, turn_id, work_backend, work_key, model, run_id, harness, node, atomic, commands,
@@ -387,10 +291,8 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	if err != nil {
 		return 0, err
 	}
-	// THE CONFLICT IS A SKIP, never an abort, though no record this build
-	// applies meets one — every drop it writes is new at its own position —
-	// because an insert aborted on its primary key would stall the log on
-	// every node.
+	// THE CONFLICT IS A SKIP, though no record this build applies meets one:
+	// an insert aborted on its primary key would stall the log on every node.
 	if _, err = store.InsertRows(ctx, tx, at.maxVariables,
 		`INSERT INTO code_ref_drops (repo_id, at, position, ref, old) VALUES `, `(?, ?, ?, ?, ?)`,
 		`ON CONFLICT (repo_id, at, position, ref, old) DO NOTHING`,
@@ -405,16 +307,12 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	if removal {
 		mark = at.packed
 	}
-	// AND THE IDLE CLOCK MOVES WITH THE LAST PUSH — a refused entry's too,
-	// which is still somebody working in the repository: what a scratch
-	// repository expires by (Retention), at the record's own instant. BUT
-	// NOT FOR A RECORD OF EXPIRIES ALONE (M3-decisions M3-O54): the engine
-	// deleting a seat's idle branches is housekeeping, not anybody working
-	// there, so a record whose every entry is one keeps the repository's last
-	// push and idle clock where they were — and one that carries an expiry
-	// beside anybody's push moves both, since the committer batches an
-	// expiry with whatever else is queued. The pushes ever and the version
-	// move for every record.
+	// THE IDLE CLOCK MOVES WITH THE LAST PUSH, a refused entry's too — still
+	// somebody working there, what a scratch repository expires by
+	// (Retention). NOT FOR A RECORD OF EXPIRIES ALONE (M3-decisions M3-O54):
+	// the engine deleting a seat's idle branches is housekeeping, so it keeps
+	// the last push and idle clock; an expiry batched beside anybody's push
+	// moves both. The pushes ever and the version move for every record.
 	keep := onlyExpiry(pushRows)
 	if _, err = tx.ExecContext(ctx, pushCountersSQL, moved.live, moved.branches, moved.tags,
 		moved.tombstones, len(packRows), packBytes, packObjects, len(pushRows), keep, at.at(), keep, at.at(),
@@ -447,14 +345,13 @@ func (e PushEntry) packKind() PackKind {
 	return PackPush
 }
 
-// applyChangeMoves writes what the record's entries — pushes, in order, none
-// already applied — do to the live changes their ok commands reach: a head
-// move's revision and its pusher as an author, a merge, a close, and the
-// change an entry opens from its push's options (revisions.go), from the
-// change rows the record finds, and answers the rows it wrote. A record
-// carrying an open reads the repository's next number first, which its opens
-// take in their entries' order. It answers apart the tally rows it wrote
-// counting the changes' states (apply_counts.go), which no horizon is given.
+// applyChangeMoves writes what the record's unapplied entries, in order, do to
+// the live changes their ok commands reach — a head move's revision and its
+// pusher as an author, a merge, a close, and the change an entry opens from
+// its push's options (revisions.go) — and answers the rows it wrote. Opens
+// take the repository's next numbers in their entries' order. It answers
+// apart the tally rows counting the changes' states (apply_counts.go), which
+// no horizon is given.
 func applyChangeMoves(ctx context.Context, tx *sql.Tx, at applyContext, repoID string,
 	pushes []PushEntry) (written, tallied int, err error) {
 
@@ -489,80 +386,36 @@ func applyChangeMoves(ctx context.Context, tx *sql.Tx, at applyContext, repoID s
 	return written, tallied, nil
 }
 
-// refDrop is one object a forced update or a deletion moved a ref off: one
-// code_ref_drops row of the record that applies it.
+// refDrop is one object a forced update or a deletion moved a ref off
+// ([leavesObject]): one code_ref_drops row of the record that applies it, how
+// an expunge keeps what such a push left for [PruneGrace] (doc.go's "Five
+// horizons") — no ref names it now, and the push history would be 181 days
+// of rows to read. One record may leave several objects on one ref, its
+// entries moving it in turn: a row each, keyed by the object too, and an
+// object it leaves twice is written once.
 type refDrop struct{ ref, old string }
 
-// leavesObject reports a command whose apply moves its ref off an object
-// that nothing the command writes reaches: a forced update, whose old
-// object is not behind its new one, or a deletion — never a create, which
-// moved its ref off nothing, nor a fast-forward, whose old object its new
-// one still reaches. A tag never moves (RefusalTagMoved), so it leaves an
-// object only by its deletion; a forced flag on a create, which no receiver
-// sets, leaves none.
+// leavesObject reports a command moving its ref off an object nothing it
+// writes reaches: a forced update or a deletion — never a create, nor a
+// fast-forward, whose new object still reaches its old. A tag never moves
+// (RefusalTagMoved), so it leaves one only by its deletion; a forced flag on
+// a create, which no receiver sets, leaves none.
 func leavesObject(c Command) bool {
 	return c.Old != ZeroOID && (c.Forced || c.New == ZeroOID)
 }
 
 // expireRefDrops removes, inside the record's own repository and within limit
-// rows, its ref drops older than PruneGrace by the record's broker instant —
-// oldest first, by instant and then by the rest of the key, the order
-// code_ref_drops' key keeps ([dropsKey]) — and answers how many it removed.
+// rows, its ref drops older than PruneGrace by the record's broker instant,
+// and answers how many it removed. limit is whatever the record leaves once
+// the push history and the tombstones have had theirs, never a fixed share:
+// why, and where it falls behind and catches up, is doc.go's "Five horizons".
+// None goes inside its grace: that would cost the object it keeps.
 //
-// # The drops take what the tombstones leave, and no fixed share
-//
-// A record's own drops are rows the committer counts in its bound
-// ([commandRows]); their removal past the grace is a horizon, which takes
-// only what the record's rows leave of MaxRecordRows — after the push
-// history's share and the tombstones, whose sweep must keep the room the
-// committer kept for a deletion's tombstone or a record it formed would
-// remove its deletions. So it has every row a record leaves when no
-// tombstone is due: 3 996 behind a one-command push, and 1 997 behind one
-// push of MaxCommandsPerPush forced updates, which writes a thousand drops.
-// A fixed share would have fallen behind that push — MaxRecordRows/8, five
-// hundred a record, against its thousand — as a fixed share of the
-// tombstones once did (HorizonDeletesPerRecord); and a share bounds no lane
-// time a full budget does not, since a record touches MaxRecordRows at most
-// either way, and deleting a drop moves one index entry, its key's, where
-// the tombstones a sweep may take as many of move three — measured, 22 ms
-// for a record forgetting 3 996 drops against 40 ms for one sweeping 3 995
-// tombstones (doc.go's measured section).
-//
-// # Where it falls behind, and how it catches up
-//
-// It keeps pace — forgets at least as many drops as its record writes, so
-// the drops past the grace do not grow — wherever what the record leaves is
-// at least that: behind a record of up to some 1 330 forced updates (one
-// push of MaxCommandsPerPush always) while no tombstone is due, and behind
-// any record of deletions the committer forms while their tombstones are
-// not yet due. Elsewhere it falls behind by the difference. Behind the
-// committer's fullest record of forced updates, 1 963 in two pushes
-// counted two rows each, it has 69 rows for their 1 963 drops, some 1 894
-// short. Behind deletions whose tombstones come due in turn, the sweep takes
-// a row for each first: 996 rows are left for the thousand drops of one
-// maximal push of them, four short, and 67 for the 1 309 of the committer's
-// fullest record of them, 1 242 short. And up to 64 fewer while the push
-// history is expiring too. No reservation in the committer's bound closes
-// that for deletions: a deletion's lifetime is four row operations — its
-// tombstone written and swept, its drop written and forgotten — and one
-// push of MaxCommandsPerPush of them would need 4 002 rows of a record's
-// 4 000.
-//
-// WHAT IT FALLS SHORT BY WAITS for a record of the repository with room —
-// up to MaxRecordRows-4 (3 996) a record behind a one-command push — so the
-// drops past the grace grow for as long as the repository's records stay
-// full of forced updates or deletions, and drain, oldest first, once they
-// are not. A drop forgotten late costs its row on every data node; one
-// forgotten early would cost the object it keeps, which is why nothing
-// forgets one inside its grace.
-//
-// BY THE INSTANT, which the key leads with, so the read seeks the expired
-// rows and stops at the first inside the grace or at its limit, whatever
-// order a leader change stamped the records in — every node holds the same
-// rows and removes the same ones, never one inside the grace; and by the rest
-// of the key after it, so a removal cut at its limit cuts every node's rows
-// at one row. A record's own drops are never past the grace at its own
-// instant.
+// BY THE INSTANT, which code_ref_drops' key leads with ([dropsKey]), then the
+// rest of the key: the read seeks the expired rows and stops at the first
+// inside the grace, whatever order a leader change stamped the records in,
+// and a removal cut at limit cuts every node's rows at one row. A record's
+// own drops are never past the grace at its own instant.
 func (a *Applier) expireRefDrops(ctx context.Context, tx *sql.Tx, at applyContext, repoID string,
 	limit int) (int, error) {
 
@@ -578,9 +431,11 @@ func (a *Applier) expireRefDrops(ctx context.Context, tx *sql.Tx, at applyContex
 	return int(n), nil
 }
 
-// moves is what the record does to the repository's counts: every ref it
-// names from its state before the record (prior, absent for a ref with no
-// row) to its state after (final, "" for a deletion). A deletion is a
+// moves is what the record does to code_repos' counts, kept as the rows move
+// so no read COUNTs a namespace (tens of milliseconds at 100 000 refs, on
+// every detail read): each named ref from its state before the record (prior,
+// absent for a ref with no row) to its state after (final, "" for a
+// deletion), exact however many entries moved it between. A deletion is a
 // TOMBSTONE, or with removal a ref with NO ROW, which counts nothing.
 func moves(prior, final map[string]string, removal bool) refCounts {
 	var moved refCounts
@@ -644,25 +499,17 @@ func recordedCommands(cmds []Command) (string, error) {
 }
 
 // pushRowBytes is what a push row weighs as code_pushes.row_bytes records it:
-// the bytes of the columns that make one row wider than another — its
-// commands as stored, its introduced ids, a seat's run, which is six fields of
-// up to MaxProvenanceBytes, and whom the push was made for, at most
-// [MaxCarrierBytes] — because deleting a wide row frees its overflow pages,
-// and that is what the history's horizon and a purge part are bounded by.
-// Every other column is a few dozen bytes on every row.
-//
-// A push's and a merge's are their record's own, carried there with more
-// (quoted, keyed, escaped), so the bytes such a record adds to the history are
-// never more than the record. A LANDING'S ARE NOT ALL ITS RECORD'S: each push
-// row it lands keeps its entry's carrier from the entry's row
-// (code_queue.working_for, [Land.pushes]), which the land record does not
-// carry, a deleted source's name from the change's row, and the target's name
-// the record holds once. So a landing adds, beside its record's own bytes, at
-// most [MaxLandEntries] rows of two commands, one introduced id and one
-// carrier — under a quarter of [MaxRecordBytes] at the widest refs JSON
-// spells, the carriers at most MaxLandEntries × MaxCarrierBytes, 12 800 bytes,
-// of it — which HorizonBytesPerRecord holds the history's removal to as it
-// does every record's (TestAPushMeasuredForItsRecordCountsWhomItWasMadeFor).
+// the columns that make one row wider than another — its commands as stored,
+// its introduced ids, a seat's run (six fields of up to MaxProvenanceBytes)
+// and whom it was made for (at most [MaxCarrierBytes]) — because deleting a
+// wide row frees overflow pages, which bound the history's horizon and a
+// purge part. A push's and a merge's are their record's own, so never more
+// than it. A LANDING'S ARE NOT: each row keeps its entry's carrier
+// (code_queue.working_for, [Land.pushes]) and names off the change's row —
+// at most [MaxLandEntries] rows of two commands, one id and one carrier,
+// under a quarter of [MaxRecordBytes] (the carriers 12 800 bytes), which
+// HorizonBytesPerRecord bounds as every record's
+// (TestAPushMeasuredForItsRecordCountsWhomItWasMadeFor).
 func pushRowBytes(commands, introduced string, run RunProvenance, workingFor string) int {
 	return len(commands) + len(introduced) + len(run.TurnID) + len(run.WorkBackend) + len(run.WorkKey) +
 		len(run.Model) + len(run.RunID) + len(run.Harness) + len(workingFor)
@@ -693,56 +540,18 @@ func pushRowWideOf(e PushEntry) (pushRowWide, error) {
 		bytes: pushRowBytes(commands, introduced, e.Principal.Run, madeFor.String)}, nil
 }
 
-// countSeatDays counts each SEAT'S entry of the record that the apply
-// inserts — pushes, the redelivered ones already left out — on the company day
-// its decide stamped on it ([PushEntry.Day]), in code_seat_days, the counter
-// the decide reads a seat's day's quota from; and forgets, for every seat it
-// counts, the seat's oldest day beyond its two newest. It answers the rows it
-// touched.
+// countSeatDays counts each SEAT'S entry the apply inserts on the company day
+// its decide stamped ([PushEntry.Day]) in code_seat_days, which the decide
+// reads pushes_per_seat_day from, and forgets each counted seat's oldest day
+// beyond its two newest, in two statements a record, answering the rows it
+// touched. The day is the decide's and "old" is read off the rows — never a
+// node's clock or a calendar a zone skips dates in — so every node agrees.
 //
-// # The log decides what is old, so every node counts alike
-//
-// The day is the decide's, never the applier's clock: so the count is a pure
-// function of the log, and every data node holds the same rows whatever its
-// own clock says. What is OLD is read off those rows too — a seat's days
-// beyond the two newest the log has counted it on — never off a calendar
-// this apply would need a zone for. Only the inserted entries count, because
-// M2's redelivery rule skips a push id code_pushes already holds, and its
-// count with it.
-//
-// # Two days, because a committer behind midnight still counts the older
-//
-// Each repository's committer stamps the day ITS OWN clock reads, so while
-// two committers' clocks straddle the company's midnight a seat's pushes are
-// counted on two days at once: the one still on the 2nd reads the 2nd's row
-// after the other's record of the 3rd has applied. Forgetting the 2nd as the
-// 3rd is counted would hand that committer a day of no pushes: it would land
-// the seat's pushes past the bound again, its count starting over at every
-// record the other lands, and a record it decided late would count its day
-// from none. Kept, the 2nd's row holds them all: the lagging committer
-// refuses the seat past the bound, and its late record adds to its day's
-// whole count. A day is forgotten only once the seat holds two newer ones,
-// and the newer of those was stamped by a clock that had reached a day
-// beginning a whole company day after the forgotten one ended, so no
-// committer still deciding on it stands less than a day behind another —
-// while no node raises clock_skew, any two stand within two hours (twice
-// objstore.AssumedClockSkew). By the rows
-// rather than by the calendar's day before the newest: where a zone skips a
-// date (Samoa's 30 December 2011, a window period.At never answers), the
-// calendar's day before the 31st is one no committer stamps, and a rule
-// keeping it would forget the 29th, which a committer two seconds behind is
-// still deciding on.
-//
-// # One day at most, so the rows a record touches are bounded
-//
-// A record's seat entries all carry the one day its decide's round counted
-// ([seatQuota]), so a seat holds at most two days before a record and three
-// after its count, and forgetting one an entry keeps the table at two rows at
-// most a seat that ever pushed. ONE, not every day beyond the two: the
-// committer bounds a seat's entry at [seatDayRows], the day's row and one
-// forgotten, and an unbounded forget could take rows the record's tombstone
-// sweep was promised. Two statements a record, never one a seat: the counts
-// driven from their list, and the forgetting from the seats'.
+// TWO DAYS: committers' clocks may straddle the company's midnight (within
+// twice objstore.AssumedClockSkew while no node raises clock_skew), and one
+// still on the older day must find its whole count. ONE forgotten, as a
+// record's entries carry one day ([seatQuota]) and the committer bounds an
+// entry at [seatDayRows], keeping the tombstone sweep's rows.
 func countSeatDays(ctx context.Context, tx *sql.Tx, at applyContext, pushes []PushEntry) (int, error) {
 	type seatDay struct{ seat, day string }
 	var counted []seatDay
@@ -787,28 +596,17 @@ func countSeatDays(ctx context.Context, tx *sql.Tx, at applyContext, pushes []Pu
 	return len(counted) + int(forgotten), nil
 }
 
-// expirePushes removes, inside the record's own repository and within the
-// rows the record has left of MaxRecordRows (budget), its push rows older than
-// PushHistory by the record's broker instant — at most HorizonDeletesPerRecord
-// of them, and no more once their bytes reach HorizonBytesPerRecord — and
-// answers how many it removed.
+// expirePushes removes, inside the record's own repository and within budget
+// (the rows the record leaves of MaxRecordRows), its push rows older than
+// PushHistory by the record's broker instant — at most HorizonDeletesPerRecord,
+// and no more once their bytes reach HorizonBytesPerRecord — answering how
+// many, and what as the activity counts it ([countPushActivity]).
 //
-// OLDEST BY POSITION, STOPPING AT THE FIRST INSIDE THE HORIZON. The rows are
-// read in log order (code_pushes_repo_idx, replicated 0084) and taken while
-// their instant is before the horizon, and the first row that is not ends the
-// read. NEVER A FILTER ON THE INSTANT: the index orders by position, so `at <
-// ?` seeks nothing there, and over position order it would walk the
-// repository's whole history — 181 days of pushes — on every push record
-// that found fewer than its LIMIT expired, to find the few that were.
-// Stopped, the read costs the rows it removes and one more. A record's
-// instant is the broker's, and a stream leader's change can stamp a later
-// record earlier; such a row waits for the one before it, at most the
-// members' clock skew past its own horizon — and every node, holding the
-// same rows in the same order, removes the same ones, never one inside the
-// horizon.
-//
-// It answers what it deleted as the activity counts it, which the record's
-// apply counts out ([countPushActivity]).
+// OLDEST BY POSITION (code_pushes_repo_idx), STOPPING AT THE FIRST INSIDE THE
+// HORIZON, so the read costs the rows it removes and one more. NEVER A FILTER
+// ON THE INSTANT: the index orders by position, so `at < ?` would walk 181
+// days of pushes on every record finding few expired. A row stamped earlier
+// than the one before it waits for that one (doc.go's "Five horizons").
 func (a *Applier) expirePushes(ctx context.Context, tx *sql.Tx, at applyContext, repoID string,
 	budget int) (int, pushActivity, error) {
 
@@ -834,51 +632,16 @@ func (a *Applier) expirePushes(ctx context.Context, tx *sql.Tx, at applyContext,
 
 // sweepTombstones removes, inside the record's own repository and within limit
 // rows, its tombstones oldest first — by deletion instant, then ref — each
-// that is among the first excess or older than RefTombstoneHorizon by the
-// record's broker instant, stopping at the first that is neither; and raises
-// tombstones_through to the highest position a swept tombstone held, so a
-// delta from below it is answered in full. It answers the rows it wrote: the
-// tombstones and the mark.
-//
-// # Two reasons a tombstone goes, one pass
-//
-// AGE: a tombstone is kept so a cache syncing a delta learns of the deletion,
-// and a cache synced longer ago than RefTombstoneHorizon is answered whole
-// instead. COUNT: excess is how far the record left the repository past
-// MaxTombstonesPerRepo, and the oldest go first, because the cache a forgotten
-// deletion sends to a full answer is one synced before it, and the longer ago
-// that was, the likelier it is idle — and a full answer re-reads the rows and
-// reuses every pack it holds, never a download. Both read the one order
-// code_refs_tombstones_idx keeps, so the pass is one seek and a scan that ends
-// at the first tombstone it keeps: one row read when nothing is due.
-//
-// # The tombstones take everything the record left
-//
-// A record adds at most MaxPushesPerRecord push rows, which a fixed share of
-// HorizonDeletesPerRecord keeps pace with. It can make some thirteen hundred
-// TOMBSTONES behind a record this build's committer forms, every deletion
-// counted in its rows with a row kept for its sweep and one for the object it
-// left ([commandRows]) — and behind one formed otherwise, a newer
-// build's or one written by hand, as many as one append carries, since
-// nothing at the apply holds a record to this build's committer's bounds:
-// some sixty thousand deletions of short refs in the log's largest record
-// (CodeLogMaxRecordBytes), which is why the removal backstop takes whatever
-// the record carries. A fixed share of those falls behind any repository
-// whose pushes delete refs in bulk — a CI deleting its build tags, a branch
-// clean-up: measured, records that each made a thousand refs and deleted the
-// previous thousand grew the table by about 936 tombstones a record with a
-// share of 64, for ever. The rest of the row budget is room the framework's transaction bound
-// already pays for, and every node computes the same budget from the same
-// record and the same rows, so the sweep stays a pure function of the record:
-// 3 995 tombstones behind a one-command push, at least as many as its own
-// deletions behind any record a committer forms ([rowBound]), and none behind
-// one it filled to the row bound with creations. That is what makes the COUNT
-// exact with one backstop no record of this build's committer reaches: a
-// record whose excess is more than its limit writes its deletions as removals
-// instead ([Applier.applyPush]), so excess here never passes limit. The ref
-// drops past their grace come after it, and take only what it leaves
-// ([Applier.expireRefDrops]): a drop forgotten late costs a row, and a
-// tombstone's sweep room taken costs every Gitlet node a full read.
+// among the first excess (how far the record left the count past
+// MaxTombstonesPerRepo) or older than RefTombstoneHorizon by the record's
+// broker instant, stopping at the first that is neither; and raises
+// tombstones_through to the highest position it swept, so a delta from below
+// it is answered in full, answering the rows it wrote, tombstones and mark.
+// Both reasons read code_refs_tombstones_idx's one order: one seek, and one
+// row when nothing is due. Oldest first, since a forgotten deletion sends only
+// a cache synced before it to a full answer (rows, never a download). limit is
+// all the record leaves, never a fixed share (doc.go's "Five horizons"), and
+// excess never passes it: [Applier.landPushes] writes removals instead.
 func (a *Applier) sweepTombstones(ctx context.Context, tx *sql.Tx, at applyContext, repoID string,
 	limit, excess int) (int, error) {
 
@@ -928,38 +691,18 @@ func (a *Applier) sweepTombstones(ctx context.Context, tx *sql.Tx, at applyConte
 	return int(n) + 1, nil
 }
 
-// applyPurgePart deletes one bounded part of a deleted repository's rows, in a
-// fixed order — its pushes, then its refs, then its packs, then the packs a
-// record retired, then its ref drops, then its changes, each whole: its
-// revisions, its authors, its conversation, its body and then its row
-// ([purgeChanges]) — then its checks, each with its log ([purgeChecks]), then
-// its home's dispatches and its targets' readings ([purgeDispatches]) — then
-// its merge queues' entries, candidates, landings, green rows and rows of
-// tip work ([purgeQueues]) — so every node deletes the same rows. THE PART IS
-// THE GUARD: only the row's purge_parts + 1 deletes anything, so a redelivered or
-// stale part deletes nothing more.
-//
-// BOUNDED BY ROWS AND BY BYTES: at most PurgePartRows rows, and its wide rows
-// only until what they weigh reaches PurgePartBytes — the push rows by their
-// row_bytes, and after them the changes by their bodies' body_bytes and their
-// conversations' text_bytes, and the checks by their own row_bytes, one budget
-// for all, because deleting any of them frees overflow pages a count does not
-// see. A part whose pushes were cut by bytes deletes nothing else: the refs
-// and packs wait for a part whose pushes are done, and the changes and the
-// checks for one whose wide rows left room.
-//
-// A RETIRED PACK'S ROW GOES WITH ITS REPOSITORY, its grace or not: the grace
-// is for a reader that began on the pack before it was retired, and no read
-// begins on a deleted repository — it is refused to every new one from its
-// deletion, and code.deleted_retention_days, a day at least, outlasts the
-// reads that had begun. Its object is then named by nothing, and the
-// collector takes it as it takes the repository's live packs'. SO DOES A REF
-// DROP, its grace or not: it keeps an object of the repository's own packs
-// reachable, and those packs go with it.
-//
-// Each push it deletes is counted out of the activity on top of its rows, and
-// a part that finds no push takes up to PurgePartRows of what is left of it
-// (apply_activity.go).
+// applyPurgePart deletes one bounded part of a deleted repository's rows in a
+// fixed order, so every node deletes the same rows: pushes, refs, packs,
+// retired packs, ref drops, changes each whole ([purgeChanges]), checks
+// ([purgeChecks]), dispatches and readings ([purgeDispatches]), merge queues
+// ([purgeQueues]). THE PART IS THE GUARD: only purge_parts + 1 deletes, so a
+// redelivered or stale part deletes nothing more. At most PurgePartRows rows,
+// and wide rows (pushes, change bodies and conversations, checks) only until
+// they weigh PurgePartBytes, one budget, since a count misses their overflow
+// pages; a part whose pushes were cut by bytes deletes nothing else. Retired
+// packs and ref drops go whatever their grace (doc.go's "Five horizons"), as
+// code.deleted_retention_days outlasts reads begun before. Deleted pushes
+// leave the activity too, a part finding none taking the rest (apply_activity.go).
 func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContext, p PurgePart) (int, error) {
 	var parts int
 	if err := tx.QueryRowContext(ctx, purgePartsSQL, p.RepoID).Scan(&parts); err != nil {
@@ -1152,41 +895,17 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 }
 
 // applyPurge removes what remains of a repository and writes its deletion
-// marker — THE GATE. Applied whatever the row's status (the decide is the
-// guard, and the applier never refuses ordinary traffic) and idempotent: a
-// redelivery of the marker's own record, which its gate lets through by op id,
-// deletes nothing and inserts nothing. Unbounded statements are safe because
-// the decide forms a purge only once at most PurgePartRows of the
-// repository's pushes and the days and pusher days they are counted in,
-// refs, packs, retired packs, ref drops, changes'
-// revisions, authors, bodies and rows and their conversations' rows — its
-// reviewers, participants, comments, reviews, findings, revisions' facts and
-// mergeability among them — the changes' notices by their counts
-// (code_changes.notices, never fewer than the rows), its checks and their logs, its heads' dispatches
-// and its targets' readings, and its merge queues' entries, candidates,
-// landings, green rows and rows of tip work remain AND the
-// pushes, the bodies, the conversations' text and the checks among them
-// weigh at most PurgePartBytes — a part's own bounds — and it holds at most
-// MaxProtectionsPerRepo rules, MaxPathOwners path owners (one row each, their
-// globs packed into it) and a published chain of at most MaxPublishedLayers
-// layers of MaxLayerParts parts each: with the name claim, the row, its kind's
-// count, its repository tally row, its viewed key and the marker that is
-// PurgePartRows + MaxProtectionsPerRepo + MaxPathOwners + MaxPublishedLayers ×
-// (1 + MaxLayerParts) + 6 rows, which the limits test holds within MaxRecordRows. A change's revisions, authors, body
-// and conversation go before the changes, through which alone they are found.
-//
-// AN OLD NAME a rename left redirecting to the repository is NOT released
-// here: how many a repository holds is bounded by nothing a part counts — one
-// a rename, for RedirectWindow — so they are released one record each by the
-// code-retention pass at their window's end ([Store.ReleaseName]), whatever
-// became of the repository meanwhile, which keeps every redirect's end in one
-// place and this record's rows bounded.
-//
-// NO PART REMOVES A LAYER: the chain is bounded apart from the rows a part
-// counts, and a layer row naming a pack a part already removed harms no
-// reader, since a deleted repository serves nothing and every cache drops it
-// whole. The collector takes the parts' objects at its first pass after this
-// record, since a derived row keeps its object only while it stands.
+// marker — THE GATE — whatever the row's status (the decide is the guard) and
+// idempotently: its own record redelivered deletes and inserts nothing. Its
+// statements are unbounded because the decide forms it only once what remains
+// fits one part ([applyPurgePart]) beside MaxProtectionsPerRepo rules,
+// MaxPathOwners owners and MaxPublishedLayers × (1 + MaxLayerParts) layer
+// rows, plus 6 (name claim, row, kind count, tally row, viewed key, marker),
+// which the limits test holds within MaxRecordRows. A change's rows go before
+// the change, through which alone they are found. A rename's old names are
+// released by the code-retention pass at their window's end
+// ([Store.ReleaseName]), as nothing a part counts bounds them; no part removes
+// a layer, which harms nothing in a repository that serves nothing.
 func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p Purge) (int, error) {
 	// THE NOTICES OF THE CHANGES THE PURGE STILL FINDS, before their rows
 	// go: the only way to them from the repository is its changes. They
@@ -1294,21 +1013,16 @@ func pushesApplied(ctx context.Context, tx *sql.Tx, ids []string) (map[string]bo
 }
 
 // pushesWithin reads the push ids query answers with their row_bytes, in its
-// order, and keeps them until their bytes reach bytes — always the first,
-// whatever it weighs, so a step always advances, and so at most one row past
-// the bound — answering what the kept rows weigh, which a purge part's
-// changes take what is left of the same bound from ([purgeChanges]). cut
-// reports that it left a row the query answered: the pushes were bounded by
-// what they weigh rather than by the query's LIMIT. Every node holds the same
-// rows with the same widths, so every node keeps the same ids.
+// order, keeping them until their bytes reach bytes — always the first, so a
+// step always advances and runs at most one row past — and answers what the
+// kept rows weigh, the rest of which a purge part's changes take
+// ([purgeChanges]). cut reports a row left unkept: the weight bounded the
+// read, not the query's LIMIT. Every node keeps the same ids.
 //
-// stop, where it is given, ends the read at the first row it holds for: the
-// query then selects a THIRD column, which stop is asked of, and the row it
-// holds for is not kept — how the push-history horizon ends at the first push
-// inside it, in the one order every node reads (expirePushes), where a filter
-// in the statement would walk every push the repository keeps. A read ended by
-// stop is not cut: what bounded it is the rows' age, not their weight. The
-// purge passes none and keeps its two-column statement.
+// stop, where given, ends the read at the first row it holds for, read off a
+// THIRD column the query then selects, keeping that row out and reporting no
+// cut: how the push-history horizon ends at its first push inside it
+// ([Applier.expirePushes]). The purge passes none.
 func pushesWithin(ctx context.Context, tx *sql.Tx, bytes int64, stop func(int64) bool, query string,
 	args ...any) (ids []string, weighed int64, cut bool, err error) {
 
@@ -1355,13 +1069,12 @@ func onlyExpiry(entries []PushEntry) bool {
 // to target: the pushing seat where an AGENT principal — its coding box, or an
 // engine write in its turn — set the ref INSIDE ITS OWN NAMESPACE
 // ([SeatNamespace]), and "" for every other write: a person's or a token's
-// push, a deletion (a tombstone names nobody), and a seat's push outside its
-// own namespace — a branch it was granted, never its own to lose.
+// push, a deletion, and a seat's push to a branch it was granted, never its
+// own to lose.
 //
-// BY THE PRINCIPAL'S KIND, NEVER BY ITS SEAT: since every person holds a human
-// seat (ADR-0032), a person's principal names their seat too (an operator with
-// Seat set, as Gitlet's admission builds it), and a person pushing
-// under refs/heads/seats/<their handle>/ is no seat's push of its own branch.
+// BY THE PRINCIPAL'S KIND, NEVER ITS SEAT: a person's principal names their
+// human seat too (ADR-0032), and a person pushing under
+// refs/heads/seats/<their handle>/ is no seat's push of its own branch.
 func seatOf(p Principal, ref, target string) string {
 	if target == "" || p.Kind != PrincipalAgent || p.Seat == "" ||
 		!strings.HasPrefix(ref, SeatNamespace(p.Seat)) {
@@ -1479,8 +1192,8 @@ const (
 			(repo_id, name, at, by, reason, purge_record_id, rejects, last_reject_at, version)
 		VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?)
 		ON CONFLICT (repo_id) DO NOTHING`
-	// purgeViewedKeySQL deletes the key the repository's viewed marks were digested under, after
-	// which those marks, which are each person's and stay, name no file once the log is trimmed
-	// past the key's record.
+	// purgeViewedKeySQL deletes the key the repository's viewed marks were
+	// digested under: those marks are each person's and stay, naming no file
+	// once the log is trimmed past the key's record.
 	purgeViewedKeySQL = `DELETE FROM code_viewed_keys WHERE repo_id = ?`
 )

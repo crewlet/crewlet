@@ -14,73 +14,42 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE NODE'S SEAT GIT-WORK SHARE: how much of a Gitlet node's READ LANE the
-// seats' git work may hold at once — half of it.
-//
-// The read lane (internal/gitlet/gitproc, ClassRead: a core a slot) is where
-// every short git process of a node waits, FIFO, for at most gitproc.SlotWait
-// before it is refused busy: a person's push's scans and its force checks, a
-// sync round's peel of the refs, a fetch's check of the objects it wants — and
-// the git a seat's read of a repository by object id runs
-// (internal/gitlet/query), and the build of an engine write a seat or a person
-// asks through a tool (internal/gitlet/host). A seat's read is git work of up to
-// a whole read deadline, and so is a write's build (WriteBuildDeadline); sized
-// past the lane, a burst of them would hold every slot, and the person whose
-// push queued behind them would be answered busy after ten seconds of
-// nothing. So the node's seat git work holds at most [ShareOf] the lane's
-// slots — ONE share a node, which every kind of seat git work takes its unit
-// of ([SeatWorks]), so no two kinds can between them take the whole lane — and
-// the other half stays the persons' and the node's own.
-//
-// A UNIT IS HELD AROUND THE WORK'S LONG GIT AND NOTHING ELSE: a read waiting
-// on its sync, on a re-sync at the log's head or on a barrier holds no
-// read-lane slot and so holds no unit — held across a cold download, one read
-// would refuse every other seat's read on a node whose share is one — and a
-// read's short check of the objects it names waits in the read lane's own
-// queue like any short read. A write is held to the same rule: its check of
-// where its branch is and of the objects it names by id is a short read like
-// any, and its unit is held around its build alone — which reads what every
-// path it names and every directory above one is, a read whose cost grows
-// with the square of a path's depth and so is no short read — given back
-// before its landing's upload, its proposal and its wait for its row, which
-// hold no read-lane slot. What the share bounds is the long processes, which
-// are what a person's push waits behind.
-//
-// PAST [GitShareWait] the work is answered [ErrGitUnready]{[UnreadyShare]} —
-// never queued for longer, and never refused as the asker's fault — so the
-// walk that asked it moves to another Gitlet node, which answers as well as a
-// saturated node would have.
+// THE NODE'S SEAT GIT-WORK SHARE ([GitShare]): seat git work holds at most
+// [ShareOf] a Gitlet node's read lane (gitproc ClassRead), where a person's
+// push's scans, a sync round's peel and a fetch's want check wait FIFO at most
+// gitproc.SlotWait before they are refused busy. A seat's read may run a whole
+// read deadline and a write's build [WriteBuildDeadline], so a burst sized to
+// the lane would refuse that push. ONE share a node, every [SeatWorks] kind
+// taking from it, so no two kinds together take the lane. A unit is held around
+// the work's LONG git alone: never across a wait for a sync, a re-sync or a
+// barrier (across a cold download one read would starve a one-unit node), nor
+// a short check of named objects, which queues in the lane like any short read.
+// Past [GitShareWait] the work is [ErrGitUnready]{[UnreadyShare]}, never queued
+// longer nor the asker's fault, so its walk moves to another Gitlet node.
 
 // SeatWork is which seat git work takes a unit of the share: the `work`
 // attribute of crewlet.code.seatwork.waits. A closed set ([SeatWorks]).
 type SeatWork string
 
 const (
-	// SeatWorkRead is a principal's server-side read of a repository by
-	// object id: the git a read's kind runs (internal/gitlet/query) for a seat
-	// or a person, and a merge preview's merge (internal/gitlet/home), a read
-	// of two commits by their ids too — never the engine's own read
-	// ([SeatWorkEngine]).
+	// SeatWorkRead is a principal's server-side read of a repository by object
+	// id (internal/gitlet/query), a merge preview's merge (internal/gitlet/home)
+	// included — never the engine's own read ([SeatWorkEngine]).
 	SeatWorkRead SeatWork = "read"
-	// SeatWorkWrite is an engine write's BUILD (internal/gitlet/host): its git
-	// from its read of what every path the change names and every directory
-	// above one is, and of what it touches — the parent commit, the
-	// directories it rewrites, the files an edit rewrites, a pick's two
-	// commits — to its pack indexed. Never the check before the build, of
-	// where the write's branch is and of what the objects it names by id
-	// are, a short read in the read lane's own queue as a read's check of
-	// what it names is; never its landing's upload, proposal or wait for its
-	// row, which hold no read-lane slot; and a branch created or deleted
-	// builds nothing and takes no unit.
+	// SeatWorkWrite is an engine write's BUILD (internal/gitlet/host): from its
+	// read of every path it names and every directory above one (a cost that
+	// grows with the square of a path's depth, so no short read) to its pack
+	// indexed. Not the check before it, of its branch and the objects it names
+	// (a short read in the lane's own queue), nor its landing's upload, proposal
+	// or wait for its row, which hold no read-lane slot; a branch created or
+	// deleted builds nothing and takes no unit.
 	SeatWorkWrite SeatWork = "write"
 	// SeatWorkEngine is a read THE ENGINE makes on its own account
-	// ([GitQuery.EnginesOwn]): a revision's facts or a commit's checks file
-	// a repository's home reads (internal/gitlet/home), and a read made for a
-	// check. It is no seat's, but it runs the same git in the same lane as a
-	// seat's read, so it takes its unit of the same share — and is COUNTED
-	// APART, because a home's background reads counted as seats' would hide
-	// from an operator what holds the share while the seats' reads are sent
-	// on (internal/gitlet/home bounds its own to leave the seats a unit).
+	// ([GitQuery.EnginesOwn]): a home's revision facts or checks file
+	// (internal/gitlet/home), or a read made for a check. It takes its unit of
+	// the same share but is COUNTED APART: counted as seats', a home's
+	// background reads would hide from an operator what holds the share
+	// (internal/gitlet/home bounds its own to leave the seats a unit).
 	SeatWorkEngine SeatWork = "engine"
 )
 
@@ -90,26 +59,17 @@ func SeatWorks() []SeatWork { return []SeatWork{SeatWorkRead, SeatWorkWrite, Sea
 // Valid reports a kind of seat git work this build knows.
 func (w SeatWork) Valid() bool { return slices.Contains(SeatWorks(), w) }
 
-// ShareOf is how many units a node whose read lane is slots wide holds: HALF
-// of it, at least one — the other half is what a person's push's scans, a sync
-// round's peel and a fetch's check of its wants wait in.
+// ShareOf is how many units a node whose read lane is slots wide holds: HALF,
+// at least one; the other half is what a person's push's scans, a sync round's
+// peel and a fetch's want check wait in.
 //
-// HALF STANDS, MEASURED AGAINST (internal/gitlet/host's BenchmarkEngineWrite,
-// beside=push, its repository kept compacted between rounds so the person's
-// push alone, beside the writes and after them meet one pack state): on two
-// cores the share is its floor of one unit, and sixty-four engine writes at
-// once into the person's repository took the push's p99 from 0.24–0.38 s
-// alone to 0.92–1.64 s, past the twice the benchmark reports it against, and
-// back to 0.25–0.51 s once they stopped (four runs over the three object
-// stores).
-// What the writes added is not a read-lane slot — the person was refused
-// nothing: the copy's syncs a push waits for ran on the two cores the
-// writes' builds and landings used (their p99 0.25–0.39 s beside the writes,
-// 0.05–0.13 s alone), and the person's proposal waited in the repository's
-// one commit queue behind theirs (its p99 0.09–1.25 s beside them, 34–82 ms
-// alone). A narrower share has no unit to give at one and would shorten
-// neither, and a wider node's half leaves more slots, not fewer: the figure
-// decides the node's cores, never this fraction.
+// Half stands against internal/gitlet/host's BenchmarkEngineWrite (beside=push):
+// at two cores' floor of one unit, 64 concurrent engine writes took the push's
+// p99 from 0.24–0.38 s to 0.92–1.64 s, but not through the share. The push was
+// refused nothing; it waited on the cores the writes used and in the
+// repository's one commit queue. A narrower share has no unit to give at one
+// and would shorten neither, and a wider node's half leaves more slots: the
+// figure decides the node's cores, never this fraction.
 func ShareOf(slots int) int { return max(1, slots/2) }
 
 // The outcomes of a take: crewlet.code.seatwork.waits' `outcome`.
@@ -154,21 +114,16 @@ func NewGitShare(node string, readSlots int, m *metrics.Recorder) *GitShare {
 // errShareWait is the cause of a take's own wait ending.
 var errShareWait = errors.New("gitlet: the seat git-work share's wait ended")
 
-// Take holds one unit for work, waiting at most [GitShareWait] for one to come
-// free: past it, [ErrGitUnready]{[UnreadyShare]} naming the node. ctx ending
-// first is ctx's own error, and is not counted, since the take did not wait
-// its while: its caller went away, and nobody waits for that answer — or the
-// work's answer fell due first ([AnswerDue]), which the work answers itself,
-// naming what spent its asker's attempt.
-// release gives the unit back, and is idempotent — every holder defers it,
-// and the one that releases early calls it again harmlessly.
+// Take holds one unit for work, waiting at most [GitShareWait]: past it,
+// [ErrGitUnready]{[UnreadyShare]} naming the node. ctx ending first is ctx's
+// own error, uncounted since the take did not wait its while: its caller left,
+// or the work's answer fell due ([AnswerDue]), which the work answers itself.
+// release is idempotent, so a holder that releases early may still defer it.
 //
-// EVERY TAKE IS TIMED, granted or unready (crewlet.code.seatwork.waits, a
-// histogram): the wait is a whole term of each attempt seat git work is
-// given — an engine write's (estate.GitWriteAttempt) and a read's
-// (estate.Timing's GitReadAttempt) — and a count of the waits that ran out
-// says only how often the node gave that term up whole, never how near the
-// granted ones came to it.
+// EVERY TAKE IS TIMED, granted or unready (crewlet.code.seatwork.waits): the
+// wait is a term of each attempt seat git work is given (estate.GitWriteAttempt,
+// estate.Timing's GitReadAttempt), and a count of the waits that ran out would
+// not show how near the granted ones came to it.
 func (s *GitShare) Take(ctx context.Context, work SeatWork) (release func(), err error) {
 	if !work.Valid() {
 		return nil, fmt.Errorf("%w: seat git work %q is not one of %s", ErrInvalid, work, words.Or(SeatWorks()))

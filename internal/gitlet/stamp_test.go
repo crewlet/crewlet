@@ -9,18 +9,13 @@ import (
 )
 
 // EVERY CODE READ IS STAMPED THROUGH THE BARRIERS ITS NODE WAS RELEASED PAST.
-//
-// A node reaches a barrier the moment it decodes it and commits it later,
-// beside its loop, so its checkpoint row can sit at the last record that wrote
-// a row while a read waits for, and is released at, a barrier after it. The
-// read's rows are whole through that barrier — a barrier writes no row — and
-// its stamp must say so. Every read here is floored at a barrier this node
-// reached with its commit held, so a stamp below the floor is the checkpoint
-// row alone: stamped so, a linearizable answer came back below one another
-// node had given before it on the very same rows — Gitlet's fleet
-// suite found a member's cache, synced linearizable, one or two barriers
-// "behind the rows read" on another member — and a cache took a linearizable
-// answer below its mark for its log gone back.
+// A node reaches a barrier when it decodes it and commits it later, so its
+// checkpoint row can lag a barrier a read waited for and was released at. A
+// barrier writes no row, so the read's rows are whole through it and its stamp
+// must say so: stamped at the checkpoint row alone, a linearizable answer comes
+// back below one another node gave on the same rows, and a cache takes it for
+// its log gone back. Every read here is floored at a barrier reached with its
+// commit held, so a stamp below the floor is the checkpoint row alone.
 func TestEveryCodeReadIsStampedThroughTheBarriersItsNodeReached(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -80,15 +75,12 @@ func TestEveryCodeReadIsStampedThroughTheBarriersItsNodeReached(t *testing.T) {
 	}
 }
 
-// A SNAPSHOT'S PAGES READ ON TWO NODES ARE ONE HISTORY whichever of them has
-// committed the barriers it was read past. A later page reads at session
-// floored at the highest stamp a page was read at, and the node that serves it
-// stamps its own page at or past that floor. Stamped with its checkpoint row
-// alone, a node that had reached the floor's barrier and not committed it
-// stamped its page below the floor, and the cursor it issued — read below
-// where it began — was refused by the next page as one no reader issues: a
-// snapshot spanning pages, asked of a fleet, failed between two nodes that
-// held the same rows.
+// A SNAPSHOT'S PAGES READ ON TWO NODES ARE ONE HISTORY whichever has committed
+// the barriers it was read past: a later page reads at session floored at the
+// highest stamp a page was read at, and its node stamps the page at or past
+// that floor. Stamped at its checkpoint row alone, a node that reached the
+// floor's barrier without committing it would stamp below the floor, and the
+// next page would refuse its cursor as one no reader issues.
 func TestASnapshotsPagesStayOneHistoryOnANodeThatHasNotCommittedItsBarriers(t *testing.T) {
 	t.Parallel()
 	a, b := newTwoNodes(t)

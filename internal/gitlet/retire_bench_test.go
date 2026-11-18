@@ -10,18 +10,15 @@ import (
 
 // BenchmarkRetireSweepStep is ONE STEP OF THE RETENTION PASS'S SWEEP on the
 // round-trip harness's real log and estate: Store.RetireSweep deciding,
-// appending its record and waiting for its own apply — the duration the pass's
-// pacer measures and waits twice after, and what a pass's budget is spent in —
-// over a repository of its own each iteration, its retired rows seeded outside
-// the timer as one earlier record's retirements:
+// appending and waiting for its own apply (the duration the pass's pacer
+// measures and its budget is spent in), over a fresh repository each
+// iteration whose retired rows are seeded, untimed, as one record's:
 //
-//   - rows=8: a sweep of a few rows, what the pass takes of a repository one
-//     small compaction retired from;
-//   - rows=3999: RetireSweepRows, the most rows one step removes.
+//   - rows=8: a few rows, a repository one small compaction retired from;
+//   - rows=3999: RetireSweepRows, the most one step removes.
 //
-// BenchmarkApplyARetireSweep is the apply alone, the share of it every other
-// data node's write lane pays; limits.go's RetentionPassBudget reasons from
-// both.
+// BenchmarkApplyARetireSweep is the apply alone, the share every other data
+// node's write lane pays; limits.go's RetentionPassBudget reasons from both.
 func BenchmarkRetireSweepStep(b *testing.B) {
 	gitlet.Quiet(b)
 	old := harnessAt.Add(-gitlet.RetireGrace - time.Hour)

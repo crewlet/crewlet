@@ -17,15 +17,15 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A LISTING OF REPOSITORIES is read by name or by last push, over the whole or one kind's range
-// of an index, and where [ReadQuery.RepoFacts] asks each row carries its card ([RepoCard]) and a
-// first page the whole listing's total ([ReposTotal]).
+// A LISTING OF REPOSITORIES is read by name or by last push, over a whole index or one kind's
+// range; where [ReadQuery.RepoFacts] asks, each row carries its card ([RepoCard]) and a first page
+// the listing's total ([ReposTotal]).
 
 // RepoSort is the order a listing of repositories walks. A closed set ([RepoSorts]).
 type RepoSort string
 
 const (
-	// RepoSortName is by name, today's order; the zero sort reads as it.
+	// RepoSortName is by name; the zero sort reads as it.
 	RepoSortName RepoSort = "name"
 	// RepoSortPushed is by last push, newest first, then the never-pushed by name: the
 	// repositories in use alone (code_repos_pushed_idx).
@@ -118,10 +118,9 @@ func reposListed(ctx context.Context, tx *sql.Tx, q ReadQuery, statuses string, 
 		return nil, fmt.Errorf("%w: %q is not a repository name, where a listing by name resumes", ErrBadCursor,
 			q.Cursor)
 	}
-	// THE PROTECTED ONES BY THEIR OWN INDEX ([ReadQuery.Protected]), and ONE KIND BY ITS OWN
-	// ([ReadQuery.RepoKind]): the same order, walked by an index that holds no other row. AND
-	// THE NAMES A PREFIX BEGINS ([ReadQuery.Prefix]) in one range of either name index, from the
-	// prefix itself to its end, past a cursor that must be one of them.
+	// The protected ones ([ReadQuery.Protected]) and one kind ([ReadQuery.RepoKind]) each walk, in
+	// the same order, an index holding no other row; a prefix ([ReadQuery.Prefix]) reads one range
+	// of either name index, past a cursor that must begin with it.
 	var (
 		listing string
 		args    []any

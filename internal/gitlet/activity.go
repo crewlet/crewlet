@@ -89,9 +89,7 @@ func pusherOf(via PushVia, kind PrincipalKind, seat string) (PusherKind, string,
 	return PusherKind(party), handle, party != ""
 }
 
-// validateDayBounds is [ReadQuery.validate] for the asker's day bounds: beside RepoFacts on
-// repositories, never with one push, 2 to MaxDayBounds quarter-hour marks after 1970, ascending,
-// within MaxDaySpan, and on a listing within MaxListingDaySpan and MaxSparkReposPerPage a page.
+// validateDayBounds is [ReadQuery.validate] for the asker's day bounds.
 func (q ReadQuery) validateDayBounds() error {
 	b := q.DayBounds
 	refused := func(why string) error { return fmt.Errorf("%w: day_bounds: %s", ErrInvalid, why) }
@@ -130,8 +128,8 @@ func (q ReadQuery) validateDayBounds() error {
 	return nil
 }
 
-// daysKept refuses day bounds whose first is older than the push history keeps whole by the reader's
-// clock now, so a day it may no longer hold whole is never answered as a count.
+// daysKept refuses day bounds whose first is older than PushDaysKept by the reader's clock, so a day
+// the history may no longer hold whole is never answered as a count.
 func (q ReadQuery) daysKept(now time.Time) error {
 	if len(q.DayBounds) == 0 || !q.DayBounds[0].Before(now.Add(-PushDaysKept)) {
 		return nil

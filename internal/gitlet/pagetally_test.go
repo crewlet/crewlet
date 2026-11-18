@@ -12,22 +12,15 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// THE PAGES A TABLE HOLDS, read off the estate's file.
-//
-// What a push leaves every data node is rows of two lifetimes: its
-// code_pushes row, which the push-history horizon keeps 181 days, and its
-// pack's code_packs row, which lives as long as the pack. Only the TABLES
-// tell the two apart. The push row names its pack too (its pack_id and
-// pack_bytes), so the file's growth over pushes carrying a pack, less its
-// growth over pushes carrying none, counts those columns — kept 181 days —
-// as the pack row's, kept for good; and that difference moves with how many
-// rows of each shape fit a page, so one pack row weighed differently beside a
-// person's push and beside a seat's. dbstat, SQLite's count of a
-// table's pages, is no table Turso has, so the count is read from the file in
-// SQLite's format, which Turso writes: each b-tree walked from the root page
-// sqlite_master names, every overflow chain followed, the free list counted
-// from the header — and held to the file, every page of which is one
-// b-tree's or free, or the walk is wrong.
+// THE PAGES A TABLE HOLDS, read off the estate's file. A push leaves rows of
+// two lifetimes, its code_pushes row (kept 181 days) and its pack's code_packs
+// row (kept as long as the pack), and only a per-table count tells them
+// apart: the file's growth with a pack less its growth without one counts the
+// push row's pack_id and pack_bytes as the pack row's, and moves with how many
+// rows fit a page. Turso has no dbstat, so the count is read from the file in
+// SQLite's format: each b-tree walked from the root sqlite_master names, every
+// overflow chain followed, the free list read from the header — and held to
+// the file, every page of which is one b-tree's or free.
 
 // pageTally is the estate's file page by page: what each table's b-trees hold
 // — its own and its indexes', overflow pages included — and what is free.
@@ -39,9 +32,8 @@ type pageTally struct {
 }
 
 // tally is the estate's file page by page once a truncating checkpoint has
-// folded every committed page into it — the database itself, never a
-// sidecar's frames — failing t where a page is held by two b-trees, or by
-// none and is not free.
+// folded every committed page into it (a WAL frame is no page of the file),
+// failing t where a page is held by two b-trees, or by none and is not free.
 func (e *estate) tally(t testing.TB) pageTally {
 	t.Helper()
 	db := storetest.ReplicatedDB(t, e.db)
@@ -271,13 +263,11 @@ func sqliteVarint(b []byte) (int64, int) {
 }
 
 // EVERY PAGE OF THE ESTATE IS ONE TABLE'S OR FREE, as the tally counts it:
-// BenchmarkPushHistoryBytes prints what each of a push's two rows costs by
-// the pages its table grew by, so a tally that left a page out, or counted
-// one twice, would print a lifetime's bytes wrong. Pushes of every shape that
-// benchmark measures — one commit with its pack and with none, and a row
-// past a page, which spills into overflow pages — then a dropped table, whose
-// pages go to the free list, each tallied, the tally failing itself where the
-// pages do not add up.
+// BenchmarkPushHistoryBytes prices each of a push's two rows by its table's
+// page growth, so a page left out or counted twice misprices a lifetime.
+// Tallied over every push shape that benchmark measures (with a pack, without
+// one, and a row spilling into overflow pages), then a dropped table's freed
+// pages.
 //
 // Mutation: count no overflow page, or no free page, or walk no interior
 // page's rightmost child, and the pages no longer add up — red.

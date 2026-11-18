@@ -19,74 +19,26 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// EVERY CODE READ SEEKS A NAMED INDEX.
-//
-// # Why it is held rather than reviewed
-//
-// Every data node applies every record of the code log on the one write lane
-// every other domain's applier waits behind, and every read a Gitlet node, a seat
-// or a person makes is answered from one of those copies: a statement that
-// scans a code table costs what the largest repository holds, on every node,
-// at every call, and it shows as a slow push or a stalled lane, never as a
-// failure. TestEveryCodeIndexServesARegisteredQuery holds each REGISTERED
-// statement to the exact seek it is written for; what no registry can see is
-// the statement nobody registered — a read added beside it is planned by
-// nobody. So this walks the package's source (readwalk_test.go) for every text
-// that reads a code table and holds it to the registry, both ways:
-//
-//   - every text the driver plans whole is a statement registeredStatements
-//     names, by its exact text — the package's own constant, so there is no
-//     copy to drift from what runs;
-//   - every text it will not plan whole is a FRAGMENT, and every function
-//     that uses one is a builder [planShapes] registers;
-//   - every function a statement's text cannot be followed out of to
-//     constants assembles one at run time, and is a builder [planShapes]
-//     registers, keyed by what decides the shapes it builds;
-//   - every registered statement is spelled in the source, and every shape
-//     names a builder the walk found — and objstore's, over the
-//     declarations [referenceTables] lists, are each registered for every
-//     declaration the builder admits, at every width its callers build it
-//     at ([referenceWidths]), as exactly the text it spells there
-//     (holdReferences).
-//
-// # What a plan must do
-//
-// Reach every table of the replicated estate it reads by a SEARCH — on an
-// index the schema declares, or on the primary key — whatever else it does.
-// A SCAN reads every row of what it scans: an index's every entry is still
-// every row. A LIMIT is no bound on one either: nothing here requires a
-// scanning statement to carry a LIMIT, and a LIMIT bounds the rows a scan
-// RETURNS, not the rows it reads — every row a filter no index serves
-// rejects is read before the LIMIT fills, which is every row the table holds
-// when none qualifies. So a scan is allowed only of
-// json_each, the statement's own list; of a subquery's or a common table
-// expression's result, which is no table; and of a table [scanOK] names with
-// what bounds it, which is never a repository's size. A SEARCH on an index the
-// schema does not declare is refused too: an automatic index is a scan and a
-// sort a statement, built where its plan is run. Planned on the estate
-// seededPlanEstate fills, with NO ANALYZE, because no deployment runs one.
-// What is judged is every statement and shape the registries name, and the
-// read a migration claims for an index no statement reads yet
-// ([claimedReads]): no code issues a claim, so the match above never sees
-// one, but the read its index's reader will issue is held to this rule from
-// the migration that declares the index.
-//
-// Mutation: read a repository by its description (`WHERE description = ?`,
-// which no index leads with) — in the judgement's own control, or in a
-// registered constant — and the gate reports the scan; spell a statement over
-// a code table nobody registers, issue one assembled at run time, register a
-// statement the source no longer spells, drop a shape objstore builds or plan
-// it at a width no caller builds it at, or give scanOK a table nothing scans,
-// and it fails.
+// EVERY CODE READ SEEKS A NAMED INDEX — the package doc's "Every read of the
+// rows seeks a named index" says why. This walks the source (readwalk_test.go)
+// for every text reading a code table, since a read nobody registered is
+// planned by nobody, and holds it to the registries both ways: a text the
+// driver plans whole is in registeredStatements by its exact constant; a
+// fragment's user, or a function assembling one at run time, is a builder
+// [planShapes] registers; every registered text is spelled and every shape
+// names a builder found, objstore's at every declaration and width
+// ([referenceTables], [referenceWidths], holdReferences). A SCAN reads every
+// row, LIMIT or not, and an undeclared (automatic) index is a scan and a sort:
+// only json_each, a subquery's or CTE's result and [scanOK] may be scanned.
+// Plans use NO ANALYZE, as no deployment runs one.
 func TestEveryCodeReadSeeksANamedIndex(t *testing.T) {
 	t.Parallel()
 	db := seededPlanEstate(t)
 	schema := schemaOf(t, db)
 
-	// THE JUDGEMENT, ON STATEMENTS WHOSE VERDICT IS KNOWN — the mutation
-	// first: a repository found by a column no index leads with reads every
-	// repository the company holds, and the gate must say so of a SELECT, an
-	// UPDATE and a join alike, and of an index read whole.
+	// THE JUDGEMENT, ON KNOWN VERDICTS: a repository found by a column no index
+	// leads with is a scan, reported of a SELECT, an UPDATE, a join and an index
+	// read whole alike.
 	for name, tc := range map[string]struct {
 		sql  string
 		args []any
@@ -196,11 +148,10 @@ func TestEveryCodeReadSeeksANamedIndex(t *testing.T) {
 		}
 	}
 
-	// THE REFERENCES' MATCH, ON SHAPES WHOSE VERDICT IS KNOWN: the collector's
-	// question planned at three keys under the name of the five hundred it
-	// asks and a walk's page planned by nothing — each a statement that runs
-	// and that no plan answers for — and a shape at a width no caller builds,
-	// a plan of a statement that never runs.
+	// THE REFERENCES' MATCH, ON KNOWN VERDICTS: the collector's question planned
+	// at three keys under the name of its full batch and a walk's page planned
+	// by nothing — each a statement that runs unanswered by a plan — and a shape
+	// at a width no caller builds, a plan of nothing that runs.
 	{
 		shapes := planShapes()
 		full := referenceShape("ObjectsAmong", PackReferences.Table, collect.JudgeBatch)
@@ -252,10 +203,9 @@ func TestEveryCodeReadSeeksANamedIndex(t *testing.T) {
 	for _, f := range holdReferences(walk, shapes) {
 		t.Error(f)
 	}
-	// EVERY PLAN THE PLAN TESTS EXPLAIN: the registered statements, the
-	// shapes, and the read a migration claims for an index no statement
-	// reads yet ([claimedReads]) — the read its reader will issue, judged
-	// now as that statement will be once it is registered.
+	// EVERY PLAN THE PLAN TESTS EXPLAIN, and the read a migration claims for an
+	// index no statement reads yet ([claimedReads]), judged as that statement
+	// will be once it is registered.
 	judged := everyStatement(t)
 	for index, st := range claimedReads() {
 		name := claimName(index)
@@ -296,15 +246,13 @@ func TestEveryCodeReadSeeksANamedIndex(t *testing.T) {
 // scanOK is every table a statement may read whole, with what bounds it —
 // never a repository's size, which no statement here may be bounded by.
 var scanOK = map[string]string{
-	// THE TRIM'S LISTING ([Domain.Evictions]): one row a node an operator
-	// has evicted from the code log, kept through its readmission — as many
-	// rows as the fleet has had evictions, whatever its repositories hold —
-	// and the trim reads every one of them each pass.
+	// The trim's listing ([Domain.Evictions]), kept through a readmission and
+	// read whole each pass.
 	"code_evictions": "one row a node an operator evicted from the code log, whatever its repositories hold",
-	// A COMPANY'S COUNTS ([ReadCounts]): every tally row, judged a row at a time.
+	// A company's counts ([ReadCounts]), judged a row at a time.
 	"code_change_tallies": "one row an owner and visibility of the repositories in use holding a change: at " +
 		"most one a repository in use, whatever any repository holds",
-	// AND THE REPOSITORIES BY KIND AND STATUS ([CountRepos], a first page's total).
+	// The repositories by kind and status ([CountRepos], a first page's total).
 	"code_repo_tallies": "one row a kind of each owner and visibility holding a repository: at most one a " +
 		"repository, whatever any repository holds",
 }
@@ -346,15 +294,14 @@ func schemaOf(t *testing.T, db store.ReplicatedHandle) planSchema {
 	return schema
 }
 
-// judgePlan judges one statement's plan, a detail line a step: every table
-// of the replicated estate it reads, sought by an index the schema declares or
-// by the primary key, or scanned where [scanOK] lets it be. It answers the
-// tables it scanned so and what it found wrong.
+// judgePlan judges one statement's plan, a detail line a step: each estate
+// table it reads is sought by a declared index or the primary key, or scanned
+// where [scanOK] allows. It answers the tables scanned so and what it found
+// wrong.
 //
-// The driver names a table a step reads first — the table on a scan
-// ("SCAN code_repos AS r"), its alias on a search ("SEARCH r USING …") — and
-// names a subquery's result "(subquery-N)", a common table expression's by
-// its name and a scalar's "CONSTANT ROW", none of them a table.
+// The driver names a step's table first — the table on a scan ("SCAN
+// code_repos AS r"), its alias on a search ("SEARCH r USING …") — and names
+// "(subquery-N)", a CTE by its name and "CONSTANT ROW", none of them a table.
 func judgePlan(plan []string, schema planSchema) (scanned, problems []string) {
 	for _, line := range plan {
 		verb, rest, _ := strings.Cut(line, " ")
@@ -581,24 +528,18 @@ func orPackageLevel(fn string) string {
 	return fn
 }
 
-// THE WALK, ON A TREE WHOSE VERDICT IS KNOWN — and the lexer under it, on
-// statements whose verdict is known. Every way the package spells a statement
-// must be found: declared, inline, built of constants, an UPDATE, a DELETE, an
-// INSERT that selects, a comma join, a quoted table, a common table
-// expression, a subquery, a context-free method, a field's handle, a
-// connection DB.Conn opened, a file this platform does not build. What only
-// writes, a column a table qualifies, a comment, a string literal and a log
-// key are none. Every way a statement is assembled at run time must make its
-// function a builder: an append, a format, a package-level variable, an
-// exported function's parameter, a closure's, a range over something the walk
-// cannot read whole, and a caller handing a helper what it built; and every
-// way a text is merely CHOSEN among constants must not: a range over a
-// literal, an assignment in each branch, a helper every caller hands a
-// constant, a method likewise, a local that shadows a constant — and a
-// statement prepared from a constant and run with arguments only the run
-// knows, whose one site is its Prepare. A method that is no statement is no
-// site, a statement method taken as a value or on a value the walk cannot
-// type is reported, and a test file is never read.
+// THE WALK, AND THE LEXER UNDER IT, ON KNOWN VERDICTS. Every way the package
+// spells a statement is found: declared, inline, built of constants, an UPDATE,
+// a DELETE, an INSERT that selects, a comma join, a quoted table, a CTE, a
+// subquery, a context-free method, a field's handle, a DB.Conn connection, a
+// file this platform does not build; a pure write, a qualified column, a
+// comment, a string literal and a log key are not. Run-time assembly — an
+// append, a format, a package variable, an exported or closure parameter, a
+// range the walk cannot read whole, a helper handed a built text — makes a
+// builder; a choice among constants (a literal range, per-branch assignment,
+// helpers and methods handed constants, a shadowing local, a prepared constant
+// whose one site is its Prepare) does not. A non-statement method is no site; a
+// method value or an untypable receiver is reported; test files are never read.
 func TestTheReadGateFindsEveryStatement(t *testing.T) {
 	t.Parallel()
 

@@ -9,47 +9,24 @@ import (
 	"time"
 )
 
-// WHEN A CHANGE LAST MOVED, and the listing narrowed to the changes that moved
-// within a window (replicated 0147).
+// WHEN A CHANGE LAST MOVED, and the listing narrowed to a window (replicated 0147). A change
+// moves on two subjects (doc.go), each stamping its own table: its lifecycle and pushes stamp
+// code_changes.updated_at, and records somebody wrote about it ([spoken]) code_conversations'
+// — never the home's facts, or every move of a target branch would date its changes. Its last
+// move is the later of the two ([ChangeSummary.UpdatedAt]).
 //
-// A change moves on two subjects (doc.go): its lifecycle and the pushes that
-// move its head on its repository's, which stamp code_changes.updated_at with
-// every record that moves the row's version; and what somebody says about it
-// on its own, which stamps code_conversations.updated_at with every record
-// somebody wrote ([spoken]) — never the home's facts, which a target branch's
-// every move would otherwise date. A table is written by the records of one
-// subject only, so the instant is kept once a subject, and when a change last
-// moved is the later of the two ([ChangeSummary.UpdatedAt]).
-//
-// # A window walks the two indexes in step
-//
-// A listing that names a window and nothing an index of who or where leads —
-// no repository, work item, reviewer or need, and no live state — walks the
-// two instants' indexes together, newest first ([windowWalk]): a page of each, every change taken at
-// the later of its two instants and left to the walk of the other index where
-// that one is the later, the two merged by instant and id. A change is so
-// listed once, at its last move. A page is cut where the walk of an index that
-// filled its page stopped, since below that the index holds rows the page did
-// not read; its cursor is that place, and the next page reads both indexes
-// after it. So a page is still the rows the page READ, two pages' worth at
-// most, and may be short, as every listing's is.
-//
-// A listing that names a window beside what leads another walk tests the
-// window on each row its page read, as it tests every filter its index does not
-// seek (changeread.go), and lists in that walk's order. A LIVE STATE (draft,
-// open) is one of those, the commonest — a screen of changes asks for the open
-// ones until told otherwise — because its index holds the live set alone, where
-// these two hold every change that moved within the window, every merged one
-// among them: in a company that merges a thousand changes a day and keeps five
-// hundred open, a month's window walked here reads some thirty thousand rows to
-// keep the five hundred, which the state's own walk reads ten pages of.
+// A listing that names a window and nothing else an index leads walks the two indexes in step
+// ([windowWalk]), so a page reads two pages' worth at most and may be short. A window beside
+// another leader is tested on that walk's rows, in its order (changeread.go). A LIVE STATE, the
+// commonest, is one: its index holds the live set alone, these every merged change too — at a
+// thousand merges a day and five hundred open, a month's window here reads ~30 000 rows to keep
+// the five hundred, which the state's own walk reads ten pages of.
 
 // ChangeWindow is how far back a `changes` listing narrowed to a window
 // reaches: the changes that moved within it, by [ChangeSummary.UpdatedAt].
-//
-// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no versionedFields
-// row. The domain landed on main with it ([RecordVersion]), so no build that
-// carries the domain ignores it and answers the wider listing it narrows.
+// An estate request's field, not a record's, so it takes no versionedFields
+// row: it came with the domain ([RecordVersion]), so no build that carries the
+// domain ignores it and answers the wider listing.
 type ChangeWindow string
 
 // The windows a listing of changes is narrowed to: what a person opening the
@@ -87,10 +64,9 @@ const (
 	conversationsMovedKey = "code_conversations_updated_idx"
 )
 
-// withConversations sets on every row of rows what its conversation says of
-// it ([changeRow.moved], [changeRow.openFindings]), each read by its key in one
-// statement driven from the rows' ids — a change nobody has discussed holds
-// none, and moved when its lifecycle last did.
+// withConversations sets on every row what its conversation says of it
+// ([changeRow.moved], [changeRow.openFindings]), in one statement driven from
+// the rows' ids; a change nobody discussed moved when its lifecycle last did.
 func withConversations(ctx context.Context, tx *sql.Tx, rows []changeRow) error {
 	for i := range rows {
 		rows[i].moved = rows[i].updatedAt
@@ -157,10 +133,8 @@ func windowWalk(ctx context.Context, tx *sql.Tx, since int64, cursor string, lim
 	if err != nil {
 		return nil, "", err
 	}
-	// THE PLACE NEITHER INDEX'S PAGE STOPPED BEFORE: below where the walk of
-	// an index that filled its page stopped, that index holds rows this page
-	// did not read, so the page ends there — at the later of the two where
-	// both filled.
+	// BELOW WHERE AN INDEX THAT FILLED ITS PAGE STOPPED it holds rows this page
+	// did not read, so the page ends there: at the later of the two where both filled.
 	var bound *changeRow
 	cutAt := func(read []changeRow, at func(changeRow) int64) {
 		if len(read) < limit {
@@ -178,9 +152,9 @@ func windowWalk(ctx context.Context, tx *sql.Tx, since int64, cursor string, lim
 	if err := withConversations(ctx, tx, all); err != nil {
 		return nil, "", err
 	}
-	// EACH CHANGE ONCE, at its last move: a row of the lifecycle's index
-	// where its lifecycle moved it last (or both at one instant), a row of
-	// the conversation's where somebody spoke of it later.
+	// EACH CHANGE ONCE, at its last move: from the lifecycle's index where its
+	// lifecycle moved it last (or both at one instant), from the conversation's
+	// where somebody spoke of it later.
 	var merged []changeRow
 	for i, row := range all {
 		fromLifecycle := i < len(lifecycle)
@@ -243,12 +217,10 @@ func readChangesBy(ctx context.Context, tx *sql.Tx, stmt string, args []any, wha
 }
 
 // The window's reads, each registered in plan_test.go: the changes whose
-// lifecycle moved within the window, and those somebody spoke of within it —
-// the conversation's index walked and each change sought by its key — each a
-// first page and a page after a cursor, newest first, with the <= beside the
-// OR that keeps the range seek (planner.go), and the partial index's predicate
-// repeated verbatim; and the conversations of a page's changes, driven from
-// their list.
+// lifecycle moved in the window, and those spoken of in it (the conversation's
+// index walked, each change sought by its key), each a first page and a page
+// after a cursor, the <= beside the OR keeping the range seek (planner.go) and
+// the partial index's predicate repeated verbatim; and a page's conversations.
 const (
 	changesMovedSQL = `SELECT ` + changeColumns + ` FROM code_changes INDEXED BY ` + changesMovedKey + `
 		WHERE updated_at >= ? ORDER BY updated_at DESC, id DESC LIMIT ?`

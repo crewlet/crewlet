@@ -16,14 +16,14 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// RETIRED PACKS AND THEIR SWEEP, on the whole path: a real broker, store and
-// applier. The retired rows are SEEDED, each case's at the positions and
-// broker instants it is about, because what a sweep decides is a question
-// about those two columns and never about the record that wrote them.
+// RETIRED PACKS AND THEIR SWEEP, on a real broker, store and applier. The
+// retired rows are SEEDED at the positions and broker instants each case is
+// about: a sweep decides on those two columns, never on the record that wrote
+// them.
 
-// seedRetired writes count retired pack rows of repoID straight into a node's
-// estate, all retired by one record — at the packed position on the code log
-// and its broker instant at — and answers the objects they name.
+// seedRetired writes count retired pack rows of repoID straight into the
+// estate, all retired by one record at packed position and broker instant at,
+// and answers the objects they name.
 func (n *node) seedRetired(repoID string, position int64, at time.Time, count int) []objstore.Key {
 	n.t.Helper()
 	packs := make([]string, count)
@@ -33,9 +33,8 @@ func (n *node) seedRetired(repoID string, position int64, at time.Time, count in
 	return n.seedRetiredPacks(repoID, position, at, packs...)
 }
 
-// seedRetiredPacks is [node.seedRetired] for packs a case names: one retired
-// row a pack, part `pack`, its object keyOf and its git checksum oidOf the
-// pack's id.
+// seedRetiredPacks is [node.seedRetired] for named packs: one row a pack, part
+// `pack`, object keyOf and git checksum oidOf the pack's id.
 func (n *node) seedRetiredPacks(repoID string, position int64, at time.Time, packs ...string) []objstore.Key {
 	n.t.Helper()
 	ctx := n.t.Context()
@@ -74,20 +73,15 @@ func (n *node) retiredThrough(repoID string) int {
 }
 
 // A RETIRED PACK KEEPS ITS OBJECT FOR THE GRACE (ADR-0081): while its row is in
-// code_packs_retired the collector reads its object as named — through the
-// declaration and the statement it builds, as every collection asks — and a
-// sweep removes the row only once the clock it is given puts the row past
-// RetireGrace, after which nothing names the object and the collector takes
-// it as it takes anything no row names.
+// code_packs_retired the collector, through RetiredPackReferences, reads its
+// object as named; a sweep removes the row only once its clock puts it past
+// RetireGrace, and then nothing names the object. Seeded rows first, then a
+// real compaction's, stamped with the broker's instant.
 //
-// The rows are seeded first, at the instant the case is about, and then
-// retired by a real compaction's record, whose instant is the broker's own.
-//
-// Mutation: declare RetiredPackReferences over code_packs, and the retired
-// objects read as nobody's while their rows stand; let the sweep's apply
-// delete nothing, and they stay named past it; drop the decide's cutoff, and
-// the sweep a second inside the grace removes them; let a compaction's apply
-// skip the retired rows, and the packs it replaced read as nobody's at once.
+// Mutation: declare RetiredPackReferences over code_packs → the retired
+// objects read as nobody's; a sweep apply that deletes nothing → they stay
+// named past it; no decide cutoff → a sweep inside the grace removes them; a
+// compaction apply that skips the retired rows → its inputs read as nobody's.
 func TestARetiredPackKeepsItsObjectForTheGrace(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -113,7 +107,7 @@ func TestARetiredPackKeepsItsObjectForTheGrace(t *testing.T) {
 			"the rest under a read that began before their retirement", got, len(keys))
 	}
 
-	// A SECOND INSIDE THE GRACE the sweep decides nothing, and writes nothing.
+	// A SECOND INSIDE THE GRACE the sweep writes nothing.
 	before := n.end()
 	res, err := n.store.RetireSweep(t.Context(), id, retiredAt.Add(gitlet.RetireGrace-time.Second))
 	if err != nil || res.Rows != 0 || n.end() != before {
@@ -138,10 +132,8 @@ func TestARetiredPackKeepsItsObjectForTheGrace(t *testing.T) {
 		t.Fatalf("the repository's retired mark is %d after the sweep through position 1", through)
 	}
 
-	// AND RETIRED BY A COMPACTION'S OWN RECORD: the packs its output replaces
-	// keep their objects named until a sweep past the grace — judged against
-	// the instant the broker stamped the compaction's record with — and a
-	// sweep a second short of it leaves them named.
+	// RETIRED BY A COMPACTION'S OWN RECORD: its inputs stay named until a sweep
+	// past the grace, counted from the broker's stamp on that record.
 	repo, ids := packedRepo(t, n, "web", 2)
 	inputs := n.packObjects(repo)
 	c, _ := committerOn(t, n, n.pub)
@@ -207,18 +199,15 @@ func (n *node) packObjects(repo string) []objstore.Key {
 	return out
 }
 
-// A SWEEP DECIDES NO ROW STILL INSIDE THE GRACE. Its walk takes a repository's
-// retired rows oldest position first and stops at the first its clock does not
-// put past RetireGrace — so a retirement recorded after one still inside the
-// grace but stamped before it (a leader change steps the broker's clock back)
-// waits for the next pass rather than going with it — and the record's bound
-// never cuts a retirement: a position it would cut is left whole for the next
-// record, and one alone past the bound is no writer's.
+// A SWEEP DECIDES NO ROW STILL INSIDE THE GRACE. Its walk goes oldest position
+// first and stops at the first row not past RetireGrace, so a later retirement
+// stamped earlier (a leader change steps the broker's clock back) waits for the
+// next pass. The record's bound never cuts a retirement: one it would cut waits
+// whole for the next record, and one alone past the bound is refused.
 //
-// Mutation: walk on past a row inside the grace, and that row is swept with
-// the one behind it; drop the bound's take-back, and a record removes part of
-// a retirement and marks it whole; drop the bound's refusal, and a decide
-// claims more rows than one record may remove.
+// Mutation: walk past a row inside the grace → the one behind it is swept;
+// drop the bound's take-back → a record removes part of a retirement and marks
+// it whole; drop the refusal → a decide claims more rows than a record may.
 func TestASweepDecidesNoRowStillInsideTheGrace(t *testing.T) {
 	t.Parallel()
 	old := harnessAt.Add(-gitlet.RetireGrace - time.Hour)
@@ -226,9 +215,8 @@ func TestASweepDecidesNoRowStillInsideTheGrace(t *testing.T) {
 		t.Parallel()
 		n := newNode(t)
 		id := seededRepo(t, n, "app")
-		// FOUR RECORDS on the log, each the retirement of the rows seeded at
-		// its position: the third stamped inside the grace, the fourth — a
-		// leader change behind it — stamped as old as the first two.
+		// FOUR RETIREMENTS: the third stamped inside the grace, the fourth (a
+		// leader change behind it) as old as the first two.
 		var at [5]int
 		for i := 1; i <= 4; i++ {
 			res := n.push(id, entry(fmt.Sprintf("p%d", i),
@@ -292,9 +280,8 @@ func TestASweepDecidesNoRowStillInsideTheGrace(t *testing.T) {
 	})
 }
 
-// opsAfter is every record on the node's log after the sequence after, each as
-// its op and its subject — less the read index's barriers and the trim's
-// records.
+// opsAfter is every record on the node's log after sequence after, as "op
+// subject", less the read index's barriers and the trim's records.
 func (n *node) opsAfter(after uint64) []string {
 	n.t.Helper()
 	var out []string
@@ -315,15 +302,12 @@ func (n *node) opsAfter(after uint64) []string {
 	return out
 }
 
-// THE RETENTION PASS SWEEPS BEFORE IT PURGES: a pass that finds one repository
-// holding retired packs past their grace and another deleted past its
-// retention publishes the sweep first — one cheap record, and every hour a
-// retired row outlives its grace is an object the collector cannot take — and
-// reports both: the sweep's record and the rows it removed beside the purge.
+// THE RETENTION PASS SWEEPS BEFORE IT PURGES: the sweep is one cheap record,
+// and every hour a retired row outlives its grace is an object the collector
+// cannot take. The report carries the sweep's records and rows beside the purge.
 //
-// Mutation: step the purges first, and the purge's record comes before the
-// sweep's; leave the sweep out of the report, and the pass says it swept
-// nothing.
+// Mutation: step the purges first → the purge's record comes first; leave the
+// sweep out of the report → the pass says it swept nothing.
 func TestTheRetentionPassSweepsBeforeItPurges(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -356,11 +340,10 @@ func TestTheRetentionPassSweepsBeforeItPurges(t *testing.T) {
 }
 
 // A SWEEP STEP THAT FAILS IS REPORTED BY THE REPOSITORY'S NAME, as a purge
-// step's is, and the pass goes on: the listing names the repository by its
-// id, and the report an operator reads is keyed by name.
+// step's is, and the pass goes on: the listing yields ids, but an operator
+// reads names.
 //
-// Mutation: report the id, and the failure is keyed by something no person
-// declared.
+// Mutation: report the id → the failure is keyed by nothing a person declared.
 func TestAFailedSweepIsReportedByTheRepositorysName(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -393,16 +376,13 @@ func TestAFailedSweepIsReportedByTheRepositorysName(t *testing.T) {
 }
 
 // THE RETIRED LISTING NAMES EACH RETIRING RECORD ONCE, however many packs it
-// retired: a record's rows share its broker instant and its repository, and a
-// sweep step removes a record whole, so an entry a record is at most one step
-// of the pass's and a page of the listing is a page of the pass's work rather
-// than of one record's rows. Read two entries a page, a record that retired
-// five packs is one entry, the records after it fill the page in their
-// instants' order, and a record still inside the grace is no entry at all.
+// retired: a sweep step removes a record whole, so a page of the listing is a
+// page of the pass's work. At two entries a page, a five-pack record is one
+// entry, later records follow in instant order, and one inside the grace is
+// not listed.
 //
-// Mutation: list the rows rather than the records, and the first page names
-// the five-pack record twice; drop the cutoff, and the record inside the
-// grace is listed.
+// Mutation: list rows → the five-pack record fills page 1; drop the cutoff →
+// the record inside the grace is listed.
 func TestTheRetiredListingNamesEachRetiringRecordOnce(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -422,15 +402,12 @@ func TestTheRetiredListingNamesEachRetiringRecordOnce(t *testing.T) {
 	}
 }
 
-// A PURGE REMOVES A REPOSITORY'S RETIRED ROWS, whatever their grace — no read
-// begins on a deleted repository — and counts them toward its parts: a deleted
-// repository holding nothing but retired packs, one past a part's rows, is
-// purged in a part and then the purge, never by one unbounded statement, and
-// no retired row of it is left.
+// A PURGE REMOVES A REPOSITORY'S RETIRED ROWS, whatever their grace (no read
+// begins on a deleted repository), and counts them toward its parts: one past a
+// part's rows goes as a part and then the purge, never one unbounded statement.
 //
-// Mutation: leave the retired rows out of the bounded count, and the purge is
-// one record deleting all of them at once; drop the part's delete, and the
-// parts remove nothing.
+// Mutation: leave retired rows out of the bounded count → one record deletes
+// them all; drop the part's delete → the parts remove nothing.
 func TestAPurgeRemovesARepositorysRetiredRows(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

@@ -20,71 +20,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A PUBLISHED LAYER'S FILES, READ AND CHECKED WITHOUT GIT, AND ITS BYTES CUT
-// INTO PARTS AND LAID BACK. A layer is three files a git wrote once, on the
-// repository's maintainer — git's own incremental multi-pack-index layer, its
-// reachability bitmap, and the commit-graph layer over the same packs
-// ([LayerRef]) — and every Gitlet node installs them. A git process trusts each
-// by its name: a layer's .midx and its .graph are NAMED by their own trailing
-// checksum, and git reads neither checksum when it opens one. So a node holds
-// the files to their row before any git process is handed them
-// ([CheckLayer]): a file of another layer, a multi-pack-index over other
-// packs, a bitmap of another multi-pack-index, a commit-graph layer over
-// another base — what a publisher's bug or a store's mix-up would install
-// under a name git trusts, read by every request over the copy.
-//
-// ONE READER OF GIT'S THREE FORMATS (ADR-0008). The maintainer states a row's
-// byte fields from the files its build wrote ([LayLayer]) and every Gitlet node
-// holds the files to the row ([CheckLayer]) by the same reading, so the side
-// that names a layer and the side that installs it judge it by one rule, and a
-// row the one forms is one the other accepts. Each rule cites the git 2.56.0
-// source it reads (the node pin, scripts/git-pin.env): gitformat-pack.adoc's
-// multi-pack-index section and midx.c's load_multi_pack_index_one,
-// pack-bitmap.c's load_bitmap_header, commit-graph.c's parse_commit_graph,
-// and, beneath the two chunk-format files, chunk-format.c's
-// read_table_of_contents and write_chunkfile.
-//
-// AS EXACT AS GIT'S WRITER, AS LENIENT AS ITS READER. What every file git
-// writes has, and a row depends on, is required exactly — the chunks
-// contiguous from the table of contents to the trailer, each chunk at the size
-// its count gives, the pack names of the one shape a cache names a pack by, the
-// trailer git's hashfile writes — because the trailer pins every byte: a file
-// git wrote never fails it, and one that does is not a file git wrote. What
-// git's own reader IGNORES — a chunk id it does not know, an option bit of a
-// bitmap it does not read — is ignored here too: a node installs only a layer
-// whose git is no newer than its own (LayerRef.Git), so whatever such a git
-// added the installing git reads, and a refusal here would cost every node its
-// bitmap over a file nothing is wrong with. A version git 2.56.0's reader
-// refuses is refused, and the pin's own files hold this reader to every git
-// the pin moves to (TestTheLayerReaderReadsWhatGitWrites).
-//
-// WHY NOT GIT'S OWN VERIFIERS. `git multi-pack-index verify` and `git
-// commit-graph verify` read every object's entry — twenty times a trailer's
-// cost for the graph, as internal/gitlet/cache measured (check.go) — neither
-// reads a bitmap, and neither knows the row. What they hold beyond the trailer
-// — every listed object where its offset says, every commit's parents — is
-// data the publisher's git wrote under a sound trailer, which no store can
-// have changed: a wrong entry there is that git's bug, and the canary read a
-// placement makes through the bitmap (internal/gitlet/cache) is what catches a
-// chain git cannot read.
-//
-// READ THROUGH AN io.ReaderAt, NEVER HELD. The root layer of the largest
-// repository the defaults admit is some 2.6 GB, so the readers read a file's
-// header, its table of contents and the chunks a count is read from — each
-// held to the file's own size before a byte of it is read, so no count a file
-// states sizes anything the file does not hold (FuzzParseMidx and its
-// siblings) — and hash the rest as it streams past, by git's trailer rule's
-// one implementation ([HashTrailer], hashfile.go): a piece at a time under the
-// caller's hold, its context checked before every read, so a check of the
-// largest layer stops when its caller does and holds a Gitlet node's read lane a
-// piece at a time, as the cache's own check of the files it keeps does.
-//
-// THE BYTES ARE CUT IN ONE PLACE (layerPart): [StoreLayer] uploads the three
-// files back to back as [LayerPartBytes] parts, every part at once, and
-// [FetchLayerPart] lays a part read back through the store's verified read
-// where it came from — the same cut both ways, a part's start in the layer and
-// its runs in the files alike, so a part is laid back exactly where it was
-// taken from.
+// A published layer's three files, read and checked without git (ADR-0008; the
+// package doc's "A layer's files are git's, read without git"), and its bytes
+// cut into parts and laid back by one cut, layerPart. Each rule cites the git
+// 2.56.0 source it follows (scripts/git-pin.env). What git's writer always
+// writes is required exactly: the trailer pins every byte, so a file git wrote
+// never fails. What git's reader ignores (an unknown chunk id or option bit) is
+// ignored here, since a node installs only a layer of a git no newer than its
+// own (LayerRef.Git); TestTheLayerReaderReadsWhatGitWrites holds both. Not git's
+// `multi-pack-index verify` or `commit-graph verify`: they read every entry
+// (twenty times a trailer's cost for the graph), no bitmap and no row, and add
+// only data under a sound trailer, which no store can have changed; the cache's
+// canary read through the bitmap catches a chain git cannot read.
 
 // LayerContentType is the content type a published layer's part is stored
 // under: not a git file — a part is a cut of the layer's three files back to
@@ -167,11 +114,9 @@ const (
 // them ([LayerRef.Sections]).
 var layerSections = [3]string{"multi-pack-index", "bitmap", "commit-graph layer"}
 
-// formatError is a file that is NOT GIT'S FORMAT as these readers read it — a
-// definite answer about its bytes, which [CheckLayer] and [LayLayer] answer as
-// [ErrBadLayer]. A read of the file that failed is never one: a disk that
-// failed a read says nothing about what the file holds, and the failure is
-// answered as it came, apart from every refusal.
+// formatError is a refusal of a file's bytes, not git's format as these
+// readers read it, which [CheckLayer] and [LayLayer] answer as [ErrBadLayer].
+// A failed read is never one: it says nothing of what the file holds.
 type formatError struct{ err error }
 
 func (e formatError) Error() string { return e.err.Error() }
@@ -233,13 +178,11 @@ func sized(r io.ReaderAt, size int64, what string) error {
 	}
 }
 
-// trailerOf holds the git hashfile r holds, size bytes, to its trailer — the
-// SHA-1 of every byte before its last twenty — by the one rule
-// ([HashTrailer]), hashed a piece at a time as p says and stopped with ctx,
-// and answers the trailer in hex: a multi-pack-index's and a commit-graph
-// layer's own name, and what a bitmap's header names. A file that does not
-// hold the bytes it was handed as, or whose trailer is not that hash, is a
-// refusal; a read, a hold or a context that failed is answered as it came.
+// trailerOf checks the hashfile r (size bytes) against its trailer by
+// [HashTrailer], a piece at a time as p says, stopped with ctx, and answers the
+// trailer in hex: a multi-pack-index's or commit-graph layer's name, what a
+// bitmap's header names. A short file or a wrong trailer is a refusal; a
+// failed read, hold or ctx is answered as it came.
 func trailerOf(ctx context.Context, r io.ReaderAt, size int64, what string, p Pieces) (string, error) {
 	t, err := HashTrailer(ctx, r, size, sha1.New(), p) //nolint:gosec // git's trailer, compared as git wrote it
 	switch {
@@ -264,19 +207,16 @@ type chunkSpan struct {
 func (c chunkSpan) len() int64 { return c.end - c.start }
 
 // readChunks reads the table of contents of the chunk-format file what (r,
-// size bytes; Documentation/gitformat-chunk.adoc): the rows of its n chunks
-// from byte at, then the row that ends it, each chunk beginning on an align
-// boundary — chunk-format.c's read_table_of_contents, every rule of it: no id
-// zero before the end, none twice, no chunk ending before it begins, and a
-// last row of id zero — and, beyond what git's reader holds a file to, the
-// shape its writer gives every one (write_chunkfile): the first chunk begins
-// where the table ends, each where the one before it ended, and the last ends
-// where the trailer begins. So every byte of the file is the header, the
-// table, a chunk or the trailer, and a chunk's length is the next row's
-// offset less its own.
+// size bytes; gitformat-chunk.adoc): n rows from byte at, then the zero row
+// that ends it. It holds every rule of chunk-format.c's
+// read_table_of_contents (no id zero before the end, none twice, none ending
+// before it begins, each start on an align boundary) and, beyond git's reader,
+// the shape write_chunkfile gives every file: chunks contiguous from the
+// table's end to the trailer. So every byte is header, table, chunk or
+// trailer, and a chunk's length is the next row's offset less its own.
 //
-// The table is read only once it is known to fit the file: n is at most 255,
-// a header's byte, so it is at most 3 KiB, and never past what the file holds.
+// The table is read only once it fits the file (FuzzParseMidx): n is a
+// header's byte, so the table is at most 3 KiB.
 func readChunks(r io.ReaderAt, size, at int64, n int, align int64, what string) ([]chunkSpan, error) {
 	tableEnd := at + int64(n+1)*chunkRowBytes
 	if tableEnd+hashBytes > size {
@@ -395,22 +335,17 @@ type MidxInfo struct {
 }
 
 // ParseMidx reads a multi-pack-index file of size bytes (gitformat-pack.adoc;
-// midx.c's load_multi_pack_index_one): the signature "MIDX", a version of 1 or
-// 2, object ids of version 1 — SHA-1, Gitlet's object format — the
-// table of contents (readChunks), and every chunk git's reader requires —
-// PNAM, OIDF, OIDL, OOFF — at the size its counts give, with RIDX and BTMP
-// besides: git writes the two exactly when it writes a bitmap
-// (midx-write.c's write_midx_internal), and a multi-pack-index without one is
-// none Gitlet publishes or installs. It names at least one pack and
-// indexes at least one object, as every one git writes with a bitmap does.
+// midx.c's load_multi_pack_index_one): signature "MIDX", version 1 or 2,
+// object id version 1 (SHA-1, Gitlet's format), the table of contents
+// (readChunks), and PNAM, OIDF, OIDL, OOFF, RIDX and BTMP at the sizes their
+// counts give: git writes RIDX and BTMP exactly when it writes a bitmap
+// (midx-write.c's write_midx_internal), and Gitlet publishes no
+// multi-pack-index without one, so at least one pack and one object too.
 // Every PNAM entry is "pack-<forty hex>.idx", the one name a cache gives a
-// pack, in strictly ascending order in a version 1 file, as git's reader
-// requires. And it recomputes the trailer over the file ([HashTrailer]), a
-// piece at a time as p says, stopped with ctx.
-//
-// Every refusal names what of the file differs; a read of r, a hold or a ctx
-// that failed is answered as it came ([CheckLayer] says why the two are
-// apart).
+// pack, strictly ascending in version 1 as git's reader requires. The trailer
+// is recomputed by [HashTrailer] as p says, stopped with ctx. A refusal names
+// what differs; a failed read, hold or ctx is answered as it came
+// ([CheckLayer] says why the two are apart).
 func ParseMidx(ctx context.Context, r io.ReaderAt, size int64, p Pieces) (MidxInfo, error) {
 	const what = "the multi-pack-index"
 	if size < midxHeaderBytes+hashBytes {
@@ -536,17 +471,14 @@ type BitmapInfo struct {
 }
 
 // ParseBitmap reads a multi-pack bitmap of size bytes (pack-bitmap.c's
-// load_bitmap_header): the signature "BITM", version 1, the options with
-// BITMAP_OPT_FULL_DAG set — git refuses a bitmap without it — the selected
-// commits, and the multi-pack-index's checksum the header names; and it
-// recomputes the trailer over the file ([HashTrailer]), a piece at a time as
-// p says, stopped with ctx. The tables the options say follow the commits'
-// bitmaps are held to the file's room by [CheckLayer] and [LayLayer], which
-// know the multi-pack-index's object count the hash cache is sized by: the
-// rest of git's own check of a header.
-//
-// Every refusal names what of the file differs; a read of r, a hold or a ctx
-// that failed is answered as it came.
+// load_bitmap_header): signature "BITM", version 1, options with
+// BITMAP_OPT_FULL_DAG (git refuses a bitmap without it), the selected commits
+// and the checksum of the multi-pack-index it belongs to, and recomputes the
+// trailer by [HashTrailer] as p says, stopped with ctx. The rest of git's
+// header check, the trailing tables against the file's room, needs the
+// multi-pack-index's object count: bitmapTablesFit, run by [CheckLayer] and
+// [LayLayer]. A refusal names what differs; a failed read, hold or ctx is
+// answered as it came.
 func ParseBitmap(ctx context.Context, r io.ReaderAt, size int64, p Pieces) (BitmapInfo, error) {
 	const what = "the bitmap"
 	if size < bitmapHeaderBytes+hashBytes {
@@ -636,18 +568,14 @@ type GraphInfo struct {
 }
 
 // ParseGraph reads a commit-graph file of size bytes (gitformat-commit-graph;
-// commit-graph.c's parse_commit_graph): the signature "CGPH", version 1, hash
-// version 1 (SHA-1), at least git's own smallest commit-graph, the table of
-// contents (readChunks), the chunks git's reader requires — OIDF, OIDL, CDAT —
-// at the sizes the commit count gives, the optional ones it reads at theirs —
-// GDA2, GDO2, EDGE, and BIDX and BDAT together, BIDX's last entry the bytes of
-// BDAT's filters as git writes it — and a BASE chunk of exactly the base
-// graphs the header counts, absent when it counts none; and it recomputes the
-// trailer over the file ([HashTrailer]), a piece at a time as p says, stopped
-// with ctx.
-//
-// Every refusal names what of the file differs; a read of r, a hold or a ctx
-// that failed is answered as it came.
+// commit-graph.c's parse_commit_graph): signature "CGPH", version 1, hash
+// version 1 (SHA-1), at least git's smallest commit-graph, the table of
+// contents (readChunks), OIDF, OIDL and CDAT at the sizes the commit count
+// gives, the optional GDA2, GDO2, EDGE and BIDX with BDAT at theirs
+// (bloomVersion), and a BASE chunk of exactly the base graphs the header
+// counts (baseGraphs). It recomputes the trailer by [HashTrailer] as p says,
+// stopped with ctx. A refusal names what differs; a failed read, hold or ctx
+// is answered as it came.
 func ParseGraph(ctx context.Context, r io.ReaderAt, size int64, p Pieces) (GraphInfo, error) {
 	const what = "the commit-graph layer"
 	// graph_min_size: a header, the rows of three chunks and of the one that
@@ -799,25 +727,18 @@ type layerFiles struct {
 	graph GraphInfo
 }
 
-// readLayer reads a layer's three files, sizes[i] bytes each — the
-// commit-graph layer absent exactly when graph is nil — and holds each to its
-// size and the three to each other and to the chain below them as every
-// layer's are: the bitmap belongs to the multi-pack-index and its tables fit
-// the objects that index holds, every pack is named once, the commit-graph
-// layer's changed-path filters are version 2, the one Gitlet writes
-// (commitGraph.changedPathsVersion = 2) — a layer of version 1 filters, or of
-// none, would have every node's log and blame read the slow way, or a path the
-// version 1 hash gets wrong misread — and the commit-graph layer is written
-// over exactly baseGraphs, the GraphIDs of the layers below it that carry
-// one, root first: a commit-graph layer names its bases in its BASE chunk, as
-// a multi-pack-index layer does not, and git reads a chain only over the bases
-// each layer names. So the side that writes a layer ([LayLayer]) and every
-// side that installs it ([CheckLayer]) refuse a layer over another chain by
-// one comparison. fields name the three sections' sizes as the caller states
-// them. Each file's trailer is hashed as p says, stopped with ctx.
-//
-// A refusal of the bytes is [ErrBadLayer], naming the field; a read, a hold
-// or a ctx that failed is answered as it came.
+// readLayer reads a layer's three files, sizes[i] bytes each (graph nil
+// exactly when the layer has no commit-graph layer), and holds each to its
+// size and the three to each other and the chain below: the bitmap belongs to
+// the multi-pack-index and its tables fit it, every pack is named once, the
+// changed-path filters are version 2, the one Gitlet writes (version 1 or none
+// would have every node's log and blame read the slow way, or misread a path
+// the version 1 hash gets wrong), and the BASE chunk is exactly baseGraphs, the
+// GraphIDs of the layers below that carry one, root first: git reads a chain
+// only over the bases each layer names. [LayLayer] and [CheckLayer] share this
+// one comparison; fields name the size fields as the caller states them. A
+// refusal of the bytes is [ErrBadLayer] naming the field; a failed read, hold
+// or ctx (trailers hashed as p says) is answered as it came.
 func readLayer(ctx context.Context, midx, bitmap, graph io.ReaderAt, sizes [3]int64, fields [3]string,
 	baseGraphs []string, p Pieces) (layerFiles, error) {
 
@@ -878,37 +799,17 @@ func readLayer(ctx context.Context, midx, bitmap, graph io.ReaderAt, sizes [3]in
 }
 
 // CheckLayer holds a layer's three files, as split from its parts, to its row
-// and to the chain below it in the incarnation — the ONE rule (ADR-0008) the
-// maintainer's own adoption and every Gitlet node's install hold a layer to
-// before any git process is handed it: the row itself first
-// ([LayerRef.Check]); each file exactly its section's bytes — the commit-graph
-// layer holding none, or handed as nil, where the row carries no graph; the
-// multi-pack-index git's format, its trailer the row's LayerID, its PNAM chunk
-// naming exactly the row's Packs, its objects the row's Objects; the bitmap
-// git's format, belonging to that multi-pack-index, its tables fitting it; and
-// the commit-graph layer git's format, its trailer the row's GraphID, its
-// commits the row's Commits, its BASE chunk exactly baseGraphs — the GraphIDs
-// of the rows below it that carry one, root first: a commit-graph layer names
-// its bases, as a multi-pack-index layer does not — and its changed-path
-// filters version 2.
-//
-// HASHED A PIECE AT A TIME, STOPPED WITH ITS CALLER: every byte of the three
-// files is read for its trailer ([HashTrailer]) — some 2.6 GB for the root
-// layer of the largest repository the defaults admit — so each trailer is
-// hashed as p says, ctx checked before every read: a Gitlet node's installer
-// hands its read lane's hold a piece at a time (internal/gitlet/cache's
-// CheckPieceBytes), as its own check of the files it keeps does, and a
-// caller holding a maintenance slot across the check none.
-//
-// Every refusal is [ErrBadLayer] naming the row's field it differs in, or the
-// file's part (bitmap.midx, graph.bases, graph.filters) — a definite answer
-// about the bytes, never retried: a part is read through the store's own hash
-// check ([FetchLayerPart]), so what differs is the publisher's, and its next
-// publication replaces the layer. A read of a file that FAILED is answered as
-// it came, never as ErrBadLayer: a disk that failed a read says nothing of the
-// layer, and refusing the layer for it would have every node fetch it again.
-// So is a hold that failed and a ctx that ended: neither says anything of
-// the bytes.
+// and the chain below it, the ONE rule (ADR-0008) the maintainer's adoption and
+// every Gitlet node's install apply before git is handed them: the row
+// ([LayerRef.Check]), each file exactly its section (graph nil or empty where
+// the row has none), the trailers the row's LayerID and GraphID, the packs,
+// objects and commits the row's, and the rest of readLayer. Each trailer is
+// hashed as p says, ctx checked before every read (internal/gitlet/cache's
+// CheckPieceBytes): the largest root layer is some 2.6 GB. A refusal is
+// [ErrBadLayer] naming the field, never retried: the parts passed the store's
+// hash check ([FetchLayerPart]), so the fault is the publisher's and its next
+// publication replaces the layer. A failed read, hold or ctx is answered as it
+// came, since refusing the layer for a disk's failure has every node refetch it.
 func CheckLayer(ctx context.Context, row LayerRef, midx, bitmap, graph io.ReaderAt, baseGraphs []string,
 	p Pieces) error {
 
@@ -975,26 +876,17 @@ func packsDiffer(file, row []string) string {
 		"the row's", len(file), len(row), file[i])
 }
 
-// LayLayer reads the three files a build wrote in a scratch — graphPath ""
-// where the build's packs held no commit the base's graph layers lack, so it
-// wrote no graph layer — and answers the row's byte fields by parsing them:
-// the sections' sizes, Objects, Commits, the packs the multi-pack-index names
-// (as checksums, sorted), LayerID and GraphID. So the publisher states nothing
-// git did not write, and states it by the reading every Gitlet node holds the
-// files to ([CheckLayer]): the files are held to each other and to the chain
-// below them as there — baseGraphs the GraphIDs of the layers the build was
-// written over that carry one, root first, which its commit-graph layer must
-// name exactly — so a build whose files no node would install, a commit-graph
-// layer over another base among them, is refused here, before a byte is
-// stored: every row field CheckLayer compares with the files is one this
-// states from them. What it cannot hold is the row's own check
-// ([LayerRef.Check]: its parts, its base, its git), which the decide holds.
-// BaseID, Replaces, Parts, Git and TookMs are the publisher's own, unset; the
-// packs it answers are for the publisher to hold to its plan. Each file's
-// trailer is hashed as p says, stopped with ctx, as [CheckLayer]'s are.
-//
-// A refusal of the bytes is [ErrBadLayer]; a file that cannot be opened or
-// read, a hold that failed and a ctx that ended are answered as they came.
+// LayLayer reads the three files a build wrote in a scratch (graphPath ""
+// when the build's packs held no commit the base's graph layers lack) and
+// answers the row's byte fields from them: section sizes, Objects, Commits,
+// the packs (as checksums, sorted), LayerID and GraphID. So the publisher
+// states nothing git did not write, by [CheckLayer]'s own reading (readLayer,
+// with baseGraphs as there), and a build no node would install is refused
+// before a byte is stored. The row's own check ([LayerRef.Check]) is the
+// decide's; BaseID, Replaces, Parts, Git and TookMs are left for the
+// publisher, which holds the packs to its plan. Trailers are hashed as p says,
+// stopped with ctx. A refusal of the bytes is [ErrBadLayer]; a failed open,
+// read, hold or ctx is answered as it came.
 func LayLayer(ctx context.Context, midxPath, bitmapPath, graphPath string, baseGraphs []string,
 	p Pieces) (LayerRef, error) {
 
@@ -1081,34 +973,18 @@ func layerSpans(sections [3]int64, start, size int64) []layerSpan {
 	return out
 }
 
-// StoreLayer uploads a layer's bytes — the three files at paths back to back,
-// sections[i] bytes each, the commit-graph layer's path "" exactly when its
-// section is 0 — as ceil(Size/LayerPartBytes) parts, ALL AT ONCE: one
-// goroutine and one Put a part, each under [UploadDeadline] of its size and
-// limited at it, stored as [LayerContentType]; and it answers the parts in
-// byte order.
-//
-// AT ONCE, because every part's key is minted as its upload begins
-// (objstore.Store.Put mints it then), so when the last part lands every key is
-// at most objstore.ReadBase + objstore.PaceFor(LayerPartBytes) old at the
-// slowest legal pace — about 8 h 33 min, under objstore.RecordWithin — however
-// many parts the layer has, while parts uploaded one after another would be k
-// times that, and two parts at the floor could no longer be named by the
-// record that proposes them. The FIRST FAILURE cancels the rest and is the
-// answer, as the store gave it — an *objstore.Full among them, which a caller
-// answers for the room it names: the parts already stored are named by no row
-// and are the collector's.
-//
-// hit, when not nil, is called before each read the store makes of a part, at
-// the LAYER offset that read begins at — the part's start and what the store
-// has read of it — so one offset names one byte of the layer whichever part
-// carries it; an error from it ends that part's upload as a failed read. A
-// fault injector's point (internal/gitlet/gitletfault), which this package never
-// imports: the caller's closure hits it.
-//
-// Each file is held to its section by its size before anything is uploaded:
-// the cut is made by the sections, and a file of another size would be cut
-// into parts that hold another layer's bytes.
+// StoreLayer uploads a layer, the files at paths back to back, sections[i]
+// bytes each (paths[2] "" exactly when sections[2] is 0; each file is held to
+// its section's size first, as the cut is by sections), as LayerPartBytes
+// parts stored as [LayerContentType], ALL AT ONCE, each Put under
+// [UploadDeadline] of its size, and answers them in byte order. At once since
+// Put mints a key as its upload begins: every key is then at most
+// objstore.ReadBase + objstore.PaceFor(LayerPartBytes) old at the slowest legal
+// pace (about 8 h 33 min, under objstore.RecordWithin); serial uploads would
+// outlive it. The first failure cancels the rest and is the answer as the store
+// gave it (an *objstore.Full among them); stored parts are the collector's. hit,
+// if not nil, runs before each store read of a part at the LAYER offset it
+// begins at, its error failing that upload (a gitletfault point, never imported).
 func StoreLayer(ctx context.Context, p Putter, paths [3]string, sections [3]int64,
 	hit func(ctx context.Context, offset int64) error) ([]LayerPart, error) {
 
@@ -1216,24 +1092,18 @@ type LayerReader interface {
 	Open(ctx context.Context, o objstore.Object) (io.ReadCloser, error)
 }
 
-// FetchLayerPart reads part i of row through r — the store's verified read —
-// and lays its bytes back into the files it cuts (files in the order of
-// [LayerRef.Sections]; one the part does not reach may be nil), each run
-// written at its place in its file through buf, by the cut [StoreLayer] made
-// it by. So a Gitlet node fetches a layer's parts at once — one fetch slot and
-// its copy buffer a part, the way it fetches a pack — into three files no
-// part's bytes are copied out of again, and holds the files to the row with
-// [CheckLayer] once every part has landed.
-//
-// The part is whole only once its last byte is read, which the store hands
-// out only once the whole part hashes to the row's digest; a part answered
-// otherwise has left bytes of its own in the files, which the caller discards
-// with the download. Its failures are told apart as the installer tells them:
-// a row [LayerRef.Check] refuses is [ErrBadLayer], before any byte moves; a
-// part the store holds no object for answers objstore.ErrNotFound, and one
-// whose bytes are not the row's objstore.ErrCorrupt — both definite, through
-// errors.Is; and the store failing, or this node's disk failing a write — in
-// a sentence that says "on this node" — is answered as it came.
+// FetchLayerPart reads part i of row through r, the store's verified read, and
+// writes its runs through buf at their places in files (ordered as
+// [LayerRef.Sections]; one the part does not reach may be nil), by the cut
+// [StoreLayer] made (layerPart). So a node fetches a layer's parts at once, one
+// fetch slot and buffer a part as for a pack, and checks the files with
+// [CheckLayer] once all have landed. The part is whole only once its last byte
+// is read, which the store hands out only once the part hashes to the row's
+// digest; on a failure the caller discards the files. A row [LayerRef.Check]
+// refuses is [ErrBadLayer] before any byte moves; a missing part is
+// objstore.ErrNotFound and a wrong one objstore.ErrCorrupt, both definite via
+// errors.Is; a store failure, or this node's disk failing a write ("on this
+// node"), is answered as it came.
 func FetchLayerPart(ctx context.Context, r LayerReader, row LayerRef, i int, files [3]io.WriterAt,
 	buf []byte) error {
 

@@ -14,22 +14,17 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// gatedPublisher is a node's write authority that watches the publishes a
-// reconcile makes on a repository's own subjects — a name's claim, a
-// repository's settings or lifecycle — as they run: how many are in flight,
-// the most there ever were, and how many began. Each such publish is HELD
-// until hold of them have been in flight together, so a run that can reach its
-// bound does, and none is held once they have: the tail of a run, fewer left
-// than the bound, goes straight on. A run that never reaches it — decided a
-// repository at a time — is let go after gateHang, and the most it held is
-// then its case's to fail; and refuse, when it answers non-nil for a publish,
-// is that publish's answer in place of the broker's. lose, when set, is asked once the broker has answered
-// any publish, and where it says so that answer is LOST: the publish answers
-// OutcomeUnknown with no error, as statelog does for an append whose context
-// ended while it was in flight — the cancelled append is classified by a probe
-// on the same dead context, which cannot answer either. The append itself is
-// made on a context that cannot end, so its record lands and its decide reads
-// the snapshot it would have.
+// gatedPublisher is a node's write authority that counts the publishes a
+// reconcile makes on a repository's own subjects (a name's claim, a
+// repository's settings or lifecycle): in flight now, the most ever, and how
+// many began. Each is HELD until hold are in flight together, so a run that
+// can reach its bound does; once reached none is held, so the tail of a run
+// goes straight on. A run that never reaches it is let go after gateHang, for
+// its case to fail on the most it held. refuse, when non-nil for a publish, replaces the broker's answer.
+// lose, when set and true once the broker has answered, LOSES that answer:
+// OutcomeUnknown with no error, as statelog answers an append whose context
+// ended mid-flight. The append runs on a context that cannot end, so its
+// record lands and its decide reads the snapshot it would have.
 type gatedPublisher struct {
 	gitlet.Publisher
 	hold   int
@@ -46,9 +41,8 @@ type gatedPublisher struct {
 	reached bool
 }
 
-// gateHang is how long a gated publish waits for the bound to be reached
-// before the gate lets every publish go: a hang detector, which only a run
-// that never reaches the bound meets.
+// gateHang is how long a gated publish waits for the bound before the gate
+// lets every publish go: a hang detector only a run that never reaches it meets.
 const gateHang = 30 * time.Second
 
 func newGatedPublisher(inner gitlet.Publisher, hold int) *gatedPublisher {
@@ -68,10 +62,9 @@ func (g *gatedPublisher) Publish(ctx context.Context, req statelog.Request) (sta
 	g.most = max(g.most, g.inFlight)
 	g.reached = g.reached || g.inFlight >= g.hold
 	g.cond.Broadcast()
-	// HELD UNTIL THE BOUND HAS BEEN REACHED ONCE, or the publish's context
-	// ends, or the gate gives up — a hang detector a run that reaches the
-	// bound never meets. Each wakes the wait under the gate's mutex, so none
-	// is lost between its check and the wait.
+	// HELD UNTIL THE BOUND HAS BEEN REACHED ONCE, the publish's context ends,
+	// or the gate gives up (gateHang). Each wakes the wait under the gate's
+	// mutex, so no wake is lost between the check and the wait.
 	ended := context.AfterFunc(ctx, g.wake)
 	hung := time.AfterFunc(gateHang, g.release) //fixedwait:liveness
 	for !g.reached && ctx.Err() == nil {
@@ -156,13 +149,12 @@ func fresh(prefix string, count int) []gitlet.Declared {
 
 // WHAT CHANGED IS DECIDED SIDE BY SIDE, AND NEVER PAST THE BOUND.
 //
-// One repository at a time, a changed activation was one round trip of a
-// write a repository — over a minute at the ten thousand a document may
-// declare, inside the apply. Each repository is its own subjects, so the
-// reconcile decides ReconcileInFlight of them at once: the bound is REACHED
-// (a run of three bounds' worth holds that many in flight together) and
-// never exceeded, every answer lands in its declaration's place, and nothing
-// is in flight when the call returns. DeleteRepos is held to the same.
+// Each repository is its own subjects, so the reconcile decides
+// ReconcileInFlight at once (one at a time is a round trip each, over a minute
+// inside the apply at the ten thousand a document may declare): the bound is
+// REACHED and never exceeded, every answer lands in its declaration's place,
+// and nothing is in flight when the call returns. DeleteRepos is held to the
+// same.
 //
 // Mutation: decide one at a time and the bound is never reached; start every
 // declaration at once and it is exceeded.
@@ -215,14 +207,12 @@ func TestAChangedActivationIsDecidedSideBySide(t *testing.T) {
 // A FAILURE EVERY REPOSITORY SHARES ENDS THE RECONCILE, and a repository's
 // own does not.
 //
-// A log that refuses this node's every write (here log_full, as a log at its
-// ceiling refuses) refuses the next repository the same way, so the decisions
-// in flight are the last begun: the call answers that failure, once, as its
-// error and as the answer of every repository it left undecided — the same
-// value, so its caller can pass over each — and returns with nothing in
-// flight. A refusal of one repository's own (a record this node cannot decode
-// covering its paths alone) is that repository's answer, and the rest are
-// decided.
+// A log refusing this node's every write (log_full) refuses the next
+// repository too, so no more begin and the call answers that failure once, as
+// its error and as the answer of every repository left undecided (the same
+// value, so its caller can pass over each), with nothing in flight. A
+// repository's own refusal (a record this node cannot decode covering its
+// paths alone) is its answer, and the rest are decided.
 //
 // Mutation: treat log_full as a repository's own and every declaration is
 // attempted; treat deferred as shared and the reconcile stops at the first.
@@ -277,8 +267,7 @@ func TestAFailureEveryRepositorySharesEndsTheReconcile(t *testing.T) {
 
 // A RECONCILE WHOSE CONTEXT ENDS RETURNS WITH NOTHING IN FLIGHT: the decisions
 // running are ended, no more begin, and every one left undecided answers the
-// context's end — the apply that asked has gone, a drain or an engine
-// stopping, and a decision still running after it would publish for an apply
+// context's end, since a decision still running would publish for an apply
 // nobody is waiting on.
 func TestAReconcileWhoseContextEndsLeavesNothingInFlight(t *testing.T) {
 	t.Parallel()
@@ -312,13 +301,11 @@ func TestAReconcileWhoseContextEndsLeavesNothingInFlight(t *testing.T) {
 }
 
 // A DECISION STILL RUNNING WHEN ANOTHER MEETS A FAILURE EVERY REPOSITORY
-// SHARES IS ENDED, not waited out: a publish on a node whose applier has
-// stalled waits its whole budget for an answer the failure already gives, and
-// a reconcile that waited for each one in flight would hold the apply for it.
-// Here every decision but the first stalls until its context ends, and says
-// which ended it: the reconcile's failure, or the stall's own end — a hang
-// detector no build that ends its decisions at the failure ever meets, so a
-// decision that waited it out is a decision the failure did not end.
+// SHARES IS ENDED, not waited out: on a node whose applier has stalled, a
+// publish waits its whole budget for an answer the failure already gives, and
+// waiting for it would hold the apply. Here every decision but the first
+// stalls until its context ends or its stall does (a hang detector), and
+// counts which: one that waited it out is one the failure did not end.
 //
 // Mutation: record the failure without ending the decisions in flight and
 // the call waits out every stall, each one counted.
@@ -359,22 +346,13 @@ func TestADecisionInFlightIsEndedByAFailureEveryRepositoryShares(t *testing.T) {
 }
 
 // A DECISION THE RECONCILE'S END LEFT UNANSWERED IS PART OF THAT END, never a
-// failure of its own repository.
-//
-// A reconcile is ended on purpose — a newer activation's request, or the
-// engine stopping — while decisions are in flight, each mid-append. statelog
-// answers such an append OutcomeUnknown with no error (the cancelled append is
-// classified by a probe on the same dead context), and a decision that read
-// that as its own repository's unknown outcome was reported as a repository
-// the reconcile could not apply: an ERROR line apiece beside the one line that
-// said the reconcile was superseded. Here every decision in flight has its
-// record appended, then the call's context is ended, and every answer is lost:
-// the call's error is the context's end, and every declaration — those in
-// flight and, where there were more, those never begun — answers that same
-// value, so a caller that says the ending once says nothing else.
-//
-// Both shapes: as many declarations as are decided at once, so none is left
-// to begin (where the call used to answer no error at all), and twice that.
+// failure of its own repository: statelog answers an append its context ended
+// OutcomeUnknown with no error. Here every decision in flight has its record
+// appended, then the call's context ends and every answer is lost: the call's
+// error is the context's end, and every declaration, in flight or never begun,
+// answers that same value, so a caller reports the ending once and nothing
+// else. Both shapes: ReconcileInFlight declarations (none left to begin) and
+// twice that.
 //
 // Mutation: keep the answer of a decision that failed once the run had ended,
 // and have an unknown outcome not say its context ended, and the lost answers
@@ -426,13 +404,11 @@ func TestADecisionTheReconcilesEndLeftUnansweredIsPartOfIt(t *testing.T) {
 
 // THE RUN'S END ANSWERS FOR WHAT IT ENDED, AND FOR NOTHING ELSE.
 //
-// decideEach answers the failure that ended its run and which decisions that
-// failure is the answer of: every one never begun, every one that met it, and
-// every one that FAILED once the run had ended — whatever its error says,
-// since a failure met on a dead context is the context's doing — while a
-// decision that succeeded after the end keeps its answer: it decided its
-// repository. Both ways a run ends: its context, and a failure every
-// repository shares.
+// decideEach's ending failure answers for every decision never begun, every
+// one that met it, and every one that FAILED once the run had ended, whatever
+// its error says (a failure on a dead context is the context's doing); one
+// that succeeded after the end keeps its answer: it decided its repository.
+// Both ways a run ends: its context, and a failure every repository shares.
 //
 // Mutation: mark only the decisions whose error is itself a shared failure
 // and the odd decisions here keep their own failures; mark every decision in
@@ -501,12 +477,11 @@ func TestTheRunsEndAnswersForWhatItEnded(t *testing.T) {
 
 // AN UNKNOWN OUTCOME ON A CONTEXT THAT ENDED SAYS IT ENDED.
 //
-// Every write the lifecycle store makes — the fence, a create, a settings
-// change, a deletion, a purge step — answers an outcome nobody could establish
-// as an error, and statelog answers one for an append its context ended in the
-// middle of. That error wraps the context's end, so whatever reads it — a
-// reconcile ended on purpose, a retention pass stopping — reads the ending
-// rather than a write of its own that failed.
+// Every write the lifecycle store makes (the fence, a create, a settings
+// change, a deletion, a purge step) answers an unknown outcome as an error,
+// and one on an ended context wraps the context's end, so a reconcile ended on
+// purpose or a retention pass stopping reads the ending rather than a write of
+// its own that failed.
 //
 // Mutation: drop the context's end from any one write's unknown error and its
 // row goes red.

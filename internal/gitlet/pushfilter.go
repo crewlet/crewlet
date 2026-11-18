@@ -20,7 +20,6 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE NARROWING'S BOUNDS.
 const (
 	// PushInstantSkew is the most a push's instant is assumed to stand before that of a push an earlier
 	// record landed: two broker members' clocks, each assumed within objstore.AssumedClockSkew of the
@@ -58,9 +57,8 @@ type PushScan struct {
 	To time.Time `json:"to,omitzero"`
 }
 
-// validatePushFilter is [ReadQuery.validate] for a push history's narrowing: a pusher of a known kind by a
-// seat's handle, or Gitlet by none, and a window of whole microseconds after 1970; never beside one push,
-// and the asker's days beside it only within its window and never beside a pusher.
+// validatePushFilter is [ReadQuery.validate] for a push history's narrowing. Day bounds ride it only
+// within its window and never beside a pusher: code_push_days counts every pusher's pushes.
 func (q ReadQuery) validatePushFilter() error {
 	f := q.PushFilter
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
@@ -593,8 +591,8 @@ type narrowWindow struct {
 }
 
 // narrowWindowOf is the window below from that reads may still take, from code_pushes_repo_idx alone: at
-// most size pushes, none past the one whose weight fills reads' bytes, ending above the
-// highest push stamped before stop.
+// most size pushes, none past the one whose weight fills reads' bytes, ending above the highest push
+// stamped before stop.
 func narrowWindowOf(ctx context.Context, tx *sql.Tx, repoID string, from pushPlace, stop int64,
 	reads page, size int) (narrowWindow, error) {
 

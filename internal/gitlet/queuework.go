@@ -13,53 +13,33 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A TARGET'S QUEUE WORK, READ FROM THE ROWS (M5-D12, M5-D13): a due-queue
-// read of ONE repository ([Reader.QueueDue]) answers its home one target's
-// [QueueDue] a page —
-// everything the home's queue worker (internal/gitlet/home's queue) decides its
-// next step from, in ONE snapshot: the target's tip, the gate its queue lands
-// under (its depth, batch and required checks), its live entries in
-// queue order — as many as one train under that gate can take, each with its
-// change and who enqueued it — and its live train, each candidate's commits
-// with the latest attempt of each required check on each, for the target —
-// and the repository's drop epoch, which a landing decided from the snapshot
-// carries ([QueueProposal.DropEpoch]).
+// A TARGET'S QUEUE WORK (M5-D12, M5-D13): a due-queue read of one repository
+// ([Reader.QueueDue]) answers one target's [QueueDue] a page, its cursor the
+// target: everything the home's queue worker (internal/gitlet/home) decides
+// its next step from, in one snapshot.
 //
-// ONE TARGET A PAGE, its cursor the target, and A PAGE READS WHAT ITS STEP
-// NEEDS, by batches, never an entry at a time: the target's first depth ×
-// batch live entries and one more for [QueueDue.More] — every entry a train
-// can take, and enough to size its candidates ([QueueDue.Entries]) — their
-// changes in ONE statement over the changes' key ([changeRowsIn]), and the
-// changes' DESCRIPTIONS, a body and the authors each, only where the snapshot
-// owes a build ([QueueDue.Builds]): a squash's commit message is written from
-// them, and no other step reads them. They are two more statements over the
-// bodies' and the authors' keys, driven from the list ([descriptionsOf]). A
-// turn that tests, lands or bisects a standing train — every turn the
-// train's own check records nudge, the busiest a queue sees — reads none of
-// them: at the default gate, 8 entries and one statement of their changes,
-// where it read 64 entries, 192 statements of them and up to two MiB of
-// bodies at MaxChangeBodyBytes (internal/gitlet's package doc has the figures).
-//
-// A fast-forward's commit is its change's head, so its candidate reads the
-// head's checks: a check is a measurement of a commit for its target, whatever
-// purpose queued it (ADR-0098), and a head its gate saw pass needs no run
-// again.
-//
-// A GIVEN-UP TRAIN'S CHECKS, ON THE FIRST PAGE: a repository's first page
-// answers, beside its first target's work, the attempts its queues queued
-// that have not ended, on a commit no train of their target tests or landed
-// ([AbandonedCheck]) — every target's, since an eject or a dequeue of a
-// target's last live entry leaves it no page of its own — which the home
-// cancels once its targets have taken their steps. An eject, a dequeue, a
-// target a person moved and a new candidate record each give a train up in
-// their apply and touch no check row, which is the checks writer's alone: so
-// the queue that gave the train up ends its attempts, as the check work ends a
-// head's its change moved on from. Left running, every one measures a commit
-// nothing will land while it holds a runner's cell ahead of the live train's,
-// since a runner claims oldest first — up to depth times the required checks
-// a red first candidate, an eject, a dequeue or a person's push. The listing
-// of repositories names, after those holding a live entry, those owing such a
-// cancellation, so a turn that failed to cancel is listed again.
+// A page reads what its step needs, by batches, never an entry at a time: the
+// first depth × batch live entries and one more for [QueueDue.More], their
+// changes in one statement ([changeRowsIn]), and their descriptions (two
+// statements more, [descriptionsOf]) only where the snapshot owes a build
+// ([QueueDue.Builds]), the one step that writes a commit message from them. A
+// turn that tests, lands or bisects a standing train, the busiest a queue
+// sees, reads none of them (the package doc's "Measured" has the figures).
+
+// A fast-forward's candidate reads its change head's checks: a check measures
+// a commit for its target, whatever queued it (ADR-0098), so a head its gate
+// saw pass runs nothing again.
+
+// A GIVEN-UP TRAIN'S CHECKS, ON THE FIRST PAGE: a repository's first page also
+// answers its queues' unended attempts on a commit no train of their target
+// tests or landed ([AbandonedCheck]), every target's, since a target whose last
+// live entry left has no page of its own. An eject, a dequeue, a moved target
+// and a new candidate give a train up without touching a check row (the checks
+// writer's alone), so the home cancels them once its targets have stepped.
+// Left running, each holds a runner's cell ahead of the live train's (runners
+// claim oldest first) measuring a commit nothing will land. The repository
+// listing names those owing a cancellation after those holding a live entry,
+// so a turn that failed to cancel is listed again.
 
 // QueueDue is one target's queue work as one snapshot holds it
 // ([QueueDueAnswer.DueQueue]).
@@ -69,11 +49,10 @@ type QueueDue struct {
 	// merge-rate alarm names the target by.
 	Repo string `json:"repo,omitempty"`
 	// Mirrored is the repository a PULL MIRROR ([RepoRef.Mirrored]), which
-	// nothing merges into — a candidate and a landing on it are refused
-	// repo_mirrored — so its home builds no train and puts every live entry
-	// out ([EjectRepoMirrored]). An answer between nodes, read whole
-	// ([QueueDueAnswer]), so a home of a build that does not declare it
-	// refuses the page rather than build a train on a mirror.
+	// nothing merges into (refused repo_mirrored), so its home builds no train
+	// and puts every live entry out ([EjectRepoMirrored]). Read whole between
+	// nodes ([QueueDueAnswer]): a home whose build does not declare it refuses
+	// the page rather than build a train on a mirror.
 	Mirrored bool `json:"mirrored,omitempty"`
 	// Tip is the target's tip, what a train is built onto.
 	Tip string `json:"tip"`
@@ -85,42 +64,37 @@ type QueueDue struct {
 	Batch    int      `json:"batch"`
 	Required []string `json:"required,omitempty"`
 	// Entries are the target's live entries in queue order: the first
-	// Depth × Batch — every entry one train can take, since a candidate
-	// takes at most Batch and a train at most Depth of them, and as many as
-	// sizing its candidates needs ([BatchOf] in internal/gitlet/home takes
-	// min(Batch, ⌈W/Depth⌉), which More answers past Depth × (Batch − 1)) —
-	// and More where more wait behind them. A train its gate's depth or
-	// batch has since narrowed may test an entry past them, and so stands no
-	// more ([QueueDue.TrainStands]): it is built again under the gate.
+	// Depth × Batch, every entry one train can take and enough to size its
+	// candidates ([BatchOf] in internal/gitlet/home takes min(Batch,
+	// ⌈W/Depth⌉), which More answers past Depth × (Batch − 1)), and More where
+	// more wait. A train a since-narrowed gate no longer fits may test an
+	// entry past them, so it stands no more ([QueueDue.TrainStands]) and is
+	// built again.
 	Entries []QueueWorkEntry `json:"entries"`
 	More    bool             `json:"more,omitempty"`
 	// Train is the target's live train's candidates in ordinal order, none
 	// where it holds no train.
 	Train []QueueWorkCandidate `json:"train,omitempty"`
-	// DropEpoch is the repository's drop epoch as the snapshot holds it: the
-	// epoch a landing decided from this snapshot states
-	// ([QueueProposal.DropEpoch]). A standing train's candidates were each
-	// recorded at the epoch of the copy their chain was built from, and an
-	// expunge begun since holds every candidate's tip live (its
-	// `expunge_tips`), so a landing of one is judged at the epoch its home
-	// read the train at: one begun between the read and the decide is
-	// refused `expunging`, and the next turn reads the train again.
+	// DropEpoch is the repository's drop epoch in the snapshot, which a
+	// landing decided from it states ([QueueProposal.DropEpoch]). An expunge
+	// begun since a candidate was built holds its tip live (`expunge_tips`),
+	// so a landing is judged at the epoch its home read the train at: one
+	// begun between the read and the decide is refused `expunging`, and the
+	// next turn reads the train again.
 	DropEpoch int64 `json:"drop_epoch,omitempty"`
 	// Enqueued is how many entries were enqueued on the target at or after
-	// the read's [QueueDueQuery.EnqueuedSince] — live, landed, ejected or
-	// dequeued alike, since each was a change asked to land — up to
-	// [MergeRateScan]; zero where the read asked no count, or the target's
-	// gate requires no check, so it has no queue whose merge rate anything
-	// prices (M5-D28).
+	// [QueueDueQuery.EnqueuedSince], whatever became of them (each was a
+	// change asked to land), up to [MergeRateScan]; zero where the read asked
+	// no count or the gate requires no check, so no merge rate is priced
+	// (M5-D28).
 	Enqueued int `json:"enqueued,omitempty"`
 }
 
 // QueueWorkEntry is one live entry as the home's queue reads it: its row, who
-// enqueued it — whom its merge commit names and its landing lands it as, and
-// whom its work item is closed as — and for whom, and its change, as its chain
-// commit is written from. The change's Body and Authors are read only where
-// the snapshot owes a build ([QueueDue.Builds]), the one step that writes a
-// commit message from them; every other snapshot answers them empty.
+// enqueued it (whom its merge commit names, its landing lands it as and its
+// work item is closed as) and for whom, and its change, as its chain commit is
+// written from. The change's Body and Authors are read only where the
+// snapshot owes a build ([QueueDue.Builds]); every other answers them empty.
 type QueueWorkEntry struct {
 	EntryID    string            `json:"entry_id"`
 	Seq        statelog.Position `json:"seq"`
@@ -129,19 +103,16 @@ type QueueWorkEntry struct {
 	Method     MergeMethod       `json:"method"`
 	CloseTask  bool              `json:"close_task,omitempty"`
 	EnqueuedBy Principal         `json:"enqueued_by"`
-	// WorkingFor is whom the entry's enqueue was made for (ADR-0109), as its
-	// row keeps it ([storedCarrier]): nil for an enqueue made for nobody, a
-	// person's, and one applied before the carrier's build. The home closes
-	// the landed change's work item for them, decided within what they may
-	// use (internal/engine's queue close), as the enqueuing turn's own write
-	// made late.
+	// WorkingFor is whom the enqueue was made for (ADR-0109), as its row
+	// keeps it ([storedCarrier]): nil for an enqueue made for nobody, a
+	// person's, or one applied before the carrier's build. The home closes the
+	// landed change's work item for them, within what they may use
+	// (internal/engine's queue close), as the enqueuing turn's write made late.
 	//
-	// THE ONE READ ANSWER THAT CARRIES WHOM A CODE WRITE WAS MADE FOR, and
-	// only because its one caller, the repository's home, writes with it on
-	// its requester's behalf: every other read of the queue — its listings,
-	// a change's entry — builds its answer field by field and leaves the
-	// carrier out, as a reader's view of a Chatlet message does. An answer
-	// between nodes read whole ([QueueDueAnswer]), so a home of a build that
+	// THE ONE READ ANSWER THAT CARRIES WHOM A CODE WRITE WAS MADE FOR, since
+	// its one caller, the home, writes with it on the requester's behalf;
+	// every other queue read builds its answer field by field and leaves it
+	// out. Read whole between nodes ([QueueDueAnswer]), so a home whose build
 	// would drop it refuses the page rather than close the item for nobody.
 	WorkingFor  *types.WorkingFor `json:"working_for,omitempty"`
 	Train       string            `json:"train,omitempty"`
@@ -152,9 +123,9 @@ type QueueWorkEntry struct {
 	WorkItem *types.WorkItem `json:"work_item,omitempty"`
 	// CloseOp is, on an owed close ([QueueDueAnswer.QueueOwedCloses]), the
 	// operation its work item is closed under ([CloseWorkItemOpID] of the
-	// landing's), "" on every other entry. An answer between nodes, read
-	// whole ([QueueDueAnswer]), so a home of a build that does not declare
-	// it refuses the page, and the close stays owed for a home that reads it.
+	// landing's), "" on every other entry. Read whole between nodes
+	// ([QueueDueAnswer]), so a home whose build does not declare it refuses
+	// the page, and the close stays owed for a home that reads it.
 	CloseOp string `json:"close_op,omitempty"`
 }
 
@@ -202,12 +173,11 @@ func (d QueueDue) TrainStands() bool {
 	return true
 }
 
-// Builds reports d a snapshot its home builds a train from: a target of a
-// repository it may merge into, holding live entries, gated on a required
-// check, with a tip to build onto and no train standing on it. The reader
-// answers the entries' descriptions on such a snapshot alone, and the home's
-// queue worker builds on it alone, both by this one predicate, so neither can
-// build from a snapshot the other read without them.
+// Builds reports d a snapshot its home builds a train from: a target it may
+// merge into, holding live entries, gated on a required check, with a tip and
+// no standing train. The reader answers descriptions and the home's worker
+// builds by this one predicate, so neither builds from a snapshot read
+// without them.
 func (d QueueDue) Builds() bool {
 	return len(d.Entries) > 0 && !d.Mirrored && len(d.Required) > 0 && d.Tip != ZeroOID && !d.TrainStands()
 }
@@ -229,9 +199,8 @@ func (c QueueWorkCommit) Check(name string) (TipCheck, bool) {
 // home cancels it for — [CheckReasonDequeued] where a change that candidate
 // merged left its queue, [CheckReasonAbandoned] for any other giving up.
 //
-// AN ANSWER'S ROW, NOT A RECORD'S, so it takes no versionedFields row. The
-// domain landed on main with it ([RecordVersion]), so every build that answers
-// a due-queue read answers it.
+// AN ANSWER'S ROW, NOT A RECORD'S, so it takes no versionedFields row: it
+// landed on main with its domain ([RecordVersion]), so every build answers it.
 type AbandonedCheck struct {
 	CheckKey
 	CandidateID string      `json:"candidate_id"`
@@ -239,9 +208,8 @@ type AbandonedCheck struct {
 }
 
 // MaxAbandonedChecks is the most given-up attempts one due-queue page
-// answers: a whole train's at the deepest queue and the widest gate,
-// MaxQueueDepth × MaxRequiredChecks — so the attempts one giving up leaves
-// are cancelled in one turn — and the rest on the next, which each
+// answers: a whole train's at the deepest queue and the widest gate, so one
+// giving up is cancelled in one turn; the rest go on the next, which each
 // cancellation's record nudges.
 const MaxAbandonedChecks = MaxQueueDepth * MaxRequiredChecks
 
@@ -272,16 +240,13 @@ func abandonedChecksIn(ctx context.Context, tx *sql.Tx, repoID string) ([]Abando
 
 // The given-up trains' reads (registered in plan_test.go): a repository's
 // attempts over code_checks_train_idx, and the repositories holding one,
-// grouped on its leading column — each index's partial predicate spelled as
-// it declares it. An attempt is GIVEN UP where no entry of its target's queue
-// a train tests or landed was built at its commit (code_queue_commit_idx), and
-// NOT where its candidate is gone: a train built again from the same rows is
-// the same commits byte for byte (gitlet/host's BuildChain), and its dispatch of
-// a commit an attempt is already measuring is answered from that attempt's row
-// (decideQueued), which keeps naming the candidate it was first queued for —
-// so the live train's own measurement may name a dropped candidate, and only
-// the commit says whether anything still tests it. A landed commit's checks
-// are its target's tip work's to read.
+// grouped on its leading column, each partial predicate spelled as declared.
+// An attempt is GIVEN UP where no testing or landed entry of its target was
+// built at its commit (code_queue_commit_idx), NOT where its candidate is
+// gone: a train built again from the same rows is the same commits
+// (gitlet/host's BuildChain), and its dispatch of a commit already measured is
+// answered from that attempt's row (decideQueued), still naming the dropped
+// candidate. A landed commit's checks are its target's tip work's to read.
 const (
 	abandonedChecksSQL = `SELECT k.target_ref, k.candidate_id, k.commit_oid, k.name, k.attempt,
 			EXISTS (SELECT 1 FROM code_queue AS d INDEXED BY code_queue_dequeued_idx
@@ -303,14 +268,13 @@ const (
 					AND q.state IN ('testing', 'landed') AND q.commit_oid != '')`
 )
 
-// dueQueue files repository repoID's next target's queue work after cursor —
-// "" for its first — into out, with that target as the next page's cursor.
-// The target is the first holding a live entry past cursor: the first page's
-// one row of queueOfRepoSQL, a later page's of queueOfRepoAfterSQL past every
-// seq of the cursor's target. A non-zero since counts the target's enqueues
-// from it ([enqueuedSince]) where its gate requires a check. The first page
-// answers the repository's given-up attempts too ([abandonedChecksIn]),
-// whether or not a target holds a live entry.
+// dueQueue files repository repoID's next target's queue work after cursor
+// ("" for the first) into out, that target the next page's cursor: the first
+// holding a live entry past cursor (queueOfRepoSQL, or queueOfRepoAfterSQL
+// past every seq of the cursor's target). A non-zero since counts the
+// target's enqueues from it where its gate requires a check. The first page
+// also answers the repository's given-up attempts and owed closes, whether or
+// not a target holds a live entry.
 func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, since time.Time, out *QueueDueAnswer) error {
 	if cursor == "" {
 		abandoned, err := abandonedChecksIn(ctx, tx, repoID)
@@ -383,18 +347,13 @@ func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, since time
 }
 
 // enqueuedSince is how many entries were enqueued on repoID's target at or
-// after since, up to [MergeRateScan] — what a queue was asked to land within
-// its merge rate's window (M5-D28), live and ended alike. ONE SEEK of
-// code_queue_enqueued_idx, the target's entries by their enqueue's instant,
-// answered from the index and stopped at the scan: the walk is the count,
-// never another target's endings nor a row of the table, so a page costs the
-// same whatever the repository's other queues land. Measured by
-// BenchmarkQueueDuePage (-benchtime 3x -count 1, the runner's two E-cores) on
-// four targets each with an hour of 3 840 landings: 8.6 ms a page with the
-// two seeks this replaced — the target's live entries over
-// code_queue_live_idx and the repository's endings over code_queue_ended_idx,
-// each row fetched to filter — and 2.8 ms with this one, which walks main's
-// own 3 841 entries and nothing of the other targets'.
+// after since, up to [MergeRateScan], live and ended alike (M5-D28). ONE SEEK
+// of code_queue_enqueued_idx answered from the index and stopped at the scan,
+// so a page never pays for another target's endings nor a table row.
+// BenchmarkQueueDuePage, four targets of an hour's 3 840 landings each: 2.8 ms
+// a page, against 8.6 ms seeking the target's live entries
+// (code_queue_live_idx) and the repository's endings (code_queue_ended_idx)
+// with each row fetched to filter.
 func enqueuedSince(ctx context.Context, tx *sql.Tx, repoID, target string, since time.Time) (int, error) {
 	var n int
 	if err := tx.QueryRowContext(ctx, enqueuedSQL, repoID, target, store.EncodeTime(since), MergeRateScan).Scan(
@@ -411,10 +370,8 @@ const enqueuedSQL = `SELECT COUNT(*) FROM (SELECT 1 FROM code_queue INDEXED BY c
 	WHERE repo_id = ? AND target_ref = ? AND enqueued_at >= ? LIMIT ?)`
 
 // workEntriesOf is entries as the home's queue reads them, each with whom its
-// enqueue was made for as its row keeps it ([QueueWorkEntry.WorkingFor]) —
-// what the home closes a landed change's work item for, from the entries of
-// the page that landed it — their changes read in ONE statement by the
-// changes' key ([changeRowsIn]) and their descriptions left to
+// enqueue was made for ([QueueWorkEntry.WorkingFor]), their changes read in
+// ONE statement ([changeRowsIn]) and their descriptions left to
 // [descriptionsOf].
 func workEntriesOf(ctx context.Context, tx *sql.Tx, entries []queueEntry) ([]QueueWorkEntry, error) {
 	ids := make([]string, len(entries))
@@ -448,21 +405,17 @@ func workEntriesOf(ctx context.Context, tx *sql.Tx, entries []queueEntry) ([]Que
 }
 
 // MaxOwedCloses is the most owed closes one due-queue page answers:
-// [MaxLandEntries], the most one landing leaves owing — so a home settles a
-// whole landing's closes in one turn and one close_settled record (which
-// holds as many), and a repository owing more (several landings no home
-// reached) settles the rest on the turns after, each close one tracker write
-// of its enqueuer's.
+// [MaxLandEntries], the most one landing leaves owing, so a home settles a
+// landing's closes in one turn and one close_settled record (which holds as
+// many); a repository owing more settles the rest on the turns after.
 const MaxOwedCloses = MaxLandEntries
 
 // owedClosesIn is repository repoID's landed entries still owing their work
 // item's close (code_queue.close_op), at most [MaxOwedCloses] in entry id
-// order — one seek of code_queue_close_owed_idx, the operation read beside
-// each row — each with its enqueuer and whom its enqueue was made for, as the
-// home closes the item for them on a later turn as on the landing's own, its
-// change and the change's work item.
-// An entry whose change the repository holds no more is answered with its
-// change's id alone and no work item, which its home settles as not closed.
+// order by one seek of code_queue_close_owed_idx, each with its enqueuer,
+// whom it was made for (the home closes for them on a later turn as on the
+// landing's own), its change and the change's work item. An entry whose change is gone is answered with the change's id
+// alone and no work item, which its home settles as not closed.
 func owedClosesIn(ctx context.Context, tx *sql.Tx, repoID string) ([]QueueWorkEntry, error) {
 	owed, ops, err := owedEntriesIn(ctx, tx, repoID)
 	if err != nil || len(owed) == 0 {

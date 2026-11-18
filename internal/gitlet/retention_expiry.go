@@ -16,41 +16,32 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE REF LIFECYCLE (M3-decisions M3-O62, M3-O64): the code-retention pass's
+// THE REF LIFECYCLE (M3-decisions M3-O62, M3-O64): the retention pass's
 // LAST step deletes every branch a seat set in its own namespace and nobody
-// has set for [RefExpiry] — through a push on the engine's own account
+// has set for [RefExpiry], by a push on the engine's own account
 // ([PrincipalSystem], [ViaExpiry]) to the repository's committer, never a
-// write of its own, so a deletion is decided against every push and hold on
-// the repository's one subject and lands in its push history like any other:
-// the row keeps each branch's last commit (its command's Old), from which
-// code_create_branch restores it while the repository still holds that
-// commit. The row is kept for the push history's 181 days, but the commit is
-// held only for the deletion's [PruneGrace] at least: the row names where
-// the branch was, never a promise that its commit is still there.
-//
-// Last, after the scratch expiry, on the pass's pacer and within its budget:
-// a purge and a release free names, an expiry only room, which
-// code_refs_near_limit says when it runs short.
-//
+// write of its own: the deletion is decided against every push and hold on
+// the repository's subject and lands in its push history, whose row keeps the
+// branch's last commit (Old) for code_create_branch to restore. The row lasts
+// the push history's 181 days but the commit only [PruneGrace] at least: the
+// row names where the branch was, never that its commit remains. It runs
+// last because a purge and a release free names and an expiry only room
+// (code_refs_near_limit says when room runs short).
+
 // # The order is the safety argument
 //
-// The scratch expiry's: the CUTOFF is taken once, before anything is read;
-// each PAGE is read with the code log's position inside its own transaction;
-// and only THEN are the live turns' holds read, for that page's refs. A hold
-// the pass could not see was therefore taken after its page was fixed, and
-// either the branch was set within [RefHoldRecordAfter] when it was taken —
-// later than the cutoff, which the decide's window refuses — or the turn
-// RECORDED its hold on the repository's subject past the page's position,
-// which the decide's held term refuses ([ExpiryRule]). The decide judges
-// every command again in its own snapshot, so a branch set, held, made the
-// default or put under review since its page is kept.
-//
+// As [Retention.expireScratch]'s, with the page's refs as keys: a hold the
+// pass missed was taken with the branch set within [RefHoldRecordAfter] of
+// it (past the cutoff, refused by the decide's window) or recorded on the
+// repository's subject past the page's position (refused by its held term,
+// [ExpiryRule]). The decide judges every command again in its own snapshot,
+// so a branch set, held, made the default or put under review since is kept.
+
 // # A retry is safe by state, never by id
 //
-// A branch an earlier proposal already deleted reads gone, so its command is
-// a noop (rule 3); one pushed meanwhile is stale (rule 4); one held since its
-// page is stale (4b) — so every proposal takes a fresh push id, and no ledger
-// of expiry ids is kept.
+// A branch already deleted reads gone, so its command is a noop (rule 3); one
+// pushed meanwhile is stale (rule 4), one held since its page stale (4b) — so
+// every proposal takes a fresh push id and no ledger of expiry ids is kept.
 
 // expire deletes, a page at a time, oldest first, every seat branch idle past
 // [RefExpiry] that no live turn holds — never on an unknown — until none is
@@ -202,14 +193,12 @@ func (r *Retention) expireIn(ctx context.Context, now time.Time, id string, page
 }
 
 // expiryCut is how many of cmds, in order, the expiry push p carries: at most
-// [MaxCommandsPerPush] — a page never lists more — and as many as its entry
-// holds in its record ([EntryRoom], [Proposal.Validate]'s [TooWideError]). A
-// thousand plain refs take under half the room, but a ref whose characters
-// the log spells in six bytes each (`&`, `<`, `>`) costs up to six times its
-// length, so some six hundred such refs fill it — and an expiry refused
-// TooWideError every pass would never expire its page. So it is cut as
-// `crewlet gitlet import` cuts its batches: by the domain's own rule, the whole
-// list asked first, which is the answer for every page of plain refs. One
+// [MaxCommandsPerPush] (a page never lists more) and as many as its entry
+// holds ([EntryRoom], [Proposal.Validate]'s [TooWideError]). A thousand plain
+// refs take under half the room, but the log spells `&`, `<` and `>` in six
+// bytes each, so some six hundred such refs fill it, and a page refused
+// TooWideError every pass would never expire. So it cuts as `crewlet gitlet
+// import` does, by the domain's own rule, the whole list asked first. One
 // command of the longest ref takes under two kibibytes, so a push always
 // carries one; any other refusal is the step's own bug, answered as an error.
 func expiryCut(p Proposal, cmds []Command) (int, error) {
@@ -378,22 +367,17 @@ func (page *idleRefsPage) readRepos(ctx context.Context, tx *sql.Tx) error {
 }
 
 // The ref expiry's two statements, each registered in plan_test.go: the
-// keyset page over its partial index, the predicate repeated verbatim and the
-// >= beside the OR keeping the range seek (the reader's own rule), and the
-// page's repositories by their key.
+// keyset page over its partial index (the predicate verbatim, the >= beside
+// the OR keeping the range seek) and the page's repositories by their key.
 //
-// THE PAGE SKIPS A LIVE CHANGE'S BRANCHES (M4-D32): a ref a draft or an open
-// change is proposed from, or into, one seek of code_changes_open_idx and one
-// of code_changes_target_idx a row, the live states spelled as both indexes
-// are partial on them. The decide keeps such a branch whatever its age
-// ([ExpiryRule]), so listing it proposed a deletion the committer refused on
-// every pass for as long as the review lasted — a decide's round and a
-// stale answer a branch a pass, and refs_kept counting what nothing raced.
-// The decide's term stays, for a change opened after the page was read. What
-// a page steps over is bounded by the live changes — each keeps two branches
-// at most, its source and its target — and the keyset resumes after the last
-// ref the page names, so a skipped row is read once a pass and never makes a
-// page short of its LIMIT while idle branches remain past it.
+// THE PAGE SKIPS A LIVE CHANGE'S BRANCHES (M4-D32), a ref a draft or open
+// change is proposed from or into: one seek a row of code_changes_open_idx
+// and of code_changes_target_idx, the live states spelled as both indexes are
+// partial on them. The decide keeps such a branch anyway ([ExpiryRule]; its
+// term stays, for a change opened after the page), so listing it cost a
+// refused proposal every pass of the review and a refs_kept nothing raced. A
+// change keeps two branches at most and the keyset resumes after the page's
+// last ref, so a skipped row is read once a pass and never cuts a page short.
 const (
 	expiryListingSQL = `SELECT r.repo_id, r.ref, r.target, r.at FROM code_refs AS r INDEXED BY code_refs_expiry_idx
 		WHERE seat != '' AND at <= ?1 AND at >= ?2 AND (at > ?2 OR r.repo_id > ?3 OR (r.repo_id = ?3 AND r.ref > ?4))

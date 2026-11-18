@@ -12,13 +12,11 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE QUALIFIED CHANGE COLUMNS ARE THE CHANGE COLUMNS: a push's reads of the
-// live changes it moves name every column of a change's row qualified — the
-// table function they are driven from has an id of its own — and scanChange
-// reads each answer in changeColumns' order, so the two lists name the same
-// columns in the same order, or a push's book would read one column into
-// another's field on every data node alike, and no other test would see a
-// change whose title is its state.
+// THE QUALIFIED CHANGE COLUMNS ARE THE CHANGE COLUMNS: a push's reads qualify
+// every column (their driving table function has an id of its own) and
+// scanChange reads them in changeColumns' order, so the lists must match, or
+// a push's book reads one column into another's field on every data node
+// alike, which no other test would see.
 //
 // Mutation: swap two columns of qualifiedChangeColumns, or drop one, and this
 // fails naming where.
@@ -113,22 +111,16 @@ func (s bookState) differs(o bookState) string {
 
 // AN ENTRY TAKEN BACK LEAVES THE BOOK AS IT FOUND IT, AND COSTS WHAT IT REACHED:
 // the push decide tries each entry on the round's one change book and takes
-// back one the record cannot hold, so after taking back an entry that moved
-// every way an entry moves a change — a head the record already moved and
-// one it had not, a new author, a merge, a close — or that opened a change,
-// on a branch nothing named or on the source of a change the record closed,
-// into a target the book holds changes into or one it holds none into, the
-// book holds exactly what it held before; what the entry would write as the
-// first of a record of its own is counted on the book and leaves it as it
-// was; and an entry kept leaves the book as moving it untried does. The
-// journal holds only the changes the entry reached — four, of a book of a
-// hundred and fifty-odd — never the book.
+// back one the record cannot hold, so taking back an entry that moved a change
+// every way (heads, author, merge, close) or opened one restores the book
+// exactly; weighing it alone leaves the book as it was; a kept entry leaves it
+// as moving it untried does; and the journal holds only the four changes the
+// entry reached, never the book.
 //
-// Mutation: forget to restore a moved change's row, an author, a source a
-// change was opened on, a target's changes or the record's writes, and the
-// book differs; save every change of the book in try, and the journal holds
-// more than the entry reached; count no row for the readiness of a change an
-// entry merged or closed, and the entry weighed alone comes two rows short.
+// Mutation: forget to restore a row, an author, a source, a target's changes
+// or the record's writes → the book differs; save the whole book in try → the
+// journal holds more; count no readiness row for a merged or closed change →
+// the entry alone comes two rows short.
 func TestAnEntryTakenBackLeavesTheBookAsItFoundIt(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -210,18 +202,12 @@ func TestAnEntryTakenBackLeavesTheBookAsItFoundIt(t *testing.T) {
 					entry.PushID, reached, len(book.rows))
 			}
 		}
-		// ALONE: the record's moves landed first, so the head it already
-		// moved is a change's row of this record again — ten rows where the
-		// record counts the same entry nine — and none of the record's own
-		// writes are its, the readiness of the change the record's "closing"
-		// closed among them. The ten are the four changes' rows, the two
-		// revisions and the two authors its head moves add, and the stored
-		// readiness of the change it merged and of the one it closed, which
-		// the apply clears ([clearReadiness]) and the book counts a row each
-		// whether or not it holds an answer, since the book reads no
-		// mergeability ([changeBook.rowCount]); and the tally row the states it
-		// moves are counted in, which the decide holds the record to
-		// ([changeBook.decidedRows]).
+		// ALONE, the entry writes as a record of its own: the head the record
+		// moved counts again, and none of the record's writes are its. Ten
+		// rows — four changes, two revisions, two authors, and the readiness
+		// of the change it merged and the one it closed, a row each whether
+		// held or not, as the book reads no mergeability ([clearReadiness],
+		// [changeBook.rowCount]) — plus the tally row ([changeBook.decidedRows]).
 		rows, moved := book.alone(tried[0])
 		if rows != 10+tallyRows || moved != 4 {
 			t.Errorf("entry %s alone writes %d rows of %d changes, want %d of 4: four changes, two revisions, "+
@@ -249,22 +235,15 @@ func (s *execCounter) ExecContext(ctx context.Context, query string, args ...any
 }
 
 // A PUSH RECORD WRITES THE CHANGES IT MOVES IN BATCHES: its apply holds the
-// replicated estate's one write lane on every data node, and one record moves
-// up to some 1 300 changes, so what it writes of them — each moved change's
-// row, at its next head, merged or closed, and each revision — goes in as few
-// statements as the engine's parameters allow ([store.Chunks]), a chunk of
-// each kind of write ([pushWrite]), as its refs do, never a statement a
-// change: a record moving 999 changes issues the statements one moving three
-// does. And each change's row says what its move did, its head and revision,
-// a merge's state and a close's — so a write that sets less than a push
-// moves fails here too.
+// estate's one write lane on every data node and may move some 1 300 changes,
+// so their rows and revisions go in a chunk per kind of write ([store.Chunks],
+// [pushWrite]), never a statement a change; and each row carries its move's
+// head, revision and state.
 //
-// Mutation: write each moved change with a statement of its own, and the
-// record of 999 issues a statement a change, or clear the ended changes'
-// readiness a statement a change; leave state out of changeMerged
-// or changeStateMoved, and the merged or the closed change stays open; leave
-// head_oid out of changeHeadMoved, and no change is at its second revision's
-// head.
+// Mutation: a statement per moved change, or per ended change's readiness →
+// the 999 case is red; drop state from changeMerged or changeStateMoved → an
+// ended change stays open; drop head_oid from changeHeadMoved → no change is
+// at its second revision's head.
 func TestAPushRecordWritesTheChangesItMovesInBatches(t *testing.T) {
 	t.Parallel()
 	for _, n := range []int{3, 999} {
@@ -274,9 +253,8 @@ func TestAPushRecordWritesTheChangesItMovesInBatches(t *testing.T) {
 			const repo = "repo-a"
 			e.apply(create(t, repo, "web"))
 			e.seedLiveChanges(repo, n)
-			// EVERY MOVE A PUSH MAKES: the heads of all but two, the source of
-			// one deleted, and main — the target of every one — set to the
-			// last one's head.
+			// EVERY MOVE: all heads but two, one source deleted, and main
+			// (every change's target) set to the last one's head.
 			var cmds []Command
 			for c := range n - 2 {
 				cmds = append(cmds, move(liveSource(c), liveHead(c), oid(fmt.Sprint("next", c))))
@@ -310,11 +288,10 @@ func TestAPushRecordWritesTheChangesItMovesInBatches(t *testing.T) {
 				}
 				return n
 			}
-			// THE MOVED CHANGES' ROWS — the n-2 whose heads it moved, the one
-			// it merged and the one it closed, each kind its own write — THE
-			// REVISIONS, and the two ended changes' stored readiness cleared
-			// in one statement: the pusher is an author of each already, and
-			// the record opens none.
+			// The moved, merged and closed changes' rows, each kind its own
+			// write, the revisions, and one statement clearing the ended
+			// changes' readiness; no authors (the pusher is one already) and
+			// no opens.
 			want := chunks(n-2, changeColumns) + chunks(1, changeColumns) + chunks(1, changeColumns) +
 				chunks(n-2, "change_id, n, head_oid, pusher, pusher_kind, push_id, position, at") + 1
 			if issued != want {

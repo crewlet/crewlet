@@ -24,21 +24,18 @@ import (
 func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 	t.Parallel()
 
-	// A STORED PACK NEVER REACHES 2 GiB. Past it a version-2 index grows a
-	// table of 64-bit offsets, and the bundle format's section sizes stop
-	// being pure functions of the object count — which is what CheckBundle
-	// compares exactly, for every bundle the store will ever hold. A push is
-	// held here; a later compaction holds what it writes with pack-objects
-	// --max-pack-size, and must keep to the same rule.
+	// A STORED PACK NEVER REACHES 2 GiB: past it a version-2 index grows a
+	// 64-bit offset table, and the section sizes CheckBundle compares exactly
+	// stop being functions of the object count (package doc, "The bundle is
+	// the permanent format, and no stored pack reaches 2 GiB"). A compaction
+	// keeps to it with --max-pack-size.
 	if gitlet.MaxPackBytes >= 1<<31 {
 		t.Errorf("MaxPackBytes is %d, at or past the 2 GiB an index's 64-bit offset "+
 			"table begins at", gitlet.MaxPackBytes)
 	}
-	// A STORED BUNDLE HAS ROOM PAST THE CLIENT'S INPUT. What receive-pack
-	// stores is the input COMPLETED — index-pack --fix-thin appends every base
-	// a thin pack's deltas name — and the bundle adds the index and the
-	// reverse index; so at equality a legal push at max_push_bytes would be
-	// refused pack_too_large for bytes the client never sent.
+	// A STORED BUNDLE HAS ROOM PAST THE CLIENT'S INPUT: index-pack --fix-thin
+	// appends a thin pack's bases and the bundle adds the .idx and .rev, so at
+	// equality a legal push at max_push_bytes would be refused pack_too_large.
 	if gitlet.MaxPackBytes <= config.CodeMaxPushBytesCeiling {
 		t.Errorf("MaxPackBytes (%d) is not past the largest input a push may send "+
 			"(CodeMaxPushBytesCeiling %d): a stored bundle must have room beyond the "+
@@ -46,10 +43,9 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 			"push the limits admit is refused pack_too_large", gitlet.MaxPackBytes,
 			config.CodeMaxPushBytesCeiling)
 	}
-	// AND THE OBJECT STORE CAN RECORD IT: the largest bundle uploaded at the
-	// pacing floor, under the whole bound its put is given, lands inside the
-	// write bound the collector deletes by — its key is minted as the upload
-	// begins, and a row names it only once the upload ends.
+	// AND THE OBJECT STORE CAN RECORD IT: the largest bundle's put at the
+	// pacing floor ends inside RecordWithin, the bound the collector deletes by,
+	// since its key is minted as the upload begins and named only once it ends.
 	if bound := gitlet.UploadDeadline(gitlet.MaxPackBytes); bound >= objstore.RecordWithin {
 		t.Errorf("a %d-byte bundle's put is given %s, past RecordWithin (%s)",
 			gitlet.MaxPackBytes, bound, objstore.RecordWithin)
@@ -62,15 +58,11 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 			"tally row, past the %d one record's apply may touch (MaxRecordRows)", gitlet.PurgePartRows,
 			gitlet.MaxRecordRows)
 	}
-	// AND SO DOES THE FINAL PURGE, whose statements are unbounded because the
-	// decide forms it only once at most PurgePartRows of the repository's
-	// pushes, refs, packs, retired packs and changes' revisions, authors,
-	// bodies and rows remain: those, every protection rule
-	// (MaxProtectionsPerRepo) and every path owner (MaxPathOwners, one row an
-	// owner), the published chain — which no part removes: MaxPublishedLayers
-	// layers of MaxLayerParts parts each — the name claim, the repository's
-	// row, its kind's count, its repository tally row, its viewed key and the
-	// deletion marker.
+	// AND SO DOES THE FINAL PURGE, unbounded in statements because the decide
+	// forms it only once at most PurgePartRows rows remain: those, every
+	// protection rule and path owner, the published chain (which no part
+	// removes) and six of its own — the name claim, the row, its kind's count,
+	// its tally row, its viewed key and the deletion marker.
 	chain := gitlet.MaxPublishedLayers * (1 + gitlet.MaxLayerParts)
 	if final := gitlet.PurgePartRows + gitlet.MaxProtectionsPerRepo + gitlet.MaxPathOwners + chain + 6; final >
 		gitlet.MaxRecordRows {
@@ -91,11 +83,10 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 			settings, gitlet.MaxProtectionsPerRepo, gitlet.MaxPathOwners, gitlet.MaxRecordRows)
 	}
 	// A MAXIMAL PUSH OF DELETIONS FITS ONE RECORD'S ROWS with its sweep's
-	// room: a push row, its pack and its refs, the object each deletion left,
-	// an old tombstone swept for each deletion's new one, the repository's
-	// counters, the push history's share and the tombstone mark — or no push
-	// could delete a thousand refs at a repository holding its bound of
-	// tombstones without its record writing them as removals.
+	// room: its row, pack and refs, each deletion's object and the old
+	// tombstone swept for its new one, the counters, the push history's share
+	// and the tombstone mark — or no push could delete a thousand refs at a
+	// repository holding its bound of tombstones.
 	rows := 1 + 3*gitlet.MaxCommandsPerPush + 1 + 1 + gitlet.HorizonDeletesPerRecord + 1
 	if rows > gitlet.MaxRecordRows {
 		t.Errorf("a maximal push of deletions touches %d rows (1 + 3 × MaxCommandsPerPush %d + 1 + "+
@@ -122,15 +113,11 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 			gitlet.HorizonBytesPerRecord, gitlet.MaxRecordBytes)
 	}
 
-	// ONE MAXIMAL PUSH ROW FITS A PAGE: a page serves at least one row, so the
-	// largest row a pushes page can hold — every command at the longest ref,
-	// with the longest code a recorded command carries, every introduced id
-	// it lists, the longest way and every field of a seat's run at its bound
-	// — a coding box's run id a UUID, the one spelling a run id has — must
-	// fit the page's bytes, or a page that has to serve it is past the reply
-	// ceiling. The longest ref and run field in ENCODED bytes: every byte
-	// after a ref's number, and every byte of a run's field, a `<`, which both
-	// may hold and JSON writes as six.
+	// ONE MAXIMAL PUSH ROW FITS A PAGE, since a page serves at least one, or
+	// that page is past the reply ceiling: every command at the longest ref and
+	// recorded code, every introduced id, the widest way and every run field at
+	// its bound (a run id is always a UUID). Refs past their number and run
+	// fields are filled with `<`, which JSON writes as six bytes.
 	longest := gitlet.Refusal("")
 	for _, r := range gitlet.Refusals() {
 		if r.Recorded() && len(r) > len(longest) {
@@ -201,11 +188,9 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 		t.Errorf("two maximal pushes encode to %d bytes, past MaxRecordBytes (%d)", len(body),
 			gitlet.MaxRecordBytes)
 	}
-	// AND A HOLD OF A SEAT'S BRANCH AT ITS LONGEST: a turn's id at the
-	// provenance bound and a ref at MaxRefNameBytes of a byte JSON escapes
-	// six-fold — the widest a hold record carries, which the code suite's one
-	// push payload a subject kind does not (its decode and apply are
-	// TestARefHoldMovesNoClock's).
+	// AND A HOLD OF A SEAT'S BRANCH AT ITS LONGEST: a turn id at the provenance
+	// bound and a ref at MaxRefNameBytes of `<`, the widest hold record (its
+	// decode and apply are TestARefHoldMovesNoClock's).
 	branch := gitlet.SeatNamespace("dev")
 	hold, err := json.Marshal(gitlet.Hold{RepoID: strings.Repeat("r", 36),
 		TurnID: strings.Repeat("<", gitlet.MaxProvenanceBytes),
@@ -225,11 +210,10 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 			queue.MaxPayloadBytes)
 	}
 
-	// A RETENTION PASS LEAVES THE LANE ITS SHARE AND ENDS BEFORE ITS TICK:
-	// it waits twice a step's duration after each (a third of the lane), and
-	// its budget is StallGrace — what a node six times slower than the holder
-	// ends a pass behind by is (6/3 − 1) budgets, StallGrace itself — and
-	// leaves most of the tick for that node to catch up before the next.
+	// A RETENTION PASS LEAVES THE LANE ITS SHARE AND ENDS BEFORE ITS TICK: it
+	// idles twice each step's duration (a third of the lane), and its budget is
+	// StallGrace, so a node six times slower ends (6/3 − 1) budgets behind,
+	// StallGrace itself, with most of the tick left to catch up.
 	if gitlet.RetentionIdlePerStep != 2 {
 		t.Errorf("a pass waits %v times a step's duration after it, want 2: a third of the "+
 			"lane (RetentionLaneShare %v)", gitlet.RetentionIdlePerStep, gitlet.RetentionLaneShare)
@@ -256,14 +240,10 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 }
 
 // EVERY PUSH IS COUNTED BELOW THE TOP BOUNDARY of the histograms that measure
-// it: its bundle in crewlet.code.push.bytes, whose byte boundaries must reach
-// the largest bundle one push may store (MaxPackBytes), and its duration in
-// the millisecond histograms, whose boundaries must reach the bound on the
-// longest transfer the engine paces (objstore.RecordWithin, which
-// TestTheBoundsFitTheReadAndPurgeBudgets holds the largest bundle at the
-// pacing floor under). Past its top boundary a
-// value lands in the overflow, where every push past 64 KiB was counted while
-// one set of boundaries ending at 65 536 served every unit.
+// it, never in the overflow: its bundle in crewlet.code.push.bytes, whose
+// boundaries must reach MaxPackBytes, and its duration in the millisecond
+// histograms, whose must reach objstore.RecordWithin, the longest transfer
+// the engine paces (TestTheBoundsFitTheReadAndPurgeBudgets).
 //
 // Mutation: end the byte boundaries below MaxPackBytes, or the millisecond
 // boundaries below twelve hours, and this fails.
@@ -296,18 +276,13 @@ func TestEveryPushIsCountedBelowTheTopBoundary(t *testing.T) {
 
 // A DELTA PASSES THE WIDEST FULL ANSWER ONLY BY TOMBSTONES IN PLACE OF PACKS.
 // The reader answers a delta only while it carries no more ROWS than the full
-// answer would — live changes and tombstones together, against the live refs
-// and every pack (TestADeltaLargerThanTheFullAnswerIsAnsweredInFull holds that
-// through the real reader) — so by rows the tombstones give it no new worst
-// case. What is held here is what that rule leaves in BYTES, every row at its
-// widest — every name at MaxRefNameBytes, every position the widest the packed
-// form admits — against the full answer of a repository of as many live refs
-// and packs: the widest delta of that many rows, filled widest row first from
-// what a delta can carry, passes it by at most one tombstone less one pack row
-// (the narrowest a repository holds) for each pack, up to MaxTombstonesPerRepo
-// of them — by nothing for names JSON writes as themselves, and by the figures
-// MaxTombstonesPerRepo states for names JSON spells longest. And the bound
-// itself is the live refs' own, for the reasons MaxTombstonesPerRepo gives.
+// answer (TestADeltaLargerThanTheFullAnswerIsAnsweredInFull), so in rows the
+// tombstones add no worst case. In BYTES, every row at its widest, the widest
+// delta of that many rows passes the full answer of as many live refs and
+// packs by at most a tombstone less the narrowest pack row for each pack, up
+// to MaxTombstonesPerRepo of them: nothing for names JSON writes as
+// themselves, the figures MaxTombstonesPerRepo states for those it spells
+// longest. The bound itself is the live refs', for the reasons it gives.
 func TestADeltaPassesTheWidestFullAnswerOnlyByTombstonesInPlaceOfPacks(t *testing.T) {
 	t.Parallel()
 	if gitlet.MaxTombstonesPerRepo != gitlet.MaxRefsPerRepo {
@@ -529,12 +504,10 @@ func TestTheBoundsFitTheRecordBudgets(t *testing.T) {
 		t.Errorf("MaxPushesPerRecord (%d) minimal pushes bound %d rows, past MaxRecordRows (%d)",
 			gitlet.MaxPushesPerRecord, got, gitlet.MaxRecordRows)
 	}
-	// A SEAT'S PUSH IS COUNTED TWO ROWS MORE — its day's row and the older
-	// day it forgets (code_seat_days) — and a full batch of the smallest
-	// still fits; the bytes of the day its committer stamps are in its bound.
-	// The smallest a seat makes is one the engine built, naming its turn
-	// alone: a push git received from a seat is its coding box's, which names
-	// its executor as well.
+	// A SEAT'S PUSH IS COUNTED TWO ROWS MORE — its day's row and the older day
+	// it forgets (code_seat_days) — and a full batch of the smallest still
+	// fits, its bound counting the day its committer stamps. A seat's smallest
+	// is engine-built, naming its turn alone (a box's names its executor too).
 	seat := minimal
 	seat.Principal = gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: strings.Repeat("s", 64),
 		Run: gitlet.RunProvenance{TurnID: "0192f00d-0000-7000-8000-000000000001"}}
@@ -679,16 +652,14 @@ func TestLimitsOfIsConfigsReading(t *testing.T) {
 }
 
 // THE CODE LOG'S GIT CENSUS FOLLOWS ITS CEILING: the barriers that fill a
-// tenth of it over the trim's min_age, so a resize of the log moves the census
-// with it — and a min_age under a day counts as one.
+// tenth of it over the trim's min_age, a min_age under a day counted as one.
 //
-// OVER THE WHOLE min_age, a fraction of a day included: a barrier stays on the
-// log for all of it, so a min_age of 36 hours divided as one day would let the
-// git clients' barriers fill half again the tenth they were sized for, and one
-// of 47 hours nearly twice it — which census_drift's factor of two would then
-// not catch until four tenths. And EXACT at every ceiling, the largest a
-// stream can declare included, which a day's nanoseconds times the ceiling
-// overflows in 64 bits.
+// Over the WHOLE min_age, a fraction of a day included, since a barrier stays
+// on the log for all of it: 36 hours divided as one day would let barriers
+// fill half again their tenth, and 47 nearly twice it, which census_drift's
+// factor of two misses until four tenths. And EXACT at every ceiling, the
+// largest a stream can declare included, where a day's nanoseconds times the
+// ceiling overflows 64 bits.
 func TestGitReadsFollowTheCodeLogsCeiling(t *testing.T) {
 	t.Parallel()
 	week := 7 * 24 * time.Hour
@@ -713,12 +684,11 @@ func TestGitReadsFollowTheCodeLogsCeiling(t *testing.T) {
 	}
 }
 
-// THE WIDEST REVISE FITS ITS RECORD: the widest revise a home of this build
-// sends, measured, touching MaxTouchedBytes of paths with every place classed
-// and every human path held, its MaxPathOwners owners each naming every glob
-// of theirs, just under MaxPathOwnersBytes of them, passes the conversation's
-// bound with the writer's widest stamp, an ask at its bound for each owner. A
-// revise refused for its bytes would leave its change due its facts for good.
+// THE WIDEST REVISE FITS ITS RECORD: MaxTouchedBytes of paths, every place
+// classed, every human path held and MaxPathOwners owners naming globs just
+// under MaxPathOwnersBytes pass the conversation's bound with the writer's
+// widest stamp and an ask at its bound for each owner. A revise refused for
+// its bytes would leave its change due its facts for good.
 //
 // Mutation: price an ask at MaxPathOwnersBytes rather than MaxOwnedPathsBytes
 // (refused, red).
