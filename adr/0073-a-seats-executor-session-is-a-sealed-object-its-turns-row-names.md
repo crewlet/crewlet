@@ -3916,7 +3916,10 @@ a buffer the highest document sets below it (a `"N%"` share on 2.2.7 and
 fifteen hundredths after) and 16,000 tokens once the limit is twice that.
 `compaction.auto: false` is a point never reached. No point, each a mark
 (`sandbox.PointMark`): a box release outside the set or other than the
-writer's (no pair has been measured), a plugin other than the engine's own, a
+writer's (no pair has been measured; the writer is the kept capture's stamp,
+or for the copy continued in its box the release the job before's record
+names beside its count, `count_release`, which a company that keeps no
+session has too), a plugin other than the engine's own, a
 provider's `contextManagement`, a source the read cannot size in the box that
 holds the copy, no model, a model the catalog does not list, a native
 compaction, a limit nothing states (OpenCode's default of 200,000 tokens may
@@ -3942,9 +3945,13 @@ logs `executor_session_may_compact` in its own form. A brief told by a reading
 is judged on its own brief, as on the runner's side. The launch's floor counts
 the summarized brief as it counts the others, and never drops it alone.
 
-**Mid-upgrade.** Nothing new is on the wire: the tellings, the point and its
-marks live in one process, the runner's and the launch's, and never leave the
-launch. No record, no `RecordVersion`, no `coord.ProtocolVersion` change.
+**Mid-upgrade.** `count_release` is additive on the job's record, written and
+cleared with the count and never carried, carried in `Extra` by an older
+build; a record an older build wrote names no writer, so a copy it collected
+and a newer build continues in its box is told as a summary. Nothing else is
+on the wire: the tellings, the point and its marks live in one process, the
+runner's and the launch's, and never leave the launch. No state-log record,
+no `RecordVersion`, no `coord.ProtocolVersion` change.
 
 **What it leaves.** A first request OpenCode does compact hands the model the
 system prompt and one user message: a checkpoint saying "Treat it as

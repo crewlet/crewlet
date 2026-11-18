@@ -180,6 +180,8 @@ func TestAnOpenCodeContinuationThatMayCompactIsHandedTheSummarizedBrief(t *testi
 			}
 		})
 	}
+	// THE COPY IN ITS OWN BOX, in a company that keeps no session: no capture
+	// names the copy's writer, and the job before's record does.
 	t.Run("the copy in its own box", func(t *testing.T) {
 		logs := captureLogs(t)
 		rig := newCoordRig(t)
@@ -189,8 +191,7 @@ func TestAnOpenCodeContinuationThatMayCompactIsHandedTheSummarizedBrief(t *testi
 		req.Continue = &Continuation{SessionID: "sess-own", Brief: savePointSameBox, Told: toldBySavePoint,
 			Summarized: summarizedSameBox, SummarizedTold: toldAsSummary,
 			Count: &ResumedCount{Tokens: 100000}, CountProvider: "stub"}
-		opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2,
-			Capture: &SessionCapture{LaunchSeq: 1, CaptureSeq: 1, HarnessVersion: "2.3.0"}}
+		opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2, Prior: PriorBox{Writer: "2.3.0"}}
 		got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"), rig.runner,
 			true, false, RunSources{})
 		t.Cleanup(got.release)
@@ -200,8 +201,8 @@ func TestAnOpenCodeContinuationThatMayCompactIsHandedTheSummarizedBrief(t *testi
 		}
 		asks := rig.runner.PointAsks()
 		if len(asks) != 1 || asks[0].Writer != "2.3.0" || asks[0].Sources == nil || asks[0].Release != "" {
-			t.Errorf("the copy's box was asked %+v, want one ask of the job before's writer, in its box, "+
-				"its release asked", asks)
+			t.Errorf("the copy's box was asked %+v, want one ask of the writer the job before's record "+
+				"names, in its box, its release asked", asks)
 		}
 		if lines := mayCompactLines(logs); len(lines) != 1 || !strings.Contains(lines[0], "path=in_place") {
 			t.Errorf("the launch logged %q, want one may-compact line naming the in-place path", lines)
@@ -315,8 +316,7 @@ func TestAFailedReadHandsTheSummarizedBrief(t *testing.T) {
 		req.Continue = &Continuation{SessionID: "sess-own", Brief: savePointSameBox, Told: toldBySavePoint,
 			Summarized: summarizedSameBox, SummarizedTold: toldAsSummary,
 			Count: &ResumedCount{Tokens: 1000}, CountProvider: "stub"}
-		opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2,
-			Capture: &SessionCapture{LaunchSeq: 1, CaptureSeq: 1, HarnessVersion: "2.3.0"}}
+		opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2, Prior: PriorBox{Writer: "2.3.0"}}
 		// ITS RUNNER INTERFACE ALONE, so no read of a point is offered.
 		got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
 			struct{ Runner }{rig.runner}, true, false, RunSources{})

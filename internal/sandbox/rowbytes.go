@@ -112,8 +112,8 @@ import (
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... measuredOtherFields     2,035,346
-//	to spare, measured .............. measuredSpare             560,562
+//	every other field, measured ..... measuredOtherFields     2,035,429
+//	to spare, measured .............. measuredSpare             560,479
 //
 // Every other field is the identity, status and time fields, the run its
 // turn's leads are kept for and how many leads that part has taken
@@ -135,8 +135,8 @@ import (
 // by their numbers in the run's leads part ([LaunchRecord.LeadMarks], at most
 // [MaxKeptLeads]), what the session its box holds carried at its newest request
 // the engine measured ([LaunchRecord.Context]), its harness's count of that
-// copy, the count's provider and its next request ([LaunchRecord.ResumedCount],
-// [LaunchRecord.CountProvider], [LaunchRecord.NextRequestTokens]) and the
+// copy, the count's provider and writer and its next request (ResumedCount,
+// CountProvider, CountRelease, NextRequestTokens on [LaunchRecord]) and the
 // restart its launch's session held ([LaunchRecord.BasisRestart]); the owed end
 // and the captures, each with the reads its session holds only as a count
 // ([SessionCapture.Omitted]) and the same three figures; and what the job may
@@ -299,8 +299,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_035_346
-	measuredSpare       = 560_562
+	measuredOtherFields = 2_035_429
+	measuredSpare       = 560_479
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].

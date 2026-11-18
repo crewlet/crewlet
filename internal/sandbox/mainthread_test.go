@@ -402,14 +402,15 @@ func TestAnOlderBuildsWriteCarriesTheCount(t *testing.T) {
 			t.Errorf("after the older build's write %s reads %+v, want %+v: %s", typ, got, read(raw), written)
 		}
 	}
-	carried(t, reflect.TypeFor[LaunchRecord](), []string{"resumed_count", "basis_restart", "count_provider"},
-		LaunchRecord{ResumedCount: count, BasisRestart: new("u-0"), CountProvider: "stub"}, func(raw []byte) any {
-			var back LaunchRecord
-			if err := json.Unmarshal(raw, &back); err != nil {
-				t.Fatal(err)
-			}
-			return []any{back.ResumedCount, back.BasisRestart, back.CountProvider}
-		})
+	carried(t, reflect.TypeFor[LaunchRecord](), []string{"resumed_count", "basis_restart", "count_provider",
+		"count_release"}, LaunchRecord{ResumedCount: count, BasisRestart: new("u-0"), CountProvider: "stub",
+		CountRelease: "2.3.0"}, func(raw []byte) any {
+		var back LaunchRecord
+		if err := json.Unmarshal(raw, &back); err != nil {
+			t.Fatal(err)
+		}
+		return []any{back.ResumedCount, back.BasisRestart, back.CountProvider, back.CountRelease}
+	})
 	carried(t, reflect.TypeFor[SessionCapture](), []string{"resumed_count", "count_provider"},
 		SessionCapture{ResumedCount: count, CountProvider: "stub"}, func(raw []byte) any {
 			var back SessionCapture
@@ -620,17 +621,18 @@ func TestTheNextRequestRidesWhereTheCountDoes(t *testing.T) {
 	})
 }
 
-// THE PROVIDER RIDES BESIDE THE COUNT. The read that collects an OpenCode job
-// names the provider of the reply its count is anchored on, and the collection
-// writes it on the job's record beside the count, in the same write, carries it
-// back to the claim beside the count, and stamps the take's on the capture
-// beside its count; a provider no record may carry as itself is written as
-// none, its count unread with it; and a later read that brings no count leaves
-// both as they were, since the provider is the count's.
+// THE PROVIDER RIDES BESIDE THE COUNT, AND SO DOES ITS WRITER. The read that
+// collects an OpenCode job names the provider of the reply its count is
+// anchored on, and the collection writes it on the job's record beside the
+// count with the release that wrote the copy, in the same write, carries both
+// back to the claim, and stamps the take's provider on the capture beside its
+// count; a provider no record may carry as itself is written as none, its count
+// unread with it, and a release that is not one as none; and a later read that
+// brings no count leaves all three as they were, since both are the count's.
 //
-// Mutation: leave the provider out of the record's write, out of the claim or
-// off the stamp, keep one no record may carry, or write it where the read
-// brings no count, and a case goes red.
+// Mutation: leave the provider or the writer out of the record's write or out
+// of the claim, the provider off the stamp, keep one no record may carry, or
+// write either where the read brings no count, and a case goes red.
 func TestTheProviderRidesBesideTheCount(t *testing.T) {
 	t.Parallel()
 	count := &ResumedCount{Tokens: 40_000, Restart: new("msg_c")}
@@ -640,7 +642,7 @@ func TestTheProviderRidesBesideTheCount(t *testing.T) {
 		rig.runner.MainThread = (&countingThread{count: count, provider: "stub"}).read
 		rig.launch("t1")
 		rig.coordinator.countRun("swe", StatusRunning)
-		rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1"})
+		rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1", HarnessVersion: "2.3.0"})
 		var (
 			mu      sync.Mutex
 			claimed []string
@@ -649,31 +651,36 @@ func TestTheProviderRidesBesideTheCount(t *testing.T) {
 		rig.resumer.during = func(_ context.Context, run PendingRun) {
 			mu.Lock()
 			defer mu.Unlock()
-			claimed = append(claimed, run.Launch.CountProvider)
+			claimed = append(claimed, run.Launch.CountProvider+" "+run.Launch.CountRelease)
 		}
 		payload, ev := rig.completion("t1")
 		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 			t.Logf("OnCompleted: %v", err)
 		}
-		if got := rig.get("t1").Launch.CountProvider; got != "stub" {
-			t.Errorf("the job's record names the provider %q, want stub", got)
+		if got := rig.get("t1").Launch; got.CountProvider != "stub" || got.CountRelease != "2.3.0" {
+			t.Errorf("the job's record names the provider %q written by %q, want stub by 2.3.0",
+				got.CountProvider, got.CountRelease)
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		if len(claimed) != 1 || claimed[0] != "stub" {
-			t.Errorf("the resume on the claim read the providers %q, want once stub", claimed)
+		if len(claimed) != 1 || claimed[0] != "stub 2.3.0" {
+			t.Errorf("the resume on the claim read the providers and writers %q, want once stub 2.3.0", claimed)
 		}
 	})
 	t.Run("the record's own rule", func(t *testing.T) {
 		t.Parallel()
-		held := LaunchRecord{ResumedCount: count, CountProvider: "stub"}
-		if got, provider := held.counted(nil, ""); !got.same(count) || provider != "stub" {
-			t.Errorf("a read with no count leaves %+v and %q, want the record's own", got, provider)
+		held := LaunchRecord{ResumedCount: count, CountProvider: "stub", CountRelease: "2.3.0"}
+		if got, provider, release := held.counted(nil, "", ""); !got.same(count) || provider != "stub" ||
+			release != "2.3.0" {
+			t.Errorf("a read with no count leaves %+v, %q and %q, want the record's own", got, provider, release)
 		}
-		got, provider := held.counted(count, `a"b`)
+		got, provider, _ := held.counted(count, `a"b`, "2.3.0")
 		if provider != "" || got.Mark != CountUnread || got.Restart != nil {
 			t.Errorf("a provider no record may carry is written as %q beside %+v, want none beside an unread "+
 				"count", provider, got)
+		}
+		if _, _, release := held.counted(count, "stub", "2.3"); release != "" {
+			t.Errorf("a release that is not one is written as %q, want none", release)
 		}
 	})
 	t.Run("the capture's stamp", func(t *testing.T) {

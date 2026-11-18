@@ -4311,6 +4311,11 @@ type PriorBox struct {
 	// thread whole or not by the rules of its release, or the record held no
 	// count.
 	Restart *string
+	// Writer is the release that wrote that copy, as that job's record's
+	// count named it ([LaunchRecord.CountRelease]): what the box's OpenCode
+	// point is paired with where the copy is continued in place. "" where the
+	// record named none.
+	Writer string
 }
 
 // KeptBoxMaxAge is how old a turn's box may be, dated from the attach that
@@ -4748,6 +4753,16 @@ type LaunchRecord struct {
 	// count, where no reply anchored one, and on a record an older build
 	// wrote. Held to [ValidCountProvider].
 	CountProvider string `json:"count_provider,omitempty"`
+
+	// CountRelease is the release of the harness whose thread ResumedCount
+	// read ([Result.HarnessVersion]): the writer of the copy the job's box
+	// holds, which a relaunch continuing that copy in the box pairs the box's
+	// OpenCode point with ([PriorBox.Writer]). On the record, never only on a
+	// capture's stamp, since a company that keeps no session takes none.
+	// Written and cleared where the count is ([LaunchRecord.counted]), NEVER
+	// CARRIED, held to [ValidRelease]. "" where no read named a release and
+	// on a record an older build wrote: no pair, the copy told as a summary.
+	CountRelease string `json:"count_release,omitempty"`
 
 	// NextRequestTokens and NextRequestOlderTokens are the harness's own
 	// estimate of the next request of the copy the job's box holds, at each

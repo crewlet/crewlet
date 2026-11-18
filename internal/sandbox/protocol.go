@@ -808,15 +808,16 @@ type Result struct {
 	// runner's collection, beside its result.
 	ReportedWindow int64
 
-	// ResumedCount is what Claude Code counts the copy of the session the
+	// ResumedCount is what its harness counts the copy of the session the
 	// job's box holds at before its next request, as the read that collected
 	// this result found it in one read of the job's main thread
 	// ([Coordinator.readMainThread]), with ReportedWindow beside it: recorded
 	// on the job's record with HarnessEnd, in that read's one write
 	// ([LaunchRecord.ResumedCount]), and carried back for the claim it
 	// collects for. Set by the coordinator, never by a runner; nil where the
-	// read asked nothing (a stop's, a loss's, another harness's job), and from
-	// a host of an older build, which reads as a copy that may compact.
+	// read asked nothing (a stop's, a loss's, a job of neither Claude Code nor
+	// OpenCode, [asksMainThread]), and from a host of an older build, which
+	// reads as a copy that may compact.
 	ResumedCount *ResumedCount
 
 	// CountProvider is the provider of the reply an OpenCode ResumedCount is

@@ -209,7 +209,7 @@ func (m *SessionMeasure) says(o *SessionMeasure) bool {
 }
 
 // EndRead is what the read that collected a job found of its end: how its
-// harness ended, what its newest request carried, and what Claude Code counts
+// harness ended, what its newest request carried, and what its harness counts
 // the copy at ([PendingStore.MarkHarnessEnd]).
 type EndRead struct {
 	// End is how the job's harness ended ([LaunchRecord.HarnessEnd]).
@@ -217,7 +217,7 @@ type EndRead struct {
 	// Request is what the newest request of the session the job's box ran
 	// carried, as its run's own account measured it ([Result.LastRequest]).
 	Request RequestMeasure
-	// Count is what Claude Code counts the copy the job's box holds at before
+	// Count is what its harness counts the copy the job's box holds at before
 	// its next request, as the read of the job's main thread found it
 	// ([Result.ResumedCount]); nil where the read asked none.
 	Count *ResumedCount
@@ -225,6 +225,9 @@ type EndRead struct {
 	// anchored on, off the same read ([Result.CountProvider]); "" for a Claude
 	// Code count and where no reply anchored one.
 	CountProvider string
+	// CountRelease is the release of the harness whose thread Count read
+	// ([Result.HarnessVersion]); "" where it is not known.
+	CountRelease string
 	// Next is the harness's own estimate of the copy's next request, off the
 	// same read ([Result.NextRequest]); zero where the read made none.
 	Next NextRequest
@@ -256,19 +259,25 @@ func (l LaunchRecord) nextRequested(read NextRequest) NextRequest {
 }
 
 // counted is the count l, a job's record, holds once a read of the job found
-// read, with the provider of the reply it is anchored on
-// ([LaunchRecord.CountProvider]): the read's wherever it made one, a mark among
+// read, with the provider of the reply it is anchored on and the release that
+// wrote the thread it read ([LaunchRecord.CountProvider],
+// [LaunchRecord.CountRelease]): the read's wherever it made one, a mark among
 // them, since a later read that could not bound the copy tells more than an
 // earlier bound; l's own where it made none (it asked nothing, or an older
-// build's host). The provider is written and cleared with the count, so no
-// record names one count's provider beside another's figure. Held to what a
+// build's host). Both are written and cleared with the count, so no record
+// names one count's provider or writer beside another's figure. Held to what a
 // record carries ([ResumedCount.bounded]); a count beside a provider no record
-// may carry ([ValidCountProvider]) is [CountUnread] with none.
-func (l LaunchRecord) counted(read *ResumedCount, provider string) (*ResumedCount, string) {
+// may carry ([ValidCountProvider]) is [CountUnread] with none, and a release
+// that is not one ([ValidRelease]) is none.
+func (l LaunchRecord) counted(read *ResumedCount, provider, release string) (*ResumedCount, string, string) {
 	if read == nil {
-		return l.ResumedCount, l.CountProvider
+		return l.ResumedCount, l.CountProvider, l.CountRelease
 	}
-	return read.provided(provider)
+	if !ValidRelease(release) {
+		release = ""
+	}
+	count, provider := read.provided(provider)
+	return count, provider, release
 }
 
 // measured is the measure l, the record of job launch, holds once a read of the
@@ -324,7 +333,7 @@ func (c *Coordinator) markHarnessEnd(ctx context.Context, run PendingRun, read E
 			"launch_id", run.LaunchID, "harness_end", string(read.End),
 			"request_tokens", read.Request.Tokens, "error", err.Error(),
 			"detail", "the run's record does not say how its job's harness ended, what the session's "+
-				"newest request carried, nor what Claude Code counts it at: the coordination store refused "+
+				"newest request carried, nor what its harness counts it at: the coordination store refused "+
 				"the write, or did not answer it "+
 				"within the room the read leaves its records. A relaunch that reads the record later, such as "+
 				"a person's answer, reads the job as one whose harness may have been cut off, and tells the "+

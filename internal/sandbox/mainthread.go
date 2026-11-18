@@ -123,12 +123,13 @@ func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sa
 		case !reads:
 			why = "the job's runner reads no main thread"
 		}
-		// THE OUTCOME IS THE HARNESS'S: a Claude Code continuation's first
-		// request is judged, and an OpenCode one's is not yet, so its marked
-		// count costs it the estimate of its next request alone.
+		// THE SAME OUTCOME FOR EITHER HARNESS: a marked count bounds no first
+		// request, so the copy is told as a cut-off one; an OpenCode one's
+		// floor, which only its count would bound, reads its newest
+		// request's input as well.
 		outcome := "a relaunch that continues this copy in its box is told it as a cut-off one"
 		if openCode {
-			outcome = "a relaunch that continues this copy in its box is held to its newest request's input"
+			outcome += ", and is held to its newest request's input"
 		}
 		log.InfoContext(ctx, "executor_session_count_unbounded", "turn_id", run.TurnID,
 			"launch_id", run.LaunchID, "mark", string(count.Mark), "detail", why, "outcome", outcome)

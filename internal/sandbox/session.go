@@ -737,7 +737,7 @@ type SessionCapture struct {
 	NextRequestTokens      int64 `json:"next_request_tokens,omitempty"`
 	NextRequestOlderTokens int64 `json:"next_request_older_tokens,omitempty"`
 
-	// ResumedCount is what Claude Code counts the session at before its next
+	// ResumedCount is what its harness counts the session at before its next
 	// request, as the take read its archive's main thread whole
 	// ([TakenSession.Count], resumed.go), with the least window the run that
 	// left it reported ([Result.ReportedWindow]): what a launch that continues

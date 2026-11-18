@@ -1661,10 +1661,13 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 			// AN OPENCODE COPY'S FIRST REQUEST, judged in this box where its
 			// caller handed the summarized telling beside the held one (the
 			// package doc's "first request is judged in its box"): sources
-			// are charged, the box holding the copy.
+			// are charged, the box holding the copy, and the point paired
+			// with the release the job before's record names as the copy's
+			// writer, whether or not the company keeps captures
+			// ([PriorBox.Writer]).
 			if continued.Summarized != "" {
 				judge := &boxJudge{path: "in_place", count: continued.Count, provider: continued.CountProvider,
-					ask: PointAsk{Writer: copyWriter(opened), Sources: &sources}}
+					ask: PointAsk{Writer: opened.Prior.Writer, Sources: &sources}}
 				if !c.sendsWhole(ctx, req, box, runner, judge, continued.Brief) {
 					launch.brief, launch.told, launch.summarized = continued.Summarized, continued.SummarizedTold, true
 					c.mayCompact(ctx, req, judge, continued.Brief)
@@ -1940,17 +1943,6 @@ func (c *Coordinator) mayCompact(ctx context.Context, req LaunchRequest, j *boxJ
 // mayCompactOutcome is what a launch whose box may compact the session before
 // its first request hands instead of the held telling ([Coordinator.mayCompact]).
 const mayCompactOutcome = "the continuation is told as one that may be a summary, and its guard arms no skill"
-
-// copyWriter is the release that wrote the copy the box of the job before
-// holds, as that job's newest capture names it, "" where no capture of that
-// job names one: a copy whose writer is not known is judged by no point
-// ([PointPair]).
-func copyWriter(opened PendingRun) string {
-	if newest := opened.Capture; newest != nil && newest.LaunchSeq == opened.LaunchSeq-1 {
-		return newest.HarnessVersion
-	}
-	return ""
-}
 
 // continueBase continues, in box, the session the turn's conversation's last
 // turn left, as the turn's first launch froze it ([PendingRun.Base]) — or says

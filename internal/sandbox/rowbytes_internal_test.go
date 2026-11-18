@@ -729,6 +729,9 @@ func worstRow(t *testing.T) PendingRun {
 		// AND THE PROVIDER BESIDE IT at its bound, every byte one a record
 		// writes as itself ([ValidCountProvider]).
 		CountProvider: plain(MaxCountProviderBytes),
+		// AND THE RELEASE THAT WROTE THE COPY at the most a release is
+		// ([ValidRelease]).
+		CountRelease: plain(executorkeep.HarnessVersionMaxBytes),
 		// AND WHAT THE HARNESS ESTIMATES ITS NEXT REQUEST AT, nineteen digits
 		// at each rate ([LaunchRecord.NextRequestTokens]).
 		NextRequestTokens: math.MaxInt64, NextRequestOlderTokens: math.MaxInt64,
