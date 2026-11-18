@@ -198,6 +198,10 @@ type Dispatcher struct {
 	// ([Engine.readDelegatedRequests]). Nil reads nothing.
 	DelegatedRequests func(ctx context.Context, handle string, evs []*events.Event) []*events.Event
 
+	// StaleAssignments drops each assignment wake whose item was finished,
+	// removed or handed on since ([Engine.dropStaleAssignments]). Nil drops none.
+	StaleAssignments func(ctx context.Context, handle string, evs []*events.Event) []*events.Event
+
 	// Observe publishes an engine-side observability event.
 	//
 	// It takes a BUILT envelope rather than a payload, because
@@ -669,6 +673,12 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	// starts no turn (ADR-0125).
 	if d.DelegatedRequests != nil {
 		if surviving = d.DelegatedRequests(ctx, handle, surviving); len(surviving) == 0 {
+			return queue.Ack()
+		}
+		held.events = surviving
+	}
+	if d.StaleAssignments != nil {
+		if surviving = d.StaleAssignments(ctx, handle, surviving); len(surviving) == 0 {
 			return queue.Ack()
 		}
 		held.events = surviving
