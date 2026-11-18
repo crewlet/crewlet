@@ -442,6 +442,19 @@ export function deleteHeld(repo: CodeRepoSummary, viewer: Reader): string | unde
   return undefined;
 }
 
+/**
+ * Why the repository's files, history and tags are not read, or undefined: a
+ * deleted repository answers no read of its content (nor any clone or push)
+ * until it is restored, and one being purged never again.
+ */
+export function contentHeld(repo: CodeRepoSummary): string | undefined {
+  if (repo.status === "purging") return `${repo.name} is being purged, with its files and history.`;
+  if (repo.status === "deleted") {
+    return `Its files, history and tags are read, cloned and pushed to again once ${repo.name} is restored.`;
+  }
+  return undefined;
+}
+
 /** Why the repository cannot be restored, or undefined: only a deleted one is. */
 export function restoreHeld(repo: CodeRepoSummary, viewer: Reader): string | undefined {
   if (repo.managed_by === "config") return DECLARED_LIFE;

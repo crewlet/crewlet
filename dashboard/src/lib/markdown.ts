@@ -363,10 +363,11 @@ export interface RenderOptions {
    * doc's pictures are files of its version, fetched with the reader's own
    * credential and shown through an object URL, never loaded from an address
    * the text names. It answers null for a source it does not show (not a file
-   * of the version, or not loaded yet), which renders as the alt text. Without
-   * it, a source is shown only when it is a safe link ([safeHref]).
+   * of the version, or not loaded yet), which renders as the alt text, and
+   * undefined for a source it leaves to the rule used without it: shown only
+   * when it is a safe link on this origin ([shownImage]), else a link to it.
    */
-  image?: (src: string) => string | null;
+  image?: (src: string) => string | null | undefined;
   /**
    * `anchor` (the default): a link is a link. `text`: a link is its label and
    * an autolink its address, as plain text: for a run drawn INSIDE a control
@@ -487,14 +488,15 @@ export function renderInline(
       );
     } else if (g.src !== undefined) {
       const alt = g.alt ?? "";
-      const src = options.image ? options.image(g.src) : shownImage(g.src);
+      const given = options.image?.(g.src);
+      const src = given === undefined ? shownImage(g.src) : given;
       // A PICTURE FROM ANOTHER ORIGIN IS A LINK TO IT, labelled by its alt
       // text: the dashboard's policy (`img-src 'self' data: blob:`) refuses to
       // load it, so an `img` there was a broken picture, and loading it would
       // tell a third party who reads the page and when. The reader can still
       // follow it on purpose. Inside a link's own label it stays its alt text,
       // since a link inside a link is no link at all.
-      const elsewhere = !src && !options.image && live !== null ? safeHref(g.src) : null;
+      const elsewhere = !src && given === undefined && live !== null ? safeHref(g.src) : null;
       // AN IMAGE WITH A REFUSED SOURCE RENDERS AS ITS ALT TEXT, which is
       // what alt text is for — not as a broken image and not as nothing.
       out.push(

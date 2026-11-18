@@ -44,6 +44,7 @@ import { zone } from "~/lib/prefs.ts";
 import { dayStartIn } from "~/lib/range.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
+import { contentHeld } from "~/lib/repoWrites.ts";
 import {
   QueryError,
   type CodeCommitMark,
@@ -63,6 +64,7 @@ import { BranchChip, CheckRollupMark, Face, useWhoName } from "../ui.tsx";
 import { DeleteBranchButton, NewBranchButton } from "./BranchWrites.tsx";
 import { useCommitMarks } from "./marks.ts";
 import { ProtectButton } from "./Protect.tsx";
+import { GoneContent } from "./RepoLife.tsx";
 import "~/styles/gitlet.css";
 
 /** A branch moved in the last 90 days is active; the rest are stale. */
@@ -128,7 +130,11 @@ export function Branches({ repo }: { repo: CodeRepoDetail }) {
       </PageToolbar>
       <div className="code-refs-boxes">
         {view === "tags" ? (
-          <TagsView repo={repo} />
+          contentHeld(repo) ? (
+            <GoneContent repo={repo} what="tags" />
+          ) : (
+            <TagsView repo={repo} />
+          )
         ) : view === "overview" && !q ? (
           <Overview repo={repo} since={since} />
         ) : (
@@ -206,7 +212,7 @@ function Overview({ repo, since }: { repo: CodeRepoDetail; since: string | undef
       <FactsNote facts={facts} repo={repo} />
       <DefaultBox repo={repo} found={found} facts={facts} />
       <ActiveBox repo={repo} active={active} facts={facts} />
-      <TagsBox repo={repo} />
+      {!contentHeld(repo) && <TagsBox repo={repo} />}
     </>
   );
 }
