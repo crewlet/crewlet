@@ -7,15 +7,12 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// EACH BOX RUNNER DECLARES THE CALL-ID KEY ITS HARNESS PROFILE READS. The bridge
-// serving a box records each call's id under the `_meta` key the box's runner
-// declares, so the runner's key is the one its harness sends: the key the
-// harness's built-in profile reads the harness's own record by
-// (`requests.call_id_meta`), measured where it was set. Claude Code sends the
-// model's tool_use id under one, so its runner declares it, and it is not
-// empty; OpenCode's `_meta` carries no id of a call, its profile names none,
-// and its runner declares none, so every call of its runs is recorded with
-// none rather than under a key it never sends.
+// EACH BOX RUNNER DECLARES THE CALL-ID KEY ITS HARNESS PROFILE READS: the
+// bridge records each call's id under the `_meta` key the box's runner
+// declares, which must be the one its harness sends and its built-in profile
+// reads (`requests.call_id_meta`). Claude Code sends the tool_use id under
+// one; OpenCode's `_meta` carries no call id, so its profile and runner name
+// none and its calls are recorded with none, never under a key it never sends.
 //
 // Mutation: declare no key for any runner (runner-declares-no-key), and a box
 // of Claude Code's has every call recorded with no id.

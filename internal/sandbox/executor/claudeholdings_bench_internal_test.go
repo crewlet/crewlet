@@ -20,81 +20,18 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// WHAT A READING COSTS AT ITS BOUNDS, in time and in memory: the figures the
-// reading's wait (internal/sandbox's holdingsReadWait) and the seats'
-// transcript slot it takes ([SeatTranscriptReadsAtOnce]) are stated by. Each
-// case writes its archive to a file first, gzipped as the take's scrub writes
-// one, and reads it from there, so what a case holds is the reading's own and
-// never the archive's. Each case holds its reading to the answer its archive is
-// built for, a reading or none and how many of its asked calls it holds, so a
-// change that turns a case into a cheaper answer fails it rather than measure
-// that; a case at a bound of the model of Claude Code's resume ([threadChain],
-// THE BOUNDS) takes either, and reports which as its read metric. What a
-// reading holds is read off the runtime's GC trace (GODEBUG=gctrace=1), one
-// case a process, between the two lines the case writes to standard error
-// around its read, after the forced collection each case takes once its
-// archive is written, since a sampling ticker would be a clock in test code.
-// Each cycle's line there reads `start->end->live MB` (MiB): what is HELD AT
-// MOST is the largest live heap, the third figure, of a cycle between the two
-// lines with the collector at GOGC=10, which runs a cycle at every tenth of the
-// heap's growth, so no growth goes long unsampled, as the chain's own
-// benchmark reads it (BenchmarkAThreadChainAtItsBounds); and the PEAK is the
-// largest heap at a cycle's start or end, the first two figures, at the
-// default GOGC, which adds the collector's headroom. Each case reports the
-// plaintext it reads and the gzipped archive it read it from, in MiB (nothing
-// is sealed here), its lines' text made of random base64, which gzip barely
-// shrinks, and of one phrase, which it shrinks to nothing, in the measure each
-// case's inflation asks. The measure is near, not exact: the run the figures
-// in the docs come from wrote the ordinary archive at 1.61 MiB, and those at
-// the archive's bound and to the plaintext's at 34.1 and 36.5 MiB, past the 32
-// they are named for, inflating by 3.5 and 7.0 rather than 3.7 and 8: more of
-// gzip's work than a real archive at those bounds, so their times are upper
-// estimates.
+// BenchmarkAReadingAtItsBounds measures a reading's time and memory at its
+// bounds, which set internal/sandbox's holdingsReadWait and
+// [SeatTranscriptReadsAtOnce]; the ordinary case is probe P6's median kept
+// session, 1.51 MiB sealed. A case reads its gzipped archive from a file, so
+// it holds only the reading's memory, and fails on any answer but its own;
+// one at a bound of the resume's model ([threadChain], THE BOUNDS) reports
+// either as its read metric. Run one case at a time, reading GODEBUG=gctrace=1
+// between its stderr lines: held at most is the largest live heap at GOGC=10
+// (a cycle every tenth of growth), the peak the largest start or end heap at
+// the default GOGC. Times at the 32 MiB bounds overstate.
 //
-//	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkAReadingAtItsBounds$/^<case>$' -benchtime 1x -benchmem
-//	GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkAReadingAtItsBounds$/^<case>$' -benchtime 1x -benchmem
-//
-// The first gives what is held at most and the second the peak and the time.
-//
-// The cases:
-//
-//   - an ordinary session: probe P6's median kept session, 1.51 MiB sealed,
-//     of lines of the 2,053 bytes a real main thread's average, a call and its
-//     result in turn, each reply under an id of its own and each record at a
-//     time of its own, inflating by the 3.7 a session at the archive's bound
-//     does (32 MiB to about 118), [sandbox.MaxBridgeCalls] of its calls asked
-//     and every one held;
-//   - a session at the archive's bound, so: about 118 MiB of such lines;
-//   - lines to the plaintext's bound, [threadPlainMax], inflating by the 8 a
-//     session must to reach it from the archive's bound;
-//   - [holdingsMaxAgents] subagents, each with its thread and metadata and its
-//     answer in the main thread, [sandbox.MaxBridgeCalls] of their calls asked
-//     and every one held;
-//   - lines at the line's bound, [threadLineMax], each a user record of text,
-//     to the plaintext's bound;
-//   - one line at the line's bound of the smallest results a message holds, all
-//     of which [threadLine.Message] keeps, more call ids than the model of
-//     Claude Code's resume files ([threadChainMaxCalls]), so its reading is
-//     no reading, reported as its read metric 0; and one of the smallest
-//     blocks of a kind no reader names, which it counts and keeps nothing of;
-//   - two shapes of ids the call-id rule refuses, each of which a reading
-//     held live before it kept no such id: 96 Agent calls each under an id of
-//     a mebibyte, and [holdingsMaxAgents] metadata each naming its call by an
-//     id of 65,000 bytes;
-//   - the model of the resume at its bounds, each of the chain's own cases at a
-//     bound read as the main thread of a reading's archive: a thread at its
-//     records bound, [threadChainMaxRecords] replies each of its own id making
-//     a call of its own and naming a parent written after it, so at both its
-//     bounds, [sandbox.MaxBridgeCalls] of its calls asked, a reading; at its
-//     retraction and kept bound, the records bound filled half by records and
-//     half by the prefixes a retry retracts and the uuids two compactions'
-//     boundaries list, a thread past 5,242,880 bytes holding a boundary, which
-//     the model cannot place, so no reading; and at its calls bound,
-//     [threadChainMaxCalls] calls in replies of 1,024 each answered by results
-//     of other ids, [sandbox.MaxBridgeCalls] of its calls asked, a reading;
-//   - THE COINCIDENT WORST: the reading's worst line, of the smallest results,
-//     after the thread at the records bound, so the reading decodes it beside
-//     the model at both its bounds, before the line passes them: no reading.
+//	[GOGC=10] GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkAReadingAtItsBounds$/^<case>$' -benchtime 1x -benchmem
 func BenchmarkAReadingAtItsBounds(b *testing.B) {
 	const (
 		line     = 2053           // a real main thread's average line, probe P6
@@ -138,9 +75,8 @@ func BenchmarkAReadingAtItsBounds(b *testing.B) {
 			ask, plain, gzipped := benchArchive(b, file, bc.write)
 			archive := sandbox.SessionArchive{Harness: ClaudeCodeName, SessionID: ctSession,
 				Format: claudeArchiveFormat, Version: holdingsWriterFloor}
-			// AN ASK A READING TAKES, as a relaunch's continuing release would
-			// send it: one the reading refuses before it opens anything would
-			// measure nothing.
+			// AN ASK A READING TAKES, as a relaunch's continuing release sends it:
+			// one refused before anything opens would measure nothing.
 			ask.Resumer = hsResumer
 			if err := (ClaudeCode{}).checkHoldings(archive, ask); err != nil {
 				b.Fatalf("the case's ask is refused: %v", err)
@@ -150,8 +86,7 @@ func BenchmarkAReadingAtItsBounds(b *testing.B) {
 			runtime.GC()
 			fmt.Fprintf(os.Stderr, "reading-bench %s: the read starts\n", bc.name)
 			b.ResetTimer()
-			// REPORTED ONCE THE TIMER IS RESET, which deletes every metric
-			// reported before it.
+			// REPORTED AFTER THE RESET, which deletes every metric reported before.
 			b.ReportMetric(float64(plain)/(1<<20), "plain-MiB")
 			b.ReportMetric(float64(gzipped)/(1<<20), "archive-MiB")
 			var got sandbox.SessionHoldings
@@ -177,9 +112,8 @@ func BenchmarkAReadingAtItsBounds(b *testing.B) {
 			}
 			b.StopTimer()
 			fmt.Fprintf(os.Stderr, "reading-bench %s: the read ends\n", bc.name)
-			// WHAT IT HOLDS, held to what the case is built for: a reading that
-			// held less than its case was built to would measure a cheaper
-			// reading than the case names.
+			// WHAT IT HOLDS, held to the case's count: holding less would measure
+			// a cheaper reading than the case names.
 			held, told := 0, ""
 			for _, c := range ask.Calls {
 				if ok, _ := got.Holds(c); ok {
@@ -291,11 +225,10 @@ func benchSessionLines(plain int64, n int, ratio float64) func(*testing.B, *tar.
 		var ask sandbox.HoldingsAsk
 		for i := range lines {
 			id := fmt.Sprintf("toolu_bench%08d", i/2)
-			// EACH RECORD UNDER THE ONE BEFORE IT, the first rooting the
-			// thread, each reply under an id of its own, as a real session
-			// writes them, and each record at a time of its own: the resume
-			// starts from the newest record it can date, and a thread of no
-			// time holds no conversation, so a reading of it holds nothing.
+			// EACH RECORD UNDER THE ONE BEFORE, each reply under an id of its own
+			// and each record at a time of its own, as a real session writes
+			// them: the resume starts from the newest dated record, and a thread
+			// of no time holds nothing.
 			parent := `"` + ctUUID(int(i)+1) + `"`
 			if i == 0 {
 				parent = "null"
@@ -366,8 +299,8 @@ func benchSubagents(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
 		if i > 0 {
 			parent = ctUUID(999 + 2*i)
 		}
-		// EACH CALL'S REPLY UNDER AN ID OF ITS OWN and each record at a time
-		// of its own, as a real session writes them.
+		// EACH CALL'S REPLY UNDER AN ID OF ITS OWN, each record at a time of its
+		// own, as a real session writes them.
 		main.WriteString(benchAt(strings.Replace(ctAssistant(parent, use, hsCallOf(started, claudeToolAgent,
 			hsAgentInput)), `"id":"msg_test"`, `"id":"msg_agent_`+fmt.Sprintf("%04d", i)+`"`, 1), 2*i+1) + "\n")
 		main.WriteString(benchAt(ctResult(use, answer, `[{"tool_use_id":"`+started+`","type":"tool_result",`+
@@ -399,8 +332,8 @@ func benchAt(record string, ms int) string {
 }
 
 // benchLongLegs writes a main thread of 96 Agent calls, each under an id of a
-// mebibyte, which held 97.7 MiB live before the reading kept no id the call-id
-// rule refuses ([holdingsWalk.leg]).
+// mebibyte the call-id rule refuses, so the reading must keep none of them
+// ([holdingsWalk.leg]).
 func benchLongLegs(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
 	var main strings.Builder
 	main.WriteString(ctBrief(ctUUID(1)) + "\n")
@@ -413,9 +346,8 @@ func benchLongLegs(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
 }
 
 // benchLongMetas writes [holdingsMaxAgents] subagents' metadata, each naming
-// the call that started it by an id of 65,000 bytes, which held 65.3 MiB live
-// before the reading kept no id a metadata names that the call-id rule
-// refuses ([subagentMetaOf]).
+// its starting call by an id of 65,000 bytes the call-id rule refuses, so the
+// reading must keep none of them ([subagentMetaOf]).
 func benchLongMetas(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
 	long := strings.Repeat("t", 65000)
 	for i := range holdingsMaxAgents {

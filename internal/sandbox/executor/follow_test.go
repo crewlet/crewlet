@@ -127,8 +127,7 @@ func TestALiveReadingIsTheWholeTextRedactedHoweverItArrives(t *testing.T) {
 }
 
 // A READING OF A LONG STREAM BEGINS AT ITS LAST WINDOW, ON A LINE, and says
-// so: what came before was never read. The stream here is past the cap a whole
-// read refused, which made the live view an error for the rest of the run.
+// so: what came before was never read, even of a stream past a whole read's cap.
 func TestALiveReadingOfALongStreamBeginsAtItsEnd(t *testing.T) {
 	t.Parallel()
 	runner := executor.NewOpenCode()
@@ -167,13 +166,11 @@ func TestALiveReadingOfTheErrorStreamStartsOnALine(t *testing.T) {
 	}
 }
 
-// A LIVE READING READS A KEY BEGUN BEFORE IT AS A KEY. A reading begins at the
-// start of the stream's last window, and a window can open inside a private
-// key's block: read from inside, its BEGIN not in the text, a key is redacted
-// only as far back as a read from its END reaches, and three lines in a row
-// that are not the key's stop that read — the lines above them are published
-// (package redact's doc). So the error stream's reading reads the context
-// before its window as well, never shows it, and shows only what it settles.
+// A LIVE READING READS A KEY BEGUN BEFORE IT AS A KEY. A window can open inside
+// a private key's block, and a key read without its BEGIN publishes its lines
+// above three that part it (package redact's doc); so the error stream's
+// reading reads the context before its window, never shows it, and shows only
+// what it settles.
 //
 // Mutation: begin the reading with no context (the follower never hands
 // pendingText its lead), and the key's lines above the three are shown.
@@ -278,9 +275,8 @@ func TestTwoReadingsOfOneStreamAgree(t *testing.T) {
 
 // A READING IS THE SAME HOWEVER ITS READS FELL. One decoder follows the stream
 // for the whole reading, so a tool call read in one poll is still known when
-// its result lands in a later one, and the text two owners derive from one
-// stream does not depend on where either one's reads happened to fall — which
-// is what lets a viewer continue across an owner move rather than reset.
+// its result lands in a later one, and two owners derive the same text, which
+// lets a viewer continue across an owner move rather than reset.
 //
 // Mutation: take a fresh decoder for every read, and the failed call read a
 // poll after it was made loses its tool's name.
@@ -310,13 +306,10 @@ func TestAReadingIsTheSameHoweverItsReadsFell(t *testing.T) {
 }
 
 // A READING THAT BEGINS INSIDE A LINE LONGER THAN ITS WINDOW DROPS THAT LINE
-// rather than showing its tail as if it were whole. A harness that writes more
-// than a window of stderr with no line break — \r-only progress, a minified
-// blob — and then a credential leaves the first live read landing mid-line;
-// the rest of that line, redacted with none of the text before it, put the
-// tail of the credential on screen with its rule's anchor cut off. The reading
-// now holds the open line until a break arrives and shows only whole lines
-// after it, so the settled text omits the unreadable line.
+// rather than showing its tail as if it were whole: after more than a window
+// of stderr with no break (\r-only progress, a minified blob), a credential's
+// tail redacted without the text before it would show with its rule's anchor
+// cut off. Only whole lines after the next break are shown.
 //
 // Mutation: drop the partialOpen handling (begin starting at the file's end,
 // take showing the rest of the line), and the token's tail shows in clear.
@@ -328,15 +321,15 @@ func TestAReadingInsideAnOverlongLineDropsIt(t *testing.T) {
 	// More than a window (1 MiB) of stderr with no line break at all.
 	noBreak := strings.Repeat("downloading 42% ", 70000) // ~1.07 MiB
 	token := "ghp_" + strings.Repeat("A1b2C3d4", 5)      // 40 body chars: matches the github-token rule
-	// The first read lands with only the token's HEAD written, so its tail —
-	// short enough not to look like a key's body on its own, so nothing else
-	// would hold it back — is what a later read would otherwise show in clear.
+	// The first read lands with only the token's HEAD written: its tail, too
+	// short to look like a key's body alone, is what a later read would
+	// otherwise show in clear.
 	b.Put(p.Err(), noBreak+"Authorization: token "+token[:24])
 	reading := runner.Follow(sandbox.RunHandle{})
 	first := read(t, reading, b)
-	// DROPPED, NOT HELD: nothing will ever show those bytes, so they are not
-	// counted as waiting to settle; the reading says instead that it began
-	// after the stream's start, which is what that line is.
+	// DROPPED, NOT HELD: nothing will show those bytes, so they do not count
+	// as waiting to settle; the reading says instead that it began past the
+	// stream's start.
 	if !first.Front || first.Held != 0 {
 		t.Errorf("inside the overlong line: front %v, held %d; want front and nothing held",
 			first.Front, first.Held)
@@ -356,8 +349,8 @@ func TestAReadingInsideAnOverlongLineDropsIt(t *testing.T) {
 	}
 }
 
-// A READING SHOWS WHAT A CLAUDE RUN IS DOING — the transcript of the stream so
-// far, which under `json` was nothing at all until the run ended.
+// A READING SHOWS WHAT A CLAUDE RUN IS DOING: the transcript of the stream so
+// far, before the run ends.
 func TestALiveReadingShowsARunningClaudeRun(t *testing.T) {
 	t.Parallel()
 	runner := executor.NewClaudeCode()

@@ -11,11 +11,10 @@ import (
 	"time"
 )
 
-// THE THREADS EVERY CASE BELOW READS ARE BUILT RECORD BY RECORD, each keyed as
-// Claude Code writes it and abridged to the keys the model reads, every
-// record's uuid its own (rcUUID) and every record's time its own (rcAt), so a
-// case turns on the ids and the times it states. A record's uuid is its
-// line's number, so a case names a record by its line.
+// THE CASES' THREADS ARE BUILT RECORD BY RECORD, keyed as Claude Code writes
+// them but abridged to the keys the model reads. A record's uuid (rcUUID) is
+// its line's number and its time (rcAt) its own, so a case names a record by
+// its line and turns on the ids and times it states.
 
 // rcUUID is record n's uuid: every record its own first 24 characters, so a
 // retraction names one record alone.
@@ -529,19 +528,16 @@ func TestTheResumeHandsTheChainFromItsLeafRootFirst(t *testing.T) {
 		3: yes(whyChain)}, rcOrder{[]int{1, 2, 3}, allVariants})
 }
 
-// THE LEAF IS THE LAST ROW'S NEAREST TURN RECORD: where no checkpoint moves
+// THE LEAF IS THE LAST ROW'S NEAREST TURN RECORD: with no checkpoint moving
 // it, the resume walks from the nearest user or assistant record up from the
-// last record it keeps a row of, so a stop hook's summary or an attachment
-// written last is no leaf: it is handed after the leaf, a tail of it (THE
-// TAILS). Where that turn record carries no time, which no leaf the resume
-// takes is, and where the thread holds no record at all, the resume finds no
-// conversation and hands nothing, in every variant.
+// last row, so a stop hook's summary or an attachment written last is handed
+// after the leaf, a tail (THE TAILS). A leaf of no time, or a thread of no
+// record, finds no conversation and hands nothing, in every variant.
 //
-// Mutation: start the walk at the last row itself, and the summary and the
-// attachment read as walked; take a turn record of no time for the leaf, and
-// a thread the resume finds no conversation in hands its records; or hand no
-// order of a thread of no record, and its readers cannot tell that every
-// variant hands it nothing.
+// Mutation: start at the last row itself, and the summary and attachment read
+// as walked; take an untimed turn record for the leaf, and its thread hands
+// its records; or hand no order of a thread of no record, and its readers
+// cannot tell that every variant hands nothing.
 func TestTheLeafIsTheLastRowsNearestTurnRecord(t *testing.T) {
 	t.Parallel()
 	for name, last := range map[string]string{
@@ -632,39 +628,17 @@ func TestTheResumeStartsFromACheckpointTheLastRowDoesNotDescendFrom(t *testing.T
 }
 
 // A LAST ROW DESCENDING THROUGH THE CHECKPOINT'S BATCH KEEPS ITS LEAF: where
-// the checkpoint names a record hanging off a batch's result, and the last row
-// descends through another result of that batch's reply, the resume walks from
-// the last row; so where the reply was written a record a call, and the last
-// row descends through another of its records, below the checkpoint's call's
-// or above it; and so where the checkpoint names a hook's record of one call
-// of the reply, its toolUseID naming the call, where the reply made more than
-// one, and not where it made that one alone. Nor where the results the
-// checkpoint hangs off answer none of the reply's calls, though another of
-// its results lies under the last row, or where the one under the last row
-// answers only the checkpoint's call again. The walk up from the last row
-// takes a record of the reply's below another as one beside it only while
-// the records between are of its run, so a prompt between them leaves the
-// checkpoint's leaf; the reply's run up from it goes on over its result, so
-// a last row below the reply's earlier record keeps its leaf; and a
-// compaction's boundary hangs off no reply, so a checkpoint naming one leads
-// to the nearest turn above it rather than through its batch, and is handed
-// after the leaf, a tail of it. Whichever leaf the resume takes, the hook's
-// records the checkpoint names hang off the batch's reply or a result of it,
-// and are handed with it (THE RECOVERY).
+// the checkpoint hangs off one result, record or hook's record of a reply's
+// batch and the last row descends through another, the resume walks from the
+// last row, a hook's record (its toolUseID naming the call) counting only for
+// a reply of more than one call; not where the checkpoint's results answer
+// none of the reply's calls, or the last row's answers only the checkpoint's
+// call again. A prompt ends a reply's run, the run goes on over its result, and a
+// boundary hangs off no reply, so a checkpoint naming one is a tail of the
+// nearest turn above it. The checkpoint's hook records are handed (THE RECOVERY).
 //
-// Mutation: skip the descent through the batch, and the resume starts from
-// the checkpoint in the first; skip the reply's other record below or above
-// the checkpoint's call, and it does in the next two; read the hook's reply
-// as one of more calls where it made one, and the hook's case of one call
-// keeps the last row; read the checkpoint's results as answering a call of
-// the reply whatever their ids, and the case of none keeps it too; take the
-// result under the last row for one of another call whatever it answers, and
-// so does the case of a call answered again; keep the mark of a record beside
-// the reply's past a prompt, and the case of a prompt between walks from the
-// last row; run the reply's run up over its own records alone, and the case
-// of its run over a result walks from the checkpoint; or take a compaction's
-// boundary for a record that hangs off a reply, and the case of a boundary
-// walks from the last row.
+// Mutation: drop or loosen any one of these conditions, and the case named for
+// it walks from the other leaf.
 func TestALastRowDescendingThroughTheCheckpointsBatchKeepsItsLeaf(t *testing.T) {
 	t.Parallel()
 	batch := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1", "x2")),
@@ -742,25 +716,17 @@ func TestALastRowDescendingThroughTheCheckpointsBatchKeepsItsLeaf(t *testing.T) 
 }
 
 // A LEAF ONLY AN UNSEEN FLAG MOVES IS CANNOT TELL: where the checkpoint is a
-// reply that made a call and the last row descends past it from a later
-// reply that says something, 2.1.322 with tengu_sorted_metcalfe on walks from
-// the last row and every other variant from the checkpoint, so a record one
-// leaf hands and the other does not is cannot tell (whyLeafFlag), each order
-// handed with its variants, and no leaf is every variant's. A near miss of
-// each of q1t's clauses is definite, one order: the later reply no later than
-// the checkpoint, or written at its own time, one that says nothing, a record
-// hanging off the checkpoint, and a turn hanging off the last row. The
-// checkpoint's run is its own: q1t asks whether the last row descends to what
-// lies above the records of the checkpoint's id it hangs from, so a
-// checkpoint on a reply's second record splits the leaf as one on its first
-// would.
+// reply that made a call and the last row descends past it from a later reply
+// that says something, 2.1.322 with tengu_sorted_metcalfe on walks from the
+// last row and every other variant from the checkpoint (q1t), so a record one
+// leaf hands and the other not is cannot tell (whyLeafFlag), each order handed
+// with its variants, and no leaf is every variant's. A near miss of each
+// clause is one order. q1t asks whether the last row descends to what lies
+// above the checkpoint's whole run of its id, so a checkpoint on a reply's
+// second record splits as one on its first would.
 //
-// Mutation: read q1t in no variant, or drop any one of its clauses, and a case
-// here hands one order where the flag hands two, or two where it hands one;
-// read a time as later where it is the same, and the near miss written at the
-// checkpoint's time hands two; or stop at the checkpoint's own parent rather
-// than above its run, and the checkpoint on a reply's second record hands
-// one.
+// Mutation: read q1t in no variant, drop a clause, read a same time as later,
+// or stop at the checkpoint's own parent, and a case hands one order or two.
 func TestALeafOnlyAnUnseenFlagMovesIsCannotTell(t *testing.T) {
 	t.Parallel()
 	head := []string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), rcCheckpoint(2)}
@@ -800,17 +766,15 @@ func TestALeafOnlyAnUnseenFlagMovesIsCannotTell(t *testing.T) {
 }
 
 // A NEWER ROW UNDER THE LAST ROW LEADS WHERE NO CHECKPOINT NAMES A LEAF: where
-// the newest row is not the last, the resume starts from the record of the
-// latest time whose walk reaches the last row, the later in the file on a
-// tie; and not where any checkpoint carries leafUuid, null among it. The
-// newest row is the first row of the latest time, so a last row written at
-// the newest row's time leaves the newest row leading.
+// the newest row is not the last, the resume starts from the latest-timed
+// record whose walk reaches the last row, the later in the file on a tie; not
+// where any checkpoint carries leafUuid, even null. The newest row is the
+// first of the latest time, so a last row written at its time leaves it
+// leading.
 //
-// Mutation: ignore the newer row, and the first case walks from the last row;
-// take the earlier on a tie, and the second walks from the other; apply the
-// rule though a checkpoint carries leafUuid, and the third walks from the
-// newer row; or take the last row of the latest time for the newest, and the
-// last case walks from the last row.
+// Mutation: ignore the newer row, take the earlier on a tie, apply the rule
+// past a leafUuid, or take the last row of the latest time for the newest, and
+// the case naming it walks from another record.
 func TestANewerRowUnderTheLastRowLeadsWhereNoCheckpointNamesALeaf(t *testing.T) {
 	t.Parallel()
 	newer := []string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("a")),
@@ -837,21 +801,16 @@ func TestANewerRowUnderTheLastRowLeadsWhereNoCheckpointNamesALeaf(t *testing.T) 
 	sameTime.expectLeaf(t, "a last row written at the newest row's time", 3)
 }
 
-// A PARENT NAMING NO RECORD IS FOLLOWED BY THE NEAREST EARLIER TIMESTAMP: the
-// walk takes, for a parent it cannot follow, the record of the latest time at
-// or before the current one's, at most 5,000 ms before it, of the same
-// isSidechain as written, not walked, the first in the file on a tie,
-// whether written before or after; and stops where none is. A parent of a
-// string that is no uuid is no root: it names no record, so the walk takes
-// the fallback there too.
+// A PARENT NAMING NO RECORD IS FOLLOWED BY THE NEAREST EARLIER TIMESTAMP: for
+// a parent it cannot follow, the walk takes the latest-timed record at or
+// before the current one's and at most 5,000 ms before it, of the same
+// isSidechain as written, not walked yet, the first in the file on a tie,
+// written before or after; and stops where none is. A parent string that is
+// no uuid is no root: it takes the fallback too.
 //
-// Mutation: take 4,999 ms for the window, and the record 5,000 ms before is
-// not taken; take only a record strictly before, and the one of the same
-// time is not; ignore isSidechain, and a record that carries none is taken
-// for one that carries false; take the last on a tie, and the other record
-// is; take a record walked already, and the walk turns round its loop; or
-// read a parent of a string that is no uuid as a root, and the walk stops at
-// its record.
+// Mutation: a 4,999 ms window, strictly earlier times, ignoring isSidechain,
+// the last on a tie, a walked record, or reading a non-uuid parent as a root,
+// and the case naming it reads otherwise.
 func TestAParentNamingNoRecordIsFollowedByTheNearestEarlierTimestamp(t *testing.T) {
 	t.Parallel()
 	prompt := rcPrompt(0, 1, 0)
@@ -895,50 +854,18 @@ func TestAParentNamingNoRecordIsFollowedByTheNearestEarlierTimestamp(t *testing.
 	}
 }
 
-// A RECOVERED RECORD IS PLACED BY ITS PLACE IN THE FILE: the recovery hands,
-// beside a reply on the walk, its other records and the results whose parent
-// is one of them, each among the walked records of the reply's window (from
-// the reply past its last record on the walk and on over the results and the
-// records that hang off it) by its place in the file, the rest at the
-// window's end, and windows that overlap merged: a reply's second record and
-// a result written after the window's walked result; a record of the reply
-// on another branch, placed after the reply's first walked record though
-// written before it; two replies' windows overlapping, merged; a result
-// written after every record of its window, at the window's end; a window's
-// records in the order of the file, whatever order the recovery met them in;
-// a meta user record, part of a reply's run, carrying its window on past it;
-// and a compaction's boundary, no part of one, ending the window before it.
+// A RECOVERED RECORD IS PLACED BY ITS PLACE IN THE FILE: the recovery hands a
+// walked reply's other records and the results under them by file position
+// among the walked records of the reply's window (the reply through its last
+// walked record and what hangs off that), the rest at the window's end,
+// overlapping windows merged; a meta user record carries a run on, a
+// compaction's boundary ends it. A WINDOW OPENS WHEREVER THE RECOVERY RECOVERS
+// OR HANGS A RECORD: a hook's record under a walked system record lands right
+// after it, one under the reply's record or result by file position; none
+// hangs under a walked prompt, past two children not met, across isSidechain,
+// under a reply of no call, or at a walked record: it is off the conversation.
 //
-// A WINDOW OPENS WHEREVER THE RECOVERY RECOVERS OR HANGS A RECORD, so a window
-// the hanging alone opens merges with the one before it and moves where that
-// one's records land: a hook's record under a walked system record of a reply
-// that made a call, one under the reply's own record, and one under the
-// reply's walked result, each hung, handed (whyHookChain), and opening the
-// reply's window; the first lands right after the system record, ahead of the
-// result the earlier window recovered, and the other two by their place in
-// the file. The hanging hangs nothing, and opens no window, where the hook's
-// record hangs under a walked prompt, has two children not met, is of another
-// isSidechain as written, hangs under a reply that made no call, or is a
-// record walked already: what it does not hang is off the conversation.
-//
-// Mutation: place a window's records after it, and the reply's other record
-// comes after its result; stop a window at its reply's last record, and the
-// later result comes before the walked one; or keep two overlapping windows
-// apart, and their records are placed twice over. Leave a window's records in
-// the order the recovery met them, and a result comes after the record of
-// its reply written after it; read a meta user record as no part of a
-// reply's run, and the result recovered beside it lands before that record;
-// or read a compaction's boundary as part of one, and the result lands after
-// the boundary. Open a window only where it
-// recovered a record, and the result the window before it recovered lands
-// before the second reply's records in the first two hanging cases; hang
-// nothing under the reply's results, and it does in the third; or hang under
-// a walked record that hangs off no reply, past a record with two children
-// not met, from one of another isSidechain, under a reply that made no call,
-// or from a record walked already, and a window opens where the resume opens
-// none, moving that result after them. Place a record hung under a walked
-// record by its place in the file, and the first hanging case's lands after
-// the recovered result.
+// Mutation: loosen any rule above, and the case naming it hands another order.
 func TestARecoveredRecordIsPlacedByItsPlaceInTheFile(t *testing.T) {
 	t.Parallel()
 	// hooked is a prompt, two replies whose windows overlap, each of which
@@ -1038,36 +965,18 @@ func TestARecoveredRecordIsPlacedByItsPlaceInTheFile(t *testing.T) {
 	}
 }
 
-// A HOOK CHAIN UNDER A CALLING REPLY IS RECOVERED WITH IT: where a record of a
-// reply on the walk made a call, the recovery hangs off it what pye hands, a
-// run of records that hang off a reply each under the one before, and hands
-// them (whyHookChain): under the reply's own record, placed by its place in
-// the file among what the window recovered; under a result recovered beside
-// the reply, as a batch's hooks write their records under its first result
-// when the session is cut before the next request; under the reply's walked
-// result, as a batch's hooks write them when cut so (probe R r6 cut after its
-// token reminder); and under a walked record of the window that hangs off a
-// reply, right after that record though written after the next reply. Two
-// windows that hang under one walked record join what they hung, the earlier's
-// first, each record hung once: the first window's record is met at once, and
-// a record whose second child was not met when the first window looked hangs
-// in the second, whose recovery met it. The recovery hangs nothing where the
-// hook's record has two children not met, where it is of another isSidechain
-// as written than the record it hangs under, or where the reply made no call:
-// those are off the conversation.
+// A HOOK CHAIN UNDER A CALLING REPLY IS RECOVERED WITH IT: where a walked
+// reply made a call, the recovery hangs off it what pye hands, a run of
+// records each under the one before (whyHookChain): under the reply's own
+// record, by file position in the window; under a result recovered beside it
+// or its walked result, as a batch's hooks write them when the session is cut
+// before the next request; and right after a walked record of the window that
+// hangs off a reply. Two windows hanging under one walked record join, the
+// earlier's first, each record once, one of two children in the window that
+// met the second. Nothing hangs past a record of two children not met, across
+// isSidechain as written, or under a reply of no call.
 //
-// Mutation: hang a record past a branch of two, and the hook's record with two
-// children is handed; compare sides as `?? false`, and the one of no
-// isSidechain is; hang under a reply that made no call, and its hook's record
-// is; hang nothing under the reply's results, and the batch's pairs are not
-// hung but off the conversation, or the leaf's tails; place what hangs under a
-// reply's record after what the window recovered, and the hook lands after the
-// result written after it; place what hangs under a walked record by its place
-// in the file, and it lands after the walked record that follows it; join two
-// windows' lists the later's first, and the second window's records come first;
-// meet no record hung at once, and the first window's record is handed twice;
-// or take a record's children once a thread, and the record whose second child
-// the second window met hangs in neither.
+// Mutation: loosen any rule above, and its case hands another answer.
 func TestAHookChainUnderACallingReplyIsRecoveredWithIt(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -1121,23 +1030,17 @@ func TestAHookChainUnderACallingReplyIsRecoveredWithIt(t *testing.T) {
 	}
 }
 
-// A RESULT TIED TO ITS CALL BY ID IS CANNOT TELL: a result whose ids are not
-// all of calls its parent made is one tengu_foamy_spring may hang under
-// another record (its sourceToolAssistantUUID's, or another reply that made
-// one of its calls) and recover with it, where that record is in the thread,
-// so the whole thread is cannot tell (whyResultByCall); and one with neither
-// is placed by its parent alone, definite. A result is held to its own
-// parent's calls alone, so one under a later reply, of a call an earlier
-// reply made and had answered, is cannot tell too; and so is one whose
-// parent, a reply of no id, made one of its calls, where a reply of an id
-// made that call too: with the flag on the resume hangs it under that reply,
-// the one its map of calls keeps, and recovers it with it.
+// A RESULT TIED TO ITS CALL BY ID IS CANNOT TELL (whyResultByCall): a result
+// whose ids are not all of its own parent's calls is one tengu_foamy_spring
+// may hang under another record in the thread (its sourceToolAssistantUUID's,
+// or another reply that made one of its calls) and recover there; one with
+// neither is placed by its parent, definite. So a result under a later reply,
+// of a call an earlier one made, is cannot tell, and so is one whose parent of
+// no id made its call where a reply of an id made it too, since the flag's map
+// of calls keeps that reply.
 //
-// Mutation: read the flag as off, and a result it may hang elsewhere is
-// placed under its parent; hold a result to the calls of every reply met
-// before its parent, and the one under the later reply reads as answered; or
-// read only the first reply that made a call, and the result whose parent
-// made it reads as placed by its parent.
+// Mutation: read the flag as off, hold a result to every earlier reply's
+// calls, or read only the first reply of a call, and a case reads as placed.
 func TestAResultTiedToItsCallByIDIsCannotTell(t *testing.T) {
 	t.Parallel()
 	sourced := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1")),
@@ -1163,24 +1066,16 @@ func TestAResultTiedToItsCallByIDIsCannotTell(t *testing.T) {
 
 // A RETRACTION TAKES BACK WHAT THE RECORDS IT HANDS NAME: a refusal's fallback
 // on the conversation drops the reply it names in both releases
-// (whyRetracted); a retry's meta user record, and a reply's own list, drop it
-// in 2.1.322 alone, which reads the list off user and assistant records, so it
-// is cannot tell (whyRelease), each release's order handed; a system record
-// named is never dropped; a list on a record off the conversation drops
-// nothing, and one on a record the recovery hangs or the tails hand drops what
-// it names: a retry hung off a reply's result, in 2.1.322 alone, and a
-// refusal's fallback under the leaf, which names the leaf itself, in both; and
-// an entry drops by its first 24 characters, so one of 24 or 30 drops its
-// record, and one of 23 nothing.
+// (whyRetracted); a retry's meta user record or a reply's own list drops it in
+// 2.1.322 alone, which reads lists off user and assistant records, so it is
+// cannot tell (whyRelease), each release's order handed. A system record named
+// is never dropped; a list off the conversation drops nothing, one the
+// recovery hangs or the tails hand does (a fallback under the leaf naming the
+// leaf); an entry drops by its first 24 characters (24 or 30 drop, 23 not).
 //
-// Mutation: read no entry of 24 characters, or none shorter than a uuid, and
-// the record it names is handed; read the names off every record, and the
-// list off the conversation drops; read no reply's list, and the reply's own
-// drops nothing; read the names off the walk and the recovery's records alone,
-// and the leaf the fallback under it names is handed; read no meta mark, and
-// the retry hangs off nothing, so what it names is handed; drop a system
-// record too, and the one named is not handed; or read 2.1.310's names as
-// 2.1.322's, and the retry's record reads as dropped in both.
+// Mutation: loosen any rule above (entry length, which records' lists count,
+// the meta mark, system records, 2.1.310's names read as 2.1.322's), and the
+// case naming it hands another answer.
 func TestARetractionTakesBackWhatTheRecordsItHandsName(t *testing.T) {
 	t.Parallel()
 	prompt, reply := rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("refused"))
@@ -1223,34 +1118,18 @@ func TestARetractionTakesBackWhatTheRecordsItHandsName(t *testing.T) {
 		rcOrder{[]int{1, 4, 5, 6}, allVariants})
 }
 
-// A MALFORMED ATTACHMENT IS NOT HANDED IN THE MAIN THREAD: after its
-// retraction filter the resume drops every attachment of its list whose
-// payload is not of its type's shape (whyMalformedAttachment), and that record
-// alone, so the reply under it stays on the walk: a hook's success of no
-// string content, a hook's additional context of an entry that is no string,
-// a skill listing of 4,097 names and a task reminder of an entry that is a
-// list are not handed, and each of its shape is, a skill listing of 4,096
-// names and one whose name is 512 UTF-16 code units in 1,024 bytes among
-// them. It drops a record the recovery hung, of a batch's pair under the
-// reply's walked result, and a tail, a Stop hook's success under the turn's
-// last reply, the record under each staying where it was; it drops alike in
-// every variant, so an attachment only q1t's leaf walks to is handed under
-// none; and it runs after the filter, so an attachment 2.1.322's filter takes
-// and 2.1.310's drop takes is not handed in either, for the filter's reason.
+// A MALFORMED ATTACHMENT IS NOT HANDED IN THE MAIN THREAD: after the
+// retraction filter the resume drops each attachment whose payload is not of
+// its type's shape (whyMalformedAttachment; a list is no object), that record
+// alone, so what hangs under it stays on the walk; the bounds are a skill listing's 4,096 names and
+// a name's 512 UTF-16 code units (not bytes). It drops what the recovery hung
+// and tails alike, in every variant (so one only q1t's leaf reaches is handed
+// in none), and after the filter, so what both take answers the filter's
+// reason.
 //
-// Mutation: skip the drop, and each malformed attachment is handed, the one
-// 2.1.322's filter takes split by release and the one q1t's leaf walks to by
-// the flag; answer what it takes cannot tell, and each is; drop in one
-// release alone, and each malformed attachment splits by release; skip it
-// in the variants q1t moves the leaf in, and the one q1t's leaf walks to
-// splits by the flag; run it over the walk and the recovery's records alone,
-// and the Stop hook's success is handed; let it take what the filter took,
-// and the attachment 2.1.322's filter takes answers the drop's reason; read an
-// object as anything typeof calls one, and the task reminder of a list is
-// handed; take any content for a hook's success, or any entry for its
-// additional context, and the malformed one is handed; let a skill listing
-// hold one name more, and the one of 4,097 is handed; or count a name's bytes
-// rather than its UTF-16 code units, and the one of two-byte runes is not.
+// Mutation: skip the drop or run it in one release, some variants or on the
+// walk alone; loosen a shape, a bound or the code-unit count; or let it take
+// what the filter took, and the case naming it hands another answer.
 func TestAMalformedAttachmentIsNotHandedInTheMainThread(t *testing.T) {
 	t.Parallel()
 	// thread is a call (2), its result (3), an attachment (4) of payload under
@@ -1456,21 +1335,16 @@ func rcTailed(records int) []string {
 	return lines
 }
 
-// A LIST THE RESUME SPREADS PAST A CALL'S ARGUMENTS IS CANNOT TELL: a walk of
-// more than threadChainMaxSpread records whose recovery spreads it is
-// whySpread, one of that many records not, as are more records than that hung
-// under one walked record, which the recovery spreads too, and that many not;
-// and so are more tails than that under the leaf, which the walk by breadth
-// spreads, and that many not. A subagent's own load spreads its walk alike,
-// and its thread then hands no own leaves, though the chain chose its leaf
+// A LIST THE RESUME SPREADS PAST A CALL'S ARGUMENTS IS CANNOT TELL (whySpread):
+// a walk the recovery spreads, records hung under one walked record, or tails
+// under the leaf (which the walk by breadth spreads), each past
+// threadChainMaxSpread, while that many is read. A subagent's own load spreads
+// its walk alike and then hands no own leaves, though the chain chose its leaf
 // among them before the recovery.
 //
-// Mutation: drop the walk's spread check, and the long walk reads; or take
-// its bound for past it, and the walk of threadChainMaxSpread records is
-// cannot tell. Drop the hung records' spread check, and the long hung chain
-// reads. Drop the tails' spread check, and the many tails read, or take its
-// bound for past it, and that many are cannot tell. Answer OwnLeaves of a
-// thread cannot tell, and the subagent's long walk hands its leaf.
+// Mutation: drop any one spread check, or take its bound for past it, and that
+// case reads otherwise; answer OwnLeaves of a cannot-tell thread, and the
+// subagent's long walk hands its leaf.
 func TestAListTheResumeSpreadsPastACallsArgumentsIsCannotTell(t *testing.T) {
 	t.Parallel()
 	rcChain(t, "", rcLongChain(threadChainMaxSpread+1)...).expectCannotTell(t, "a walk past a call's arguments",
@@ -1524,110 +1398,17 @@ func rcBytesAt(t *testing.T, line string, within bool) string {
 }
 
 // A THREAD PAST FIVE MEBIBYTES IS READ AS BOTH ITS LARGE-FILE READERS READ IT:
-// the load hands a thread of more than 5,242,880 bytes what the dispatch, or
-// with CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP the prune, chooses of its lines by
-// their bytes, so the chain answers for one past the bound only where it is
-// path-free, every reader of either release handing the load what the small
-// path does: then it answers as the same thread under the bound, and AnySize
-// holds of both. T4's shape is, its parallel results recovered; so is a thread
-// whose record before the last holds a sidechain's bytes, which move no
-// reader's start; one whose line of no record carries `"parentUuid":` only
-// below its depth one; one whose readers key a record by its own uuid among
-// others, the one at depth one of two before their times, whether it is the
-// first of them or the last, or the last of those before their times where
-// none is at depth one; one whose abandoned prompt hangs off an attachment,
-// which hands it on alone; one whose reply hangs off a walked result, X_e
-// reading it as part of the reply above that result; and one holding a line
-// the layer refuses that yields the load nothing and that no reader takes for
-// a slot by its bytes: one value that is no object, a line a later write tore
-// into, an object of no kind the load reads; and one holding a line whose name
-// a decode reads as `parentUuid` and no reader's bytes read as that key, the
-// name escaped or a space before its colon. Every other thread past the bound
-// is whyLargeFile, and under it answers as its small path does with AnySize
-// false: one whose reply of an id hangs off another branch, whose abandoned
-// prompt hangs off a result off the walk, whose result is written before the
-// walked call it answers, or whose result hangs off a prompt an attachment
-// hands on alone, none of which the dispatch from the last record alone
-// reaches; one holding a compaction's boundary; a refused line a reader may
-// take for the slot it starts from, the record a torn write put in it keying
-// it, and one that says it is a sidechain's right after its parent, which a
-// reader may still walk through in a main thread, held so conservatively; a
-// line of no record that carries `"parentUuid":` at its depth one,
-// past a string holding a brace and an escaped quote; a record whose line does
-// not begin `{"parentUuid":`, its keys in another order, or another key's
-// value where the parent's would be; a last record holding a sidechain's bytes
-// in its first 256 bytes, or past them, where the prune alone reads them, or in
-// a call's input under a key whose name ends in them through an escaped quote,
-// which no decode reads as the mark; a record keyed by the uuid after such a
-// key ending in `uuid`'s bytes, before a time, its own uuid before none; a
-// refused line of one list whose object carries `"parentUuid":`, or whose
-// value, a string, spells the key, each at its depth one to a reader of bytes
-// and, to a decode, no key of the head a record's own object holds; a
-// parent written with an escape, or written twice, null first; a uuid the
-// readers key otherwise than the decode; a branch only the walk from the
-// checkpoint reaches, which the prune never makes; a parent naming no record
-// on the walk, which ends the prune's walk short of the record the small
-// path's fallback walks on to; and a reply only the prune's group reads as
-// part of its parent's, under a result written before its own call. A thread
-// of exactly 5,242,880 bytes is read as its small path reads it. A subagent's
-// thread whose every record says it is a sidechain's right after its parent,
-// and that holds no line that binds it to the small path, is path-free, a
-// branch the main thread's dispatch from the last record would not reach among
-// it, since no reader has a slot to start from there: it answers alike under
-// the bound, at it and past it, holding a line a torn write left, or a line of
-// no record, that says it is a sidechain's right after its parent, a record's
-// or null, as every record there does. Any other is whyLargeFile past the
-// bound, and answers as its small path does under it and at it, AnySize
-// false: one whose torn line's head names its parent by bytes of no
-// lowercase canonical uuid's form, held so conservatively, as a record's
-// head is; one whose record says so after another key, or that holds a
-// boundary, a line whose JSON fails that a reader takes for its start, a torn
-// line that says it is a sidechain's after another key, held so
-// conservatively as a record that does is, or a line of no record that
-// carries `"parentUuid":` at its depth one. A refused line handed with no
-// bytes of its Size binds the thread.
+// past 5,242,880 bytes the load hands what the dispatch (or the prune, under
+// CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP) chooses of its lines by their bytes,
+// so the chain answers there only for a path-free thread, which every reader
+// of either release hands as the small path does, AnySize true (the first
+// table); any other is whyLargeFile past the bound, AnySize false (the
+// second), and a thread of exactly the bound reads as small. A subagent's
+// thread whose every record is marked a sidechain's right after its parent
+// gives no reader a slot to start from, so is path-free unless a line binds
+// it (the third). Facts are read off a line's bytes, never a decode's names.
 //
-// Mutation: take the bound itself for past it, and the thread of 5,242,880
-// bytes is cannot tell; drop the dispatch's coverage, and the threads it never
-// reaches read; reach a record off the walk under a walked parent written
-// after it, and the early result reads; walk from the checkpoint too, and the
-// branch only that walk reaches reads; read the prune's group for the
-// dispatch's, and the reply only it reads reads; pass no group down, or read a
-// reply's group off its parent, and the reply under the walked result costs
-// the thread; hand nothing off a UF parent, and the prompt under the
-// attachment costs it, or hand that prompt's children on, and the result under
-// it reads; drop any one byte condition (the boundary, the refused line, the
-// key of a line of no record, the line's head, the parent as written, the uuid
-// the readers key by, the last record's sidechain bytes, a subagent's mark),
-// and the thread holding it reads; read the key of a line of no record
-// anywhere, or only as the prefix, or with no string or escape read, and the
-// nested key costs the thread, or the depth-one one does not; read the
-// sidechain's bytes off every record, or off the first 256 bytes alone, and
-// the record before the last costs the thread, or the far bytes do not; key a
-// record by the first of its uuids before their times, or by the last of them
-// where one is at depth one, or by the first of them where none is, and the
-// record's own uuid is missed; read a walk that meets a parent naming no
-// record as handing the load every line, as the dispatch alone does, and the
-// record above it reads; read a refused line, or a line of no record carrying
-// the key, as binding a main thread alone, and the subagent's thread holding
-// one reads; hold a subagent's thread to the main thread's dispatch from its
-// last record, and its branch costs it the bound; read every refused line as
-// binding, whatever its bytes, and the main threads holding one of no slot,
-// and the subagent's threads holding a torn line that says it is a
-// sidechain's, cost the bound; trust a refused line handed with no bytes, or
-// fewer than its Size, and that thread is path-free; spare a sidechain's head
-// in a main thread too, and the main thread holding one reads; read such a
-// head's parent as null alone, or as a uuid alone, and the torn line under the
-// other costs its thread the bound; read a sidechain's mark anywhere in the
-// line, and the torn line marked after another key reads; take a head's
-// parent of any 36 bytes, and the torn line under an uppercase uuid reads;
-// or hold a line of no record to the key alone in a subagent's thread, and
-// the one headed as a sidechain's costs its thread the bound; or read these
-// facts off a decode's names rather than the line's bytes (a key read as the
-// name it decodes to, an escaped quote passed over), and the threads holding a
-// key that ends in a mark's bytes, a uuid's key, or a refused line that spells
-// parentUuid read as path-free, and those whose name only a decode reads as
-// parentUuid cost the bound.
+// Mutation: loosen or widen any byte condition, and its case changes table.
 func TestAThreadPastFiveMebibytesIsReadAsBothItsLargeFileReadersReadIt(t *testing.T) {
 	t.Parallel()
 	past := claudeResumeLargeFile + 1
@@ -1818,7 +1599,7 @@ func TestAThreadPastFiveMebibytesIsReadAsBothItsLargeFileReadersReadIt(t *testin
 	// sidechain's right after its parent, and hands both. tore is line, a
 	// record of the subagent's, cut inside its key at, and the record a later
 	// write put after it, of uuid 8: a line whose JSON fails, as a torn write
-	// leaves one (probe P2's run d), which says what line said first.
+	// leaves one, which says what line said first.
 	agent := []string{rcOwn(t, rcPrompt(0, 1, 0)), rcOwn(t, rcReply(1, 2, "msg_a", 1000, rcSaid("done")))}
 	tore := func(line, at string) string {
 		return line[:strings.Index(line, at)+len(at)-3] + rcOwn(t, rcMeta(2, 8, 1600))
@@ -1905,19 +1686,16 @@ func TestAThreadPastFiveMebibytesIsReadAsBothItsLargeFileReadersReadIt(t *testin
 	}
 }
 
-// A LINE THAT IS NO RECORD IS SKIPPED ONLY WHERE THE LOAD SKIPS IT: a line
-// whose JSON fails before any whole value, one whole value that is no object,
-// and an object of a kind the load reads nowhere a resume looks are skipped,
-// the thread answering as it does without them; every other line the layer
-// refuses may yield the load a value, so the thread is cannot tell (whyLine):
-// a kind the load reads with a head in no shape, a content replacement's among
-// them, a value cut at the break, a value followed by more, a line led by a
-// NUL or a byte order mark, a value nested past the decode's depth, a fault
-// no kind names, and none at all.
+// A LINE THAT IS NO RECORD IS SKIPPED ONLY WHERE THE LOAD SKIPS IT: JSON that
+// fails before any whole value, a whole value that is no object, and an object
+// of a kind the load reads nowhere a resume looks are skipped; any other
+// refused line may yield the load a value, so the thread is cannot tell
+// (whyLine): a read kind's head in no shape, a value cut at the break or
+// followed by more, a NUL or byte order mark first, nesting past the decode's
+// depth, a fault no kind names, or none.
 //
-// Mutation: read every refused line as skipped, and the lines the load may
-// read pass as none; or read none as skipped, and the lines it skips cost the
-// thread its model.
+// Mutation: read every refused line as skipped, or none, and one table's
+// cases read otherwise.
 func TestALineThatIsNoRecordIsSkippedOnlyWhereTheLoadSkipsIt(t *testing.T) {
 	t.Parallel()
 	brief := ctBrief(ctUUID(1))
@@ -1957,37 +1735,18 @@ func TestALineThatIsNoRecordIsSkippedOnlyWhereTheLoadSkipsIt(t *testing.T) {
 	}
 }
 
-// A THREAD PAST THE CHAIN'S BOUND IS CANNOT TELL: the chain files
+// A THREAD PAST THE CHAIN'S BOUND IS CANNOT TELL (whyBound): the chain files
 // threadChainMaxRecords records, retraction prefixes and uuids the newest
-// boundary that names what it kept lists, and threadChainMaxCalls call ids;
-// a thread at each bound is read, and one past it, by a prefix, a listed uuid,
-// a call or a record more, is whyBound; a boundary's list counts in place of
-// the one before it, never beside it, and the boundary itself with it, so a
-// boundary at the bound in place of a longer list is read, and one past it
-// with no list to replace, whether it names what it kept or not, is whyBound;
-// and past the bound See still hands back each user and assistant message,
-// with pastChainBound, which answers whyBound. THE ROOM COMES BEFORE
-// THE SHAPE, as the lists are read in order: a list whose prefixes, or whose
-// entries, pass the bound before an entry in no shape is whyBound, and one in
-// no shape within it is whyRetractionShape or whyPreservedShape; a retraction's
-// entries that name no prefix take no room; and a list of no anchor is in no
-// shape however many entries it holds, its anchor read before them.
+// newest listing boundary names, and threadChainMaxCalls call ids; a thread at a
+// bound reads. A boundary's list counts in place of the one before, itself
+// with it. Past the bound See still hands back each message, pastChainBound.
+// THE ROOM COMES BEFORE THE SHAPE: a list past the bound before an entry in
+// no shape is whyBound, within it whyRetractionShape or whyPreservedShape;
+// retraction entries naming no prefix take no room; a list's anchor is read
+// before its entries, so a list of none is in no shape at any length.
 //
-// Mutation: take a bound's own count for past it, and the thread at it is
-// cannot tell; count no prefixes, no listed uuids or no calls, or no record
-// past a bound its prefixes filled, and the thread past one reads; hold a list
-// to no room, or count only its entries that are uuids, and the list of none
-// past the bound by itself reads; count an earlier boundary's list beside the
-// later one's, and the two lists of half the bound pass it; hold a boundary's
-// own room before the list it replaces is released, and the boundary at the
-// bound passes it; let a boundary pass the bound, and the boundary past it
-// reads; hand back no message past the bound, and the reader that counts
-// what lies past it counts nothing; judge a list's shape before its room, and
-// each list in no shape past the bound is whyRetractionShape or
-// whyPreservedShape; count a retraction's every entry against the room, and
-// the list whose entries naming nothing pass it is cannot tell; or count a
-// list's entries before its anchor is read, and the list of no anchor past
-// the bound is whyBound.
+// Mutation: loosen any count or order above, and the case naming it reads
+// otherwise.
 func TestAThreadPastTheChainsBoundIsCannotTell(t *testing.T) {
 	t.Parallel()
 	prompt := rcPlain[0]
@@ -2144,58 +1903,18 @@ func TestEachDistinctOrderIsHandedOnce(t *testing.T) {
 	}
 }
 
-// A RELINK HANDS THE KEPT RECORDS UNDER ITS ANCHOR: where the last compaction's
-// boundary names the records it kept, by a list, a segment or both alike, the
-// resume chains them under the boundary's anchor, the compaction's summary as
-// both releases write it or the boundary itself as a partial compaction does,
-// hangs the anchor's other children from the last of them, and deletes every
-// record written before the boundary that it did not keep (whyRelinkDeleted).
-// So it hands probe S's two runs and probe T's T9media: a head a trim left
-// naming no record until the relink hangs it, whole turns deleted, and each S
-// run's last Stop hook's pair after the leaf, its tails. Where it
-// deleted a user record's parent, it hangs that record from the last kept one
-// too; an attachment keeps that parent, which then names none, so the walk
-// takes its fallback there. Where the anchor holds a call, or lies between a
-// call and its result, the relink hangs the result from the kept records,
-// which hold no call of its, so tengu_foamy_spring may hang it under its
-// call's reply: the thread is cannot tell (whyResultByCall), the critic's F1a
-// to F1f. Where the anchor is the summary, under it an attachment as T9media
-// writes it or not, or the boundary keeps records the thread does not hold,
-// the call and its result stay together. Where the anchor's own ancestry loops
-// short of the kept records, the relink holds: the walk up from the anchor
-// stops at the loop, and the kept records hang under it, off the walk from
-// the leaf.
+// A RELINK HANDS THE KEPT RECORDS UNDER ITS ANCHOR: where the last boundary
+// names what it kept (list, segment or both), the resume chains them under
+// its anchor (the summary, or the boundary in a partial compaction), hangs
+// the anchor's other children and any user record whose parent it deleted
+// from the last (an attachment takes the fallback), and deletes every earlier
+// record it did not keep (whyRelinkDeleted). An anchor at or between a call
+// and its result is whyResultByCall (F1a-F1f); a loop in the anchor's
+// ancestry stops that walk. A RECORD THE RELINK DELETES IS IN NO LATER STEP,
+// which all read the map 2.1.322's iWo and 2.1.310's ypo delete from: no tail,
+// parent, leaf, fallback target, recovered record or result's source.
 //
-// A RECORD THE RELINK DELETES IS IN NO LATER STEP, whatever it names or
-// shares with a record it kept, as every step after 2.1.322's iWo and
-// 2.1.310's ypo reads the map they deleted it from: an attachment it deletes
-// under the last kept record is no tail of the leaf, and makes that record
-// no parent; a reply it deletes is no member of the leaf set though nothing
-// names it; an attachment whose parent it deleted takes the fallback past
-// that parent, to the summary 400 ms before it, and never to the deleted reply
-// stamped later still; and a reply it deletes that shares a kept reply's id,
-// or a result it deletes of a kept reply's call, is not recovered beside it;
-// and a reply it deletes is no record foamy_spring may hang a result under,
-// though the result names it as its source and answers its call.
-//
-// Mutation: hang none of the anchor's other children, and the kept records lie
-// on no walk; chain none of the kept records, and the walk stops at the head
-// the trim left; delete the boundary too, and the relink chains the summary
-// under itself; hang no user record whose parent was deleted, and the walk
-// takes its fallback there; hang an attachment too, and it brings the kept
-// records onto the walk; delete nothing, and what lies before the boundary
-// reads as off the conversation; index a deleted record by its parent or its
-// reply, and the deleted attachment is a tail; count a deleted record as
-// naming its parent, and the last kept reply is no terminal, so the leaf set
-// is empty and the summary leads; walk up from a deleted record as from a
-// terminal, and the deleted reply joins the set, which the last row, the
-// summary, then narrows to itself; read a deleted parent as a root, and the
-// attachment past it takes no fallback; take a deleted record among the
-// fallback's candidates, and the walk takes the deleted reply; take a deleted
-// reply as a result's source, or as one that made its call, and the result
-// whose deleted parent the relink re-hung is cannot tell; or walk up from
-// the anchor past a record it met, and that walk never ends where the anchor's
-// ancestry loops: End, which counts the walk's steps, gives up on the thread.
+// Mutation: loosen any rule above, and the case naming it reads otherwise.
 func TestARelinkHandsTheKeptRecordsUnderItsAnchor(t *testing.T) {
 	t.Parallel()
 	turn := []string{rcReply(4, 5, "msg_a", 3000, rcSaid("a")), rcPrompt(5, 6, 4000)}
@@ -2318,27 +2037,17 @@ func TestARelinkHandsTheKeptRecordsUnderItsAnchor(t *testing.T) {
 	}
 }
 
-// A RELINK THAT DOES NOT RESOLVE DELETES ONLY WHAT ITS BOUNDARY CUTS: where the
-// boundary that names what it kept is not the last, or lists none, the resume
-// keeps nothing and still deletes every record written before the last
-// boundary, then walks the rest by its single path, a list of none read before
-// a segment beside it; and where a uuid its list names no record of the
-// thread, a canonical uuid or not, where its segment's walk up from its tail
-// breaks before its head or meets a loop there, or where no boundary names
-// what it kept, nothing happens at all, and what lies before the boundary is
-// off the conversation rather than deleted.
+// A RELINK THAT DOES NOT RESOLVE DELETES ONLY WHAT ITS BOUNDARY CUTS: where
+// the listing boundary is not the last, or lists none, the resume keeps
+// nothing yet deletes every record before the last boundary and walks the rest
+// by its single path, a list of none read before a segment beside it; where a
+// listed uuid (canonical or not) names no record, its segment's walk up from
+// its tail breaks or loops before its head, or no boundary names what it kept,
+// nothing happens: what lies before the boundary is off the conversation.
 //
-// Mutation: relink by an earlier boundary's list, and the thread reads as one
-// whose anchor the last boundary's deletion takes, cannot tell; delete nothing
-// where that boundary is not the last, and what lies
-// before the last reads as off the conversation; read the segment before a
-// list beside it, and the relink starts the resume from the checkpoint;
-// delete where a listed record is absent, and the records before the boundary
-// read as deleted; read a list of a uuid that is no canonical uuid by its
-// canonical ones alone, or a segment whose walk breaks as what it walked, and
-// the resume relinks; or walk a segment past a record it met, and that walk
-// never ends where a loop stands between its tail and its head: End, which
-// counts the walk's steps, gives up on the thread.
+// Mutation: relink by an earlier list, delete nothing, read the segment first,
+// delete where a listed record is absent, relink a broken list or segment, or
+// walk a segment past a record it met, and the case naming it reads otherwise.
 func TestARelinkThatDoesNotResolveDeletesOnlyWhatItsBoundaryCuts(t *testing.T) {
 	t.Parallel()
 	turn := rcReply(4, 5, "msg_a", 3000, rcSaid("a"))
@@ -2421,48 +2130,17 @@ func TestARelinkTheModelCannotFollowIsCannotTell(t *testing.T) {
 }
 
 // THE LEAF SET IS CJT'S ON THE RELINKED PARENTS: where the resume relinked, or
-// its single path finds no user or assistant record, it takes its leaf from
-// the set of the first such records up from each record none names as its
-// parent, through records that are neither, that no user or assistant record
-// names in turn: a set of one is that one; of more, the resume walks from the
-// checkpoint's nearest such record, where the checkpoint is in the set and the
-// last row descends through none of its batches, else from the last row's;
-// and where that walk finds none, from the set's newest member, the first in
-// the file on a tie.
+// its single path finds no turn record, the leaf comes from the set of first
+// turn records up from each record none names (through records that are not
+// turn records), each filed once: of one, that one; of more, the checkpoint's
+// nearest turn record where the checkpoint is in the set and the last row
+// descends through none of its batches, else the last row's; failing that,
+// the newest member, the first in the file on a tie. A record the relink
+// deleted names no parent. The cases are the relink critics' shapes (I3a-I3i,
+// R2a-R2c, S1-S3, B3) and the near misses beside them.
 //
-// Each of the round's relink critics' shapes, read as both releases read them:
-// a lagging checkpoint the resume does not start from, under which a turn
-// hangs off an attachment or a stop hook's summary, the checkpoint the anchor,
-// or a call's result whose token reminder the next call hangs off, alone or
-// under T9media's anchor (I3a, I3d to I3i, R2b, R2c, S1); a checkpoint the
-// resume does start from, which a terminal attachment or summary under it puts
-// in the set (I3b, I3c, the critic's F1 as R2a); a last record a stop hook's
-// summary, a checkpoint the boundary, and a relink by its segment alone (S2,
-// S3, B3). Beside them, a checkpoint in the set that the last row descends
-// through the batch of, from which the resume does not start; a terminal
-// attachment under a record a turn names, which puts that record in no set; a
-// checkpoint a turn names, outside a set of two; a set of two whose last
-// row's walk finds no turn record; a prompt only a record the relink
-// deleted names as its parent, a terminal for all that, which leads though the
-// summary over it is stamped later; and a reply two terminal attachments walk
-// up to, a set of one, which the last row, an attachment under the prompt a
-// turn names, does not narrow.
-//
-// Mutation: take a system record for a turn record, and the critic's F1 walks
-// from the last row; take the checkpoint whether or not it is in the set, and
-// the checkpoint a turn names leads; drop the batch exception, and the batch's
-// last row is cut; read Y1t directly in the set's pick, and I3b walks from the
-// last row; take a member a user or assistant record names, and the record
-// over the terminal attachment leads; walk past the first turn record up, and
-// the set holds the thread's roots; take the set's member last in the file,
-// or the later on a tie, and the set of two walks from the other; or fall
-// back to the newest record of all where the single path finds no turn
-// record, and the set of two of one time walks from its last row; or count a
-// record the relink deleted as naming its parent, and the prompt only a
-// deleted attachment names is no terminal, so the set is empty and the
-// summary, the newest record, leads; or file a member once for each terminal
-// that walks up to it, and the set of one reads as two, which the last row
-// narrows to the prompt over it.
+// Mutation: loosen any rule above, and the case naming it walks from another
+// leaf.
 func TestTheLeafSetIsCjtsOnTheRelinkedParents(t *testing.T) {
 	t.Parallel()
 	keeping := rcKeeping(4, 1, 2)
@@ -2580,20 +2258,15 @@ func TestTheLeafSetIsCjtsOnTheRelinkedParents(t *testing.T) {
 	}
 }
 
-// AN EMPTY LEAF SET FALLS BACK TO THE NEWEST RECORD: where no walk up from a
-// record none names finds a user or assistant record that none names, the
-// resume walks from the record of the latest time of all, of any kind, the
-// first in the file on a tie, as 2.1.322's Ozt and 2.1.310's p0 take it, of
-// the records the relink left, never one it deleted though stamped later; and
-// where the set holds records of no time at all, it finds no conversation and
-// hands nothing, falling back to none.
+// AN EMPTY LEAF SET FALLS BACK TO THE NEWEST RECORD: where no walk up finds a
+// turn record none names, the resume walks from the latest-timed record of
+// any kind the relink left (2.1.322's Ozt, 2.1.310's p0), the first in the
+// file on a tie; where the set's records have no time, it finds no
+// conversation and hands nothing.
 //
-// Mutation: take the later on a tie, and the second attachment leads; fall back
-// to user and assistant records alone, and a thread of none hands nothing,
-// and one whose turns a loop holds walks from them; or fall back wherever the
-// set's members have no time, and a set of untimed records hands the newest;
-// or take a record the relink deleted among them, and the prompt it deleted,
-// the latest of all, leads.
+// Mutation: take the later on a tie, fall back to turn records alone, fall
+// back despite untimed members, or take a deleted record, and the case naming
+// it leads from another.
 func TestAnEmptyLeafSetFallsBackToTheNewestRecord(t *testing.T) {
 	t.Parallel()
 	system := rcSystem(0, 1, 0, "informational", "")
@@ -2626,46 +2299,18 @@ func TestAnEmptyLeafSetFallsBackToTheNewestRecord(t *testing.T) {
 	}
 }
 
-// A SUBAGENT'S CONVERSATION IS THE ONE ITS OWN LOAD HANDS: the load leads from
-// one of its own leaves, the records of the subagent's agentId and a
-// sidechain's that no such record names as its parent, a compaction's
-// boundary aside: the latest of them, the first in the file on a tie, an
-// attachment as well as a reply, none of no time; a record that is no
-// sidechain's, or of another agent, neither leads nor makes the record it
-// names a parent; and a thread of none, or none of a time, hands nothing. It
-// walks the whole file as the main thread's resume does, as its own relink
-// left it (a record it deleted no own leaf, and naming no own record as its
-// parent), by parents written after their records and by the fallback past a
-// record a torn write left, recovers beside its replies a result off the walk
-// as well, and hands on every record of the subagent's agentId that the walk,
-// the recovery or the tails reach, a sidechain's or not, and no other's. No
-// retraction filter or drop of malformed attachments runs on it, and a fork's
-// briefing is an attachment like any other there. Its own leaves are those its
-// load chose among, a second one off the conversation (DW's dropped reply) or
-// recovered (V3) as its load leaves it.
+// A SUBAGENT'S CONVERSATION IS THE ONE ITS OWN LOAD HANDS: it leads from the
+// latest of its own leaves (records of its agentId, a sidechain's, that no
+// such record names; never a boundary or an untimed one), the first in the
+// file on a tie; another agent's or a non-sidechain record neither leads nor
+// parents one, and a thread of none hands nothing. It walks the whole file
+// as the main resume does (its own relink and fallback), recovers beside
+// replies, and hands every record of its agentId the walk, recovery or tails
+// reach, sidechain or not. No retraction filter or malformed-attachment drop
+// runs, and a fork's briefing is a plain attachment. Its own leaves are those
+// the load chose among, as it leaves them (DW's dropped reply, V3's result).
 //
-// Mutation: lead by the file's order, and V2 leads from its last own leaf;
-// take the later on a tie, and V2b does; lead from the first own leaf, and
-// V3's result and DW's dropped reply do; lead from any record, and the latest
-// one, no sidechain's, leads; let a record of no time, or a compaction's
-// boundary, lead; read every record's parent as naming one, and the own
-// leaves another agent's records name are none, so their thread hands
-// nothing; read own records by their agentId alone, or every agentId as the
-// subagent's, and a thread of none leads, and another agent's records are
-// handed; pick the leaf as the main thread's resume does, or file no own
-// leaves, and the answers and own leaves part from the load's; skip the
-// relink, and the turn it deletes is handed; take a record the relink deleted
-// for an own leaf, and the own leaves part from the load's; count one as
-// naming its parent, and the prompt only a deleted attachment names is no own
-// leaf, so the thread hands nothing; filter on isSidechain as well as
-// agentId, and the record of the subagent's id that is no sidechain's is not
-// handed; hand another agent's records, or another agent's tails, and they
-// are not answered not handed; run the retraction filter, and
-// the reply its fallback names is taken back; run the malformed-attachment
-// drop, and the hook's success it takes is not handed, and the thread of the
-// skill listing it cannot judge is cannot tell; refuse a fork's briefing, and
-// its thread is cannot tell; or stop the walk where a parent names no record,
-// and the torn copy hands its last two records alone.
+// Mutation: loosen any rule above, and the case naming it reads otherwise.
 func TestASubagentsConversationIsTheOneItsOwnLoadHands(t *testing.T) {
 	t.Parallel()
 	own := func(line string) string { return rcOwn(t, line) }
@@ -2686,7 +2331,7 @@ func TestASubagentsConversationIsTheOneItsOwnLoadHands(t *testing.T) {
 			own(rcReply(4, 5, "msg_b", 3000, rcSaid("done")))}
 	}
 	// torn is a reply cut inside a key by the write of a meta user record (51)
-	// after it, as p2 run d's box left its subagent's line 25.
+	// after it, as a torn write leaves one.
 	torn := own(rcReply(4, 50, "msg_b", 1300, rcCalls("x2")))
 	torn = torn[:strings.Index(torn, `"stop_reason"`)+len(`"stop_rea`)] + own(rcMeta(4, 51, 4400))
 	// relinked is a thread whose compaction kept a prompt (3) and a reply (4)
@@ -2800,45 +2445,18 @@ func TestASubagentShapeTheLoadCannotBeModelledOnIsCannotTell(t *testing.T) {
 		rcOrder{[]int{1, 2}, allVariants})
 }
 
-// THE LEAF'S TAILS ARE HANDED LAST, IN EITHER ORDER: after all the walk and
-// the recovery hand, the resume hands every record under the leaf that is
-// neither a user nor an assistant record, through records that are neither
-// (whyLeafTail): probe R r6's Stop hook's pair after the turn's last reply,
-// its batch's hook records on the walk; a batch's pair cut before the next
-// request, where the recovery hangs it off nothing (a reply of no id, which
-// the recovery passes over, or a hook's record of two children, which pye
-// refuses); the attachments probe S's compact command leaves under its
-// output, five of one time written before it, in the order they hang; a
-// compaction's boundary; and one of another isSidechain, which the tails take
-// whatever its side. A record met already ends its branch: one the walk took
-// by the fallback leaves what hangs under it off the conversation, and a
-// call's hooks under a leaf that made it are the recovery's, not the tails'.
-// A user record under the leaf is no tail. Where the tails run two deep and
-// their times interleave, warm_mochi's walk by depth, each record's children
-// earliest first, hands them in one order, and the walk by breadth sorted by
-// time in another, in the main thread and a subagent's alike, the same
-// records in both. A sort that holds a record of no time beside two of
-// different times orders none of them (whyTailTime): the walk by depth's
-// sort of the leaf's children, the walk by breadth's of every tail though
-// each record's children are of one time, and the walk by depth's of
-// children one of which the recovery hung; one beside records of one time
-// leaves them all in the file's order.
+// THE LEAF'S TAILS ARE HANDED LAST, IN EITHER ORDER: after the walk and the
+// recovery, the resume hands every non-turn record under the leaf, through
+// non-turn records and whatever their isSidechain (whyLeafTail): a Stop hook's
+// pair, a batch's pair the recovery hangs off nothing, a compaction's boundary.
+// A record met already ends its branch (a call's hooks under the leaf are the
+// recovery's), and a user record is no tail. Two deep with interleaved times,
+// warm_mochi's walk by depth (children earliest first) and the walk by
+// breadth sorted by time hand one set in two orders, in a subagent's thread
+// too. A sort holding an untimed record beside two of different times is
+// whyTailTime; beside one time it keeps the file's order.
 //
-// Mutation: hand the tails before the walk and the recovery's records, and
-// r6's Stop pair leads; take the tails before the recovery, and the call's
-// hooks under the leaf read as tails; pass over no record met, and what
-// hangs under the walked record is handed, and the call's hooks twice; hand
-// one order only, and the variants without warm_mochi hand warm_mochi's;
-// leave a warm_mochi variant out of those that walk by depth, and it hands
-// the walk by breadth's order; leave a record's children unsorted, or take
-// the latest first, or leave the walk by breadth unsorted, and the two-deep
-// tails come in another order;
-// take a user record for a tail, and the abandoned prompt is handed; take
-// the tails through UF records alone, and the boundary is not; hold a tail to
-// its parent's side, and the one of no isSidechain is not; refuse no sort of
-// a record of no time, or only the walk by depth's, or only of children not
-// met, and each disordered thread reads; or refuse every sort holding one,
-// and the attachments of one time are cannot tell.
+// Mutation: loosen any rule above, and its case hands another answer.
 func TestTheLeafsTailsAreHandedLastInEitherOrder(t *testing.T) {
 	t.Parallel()
 	untimed := func(line string, ms int) string { return ctReplace(t, line, `,"timestamp":"`+rcAt(ms)+`"`, "") }

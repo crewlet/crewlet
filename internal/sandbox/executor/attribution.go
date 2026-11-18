@@ -12,59 +12,21 @@ import (
 )
 
 // Commit attribution: what a run asked to credit Crewlet on its commits
-// ([sandbox.CommitAttribution]) is given in its box.
-//
-// GIT ADDS THE CREDIT, NOT THE MODEL. An instruction in the run's standing
-// text — which is how a harness adds its own co-author line — holds only as
-// long as the model remembers it, and nothing would notice the commit that
-// went out without it. A prepare-commit-msg hook runs on every commit git
-// makes, `git commit --no-verify` included, which skips pre-commit and
-// commit-msg but not this one.
-//
-// THE HOOK IS REACHED THROUGH THE RUN'S ENVIRONMENT, never a git
-// configuration file. The wrapper appends `core.hooksPath` to the run's
-// GIT_CONFIG_COUNT entries ([attributionExports]), which git ranks above
-// every configuration file: written into the box's global configuration
-// instead, it would collide with the operator's setup recipe, which writes
-// that file, and a repository's own core.hooksPath (husky's, say) would
-// switch it off without a word. Appended IN THE WRAPPER, after the login
-// shell has sourced its profile, for the reason [Output.Unset] is applied
-// there: a profile that sets the count would otherwise replace the entry.
-//
-// A hooks directory replaces the repository's own for the run, so the one
-// script linked under every hook name ([gitHooks]) hands each hook on to the
-// repository's: the repository's hooks run as they always do, and a hook
-// that refuses a commit still refuses it (attribution_hook.sh).
-//
-// ONLY THE RUN'S OWN COMMITS: the hook credits a commit whose author is the
-// identity the run commits as. A person's commit the run amends, rewords,
-// cherry-picks or carries through a rebase keeps its author and gains no
-// co-author, because Crewlet did not write it.
-//
-// Not reached, by construction: a commit made through a code host's API (a
-// tool that writes a file through GitHub's), which runs no git in the box;
-// and a box whose git predates GIT_CONFIG_COUNT (2.31), which ignores it.
-//
-// A TRAILER IS A CLAIM, NEVER EVIDENCE. The run can delete the hook, unset
-// the entry or type any trailer it likes, so nothing in the engine reads a
-// pushed commit's trailers: a box push's provenance is stamped from the run's
-// own row at its admission. The trailers carry that provenance where the row
-// does not reach — a mirror of the repository, and a commit older than
-// Gitlet's push horizon, after which the row is gone. No Go string of the
-// binary but this file's spells a Crewlet trailer's key, and the keys are
-// unexported, so a reader of them cannot be added unseen
-// (TestNothingButTheAttributionSpellsATrailerKey).
-//
-// ONE OF EACH CREWLET TRAILER, REPLACED: a commit of the run's own that an
-// amend, a rebase or a cherry-pick rewrote carries the trailers of the run
-// that rewrote it, as git itself replaces the committer, never a second set
-// beside the first. The co-author line is added only where it is not already
-// there, never replacing one: a person the commit already credits stays
-// credited.
+// ([sandbox.CommitAttribution]) is added by git in its box, not by the model:
+// a standing instruction holds only while the model remembers it, and a
+// prepare-commit-msg hook runs on every commit, `--no-verify` included.
+// The run's hooks directory replaces the repository's, so the one script
+// linked under every hook name ([gitHooks]) hands each hook on to the
+// repository's, whose refusals still refuse (attribution_hook.sh). Only a
+// commit authored as the run's identity is credited: a person's commit the run
+// amends, cherry-picks or rebases keeps its author and gains no co-author.
+// Not reached, by construction: a commit made through a code host's API, which
+// runs no git in the box, and a git older than 2.31, which ignores
+// GIT_CONFIG_COUNT ([attributionExports]).
 
 // attributionHookScript is the hook, with [attributionTrailersMark] where the
-// run's trailers go. Embedded rather than shipped beside the binary, so the
-// hook a run is handed is the one this build tests.
+// run's trailers go. Embedded so the hook a run is handed is the one this
+// build tests.
 //
 //go:embed attribution_hook.sh
 var attributionHookScript string
@@ -75,16 +37,20 @@ var attributionHookScript string
 const attributionTrailersMark = "@TRAILERS@"
 
 // CoAuthor is who a run's commits credit: Crewlet, at an address verified on
-// the GitHub account that renders it — so the commit lists Crewlet among its
-// participants beside the seat that authored it. NOT `Signed-off-by`, which
-// is no attribution at all: it certifies the Developer Certificate of Origin,
-// which only the party answerable for the code can do, and GitHub renders it
+// the GitHub account that renders it, so the commit lists Crewlet among its
+// participants. Not `Signed-off-by`, which certifies the Developer Certificate
+// of Origin (only the party answerable for the code can) and GitHub renders
 // as nothing.
 const CoAuthor = "Crewlet <noreply@crewlet.ai>"
 
 // The keys of the Crewlet trailers: the seat that made a commit, the run that
-// wrote it, and the work item its turn is charged to. UNEXPORTED, so no
-// package can read a trailer by them ([attributionTrailers]).
+// wrote it, and the work item its turn is charged to. A trailer is a claim the
+// box can forge, never evidence: nothing in the engine reads a pushed commit's
+// trailers (a box push's provenance is stamped from the run's row at
+// admission), and they carry it only where the row does not reach, a mirror
+// or a commit past Gitlet's push horizon. So the keys are unexported and no
+// other Go string of the binary spells one
+// (TestNothingButTheAttributionSpellsATrailerKey).
 const (
 	seatTrailer     = "Crewlet-Seat"
 	runTrailer      = "Crewlet-Run"
@@ -92,16 +58,14 @@ const (
 )
 
 // noWorkItem is the work-item trailer of a seat's run on no work item.
-// WRITTEN, never left out: the trailer replaces the one a rewritten commit
-// carried, so a run on no item that amended another run's commit would
-// otherwise keep that run's item beside its own run.
+// Written, never left out: the trailer replaces a rewritten commit's, so a run
+// on no item amending another run's commit would otherwise keep that item.
 const noWorkItem = "none"
 
 // gitHooks is every hook git runs by name out of a hooks directory
-// (githooks(5)). The script is linked under each of them, because a
-// directory that lacked one would leave the repository's hook of that name
-// unrun for as long as the run's entry stands. fsmonitor-watchman is listed
-// for completeness only: git runs it from core.fsmonitor rather than by name.
+// (githooks(5)); a name missing here leaves the repository's hook of that name
+// unrun while the run's entry stands. fsmonitor-watchman is listed for
+// completeness only: git runs it from core.fsmonitor, not by name.
 var gitHooks = []string{
 	"applypatch-msg", "pre-applypatch", "post-applypatch",
 	"pre-commit", "pre-merge-commit", "prepare-commit-msg", "commit-msg", "post-commit",
@@ -122,15 +86,16 @@ type attributionTrailer struct {
 
 // attributionTrailers is the trailers a run's commits carry: the co-author;
 // the seat and its work item where the run is a seat's; and the run where
-// the attribution names one.
+// the attribution names one. Each Crewlet trailer replaces the one a rewritten
+// commit carries, as git replaces the committer; the co-author is added only
+// where absent, so a person the commit already credits stays credited.
 //
-// A RUN THAT IS NOT ONE LINE OF PRINTABLE TEXT IS REFUSED rather than
-// written: a line break in a trailer's value would end the trailer there and
-// add whatever followed as a line of the commit message. The seat and the
-// item are ENCODED instead ([trailerValue]): a tracker's key is somebody
-// else's text, and a label must not fail a run over a convention. A work
-// item with no seat, or with no backend, is the engine's own bug, refused as
-// for any failure of the run's environment.
+// A run that is not one line of printable text is refused: a line break would
+// end the trailer and add the rest to the commit message. The seat and the
+// item are encoded instead ([trailerValue]): a tracker's key is somebody
+// else's text, and a label must not fail a run. A work item with no seat or no
+// backend is the engine's own bug, refused like any failure of the run's
+// environment.
 func attributionTrailers(a sandbox.CommitAttribution) ([]attributionTrailer, error) {
 	trailers := []attributionTrailer{{line: "Co-authored-by: " + CoAuthor, ifExists: "addIfDifferent"}}
 	switch {
@@ -173,12 +138,11 @@ func workItemValue(item *types.WorkItem) string {
 }
 
 // trailerValue is s with every byte outside A-Z a-z 0-9 - . _ ~ / # ! @ +
-// written as %XX in upper-case hex — the space and '%' among them — so the
-// result is one line of printable ASCII with no space, which no value can turn
-// into a second trailer line, and url.PathUnescape turns it back into s.
-// "ENG-412", "acme/api#88", "group/sub/proj!12", every handle and every UUID
-// pass through unchanged. It never cuts: git bounds no message line, and a
-// cut key could not be recovered.
+// (the space and '%' among them) written as upper-case %XX: one line of
+// printable ASCII no value can turn into a second trailer, which
+// url.PathUnescape turns back into s. "ENG-412", "acme/api#88", handles and
+// UUIDs pass unchanged. It never cuts: git bounds no message line, and a cut
+// key could not be recovered.
 func trailerValue(s string) string {
 	const hex = "0123456789ABCDEF"
 	var b strings.Builder
@@ -222,15 +186,12 @@ func installAttribution(ctx context.Context, box sandbox.Sandbox, paths Paths, a
 	if err = box.WriteFile(ctx, source, attributionHook(trailers)); err != nil {
 		return fmt.Errorf("executor: writing the commit attribution hook: %w", err)
 	}
-	// THE HOOK IS PUT IN PLACE BY THE BOX'S OWN PROCESS, as a copy of what
-	// the engine wrote beside it. On a box on the engine host the engine's
-	// own write is a descriptor a fork of the engine's can inherit, and
-	// Linux refuses to execute a file any process holds open for writing
-	// (ETXTBSY) — a commit's hook refused as busy is a commit refused. A
-	// copy made by a process that has exited is held open by nobody.
-	//
-	// RELATIVE LINKS, made in the box too: a link the engine made on the
-	// host would name the host's path, which a container does not have.
+	// The box's own process copies the hook into place: on the engine host a
+	// fork of the engine can inherit the engine's write descriptor, and Linux
+	// refuses to execute a file held open for writing (ETXTBSY), refusing the
+	// commit. A copy by an exited process is held open by nobody. The links are
+	// relative and made in the box: a host-made link names a host path a
+	// container lacks.
 	link := "cd " + sandbox.ShellQuote(paths.CommitAttribution()) + " && cp hook.source hook && rm hook.source && " +
 		"chmod 700 hook && mkdir -p hooks && " +
 		"for hook in " + strings.Join(gitHooks, " ") + `; do ln -sf ../hook "hooks/$hook" || exit; done`
@@ -247,11 +208,16 @@ func installAttribution(ctx context.Context, box sandbox.Sandbox, paths Paths, a
 
 // attributionExports is the wrapper's statement pointing git at the run's
 // hooks: one more GIT_CONFIG_COUNT entry, appended after any the run's
-// environment, its image or its profile already holds, so theirs still hold.
+// environment, image or profile holds, so theirs still hold. An environment
+// entry, not a configuration file: git ranks it above every file, whereas
+// written to the box's global configuration it would collide with the
+// operator's setup recipe, and a repository's own core.hooksPath (husky's)
+// would silently switch it off. Run in the wrapper, after the login profile,
+// for [Output.Unset]'s reason: a profile setting the count would replace it.
 //
-// A COUNT THAT IS NOT A NUMBER IS LEFT AS IT IS: git refuses every command
-// under one ("bogus count in GIT_CONFIG_COUNT"), which says what is wrong far
-// better than an entry written over the run's own first one would.
+// A count that is not a number is left as it is: git then refuses every
+// command ("bogus count in GIT_CONFIG_COUNT"), which says what is wrong far
+// better than overwriting the run's own first entry would.
 func attributionExports(hooks string) string {
 	return `_crewlet_n=${GIT_CONFIG_COUNT:-0}; case $_crewlet_n in *[!0-9]*) ;; *) ` +
 		`export "GIT_CONFIG_KEY_$_crewlet_n=core.hooksPath" "GIT_CONFIG_VALUE_$_crewlet_n="` + sandbox.ShellQuote(hooks) +
