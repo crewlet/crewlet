@@ -700,9 +700,9 @@ type FakeRunner struct {
 
 	// SavesSessions is what [FakeRunner.Saves] answers: whether the harness
 	// this fake stands in for has its session saved while its run still
-	// works, as Claude Code's runner does and OpenCode's does not. A save
-	// packs [FakeRunner.Session] as it stands then. Set it before the first
-	// poll that may offer a save.
+	// works, as both executor harnesses' runners do; false stands for one
+	// that saves none. A save packs [FakeRunner.Session] as it stands then.
+	// Set it before the first poll that may offer a save.
 	SavesSessions bool
 	// PackSaveErr, when set, fails every [FakeRunner.PackSave], as a pack
 	// that a file rewritten under it refused fails. Packing, when set, runs

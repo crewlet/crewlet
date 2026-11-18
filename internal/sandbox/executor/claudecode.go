@@ -1075,7 +1075,8 @@ const heldTools = "find ls wc sed grep head cksum touch sleep"
 const heldClockWaits = 50
 
 // heldPlainMax is the most plaintext a pack beside a working harness packs
-// ([claudeHeldTar]): the most one reading of an archive yields to a kept
+// ([claudeHeldTar]), and the most an OpenCode pack on demand exports
+// ([openCodePack]): the most one reading of an archive yields to a kept
 // session's scrub, [scrubExpansion] times the bound a kept session's archive is
 // held to (executorkeep.SessionMaxBytes), a quarter of a gibibyte. A session
 // whose files add up past it is refused by the take once packed, so it is not

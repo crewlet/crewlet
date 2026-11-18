@@ -138,6 +138,10 @@ const (
 // ([heldPlainMax]): what a case sizes a session past it by.
 const HeldPlainMax = heldPlainMax
 
+// OpenCodeSaveRoom defines the shell functions an OpenCode save reads its box's
+// room and its need by ([openCodeSaveRoom]): what a case feeds memory lines.
+var OpenCodeSaveRoom = openCodeSaveRoom
+
 // OpenCodeStops is a run's script's stops ([openCodeStops]) beside the end they
 // stop with ([endFunction]) at stop, and OpenCodeExporter its login exporter
 // ([openCodeExporter]) at sync into file: a case about stopping the exporter

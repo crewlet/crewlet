@@ -465,7 +465,7 @@
 //
 // # A running executor's session, saved as it works
 //
-// The sandbox coordinator saves a running Claude Code job's session as it
+// The sandbox coordinator saves a running executor job's session as it
 // works (internal/sandbox's "A save is offered by the poll, from memory"), and
 // this package wires it: both waiters offer it every box their poll finds
 // running ([Engine.sandboxWaiterOptions]), each save is charged to the fleet
