@@ -25,9 +25,10 @@ const (
 	// TagInput is one line of a call's whole subject, written where the
 	// preview does not hold it.
 	TagInput Tag = "input"
-	// TagOK and TagFailed are a call's result, with how long it ran where
-	// the harness says; a failure carries the first line of why.
-	TagOK     Tag = "ok"
+	// TagOK is a call's result where it succeeded, with how long it ran where
+	// the harness says.
+	TagOK Tag = "ok"
+	// TagFailed is a call's result where it failed, with the first line of why.
 	TagFailed Tag = "failed"
 	// TagSteer is a note a person sent the run, as its hook handed it over.
 	TagSteer Tag = "steer"
