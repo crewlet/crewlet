@@ -53,6 +53,7 @@ import {
   Stack,
   Tabs,
   Tag,
+  type TabsMarker,
   Textarea,
   tabId,
   useClipboard,
@@ -82,12 +83,17 @@ import { WriteButton } from "~/components/WriteButton.tsx";
 import { ago } from "~/lib/ago.ts";
 import { changeLive, changeRef, isRepoName, refName } from "~/lib/code.ts";
 import { useNow } from "~/lib/clock.ts";
-import { fmtDateTime } from "~/lib/format.ts";
+import { fmtDateTime, plural } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import type { CodeChangeDetail, CodeRevisionRow, CodeVerdict } from "~/protocol/index.ts";
+import type {
+  CodeChangeDetail,
+  CodeCheckRow,
+  CodeRevisionRow,
+  CodeVerdict,
+} from "~/protocol/index.ts";
 import { ChangeStateTag, ReadinessMeter } from "../ChangeRow.tsx";
 import { Diffstat } from "../Diffstat.tsx";
 import { CodeNotFound } from "../NotFound.tsx";
@@ -99,7 +105,14 @@ import { Conversation } from "./Conversation.tsx";
 import { Files } from "./Files.tsx";
 import { Notified, Provenance, Revisions } from "./Facts.tsx";
 import { ReviewDialog, heldItem, verdictItems } from "./ReviewDialog.tsx";
-import { CHANGE_POLL_MS, changePartParams, revisionInputs, useAskAgainWhenMoved } from "./reads.ts";
+import {
+  CHANGE_POLL_MS,
+  changePartParams,
+  revisionInputs,
+  useAskAgainWhenMoved,
+  useLatestChecks,
+  type LatestChecks,
+} from "./reads.ts";
 import "~/styles/gitlet.css";
 
 /** Each tab's glyph: decorative, its label names it. */
@@ -154,6 +167,8 @@ export function ChangePage({ repo, number }: { repo: string; number: number }) {
   const [tab, setTab] = useTab<ChangeTab>("tab", CHANGE_TABS);
   const panelId = useId();
   const [boxes] = useState(() => new DraftBoxes());
+  // ONE READ of the head's latest checks: the merge box, the rail and the Checks tab's count.
+  const checks = useLatestChecks(read.data?.change);
   if (!named) {
     return (
       <EmptyState
@@ -194,6 +209,7 @@ export function ChangePage({ repo, number }: { repo: string; number: number }) {
         <ChangeTabs
           change={change}
           revisions={revisions}
+          checks={checks}
           tab={tab}
           setTab={setTab}
           panelId={panelId}
@@ -231,26 +247,42 @@ export function ChangePage({ repo, number }: { repo: string; number: number }) {
   );
 }
 
+/** The Checks tab's marker: a count of the failed checks, or that every one passed. */
+export function checksMarker(rows: readonly CodeCheckRow[]): TabsMarker | undefined {
+  const failed = rows.filter((r) => r.state === "failed" || r.state === "errored").length;
+  if (failed > 0)
+    return { tone: "danger", count: failed, label: `${plural(failed, "check")} failed` };
+  if (rows.every((r) => r.state === "passed" || r.state === "skipped")) {
+    return { tone: "success", label: "Every check passed" };
+  }
+  return undefined;
+}
+
 /** The tab row: each tab's count where one is known, and the head's diffstat at its end. */
 function ChangeTabs({
   change,
   revisions,
+  checks,
   tab,
   setTab,
   panelId,
 }: {
   change: CodeChangeDetail;
   revisions: readonly CodeRevisionRow[];
+  checks: LatestChecks;
   tab: ChangeTab;
   setTab: (next: ChangeTab) => void;
   panelId: string;
 }) {
   const diff = useHeadDiff(change, revisions);
+  const checked = checks.rows !== null && checks.rows.length > 0 ? checks.rows : null;
   const counts: Partial<Record<ChangeTab, number>> = {
     ...(change.conversation ? { conversation: change.conversation.comments } : {}),
     revisions: change.revision,
+    ...(checked ? { checks: checked.length } : {}),
     ...(diff ? { files: diff.total } : {}),
   };
+  const marker = checked ? checksMarker(checked) : undefined;
   return (
     <Tabs
       overflow="menu"
@@ -276,6 +308,7 @@ function ChangeTabs({
         ...(value === "more" ? { menuLabel: MORE_MENU_LABEL } : {}),
         icon: CHANGE_TAB_GLYPHS[value],
         ...(counts[value] !== undefined ? { count: counts[value] } : {}),
+        ...(value === "checks" && marker ? { marker } : {}),
       }))}
     />
   );

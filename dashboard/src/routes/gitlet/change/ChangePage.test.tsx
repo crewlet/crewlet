@@ -33,6 +33,7 @@ import { ChangePage } from "./ChangePage.tsx";
 import { EDIT_MOVED } from "./Description.tsx";
 import { FOLD_FROM_LINES } from "./FileStack.tsx";
 import { NOT_AUTHOR_RESOLVE } from "./Finding.tsx";
+import { CHECKS_POLL_MS } from "../checks/CheckList.tsx";
 import { CHANGE_POLL_MS } from "./reads.ts";
 
 beforeEach(() => sessionStorage.clear());
@@ -137,6 +138,42 @@ interface Acted {
 
 /** Every `code_checks` question the engine was asked, newest last. */
 const checksAsked: URL[] = [];
+/** A latest check of the head: `unit` by default, as `over` says. */
+const check = (over: Record<string, unknown> = {}) => ({
+  repo_id: "id-web",
+  repo: "web",
+  oid: HEAD,
+  target: "refs/heads/main",
+  name: "unit",
+  attempt: 1,
+  state: "passed",
+  purpose: "head",
+  required: true,
+  started_at: "2026-10-27T10:00:00Z",
+  finished_at: "2026-10-27T10:01:35Z",
+  duration_ms: 95_000,
+  ...over,
+});
+
+/** The head's latest checks as a case sets them: unit passed and e2e running, both required. */
+let LATEST: Record<string, unknown>[] = [];
+const STORY_CHECKS = () => [
+  check(),
+  check({
+    name: "e2e",
+    state: "running",
+    started_at: "2026-10-27T10:00:00Z",
+    finished_at: undefined,
+    duration_ms: undefined,
+  }),
+];
+/** The engine's answer to a `latest=true` checks question; a case may refuse it instead. */
+let latest = (): Response => json({ checks: LATEST, position: POSITION, level: "session" });
+beforeEach(() => {
+  LATEST = STORY_CHECKS();
+  latest = () => json({ checks: LATEST, position: POSITION, level: "session" });
+});
+
 /** Every `code_change` question the engine was asked, newest last. */
 const changeAsked: URL[] = [];
 
@@ -177,6 +214,7 @@ function stubEngine(
       }
       if (url.pathname === "/query/code_checks") {
         checksAsked.push(url);
+        if (url.searchParams.get("latest") === "true") return latest();
         return json({
           checks: [
             {
@@ -892,7 +930,81 @@ test("the tabs are Conversation, Revisions, Checks, Files changed and More, with
     within(row)
       .getAllByRole("tab")
       .map((t) => t.textContent),
-  ).toEqual(["Conversation3", "Revisions2", "Checks", "Files changed1", "More"]);
+  ).toEqual(["Conversation3", "Revisions2", "Checks2", "Files changed1", "More"]);
+});
+
+// THE CHECKS TAB COUNTS THE HEAD'S LATEST CHECKS, a failure marked as a
+// danger count in place of the figure and a full pass as a success dot.
+// Mutation: count every attempt, or mark a running check, and this fails.
+test("the Checks tab counts the latest checks and marks a failure or a full pass", async () => {
+  const tab = async () => {
+    const row = await screen.findByRole("tablist", { name: "The change's sections" });
+    return waitFor(() => {
+      const t = within(row).getByRole("tab", { name: /^Checks/ });
+      expect(t.textContent).not.toBe("Checks");
+      return t;
+    });
+  };
+  stubEngine(detail(), () => json({}));
+  mount();
+  expect((await tab()).textContent).toBe("Checks2");
+  cleanup();
+
+  LATEST = [
+    check(),
+    check({ name: "e2e", state: "failed" }),
+    check({ name: "lint", state: "errored", required: false }),
+  ];
+  stubEngine(detail(), () => json({}));
+  mount();
+  // THE DANGER COUNT REPLACES THE FIGURE: two failed of three, the label said to a screen reader.
+  const failed = await tab();
+  expect(failed.textContent).toBe("Checks22 checks failed");
+  expect(within(failed).getByText("2 checks failed")).toBeTruthy();
+  cleanup();
+
+  LATEST = [check(), check({ name: "lint", state: "skipped", required: false })];
+  stubEngine(detail(), () => json({}));
+  mount();
+  const passed = await tab();
+  expect(passed.textContent).toMatch(/^Checks2/);
+  expect(within(passed).getByText("Every check passed")).toBeTruthy();
+});
+
+// THE LATEST CHECKS FOLLOW A LIVE CHANGE: asked on the checks' own poll and
+// when the head moves, and a merged change's are asked once. Mutation: drop
+// the poll, poll a merged change, or keep the old head's answer, and this fails.
+test("the latest checks are asked again on their poll and when the head moves, never polled once merged", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  let head = HEAD;
+  stubEngine(
+    () => detail({ head }),
+    () => json({}),
+  );
+  checksAsked.length = 0;
+  mount();
+  const latestAsked = () => checksAsked.filter((u) => u.searchParams.get("latest") === "true");
+  await waitFor(() => expect(latestAsked()).toHaveLength(1));
+  expect(Object.fromEntries(latestAsked()[0]!.searchParams)).toMatchObject({
+    repo: "web",
+    change: "42",
+    latest: "true",
+  });
+  await act(async () => void vi.advanceTimersByTime(CHECKS_POLL_MS));
+  await waitFor(() => expect(latestAsked()).toHaveLength(2));
+  head = "fedcba9876543210fedcba9876543210fedcba98";
+  await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS - CHECKS_POLL_MS));
+  // THE DETAIL'S MINUTE moved the head; the checks' own half minute came due beside it.
+  await waitFor(() => expect(latestAsked()).toHaveLength(4));
+  cleanup();
+
+  stubEngine(detail({ state: "merged", readiness: undefined }), () => json({}));
+  checksAsked.length = 0;
+  mount();
+  await waitFor(() => expect(latestAsked()).toHaveLength(1));
+  for (let i = 0; i < 3; i++) await act(async () => void vi.advanceTimersByTime(CHECKS_POLL_MS));
+  await settled(() => latestAsked().length);
+  expect(latestAsked()).toHaveLength(1);
 });
 
 // THE DIGITS FOLLOW THE TAB ORDER, and one past the end is left alone.
