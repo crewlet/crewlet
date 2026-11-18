@@ -1502,7 +1502,7 @@ test("the timeline draws the change's queue entries and says which revisions wer
     expect.stringMatching(/^Engineer pushed revision 1/),
     expect.stringMatching(/^CTO added it to the queue for main/),
     expect.stringMatching(
-      /^Gitlet took it out of the queue: its branch's checks file defines a check its gate requires in no form that runs: lint and unit/,
+      /^Gitlet took it out of the queue: its branch's checks file defines a required check in no form that runs: lint and unit/,
     ),
     expect.stringMatching(/^Engineer force-pushed revision 2/),
     expect.stringMatching(/^CTO added it to the queue for main/),
