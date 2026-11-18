@@ -480,23 +480,18 @@ the dependency surface before choosing a host for it:
   refused once it has heard nothing for about 253 seconds; its other requests
   are held up to 248 seconds past their own bounds the same way
   ([across a link, silence is the link's](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
-  It windows its pulls to what the link carries in four seconds at the
-  floor, as an upload is windowed to one 128 KiB message, so a request sent
-  behind either alone on the link — a lease renewal among them — is still
-  answered inside its five-second term at any rate the engine allows. Until
-  [#1035](https://github.com/crewlet/crewlet/issues/1035), more still holds
-  a request past its term. Each direction has a window of its own, so with
-  an upload and a hydration both in flight a request whose bytes wait behind
-  the one and whose reply waits behind the other can take 7.75 seconds at the
-  floor beyond its own round trip. Nothing windows the object store's other
-  reads toward the node — a download, which holds four 128 KiB messages in
-  hand, fifteen seconds at the floor, a listing's walk, or a read's check of
-  what the stream's leader holds, answered with a whole message — nor an
-  event delivered to one of the node's seats, which crosses whole, so a
-  request whose reply crosses behind them waits for all of it, as one sent
-  behind what the node sends whole does (next item). A hydration's next row
-  waiting there is waited for while the link moves, as above, but a lease
-  renewal is not. Meanwhile the
+  Its pulls share the link's **one window** with the object store's
+  uploads, downloads and listings, both ways: what the link carries in four
+  seconds at the floor, one 128 KiB piece of a file either way, so whatever
+  the node has in flight, a request sent behind it on the link — a lease
+  renewal among them — is still answered inside its five-second term at any
+  rate the engine allows
+  ([one window per link](../concepts/object-store.md#the-fleets-own-bucket--nats-the-default)).
+  What the window does not hold is an event delivered to one of the node's
+  seats, which crosses whole, so a request whose reply crosses behind one
+  waits for it, as one sent behind what the node sends whole does (next
+  item). A hydration's next row waiting there is waited for while the link
+  moves, as above, but a lease renewal is not. Meanwhile the
   node's placement pass waits for it (see
   [a seat's memory follows it](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
   A restart costs that
@@ -512,11 +507,11 @@ the dependency surface before choosing a host for it:
   every lap of the seats
   ([#1040](https://github.com/crewlet/crewlet/issues/1040); see
   [what a crash and a handoff lose](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
-- **A fair queue at the link's bottleneck, each way.** The satellite
-  windows its uploads, one 128 KiB message at a time, and its memory
-  replay's pulls toward it, four seconds at the floor, so a small request
-  sent behind either alone is answered inside its five-second term even at
-  thirty seconds a mebibyte. Whatever else a first-in-first-out queue at a
+- **A fair queue at the link's bottleneck, each way.** The satellite holds
+  its uploads, downloads and memory replays to one window across its link,
+  both ways together, four seconds at the floor, so a small request sent
+  behind them is answered inside its five-second term even at thirty
+  seconds a mebibyte. Whatever else a first-in-first-out queue at a
   bottleneck holds is added to that wait: another flow's bulk, such as a
   harness's own upload or download, keeps the queue full for as long as it
   takes to drain, and a request on the leaf link waits as long — a 256 KiB
