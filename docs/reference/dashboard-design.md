@@ -4647,8 +4647,8 @@ log yet), that this cannot be said
 now and why: an unknown is never drawn as a no. Under
 it is the
 **transcript**, a page at a time (**Load more of the transcript**) as the
-harness recorded it: each entry labelled by who it is from (brief, note, model,
-tool call, result, summary), a subagent's entries naming the subagent, a
+harness recorded it: each entry labelled by who it is from (brief, note, late
+call, model, tool call, result, summary), a subagent's entries naming the subagent, a
 result's tool and a failure marked, a call's input and a tool's output as
 blocks under the record ceiling every block in the scroller takes — each a
 focusable region named by its tool only when it scrolls, and select-all left to

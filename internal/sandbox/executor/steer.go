@@ -34,9 +34,14 @@ import (
 // sandbox layer cannot import, so a test holds the two together.
 const (
 	// noteHeadOpen and noteHeadClose are that heading either side of the
-	// sender, shared with [notesIn], which tells a note from a brief by it.
+	// sender, shared with [headingAt], which tells a note from a brief by it.
 	noteHeadOpen  = "## A note from "
 	noteHeadClose = ", sent while this turn was running"
+
+	// lateCallHead is the whole line the engine's account of a late call it
+	// hands a running job opens with (internal/agent/prompts' LateCallArrived),
+	// which [headingAt] tells such an account by.
+	lateCallHead = "## A call the run that made it stopped waiting for"
 
 	steerInstructionHead = "## Notes from a person while you work\n\n" +
 		"A person who leads this seat, or an administrator, may send a short note " +
@@ -270,6 +275,14 @@ func ClaudeHookAnswer(event, take string, notes []HookNote) string {
 	}
 	return strings.TrimSuffix(buf.String(), "\n")
 }
+
+// The hook's line names the late calls it hands over in these words: one, or
+// a count and the plural ([ClaudeHookAnswer]). A line naming notes names them
+// first, so one that opens with either names calls alone ([hookLineKind]).
+const (
+	hookCallOne   = "a call that finished after its run stopped waiting for it"
+	hookCallsMany = "calls that finished after their run stopped waiting for them"
+)
 
 // claudeTakePrefix opens the token that names a take in a hook's words
 // ([claudeTakeToken]).
