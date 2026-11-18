@@ -1058,16 +1058,20 @@ count the attempts loaded, as each says. A repository's page has its own
 **Checks** tab, every attempt it keeps with no window, and a change's page
 has one too: the attempts that judge it, its head's, checked for its target.
 
-Press an attempt to open it: what it was checking (a change's head, a queue's
-candidate, a branch's tip, a landing bisected), the commit and branch, how
-long it ran, its exit code and why it ended; its **failures**, each
+Press an attempt to open it: how many of its tests failed of how many ran,
+and its exit code; what it was checking (a change's head, a queue's
+candidate merged onto its branch, a branch's tip, a landing bisected), the
+commit and branch, how long it ran and why it ended; **Open in CI** for a run
+another CI reported; its **failures**, each
 `path:line` a link into the diff it was checked on — the comparison of its
 base and its commit, opened on that file with the failing line marked and
 scrolled to, however long the file's patch is: the page reads the patch on
 to the page that holds the line, and no further (where the line is outside
 what the diff changes, the page says so as soon as the patch reaches past
 it, and offers the file at the attempt's commit, opened on that line; an
-attempt that records no base opens the file there directly); its **tail**; and **Read its log**,
+attempt that records no base opens the file there directly); **the end of
+its output**, numbered from its place in the whole output, its failing lines
+marked; and **Read its log**,
 which reads the log a failed run kept a page at a time, only when you ask. A
 check measures durations and exit codes, never tokens: it runs no model.
 

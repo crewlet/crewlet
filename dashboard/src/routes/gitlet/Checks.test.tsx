@@ -193,7 +193,11 @@ test("an attempt opens whole, its failures linked into its diff and its log read
   const chip = row.querySelector(".code-branch-chip");
   expect(chip?.textContent).toBe("main");
   expect(chip?.parentElement?.textContent).toContain("for main");
-  expect(within(pane).getByText("main").closest(".code-branch-chip")).not.toBeNull();
+  expect(
+    within(pane)
+      .getAllByText("main")
+      .some((el) => el.closest(".code-branch-chip")),
+  ).toBe(true);
 
   fireEvent.click(within(pane).getByRole("button", { name: /Read its log/ }));
   expect(await within(pane).findByText(/=== RUN TestRetry/)).toBeTruthy();
@@ -236,4 +240,183 @@ test("a repository's Checks tab lists its own attempts, with no window", async (
   const first = asked.find((u) => u.pathname === "/query/code_checks")!;
   expect(first.searchParams.get("repo")).toBe("web");
   expect(first.searchParams.has("since")).toBe(false);
+});
+
+// ---- the pane every checks view opens a run in ----------------------------
+
+const API_OID = "c17a9e2".padEnd(40, "0");
+const API_HEAD = "9b2e4d7".padEnd(40, "0");
+const API_BASE = "5c3e8b1".padEnd(40, "0");
+const BOARD_TAIL = [
+  "=== RUN   TestKeysetPagesInOrder",
+  "    orders_test.go:71: seeded 120 orders",
+  "    orders_test.go:88: got 49 rows, want 50",
+  "    orders_test.go:91: ord_8f21 seen twice",
+  "--- FAIL: TestKeysetPagesInOrder (0.42s)",
+  "=== RUN   TestKeysetEmptyPage",
+  "--- PASS: TestKeysetEmptyPage (0.03s)",
+  "=== RUN   TestKeysetForeignCursor",
+  "--- PASS: TestKeysetForeignCursor (0.01s)",
+  "FAIL",
+  "FAIL    nimbus/api/internal/http      1.874s",
+  "ok      nimbus/api/internal/orders    0.912s",
+  "ok      nimbus/api/internal/store     2.301s",
+  "ok      nimbus/api/internal/billing   0.655s",
+  "tearing down the postgres container (12s)",
+  "FAIL",
+  "make: *** [Makefile:41: e2e] Error 1",
+  "exit status 1",
+];
+
+/** api's e2e, failed for api!17 in the queue, as the standing listing answers it. */
+function apiE2E(extra: Record<string, unknown> = {}) {
+  return {
+    repo_id: "id-api",
+    repo: "api",
+    oid: API_OID,
+    target: "refs/heads/main",
+    name: "e2e",
+    attempt: 1,
+    state: "failed",
+    purpose: "candidate",
+    required: true,
+    change: {
+      repo: "api",
+      ref: "api!17",
+      title: "api: page the orders listing by keyset",
+      state: "open",
+    },
+    source_ref: "refs/heads/backend/orders-keyset",
+    change_head: API_HEAD,
+    base: API_BASE,
+    duration_ms: 112_000,
+    started_at: new Date(Date.now() - 22 * 60_000).toISOString(),
+    finished_at: new Date(Date.now() - 20 * 60_000).toISOString(),
+    ...extra,
+  };
+}
+
+/** The same run whole, as `code_check` answers it: with no change, which only a standing row names. */
+function apiE2EWhole(extra: Record<string, unknown> = {}) {
+  const run: Record<string, unknown> = apiE2E();
+  delete run.change;
+  delete run.source_ref;
+  delete run.change_head;
+  return {
+    ...run,
+    def: { name: "e2e", run: "make e2e", timeout_seconds: 900 },
+    tests: { total: 214, failed: 1 },
+    exit_code: 1,
+    summary: "1 test failed",
+    log_lines: 1201,
+    tail_first_line: 1184,
+    tail: `${BOARD_TAIL.join("\n")}\n`,
+    failures: [
+      {
+        path: "internal/http/orders_test.go",
+        line: 88,
+        test_id: "TestKeysetPagesInOrder",
+        message: "got 49 rows, want 50",
+      },
+    ],
+    log: { object: "objects/log-api", hash: "h", size: 88_064 },
+    url: "https://ci.example.com/runs/8812",
+    ...extra,
+  };
+}
+
+/** The words of the pane's fact under `label`. */
+function fact(pane: HTMLElement, label: string): string | null | undefined {
+  const dt = [...pane.querySelectorAll("dt")].find((d) => d.textContent === label);
+  return dt?.nextElementSibling?.textContent;
+}
+
+/** Open api's e2e from api's Checks tab, its whole read answered by `whole`. */
+async function openApiPane(whole: Record<string, unknown> = apiE2EWhole()) {
+  stubCodeEngine({
+    "/query/code_checks": () => jsonAnswer({ checks: [apiE2E()], ...page }),
+    "/query/code_check": () => jsonAnswer({ check: whole, ...page }),
+  });
+  mountCode("#/gitlet/repos/api?tab=checks", <RepoChecks repo="api" />);
+  const grid = await screen.findByRole("table", { name: "Checks of api" });
+  const row = within(grid).getByText("e2e").closest<HTMLElement>('[role="row"]')!;
+  fireEvent.click(within(row).getByRole("button"));
+  const pane = await screen.findByRole("region", { name: "Check e2e, attempt 1" });
+  await within(pane).findByRole("list", { name: "Failures" });
+  return pane;
+}
+
+// Mutation: draw an absent count as 0, or repeat the summary under the tests line.
+test("the pane says how many tests failed of how many ran", async () => {
+  const pane = await openApiPane();
+  expect(within(pane).getByRole("heading", { name: "e2e failed for api!17" })).toBeTruthy();
+  const tests = pane.querySelector(".code-check-pane__tests")!;
+  expect(tests.textContent).toBe("1 of 214 tests failed · exit code 1");
+  expect(tests.getAttribute("data-tone")).toBe("danger");
+  cleanup();
+  const passed = await openApiPane(
+    apiE2EWhole({
+      state: "passed",
+      tests: { total: 214 },
+      exit_code: 0,
+      summary: "214 tests passed · exit code 0",
+    }),
+  );
+  expect(passed.querySelector(".code-check-pane__tests")?.textContent).toBe(
+    "214 tests passed · exit code 0",
+  );
+  expect(within(passed).getAllByText("214 tests passed · exit code 0")).toHaveLength(1);
+  cleanup();
+  const uncounted = await openApiPane(apiE2EWhole({ tests: undefined }));
+  expect(uncounted.querySelector(".code-check-pane__tests")?.textContent).toBe("exit code 1");
+  expect(uncounted.textContent).not.toMatch(/\b0 tests\b/);
+});
+
+// Mutation: say the candidate's own commit, or drop the train's base.
+test("the pane's facts say what was checked", async () => {
+  const pane = await openApiPane();
+  expect(fact(pane, "Checked")).toBe("merged onto main at 5c3e8b1 in the queue");
+  const commit = within(pane).getByRole("link", { name: "9b2e4d7" });
+  expect(commit.getAttribute("href")).toBe(commitHref("api", API_HEAD));
+  expect(commit.parentElement?.textContent).toBe("9b2e4d7 on backend/orders-keyset");
+  expect(
+    within(pane)
+      .getByRole("link", { name: /api!17/ })
+      .getAttribute("href"),
+  ).toContain("/gitlet/repos/api/changes/17");
+});
+
+// Mutation: number from 1, or tint a line that says no failure.
+test("the end of the output is numbered from its first line and its failing lines are marked", async () => {
+  const pane = await openApiPane();
+  const tail = within(pane).getByRole("region", { name: "The end of its output" });
+  const lines = [...tail.querySelectorAll<HTMLElement>(".code-check-tail__line")];
+  const numbers = lines.map((l) => Number(l.querySelector(".code-check-tail__n")!.textContent));
+  expect(numbers[0]).toBe(1184);
+  expect(numbers.at(-1)).toBe(1201);
+  expect(within(pane).getByText("lines 1,184 to 1,201 of 1,201")).toBeTruthy();
+  expect(
+    lines
+      .filter((l) => l.hasAttribute("data-fail"))
+      .map((l, _, all) => numbers[lines.indexOf(l)] ?? all),
+  ).toEqual([1186, 1188, 1193, 1194, 1199]);
+  cleanup();
+  const cut = await openApiPane(apiE2EWhole({ tail_cut: true }));
+  expect(cut.querySelector(".code-check-tail__n")?.textContent).toBe("1184…");
+  cleanup();
+  const old = await openApiPane(apiE2EWhole({ log_lines: undefined, tail_first_line: undefined }));
+  expect(old.querySelector(".code-check-tail")).toBeNull();
+  expect(old.querySelector(".code-check-tail__n")).toBeNull();
+  expect(old.textContent).toContain("=== RUN   TestKeysetPagesInOrder");
+});
+
+// Mutation: draw Open in CI for a run that names no CI.
+test("Open in CI is drawn only for a run that names its CI", async () => {
+  const pane = await openApiPane();
+  const ci = within(pane).getByRole("link", { name: /Open in CI/ });
+  expect(ci.getAttribute("href")).toBe("https://ci.example.com/runs/8812");
+  expect(ci.getAttribute("target")).toBe("_blank");
+  cleanup();
+  const local = await openApiPane(apiE2EWhole({ url: undefined }));
+  expect(within(local).queryByRole("link", { name: /Open in CI/ })).toBeNull();
 });
