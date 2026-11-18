@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"path"
@@ -333,8 +334,10 @@ type LaunchRequest struct {
 	// that write the record holds the turn's notes, the brief's and the
 	// box's ([LaunchRequest.HandedNotes]), and a launch that fails after it
 	// ENDS the record, whose ending reports every one of them no job ran
-	// with ([PendingRun.EndedNotes]); a launch that fails before it wrote
-	// nothing, and its notes are the caller's still. Nil tells nobody.
+	// with ([PendingRun.EndedNotes]). A write whose answer was lost is told
+	// once the launch has ended a record that names the job
+	// ([UnopenedLaunchError]). A launch that fails before it wrote nothing,
+	// and its notes are the caller's still. Nil tells nobody.
 	Recorded func(launchID string)
 
 	// Opened is told the job the moment the store has opened it
@@ -828,6 +831,14 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		CreatedAt:      now(),
 	}, fence)
 	if err != nil {
+		// A ROW THAT MAY NAME THE JOB WITH NO LOG OPENED TO IT is ended, that
+		// job alone ([UnopenedLaunchError]): left launching, nothing polls or
+		// claims it, and it holds its seat until the seat moves. Ended, the
+		// record held the turn's notes, and its ending reports them.
+		if unopened, ok := errors.AsType[*UnopenedLaunchError](err); ok &&
+			c.endLaunch(ctx, req, fence, unopened.LaunchID) && req.Recorded != nil {
+			req.Recorded(unopened.LaunchID)
+		}
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the run: %w", err)
 	}
 	// THE RECORD HOLDS THE TURN'S NOTES FROM HERE — see
@@ -1359,8 +1370,6 @@ func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest
 		}
 		cancel()
 	}
-	ctx, done := detachedEnding(ctx)
-	defer done()
 	// Every live status and every job: this launch is abandoned whatever the
 	// row reached. TWO BOXES CAN BE OWED A RECLAIM, and each is reclaimed by
 	// the one party that can name it. The launch's own is killed above,
@@ -1373,21 +1382,33 @@ func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest
 	// a settle may no longer act on ([Coordinator.finish]). Where the two are
 	// one box — the attach landed — it is killed twice, which every provider
 	// answers as the reclaim it wanted: a kill of a box already gone succeeds.
+	c.endLaunch(ctx, req, fence, EveryLaunch)
+	// AND THE SEAT GOES BACK whether or not the record could be deleted:
+	// the launch is over and its box reclaimed, so nothing is driving a job
+	// the seat's mail must wait behind. A record that survived the delete is
+	// a launching row whose ending this node keeps and retries.
+	c.uncountRun(req.Turn.AgentHandle, StatusLaunching)
+}
+
+// endLaunch ends the run of a launch that could not finish, licensed to launch
+// alone or to [EveryLaunch], under a context of its own ([detachedEnding]),
+// reporting whether an ending of the run under that license was decided: a
+// row that names another job is left as it stands. See [Coordinator.abandon].
+func (c *Coordinator) endLaunch(ctx context.Context, req LaunchRequest, fence Fence, launch string) bool {
+	ctx, done := detachedEnding(ctx)
+	defer done()
 	run := PendingRun{TurnID: req.Turn.TurnID, AgentHandle: req.Turn.AgentHandle}
-	if _, err := c.endRecord(ctx, run, ending{
-		fence: fence, whileIn: Active, launch: EveryLaunch, reclaim: true,
-	}); err != nil {
+	ended, err := c.endRecord(ctx, run, ending{
+		fence: fence, whileIn: Active, launch: launch, reclaim: true,
+	})
+	if err != nil {
 		log.WarnContext(ctx, "sandbox_launch_finish_kept",
 			"turn_id", req.Turn.TurnID, "error", err.Error(),
 			"detail", "the abandoned launch's record is not deleted yet; this node finishes "+
 				"the ending, and the seat's next recovery pass reaps the row if the seat "+
 				"moves first")
 	}
-	// AND THE SEAT GOES BACK whether or not the record could be deleted:
-	// the launch is over and its box reclaimed, so nothing is driving a job
-	// the seat's mail must wait behind. A record that survived the delete is
-	// a launching row whose ending this node keeps and retries.
-	c.uncountRun(req.Turn.AgentHandle, StatusLaunching)
+	return ended != nil
 }
 
 // label is what the run is named by, cut by [summarise]: the caller's own
