@@ -20,22 +20,21 @@ import (
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
-// How a call carries the id its harness gave it (the package doc's "A call
-// carries the id its harness gave it").
+// How a call carries the id its harness gave it (package doc, "A call carries
+// the id its harness gave it").
 
-// toolUseKey is the `_meta` key Claude Code hands each call's own id under, as
-// the claude-code profile reads it: the key a runner of a box of Claude Code's
-// declares (internal/sandbox/executor's Runner.CallIDMeta).
+// toolUseKey is the `_meta` key Claude Code hands each call's id under, the one
+// its box's runner declares (internal/sandbox/executor's Runner.CallIDMeta).
 const toolUseKey = "claudecode/toolUseId"
 
-// withCallIDKey readies a session to read each call's id under key, as the
-// runner that starts its box declares it.
+// withCallIDKey readies a session to read each call's id under key, as its
+// box's runner declares it.
 func withCallIDKey(key string) func(*mcpbridge.Session) {
 	return func(s *mcpbridge.Session) { s.CallIDMeta = key }
 }
 
-// callWithMeta makes one call of name from sess, meta its request's `_meta`,
-// and answers its result: a failed one's too, which is an answer.
+// callWithMeta makes one call of name from sess with meta as its `_meta`, and
+// returns its result, a failed one's included.
 func callWithMeta(t *testing.T, sess *mcp.ClientSession, name string, args any,
 	meta mcp.Meta) *mcp.CallToolResult {
 	t.Helper()
@@ -48,10 +47,8 @@ func callWithMeta(t *testing.T, sess *mcp.ClientSession, name string, args any,
 	return res
 }
 
-// callFromBoxWithMeta makes a call to name from box, meta its request's `_meta`,
-// and hands back its answer once the call returns — or its failure, as a failed
-// answer that names it: [callFromBox], for a call that carries its harness's
-// id.
+// callFromBoxWithMeta is [callFromBox] for a call carrying its harness's id in
+// meta, its request's `_meta`.
 func callFromBoxWithMeta(ctx context.Context, box *mcp.ClientSession, name string, args map[string]any,
 	meta mcp.Meta) <-chan *mcp.CallToolResult {
 
@@ -67,9 +64,8 @@ func callFromBoxWithMeta(ctx context.Context, box *mcp.ClientSession, name strin
 	return answered
 }
 
-// carriesID fails t unless l holds one record of a call, under id, and — where
-// entry is set — the one entry written ahead of it, under id too, or no entry
-// where it is not; and answers the records.
+// carriesID fails t unless l holds one call record under id and, if entry, one
+// entry under id ahead of it (else none); it returns the records.
 func carriesID(t *testing.T, l *ledger, id string, entry bool) []mcpbridge.Call {
 	t.Helper()
 	rows := l.rows()
@@ -85,27 +81,18 @@ func carriesID(t *testing.T, l *ledger, id string, entry bool) []mcpbridge.Call 
 	return rows
 }
 
-// EVERY RECORD OF A BOX'S CALL CARRIES THE ID ITS HARNESS GAVE IT. Claude Code
-// names each call it makes by the model's tool_use id, which it hands the
-// server in the request's `_meta` and its session's transcript files the call
-// under. The bridge records that id, read under the key the box's runner
-// declares, on the call's entry written ahead of it and on its one update, so
-// the run's log names each call as its harness's session does — ON EVERY PATH
-// THAT RECORDS A CALL: one that ran, one the surface refused before its tool
-// ran, one the surface could not run, one held for a person, one whose
-// arguments did not parse, one made once the run's tools had closed (those two
-// answered without being admitted, so with no entry), and one whose run's
-// tools closed while its entry was being written, refused, its entry updated
-// to that refusal. A held call keeps its id beside neither its arguments nor
-// their digest: the id says nothing of what the seal hides. And a skill load
-// its harness's hook reports, the bridge's own call of the loader, carries
-// none, whatever id the hook's request sent.
+// EVERY RECORD OF A BOX'S CALL CARRIES THE ID ITS HARNESS GAVE IT (the
+// model's tool_use id, in `_meta`), on entry and update, so the run's log names
+// each call as the harness's transcript does — ON EVERY PATH: ran, refused,
+// could not run, held for a person, unparsable arguments or tools already
+// closed (no entry: never admitted), and tools closed mid-entry. A held call
+// keeps its id though its arguments are sealed: the id reveals nothing. A
+// hook-reported skill load, the bridge's own call, carries none, whatever id
+// the hook sent.
 //
-// Mutation: record a finished call without the id it arrived with
-// (bridge-record-carries-no-id), and the update of a call that ran, of one the
-// surface refused and of a held one carries none; record the refusal of a call
-// whose run's tools closed while its entry was written without its entry's id
-// (bridge-stopped-update-carries-no-id), and that call's update carries none.
+// Mutation: drop a finished call's id (bridge-record-carries-no-id), or the
+// tools-closed-mid-entry refusal's (bridge-stopped-update-carries-no-id), and
+// those updates carry none.
 func TestEveryRecordOfABoxsCallCarriesTheIDItsHarnessGaveIt(t *testing.T) {
 	t.Parallel()
 	const id = "toolu_01carriesitsid"
@@ -239,15 +226,11 @@ func TestEveryRecordOfABoxsCallCarriesTheIDItsHarnessGaveIt(t *testing.T) {
 	})
 }
 
-// A CALL'S ID IS READ ONLY UNDER ITS RUNNER'S KEY, AND ONLY WHOLE. The box's
-// harness hands a call's id in the request's `_meta` under a key of its own,
-// which the runner that starts the box declares, and the box can put anything
-// anywhere in `_meta`: so the bridge reads the id under that one key and no
-// other — a session whose runner declares none reads none, even a value under
-// the empty key — and takes only an id the run's log keeps whole: at most
-// sandbox.MaxBridgeCallIDBytes of letters, digits, `-` and `_`. A value that is
-// not a string, an id past the bound and one outside those characters are
-// recorded as none, on the call's entry and its update alike, never cut: two
+// A CALL'S ID IS READ ONLY UNDER ITS RUNNER'S KEY, AND ONLY WHOLE. The box
+// can put anything in `_meta`, so the id is read under the runner's declared
+// key alone (none declared reads none, even under the empty key), and only as
+// at most sandbox.MaxBridgeCallIDBytes of letters, digits, `-` and `_`. Any
+// other value is recorded as none on entry and update alike, never cut: two
 // ids cut alike would name two calls as one.
 //
 // Mutation: read the id under a fixed key, whatever it is

@@ -12,13 +12,12 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// THE WATERMARK IS NEVER REUSED. An append-only table is carried past its
-// watermark value of the last row the changelog acknowledged, so a row written
-// after that has to come out ABOVE it. The rowid did not: these
-// tables are keyed on text, so a new row took max(rowid) + 1 — and once the
-// newest row was deleted (the diary's trim and expiry, the lifecycle's sweeps,
-// a skill's pruned history) the next insert took that rowid again, below the
-// mark, and was never published while this node held the seat.
+// THE WATERMARK IS NEVER REUSED. An append-only table is carried past the
+// watermark of the last row the changelog acknowledged, so a later row must
+// come out ABOVE it. A rowid does not: on these text-keyed tables, once the
+// newest row is deleted (the diary's trim and expiry, the lifecycle's sweeps,
+// a skill's pruned history) the next insert takes its rowid again, below the
+// mark, and is never published while this node holds the seat.
 
 // appendOnlyRow writes one row of an append-only table for the seat, under
 // the given id, the way that table's writers do — one per table, so a table
@@ -121,10 +120,9 @@ func TestNoAppendOnlyTableReusesItsWatermark(t *testing.T) {
 }
 
 // THE DIARY, end to end through a real broker: the holder publishes the
-// seat's notes; the expiry and the trim delete the newest of them — the trim
-// the oldest never-retrieved note, which is where the fill used to re-file the
-// last note it moved; then a new note is written and an old one filled. Both
-// reach the changelog, and a node hydrating the seat from it holds both.
+// seat's notes; the expiry and the trim (of the oldest never-retrieved note)
+// delete the newest of them; then a new note is written and an old one
+// filled. Both reach the changelog, and a node hydrating the seat holds both.
 func TestANoteWrittenOrFilledAfterTheNewestWasSweptIsStillCarried(t *testing.T) {
 	t.Parallel()
 	conn := broker(t)
@@ -212,15 +210,13 @@ var changeIndexes = map[string]string{
 
 // THE INCREMENTAL EXPORT IS A RANGE SEEK, NOT A SORT.
 //
-// A page is read in watermark order until it holds its budget, and the read
-// stops there, which saves the rest only when the plan returns rows in that
-// order as it finds them: a seek on node migration 0041's (seat, change_seq)
-// index, with no sort and no pass over the table. With a sort, the first row
-// of every page waits on reading, and sorting, every row above the mark, and
-// the page bounds nothing. Planned as a deployment plans it, over a store
-// nothing has ANALYZEd, where episodes has four other indexes that lead on
-// the seat, for both of a seat's ranges: a page of its own rows, above a mark,
-// and a page of its backlog, between a mark and the seat's boundary.
+// A page reads in watermark order until it holds its budget and stops, which
+// saves the rest only when the plan is a seek on node migration 0041's (seat,
+// change_seq) index, with no sort and no pass over the table: with a sort,
+// every page first reads and sorts every row above the mark. Planned as a
+// deployment plans it, over a store nothing has ANALYZEd, where episodes has
+// four other indexes leading on the seat, for both of a seat's ranges: its
+// own rows above a mark, and its backlog between a mark and its boundary.
 //
 // Mutation: read either range's page in key order, and this goes red.
 func TestTheIncrementalExportIsARangeSeekNotASort(t *testing.T) {
@@ -295,13 +291,11 @@ var writtenTogether = map[string]func(t *testing.T, db *store.DB){
 
 // ROWS WRITTEN TOGETHER CARRY DISTINCT WATERMARKS.
 //
-// A mark per acknowledged row is sound only while no two rows of a table share
-// a watermark value above 0: a page boundary or a cut between two that did
-// would leave the mark at their value, and the next read, strictly above it,
-// would never publish the second while this node holds the seat. A mark per
-// table could not split such a pair inside one export; pages and a mark per
-// row can. So every way a row is stamped is held here: two rows of one
-// statement, a vector filled in place, and a row a hydration imports.
+// The mark moves per acknowledged row, so two rows of a table sharing a
+// watermark above 0, split by a page or a cut, would leave the mark at their
+// value, and the next read, strictly above it, would skip the second. So
+// every way a row is stamped is held here: two rows of one statement, a
+// vector filled in place, and a row a hydration imports.
 //
 // Mutation: point the diary's watermark at created_at, and this goes red.
 func TestRowsWrittenTogetherCarryDistinctWatermarks(t *testing.T) {

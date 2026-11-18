@@ -22,19 +22,16 @@ import (
 
 // A `[SEATS]` SATELLITE READS THE CHANGELOG ACROSS A LEAF LINK.
 //
-// A node without the `data` role joins the fleet's broker as a LEAF: its own
-// broker runs no JetStream and reaches the members' across one leaf link, in
-// the fleet's domain ([jsapi.Domain]), and it holds that link to its own
-// max_payload — a larger message arriving on it closes the link (nats-server
-// leafnode.go, processLeafMsgArgs), and the satellite's lease renewals cross
-// it. The cases below start a member and a leaf joined to it, as the embedded
-// fleet does, publish a seat's rows through the member and hydrate them
-// through the leaf.
+// A node without `data` reaches the members' JetStream across one leaf link in
+// [jsapi.Domain], and a message past the leaf's max_payload closes that link
+// (nats-server leafnode.go, processLeafMsgArgs), the satellite's lease
+// renewals with it. These cases publish through a member and hydrate through
+// a leaf joined to it, as the embedded fleet does.
 
-// leafFleet starts a member carrying memberPayload bytes a message, holding
-// every stream the queue provisions in the embedded fleet's domain, and a leaf
-// joined to it carrying leafPayload, and returns the member and a connection to
-// each once the leaf's clients reach the member's JetStream.
+// leafFleet starts a member carrying memberPayload bytes a message, with every
+// stream the queue provisions in the embedded fleet's domain, and a leaf
+// carrying leafPayload, returning once the leaf's clients reach the member's
+// JetStream.
 func leafFleet(t *testing.T, memberPayload, leafPayload int32) (hub *server.Server, member, leaf *nats.Conn) {
 	t.Helper()
 	dir := brokertest.TempDir(t)
@@ -51,9 +48,8 @@ func leafFleet(t *testing.T, memberPayload, leafPayload int32) (hub *server.Serv
 			t.Fatalf("provision %s as the queue provisions it: %v", stream.Name, err)
 		}
 	}
-	// THE PORT THE MEMBER'S LEAF LISTENER BOUND, as nats-server reports it:
-	// it writes the port it chose back into its options before it is ready,
-	// and offers no listener address for leaves.
+	// nats-server offers no leaf listener address; Varz reports the port it
+	// chose.
 	varz, err := hub.Varz(nil)
 	if err != nil {
 		t.Fatalf("read the member's leaf listener: %v", err)
@@ -71,9 +67,8 @@ func leafFleet(t *testing.T, memberPayload, leafPayload int32) (hub *server.Serv
 	return hub, member, leaf
 }
 
-// leafLink is the member's connection to its one leaf, by the id the member
-// gave it, or 0 while it holds none: a leaf that closed its link and dialled
-// again is a connection of another id.
+// leafLink is the id of the member's connection to its one leaf, or 0 while
+// it holds none: a leaf that closed its link and redialled has another id.
 func leafLink(t *testing.T, hub *server.Server) uint64 {
 	t.Helper()
 	leafz, err := hub.Leafz(nil)
@@ -86,8 +81,7 @@ func leafLink(t *testing.T, hub *server.Server) uint64 {
 	return leafz.Leafs[0].ID
 }
 
-// startServer starts an in-process broker with opts, stopped when the case
-// ends.
+// startServer starts an in-process broker, stopped when the case ends.
 func startServer(t *testing.T, opts *server.Options) *server.Server {
 	t.Helper()
 	ns, err := server.NewServer(opts)
@@ -114,8 +108,8 @@ func connectTo(t *testing.T, ns *server.Server) *nats.Conn {
 	return conn
 }
 
-// embeddedOn is a JetStream client over conn in the embedded fleet's API, its
-// domain: the one a leaf's clients reach the members' JetStream in.
+// embeddedOn is a JetStream client over conn in the embedded fleet's domain,
+// the one a leaf's clients reach the members' JetStream in.
 func embeddedOn(t *testing.T, conn *nats.Conn) jetstream.JetStream {
 	t.Helper()
 	client, err := jsapi.Embedded().Client(conn)
@@ -125,10 +119,9 @@ func embeddedOn(t *testing.T, conn *nats.Conn) jetstream.JetStream {
 	return client
 }
 
-// reachable waits until client reaches the changelog: across a leaf, the link
-// is made and the member's interest in its domain's API carried over it a
-// moment after both brokers say they are ready, and until then a request
-// through the leaf has no responder.
+// reachable waits until client reaches the changelog: the member's interest
+// in its domain's API crosses the leaf a moment after both brokers are ready,
+// and until then a request through the leaf has no responder.
 func reachable(t *testing.T, client jetstream.JetStream) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
@@ -169,14 +162,10 @@ func noteOfSize(t *testing.T, id string, size int) Row {
 
 // A ROW AT THE TRANSPORT'S LIMIT HYDRATES ACROSS A LEAF LINK.
 //
-// A row crosses a satellite's link as its replay's pull delivers it, whole and
-// no larger, and nothing else a hydration asks is answered with a row: the
-// barrier it reads to is a message of no bytes, and every count arrives with
-// a consumer's creation. So a row at the link's limit fits, where any answer
-// carrying it base64-encoded in JSON, a third larger, would close the leaf's
-// link to the member. The row here is a note whose message is exactly the
-// limit, on a fleet carrying a small one and on one carrying the embedded
-// fleet's 8 MiB.
+// A row crosses the link only raw, in a replay's pull (the barrier is an empty
+// message, counts come with a consumer's creation), so a row at the limit
+// fits, where a base64 JSON answer a third larger would close the link. Run at
+// 64 KiB and at the embedded fleet's 8 MiB.
 //
 // Mutation: bound a pull by the max_payload alone, without the room the
 // broker counts beside a message, and this goes red.
@@ -218,18 +207,12 @@ func TestARowAtTheTransportsLimitHydratesAcrossALeafLink(t *testing.T) {
 
 // A ROW LARGER THAN THIS NODE'S CONNECTION CARRIES IS REFUSED AS THAT.
 //
-// A pull is bounded at one message at this node's connection's max_payload,
-// and the broker sends a pull nothing past what is left of its bytes: it ends
-// the pull with none (`409 Message Size Exceeds MaxBytes`, which the client
-// reads as the pull's ordinary end). So a row published through a server, an
-// account or a user carrying more than this node's connection is never sent to
-// it, at any pull of any sweep, and the seat is refused there. That refusal
-// read as a copy behind its leader whose budget ran out, said a second into a
-// fifteen-second budget and naming no limit, so nothing pointed at the setting
-// to align. It is refused by name, naming the limit. The fleet here is a
-// member carrying 128 KiB a message and a leaf carrying 64 KiB, and the row is
-// a note of 96 KiB, published through the member; the link stays up, since
-// the broker never sends the row across it.
+// A pull is bounded at this node's max_payload, and the broker ends a pull
+// with nothing rather than send a larger message (`409 Message Size Exceeds
+// MaxBytes`, read by the client as an ordinary end). So a row published through
+// a peer carrying more is never delivered, and the seat is refused as
+// errRowPastPull, naming the limit to align, never as a stalled copy. A 96 KiB
+// note crosses from a 128 KiB member toward a 64 KiB leaf.
 //
 // Mutation: read a pull that ended with no row while its copy held more as a
 // copy that stalled, and this goes red.
@@ -253,26 +236,12 @@ func TestARowLargerThanThisNodesConnectionCarriesIsRefusedAsThat(t *testing.T) {
 // A COPY BEHIND ACROSS A LEAF HANDS THE SATELLITE THE ROW IT LACKED IN A PULL,
 // AND THE LINK STAYS UP.
 //
-// Where a table's replay ran on a copy behind the changelog's leader, the
-// leader's word on what lay past the replay was the first row the copy lacked,
-// whole and base64-encoded in JSON, a third larger than the row. A row of 6 to
-// 8 MiB therefore crossed a satellite's leaf link as a reply over the 8 MiB
-// the leaf carries, and the leaf closed its whole link to the fleet, the
-// satellite's lease renewals with it (crewlet/crewlet#1031's defect, reached
-// through that read). A replay ends at a barrier it reads through its own
-// consumer instead, so a row crosses the link only in a pull, raw. Here the
-// fleet is a member and a leaf each carrying the embedded fleet's 8 MiB, and
-// the first copy the diary's replay is placed on lacks its newest note, of
-// 7 MiB, and the hydration's barrier, and never catches up: the replay is
-// placed again past the note it received, and the copy it lands on hands the
-// large note over, alone in a pull at the transport's bound since it is past
-// the window a pull across the link carries. The hydration carries both
-// notes, the large one whole, and the member's connection to the leaf is the
-// one it had before.
-//
-// Red on the end check this replaced: the leader's answer closed the link
-// (the member's connection to the leaf went from one id to another) and the
-// read, asked once across a link, waited out the hydration's budget.
+// A replay ends at a barrier read through its own consumer, never at a
+// leader's answer, which would carry the copy's missing row as base64 JSON and
+// close an 8 MiB leaf link. On 8 MiB brokers, the diary's first copy lacks a
+// 7 MiB note and the barrier and never catches up: the replay is placed again
+// past what it received, and the next copy hands the note over alone in a
+// pull. Both notes arrive, the large one whole, and the leaf link keeps its id.
 //
 // Mutation: take the copy's word for the end, and this goes red: the
 // hydration carries the note the copy held alone.

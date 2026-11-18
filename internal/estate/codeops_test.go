@@ -27,10 +27,10 @@ import (
 
 // ---- a fake node's code half ------------------------------------------------ //
 
-// Propose is a committer that commits every push it is given at the next
-// position on the code log, answering as the operation its own node's name —
-// so a case can tell which node decided — or refuses every push with codeErr;
-// and, while holdProposals is set, decides nothing until it is closed.
+// Propose is a committer that commits every push at the next position on the
+// code log, answering its own node's name as the operation (so a case can tell
+// which node decided), or refuses every push with codeErr; while holdProposals
+// is set, it decides nothing until that is closed.
 func (f *fakeNode) Propose(ctx context.Context, p gitlet.Proposal) (gitlet.ProposeResult, error) {
 	f.note("code.propose")
 	f.mu.Lock()
@@ -399,15 +399,15 @@ func (f *fleet) conversedOn(repo string) []string {
 	return out
 }
 
-// A CONVERSATION RECORD IS PUBLISHED BY THE COMMITTING NODE: a write of a
-// change's conversation is asked of the repository's committer — the first of
-// the rendezvous order of the repository over every data node, the node a push
-// to it is proposed on — whichever node asks, so one node's change writer takes
-// a change's writes one at a time and a Gitlet node never publishes one; and an
-// unanswered one is asked of the runner-up under the same operation id.
+// A CONVERSATION RECORD IS PUBLISHED BY THE COMMITTING NODE: whichever node
+// asks, a write of a change's conversation goes to the repository's committer
+// (first of its rendezvous order over every data node, where its pushes are
+// proposed), so one change writer takes a change's writes one at a time and a
+// Gitlet node never publishes one; an unanswered write goes to the runner-up
+// under the same operation id.
 //
-// Mutation: key the operation by nothing, and the writes spread over whichever
-// node answered last; key it by the change, and a repository's conversations
+// Mutation: key the operation by nothing and the writes spread over whichever
+// node answered last; key it by the change and a repository's conversations
 // leave its committer.
 func TestAConversationRecordIsPublishedByTheCommittingNode(t *testing.T) {
 	t.Parallel()
@@ -477,16 +477,15 @@ func (f *fleet) checkedOn(repo string) []string {
 	return out
 }
 
-// A CHECK RECORD IS PUBLISHED BY A DATA NODE — the repository's committing
-// one: a write of a repository's checks is asked of the first of the
-// rendezvous order of the repository over every data node, the node its pushes
-// are proposed on, whichever node asks — a Gitlet node running the check among
-// them, which never publishes one — so one node's checks writer takes a
-// repository's check writes one at a time; and an unanswered one is asked of
-// the runner-up under the same operation id.
+// A CHECK RECORD IS PUBLISHED BY A DATA NODE, the repository's committer:
+// whichever node asks (a Gitlet node running the check among them, which never
+// publishes one), a write of a repository's checks goes to the first of its
+// rendezvous order over every data node, where its pushes are proposed, so one
+// checks writer takes its check writes one at a time; an unanswered write goes
+// to the runner-up under the same operation id.
 //
-// Mutation: key the operation by nothing — publish on the node that asks — and
-// the writes spread over whichever node answered last, red.
+// Mutation: key the operation by nothing (publish on the asking node) and the
+// writes spread over whichever node answered last, red.
 func TestACheckRecordIsPublishedByADataNode(t *testing.T) {
 	t.Parallel()
 	holders := []string{"data-a", "data-b", "data-c", "data-d"}
@@ -788,21 +787,15 @@ func serveDesk(t *testing.T, f *fleet, d *codeDesk) {
 	f.git.set(func(p *fakePlacement) { p.nodes = []string{"data-d"} })
 }
 
-// EVERY CODE OPERATION CROSSES WHOLE: a push's proposal and a compaction's —
-// a publication's, its layer whole — and each of an expunge's three records,
-// the admission's resolve, a cache's snapshot page, the receiver's pending
-// wait, the REST routes' listing, a seat's refs listing, a Gitlet node's
-// introduced pages and its compactor's, publisher's and maintainer's due
-// listings, a home's due queue, and a seat's resolve of a ref reach a data
-// node from a node that holds no data —
-// and a read by object id and a merge preview the Gitlet node — with their
-// arguments as they were sent (a seat's reads naming the colleague they are
-// made for, whose grant the answering node judges too), their answers come
-// back as they were given — a snapshot's layers, packs, refs, pushes,
-// retirements and cursor, a repository's detail, its limits and who set its
-// rules, the refs and the introducing pushes, the due listings, a home's
-// queue work with its given-up attempts and owed closes, a resolved ref, a
-// page of a diff, a preview's conflicted paths — and a refusal keeps the
+// EVERY CODE OPERATION CROSSES WHOLE: every code log write (a push, a
+// compaction with its published layer, an expunge's records, a change's, a queue's, a
+// merge's, a conversation's, a check's, a lifecycle request) and every code
+// read (a resolve, a snapshot page, the pending wait, the listings and due
+// listings, a home's due queue, a seat's resolve of a ref) reaches a data node
+// from a node holding no data, and a read by object id, a merge preview and an
+// engine write reach the Gitlet node, with their arguments as sent (a seat's
+// reads naming the colleague they are made for, whose grant the answering node
+// judges too); every answer comes back as given, and a refusal keeps the
 // identity the host and the cache branch on.
 func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	t.Parallel()
@@ -1119,9 +1112,8 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		}
 	}
 
-	// A CHANGE'S SEVEN WRITES, every field of each — the fields the committer
-	// stamps among them, which cross whole whoever set them — and every
-	// field of the answer.
+	// A CHANGE'S SEVEN WRITES, every field of each (the committer-stamped ones
+	// too, which cross whole whoever set them), and every field of the answer.
 	title, body := "Retry the flaky upload", "It fails one run in ten.\n\nSee ENG-412."
 	seat := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"}
 	// WHOM EACH SEAT'S WRITE IS MADE FOR, which crosses whole beside it.
@@ -1163,10 +1155,9 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		}
 	}
 
-	// A MERGE QUEUE'S TWO WRITES AND THE HOME'S EJECT, every field of each —
-	// the principal the committer stamps among them, which crosses whole
-	// whoever set it — and every field of the answer, the preconditions a
-	// gate_unmet names among them.
+	// A MERGE QUEUE'S TWO WRITES AND THE HOME'S EJECT, every field of each (the
+	// committer-stamped principal too, crossing whole whoever set it), and
+	// every field of the answer, a gate_unmet's preconditions among them.
 	for name, p := range map[string]gitlet.QueueProposal{
 		"an enqueue": {Enqueue: &gitlet.Enqueue{RepoID: ref.ID, EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
 			ChangeID: item.ChangeID, TargetRef: "refs/heads/main",
@@ -1197,10 +1188,9 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		}
 	}
 
-	// A CHANGE'S MERGE, every field of it — the principal, the source and
-	// what the snapshot held of the target, which the committer stamps,
-	// among them, crossing whole whoever set them — and every field of the
-	// answer, the preconditions a gate_unmet names among them.
+	// A CHANGE'S MERGE, every field of it (the committer-stamped principal,
+	// source and snapshot of the target too, crossing whole whoever set them),
+	// and every field of the answer, a gate_unmet's preconditions among them.
 	merge := gitlet.MergeProposal{OpID: "019a0c2e-0000-7000-8000-0000000000f0.code_merge_change", Asker: seat,
 		Seen: at, WrittenFor: carrier, Merge: gitlet.Merge{RepoID: ref.ID, MergeID: "019a0c2e-0000-7000-8000-0000000000f5",
 			ChangeID: item.ChangeID, Method: gitlet.MergeMethodSquash, TargetRef: "refs/heads/main",
@@ -1225,9 +1215,8 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		t.Errorf("the committer was proposed the merge %+v, want %+v", got, merge)
 	}
 
-	// A CHANGE'S CONVERSATION'S WRITES, every field of each — the fields the
-	// writer stamps among them, which cross whole whoever set them — and
-	// every field of the answer.
+	// A CHANGE'S CONVERSATION'S WRITES, every field of each (the writer-stamped
+	// ones too, crossing whole whoever set them), and every field of the answer.
 	comment := &gitlet.Comment{RepoID: ref.ID, ChangeID: item.ChangeID, CommentID: "019a0c2e-0000-7000-8000-0000000000e1",
 		ThreadID: "019a0c2e-0000-7000-8000-0000000000e2", ParentID: "019a0c2e-0000-7000-8000-0000000000e2",
 		FindingID: "019a0c2e-0000-7000-8000-0000000000e4", By: seat,
@@ -1453,16 +1442,16 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		}
 	}
 
-	// THE HOME'S DUE QUEUE, each query and each page whole: the listing after
-	// a marked cursor, and one repository's page with every field of its
-	// target's queue work — an entry, enqueued by a seat for a credential
-	// with the apps that credential's turn used, a candidate with a check on
-	// its commit — a given-up train's attempt and an owed close of the same
-	// entry. Dropped on the wire, the repository's id would list every
-	// repository, the cursor read a first page again, the floor read rows from
-	// before the home's own record, and an entry's member land, eject or close
-	// the entry as another — whom its enqueue was made for among them, without
-	// which its work item is closed for nobody, decided for the enqueuer alone.
+	// THE HOME'S DUE QUEUE, each query and page whole: the listing after a
+	// marked cursor, and one repository's page with every field of its
+	// target's queue work (an entry enqueued by a seat for a credential, with
+	// the apps that credential's turn used; a candidate with a check on its
+	// commit; a given-up train's attempt; an owed close of the same entry).
+	// Dropped on the wire, the repository id would list every repository, the
+	// cursor reread a first page, the floor read rows older than the home's own
+	// record, and an entry's member land, eject or close it as another; without
+	// whom its enqueue was made for, its work item is closed for nobody, decided
+	// for the enqueuer alone.
 	entry := gitlet.QueueWorkEntry{EntryID: "019a0c2e-0000-7000-8000-0000000000f1", Seq: at,
 		State: gitlet.QueueTesting, HeadOID: "7777777777777777777777777777777777777777",
 		Method: gitlet.MergeMethodSquash, CloseTask: true,
@@ -1514,11 +1503,10 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	}
 
 	// A REF RESOLVED, and a READ BY OBJECT ID asked of the Gitlet node: each
-	// query whole — the git read's floor, cursor, paths given as bytes and
-	// its sub-query — and each answer whole, the git read's page with its
-	// next cursor and the position its copy was read at. The walk stamps
-	// the git read's attempt itself (home, asked of its one Gitlet node first),
-	// so that is the one field it adds to what the caller sent.
+	// query whole (the git read's floor, cursor, byte paths and sub-query) and
+	// each answer whole (the page, its next cursor, the position its copy was
+	// read at). The walk stamps the git read's attempt itself (home, asked of
+	// its one Gitlet node first): the one field it adds to what was sent.
 	d.mu.Lock()
 	d.resolved = gitlet.RefAnswer{Repo: ref, Refs: []gitlet.ResolvedRef{
 		{Name: "main", Ref: "refs/heads/main", OID: "6666666666666666666666666666666666666666", Moved: at},
@@ -1551,10 +1539,10 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		t.Errorf("git read asked %+v, want %+v", got, stamped)
 	}
 
-	// A MERGE PREVIEW asked of the Gitlet node, every field of it — a seat's
-	// for the colleague it reads for, at its floor — and of its answer: the
-	// state, the conflicted paths it holds and how many more, and the
-	// position the copy was read at. Stamped home by the walk, as a read is.
+	// A MERGE PREVIEW asked of the Gitlet node, every field of it (a seat's,
+	// for the colleague it reads for, at its floor) and of its answer (the
+	// state, the conflicted paths and how many more, the position read at).
+	// Stamped home by the walk, as a read is.
 	previewQ := gitlet.MergePreviewQuery{RepoID: ref.ID, Asker: gitlet.Principal{Kind: gitlet.PrincipalAgent,
 		Seat: "dev"}, CeilingSeat: "lead", Base: "6666666666666666666666666666666666666666",
 		Head: "7777777777777777777777777777777777777777", Fresh: statelog.FloorAt(statelog.ReadSession, at)}
@@ -1573,12 +1561,11 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 
 	// AN ENGINE WRITE asked of the Gitlet node, every field of it and of its
 	// answer: a seat's commit of every kind of file operation onto a new
-	// branch from a start commit, and a cherry-pick of a commit onto the head
-	// it read — the principal with the run that made it, the operation, the
-	// floor, the message — and an answer carrying its outcome, its command,
-	// its commit, its push and position, a refusal of the change with its
-	// sentence and every conflict's stages. As for a read, the walk stamps
-	// its attempt itself, home where it is asked of its one Gitlet node first.
+	// branch, and a cherry-pick onto the head it read, each with its principal
+	// and run, operation, floor and message; an answer with its outcome,
+	// command, commit, push and position, a refusal of the change with its
+	// sentence and every conflict's stages. As for a read, the walk stamps the
+	// attempt itself, home where its one Gitlet node is asked first.
 	content, target := "hello\n", "docs/guide.md"
 	seatRun := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev", Run: gitlet.RunProvenance{
 		TurnID: "019a0c2e-0000-7000-8000-0000000000d2", WorkBackend: "native", WorkKey: "ENG-412",
@@ -1641,11 +1628,11 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	d.err = nil
 	d.mu.Unlock()
 
-	// A LIFECYCLE REQUEST of every kind's fields, and its answer whole — a
-	// protect request's rule among it, its gate whole beside the row, which
-	// carries none: a create's whole settings, a settings CHANGE and a
-	// protection's — the changes the deciding node resolves — a delete's
-	// reason, and a hold's turn and the read it is decided at.
+	// A LIFECYCLE REQUEST of every kind's fields, and its answer whole (a
+	// protect request's rule with its gate beside the row, which carries
+	// none): a create's whole settings, a settings CHANGE and a protection's
+	// (which the deciding node resolves), a delete's reason, and a hold's turn
+	// and the read it is decided at.
 	d.mu.Lock()
 	d.lifecycle = gitlet.LifecycleResult{Outcome: statelog.OutcomePending, Repo: ref,
 		Rule: &gitlet.Protection{PushRule: ref.Protections[0], Gate: &gitlet.MergeGate{
@@ -1739,14 +1726,15 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	}
 }
 
-// A PROPOSAL RAISES THIS NODE'S FLOOR AND A READ DOES NOT — departure D1: the
-// node's session holds the positions of its OWN writes, which its next read of
-// the repository must see on whichever node answers it; a read's position is
-// somebody else's writes, and observing it would hold every later stale read
-// this node routes behind the newest linearizable read anybody on it made. So
-// do Gitlet's other writes — a compaction, an expunge record, a
-// change's write, a lifecycle request, a write of a change's conversation and
-// an engine write — each only where it landed a record.
+// A PROPOSAL RAISES THIS NODE'S FLOOR AND A READ DOES NOT (departure D1): the
+// session holds
+// the positions of the node's OWN writes, which its next read of the repository
+// must see wherever it is answered; a read's position is somebody else's
+// writes, and observing it would hold every later stale read this node routes
+// behind the newest linearizable read anybody on it made. Gitlet's other writes
+// (a compaction, an expunge record, a change's write, a lifecycle request, a
+// conversation write, an engine write) raise it too, only where they landed a
+// record.
 //
 // Mutation: raise the floor on every engine write's answer — a refused one
 // floors its repository at a position somebody else's rows hold, red.
@@ -1813,10 +1801,9 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 		t.Fatalf("after a push found landed at %v the repository's floor is %v", landed, got)
 	}
 
-	// AND A COMPACTION THIS NODE PROPOSED raises them to the compaction's
-	// record, which its builder's next listing and sync must see — where it
-	// landed, and never where it was refused with no record — the floor of
-	// the repository it compacted and of no other.
+	// AND A COMPACTION THIS NODE PROPOSED raises them to its record, which its
+	// builder's next listing and sync must see, only where it landed: the
+	// floor of the repository it compacted and of no other.
 	compacted := statelog.Position{Stream: codeStream, Generation: 1, Seq: 70}
 	for _, tc := range []struct {
 		answer gitlet.CompactResult
@@ -1847,9 +1834,8 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 		}
 	}
 
-	// AND AN EXPUNGE RECORD THIS NODE PROPOSED raises them to the record
-	// where it landed, and never where it was refused with no record: the
-	// floor of the repository it is about and of no other.
+	// AND AN EXPUNGE RECORD THIS NODE PROPOSED raises them to the record, only
+	// where it landed: the floor of the repository it is about and no other.
 	expunged := statelog.Position{Stream: codeStream, Generation: 1, Seq: 80}
 	for _, tc := range []struct {
 		answer gitlet.ExpungeResult
@@ -1881,10 +1867,9 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 	}
 
 	// AND A CHANGE'S WRITE THIS NODE PROPOSED raises them to the record where
-	// it landed — never where it was refused, and never where it was answered
-	// UNCHANGED from the change's row, whose position is the change's last
-	// record, somebody else's write: the floor of the repository it is about
-	// and of no other.
+	// it landed: never when refused, nor when answered UNCHANGED from the
+	// change's row, whose position is somebody else's last record. The floor
+	// of the repository it is about and of no other.
 	changed := statelog.Position{Stream: codeStream, Generation: 1, Seq: 85}
 	for _, tc := range []struct {
 		answer gitlet.ChangeResult
@@ -1919,10 +1904,9 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 	}
 
 	// AND A LIFECYCLE REQUEST THIS NODE ASKED raises them to its record where
-	// it landed — and never for a refusal, nor for an answer the rows gave with
-	// no record (a no-op, a repeat of nothing), whose position is the rows
-	// somebody else wrote: the floor of the repository it is about and of no
-	// other.
+	// it landed: never for a refusal, nor for an answer the rows gave with no
+	// record (a no-op, a repeat of nothing), whose position is somebody else's.
+	// The floor of the repository it is about and of no other.
 	lived := statelog.Position{Stream: codeStream, Generation: 1, Seq: 95}
 	for _, tc := range []struct {
 		answer gitlet.LifecycleResult
@@ -1992,11 +1976,10 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 	}
 
 	// AND AN ENGINE WRITE THIS NODE ASKED raises them to its push's record
-	// where it APPLIED or is PENDING — answered from the row an earlier ask of
-	// it landed among them, since that push is this one — and never for a
-	// refusal of the change or of the push, nor for an outcome unknown, none
-	// of which is a record this node's next read must see: the floor of the
-	// repository it wrote and of no other.
+	// where it APPLIED or is PENDING (answered from the row an earlier ask
+	// landed too, since that push is this one), never for a refusal of the
+	// change or the push nor an unknown outcome, none a record this node's
+	// next read must see: the floor of the repository it wrote and no other.
 	const written = "019a0c2e-0000-7000-8000-0000000000e9"
 	applied := statelog.Position{Stream: codeStream, Generation: 1, Seq: 98}
 	pending := statelog.Position{Stream: codeStream, Generation: 1, Seq: 99}
@@ -2036,11 +2019,10 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 }
 
 // A REPOSITORY'S FLOOR IS ITS OWN, AND THE NODE KEEPS A BOUNDED NUMBER: a
-// write raises only its repository's floor, and never lowers it; a position
-// that names nothing is ignored; and past maxRepoFloors repositories the one
-// written at the lowest position is forgotten — floored at nothing again, which
-// costs a read of it one sync at the log's head where its copy lacks what this
-// node wrote, never a wrong answer — and no other.
+// write raises only its repository's floor and never lowers it; a position
+// naming nothing is ignored; past maxRepoFloors repositories the one written at
+// the lowest position is forgotten, and no other (floored at nothing again,
+// costing a read of it one sync at the log's head, never a wrong answer).
 //
 // Mutation: observe keeping every repository, or evicting another than the
 // lowest → red.
@@ -2083,21 +2065,18 @@ func TestARepositorysFloorIsItsOwnAndBounded(t *testing.T) {
 	}
 }
 
-// A PROPOSAL CARRIES ITS ATTEMPT TO THE COMMITTER: the committer answers a
-// push inside its asker's attempt by judging it against the deadline it is
-// served under — starting a batch only while a whole CommitBudget and the
-// ReplyMargin are left, and answering it busy the moment they are not — so a
-// routed proposal must reach the code half bounded by the attempt the asker
-// gives it: the router's write attempt for a caller with no deadline (the
-// host's receiver), and the caller's own where it has one. A proposal served
-// with none would be judged by its wait in the queue alone, and answered up to
-// the serving node's floor wait and the request's trip after its asker had
-// handed the push id to the runner-up.
+// A PROPOSAL CARRIES ITS ATTEMPT TO THE COMMITTER: the committer judges a push
+// against the deadline it is served under (starting a batch only while a whole
+// CommitBudget and the ReplyMargin are left, answering busy once they are not),
+// so a routed proposal reaches the code half bounded by its asker's attempt:
+// the router's write attempt for a caller with no deadline (the host's
+// receiver), the caller's own where it has one. Served with none, it would be
+// judged by its queue wait alone and could be answered up to the floor wait and the trip after its asker had handed the
+// push id to the runner-up.
 //
-// THE ROUTER'S OWN WRITE ATTEMPT, read from the timing it was built with:
-// halfway between the shortest a router takes and production's, so it is
-// neither production's constant nor the router's read attempt, and a router
-// that waited either for a write is caught.
+// The router's write attempt is set halfway between the shortest a router
+// takes and production's, so a router that waited production's constant or its
+// read attempt for a write is caught.
 func TestAProposalCarriesItsAttemptToTheCommitter(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -2145,20 +2124,17 @@ func TestAProposalCarriesItsAttemptToTheCommitter(t *testing.T) {
 }
 
 // A ROUTED PUSH CAN BE DECIDED INSIDE ITS ATTEMPT, or no router is built with
-// it: the serving node may spend statelog.ReadBudget of the router's write
-// attempt waiting for the asker's floor before the committer sees the push,
-// and the committer starts a batch only while a CommitBudget and the
-// ReplyMargin are left before the attempt ends — so the attempt, less that
-// wait, must hold MORE than a batch and its answer, or every push asked of
-// another node's committer by a caller with no deadline of its own is answered
-// busy before anything decides it. A write attempt at that sum is refused,
-// naming the field; the next is taken, and so is production's, whose excess is
-// how long a push may queue behind its repository's earlier pushes.
+// it: the serving node may spend statelog.ReadBudget of the write attempt
+// waiting for the asker's floor, and the committer starts a batch only while a
+// CommitBudget and the ReplyMargin are left, so the attempt less that wait must
+// hold MORE than a batch and its answer, or every push routed for a caller with
+// no deadline is answered busy undecided. A write attempt at that sum is
+// refused, naming the field; the next is taken, as is production's, whose
+// excess is how long a push may queue behind its repository's earlier pushes.
 //
-// The sum is spelled here from the committer's bounds and the floor wait, never
-// from the router's own constant, so a bound that lost a term fails; the two
-// packages' constants meet here because estate imports gitlet, never the
-// reverse.
+// The sum is spelled from the committer's bounds and the floor wait, never the
+// router's own constant, so a bound that lost a term fails; the constants meet
+// here because estate imports gitlet, never the reverse.
 func TestARoutedPushCanBeDecidedInsideItsAttempt(t *testing.T) {
 	t.Parallel()
 	build := func(write time.Duration) error {
@@ -2224,11 +2200,11 @@ func codeRows(t *testing.T, at statelog.Position) store.ReplicatedHandle {
 }
 
 // A SEAT'S READ ON A NODE WITH NO CHART IS ANSWERED BY A PEER (M3-O82). The
-// node the walk asks first holds no chart — between its code reader's start
-// and its first epoch's install — and its reader refuses the seat's read
-// ABOUT ITSELF, gitlet.ErrNotServing, which the walk reads as a node that ran
-// nothing; the next node, holding a chart, answers it. Both read the same
-// rows with REAL readers: what differs is the chart alone.
+// node the walk asks first holds no chart (between its code reader's start and
+// its first epoch's install), so its reader refuses ABOUT ITSELF with
+// gitlet.ErrNotServing, which the walk reads as a node that ran nothing; the
+// next node, holding a chart, answers. Both read the same rows with REAL
+// readers: only the chart differs.
 //
 // Mutation: a reader with no chart answering AccessNone again → the first node
 // answers not_permitted, a definite answer, and the walk ends there.

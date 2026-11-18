@@ -128,20 +128,14 @@ func TestAPullStillCrossingIsNeitherAStallNorAskedAgain(t *testing.T) {
 // A ROW REPLACED AHEAD OF A REPLAY IS DELIVERED BEFORE ITS END BARRIER, ON THE
 // BROKER THIS BUILD RUNS.
 //
-// The end barrier's proof rests on the server delivering a consumer's copy in
-// sequence order from its store, reading the store at each delivery, so a row
-// replaced after the replay's barrier was stored and before the replay
-// reached the row is delivered at its NEW sequence, past that barrier and
-// below an end barrier published after it (nats-server consumer.go,
-// getNextMsg). Held here on the embedded server, as a replay reads, one
-// message a pull: two notes and a barrier; a pull takes the first note; the
-// second, not yet delivered, is replaced, which removes its first version
-// ahead of the consumer and stores the replacement past the barrier; the next
-// pull takes the barrier, its first version skipped; the end barrier is
-// published once the barrier has arrived, as a replay publishes it; and
-// reading on delivers the replacement and then the end barrier. The first
-// version is never delivered, and the replacement is not missed. A
-// nats-server bump that changes that order turns this red.
+// The end barrier rests on the server delivering a consumer's copy in sequence
+// order, reading its store at each delivery, so a row replaced after the
+// replay's barrier but before the replay reached it arrives at its NEW
+// sequence, past that barrier and below a later end barrier (nats-server
+// consumer.go, getNextMsg). Played one message a pull on the embedded server,
+// the end barrier published once the barrier arrives, as a replay does: the
+// replaced note's first version is skipped, and its replacement arrives before
+// the end barrier. A nats-server bump that changes that order turns this red.
 func TestARowReplacedAheadOfAReplayIsDeliveredBeforeTheEndBarrierOnTheBrokerThisBuildRuns(t *testing.T) {
 	t.Parallel()
 	conn := broker(t)
@@ -165,9 +159,8 @@ func TestARowReplacedAheadOfAReplayIsDeliveredBeforeTheEndBarrierOnTheBrokerThis
 		t.Fatalf("open the consumer: %v", err)
 	}
 	t.Cleanup(func() { pulls.Stop(); s.replays().drop(t.Context(), pulls.Name()) })
-	// read asks one pull of n messages, with no byte bound, so it ends at
-	// its count's last delivery and nothing follows it, and answers the
-	// subject and stream sequence of each delivery.
+	// read asks one pull of n messages with no byte bound, so it ends at its
+	// count's last delivery, and answers each delivery's subject@sequence.
 	read := func(n int) []string {
 		t.Helper()
 		if err := pulls.Ask(n, 0, time.Minute, 0); err != nil {

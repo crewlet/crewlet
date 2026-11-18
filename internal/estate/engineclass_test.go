@@ -24,32 +24,20 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
-// THE ENGINE CLASS: the executor and access logs' writes are the engine's record
-// of what its own runs did and told, which no tool, no person and no operator
-// surface makes ([originEngine]). Two gates hold it, one on each side: every write on the log
-// is declared the engine's and nothing else is (the operation table), and no
-// package that serves a person or a model reaches the log's write side (the
-// source tree).
+// THE ENGINE CLASS: the executor and access logs' writes are the engine's
+// record of what its own runs did and told, which no tool, person or operator
+// surface makes ([originEngine]). Two gates hold it: the operation table
+// declares every write on those logs the engine's and nothing else, and the
+// source tree keeps every package serving a person or a model off their write
+// side.
 
-// EVERY WRITE ON THE EXECUTOR LOG IS THE ENGINE'S, AND NOTHING ELSE IS.
-//
-// A write on the log declared a surface's would be one SurfaceWriteDomains
-// lists, so the person's write surfaces would have to class and name a write
-// nobody can make of them. An engine write on any other domain would be
-// carried by a facade the other side of the gate does not read, so the class
-// would hold it to nothing. And a read is never the engine's: the engine's
-// reads are ordinary ones, which a surface may hold — save two ANSWERS, each
-// handing over whom a write was made for and so the engine's alone: the
-// turn-start thread read's (chat.turn_thread, through [TurnThreads]), whom
-// each chat message was written for, and the home's due-queue read's
-// (code.queue_due, through [CodeSeam.QueueDue]), whom each queued change's
-// enqueue was made for; so the same gate over the source tree holds the
-// surfaces off both ([TestOnlyTheEngineReadsWhomAMessageWasWrittenFor],
+// EVERY WRITE ON THE EXECUTOR LOG IS THE ENGINE'S, AND NOTHING ELSE IS: one
+// declared a surface's would land in SurfaceWriteDomains, a write no surface can
+// make, and an engine write elsewhere rides a facade the tree guard does not
+// read. executor.begin is one. No read is the engine's, but two hand over whom a
+// write was made for (chat.turn_thread, code.queue_due), so the tree guard holds
+// surfaces off them ([TestOnlyTheEngineReadsWhomAMessageWasWrittenFor],
 // [TestOnlyTheEngineReadsWhomAQueuedChangeWasEnqueuedFor]).
-//
-// A TURN'S BEGIN IS ONE OF THEM: the record of a turn's first read and the
-// base it holds is the engine's account of what its launch read, which nobody
-// asks of it, and is held to the class like every other write on the log.
 //
 // Mutation: drop byEngine() from executor.capture or executor.begin, or put it
 // on a tracker write, and the operation is named; the planted table makes each
@@ -132,14 +120,13 @@ func engineClassViolations(table map[string]*opSpec) []string {
 	return out
 }
 
-// THE DOMAINS A SURFACE WRITES LEAVE THE ENGINE'S OUT, AND ONLY THE ENGINE'S.
-//
+// THE DOMAINS A SURFACE WRITES LEAVE THE ENGINE'S OUT, AND ONLY THE ENGINE'S:
 // internal/agent/builtin holds its declaration of the domains a person's write
-// surface classes refusals of and names objects of to exactly this list
-// (TestEveryRoutedDomainIsDeclaredToTheSurfaces). A list that kept the
-// executor log would demand a refusal class and an object argument for writes
-// no surface makes; one that dropped a surface's domain beside it would let
-// that domain's refusals reach a person as faults.
+// surface classes refusals of and names objects of to this list
+// (TestEveryRoutedDomainIsDeclaredToTheSurfaces). Keeping the executor log
+// would demand a refusal class and an object argument for writes no surface
+// makes; dropping a surface's domain would let its refusals reach a person as
+// faults.
 //
 // Mutation: drop the origin from surfaceWrite and the executor log is listed;
 // drop the class and a read is counted a surface's write.
@@ -207,13 +194,11 @@ var writeSideTypes = []string{"ExecutorWrites", "ExecutorWriter", "ExecutorHalf"
 // call every write takes and no read does.
 var domainWriteNames = []string{"Writer", "NewWriter", "WriterDeps", "Call"}
 
-// turnReadNames are the names the engine's turn-start thread read is reached
-// by, matched on any operand: the router's facade and its accessor
-// (TurnThreads), the serving read and its answer (TurnThread), Chatlet's thread
-// reader, which the engine builds over the facade (NewThreadReader), and the
-// engine's own set of thread readers (ChatThreads). That read hands over whom
-// each chat message was written for, which no reader of a room may see; a
-// surface reads a thread through [Chat]'s Thread.
+// turnReadNames reach the engine's turn-start thread read, matched on any
+// operand: the router's facade and accessor (TurnThreads), the serving read and
+// its answer (TurnThread), Chatlet's reader built over the facade
+// (NewThreadReader) and the engine's set of them (ChatThreads). A surface reads
+// a thread through [Chat]'s Thread.
 var turnReadNames = []string{"TurnThreads", "TurnThread", "NewThreadReader", "ChatThreads"}
 
 // The import paths of the types that carry the turn-start read, as a
@@ -223,45 +208,28 @@ var (
 	notifyImport  = reflect.TypeFor[notify.ThreadReaders]().PkgPath()
 )
 
-// queueReadNames are the names the home's due-queue read is reached by,
-// matched on any operand: the read itself — the router's code facade's
-// ([CodeSeam.QueueDue]), Gitlet's reader's and its server's, the home's
-// estate's — and the page of one target's queue work it answers, which share
-// one name (QueueDue); its answer (QueueDueAnswer); and an entry of that work
-// (QueueWorkEntry), which carries whom its enqueue was made for. That read
-// hands a repository's home whom each queued change's enqueue was made for,
-// so its close of the change's work item is decided within their apps, and
-// no reader of a queue may see it; a surface lists a queue through
-// code.read's `queue` kind, whose rows leave it out.
+// queueReadNames reach the home's due-queue read, matched on any operand: the
+// read and the page of queue work it answers, which share one name (QueueDue:
+// [CodeSeam.QueueDue], Gitlet's reader and server, the home's estate), its
+// answer (QueueDueAnswer) and an entry (QueueWorkEntry, which carries whom its
+// enqueue was made for). A surface lists a queue through code.read's `queue`
+// kind, whose rows leave that out.
 var queueReadNames = []string{"QueueDue", "QueueDueAnswer", "QueueWorkEntry"}
 
 // gitletImport is Gitlet's package, whose types carry the due-queue read, as
 // a hand-out's results name them.
 var gitletImport = reflect.TypeFor[gitlet.QueueDueAnswer]().PkgPath()
 
-// NO SURFACE HOLDS THE ENGINE'S EXECUTOR WRITES.
-//
-// The router declares the executor log's writes the engine's
-// (TestEveryExecutorWriteIsTheEngines); what keeps a surface from making one
-// anyway is that no package serving a person or a model reaches the write
-// side ([personSurfaces]). Each tree is read whole, its non-test Go files less
-// testdata, for a road to it:
-//
-//   - the router's writer facade and the serving half's writer, by name on
-//     any operand ([engineWriteNames]): `estate.ExecutorWrites`,
-//     `router.ExecutorWrites()`, `estate.ExecutorWriter` and the engine's own
-//     `ExecutorWriter()`;
-//   - the domain's own write side through whatever name a file imports the
-//     domain under ([domainWriteNames]); a dot-import of the domain or of this
-//     package is refused outright, since it reaches every name unqualified;
-//   - every exported function and method of internal/engine whose results
-//     name the write side, under whatever name it has: a hand-out is a road a
-//     surface takes without naming the writer at all.
-//
-// It is SYNTACTIC, as every guard over the tree is: a writer reached through a
-// value of another type that carries one, or through reflection, is no name it
-// can match, and review holds those. A walk that read nothing would pass, so
-// each surface must yield a Go file.
+// NO SURFACE HOLDS THE ENGINE'S EXECUTOR WRITES: no package serving a person or
+// a model ([personSurfaces]) reaches the write side. Each tree's non-test Go
+// files, less testdata, are read for a road: the router's facade or the serving
+// half's writer by name on any operand ([engineWriteNames]); the domain's write
+// side under whatever name a file imports it ([domainWriteNames]), a dot-import
+// of it or of this package refused outright as reaching every name unqualified;
+// and every exported internal/engine function or method whose results name the
+// write side, a road taken without naming the writer. It is syntactic: a writer
+// reached through another type's value or reflection is review's to hold. A
+// walk that read nothing would pass, so each surface must yield a Go file.
 //
 // Mutation: TestTheEngineWritesGuardFindsEveryRoad makes each move above.
 func TestNoSurfaceHoldsTheEnginesExecutorWrites(t *testing.T) {
@@ -279,12 +247,10 @@ func TestNoSurfaceHoldsTheEnginesExecutorWrites(t *testing.T) {
 	}
 }
 
-// THE GUARD FINDS EVERY ROAD IT CLAIMS TO CLOSE.
-//
-// Each case plants files in a tree where every surface otherwise holds a file
-// that takes no road, and scans it: a road is one failure naming its file and
-// line, and a file that only looks like one is none. The last case is a
-// surface whose tree holds no Go file at all: a walk that read nothing.
+// THE GUARD FINDS EVERY ROAD IT CLAIMS TO CLOSE: each case plants files in a
+// tree whose surfaces otherwise hold a file taking no road, and scans it. A road
+// is one failure naming its file and line, a lookalike is none, and the last
+// case is a surface holding no Go file: a walk that read nothing.
 //
 // Mutation: match the facade only under the import name `estate`, match the
 // domain's names on any operand, read the test files, or leave the engine's
@@ -413,16 +379,13 @@ func TestTheEngineWritesGuardFindsEveryRoad(t *testing.T) {
 	})
 }
 
-// ONLY THE ENGINE READS WHOM A MESSAGE WAS WRITTEN FOR (ADR-0109).
-//
-// The engine's turn-start thread read hands over whom each chat message was
-// written for, so a turn works through only the waiting messages of its own
-// requester; no reader of a room may see it. The guard over the packages that
-// serve a person or a model ([TestNoSurfaceHoldsTheEnginesExecutorWrites])
-// holds them off that read as it holds them off the engine's writes: by name
-// on any operand ([turnReadNames]), and through every engine hand-out whose
-// results carry it. Each case plants files and scans them: a road is one
-// failure, and the plain thread read a surface does hold is none.
+// ONLY THE ENGINE READS WHOM A MESSAGE WAS WRITTEN FOR (ADR-0109): the engine's
+// turn-start thread read hands that over, so a turn works through only its own
+// requester's waiting messages, and no reader of a room may see it. The surface
+// guard ([TestNoSurfaceHoldsTheEnginesExecutorWrites]) holds the surfaces off
+// it by name on any operand ([turnReadNames]) and through every engine hand-out
+// whose results carry it. A planted road is one failure; the plain thread read
+// a surface does hold is none.
 //
 // Mutation: drop a name from turnReadNames, or leave the read's hand-outs
 // underived, and the case for that road changes its answer.
@@ -486,19 +449,14 @@ func TestOnlyTheEngineReadsWhomAMessageWasWrittenFor(t *testing.T) {
 	}
 }
 
-// ONLY THE ENGINE READS WHOM A QUEUED CHANGE WAS ENQUEUED FOR (ADR-0109).
-//
-// The home's due-queue read (code.queue_due) hands a repository's home whom
-// each entry's enqueue was made for (gitlet.QueueWorkEntry.WorkingFor), so
-// the queue's close of a landed change's work item is decided within their
-// apps; no reader of a queue may see it. The guard over the packages that
-// serve a person or a model ([TestNoSurfaceHoldsTheEnginesExecutorWrites])
-// holds them off that read as it holds them off the engine's writes and its
-// turn-start thread read: by name on any operand ([queueReadNames]), through
-// every engine hand-out whose results carry it, and refusing a dot-import of
-// Gitlet, which would reach its types unqualified. Each case plants files and
-// scans them: a road is one failure, and the queue listing a surface does
-// hold is none.
+// ONLY THE ENGINE READS WHOM A QUEUED CHANGE WAS ENQUEUED FOR (ADR-0109): the
+// home's due-queue read (code.queue_due) hands a repository's home whom each
+// entry was enqueued for (gitlet.QueueWorkEntry.WorkingFor), so closing a
+// landed change's work item is decided within their apps; no reader of a queue
+// may see it. The surface guard holds the surfaces off it by name
+// ([queueReadNames]), through every engine hand-out carrying it, and by
+// refusing a dot-import of Gitlet. A planted road is one failure; the queue
+// listing a surface holds is none.
 //
 // Mutation: drop a name from queueReadNames, leave the read's hand-outs
 // underived, or let Gitlet be dot-imported, and the case for that road

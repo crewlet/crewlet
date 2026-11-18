@@ -12,16 +12,13 @@ import (
 
 // THE ACCESS LOG AS OPERATIONS: what each seat was told about its access and
 // every SSH certificate and command (ADR-0103), reached from whichever node
-// holds the seat. A turn is dispatched and launched where its seat is held, a
-// seats-only leaf included, and only a data node publishes.
+// holds the seat, a seats-only leaf included; only a data node publishes.
 //
-// Every write is the engine's own record of what it did ([originEngine]): the
-// log is in no list of the domains a surface writes, and its writer facade
-// ([AccessWrites]) is the engine's alone. Each carries the operation id the
-// domain derives per execution, so a write one data node never answered is
-// asked of the next under the same id. Every read is answered at the level its
-// caller passes, on this node's floor on the log: a dispatch reads its seat's
-// baseline at `linearizable`.
+// Every write is the engine's own ([originEngine]): no surface writes the log,
+// and [AccessWrites] is the engine's alone. Each carries the operation id the
+// domain derives per execution, so an unanswered write is asked of the next
+// data node under the same id. A read is answered at its caller's level on
+// this node's floor: a dispatch reads its seat's baseline at `linearizable`.
 
 // AccessReader is the access log's read side: the domain reader's methods a
 // node off the estate needs.
@@ -88,7 +85,7 @@ type accessRecentArgs struct {
 }
 
 // A SEAT'S BASELINE AND ITS RECENT TOLD RECORDS, in one transaction on the node
-// that answers: a dispatch asks `linearizable`.
+// that answers.
 var opAccessRecent = define("access.recent", opRead, accessDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a accessRecentArgs) (accessdomain.Recent, error) {
 		r, err := b.accessReader()

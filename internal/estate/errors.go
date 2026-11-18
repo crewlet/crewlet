@@ -38,13 +38,13 @@ import (
 // ErrOutcomeUnknown is a write that was sent and never answered. It may have
 // landed.
 //
-// TWO CLASSES REACH IT, and they differ in what makes the retry safe, which is
-// why the sentence names neither. A write a repeat is not safe for
-// ([opOnceWrite]) is reported at the first node that did not answer, and is
-// read back before it is written again. A write carrying its caller's
-// operation id ([opIdempotentWrite]) is asked of every other data node first,
-// and reported only when none of them ran it either — where repeating it
-// under that SAME id is the safe retry, and a fresh one is a second write.
+// Two classes reach it, with different safe retries, so the sentence names
+// neither (package doc, "What makes a retry safe, per operation"). A write a
+// repeat is not safe for ([opOnceWrite]) is reported at the first node that
+// did not answer, and is read back before it is written again. One carrying
+// its caller's operation id ([opIdempotentWrite]) is reported only once no
+// other data node ran it either; retry it under that SAME id, since a fresh
+// one is a second write.
 var ErrOutcomeUnknown = errors.New("estate: the write was sent to a data node " +
 	"that did not answer, so whether it landed is unknown")
 
@@ -57,13 +57,11 @@ type sentinel struct {
 // sentinels are every error value a serving node's answer may carry and a
 // caller may compare with errors.Is.
 //
-// EVERY exported Err* of the packages whose errors cross — the gate in
-// errors_test.go parses them and fails on one missing here — rather than the
-// ones a tool compares today, because the list of what a tool compares grows
-// in a different package from this one and nothing would tell this list.
-//
-// The code is the Go identifier, so the list is its own documentation and a
-// renamed sentinel is a gate failure rather than a silently dead code.
+// EVERY exported Err* of the crossing packages, not only those a tool compares
+// today: that list grows in other packages and nothing would tell this one
+// (TestEveryErrorOfTheCrossingPackagesIsRegistered fails on one missing). The
+// code is the Go identifier, so a renamed sentinel fails the gate rather than
+// leaving a dead code.
 var sentinels = []sentinel{
 	{"context.Canceled", context.Canceled},
 	{"context.DeadlineExceeded", context.DeadlineExceeded},
@@ -97,12 +95,10 @@ var sentinels = []sentinel{
 	{"worklet.ErrTooBroad", worklet.ErrTooBroad},
 	{"worklet.ErrUploadStale", worklet.ErrUploadStale},
 
-	// THE INBOX RULES', which a person's gesture on a domain's inbox is
-	// decided by on the data node that writes it: a list at its ceiling is
-	// answered as itself, since its remedy is another gesture. And a composed
-	// cursor this build did not issue, refused where the inbox is composed:
-	// registered with the rest, so the day a composition is asked across a
-	// hop its refusal arrives as itself rather than as a bare message.
+	// The inbox rules', deciding a person's gesture on a domain's inbox on the
+	// data node that writes it: ErrFull crosses as itself, since its remedy is
+	// another gesture. ErrBadCursor is refused where an inbox is composed, not
+	// across a hop today; registered so it would arrive as itself.
 	{"inbox.ErrBadCursor", inbox.ErrBadCursor},
 	{"inbox.ErrFull", inbox.ErrFull},
 	{"inbox.ErrInvalid", inbox.ErrInvalid},
@@ -123,20 +119,14 @@ var sentinels = []sentinel{
 	{"search.ErrNoMethods", search.ErrNoMethods},
 	{"search.ErrNoViewer", search.ErrNoViewer},
 
-	// A REPOSITORY'S READERS refuse a cursor or a range their asker formed —
-	// the asker's mistake, answered by name whichever data node read it.
+	// A cursor or range the asker formed: its mistake, answered by name
+	// whichever data node read it.
 	{"usage.ErrBadCursor", usage.ErrBadCursor},
 	{"usage.ErrBadRange", usage.ErrBadRange},
 
-	// GITLET'S, every one of them — ErrBadBundle, ErrBadLayer,
-	// ErrSuperseded, ErrAnswerDue and ErrMisplaced included, though none is
-	// answered across the wire today (a bad bundle never leaves the receiving
-	// node, nor a bad layer the Gitlet node that checked it; a superseded
-	// reconcile is the deciding node's own; a read whose answer fell due is
-	// answered unready by the Gitlet node it fell due on; a re-anchoring answer
-	// placing another set than its anchors is refused on the node that asked
-	// for it, as that node's own fault) — for the reason the list is complete
-	// at all.
+	// Gitlet's, every one: ErrAnswerDue, ErrBadBundle, ErrBadLayer,
+	// ErrMisplaced and ErrSuperseded never cross today, each answered on the
+	// node that met it, but the list is complete for the reason above.
 	{"gitlet.ErrAboveCeiling", gitlet.ErrAboveCeiling},
 	{"gitlet.ErrAnswerDue", gitlet.ErrAnswerDue},
 	{"gitlet.ErrBadBundle", gitlet.ErrBadBundle},
@@ -203,11 +193,10 @@ var sentinels = []sentinel{
 	{"statelog.ErrWaitAbandoned", statelog.ErrWaitAbandoned},
 	{"statelog.ErrWrongStream", statelog.ErrWrongStream},
 
-	// THE IDENTITY DIRECTORY'S, which a node holding no data reads through
-	// a data node ([opIdentityBinding], [opSeatHolders], [opRequester]) —
-	// and the identity vocabulary's and the session's, which the questions a
-	// person verb is decided on answer in ([iam.Holders],
-	// [session.ResolveSeat]).
+	// The identity directory's, read through a data node ([opIdentityBinding],
+	// [opSeatHolders], [opRequester]), and the identity vocabulary's and the
+	// session's, in which a person verb's questions are answered
+	// ([iam.Holders], [session.ResolveSeat]).
 	{"iamdomain.ErrAssistRefused", iamdomain.ErrAssistRefused},
 	{"iamdomain.ErrCollapsed", iamdomain.ErrCollapsed},
 	{"iamdomain.ErrInvalid", iamdomain.ErrInvalid},
@@ -234,10 +223,9 @@ var sentinels = []sentinel{
 	{"session.ErrNoCompany", session.ErrNoCompany},
 	{"session.ErrNoKeyring", session.ErrNoKeyring},
 
-	// THE ARTIFACTS ESTATE'S, which every data node answers for a node
-	// holding no data ([Artifacts]), and the vocabulary's beneath it: an
-	// audience, an id or a label a write refused, and the manifest grammar's
-	// and the media table's refusals a publish wraps.
+	// The artifacts estate's ([Artifacts]) and its vocabulary's: an audience,
+	// id or label a write refused, and the manifest grammar's and the media
+	// table's refusals a publish wraps.
 	{"artifactsdomain.ErrAboveOwnRole", artifactsdomain.ErrAboveOwnRole},
 	{"artifactsdomain.ErrAgentCompanyShare", artifactsdomain.ErrAgentCompanyShare},
 	{"artifactsdomain.ErrBadCursor", artifactsdomain.ErrBadCursor},
@@ -272,8 +260,7 @@ var sentinels = []sentinel{
 	{"manifest.ErrReserved", manifest.ErrReserved},
 	{"mediatype.ErrRefused", mediatype.ErrRefused},
 
-	// THE DATASTORE'S, answered by a data node for a node holding no data
-	// ([ArtifactData]), and its encoder's and query compiler's beneath it.
+	// The datastore's ([ArtifactData]), its encoder's and query compiler's.
 	{"artifactdata.ErrBadCursor", artifactdata.ErrBadCursor},
 	{"artifactdata.ErrConflict", artifactdata.ErrConflict},
 	{"artifactdata.ErrForbidden", artifactdata.ErrForbidden},
@@ -288,11 +275,10 @@ var sentinels = []sentinel{
 	{"query.ErrInvalid", query.ErrInvalid},
 	{"query.ErrNotIndexed", query.ErrNotIndexed},
 
-	// THE EXECUTOR LOG'S, answered by a data node for the engine on a node
-	// holding no data ([ExecutorReads], [ExecutorWrites]): a capture refused
-	// for an ended turn, a stale ordinal or the seat's budget, a retention
-	// delete no longer due, a listing a node cannot answer whole — each a
-	// different next step for the engine, so each crosses as itself.
+	// The executor log's ([ExecutorReads], [ExecutorWrites]): an ended turn, a
+	// stale ordinal, the seat's budget, a delete no longer due and a listing
+	// not answerable whole each mean a different next step for the engine, so
+	// each crosses as itself.
 	{"executordomain.ErrConflict", executordomain.ErrConflict},
 	{"executordomain.ErrIncomplete", executordomain.ErrIncomplete},
 	{"executordomain.ErrInvalid", executordomain.ErrInvalid},
@@ -304,27 +290,22 @@ var sentinels = []sentinel{
 	{"executordomain.ErrUnreadable", executordomain.ErrUnreadable},
 	{"executordomain.ErrUploadStale", executordomain.ErrUploadStale},
 
-	// THE ACCESS LOG'S, answered by a data node for the engine on a node
-	// holding no data ([AccessReads], [AccessWrites]): a record already made,
-	// an expiry no longer due, a command that does not open as its record's.
+	// The access log's ([AccessReads], [AccessWrites]).
 	{"accessdomain.ErrConflict", accessdomain.ErrConflict},
 	{"accessdomain.ErrInvalid", accessdomain.ErrInvalid},
 	{"accessdomain.ErrNotDue", accessdomain.ErrNotDue},
 	{"accessdomain.ErrRecorded", accessdomain.ErrRecorded},
 	{"accessdomain.ErrUnreadable", accessdomain.ErrUnreadable},
 
-	// THE ATLAS LOG'S, answered by a data node for a person or a node holding
-	// no data ([AtlasReads], [AtlasWrites]): a value or a key the vocabulary
-	// refuses, an edit decided from a version the entry moved past, something
-	// an administrator purged, a lost race and an expiry no longer due.
+	// The atlas log's ([AtlasReads], [AtlasWrites]).
 	{"atlasdomain.ErrConflict", atlasdomain.ErrConflict},
 	{"atlasdomain.ErrExists", atlasdomain.ErrExists},
 	{"atlasdomain.ErrInvalid", atlasdomain.ErrInvalid},
 	{"atlasdomain.ErrNotDue", atlasdomain.ErrNotDue},
 	{"atlasdomain.ErrPurged", atlasdomain.ErrPurged},
 	{"atlasdomain.ErrStaleVersion", atlasdomain.ErrStaleVersion},
-	// And the session's bound the log refuses a capture past, which is
-	// internal/executorkeep's: the sandbox that takes a session stops at it too.
+	// The session bound the executor log refuses a capture past lives in
+	// executorkeep, since the sandbox that takes a session stops at it too.
 	{"executorkeep.ErrSessionTooLarge", executorkeep.ErrSessionTooLarge},
 
 	{"estate.ErrOutcomeUnknown", ErrOutcomeUnknown},
@@ -345,11 +326,9 @@ var rebuiltByPeer = map[string]func(typedError) (reflect.Value, bool){
 }
 
 // typedKinds are every error TYPE a caller may unwrap with errors.As, keyed
-// by the Go identifier for the reason [sentinels] is.
-//
-// Each is carried field by field: a plain field as JSON, and a field of type
-// error — the cause a refusal was concluded from — as a nested wire error, so
-// the cause still answers errors.Is on the far side.
+// by the Go identifier for the reason [sentinels] is. Each crosses field by
+// field: a plain field as JSON, a field of type error (a refusal's cause) as
+// a nested wire error, so the cause still answers errors.Is on the far side.
 var typedKinds = []typedKind{
 	{"worklet.AlreadyAnsweredError", reflect.TypeFor[*worklet.AlreadyAnsweredError]()},
 	{"worklet.ErrAmbiguous", reflect.TypeFor[*worklet.ErrAmbiguous]()},
@@ -376,10 +355,8 @@ var typedKinds = []typedKind{
 
 	{"usage.ErrFutureVersion", reflect.TypeFor[*usage.ErrFutureVersion]()},
 
-	// GITLET'S, every one of them — BadBundle included, though it is
-	// never answered across the wire today (a bundle its seal refused is
-	// answered by the landing on the node that stored it) — for the reason
-	// the list is complete at all.
+	// Gitlet's, every one: BadBundle never crosses today (the node that
+	// stored the bundle answers it), but the list is complete regardless.
 	{"gitlet.BadBundle", reflect.TypeFor[*gitlet.BadBundle]()},
 	{"gitlet.ChartRefusal", reflect.TypeFor[*gitlet.ChartRefusal]()},
 	{"gitlet.ErrFutureVersion", reflect.TypeFor[*gitlet.ErrFutureVersion]()},
@@ -423,17 +400,16 @@ var typedKinds = []typedKind{
 
 	{"estate.ErrUnserved", reflect.TypeFor[*ErrUnserved]()},
 
-	// A REQUEST A DATA NODE'S BUILD CANNOT READ WHOLE, with its own code so
-	// the asking router reads it as "this node ran nothing of it" and asks the
-	// next — never a decode failure lumped with the rest — and so a node that
-	// answered on another's behalf carries the refusal back across a second
-	// hop as itself.
+	// A request a node's build cannot read whole has its own code, so the
+	// asking router reads it as "this node ran nothing" and asks the next
+	// rather than as a decode failure, and a second hop
+	// carries it back as itself (package doc, "A request is read whole, or
+	// runs nowhere").
 	{"estate.ErrUnknownKeys", reflect.TypeFor[*ErrUnknownKeys]()},
 
-	// A REFUSAL'S WORDS FOR A PERSON, which a writer puts beside its
-	// error (ADR-0060): carried so a write refused on a data node answers
-	// a person on this one with them. A peer that does not send it is
-	// answered with the refusal code's own sentence, never a model's.
+	// A refusal's words for a person (ADR-0060), so a write refused on a data
+	// node answers the person on this one in them. Without them (an older
+	// peer) the refusal reads in its code's own sentence, never a model's.
 	{"caveat.Said", reflect.TypeFor[*caveat.Said]()},
 }
 
@@ -471,9 +447,8 @@ func encodeError(err error) *wireError {
 		}
 		typed, encErr := encodeTyped(k.code, target.Elem())
 		if encErr != nil {
-			// THE MESSAGE STILL CROSSES, and the identities the
-			// sentinels carry; only this type's fields are lost, and
-			// the gate is what keeps that from ever happening.
+			// The message and sentinels still cross; only this type's
+			// fields are lost, which the registry gate keeps from happening.
 			continue
 		}
 		w.Typed = append(w.Typed, typed)
@@ -559,9 +534,8 @@ func (e *remoteError) As(target any) bool {
 
 // decodeError rebuilds an error from the wire, or nil.
 //
-// An identity this build does not know — a newer peer's sentinel — is
-// DROPPED and its message kept: the caller reads what went wrong in words,
-// and branches on nothing it could not have branched on anyway.
+// An identity this build does not know (a newer peer's) is DROPPED and its
+// message kept: the caller loses no branch it could have taken anyway.
 func decodeError(w *wireError) error {
 	if w == nil {
 		return nil
@@ -631,9 +605,7 @@ func decodeTyped(t typedError) (reflect.Value, bool) {
 
 // saidFromPeer rebuilds a refusal's person phrasing a peer carried as
 // `{"Words": {"person": "<sentence>", "remedy": {...}}}`, or reports false for
-// one with no words or words it cannot read, which leave the refusal its
-// code's own sentence, as every field of a typed error this router cannot
-// decode does.
+// missing or unreadable words, which leave the refusal its code's own sentence.
 func saidFromPeer(t typedError) (reflect.Value, bool) {
 	raw, ok := t.Fields["Words"]
 	if !ok {
