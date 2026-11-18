@@ -272,7 +272,7 @@ func (s *Syncer) pullBytes() int {
 // still crossing: an 8 MiB pull at the floor ([objstore.MiBPace]) holds it four
 // minutes, the window four seconds, inside its term, since one pull is out at a
 // time ([tableReplay.pull]) and takes its bytes from the window the object
-// store's transfers on the link share (ADR-0160). Its price is round trips on a
+// store's transfers on the link share (ADR-0161). Its price is round trips on a
 // fast distant link. What it leaves uncovered is the package doc's "A window
 // across a link".
 func (s *Syncer) pullBound() int {

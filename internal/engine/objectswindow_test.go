@@ -14,7 +14,7 @@ import (
 //
 // Across a link (a dial to an external cluster here, a leaf's alike) the
 // object store's transfers and the memory sync's replay pulls take from the
-// ONE window the link's queue owns (ADR-0160). natsobj's and memsync's cases
+// ONE window the link's queue owns (ADR-0161). natsobj's and memsync's cases
 // hand their stores a window; this holds the engine to handing both the
 // queue's. A member crosses no link: its puts share a window of their own, and
 // a replay pulls the connection's whole bound.

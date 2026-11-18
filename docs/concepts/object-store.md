@@ -136,7 +136,7 @@ logs survive, on the same members:
   transfer waiting its turn is never failed for waiting. A download across a
   link asks for its pieces one at a time. A request sent behind all of them
   still has the second its own round trip needs, at every lease TTL
-  ([ADR-0160](../../adr/0160-a-link-carries-one-window-both-ways-sized-to-a-requests-term.md)).
+  ([ADR-0161](../../adr/0161-a-link-carries-one-window-both-ways-sized-to-a-requests-term.md)).
   The window does not follow the lease, and is not sized by the link's
   measured rate: after a drop to the floor every request would wait past its
   term while a window sized for the faster rate drained. What the window

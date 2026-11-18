@@ -201,7 +201,7 @@
 //
 // So a download across a distant link moves about a piece a round trip, and
 // transfers both ways at once share that: the price of a request answered
-// inside its term behind them (ADR-0160).
+// inside its term behind them (ADR-0161).
 //
 // # What it costs, measured
 //

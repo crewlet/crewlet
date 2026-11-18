@@ -1,4 +1,4 @@
-# ADR-0160: A link carries one window, both ways, sized to a request's term
+# ADR-0161: A link carries one window, both ways, sized to a request's term
 
 - **Status:** accepted
 - **Authority:** `internal/jsapi`

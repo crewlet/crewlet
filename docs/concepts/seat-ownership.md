@@ -512,7 +512,7 @@ five-second term: a request behind a full window still has the second its own
 round trip needs, at every lease TTL. The window is **the link's one window**,
 both ways: a pull takes it before it is asked, beside the object store's
 uploads, downloads and listings on the same link, first come first served
-([ADR-0160](../../adr/0160-a-link-carries-one-window-both-ways-sized-to-a-requests-term.md)),
+([ADR-0161](../../adr/0161-a-link-carries-one-window-both-ways-sized-to-a-requests-term.md)),
 so whatever the node has in flight a request crosses inside its term; and a
 pull waiting its turn is no silence of its copy's. A row larger than the window
 crosses alone, in a pull of one message at the broker's limit, once the window

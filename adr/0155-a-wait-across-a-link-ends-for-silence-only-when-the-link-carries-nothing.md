@@ -25,7 +25,7 @@ memsync's `quietCap`), and a replay that has watched one such message and one
 of its own pulls cross with nothing for it is placed again (memsync's
 `quietBytes`). That is not a bound on what may be ahead of a reply: any number
 of messages may be (below), beside the node's own bulk, held to its link's one
-window (ADR-0160). A reply behind more than the cap allows is cut at the
+window (ADR-0161). A reply behind more than the cap allows is cut at the
 cap, where it was cut at its span before, and a replay behind more is placed
 again needlessly. A held wait is judged again as the meter reads (a request's
 every quarter second, a replay's every second, over the span before each
