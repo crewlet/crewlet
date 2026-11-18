@@ -48,12 +48,10 @@ type threadReading interface {
 // after it.
 //
 // HELD TO A BASE, past it ONE SLOT (the package doc's "A collection's read of
-// a thread"): the walk holds large's slot before it hands on a byte of a line
-// past [collectionBaseLineBytes] ([lineRun]), or reads a line after a reading
-// holds more than [collectionBaseRecords] records ([recordKeeper]); a wait
-// its ctx ends ends the walk with that error ([errLargeWait]). A walk whose
-// readings keep records keeps the slot, which its caller gives back
-// ([passBudget.release]); any other holds it for the line alone.
+// a thread"): held for a line past [collectionBaseLineBytes] ([lineRun]) or
+// once a reading keeps more than [collectionBaseRecords] records, to the end
+// where one keeps records ([recordKeeper]; its caller releases large), for
+// the line alone otherwise. A wait its ctx ends ends the walk ([errLargeWait]).
 func walkThread(ctx context.Context, r io.Reader, maxBytes int64, large *passBudget, readings ...threadReading) {
 	gate := large.gate(ctx)
 	if keepsRecords(readings) {
