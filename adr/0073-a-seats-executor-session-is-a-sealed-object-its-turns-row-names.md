@@ -4659,7 +4659,11 @@ is raised only where its archive's release is one whose resume this build read
 request attempt in flight, whose calls lie past the point. Outside, a capture
 stays at zero. A relaunch tells, and asks a reading of, only the calls past
 the point; the reading runs at the relaunch (`Coordinator.HoldingsOf`), never
-at the save.
+at the save. Reserved or raised, the capture states every late call its
+launch's brief counted without listing it (`LaunchRecord.LateOmittedCalls`),
+whatever its place: a telling of a late call is credited by the capture's note
+cursor, never its save point (`runner.heldByTelling`), so a session whose brief
+only counted the call is credited none at any point.
 
 **The drain saves `direct` OpenCode jobs** with no code of its own: it takes
 every running job whose runner saves, one pack after another.

@@ -561,7 +561,7 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 	stamp := captureStamp(row, run.LaunchID, nextCaptureSeq(row), false, true, hold, taken, in.box, in.policy)
 	// RESERVED AT ZERO, its instant last, and raised once its spool is
 	// counted ([SessionCapture.placeAtNewest] says why), off this one row read.
-	stamp.placeAtZero()
+	stamp.placeAtZero(row.Launch)
 	stamp.At = c.now().UTC()
 	reserveBy, _ := take.Deadline()
 	took, _, err := c.askStamp(take, reserveBy, run.TurnID, stamp, c.pending.ReserveSave)

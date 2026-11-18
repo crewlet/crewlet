@@ -1,5 +1,7 @@
 package sandbox
 
+import "slices"
+
 // A CAPTURE'S SAVE POINT, WHERE NO READ MADE NOW CAN PLACE IT.
 //
 // Only a capture whose harness ended its own run is placed by a read of its
@@ -29,19 +31,22 @@ type savePlaces struct {
 }
 
 // placeAtZero reserves c, a capture no read places, at a stated zero, with no
-// place an older build reads and no read left out: what tells a continuation
-// every call of the round, more, never less. Its take raises it once counted
-// ([SessionCapture.placeAtNewest]).
-func (c *SessionCapture) placeAtZero() {
+// place an older build reads and no read left out, but every late call launch's
+// brief counted ([LaunchRecord.LateOmittedCalls]), whatever its place: a telling
+// is credited by the note cursor, never the save point (internal/agent/runner's
+// heldByTelling). What tells a continuation every call of the round, more,
+// never less. Its take raises it once counted ([SessionCapture.placeAtNewest]).
+func (c *SessionCapture) placeAtZero(launch LaunchRecord) {
 	c.Through = new(0)
-	c.BridgeSeq, c.BridgeOpen, c.Omitted, c.LateOmitted = 0, nil, nil, nil
+	c.BridgeSeq, c.BridgeOpen, c.Omitted = 0, nil, nil
+	c.LateOmitted = slices.Clone(launch.LateOmittedCalls())
 }
 
 // placeAtNewest raises c, reserved at zero and its take's count stamped, to the
 // newest save point a capture its launch's session holds states whose newest
 // compaction is the one c's count names ([launchKept], [LaunchRecord.Continued]),
-// both omitted sets the launch's at or below it ([LaunchRecord.OmittedCalls]),
-// else leaves it at zero: the package doc's "A capture no read places" says why.
+// Omitted the launch's at or below it ([LaunchRecord.OmittedCalls]), else
+// leaves it at zero: the package doc's "A capture no read places" says why.
 //
 // THE POINT IS RAISED AFTER THE TAKE, never at the place: whether the session
 // compacted since a capture it holds is known only from the take's own count,
@@ -69,23 +74,15 @@ func (c *SessionCapture) placeAtNewest(from savePlaces) {
 	}
 	raised := *c
 	raised.Through = new(point)
-	raised.Omitted = atOrBelow(run.Launch.OmittedCalls(), point)
-	raised.LateOmitted = atOrBelow(run.Launch.LateOmittedCalls(), point)
+	raised.Omitted = nil
+	for _, place := range run.Launch.OmittedCalls() {
+		if place <= point {
+			raised.Omitted = append(raised.Omitted, place)
+		}
+	}
 	if raised.Bounded() == nil {
 		*c = raised
 	}
-}
-
-// atOrBelow is the places of set at or below point, nil where none is: a
-// continuation tells every call past the point anyway.
-func atOrBelow(set []int, point int) []int {
-	var kept []int
-	for _, place := range set {
-		if place <= point {
-			kept = append(kept, place)
-		}
-	}
-	return kept
 }
 
 // sameRestart reports whether seen, a newest compaction a capture or a launch

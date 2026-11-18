@@ -1498,7 +1498,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	if calls != nil {
 		stamp.placeAt(*calls, current.Launch)
 	} else {
-		stamp.placeAtZero()
+		stamp.placeAtZero(current.Launch)
 		places = &savePlaces{run: current, resumeRead: taken.ResumeRead}
 	}
 	stamp.At = c.now().UTC()

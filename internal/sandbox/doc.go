@@ -745,18 +745,22 @@
 // Kept by savepoint.go. A save, the take of a job still working and a capture
 // cut off may lack calls their harness had answered and never written, so no
 // read of the log places them. Each is RESERVED AT ZERO
-// ([SessionCapture.placeAtZero]): the ledger's compare-and-swap, then the
-// stamp, then its instant last, then the reservation, with nothing that waits
-// between the instant and the reservation; then the spool, the check against
-// what the ledger counted, and the spool's whole read, which stamps the take's
-// count and then RAISES the point ([SessionCapture.placeAtNewest]), pure
-// computation on that count and the one row read; then the keep, whose outcome
-// stamp, at the same instant, carries the raised point. A take of a job still
-// working or cut off follows the same order. A standby's takeover reserves the
-// next place after its own take, so at the point that take raised: the one
-// reservation above zero. A log's settle that lands a begun capture lands it as
-// the store holds it, at zero, which loses the raise and tells more, never
-// less.
+// ([SessionCapture.placeAtZero]), stating no read left out but every late call
+// its launch's brief counted ([LaunchRecord.LateOmittedCalls]) whatever its
+// place, since a continuation credits a telling of a late call by the note
+// cursor, never the save point (internal/agent/runner's heldByTelling), and a
+// session whose brief only counted the call is credited none: the ledger's
+// compare-and-swap, then the stamp, then its instant last, then the
+// reservation, with nothing that waits between the instant and the reservation;
+// then the spool, the check against what the ledger counted, and the spool's
+// whole read, which stamps the take's count and then RAISES the point
+// ([SessionCapture.placeAtNewest]), pure computation on that count and the one
+// row read; then the keep, whose outcome stamp, at the same instant, carries
+// the raised point. A take of a job still working or cut off follows the same
+// order. A standby's takeover reserves the next place after its own take, so at
+// the point that take raised: the one reservation above zero. A log's settle
+// that lands a begun capture lands it as the store holds it, at zero, which
+// loses the raise and tells more, never less.
 //
 // THE RAISE: once the take's count names the session's newest compaction (its
 // identity, [ResumedCount.Restart]), the point rises to the newest a held
@@ -768,9 +772,10 @@
 // and [LaunchRecord.BasisRestart], written from the same capture, is that
 // compaction. Omitted becomes the places of the launch's
 // [LaunchRecord.OmittedCalls] at or below the point, a read the brief left out
-// past it being told as a call after the point anyway; BridgeSeq and BridgeOpen
-// stay zero and nil, so an older build that reads them is told every call. A
-// raise the stamp's bounds refuse is dropped, never the capture.
+// past it being told as a call after the point anyway, and LateOmitted stays
+// whole; BridgeSeq and BridgeOpen stay zero and nil, so an older build that
+// reads them is told every call. A raise the stamp's bounds refuse is dropped,
+// never the capture.
 //
 // WHY IT IS SOUND. The continued capture C1 states p1; the save's take names
 // C1's newest compaction, so the job made none after C1. Where C1's own job

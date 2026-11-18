@@ -3,6 +3,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"slices"
 	"sync"
 	"testing"
 
@@ -15,14 +16,16 @@ import (
 
 // continuingJob launches t1's job as the second of its turn, its record naming
 // the job before's kept capture at 7, taken up by its box in the same round and
-// of the newest compaction msg_1, as edit leaves it; and has the job's take
-// name that compaction, of a release whose resume was read.
+// of the newest compaction msg_1, its brief having counted the reads 3 and 12
+// and the late calls 5 and 13 without listing them, as edit leaves it; and has
+// the job's take name that compaction, of a release whose resume was read.
 func continuingJob(t *testing.T, rig *coordRig, edit func(*PendingRun)) PendingRun {
 	t.Helper()
 	rig.launch("t1")
 	if _, _, err := rig.pending.mutate(t.Context(), "t1", func(run *PendingRun) bool {
 		run.LaunchSeq = 2
 		run.Launch.Brief, run.Launch.BriefOmitted = BriefContinued, []int{3, 12}
+		run.Launch.BriefLateOmitted = []int{5, 13}
 		run.Launch.SessionStart, run.Launch.BasisRestart = SessionStartContinued, new("msg_1")
 		run.Launch.Continued = &ContinuedPoint{LaunchSeq: 1, Through: 7}
 		if edit != nil {
@@ -61,7 +64,8 @@ func (r *reservedAs) watch(t *testing.T, rig *coordRig, reads func(PendingRun) *
 }
 
 // atZero fails t unless the reservation recorded states a zero save point and
-// nothing an older build reads, nor any read left out.
+// nothing an older build reads, nor any read left out, and every late call its
+// launch's brief counted without listing it (continuingJob's 5 and 13).
 func (r *reservedAs) atZero(t *testing.T, what string) SessionCapture {
 	t.Helper()
 	r.mu.Lock()
@@ -74,6 +78,10 @@ func (r *reservedAs) atZero(t *testing.T, what string) SessionCapture {
 		t.Errorf("%s: the reservation states %d (stated %v), %d, %v and %v; want a stated zero and nothing else",
 			what, through, stated, r.stamp.BridgeSeq, r.stamp.BridgeOpen, r.stamp.Omitted)
 	}
+	if !slices.Equal(r.stamp.LateOmitted, []int{5, 13}) {
+		t.Errorf("%s: the reservation states late calls %v left out, want its launch's [5 13]: a continuation "+
+			"credits no telling of one", what, r.stamp.LateOmitted)
+	}
 	return *r.stamp
 }
 
@@ -82,11 +90,13 @@ func (r *reservedAs) atZero(t *testing.T, what string) SessionCapture {
 // whose own landed capture states 9 with places an older build reads and a
 // read left out, and whose record names a continued capture at 7, all of one
 // newest compaction. Raised after the take, the outcome states 9, nothing an
-// older build reads, and the launch's own reads left out at or below it.
+// older build reads, the launch's own reads left out at or below it, and every
+// late call its brief counted, whatever its place: a telling is credited by the
+// note cursor, never by the save point (internal/agent/runner's heldByTelling).
 //
-// Mutation: raise before the instant (place a save or a take at its launch's
-// point at the place), or keep the places of the capture it was raised to,
-// and a case goes red.
+// Mutation: raise before the instant, keep the places of the capture it was
+// raised to, or reserve or raise with fewer than the launch's late calls, and a
+// case goes red.
 func TestEveryCaptureNoReadPlacesIsReservedAtZeroAsTheStoreHoldsIt(t *testing.T) {
 	t.Parallel()
 	for name, take := range map[string]func(t *testing.T, rig *coordRig, run PendingRun){
@@ -129,9 +139,9 @@ func TestEveryCaptureNoReadPlacesIsReservedAtZeroAsTheStoreHoldsIt(t *testing.T)
 					t.Fatalf("the row keeps %+v, want the take's capture in the place after its own", kept)
 				}
 				if through, _ := kept.SavePoint(); through != 9 || kept.BridgeSeq != 0 || kept.BridgeOpen != nil ||
-					len(kept.Omitted) != 1 || kept.Omitted[0] != 3 {
-					t.Errorf("the kept capture states %d, %d, %v and %v left out; want 9, zero, none and [3]",
-						through, kept.BridgeSeq, kept.BridgeOpen, kept.Omitted)
+					!slices.Equal(kept.Omitted, []int{3}) || !slices.Equal(kept.LateOmitted, []int{5, 13}) {
+					t.Errorf("the kept capture states %d, %d, %v, %v left out and late %v; want 9, zero, none, [3] "+
+						"and [5 13]", through, kept.BridgeSeq, kept.BridgeOpen, kept.Omitted, kept.LateOmitted)
 				}
 			})
 		})
@@ -196,8 +206,9 @@ func TestASavesReservationStatesZeroAndItsOutcomeTheRaisedPoint(t *testing.T) {
 				if kept == nil || !kept.sameTake(reservation) {
 					t.Fatalf("the row keeps %+v, want the save reserved as %+v", kept, reservation)
 				}
-				if through, _ := kept.SavePoint(); through != tc.through {
-					t.Errorf("the kept save states %d, want %d", through, tc.through)
+				if through, _ := kept.SavePoint(); through != tc.through || !slices.Equal(kept.LateOmitted, []int{5, 13}) {
+					t.Errorf("the kept save states %d and late %v left out, want %d and its launch's [5 13], "+
+						"raised or not", through, kept.LateOmitted, tc.through)
 				}
 			})
 		})

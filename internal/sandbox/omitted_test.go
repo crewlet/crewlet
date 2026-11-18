@@ -230,11 +230,11 @@ func TestARecordReadsTheOmittedCallsOfTheBriefItsRunRead(t *testing.T) {
 // counting as held every call the log took, its brief's counted-not-listed
 // reads among them: so it states those, off the job's record by the brief its
 // run read, and a relaunch continuing it tells them. One raised to an earlier
-// capture's point states its launch's own set at or below the point; one at
-// the round's start owes none.
+// capture's point states its launch's own reads at or below the point and its
+// late calls whole; one at the round's start owes none.
 //
 // Mutation: place an own-run capture by its read without its job's set, or
-// raise one with the earlier capture's set rather than its launch's, and a
+// raise one with the earlier capture's sets rather than its launch's, and a
 // check goes red.
 func TestAnOwnRunCaptureStatesTheReadsItsBriefLeftOut(t *testing.T) {
 	t.Parallel()
@@ -278,22 +278,22 @@ func TestAnOwnRunCaptureStatesTheReadsItsBriefLeftOut(t *testing.T) {
 
 	own := &SessionCapture{LaunchSeq: 2, CaptureSeq: 1, Launch: "job-2", State: CaptureLanded, Through: new(9),
 		Omitted: []int{4}, LateOmitted: []int{6}, ResumedCount: &ResumedCount{Tokens: 1, Restart: new("u-1")}}
-	cutOff := SessionCapture{Omitted: []int{99}, LateOmitted: []int{98}}
-	cutOff.placeAtZero()
-	cutOff.ResumedCount = &ResumedCount{Tokens: 1, Restart: new("u-1")}
 	launch := LaunchRecord{Brief: BriefFresh, BriefOmitted: []int{3, 12}, BriefLateOmitted: []int{5, 13}}
+	cutOff := SessionCapture{Omitted: []int{99}, LateOmitted: []int{98}}
+	cutOff.placeAtZero(launch)
+	cutOff.ResumedCount = &ResumedCount{Tokens: 1, Restart: new("u-1")}
 	cutOff.placeAtNewest(savePlaces{run: PendingRun{TurnID: "t1", LaunchID: "job-2", LaunchSeq: 2, Kept: own,
 		Capture: own, Launch: launch}, resumeRead: true})
-	if !slices.Equal(cutOff.Omitted, []int{3}) || !slices.Equal(cutOff.LateOmitted, []int{5}) {
+	if !slices.Equal(cutOff.Omitted, []int{3}) || !slices.Equal(cutOff.LateOmitted, []int{5, 13}) {
 		t.Errorf("a capture raised to its launch's own capture's point states %v and late %v left out, want its "+
-			"launch's at or below it, [3] and [5]", cutOff.Omitted, cutOff.LateOmitted)
+			"launch's reads at or below it, [3], and its late calls whole, [5 13]", cutOff.Omitted, cutOff.LateOmitted)
 	}
 	cutOff.Omitted[0], cutOff.LateOmitted[0] = -1, -1
 	if launch.BriefOmitted[0] == -1 || launch.BriefLateOmitted[0] == -1 {
 		t.Error("the capture shares a set with its launch's record")
 	}
 	start := SessionCapture{Omitted: []int{99}, LateOmitted: []int{98}}
-	start.placeAtZero()
+	start.placeAtZero(LaunchRecord{})
 	start.placeAtNewest(savePlaces{run: PendingRun{TurnID: "t1", LaunchID: "job-2", LaunchSeq: 2}})
 	if len(start.Omitted)+len(start.LateOmitted) != 0 {
 		t.Errorf("a capture placed at the round's start states %v and late %v left out, want none", start.Omitted,

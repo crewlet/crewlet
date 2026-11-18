@@ -332,12 +332,13 @@ func TestAKeptStampWithNoSavePointIsNotContinued(t *testing.T) {
 // take's count is stamped, to the newest point stated by its launch's own
 // landed capture or by the capture it continued (the job before's, taken up by
 // its box), where that capture names the same compaction. Omitted is the
-// launch's own at or below the point; an older build's places stay zero and
-// nil. Every other case stays at zero, and its row says why.
+// launch's own at or below the point, LateOmitted the launch's whole; an older
+// build's places stay zero and nil. Every other case stays at zero.
 //
 // Mutation: compare counts, not identities; drop the SessionStart, launch or
 // bounds check; accept an unknown basis; carry launchKept's point unchecked;
-// take Omitted off the carried capture or past the point; or copy BridgeSeq.
+// take Omitted off the carried capture or past the point, or LateOmitted short
+// of the launch's; or copy BridgeSeq.
 func TestACapturePointRisesOnlyWhereItsTakeNamesTheHeldCapturesNewestCompaction(t *testing.T) {
 	t.Parallel()
 	const job = "job-2"
@@ -351,7 +352,8 @@ func TestACapturePointRisesOnlyWhereItsTakeNamesTheHeldCapturesNewestCompaction(
 	// before, taken up by its box, naming basis.
 	continued := func(basis *string) LaunchRecord {
 		return LaunchRecord{Brief: BriefContinued, SessionStart: SessionStartContinued, BasisRestart: basis,
-			BriefOmitted: []int{3, 12}, Continued: &ContinuedPoint{LaunchSeq: 1, Through: 7}}
+			BriefOmitted: []int{3, 12}, BriefLateOmitted: []int{5, 13},
+			Continued: &ContinuedPoint{LaunchSeq: 1, Through: 7}}
 	}
 	past := make([]int, MaxBridgeCalls+1)
 	for i := range past {
@@ -426,8 +428,8 @@ func TestACapturePointRisesOnlyWhereItsTakeNamesTheHeldCapturesNewestCompaction(
 			run := PendingRun{TurnID: "t1", LaunchID: job, LaunchSeq: cmp.Or(tc.launchSeq, 2), Launch: tc.launch,
 				Kept: tc.kept, Capture: tc.kept}
 			capture := SessionCapture{Harness: cmp.Or(tc.harness, ClaudeCodeHarness), BridgeSeq: 99,
-				BridgeOpen: []int{98}, Omitted: []int{97}}
-			capture.placeAtZero()
+				BridgeOpen: []int{98}, Omitted: []int{97}, LateOmitted: []int{96}}
+			capture.placeAtZero(run.Launch)
 			capture.ResumedCount = &ResumedCount{Tokens: 1, Restart: tc.take}
 			capture.placeAtNewest(savePlaces{run: run, resumeRead: true})
 			if through, stated := capture.SavePoint(); !stated || through != tc.through {
@@ -435,6 +437,10 @@ func TestACapturePointRisesOnlyWhereItsTakeNamesTheHeldCapturesNewestCompaction(
 			}
 			if !slices.Equal(capture.Omitted, tc.omitted) {
 				t.Errorf("the capture states %v left out, want %v", capture.Omitted, tc.omitted)
+			}
+			if want := tc.launch.LateOmittedCalls(); !slices.Equal(capture.LateOmitted, want) {
+				t.Errorf("the capture states late calls %v left out, want its launch's whole, %v",
+					capture.LateOmitted, want)
 			}
 			if capture.BridgeSeq != 0 || capture.BridgeOpen != nil {
 				t.Errorf("the capture carries %d and %v for an older build, want zero and none, which tells it "+
@@ -446,17 +452,29 @@ func TestACapturePointRisesOnlyWhereItsTakeNamesTheHeldCapturesNewestCompaction(
 
 // EVERY CAPTURE NO READ PLACES IS RESERVED AT ZERO, whatever places its stamp
 // already carries: a stated zero, no place an older build reads and no read
-// left out, so a continuation of it is told every call of the round.
+// left out, so a continuation of it is told every call of the round; and every
+// late call its launch's brief counted, which a continuation credits no telling
+// of, at whatever point (internal/agent/runner's heldByTelling).
 //
-// Mutation: keep a stamp's places, or state no point, and this goes red.
+// Mutation: keep a stamp's places, state no point, or reserve with fewer late
+// calls than the launch's, and this goes red.
 func TestEveryCaptureNoReadPlacesIsReservedAtZero(t *testing.T) {
 	t.Parallel()
-	capture := SessionCapture{Through: new(9), BridgeSeq: 11, BridgeOpen: []int{10}, Omitted: []int{3}}
-	capture.placeAtZero()
+	capture := SessionCapture{Through: new(9), BridgeSeq: 11, BridgeOpen: []int{10}, Omitted: []int{3},
+		LateOmitted: []int{2}}
+	launch := LaunchRecord{Brief: BriefFresh, BriefOmitted: []int{4}, BriefLateOmitted: []int{5, 13}}
+	capture.placeAtZero(launch)
 	if through, stated := capture.SavePoint(); !stated || through != 0 || capture.BridgeSeq != 0 ||
 		capture.BridgeOpen != nil || capture.Omitted != nil {
 		t.Errorf("the capture is reserved at %d (stated %v), %d, %v and %v, want a stated zero and nothing else",
 			through, stated, capture.BridgeSeq, capture.BridgeOpen, capture.Omitted)
+	}
+	if !slices.Equal(capture.LateOmitted, []int{5, 13}) {
+		t.Errorf("the capture is reserved stating late calls %v left out, want its launch's [5 13]",
+			capture.LateOmitted)
+	}
+	if capture.LateOmitted[0] = -1; launch.BriefLateOmitted[0] == -1 {
+		t.Error("the capture shares its late calls with its launch's record")
 	}
 }
 
@@ -485,7 +503,7 @@ func TestAClaudeCodeSaveOutsideTheResumeReadSetIsNeverRaised(t *testing.T) {
 	} {
 		save := SessionCapture{Harness: tc.harness, Interrupted: true,
 			ResumedCount: &ResumedCount{Tokens: 1, Restart: new("u-1")}}
-		save.placeAtZero()
+		save.placeAtZero(run.Launch)
 		save.placeAtNewest(savePlaces{run: run, resumeRead: tc.resumeRead})
 		if through, _ := save.SavePoint(); through != tc.through {
 			t.Errorf("%s: the save is placed at %d, want %d", name, through, tc.through)
