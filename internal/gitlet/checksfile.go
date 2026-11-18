@@ -198,7 +198,7 @@ func (d CheckDef) Timeout() time.Duration { return time.Duration(d.TimeoutSecond
 func (d CheckDef) Validate() error {
 	if faults := defFaults(d); len(faults) > 0 {
 		f := faults[0]
-		return fmt.Errorf("%w: %s: %s: %s", ErrInvalid, f.path.String(), f.kind.Error(), f.detail)
+		return refusedf("%w: %s: %s: %s", ErrInvalid, f.path.String(), f.kind.Error(), f.detail)
 	}
 	return nil
 }

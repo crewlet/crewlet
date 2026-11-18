@@ -547,11 +547,11 @@ type Actor struct {
 func (a Actor) validate() error {
 	switch {
 	case !a.Kind.Valid():
-		return fmt.Errorf("%w: actor.kind: %q is not one of %s", ErrInvalid, a.Kind, words.Or(ActorKinds()))
+		return refusedf("%w: actor.kind: %q is not one of %s", ErrInvalid, a.Kind, words.Or(ActorKinds()))
 	case strings.TrimSpace(a.ID) == "":
-		return fmt.Errorf("%w: actor.id: a record names who decided it", ErrInvalid)
+		return refusedf("%w: actor.id: a record names who decided it", ErrInvalid)
 	case a.Kind == ActorOperator && strings.TrimSpace(a.OperatorID) == "":
-		return fmt.Errorf("%w: actor.operator_id: an operator's record names the "+
+		return refusedf("%w: actor.operator_id: an operator's record names the "+
 			"credential it was made with", ErrInvalid)
 	}
 	return nil

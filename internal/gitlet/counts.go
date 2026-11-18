@@ -245,7 +245,7 @@ type QueueCounts struct {
 // validateCounts is [ReadQuery.validate] for a `counts` read: at least one part,
 // and one answer, never paged.
 func (q ReadQuery) validateCounts() error {
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
 	case q.Counts == nil || !q.Counts.asks():
 		return refused("counts", "a counts read names at least one part: "+words.Or(CountParts()))

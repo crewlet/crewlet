@@ -52,7 +52,7 @@ const MaxStandingCounted = 128
 // validateStanding is [ReadQuery.validateChecks] for a listing asked where each check stands: of
 // a repository or of every repository, in a window that ends now, narrowed by a name and a state.
 func (q ReadQuery) validateStanding() error {
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	c := q.Checks
 	switch {
 	case !c.Standing.Valid():

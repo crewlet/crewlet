@@ -471,7 +471,7 @@ func (k CheckKey) validateAs(prefix string) error {
 
 // checkField is a check record's field refused, as [ErrInvalid].
 func checkField(field, format string, args ...any) error {
-	return fmt.Errorf("%w: %s: %s", ErrInvalid, field, fmt.Sprintf(format, args...))
+	return refusedf("%w: %s: %s", ErrInvalid, field, fmt.Sprintf(format, args...))
 }
 
 // CheckQueued queues one attempt of one check of one commit — or records it

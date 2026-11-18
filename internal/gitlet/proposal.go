@@ -205,12 +205,12 @@ func (p Proposal) ValidateCommands() error {
 	case !p.Via.proposed():
 		// The asker's own bug, never the client's: an unstamped way measures
 		// short by up to the longest way's spelling.
-		return fmt.Errorf("%w: via: %q is not one of %s — a push is measured as built", ErrInvalidProposal,
+		return refusedf("%w: via: %q is not one of %s — a push is measured as built", ErrInvalidProposal,
 			p.Via, words.Or(proposedVias()))
 	case len(p.Commands) == 0:
-		return fmt.Errorf("%w: commands: a push updates at least one ref", ErrInvalidProposal)
+		return refusedf("%w: commands: a push updates at least one ref", ErrInvalidProposal)
 	case len(p.Commands) > MaxCommandsPerPush:
-		return fmt.Errorf("%w: commands: %d, past the %d one push may carry (MaxCommandsPerPush)",
+		return refusedf("%w: commands: %d, past the %d one push may carry (MaxCommandsPerPush)",
 			ErrInvalidProposal, len(p.Commands), MaxCommandsPerPush)
 	}
 	if err := validCommands(p.Commands); err != nil {
@@ -306,7 +306,7 @@ var largestEntry = sync.OnceValue(func() PushEntry {
 func (p Proposal) ValidateUnstored() error {
 	if p.Pack != nil {
 		if !p.Pack.Object.IsZero() || p.Pack.Hash != "" {
-			return fmt.Errorf("%w: pack: already stored as %s — Validate checks a stored pack",
+			return refusedf("%w: pack: already stored as %s — Validate checks a stored pack",
 				ErrInvalidProposal, p.Pack.Object)
 		}
 		pack := *p.Pack
@@ -332,11 +332,11 @@ func (p Proposal) validFields() error {
 		return err
 	}
 	if !ValidPushID(p.PushID) {
-		return fmt.Errorf("%w: push_id: %q is not a UUIDv7 in its canonical lowercase spelling",
+		return refusedf("%w: push_id: %q is not a UUIDv7 in its canonical lowercase spelling",
 			ErrInvalidProposal, p.PushID)
 	}
 	if id, err := uuid.Parse(p.RepoID); err != nil || id.String() != p.RepoID {
-		return fmt.Errorf("%w: repo_id: %q is not a UUID in its canonical lowercase spelling",
+		return refusedf("%w: repo_id: %q is not a UUID in its canonical lowercase spelling",
 			ErrInvalidProposal, p.RepoID)
 	}
 	// Who pushes: a person through a credential bound to their human seat, or a
@@ -353,54 +353,54 @@ func (p Proposal) validFields() error {
 	case why != "":
 		return fmt.Errorf("%w: %s", ErrInvalidProposal, why)
 	case p.Principal.Kind == PrincipalSystem && p.Via != ViaExpiry:
-		return fmt.Errorf("%w: via: %q — the engine's own account pushes only the ref lifecycle's expiry (%q)",
+		return refusedf("%w: via: %q — the engine's own account pushes only the ref lifecycle's expiry (%q)",
 			ErrInvalidProposal, p.Via, ViaExpiry)
 	case p.Via == ViaExpiry && p.Principal.Kind != PrincipalSystem:
-		return fmt.Errorf("%w: principal.kind: %q — the ref lifecycle's expiry is the engine's own push, "+
+		return refusedf("%w: principal.kind: %q — the ref lifecycle's expiry is the engine's own push, "+
 			"kind %q", ErrInvalidProposal, p.Principal.Kind, PrincipalSystem)
 	case p.Principal.Kind == PrincipalOperator && p.Principal.Seat == "":
-		return fmt.Errorf("%w: principal.seat: a push names the person its token is bound to — a "+
+		return refusedf("%w: principal.seat: a push names the person its token is bound to — a "+
 			"token bound to nobody fetches only", ErrInvalidProposal)
 	case p.Principal.Kind == PrincipalAgent && p.Principal.Run.IsZero():
 		// The server stamps the run (its turn at least) on every seat's push,
 		// so one naming none is its proposer's bug.
-		return fmt.Errorf("%w: principal.run: a seat's push names the run that made it — its turn at "+
+		return refusedf("%w: principal.run: a seat's push names the run that made it — its turn at "+
 			"least, stamped by the engine from the call", ErrInvalidProposal)
 	case p.Principal.Kind == PrincipalAgent && p.Via == ViaGit && p.Principal.Run.RunID == "":
 		// A seat's push git received is its coding box's, whose run Gitlet
 		// stamps on admitting it: one naming none is its proposer's bug, and
 		// no read of that run's pushes would find its row.
-		return fmt.Errorf("%w: principal.run.run_id: a seat's push git received is its coding box's, "+
+		return refusedf("%w: principal.run.run_id: a seat's push git received is its coding box's, "+
 			"which names the run that made it and its harness, stamped by the engine from the run's row",
 			ErrInvalidProposal)
 	case p.Via == ViaEngine && p.Principal.Run.RunID != "":
 		// An engine-built write is a tool call's, whose run is its turn: one
 		// naming an executor would list under a run that never made it.
-		return fmt.Errorf("%w: principal.run.run_id: a push the engine built is a tool call's, whose run "+
+		return refusedf("%w: principal.run.run_id: a push the engine built is a tool call's, whose run "+
 			"is its turn: it names no executor", ErrInvalidProposal)
 	case !p.Via.proposed():
 		// A MERGE'S PUSH IS ITS RECORD'S, never a proposal's: a push naming
 		// via merge would move a branch as a merge does and judge it as a
 		// push, past the gate a merge is decided by (ADR-0096).
-		return fmt.Errorf("%w: via: %q is not one of %s — a push names how its pack was built, and a "+
+		return refusedf("%w: via: %q is not one of %s — a push names how its pack was built, and a "+
 			"merge is decided through its gate, never proposed as a push", ErrInvalidProposal, p.Via,
 			words.Or(proposedVias()))
 	case strings.TrimSpace(p.Node) == "":
-		return fmt.Errorf("%w: node: a push names the node that received it", ErrInvalidProposal)
+		return refusedf("%w: node: a push names the node that received it", ErrInvalidProposal)
 	case p.ReceivedAt.IsZero():
-		return fmt.Errorf("%w: received_at: a push names when it was received", ErrInvalidProposal)
+		return refusedf("%w: received_at: a push names when it was received", ErrInvalidProposal)
 	case !p.Seen.IsZero() && p.Seen.Stream != topics.CodeLogStream:
-		return fmt.Errorf("%w: seen: %s is a position on another log than the code log (%s)",
+		return refusedf("%w: seen: %s is a position on another log than the code log (%s)",
 			ErrInvalidProposal, p.Seen, topics.CodeLogStream)
 	case !p.Seen.IsZero() && p.Seen.Valid() != nil:
 		return fmt.Errorf("%w: seen: %w", ErrInvalidProposal, p.Seen.Valid())
 	case p.DropEpoch < 0:
-		return fmt.Errorf("%w: drop_epoch: %d — a drop epoch counts the expunges begun on a "+
+		return refusedf("%w: drop_epoch: %d — a drop epoch counts the expunges begun on a "+
 			"repository, from 0", ErrInvalidProposal, p.DropEpoch)
 	case len(p.Commands) == 0:
-		return fmt.Errorf("%w: commands: a push updates at least one ref", ErrInvalidProposal)
+		return refusedf("%w: commands: a push updates at least one ref", ErrInvalidProposal)
 	case len(p.Commands) > MaxCommandsPerPush:
-		return fmt.Errorf("%w: commands: %d, past the %d one push may carry (MaxCommandsPerPush)",
+		return refusedf("%w: commands: %d, past the %d one push may carry (MaxCommandsPerPush)",
 			ErrInvalidProposal, len(p.Commands), MaxCommandsPerPush)
 	}
 	// WHOM IT IS MADE FOR, held to its pusher: a seat's push states it, and
@@ -420,16 +420,16 @@ func (p Proposal) validFields() error {
 	// or --atomic, is no push the engine built.
 	switch {
 	case p.Via == ViaEngine && len(p.Commands) != 1:
-		return fmt.Errorf("%w: commands: %d, and a push the engine built moves exactly one ref",
+		return refusedf("%w: commands: %d, and a push the engine built moves exactly one ref",
 			ErrInvalidProposal, len(p.Commands))
 	case p.Via == ViaEngine && p.Atomic:
-		return fmt.Errorf("%w: atomic: a push the engine built moves one ref, which --atomic has nothing "+
+		return refusedf("%w: atomic: a push the engine built moves one ref, which --atomic has nothing "+
 			"to hold together with", ErrInvalidProposal)
 	case p.Via == ViaEngine && p.Pack != nil && p.Pack.PackBytes() > MaxWritePackBytes:
 		// THE BUILD'S OWN BOUND: a Gitlet node answers a write whose pack is
 		// past it too_large before anything is uploaded, so a proposal
 		// carrying one is no build of this engine's.
-		return fmt.Errorf("%w: pack: %d bytes of pack, past the %d an engine-built push may store "+
+		return refusedf("%w: pack: %d bytes of pack, past the %d an engine-built push may store "+
 			"(MaxWritePackBytes)", ErrInvalidProposal, p.Pack.PackBytes(), MaxWritePackBytes)
 	}
 	if p.Pack != nil {
@@ -450,10 +450,10 @@ func (p Proposal) validFields() error {
 	}
 	switch {
 	case len(p.Introduced) > MaxIntroduced:
-		return fmt.Errorf("%w: introduced: %d ids, past the %d a push row lists (MaxIntroduced)",
+		return refusedf("%w: introduced: %d ids, past the %d a push row lists (MaxIntroduced)",
 			ErrInvalidProposal, len(p.Introduced), MaxIntroduced)
 	case p.IntroducedCount < len(p.Introduced):
-		return fmt.Errorf("%w: introduced_count: %d, fewer than the %d ids listed",
+		return refusedf("%w: introduced_count: %d, fewer than the %d ids listed",
 			ErrInvalidProposal, p.IntroducedCount, len(p.Introduced))
 	}
 	for i, oid := range p.Introduced {
@@ -469,18 +469,18 @@ func (p Proposal) validFields() error {
 func (p Proposal) validOffered() error {
 	switch {
 	case p.Offered < 0:
-		return fmt.Errorf("%w: offered: %d is no count of commits", ErrInvalidProposal, p.Offered)
+		return refusedf("%w: offered: %d is no count of commits", ErrInvalidProposal, p.Offered)
 	case p.Offered == 0:
 		return nil
 	case p.Via != ViaGit:
-		return fmt.Errorf("%w: offered: only a push git received is an attempt", ErrInvalidProposal)
+		return refusedf("%w: offered: only a push git received is an attempt", ErrInvalidProposal)
 	case !Attempted(p.Commands):
-		return fmt.Errorf("%w: offered: only a push its receiver refused whole, by a rule, carries the "+
+		return refusedf("%w: offered: only a push its receiver refused whole, by a rule, carries the "+
 			"commits it offered", ErrInvalidProposal)
 	case p.Pack != nil || len(p.Introduced) > 0 || p.IntroducedCount > 0:
-		return fmt.Errorf("%w: offered: an attempt stores and introduces nothing", ErrInvalidProposal)
+		return refusedf("%w: offered: an attempt stores and introduces nothing", ErrInvalidProposal)
 	case p.Change != nil:
-		return fmt.Errorf("%w: offered: an attempt opens no change", ErrInvalidProposal)
+		return refusedf("%w: offered: an attempt opens no change", ErrInvalidProposal)
 	}
 	return nil
 }
@@ -507,17 +507,17 @@ func (p Proposal) validExpiry() error {
 	}
 	switch {
 	case p.Pack != nil:
-		return fmt.Errorf("%w: pack: the ref lifecycle's expiry only deletes, and carries no objects",
+		return refusedf("%w: pack: the ref lifecycle's expiry only deletes, and carries no objects",
 			ErrInvalidProposal)
 	case len(p.Introduced) > 0 || p.IntroducedCount != 0:
-		return fmt.Errorf("%w: introduced: the ref lifecycle's expiry introduces no commit", ErrInvalidProposal)
+		return refusedf("%w: introduced: the ref lifecycle's expiry introduces no commit", ErrInvalidProposal)
 	case p.Atomic:
-		return fmt.Errorf("%w: atomic: each branch the expiry deletes is judged on its own, and one kept never "+
+		return refusedf("%w: atomic: each branch the expiry deletes is judged on its own, and one kept never "+
 			"keeps another", ErrInvalidProposal)
 	case p.Change != nil:
-		return fmt.Errorf("%w: change: the ref lifecycle's expiry asks for no change", ErrInvalidProposal)
+		return refusedf("%w: change: the ref lifecycle's expiry asks for no change", ErrInvalidProposal)
 	case p.Seen.IsZero():
-		return fmt.Errorf("%w: seen: the ref lifecycle's expiry names the position of the page it was listed "+
+		return refusedf("%w: seen: the ref lifecycle's expiry names the position of the page it was listed "+
 			"from, which every hold recorded since keeps a branch past", ErrInvalidProposal)
 	}
 	return nil
@@ -573,14 +573,14 @@ func validCommands(cmds []Command) error {
 func (p Proposal) validPack() error {
 	k := p.Pack
 	if k.PackID != p.PushID {
-		return fmt.Errorf("%w: pack.pack_id: %q, and a push's pack carries the push's id %q",
+		return refusedf("%w: pack.pack_id: %q, and a push's pack carries the push's id %q",
 			ErrInvalidProposal, k.PackID, p.PushID)
 	}
 	if err := k.Check(); err != nil {
 		return fmt.Errorf("%w: pack.%w", ErrInvalidProposal, err)
 	}
 	if !slices.ContainsFunc(p.Commands, func(c Command) bool { return c.New != ZeroOID }) {
-		return fmt.Errorf("%w: pack: a push that only deletes refs carries no objects",
+		return refusedf("%w: pack: a push that only deletes refs carries no objects",
 			ErrInvalidProposal)
 	}
 	return nil
