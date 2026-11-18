@@ -15,26 +15,18 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE FOLDER TREE IN MEMORY: one shape the writer's snapshot, the applier and
-// the reader all read the tree into, so a depth, a namespace, a path and a
-// subtree are computed one way wherever they are asked.
+// THE FOLDER TREE IN MEMORY: the writer's snapshot, the applier and the reader
+// all read it into this one shape, so its questions are answered one way.
 //
-// # Why the whole tree is read
+// The whole tree is read: a company holds at most [artifacts.MaxFolders] live
+// folders and every question a folder write asks (sibling names, a move's
+// cycle, the depth beneath, the live count) is about the whole tree, so one
+// indexed statement beats one per question, and it is the snapshot the tree
+// subject's arbitration covers.
 //
-// A company holds at most [artifacts.MaxFolders] live folders, and every
-// question a folder write asks (sibling names, the ancestor chain a move must
-// not close into a cycle, the depth beneath a folder, the live count) is about
-// the tree as a whole. Reading every live row once is one indexed statement,
-// cheaper and simpler than a walk of statements per question, and it is the
-// snapshot the tree subject's arbitration covers.
-//
-// # The live tree is closed
-//
-// A live folder's parent is always a live folder or the top level: a removal
-// moves every child of the folder it removes up to that folder's parent in the
-// same apply, and a create or a move names only a live parent. So a parent
-// chain read from live rows never reaches a tombstone, and a tombstone is a
-// leaf nothing live sits under.
+// The live tree is closed: a removal moves its children up in the same apply
+// and a create or move names only a live parent, so a parent chain read from
+// live rows never reaches a tombstone.
 
 // folderRow is one row of artifact_folders.
 type folderRow struct {
@@ -256,14 +248,12 @@ func companyWide(shares []artifacts.Share) bool {
 	})
 }
 
-// topLevel is one namespace of top-level folder names.
-//
-// TWO KINDS OF NAMESPACE, so a name is never an oracle: the company's
-// top-level folders are unique among themselves (everyone sees all of them),
-// and each owner's other top-level folders are unique among that owner's own
-// (nobody else's private name can refuse theirs). A private folder may share a
-// name with a company one, and a path that then names both is refused naming
-// both ([FolderAmbiguous]) rather than resolved by a guess.
+// topLevel is one namespace of top-level folder names. Two kinds, so a name is
+// never an oracle: the company's top-level folders are unique among themselves
+// (everyone sees them all), each owner's others among that owner's own
+// (nobody's private name can refuse another's). A private folder may share a
+// company folder's name; a path naming both is refused ([FolderAmbiguous])
+// rather than resolved by a guess.
 type topLevel struct {
 	company bool
 	owner   string
@@ -324,8 +314,7 @@ func (t *folderTree) resolvePath(path string) ([]*folderRow, error) {
 		}
 		key, named := folderKey(segment)
 		if !named {
-			// A NAME NO FOLDER COULD HOLD names no folder: answered as
-			// absent, the same answer a name nobody used gets.
+			// A NAME NO FOLDER COULD HOLD answers absent, as an unused name does.
 			return nil, nil
 		}
 		var next []string

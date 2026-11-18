@@ -12,128 +12,78 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// The operator's answer, and why it is ONE value.
+// The operator's answer is ONE value: `crewlet retention status` and GET
+// /worklet/retention serve the same bytes, encoded once by the node that
+// assembled them; the CLI renders them and exits non-zero from their alarms,
+// re-deriving neither. A surface computing its own verdict would be a second
+// retention gate on a machine that cannot see the register, and when the two
+// disagreed nobody could tell which one the engine acted on.
 //
-// `crewlet retention status` and GET /worklet/retention answer the SAME BYTES:
-// this type, encoded once by the node that assembled it. The CLI renders what
-// it was given and exits non-zero from the alarms it was given; it does not
-// re-derive either. That is not tidiness. An operator surface that computed
-// its own verdict would be a second implementation of the retention gate,
-// running on a machine that cannot see the register, and the first time the
-// two disagreed the person reading the screen would have no way to tell which
-// one the engine had acted on.
-//
-// # Why it is per fleet with the DOMAIN AS A COLUMN
-//
-// The framework carries N domains and every one of them has a stream, a trim
-// point, six terms and a floor. The shape that survives a second domain is a
-// row per domain inside one answer — not a second command, not a second
-// route, and not a `?domain=` that returns a different document. A term that
-// does not apply to a domain reports ABSENT rather than zero, because a
-// domain that declares no wake feed genuinely has none and rendering that as
-// `0` is a claim that the feed has scanned nothing.
-//
-// # What is NOT here, and where it is instead
-//
-// The per-node SNAPSHOT INVENTORY — every artefact on a node's disk, its
-// path, its digest and its verification status — is `crewlet retention
-// snapshots`, its own verb, because the repository is per node: "which of my
-// machines can donate, and how old is what they hold" is a disk question. The
-// block here is what the REGISTER knows, which is one row per node and the
-// newest artefact only.
+// It is per fleet with the domain as a column: a row per domain, never a second
+// command, route or `?domain=`. A term that does not apply to a domain is ABSENT,
+// not `0`, which would claim e.g. a wake feed that scanned nothing. The per-node
+// snapshot inventory is `crewlet retention snapshots`, a disk question; here is
+// only what the register knows, the newest artefact per node.
 
-// ReportVersion is the shape this build writes.
-//
-// Evolution is ADDITIVE, exactly as the event envelope's is and for the same
-// reason: a fleet mid-upgrade has an older CLI reading a newer node's answer,
-// and the CLI decodes into a struct of its own so an unknown field is ignored
-// rather than refused. The version is here for the case a field ever changes
-// MEANING, which is the one an added field cannot express.
+// ReportVersion is the shape this build writes. Evolution is additive, as the
+// event envelope's is: mid-upgrade, an older CLI decodes a newer node's answer
+// into its own struct and ignores unknown fields. The version is for a field
+// that changes MEANING, which an added field cannot express.
 const ReportVersion = 1
 
 // Report is the fleet's retention answer.
 type Report struct {
 	V int `json:"v"`
 
-	// NodeID is who assembled it. Load-bearing rather than decorative:
-	// the replica block, the alarms and every "this node" figure are
-	// facts about THIS node, and a report copied into a ticket without
-	// its author is three of those facts attributed to a fleet.
+	// NodeID is who assembled it: the replica block, the alarms and every
+	// "this node" figure are facts about that node, not the fleet.
 	NodeID string    `json:"node_id"`
 	At     time.Time `json:"at"`
 
-	// ReadLevel is the level this answer was SERVED at, which is what
-	// keeps a replication answer inside the read-level contract rather
-	// than exempt from it.
-	//
-	// It is DERIVED rather than chosen — by nobody, on any surface, the
-	// operator MCP included (see [SurfaceReplication]): `stale` while the
-	// lag is a number, and `consistent_prefix` when it is not, because
-	// `stale` is a claim about AGE and an unknown lag cannot make one.
-	// The moment somebody needs this document is the moment the broker or
-	// coordination may be unreachable, so the weaker answer is the one
-	// that gets delivered — named, rather than delivered under the
-	// stronger name.
+	// ReadLevel is the level this answer was served at, which keeps it inside
+	// the read-level contract. No surface chooses it ([SurfaceReplication]):
+	// `stale` while the lag is a number, `consistent_prefix` when it is not,
+	// since `stale` claims an AGE. This document is wanted when the broker or
+	// coordination may be down, so the weaker answer is delivered, by its name.
 	ReadLevel ReadLevel `json:"read_level"`
 
-	// BackupOwner is `retention.backup_owner`, empty when unset. It is on
-	// the report rather than looked up beside it because the one place it
-	// matters is the backup term's remedy, and a remedy that named a
-	// value the report did not carry would be a remedy the JSON reader
-	// never sees.
+	// BackupOwner is `retention.backup_owner`, empty when unset; carried
+	// here because the backup term's remedy names it, and a JSON reader sees
+	// only the report.
 	BackupOwner string `json:"backup_owner,omitempty"`
 
 	Domains []DomainReport `json:"domains"`
 	Nodes   []NodeReport   `json:"nodes"`
 
-	// RegisterReadable says the node block is the fleet rather than what
-	// could be read of it.
-	//
-	// AN EMPTY NODE BLOCK IS TWO DIFFERENT ANSWERS — "this fleet has no
-	// nodes", which cannot happen, and "coordination could not be
-	// listed", which happens during exactly the outage somebody is
-	// running this command in. Without the flag a renderer has no way to
-	// tell them apart and prints the impossible one.
+	// RegisterReadable says the node block is the whole fleet. Without it an
+	// empty block is either "no nodes" (impossible) or "coordination could
+	// not be listed" (the outage this command is run in).
 	RegisterReadable bool `json:"register_readable"`
 
 	Snapshots []SnapshotReport `json:"snapshots"`
 	Replica   ReplicaReport    `json:"replica"`
 
-	// Alarms is every condition currently true on this node, evaluated
-	// once here, and an empty list, never null, when none is. The CLI's
-	// exit code is derived from THIS field.
+	// Alarms is every condition currently true on this node, evaluated once
+	// here; an empty list, never null. The CLI's exit code derives from it.
 	Alarms []Alarm `json:"alarms"`
 
 	// Unjudged is the per-entry instances this evaluation could not judge
 	// ([Unjudged]), which the node's tracker keeps standing.
 	Unjudged []AlarmRef `json:"-"`
 
-	// Maintenance is every capacity operation currently holding the
-	// fleet, the oldest first, and absent when there is none.
-	//
-	// ABSENT RATHER THAN ZEROED, because a zeroed block is a claim that an
-	// operation exists in phase "" with nobody outstanding — and the whole
-	// point of this field is that maintenance is otherwise visible on NO
-	// screen. It stops every publisher on every node: no seats, no duties,
-	// no scheduler, no write routes. An hour of that is an outage nobody
-	// is watching, which is what `maintenance_open` alarms on and what
-	// this renders while it is happening rather than after.
-	//
-	// EVERY ONE, because a window is per log and two can be open at once (a
-	// fleet resizing two logs runs both in the same restarts), each waiting
-	// on its own nodes. The oldest alone hid what the other was waiting on
-	// until the first had closed.
+	// Maintenance is every capacity operation holding the fleet, oldest
+	// first; absent, not zeroed, when none is, since a zeroed block claims
+	// an operation in phase "" with nobody outstanding. Maintenance stops
+	// every publisher on every node and shows on no other screen
+	// (`maintenance_open` alarms on it). Every one, because a window is per
+	// log and two can be open at once, each waiting on its own nodes.
 	Maintenance []MaintenanceReport `json:"maintenance,omitempty"`
 
 	// MaintenanceUnread is every log whose capacity window this node
-	// couldn't read, and absent when it read every one.
-	//
-	// NOT A LOG WITH NO WINDOW, which is what leaving it out of Maintenance
-	// alone said: the read that fails is the coordination read, and the
-	// outage that fails it is exactly when somebody opens this to ask why the
-	// company has gone quiet. It is THIS NODE'S read: a data node's own boot
-	// reads the same register, and won't start in service while it can't
-	// read a log's window there, for the same reason.
+	// couldn't read, absent when it read every one: an unread window is not
+	// no window, and the coordination outage that fails the read is when
+	// somebody opens this. It is this node's read; a data node's boot won't
+	// start in service without the same read either.
 	MaintenanceUnread []string `json:"maintenance_unread,omitempty"`
 }
 
@@ -145,64 +95,53 @@ type MaintenanceReport struct {
 	OperationID string `json:"operation_id"`
 
 	// Phase is where the operation stands and Attempt which write-then-
-	// seal cycle it is on. Both, because a second attempt in the same
-	// phase is the shape a retry has and one number cannot show it.
+	// seal cycle it is on: a retry is a second attempt in the same phase.
 	Phase   string `json:"phase"`
 	Attempt int    `json:"attempt"`
 
 	// TargetMaxBytes is the ceiling being written and OriginalMaxBytes
-	// what it was, so a reader can see the direction without consulting
-	// the stream.
+	// what it was, so a reader sees the direction without the stream.
 	TargetMaxBytes   uint64 `json:"target_max_bytes"`
 	OriginalMaxBytes uint64 `json:"original_max_bytes"`
 
-	// Since is when the exclusion was taken and By which operator ran the
-	// verb — the two things somebody finding this at an inconvenient hour
-	// needs before anything else — with OperatorID the credential they ran
-	// it through, which tells their own gesture from their token's.
+	// Since is when the exclusion was taken, By which operator ran the
+	// verb, and OperatorID the credential they ran it through (their own
+	// gesture or their token's).
 	Since      time.Time `json:"since"`
 	By         string    `json:"by,omitempty"`
 	OperatorID string    `json:"operator_id,omitempty"`
 
-	// ParticipantsMissing names the nodes the window's next step is still
-	// waiting for: at `opened`, those with no restart into a maintenance
-	// mode recorded, which is what the baseline reads ([BaselineMissing]);
-	// from the baseline to the seal, those whose acknowledgement the seal is
-	// still waiting for ([SealOutstanding]); and once it has sealed, none,
-	// since the verify and the release wait on no node.
-	// EMPTY IS NOT THE SAME AS UNKNOWN: an operation with nobody
-	// outstanding is one waiting on its operator, and that is the state an
-	// operator most needs to be able to see.
+	// ParticipantsMissing names the nodes the window's next step waits for:
+	// at `opened`, those with no maintenance-mode restart recorded
+	// ([BaselineMissing]); from the baseline to the seal, those whose
+	// acknowledgement the seal awaits ([SealOutstanding]); once sealed, none.
+	// Empty is not unknown: nobody outstanding means it waits on its operator.
 	ParticipantsMissing []string `json:"participants_missing,omitempty"`
 
-	// AcksUnread says the acknowledgements ParticipantsMissing is read from
-	// couldn't be read, and AdmissionsUnread the same of the admissions
-	// AdmissionsBlocking is read from. Either list is then absent, and
-	// NEITHER IS EMPTY: a list formed from nothing named every participant
-	// as owing a restart, or nobody's admission as holding the window, and
-	// both surfaces printed it as a fact.
+	// AcksUnread says the acknowledgements ParticipantsMissing comes from
+	// couldn't be read, and AdmissionsUnread the same of AdmissionsBlocking's
+	// admissions. That list is then absent, never empty: one formed from
+	// nothing names every participant as owing a restart, or no admission as
+	// holding the window, as a fact.
 	AcksUnread       bool `json:"acks_unread,omitempty"`
 	AdmissionsUnread bool `json:"admissions_unread,omitempty"`
 
 	// AdmissionsBlocking names the nodes holding an admission that keeps a
-	// window at `opened` from sending anything ([AdmissionBlocks]). Empty
-	// past `opened`, where no step reads an admission. Said beside the
-	// missing participants because it is the one thing holding a window
-	// that no participant owes: every node can have restarted and the
-	// window still wait on a node that stopped without giving its
-	// admission back.
+	// window at `opened` from sending anything ([AdmissionBlocks]); empty
+	// past `opened`. It is what holds a window no participant owes: a node
+	// that stopped without giving its admission back.
 	AdmissionsBlocking []string `json:"admissions_blocking,omitempty"`
 
-	// Blocked names why the operation cannot proceed without a person,
-	// empty while it can: a code for scripts. BlockedDetail is the same in
-	// the words a person reads ([BlockedDetail]), who blocked it and what
-	// clears it, and it is what every surface shows.
+	// Blocked is why the operation cannot proceed without a person, empty
+	// while it can: a code for scripts. BlockedDetail ([BlockedDetail]) is
+	// the same for a person, who blocked it and what clears it, and every
+	// surface shows it.
 	Blocked       coord.MaintenanceBlock `json:"blocked,omitempty"`
 	BlockedDetail string                 `json:"blocked_detail,omitempty"`
 
-	// AbandonedBy is who abandoned the operation, once somebody has: a
-	// window blocked because it was abandoned is still carrying out that
-	// person's decision, and the block alone named nobody.
+	// AbandonedBy is who abandoned the operation: a window blocked by its
+	// abandonment carries out that person's decision, and the block names
+	// nobody.
 	AbandonedBy coord.MaintenanceParty `json:"abandoned_by,omitzero"`
 }
 
@@ -213,16 +152,13 @@ type DomainReport struct {
 	Generation uint32         `json:"generation"`
 	Replay     ReplayProtocol `json:"replay"`
 
-	// FirstSeq and LastSeq are the stream's own window, and Bytes and
-	// MaxBytes its ceiling. Zero MaxBytes means the broker could not be
-	// asked, which is why HeadroomFraction is a POINTER: a fraction of an
-	// unknown ceiling is not zero headroom, and rendering it as zero
-	// would fire the one alarm an operator cannot ignore.
-	//
-	// ReserveBytes is the top of MaxBytes kept for gate records — an
-	// eviction, a readmission — on a log that keeps a reserve
-	// ([Reservation.Bytes]), and HeadroomFraction is what is left of the rest:
-	// the ceiling ordinary writes are refused `log_full` at.
+	// FirstSeq and LastSeq are the stream's window, Bytes and MaxBytes its
+	// ceiling. Zero MaxBytes means the broker could not be asked, so
+	// HeadroomFraction is a pointer: unknown headroom rendered as zero would
+	// fire the one alarm an operator cannot ignore. ReserveBytes is the top
+	// of MaxBytes kept for gate records on a log that keeps a reserve
+	// ([Reservation.Bytes]); HeadroomFraction is what is left of the rest,
+	// where ordinary writes are refused `log_full`.
 	FirstSeq         uint64   `json:"first_seq"`
 	LastSeq          uint64   `json:"last_seq"`
 	Bytes            uint64   `json:"bytes"`
@@ -230,114 +166,78 @@ type DomainReport struct {
 	ReserveBytes     uint64   `json:"reserve_bytes,omitempty"`
 	HeadroomFraction *float64 `json:"headroom_fraction,omitempty"`
 
-	// BytesPerDay is what the log took in over the trailing day, as this
-	// node last measured it — the rate `log_ceiling_short` holds the
-	// ceiling against.
-	//
-	// ABSENT RATHER THAN ZERO when nothing was measured, which is every
-	// compacted log, every log in its first two days — whose trailing day
-	// would contain the day it was imported into — and every node before
-	// its first trim tick: zero is a log that took in nothing, and
-	// rendering "not measured" as that would show an idle log where nobody
-	// knows.
+	// BytesPerDay is the log's intake over the trailing day as this node
+	// last measured it, the rate `log_ceiling_short` holds the ceiling
+	// against. Absent, not zero (an idle log), when unmeasured: every
+	// compacted log, every log in its first two days (whose trailing day
+	// would hold its import), and every node before its first trim tick.
 	BytesPerDay *uint64 `json:"bytes_per_day,omitempty"`
 
-	// TrimFloor is the floor the fleet has published — everything below it
-	// may already have been removed, by the last tick or any earlier one
-	// at this generation, and it never moves down. TrimTo is what THIS
-	// tick concluded may be removed: zero while blocked, and lower than
-	// the floor whenever the lowest counted node is. Two numbers because
-	// they answer different questions: the first is where a joining node's
-	// replay can start, the second is whether the gate is moving at all.
-	//
-	// BOTH ARE MEANINGFUL ONLY WHERE TrimFloorState IS published. A zero
-	// here is otherwise not a floor of zero: it is the trim having
-	// concluded nothing about this generation of the log yet, or a floor
-	// register nobody could read.
+	// TrimFloor is the fleet's published floor, never moving down: anything
+	// below may already be removed, so it is where a joining node's replay
+	// can start. TrimTo is what THIS tick concluded may be removed (zero
+	// while blocked, below the floor whenever the lowest counted node is): it
+	// says whether the gate moves. Both mean something only where
+	// TrimFloorState is published; a zero is otherwise no conclusion yet, or
+	// an unreadable register.
 	TrimFloor uint64 `json:"trim_floor"`
 	TrimTo    uint64 `json:"trim_to"`
 
 	// TrimFloorState says whether TrimFloor, TrimTo, Terms and BlockedBy
-	// are a conclusion at all — see [TrimFloorState]. Always written: its
-	// zero value is not one of the three, and a reader has to be able to
-	// tell "advancing" from "nothing concluded yet" from "unreadable".
+	// are a conclusion at all ([TrimFloorState]). Always written: its zero
+	// value is none of the three states.
 	TrimFloorState TrimFloorState `json:"trim_floor_state"`
 
-	// Terms is the last tick's six terms, and an EMPTY LIST — never null —
+	// Terms is the last tick's six terms, and an empty list, never null,
 	// where the trim has concluded nothing about this generation: a null
-	// here crashed both retention screens the moment after every reanchor,
-	// which is when they are read.
+	// crashes both retention screens, read right after a reanchor.
 	Terms        []TermReport `json:"terms"`
 	BlockedBy    TermName     `json:"blocked_by,omitempty"`
 	BlockedSince time.Time    `json:"blocked_since,omitzero"`
 
-	// NotReady is why THIS node refuses every read of this domain right
-	// now — the same [Health.Refusal] its readiness reads — and nil while
-	// it serves them. WritesRefused is why it refuses this domain's WRITES
-	// while serving its reads: a peer's rows hold records the log lost
-	// ([ErrLogTruncated]). Both are this node's facts, like the replica
-	// block, and both carry the sentence the refusal carries everywhere
-	// else, so the guide's "status shows the domain as not ready, naming
-	// the recreation" is a line the status actually prints.
+	// NotReady is why THIS node refuses every read of this domain (the
+	// [Health.Refusal] its readiness reads), nil while it serves them.
+	// WritesRefused is why it refuses the domain's writes while serving its
+	// reads: a peer's rows hold records the log lost ([ErrLogTruncated]).
+	// Both are this node's facts and carry the refusal's own sentence, which
+	// the guide tells an operator the status prints.
 	NotReady      *DomainRefusal `json:"not_ready,omitempty"`
 	WritesRefused *DomainRefusal `json:"writes_refused,omitempty"`
 
-	// Prose is the sentence a blocked trim leads with, because it is the
-	// answer to the only question anybody runs this command for.
+	// Prose is the sentence a blocked trim leads with: the answer to the
+	// question this command is run for.
 	Prose string `json:"prose,omitempty"`
 
-	// SnapshotBlockedBy is the snapshot loop's own skip reason on this
-	// node.
-	//
-	// ITS OWN FIELD, NOT FOLDED INTO BlockedBy: a fleet that has stopped
-	// trimming and a fleet that has stopped snapshotting are two different
-	// problems with two different remedies, and the second one is silent
-	// until a node tries to join.
+	// SnapshotBlockedBy is the snapshot loop's skip reason on this node,
+	// apart from BlockedBy: stopped snapshotting has its own remedy and is
+	// silent until a node tries to join.
 	SnapshotBlockedBy SkipReason `json:"snapshot_blocked_by,omitempty"`
 
-	// EvictionsUnreadable says this node could not read the evictions its
-	// own rows hold for this log when it assembled the report — the store
-	// read failed, or the replicated estate was closed for an adoption's
-	// rename or a shutdown. Set only on a log that claims identity, since
-	// no other log carries evictions.
-	//
-	// THE NODE BLOCK CANNOT SAY SO ON ITS OWN. An unread log contributes no
-	// tombstone, which keeps the COUNTED column on the conservative side —
-	// a node nobody could establish was gone stays counted, as the trim
-	// itself keeps it — but it also shows EVERY node as not evicted, and
-	// "not evicted" is then a guess the reader cannot tell from a fact. A
-	// screen that reads a missing tombstone as proof of a readmission
-	// released an eviction it had just made and offered to make it again,
-	// re-dating it. ABSENT WHEN READ, so only the case a reader must treat
-	// differently carries the key.
+	// EvictionsUnreadable says this node could not read its rows' evictions
+	// for this log (the store read failed, or the estate was closed for an
+	// adoption's rename or a shutdown); set only on a log that claims
+	// identity, the only kind carrying evictions, and absent when read. The
+	// node block cannot say it: an unread log keeps every node counted, as
+	// the trim does, but also shows every node as not evicted, and a screen
+	// taking that for a readmission releases an eviction and re-dates it.
 	EvictionsUnreadable bool `json:"evictions_unreadable,omitempty"`
 
 	// BackupAt is when the backup this log's trim counts was taken: the
-	// newest verified point the backup policy takes the word of that
-	// covers this log's stream — a node's copy under `engine`, the
-	// operator's acknowledgement of this log under `operator`. ABSENT
-	// where none covers it, which is the state the backup term blocks on
-	// and the backup-age alarm names, per log.
-	//
-	// PER LOG because the answer differs per log: an acknowledgement
-	// names one stream, and a node's copy reaches the logs it ran. One
-	// instant for the node, which is what the alarm aged, was the newest
-	// point's whatever it covered.
+	// newest verified point the backup policy trusts that covers this log's
+	// stream (a node's copy under `engine`, the operator's acknowledgement
+	// of this log under `operator`). Absent where none does, the state the
+	// backup term blocks on and the backup-age alarm names. Per log: an
+	// acknowledgement names one stream, and a node's copy covers only the
+	// logs it ran.
 	BackupAt time.Time `json:"backup_at,omitzero"`
 }
 
 // TrimFloorState says what a domain's trim floor, conclusion and terms are.
 //
-// # Why a state and not a zero
-//
-// The report fills a domain's floor only from a published row AT THE DOMAIN'S
-// OWN GENERATION, so right after every reanchor — until the trim's first tick
-// on the adopted stream, up to a retention interval later — there is nothing
-// to fill it from. Read as values, that row said floor 0, conclusion 0, no
-// blocking term: "advancing", about a trim that had concluded nothing about the
-// stream it now runs. And a floor register nobody could read said exactly the
-// same thing, where the file's own rule is that a failed read is reported as
-// unreadable rather than as empty.
+// A state, not zeros: the floor is filled only from a row published at the
+// domain's own generation, so after a reanchor, until the trim's first tick on
+// the adopted stream, there is none, and zeros read as "advancing". A floor
+// register nobody could read is unreadable, never empty.
 type TrimFloorState string
 
 const (
@@ -365,14 +265,11 @@ func TrimFloorStates() []TrimFloorState {
 func (s TrimFloorState) Valid() bool { return slices.Contains(TrimFloorStates(), s) }
 
 // IdentityCause names which finding put a domain's log out of step with this
-// node's rows, behind one `wrong_stream`.
-//
-// THE REFUSAL IS ONE WORD FOR FOUR FACTS, deliberately — every one of them
-// refuses exactly the same reads and writes — but each has its own cause and
-// its own remedy, and the guide sends an operator to the status to find out
-// which: a stream rebuilt under this node, a broker restored from a copy older
-// than its rows, the same restore written past them, or a peer re-anchoring
-// past them (whose remedy is this node's own adoption, not a reanchor).
+// node's rows, behind one `wrong_stream`: all four refuse the same reads and
+// writes, but each has its own remedy, and the guide sends an operator to the
+// status for it. A stream rebuilt under this node, a broker restored from a
+// copy older than its rows, that restore written past them, or a peer
+// re-anchoring past them (remedied by this node's adoption, not a reanchor).
 type IdentityCause string
 
 const (
@@ -414,21 +311,17 @@ type DomainRefusal struct {
 	// other code.
 	Causes []IdentityCause `json:"causes,omitempty"`
 
-	// Detail is the sentence the refusal carries wherever else it is met —
-	// the applier's stop, a read's refusal, a write's — naming the
-	// instants, the sequences and the peer it is about.
+	// Detail is the sentence the refusal carries everywhere (the applier's
+	// stop, a read's or a write's refusal), naming the instants, sequences
+	// and peer it is about.
 	Detail string `json:"detail"`
 }
 
 // NotReady is this domain's read refusal as a report renders it, or nil while
-// it serves reads.
-//
-// identity is the applier's own answer about the log's identity
-// ([Runner.StreamIdentity]), whose sentence names both creation instants, the
-// peer or the record — so a `wrong_stream` reads the same here as where the
-// read or the write that met it did. A checkpoint past the end that the
-// applier has not observed yet is decided from this health's own end, as
-// [Health.Refusal] decides it.
+// it serves reads. identity is the applier's answer about the log's identity
+// ([Runner.StreamIdentity]), so a `wrong_stream` reads here as it did where a
+// read or write met it; a checkpoint past an end the applier has not observed
+// yet is decided from this health's own end, as [Health.Refusal] does.
 func (h Health) NotReady(now time.Time, stream string, identity error) *DomainRefusal {
 	code := h.Refusal(now)
 	if code == "" {
@@ -489,25 +382,18 @@ const (
 	// TermKnown — the term was read and permits removal up to its Seq.
 	TermKnown TermState = "ok"
 
-	// TermUnreadable — the term could not be evaluated, which BLOCKS. It
-	// renders differently from a term permitting zero because the remedy
-	// is different: one is a thing to fix, the other is a thing to wait
-	// for.
+	// TermUnreadable — the term could not be evaluated, which BLOCKS;
+	// rendered apart from a term permitting zero because it is a thing to
+	// fix, not one to wait for.
 	TermUnreadable TermState = "unknown"
 
-	// TermAbsent — this domain does not have the term at all. `n/a`
-	// rather than `0`, on the rule that runs through the whole framework.
+	// TermAbsent — this domain does not have the term: `n/a`, never `0`.
 	TermAbsent TermState = "n/a"
 
-	// TermUnbounded — the term was read and BINDS NOTHING: no hold pins the
-	// log, or a solo fleet takes no snapshots. It is not a fourth value so
-	// much as the honest rendering of a sequence that was never a position:
-	// [SeqUnbounded] is the identity for the trim's own minimum, chosen to
-	// lose a comparison, and a screen printing it says
-	// `18446744073709552000` beside "nothing is pinning the log". Separate
-	// from TermKnown because the number is meaningless, and separate from
-	// TermAbsent because this domain DOES have the term — it simply permits
-	// everything today, which is a state that can change.
+	// TermUnbounded — the term was read and binds nothing (no hold pins the
+	// log, or a solo fleet takes no snapshots). Not TermKnown, because its
+	// Seq is [SeqUnbounded], the trim minimum's identity and no position;
+	// not TermAbsent, because the domain has the term and it may bind later.
 	TermUnbounded TermState = "unbounded"
 )
 
@@ -516,24 +402,17 @@ type TermReport struct {
 	Name  TermName  `json:"name"`
 	State TermState `json:"state"`
 
-	// Seq is what the term permits, and is meaningless unless State is
-	// TermKnown.
-	//
-	// ALWAYS WRITTEN. It carried `omitempty`, which drops exactly the value
-	// a young fleet's binding term has: a term permitting removal up to 0 —
-	// the state that holds the trim and is therefore the one worth
-	// reading — went onto the wire indistinguishable from a term with no
-	// sequence at all, and a reader could only recover it by assuming the
-	// absence meant zero, which for an unreadable term it does not.
+	// Seq is what the term permits, meaningless unless State is TermKnown.
+	// Always written, never `omitempty`: zero is a young fleet's binding
+	// term, the one worth reading, and omitted it is indistinguishable from
+	// a term with no sequence.
 	Seq uint64 `json:"seq"`
 
 	// Detail is what was read, named: which node, which holder, how old.
 	Detail string `json:"detail,omitempty"`
 
-	// Remedy is what to do about it. On EVERY term rather than on the
-	// blocking one alone — an operator watching a term approach is the
-	// case the whole surface exists for, and a remedy that appeared only
-	// once the term had already blocked would arrive one incident late.
+	// Remedy is what to do about it, on every term: an operator watches a
+	// term approach, and a remedy shown only once it blocks is too late.
 	Remedy string `json:"remedy"`
 }
 
@@ -541,18 +420,16 @@ type TermReport struct {
 type NodeReport struct {
 	NodeID string `json:"node_id"`
 
-	// Counted says the trim waits for this node. Live says it is holding
-	// a presence lease right now. THEY ARE INDEPENDENT and the pair is
-	// what an operator reads: counted-and-not-live is the node pinning
-	// the log, and live-and-not-counted is a node inside its eviction
+	// Counted says the trim waits for this node, Live that it holds a
+	// presence lease now. They are independent: counted-and-not-live is a
+	// node pinning the log, live-and-not-counted one inside its eviction
 	// fence window, still writing.
 	Counted bool `json:"counted"`
 	Live    bool `json:"live"`
 
-	// At is when it last wrote its row, and is ZERO for a node that is
-	// live and has never reported. That case is rendered as counted with
-	// no position yet rather than as a node at position zero, because the
-	// two block the trim for very different lengths of time.
+	// At is when it last wrote its row, zero for a live node that has never
+	// reported: rendered as counted with no position yet, not position zero,
+	// since the two block the trim for very different times.
 	At time.Time `json:"at,omitzero"`
 
 	// Domains is what it has done, per domain. A domain absent from the
@@ -570,46 +447,37 @@ type NodeDomainReport struct {
 	AppliedThrough uint64 `json:"applied_through"`
 
 	// GenerationState is this position's generation against the domain's
-	// own — see [GenerationState]. Seq and AppliedThrough compare with the
-	// domain's sequences only where it is `current`.
+	// ([GenerationState]); Seq and AppliedThrough compare with the domain's
+	// sequences only where it is `current`.
 	GenerationState GenerationState `json:"generation_state"`
 
-	// Lag is this node's distance from the stream's last sequence, and
-	// NIL when the stream could not be read — the same pointer rule
-	// [Health] uses, for the same reason: an unknown lag rendered as zero
-	// is a node reported as caught up. NIL TOO for a position from another
-	// generation, whose sequence is in another number space: subtracted,
-	// a node still on the old generation read lag 0 whenever its old
-	// sequence was higher than the adopted stream's last.
+	// Lag is this node's distance from the stream's last sequence: nil when
+	// the stream could not be read (as in [Health], an unknown lag as zero
+	// reads as caught up), and nil for a position from another generation,
+	// whose sequence is in another number space.
 	Lag *uint64 `json:"lag,omitempty"`
 
 	Deferred int `json:"deferred,omitempty"`
 
-	// LogDiverged is the node's own report that the log holds, at its
-	// checkpoint, another record than the one it consumed there — the one
-	// such node nothing else on its row shows, since its position is at or
-	// below the log's end where a lagging node's is. Every other node on
-	// the log refuses its writes while this is set.
+	// LogDiverged is the node's own report that the log holds another
+	// record at its checkpoint than the one it consumed; nothing else on its
+	// row shows it, since its position is not past the log's end. Every
+	// other node on the log refuses its writes while it is set.
 	LogDiverged bool `json:"log_diverged,omitempty"`
 
 	// StreamCreatedAt is the creation instant of the stream the node's rows
-	// are keyed to, and CheckpointStoredAt the broker's instant for the
-	// record its checkpoint stands on — what a reanchor weighs to tell a
-	// peer on the lost stream from one on the live one, and a peer whose
-	// history is the log's from one holding history the log lost.
-	// CheckpointStoredAt is ABSENT where the checkpoint names no record.
+	// are keyed to, and CheckpointStoredAt the broker's instant for its
+	// checkpoint's record, absent where it names none: what a reanchor
+	// weighs to tell a peer on the lost stream from one on the live one, and
+	// one holding the log's history from one holding history the log lost.
 	StreamCreatedAt    time.Time `json:"stream_created_at,omitzero"`
 	CheckpointStoredAt time.Time `json:"checkpoint_stored_at,omitzero"`
 }
 
-// GenerationState is a node's position generation against its domain's.
-//
-// A NAMED STATE rather than a number the reader compares, because the reader
-// did not: every surface subtracted the node's sequence from the log's last
-// whatever generation each was at, and a node on a sequence space the log had
-// left read as caught up. The readmission refusal then told an operator to
-// check a SEQ "at the log's current generation" on a surface that showed no
-// generation at all.
+// GenerationState is a node's position generation against its domain's: a
+// named state, not numbers for the reader to compare, since subtracting
+// sequences across generations shows a node on a sequence space the log has
+// left as caught up.
 type GenerationState string
 
 const (
@@ -618,9 +486,8 @@ const (
 	GenerationCurrent GenerationState = "current"
 
 	// GenerationLeft — the node's position is from a generation the log
-	// has since left: a sequence space that no longer exists, nothing it
-	// holds compares with anything the log still has, and a readmission is
-	// refused on it.
+	// has since left, a sequence space that no longer exists; a readmission
+	// is refused on it.
 	GenerationLeft GenerationState = "left"
 
 	// GenerationAhead — the node's position is from a generation above the
@@ -647,10 +514,9 @@ type EvictionReport struct {
 	By string    `json:"by"`
 	At time.Time `json:"at"`
 
-	// EffectiveAt is when the trim stops counting the node — one fence
-	// window after the gesture, printed because the gesture is NOT
-	// immediate and an operator who does not know that reads the
-	// unchanged watermark as a failure.
+	// EffectiveAt is when the trim stops counting the node, one fence window
+	// after the gesture; printed because an operator unaware of the delay
+	// reads the unchanged watermark as a failure.
 	EffectiveAt time.Time `json:"effective_at"`
 
 	// Effective says the window has passed.
@@ -668,32 +534,27 @@ type SnapshotReport struct {
 	At    time.Time `json:"at,omitzero"`
 	Bytes int64     `json:"bytes,omitempty"`
 
-	// Skip is the loop's own reason for holding none, and is what turns
-	// "node-4 none" into an answer.
+	// Skip is the loop's reason for holding none, making "node-4 none" an
+	// answer.
 	Skip SkipReason `json:"skip,omitempty"`
 }
 
-// ReplicaReport is what THIS node costs to replace.
-//
-// On the retention surface rather than a health one because it is the same
-// question: the log's window is what a joining node replays from, and how
-// long that takes is what decides whether the window is big enough.
+// ReplicaReport is what THIS node costs to replace. It is a retention fact:
+// a joining node replays the log's window, and how long that takes decides
+// whether the window is big enough.
 type ReplicaReport struct {
 	// StoreBytes is the replicated estate on this node's disk.
 	StoreBytes int64 `json:"store_bytes"`
 
 	// ProjectedJoinSeconds is how long a peer would need to become a
-	// complete replica of it, and RejoinWindowSeconds is the operator's
-	// budget for that. Both seconds rather than durations because this
-	// document is read by a dashboard as often as by a person.
+	// complete replica of it, and RejoinWindowSeconds the operator's budget
+	// for that; seconds, not durations, since a dashboard reads this too.
 	ProjectedJoinSeconds float64 `json:"projected_join_seconds"`
 	RejoinWindowSeconds  float64 `json:"rejoin_window_seconds"`
 }
 
-// WithinWindow reports whether a join fits the operator's budget.
-//
-// A method rather than a stored bool: it is a comparison of two fields in the
-// same struct, and a third field could disagree with them.
+// WithinWindow reports whether a join fits the operator's budget; a method,
+// not a stored bool that could disagree with the two fields.
 func (r ReplicaReport) WithinWindow() bool {
 	return r.RejoinWindowSeconds > 0 && r.ProjectedJoinSeconds <= r.RejoinWindowSeconds
 }
@@ -705,9 +566,9 @@ type DomainInputs struct {
 	Generation uint32
 	Replay     ReplayProtocol
 
-	// FirstSeq, LastSeq, Bytes and MaxBytes come from the stream itself,
-	// and StreamReadable says whether they could be read at all. A stream
-	// nobody could ask is not a stream with a zero ceiling.
+	// FirstSeq, LastSeq, Bytes and MaxBytes come from the stream, and
+	// StreamReadable says whether they could be read: an unread stream
+	// is not one with a zero ceiling.
 	FirstSeq, LastSeq, Bytes, MaxBytes uint64
 	StreamReadable                     bool
 
@@ -716,8 +577,8 @@ type DomainInputs struct {
 	BytesPerDay *uint64
 
 	// Reservation is how the log divides MaxBytes between ordinary writes
-	// and gate records ([ReservationOf]), which is what its headroom is
-	// measured against. Its zero value keeps no reserve.
+	// and gate records ([ReservationOf]), which its headroom is measured
+	// against; its zero value keeps no reserve.
 	Reservation Reservation
 
 	// TrimFloor is the published floor, and Decision is what this tick
@@ -749,15 +610,11 @@ type DomainInputs struct {
 	SnapshotSkip SkipReason
 
 	// DeferredAge and DeferredRecord are the oldest record this node holds
-	// on this log and cannot decode, exactly as [Reading] defines them, and
-	// zero while it holds none.
-	//
-	// HERE RATHER THAN ON THE NODE'S READING, because what the grace does
-	// is the log's: every log's copy is judged on its own (ADR-0079), so a
-	// record held past it takes this node's copy of THAT log out of service
-	// and no other's. Folded into one node-wide alarm naming the oldest, an
-	// identity record two hours old was the only one named while a tracker
-	// record forty minutes old had taken the tracker's copy out as well.
+	// on this log and cannot decode, as [Reading] defines them, zero while
+	// it holds none. Per log, not on the node's reading: each log's copy is
+	// judged on its own (ADR-0079), so a record past the grace takes only
+	// that log's copy out, and one node-wide alarm naming the oldest record
+	// would hide the other logs it took out.
 	DeferredAge    time.Duration
 	DeferredRecord string
 
@@ -768,15 +625,14 @@ type DomainInputs struct {
 	FloorUnknownCause string
 
 	// FeedDeadLetters is what this log's wake feed holds dead-lettered, as
-	// [Reading] defines it — empty for a log with no feed, and for one whose
-	// feed holds none. A log whose dead letters could not be read this time
-	// carries the last reading that answered, aged to now: an entry is not
-	// gone because one listing failed.
+	// [Reading] defines it; empty with no feed or none held. A failed
+	// listing carries the last reading that answered, aged to now: an entry
+	// is not gone because one listing failed.
 	FeedDeadLetters []FeedDeadLetter
 
 	// LinearizableReads and LinearizableReadsExpected are this log's
-	// observed daily read rate and its census, as [Reading] defines them —
-	// evaluated per log, because each log was sized for its own census.
+	// observed daily read rate and its census, as [Reading] defines them;
+	// per log, because each log is sized for its own census.
 	LinearizableReads, LinearizableReadsExpected int
 
 	// CeilingField is the Tier A field that sets this log's byte ceiling,
@@ -784,66 +640,56 @@ type DomainInputs struct {
 	CeilingField string
 
 	// Tombstones is this log's own evictions: with the register's rows
-	// naming the log and the live data nodes ([ReportInputs.Live]), the
-	// three inputs the trim counts the log's nodes from, which the node
-	// block's counted mark is taken from ([ReportInputs.nodes]).
+	// naming the log and the live data nodes ([ReportInputs.Live]), one of
+	// the three inputs the trim and the node block's counted mark
+	// ([ReportInputs.nodes]) count the log's nodes from.
 	Tombstones []Tombstone
 }
 
-// ReportInputs is everything the report is assembled from, already read.
-//
-// A STRUCT OF VALUES rather than a set of callbacks, so the assembly is a
-// pure function: every case an operator ever screenshots — a blocked term, a
-// node inside its fence, a register nobody could list — is reachable in a
-// table test with no broker, no store and no fleet.
+// ReportInputs is everything the report is assembled from, already read:
+// values, not callbacks, so the assembly is a pure function and every case an
+// operator screenshots is reachable in a table test with no broker, store or
+// fleet.
 type ReportInputs struct {
 	NodeID      string
 	At          time.Time
 	BackupOwner string
 
-	// Reading is this node's alarm reading, MINUS the conditions that are
-	// per domain: a log's headroom, its ceiling against its window, a
-	// blocked trim, the age of the backup its trim counts, a record held
-	// past the deferral grace, an unreadable floor, its wake feed's dead
-	// letters and a read rate past the census are evaluated per domain here,
-	// from the domain rows and [DomainInputs], so a fleet reports which log
-	// is full, blocked, uncovered, holding, refusing, losing wakes or read
-	// past its sizing rather than that something is.
+	// Reading is this node's alarm reading, minus the per-domain
+	// conditions (headroom, ceiling against window, a blocked trim, backup
+	// age, a record past the deferral grace, an unreadable floor, feed dead
+	// letters, a read rate past the census), which are evaluated here from
+	// the domain rows and [DomainInputs] so an alarm names its log.
 	Reading Reading
 
-	// ReplayWindow is `stream.tracker_retention.min_age`: how much of its
-	// own history every log keeps, because the trim never removes a record
-	// younger than it. One value for every domain, since one age term
-	// governs every domain's trim — and it is what `log_ceiling_short`
-	// asks each log's ceiling to hold at that log's measured rate.
+	// ReplayWindow is `stream.tracker_retention.min_age`: the history every
+	// log keeps, since the trim removes no younger record. One value, as one
+	// age term governs every domain's trim; `log_ceiling_short` asks each
+	// log's ceiling to hold it at that log's measured rate.
 	ReplayWindow time.Duration
 
-	// BackupMaxAge is the backup policy every log's backup is aged
-	// against (`backup_max_age`), and zero for a deployment with none.
-	//
-	// HERE AND NOT ON Reading, because the age it is compared with is a
-	// property of each LOG: under `backup_floor: operator` every log is
-	// acknowledged on its own, so the logs' backups have as many ages as
-	// there are logs, and the one age a node-wide reading could carry was
-	// the newest point's — green beside every log that point left out.
+	// BackupMaxAge is the policy every log's backup is aged against
+	// (`backup_max_age`), zero for a deployment with none. Here, not on
+	// Reading, because a backup's age is per log (under `backup_floor:
+	// operator` each log is acknowledged on its own), and a node-wide age
+	// would show green beside every log the newest point left out.
 	BackupMaxAge time.Duration
 
 	Domains []DomainInputs
 
 	// Register is every node's row and RegisterReadable whether it could
-	// be listed. An unreadable register is rendered as such rather than
-	// as an empty fleet: the second is a claim that no node exists.
+	// be listed; an unreadable register is not an empty fleet.
 	Register         []coord.NodePositions
 	RegisterReadable bool
 
 	// Live is every live data node, which the node block marks live and
-	// every log's counted set counts ([CountedSet]) — nil where they could
+	// every log's counted set counts ([CountedSet]); nil where they could
 	// not be listed, when the mark counts the rows alone and each log's
 	// published floor says its counted set was unknown.
 	Live []Presence
 
-	// Tombstones is one per node evicted on EVERY identity log, as of the
-	// latest — what the node block renders as evicted. Each log's own are its
+	// Tombstones is one per node evicted on EVERY identity log, the latest,
+	// which the node block renders as evicted; each log's own are its
 	// [DomainInputs.Tombstones].
 	Tombstones []Tombstone
 
@@ -868,9 +714,8 @@ func NewReport(in ReportInputs) Report {
 	for _, d := range in.Domains {
 		rep.Domains = append(rep.Domains, in.domain(d))
 	}
-	// EVERY LIST THE WIRE REQUIRES IS A LIST, NEVER NULL: with no alarm
-	// standing or no domain registered the slice is nil, and a reader
-	// indexing a required array crashes on `null`.
+	// Every list the wire requires is `[]`, never null: a reader indexing a
+	// required array crashes on `null`.
 	rep.Domains = nonNil(rep.Domains)
 	rep.Nodes = nonNil(in.nodes())
 	rep.Snapshots = nonNil(in.snapshots())
@@ -878,10 +723,9 @@ func NewReport(in ReportInputs) Report {
 	rep.Unjudged = Unjudged(in.Reading)
 	rep.Maintenance = in.Maintenance
 	rep.MaintenanceUnread = in.MaintenanceUnread
-	// THE LEVEL IS RESOLVED FROM THIS NODE'S OWN LAG, not from the
-	// fleet's: the document's every "this node" figure is a fact this
-	// process states about itself, and a peer whose row could not be read
-	// says nothing about whether THIS answer can claim an age.
+	// The level comes from this node's own lag, not the fleet's: an
+	// unreadable peer row says nothing about whether THIS answer can claim
+	// an age.
 	rep.ReadLevel = ResolveReplicationLevel(rep.lagKnownHere())
 	return rep
 }
@@ -895,18 +739,10 @@ func nonNil[T any](list []T) []T {
 	return list
 }
 
-// lagKnownHere reports whether this node's own distance from every domain's
-// log came back as a number.
-//
-// EVERY DOMAIN, not any: a document that could state an age for the tracker
-// and not for the knowledge base is one whose `stale` claim is true of half
-// its rows, and a reader bounding staleness against it would be bounding
-// nothing on the other half.
-//
-// A NODE WITH NO ROW IN THE REGISTER IS NOT A KNOWN LAG. That is the state
-// during exactly the coordination outage this document is opened for, and
-// reading it as "no domains reported, so nothing is unknown" would answer
-// `stale` with no evidence at all.
+// lagKnownHere reports whether this node's own distance from EVERY domain's
+// log came back as a number: a `stale` claim true of some rows bounds nothing
+// on the rest. A node with no row in the register (the coordination outage
+// this document is opened in) has no known lag, not a vacuously known one.
 func (r Report) lagKnownHere() bool {
 	for _, node := range r.Nodes {
 		if node.NodeID != r.NodeID {
@@ -925,14 +761,10 @@ func (r Report) lagKnownHere() bool {
 	return false
 }
 
-// ExitNonZero is the CLI's exit code, and the reason it is a method on the
-// REPORT rather than a rule in the CLI.
-//
-// `crewlet retention status` exits non-zero exactly when this node has an
-// active alarm — the same evaluation that drives the gauges and the log
-// lines. A second rule in the CLI would be a second definition of "is
-// something wrong", and the shell script watching the exit code would be
-// watching the one nobody maintained.
+// ExitNonZero is the CLI's exit code: `crewlet retention status` exits
+// non-zero exactly when this node has an active alarm, the evaluation that
+// drives the gauges and log lines. A rule in the CLI would be a second
+// definition of "something is wrong".
 func (r Report) ExitNonZero() bool { return len(r.Alarms) > 0 }
 
 // Blocked names every domain whose trim is not advancing.
@@ -966,32 +798,26 @@ func (in ReportInputs) domain(d DomainInputs) DomainReport {
 		WritesRefused:       d.WritesRefused,
 		EvictionsUnreadable: d.EvictionsUnreadable,
 		BackupAt:            d.BackupAt.UTC(),
-		// AN EMPTY LIST, NEVER NULL: a domain the trim has concluded
-		// nothing about has no terms, and `"terms": null` is what
-		// crashed both retention screens after every reanchor.
+		// Never null, though a domain with no conclusion has no terms
+		// ([DomainReport.Terms]).
 		Terms: make([]TermReport, 0, len(d.Decision.Terms)),
 	}
 	if !out.TrimFloorState.Valid() {
-		// A CALLER THAT SAID NOTHING HAS NO CONCLUSION TO SHOW. Read as
-		// published, its zeros would be a floor of zero and an advancing
-		// trim — the claim this field exists to stop.
+		// A caller that said nothing has no conclusion: read as
+		// published, its zeros would claim an advancing trim.
 		out.TrimFloorState = TrimFloorNoneAtGeneration
 	}
 	if d.StreamReadable && d.MaxBytes > 0 {
 		out.MaxBytes = d.MaxBytes
 		out.ReserveBytes = d.Reservation.Bytes(d.MaxBytes)
-		// OF THE CEILING ORDINARY WRITES ARE HELD TO, because that is
-		// where they start being refused — see [Reservation.Headroom].
+		// Of the ceiling ordinary writes are refused at
+		// ([Reservation.Headroom]).
 		out.HeadroomFraction = d.Reservation.Headroom(d.Bytes, d.MaxBytes)
 	}
 	for _, t := range d.Decision.Terms {
 		state := termState(t)
-		// A SEQUENCE ONLY GOES OUT WHERE IT IS ONE. Every other state's
-		// number is meaningless by this type's own documentation, and one
-		// of them — unbounded — is meaningless in a way a reader cannot
-		// tell from a real position: 2^64-1 is a twenty-digit figure that
-		// a JSON float64 cannot even carry exactly, so it reached the
-		// screen wrong as well as wrong.
+		// A sequence goes out only where it is one: unbounded's 2^64-1
+		// looks like a position, and a JSON float64 cannot carry it.
 		seq := t.Seq
 		if state != TermKnown {
 			seq = 0
@@ -1005,12 +831,9 @@ func (in ReportInputs) domain(d DomainInputs) DomainReport {
 		})
 	}
 	if out.BlockedBy != "" {
-		// A BLOCKED DOMAIN ALWAYS CARRIES AN INSTANT. A caller whose
-		// tick is the first to see the block has none to give, and
-		// this tick is the honest answer: the alarm then reports a
-		// duration of zero, which is true, where an absent instant
-		// would render as the zero time and read as "blocked since
-		// year one".
+		// A blocked domain always carries an instant: on the tick that
+		// first sees the block it is now (a true duration of zero), not
+		// the zero time, "blocked since year one".
 		out.BlockedSince = d.BlockedSince.UTC()
 		if d.BlockedSince.IsZero() {
 			out.BlockedSince = in.At.UTC()
@@ -1022,16 +845,10 @@ func (in ReportInputs) domain(d DomainInputs) DomainReport {
 }
 
 // termState is the rendering of one term, and the only place [SeqUnbounded] is
-// turned back into words.
-//
-// ABSENT IS CHECKED FIRST. A term a domain does not have is also a term
-// nobody read, so the other order would report the wake feed of every domain
-// that declares none as unreadable and block-looking on a screen where
-// nothing is wrong.
-//
-// AND UNBOUNDED IS CHECKED BEFORE KNOWN, because it IS known — the sentinel
-// only ever reaches here with Known set, and reporting it as an ordinary
-// sequence is what put 2^64-1 on the retention screen.
+// turned back into words. Absent is checked first: an absent term is also
+// unread, and would otherwise show every feedless domain's wake feed as
+// unreadable. Unbounded precedes known, since the sentinel arrives with Known
+// set and must not render as a sequence.
 func termState(t Term) TermState {
 	switch {
 	case t.Absent:
@@ -1045,15 +862,9 @@ func termState(t Term) TermState {
 	}
 }
 
-// remedy is what an operator does about one term.
-//
-// # Why every term has one, including the healthy one
-//
-// Five of the six name something to fix. The sixth — the age floor — is the
-// term that binds on a fleet where NOTHING is wrong, and saying so is the
-// whole value of it: an operator who reads "age_floor" beside five terms with
-// remedies and none beside it concludes the surface is incomplete. The
-// healthy answer has to be written down as an answer.
+// remedy is what an operator does about one term. The age floor, which binds
+// on a fleet where nothing is wrong, gets one too: a blank beside it reads as
+// an incomplete surface, so the healthy answer is written as an answer.
 func (in ReportInputs) remedy(name TermName) string {
 	switch name {
 	case TermApplied:
@@ -1104,13 +915,11 @@ func (in ReportInputs) nodes() []NodeReport {
 		tombs[t.NodeID] = t
 	}
 
-	// THE COUNTED SET IS NOT RE-DERIVED HERE. It is the same function the
-	// trim itself calls, LOG BY LOG over the same three inputs — the rows
-	// naming the log, the live data nodes and the log's own tombstones —
-	// and a node is marked counted where some log's set holds it, so the
-	// screen can never name a different fleet from the one the gate is
-	// waiting for. Folded into one set over every log's rows, it counted a
-	// node evicted on a log beside another it never ran.
+	// The counted set is the trim's own [CountedSet], log by log over the
+	// same three inputs (the rows naming the log, the live data nodes, the
+	// log's tombstones), so the screen names the fleet the gate waits for.
+	// One set over every log's rows would count a node evicted on one log
+	// beside another it never ran.
 	counted := make(map[string]bool)
 	for _, d := range in.Domains {
 		var named []NodePosition
@@ -1160,8 +969,8 @@ func (in ReportInputs) nodes() []NodeReport {
 					StreamCreatedAt:    d.StreamCreatedAt.UTC(),
 					CheckpointStoredAt: d.CheckpointStoredAt.UTC(),
 				}
-				// THE GENERATION FIRST, because it decides whether the
-				// sequence compares with the log's at all.
+				// The generation first: it decides whether the sequence
+				// compares with the log's at all.
 				current, runs := generation[name]
 				switch {
 				case !runs:
@@ -1173,12 +982,9 @@ func (in ReportInputs) nodes() []NodeReport {
 				default:
 					nd.GenerationState = GenerationCurrent
 				}
-				// LAG IS COMPUTED, NEVER REPORTED BY THE NODE
-				// ITSELF: a lagging node's own idea of the
-				// stream's end is exactly the number it is
-				// behind on. And ONLY WITHIN ONE GENERATION: a
-				// sequence from another is a number in another
-				// space, and the difference is not a distance.
+				// Lag is computed here, never taken from the node,
+				// whose idea of the stream's end is what it lags on;
+				// and only within one generation.
 				if readable[name] && nd.GenerationState == GenerationCurrent {
 					var lag uint64
 					if last := lastSeq[name]; last > d.Seq {
@@ -1197,12 +1003,9 @@ func (in ReportInputs) nodes() []NodeReport {
 				By:          t.By,
 				At:          t.At.UTC(),
 				EffectiveAt: t.At.Add(EvictionFenceWindow).UTC(),
-				// THE SAME COMPARISON [CountedSet] MAKES, to
-				// the instant. A report that called a
-				// tombstone effective one tick before the gate
-				// did would show an evicted node dropped from
-				// the counted set while the trim was still
-				// waiting for it.
+				// [CountedSet]'s comparison, to the instant, so
+				// the screen never drops a node the trim still
+				// waits for.
 				Effective: in.At.Sub(t.At) > EvictionFenceWindow,
 			}
 		}
@@ -1232,10 +1035,9 @@ func (in ReportInputs) snapshots() []SnapshotReport {
 				row.At = d.SnapshotAt.UTC()
 			}
 		}
-		// A NODE WITH NO ARTEFACT AND NO REASON still gets a row. The
-		// absence is the operator's answer to "why did the join fail",
-		// and dropping the row would render it as a node that was
-		// never asked.
+		// A node with no artefact and no reason still gets a row: the
+		// absence answers "why did the join fail", where no row reads as
+		// a node never asked.
 		rows = append(rows, row)
 	}
 	slices.SortFunc(rows, func(a, b SnapshotReport) int {
@@ -1244,51 +1046,18 @@ func (in ReportInputs) snapshots() []SnapshotReport {
 	return rows
 }
 
-// alarms evaluates this node's conditions once.
-//
-// # Why the per-domain half is evaluated separately
-//
-// [Reading] describes ONE node, and seven of its conditions (the log's
-// headroom, a ceiling too small for the log's own replay window, a blocked
-// trim, the age of the backup the log's trim counts, a record held past the
-// deferral grace, a floor this node cannot read and a read rate past the log's
-// census) are properties of a DOMAIN ([PerLogKinds]). Evaluating the node-wide
-// reading once and each domain's own fields once per domain is what lets a
-// fleet say WHICH log is filling. Folding them into one reading would report
-// the worst of them with no name on it, which is the number an operator then
-// has to go and find by hand; for the deferral and the floor it would say the
-// WRONG thing about the others, since what the grace does and which re-anchor a
-// floor needs differ from one log to the next; and for the backup it reported
-// the BEST, the newest point's age, for every log that point did not cover.
-//
-// The domain rows are [ReportInputs.domain]'s, one per [ReportInputs.Domains]
-// entry and in the same order, so a row and the inputs it was built from share
-// an index.
-//
-// # And why each kind is still ONE alarm
-//
-// The kind is an alarm's identity on the count, the gauge and every screen:
-// the gauge has one series per kind, and the health envelope counts what an
-// operator has to look at. So a kind raised on several logs is one alarm
-// listing them ([Alarm.Domains]), each with its own measurement and the most
-// pressing log's as its detail, rather than one alarm per log that the health
-// count would add up and the gauge would not. A measurement taken in the same
-// words on several logs no term holds is ONE entry naming them ([withEntry]),
-// so no surface draws one sentence once per log. The log lines are the one
-// surface that stays per log, and the [Tracker] forms them from this list.
-//
-// # A trim the backup policy holds is the backup alarm's
-//
-// While a log's own [KindBackupAge] fires, its [KindTrimBlocked] held by the
-// backup term is not a second problem: the backup is the remedy, and the backup
-// alarm already says that the trim waits for one. The term and the instant the
-// trim stopped ride on the log's entry under that alarm instead, so a company
-// with no backup reads as the one problem it has rather than as two per log. A
-// hold that has not yet lasted past the replay window and a tick, or that keeps
-// nothing past the window, raises no [KindTrimBlocked] and so is folded nowhere
-// — exactly as a hold by any other term. A log the backup term holds while its
-// OWN backup is inside the policy (a backup taken on an earlier generation of
-// the log) stays under [KindTrimBlocked], because nothing else names it.
+// alarms evaluates this node's conditions once. [Reading] describes one node,
+// so the per-log kinds ([PerLogKinds]) are evaluated per domain row, which shares
+// its index with [ReportInputs.Domains], to name WHICH log: one folded reading
+// would report the worst unnamed, misstate the grace and floor of the others,
+// and give every log the newest backup's age. Each kind is still ONE alarm (its
+// identity on the count, the gauge and every screen) listing its logs
+// ([Alarm.Domains]) and leading with the most pressing log's detail; the same
+// words on several logs no term holds are one entry ([withEntry]). The
+// [Tracker] forms the per-log log lines from it. While a log's [KindBackupAge]
+// fires, its [KindTrimBlocked] held by the backup term folds into the backup
+// entry, the backup being its remedy; a backup-term hold whose own backup is
+// inside the policy stays a [KindTrimBlocked].
 func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 	out := Evaluate(in.Reading)
 	// Where each per-domain kind sits in out, and the reading its detail is
@@ -1301,27 +1070,20 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 			HeadroomFraction: d.HeadroomFraction,
 			TrimBlockedBy:    string(d.BlockedBy),
 			TrimPastWindow:   pastWindow(d),
-			// THE CEILING THE DOMAIN ROW CARRIES, which is set only
-			// where the stream answered and declares one: an unknown
-			// ceiling is not a small one, so the rule is silent
-			// rather than comparing a rate against zero.
+			// The row's MaxBytes is set only where the stream answered
+			// with a ceiling: an unknown ceiling is not a small one.
 			LogBytesPerDay: d.BytesPerDay,
 			LogMaxBytes:    d.MaxBytes,
 			ReplayWindow:   in.ReplayWindow,
-			// THE BACKUP THIS LOG'S TRIM COUNTS, aged against the one
-			// policy: each log has its own, so the age is per log.
+			// One policy; each log's backup is aged against it.
 			BackupMaxAge: in.BackupMaxAge,
-			// WHAT THIS NODE HOLDS AND CANNOT READ on this log, as the
-			// caller measured it from its own applier and its own
-			// observations of the floor.
-			DeferredAge:       held.DeferredAge,
-			DeferredRecord:    held.DeferredRecord,
-			FloorUnknownFor:   held.FloorUnknownFor,
-			FloorUnknownCause: held.FloorUnknownCause,
-			// AND WHAT ITS WAKE FEED GAVE UP ON, as this node last read
-			// the dead-letter stream.
-			FeedDeadLetters: held.FeedDeadLetters,
-			// AND HOW FAR PAST ITS OWN CENSUS this log's reads run.
+			// As the caller measured them from its own applier and
+			// floor observations.
+			DeferredAge:               held.DeferredAge,
+			DeferredRecord:            held.DeferredRecord,
+			FloorUnknownFor:           held.FloorUnknownFor,
+			FloorUnknownCause:         held.FloorUnknownCause,
+			FeedDeadLetters:           held.FeedDeadLetters,
 			LinearizableReads:         held.LinearizableReads,
 			LinearizableReadsExpected: held.LinearizableReadsExpected,
 			LogCeilingField:           held.CeilingField,
@@ -1333,11 +1095,8 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 			perDomain.BackupAge = Age(in.At.Sub(d.BackupAt))
 		}
 		fired := Evaluate(perDomain)
-		// FOLDED ONLY WHERE BOTH FIRE ON THIS LOG: its trim_blocked, raised
-		// on the backup term, and its own backup_age. A younger hold raises
-		// no trim_blocked, so there is nothing to fold and nothing to stamp
-		// on the backup entry; a hold whose own backup is inside the policy
-		// raises no backup_age, so it stays under trim_blocked.
+		// Folded only where both fire on this log: the trim_blocked raised
+		// on the backup term and the log's own backup_age.
 		trimAt := slices.IndexFunc(fired, func(a Alarm) bool { return a.Kind == KindTrimBlocked })
 		heldByBackup := d.BlockedBy == TermBackupFloor && trimAt >= 0 &&
 			slices.ContainsFunc(fired, func(a Alarm) bool { return a.Kind == KindBackupAge })
@@ -1351,10 +1110,9 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 				entry.Term, entry.Since = d.BlockedBy, d.BlockedSince
 			case KindBackupAge:
 				if heldByBackup {
-					// THE HOLD'S OWN MEASUREMENT RIDES BESIDE THE
-					// BACKUP'S, since its trim_blocked is not raised:
-					// how long the trim has stood still and what it is
-					// keeping is what makes the missing backup urgent.
+					// The unraised hold's measurement rides here:
+					// how long the trim has stood still is what
+					// makes the missing backup urgent.
 					entry.Term, entry.Since = d.BlockedBy, d.BlockedSince
 					entry.Detail += "; " + fired[trimAt].Detail
 				}
@@ -1372,8 +1130,8 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 			}
 		}
 	}
-	// THE TABLE'S OWN ORDER, which is the order every other surface reads in:
-	// the per-domain kinds were appended after the node-wide ones.
+	// The table's order, which every surface reads in; the per-domain kinds
+	// were appended last.
 	slices.SortStableFunc(out, func(a, b Alarm) int {
 		return tableIndex(a.Kind) - tableIndex(b.Kind)
 	})
@@ -1395,25 +1153,14 @@ func withEntry(entries []AlarmDomain, entry AlarmDomain) []AlarmDomain {
 	return append(entries, entry)
 }
 
-// pastWindow is how many records a domain's log holds that are older than the
-// replay window — the ones the age term alone would release.
-//
-// THE AGE TERM'S OWN SEQUENCE against the log's first, both as the report has
-// them: the term is the published tick's search for the first record young
-// enough to keep, so everything below it that the log still holds is past the
-// window. The term is a tick old and the log's bounds are this instant's, and
-// that is the conservative pairing — the trim is what removes records, and a
-// blocked one has removed none since, so the count is at worst an
-// underestimate by the records that aged past the window during the tick.
-//
-// A COUNT OF SEQUENCES, not of records: a compacted log's span has holes where
-// superseded records were removed, so there it is an upper bound on what the
-// block keeps, and zero is still exactly "nothing" — a span below the age term
-// that is not empty starts at the log's first record, which is present.
-//
-// ZERO WHERE NOTHING IS KNOWN: a stream this node could not read carries no
-// bounds, an empty log holds nothing, and a domain with no published floor has
-// no age term to compare.
+// pastWindow is how many records a domain's log holds older than the replay
+// window, the ones the age term alone would release: the age term's sequence
+// (the published tick's first record young enough to keep) less the log's
+// first. The term is a tick old and the bounds current, which can only
+// undercount, since a blocked trim has removed nothing since. It counts
+// sequences: on a compacted log, with holes, an upper bound, and zero is still
+// exactly nothing. Zero where nothing is known: an unread stream, an empty log,
+// or no published floor.
 func pastWindow(d DomainReport) uint64 {
 	if d.LastSeq == 0 || d.LastSeq < d.FirstSeq {
 		return 0
@@ -1501,28 +1248,14 @@ func tableIndex(kind Kind) int {
 }
 
 // JoinSecondsPerGB and JoinFixedSeconds project how long a peer needs to
-// become a complete replica of a store of a given size.
-//
-// # Where the two numbers come from
-//
-// The per-gigabyte term is the CONSERVATIVE profile — a network volume rather
-// than local NVMe — because a projection an operator sizes a rejoin window
-// against must not be the optimistic one: a window that fits only the fast
-// path is a window that expires during exactly the incident it was set for.
-// The fast profile is about 2.3× better and is deliberately not what this
-// reports.
-//
-// The fixed term is 25 s of setup — opening the estates, running the
-// migrator, establishing the donor — plus the 18 s the read barriers add to a
-// twenty-four-hour replay, which costs 793 fetches rather than 272 at about
-// 35 ms each.
-//
-// # Why it is a projection and says so
-//
-// Nothing here is measured on this host. It is arithmetic over a size, and its
-// job is to answer "is the operator's window plausible" rather than to predict
-// a particular join — which is why [ReplicaReport] carries the window beside it
-// and the surfaces render both.
+// become a complete replica of a store of a given size: arithmetic, not
+// measured on this host, answering whether the operator's window is plausible
+// ([ReplicaReport] carries both). The per-gigabyte term is the conservative
+// network-volume profile, not local NVMe (about 2.3x faster): a window that
+// fits only the fast path expires in the incident it was set for. The fixed
+// term is 25 s of setup (opening the estates, the migrator, the donor) plus
+// the 18 s read barriers add to a 24-hour replay (793 fetches, not 272, at
+// about 35 ms each).
 const (
 	JoinSecondsPerGB = 27.33
 	JoinFixedSeconds = 43.0

@@ -191,6 +191,66 @@
 // It ends when the seat leaves the company, never when its holder does; see
 // chatread.go for why neither a person id nor an agent id is the key.
 //
+// # A seat's save ledger lives in the uploads bucket
+//
+// [SaveAllowances] keeps one ledger per seat of the executor sessions its runs
+// saved as they worked (internal/sandbox). The WHOLE COMPANY has to agree on
+// it: a save uploads a session's archive to the object store the fleet
+// shares, and the archive it supersedes stays there, named by nothing, until
+// the object collector could have deleted it. The ledger counts those bytes
+// against the seat's session budget. Any node that drives one of the seat's
+// jobs may save it, and a handover moves a job between nodes, so nodes
+// counting alone would let a seat hold its budget once per node; one value
+// written by compare-and-set lets two saves racing for the last of an
+// allowance never both win.
+//
+// It is a third key class of the UPLOADS BUCKET, `save.<seat>`, which neither
+// the upload ledger's one segment nor an upload record (`upload.<id>`) can
+// spell. What it counts is what an upload reservation counts, bytes nothing
+// names until the collector could have deleted them, and the bucket's age
+// ([UploadRetention]) is that hold already: a ledger nobody wrote for that
+// long holds only lapsed entries, and a removed seat's ledger goes on its own,
+// with no sweep.
+//
+// Every error is UNKNOWN, and the safe direction is not to save: a save its
+// node could not count is one that may pass the seat's budget.
+//
+// # A node's runs waiting for an operator
+//
+// A node's status record (nodestatusrecord.go) says how many runs of the seats
+// it holds wait for an operator ([NodeStatusRecord.ResumesBlocked]): runs whose
+// executor's job finished and whose last resume there failed on a condition
+// only an operator clears (internal/sandbox's Coordinator.ResumesBlocked). It
+// is ON THE RECORD because the node holding the seat is the only one that
+// knows, and it may be one with no alarm table to raise it on: a satellite
+// (`roles: [seats]`) runs no state log, so it evaluates none. So the
+// `executor_resume_blocked` alarm is judged by every data node off the live
+// records, as the model alarms are. The record carries THE COUNT, AND THE RUN
+// WAITING LONGEST BY ITS SEAT, ITS CONDITION AND SINCE WHEN, the seat and the
+// kind bounded ([MaxResumeBlockedKindBytes]), never how long it has waited,
+// which moves on every pass and would rewrite the record on each. It is absent
+// where nothing waits, and a node running no executor, or a build from before
+// it, says nothing.
+//
+// # A live node not saying keeps what it said
+//
+// A reader that judges the fleet over and over, an alarm evaluation above all,
+// reads [LiveNodeStatusesKept]: a live node whose record is not counted now
+// keeps the record the reader counted on its previous read, while its presence
+// stands at the epoch that record was written under. A LIVE NODE WHOSE RECORD
+// IS NOT COUNTED IS A NODE NOT SAYING, never one whose rows went away: a record
+// whose rewrites failed while the node lives ages out of its bucket
+// ([StatusFreshness]) before the presence lapses, and read as a node holding
+// nothing, a condition only that node held (a model's sit-out, a server's
+// outage, a run waiting for the operator) cleared for one evaluation and was
+// raised again on the next, with its lines and its wakes. A node whose
+// presence is gone, or was claimed again at a new epoch, keeps nothing: what
+// it held moves to holders that say their own, and a restarted node's memory
+// went with its process. A reader that decides once, rather than judging a
+// standing condition, reads [LiveNodeStatuses] itself, and one with a truer
+// word for a node than its last record, its own memory for the node it runs
+// on, leaves that node out of what it kept.
+//
 // # Maintenance mode
 //
 // A stream's byte ceiling is changed only while no request to it can be

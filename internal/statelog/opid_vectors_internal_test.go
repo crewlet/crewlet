@@ -19,17 +19,14 @@ type opIDVector struct {
 
 // A CLIENT THAT MINTS ITS OWN OPERATION ID MINTS THIS GRAMMAR'S, BYTE FOR BYTE.
 //
-// The command line and the dashboard both mint a gesture's id before they send
-// it, because the node finishes a gesture whatever happens to the connection
-// and an id minted on the node is lost with an answer that never arrives. The
-// command line mints through [NewOpID]; the dashboard cannot import it and
-// writes the layout itself, in TypeScript. The vectors in
-// testdata/opid_vectors.json are the contract between the two: this test holds
-// [layout] and [named] to them and holds every id to [CheckCallerOpID] and
-// [OpMintedAt], and the dashboard's own suite holds its minter to the same
-// file. A drift on either side is a failing test rather than a gesture the
-// route refuses `op_id_invalid` — or worse, one it accepts at the wrong
-// instant, which the ledger's vouching reads.
+// The command line and the dashboard mint a gesture's id before sending it,
+// since an id minted on the node is lost with an answer that never arrives.
+// The dashboard cannot import [NewOpID] and writes the layout in TypeScript;
+// testdata/opid_vectors.json is the contract: this test holds [layout],
+// [named], [CheckCallerOpID] and [OpMintedAt] to it, and the dashboard's suite
+// its minter. A drift fails a test rather than a gesture: refused
+// `op_id_invalid`, or accepted at the wrong instant, which the ledger vouches
+// by.
 func TestAMintedOperationIDMatchesTheSharedVectors(t *testing.T) {
 	raw, err := os.ReadFile("testdata/opid_vectors.json")
 	if err != nil {
@@ -74,13 +71,11 @@ type opNameVector struct {
 // A CLIENT THAT WRITES A VALUE INTO AN OPERATION'S NAME WRITES IT AS
 // [OpNamePart] DOES, BYTE FOR BYTE.
 //
-// The dashboard names a gate gesture's id by its node, which may hold the dot
-// that begins a step, and so escapes it as this package does — in TypeScript,
-// over a digest of its own, since the browser's is not available to it. The
-// vectors in testdata/opname_vectors.json are the contract between the two,
-// as the layout's are: this test holds [OpNamePart] to them and the
-// dashboard's own suite holds its escape to the same file, with every value
-// written as itself and every escape on both sides of the bound among them.
+// The dashboard names a gate gesture's id by its node, which may hold a dot,
+// and escapes it in TypeScript over a digest of its own.
+// testdata/opname_vectors.json is the contract, as the layout's is: this test
+// holds [OpNamePart] to it and the dashboard's suite its escape; the file
+// holds values written as themselves and escapes on both sides of the bound.
 func TestAValueIsWrittenIntoANameAsTheSharedVectorsSay(t *testing.T) {
 	raw, err := os.ReadFile("testdata/opname_vectors.json")
 	if err != nil {

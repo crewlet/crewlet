@@ -118,8 +118,12 @@ type admission struct {
 	// waiting for the seat.
 	done chan struct{}
 	// hold is the reason this admission holds the seat's inbox under, its
-	// own ([HoldSeatTurn]).
-	hold string
+	// own ([HoldSeatTurn]), and seat and inbox the mailbox it took that hold
+	// on and the attachment it took it for, the zero one for none taken.
+	// Under the node's mu.
+	hold  string
+	seat  uuid.UUID
+	inbox queue.Attachment
 	// contended is set when another turn was refused for the seat while this
 	// admission held it ([ErrSeatBusy]): somebody is waiting for the seat,
 	// and its release says so ([Config.SeatTurnEnded]).
@@ -251,7 +255,7 @@ func (n *Node) waitForSeat(ctx context.Context, handle string, running *admissio
 // the mailbox holds the seat's inbox from here.
 func (n *Node) admitted(ctx context.Context, held *admission, fromMailbox bool) context.Context {
 	if !fromMailbox {
-		n.holdInbox(ctx, held.handle, held.hold, true)
+		n.holdInbox(ctx, held, true)
 	}
 	ctx, cancel := context.WithCancel(context.WithValue(ctx, admissionKey{}, held))
 	held.cancel = cancel
@@ -286,7 +290,7 @@ func (held *admission) release(free func(), fromMailbox bool) func() {
 			free()
 			held.node.freeSeat(held)
 			if !fromMailbox {
-				held.node.holdInbox(context.Background(), held.handle, held.hold, false)
+				held.node.holdInbox(context.Background(), held, false)
 			}
 			// ONLY WHERE SOMEBODY WAITS FOR THE SEAT: an admission nobody
 			// was refused behind frees nothing anybody asked for, and one
@@ -306,29 +310,40 @@ func (held *admission) release(free func(), fromMailbox bool) func() {
 // refuses is logged and left: the mailbox's own wait for the seat
 // ([Node.admit]) still keeps its turn from starting beside this one, at the
 // cost of one in-flight delivery's ack window rather than a delivery.
-func (n *Node) holdInbox(ctx context.Context, handle, reason string, hold bool) {
+//
+// TAKEN FOR THE ATTACHMENT THE SEAT HOLDS AS THE TURN IS ADMITTED, and lifted
+// for that one: a seat released meanwhile ended it, which dropped the hold, so
+// the lift lifts nothing, and a hold asked after that release is refused rather
+// than carried onto the mailbox this node attaches if it takes the seat back.
+func (n *Node) holdInbox(ctx context.Context, held *admission, hold bool) {
 	n.mu.Lock()
-	var seatID uuid.UUID
-	for id, h := range n.attached {
-		if h == handle {
-			seatID = id
-			break
+	if hold {
+		for id, h := range n.attached {
+			if h == held.handle {
+				held.seat, held.inbox = id, n.inboxes[id]
+				break
+			}
 		}
 	}
+	seat, at := held.seat, held.inbox
 	n.mu.Unlock()
-	inbox, group := topics.AgentInbox(seatID), topics.AgentInboxGroup(seatID)
-	if inbox == "" {
+	inbox, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
+	if inbox == "" || at == 0 {
 		return
 	}
 	ctx = context.WithoutCancel(ctx)
 	var err error
 	if hold {
-		err = n.cfg.Queue.PauseTopic(ctx, inbox, group, reason)
+		err = n.cfg.Queue.PauseTopic(ctx, inbox, group, at, held.hold)
 	} else {
-		err = n.cfg.Queue.ResumeTopic(ctx, inbox, group, reason)
+		err = n.cfg.Queue.ResumeTopic(ctx, inbox, group, at, held.hold)
 	}
-	if err != nil {
-		n.log.Warn("seat_turn_hold_failed", "handle", handle, "hold", hold, "error", err.Error())
+	switch {
+	case errors.Is(err, queue.ErrAttachmentGone):
+		// Released under the turn: nothing to hold, and nothing held.
+		n.log.Debug("seat_turn_hold_attachment_ended", "handle", held.handle)
+	case err != nil:
+		n.log.Warn("seat_turn_hold_failed", "handle", held.handle, "hold", hold, "error", err.Error())
 	}
 }
 

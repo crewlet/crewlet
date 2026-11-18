@@ -15,9 +15,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// purgeBelow trims the log the way the retention duty does — by sequence,
-// stream-wide — which is what leaves a quiet object's subject holding
-// nothing.
+// purgeBelow trims the log as the retention duty does, by sequence and
+// stream-wide, which leaves a quiet object's subject holding nothing.
 func (h *harness) purgeBelow(seq uint64) {
 	h.t.Helper()
 	ctx := h.t.Context()
@@ -36,11 +35,9 @@ func (h *harness) purgeBelow(seq uint64) {
 
 // CONCURRENT WRITERS RACE ONE OBJECT AND EXACTLY ONE WINS EACH ROUND.
 //
-// The broker is the only party that sees every writer, which is why the
-// expectation is checked there and not here. What this asserts is the
-// property that makes that safe: every write either lands exactly once or is
-// told it did not land, and the log ends up holding every record exactly once
-// in an order every node will replay identically.
+// Only the broker sees every writer, so it checks the expectation; this
+// asserts what makes that safe: every write lands exactly once or is told it
+// did not, each at its own position in the one replay order.
 func TestConcurrentWritersRaceOneObject(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -81,19 +78,15 @@ func TestConcurrentWritersRaceOneObject(t *testing.T) {
 
 // A TRIMMED ANCHOR RETRIES ONCE AT ZERO, AND ONLY THROUGH THE FENCE.
 //
-// The server evaluates a per-subject expectation by loading that subject's
-// last message and rescues only the case where the expectation is ZERO. So
-// once a quiet object's only commit is trimmed, an expectation above zero is
-// refusable FOR EVER: the writer re-reads its row, gets the same number,
-// retries, and is refused again. A quiet object becomes permanently
-// unwritable.
+// The server rescues an empty subject only for an expectation of ZERO, so once
+// a quiet object's only commit is trimmed, its row's anchor is refused FOR EVER
+// without the retry (package doc, "THE FLOOR THEOREM").
 func TestWriteImmediatelyAfterTrimAdvances(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 
-	// One commit on a quiet object, then plenty of traffic elsewhere, then
-	// a trim past all of it — which is exactly the shape the retention
-	// duty produces.
+	// One commit on a quiet object, traffic elsewhere, then a trim past all
+	// of it: the retention duty's shape.
 	quiet, err := h.write(probeSubject("quiet"), "op-quiet", "once")
 	if err != nil {
 		t.Fatalf("the quiet object's only write: %v", err)
@@ -105,8 +98,7 @@ func TestWriteImmediatelyAfterTrimAdvances(t *testing.T) {
 	}
 	h.purgeBelow(quiet.Position.Seq + 3)
 
-	// The quiet object's row still records its old anchor, and its
-	// subject now holds nothing.
+	// The row keeps its old anchor; the subject holds nothing.
 	h.anchorAt(probeSubject("quiet"), quiet.Position.Seq)
 	h.fence.zeroes.Store(0)
 	before := h.appends.appends.Load()
@@ -133,10 +125,9 @@ func TestWriteImmediatelyAfterTrimAdvances(t *testing.T) {
 
 // AND THE FENCE IS WHAT STANDS BETWEEN THAT RETRY AND A LOST UPDATE.
 //
-// A node that cannot establish that it is at or above the published trim
-// floor must not retry at zero: below the floor its rows may be stale, and an
-// expectation of zero on an emptied subject succeeds against a peer's write
-// rather than losing to it.
+// Below the published trim floor a node's rows may be stale, and an
+// expectation of zero on an emptied subject succeeds over a peer's write
+// rather than losing to it, so such a node is refused instead.
 func TestABelowFloorNodeIsRefusedRatherThanRetryingAtZero(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -157,9 +148,7 @@ func TestABelowFloorNodeIsRefusedRatherThanRetryingAtZero(t *testing.T) {
 	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonBelowFloor {
 		t.Fatalf("write = %v, want a below_floor refusal", err)
 	}
-	// ONE attempt — the refused one. The retry never reaches the broker,
-	// which is the assertion, stated as the absence of an append rather
-	// than as the presence of an error.
+	// ONE attempt, the refused one: the retry never reaches the broker.
 	if attempts := h.appends.appends.Load() - before; attempts != 1 {
 		t.Fatalf("the write made %d append attempt(s) below the floor, want 1 — "+
 			"the retry at zero must never reach the broker", attempts)
@@ -169,28 +158,24 @@ func TestABelowFloorNodeIsRefusedRatherThanRetryingAtZero(t *testing.T) {
 // THE ZERO FENCE IS ASKED ABOUT THE CHECKPOINT THE DECISION WAS MADE AT, on
 // both roads to an expectation of zero.
 //
-// The floor theorem concludes that a trimmed record on this subject is already
-// reflected in the rows the write decided from, so the C it verifies F <= C+1
-// against has to be the position THOSE rows were at. This node's applier keeps
-// moving while a write runs, and only forward, so its live position is the
-// permissive answer: a record applied after the snapshot and trimmed before the
-// check passes against it, and the decision published at zero — which never
-// saw that record — overwrites it. The staging lands a record on the applier
-// between the snapshot and the check, and the fence must be asked about the
-// snapshot's position rather than the one the applier moved to.
+// The C the fence verifies F <= C+1 against must be the position the decided
+// rows were at (package doc, "THE FLOOR THEOREM"). The applier moves forward
+// while a write runs, so its live position is too permissive: a record applied
+// after the snapshot and trimmed before the check passes, and the decision
+// published at zero overwrites it. The staging applies one in between.
 func TestTheZeroFenceIsAskedAboutTheCheckpointTheDecisionRead(t *testing.T) {
 	t.Parallel()
 	for name, stage := range map[string]func(h *harness) statelog.Subject{
-		// No anchor and nothing on the broker: the expectation itself is
-		// zero, formed and fenced before the first append.
+		// No anchor and nothing on the broker: the expectation is zero,
+		// fenced before the first append.
 		"a subject nobody has written": func(h *harness) statelog.Subject {
 			if _, err := h.write(probeSubject("busy"), "op-busy", "x"); err != nil {
 				h.t.Fatalf("a write elsewhere: %v", err)
 			}
 			return probeSubject("fresh")
 		},
-		// An anchor the trim removed: the append at it is refused, and
-		// the retry at zero publishes the same snapshot's decision.
+		// An anchor the trim removed: the append at it is refused, and the
+		// retry at zero publishes the same snapshot's decision.
 		"an anchor the trim removed": func(h *harness) statelog.Subject {
 			quiet, err := h.write(probeSubject("quiet"), "op-quiet", "once")
 			if err != nil {
@@ -240,31 +225,24 @@ func TestTheZeroFenceIsAskedAboutTheCheckpointTheDecisionRead(t *testing.T) {
 }
 
 // THE ZERO FENCE READS ITS BOUNDS ONLY AFTER THE LOG HAS SAID THE SUBJECT IS
-// EMPTY, on both roads to an expectation of zero — which is what excludes the
-// purge of a record the decision never read.
+// EMPTY, on both roads to an expectation of zero.
 //
-// The applied term bounds a purge by what this node had APPLIED, and a node
-// applies past its own snapshot while a write runs. So a peer's record R on
-// this subject, above the snapshot's checkpoint, can be applied here, licensed
-// and purged before the write learns the subject is empty — and the decision
-// published at zero never saw R. What refuses it is the order of the write's
-// own reads: the floor that licensed the purge was published before it, and
-// the fence reads that floor, and the log's first sequence, only after LastSeq
-// has answered. Read the other way round, the fence clears against bounds from
-// before the purge, LastSeq then finds nothing, and the write lands at zero over
-// R. Each case purges R at the one instant that tells the two orders apart: as
-// the publisher asks the broker for the subject's last message.
+// A node applies past its own snapshot while a write runs, so a peer's record
+// R above the snapshot's checkpoint can be applied here, licensed (the applied
+// term) and purged before the write learns the subject is empty. The licensing
+// floor is published before the purge, so a fence reading the floor and the
+// log's first sequence after LastSeq refuses; reading them before, it clears
+// and the write lands at zero over R. Each case purges R as the publisher asks for LastSeq,
+// the one instant that tells the two orders apart.
 func TestTheZeroFenceReadsItsBoundsOnlyAfterTheLogSaysTheSubjectIsEmpty(t *testing.T) {
 	t.Parallel()
 	subject := probeSubject("contended")
 	wire := probePrefix + "." + subject.String()
 	for name, stage := range map[string]func(t *testing.T, h *harness){
-		// This node has applied nothing on the subject: the expectation
-		// itself is zero, and LastSeq is what forms it.
+		// Nothing applied on the subject: LastSeq forms the zero.
 		"a subject this node has never written": func(*testing.T, *harness) {},
-		// This node's row names its own record, the peer's record R sits
-		// above it, so the append at the anchor is refused and LastSeq is
-		// what tells a trimmed anchor from a lost race.
+		// The row names this node's own record and R lands above it, so the
+		// append is refused and LastSeq tells a trimmed anchor from a lost race.
 		"an anchor the broker refuses": func(t *testing.T, h *harness) {
 			own, err := h.write(subject, "op-own", "mine")
 			if err != nil {
@@ -290,8 +268,8 @@ func TestTheZeroFenceReadsItsBoundsOnlyAfterTheLogSaysTheSubjectIsEmpty(t *testi
 					"checkpoint %d", r, decided.Seq)
 			}
 
-			// THE REAL ZERO FENCE, over a published floor and the log's own
-			// ends as they stand when it reads them.
+			// THE REAL ZERO FENCE, over a published floor and the log's ends
+			// as they stand when it reads them.
 			var floor atomic.Uint64
 			h.fence.zero = &statelog.ZeroFence{
 				Evicted: func(context.Context) (bool, error) { return false, nil },
@@ -305,9 +283,8 @@ func TestTheZeroFenceReadsItsBoundsOnlyAfterTheLogSaysTheSubjectIsEmpty(t *testi
 				Committed: h.applier.Committed,
 			}
 
-			// AND THE TRIM, as the write asks what the subject holds: this
-			// node applies R and reports it, a tick publishes a floor past
-			// R, and then purges below it.
+			// AND THE TRIM, as the write asks what the subject holds: this node
+			// applies R, a tick publishes a floor past R, then purges below it.
 			var once sync.Once
 			h.appends.mu.Lock()
 			h.appends.beforeLastSeq = func() {
@@ -350,21 +327,19 @@ func TestTheZeroFenceReadsItsBoundsOnlyAfterTheLogSaysTheSubjectIsEmpty(t *testi
 }
 
 // AN OLD GENERATION'S ANCHOR CANNOT EXIST ON A RECREATED STREAM, and the
-// probe is what says so rather than a cheap pre-filter.
+// probe says so, not a pre-filter.
 //
-// After an operator rebuilds a lost broker estate, every stored sequence is a
-// number in a space it does not belong to. A first-sequence pre-filter reads
-// TRUE for every stale row on the new stream — the stream starts at zero and
-// zero is below everything — so it would hand a writer an expectation the
-// broker refuses for ever.
+// On a rebuilt broker estate every stored sequence is from another space, and
+// a first-sequence pre-filter reads TRUE for every stale row (the new stream
+// starts at zero), handing a writer an expectation refused for ever.
 func TestOldVersionAgainstARecreatedStream(t *testing.T) {
 	t.Parallel()
 
 	t.Run("an empty subject publishes at zero, fenced", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
-		// The row was last written in generation 1; the estate is now
-		// on generation 2 and its stream holds nothing for this object.
+		// The row is from generation 1; generation 2's stream holds
+		// nothing for this object.
 		h.gen.Store(2)
 		h.rows.stage(probeSubject("a"),
 			statelog.Position{Stream: probeStream, Generation: 1, Seq: 4_000})
@@ -395,9 +370,8 @@ func TestOldVersionAgainstARecreatedStream(t *testing.T) {
 		if err != nil {
 			t.Fatalf("the peer's write: %v", err)
 		}
-		// The row was last written in generation 1, and the subject is
-		// occupied in generation 2 by a record this node has not
-		// applied.
+		// The row is from generation 1, and a record this node has not
+		// applied occupies the subject in generation 2.
 		h.rows.stage(probeSubject("a"),
 			statelog.Position{Stream: probeStream, Generation: 1, Seq: 4_000})
 		h.applier.advance(statelog.Position{Stream: probeStream, Generation: 2})
@@ -418,7 +392,7 @@ func TestOldVersionAgainstARecreatedStream(t *testing.T) {
 }
 
 // A LOST ACKNOWLEDGEMENT IS NEVER A SUCCESS, and which of the other two it is
-// depends on facts this node reads locally rather than on a guess.
+// rests on facts this node reads locally, never a guess.
 func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 	t.Parallel()
 
@@ -431,8 +405,8 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 		}
 		h.anchorAt(probeSubject("a"), first.Position.Seq)
 
-		// The record LANDS and the acknowledgement does not, and this
-		// node's applier never reaches it.
+		// The record LANDS, the acknowledgement does not, and this node's
+		// applier never reaches it.
 		h.applier.mu.Lock()
 		h.applier.auto = false
 		h.applier.mu.Unlock()
@@ -463,15 +437,12 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 		h.anchorAt(probeSubject("a"), first.Position.Seq)
 		decided := h.rows.snapshots()
 
-		// The record lands, the acknowledgement is lost, this node
-		// applies past it — and its operation ledger is EMPTY, because
-		// its retention sweep ran DURING this write with a cutoff past
-		// the operation's mint instant (an id carrying an old instant: a
-		// turn-derived one, or a caller's retry a month on), after its
-		// decision was checked. And a PEER's write lands above it
-		// before anybody asks the subject what it holds, so the newest
-		// record there is another operation's: nothing on the log says
-		// whether this one landed below it.
+		// The record lands, the acknowledgement is lost, this node applies
+		// past it, and its ledger is EMPTY: its sweep ran DURING the write,
+		// after the decision's check, with a cutoff past the operation's
+		// mint instant (an old-instant id: turn-derived, or a late retry).
+		// And a PEER's record lands above it before the subject is asked,
+		// so nothing on the log says whether this one landed below it.
 		h.applier.mu.Lock()
 		h.applier.auto = false
 		h.applier.mu.Unlock()
@@ -528,14 +499,10 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 		}
 		h.anchorAt(probeSubject("a"), first.Position.Seq)
 
-		// As above — the ledger swept during the write past the
-		// operation's mint instant, and a peer's record of another
-		// operation newest on the subject — and THIS NODE'S EVICTION is
-		// below that record. The gate says nothing about the peer's
-		// record, which applied; what a refusal would say of this
-		// write's own append — that it applies nowhere — is the ledger's
-		// silence read, and an append that landed below the eviction
-		// applied, its row among those the sweep took.
+		// As above, and THIS NODE'S EVICTION is below the peer's record.
+		// A refusal would claim this write's append applies nowhere, which
+		// is the ledger's silence read: an append landing below the
+		// eviction applied, its row among those the sweep took.
 		h.applier.mu.Lock()
 		h.applier.auto = false
 		h.applier.mu.Unlock()
@@ -579,10 +546,9 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 		h.anchorAt(probeSubject("a"), first.Position.Seq)
 		decided := h.rows.snapshots()
 
-		// As above, with no peer: the newest record on the subject is
-		// the one this write appended, and it carries this operation's
-		// id — so the log itself says the write landed there, whatever
-		// the ledger lost, and no gate dropped it.
+		// As above, with no peer: the newest record on the subject carries
+		// this operation's id, so the log itself says the write landed
+		// there, whatever the ledger lost, and no gate dropped it.
 		h.applier.mu.Lock()
 		h.applier.auto = false
 		h.applier.mu.Unlock()
@@ -619,16 +585,15 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 	t.Run("an acknowledged record whose ledger row was lost is applied", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
-		// The decision is checked before any loss; the loss is reported
-		// from the SECOND read of the watermark on — the resolution's —
-		// which is this node's sweep landing between this write's
-		// append and the answer to it.
+		// The loss shows from the SECOND watermark read on (the
+		// resolution's): this node's sweep landing between the append and
+		// its answer, after the decision's check.
 		h.applier.mu.Lock()
 		h.applier.lost = time.Now().Add(time.Hour)
 		h.applier.lostFrom = 2
 		h.applier.mu.Unlock()
-		// This node's rows are past the record, and its ledger holds
-		// no row for it: the sweep took the row its applier wrote.
+		// This node's rows are past the record, and the sweep took its
+		// ledger row.
 		h.applier.mu.Lock()
 		h.applier.auto = false
 		h.applier.mu.Unlock()
@@ -652,9 +617,8 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 // its own mismatch.
 //
 // A strict loop over a compacted stream stalls for ever on the first ordinary
-// write; a compacted loop over a log accepts a hole that is data loss. Both
-// failures are quiet and both are permanent, so the pairing is refused at the
-// seam rather than inferred by whichever loop got there first.
+// write; a compacted loop over a log accepts a hole that is data loss. Both are
+// quiet and permanent, so [statelog.StreamSpec.Validate] refuses the pairing.
 func TestAStreamSpecAndItsReplayProtocolMustAgree(t *testing.T) {
 	t.Parallel()
 	base := func() statelog.StreamSpec { return specOf(probeDomain{}) }
@@ -719,10 +683,9 @@ func TestAStreamSpecAndItsReplayProtocolMustAgree(t *testing.T) {
 
 // EVERY TABLE A DOMAIN WRITES CARRIES A CLASS, and the four are exhaustive.
 //
-// The framework derives the snapshot's scrub list, the identity claim's
-// membership and the local sweep from this one map — which is the fix for the
-// failure the backup package names in its own words, a hardcoded list that
-// "would silently omit whatever a deployment actually has".
+// The snapshot's scrub list, the identity claim's membership and the local
+// sweep all derive from this one map, never a hardcoded list, which "would
+// silently omit whatever a deployment actually has" (the backup package).
 func TestEveryTableClassIsOneOfTheFour(t *testing.T) {
 	t.Parallel()
 	for table, class := range (probeDomain{}).Tables() {
@@ -733,16 +696,15 @@ func TestEveryTableClassIsOneOfTheFour(t *testing.T) {
 			t.Errorf("%s is classed %s, which has no name", table, class)
 		}
 	}
-	// AND A VALUE OFF THE END IS REFUSED rather than rendered as
-	// whichever behaviour its number happened to fall into.
+	// AND A VALUE OFF THE END IS REFUSED, not given whatever behaviour its
+	// number falls into.
 	if (statelog.TableClass(99)).Valid() {
 		t.Error("TableClass(99) reports itself valid")
 	}
 }
 
-// unusedCompileGuards keeps the seams honest: a fake that stops satisfying an
-// interface must fail the build here rather than at whichever test happens to
-// use it next.
+// unusedCompileGuards fails the build here when a fake stops satisfying its
+// interface, not at whichever test uses it next.
 var (
 	_ statelog.Domain   = probeDomain{}
 	_ statelog.Rows     = (*fakeRows)(nil)
@@ -761,9 +723,9 @@ func (ledgerless) OpsTable() string { return "" }
 
 // A DOMAIN WITH NO LEDGER IS ANSWERED FROM THE WAIT AND THE GATES ALONE.
 //
-// Without this arm every one of its writes reads its own permanently empty
-// table as "somebody else won" and republishes — for sixteen rounds, and then
-// tells the caller its object kept changing when nothing touched it.
+// Otherwise every write reads its permanently empty table as "somebody else
+// won" and republishes for sixteen rounds, then reports the object kept
+// changing when nothing touched it.
 func TestALedgerlessDomainResolvesFromItsOwnPosition(t *testing.T) {
 	t.Parallel()
 	h := newHarnessFor(t, ledgerless{})
@@ -779,9 +741,8 @@ func TestALedgerlessDomainResolvesFromItsOwnPosition(t *testing.T) {
 			"is one reading its own empty table as a lost race", res.Rounds)
 	}
 
-	// AND A GATE STILL DROPS ITS RECORDS. Having no ledger says nothing
-	// about eviction: a record from an evicted node produces rows on no
-	// node whatever the domain declares.
+	// AND A GATE STILL DROPS ITS RECORDS: an evicted node's record
+	// produces rows on no node, ledger or not.
 	h.gates.gated, h.gates.reason = true, statelog.ReasonEvicted
 	_, err = h.write(probeSubject("b"), "op-2", "hello")
 	var refusal *statelog.Unavailable
@@ -794,15 +755,14 @@ func TestALedgerlessDomainResolvesFromItsOwnPosition(t *testing.T) {
 // AN APPLIER THAT WRITES NO LEDGER ROW FOR AN ACKNOWLEDGED RECORD IS
 // REPORTED, not guessed at.
 //
-// The broker acknowledged the record, this node applied past it, and no gate
-// dropped it — so it applied and the ledger row is missing. Re-deciding there
-// would republish a record that already landed, which is the one thing the
-// ledger exists to prevent.
+// Acknowledged, applied past and not gated, the record applied and its ledger
+// row is missing; re-deciding would republish a record that already landed,
+// which the ledger exists to prevent.
 func TestAnAppliedRecordWithNoLedgerRowIsReported(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	// The applier commits but records nothing, which is what a domain
-	// that forgot its ledger write looks like from here.
+	// The applier commits but records nothing: a domain that forgot its
+	// ledger write.
 	h.applier.mu.Lock()
 	h.applier.auto = false
 	h.applier.mu.Unlock()

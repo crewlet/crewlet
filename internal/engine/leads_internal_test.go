@@ -252,11 +252,14 @@ func TestAnAnswerCarriedOnInACutOffBoxReachesTheNextBriefAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if job.Launch.Brief != sandbox.BriefContinued || len(leads.Kept) != 1 || leads.Kept[0].Job != job.LaunchID ||
+	// AND ITS FRESH BRIEF'S TASK BESIDE IT, unmarked: its box would have
+	// started a session of its own on that brief had the copy not restored.
+	if job.Launch.Brief != sandbox.BriefContinued || len(leads.Kept) != 2 || leads.Kept[0].Job != job.LaunchID ||
+		leads.Kept[1].Kind != sandbox.LeadKindFresh ||
 		!slices.Equal(job.Launch.LeadMarks, []int{leads.Kept[0].Appended}) {
 		t.Fatalf("the answer's job records brief %q and marks %v beside leads %+v; want the copy continued in its "+
-			"box and the answer it opened with, sealed for job %s and marked", job.Launch.Brief,
-			job.Launch.LeadMarks, leads.Kept, job.LaunchID)
+			"box and the answer it opened with, sealed for job %s and marked, its fresh task kept beside",
+			job.Launch.Brief, job.Launch.LeadMarks, leads.Kept, job.LaunchID)
 	}
 
 	// REFUSED ON A REPLACED SIGN-IN BEFORE ITS HARNESS WROTE THE BRIEF.
@@ -321,7 +324,9 @@ func TestAChainOfCutOffSessionsOutlivesAReadOfItsLeadsThatFailed(t *testing.T) {
 			Leads: sandbox.TurnLeads{Cut: job.LeadsAppended, Unread: true},
 			Asked: &sandbox.AskedRun{Question: "which tests?", Answer: "the unit tests", By: "founder",
 				SessionID: "sess-ask", BoxKept: true}}, nil, nil, testLeads()))
-	notKept := "(+1 earlier such message, which is not kept to tell again.)"
+	// THE ROW COUNTS THE FIRST JOB'S ANSWER AND ITS FRESH TASK, each said
+	// as not kept.
+	notKept := "(+2 earlier such messages, which are not kept to tell again.)"
 	if told := strings.Index(second.Continue.Brief, leadsHeading); told < 0 ||
 		!strings.Contains(second.Continue.Brief[told:], notKept) ||
 		strings.Contains(second.Continue.Brief, "use the release branch") {
@@ -331,12 +336,15 @@ func TestAChainOfCutOffSessionsOutlivesAReadOfItsLeadsThatFailed(t *testing.T) {
 	again := carried.launch(t, second.Continue)
 	middle := again.row(t, turnID)
 	read, err := again.pending.Leads(ctx, middle)
-	if err != nil || len(read.Kept) != 2 || middle.LaunchID == job.LaunchID ||
-		middle.Launch.Brief != sandbox.BriefContinued {
+	// EACH JOB'S FRESH TASK KEPT BESIDE ITS ANSWER, unmarked.
+	if err != nil || len(read.Kept) != 4 || middle.LaunchID == job.LaunchID ||
+		middle.Launch.Brief != sandbox.BriefContinued || read.Kept[0].Kind != sandbox.LeadKindAnswer ||
+		read.Kept[2].Kind != sandbox.LeadKindAnswer {
 		t.Fatalf("the second answer's job %s records brief %q beside leads %+v, %v; want a new job continuing "+
-			"the copy, and both answers kept", middle.LaunchID, middle.Launch.Brief, read.Kept, err)
+			"the copy, and both answers kept, each beside its job's fresh task", middle.LaunchID,
+			middle.Launch.Brief, read.Kept, err)
 	}
-	if want := []int{read.Kept[0].Appended, read.Kept[1].Appended}; !slices.Equal(middle.Launch.LeadMarks, want) {
+	if want := []int{read.Kept[0].Appended, read.Kept[2].Appended}; !slices.Equal(middle.Launch.LeadMarks, want) {
 		t.Errorf("the job whose brief could not read the leads marks %v; want %v, the first answer, which its "+
 			"brief was to tell again, and its own", middle.Launch.LeadMarks, want)
 	}
@@ -390,10 +398,12 @@ func TestABaseContinuationRefusedBeforeItsHarnessWroteIsToldItsTurnAgain(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.Launch.Brief != sandbox.BriefContinuedConversation || len(leads.Kept) != 1 ||
-		leads.Kept[0].Kind != sandbox.LeadKindTask || !slices.Equal(row.Launch.LeadMarks, []int{1}) {
+	if row.Launch.Brief != sandbox.BriefContinuedConversation || len(leads.Kept) != 2 ||
+		leads.Kept[0].Kind != sandbox.LeadKindTask || leads.Kept[1].Kind != sandbox.LeadKindFresh ||
+		!slices.Equal(row.Launch.LeadMarks, []int{1}) {
 		t.Fatalf("the first launch records brief %q and marks %v beside leads %+v; want the conversation's "+
-			"session continued, its task the lead, marked", row.Launch.Brief, row.Launch.LeadMarks, leads.Kept)
+			"session continued, its task the lead, marked, and its fresh brief's task beside it", row.Launch.Brief,
+			row.Launch.LeadMarks, leads.Kept)
 	}
 
 	// REFUSED AT ONCE, ITS HARNESS NEVER HAVING WRITTEN THE BRIEF: its harness
@@ -429,10 +439,10 @@ func TestABaseContinuationRefusedBeforeItsHarnessWroteIsToldItsTurnAgain(t *test
 // cut-off job carried on by a person's answer is told its earlier answer
 // again, and the relaunched job's record marks it told. The case re-makes,
 // through the real take, the attach of a job whose brief continued the
-// session and opened with an answer (a first launch's fresh brief lacks
-// nothing), and drives an answer's resume: only it continues the box's copy
-// in place, never a loss's (runner.Lost). Mutation: drop the leads in the
-// resumer, or hand runnerResume none, and the relaunch is told nothing.
+// session and opened with an answer (a first launch's fresh brief opens with
+// the turn's task alone), and drives an answer's resume: only it continues the
+// box's copy in place, never a loss's (runner.Lost). Mutation: drop the leads
+// in the resumer, or hand runnerResume none, and the relaunch is told nothing.
 func TestAResumesLeadsReachItsRelaunchsBrief(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -483,9 +493,12 @@ func TestAResumesLeadsReachItsRelaunchsBrief(t *testing.T) {
 		t.Fatalf("ClaimForResume = %v, %v", claimed, err)
 	}
 	leads, err := pending.Leads(ctx, row)
-	if err != nil || len(leads.Kept) != 1 {
-		t.Fatalf("the run's leads read %+v, %v; want the job's answer", leads, err)
+	if err != nil || len(leads.Kept) != 2 || leads.Kept[0].Kind != sandbox.LeadKindFresh ||
+		leads.Kept[1].Kind != sandbox.LeadKindAnswer {
+		t.Fatalf("the run's leads read %+v, %v; want the first launch's fresh task and the job's answer", leads,
+			err)
 	}
+	answer := leads.Kept[1].Appended
 	if err := (&resumer{engine: e}).Resume(ctx, sandbox.ResumeRequest{Run: row, Leads: leads,
 		Asked: &sandbox.AskedRun{Question: "which test suite?", Answer: "the unit tests", By: "founder",
 			SessionID: row.SessionRan(), BoxKept: true}}); err != nil {
@@ -502,8 +515,8 @@ func TestAResumesLeadsReachItsRelaunchsBrief(t *testing.T) {
 		t.Errorf("the relaunch is not told the answer its copy may lack:\n%s", brief)
 	}
 	next := rig.row(t, turnID)
-	if next.LaunchID == first.LaunchID || !slices.Contains(next.Launch.LeadMarks, 1) {
-		t.Errorf("the relaunched job %s marks %v, want a new job marking the answer it told again, 1",
-			next.LaunchID, next.Launch.LeadMarks)
+	if next.LaunchID == first.LaunchID || !slices.Contains(next.Launch.LeadMarks, answer) {
+		t.Errorf("the relaunched job %s marks %v, want a new job marking the answer it told again, %d",
+			next.LaunchID, next.Launch.LeadMarks, answer)
 	}
 }

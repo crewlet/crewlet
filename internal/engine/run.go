@@ -365,6 +365,10 @@ type Engine struct {
 	// nomodels.go.
 	modelHolds modelHolds
 
+	// inboxes is the attachment of each seat's inbox this node holds, which
+	// every hold it takes on one names. See seatinbox.go.
+	inboxes seatInboxes
+
 	// budgetParks is every seat inbox this node holds because a capped
 	// token window is refusing, each with the alarm that releases it when
 	// the window turns over. See budgetpark.go.
@@ -458,6 +462,10 @@ type Engine struct {
 	// fleet-wide inputs, the model entries' and the MCP servers'
 	// ([Engine.entriesReading]).
 	entryInputs entryInputs
+
+	// blockedSaid is the last word of each live node on the runs of its
+	// seats waiting for an operator ([Engine.executorReading]).
+	blockedSaid blockedSaid
 
 	// applying serialises [Engine.Apply] against [Engine.Drain], and stopped,
 	// which it guards, is what refuses an apply once a drain has begun. See
@@ -2489,9 +2497,13 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		Turn:            e.mailboxTurn,
 		// Before the mailbox opens and after it closes — see node.Config.
 		// A seat mid-detached-run must have its runs recovered and its mail
-		// parked before anything can deliver to it.
-		SeatReady: func(ctx context.Context, s placement.Seat, lease coord.Lease) error {
-			return e.prepareSeat(ctx, s, lease.Epoch, lease.Owner)
+		// parked before anything can deliver to it, and A SEAT A PERSON
+		// PAUSED is held before its inbox is attached, so placement moving
+		// it here does not deliver the mail it is holding: the release on
+		// the node it left dropped that node's hold with the attachment. See
+		// seatpause.go.
+		SeatReady: func(ctx context.Context, s placement.Seat, lease coord.Lease, inbox queue.Attachment) error {
+			return e.prepareSeat(ctx, s, lease.Epoch, lease.Owner, inbox)
 		},
 		SeatDone: e.releaseSeat,
 		// A seat that starts admitting turns re-checks at once what was
@@ -2515,11 +2527,6 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		SeatTurnEnded: func(handle string) {
 			e.readmitResumes(waitSeatBusy, handle)
 		},
-		// A SEAT A PERSON PAUSED is attached already held, so placement
-		// moving it here does not deliver the mail it is holding: the
-		// release on the node it left dropped that node's hold with the
-		// attachment. See seatpause.go.
-		AttachHolds:   e.attachHolds,
 		LeaseTTL:      e.leaseTTL,
 		SweepInterval: opts.sweepEvery,
 		// The host's own ceiling, from Tier A. Per NODE, so a fleet's is
@@ -2877,8 +2884,8 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.DelegatedRequests == nil {
 		d.DelegatedRequests = e.readDelegatedRequests
 	}
-	if d.StaleAssignments == nil {
-		d.StaleAssignments = e.dropStaleAssignments
+	if d.StaleWakes == nil {
+		d.StaleWakes = e.dropStaleWakes
 	}
 	if d.Observe == nil {
 		d.Observe = e.observe
@@ -3206,13 +3213,44 @@ func (e *Engine) Drain(ctx context.Context) {
 				tracing.TraceOf(ctx))
 			announced.Go(func() { e.publishLifecycle(ctx, ev) })
 		}
+		// AND THE SESSIONS OF THE DIRECT JOBS THIS NODE LAUNCHED ARE SAVED
+		// BESIDE THE WAIT FOR TURNS, not after it: the stop a drain comes
+		// before usually takes such a job with its container, unit or host,
+		// its relaunch continues its newest save, and the wait for turns is
+		// time the drain already spends. Joined before the drain returns, so
+		// the teardown closes nothing a save still writes through; bounded by
+		// its own wait (the sandbox package doc's "A save as its node
+		// drains").
+		saved := make(chan struct{})
+		go func() {
+			defer close(saved)
+			if rt := e.sandbox.Load(); rt != nil {
+				rt.coordinator.SaveHosted(ctx)
+			}
+		}()
 		e.node.Drain(ctx)
 		// THE CALLS ITS SEATS' RUNS STILL HAD RUNNING, once every seat is
 		// given back: each to its record, before the teardown closes what it
 		// records through.
 		e.bridge.AwaitCalls(ctx)
 		announced.Wait()
+		awaitDrainSaves(ctx, saved)
 	})
+}
+
+// awaitDrainSaves waits for the drain's saves ([Engine.Drain]) to end, saying
+// so first where they have not, as the bridge's wait for its calls does: a
+// drain that holds a node's stop says what it waits on.
+func awaitDrainSaves(ctx context.Context, saved <-chan struct{}) {
+	select {
+	case <-saved:
+		return
+	default:
+	}
+	log.InfoContext(ctx, "executor_session_saves_draining",
+		"detail", "the sessions of this node's direct jobs are still being saved as it drains; "+
+			"waiting for each to pass its spool, for at most the drain save's wait")
+	<-saved
 }
 
 // ShuttingDown reports whether a drain has begun.

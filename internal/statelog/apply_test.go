@@ -23,13 +23,10 @@ import (
 
 // ---- the applier's fakes -------------------------------------------- //
 //
-// The domain arrives eleven steps later. What is under test is the framework's
-// loop, which is decided entirely by what these answer — so a fake that can be
-// driven into each branch is a stronger test than a real domain that only
-// reaches the easy ones.
+// The loop under test is decided by what these answer, so a fake driven into
+// each branch tests more than a real domain that reaches only the easy ones.
 
-// probeApplier is a state machine whose whole job is to be observable: it
-// writes one row per record into a table the test can count.
+// probeApplier writes one row per record into a table the test can count.
 type probeApplier struct {
 	mu      sync.Mutex
 	applied []statelog.Position
@@ -41,19 +38,18 @@ type probeApplier struct {
 	failAt  uint64
 	rowsPer int
 
-	// lockedAt is a sequence whose FIRST apply fails the way a write that
-	// lost the file's lock does, which the store answers by running the
-	// transaction's whole body again; zero fails nothing. It is how a case
-	// stages the re-run no healthy store produces.
+	// lockedAt is a sequence whose FIRST apply fails as a write that lost
+	// the file's lock does, so the store re-runs the transaction's body: a
+	// re-run no healthy store produces. Zero fails nothing.
 	lockedAt uint64
 
-	// hooks is every post-commit call the framework made, in order: a
-	// "retained N" for each [statelog.RetentionHook] call and a
-	// "committed" for each [statelog.Applier.Committed].
+	// hooks is every post-commit call, in order: "retained N" per
+	// [statelog.RetentionHook] call, "committed" per
+	// [statelog.Applier.Committed].
 	hooks []string
 
 	// instants is the broker instant each applied record was handed, by
-	// sequence: the record's own and the options', exactly as they arrived.
+	// sequence, on the record and in the options.
 	instants map[uint64]probeInstant
 }
 
@@ -64,8 +60,8 @@ type probeInstant struct {
 	record, options time.Time
 }
 
-// THE PROBE TAKES THE OPTIONAL HOOK, as every applier that implements it must
-// assert: the framework finds it by a type assertion.
+// The framework finds the optional hook by a type assertion, so an applier
+// that takes it asserts so.
 var _ statelog.RetentionHook = (*probeApplier)(nil)
 
 func newProbeApplier() *probeApplier {
@@ -89,9 +85,8 @@ func (a *probeApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Recor
 			rec.Position.Seq)
 	}
 	if rec.Kind == statelog.BarrierKind {
-		// A BARRIER WRITES NO ROW, as every domain's applier is certified to
-		// keep it (statelogtest.ABarrierWritesNoRow): the loop serves the
-		// reads waiting on it before its transaction commits.
+		// A BARRIER WRITES NO ROW (statelogtest.ABarrierWritesNoRow): the
+		// loop serves the reads waiting on it before its transaction commits.
 		a.mu.Lock()
 		a.applied = append(a.applied, rec.Position)
 		a.epochs = append(a.epochs, opts.Epoch)
@@ -161,65 +156,53 @@ func (a *probeApplier) epochsSeen() []map[string]any {
 	return append([]map[string]any(nil), a.epochs...)
 }
 
-// probeFetch hands the loop whatever the test queued, and records what was
-// acknowledged. It is the log read by POSITION as well ([statelog.CheckpointLog]):
-// every record ever offered stays readable at its sequence, the way a stream
-// keeps what a consumer has delivered.
+// probeFetch hands the loop whatever the test queued and records what was
+// acknowledged. As the log read by position ([statelog.CheckpointLog]) it keeps
+// every record ever offered readable at its sequence, as a stream does.
 type probeFetch struct {
 	mu    sync.Mutex
 	queue []statelog.Message
 	acked map[uint64]int
-	// fetches counts the loop's calls of Fetch, and answered the calls that
-	// have returned. One CALL each, however long it waits on an empty
-	// queue: counted per poll of that wait, one idle fetch read as hundreds,
-	// so a case asking whether the loop had fetched again was answered by
-	// the fetch it was already in.
+	// fetches counts the loop's calls of Fetch, and answered those that
+	// returned: one per CALL however long it waits, so "has the loop
+	// fetched again" is not answered by the fetch it is already in.
 	fetches, answered int
 
-	// stopped is the runner's own [statelog.Runner.Stopped], where a
-	// harness built one over this fetch: a runner that halts makes no more
-	// fetches, and [probeFetch.awaitAnswered] says so rather than waiting out
-	// its bound.
+	// stopped is the runner's [statelog.Runner.Stopped], where a harness
+	// built one: a halted runner fetches no more, so
+	// [probeFetch.awaitAnswered] fails at once rather than at its bound.
 	stopped func() error
 
 	// released counts the deliveries the loop handed back unconsumed, by
-	// sequence ([statelog.Message.Release]), and redeliver is what the broker
-	// owes the next fetch for them: the record its log holds at each such
-	// sequence NOW — another one, where a restore replaced it — ahead of
-	// what it has not yet delivered, as a broker answers a negative
-	// acknowledgement.
+	// sequence ([statelog.Message.Release]); redeliver is what the next
+	// fetch owes for them ahead of the queue, as a broker answers a negative
+	// acknowledgement: the record the log holds at each sequence NOW, which
+	// a restore may have replaced.
 	released  map[uint64]int
 	redeliver []statelog.Message
 
-	// log is every record offered, by sequence — a later offer at a
-	// sequence REPLACES the earlier one, which is what a broker restored
-	// from an older copy and written past a node's rows looks like from
-	// that node — and end, when set, the last sequence Bounds reports in
-	// place of the highest offered one.
+	// log is every record offered, by sequence; a later offer REPLACES the
+	// earlier, as a broker restored from an older copy and written past a
+	// node's rows looks to that node. end, when set, is the last sequence
+	// Bounds reports in place of the highest offered.
 	log map[uint64]statelog.Message
 	end *uint64
 
-	// withhold is how many queued records the broker keeps back from
-	// every fetch while still counting them as pending — which is what a
-	// consumer at its in-flight ceiling looks like from the loop: Pending
-	// says records remain and Fetch hands over none of them.
+	// withhold is how many queued records every fetch keeps back while
+	// Pending still counts them: a consumer at its in-flight ceiling.
 	withhold int
 
-	// failures is how many fetches the broker answers with an error
-	// before it answers normally again — a blip, as the loop sees one.
+	// failures is how many fetches fail before the broker answers again.
 	failures int
 
-	// after runs once, after the fetch with that NUMBER has handed its
-	// records over. It is how a case stages a REDELIVERY, which no single
-	// batch can: a batch is sorted and deduped on arrival, so a record
-	// that comes back has to arrive in a LATER fetch, while the loop still
-	// holds a higher one in the same run.
+	// after runs once, after the fetch with that NUMBER hands over its
+	// records: how a case stages a REDELIVERY, which must arrive in a LATER
+	// fetch because a batch is sorted and deduped on arrival.
 	after map[int]func()
 
-	// atHook runs once, after the next read of the log by position has
-	// read its record ([probeFetch.At]): how a case lands something between
-	// a verification's read of the record at the checkpoint and what the
-	// runner then does with what it read.
+	// atHook runs once, after the next [probeFetch.At] has read its record:
+	// how a case lands something between a verification's read at the
+	// checkpoint and what the runner does with it.
 	atHook func()
 }
 
@@ -252,17 +235,14 @@ func probeStoredAt(seq uint64) time.Time {
 	return time.Unix(1_700_000_000, 0).UTC().Add(time.Duration(seq) * time.Second)
 }
 
-// offer queues one record at seq, encoded as the probe domain's envelope and
-// SIGNED, because what a broker hands an applier is what a publisher wrote and
-// the framework signs every one of those. A fixture that offered an unsigned
-// record would be testing the refusal rather than the path.
+// offer queues one record at seq as the probe domain's envelope, SIGNED as every
+// published record is: an unsigned fixture would test the refusal, not the path.
 func (f *probeFetch) offer(seq uint64, env statelog.Envelope) {
 	f.offerStored(seq, probeStoredAt(seq), env)
 }
 
-// offerStored is [probeFetch.offer] with the broker instant named: a record at
-// seq the broker stored at another moment than the one first offered there is
-// ANOTHER record at that sequence.
+// offerStored is [probeFetch.offer] with the broker instant named: one stored at
+// another instant than the record first offered at seq is ANOTHER record.
 func (f *probeFetch) offerStored(seq uint64, storedAt time.Time, env statelog.Envelope) {
 	body, err := json.Marshal(env)
 	if err != nil {
@@ -303,9 +283,9 @@ func (f *probeFetch) offerStored(seq uint64, storedAt time.Time, env statelog.En
 	f.log[seq] = m
 }
 
-// rewrite replaces what the log holds at seq with another record, WITHOUT
-// delivering it — the log as a node finds it after a broker was restored from
-// an older copy and written past that node's rows.
+// rewrite replaces what the log holds at seq WITHOUT delivering it: the log a
+// node finds after a broker was restored from an older copy and written past
+// its rows.
 func (f *probeFetch) rewrite(seq uint64, storedAt time.Time) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -346,8 +326,8 @@ func (f *probeFetch) At(_ context.Context, seq uint64) (string, []byte, time.Tim
 	f.atHook = nil
 	f.mu.Unlock()
 	if hook != nil {
-		// OUTSIDE THE LOCK, because a hook stages records and offering one
-		// takes it; what this read answers was read before it ran.
+		// OUTSIDE THE LOCK: a hook offers records, which takes it. This
+		// read's answer was taken before it ran.
 		hook()
 	}
 	if !held {
@@ -356,9 +336,8 @@ func (f *probeFetch) At(_ context.Context, seq uint64) (string, []byte, time.Tim
 	return "probe", m.Payload, m.StoredAt, true, nil
 }
 
-// Fetch waits for the queue the way a real pull consumer waits for its
-// stream: an empty broker blocks for the caller's own wait rather than
-// answering nothing immediately, which would turn the apply loop into a spin.
+// Fetch waits out the caller's wait on an empty queue, as a pull consumer
+// does: answering nothing at once would spin the apply loop.
 func (f *probeFetch) Fetch(ctx context.Context, maxMessages, maxBytes int, wait time.Duration) ([]statelog.Message, error) {
 	deadline := time.Now().Add(wait)
 	f.mu.Lock()
@@ -377,8 +356,7 @@ func (f *probeFetch) Fetch(ctx context.Context, maxMessages, maxBytes int, wait 
 			f.mu.Unlock()
 			return nil, errors.New("the probe broker did not answer")
 		}
-		// WHAT WAS HANDED BACK COMES FIRST, ahead of what the broker has
-		// not yet delivered.
+		// WHAT WAS HANDED BACK COMES FIRST, ahead of the undelivered.
 		if len(f.redeliver) > 0 {
 			f.queue, f.redeliver = slices.Concat(f.redeliver, f.queue), nil
 		}
@@ -389,8 +367,8 @@ func (f *probeFetch) Fetch(ctx context.Context, maxMessages, maxBytes int, wait 
 			hook := f.after[call]
 			f.mu.Unlock()
 			if hook != nil {
-				// OUTSIDE THE LOCK, because a hook stages more
-				// records and offering one takes it.
+				// OUTSIDE THE LOCK: a hook offers records,
+				// which takes it.
 				hook()
 			}
 			return out, nil
@@ -443,19 +421,14 @@ func (f *probeFetch) fetchCount() int {
 }
 
 // awaitAnswered blocks until the broker has answered n more of the loop's
-// fetches than it had when called, and the loop has STARTED the fetch after
-// them — so it has finished handling every one of those answers, whatever it
-// does with an answer between one fetch and the next.
+// fetches than when called and the loop has STARTED the next one, so it has
+// handled every one of those answers. It is how a case lets an idle loop run
+// "long enough": on a loaded runner a sleep lets no fetch happen, and an
+// assertion that nothing was said during it watched nothing.
 //
-// It is how a case lets an idle loop run "long enough": a sleep sized in
-// fetch intervals is decided by how fast the runner is, and on a loaded one
-// it lets no fetch happen at all, so an assertion that nothing was said
-// during it passes having watched nothing.
-//
-// THE BROKER ANSWERS EVERY FETCH within its wait, so what runs the bound out is
-// a loop that stopped fetching: one wedged between two fetches, or a runner
-// that halted, which ends the wait at once and is named with its error. Its
-// failure says how many fetches the loop made of the ones it needed.
+// The broker answers every fetch within its wait, so only a loop that stopped
+// fetching runs the bound out: one wedged between two fetches, or a halted
+// runner, which ends the wait at once with its error.
 func (f *probeFetch) awaitAnswered(t *testing.T, n int, what string) {
 	t.Helper()
 	f.mu.Lock()
@@ -514,8 +487,8 @@ type applyHarness struct {
 	fetch   *probeFetch
 	metrics *metrics.Recorder
 
-	// epoch is the source [applyHarness.rebuild] hands the runner, nil for
-	// none — as a caller that declares no epoch builds one.
+	// epoch is the source [applyHarness.rebuild] hands the runner; nil
+	// declares none.
 	epoch func() map[string]any
 }
 
@@ -532,7 +505,7 @@ func newApplyHarnessWith(t *testing.T, domain statelog.Domain,
 	return newApplyHarnessOn(t, domain, store.Options{}, mutate)
 }
 
-// newApplyHarnessOn is [newApplyHarnessWith] over a store opened with opts — a
+// newApplyHarnessOn is [newApplyHarnessWith] over a store opened with opts, for a
 // driver a case wraps to hold or fail the node's commits.
 func newApplyHarnessOn(t *testing.T, domain statelog.Domain, opts store.Options,
 	mutate func(*statelog.RunnerDeps)) *applyHarness {
@@ -545,10 +518,8 @@ func newApplyHarnessOn(t *testing.T, domain statelog.Domain, opts store.Options,
 		}
 	})
 
-	// THE DOMAIN'S OWN TABLES, in plain DDL. A real domain ships them in
-	// its own migration; the framework's migration deliberately creates
-	// only its own three, so a second domain adds a file rather than
-	// editing one that has already shipped.
+	// THE DOMAIN'S OWN TABLES: a real domain ships them in its own
+	// migration, and the framework's creates only its own three.
 	if err := estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), probeDDL)
 		return err
@@ -585,29 +556,25 @@ func newApplyHarnessOn(t *testing.T, domain statelog.Domain, opts store.Options,
 		fetch: fetch, metrics: recorder}
 }
 
-// upgrade rebuilds the runner over the SAME database under another domain —
-// the shape of a node restarting on a newer build. The applier, the fetch and
-// the recorder are fresh, because a new process has new ones; the rows, the
-// checkpoint and the retained records are what survive.
+// upgrade rebuilds the runner over the SAME database under another domain, as a
+// node restarting on a newer build: the applier, fetch and recorder are fresh;
+// the rows, checkpoint and retained records survive.
 func (h *applyHarness) upgrade(domain statelog.Domain) {
 	h.t.Helper()
 	h.rebuild(domain, time.Time{})
 }
 
-// rebuild is [applyHarness.upgrade] under a stream identity: the instant the
-// broker reports for the stream, which the loop compares against the instant
-// its checkpoint was committed under.
+// rebuild is [applyHarness.upgrade] with the stream's creation instant, which
+// the loop compares with the one its checkpoint was committed under.
 func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
 	h.t.Helper()
 	probe := newProbeApplier()
 	h.rebuildWith(domain, created, probe, probe)
 }
 
-// rebuildWith is [applyHarness.rebuild] on a build whose applier is applier —
-// a probe applier, or one wrapping probe with rules of its own ([Deriver]) —
-// and it is the ONE place a restarting node's runner is built, so a case that
-// varies the applier inherits everything a restart is held to (the keyring
-// included) rather than a second copy of the deps that drifts from it.
+// rebuildWith is [applyHarness.rebuild] with applier (the probe, or one wrapping
+// it, as [Deriver] does). It is the ONE place a restarting node's runner is
+// built, so every variant inherits what a restart is held to, keyring included.
 func (h *applyHarness) rebuildWith(domain statelog.Domain, created time.Time,
 	applier statelog.Applier, probe *probeApplier) {
 
@@ -679,23 +646,12 @@ func (h *applyHarness) retainedCount() int64 {
 // observed: the checkpoint does not move, so [applyHarness.run] has nothing to
 // wait on.
 //
-// # Over is the loop's first fetch, never the count alone
-//
-// The count says none of what a startup does. On a runner retaining nothing it
-// is already want before the loop has run a line, so a case that then asked the
-// reanchor's void rules found the checkpoint they ride on unread and voiding
-// nothing. And on a runner releasing records it moves when the LAST released
-// record's transaction commits, while that record's gate counter and Committed
-// hook, the deferral refresh and the pass's own `reprocessed`/`gated` tally all
-// follow it. It waited for the count and then slept twenty milliseconds, so on
-// a loaded runner the cancel landed inside the pass, its next read failed on
-// the cancelled context, and the case read a tally the pass never reached — a
-// counter at zero reported as the applier forgetting a gated record. The loop
-// fetches only once [statelog.Runner.Run]'s startup has returned (the
-// checkpoint loaded with the reanchor's rules on it, the retained records
-// reprocessed, the Committed hook run for them), so its first fetch is the one
-// instant every effect of the startup is visible; a run that RETURNED instead
-// has finished its startup too.
+// Over is the loop's first fetch, never the count alone: the count can read
+// want before the loop has run a line, and moves when the last released record
+// commits, ahead of its gate counter, Committed hook and the pass's tally. The
+// loop fetches only once [statelog.Runner.Run]'s startup has returned, so its
+// first fetch is the one instant every startup effect is visible; a run that
+// RETURNED has finished its startup too.
 func (h *applyHarness) boot(want int64) error {
 	h.t.Helper()
 	ctx, cancel := context.WithTimeout(h.t.Context(), 20*time.Second)
@@ -715,10 +671,9 @@ func (h *applyHarness) boot(want int64) error {
 		}
 		select {
 		case err := <-errs:
-			// A STOP AT STARTUP is the runner's answer, which a case
-			// reads through [statelog.Runner.Stopped]; it is this
-			// harness's failure only where it left the retained table
-			// short of what the case expects.
+			// A STOP AT STARTUP is the runner's answer, read through
+			// [statelog.Runner.Stopped]; it fails here only if the
+			// retained table is not what the case expects.
 			if h.retainedCount() == want {
 				return nil
 			}
@@ -746,9 +701,8 @@ func (h *applyHarness) counter(name string) uint64 {
 	return total
 }
 
-// probeDDL is the probe domain's tables. probe_evictions is its eviction row
-// per node and log, as tracker_evictions is the tracker's — keyed so the read
-// every append makes of it is one row by its primary key.
+// probeDDL is the probe domain's tables. probe_evictions, like the tracker's
+// tracker_evictions, is keyed so every append's read of it is one row by key.
 const probeDDL = `
 CREATE TABLE probe_rows (
     position  INTEGER NOT NULL PRIMARY KEY,
@@ -842,12 +796,9 @@ func env(seq uint64, kind, id, opID string, version int, scope ...string) statel
 // THE ROWS, THE OPERATION ID, THE ANCHOR AND THE CHECKPOINT COMMIT TOGETHER,
 // and the acknowledgement is outside that transaction.
 //
-// This is the one contract every consumer gets for free and can break
-// invisibly. The nearest neighbour in this tree does the opposite for a
-// correct reason — it commits its batch and then writes its cursor, because a
-// crash between the two replays a batch it can always redeliver. That is false
-// for a log that gets trimmed: the replay it counts on is a replay of records
-// the trim has removed.
+// Committing the batch and then the cursor relies on redelivering the batch
+// after a crash between the two, and a trimmed log has removed the records that
+// replay counts on (package doc, "The checkpoint commits with the rows").
 func TestTheCheckpointCommitsWithTheRowsItCovers(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -858,9 +809,8 @@ func TestTheCheckpointCommitsWithTheRowsItCovers(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 
-	// Every record's row, its operation and its anchor are all present at
-	// the checkpoint. Reading them in one transaction is the assertion:
-	// the contract is that they are simultaneous, not that they exist.
+	// Read in one transaction: the contract is that they are simultaneous,
+	// not merely present.
 	var rows, ops, anchors, cursor int64
 	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM probe_rows`).Scan(&rows); err != nil {
@@ -892,11 +842,11 @@ func TestTheCheckpointCommitsWithTheRowsItCovers(t *testing.T) {
 // A RECORD THIS BUILD CANNOT DECODE IS RETAINED, and the checkpoint advances
 // past it.
 //
-// Retained rather than skipped, because the bytes are the only copy: a rolling
-// upgrade puts records on the wire the older half has never heard of, and
-// dropping them would make every upgrade an outage. The checkpoint advances
-// because the log CONSUMED the record — a checkpoint that stopped would
-// redeliver it for ever and never apply anything above it.
+// Retained, because the bytes are the only copy and a rolling upgrade puts
+// records on the wire the older half cannot read; the checkpoint advances
+// because the log CONSUMED the record, and one that stopped would redeliver it
+// for ever (package doc, "A record this build cannot decode is RETAINED, with
+// one exception").
 func TestARecordThisBuildCannotDecodeIsRetainedAtItsPosition(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -947,8 +897,7 @@ func TestARecordThisBuildCannotDecodeIsRetainedAtItsPosition(t *testing.T) {
 		t.Fatalf("the applier saw %d record(s), want 2 — the retained one must "+
 			"not reach it", got)
 	}
-	// AND ITS DELIVERY IS ACKNOWLEDGED. An unacknowledged retained record
-	// is redelivered for ever, and the checkpoint drops it every time.
+	// AND ITS DELIVERY IS ACKNOWLEDGED, or it is redelivered for ever.
 	if got := h.fetch.ackCount(2); got != 1 {
 		t.Fatalf("the retained record was acknowledged %d time(s), want 1", got)
 	}
@@ -957,18 +906,14 @@ func TestARecordThisBuildCannotDecodeIsRetainedAtItsPosition(t *testing.T) {
 	}
 }
 
-// A LATER RECORD ON STALE ROWS IS RETAINED TOO, and it is the half a
-// per-record decode check cannot see.
-//
-// Applying a record this build CAN read on top of rows a deferred record never
-// wrote produces state no other node holds — and nothing later can tell that
-// it did, because both nodes think they are current.
+// A LATER RECORD ON STALE ROWS IS RETAINED TOO: the half a per-record decode
+// check cannot see. Applied over rows a deferred record never wrote, it makes
+// state no other node holds, and both nodes think they are current.
 func TestARecordOverAStaleScopeIsRetainedRatherThanApplied(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
-	// A record this build cannot read, whose scope names the CONTAINER of
-	// the object the next record edits. There is nothing on the next
-	// record's own subject to say so.
+	// Unreadable, scoped to the CONTAINER of the object the next record
+	// edits; nothing on that record's own subject says so.
 	h.fetch.offer(1, env(1, "edit", "a", "op-1", 9, "project/ENG"))
 	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1, "project/ENG/object/b"))
 	h.fetch.offer(3, env(3, "edit", "c", "op-3", 1, "project/OPS/object/c"))
@@ -996,18 +941,13 @@ func TestARecordOverAStaleScopeIsRetainedRatherThanApplied(t *testing.T) {
 }
 
 // AN APPLIER IS TOLD WHAT A COMMITTED BATCH RETAINED, before it is told the
-// batch committed — and is told nothing of the kind about a batch that
-// retained nothing.
+// batch committed, and nothing of the kind about a batch that retained nothing.
 //
-// A retained record never reaches Apply, so an applier that says after a batch
-// what the batch moved says nothing about it — while every read its scope
-// covers became unknown at that commit. The identity estate is why this
-// exists: a session a newer peer's record revoked is refused by every REST
-// route on a node that retained the record, and a dashboard socket held open
-// on that session heard nothing until its applier was told. Both retain arms
-// count — a record this build cannot read, and a readable one whose scope that
-// record covers — and the hook comes BEFORE Committed, because an applier
-// folds it into what Committed hands over.
+// A retained record never reaches Apply, yet every read its scope covers became
+// unknown at that commit: a dashboard socket held open on a session a retained
+// record revoked hears of it only so. Both retain arms count (a record this
+// build cannot read, and a readable one in its scope), and the hook comes
+// BEFORE Committed because an applier folds it into what Committed hands over.
 //
 // Mutation: drop the hook call from the runner and the second batch reports
 // no retention.
@@ -1054,10 +994,9 @@ func TestAnApplierIsToldWhatABatchRetained(t *testing.T) {
 
 // A GATE DROPS A DURABLE RECORD, and the anchor and the checkpoint still move.
 //
-// A gate is a rule under which a durable record applies NOWHERE. Its position
-// is still the subject's last message, so the anchor must record it — a writer
-// forming its expectation from anything else re-reads the number that produced
-// its own rejection until it runs out of rounds.
+// A gated record applies nowhere, but its position is still the subject's last
+// message, so the anchor records it: a writer expecting anything else re-reads
+// the number that produced its own rejection until it runs out of rounds.
 func TestAGatedRecordWritesNoRowsAndStillMovesTheAnchor(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -1099,12 +1038,10 @@ func TestAGatedRecordWritesNoRowsAndStillMovesTheAnchor(t *testing.T) {
 
 // AN ANCHOR IS WRITTEN ONLY FOR AN ARBITRATED KIND.
 //
-// Arbitration is a property of the subject KIND rather than of the stream, and
-// a stream-wide rule is not merely wasteful: the framework's own barrier
-// shares ONE subject across every read in the company, so it would put an
-// upsert per read on a single hot row inside the transaction that holds this
-// store's only writer — and it would falsify the property that a barrier
-// writes zero rows and never enters the applier's budget at all.
+// Arbitration belongs to the subject KIND, not the stream: the barrier shares
+// ONE subject across every read in the company, so a stream-wide rule would
+// upsert one hot row per read inside the store's only writer, and a barrier
+// would no longer write zero rows or stay out of the applier's budget.
 func TestAnAnchorIsWrittenOnlyForAnArbitratedKind(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -1138,14 +1075,13 @@ func TestAnAnchorIsWrittenOnlyForAnArbitratedKind(t *testing.T) {
 	}
 }
 
-// AN APPLY GATE THIS BUILD CANNOT READ IS A STOP, and it is the one place the
-// retain rule inverts.
+// AN APPLY GATE THIS BUILD CANNOT READ IS A STOP: the one place the retain rule
+// inverts.
 //
-// A deferred gate does not postpone one record's effect on one node — it
-// silently LICENSES every record above it. An eviction deferred by the node it
-// evicts leaves that node's own eviction rows empty, which is the one fence
-// still fresh when its coordination path is wedged, so it passes every fence
-// it has and publishes records every peer drops.
+// A deferred gate LICENSES every record above it: an eviction deferred by the
+// node it evicts leaves that node's eviction rows empty, the one fence still
+// fresh when its coordination path is wedged, so it publishes records every
+// peer drops.
 func TestARecordThatInstallsAGateStopsRatherThanDefers(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, gatingDomain{})
@@ -1196,10 +1132,9 @@ func (gatingDomain) NodeGate(env statelog.Envelope) bool {
 
 // A REDELIVERY IS ACKNOWLEDGED AND APPLIED ONCE.
 //
-// The checkpoint is what makes an apply idempotent at a position, and a
-// duplicate arriving in the SAME run is the case the committed cursor cannot
-// catch: it is above the cursor the transaction started from, and at or below
-// something that transaction has already applied.
+// A duplicate in the SAME run is what the committed cursor cannot catch: it is
+// above the cursor the transaction started from, and at or below something
+// that transaction already applied.
 func TestARedeliveredRecordIsAppliedOnceAndAcknowledged(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -1238,9 +1173,9 @@ func TestARedeliveredRecordIsAppliedOnceAndAcknowledged(t *testing.T) {
 // A COMPACTED DOMAIN HAS NO CONTIGUITY TO TEST, and its deferred records key
 // on the SUBJECT.
 //
-// Its stream keeps one message per subject, so an ordinary write removes an
-// interior sequence — a strict loop would stall on the first one for ever, and
-// a positional retention would keep records the stream itself has superseded.
+// Its stream keeps one message per subject, so an ordinary write leaves a hole
+// a strict loop would stall on for ever, and a positional retention would keep
+// records the stream has superseded.
 func TestACompactedDomainStepsOverHolesAndSupersedesItsDeferrals(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, compactedDomain{})
@@ -1257,12 +1192,10 @@ func TestACompactedDomainStepsOverHolesAndSupersedesItsDeferrals(t *testing.T) {
 			`SELECT COUNT(*) FROM probe_log_deferred`).Scan(&count); err != nil {
 			return err
 		}
-		// THE SCOPE CHILD IS SUPERSEDED WITH ITS PARENT. There is no
-		// foreign key, so the child is found through the parent's own
-		// position — and a supersede that removed the parent first
-		// would leave rows no record owns, which every later probe
-		// reads as a deferral this node cannot clear: the read barrier
-		// waits on it and the writer's step 0 refuses to publish.
+		// THE SCOPE CHILD IS SUPERSEDED WITH ITS PARENT, found by the
+		// parent's position (no foreign key). An orphan reads as a
+		// deferral this node cannot clear: the read barrier waits on it
+		// and the writer's step 0 refuses to publish.
 		if err := tx.QueryRowContext(t.Context(), `
 			SELECT COUNT(*) FROM probe_deferred_scope s
 			WHERE NOT EXISTS (
@@ -1310,11 +1243,8 @@ func (compactedDomain) Stream() statelog.StreamSpec {
 
 // A WAITER IS WOKEN ONCE, BY THE COMMIT THAT SATISFIED IT.
 //
-// The shape this replaces broadcasts on every commit and wakes every waiter to
-// re-test its own target, with a goroutine per wait to turn a deadline into a
-// wake. At the rate this framework creates — a barrier per linearizable read,
-// and an applier that yields its batch to serve it — that is every waiter woken
-// per read.
+// Not a broadcast per commit that wakes every waiter to re-test its target:
+// with a barrier per linearizable read, that is every waiter woken per read.
 func TestAWaiterIsWokenOnceByItsOwnCommit(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -1346,8 +1276,8 @@ func TestAWaiterIsWokenOnceByItsOwnCommit(t *testing.T) {
 	cancel()
 	<-errs
 
-	// AND A STOPPED APPLIER RELEASES EVERYBODY. A waiter left blocked on
-	// one waits out its whole budget for a position nothing will reach.
+	// AND A STOPPED APPLIER RELEASES EVERYBODY, or each waits out its
+	// budget for a position nothing will reach.
 	if got := h.runner.Waiting(); got != 0 {
 		t.Fatalf("%d waiter(s) left behind by a stopped applier", got)
 	}
@@ -1355,19 +1285,16 @@ func TestAWaiterIsWokenOnceByItsOwnCommit(t *testing.T) {
 
 // THE ACKNOWLEDGEMENT IS BY IDENTITY AND THE TAIL IS CARRIED.
 //
-// Two defects wearing one shape. A run carries records that were applied,
-// records retained because this build cannot read them, records a gate
-// dropped and records already below the checkpoint — so acknowledging "as many
-// as were applied" acknowledges the WRONG ONES: the retained record's delivery
-// stays open and is redelivered for ever, and an applied record's is
-// acknowledged in its place. And after a budget ends a transaction early, the
-// rest of the run is neither acknowledged nor carried, so every
+// A run holds applied, retained, gated and already-checkpointed records, so
+// acknowledging "as many as were applied" acknowledges the WRONG ONES and the
+// retained record is redelivered for ever. And when a budget ends a
+// transaction early, the rest of the run must be carried, or every
 // budget-bounded transaction leaves a hole the loop waits out.
 func TestAckIsByIdentityAndTheTailIsCarried(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
 	// Each record costs most of the row budget, so the transaction ends
-	// after the second one — at a RECORD boundary, never inside a commit.
+	// after the second, at a RECORD boundary.
 	h.applier.rowsPer = statelog.ApplyTxRowBudget/2 + 1
 	h.applier.gate = statelog.ReasonDeleted
 	h.applier.gated[3] = true
@@ -1395,8 +1322,8 @@ func TestAckIsByIdentityAndTheTailIsCarried(t *testing.T) {
 			"break must be carried into the next transaction rather than "+
 			"dropped", got)
 	}
-	// AND THE BUDGET ACTUALLY BOUND SOMETHING. A case that never reaches
-	// the break is a case that asserts nothing about the tail.
+	// AND THE BUDGET BOUND SOMETHING: a case that never reaches the break
+	// asserts nothing about the tail.
 	if got := len(h.applier.seen()); got != 3 {
 		t.Fatalf("the applier saw %d record(s), want 3 — one retained and one "+
 			"gated must not reach it", got)
@@ -1405,10 +1332,8 @@ func TestAckIsByIdentityAndTheTailIsCarried(t *testing.T) {
 
 // A HOLE IN A STRICT LOG IS WAITED OUT, NOT STEPPED OVER.
 //
-// A log is contiguous by construction, so a hole is a redelivery in flight
-// rather than the stream's own doing. Applying past it produces state no other
-// node holds — and nothing later can tell that it did, because the checkpoint
-// moved and both nodes think they are current.
+// A log is contiguous, so a hole is a redelivery in flight. Applying past it
+// makes state no other node holds, which the moved checkpoint then hides.
 func TestAStrictLoopWaitsForAHoleRatherThanApplyingPastIt(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -1431,10 +1356,8 @@ func TestAStrictLoopWaitsForAHoleRatherThanApplyingPastIt(t *testing.T) {
 		t.Fatalf("the checkpoint is at %d, want 1 — a record above a hole must "+
 			"not be applied", got)
 	}
-	// Steady state: it must NOT advance to 3 while 2 is missing, across two
-	// more fetches the loop has answered and handled with the hole still
-	// open. A sleep here watched nothing on a runner that let no fetch
-	// happen during it.
+	// It must NOT advance to 3 while 2 is missing, across two more fetches
+	// answered and handled with the hole open ([probeFetch.awaitAnswered]).
 	h.fetch.awaitAnswered(t, 2, "two fetches with the hole open")
 	if got := h.runner.Committed().Seq; got != 1 {
 		cancel()
@@ -1470,15 +1393,11 @@ func TestAStrictLoopWaitsForAHoleRatherThanApplyingPastIt(t *testing.T) {
 // AN APPLIER'S FAILURE ON ONE RECORD DOES NOT MOVE THE CHECKPOINT, AND DOES
 // NOT END THE LOOP.
 //
-// The transaction rolls back, so the rows, the anchor, the operation id and
-// the checkpoint all go back together — which is the whole point of committing
-// them together, and the property a node "can only be behind, never
-// inconsistent" rests on. And the loop retries the same run in place: a
-// failure that is not a stop is a disk that refused, a broker that did not
-// answer, an applier that errored — none of which says this node cannot run
-// the company's records, and a loop that returned on one of them left the
-// domain dead for the life of the process. Once the failure clears, both
-// records apply.
+// The rollback takes the rows, anchor, operation id and checkpoint back
+// together: a node can be behind, never inconsistent. And the loop retries the
+// run in place: a failure that is not a stop says nothing about whether this
+// node can run the company's records, and returning on one leaves the domain
+// dead for the life of the process.
 func TestAFailedApplyLeavesNothingBehind(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -1533,9 +1452,8 @@ func TestAFailedApplyLeavesNothingBehind(t *testing.T) {
 		t.Fatalf("rows=%d anchors=%d after a rolled-back transaction, want 0 — "+
 			"a node can be behind and must never be inconsistent", rows, anchors)
 	}
-	// NOTHING IS ACKNOWLEDGED either: the acknowledgement is outside the
-	// transaction and after it, so a rollback leaves the deliveries open
-	// for a redelivery this node can apply.
+	// NOTHING IS ACKNOWLEDGED: acknowledgement follows the commit, so a
+	// rollback leaves the deliveries open.
 	if len(h.fetch.ackedAll()) != 0 {
 		t.Fatalf("%d delivery(ies) acknowledged for a transaction that rolled "+
 			"back", len(h.fetch.ackedAll()))
@@ -1571,10 +1489,9 @@ func TestAFailedApplyLeavesNothingBehind(t *testing.T) {
 
 // A BROKER THAT DOES NOT ANSWER IS RETRIED, NOT RETURNED FROM.
 //
-// A fetch error was the loop's exit: one timeout at the wrong moment and the
-// domain's applier was gone until the process restarted, with the first
-// symptom a node that had lost its seats. A blip is waited out on a widening
-// pause and the loop carries on from where it was.
+// Returning would leave the domain without an applier until the process
+// restarts, first seen as a node that lost its seats. A blip is waited out on a
+// widening pause and the loop carries on from where it was.
 func TestABrokerBlipDoesNotEndTheApplier(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -1622,9 +1539,8 @@ func TestTheRetryPauseIsBoundedAndTheBudgetOutlastsSeveralOfIt(t *testing.T) {
 // APPLY IS STRICTLY BY SEQUENCE ACROSS TRANSACTION BOUNDARIES.
 //
 // The budget splits a batch at a RECORD boundary and the next transaction
-// resumes at the next sequence with no re-sorting — which is what makes "two
-// nodes at one checkpoint hold the same rows" a statement about the log's
-// order rather than about how either node happened to batch it.
+// resumes at the next sequence with no re-sorting, so "two nodes at one
+// checkpoint hold the same rows" is about the log's order, not their batching.
 func TestApplyIsStrictlyBySequenceAcrossTransactionBoundaries(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -1650,8 +1566,7 @@ func TestApplyIsStrictlyBySequenceAcrossTransactionBoundaries(t *testing.T) {
 				"place the order may change", seen)
 		}
 	}
-	// AND IT REALLY DID SPLIT. A case that fitted everything in one
-	// transaction asserts nothing about a boundary.
+	// AND IT DID SPLIT, or this asserts nothing about a boundary.
 	h.applier.mu.Lock()
 	commits := h.applier.commits
 	h.applier.mu.Unlock()
@@ -1666,12 +1581,9 @@ func TestApplyIsStrictlyBySequenceAcrossTransactionBoundaries(t *testing.T) {
 // AN EPOCH THAT MOVES REACHES THE APPLIER AT ITS NEXT BATCH, WITH NO RESTART.
 //
 // The runner is built once, at boot, and the epoch moves with every
-// activation. It was handed the epoch as a VALUE, so every batch for the life
-// of the process applied under the boot company's — a node that booted with no
-// company under none at all — and a revision that moved a key an applier reads
-// (the tracker's inbox retention) reached the applier at the next restart,
-// while two nodes that had restarted at different times applied one record
-// under two epochs for as long as both ran.
+// activation. An epoch handed as a VALUE applies every batch under the boot
+// company's: a revision reaches the applier only at a restart, and two nodes
+// restarted at different times apply one record under two epochs.
 //
 // ONE RUN spans both records, because a restart between them is exactly what
 // the case must not need. Mutation: read the source once, in NewRunner, and
@@ -1728,19 +1640,13 @@ func TestAChangedEpochReachesTheApplierWithNoRestart(t *testing.T) {
 	}
 }
 
-// THE OPERATION LEDGER IS SWEPT, and nothing swept it.
+// THE OPERATION LEDGER IS SWEPT.
 //
-// Every `<domain>_ops` migration says the table is swept and ships
-// `<domain>_ops_swept_idx` for the range delete, and no code anywhere deleted
-// a row: one per applied record, kept for ever, on every data node. What makes
-// it invisible rather than loud is that the table's only reader asks "did my
-// operation land", which nobody asks about a month-old op id — so the answers
-// stay correct while the file grows.
-//
-// The horizon is the CLIENT'S rather than the machine's: a seat carries an op
-// id forward and re-asks on its next wake, hours or a weekend later, and an op
-// id that outlives its row resolves `unknown` rather than `applied` — which
-// sends a turn to re-decide work it already did.
+// It holds a row per applied record on every data node, and its only reader
+// asks "did my operation land", so an unswept ledger stays correct while the
+// file grows. The horizon is the CLIENT'S: a seat re-asks about an op id on its
+// next wake, hours or a weekend later, and an op id that outlived its row
+// resolves `unknown`, not `applied`, sending a turn to re-decide done work.
 func TestTheOperationLedgerIsSwept(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -1756,9 +1662,8 @@ func TestTheOperationLedgerIsSwept(t *testing.T) {
 			held, err)
 	}
 
-	// A CUTOFF IN THE FUTURE sweeps everything, which is the arithmetic
-	// rather than the horizon: what is under test is that the delete
-	// happens and reports what it did.
+	// A CUTOFF IN THE FUTURE sweeps everything: under test is that the
+	// delete happens and reports what it did.
 	swept, err := h.runner.PurgeOps(t.Context(), time.Now().Add(time.Hour))
 	if err != nil {
 		t.Fatalf("PurgeOps: %v", err)
@@ -1771,9 +1676,8 @@ func TestTheOperationLedgerIsSwept(t *testing.T) {
 			held, err)
 	}
 
-	// AND THE CONTROL, because a sweep that deletes everything is not a
-	// sweep — it is a truncate with a cutoff argument. A row inside the
-	// horizon stays.
+	// AND THE CONTROL: a row inside the horizon stays, or the sweep is a
+	// truncate.
 	h.fetch.offer(7, env(7, "edit", "o7", "op-7", 1))
 	if err := h.run(7); err != nil {
 		t.Fatalf("run: %v", err)
@@ -1794,17 +1698,15 @@ func TestTheOperationLedgerIsSwept(t *testing.T) {
 
 // A BACKLOG WIDER THAN ONE BATCH STILL DRAINS.
 //
-// The sweep is batched because the applier's connection is pinned and its
-// commits are the same file's: one statement over a month of rows holds the
-// writer for as long as it takes, and the backlog case — a node returning from
-// a long absence — is exactly the one that matters. A loop that stopped after
-// its first batch would look identical on a small table and leave the month
-// behind on the one node that had it.
+// The sweep is batched because it shares the file with the applier's commits,
+// and one statement over a month of rows holds the writer throughout. A loop
+// that stopped after one batch looks identical on a small table and leaves the
+// month behind on a node returning from a long absence.
 func TestTheOperationSweepDrainsABacklogWiderThanOneBatch(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
-	// Written directly: applying enough records to cross the batch is a
-	// minute of broker round trips to test one loop.
+	// Seeded directly: applying that many records is a minute of round
+	// trips.
 	rows := statelog.OpsPurgeBatch + 7
 	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		for i := range rows {
@@ -1842,17 +1744,11 @@ func TestTheOperationSweepDrainsABacklogWiderThanOneBatch(t *testing.T) {
 
 // A CLEAN APPLY COUNTS NO TRANSACTION ABORTS.
 //
-// `apply.tx.aborts` is the number that says whether an apply's body is ever
-// run twice on the operator's own hardware, and it reads zero by
-// construction: the store's write transactions hold the file's lock from
-// their BEGIN, so nothing committing elsewhere in the file can abort one. A
-// non-zero count means the retry budget is being spent rather than held in
-// reserve.
-//
-// An instrument that recorded on every run would be useless in the direction
-// that matters — the reserve would read as spent on a healthy fleet — and it
-// is one off-by-one away, because what the applier counts is its own re-runs
-// and a first attempt is not a retry.
+// `apply.tx.aborts` says whether an apply's body ever runs twice, and reads
+// zero by construction: the store's write transactions hold the file's lock
+// from BEGIN, so nothing elsewhere can abort one. Counting every run would read
+// the retry reserve as spent on a healthy fleet, one off-by-one away: a first
+// attempt is not a retry.
 func TestApplyTxAbortsAreCounted(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -1868,9 +1764,7 @@ func TestApplyTxAbortsAreCounted(t *testing.T) {
 			"budget reads as spent on a fleet that has not spent any of it",
 			got)
 	}
-	// THE CONTROL, on the same recorder and the same instrument: the
-	// assertion above passes identically when nothing is wired at all,
-	// and this is what separates the two.
+	// THE CONTROL: the assertion above passes too with nothing wired.
 	if got := h.counter(metrics.StatelogApplyRecords); got == 0 {
 		t.Error("the applier recorded no records at all, so this recorder is " +
 			"not connected and the assertion above proves nothing")
@@ -1879,15 +1773,11 @@ func TestApplyTxAbortsAreCounted(t *testing.T) {
 
 // A RE-RUN APPLY TRANSACTION SAYS WHAT IT SAW ONCE.
 //
-// The store runs an apply's body again when an attempt fails transiently, and
-// the rows it wrote roll back with it — but a counter bumped and a line logged
-// from inside the body do not. So a record retained as unverifiable, or
-// dropped by a gate, on the attempt that was abandoned and again on the one
-// that committed was counted twice, and `records.unverifiable` and
-// `records.gated` are what the alarm table reads. This stages the re-run the
-// healthy store never produces: the LAST record of the run fails its first
-// apply the way a lost lock does, so the whole body — the unverifiable record
-// and the gated one included — runs twice.
+// The store re-runs an apply's body on a transient failure; its rows roll back,
+// but a counter bumped or a line logged inside it does not, and the alarm table
+// reads `records.unverifiable` and `records.gated`. The LAST record of the run
+// fails its first apply as a lost lock does, so the whole body, the
+// unverifiable and the gated record included, runs twice.
 func TestARerunApplySaysWhatItSawOnce(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -1923,11 +1813,9 @@ func TestARerunApplySaysWhatItSawOnce(t *testing.T) {
 // A RECORD A GATE DROPPED IS COUNTED ONCE, WHEN ITS DROP COMMITS — however
 // many times the store runs the transaction that drops it.
 //
-// The store runs a transaction's body again when an attempt fails transiently,
-// and the gate is asked again with it. Reported where the gate is asked, one
-// dropped record was counted and logged once per attempt, on the counter the
-// records_gated alarm reads: the alarm said two records were lost where one
-// was.
+// A re-run body asks the gate again, so counted where the gate is asked, one
+// dropped record counts once per attempt on the counter the records_gated
+// alarm reads.
 func TestAGatedRecordIsCountedOnceHoweverOftenItsTransactionRuns(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -1940,9 +1828,8 @@ func TestAGatedRecordIsCountedOnceHoweverOftenItsTransactionRuns(t *testing.T) {
 	if err := h.run(2); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	// THE CONTROL: the body did run twice over the dropped record. Without
-	// it, a batch that happened to split between the two records passes the
-	// assertion below having re-run nothing.
+	// THE CONTROL: the body ran twice over the dropped record; a batch split
+	// between the two would pass below having re-run nothing.
 	h.applier.mu.Lock()
 	asked := h.applier.asked[1]
 	h.applier.mu.Unlock()
@@ -1968,14 +1855,12 @@ func TestAGatedRecordIsCountedOnceHoweverOftenItsTransactionRuns(t *testing.T) {
 // A RETAINED RECORD A GATE DROPS WHEN IT IS REPROCESSED IS GATED, NOT
 // REPROCESSED — counted, logged and released exactly as the live loop drops it.
 //
-// A record is retained by a build that cannot read it, so that build never
-// asked a gate about it; the build that can read it asks at its next boot, and
-// a gate may drop it then — the writer evicted since, a generation a reanchor
-// voided, an object deleted. That drop wrote no row, so a reprocess tally that
-// took every released record for an applied one reported rows this node does
-// not hold, and the records-gated counter, which is a dropped record's only
-// witness, never heard of it. What the gated record held back by scope is
-// released with it, since nothing applied is left to order it behind.
+// The retaining build never asked a gate about the record; the build that reads
+// it asks at its next boot, and the gate may drop it (writer evicted since,
+// generation voided by a reanchor, object deleted). That drop writes no row, so
+// a tally of it as reprocessed reports rows this node lacks, and the
+// records-gated counter is a dropped record's only witness. What it held back
+// by scope is released with it: nothing applied is left to order it behind.
 func TestAReprocessedRecordAGateDropsIsCountedGated(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -2062,14 +1947,11 @@ func probeRows(t *testing.T, h *applyHarness) []int64 {
 	return out
 }
 
-// TestTheApplierMeasuresItsOwnDrain is the input three answers divide a record
-// backlog by to state a TIME: a bounded stale read's "am I inside the caller's
-// staleness", a refusal's `retry_after_seconds`, and the apply-lag alarm.
-//
-// Unmeasured, all three fall back to one record per second — so a node two
-// thousand records behind, which is about a second of real work, reports
-// itself half an hour behind, refuses reads it should have served and fires an
-// alarm nobody can act on.
+// TestTheApplierMeasuresItsOwnDrain: the drain is what three answers divide a
+// backlog by to state a TIME (a bounded stale read's staleness, a refusal's
+// `retry_after_seconds`, the apply-lag alarm). Unmeasured, all three fall back
+// to one record per second, so a node a second of work behind reports half an
+// hour, refuses reads it should serve and fires an alarm nobody can act on.
 func TestTheApplierMeasuresItsOwnDrain(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -2091,23 +1973,19 @@ func TestTheApplierMeasuresItsOwnDrain(t *testing.T) {
 			"rate makes every lag figure in the engine a count in disguise",
 			drain)
 	}
-	// A SANITY BOUND rather than a threshold: what is being asserted is
-	// that the figure is a RATE — records divided by the time they took —
-	// and not a count, a constant, or the one-per-second fallback.
+	// A SANITY BOUND, not a threshold: the figure is a RATE, not a count, a
+	// constant or the one-per-second fallback.
 	if drain < 1 {
 		t.Fatalf("the drain is %v records/second over twenty records applied in "+
 			"a test — that is the unmeasured fallback rather than a "+
 			"measurement", drain)
 	}
 
-	// AND THE COMMIT RATE BESIDE IT, which is a different resource: rows
-	// per second is progress, commits per second is the FSYNC rate a
-	// device's write budget is spent by. They move independently by
-	// design — a run is filled toward the transaction budget precisely so
-	// a barrier-heavy stream commits once per two dozen records — so a
-	// node whose rows/s is healthy and whose commits/s has doubled is
-	// doing twice the disk work for the same progress, and neither figure
-	// alone can say it.
+	// AND THE COMMIT RATE BESIDE IT: rows per second is progress, commits
+	// per second the FSYNC rate a device's write budget is spent by. They
+	// move independently (a run fills toward the transaction budget), so
+	// a doubled commit rate at a healthy row rate is twice the disk work
+	// for the same progress, which neither figure alone shows.
 	commits := h.runner.Commits()
 	if commits <= 0 {
 		t.Fatalf("after applying twenty records the commit rate is %v, so the "+
@@ -2123,16 +2001,11 @@ func TestTheApplierMeasuresItsOwnDrain(t *testing.T) {
 
 // A PARTIAL RUN COMMITS WHEN THE BROKER HANDS OVER NOTHING.
 //
-// The loop fills a run toward its budget while records are pending, and the
-// broker reports records pending for as long as it has not DELIVERED them —
-// which includes records it is deliberately withholding because the consumer
-// is at its in-flight ceiling. That ceiling is reached by exactly the records
-// the run holds, and it clears only when they are acknowledged, which happens
-// only after the run commits. A loop that kept pulling while anything was
-// pending was therefore waiting on its own commit, for ever: measured on the
-// embedded broker, a 257-record backlog stopped a node applying anything at
-// all. The linger is the bound: a pull that returns nothing inside it closes
-// the run.
+// The broker reports records pending until it DELIVERS them, including those
+// it withholds at the consumer's in-flight ceiling; the run's own records fill
+// that ceiling and are acknowledged only after it commits. So a loop that
+// pulled while anything was pending would wait on its own commit for ever. The
+// linger bounds it: a pull that returns nothing inside it closes the run.
 func TestAPartialRunCommitsWhenTheBrokerHandsOverNothing(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -2164,11 +2037,9 @@ func TestAPartialRunCommitsWhenTheBrokerHandsOverNothing(t *testing.T) {
 			"broker will not deliver until the run commits waits for ever",
 			got, 4*statelog.ApplyLinger)
 	}
-	// THE ACKNOWLEDGEMENTS FOLLOW THE COMMIT, never precede it — the
-	// checkpoint is the authority and an acknowledgement the weaker number
-	// — so the run's position moves first and they land a moment after:
-	// read at the instant the checkpoint moved, they were sometimes not
-	// there yet. So they are waited for, and then counted exactly.
+	// THE ACKNOWLEDGEMENTS FOLLOW THE COMMIT (the checkpoint is the
+	// authority), so they land a moment after the checkpoint moves: waited
+	// for, then counted exactly.
 	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) && (h.fetch.ackCount(1) == 0 || h.fetch.ackCount(2) == 0) {
 		time.Sleep(2 * time.Millisecond)
@@ -2208,16 +2079,11 @@ func (d upgradedDomain) RecordVersion() int { return d.reads }
 // A RETAINED RECORD IS APPLIED BY THE BUILD THAT CAN READ IT, at its next
 // boot, in log order, and released in the transaction that applied it.
 //
-// This is the second half of the retain rule and the half that had no code:
-// a record this build cannot decode is kept byte for byte so that a build
-// which can decode it applies it later. Without the later, a node that sat
-// through a rolling upgrade kept its deferrals after it was upgraded — refusing
-// every read and write about the objects they covered, for ever, and naming a
-// record version it was already running.
-//
-// The record retained BECAUSE its scope met the undecodable one is applied
-// too, and after it: it was decodable all along, and what kept it back was
-// order.
+// Otherwise a node upgraded through a rolling upgrade keeps its deferrals,
+// refusing every read and write about the objects they cover, for ever, and
+// naming a record version it already runs. The record retained BECAUSE its
+// scope met the undecodable one applies too, after it: it was decodable all
+// along, and what kept it back was order.
 func TestARetainedRecordIsAppliedByTheBuildThatCanReadIt(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -2328,19 +2194,14 @@ func TestAReprocessKeepsWhatAnUnreadableRecordStillCovers(t *testing.T) {
 	}
 }
 
-// A RECREATED STREAM STOPS THE APPLIER, and it is the stream's own creation
-// instant that says so.
+// A RECREATED STREAM STOPS THE APPLIER, on the stream's own creation instant.
 //
-// A stream deleted and remade restarts its sequences at one. Every position
-// this node holds then names a number space that no longer exists, and a
-// consumer resumed from the checkpoint waits for a sequence the new stream
-// reaches only by coincidence — reporting nothing pending, looking perfectly
-// caught up, applying none of the new stream's records. The instant is the
-// only thing that can notice: the sequences are plausible and an empty stream
-// and an emptied one have the same count.
-//
-// Until the engine passed the LIVE instant, the loop compared the checkpoint
-// row's own recorded value against itself and this could never fire.
+// A remade stream restarts its sequences at one, so every position this node
+// holds names a number space that no longer exists, and a consumer resumed from
+// the checkpoint looks caught up while applying none of the new records. Only
+// the instant can notice: the sequences are plausible, and an empty stream and
+// an emptied one have the same count. It must be the LIVE instant: the
+// checkpoint row's own value compared with itself never fires.
 func TestARecreatedStreamStopsTheApplier(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -2352,8 +2213,8 @@ func TestARecreatedStreamStopsTheApplier(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 
-	// THE SAME STREAM, reported at nanosecond precision against a row that
-	// keeps microseconds: the same stream, and it must read as such.
+	// THE SAME STREAM at nanosecond precision, against a row that keeps
+	// microseconds, must read as the same.
 	h.rebuild(probeDomain{}, born.Add(100*time.Nanosecond))
 	if err := h.boot(0); err != nil {
 		t.Fatalf("the same stream, reported at a finer resolution, was refused: %v", err)
@@ -2378,10 +2239,9 @@ func TestARecreatedStreamStopsTheApplier(t *testing.T) {
 		t.Fatal("the applier does not report itself stopped, so its health would " +
 			"not refuse and its seats would not move")
 	}
-	// AND THE PUBLISHER BESIDE IT KNOWS: a stop ends this loop, and the
-	// write path never reads a loop's error — it asks the identity, which
-	// has to carry this same finding or every write goes on landing on a
-	// log this node's rows are not keyed to.
+	// AND THE PUBLISHER KNOWS: the write path asks the identity, never the
+	// loop's error, so the identity carries the finding or writes go on
+	// landing on a log this node's rows are not keyed to.
 	if identity := h.runner.StreamIdentity(); !errors.Is(identity, statelog.ErrStreamRecreated) {
 		t.Fatalf("StreamIdentity after the boot found a recreated stream = %v, "+
 			"want %v — the writes would not refuse", identity, statelog.ErrStreamRecreated)
@@ -2397,14 +2257,12 @@ func TestARecreatedStreamStopsTheApplier(t *testing.T) {
 // A LIVE READING OF A REBUILT LOG IS THE RUNNER'S VERDICT, and it outlives the
 // loop that was running when it was taken.
 //
-// The boot compares the checkpoint once; a stream deleted and rebuilt under a
-// running node is seen only by a later read of the stream's state, and every
-// such read hands its instant here. Three properties make that the one answer
-// the reads and the writes can share: a reading of the SAME stream at the
-// broker's finer resolution establishes nothing, a reading that could not be
-// taken establishes nothing, and a rebuild, once established, is not cleared by
-// a run that starts again — a stop is a verdict about rows an adoption may
-// replace, and this is a verdict about the positions the runner was built on.
+// The boot compares the checkpoint once; a stream rebuilt under a running node
+// shows only in a later reading, and every one is handed here, so the reads and
+// the writes share one answer. A reading of the SAME stream at the broker's
+// finer resolution, or one that could not be taken, establishes nothing; and a
+// re-run does not clear an established rebuild: unlike a stop, about rows an
+// adoption may replace, it is about the positions the runner was built on.
 func TestALiveReadingOfARebuiltLogIsTheRunnersVerdict(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -2447,19 +2305,15 @@ func TestALiveReadingOfARebuiltLogIsTheRunnersVerdict(t *testing.T) {
 		}
 	}
 
-	// ESTABLISHED ONCE: a second reading reports nothing new, so the
-	// line that names the rebuild is written once rather than per beat.
+	// ESTABLISHED ONCE, so the line naming the rebuild is written once,
+	// not per beat.
 	if h.runner.ObserveStream(rebuiltAt) {
 		t.Fatal("a second reading of the same rebuild reported it again")
 	}
-	// AND A RUN THAT STARTS AGAIN DOES NOT FORGET IT. The loop restarts
-	// after an adoption; the positions it was built on do not change.
-	//
-	// NOR DOES IT APPLY FROM THE REBUILT STREAM. The checkpoint row still
-	// names the instant the runner was built with, so the boot comparison
-	// passes — and a loop that resumed would apply the rebuilt stream's
-	// records into rows keyed to the one before it. It stops instead, on
-	// the verdict it already holds, exactly as a boot on that stream does.
+	// AND A RE-RUN NEITHER FORGETS IT NOR APPLIES FROM THE REBUILT STREAM:
+	// the checkpoint row still names the instant the runner was built with,
+	// so the boot comparison passes, and a resumed loop would apply the new
+	// stream's records into rows keyed to the old. It stops on the verdict.
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	if err := h.runner.Run(ctx); !errors.Is(err, statelog.ErrStopped) ||
@@ -2477,27 +2331,17 @@ func TestALiveReadingOfARebuiltLogIsTheRunnersVerdict(t *testing.T) {
 	}
 }
 
-// A CHECKPOINT PAST THE LOG'S END IS THE RUNNER'S VERDICT FOR AS LONG AS THE
-// END STAYS BELOW IT — and no longer, and not on a reading that says nothing
-// about it.
+// A CHECKPOINT PAST THE LOG'S END IS THE RUNNER'S VERDICT WHILE THE END STAYS
+// BELOW IT. Only that shows a broker restored from an older copy (it keeps its
+// creation instant), and fence 0 refuses every write on the verdict:
 //
-// A broker restored from an older copy keeps its creation instant, so the
-// rebuild check above never fires, and the only thing that shows it is the log
-// ending below this node's checkpoint. Fence 0 refuses every write on this
-// verdict, so each of its rules is a way a node either goes on publishing
-// records its own applier has already passed, or stops writing for good:
-//
-//   - a reading AT the end is a caught-up node, and one past it a busy one;
-//     neither establishes anything;
-//   - a reading paired with a LOWER checkpoint — the zero a runner reports
-//     before its loop has loaded the row, which is what the first heartbeat of
-//     a boot reads — does not clear it;
-//   - a run that starts again over the same checkpoint keeps it;
-//   - an end that has reached the checkpoint clears it, because an end below
-//     it may be one member's stale answer, and a verdict nothing could clear
-//     would stop a healthy node's writes over one election;
-//   - a checkpoint the runner no longer stands at — a re-run over an adopted
-//     snapshot — drops it.
+//   - a reading AT the end (caught up) or past it (busy) establishes nothing;
+//   - one paired with the zero checkpoint a boot's first heartbeat reads,
+//     before the loop loads its row, does not clear it;
+//   - a re-run over the same checkpoint keeps it;
+//   - an end reaching the checkpoint clears it, so one stale member's answer
+//     cannot stop a healthy node's writes for good;
+//   - a checkpoint the runner left (an adopted snapshot) drops it.
 func TestACheckpointPastTheEndIsTheRunnersVerdictWhileTheEndStaysBelow(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -2557,8 +2401,8 @@ func TestACheckpointPastTheEndIsTheRunnersVerdictWhileTheEndStaysBelow(t *testin
 			"would reopen the writes a restored broker must refuse")
 	}
 
-	// A RUN THAT STARTS AGAIN OVER THE SAME CHECKPOINT keeps it: the
-	// record it applies is only there to prove the loop loaded the row.
+	// A RE-RUN OVER THE SAME CHECKPOINT keeps it; its record only proves
+	// the loop loaded the row.
 	h.fetch.offer(4, env(4, "edit", "4", "op-4", 1))
 	if err := h.run(4); err != nil {
 		t.Fatalf("run again: %v", err)
@@ -2580,8 +2424,8 @@ func TestACheckpointPastTheEndIsTheRunnersVerdictWhileTheEndStaysBelow(t *testin
 	}
 
 	// A CHECKPOINT THIS RUNNER NO LONGER STANDS AT drops the verdict: the
-	// row is rewritten to a donor's position below the log's end, naming the
-	// log's own record there, as an adoption leaves it, and the loop loads it.
+	// row is rewritten, as an adoption leaves it, to a donor's position
+	// below the log's end naming the log's own record there.
 	if established, _ := h.runner.ObserveEnd(h.runner.Stance(), 2); !established {
 		t.Fatal("the verdict was not re-established for the adoption case")
 	}
@@ -2633,11 +2477,10 @@ func TestARebuildOutranksACheckpointPastTheEnd(t *testing.T) {
 
 // A RUNNER RUNS AGAIN FROM THE CHECKPOINT IT NOW HOLDS.
 //
-// An adoption on a running node ends every apply loop, replaces the file, and
-// starts the loops again — the same runners, because every subsystem holds
-// them. So Run has to be re-enterable: it resumes from whatever checkpoint the
-// file keeps, and a stop from the previous run is a verdict about rows this
-// node no longer has rather than something to remember.
+// An adoption ends every apply loop, replaces the file and restarts the loops
+// on the same runners, which every subsystem holds. So Run is re-enterable: it
+// resumes from the file's checkpoint, and the last run's stop is about rows
+// this node no longer has.
 func TestARunnerRunsAgainFromTheCheckpointItNowHolds(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -2660,9 +2503,8 @@ func TestARunnerRunsAgainFromTheCheckpointItNowHolds(t *testing.T) {
 	}
 	runCtx, stopRun := context.WithCancel(t.Context())
 	errs := make(chan error, 1)
-	// STOPPED ONCE IT IS RUNNING: a loop fetches only once its startup is
-	// done, so its first fetch is the loop the waiter is waiting on. A
-	// sleep here stopped, on a loaded runner, a run that had not started.
+	// STOPPED ONCE IT IS RUNNING: a loop fetches only after its startup,
+	// so its first fetch marks the loop the waiter waits on.
 	fetched := h.fetch.fetchCount()
 	go func() { errs <- h.runner.Run(runCtx) }()
 	for h.fetch.fetchCount() <= fetched {
@@ -2698,26 +2540,19 @@ func TestARunnerRunsAgainFromTheCheckpointItNowHolds(t *testing.T) {
 
 // A LATE REDELIVERY MUST NOT MOVE THE CHECKPOINT BACKWARDS.
 //
-// [reorderBuffer.admit] deliberately hands a record already below the run's
-// high-water mark straight to the caller, because a redelivery nothing
-// acknowledges is redelivered for ever. A run therefore closes legitimately as
-// [1, 2, 1] — and the checkpoint is the HIGHEST position it applied, never the
-// tail.
-//
-// Checkpointing the tail wrote 1 in the same transaction that committed 2's
-// rows: a cursor understating its own database, which is the one thing the
-// checkpoint exists to rule out. It is not a self-correcting slip either. The
-// waiters release through the same value, so a linearizable read waiting for 2
-// is refused `behind` over rows this node already holds; and the next boot
-// resumes at 2 and re-applies a record whose anchor it already advanced past.
+// [reorderBuffer.admit] hands a record below the run's high-water mark straight
+// through, since an unacknowledged redelivery comes back for ever, so a run can
+// close as [1, 2, 1]: the checkpoint is the HIGHEST position applied, never the
+// tail. A tail checkpoint understates its own rows: a linearizable read waiting
+// for 2 is refused `behind`, and the next boot re-applies a record whose anchor
+// it already passed.
 func TestALateRedeliveryDoesNotRegressTheCheckpoint(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
 	h.fetch.offer(1, env(1, "object", "a", "op-1", 1))
 	h.fetch.offer(2, env(2, "object", "b", "op-2", 1))
-	// THE ACKNOWLEDGEMENT OF 1 WAS LOST, so the broker hands it back
-	// while the loop still holds 2 — in a later fetch, because a single
-	// batch is deduped on arrival and could never produce this run.
+	// THE ACKNOWLEDGEMENT OF 1 WAS LOST, so the broker hands it back while
+	// the loop holds 2, in a later fetch: one batch is deduped on arrival.
 	h.fetch.afterFetch(1, func() {
 		h.fetch.offer(1, env(1, "object", "a", "op-1", 1))
 	})
@@ -2727,9 +2562,8 @@ func TestALateRedeliveryDoesNotRegressTheCheckpoint(t *testing.T) {
 	errs := make(chan error, 1)
 	go func() { errs <- h.runner.Run(ctx) }()
 
-	// THE ACK IS THE SIGNAL THE RUN COMMITTED, and it happens whatever
-	// the checkpoint ended up saying — so a broken checkpoint fails these
-	// assertions promptly rather than waiting out a timeout.
+	// THE ACK SIGNALS THE COMMIT whatever the checkpoint says, so a broken
+	// checkpoint fails promptly rather than at a timeout.
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) && h.fetch.ackCount(2) == 0 {
 		select {
@@ -2756,8 +2590,7 @@ func TestALateRedeliveryDoesNotRegressTheCheckpoint(t *testing.T) {
 			"the checkpoint exists to rule out", at, found)
 	}
 	// AND THE REDELIVERY IS STILL ACKNOWLEDGED, which is why admit passes
-	// it through at all: dropping it to protect the checkpoint would
-	// leave the broker redelivering it for ever.
+	// it through: dropped, it would be redelivered for ever.
 	if got := h.fetch.ackCount(1); got != 2 {
 		t.Errorf("sequence 1 was acknowledged %d time(s), want 2 — the "+
 			"original delivery and the redelivery", got)
@@ -2765,9 +2598,8 @@ func TestALateRedeliveryDoesNotRegressTheCheckpoint(t *testing.T) {
 }
 
 // flakyEstate is a replicated estate whose connection cannot be pinned for the
-// first `refusals` attempts — a store that is momentarily unavailable, which is
-// what an adoption's close-and-reopen bracket and a refused transaction both
-// look like from the applier.
+// first `refusals` attempts: a store momentarily unavailable, as an adoption's
+// close-and-reopen or a refused transaction looks to the applier.
 type flakyEstate struct {
 	inner interface {
 		Read(context.Context, func(*sql.Tx) error) error
@@ -2812,18 +2644,11 @@ func (f *flakyEstate) pinAttempts() int {
 
 // A STORE THAT IS MOMENTARILY UNAVAILABLE AT STARTUP IS RETRIED, NOT FATAL.
 //
-// Pinning the connection, reading the checkpoint and reprocessing what an
-// earlier build retained are all database work, and all three used to sit
-// ABOVE the retry loop: a store that refused for a moment — the adoption
-// bracket between a close and a reopen, a refused transaction, a slow disk —
-// returned straight out of Run and left the domain with no applier for the
-// life of the process.
-//
-// Nothing restarted it and nothing reported it either. Stopped stayed nil and
-// no fault was recorded, so this node went on publishing a caught-up position
-// for a domain that would never apply another record — which is precisely the
-// failure the loop's retry design exists to rule out, reached through the door
-// above it.
+// Pinning the connection, reading the checkpoint and reprocessing retained
+// records are database work inside the retry loop: returning out of Run on a
+// momentary refusal (an adoption's bracket, a refused transaction, a slow disk)
+// leaves the domain with no applier for the life of the process, with Stopped
+// nil and no fault, so the node goes on publishing a caught-up position.
 func TestAStoreThatRefusesAtStartupIsRetried(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -2874,9 +2699,8 @@ func TestAStoreThatRefusesAtStartupIsRetried(t *testing.T) {
 	}
 }
 
-// probeSeal signs a fixture's record under the same keyring the harness
-// verifies with. It panics rather than returning an error: a fixture that
-// cannot sign is a broken test file, not a case.
+// probeSeal signs a fixture's record under the keyring the harness verifies
+// with, panicking: a fixture that cannot sign is a broken test file, not a case.
 func probeSeal(body []byte) []byte {
 	signer, err := recordseal.NewSigner(probeDomain{}.Name(), testRing())
 	if err != nil {
@@ -2888,13 +2712,12 @@ func probeSeal(body []byte) []byte {
 // ONE SUBJECT KIND'S LEDGER ROWS CAN BE SWEPT ON THEIR OWN HORIZON — and only
 // that kind's.
 //
-// A domain whose kind no slow client re-asks declares a shorter horizon for it
-// (the identity estate's sessions: an hour against the month), and that sweep
-// is a RANGE over the stored subject. A range is where the ways to be wrong
-// live, so each row below is one of them: the kind's own old rows go, its row
-// with no id goes, its recent row stays, and a kind whose name merely BEGINS
-// with this one's — the byte after the name is what a naive prefix test gets
-// wrong — stays, as does every other kind.
+// A kind no slow client re-asks about declares a shorter horizon (the identity
+// estate's sessions: an hour against the month), swept as a RANGE over the
+// stored subject. Each row is one way a range goes wrong: the kind's old rows
+// and its row with no id go; its recent row stays, as do every other kind and
+// one whose name merely BEGINS with this one's (the byte after the name is
+// what a naive prefix test gets wrong).
 func TestOneSubjectKindsLedgerRowsAreSweptOnTheirOwn(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -2950,13 +2773,10 @@ func TestOneSubjectKindsLedgerRowsAreSweptOnTheirOwn(t *testing.T) {
 // THE DRAIN IS THE APPLIER'S OWN OBSERVATION, AND IT IS A HISTORY.
 //
 // [statelog.Health.Drained] answers "have this node's rows ever been the whole
-// state", which no single reading of the lag can: the two were one bool,
-// derived per heartbeat from `lag == 0`, and every reader that wanted the
-// history got the instant instead — a solo node released all seven of its
-// seats on each burst of tracker writes, because the record it had not applied
-// yet made that bool false for one beat. The loop is the only witness that
-// cannot miss a drain: the fetch the broker answers with nothing, while the
-// loop holds nothing itself, IS one.
+// state", which no single lag reading can: derived per heartbeat from
+// `lag == 0`, one unapplied record makes it false for a beat, and a solo node
+// releases its seats on every burst of writes. The loop is the only witness
+// that cannot miss a drain: an empty fetch while it holds nothing IS one.
 func TestTheDrainLatchIsTheApplierSOwnObservation(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -2990,12 +2810,10 @@ func TestTheDrainLatchIsTheApplierSOwnObservation(t *testing.T) {
 			"gets after a shutdown is the last honest one, not a fresh doubt")
 	}
 
-	// A RESTART CLEARS IT. Re-entering Run is what an adoption does — a
-	// peer's rows installed under a history this loop has never applied —
-	// so what it drained before is not a claim about what it holds now.
-	// The broker refuses the first few fetches, which is the state in
-	// which the answer must stay false: a loop that cannot reach the log
-	// has not reached the end of it.
+	// A RESTART CLEARS IT: re-entering Run is what an adoption does,
+	// installing a peer's rows under a history this loop never applied.
+	// The broker refuses the first fetches, and a loop that cannot reach
+	// the log has not reached its end, so the answer stays false.
 	h.fetch.mu.Lock()
 	h.fetch.failures = 4
 	h.fetch.mu.Unlock()
@@ -3006,9 +2824,8 @@ func TestTheDrainLatchIsTheApplierSOwnObservation(t *testing.T) {
 	waitForDrain(t, h, false, "the restarted loop to drop its drain latch")
 
 	// AND IT COMES BACK ONLY WHEN THE BROKER ANSWERS ONE. Counted from the
-	// restart, because the fetches of the first run say nothing about this
-	// one: fewer than five would mean the latch was set while every fetch
-	// this loop made was still failing.
+	// restart: fewer than five fetches means the latch was set while every
+	// one was failing.
 	waitForDrain(t, h, true, "the loop to drain once the broker answers again")
 	if got := h.fetch.fetchCount() - before; got <= 4 {
 		t.Errorf("the restarted loop latched after %d fetch(es), and the first "+
@@ -3020,15 +2837,13 @@ func TestTheDrainLatchIsTheApplierSOwnObservation(t *testing.T) {
 }
 
 // A LOG BUSIER THAN A FETCH WAIT STILL DRAINS: a run the broker had nothing
-// left behind, committed whole, is as much the end of the log as a fetch the
-// broker answers with nothing.
+// left behind, committed whole, is as much the end of the log as an empty
+// fetch.
 //
-// On a log that gains a record more often than [statelog.FetchWait], every
-// fetch is answered with one, so a latch set only on an empty fetch was never
-// set while the company stayed busy: a data node restarted into it stayed a
-// LAGGING copy — asked last for every request, never a snapshot's donor —
-// until its company went quiet for half a second. The records here arrive five
-// to a fetch wait, and the loop must say it drained while they still do.
+// On a log gaining a record more often than [statelog.FetchWait], every fetch
+// returns one, so a latch set only on an empty fetch leaves a restarted data
+// node a LAGGING copy (asked last, never a snapshot's donor) until the company
+// goes quiet. Here records arrive five to a fetch wait.
 func TestALogBusierThanAFetchWaitStillDrains(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -3070,10 +2885,8 @@ func TestALogBusierThanAFetchWaitStillDrains(t *testing.T) {
 }
 
 // A LOOP HOLDING A RECORD ABOVE A HOLE HAS NOT DRAINED, however empty the
-// broker's answers: the record it holds is one its rows do not, waiting for the
-// one below it the broker will deliver again, so its rows are a prefix of the
-// log rather than the whole of it. The latch used to be set on any empty fetch
-// with nothing in the run, the reorder buffer's records forgotten.
+// broker's answers: its rows are a prefix of the log, short of the record its
+// reorder buffer holds for the one below.
 func TestALoopHoldingARecordAboveAHoleHasNotDrained(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -3104,15 +2917,12 @@ func TestALoopHoldingARecordAboveAHoleHasNotDrained(t *testing.T) {
 
 // THE FIRST DRAIN OF A RUN IS TOLD, ONCE, AND ONLY ONCE THE LATCH READS IT.
 //
-// What waits on the drain is a loop of somebody else's — a node's snapshot
-// gate declines until every applier has drained — and a gate that learned of
-// it only by asking again found out a boot's whole settling time late. So the
-// loop says so, the moment [statelog.Runner.Drained] turns true: never before
-// it (a gate woken early reads the latch still false and declines the copy it
-// was woken for), never again for the later drains of the same run (every
-// empty fetch is one, and a hook called per fetch would wake the gate once a
-// fetch interval for the life of the node), and again after the loop runs
-// anew, whose drain is a claim about a different history.
+// A node's snapshot gate declines until every applier has drained, and one
+// that only re-asks learns of it a boot's settling time late. So the loop tells
+// it when [statelog.Runner.Drained] turns true: never before (a gate woken
+// early reads false and declines), never for the run's later drains (every
+// empty fetch is one, waking the gate once a fetch interval), and again after
+// the loop runs anew, whose drain is about a different history.
 func TestTheFirstDrainOfARunIsToldOnce(t *testing.T) {
 	t.Parallel()
 	var h *applyHarness
@@ -3126,9 +2936,8 @@ func TestTheFirstDrainOfARunIsToldOnce(t *testing.T) {
 	errs := make(chan error, 1)
 	go func() { errs <- h.runner.Run(ctx) }()
 	awaitTold(t, told, "the first drain")
-	// EVERY LATER EMPTY FETCH IS A DRAIN TOO, and says nothing: the loop
-	// is left until the broker has answered three more of its fetches,
-	// each with nothing, and it has handled every one of them.
+	// EVERY LATER EMPTY FETCH IS A DRAIN TOO, and says nothing: three more
+	// answered empty and handled.
 	h.fetch.awaitAnswered(t, 3, "three idle fetches after the first drain")
 	select {
 	case <-told:
@@ -3149,26 +2958,20 @@ func TestTheFirstDrainOfARunIsToldOnce(t *testing.T) {
 
 // THE LOOP SAYS SO EACH TIME IT COMES LEVEL WITH ITS LOG, AND ONLY THEN.
 //
-// What waits on it is a node's seat claims, which ask whether the node is
-// level NOW: a boot's first drain is one such moment, and so is the end of
-// every burst of writes the loop works through and every outage it retries
-// across — a gate told of the first drain alone learned of the rest on a
-// timer. Each is told after the records it applied are committed, so a gate
-// it wakes reads the rows it was woken for; and an idle loop, whose every
-// fetch comes back empty, is level once rather than once a fetch interval.
+// A node's seat claims ask whether it is level NOW: after a boot's first
+// drain, and after every burst of writes and every outage retried across. Each
+// is told after its records commit, so a woken gate reads the rows it was woken
+// for; an idle loop, every fetch empty, is level once, not once a fetch
+// interval.
 func TestTheLoopSaysEachTimeItComesLevel(t *testing.T) {
 	t.Parallel()
 	var h *applyHarness
 	told := make(chan uint64, 16)
 	// stopOnTell, when armed, ends the run from inside the hook, so the loop
-	// leaves between two fetches still level — the stop the restart below
-	// has to see past.
-	//
-	// READ BEFORE THE HOOK TELLS, because the case arms it the moment it
-	// has heard the tell before the outage: read after, the call that told
-	// it could see it armed — the case runs as soon as the send lands,
-	// while the hook may not have run another instruction — and end the
-	// run before the outage it was armed for.
+	// leaves between two fetches still level: the stop the restart below
+	// must see past. READ BEFORE THE HOOK TELLS: the case arms it as soon as
+	// the tell before the outage lands, so read after, that earlier call
+	// could see it armed and end the run before the outage.
 	var stopOnTell atomic.Pointer[context.CancelFunc]
 	h = newApplyHarnessWith(t, probeDomain{}, func(d *statelog.RunnerDeps) {
 		d.OnLevel = func() {
@@ -3185,9 +2988,8 @@ func TestTheLoopSaysEachTimeItComesLevel(t *testing.T) {
 	errs := make(chan error, 1)
 	go func() { errs <- h.runner.Run(ctx) }()
 	awaitLevel(t, told, 1, "the first drain")
-	// AN IDLE LOOP IS LEVEL ONCE: every empty fetch after the one that
-	// told says nothing new, and the loop is left until three more have
-	// been answered and handled.
+	// AN IDLE LOOP IS LEVEL ONCE: three more empty fetches, answered and
+	// handled, tell nothing new.
 	h.fetch.awaitAnswered(t, 3, "three idle fetches after the first drain")
 	select {
 	case seq := <-told:
@@ -3220,9 +3022,8 @@ func TestTheLoopSaysEachTimeItComesLevel(t *testing.T) {
 	<-errs
 }
 
-// awaitLevel waits for one call of the level hook and holds it to having been
-// made with the checkpoint at seq: told before its records were committed, a
-// gate it woke would read the rows it was woken for as not there yet.
+// awaitLevel waits for one call of the level hook and holds it to the checkpoint
+// at seq: told before its records commit, a woken gate would not find them.
 func awaitLevel(t *testing.T, told <-chan uint64, seq uint64, what string) {
 	t.Helper()
 	select {
@@ -3265,12 +3066,11 @@ func waitForDrain(t *testing.T, h *applyHarness, want bool, what string) {
 
 // THE SWEEP RECORDS HOW FAR BACK IT FORGOT, and only when it forgot anything.
 //
-// The ledger's silence about an operation means "it never applied here" only
-// where the sweep has not deleted the row that would have said otherwise, so
-// the publisher reads this record before it trusts that silence. A watermark
-// that trailed the rows actually deleted would re-decide an operation that
-// already landed; one written by a pass that deleted nothing would refuse
-// operations whose rows are all still here.
+// The ledger's silence means "never applied here" only where the sweep has not
+// deleted the row that would say otherwise, so the publisher reads this record
+// before trusting it. A watermark
+// trailing the rows deleted re-decides an operation that landed; one written by
+// a pass that deleted nothing refuses operations whose rows are all here.
 func TestTheOperationSweepRecordsWhatItForgot(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -3335,16 +3135,13 @@ func TestTheOperationSweepRecordsWhatItForgot(t *testing.T) {
 // A LOG'S BARRIERS ARE COUNTED WHERE THEY ARE APPLIED, ONCE EACH, UNDER THE LOG,
 // AT THE HOUR THEY WERE COMMITTED.
 //
-// The census a log is held against is its linearizable reads, and a barrier
-// record is what each one costs it. Every data node applies every record, so
-// the applier's count is the whole fleet's — which is the number `census_drift`
-// needs and a node's own appends are not. Labelled with the stream, which is
-// what an operator finds the log by on the broker; counted from the batch that
-// committed, so a record redelivered below the checkpoint is not a second read;
-// and filed in the rolling window at the hour the BROKER stored it, so a node
-// replaying days of backlog — back from an outage, or past a snapshot a day old
-// — does not read days of reads as the last one. The cumulative series counts
-// every barrier applied, as an exporter diffs it.
+// A barrier is what a linearizable read costs the log, and every data node
+// applies every record, so the applier's count is the fleet's, which
+// `census_drift` needs. Labelled with the stream an operator finds the log by;
+// counted from the committed batch, so a redelivery below the checkpoint is no
+// second read; windowed at the hour the BROKER stored it, so a replayed backlog
+// is not read as the last day's reads. The cumulative series counts every
+// barrier applied, for an exporter to diff.
 func TestALogsBarriersAreCountedWhereTheyAreApplied(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})

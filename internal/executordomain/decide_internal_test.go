@@ -60,11 +60,10 @@ func TestACaptureOfAnObjectPastRecordWithinIsRefused(t *testing.T) {
 	}
 }
 
-// A CAPTURE THE ROWS CANNOT TAKE IS REFUSED BEFORE ANYTHING IS PUBLISHED: one
-// not newer than the row's ordinals, one of an ended turn — refused by its
-// tombstone, which every end writes beside its row ([turnEnded]) — and one the
-// seat's budget cannot hold even with every ended session released, each with
-// the sentinel its caller acts on.
+// A CAPTURE THE ROWS CANNOT TAKE IS REFUSED BEFORE ANYTHING IS PUBLISHED, with
+// the sentinel its caller acts on: one not newer than the row's ordinals, one
+// of an ended turn (by its tombstone, [turnEnded]), and one the seat's budget
+// cannot hold even with every ended session released.
 //
 // Mutation: drop decideCapture's ordinals, tombstone or budget arm and its
 // capture is published to be dropped by every applier, its object left for the
@@ -106,8 +105,8 @@ func TestACaptureNamingAnotherConversationIsRefused(t *testing.T) {
 
 // EVERY RECORD IS PUBLISHED UNDER AN OPERATION DERIVED PER EXECUTION: two
 // captures of one launch are two operations, one capture retried is one, and a
-// re-run of the same unit of work (another turn id) is another, which is what
-// keeps a re-run's capture from being answered as the first run's.
+// re-run of the same work (another turn id) is another, so a re-run's capture
+// is never answered as the first run's.
 //
 // Mutation: derive the capture's operation from the work key and the two runs
 // share one id.
@@ -146,12 +145,10 @@ func TestEveryRecordIsPublishedUnderAnOperationDerivedPerExecution(t *testing.T)
 	}
 }
 
-// A TURN IS KEYED BY ITS ONE SPELLING: a run id the engine mints is a UUID in
-// canonical lowercase form, and every other spelling uuid.Parse accepts — the
-// braced, the uppercase, the URN and the undashed — is refused rather than
-// keyed on, since each would be a second row, a second conversation subject and
-// a second associated data for one run, and the retention's check of the run's
-// liveness would miss it.
+// A TURN IS KEYED BY ITS ONE SPELLING, the canonical lowercase UUID the engine
+// mints. Every other spelling uuid.Parse accepts (braced, uppercase, URN,
+// undashed) is refused: each would be a second row, conversation subject and
+// associated data for one run, which the retention's liveness check misses.
 //
 // Mutation: check the turn with uuid.Parse alone and every spelling here is
 // accepted.
@@ -174,9 +171,8 @@ func TestATurnIsKeyedByItsOneSpelling(t *testing.T) {
 }
 
 // A RECORD ABOUT A TURN NAMES THE TURN'S ONE UNIT OF WORK: a capture or an end
-// naming another work key than the one the turn's row already carries is
-// refused at the decide, as one naming another conversation is, while one
-// naming none contradicts nothing.
+// naming another work key than the turn's row carries is refused at the
+// decide; one naming none contradicts nothing.
 //
 // Mutation: drop the work-key arm from decideCapture or decideEnd and a turn's
 // records disagree about which attempt at which work it is.
@@ -252,15 +248,13 @@ func (e *estate) decideBeginOf(n NewBegin) (bool, error) {
 
 // A BEGIN THE ROWS CANNOT TAKE IS REFUSED BEFORE ANYTHING IS PUBLISHED, and one
 // the turn's first read already stands for publishes nothing: an ended turn's
-// begin is refused ended — whether its row is still there or a later turn's end
-// absorbed it, the turn's tombstone outliving its row — one naming another
-// conversation or unit of work than the turn's row is invalid, a turn whose row
-// holds a read is begun already, and a turn with no row is decided.
+// begin is refused ended, by its tombstone, which outlives a row a later end
+// absorbed; one naming another conversation or unit of work is invalid; a turn
+// whose row holds a read is begun already; a turn with no row is decided.
 //
-// Mutation: drop any arm of decideBegin and its begin is published to be
-// dropped by every applier — or, the first read's, published at all; test the
-// row's end in place of the tombstone and the absorbed turn's begin is
-// decided as a turn with no row yet.
+// Mutation: drop any arm of decideBegin and its begin is published (to be
+// dropped by every applier, or, the first read's, at all); test the row's end
+// in place of the tombstone and the absorbed turn's begin is decided.
 func TestABeginTheRowsCannotTakeIsRefusedAtTheDecide(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
@@ -310,11 +304,11 @@ func TestABeginTheRowsCannotTakeIsRefusedAtTheDecide(t *testing.T) {
 }
 
 // A BEGIN NO READ HANDS OUT IS REFUSED BY ITS WRITER, naming the field, before
-// any snapshot is read: a turn id that is no run id, no conversation, no read —
-// a position of this very log, short only its sequence, which still packs to
-// a number past zero — a read of another log, a base the read did not hand
-// out (the turn itself among them, which no read hands out to itself), a
-// base's session with no base turn, and a base turn with no session.
+// any snapshot is read: a turn id that is no run id; no conversation; no read
+// (a position of this log short only its sequence, which still packs past
+// zero); a read of another log; a base the read did not hand out (the turn
+// itself among them); a base's session with no base turn; a base turn with no
+// session.
 //
 // Mutation: drop any arm of NewBegin.validate and its begin is published to be
 // dropped by every applier.

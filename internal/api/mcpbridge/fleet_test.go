@@ -2,6 +2,7 @@ package mcpbridge_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -356,6 +357,110 @@ func TestACallNoHolderAnswersIsUnavailable(t *testing.T) {
 	if took := time.Since(began); took < 300*time.Millisecond {
 		t.Errorf("a call with no holder was answered after %s, before it waited for one", took)
 	}
+}
+
+// A RELAYED CALL WHOSE OPENING LEFT AFTER ITS ADMISSION IS ANSWERED AS THE NODE
+// CAN ANSWER IT NOW (package doc, "The session is the seat holder's, and only
+// the token is the fleet's"), on the notes route, the skill route and the MCP
+// endpoint alike: refused where the run is over, closed or replaced by a
+// relaunch's job; turned away to ask again, a 503 with a Retry-After, where
+// the seat left this node; and served by the opening that serves the box now
+// where a recovery opened the job again.
+//
+// Mutation: refuse every relayed call whose opening is gone (the 401 whatever
+// the node can do now), and the seat's leaving goes red; turn every one away
+// (the 503 whatever), and the run's close and the relaunch go red.
+func TestARelayedCallWhoseOpeningLeftAfterItsAdmissionIsAnsweredAsTheNodeCanNow(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		end  func(t *testing.T, f *steerFixture)
+		// status is the answer to a call of either route, and code its
+		// refusal's: 0 where the node serves the call.
+		status int
+		code   string
+	}{
+		{"the run's close", func(_ *testing.T, f *steerFixture) { f.bridge.Close("run-1") },
+			http.StatusUnauthorized, "invalid_token"},
+		{"a relaunch's opening of the run's next job", func(t *testing.T, f *steerFixture) {
+			if f.bridge.Open(t.Context(), &mcpbridge.Session{RunID: "run-1", Launch: "job-2", Handle: "dev",
+				Role: "Engineer", Surface: f.surface, Ledger: f.ledger, Steer: newFakeInbox()}) == "" {
+				t.Fatal("the relaunch minted no endpoint")
+			}
+		}, http.StatusUnauthorized, "invalid_token"},
+		{"the seat leaving this node", func(_ *testing.T, f *steerFixture) { f.bridge.ReleaseSeat(seat()) },
+			http.StatusServiceUnavailable, "unavailable"},
+		{"a recovery's opening of the same job", func(t *testing.T, f *steerFixture) {
+			if f.bridge.Open(t.Context(), f.session) == "" {
+				t.Fatal("the recovery minted no endpoint")
+			}
+		}, 0, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newSteerFixtureWith(t, time.Minute, func(s *mcpbridge.Session) { s.Skills = handed })
+			f.inbox.file(mcpbridge.SteerNote{Seq: 1, ID: "n-1", Inbox: "msg_1", Message: "use staging"})
+			// THE RELAY'S ADMISSION FOUND THE OPENING HERE: this node has
+			// finished taking the seat, and holds the job's opening.
+			f.bridge.SeatReady(seat())
+			relay := httptest.NewServer(mcpbridge.Relayed(f.bridge))
+			t.Cleanup(relay.Close)
+			endpoint := relay.URL + strings.TrimPrefix(f.url, f.server.URL)
+			tc.end(t, f)
+
+			poll := pollWith(t.Context(), t, relay.Client(), mcpbridge.SteerURL(endpoint)+"/notes")
+			if tc.status == 0 {
+				if poll.res == nil || poll.res.StatusCode != http.StatusOK || len(poll.notes) != 1 ||
+					poll.notes[0].ID != "n-1" {
+					t.Errorf("the relayed poll was answered %v %+v, want the note the recovery's opening serves",
+						poll.res, poll.notes)
+				}
+				return
+			}
+			for route, got := range map[string]polled{
+				"the notes route": poll,
+				"the skill route": postWith(t.Context(), t, relay.Client(), mcpbridge.SkillURL(endpoint),
+					`{"skill":"crewlet:mcp-github"}`),
+				"the MCP endpoint": postWith(t.Context(), t, relay.Client(), endpoint, `{}`),
+			} {
+				if got.res == nil {
+					t.Errorf("a relayed call of %s failed on the wire", route)
+					continue
+				}
+				if got.res.StatusCode != tc.status {
+					t.Errorf("a relayed call of %s was answered %d %q, want %d", route, got.res.StatusCode,
+						got.refusal, tc.status)
+					continue
+				}
+				if tc.status == http.StatusServiceUnavailable {
+					wantTurnedAway(t, got, tc.code)
+				} else if got.refusal != tc.code {
+					t.Errorf("a relayed call of %s was refused %q, want %q", route, got.refusal, tc.code)
+				}
+			}
+		})
+	}
+}
+
+// postWith is one POST of body to a route under the bridge's prefix through
+// client, read whole: the response, and the error code of a refusal.
+func postWith(ctx context.Context, t *testing.T, client *http.Client, url, body string) polled {
+	t.Helper()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := client.Do(req)
+	if err != nil {
+		return polled{}
+	}
+	defer res.Body.Close()
+	var refusal struct {
+		Error string `json:"error"`
+	}
+	_ = json.NewDecoder(res.Body).Decode(&refusal)
+	return polled{res: res, refusal: refusal.Error}
 }
 
 // A STOPPING NODE ANSWERS A CALL WAITING FOR A HOLDER AT ONCE: draining, and

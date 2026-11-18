@@ -9,14 +9,11 @@ import (
 
 // applyOwner applies a person's erasure: every conversation they own is
 // removed, each leaving its deletion marker, and the person is marked erased so
-// no conversation is created for them afterwards ([Applier.Gated]).
-//
-// ONE RECORD FOR EVERYTHING THEY OWN, decided from the rows at its position
-// rather than from a list the writer enumerated: a conversation created on
-// another node between the writer's read and this apply is the owner's too,
-// and an erasure that left it behind would leave a removed person's words on
-// every node. The conversations are visited in id order, so every node writes
-// the same rows in the same order.
+// no conversation is created for them afterwards ([Applier.Gated]). It takes
+// the conversations the rows hold at its position, not a list the writer read,
+// so one created elsewhere since goes too (else a removed person's words
+// would stay on every node); id order makes every node write the same rows
+// in the same order.
 func applyOwner(ctx context.Context, tx *sql.Tx, c applyContext, payload any) (int, error) {
 	p, ok := payload.(OwnerErased)
 	if !ok {

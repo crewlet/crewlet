@@ -74,7 +74,7 @@ func TestADrainWaitsForTheSeatsItCutWithinItsBound(t *testing.T) {
 			return queue.Ack()
 		},
 		// A HOOK THAT HONOURS ITS CUT, then takes until unwind to return.
-		SeatReady: func(ctx context.Context, _ placement.Seat, _ coord.Lease) error {
+		SeatReady: func(ctx context.Context, _ placement.Seat, _ coord.Lease, _ queue.Attachment) error {
 			cutOnce.Do(func() { close(entered) })
 			<-ctx.Done()
 			wasCut.Store(true)

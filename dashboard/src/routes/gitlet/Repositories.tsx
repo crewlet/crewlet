@@ -92,6 +92,7 @@ import {
   sortHeld,
   type RepoKind,
 } from "./repoListing.ts";
+import { useGitletSectionCounts } from "./sectionCounts.ts";
 import { CheckRollupMark, Face, useWhoName } from "./ui.tsx";
 import "~/styles/gitlet.css";
 
@@ -107,8 +108,6 @@ const REPOS_POLL_MS = 60_000;
 
 /** Where a repository's settings are written: Settings › Configuration. */
 const CONFIG_PATH: readonly string[] = ["settings", "config"];
-
-const COUNTS_PARAMS = { parts: "repos" } as const;
 
 export function Repositories() {
   const org = useOrg();
@@ -142,8 +141,8 @@ export function Repositories() {
     (repo: CodeRepoSummary) => repo.id,
     (answer: CodeReposAnswer) => answer.next ?? "",
   );
-  // THE KIND COUNTS, a second small read: its refusal costs only the figures.
-  const counts = useCodeQuery("code_counts", COUNTS_PARAMS, { pollMs: REPOS_POLL_MS });
+  // THE KIND COUNTS, the section figures' answer: its refusal costs only the figures.
+  const counts = useGitletSectionCounts({ pollMs: REPOS_POLL_MS });
   const byKind = counts.data?.counts?.repos;
   const rows = paged.items;
   const total = paged.answers[0]?.repos_total;

@@ -20,44 +20,17 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE ADOPTED BRAND (ADR-0048: the adopted brand is the company's public face,
-// snapshotted by an administrator and served by its bytes).
-//
-// A brand KIT is an ordinary artifact of kind `brand`, which anybody with the
-// app may draft, agents included. The company's brand is an ADOPTION: an
-// administrator, a person, at a recent proof of identity, adopts one fixed
-// version of one kit on ONE subject ([BrandSubject]). The adoption SNAPSHOTS
-// that version (its canonical brand.json, the stylesheet generated from it,
-// and every file the brand serves) into rows of its own, so the adopted brand
-// survives the kit's retention, trash and purge, and a later publish to the
-// kit changes nothing until somebody adopts again.
-//
-// THE SNAPSHOT'S FILES ARE ITS OWN OBJECTS. The upload pipeline copies every
-// logo and face out of the kit's version (sanitised again by this build's
-// rules) and stores the generated stylesheet beside them, each as a fresh
-// object under one reservation, and the adoption names those keys and no
-// other. So no record names an object another artifact's row names: the
-// collector's invariant (ADR-0027, ADR-0036: a key is named only by the write
-// that uploaded it, or by a carry within one artifact) holds with no case for
-// the brand.
-//
-// A FRAMED VERSION PINS THE STYLESHEET ADOPTED WHEN IT IS PUBLISHED
-// ([VersionPayload.Brand], `artifact_versions.brand`), and the artifact origin
-// places that stylesheet's link when it serves the version. So an adoption's
-// files stay served while it is current or any retained version names its
-// stylesheet: the applier prunes a superseded adoption's rows once neither
-// holds, at the next adoption or clear, or in the apply that retires or purges
-// the last version naming it, and never sooner.
-//
-// What the adoption serves is the company's public face: every artifact,
-// every agent and the public brand route on the artifact listener read it, so
-// it is everybody's to read and only an administrator's to change.
+// THE ADOPTED BRAND (package doc, "The adopted brand is a snapshot"; ADR-0048):
+// an administrator adopts one kit version on the one [BrandSubject], snapshotting
+// its brand.json, stylesheet and a fresh copy of every file it serves, so no
+// record names another artifact's object (ADR-0027, ADR-0036). A framed version
+// pins the stylesheet current at its publish ([VersionPayload.Brand]). The
+// brand is everybody's to read and only an administrator's to change.
 
 // Adoption is the company's adopted brand.
 type Adoption struct {
-	// Kit and KitVersion are the brand artifact and version it was adopted
-	// from. The kit may since have been trashed or purged: the snapshot is
-	// what is served.
+	// Kit and KitVersion are the brand artifact and version adopted. The kit
+	// may since be trashed or purged: the snapshot is what is served.
 	Kit        artifacts.ID `json:"kit"`
 	KitVersion int          `json:"kit_version"`
 
@@ -76,9 +49,8 @@ type Adoption struct {
 	AdoptedBy iam.Actor `json:"adopted_by"`
 	AdoptedAt time.Time `json:"adopted_at"`
 
-	// KitAuthor is who published the adopted version: who wrote the brand,
-	// its voice included, which the adopter only adopted. Empty for an
-	// adoption recorded before the engine kept it.
+	// KitAuthor is who published the adopted version, and so wrote the brand
+	// and its voice; the adopter only adopted it. Empty when not recorded.
 	KitAuthor iam.Actor `json:"kit_author"`
 
 	// Position is the packed position of the adoption record.
@@ -99,15 +71,14 @@ type BrandAdoptInput struct {
 	Kit     artifacts.ID
 	Version int
 
-	// BrandJSON is the version's brand.json in canonical form
-	// (brandformat.Canonical), which the caller read and validated from the
-	// version it names.
+	// BrandJSON is the named version's brand.json in canonical form
+	// (brandformat.Canonical), read and validated by the caller.
 	BrandJSON []byte
 
 	// Files are every file the adoption serves: the generated stylesheet
-	// first ([brandformat.SlotCSS], its hash the adoption's stylesheet
-	// hash), then a fresh copy of each logo and face of the version, one per
-	// slot the brand names ([brandformat.FontFileSlot] for a face's files).
+	// first ([brandformat.SlotCSS], whose hash is the adoption's CSSSha), then
+	// a fresh copy of each logo and face file, one per slot the brand names
+	// ([brandformat.FontFileSlot] for a face's files).
 	Files []BrandFile
 
 	// Uploaded is every key Files names, each minted at most
@@ -117,9 +88,8 @@ type BrandAdoptInput struct {
 
 // MaxBrandCSSBytes bounds the generated stylesheet. The generator writes at
 // most fourteen custom properties and eight `@font-face` rules (two faces of
-// at most [brandformat.MaxFontFilesPerFamily] files), under two kilobytes;
-// sixteen leaves the generator room to grow and refuses a writer that sends
-// something else as the stylesheet.
+// [brandformat.MaxFontFilesPerFamily] files), under 2 KiB; 16 KiB leaves it
+// room to grow and still refuses a writer sending something else.
 const MaxBrandCSSBytes = 16 << 10
 
 // BrandContrast is an adoption refused because the brand's text does not
@@ -140,17 +110,16 @@ func (e *BrandContrast) Error() string {
 func (e *BrandContrast) Unwrap() error { return ErrBrandContrast }
 
 // BrandIncomplete is an adoption refused because the brand leaves out a field
-// an adopted brand holds (brandformat.AdoptionFields): a draft saved step by
-// step publishes with its name alone, and is adopted only once it holds a
-// logo and a colour. 422 `policy_refused`, a finding naming each missing
-// field. It is [ErrBrandIncomplete].
+// an adopted brand holds (brandformat.AdoptionFields): a draft publishes with
+// its name alone, but is adopted only once it holds a logo and a colour. 422
+// `policy_refused`, a finding per missing field. It is [ErrBrandIncomplete].
 type BrandIncomplete struct {
 	// Missing are the fields left out, in brandformat.AdoptionFields' order.
 	Missing []string `json:"missing"`
 }
 
 func (e *BrandIncomplete) Error() string {
-	// FIELD PATHS AS THE KIT WRITES THEM, said as they are rather than quoted.
+	// Field paths as the kit writes them, said rather than quoted.
 	missing := make([]words.Said, len(e.Missing))
 	for i, field := range e.Missing {
 		missing[i] = words.Said(field)
@@ -162,13 +131,12 @@ func (e *BrandIncomplete) Error() string {
 // Unwrap is the sentinel the estate and the API branch on.
 func (e *BrandIncomplete) Unwrap() error { return ErrBrandIncomplete }
 
-// CheckBrandAdoptable is the adoption's rule, the one implementation the
-// upload pipeline asks before it stores a byte and the writer asks again
-// before it appends: every field an adopted brand holds is present
-// (*[BrandIncomplete] naming the rest), then the first pair
-// brandformat.ContrastPairs marks as refusing reaches its floor
-// (*[BrandContrast]). It answers the brand as the adoptable brand the
-// stylesheet is generated from.
+// CheckBrandAdoptable is the adoption's one rule, asked by the upload pipeline
+// before it stores a byte and by the writer before it appends: every field an
+// adopted brand holds is present (else *[BrandIncomplete]), then every pair
+// brandformat.ContrastPairs marks as refusing reaches its floor (else
+// *[BrandContrast] for the first that does not). It answers the adoptable brand
+// the stylesheet is generated from.
 func CheckBrandAdoptable(b brandformat.Brand) (brandformat.Adoptable, error) {
 	a, ok := brandformat.AsAdoptable(b)
 	if !ok {
@@ -190,9 +158,9 @@ func CheckBrandAdoptable(b brandformat.Brand) (brandformat.Adoptable, error) {
 // light ground a *[BrandContrast]; a kit or version the log no longer holds is
 // ErrNotFound (ErrPurged for a purged kit), a kit in the trash ErrTrashed.
 //
-// THE KIT'S VERSION IS NAMED IN THE SCOPE (its artifact's term), so the apply
-// orders behind any record about the kit and refuses `version_not_found`
-// when retention or a purge removed the version since the decide.
+// THE KIT IS NAMED IN THE SCOPE (its artifact's term), so the apply orders
+// behind any record about the kit and refuses `version_not_found` when
+// retention or a purge removed the version since the decide.
 func (w *Writer) AdoptBrand(ctx context.Context, c Call, in BrandAdoptInput) (Written, error) {
 	if err := validCall(c); err != nil {
 		return Written{}, err
@@ -360,11 +328,10 @@ func checkBrandFile(f BrandFile) error {
 }
 
 // adoptionLabel is the label an adoption sets on the version it adopts, so the
-// kit's history says which version is the company's brand: `Adopted
-// <date>`, numbered when that label is already held, and empty when the
-// version carries a label already or the kit keeps as many labels as it may
-// (the snapshot holds its own copy of every file, so the label is provenance,
-// never what keeps the adopted bytes).
+// kit's history shows the company's brand: `Adopted <date>`, numbered when
+// that is held, and empty when the version has a label or the kit is at
+// artifacts.MaxLabels. The label is provenance only: the snapshot, not the
+// label, keeps the adopted bytes.
 func adoptionLabel(ctx context.Context, tx *sql.Tx, kit, current string, at time.Time) (string, error) {
 	if current != "" {
 		return "", nil
@@ -390,9 +357,9 @@ func adoptionLabel(ctx context.Context, tx *sql.Tx, kit, current string, at time
 	return "", nil
 }
 
-// ClearBrand withdraws the company's adopted brand. Clearing when none is
-// adopted publishes nothing and answers success. Pages pinned to an earlier
-// stylesheet keep it while a retained version names it.
+// ClearBrand withdraws the company's adopted brand; with none adopted it
+// publishes nothing and succeeds. A retained version keeps serving the
+// stylesheet it pinned.
 func (w *Writer) ClearBrand(ctx context.Context, c Call) (Written, error) {
 	if err := validCall(c); err != nil {
 		return Written{}, err
@@ -476,8 +443,8 @@ func (r *Reader) Brand(ctx context.Context, fresh statelog.Freshness) (Adoption,
 // adoption serves is ErrNotFound.
 //
 // READ AT `stale`: a hash names the same bytes for ever, so the only question
-// is whether this node's rows allow it, and a node that has not applied the
-// adoption yet answers not found until it has.
+// is whether this node's rows allow it; a node yet to apply the adoption
+// answers not found until it does.
 func (r *Reader) BrandFile(ctx context.Context, hash objstore.Hash) (BrandFile, error) {
 	if !hash.Valid() {
 		return BrandFile{}, fmt.Errorf("%w: %q is not a file's hash", ErrNotFound, hash)

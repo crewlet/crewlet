@@ -5,23 +5,16 @@ import (
 	"time"
 )
 
-// FloorState is what this node knows about the published trim floor, and
-// there are FOUR answers rather than two.
+// FloorState is what this node knows about the published trim floor: four
+// answers, not a bool, because "could not be read" folded into "at or above"
+// keeps a node serving reads over a hole it cannot see. An unreadable term
+// blocks, as it does for the trim.
 //
-// A boolean here hid the one that matters. "This node is at or above the
-// floor", "this node is below it" and "the floor could not be read" lead to
-// different code, and collapsing the third into the first keeps a node serving
-// reads over a hole it cannot see. The rule is the same one the trim itself
-// uses: a term that cannot be read blocks.
-//
-// And "below it" is two states, because the floor is published BEFORE the
-// purge it licenses: a purge that failed, and that no later tick carries out
-// because each concluded less, leaves the floor above the log's first
-// surviving record. A node between the two lacks records the trim may remove
-// and the log still holds, so it replays them; a node below the log's first
-// record lacks records no replay can supply. They send a caller and an
-// operator to opposite places — come back here soon, or go elsewhere while
-// this node adopts a snapshot — so they are different values.
+// "Below" is two states because the floor is published BEFORE the purge it
+// licenses, and a failed purge leaves the floor above the log's first record.
+// Between the two a node replays what it lacks (come back soon); below the
+// log's first record no replay can supply it (go elsewhere while this node
+// adopts a snapshot).
 type FloorState int
 
 const (
@@ -30,16 +23,12 @@ const (
 	// trim has licensed removing.
 	FloorOK FloorState = iota
 
-	// FloorReplaying is below the published floor and not below the log:
-	// the trim has licensed removing records this node has not applied,
-	// and the log's first surviving record says they are all still there.
-	// It is replaying them and the state clears on its own; reads refuse
-	// at every level meanwhile — as [RefuseBehind], or as [RefuseStalled]
-	// once the replay stops moving — because the floor is what every node
-	// must hold before it answers, and a write at an expectation of zero
-	// is refused by the fence until it holds it. It stays in service: a
-	// copy that is BEHIND catches up on its own, and [Health.Healthy]
-	// fires on no lag of any size, this one included.
+	// FloorReplaying is below the published floor but not below the log:
+	// what this node lacks is still there, so it replays and clears on its
+	// own. Reads refuse meanwhile ([RefuseBehind], or [RefuseStalled] once
+	// the replay stops moving), and the fence refuses a write at an
+	// expectation of zero until it holds the floor. It stays in service:
+	// [Health.Healthy] fires on no lag, this one included.
 	FloorReplaying
 
 	// FloorBelow is below the log itself: the next record this node needs
@@ -49,10 +38,8 @@ const (
 	// and its seats stay — ADR-0079), and it adopts a peer's snapshot.
 	FloorBelow
 
-	// FloorUnknown is the fourth value, and it takes the SAME branch as
-	// FloorBelow rather than the optimistic one. A floor that cannot be
-	// read is not a floor that is satisfied, and the cost of guessing
-	// wrong is a node serving answers with a hole in them.
+	// FloorUnknown takes FloorBelow's branch, not the optimistic one: an
+	// unreadable floor is not a satisfied one.
 	FloorUnknown
 )
 
@@ -71,14 +58,10 @@ func (f FloorState) String() string {
 	return fmt.Sprintf("FloorState(%d)", int(f))
 }
 
-// Floor is what this node knows about the published trim floor AND when it
-// last knew it.
-//
-// ONE FIELD RATHER THAN TWO, because a state without its instant ages
-// silently into an assertion: a cached "at or above the floor" from four
-// heartbeats ago is not a floor that is satisfied, it is a coordination path
-// that has stopped answering — and the two are indistinguishable to anything
-// holding only the state.
+// Floor is the floor state AND when it was last read, as one field: a state
+// without its instant ages silently into an assertion, and a cached "at or
+// above" from four heartbeats ago is a coordination path that stopped
+// answering.
 type Floor struct {
 	// State is what the last successful read said.
 	State FloorState
@@ -88,12 +71,9 @@ type Floor struct {
 	ReadAt time.Time
 }
 
-// Effective is the floor state as of now, which is [Floor.State] until the
-// read behind it is too old to count as a read at all.
-//
-// FOUR HEARTBEATS, which is the same derivation this engine already uses for
-// how long a node's own status stays credible: a node may miss three beats and
-// still be healthy, so a value older than four is not a slow read.
+// Effective is [Floor.State] until the read behind it is older than
+// [FloorCacheStale] (four heartbeats: a node may miss three and still be
+// healthy), and [FloorUnknown] after.
 func (f Floor) Effective(now time.Time) FloorState {
 	if f.ReadAt.IsZero() || now.Sub(f.ReadAt) > FloorCacheStale {
 		return FloorUnknown
@@ -109,117 +89,59 @@ func (f Floor) Age(now time.Time) time.Duration {
 	return now.Sub(f.ReadAt)
 }
 
-// Replayable reports whether a node whose checkpoint is `checkpoint` can still
-// replay forward on a log whose lowest record is `first` — whether the next
-// record it needs, checkpoint+1, is still there. False against the stream's
-// own first sequence is the state [FloorBelow] names; false only against a
-// published floor above it is [FloorReplaying].
-//
-// ONE PREDICATE, because the question is asked in more places than any one of
-// them can see: [Health.Established], the health read that stamps FloorBelow,
-// the boot's join, the re-check after a transfer, a running node's heartbeat,
-// a backup refusing a copy the log can no longer reach, and both write fences
-// that clear an expectation of zero. Written out per site it was one
-// inequality in two spellings, `seq+1 < floor` and `first > seq+1`, at eight
-// sites that could each drift alone — and the tracker's fence records what one
-// step of drift costs: compared against the checkpoint itself, it refused a
-// node ONE BELOW `first`, which has already applied everything that may be
-// gone.
-//
-// # Why the boundary is checkpoint+1
-//
-// A checkpoint is the last sequence APPLIED, so what a node needs next is
-// checkpoint+1. A checkpoint ONE BELOW `first` has applied everything that was
-// ever removed: every record under `first` is gone and it holds all of them.
-// So (first-1, first) is replayable, and first-2 is the highest checkpoint
-// that is short a record.
-//
-// # What `first` is
-//
-// The lowest sequence the caller trusts the log to hold, and choosing it is
-// the caller's decision rather than this function's. The stream's own first
-// sequence says what IS there; the published trim floor says what the trim has
-// not licensed removing; a caller that must survive the next trim asks of the
-// higher of the two. [OfferRequest.Need] is this same boundary shipped to a
-// donor as a number — first-1, the lowest checkpoint this accepts — because a
-// donor holds no view of the joiner's stream.
-//
-// # The zero cases, as measured on JetStream
-//
-//   - A stream nobody has written reports first = 0, NOT 1, and every
-//     checkpoint is replayable against it: there is nothing to have missed.
-//   - A written stream reports first >= 1. A node that has applied nothing
-//     has checkpoint 0, so (0, 1) is replayable — the whole log is ahead of
-//     it — and (0, 2) is not: record 1 is gone and it never saw it.
-//   - A stream EMPTIED by a purge reports first = last+1, one past a record
-//     it no longer holds. A node that applied through `last` is exactly one
-//     below that and replayable; one that stopped short of `last` is not,
-//     because what it never applied went with the purge.
-//   - A published floor of 0 is a trim that has licensed removing nothing,
-//     and it reads exactly as the never-written stream does.
-//
-// # And why it is not written `first > checkpoint+1`
-//
-// Because that form overflows: at a checkpoint of the top of uint64 the sum
-// wraps to 0, and every log with a record in it reads as having left behind a
-// node that has applied every sequence there is. `first-1 <= checkpoint`
-// behind a guard on zero forms no sum, so it is exact over the whole range.
-// The two forms differ only at a checkpoint of exactly that top value, which
-// no valid position reaches — [Position.Valid] stops at [MaxSeq] — so no
-// reachable answer changed; but a boundary stated once for every caller
-// should be exact for every value a caller can pass.
+// Replayable reports whether a node at `checkpoint` (the last sequence
+// APPLIED) can still replay a log whose lowest record is `first`: whether
+// checkpoint+1 is still there, so one below `first` holds all that was
+// removed. False against the stream's first sequence is [FloorBelow]; only
+// against a higher published floor, [FloorReplaying]. `first` is the caller's
+// choice: the higher of the two to survive the next trim. [OfferRequest.Need]
+// ships first-1 to a donor, which cannot see the joiner's stream. JetStream
+// reports first = 0 for a never-written stream and last+1 for one a purge
+// emptied; a published floor of 0 licenses removing nothing. ONE predicate for
+// every site (health, boot join, transfer, heartbeat, backup, both zero
+// fences), since per-site spellings drift; `first-1 <= checkpoint` forms no
+// sum, so it cannot overflow at the top of uint64.
 func Replayable(checkpoint, first uint64) bool {
 	return first == 0 || first-1 <= checkpoint
 }
 
-// ApplyRetryBudget is how long a transient apply error is retried in place
-// before the applier reports itself faulted — which its readers treat as
-// stalled: reads refuse naming the error, and the node takes its copy of that
-// domain out of service until a retry succeeds.
+// ApplyRetryBudget is how long a transient apply error is retried quietly
+// before the applier reports itself faulted, which readers treat as stalled:
+// reads refuse naming the error, and the node takes its copy of that domain
+// out of service until a retry succeeds. The retry never gives up
+// ([Runner.Fault]).
 //
-// HALF THE STALL GRACE, deliberately: a retry that outlasted the grace would
-// let a node report itself healthy while it made no progress, and one much
-// shorter would turn an ordinary transaction conflict into a fleet event. The
-// retry itself never gives up — see [Runner.Fault]; this is the point at which
-// it stops being quiet about it.
+// HALF THE STALL GRACE: longer would let a node report healthy while making
+// no progress; much shorter turns an ordinary transaction conflict into a
+// fleet event.
 const ApplyRetryBudget = StallGrace / 2
 
 // Health is one registered domain's readiness.
 //
-// # SEVENTEEN FIELDS, DECLARED ONCE
-//
-// This struct is cited from the framework's contracts, from the readiness
-// gate, from the operator surface and from the register's own heartbeat, and
-// it is written out in exactly one place. The reason is mechanical rather than
-// aesthetic: written out per reader it becomes three lists that disagree —
-// and the fields most likely to be dropped are the nilable ones, which are
-// precisely the ones carrying "this is unknown" rather than "this is zero".
-// The count in that heading is asserted by
-// TestHealthCarriesEveryFieldItsContractsCite, so a field added here moves the
-// heading and that test in the same change.
+// SEVENTEEN FIELDS, DECLARED ONCE: the framework's contracts, the readiness
+// gate, the operator surface and the register's heartbeat all cite this one
+// struct, because per-reader copies drift, dropping first the nilable fields
+// that carry "unknown" rather than "zero".
+// TestHealthCarriesEveryFieldItsContractsCite asserts the count, so a new
+// field moves this line and that test together.
 //
 // [Health.AppliedThrough] is a RAW sequence within [Health.Position]'s own
-// generation, where Position is composed. That is why the two have different
-// shapes, and why every barrier compares the first against a read index taken
-// from the same generation.
+// generation, so every barrier compares it against a read index taken from
+// the same generation.
 type Health struct {
 	// Position is (stream, generation, seq) THIS node's rows are current
 	// through: its reached position ([Runner.Reached]), every record at or
 	// below it committed in this node's own transaction or a barrier that
-	// writes no row — not a consumer's acknowledgement floor, which moves
-	// for reasons that have nothing to do with what this node holds, and
-	// not the committed checkpoint, which a stalled fsync holds back over
-	// rows that are already whole.
+	// writes no row. Not a consumer's ack floor (it moves for reasons
+	// unrelated to what this node holds), nor the committed checkpoint (a
+	// stalled fsync holds it back over rows already whole).
 	Position Position
 
 	// AppliedThrough is the prefix whose DERIVED CONSEQUENCES this node
 	// holds: the lowest deferred sequence minus one, or Position.Seq when
-	// it holds none.
-	//
-	// THE NODE-WIDE VALUE, for the register and for an operator's screen.
-	// A read's own coverage is a separate probe over the objects that
-	// read is about, decided before any barrier is appended and never
-	// waited on — a wait on this number could not terminate, because a
+	// it holds none. Node-wide, for the register and an operator: a read's
+	// own coverage is a separate probe, taken before any barrier is appended
+	// and never a wait on this number, which could not terminate — a
 	// deferred scope pins it below the checkpoint while a barrier is
 	// appended above it.
 	AppliedThrough uint64
@@ -234,98 +156,55 @@ type Health struct {
 	// Drained reports having applied this domain's log to nothing pending
 	// at least once, and not having stalled since.
 	//
-	// A HISTORY, NOT AN INSTANT, and the distinction is the whole reason
-	// the field exists beside [Health.Lag]. Whether this node is behind
-	// RIGHT NOW is the lag; whether its rows have ever been a whole state
-	// is this. The two were one bool once, assigned `lag == 0` on every
-	// heartbeat, and the readers that wanted the history got the instant:
-	// on a single node every write to the tracker put one record on the
-	// log the applier had not yet consumed, so the bool went false for one
-	// heartbeat and [Health.Healthy] read the node as a WRONG copy — seven
-	// seats released, reclaimed five seconds later, six times in eight
-	// minutes, on a company doing nothing but filing work items.
+	// A HISTORY, NOT AN INSTANT (that is [Health.Lag]): read as `lag == 0`
+	// per heartbeat, every tracker write on a single node made [Health.Healthy]
+	// call the copy WRONG for a beat. It is the applier's own observation
+	// ([Runner.Drained]: a fetch the broker answered empty), since a sampled
+	// lag can miss every moment a busy log is empty and never latch.
 	//
-	// IT IS THE APPLIER'S OWN OBSERVATION rather than a sampled lag, for
-	// the reason a sample cannot answer a question about a series: a
-	// heartbeat that looks every ten seconds can miss every moment a busy
-	// log is empty, and a latch that never latches is a refusal nothing
-	// clears. The applier sees each one — the fetch the broker answered
-	// with nothing is the drain — and [Runner.Drained] is that record.
-	//
-	// TWO READERS, ASKING ONE QUESTION: the donor gate — may this node hand
-	// a peer a copy of its rows — and [Health.Serving] — may this copy
-	// answer for the estate. Each is about whether the rows were ever
-	// whole, and the separate question of how far they have since fallen
-	// behind is [Health.Lag] against [SnapshotLagSlack], which both apply.
-	// Neither readiness gate reads this — admission wants the instant and
-	// a copy's fault wants a fault, and neither is a history.
+	// Read by the donor gate and [Health.Serving], each also bounding
+	// [Health.Lag] by [SnapshotLagSlack]; neither readiness gate reads it,
+	// since admission wants the instant and a copy's fault wants a fault.
 	Drained bool
 
 	// Stalled reports an applied prefix that has not moved for the stall
-	// grace. A first-class state rather than a symptom: a stalled node's
-	// rows are frozen, so every expectation it forms is stale and every
-	// write it makes burns its whole round budget to a conflict a model
-	// reads as a colleague editing the same object.
+	// grace: a first-class state, because a stalled node's rows are frozen,
+	// so every expectation it forms is stale and every write burns its whole
+	// round budget on a conflict a model reads as a colleague's edit.
 	Stalled bool
 
-	// Floor is the four-valued floor state and when it was last read.
-	// ONE FIELD, because a state whose age nobody carries ages silently
-	// into an assertion.
+	// Floor is the four-valued floor state and when it was last read
+	// ([Floor]).
 	Floor Floor
 
-	// Evicted reports an eviction tombstone for this node.
-	//
-	// COORDINATION-DERIVED: it is this process's copy of the cached
-	// tombstone, refreshed on the same loop, so it is NOT an independent
-	// input. That is exactly why the write path's fence checks a third
-	// source — this node's own applied eviction rows, fresh to its
-	// applied prefix and the only one still fresh when coordination is
-	// wedged, which is a precondition of an eviction being permitted.
+	// Evicted reports an eviction tombstone for this node: this process's
+	// cached copy, refreshed on the coordination loop, so NOT an independent
+	// input. The write fence therefore also checks this node's own applied
+	// eviction rows, the one source still fresh when coordination is wedged,
+	// which an eviction presupposes.
 	Evicted bool
 
 	// Lag is the stream's last sequence minus this node's position, and
-	// NIL when the broker could not be reached.
+	// NIL when the broker could not be reached: a zero-because-unknown lag
+	// would serve a bounded stale read with no bound at all.
 	//
-	// A POINTER because a zero-because-unknown lag serves a bounded
-	// stale read without any bound at all: the read asks "how far behind
-	// may this answer be", and an unreadable broker answers "not at all".
-	//
-	// AS OF THE LAST READ OF THE LOG'S ENDS, which a read's health may be
-	// served from memory rather than asked per read ([ReaderDeps.Health])
-	// — a few seconds at most, since a lag older than that is no bound on
-	// a log that can run on by thousands of records meanwhile. Ends nobody
-	// could refresh for that long are not a lag of any age: the health that
-	// would carry them is not served at all.
+	// As of the last read of the log's ends, which a read's health may serve
+	// from memory for a few seconds at most ([ReaderDeps.Health]); ends
+	// unrefreshed for longer serve no health at all.
 	Lag *uint64
 
-	// FirstSeq is the stream's first surviving sequence as last read, and
-	// NIL when it could not be.
+	// FirstSeq is the stream's first surviving sequence as last read, NIL
+	// when it could not be. ADVISORY, and it may only RAISE the floor: it
+	// comes on the same stream info from a possibly non-authoritative member,
+	// and a stale one is LOWER than the truth.
 	//
-	// ADVISORY, and it may only RAISE the floor. It arrives on the same
-	// stream info from the same possibly-non-authoritative member, and a
-	// stale one is LOWER than the truth — so a maximum that trusts it
-	// under-fires and a node below the real floor keeps serving.
-	//
-	// BELOW THE PUBLISHED FLOOR IT CHOOSES BETWEEN TWO STATES, neither of
-	// which serves a read at any level: [FloorBelow], the node's next
-	// record gone from the log, or [FloorReplaying], the log still holding
-	// it. The choice picks the refusal — `below_floor`, which sends a
-	// caller elsewhere and the node to adopt, or the retryable `behind` —
-	// and whether the floor term alone takes the copy out of service,
-	// which [Health.Healthy] does for the first and not the second. So a
-	// stale-low value reports a node as replaying records that are already
-	// gone. What bounds that is where a stale value comes from: only a
-	// replica of a group with no leader answers the stream info, and every
-	// heartbeat, verdict and admission check asks afresh — a READ is served
-	// the value last read, and never one older than the few seconds a
-	// working refresh leaves it ([ReaderDeps.Health]), which can call a
-	// node replaying for those seconds and never longer.
-	// The heartbeat, asking of this value alone, is what requests the
-	// rejoin once a reading shows the record gone — a LATER reading of the
-	// same stream info, not an independent source — and meanwhile a strict
-	// applier the broker clamped past the hole faults when its reorder
-	// buffer overflows, which refuses as `stalled` and stops the copy
-	// serving.
+	// Below the published floor it picks [FloorBelow] (`below_floor`, out of
+	// service, adopt) or [FloorReplaying] (retryable `behind`), so a stale-low
+	// value calls a node replaying records already gone, for seconds only:
+	// just a leaderless replica answers stale, every heartbeat, verdict and
+	// admission asks afresh, and a read's copy ages no further than
+	// [ReaderDeps.Health]. A later heartbeat reading requests the rejoin;
+	// meanwhile a strict applier clamped past the hole faults, as `stalled`.
 	FirstSeq *uint64
 
 	// TrimFloor is the register's published floor for this domain as last
@@ -334,65 +213,42 @@ type Health struct {
 	TrimFloor *uint64
 
 	// LastSeq is the stream's own last sequence as last read, and NIL when
-	// it could not be.
-	//
-	// ITS OWN FIELD BESIDE Lag, because Lag is clamped at zero: a
-	// checkpoint PAST the log's end reads as caught up through it, and
-	// that is the one state the number exists to refuse. A checkpoint
-	// above the end is a position on a stream that is not this one — a
-	// recreated stream, or a broker restored from an older copy — and a
-	// consumer created there waits for a sequence that never arrives while
-	// reporting nothing pending.
+	// it could not be. Its own field because Lag is clamped at zero: a
+	// checkpoint PAST the end is a position on another stream (recreated, or
+	// a broker restored from an older copy), where a consumer waits forever
+	// reporting nothing pending — the one state this exists to refuse.
 	LastSeq *uint64
 
 	// StreamRecreated is a live stream that is not the one this node's rows
-	// are keyed to — a delete and a rebuild under the same name, found at boot
-	// against the checkpoint or while running against the instant the applier
-	// started on.
+	// are keyed to — a delete and a rebuild under the same name — found at
+	// boot against the checkpoint or while running against the applier's start.
 	//
-	// # Why it is observed rather than derived
-	//
-	// Because nothing this node holds can show it. The generation does not move
-	// (a rebuilt stream comes back at 0), the sequences count from 1 again, and
-	// once the new stream has published past this node's checkpoint even
-	// [Health.AheadOfLog] goes quiet — the checkpoint is no longer past an end
-	// that has caught up with it. What is left is a node applying a DIFFERENT
-	// history into rows keyed by the old one, reporting itself caught up.
-	//
-	// The only thing that separates the two streams is the stream's creation
-	// instant ([StreamCreatedAt]). The boot compares it once, and a running
-	// node sees the live one wherever it reads the stream's state — the
-	// position heartbeat every [PositionHeartbeat], and the write fence on
-	// every expectation of zero. Every one of those lands in
-	// [Runner.StreamIdentity], and this is that answer's RECREATION half —
-	// errors.Is against [ErrStreamRecreated] — the SAME one the write path
-	// refuses on, so a node can never refuse its reads over a rebuilt log
-	// while its writes go on landing there. The identity's other half, a
-	// checkpoint past the end, is [Health.AheadOfLog] here, read live from
-	// this health's own end rather than from the runner's last reading. The
-	// remedy is the same either way, an operator's re-anchor.
+	// Observed, because nothing this node holds shows it: the generation does
+	// not move, sequences restart at 1, and [Health.AheadOfLog] goes quiet once
+	// the new stream passes the checkpoint. Only the creation instant
+	// ([StreamCreatedAt]) tells them apart; the boot, every [PositionHeartbeat]
+	// and the zero fence land it in [Runner.StreamIdentity], and this is
+	// errors.Is [ErrStreamRecreated] on that same answer the write path refuses
+	// on, so reads and writes cannot disagree. The checkpoint-past-end half is
+	// [Health.AheadOfLog]. Either way the remedy is an operator's re-anchor.
 	StreamRecreated bool
 
 	// GenerationPassed is a domain a peer re-anchored past this node's rows
-	// ([ErrGenerationPassed]): the log now continues from that peer's rows,
-	// so these are a history the fleet has left. The identity's third half,
-	// and observed for the reason the recreation is — the heartbeat's
-	// reading of the positions register, or a record on the log from a
-	// generation this node never entered, lands in [Runner.StreamIdentity]
-	// and this is errors.Is against that same answer. It refuses exactly
-	// where a recreation does; its remedy is not an operator's but this
-	// node's own adoption of a peer's snapshot.
+	// ([ErrGenerationPassed]): the log continues from that peer's rows, so
+	// these are a history the fleet has left. Observed like the recreation:
+	// the heartbeat's positions-register reading, or a record from a
+	// generation this node never entered, lands in [Runner.StreamIdentity],
+	// and this is errors.Is on that answer. It refuses where a recreation
+	// does; the remedy is this node adopting a peer's snapshot.
 	GenerationPassed bool
 
 	// LogDiverged is a log whose record at this node's checkpoint is not the
 	// one it consumed there ([ErrLogDiverged]): a broker restored from an
-	// older copy and since written past these rows, so the log continues a
-	// history they are not. The identity's fourth half, observed like the
-	// others — by the applier before it applies past the checkpoint and by
-	// the heartbeat every interval — and errors.Is against the same answer
-	// the write path refuses on. It refuses exactly where a recreation does,
-	// and it is the one state [Health.AheadOfLog] used to lose the moment the
-	// restored log was written back past the checkpoint.
+	// older copy and written past these rows since. Observed by the applier
+	// before it applies past the checkpoint and by every heartbeat, errors.Is
+	// the write path's same answer, and refused where a recreation is: the
+	// state [Health.AheadOfLog] loses once the log is written back past the
+	// checkpoint.
 	LogDiverged bool
 
 	// Coverage is COMPACTED domains only: the fraction of rows present
@@ -413,15 +269,9 @@ type DeferredSince struct {
 }
 
 // Age is how long the oldest undecodable record has been held as of now, and
-// zero when none is — or when nothing has dated one yet.
-//
-// ONE ARITHMETIC FOR THREE READERS: [Health.Healthy], which takes the copy out
-// of service past the grace, the `deferred_old` alarm that tells an operator
-// when it will happen, and the gauge a collector scrapes. Each used to derive
-// the age for itself, and the alarm's copy was not a derivation at all — it
-// stood the grace itself in for the age whenever a record was held, so a
-// condition written as "older than the grace" compared the grace with itself
-// and could never fire.
+// zero when none is — or when nothing has dated one yet. The one arithmetic for
+// [Health.Healthy] (out of service past the grace), the `deferred_old` alarm
+// and the gauge, so the three cannot disagree.
 func (d DeferredSince) Age(now time.Time) time.Duration {
 	if !d.Held || d.Since.IsZero() {
 		return 0
@@ -431,10 +281,9 @@ func (d DeferredSince) Age(now time.Time) time.Duration {
 
 // Refusal is why this domain is not serving as of now, or empty when it is.
 //
-// A NODE REPLAYING UP TO THE FLOOR IS REFUSED LAST, and as [RefuseBehind]:
-// it clears on its own only while its applier is moving and its log is the
-// one its rows are keyed to, so a stall or a wrong stream is the truer answer
-// whenever either holds.
+// A node replaying up to the floor is refused LAST, as [RefuseBehind]: it
+// clears on its own only while its applier moves on the stream its rows are
+// keyed to, so a stall or a wrong stream is the truer answer.
 func (h Health) Refusal(now time.Time) ReadRefusal {
 	switch {
 	case h.Evicted:
@@ -453,70 +302,27 @@ func (h Health) Refusal(now time.Time) ReadRefusal {
 	return ""
 }
 
-// AheadOfLog reports a checkpoint past the stream's own last sequence.
-//
-// A position the log has never reached is a position on another stream: the
-// stream was recreated, or the broker was restored from a copy older than
-// this node's rows. Nothing this node holds above the end can be reconciled
-// with what the log will now produce, so it is a refusal on every path rather
-// than a lag of zero — which is exactly what a clamped lag would report.
-//
-// The WRITE path refuses on the same fact with the same word — see
-// [Runner.ObserveEnd] and [ZeroFence] — so a node can never refuse its reads
-// over a checkpoint past the end while its writes go on landing there.
+// AheadOfLog reports a checkpoint past the stream's own last sequence: a
+// position on another stream (recreated, or a broker restored from an older
+// copy) that nothing can reconcile, so it refuses on every path rather than
+// reading as a clamped lag of zero. The write path refuses on the same fact
+// with the same word ([Runner.ObserveEnd], [ZeroFence]).
 func (h Health) AheadOfLog() bool {
 	return h.LastSeq != nil && pastEnd(h.Position.Seq, *h.LastSeq)
 }
 
-// Healthy reports whether this copy of the domain's log is SOUND — the copy its
-// node may keep serving that DOMAIN's operations from. One that is not goes out
-// of service for that domain alone (ADR-0079): its operations go to the other
-// data nodes, every other domain's copy keeps serving, and the node's seats
-// stay, since a copy being wrong is no fault of theirs.
+// Healthy reports whether this copy of the domain's log is SOUND — one its
+// node may keep serving that DOMAIN's operations from. One that is not goes
+// out of service for that domain alone (ADR-0079); the node's seats stay.
 //
-// # It answers "is this copy WRONG", never "is this copy BEHIND"
-//
-// That is the whole line between it and [Health.Established], which gates
-// admission. A copy that is behind catches up on its own, so withholding
-// claims is the entire remedy and taking it out of service would be pure
-// loss; a copy that is wrong cannot catch up, so nothing may be answered from
-// it. Every term below is of the second kind.
-//
-// # What does NOT make it false, and why
-//
-// BEING BEHIND DOES NOT — not by a record, not by ten thousand, and not
-// because this node has yet to drain the log a first time. The reading that
-// conflated the two was `lag == 0` recomputed per heartbeat: on a single node
-// every tracker write put one record on the log the applier had not consumed
-// yet, so this went false for one heartbeat and — when a false answer shed
-// seats — the sweep released all seven of the company's seats, reclaiming
-// them about five seconds later — six times in eight minutes, with a real
-// model that is every turn on the node interrupted by somebody filing a work
-// item. A prefix that stops MOVING is a
-// different fact and it is [Health.Stalled], which is below.
-//
-// Nor does replaying up to the published floor ([FloorReplaying]), which is
-// one more way of being behind: the records are on the log and the node is
-// reading them. Only a node below THE LOG itself ([FloorBelow]), or under a
-// floor nobody could read ([FloorUnknown]), has a hole in its rows.
-//
-// Holding records this build cannot decode does not either, on its own.
-// Folding that into "stalled" takes every copy out of service fleet-wide on a
-// routine rolling upgrade — one upgraded writer taking every un-upgraded node
-// out of service at once, which is exactly the outage the retain rule exists
-// to prevent, arriving through the applier instead of the codec.
-//
-// # And what does
-//
-// Holding them PAST THE DEFERRAL GRACE. At that point the honest reading is
-// "this node cannot run this company's records" rather than "this node is
-// briefly behind", and a copy that fails every call about a growing set of
-// objects while it keeps serving is the same outage in a slower form. Under
-// the grace nothing changes, which covers every rolling upgrade this design
-// describes — a config apply and a seat re-placement are one heartbeat each.
-//
-// A compacted domain's coverage does not make it false either: a derived row's
-// gaps are the compaction policy working.
+// It answers "is this copy WRONG", never "BEHIND" ([Health.Established] gates
+// admission on that): a copy behind catches up, so taking it out of service is
+// pure loss. No lag makes it false, nor a first drain not yet reached, nor
+// [FloorReplaying]; a prefix that stops moving ([Health.Stalled]) does.
+// Undecodable records alone do not (that would take every copy out on a
+// rolling upgrade) until held past [DeferralGrace], when the node cannot run
+// this company's records. Nor does a compacted domain's coverage: its gaps
+// are the compaction policy working. [Health.Fault] lists the terms.
 func (h Health) Healthy(now time.Time, deferredSince DeferredSince) bool {
 	return h.Fault(now, deferredSince) == ""
 }
@@ -524,13 +330,9 @@ func (h Health) Healthy(now time.Time, deferredSince DeferredSince) bool {
 // Fault is WHY this copy is wrong ([Health.Healthy] false), or empty while it
 // is sound: the refusal its reads answer for the same state, in
 // [Health.Refusal]'s order, and [RefuseDeferred] for a record held past the
-// deferral grace, which no read refuses on by itself. It is what the line
-// announcing a copy going out of service names, because WHICH fault holds is
-// what an operator acts on — an eviction is lifted, a copy below its log
-// adopts a snapshot, an undecodable record needs an upgrade.
-//
-// ONE LIST, the one [Health.Healthy] reads: a reason computed beside the
-// predicate rather than by it would be a second opinion about one copy.
+// deferral grace, which no read refuses on by itself. The out-of-service line
+// names it, since which fault holds is what an operator acts on. ONE LIST,
+// the one [Health.Healthy] reads, so reason and predicate cannot disagree.
 func (h Health) Fault(now time.Time, deferredSince DeferredSince) ReadRefusal {
 	floor := h.Floor.Effective(now)
 	switch {
@@ -542,11 +344,10 @@ func (h Health) Fault(now time.Time, deferredSince DeferredSince) ReadRefusal {
 		return RefuseBelowFloor
 	case h.AheadOfLog() || h.StreamRecreated || h.GenerationPassed || h.LogDiverged:
 		return RefuseWrongStream
-	// A FROZEN PREFIX, which is the one term here that a lag resembles and
-	// is not: a node that owes progress and has made none for the stall
-	// grace answers every expectation out of rows that stopped, where a
-	// node that is merely behind is applying its way out of it. An applier
-	// that stopped, or has faulted past its budget, is the same report.
+	// A FROZEN PREFIX, the one term a lag resembles and is not: a node
+	// owing progress that made none for the stall grace answers from rows
+	// that stopped. A stopped applier, or one faulted past its budget, is
+	// the same report.
 	case h.Err != "" || h.Stalled:
 		return RefuseStalled
 	case h.Deferred > 0 && deferredSince.Age(now) > DeferralGrace:
@@ -555,32 +356,18 @@ func (h Health) Fault(now time.Time, deferredSince DeferredSince) ReadRefusal {
 	return ""
 }
 
-// Established is the two-sided inequality plus a drain, and it is
-// RE-EVALUATED ON EVERY HEARTBEAT rather than only at boot.
+// Established is the two-sided inequality plus a drain, RE-EVALUATED ON EVERY
+// HEARTBEAT, not only at boot: a live consumer below the stream's first
+// sequence is CLAMPED UPWARD silently and reports itself caught up over a
+// hole, an evicted node keeps running while the trim passes it (the counted
+// set cannot cover it), and a slow node can cross the floor mid-flight.
 //
-// The continuity is load-bearing three ways, and each one is a state a node
-// reaches without restarting:
-//
-//   - A live consumer whose position falls below the stream's first sequence
-//     is CLAMPED UPWARD with no error at all, and then reports itself caught
-//     up over a hole.
-//   - An evicted node keeps running while the trim advances past it, so the
-//     counted-set term the floor rests on cannot cover it.
-//   - A merely slow node can cross the floor mid-flight on a busy fleet.
-//
-// ABOVE THE STREAM'S LAST SEQUENCE IS A REFUSAL, not a clamp. With a non-zero
-// start sequence the server does not clamp downward, so a consumer created
-// there waits for a sequence that never arrives, reports nothing pending, and
-// looks perfectly caught up while applying nothing, for ever. It is decided
-// from [Health.LastSeq] rather than from Lag, because Lag is clamped at zero
-// and reads that state as caught up.
-//
-// STRICT IS THE INSTANT, NOT THE HISTORY. It asks whether this node is behind
-// RIGHT NOW, because it gates a seat about to attach and act on these rows —
-// a node inside the trim floor still serves rows that are behind, and a seat
-// reading one answers "there is no such item" about work it was just handed.
-// [Health.Drained] is the opposite question and belongs to the opposite gate:
-// what a node may KEEP is not decided on a lag (see [Health.Healthy]).
+// Above the stream's last sequence is a refusal: at a non-zero start sequence
+// the server does not clamp downward, so a consumer there waits forever
+// looking caught up. Read from [Health.LastSeq], since Lag is clamped at zero.
+// strict is the INSTANT: a seat about to attach must not read rows that are
+// behind and answer "no such item" about work it was just handed. What a node
+// may KEEP is not decided on a lag ([Health.Healthy]).
 func (h Health) Established(strict bool) (bool, ReadRefusal) {
 	// THE AUTHORITATIVE TERM IS THE PUBLISHED FLOOR. The stream's own
 	// first sequence may only raise it.
@@ -592,20 +379,13 @@ func (h Health) Established(strict bool) (bool, ReadRefusal) {
 		floor = *h.FirstSeq
 	}
 	if !Replayable(h.Position.Seq, floor) {
-		// BELOW THE FLOOR, and the stream's first sequence says which
-		// side of the log: the floor is published before the purge it
-		// licenses, so the log may still hold what this node lacks. An
-		// unreadable first sequence cannot show that it does, and the
-		// broker that did not answer is the honest reason.
+		// BELOW THE FLOOR; the first sequence says which side of the log,
+		// since the floor is published before its purge. Unread, it cannot
+		// show the log holds what this node lacks.
 		//
-		// IN [Health.Refusal]'S ORDER, with the one retryable answer
-		// LAST: a replay clears on its own only on the log the rows are
-		// keyed to, so a checkpoint past the end or a rebuilt stream is
-		// the truer answer whenever either holds. A stream deleted and
-		// rebuilt under the same name keeps whatever floor the old one
-		// had published — only a reanchor touches it — so a node below
-		// that stale floor on the rebuilt log is not replaying anything
-		// that clears; it needs an operator.
+		// In [Health.Refusal]'s order, the retryable answer LAST: a rebuilt
+		// stream keeps the old one's floor (only a reanchor touches it), so
+		// a node below it there replays nothing that clears.
 		switch {
 		case h.FirstSeq == nil:
 			return false, RefuseBrokerUnreachable
@@ -617,17 +397,15 @@ func (h Health) Established(strict bool) (bool, ReadRefusal) {
 		return false, RefuseBehind
 	}
 	if h.Lag == nil || h.LastSeq == nil {
-		// The stream's own end could not be read, so the upper half of
-		// the inequality cannot be evaluated — and it is the half whose
-		// failure is silent.
+		// The end is unread, so the inequality's upper half, whose failure
+		// is silent, cannot be evaluated.
 		return false, RefuseBrokerUnreachable
 	}
 	if h.AheadOfLog() || h.StreamRecreated || h.GenerationPassed || h.LogDiverged {
 		return false, RefuseWrongStream
 	}
-	// THE LAG ITSELF, and it is non-nil by the check above: a node with
-	// records left to apply holds a PREFIX of what the log says, whether
-	// or not it has ever held the whole of it.
+	// THE LAG ITSELF, non-nil by the check above: a node with records left
+	// to apply holds only a PREFIX of the log.
 	if strict && *h.Lag > 0 {
 		return false, RefuseBehind
 	}
@@ -638,21 +416,12 @@ func (h Health) Established(strict bool) (bool, ReadRefusal) {
 // read, or a write decided from its rows: it is [Health.Serving], or it is
 // established at a lag of zero this instant ([Health.Established] strict).
 //
-// # Neither half alone
-//
-// Serving alone refuses a copy that is level but has not yet LEARNED it is:
-// the drained latch is set once a run commits with nothing pending behind it,
-// or on the empty fetch after one that closed for another reason — up to a
-// fetch wait later — and a seat admitted at lag zero in that window would find
-// every call it made refused by the node that admitted it. Strict alone is
-// seat admission's question, and a request gate that asked it refused a busy
-// company's copy on most instants — a record in flight — so every request
-// went to whichever data node happened to be level at that moment, or to none.
-// What a request must see of its own node's writes is what the session floors
-// carry, and neither half is asked to supply it.
-//
-// Refused, it answers Serving's refusal: the one that says what the copy is
-// waiting for.
+// Neither half alone: Serving refuses a level copy whose drained latch is not
+// set yet (up to a fetch wait), so a seat admitted at lag zero would be
+// refused by its own node; strict refuses a busy copy on most instants, a
+// record being in flight. What a request must see of its own node's writes is
+// the session floors' job, not either half's. Refused, it answers Serving's
+// refusal, which says what the copy is waiting for.
 func (h Health) Answers() (bool, ReadRefusal) {
 	ok, refusal := h.Serving()
 	if ok {
@@ -664,23 +433,16 @@ func (h Health) Answers() (bool, ReadRefusal) {
 	return false, refusal
 }
 
-// Serving reports whether this copy of a log may answer for the estate: what
-// its node asks before it answers a call from its own copy rather than a
-// peer's. It is ESTABLISHED on the log's own terms — at or above the floor, on
-// the stream its rows are keyed to — and DRAINED since its applier started,
-// and it is within [SnapshotLagSlack] of the log's end. Otherwise it answers
-// the refusal that holds, [RefuseBehind] for a copy that has never drained or
-// has fallen past the slack.
+// Serving reports whether this copy of a log may answer for the estate rather
+// than a peer's: ESTABLISHED on the log's own terms (at or above the floor, on
+// the stream its rows are keyed to), DRAINED since its applier started, and
+// within [SnapshotLagSlack] of the end. Otherwise it answers the refusal that
+// holds, [RefuseBehind] for a copy never drained or past the slack.
 //
-// A HISTORY AND A DISTANCE, NEVER THE INSTANT. [Health.Established] strict is
-// seat admission's question — may a seat attach and act on these rows right
-// now — and it refuses at a lag of one, which a busy log has on most
-// heartbeats: a gate sampling that instant took an established, drained copy
-// of a company filing work out of service on every beat that caught a record
-// in flight. Whether a copy holds a whole state is what the applier observed
-// ([Health.Drained]); how far it has since fallen behind is the lag against
-// the slack a donor is held to, since a copy close enough to hand a joiner is
-// close enough to answer for the estate.
+// A history and a distance, never the instant: [Health.Established] strict
+// refuses at a lag of one, which a busy log has on most heartbeats. The slack
+// is a donor's, since a copy close enough to hand a joiner is close enough to
+// answer for the estate.
 func (h Health) Serving() (bool, ReadRefusal) {
 	if ok, refusal := h.Established(false); !ok {
 		return false, refusal

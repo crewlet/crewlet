@@ -113,6 +113,47 @@
 // reported a contract violation. The id stays spent on that log until the
 // window passes, which is what the refusal tells its caller.
 //
+// # Resolving a durable record
+//
+// [Publisher.resolve] answers what a durable record at a position produced,
+// on the ambiguous path and for every acknowledged write, a successful wait
+// included: an evicted node's applier drops its own record under its own gate
+// well inside the budget, so an answer from the wait alone would report it
+// applied. It needs no coordination read, clock or cadence, because the
+// applier is contiguous: passing p applies everything below it, an eviction
+// gates only when its commit is strictly below p, and a deletion marker that
+// could gate p is on the record's own subject and so below it, or the broker
+// would have refused the append. A marker landing ABOVE p after an eviction
+// dropped the record is reported `deleted` by the gate rule ("The rule every
+// gate reader keeps").
+//
+// WHOSE record it is decides what the gates are asked, since a writer's gate
+// drops a record by its WRITER. A record this call did not append is read off
+// the log, through a VerifiedReader because the log holds signed frames.
+// Another node's copy of this operation, landed above that node's eviction,
+// holds the id in the broker's duplicate window; the refusal names that writer
+// ([Unavailable.CopyWriter]) when the gate blames it ([Reason.BlamesWriter]),
+// never beside `deleted`, which holds every writer's record. A record that is
+// ANOTHER operation's (found newest on the subject by the ambiguous path) is
+// not this operation's landing: the gates are asked about this node from the
+// subject alone, the refusal names the position judged at rather than a
+// dropped record ([Unavailable.Dropped]), and since it reads the ledger's
+// silence it is said only where the ledger vouches, else `unknown`. A record
+// nobody can read is `unknown`. A missing ledger row means "somebody else won"
+// only when the record might have been somebody else's. The framework's
+// reanchor rules ([Voids]) are asked before the domain's gates, by the
+// generation this call stamped on its own append and by the record's own for
+// any other. [Request.NoWait] answers before the wait from what is known of
+// the record ([Publisher.unresolved]), except for a record the ambiguous path
+// found.
+//
+// Past the broker's acknowledgement nothing can un-write the record, so
+// nothing is answered as a FAILURE that a caller would read as "did not land":
+// a wait that ends early or a read that fails (caller gone, store busy or
+// closed) answers what is known of the record. Only conclusions the reads
+// reached are failures: a gate that dropped it, a ledger row not this node's
+// to answer, a log contradicting its acknowledgement.
+//
 // # An operation id carries the instant it was minted
 //
 // Layer 1 has a hole the other two cannot fill: the ops table can LOSE ROWS.
@@ -156,7 +197,10 @@
 // a caller stamped beside it was the CALL's: later than any loss on every
 // retry, which is precisely the case the question exists for. An id that
 // carries no instant is read as minted before every loss. opid.go states the
-// grammar, the clock it is read off and what that assumes of the fleet.
+// grammar, the clock it is read off and what that assumes of the fleet. The
+// dashboard's gate minter escapes a segment by the same rule, held to this
+// package's by testdata/opname_vectors.json, which both suites read, so a
+// change to the grammar is a change to both.
 //
 // A DERIVED id's instant is the start of the work it belongs to, and that can
 // be further back than any ledger remembers — a trigger dispatched a month
@@ -545,6 +589,38 @@
 // ([Request.NodeGate]), and a reanchor then opens the generation after the
 // abandoned one with its records void ([ReanchorAbandoned]).
 //
+// # A reanchor's generation record skips the publisher
+//
+// A reanchor's generation record goes straight to the broker
+// ([appendGeneration]), not through the domain's publisher: every fence of
+// the write authority is about the stream this node's rows are keyed to, and
+// this one write exists to leave that stream. Fence 0 refuses while the runner
+// holds the recreation verdict, the only state a reanchor runs in, and the
+// zero fence would clear an expectation of zero against a checkpoint and floor
+// from the old history, which on a rebuilt log end below the checkpoint and
+// refuse. What those fences establish, the transition establishes otherwise:
+//
+//   - IDENTITY: the operator's confirmation of the LIVE creation instant,
+//     checked before the append and read again after it (stillConfirmed). An
+//     instant is never reissued, so the same instant on both sides is the same
+//     stream throughout.
+//   - EVICTION: [Reanchor] asks, before the append, the reader fence 0 asks.
+//   - THE FLOOR THEOREM is not in play: it protects an object whose record was
+//     trimmed from a writer with stale rows, and the generation subject is
+//     written only by a reanchor to that generation, its one record decided by
+//     first-writer-wins arbitration (generationIsOurs).
+//   - RESOLUTION is not awaited: the applier that would resolve it is the one
+//     the transition re-points at the stream, and it applies the record first
+//     on resuming, from the case's checkpoint, which is below the record
+//     because the first sequence and the end it was taken from were read
+//     before the append.
+//   - THE GATE RESERVE ([Reservation.Bytes]) is not asked, so the record may
+//     land in it. It is a gate record in the reserve's sense (it installs the
+//     generation every later record is placed in); it lands on a stream every
+//     node's fence refuses ordinary writes to until it has, so nothing
+//     ordinary filled the reserve since; and it lands at most once per
+//     generation.
+//
 // # A domain declares its own stream
 //
 // A [Domain] declares its stream ([Domain.Stream]) beside its tables and its
@@ -556,6 +632,24 @@
 // identity are keyed by the stream's name; a position row, a floor and a
 // manifest name the log by the domain's; and a barrier proves where that one
 // log ends, single-flighted per node per log ([ReadIndex]).
+//
+// A domain is also a site in several per-domain lists across the tree, and a
+// list that misses a new domain fails SILENTLY rather than refusing it: a new
+// domain is added wherever an existing domain's name appears.
+//
+// # Recovery is three loops on every data node, and the trim a fourth
+//
+// A node below the floor recovers by adopting a peer's snapshot, and that path
+// is real only while every data node runs all three halves of it: the POSITION
+// HEARTBEAT, whose rows are the counted set the trim takes its minimum over, so
+// a node that publishes none is one the trim cannot see and trims past; the
+// SNAPSHOTTER ([Snapshotter]), one artefact series per node; and the DONOR
+// ([Donor]), on every data node, since a fleet whose only donor is down has
+// nothing to give. Each is useless without the other two, and the recipient
+// half alone is the worst state: it reports itself working while asking a
+// fleet that can never answer. The TRIM ([Trim]; its loop, a fleet singleton,
+// is internal/engine's retention.go) is the fourth, without which a log only
+// grows.
 //
 // # What a write costs, measured
 //
@@ -670,6 +764,81 @@
 // eviction (`evicted`), a stream it is not on (`wrong_stream`), a floor it is
 // below (`below_floor`) — each a fence of the write authority above.
 //
+// # The rule every gate reader keeps
+//
+// Each domain spells its own [Gates] queries, and every one answers by ONE
+// rule, certified for all of them by statelogtest.RunGates
+// (statelogtest.RunEvictionGates holds a domain that keeps no deletion marker
+// to the eviction half), because two readers that agree only by looking alike
+// drift apart.
+//
+//  1. The deletion gate is reported first. A marker is a fact about the OBJECT
+//     that holds for every writer for ever, an eviction a fact about one
+//     WRITER that a readmission ends, so a record both hold is reported
+//     `deleted`, the answer that stays true. The applier checks the eviction
+//     first; its order decides only which gate a drop is counted under.
+//  2. The marker has no position, as the applier's has none: it gates every
+//     record on its object that did not apply, whenever processed, so once an
+//     object is purged a record the eviction dropped below the purge is
+//     reported `deleted` too. What is reported is the gate that holds the
+//     record now; which fired first is the applier's `statelog_record_gated`
+//     line.
+//  3. The marker covers the subjects the applier's does, which may be more
+//     than the object's own (a tracker turn is a record about its task on a
+//     subject of its own kind). Each domain states the set once for both
+//     sides, and the family asks the applier about every subject kind a record
+//     can carry.
+//  4. The purge's own record is exempt from its own marker, by operation id,
+//     and from that gate alone: it still falls through to the eviction window.
+//  5. The eviction window is half-open at both ends, as the applier's: a
+//     record is gated when the eviction's position is below it and no
+//     readmission is at or below it.
+//
+// # The gate reserve
+//
+// A log that fills refuses appends rather than dropping records, and what
+// usually fills one is a trim pinned by a node that is gone and still
+// counted, holding the applied term at its last position. The one gesture
+// that unpins it, an EVICTION, is a record on that log, so a log full to the
+// broker's ceiling would refuse the only way out of it. Ordinary appends are
+// therefore refused `log_full` at a SOFT ceiling, [Reservation.Bytes] below
+// the broker's, and only the records that install or lift a node's gate land
+// in between: an eviction and the readmission that inverts it, the two halves
+// of one gesture an operator must be able to finish. A reanchor's generation
+// record lands there too, at most once per generation ("A reanchor's
+// generation record skips the publisher"). A PURGE IS NOT a gate record
+// although it installs a deletion marker: it frees nothing until the trim
+// removes what it gates, and nothing bounds how many an operator runs, so in
+// the reserve it could spend the room an eviction is kept for. Only a log that
+// claims identity keeps a reserve ([ReservationOf]); on the vector changelog
+// and the usage log one would only refuse ordinary writes early to keep room
+// nothing is written into.
+//
+// Usage is read from the broker's own stream state, the one figure that
+// counts every node's writes, and READ AFTER THE ADMISSION BEGAN
+// ([Reserve.fresh]; the arrival rule [ReadIndex] applies to a barrier), so the
+// only bytes a reading cannot see are appends in flight beside it. This
+// node's own are counted exactly: an ordinary append holds its size in
+// [Reserve]'s budget from before its reading until the broker answers. Its
+// PEERS' appends in flight are the blind spot: each node holds at most one
+// [StreamSpec.MaxAppendBytes] in flight and no record is larger, so in a fleet
+// of [GateReserveFleet] it is seven of the log's largest appends. That plus
+// [GateRoom] for the gate records is the FLEET TERM. It is set by the log's
+// largest record, not its ceiling, so it holds on the smallest log, where a
+// fraction of the ceiling alone could be less than one record. The reserve is
+// the larger of the fleet term and a sixteenth of the ceiling
+// ([GateReserveDivisor]), which grows with the ceiling so a larger log absorbs
+// a larger fleet. On the corpus-sized logs (a gibibyte floor, records up to
+// the transport's eight mebibytes) the sixteenth is the larger from the floor
+// up, 64 MiB against 57; on the identity estate (a 64 MiB floor, records of at
+// most 128 KiB) too, 4 MiB against under 2.
+//
+// The reserve is ceiling ordinary writes never use, and the headroom alarm
+// fires at a tenth of what is left of the ORDINARY ceiling, so an operator
+// hears of a filling log long before either line. Past the reserve a gate
+// record is refused like any other, and the refusal says to raise the ceiling
+// (`crewlet retention set-capacity`), not to run the gesture again.
+//
 // # Which log a coordination record is about
 //
 // ONE RULE, for every record the fleet shares about a log — a node's row in
@@ -689,6 +858,51 @@
 // is a record on the very log it gates, applied into that log's rows in the
 // replicated estate, so it is about that log by construction — the same way a
 // checkpoint, an anchor and a generation are.
+//
+// # The capacity operation's state machine
+//
+// A resize is unsafe while anything publishes, so the fleet restarts into a
+// mode with every broker and no publisher, and the operation's record IS the
+// exclusion ([coord.MaintenanceOperation]). It opens, records who is running
+// BEFORE issuing anything, applies, and is then SEALED once every
+// participant's process has been replaced by one booted into seal mode: what
+// retires a request the broker already queued is the broker process
+// restarting, not a client closing. Only a sealed operation may be verified,
+// and only a verified one is confirmed and deleted. The phases, evidence,
+// transitions and ordering are stated here only; every other site (the CLI's
+// help, the docs) says what an operator does and points here, since a
+// restated transition is a second state machine.
+//
+// The seal stands on four records, each proving one thing:
+//
+//   - An ACKNOWLEDGEMENT ([coord.MaintenanceAck]) is written by a process as
+//     it boots into a maintenance mode, once per log ([acksOf]): which process
+//     it is, its mode, and the window and attempt open on that log when it
+//     read them, or none. It is evidence about that log's window only; one
+//     boot answers two open windows. Written after its broker started, it
+//     proves the process was running by then, never that it started after
+//     anything: only a later process of the same node bounds a start from
+//     below, by replacing it.
+//   - The RECORD OF WHO IS RUNNING
+//     ([coord.MaintenanceOperation.WriteIncarnations]) names, per
+//     participant, the process its newest acknowledgement named. Each
+//     request's sender writes it in the same write as that request's journal
+//     record, immediately before the request leaves, so it is always the
+//     newest request's.
+//   - The SEAL'S INEQUALITY ([SealRestarts]): a seal-mode acknowledgement from
+//     another process than the recorded one proves the recorded process gone,
+//     since an incarnation is minted per process. That retires a request only
+//     because the recorded process is the one running as the request left;
+//     recorded once at the baseline, a request a resumed window sent later
+//     would be retired by restarts made before it left.
+//   - A JOURNAL RECORD ([coord.JournalRecord]) is one request, written by its
+//     sender before it leaves. Only that request's own read-back completes
+//     it; otherwise the barrier retires it ([Retire]), and a value never does.
+//
+// None of them sees a node restarting while a request is leaving (its broker
+// up before the request, its acknowledgement written after the record). So
+// the fleet restarts into seal mode only once the verb has answered, and a
+// node restarted before a request leaves is asked to restart again after it.
 //
 // # The alarm table borrows every threshold it fires at
 //
@@ -735,4 +949,46 @@
 // derived from the transition's. A transition is one node's fact about
 // itself, never a record on a log — the alarms most worth a wake are about the
 // logs, and a log at its ceiling would refuse the record that says so.
+//
+// # A run waiting for an operator is raised fleet-wide
+//
+// `executor_resume_blocked` ([KindExecutorResumeBlocked]) counts the runs of
+// seats, across the fleet, that finished their executor's job and failed their
+// last resume on a condition only an operator clears: the disk of the node
+// holding the seat full, read-only or failing, its limit of open files
+// reached, or the fleet's nodes holding different keys or running different
+// builds (internal/sandbox's Coordinator.ResumesBlocked, which each node says
+// in its status record). The reading names the seat of the run waiting
+// longest, the node holding it, the condition its last resume failed on, and
+// how long since the first such failure in a row.
+//
+// THE GIVE-UP NEVER ENDS SUCH A RUN, so this is the wait's one signal: the
+// failure is the node's, the run and its seat wait for the operator, and the
+// sandbox judged each failure at the classification the give-up itself reads,
+// so the rule fires at any count (ADR-0015). FLEET-WIDE, off the live status
+// records of the nodes holding the seats, because the node holding the seat
+// may evaluate no table of its own: a satellite runs no state log. Every
+// field is zero where no node holds such a run.
+//
+// # Whose failure a refusal is
+//
+// [Reason.RefusesTheWrite] sets apart the refusals of a write for WHAT THE
+// WRITE IS OR NAMES, which every node and every attempt meets alike and only a
+// different write gets past: a record larger than the broker takes
+// (record_too_large), an object deleted for good (deleted), an operation id
+// that already names another write (op_reused), or an operation a later
+// record has undone or replaced (superseded). Every refusal of the node, the
+// log or the broker the write was sent through (a node evicted, behind or
+// deferring, a log full, truncated or wrong, a broker that refused or skewed,
+// a record a reanchor voided) is not one: another node, a later attempt of the
+// same write or an operator's gesture on the fleet gets past it. Nor is a
+// reason this build does not name.
+//
+// What it decides is whose failure a refusal is: a piece of work that asked
+// for such a write failed for what it asked, while every other refusal is the
+// node's or its infrastructure's (internal/agent/builtin's
+// KindStateLogWriteRefused beside KindStateLogUnavailable). It is decided per
+// reason beside [Reason.BlamesWriter] and held by an explicit answer for every
+// reason (TestOnlyARefusalOfTheWriteItselfIsTheWorks), so a reason added later
+// is put on a side where it is declared.
 package statelog

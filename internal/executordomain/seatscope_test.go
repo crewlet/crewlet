@@ -15,16 +15,14 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A SEAT READS NO OTHER SEAT'S SESSION. A turn id is the fleet's, one row of
-// one seat whoever minted it, so what holds a seat's reads to its own sessions
-// is the seat every statement asks for beside it — the row's, the page's and
-// the search's — and nothing else: no reader above it checks a row's seat
-// again. Over the real write path, two seats each keeping a session — its
-// object in the store, its turn ended, both asks holding the same words — ana's
-// read of ben's turn finds no row, her page and her search list her own turn
-// alone, and the one reader every surface reads a kept session by answers her
-// read of ben's turn in the very words it answers a turn id nobody has, while
-// her read of her own turn opens it.
+// A SEAT READS NO OTHER SEAT'S SESSION. A turn id is the fleet's, so only the
+// seat each statement asks for beside it (the row's, the page's, the search's)
+// holds a seat's reads to its own sessions; no reader above rechecks it. Over
+// the real write path, with two seats' sessions kept and ended and their asks
+// sharing words, ana's read of ben's turn finds no row, her page and search
+// list her turn alone, and executorread, which every surface reads a kept
+// session by, answers her read of ben's turn in the very words of a turn
+// nobody has, while her own turn opens.
 //
 // Mutation: read a turn's row by the turn and any seat, or page a seat's rows
 // past its own, and a check goes red.

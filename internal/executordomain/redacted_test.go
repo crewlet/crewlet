@@ -18,16 +18,13 @@ import (
 var plantedToken = "ghp_" + strings.Repeat("Qx7Rb2", 6)
 
 // A SESSION'S ROW IS SHOWN REDACTED: ITS WORDS SOMEBODY ELSE WROTE, AND NOTHING
-// ELSE. Every field of the row is set, every text spelling a token the
-// redaction knows: Redacted hands out what the turn was asked, the ending's
-// four prose fields and its unkept capture's reason redacted, and every other
-// field — the conversation's key and the work key among them, which are a
-// surface's and the engine's identifiers, and the unkept capture and went_on,
-// which stand on a row older than the capture and the last word its end
-// names — exactly as the row holds it; and the row it was called on keeps its
-// words, its ending shared with no copy. The
-// fixture sets every field, which the test checks first, so a field added to
-// the row is set here too and this says whether it is shown as it is held.
+// ELSE. With every field set and every text spelling a known token, Redacted
+// redacts the ask, the ending's four prose fields and the unkept capture's
+// reason, and hands out every other field (identifiers such as the
+// conversation and work keys; the unkept capture and went_on, on a row older
+// than what its end names) as the row holds it; the receiver keeps its words
+// and shares its ending with no copy. The fixture is checked to set every
+// field, so a field added to the row must be set here too.
 //
 // Mutation: leave the unkept capture's reason as stored, or redact the
 // conversation key too, and a check goes red.
@@ -94,14 +91,13 @@ func TestASessionsRowIsShownRedacted(t *testing.T) {
 }
 
 // A ROW IS SHOWN WITH NO UNKEPT CAPTURE IT KEEPS. An end decided off the run's
-// record can name as not kept a capture whose record the log took before the
-// end — one a taker handed on before its lease's window closed, which the node
-// that waited on it settled refused — and the row's place is then that
-// capture's own. The one form every reader is shown a row in names the end's
-// unkept capture only where it is newer than the row's place
-// ([executordomain.Session.Unkept]), its reason redacted, so no surface that
-// shows the row tells the session it keeps as lost; the row it was called on
-// keeps the ending as the log holds it.
+// record can call unkept a capture the log took before the end (a taker handed
+// it on before its lease's window closed, which the waiting node settled
+// refused), which is then the row's place. The
+// shown form names the end's unkept capture only where it is newer than the
+// row's place ([executordomain.Session.Unkept]), its reason redacted, so no
+// surface tells the session the row keeps as lost; the receiver keeps the
+// ending as the log holds it.
 //
 // Mutation: copy the ending's unkept capture as the row holds it, and the row
 // at that capture's own place, or past it, is shown with it.

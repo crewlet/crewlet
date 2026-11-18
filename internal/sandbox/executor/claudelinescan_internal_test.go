@@ -118,9 +118,10 @@ func scanPayloads(line threadLine) string {
 	fmt.Fprintf(&b, "toolUseResult facts: hands back %t, completed %t, agent %q, refused %t\n", r.handsBack,
 		r.completed, r.agent, r.refused)
 	a := f.attachment
-	fmt.Fprintf(&b, "attachment facts: %v, %v; type %q, toolUseID %q, by %q; content %v, strings %t, objects %t; "+
-		"skills %t; names %t, %v; entries %t\n", a.kind, a.err, ctRaw(a.typ), ctRaw(a.toolUseID), ctRaw(a.by),
-		a.content, a.contentStrings, a.contentObjects, a.skillsShaped, a.namesKept, a.namesErr, a.entriesKept)
+	fmt.Fprintf(&b, "attachment facts: %v, %v; type %q, toolUseID %q, by %q, hookEvent %q; content %v, strings %t, "+
+		"objects %t, tokens %b; stdout tokens %b; skills %t; names %t, %v; entries %t\n", a.kind, a.err,
+		ctRaw(a.typ), ctRaw(a.toolUseID), ctRaw(a.by), ctRaw(a.event), a.content, a.contentStrings, a.contentObjects,
+		a.contentTokens, a.stdoutTokens, a.skillsShaped, a.namesKept, a.namesErr, a.entriesKept)
 	c := f.compacted
 	fmt.Fprintf(&b, "compactMetadata facts: %v, %v; preservedMessages %v, %s, %v; preservedSegment %q\n", c.kind,
 		c.err, c.messages, scanPreserved(c.list), c.listErr, ctRaw(c.segment))
@@ -135,6 +136,9 @@ func scanPayloads(line threadLine) string {
 	kept, keptErr := line.AttachmentWellFormed()
 	fmt.Fprintf(&b, "hands back %t; answer %t %q %t; attachment type %q, %v; tool use key %x %t; well formed %t, %v\n",
 		line.HandsBack(), completed, agent, refused, typ, typErr, key, isString, kept, keptErr)
+	event, eventErr := line.HookEvent()
+	contentTakes, stdoutTakes := line.HookTakes()
+	fmt.Fprintf(&b, "hook event %q, %v; hook takes %b %b\n", event, eventErr, contentTakes, stdoutTakes)
 	preserved, preservedErr := line.Preserved()
 	retracted, retractedErr := line.Retracted()
 	fmt.Fprintf(&b, "preserved %s, %v; retracted %s, %v\n", scanPreserved(preserved), preservedErr,
@@ -263,6 +267,9 @@ func checkScanReadsAsDecode(t testing.TB, text []byte, chunk int) {
 			end = fmt.Sprintf("ended by EOF, then EOF, torn %t\n", len(rest) > 0)
 		}
 		r.Reset(bytes.NewReader(member), int64(len(member)))
+		if err := r.Asking(scanAsked); err != nil {
+			t.Fatal(err)
+		}
 		got := scanReading(t.Context(), r)
 		if len(got) != len(wants)+1 || got[len(wants)] != end {
 			t.Fatalf("lines %d to %d, the last %.300q, read in pieces of %d bytes at most, read as %d answers "+
@@ -289,7 +296,7 @@ func checkScanReadsAsDecode(t testing.TB, text []byte, chunk int) {
 // the line wrote before it ([scanPassedOver]), the error that ends the
 // reading there, naming the first such frame of [scanGates].
 func scanWant(n int, raw []byte) (string, error) {
-	line, err := decodeThreadLine(n, raw)
+	line, err := decodeThreadLine(n, raw, scanAsked)
 	if err != nil {
 		return scanAnswer(line, err), nil
 	}
@@ -301,6 +308,11 @@ func scanWant(n int, raw []byte) (string, error) {
 	}
 	return scanAnswer(line, nil), nil
 }
+
+// scanAsked is the take tokens the differential asks of every line
+// ([scanReader.Asking]), so a hook's words naming one, both or a near miss of
+// either are read by both readings ([scanPayloadLines]).
+var scanAsked = []string{claudeTakeToken(ctUUID(7)), claudeTakeToken(ctUUID(8))}
 
 // scanGates is each frame of a record a reading in one pass reads only on
 // records of some types, and those types: those of the records each frame's
@@ -469,7 +481,8 @@ var scanFrames = []struct{ path, keys []string }{
 	{[]string{"message", "content", "*", "input"}, []string{"to"}},
 	{[]string{"message", "content", "*", "content", "0"}, []string{"type", "text"}},
 	{[]string{"toolUseResult"}, []string{"handback", "handbackReport", "status", "agentId", "success"}},
-	{[]string{"attachment"}, []string{"type", "toolUseID", "by", "content", "skills", "names", "entries"}},
+	{[]string{"attachment"}, []string{"type", "toolUseID", "by", "hookEvent", "content", "stdout", "skills", "names",
+		"entries"}},
 	{[]string{"attachment", "entries", "*"}, []string{"path", "displayPath", "why"}},
 	{[]string{"compactMetadata"}, []string{"preservedMessages", "preservedSegment"}},
 	{[]string{"compactMetadata", "preservedMessages"}, []string{"anchorUuid", "uuids"}},
@@ -741,6 +754,7 @@ func scanPayloadLines() [][]byte {
 		return strings.TrimSuffix(strings.Repeat(name+",", n), ",")
 	}
 	long := strings.Repeat("n", 2*textPieceBytes)
+	take1, take2 := scanAsked[0], scanAsked[1]
 	// Entries about the edges of what a reader reads of one: a uuid, one byte
 	// short of it and one past it, its first 24 characters alone and one
 	// short of them, one in capitals, one with a letter escaped, one past
@@ -811,6 +825,21 @@ func scanPayloadLines() [][]byte {
 		attached(`"x"`), attached(`null`), attached(`[]`), attached(`{"type":7}`), attached(`{}`),
 		attached(`{"toolUseID":7,"type":"hook_success","content":"x"}`),
 		attached(`{"type":"a","by":"b","toolUseID":"c"}`),
+		// A hook's words naming the asked take tokens ([scanAsked]): in its
+		// content and a hook_success's stdout, whichever key comes first; one
+		// across the edge of a piece; one with its bracket escaped; near misses;
+		// a stdout of another type, or of a type a later one replaces.
+		attached(`{"type":"hook_success","hookEvent":"PostToolBatch","content":` + quote("a note "+take1) +
+			`,"stdout":` + quote(`{"systemMessage":"from ada `+take2+`"}`) + `}`),
+		attached(`{"stdout":` + quote(take1+take2+" and more") + `,"hookEvent":"Stop","type":"hook_success"}`),
+		attached(`{"type":"hook_success","content":` + quote(strings.Repeat("n", textPieceBytes-20)+take1+take2) + `}`),
+		attached(`{"type":"hook_success","content":"\u005bcrewlet take ` + u(7) + `]"}`),
+		attached(`{"type":"hook_success","content":` + quote(strings.ToUpper(take1)+take1[:len(take1)-1]) + `}`),
+		attached(`{"type":"hook_additional_context","content":[` + quote(take1) + `],"stdout":` + quote(take1) + `}`),
+		attached(`{"type":"hook_success","stdout":` + quote(take1) + `,"type":"hook_cancelled"}`),
+		attached(`{"type":"hook_success","stdout":` + quote(take1) + `,"stdout":"none"}`),
+		attached(`{"type":"hook_success","stdout":7,"stdout":` + quote(take2) + `,"hookEvent":7}`),
+		attached(`{"type":"hook_success","content":` + quote(take2) + `,"content":["x"]}`),
 		`{"attachment":{"type":"hook_success","content":"x"},"type":"attachment"}`,
 		`{"type":"attachment","attachment":{"type":"hook_success","content":"x"},"attachment":"x"}`,
 		`{"attachment":{"type":"hook_success","content":"x"},"type":"user"}`,

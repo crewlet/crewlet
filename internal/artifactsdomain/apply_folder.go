@@ -15,19 +15,16 @@ import (
 
 // The folder tree's records, and an artifact's move.
 //
-// EVERY RULE HERE IS DECIDED FROM THE RECORD AND THIS LOG'S ROWS ALONE: a
-// depth, a children or a company bound is the one STAMPED in the record, never
-// this build's constant, so a later build that raises one cannot part the
-// fleet on a record at the boundary. The writer decided each from its
-// snapshot of the one tree subject, so for a well-behaved writer none of these
-// refusals fires; they are here so that a writer's mistake is a refusal every
-// node agrees on rather than rows that differ.
+// EVERY RULE IS DECIDED FROM THE RECORD AND THIS LOG'S ROWS ALONE: each bound
+// is the one STAMPED in the record, never this build's constant, so a build
+// that raises one cannot part the fleet (package doc, "An artifact lives in one
+// folder, and a folder grants nothing"). A well-behaved writer, deciding from
+// the one tree subject, is never refused here; the refusals make a writer's
+// mistake one every node agrees on rather than rows that differ.
 //
-// A RECORD ON AN ARTIFACT SUBJECT THAT READS A FOLDER (a create into one, a
-// move) is not arbitrated against the tree, so the folder it names may have
-// been removed between its decide and its apply: it is refused `folder_gone`
-// here, at its position, on every node alike, and its writer told the folder
-// is no longer there.
+// A record on an ARTIFACT subject that reads a folder (a create into one, a
+// move) is not arbitrated against the tree, so its folder may be gone by the
+// apply: it is refused `folder_gone` at its position on every node alike.
 
 // applyFolder applies one record on the tree subject.
 func (a *Applier) applyFolder(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
@@ -62,9 +59,8 @@ func folderApplied(ctx context.Context, tx *sql.Tx, c applyContext, folder strin
 	return n > 0, nil
 }
 
-// writeFolderHistory writes the record's folder history row, filed under
-// folder, with the actor the record names and the authority it was stamped
-// with. The summary names folder ids and counts, never a name.
+// writeFolderHistory writes the record's folder history row under folder. The
+// summary names folder ids and counts, never a name.
 func writeFolderHistory(ctx context.Context, tx *sql.Tx, c applyContext, folder string, op OpKind,
 	outcome Outcome, reason Refusal, summary FolderHistorySummary, authority artifacts.Authority) (int, error) {
 
@@ -107,8 +103,7 @@ func (a *Applier) applyFolderCreate(ctx context.Context, tx *sql.Tx, c applyCont
 	p FolderCreatePayload) (int, error) {
 
 	if len(p.Folders) == 0 {
-		// A CREATE OF NOTHING files its refusal under no folder: the log
-		// carries it, and no writer forms it.
+		// A CREATE OF NOTHING, which no writer forms, is refused under no folder.
 		return refuseFolder(ctx, tx, c, "", OpCreate, RefusedInvalid, FolderHistorySummary{}, p.Authority)
 	}
 	first := p.Folders[0]
@@ -221,8 +216,7 @@ func folderRowExists(ctx context.Context, tx *sql.Tx, id string) (bool, error) {
 }
 
 // writeFolderShares writes a top-level folder's shares, each at the record's
-// broker instant (a share's own instant is the writer's clock, and never
-// written).
+// broker instant, never the share's own (the writer's clock).
 func writeFolderShares(ctx context.Context, tx *sql.Tx, c applyContext, folder string,
 	shares []artifacts.Share) (int, error) {
 
@@ -401,17 +395,15 @@ func reroot(ctx context.Context, tx *sql.Tx, c applyContext, ids []string, root 
 // applyFolderRemove removes one folder: its child folders (tombstones
 // included) and every artifact filed in it, live and trashed, move up to its
 // parent, and its row becomes a tombstone. A child moved up to the top level
-// becomes a top-level folder holding the removed folder's shares, owned by
-// its own owner: everybody the shares reached keeps seeing it, and the old
-// top-level folder's owner does too unless the child is somebody else's in a
-// tree with no company share, which only an administrator's elevated move
-// produces (ADR-0047 says why no share is granted on their behalf).
+// becomes a top-level folder holding the removed folder's shares, owned by its
+// own owner; the old top-level owner loses sight of it only when the child is
+// somebody else's in a tree with no company share, which only an elevated move
+// produces (ADR-0047 says why no share is granted for them).
 //
-// ONE HISTORY ROW, WITH THE COUNTS, and no row per artifact: an unbounded
-// folder would turn one person's gesture into as many history writes inside
-// the one transaction every other record waits behind. The artifacts' own
-// histories say nothing about it, because nothing about any of them changed
-// but where it is filed.
+// ONE HISTORY ROW, WITH THE COUNTS, not one per artifact: an unbounded folder
+// would make one gesture as many writes inside the transaction every other
+// record waits behind. The artifacts' histories are untouched: only where each
+// is filed changed.
 func (a *Applier) applyFolderRemove(ctx context.Context, tx *sql.Tx, c applyContext,
 	p FolderRemovePayload) (int, error) {
 
@@ -542,7 +534,7 @@ func (a *Applier) applyMove(ctx context.Context, tx *sql.Tx, c applyContext, id 
 	return 1 + n, nil
 }
 
-// artifactFolder is the folder an artifact is filed in now, ” at the top
+// artifactFolder is the folder an artifact is filed in now, "" at the top
 // level or for an artifact with no row.
 func artifactFolder(ctx context.Context, tx *sql.Tx, id string) (string, error) {
 	var folder string

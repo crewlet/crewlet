@@ -51,9 +51,8 @@ const (
 	// fraction.
 	KindGauge Kind = "gauge"
 
-	// KindHistogram is a distribution. Every latency here is one, because
-	// a mean latency answers no operational question — the tail is what a
-	// budget is spent by.
+	// KindHistogram is a distribution, as every latency here is: a mean
+	// answers no operational question, and the tail is what spends a budget.
 	KindHistogram Kind = "histogram"
 )
 
@@ -74,22 +73,18 @@ type Instrument struct {
 	Kind Kind
 	Unit string
 
-	// Attributes are the dimensions, and every one of them is a CLOSED SET.
-	// Cardinality is bounded by construction here rather than by
-	// convention: a subject id or a task key as an attribute is a time
-	// series per object, which is how a metrics backend falls over.
+	// Attributes are the dimensions, each a CLOSED SET: a subject id or a
+	// task key as an attribute is a time series per object, which is how a
+	// metrics backend falls over.
 	Attributes []string
 
-	// Shows is the failure this instrument makes visible. It is the reason
-	// the instrument exists, and an entry that cannot fill it in is an
-	// instrument nobody will alarm on.
+	// Shows is the failure this instrument makes visible; an entry that
+	// cannot fill it in is an instrument nobody will alarm on.
 	Shows string
 }
 
-// Catalogue is every instrument this engine records, in name order.
-//
-// ORDERED, so the generated reference is stable and a diff is a change rather
-// than a shuffle.
+// Catalogue is every instrument this engine records, in name order, so the
+// generated reference is stable and a diff is a change rather than a shuffle.
 func Catalogue() []Instrument {
 	return []Instrument{
 		// ---- the write path -------------------------------------------
@@ -323,18 +318,9 @@ func Catalogue() []Instrument {
 				"elsewhere in the file can abort an apply. A non-zero count " +
 				"on the operator's own hardware means the retry budget is " +
 				"being spent rather than held in reserve.",
-			// AND IT IS THE ONLY RETRY THE APPLIER HAS. A catalogued
-			// `apply.retries` sat beside this one, declared as
-			// "transient apply failures retried in place" — a
-			// mechanism that does not exist: [statelog.Runner.Run]
-			// returns on any error and the applier stays stopped
-			// until a build that can read the record runs. The
-			// transaction abort above IS the retry in place, so two
-			// instruments named one phenomenon and nothing recorded
-			// the vaguer of them. It was removed rather than given a
-			// call site, because inventing a second count for one
-			// event is the drift the single catalogue exists to
-			// prevent.
+			// Not apply.retries: that counts the apply loop retrying a
+			// failed attempt; this counts the store re-running one
+			// transaction's body.
 		},
 		{
 			Name: StatelogRecordsGated, Kind: KindCounter, Unit: UnitCount,
@@ -2829,12 +2815,10 @@ func Catalogue() []Instrument {
 	}
 }
 
-// Validate reports why the catalogue is malformed.
-//
-// Run by the constructor rather than only by a test: an instrument with no
-// name registers as an empty metric, and one with no reason is one nobody will
-// alarm on — both are mistakes worth refusing at the point the recorder is
-// built rather than discovering on a dashboard.
+// Validate reports why the catalogue is malformed. The constructor runs it,
+// not only a test: an instrument with no name registers as an empty metric,
+// and one with no reason is one nobody will alarm on, so the recorder refuses
+// both when it is built rather than a dashboard showing them.
 func Validate(entries []Instrument) error {
 	seen := map[string]bool{}
 	for _, e := range entries {

@@ -156,6 +156,8 @@ type benchRead struct {
 	end, look       time.Duration
 	filed, endAlloc uint64
 	count           *resumedReading
+	// escalated is whether the walk took the large slot ([passBudget]).
+	escalated bool
 }
 
 // benchChain reads the walk ([walkThread]) into the chain: every whole line to
@@ -178,6 +180,10 @@ func (r *benchChain) refused(broken *threadLineError) { r.c.Unread(broken) }
 // end keeps what ended the walk: nil at the thread's end.
 func (r *benchChain) end(_ bool, err error) { r.err = err }
 
+// records is how many records the chain filed, which the walk holds to its
+// base ([recordKeeper]).
+func (r *benchChain) records() int { return r.c.handles }
+
 // benchReadThread reads file into a chain of agent's in one walk, then End;
 // where count is set, the resumed count reads the same walk after the chain,
 // as a node's collection does. The chain goes first so the message See hands
@@ -196,7 +202,10 @@ func benchReadThread(b *testing.B, file, agent string, count bool) benchRead {
 		read.count = new(resumedReading)
 		readings = append(readings, read.count)
 	}
-	walkThread(b.Context(), f, threadPlainMax, readings...)
+	large := new(passBudget)
+	walkThread(b.Context(), f, threadPlainMax, large, readings...)
+	read.escalated = large.took != nil
+	large.release()
 	if chain.err != nil {
 		b.Fatalf("the thread reads to %v", chain.err)
 	}

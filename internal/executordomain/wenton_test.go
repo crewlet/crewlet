@@ -11,48 +11,18 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// A ROW KEPT UP TO A SESSION ITS TURN WENT PAST SAYS SO, and so does a lost
-// one. Its end said the turn went on past the session the row names, or the
-// turn was lost, which no frame of it saw end: either way the row is no account
-// of all the turn did, and a reader is told — a note in a reader's words, asked
-// of the row's one shown form, so the newer capture it names as not kept is the
-// one that stands on the row and its reason is redacted. And the view the
-// conversation's next turn continues the session by
-// ([executordomain.Session.Kept]) carries the two facts apart — what the end
-// said, and whether the turn was lost — with when the session was kept, so
-// that turn is told where the session ends, and of a lost turn only what its
-// end can say. A row that names no session, a turn still working and one that
-// ended on its last word say nothing of the kind.
+// A ROW KEPT UP TO A SESSION ITS TURN WENT PAST SAYS SO, and so does a lost one
+// (package doc, "What a reader is told of the session a row keeps"): the note,
+// asked of the row's shown form, names the unkept capture as it stands and
+// redacts its reason; a lost turn is told only what its end can say; Kept holds
+// the end's word and the loss apart, with CapturedAt. THE END'S WORD IS HELD TO
+// THE ROW'S PLACE: a row at its LastWord holds all the turn did (no note, handed
+// on and shown without went_on); an older one is one it went on past.
 //
-// THE END'S WORD IS HELD TO THE ROW'S PLACE. An end names the turn's last word
-// where it knows it ([executorkeep.Ending.LastWord]), and a row whose place is
-// that last word's — its final capture, which the run's record held refused and
-// the log took before the end all the same — holds all the turn did: it reads
-// as no row its turn went on past, says no note of it, is handed the next turn
-// as one through that turn, and is shown to every reader without went_on. A
-// row older than the last word named, of its own launch or an earlier one, is
-// one its turn went on past; and a lost turn's row at its last word is told
-// only what a lost turn's end can say. Whichever form of the row a reader asks
-// — as the row holds it, or as every reader is shown it, whose went_on is
-// already the end's word held to the row's place — it is told the same: the
-// row's own note, redacted, is its shown form's.
-//
-// Mutation: drop the lost outcome from WentOn, and the lost row reads as its
-// turn's whole session; name the unkept capture as the end did rather than as
-// it stands, and the row's own capture is told as not kept; tell a lost turn
-// the definite note, and it is said to have gone on past a session it may not
-// have; join the two facts in Kept, and a lost turn's next turn is told its
-// session was kept while it still worked; leave WentOn, Lost or CapturedAt out
-// of Kept, and the next turn is told the session runs through its turn's end.
-// Read went_on off the ending alone (endWentPast ignoring the last word), and
-// the row at its turn's last word reads, is noted, is handed on and is shown as
-// one its turn went on past; take every row as its last word's once one is
-// named, or hold the place to it at or after it, and the rows older than it, or
-// at it, read wrong; compare its launch or its capture alone, and a row older
-// than a later capture of its own launch, or than a later launch's, reads as
-// its turn's last word; choose the note, hand the row on, or show it by the
-// end's own went_on, and the lost row's note as the row holds it, the next turn
-// or the shown form at the last word says the turn went on past it.
+// Mutation: drop the lost outcome from WentOn; name the unkept capture as the
+// end did; give a lost turn the definite note; join or drop WentOn, Lost or
+// CapturedAt in Kept; read went_on off the ending alone, or compare launch or
+// capture alone; or show the end's own went_on: a case goes red.
 func TestARowKeptUpToASessionItsTurnWentPastSaysSo(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 11, 8, 9, 0, 0, 0, time.UTC)

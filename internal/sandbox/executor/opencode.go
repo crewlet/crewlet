@@ -20,7 +20,7 @@ import (
 )
 
 // OpenCodeName is this runner's config name.
-const OpenCodeName = "opencode"
+const OpenCodeName = sandbox.OpenCodeHarness
 
 // transcriptDetailLimit caps one transcript line's echoed text: the grammar's
 // own preview bound.

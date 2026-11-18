@@ -16,15 +16,13 @@ import (
 // WHAT A LOOP HOLDS PAST ITS CHECKPOINT WHEN ITS LOG MAY HAVE MOVED IS GIVEN
 // BACK, NEVER MIXED IN.
 //
-// A broker restored under a running node — an R1 log on an interval fsync that
-// crashed, or a copy brought back — ends somewhere below the records the node
-// was handed, and its own next records reuse their sequences. The loop learns
-// of it from a failed fetch or from an end read below what it holds, and
-// before it applies anything past its checkpoint it compares the record there
-// with the log's. Every case below ends one of the two ways that keeps a
-// node's rows ONE history: the divergence stop, or only the restored log's
-// records applied past the checkpoint — never the old history's records
-// committed with the new one's after them, which no later reading can find.
+// A broker restored under a running node (a crashed R1 log on interval fsync,
+// a copy brought back) ends below what the node was handed, and its next
+// records reuse those sequences. The loop learns of it from a failed fetch or
+// an end read below what it holds, and compares the record at its checkpoint
+// with the log's before applying past it. Every case ends one of the two ways
+// that keep a node's rows ONE history: the divergence stop, or only the
+// restored log's records applied past the checkpoint.
 
 // restoredAt is the broker instant of the restored log's record at seq: another
 // record than the one first offered there.
@@ -115,20 +113,14 @@ func rowsByHistory(t *testing.T, h *applyHarness, through uint64) map[uint64]str
 // BARRIERS REACHED PAST THE CHECKPOINT ARE NOT THE BASE A RESTORED LOG IS
 // ADMITTED AGAINST.
 //
-// Two barriers are reached and handed to the checkpoint transaction beside the
-// loop, whose commit is held — a disk's stalled fsync. The broker is restored
-// meanwhile: the loop's next fetch fails, and the log now holds edits of its
-// own at the barriers' sequences and past them. The commit lands only after
-// the loop has had time to look at what the restored broker delivers. Before,
-// the loop verified the checkpoint's record as it stood before that commit,
-// found it the log's, took the restored edits at the barriers' sequences for
-// redeliveries of what it had reached — and skipped them once the barriers
-// committed — and applied the edit after them on top: rows of two histories,
-// and a checkpoint naming the restored log's own record, so neither the loop
-// nor the heartbeat could find it again. Now the doubt sends the reached
-// position back, the loop waits for the commit in flight before it looks, and
-// the record that commit left at the checkpoint is the old history's, which
-// the restored log does not hold: the divergence stop.
+// Two barriers sit in the checkpoint transaction, its commit held (a stalled
+// fsync), when the broker is restored: a fetch fails and the log holds its own
+// edits at the barriers' sequences and past them. The doubt sends the reached
+// position back and the loop waits for the commit in flight before it looks;
+// that commit leaves the old history's record at the checkpoint, so it stops
+// on the divergence. Verifying before the commit took the restored edits for
+// redeliveries and applied the next on top: two histories, and a checkpoint
+// neither the loop nor the heartbeat could find again.
 func TestBarriersReachedPastTheCheckpointAreNotTheBaseARestoredLogIsAdmittedAgainst(t *testing.T) {
 	t.Parallel()
 	hold := storetest.HoldCommits(t)
@@ -155,8 +147,8 @@ func TestBarriersReachedPastTheCheckpointAreNotTheBaseARestoredLogIsAdmittedAgai
 		"read waiting there would be released on barriers the log may no longer hold",
 		func() bool { return h.fetch.failing() == 0 && h.runner.Reached().Seq == 3 })
 	// LONG ENOUGH for a loop that did not wait for the commit in flight to
-	// fetch what the restored broker delivers and verify the checkpoint as it
-	// stood before that commit — a back-off and a fetch, milliseconds.
+	// fetch and verify the checkpoint as it stood before it: a back-off and a
+	// fetch, milliseconds.
 	time.Sleep(time.Second)
 	hold.Release()
 
@@ -178,14 +170,11 @@ func TestBarriersReachedPastTheCheckpointAreNotTheBaseARestoredLogIsAdmittedAgai
 // A TAIL THE BUDGET SPLIT IS GIVEN BACK AT A FAILED FETCH.
 //
 // Each record writes a whole transaction's rows, so a run of three commits one
-// and keeps the other two in hand. The broker is restored while the first
-// commits: the loop's next fetch fails, and the log holds edits of its own at
-// the two in hand and past them. Before, the loop kept its tail, verified the
-// checkpoint's record — the restored log's own, since the restore point is at
-// it — and applied the old history's two before the restored log's next edit,
-// skipping the restored log's at their sequences as redeliveries. Now the tail
-// goes back to the broker with the doubt, and only the restored log's records
-// are applied past the checkpoint.
+// and keeps two in hand. The broker is restored while the first commits: the
+// next fetch fails, and the log holds its own edits at the two and past them.
+// The tail goes back with the doubt, so only the restored log's records are
+// applied past the checkpoint; a kept tail was applied before the restored
+// log's next edit, its own at those sequences skipped as redeliveries.
 func TestATailTheBudgetSplitIsGivenBackAtAFailedFetch(t *testing.T) {
 	t.Parallel()
 	hold := storetest.HoldCommits(t)
@@ -237,13 +226,11 @@ func TestATailTheBudgetSplitIsGivenBackAtAFailedFetch(t *testing.T) {
 
 // WHAT THE REORDER BUFFER HOLDS ABOVE A HOLE IS GIVEN BACK AT A FAILED FETCH.
 //
-// Two records arrive above a hole and wait in the reorder buffer for the one
-// below them. The broker is restored: a fetch fails, and the log holds edits of
-// its own from the hole up. Before, the buffer kept the old two, and when the
-// restored log's records arrived it kept ONE record per sequence — the old
-// ones, which arrived first — so the restored log's record at the hole was
-// applied under the old history's two. Now the buffer is emptied with the
-// doubt, and only the restored log's records are applied.
+// Two records wait in the reorder buffer above a hole when the broker is
+// restored: a fetch fails, and the log holds its own edits from the hole up.
+// The buffer empties with the doubt, so only the restored log's records are
+// applied; kept, the buffer's one-record-per-sequence held the old two, and
+// the restored record at the hole was applied under them.
 func TestWhatTheReorderBufferHoldsIsGivenBackAtAFailedFetch(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -279,15 +266,13 @@ func TestWhatTheReorderBufferHoldsIsGivenBackAtAFailedFetch(t *testing.T) {
 
 // AN END READ BELOW THE REACHED POSITION OWES A VERIFICATION.
 //
-// The checkpoint is below the barriers the loop reached past it, so a reading
-// of the log's end between the two finds nothing ahead — the checkpoint is
-// inside the log — and refuses nothing. It is still a log that does not hold
-// what the loop holds: here a restore that no fetch failure told the loop of,
-// whose log is then written past those barriers in another history. The
-// reading sends the reached position back at once and the loop verifies before
-// it goes on, at the checkpoint the held commit leaves: the divergence stop.
-// Paired only with the checkpoint, the reading found nothing, and the loop
-// applied the restored log's next record on top of the barriers it committed.
+// The checkpoint is below the barriers reached past it, so an end read between
+// the two is inside the log and, paired with the checkpoint alone, refuses
+// nothing; yet that log lacks what the loop holds (a restore no fetch failure
+// reported, then written past the barriers in another history). The reading
+// sends the reached position back and the loop verifies at the checkpoint the
+// held commit leaves: the divergence stop, not the restored log's next record
+// applied on top of the committed barriers.
 func TestAnEndReadBelowTheReachedPositionOwesAVerification(t *testing.T) {
 	t.Parallel()
 	hold := storetest.HoldCommits(t)
@@ -338,15 +323,13 @@ func TestAnEndReadBelowTheReachedPositionOwesAVerification(t *testing.T) {
 
 // A BARRIER WAITING BESIDE THE LOOP AT A DOUBT IS GIVEN BACK, NOT COMMITTED.
 //
-// Two barriers are in the checkpoint transaction beside the loop, held at its
-// commit, and a third waits behind them for the next. The broker is restored
-// with its end at the second — the third and what follows it are the restored
-// log's own — and a fetch fails. The held commit is the old history's and the
-// log's alike, so the checkpoint it leaves is one the restored log holds; the
-// third, from before the failure, is not committed after it but given back,
-// and the loop follows the restored log from the checkpoint without a stop.
-// Committed under the doubt, it named a record the restored log does not hold
-// at its sequence, and the node stopped on a divergence its own rows never had.
+// Two barriers are held at the checkpoint transaction's commit and a third
+// waits for the next when the broker is restored with its end at the second
+// and a fetch fails. The held commit is in both histories, so its checkpoint
+// is one the restored log holds; the third is given back, and the loop
+// follows the restored log without a stop. Committed under the doubt, it
+// named a record the restored log lacks, and the node stopped on a divergence
+// its rows never had.
 func TestABarrierWaitingBesideTheLoopAtADoubtIsGivenBack(t *testing.T) {
 	t.Parallel()
 	hold := storetest.HoldCommits(t)
@@ -394,16 +377,13 @@ func TestABarrierWaitingBesideTheLoopAtADoubtIsGivenBack(t *testing.T) {
 
 // A DOUBT WHILE THE START VERIFIES IS NOT SETTLED BY IT.
 //
-// A start compares the record at the checkpoint with the log's before the loop
-// applies anything past it. Here the broker is restored the moment that
-// comparison has read the log: the heartbeat beside the start reads the end
-// below the checkpoint, and the restored log is then written past it in
-// another history. What the start read was the node's own record, but the
-// doubt came after it read, so the loop owes a look of its own, finds another
-// record at the checkpoint, and stops on the divergence. Settled by the start,
-// the doubt was cleared unasked and the restored log's records were applied on
-// top of these rows, past a checkpoint that then named the restored log's own
-// record — which neither the loop nor the heartbeat could find again.
+// The broker is restored just after the start's checkpoint comparison read
+// the log: the heartbeat reads the end below the checkpoint, and the restored
+// log is written past it in another history. The start saw the node's own
+// record, but the doubt came later, so the loop looks again, finds another
+// record at the checkpoint and stops on the divergence. Settled by the start,
+// the restored log's records were applied on top of these rows, past a
+// checkpoint neither the loop nor the heartbeat could find again.
 func TestADoubtWhileTheStartVerifiesIsNotSettledByIt(t *testing.T) {
 	t.Parallel()
 	h := appliedThrough(t, 3)

@@ -19,13 +19,13 @@ import (
 // every note it read. What it is told is what it lacks
 // — what changed since its last message, and of a session cut off, that it was
 // or may have been and what it may not show ([InterruptedSession],
-// [InterruptedCopy], [MayBeInterruptedCopy]), with the messages that carried
-// its work on, the calls and the notes it may lack ([LeadsToldAgain],
-// [CalledAfter], [NotesReadAgain]) — and, where the box it runs in is
-// not the one it was last worked in, what that changes. The fresh brief a run
-// that starts a session of its own is handed is [BuildPhaseUserMessage]'s, and,
-// for one carrying a round on, what became of the run before it and every call
-// of the round so far ([CalledBefore]), which its session holds none of.
+// [InterruptedCopy], [MayBeInterruptedCopy], [SavedSession]), with the
+// messages that carried its work on, the calls and the notes it may lack
+// ([LeadsToldAgain], [CalledAfter], [NotesReadAgain]) — and, where the box it
+// runs in is not the one it was last worked in, what that changes. The fresh
+// brief a run that starts a session of its own is handed is
+// [BuildPhaseUserMessage]'s, and, for one carrying a round on, what became of
+// the run before it and every call of the round so far ([CalledBefore]).
 //
 // A CONVERSATION'S NEXT TURN continues the session its last turn left, in a box
 // of its own, and that session holds another turn: none of what this turn was
@@ -147,11 +147,38 @@ func BuildContinuedRound(m ContinuedRound) Prompt {
 // harness still worked — a job its box would not end, packed as it stood — and
 // one taken as or after its harness was stopped, by a stop, a loss, its turn's
 // cap or its own death. Said as only the second, it told a run continuing the
-// first that its harness had been stopped when it never was.
+// first that its harness had been stopped when it never was. A capture its job
+// went on past, never that job's final one, is told [SavedSession] in its
+// place, which says this and that the job went on.
 const InterruptedSession = "## The session above was cut off" +
 	"\nIt was saved while its harness was still working, or as or after it was stopped, so it may" +
 	" end in the middle of a call — a tool call with no result, which may or may not have run." +
 	" Check what such a call was meant to do before doing it again."
+
+// SavedSession tells a run that continues a session saved while the run that
+// worked in it still worked (internal/agent/runner's SessionBasis.WentOn) that
+// it was saved then, and when (at), and that the run went on: the session ends
+// where it was saved, not where its run stopped, and may end mid-call as
+// [InterruptedSession] says. Told only that, the run would take the session's
+// end for where its work stopped, while its job went on changing files no
+// record keeps; so it is told to read the working tree first. "Any call ... is
+// told below", never "what it did": a run that made no call after the save
+// gets no list ([CalledAfter]), and the words stay true. With at zero the
+// instant is left out, as [BuildNextTurn] leaves out a zero CapturedAt.
+func SavedSession(at time.Time) string {
+	var w strings.Builder
+	w.WriteString("## The session above was saved while its run still worked\nIt was saved")
+	if !at.IsZero() {
+		w.WriteString(" at " + at.UTC().Format(time.RFC3339) + ",")
+	}
+	w.WriteString(" while the run that worked in it was still working, and that run went on after it: the" +
+		" session above ends where it was saved, not where the run stopped. So it may end in the middle of a" +
+		" call: a tool call with no result, which may or may not have run. Any call the run made through your" +
+		" tools after it is told below. What else it did after it, the commands it ran and the files it read" +
+		" or changed, is in no record: check the working tree, and what any such call was meant to do, before" +
+		" doing any of it again.")
+	return w.String()
+}
 
 // InterruptedCopy is [InterruptedSession] for the copy of a session its job's
 // own box holds, continued in place where the job's record says its harness
@@ -190,7 +217,7 @@ const MayBeInterruptedCopy = "## The session above may have been cut off" +
 // it, so each told again is said to be one message, call or note, not two.
 // Where the job's record also says it was cut off, the cut-off words are told
 // in its place ([InterruptedCopy], [MayBeInterruptedCopy],
-// [InterruptedSession]), which say so and more.
+// [InterruptedSession], [SavedSession]), which say so and more.
 const MayCompactSession = "## The session above may reach you as a summary" +
 	"\nIts harness may have compacted it as this work went on, or may compact it before going on: a" +
 	" session near its window's size is compacted, which replaces everything before its last reply" +
@@ -1210,33 +1237,34 @@ const KeyKeptSession = "kept_session"
 // id, `match` finding a word in it. turn is the engine's record, defused by the
 // caller.
 //
+// THIS TURN'S IS KEPT ONLY UNTIL THIS RUN FIRST SAVES ITS OWN, which replaces it
+// on the turn's row, so the run is told to read it before then; no time is
+// given, which pacing or a failed save would make false. The last turn's is
+// another row, which nothing this turn keeps replaces.
+//
 // A SCHEDULE'S FIRE IS TOLD IN THE SCHEDULE'S WORDS (fire), as [BuildNextTurn]
-// and the endings block tell it: the session its schedule's last fire left, or
-// this fire's earlier launches'. Everywhere else in its brief a run its
-// schedule woke is told of fires, and "this conversation's last turn" beside
-// them names a turn nothing else in the brief speaks of.
+// and the endings block tell it: elsewhere in its brief a run its schedule woke
+// is told of fires, and "this conversation's last turn" would name a turn
+// nothing else there speaks of.
 //
 // ONE SENTENCE, AND ONLY HERE: a standing sentence about the session tools
-// would ride every request of every run and say what their descriptions say,
-// and this is the one place a model cannot know a session it could read
-// exists — a launch that could not continue the turn's own, or the one its
-// conversation's last turn left.
+// would ride every request of every run and repeat their descriptions; this is
+// the one place a model cannot know a session it could read exists.
 //
-// NEVER WHY IT IS NOT CONTINUED. Why a launch continues no session is said in
-// words for the log, and they quote what said no: a store's or a router's
-// error, a refused capture's reason, which carries what a box printed. Told
-// to the run in the engine's own voice, they put what a box wrote outside any
-// fence and an error meant for an operator into a vendor model's prompt; and
-// what the run can do about it is the same whatever the reason — read what
-// that session did.
+// NEVER WHY IT IS NOT CONTINUED: the log's words quote what said no (a store's
+// or a router's error, a box's output); told in the engine's voice, they would
+// put a box's words outside any fence and an operator's error into a vendor
+// model's prompt, and what the run can do is the same whatever the reason:
+// read what that session did.
 func KeptSession(turn string, thisTurn, fire bool) string {
 	said := nextTurnWordsFor(NextTurn{Fire: fire})
-	whose, what := "This "+said.whole+"'s last "+said.turn, "it did"
+	whose, read := "This "+said.whole+"'s last "+said.turn, ". Read what it did"
 	if thisTurn {
-		whose, what = "This "+said.turn+"'s earlier launches", "they did"
+		whose = "This " + said.turn + "'s earlier launches"
+		read = ", kept until this run first saves its own. Until then, read what they did"
 	}
-	return keptSessionHeader + "\n" + whose + " worked in a session this run does not continue. Read what " +
-		what + " with `" + toolname.ReadSession + "`, turn_id `" + turn + "`; `match` finds a word in it."
+	return keptSessionHeader + "\n" + whose + " worked in a session this run does not continue" + read +
+		" with `" + toolname.ReadSession + "`, turn_id `" + turn + "`; `match` finds a word in it."
 }
 
 // NextTurn is where the session a conversation's last turn left ends and the
@@ -1460,6 +1488,16 @@ func NextTurnAgain(m NextTurn) string {
 	}
 	return w.String()
 }
+
+// FreshTaskAgain is the lead of a fresh brief, which opened a session of the
+// run's own with the turn's task, as a later brief to a session of the work
+// that may be a summary tells it again (internal/agent/runner's leadsAgain):
+// the task it opened with follows it, rendered again by its teller. NO TURN
+// BOUNDARY AND NO BOX: that brief said neither, and the session it reaches may
+// have begun as another, so it says only that the work was started on it.
+const FreshTaskAgain = "### The task this work was started on" +
+	"\nA run of this work that began a session of its own was first told the task below, and the session " +
+	"above may show it only in a summary."
 
 // turnAgainSpan is the turn a conversation's last turn left this one after, as
 // [NextTurnAgain] names it, the clause that follows "your earlier turns of this

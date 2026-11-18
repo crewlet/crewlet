@@ -360,7 +360,11 @@ func TestABackendsOwnHandBackIsInFlightUntilSettled(t *testing.T) {
 			const group = "grp"
 			topic := "held.letters"
 			q := openForTest(t, Config{})
-			if err := q.PauseTopic(t.Context(), topic, group, "a person paused the seat"); err != nil {
+			at, err := q.Attachment(t.Context(), topic, group)
+			if err != nil {
+				t.Fatalf("Attachment: %v", err)
+			}
+			if err := q.PauseTopic(t.Context(), topic, group, at, "a person paused the seat"); err != nil {
 				t.Fatalf("PauseTopic: %v", err)
 			}
 			a := &attachment{q: q, key: attachKey{topic: topic, group: group},

@@ -11,12 +11,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// AN EVICTED NODE STAYS COUNTED UNTIL IT HAS HAD A CHANCE TO NOTICE.
-//
-// Dropping a node from the counted set is what lets the trim advance past its
-// position — and the moment it does, that node's writes become records every
-// applier drops, while it may still believe it holds everything it held. The
-// window is how long the fleet waits for it to read its own tombstone.
+// AN EVICTED NODE STAYS COUNTED UNTIL IT HAS HAD A CHANCE TO NOTICE: dropping
+// it lets the trim pass its position while it may still be writing records
+// every applier drops. The window is how long the fleet waits for it to read
+// its own tombstone.
 func TestEvictionFenceHoldsTheTrimUntilTheNodeCanNotice(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
@@ -43,13 +41,10 @@ func TestEvictionFenceHoldsTheTrimUntilTheNodeCanNotice(t *testing.T) {
 	}
 }
 
-// A LIVE DATA NODE WHOSE ROW HAS NOT LANDED COUNTS AT ZERO AND BLOCKS.
-//
-// That is a running node whose heartbeat's write was refused: it holds a
-// presence lease and applies every log, and nothing says where it stands.
-// Treating it as absent would let the trim advance past what it has still to
-// apply. (A node adopting a snapshot at boot is not this: it holds no lease
-// yet, and is kept by its own pin — [statelog.AdoptDeps.Hold].)
+// A LIVE DATA NODE WHOSE ROW HAS NOT LANDED COUNTS AT ZERO AND BLOCKS: it
+// holds a presence lease and applies every log, so treating it as absent would
+// let the trim pass what it has still to apply. (A node adopting a snapshot at
+// boot holds no lease yet and is kept by its own pin, [statelog.AdoptDeps.Hold].)
 func TestANodeWithNoPositionYetIsCountedAtZero(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
@@ -84,13 +79,9 @@ func TestANodeWithNoPositionYetIsCountedAtZero(t *testing.T) {
 	}
 }
 
-// A LIVE LEASE REFUSES AN EVICTION.
-//
-// A node renewing its presence lease is reaching the fleet and almost always
-// running, and an eviction drops every record it writes on every node and
-// moves its seats: the gesture is for a node that is not coming back, and a
-// live lease is the fleet's own evidence that this one is. The refusal is what
-// stops a mistyped node id taking a healthy machine out.
+// A LIVE LEASE REFUSES AN EVICTION: a node renewing it is almost always
+// running, and an eviction drops every record it writes and moves its seats.
+// The refusal stops a mistyped node id taking a healthy machine out.
 func TestAnEvictionIsRefusedWhileTheTargetIsStillTalking(t *testing.T) {
 	t.Parallel()
 	live := []statelog.Presence{{NodeID: "b"}}
@@ -105,31 +96,24 @@ func TestAnEvictionIsRefusedWhileTheTargetIsStillTalking(t *testing.T) {
 	if err := statelog.PermitEviction("gone", live, false); err != nil {
 		t.Fatalf("a node that is out of contact was refused: %v", err)
 	}
-	// AND AN OPERATOR MAY OVERRIDE, because the refusal is about safety
-	// rather than about permission and an operator can know something the
-	// lease does not say.
+	// AND AN OPERATOR MAY OVERRIDE: the refusal is about safety, not
+	// permission, and an operator can know what the lease does not say.
 	if err := statelog.PermitEviction("b", live, true); err != nil {
 		t.Fatalf("a forced eviction was refused: %v", err)
 	}
 }
 
-// A NODE THE FLOOR HAS PASSED IS NOT READMITTED, and every branch of the
-// judgement is reachable without a fleet.
-//
-// The operator documentation promised this refusal and nothing implemented it:
-// `crewlet retention readmit` wrote the inverse record for any node, including
-// one still offline at a position the log had long since trimmed — which put
-// back exactly the pin the eviction had been run to lift, and reported
-// success. The boundary is [statelog.Replayable]'s, against the HIGHER of the
-// published floor and the log's first surviving sequence, because that is the
-// bound the fence the readmitted node becomes subject to reads.
+// A NODE THE FLOOR HAS PASSED IS NOT READMITTED, which would put back the
+// pin its eviction lifted; every branch of the judgement is reachable without
+// a fleet. The boundary is [statelog.Replayable]'s, against the HIGHER of the
+// published floor and the log's first surviving sequence: the bound the fence
+// the readmitted node becomes subject to reads.
 func TestAReadmissionIsRefusedBelowTheFloor(t *testing.T) {
 	t.Parallel()
 	reported := time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
-	// THE TWO WITNESSES CARRY ONE DOMAIN EACH, so a judgement that read only
-	// one of them fails a case below: the tracker's floor is ahead of its
-	// stream, and the pages floor is unpublished while its stream has been
-	// purged.
+	// THE TWO WITNESSES CARRY ONE DOMAIN EACH, so a judgement reading only
+	// one fails a case: the tracker's floor is ahead of its stream, and the
+	// pages floor is unpublished while its stream has been purged.
 	bounds := []statelog.ReadmissionBound{
 		{Domain: "tracker", Generation: 2, Floor: 9_000, First: 8_800},
 		{Domain: "pages", Generation: 2, Floor: 0, First: 500},
@@ -220,9 +204,8 @@ func TestAReadmissionIsRefusedBelowTheFloor(t *testing.T) {
 						"node cannot compare is not a fault in the node", err,
 						statelog.ErrUnavailable)
 				}
-				// AND IT SAYS WHICH LOG, so the engine can tell the
-				// operator where this node is behind and send them to a
-				// node that isn't, rather than answer a fault.
+				// AND IT SAYS WHICH LOG, so the engine can send the operator to
+				// a node that is not behind rather than answer a fault.
 				var behind *statelog.ReanchorNotApplied
 				if !errors.As(err, &behind) || behind.Domain != "tracker" ||
 					behind.Reported != 3 || behind.Runs != 2 {
@@ -266,13 +249,10 @@ func TestAReadmissionIsRefusedBelowTheFloor(t *testing.T) {
 	}
 }
 
-// WHO READS WHAT IS ASKED OF THE TRIM'S OWN COUNTED SET.
-//
-// A writer about to publish a kind an older build cannot even defer waits for
-// every node that applies the log — so the set it asks is exactly the one the
-// trim counts. A live node holding a lease and no row yet applies the log all
-// the same and reads as zero, a node advertising a lower version reads as
-// that version, and an operator's eviction, once its fence window has passed,
+// WHO READS WHAT IS ASKED OF THE TRIM'S OWN COUNTED SET: a writer about to
+// publish a kind an older build cannot defer waits for every node that applies
+// the log. So a leased node with no row reads as zero, a node advertising a
+// lower version reads as that version, and an eviction past its fence window
 // releases the writer exactly as it releases the trim.
 func TestTheReadersAreTheTrimsCountedSet(t *testing.T) {
 	t.Parallel()

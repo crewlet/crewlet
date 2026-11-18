@@ -1406,7 +1406,9 @@ started with `-p` and no prompt, reading its brief on standard input from a
 file in the box — a brief carries every note the turn has read, and one
 argument is capped at 128 KiB — and with `--settings` naming a file of two
 `mcp_tool` hooks, which call the bridge's unlisted `steer_take` tool after each
-batch of the main agent's tool calls and as the run is about to finish, beside
+batch of the main agent's tool calls and as the run is about to finish (each
+note a hook is handed is recorded read only once the job's own session shows
+the hook took it), beside
 the setting every run's settings hold, which keeps the box's own retention
 sweep off the session the engine carries. The wrapper unsets
 `CLAUDE_CODE_SIMPLE` and `CLAUDE_CODE_SAFE_MODE` first, since either switches

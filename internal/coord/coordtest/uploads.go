@@ -251,3 +251,150 @@ var uploadReservationCases = []fleetCase{{
 		}
 	},
 }}
+
+// ---- the seats' save allowances --------------------------------------- //
+
+func (h *fleetHarness) saveLedger(seat string) (string, uint64) {
+	h.t.Helper()
+	value, rev, err := h.f.SaveLedger(h.ctx, seat)
+	if err != nil {
+		h.t.Fatalf("SaveLedger(%s): %v", seat, err)
+	}
+	return string(value), rev
+}
+
+func (h *fleetHarness) swapSaveLedger(seat, value string, rev uint64) bool {
+	h.t.Helper()
+	wrote, err := h.f.SwapSaveLedger(h.ctx, seat, []byte(value), rev)
+	if err != nil {
+		h.t.Fatalf("SwapSaveLedger(%s, %s at %d): %v", seat, value, rev, err)
+	}
+	if wrote != 0 {
+		if _, now := h.saveLedger(seat); now != wrote {
+			h.t.Fatalf("SwapSaveLedger answered revision %d and %s's save ledger is at %d", wrote, seat, now)
+		}
+	}
+	return wrote != 0
+}
+
+var saveAllowanceCases = []fleetCase{{
+	// A SEAT'S SAVE LEDGER IS ONE COMPARE-AND-SET: a save counts its bytes
+	// against the revision it read, so two saves of one seat racing for the
+	// last of its allowance cannot both win, and a create lands only where
+	// no ledger is.
+	name: "a seat's save ledger is written only at the revision it was read at",
+	fn: func(h *fleetHarness) {
+		if value, rev := h.saveLedger("ada"); value != "" || rev != 0 {
+			h.t.Fatalf("a fresh fleet's save ledger reads %q at %d, want nothing at 0", value, rev)
+		}
+		if !h.swapSaveLedger("ada", `{"entries":1}`, 0) {
+			h.t.Fatal("the first save ledger write was refused")
+		}
+		value, rev := h.saveLedger("ada")
+		if value != `{"entries":1}` || rev == 0 {
+			h.t.Fatalf("the save ledger reads %q at %d after its first write", value, rev)
+		}
+		if h.swapSaveLedger("ada", `{"entries":"again"}`, 0) {
+			h.t.Fatal("a second create of the save ledger landed over the first")
+		}
+		if h.swapSaveLedger("ada", `{"entries":"stale"}`, rev+1000) {
+			h.t.Fatal("a save ledger write at a revision nobody read landed")
+		}
+		if !h.swapSaveLedger("ada", `{"entries":2}`, rev) {
+			h.t.Fatal("a save ledger write at the revision read was refused")
+		}
+		value, next := h.saveLedger("ada")
+		if value != `{"entries":2}` || next <= rev {
+			h.t.Fatalf("the save ledger reads %q at %d after a write at %d", value, next, rev)
+		}
+		if h.swapSaveLedger("ada", `{"entries":"lost"}`, rev) {
+			h.t.Fatal("a save ledger write at the superseded revision landed")
+		}
+		if value, _ := h.saveLedger("ada"); value != `{"entries":2}` {
+			h.t.Fatalf("the save ledger reads %q, want the write that won", value)
+		}
+	},
+}, {
+	// RACING SAVES OF ONE SEAT SERIALISE across nodes, which is where they
+	// race: a handover moves a job to another node while the old one's save
+	// is still counting.
+	name: "racing save ledger writes at one revision land exactly once",
+	fn: func(h *fleetHarness) {
+		if !h.swapSaveLedger("ada", `{"entries":0}`, 0) {
+			h.t.Fatal("the first save ledger write was refused")
+		}
+		_, rev := h.saveLedger("ada")
+		nodes := h.nodes(4)
+		const writers = 8
+		var (
+			wg     sync.WaitGroup
+			mu     sync.Mutex
+			landed int
+		)
+		for i := range writers {
+			node := nodes[i%len(nodes)]
+			wg.Go(func() {
+				wrote, err := node.SwapSaveLedger(h.ctx, "ada", fmt.Appendf(nil, `{"entries":%d}`, i), rev)
+				if err != nil {
+					h.t.Errorf("SwapSaveLedger: %v", err)
+					return
+				}
+				if wrote != 0 {
+					mu.Lock()
+					landed++
+					mu.Unlock()
+				}
+			})
+		}
+		wg.Wait()
+		if landed != 1 {
+			h.t.Fatalf("%d racing writes at one revision landed, want exactly one", landed)
+		}
+	},
+}, {
+	// A SAVE LEDGER IS ITS OWN KEY in a bucket the upload reservations
+	// share: no seat handle, "ledger" included, writes the upload ledger or
+	// an upload's record, no upload writes a seat's save ledger, and one
+	// seat's ledger is not another's. A collision would let an upload's
+	// reservation and a seat's saves overwrite each other's counts.
+	name: "a seat's save ledger is not the upload ledger, an upload record or another seat's",
+	fn: func(h *fleetHarness) {
+		h.swapSaveLedger("ledger", "saves of ledger", 0)
+		h.swapSaveLedger("u-6", "saves of u-6", 0)
+		if value, rev := h.uploadLedger(); value != "" || rev != 0 {
+			h.t.Fatalf("a seat's save ledger reads as the upload ledger: %q at %d", value, rev)
+		}
+		for _, upload := range []string{"ledger", "u-6"} {
+			if value, rev := h.uploadRecord(upload); value != "" || rev != 0 {
+				h.t.Fatalf("a seat's save ledger reads as upload %s's record: %q at %d", upload, value, rev)
+			}
+		}
+		h.swapLedger("the upload ledger", 0)
+		h.swapRecord("u-6", "the record of u-6", 0)
+		if value, _ := h.saveLedger("ledger"); value != "saves of ledger" {
+			h.t.Fatalf("writing the upload ledger moved the save ledger of a seat named ledger: %q", value)
+		}
+		if value, _ := h.saveLedger("u-6"); value != "saves of u-6" {
+			h.t.Fatalf("writing an upload's record moved the save ledger of a seat of its name: %q", value)
+		}
+		if value, rev := h.saveLedger("grace"); value != "" || rev != 0 {
+			h.t.Fatalf("a seat that never saved reads another seat's save ledger: %q at %d", value, rev)
+		}
+	},
+}, {
+	name: "an empty value or seat is an error, not a save ledger write",
+	fn: func(h *fleetHarness) {
+		if wrote, err := h.f.SwapSaveLedger(h.ctx, "ada", nil, 0); err == nil || wrote != 0 {
+			h.t.Errorf("an empty save ledger answered (%d, %v), want an error", wrote, err)
+		}
+		if wrote, err := h.f.SwapSaveLedger(h.ctx, "", []byte("x"), 0); err == nil || wrote != 0 {
+			h.t.Errorf("a save ledger of no seat answered (%d, %v), want an error", wrote, err)
+		}
+		if _, _, err := h.f.SaveLedger(h.ctx, ""); err == nil {
+			h.t.Error("a read of the save ledger of no seat answered no error")
+		}
+		if value, rev := h.saveLedger("ada"); value != "" || rev != 0 {
+			h.t.Fatalf("refused writes left a save ledger: %q at %d", value, rev)
+		}
+	},
+}}

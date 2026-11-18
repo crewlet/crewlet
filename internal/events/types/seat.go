@@ -176,19 +176,21 @@ const (
 	// on its executor's question holds its notes for whatever resumes it.
 	SteerExpired SteerOutcome = "expired"
 
-	// SteerMissed is a note a step took for its reader, which never had it.
-	// The take's write landed and its answer was lost, so the run's record
-	// marks the read unanswered, and no later launch whose job started was
-	// told the note: one that was records it read by its brief, which is then
-	// delivered there. Named at the step that took it, and reported by the
-	// turn's ending, since no step recorded handing it over.
+	// SteerMissed is a note a step took for its reader, which never had it:
+	// the take's answer was lost, so the record marks the read unanswered; or
+	// a Claude Code hook served it and every serve was lost, each a hook's
+	// serve its harness gave up or its job's whole session proves it never
+	// took, one the latter. And no later step read it: a later launch whose
+	// job started records it read by its brief, delivered there. Named at the
+	// step that took it or the last serve, reported by the turn's ending.
 	SteerMissed SteerOutcome = "missed"
 
-	// SteerUnconfirmed is a note the run's bridge handed to its executor's
-	// harness, one that takes notes as it polls (OpenCode's), which never
-	// confirmed putting it in front of its model before the turn ended. Its
-	// session may hold it, and nothing says it does. Named at the job it was
-	// handed to.
+	// SteerUnconfirmed is a note handed to its executor's harness, by a poll
+	// (OpenCode's) or a hook's answer (Claude Code's), which never confirmed
+	// it before the turn ended: OpenCode by its own confirmation, Claude Code
+	// by its session's record, its harness having given up each call that
+	// served it included, since an answer can outrun the cancel. Its session
+	// may hold it. Named at the step it was handed over at.
 	SteerUnconfirmed SteerOutcome = "unconfirmed"
 )
 
@@ -220,10 +222,12 @@ const (
 	// SteerBoundaryBrief — in the brief an executor was launched with.
 	SteerBoundaryBrief SteerBoundary = "brief"
 
-	// SteerBoundaryToolBatch — Claude Code, after a batch of tool calls.
+	// SteerBoundaryToolBatch — Claude Code, after a batch of tool calls, once
+	// the job's session showed its hook took it.
 	SteerBoundaryToolBatch SteerBoundary = "tool_batch"
 
-	// SteerBoundaryFinish — Claude Code, as the run was about to finish.
+	// SteerBoundaryFinish — Claude Code, as the run was about to finish, once
+	// the job's session showed its hook took it.
 	SteerBoundaryFinish SteerBoundary = "finish"
 
 	// SteerBoundaryStep — OpenCode, at its next step.
@@ -245,9 +249,9 @@ func (b SteerBoundary) Valid() bool { return slices.Contains(SteerBoundaries, b)
 // an executor that never confirmed reading it ([SteerOutcome]).
 //
 // PUBLISHED BY THE NODE WHOSE STEP READ THE NOTE — the runner's node for a round
-// of the engine's loop or an executor's brief, the node serving the run's tool
-// bridge for a read inside the run — or BY THE NODE THAT FINISHED THE TURN'S
-// ENDING, for every note no step reported reading: expired, missed or
+// or a brief, the run's bridge's node for OpenCode's confirmation, the node
+// collecting the job for its hook's read, at the serve's instant — or BY THE
+// NODE THAT FINISHED THE TURN'S ENDING, for every note no step reported reading: expired, missed or
 // unconfirmed, as the run's record knows it, or delivered where a launch's brief
 // told it again ([AgentTurnSteered.Retold]). Never by the node that took the
 // request, which answered `pending` and cannot see the turn. A note to a turn with no run

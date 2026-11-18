@@ -182,11 +182,14 @@ func (e *Engine) removeStatusRecord(ctx context.Context) {
 // statusRecordRows is this node's rows as its record carries them, each read
 // from memory as the heartbeat once read them: the MCP rows off the bridges'
 // own record, the model rows off each entry's plan, the runner probe's last
-// finding, and what the node's file says it runs on.
+// finding, what the node's file says it runs on, and the runs of its seats
+// waiting for an operator, off the executor coordinator's memory: what every
+// data node raises executor_resume_blocked from, since this node may evaluate
+// no alarm table of its own ([Engine.executorReading]).
 func (e *Engine) statusRecordRows(ctx context.Context) coord.NodeStatusRecord {
 	return coord.NodeStatusRecord{
 		MCP: e.mcpStatus(ctx), Models: e.modelStatus(ctx), Runners: e.runnerStatus(),
-		Infra: NodeInfra(e.boot),
+		Infra: NodeInfra(e.boot), ResumesBlocked: e.resumesBlocked(),
 	}
 }
 

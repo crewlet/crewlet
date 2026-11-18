@@ -526,10 +526,10 @@ every other route.
 | `POST` | `/webhooks/datadog` | Receive a Datadog monitor alert, authenticated by a constant-time comparison of `X-Crewlet-Token`. Datadog signs nothing, so the token is the whole check: an unset one answers `503`, and one shorter than 26 characters answers `503` too — see [Datadog](../integrations/datadog.md#verification-is-weaker-here-and-that-is-the-providers-ceiling) |
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
 | `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path). Mounted where `CREWLET_SANDBOX_OTEL_RECEIVER_URL` is set, or, for a node's own `direct` boxes, where it runs seats, binds `api.port` and forwards to `OTEL_EXPORTER_OTLP_ENDPOINT` — on a node without `ingress` to its own host's loopback alone, as the bridge is |
-| `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to the seat's executor, its harness's run in a box — by the node holding the seat, to which the node the call reaches relays it over the broker. Per-run token in the path; all three verbs because that is what the transport uses. A call is admitted under any `Host`, a proxy's or tunnel's public name on the node's loopback included. `401` for a token that is forged, expired, or names a run that is over, for a request on a job's other token once its box has said which session it started (a job whose launch continues a session is handed one token per session its box may start: see [Which session the box started](../concepts/code-sandbox.md#which-session-the-box-started)), and for a call to an Ask Crewlet deep-work run held to the engine host's loopback that comes from any other address, or names a `Host` that is neither loopback nor a container runtime's name for the engine host (`host.docker.internal`, `host.containers.internal`); `503` with a `Retry-After` while no node can answer for the run's seat, after waiting up to two seat-lease lifetimes for one; `502` when the seat's holder took the call and stopped answering before it wrote a status. Mounted only on a node that has a bridge: one given `CREWLET_MCP_BRIDGE_URL`, or one that runs seats and binds `api.port`, for its own `direct` boxes. A node without `ingress` mounts it on `api.port` beside its probes and serves it to its own host's loopback alone, answering any other caller `404 no_route` (see [Probes on a node without ingress](#probes-on-a-node-without-ingress)); on any other node the route is absent |
+| `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to the seat's executor, its harness's run in a box — by the node holding the seat, to which the node the call reaches relays it over the broker. Per-run token in the path; all three verbs because that is what the transport uses. A call is admitted under any `Host`, a proxy's or tunnel's public name on the node's loopback included. `401` for a token that is forged, expired, or names a run that is over, for a request on a job's other token once its box has said which session it started (a job whose launch continues a session is handed one token per session its box may start: see [Which session the box started](../concepts/code-sandbox.md#which-session-the-box-started)), and for a call to an Ask Crewlet deep-work run held to the engine host's loopback that comes from any other address, or names a `Host` that is neither loopback nor a container runtime's name for the engine host (`host.docker.internal`, `host.containers.internal`); `503` with a `Retry-After` while no node can answer for the run's seat, after waiting up to two seat-lease lifetimes for one, and at once where the node a call was relayed to let the seat go before serving it, or where a request opening an MCP session reached the run's session just as it ended on the node that held it; `502` when the seat's holder took the call and stopped answering before it wrote a status. Mounted only on a node that has a bridge: one given `CREWLET_MCP_BRIDGE_URL`, or one that runs seats and binds `api.port`, for its own `direct` boxes. A node without `ingress` mounts it on `api.port` beside its probes and serves it to its own host's loopback alone, answering any other caller `404 no_route` (see [Probes on a node without ingress](#probes-on-a-node-without-ingress)); on any other node the route is absent |
 | `GET` `POST` `DELETE` | `/mcp/{token}/server/{server}` | One of the seat's MCP servers, served apart from the engine's own tools at `/mcp/{token}` so the run's harness can keep its tools out of each request ([the tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)): that server's tools alone, under the name the company gives it, with what the company says the server is for as its MCP instructions. Every call is the run's, decided and recorded as one at `/mcp/{token}` is. The same token, transport, routing and refusals as `/mcp/{token}`, relayed to the seat's holder the same way; `400` for a server the run's session does not serve |
 | `GET` | `/mcp/{token}/steer/notes?after={seq}` | The run's [notes](../concepts/code-sandbox.md#notes-to-a-running-run): the notes waiting for its turn past the cursor, `{"notes": [{seq, id, inbox, message}]}`, held up to ten seconds while none waits and answered at once when one arrives. `503` with a `Retry-After` once the node is stopping (`draining`) or the run's session has ended here (`unavailable`), the held poll included: its notes wait for the session's next opening. The same token, routing and refusals as the bridge; `404` for a run that has nothing to steer |
-| `POST` | `/mcp/{token}/steer/read` | Record the notes the run's harness put in front of its model, `{"ids": [...]}` (one to ten, at most 64 KiB): `204`, or `503` with a `Retry-After` when the record could not be written, and the notes wait |
+| `POST` | `/mcp/{token}/steer/read` | Record the notes the run's harness put in front of its model, `{"ids": [...]}` (one to ten, at most 64 KiB): `204`, or `503` with a `Retry-After` when the record could not be written, when the run's session ended here as the read reached it or before it was recorded, while the run's tools are closed here, its seat leaving the node or a person having stopped it, or once the run's record takes no read of its job any more, its completion having claimed the run, or where it names a waiting note sealed under a key this node does not hold, which a node that holds the key records (`unavailable`), and the notes it did not record wait |
 | `POST` | `/mcp/{token}/skill` | Record that the run's harness loaded one of the skills it was handed as its own, `{"skill": "<name>"}` (at most 4 KiB), naming the skill as the harness listed it: the run's own load of the Tool Skill it stands for, recorded as a `load_tool_skill` call on the run's record, which unlocks the tools a required skill covers. `204` whether or not the name is one of the run's skills; `404` for a run handed none. The plugin of an OpenCode run posts here; a Claude Code run's hook reports the same load as a call of the bridge's `skill_loaded` tool, which is never listed. The same token, routing and refusals as the bridge |
 | `POST` | `/operator/mcp` | Worklet, Doclet and Chatlet, served over MCP to **your** AI assistant. **Always needs a credential**, which for an assistant is a [machine token](#post-iamcredentials-mints-a-machine-token) acting as you: it files and moves work (see [below](#operatormcp--your-own-assistant)). The catalogue is built per request: `503 no_active_revision` until this node has met its first company, and never empty after that. Pausing, resuming and steering a seat and answering a parked run are about the fleet's own records, so every company is served them whatever backends it runs. Stateless: no session, so any node answers any request, and a `GET` or `DELETE` is answered `405` |
 | `POST` | `/operator/act/{tool}` | The same catalogue's writes, one tool per request, **as the principal your request resolves to**: the dashboard's write surface. Any credential the guard resolved; every tool is decided by the authority table, as on every other surface, and the `Idempotency-Key` header is required (see [below](#operatoract--the-dashboards-write-surface)). Answers `503 no_active_revision` before the first company, as `/operator/mcp` does, and `404 unknown_tool` for a tool the company's catalogue does not serve |
@@ -7348,10 +7348,14 @@ kind of step (`boundary`) and, for a read by the executor in its box, its
 launch (`launch_id`), with `retold` where a later launch's brief told it again
 after a step that took it never handed it over; `expired` if the turn ended
 first; `missed`, at the step that took it, where that step's reader never had
-it (a take whose answer was lost) and no later launch whose job started told
-it; or
-`unconfirmed`, at the job, where the executor's harness was handed it and never
-confirmed reading it. `note_id` is the request's
+it (a take whose answer was lost, or a note whose every serve to a Claude Code
+hook was lost, a serve's session proving it absent) and no later launch whose
+job started told it; or `unconfirmed`, at the job, where the executor's harness
+was handed it and never confirmed reading it, or at the last of a Claude Code
+hook's serves where its harness gave up every lost serve of the note. A Claude
+Code run's note is recorded `delivered` at its hook's step only once the job's
+session shows the hook took it, when the job's box is read at its collection,
+a stop or a loss. `note_id` is the request's
 own id, so a retry of one request is one note however often it is sent.
 
 **Where it goes**: a turn whose executor has launched in its box keeps its
@@ -11132,7 +11136,7 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   decided by the one decision that launch takes, of the member of the seat's
   executor chain it would be launched on now, the first not sitting out its
   plan. **A relaunch** decides it as a relaunch does — the turn live and not
-  ending, the newest capture of the job a relaunch would follow kept, stating
+  ending, the newest kept capture of the job a relaunch would follow, stating
   its save point and named by the row, and a runner that restores its harness,
   format and release
   ([A relaunch continues the turn's
@@ -11151,7 +11155,9 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   comes: the node answering asks it, once a page, a live turn's session by its
   turn and a head by none, itself where it holds the seat. **`continues_in`**
   says where: `any_box`, in whichever box the launch gets — a relaunch from the
-  turn's kept capture, the next turn from the head, in a box of its own; or
+  turn's kept capture (in the box its job parked in, where that capture was
+  taken while the job still worked, from the copy that box holds, which went on
+  past it), the next turn from the head, in a box of its own; or
   `parked_box`, a relaunch's alone, where the kept capture is not continued but
   a person's answer would carry the turn's parked run on in the box it parked
   in, which still holds that box, ran the row's own session there, and runs
@@ -11176,11 +11182,16 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   has neither taken its final capture nor begun its turn; its capture is still
   being kept, or its record was sent and never answered, which a relaunch asks
   the executor log for again before it decides, continuing the capture where it
-  landed (until fourteen hours have passed since the capture's object was
-  minted, on the reading node's clock: the twelve a record may name it in,
-  past which the executor log refuses the record on its own clock, and the two
-  any two machines' clocks may stand apart); what the launch is launched on
-  cannot be said (every member of
+  landed, and otherwise the newest capture that job kept before it (until
+  fourteen hours have passed since the capture's object was minted, on the
+  reading node's clock: the twelve a record may name it in, past which the
+  executor log refuses the record on its own clock, and the two any two
+  machines' clocks may stand apart); a capture of an earlier job of the
+  turn is still being kept while the turn has kept none of its own, since once
+  one lands a relaunch no longer continues the session the turn's first launch
+  was handed (beside a capture the turn kept, an earlier job's keep changes
+  nothing a relaunch decides, and the row is decided); what the launch is
+  launched on cannot be said (every member of
   the seat's chain sitting out its plan, no node holding the seat, the node
   holding it not answering); only the resume of a collected job decides the
   relaunch, and its turn has not begun (a round lost a second time, or carried
@@ -13402,8 +13413,8 @@ it, for a person's stop. Such a run is over, and its `status` is the one it
 was ended in: its record waits only for the ending's last steps, which on an
 engine that records every turn's end include [recording that
 end](../concepts/turn-engine.md#how-a-turn-ends-on-the-executor-log) once the
-turn's captures have settled, and can take minutes, and up to about three
-hours and fifty minutes from the moment the end first sees a read standing
+turn's captures have settled, and can take minutes, and up to about four
+hours and seventeen minutes from the moment the end first sees a read standing
 by for one of them, where a store answers each change of a run's record at
 the slowest pace a link is allowed. The seat's next work
 waits behind it. `answerable_in_chat` is `false`

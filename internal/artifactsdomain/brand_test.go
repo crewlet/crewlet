@@ -394,14 +394,13 @@ func (n *node) brandFileRows() map[string]objstore.Object {
 	return out
 }
 
-// AN ADOPTION NAMES THE FILES ITS ROWS NAME (ADR-0082). A backup reads the
-// artifacts log past its store copy and carries every object a record names,
-// because a restore replays those records into the rows — so what the
-// declaration's reader says an adoption writes has to be what the applier
-// wrote: one row per file it serves, spelled as the walk spells it, each the
-// fresh copy the adoption uploaded. A clear removes rows it does not list and
-// answers none; a record of another kind answers none; and one a newer build
-// wrote, whose scope reaches the brand, is the refusal a backup recognises.
+// AN ADOPTION NAMES THE FILES ITS ROWS NAME (ADR-0082): a backup carries every
+// object a record names and a restore replays those records into the rows, so
+// the declaration's reader answers what the applier wrote: one row per file
+// served, spelled as the walk spells it, each the adoption's fresh copy. A
+// clear (which removes rows it does not list) and a record of another kind
+// answer none; an adoption a newer build wrote is the refusal a backup
+// recognises.
 //
 // Mutation: answer an adoption's files under the kit's id rather than the
 // stylesheet's hash, and the walk and the record disagree on every row.
@@ -557,9 +556,9 @@ func TestAnAdoptionOfAVersionGoneByItsApplyIsRefusedThere(t *testing.T) {
 }
 
 // A PIN OF A STYLESHEET PRUNED BEFORE ITS APPLY FOLLOWS THE ADOPTION AT THE
-// APPLY: a framed create decided against an adoption that a later adoption
-// superseded (and pruned, nothing pinning it yet) is stored pinning the
-// stylesheet adopted when it applies, never one the route no longer serves.
+// APPLY: a framed create decided against an adoption a later one superseded
+// and pruned (nothing pinning it yet) pins the stylesheet adopted when it
+// applies, never one the route no longer serves.
 //
 // Mutation: store the record's pin unchecked and the version pins a
 // stylesheet nothing serves.
@@ -602,8 +601,8 @@ func TestAPinOfAPrunedStylesheetFollowsTheAdoptionAtTheApply(t *testing.T) {
 // TWO NODES ADOPTING AND PUBLISHING ON ONE LOG CONVERGE, and a replay rebuilds
 // them: the adoption's snapshot, its file rows and their prune, a framed
 // version's pin, the kit's label and every history row are the same bytes on
-// every node, because each is a function of the record and the rows at its
-// position alone.
+// every node, each a function of the record and the rows at its position
+// alone.
 //
 // Mutation: stamp the adoption with the applying node's clock rather than the
 // broker's, and the brand rows differ between the nodes.

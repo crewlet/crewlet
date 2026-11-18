@@ -1,0 +1,85 @@
+{
+  "info": {
+    "id": "ses_d5db0a9e8aa5ae4325d2e868c4a61c19",
+    "projectID": "9f7c24d92eabcb896843499b839b880c6dea7ac4",
+    "model": {
+      "id": "stub-model",
+      "providerID": "stub",
+      "variant": "default"
+    },
+    "cost": 0,
+    "tokens": {
+      "input": 1201,
+      "output": 30,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "outcome": "succeeded",
+    "time": {
+      "created": 1794890562437,
+      "updated": 1794890562542,
+      "busy": 1794890562458,
+      "idle": 1794890562547
+    },
+    "title": "crewlet",
+    "location": {
+      "directory": "/tmp/job-work/2.3.0/job"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_1e7d07b91001edTvYQAJwf3LpG",
+      "time": {
+        "created": 1794890562472
+      },
+      "text": "Job text job: answer once.\n",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_1e7d07bb3001iLe2TiJYTIFvJv",
+      "time": {
+        "created": 1794890562490,
+        "firstToken": 1794890562522,
+        "streamed": 1794890562540,
+        "completed": 1794890562542
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "stub-model",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "job text job done"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 1201,
+        "output": 30,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_1e7d07bf2001rygAtMSCeRg1KP",
+      "time": {
+        "created": 1794890562547
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    }
+  ]
+}
