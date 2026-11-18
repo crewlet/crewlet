@@ -171,7 +171,7 @@ func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sa
 		return MainThreadReading{}
 	}
 	counts, openCode := read == BoxReadCollect, run.Harness == OpenCodeHarness
-	counted := counts && at.final && !(openCode && at.cutOff)
+	counted := counts && at.final && (!openCode || !at.cutOff)
 	ask := MainThreadAsk{Session: run.SessionRan(), Release: result.HarnessVersion, Count: counted,
 		Next: counted, Ended: !at.cutOff}
 	if asksHookReceipts(run) {
