@@ -2538,6 +2538,20 @@ func (l BridgeLog) Changes() []string {
 	return out
 }
 
+// Told is the tellings among tellings ([RunSteer.Tellings]) of the log's own
+// round: ONLY ITS ROUND, since a telling names a place in its round's log
+// alone, and one an older build's new-round reset left on the row names no call
+// of this log. None for a log that names no round.
+func (l BridgeLog) Told(tellings []CallTelling) []CallTelling {
+	var out []CallTelling
+	for _, t := range tellings {
+		if l.Round != "" && t.Round == l.Round {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // committedOnce is have with every kind of more it lacks, in first-seen order.
 func committedOnce(have, more []string) []string {
 	for _, c := range more {

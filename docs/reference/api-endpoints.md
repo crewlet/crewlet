@@ -13389,7 +13389,14 @@ failed}`, sent to whom the run's body is sent and always an array beside
 `bridge_calls`. An entry with no `digest` counts calls to its tool whose
 arguments' identity was not kept, and one with no `name` calls whose tool was
 not kept either — which is also how calls an older engine dropped, keeping a
-count and no entries, are served.
+count and no entries, are served. `bridge_calls_told` names the `late` and
+`abandoned` calls of the log that the job working as each landed took into its
+own session, one `{appended, launch}` each: the call's `appended` place and the
+job whose session took it, never a word of the call. A continuation of that
+session is not told such a call again; the executors board tags it "told to its
+run while it worked". It lists only calls of the log's own round, is sent to
+every reader beside `launch_id`, and is always an array, empty for a reader the
+run's body is withheld from, who is sent no calls to name.
 
 `box_exists` and `paused_at` stand in for the sandbox id: a board wants to
 know that a box exists and that it is currently paused (and being billed
