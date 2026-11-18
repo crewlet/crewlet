@@ -279,8 +279,8 @@ func TestTheBoxReadBudgetHoldsTheMainThreadRead(t *testing.T) {
 		}
 	}
 	for _, run := range []PendingRun{claude, open} {
-		if got := BoxReadBudget(run, BoxReadCollect) - BoxReadBudget(PendingRun{}, BoxReadCollect); got != 20*time.Second {
-			t.Errorf("an uncapped %s collection waits %v more than one that reads no thread, want 20s",
+		if got := BoxReadBudget(run, BoxReadCollect) - BoxReadBudget(PendingRun{}, BoxReadCollect); got != 36*time.Second {
+			t.Errorf("an uncapped %s collection waits %v more than one that reads no thread, want 36s",
 				run.Harness, got)
 		}
 	}

@@ -261,23 +261,23 @@
 // heap peaking at 137 MiB at the default GOGC against the pass's 62 MiB).
 // Shared with [TranscriptReadsAtOnce]'s two, a collection's large pass waits
 // behind two transcript reads of up to about 22 s each and spends
-// internal/sandbox's MainThreadReadWait (15 s), so a person paging a transcript
+// internal/sandbox's MainThreadReadWait (27 s), so a person paging a transcript
 // would decide how a turn's relaunch is told; apart, it never does. One slot,
 // not two: the process's thread readers then hold at worst 2 x 133 + 89 = 355
 // MiB beside the base tier. One waiter behind a pass over ordinary lines at the
 // bound (2.6 to 2.8 s with the count and the next request's estimate, 5.7 s
-// loaded) is through in 11.4 s, within the 15 s. Behind the slot's slowest
-// holder it is not: a pass keeping more than [collectionBaseRecords] records
-// holds the slot to its end whatever its lines, so a collection whose chain
-// keeps the records of 2^20 short lines of blocks of an empty kind, at the
-// bound (18.3 to 19.7 s with the count alone, 20.7 to 21.6 s with the next
-// request's estimate, BenchmarkTheMainThreadReadAtItsBound), holds it until its
-// own MainThreadReadWait cuts it. One such line to the bound, 18.6 to 18.8 s
-// (20.8 to 21.7 s estimating), one record of few facts, holds none. That
-// waiter, a later one, or one behind a take's piece streaming from a slow box
-// ends with [errLargeWait] and reads as no reading (count unread), the safe
-// side, as a read past MainThreadReadWait already is. The wait is spent inside
-// that wait, never added to it.
+// loaded) is through in 11.4 s, within the 27 s. Behind the slot's slowest
+// holder, loaded, it is not: a pass keeping more than [collectionBaseRecords]
+// records holds the slot to its end whatever its lines, so a collection whose
+// chain keeps the records of 2^20 short lines of blocks of an empty kind, at
+// the bound (18.3 to 19.7 s with the count alone, 20.7 to 21.6 s with the next
+// request's estimate, BenchmarkTheMainThreadReadAtItsBound, twice that loaded),
+// holds it until its own MainThreadReadWait cuts it. One such line to the
+// bound, 18.6 to 18.8 s (20.8 to 21.7 s estimating), one record of few facts,
+// holds none. That waiter, a later one, or one behind a take's piece streaming
+// from a slow box ends with [errLargeWait] and reads as no reading (count
+// unread), the safe side, as a read past MainThreadReadWait already is. The
+// wait is spent inside that wait, never added to it.
 //
 // # A hook's note, confirmed off its job's main thread
 //

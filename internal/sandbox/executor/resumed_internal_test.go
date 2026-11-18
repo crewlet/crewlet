@@ -1206,15 +1206,14 @@ func (r *repeating) Read(p []byte) (int, error) {
 
 // BenchmarkTheMainThreadReadAtItsBound measures the collection's walk, with the
 // count's reading, of a main thread at its bounds on the engine host: ordinary
-// lines to [threadPlainMax] (a quarter gibibyte), the ground for
-// internal/sandbox's MainThreadReadWait, which holds twice this figure on a
-// loaded host within its fifteen seconds; the slowest measured, a line of
-// blocks of an empty kind to that bound, and lines of such blocks to it and
-// [threadLinesMax] at once, each past that wait; tiny lines to
-// [threadLinesMax]; and a line of one result whose content is text blocks, or
-// empty strings, to the bound, the most elements the estimate walks. Each case
-// runs with the count alone, and as _next with the next request's estimate
-// beside it ([nextReading]), which a collection asks with the count.
+// lines to [threadPlainMax] (a quarter gibibyte); a line of one result whose
+// content is text blocks to that bound, the slowest shape a session writes and
+// the ground for internal/sandbox's MainThreadReadWait, which holds twice it
+// with the next request's estimate, with headroom; the slowest measured, a line
+// of blocks of an empty kind, a result of empty strings, and lines of such
+// blocks to both bounds at once, which no release writes; and tiny lines to
+// [threadLinesMax]. Each case runs with the count alone, and as _next with the
+// next request's estimate beside it ([nextReading]), which a collection asks.
 func BenchmarkTheMainThreadReadAtItsBound(b *testing.B) {
 	lines := benchLines(1 << 20)
 	lines = lines[bytes.IndexByte(lines, '\n')+1:]
