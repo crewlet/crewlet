@@ -59,6 +59,24 @@
 // inventory to them both ways, because the atlas's buckets and the uploads
 // bucket each shipped missing from one of them with nothing to notice.
 //
+// # The instructions every agent loads stay small
+//
+// CLAUDE.md is in the context of every Claude Code session and subagent that
+// works in this tree, and every later request of that context sends it again,
+// so its size is paid on every request anybody makes here. At 67 KB it was some
+// 23k tokens of each agent's starting context. What only some changes need lives
+// where only they load it: a rule under .claude/rules/, which loads with the
+// first file its paths name, or a skill under .claude/skills/, which loads when
+// used. TestTheAlwaysLoadedInstructionsStayWithinTheirBudget holds CLAUDE.md to
+// its budget; TestEveryRuleLoadsOnlyWithTheFilesItNames holds each rule to its
+// own, refuses a rule with no paths (it would load at launch, outside the
+// budget) and a pattern that names no file (its rule would never load), and
+// requires each pattern's twin under .claude/worktrees/*/, where Claude Code
+// keeps the worktrees a session works through; TestEverySkillSaysWhenToUseIt
+// holds a skill's description to the length Claude Code shows; and
+// TestCLAUDEMDNamesEveryRuleAndSkill holds CLAUDE.md's table of them to
+// .claude/ both ways.
+//
 // The package is test-only: this file is its documentation and the gates are
 // its tests.
 package docsgate

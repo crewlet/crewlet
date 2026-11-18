@@ -50,18 +50,14 @@ func readSecret(t *testing.T, b *config.Bootstrap, fleet coord.Secrets, name str
 }
 
 // A STOPPED SOLO NODE'S FLEET STORE IS REACHED FROM OUTSIDE THE ENGINE, and
-// what is written there is what the engine reads when it boots.
+// what is written there is what the engine reads when it boots: booting the
+// engine on the store afterwards proves the buckets the opener created, on a
+// store no engine had booted, are the ones the engine adopts.
 //
-// The whole point of the opener: with the engine stopped, a `crewlet` command
-// reads and writes the company's values where the engine keeps them, rather
-// than in a table of its own that the fleet never sees. Booting the engine on
-// the same store afterwards is what proves the buckets this created — on a
-// store no engine had ever booted — are the ones the engine adopts.
-//
-// Mutation: open a bucket of the fleet store with settings of its own (a
-// second constructor) and the engine's boot sees a different store, or
-// refuses the bucket; drop the store directory from the broker this starts and
-// the value is gone at the next open.
+// Mutation: open a fleet-store bucket with settings of its own (a second
+// constructor) and the engine's boot sees a different store, or refuses the
+// bucket; drop the store directory from the broker this starts and the value
+// is gone at the next open.
 func TestAStoppedNodesFleetStoreIsReachedAndTheEngineReadsIt(t *testing.T) {
 	t.Parallel()
 	dir := filepath.Join(brokertest.TempDir(t), "stream")
@@ -162,10 +158,9 @@ func TestANodeThatCannotReachTheStoreAloneIsSentToItsPeers(t *testing.T) {
 // THE BROKER IT STARTS LISTENS FOR NOBODY, even on a member that has a leaf
 // listener: the fleet's leaves would rejoin a broker that is about to go away.
 //
-// The node's leaf port is held by the test for the whole case, so a broker that
-// tried to open it would be refused — a member probes its leaf port before it
-// starts ([jetstream.ErrLeafPortTaken]) — and nothing else on the machine can
-// take the port in between, as it could a port merely found free.
+// The test holds the node's leaf port for the whole case, so a broker opening
+// it is refused ([jetstream.ErrLeafPortTaken]), and nothing else can take the
+// port in between, as it could a port merely found free.
 //
 // Mutation: pass the node's leaf port through to the broker and the open is
 // refused with the port taken.

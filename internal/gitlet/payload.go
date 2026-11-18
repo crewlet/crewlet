@@ -22,20 +22,16 @@ import (
 
 // THE TYPED PAYLOADS, one per (kind, op), and the closed sets they spell.
 //
-// Every payload travels as FULL POST-STATE or as the complete list of what a
-// record does: a repository's settings whole, a push's every command with its
-// result. That is what lets a record rebuild its rows on a node that replays
-// it from zero, with no lookup against anything but the rows a strict replay
-// has already written.
+// Every payload carries FULL POST-STATE or the complete list of what a record
+// does (settings whole, a push's every command with its result), so a node
+// replaying from zero rebuilds its rows from nothing but the rows a strict
+// replay has already written.
 //
-// NO PAYLOAD CARRIES A VERSION FIELD: the RECORD's version gates decoding, the
-// domain keeps no document version of its own, and a field nothing reads is
-// not shipped. The eviction and the generation keep the framework's shape,
-// version and all, which every domain shares.
+// NO PAYLOAD CARRIES A VERSION FIELD: the RECORD's version gates decoding. The
+// eviction and the generation keep the framework's shape, version and all.
 //
 // EVERY ENUM is a named string with typed constants, Valid, and a function
-// answering the closed set in order — the one list a validator and a schema
-// read.
+// answering the closed set in order: the one list a validator and a schema read.
 
 // OwnerKind is what owns a repository.
 type OwnerKind string
@@ -62,17 +58,15 @@ const (
 	// else may.
 	ManagedConfig ManagedBy = "config"
 
-	// ManagedTools is a repository a tool made — a person's or a lead's
-	// project, or a seat's scratch repository — whose lifecycle the tools'
-	// requests decide ([Store.Lifecycle]) and no configuration reaches: the
-	// reconcile refuses to adopt one ([ErrNotConfigManaged]), and the
-	// activation fence never refuses one's record ([Applier.fenced]).
+	// ManagedTools is a repository a tool made (a person's or a lead's
+	// project, or a seat's scratch repository), whose lifecycle the tools'
+	// requests decide ([Store.Lifecycle]): the reconcile refuses to adopt one
+	// ([ErrNotConfigManaged]), and the activation fence never refuses its
+	// record ([Applier.fenced]).
 	//
-	// NO versionedFields ROW, unlike the kind beside it ([RepoSettings.Kind]):
-	// a build that knows only ManagedConfig applies a record carrying this
-	// value as this build does — the applier stores a manager as written and
-	// fences only a configuration's record — and its reconcile refuses to
-	// adopt the repository as this one's does, so it reads nothing wrongly.
+	// NO versionedFields ROW: a build knowing only ManagedConfig stores the
+	// manager as written, fences only a configuration's record and refuses to
+	// adopt the repository, so it reads nothing wrongly.
 	ManagedTools ManagedBy = "tools"
 )
 
@@ -86,9 +80,8 @@ func (m ManagedBy) Valid() bool { return slices.Contains(ManagedBys(), m) }
 // may create it, whether it takes protections and whether it expires.
 //
 // THE KIND FOLLOWS THE NAME (gitref): a project's name is one label, a
-// scratch repository's `<handle>.<slug>`, so a reader holding only a name
-// knows which it is — which is why a rename keeps its kind's form for every
-// actor ([lifecycleRefusal]).
+// scratch repository's `<handle>.<slug>`, so a rename keeps its kind's form
+// for every actor ([lifecycleRefusal]).
 type RepoKind string
 
 const (
@@ -111,10 +104,9 @@ func RepoKinds() []RepoKind { return []RepoKind{RepoProject, RepoScratch} }
 func (k RepoKind) Valid() bool { return slices.Contains(RepoKinds(), k) }
 
 // KindOf is the kind a repository's name says it is: scratch for a seat's
-// <handle>.<slug>, a project otherwise — what a create's settings must state
-// ([RepoSettings.Validate] does not know the name; [LifecycleRequest.Validate]
-// holds a tool's create to it, and a declaration is a project by the one
-// constructor every reconcile's settings come from, [Declared.settingsAt]).
+// <handle>.<slug>, a project otherwise. [LifecycleRequest.Validate] holds a
+// tool's create to it ([RepoSettings.Validate] does not know the name), and a
+// declaration is a project by [Declared.settingsAt].
 func KindOf(name string) RepoKind {
 	if _, scratch := gitref.ScratchName(name); scratch {
 		return RepoScratch
@@ -128,9 +120,8 @@ type DirectPush string
 const (
 	// DirectPersons lets a person push to it directly, and NOBODY ELSE: a
 	// seat's push to it is refused protected_direct ([ProtectionRefusal]),
-	// so a seat's work reaches it when a person pushes it. Before seats
-	// pushed it refused nothing, and read as "anyone who may push" it would
-	// mean what a ref no rule matches already means.
+	// so a seat's work reaches it when a person pushes it. Read as "anyone
+	// who may push" it would mean what a ref no rule matches already means.
 	DirectPersons DirectPush = "persons"
 	// DirectNone lets nobody push to it directly.
 	DirectNone DirectPush = "none"
@@ -142,11 +133,11 @@ func DirectPushes() []DirectPush { return []DirectPush{DirectPersons, DirectNone
 // Valid reports a value this build knows.
 func (d DirectPush) Valid() bool { return slices.Contains(DirectPushes(), d) }
 
-// Visibility is who may read a repository besides persons and the tokens of
-// Tier A (ADR-0088): a SEAT'S standing narrows by it, and a person's never
-// does — a credential presented by a person, or a token bound to nobody, reads
-// every repository, because a CI token that could not read a unit repository
-// breaks its builds and a Tier A token is the operator's own credential.
+// Visibility is who may read a repository besides persons and Tier A tokens
+// (ADR-0088): a SEAT'S standing narrows by it, a person's never does. A
+// person's credential or a token bound to nobody reads every repository: a CI
+// token that could not read a unit repository breaks its builds, and a Tier A
+// token is the operator's own credential.
 type Visibility string
 
 const (
@@ -163,40 +154,23 @@ const (
 // TestEveryDeclaredVisibilityIsOneTheDomainRecords) are read against.
 func Visibilities() []Visibility { return []Visibility{VisibilityCompany, VisibilityUnit} }
 
-// Valid reports a value this build knows. EMPTY IS NOT ONE: a record carries a
-// repository's settings whole, and a settings record that named no visibility
-// would be a reader's guess at which one it meant — the configuration applies
-// its default (company) before the record is formed.
+// Valid reports a value this build knows. EMPTY IS NOT ONE: a record carries
+// settings whole, so an empty visibility would leave a reader guessing; the
+// configuration applies its default (company) before forming the record.
 func (v Visibility) Valid() bool { return slices.Contains(Visibilities(), v) }
 
 // SearchMode is how code search reads a repository: from an index of its
-// default branch's tip (indexed), which a search across the company's
-// repositories reads as well as one naming the repository, or with git grep
-// over a copy of it (grep), only when a search names it. An index costs every
-// Gitlet node that keeps one its disk and a build at each new tip, and a grep
-// costs nothing until somebody asks — so the mode is a SETTING LIKE EVERY
-// OTHER, carried whole by every create, settings and restore record
-// ([RepoSettings.Search]) and changed by whoever maintains the repository.
+// default branch's tip (indexed), or with git grep (grep), only by a search
+// naming it. An index costs its holders disk and a build per tip; grep costs
+// nothing until asked. Indexed is code.repos' default
+// (config.CodeSearchMode.Resolved), grep a tool's. A SCRATCH REPOSITORY IS
+// ALWAYS grep ([RepoSettings.Validate]): a seat makes up to
+// code.scratch.max_per_seat, each deleted once idle, so indexing them would
+// index every experiment.
 //
-// EACH IS THE DEFAULT WHERE ITS SETTINGS ARE FORMED: indexed for a repository
-// code.repos declares that leaves the field unset
-// (config.CodeSearchMode.Resolved), since a project the company named is the
-// code its seats work in; grep for one a tool makes — the tool forms its create
-// so — since no index is built for a repository until somebody who maintains
-// it asks for one. A SCRATCH REPOSITORY IS ALWAYS grep ([RepoSettings.Validate]):
-// a seat makes up to code.scratch.max_per_seat of its own and each is deleted
-// once idle, so indexing them would build and keep an index on the Gitlet nodes
-// for every experiment a seat makes; a search naming one still reads it.
-//
-// THE GITLET NODES READ IT. Each one's indexer (internal/gitlet/cache) keeps a code
-// index of every indexed repository whose git order it is among the first
-// [IndexHolders] of, built at each new tip of the default branch, and keeps
-// none of a grep one. A search naming one repository is a git read of it
-// ([GitSearch], answered by internal/gitlet/query): from that index where the
-// answering node holds it at the searched tip, else with git grep. A search
-// of more is internal/codesearch's scatter, which reads every indexed
-// repository the asker may read and a grep one only when a repo: filter
-// names it.
+// internal/gitlet/cache builds the index on the first [IndexHolders];
+// [GitSearch] reads it or greps; internal/codesearch's scatter greps a grep
+// repository only when a repo: filter names it.
 type SearchMode string
 
 const (
@@ -236,19 +210,17 @@ const (
 	// PrincipalAgent is a seat of the chart, by its handle, whose standing on
 	// a repository the chart decides ([GrantOf]).
 	PrincipalAgent PrincipalKind = "agent"
-	// PrincipalSystem is the ENGINE ON ITS OWN ACCOUNT — no credential, no
-	// seat, no run — and it acts in one way only: the ref lifecycle's push
-	// deleting seats' idle branches ([ViaExpiry], retention_expiry.go). A
-	// proposal pairs the two both ways ([Proposal.Validate]), and nothing
-	// asks, reads or writes anything else as it: [Principal.Validate] refuses
-	// it, so every read's asker, every lifecycle request's actor and every
-	// change's, conversation's and merge's asker refuses it before any decide
-	// is asked, and [GrantOf] grants it nothing but that one deletion
-	// ([Grant.RefRule]). Spelled as iam's own account of the engine
-	// (iam.ActorSystem), which is what its push row's actor_kind says.
+	// PrincipalSystem is the ENGINE ON ITS OWN ACCOUNT (no credential, seat
+	// or run), acting only as the ref lifecycle's push deleting seats' idle
+	// branches ([ViaExpiry], retention_expiry.go); [Proposal.Validate] pairs
+	// the two both ways. [Principal.Validate] refuses it, so a read,
+	// lifecycle request, change, conversation or merge naming it is refused
+	// before any decide, and
+	// [GrantOf] grants it only that deletion ([Grant.RefRule]). Spelled as
+	// iam.ActorSystem, which its push row's actor_kind says.
 	//
-	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
-	// kind, so every build that meets a push record reads it.
+	// BASE FORMAT ([RecordVersion]): every build that meets a push record
+	// reads it.
 	PrincipalSystem PrincipalKind = "system"
 )
 
@@ -262,15 +234,11 @@ func (p PrincipalKind) Valid() bool { return slices.Contains(PrincipalKinds(), p
 
 // readsChart reports a principal whose push is judged from the CHART: a
 // seat's alone. A person maintains every repository and a token bound to
-// nobody reads every one — rules that need no chart (ADR-0085), so [GrantOf]
-// never consults one for them — and the engine's own expiry deletes a seat's
-// idle branch by a rule of its own ([Grant.RefRule]), while a seat's standing
-// is its relation on the chart, and so is everything the push decide holds a
-// seat's push to beside it: its grant, the protections that take a person's
-// push alone, its share of a repository outside its unit, its day's quota. A
-// node that holds no chart, or one confirmed behind the company's
-// configuration, decides none of such a push ([CommitterOptions.SeatRules],
-// [CommitterOptions.Current]).
+// nobody reads every one (ADR-0085), and the engine's expiry has its own rule
+// ([Grant.RefRule]); a seat's grant, protections, cross-unit share and daily
+// quota all come from the chart. A node holding no chart, or one confirmed
+// behind the configuration, decides no such push
+// ([CommitterOptions.SeatRules], [CommitterOptions.Current]).
 func (p PrincipalKind) readsChart() bool { return p == PrincipalAgent }
 
 // CommandResult is what became of one ref update.
@@ -295,18 +263,16 @@ func (r CommandResult) Valid() bool { return slices.Contains(CommandResults(), r
 type RepoStatus string
 
 const (
-	// RepoStatusImporting is being filled from another host — an import, or
-	// a pull mirror's first fetch from its source, at its create
-	// ([CreateRepo.status]) or when a settings record makes an active
-	// repository a mirror of a source it does not follow yet
-	// ([repoRemotes.startsImport]) — and
-	// takes no write until its import is done: no push, no change, no
-	// archive and no expunge ([RefusalRepoImporting]). It is fetched, listed
-	// and renamed, its settings change and it is deleted as an active one is;
-	// the compactor, the publisher and the expunge pass it by.
+	// RepoStatusImporting is being filled from another host: an import, or a
+	// pull mirror's first fetch, at its create ([CreateRepo.status]) or when a
+	// settings record makes an active repository a mirror
+	// ([repoRemotes.startsImport]). It takes no write until done: no push,
+	// change, archive or expunge ([RefusalRepoImporting]). It is fetched,
+	// listed, renamed, has its settings changed and is deleted as an active
+	// one is; the compactor, the publisher and the expunge pass it by.
 	//
-	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
-	// status, so every build that meets a record making one reads it.
+	// BASE FORMAT ([RecordVersion]): every build that meets a record making
+	// one reads it.
 	RepoStatusImporting RepoStatus = "importing"
 	// RepoStatusActive takes pushes.
 	RepoStatusActive RepoStatus = "active"
@@ -339,12 +305,10 @@ func (s RepoStatus) Valid() bool { return slices.Contains(RepoStatuses(), s) }
 
 // PackKind is what added a pack row to code_packs: which record wrote it.
 //
-// READ BY NOTHING THAT DECIDES: a cache installs a pack by its [PackState],
-// and a decide judges one by its state, its part and its size, so a row of a
-// kind this build does not know — a newer build's — is installed and judged
-// as any other. It is the repository's history of what rewrote its packs, for
-// whoever reads the rows. Every value is in the base format, as [OpCompact]
-// and [OpExpungeBegin] are.
+// READ BY NOTHING THAT DECIDES: a cache installs by [PackState] and a decide
+// judges state, part and size, so a newer build's kind is installed and judged
+// as any other. It records what rewrote the packs, for whoever reads the rows.
+// Every value is in the base format, as [OpCompact] and [OpExpungeBegin] are.
 type PackKind string
 
 const (
@@ -378,9 +342,8 @@ const (
 	PackMirror PackKind = "mirror"
 )
 
-// PackKinds is the closed set, in the order the records that write them were
-// added — the merge's three among them, which the merge records extend, so
-// one list names every kind code_packs may hold.
+// PackKinds is the closed set, in the order their records were added: one
+// list of every kind code_packs may hold.
 func PackKinds() []PackKind {
 	return []PackKind{PackPush, PackCompact, PackMerge, PackCandidate, PackExpunge, PackCruft, PackRescue,
 		PackImport, PackMirror}
@@ -419,13 +382,11 @@ type Owner struct {
 	Ref string `json:"ref"`
 }
 
-// PathOwner is one owner of a repository's paths: a unit, by its key, or a
-// seat, by its handle — and the globs over the repository's tree it owns
-// (gitref.ParsePathGlob), sorted and each once. What a path owner is for is
-// REVIEW: a change touching its paths asks it for one. It GRANTS NOTHING — a
-// seat's standing on a repository is its grant ([GrantOf]), read off the chart
-// and its tier, and no path owner is read there — and so it is never on a
-// [RepoRef], which every read, push and fetch decides from.
+// PathOwner is one owner of a repository's paths, a unit by key or a seat by
+// handle, and the globs it owns (gitref.ParsePathGlob), sorted and each once.
+// It is for REVIEW: a change touching its paths asks it for one. It GRANTS
+// NOTHING (standing is [GrantOf]'s), so it is never on a [RepoRef], which
+// every read, push and fetch decides from.
 type PathOwner struct {
 	Owner Owner    `json:"owner"`
 	Paths []string `json:"paths"`
@@ -437,9 +398,8 @@ func (p PathOwner) equal(o PathOwner) bool {
 }
 
 // comparePathOwners is the canonical order of a repository's path owners: by
-// the owner's kind, then its reference — every unit and every seat once, the
-// one order every node forms a record in and [RepoSettings.Validate] holds a
-// record to.
+// the owner's kind, then its reference, the one order every node forms a
+// record in and [RepoSettings.Validate] holds a record to.
 func comparePathOwners(a, b PathOwner) int {
 	if c := strings.Compare(string(a.Owner.Kind), string(b.Owner.Kind)); c != 0 {
 		return c
@@ -447,13 +407,11 @@ func comparePathOwners(a, b PathOwner) int {
 	return strings.Compare(a.Owner.Ref, b.Owner.Ref)
 }
 
-// CanonicalPathOwners is owners in the ONE FORM a record carries them in: by
-// owner ([comparePathOwners]), each owner's globs sorted — a copy, leaving
-// owners as it was. THE ONE PLACE the order is formed, read by the engine's
-// reconcile for a declaration and by a lifecycle request's decide for a
-// change, so every node deciding one declaration forms byte-identical records.
-// It removes nothing: an owner or a glob named twice is the caller's to
-// refuse, and [RepoSettings.Validate] refuses it.
+// CanonicalPathOwners is owners in the ONE FORM a record carries them: sorted
+// by owner ([comparePathOwners]), each owner's globs sorted, as a copy. THE
+// ONE PLACE the order is formed (the reconcile and a lifecycle decide read
+// it), so every node forms byte-identical records. It removes no duplicate:
+// [RepoSettings.Validate] refuses one.
 func CanonicalPathOwners(owners []PathOwner) []PathOwner {
 	if len(owners) == 0 {
 		return nil
@@ -466,12 +424,10 @@ func CanonicalPathOwners(owners []PathOwner) []PathOwner {
 	return out
 }
 
-// pathOwnersInvalid is why owners are no repository's path owners in the form
-// a record carries them, or "": at most [MaxPathOwners], each a unit or a seat
-// naming itself, with 1 to [MaxPathOwnerPaths] globs gitref reads, sorted and
-// each once, and the owners sorted and each once ([comparePathOwners]) — and
-// the whole at most [MaxPathOwnersBytes] as a record encodes it, judged last,
-// since owners refused for what one says are refused for that.
+// pathOwnersInvalid is why owners are not in the form a record carries, or "":
+// at most [MaxPathOwners], each with 1 to [MaxPathOwnerPaths] globs, all sorted
+// and once ([comparePathOwners]), and the whole within [MaxPathOwnersBytes],
+// judged last so a malformed owner is refused for what it says.
 func pathOwnersInvalid(owners []PathOwner) string {
 	if len(owners) > MaxPathOwners {
 		return fmt.Sprintf("path_owners: %d owners, past the cap of %d", len(owners), MaxPathOwners)
@@ -509,15 +465,11 @@ func pathOwnersInvalid(owners []PathOwner) string {
 	return ""
 }
 
-// PushRule is a protection rule as a PUSH is judged by it: the refs its
-// pattern matches and what it lets a push to one of them do — and never the
-// rule's merge gate, which holds the merges a change makes and nothing a push
-// does. It is the rule as every read of a repository's row answers it
-// ([RepoRef.Protections]): the admission of every git request, every page of
-// a Gitlet node's sync, the cache's state file, the push decide's rounds and a
-// listing of repositories, none of which reads a gate. Typed apart from
-// [Protection], rather than a Protection whose gate a read left nil, so no
-// consumer can take a gate nobody read for a rule that has none.
+// PushRule is a protection rule as a PUSH is judged by it: its pattern and
+// what it lets a push do, never the merge gate. It is what every read of a
+// repository's row answers ([RepoRef.Protections]), none of which reads a
+// gate. Typed apart from [Protection] so no consumer takes a gate nobody read
+// for a rule that has none.
 //
 // Comparable with ==: it holds no pointer.
 type PushRule struct {
@@ -528,21 +480,18 @@ type PushRule struct {
 	DirectPush  DirectPush `json:"direct_push"`
 }
 
-// Protection is one rule over the refs a pattern matches WHOLE: what a push to
-// one of them may do ([PushRule], whose fields it carries as its own, so a
-// record spells a rule as one object), and — on a branch rule — what a merge
-// into one needs. What a repository's settings carry, and what reads that
-// present a rule's gate or rewrite the settings read: one repository's detail
-// asked for its gates ([ReadQuery.Gates], answered as [RuleGate]s), the
-// lifecycle decides and the reconcile.
+// Protection is one rule over the refs a pattern matches WHOLE: its [PushRule]
+// (embedded, so a record spells a rule as one object) and, on a branch rule,
+// what a merge into one needs. Settings carry it, and so do the reads that
+// present a gate or rewrite settings ([ReadQuery.Gates], the lifecycle
+// decides, the reconcile).
 //
 // COMPARED BY [Protection.Equal], never ==: its gate is a pointer.
 type Protection struct {
 	PushRule
-	// Gate is the rule's merge gate ([MergeGate]), nil for a rule with none
-	// — and always nil on a tag rule: a tag never moves, so no merge reaches
-	// one. A push decides nothing by it: a push is held to its [PushRule],
-	// and the merge gate holds the merges a change makes.
+	// Gate is the rule's merge gate ([MergeGate]), nil for none and always
+	// nil on a tag rule, which no merge reaches. A push is held to the
+	// [PushRule] alone.
 	Gate *MergeGate `json:"gate,omitempty"`
 }
 
@@ -559,14 +508,10 @@ func pushRules(rules []Protection) []PushRule {
 	return out
 }
 
-// invalid is why p is no rule a record may carry, or "", naming the field: a
-// protection pattern, a direct_push this build knows, no allow_force and no
-// merge gate on a tag pattern, since a tag never moves, and a gate a record
-// may carry ([MergeGate]'s own rules, named below gate). THE ONE RULE for a
-// rule alone, read by [RepoSettings.Validate] for every rule a record carries
-// and by a protect request's own validation for the one it sends
-// ([LifecycleRequest.Validate]); a rule's place among the others — sorted by
-// pattern, each once — is the list's to judge.
+// invalid is why p is no rule a record may carry, or "", naming the field. THE
+// ONE RULE for a rule alone, read by [RepoSettings.Validate] and
+// [LifecycleRequest.Validate]; its place among the others is the list's to
+// judge.
 func (p Protection) invalid() string {
 	switch {
 	case !gitref.ValidPattern(p.Pattern):
@@ -596,13 +541,11 @@ func (p Protection) invalid() string {
 // whole by every record that sets it.
 type RepoSettings struct {
 	ManagedBy ManagedBy `json:"managed_by"`
-	// Kind is what the repository is for, which its name says ([KindOf]):
-	// every create states it, a declaration's always a project
-	// ([Declared.settingsAt]), and no record changes it — a rename keeps its
-	// kind's form.
+	// Kind is what the repository is for, as its name says ([KindOf]); a
+	// declaration's is always a project ([Declared.settingsAt]), and no
+	// record changes it.
 	//
-	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
-	// field, so every build that meets a record carrying settings reads it.
+	// BASE FORMAT ([RecordVersion]): every build that meets settings reads it.
 	Kind  RepoKind `json:"kind"`
 	Owner Owner    `json:"owner"`
 	// DefaultBranch is a branch name, not a ref ("main").
@@ -612,22 +555,15 @@ type RepoSettings struct {
 	// Visibility is who may read it besides persons and Tier A tokens.
 	Visibility Visibility `json:"visibility"`
 	// Search is how code search reads it ([SearchMode]): never indexed on a
-	// scratch repository.
-	//
-	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
-	// field, so every build that meets a record carrying settings reads it.
+	// scratch repository. BASE FORMAT, as Kind is.
 	Search SearchMode `json:"search"`
 	// Protections are sorted by Pattern and unique — the canonical order,
 	// so two nodes deciding one declaration form byte-identical records —
 	// each one's gate in its one form too ([CanonicalGate]).
 	Protections []Protection `json:"protections,omitempty"`
-	// PathOwners are who owns which of its paths, in the one form a record
-	// carries them in ([CanonicalPathOwners]): at most [MaxPathOwners], each
-	// owner once and each one's globs sorted and once — none on a scratch
-	// repository, which is its seat's own.
-	//
-	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
-	// field, so every build that meets a record carrying settings reads it.
+	// PathOwners are who owns which of its paths, in [CanonicalPathOwners]'
+	// form; none on a scratch repository, which is its seat's own. BASE
+	// FORMAT, as Kind is.
 	PathOwners []PathOwner `json:"path_owners,omitempty"`
 	// MirrorFrom makes it a PULL MIRROR of a repository at another host, and
 	// MirrorTo a PUSH MIRROR to one; nil for none, and neither on a scratch
@@ -641,9 +577,8 @@ type RepoSettings struct {
 	ConfigEpoch int64 `json:"config_epoch"`
 }
 
-// Validate refuses settings this domain will not record. The configuration
-// validator refuses the same document earlier with the same rules, from the
-// same gitref grammar; this is the domain's own guard, since the applier
+// Validate refuses settings this domain will not record: the domain's own
+// guard beside the configuration validator's same rules, since the applier
 // salvages rather than refuses.
 func (s RepoSettings) Validate() error {
 	switch {
@@ -703,10 +638,9 @@ func (s RepoSettings) Validate() error {
 	if why := pathOwnersInvalid(s.PathOwners); why != "" {
 		return fmt.Errorf("%w: %s", ErrInvalid, why)
 	}
-	// A SCRATCH REPOSITORY TAKES NO MIRROR: it is its seat's own experiment,
-	// and a mirror dials another host for it, or publishes it there. And an
-	// ARCHIVED one is no pull mirror: it takes no sync, so its source would
-	// never move it.
+	// A SCRATCH REPOSITORY TAKES NO MIRROR, which would dial or publish to
+	// another host for a seat's own experiment. An ARCHIVED one is no pull
+	// mirror: it takes no sync, so its source would never move it.
 	switch {
 	case s.Kind == RepoScratch && (s.MirrorFrom != nil || s.MirrorTo != nil):
 		return fmt.Errorf("%w: mirror: a scratch repository takes no mirror — it is its seat's own", ErrInvalid)
@@ -727,11 +661,10 @@ func (s RepoSettings) Validate() error {
 	return nil
 }
 
-// equal compares two settings field by field, Protections and PathOwners as
-// slices (both are sorted by Validate's rule, and each path owner's globs too)
-// of values compared by value — a rule's gate is a pointer, which
-// [Protection.Equal] follows — and IGNORES ConfigEpoch: the activation a value
-// came from is not a difference in the value.
+// equal compares two settings by value, Protections and PathOwners in order
+// (Validate holds them sorted), a rule's gate through [Protection.Equal], and
+// IGNORES ConfigEpoch: the activation a value came from is no difference in
+// the value.
 func (s RepoSettings) equal(o RepoSettings) bool {
 	return s.ManagedBy == o.ManagedBy && s.Kind == o.Kind && s.Owner == o.Owner &&
 		s.DefaultBranch == o.DefaultBranch && s.Description == o.Description &&
@@ -761,29 +694,23 @@ func (s RepoSettings) status() RepoStatus {
 
 // CreateRepo makes a repository. Its subject is the NAME.
 type CreateRepo struct {
-	// RepoID is chosen by the WRITER and carried, never derived by the
-	// applier: a create that lost its race must not have written a
-	// repository under an id the winner also chose. A configuration's create
-	// mints it once per call; a tool's derives it from the request's own
+	// RepoID is chosen by the WRITER, never derived by the applier, so a
+	// create that lost its race wrote nothing under the winner's id. A
+	// configuration mints it per call; a tool derives it from the request's
 	// operation id ([Store.Lifecycle]), so a retry whose ledger row was swept
-	// names the same repository, while two requests are two operations and
-	// never share one.
+	// names the same repository and two requests never share one.
 	RepoID   string       `json:"repo_id"`
 	Name     string       `json:"name"`
 	Settings RepoSettings `json:"settings"`
-	// Import fills the repository from another host as it is created
-	// ([ImportSource]) — read by its create alone, so a declaration naming one
-	// for a repository that exists is not read again — and nil for none: a
-	// pull mirror ([RepoSettings.MirrorFrom]) is imported from its own
-	// source, and takes none beside it. Only a person or the configuration
-	// names one (mirror.go, whose head states the record format's condition).
+	// Import fills the repository from another host at its create
+	// ([ImportSource]), nil for none; read by the create alone, and never
+	// beside a pull mirror, which imports from its own source. Only a person
+	// or the configuration names one (mirror.go's head has the record
+	// format's condition).
 	Import *ImportSource `json:"import,omitempty"`
 }
 
-// importInvalid is why the create's import — its own, or its pull mirror's
-// first fetch — is none a record carries, or "": none on a scratch repository,
-// none beside a pull mirror, which is imported from its source, and none into
-// an archived repository, which takes nothing an import lands.
+// importInvalid is why the create's import is none a record carries, or "".
 func (p CreateRepo) importInvalid() string {
 	switch i := p.Import; {
 	case i == nil:
@@ -815,9 +742,8 @@ func (p CreateRepo) status() RepoStatus {
 }
 
 // importSource is what the create's import fetches, as code_repos.import_source
-// records it: its own import, or its pull mirror's source — FIXED AT THE
-// CREATE, so a mirror_from a settings change moves while the import runs is the
-// next sync's to follow — and nil where it imports nothing.
+// records it: its import, or its pull mirror's source FIXED AT THE CREATE (a
+// mirror_from moved meanwhile is the next sync's to follow), nil for none.
 func (p CreateRepo) importSource() *ImportSource {
 	switch {
 	case p.Import != nil:
@@ -849,8 +775,7 @@ type LifecycleRecord struct {
 // Rename claims To for a tool-managed repository, on To's name subject, and
 // leaves From redirecting to it for [RedirectWindow] ([Store.Lifecycle]).
 //
-// BASE FORMAT ([RecordVersion]): the domain landed on main with this op, so
-// every build that meets a record of it reads it. It is no gate.
+// BASE FORMAT ([RecordVersion]), and no gate.
 type Rename struct {
 	RepoID string `json:"repo_id"`
 	From   string `json:"from"`
@@ -868,24 +793,21 @@ type ReleaseName struct {
 }
 
 // RedirectWindow is how long a renamed repository's old name keeps
-// redirecting: a MONTH, so a clone's remote and a CI configuration naming the
-// old URL keep working while their owners update them. A product judgment, not
-// a measurement; the release follows the window's end within one pass of the
-// code-retention duty ([RetentionInterval]), and until it lands the name stays
-// the repository's — every node at one position answers one way, which a
-// comparison with each node's clock would not.
+// redirecting: a MONTH, a product judgment, so a clone's remote or a CI
+// configuration naming the old URL keeps working while its owner updates it.
+// The release lands within one code-retention pass ([RetentionInterval]);
+// until then the name stays the repository's, so every node at one position
+// answers alike, which comparing each node's clock would not.
 const RedirectWindow = 30 * 24 * time.Hour
 
 // Hold is a LIVE TURN'S HOLD on a scratch repository, or on one seat's branch
-// of any repository (Ref), recorded on the repository's subject so that a
-// deletion listed before the turn's read of it is ordered against it: the
-// broker arbitrates the two on the one subject `repo.<id>`, so whichever lands
-// second decides from the first ([Store.ExpireScratch] refuses a repository
-// with a record past the page it listed; a hold decided after the deletion
-// answers repo_deleted, or for a ref ref_deleted). Its apply moves the
-// repository's version — and a ref hold's, the ref's held_position — and
-// NOTHING else: never an idle clock, which only activity moves ([Retention]),
-// nor a ref's own `at`, `position`, seat or target ([RefHoldKey]'s file).
+// (Ref), recorded on `repo.<id>` so the broker orders it against a deletion
+// listed before the turn's read: whichever lands second decides from the
+// first ([Store.ExpireScratch] refuses a repository with a record past its
+// listed page; a hold after the deletion answers repo_deleted, or
+// ref_deleted). Its apply moves only the repository's version and a ref
+// hold's held_position: never an idle clock ([Retention]), nor a ref's `at`,
+// `position`, seat or target ([RefHoldKey]'s file).
 //
 // BASE FORMAT, as [Rename] is. It is no gate.
 type Hold struct {
@@ -895,41 +817,23 @@ type Hold struct {
 	// expiry.
 	TurnID string `json:"turn_id"`
 	// Ref is the seat's branch the turn holds — a ref [Holdable] admits — or
-	// "" for a hold on the scratch repository itself.
-	//
-	// BASE FORMAT, as the op itself is ([RecordVersion]): the domain landed
-	// on main with this field.
+	// "" for a hold on the scratch repository itself. BASE FORMAT, as the op
+	// is.
 	Ref string `json:"ref,omitempty"`
 }
 
 // HoldRecordAfter is how long a scratch repository must have been idle before
-// a turn's hold on it is also RECORDED ([Hold]): one day — the floor of
-// code.scratch.idle_days (config.CodeScratchIdleDaysFloor) — less two hours.
-//
-// WHY A RECORD AT ALL, and only past this: a pass fixes its cutoff BEFORE it
-// reads the live turns' holds, so a hold it could not see was taken after its
-// cutoff was fixed. The pass's cutoff and this threshold are each ONE node's
-// clock compared with the same broker-stamped last_activity_at, so the broker's
-// clock cancels and only the two nodes' disagreement matters: a repository
-// idle less than this by the holding node's clock, read after the hold was
-// taken, is past no in-flight pass's cutoff, whatever that pass's epoch says
-// idle_days is, as long as the two clocks disagree by under two hours. Two
-// hours covers twice the references gate's assumed skew between two nodes
-// (objstore.AssumedClockSkew, an hour, which the collector's grace rests on
-// too), and exactly two nodes each within an hour of the broker, which the
-// `clock_skew` alarm watches. Only an older repository can be raced, and for
-// it the record makes the broker decide the race. Held by
-// references.TestAHoldRecordCoversEveryPassInFlight.
-//
-// WHAT IT COSTS IS A RECORD A TURN, not one a repository: a hold moves no
-// clock, so every turn that names a repository idle this long records again,
-// until a push moves its clock or the expiry takes it — at the default seven
-// idle days, the turns of the six days and two hours before it falls due.
-// That window is long because the threshold is idle_days' FLOOR rather than
-// the idle_days in force, which a pass in flight may judge by another epoch's
-// (above). One record is small (TestAHoldRecordCostsTheLogOneSmallRecord),
-// and internal/worklet's codeLogNegligible weighs the turns' records against
-// the code log's day.
+// a turn's hold on it is also RECORDED ([Hold]): idle_days' floor of one day
+// (config.CodeScratchIdleDaysFloor) less two hours. A pass fixes its cutoff
+// BEFORE reading live holds, so only a hold taken after it is unseen; cutoff
+// and threshold each compare one node's clock with the same broker-stamped
+// last_activity_at, so a repository idle less than this is past no in-flight
+// pass's cutoff, under any epoch's idle_days, while two nodes disagree by under
+// two hours (twice objstore.AssumedClockSkew; `clock_skew` watches it); for an
+// older one the broker decides the race
+// (references.TestAHoldRecordCoversEveryPassInFlight). It costs a record per
+// TURN, as a hold moves no clock: small (TestAHoldRecordCostsTheLogOneSmallRecord),
+// weighed by internal/worklet's codeLogNegligible.
 const HoldRecordAfter = 22 * time.Hour
 
 // PushBatch is one or more pushes to one repository, in the order they were
@@ -939,9 +843,9 @@ type PushBatch struct {
 	Pushes []PushEntry `json:"pushes"`
 }
 
-// PushEntry is one push: in a record iff at least one of its commands is ok, or it is an ATTEMPT
-// ([Attempted]): a push git received every command of which is refused, one by a rule, recorded moving
-// nothing, with no pack, no commit introduced, no change and no routing.
+// PushEntry is one push: in a record iff at least one of its commands is ok,
+// or it is an ATTEMPT ([Attempted]): every command refused, one by a rule,
+// recorded moving nothing, with no pack, introduced commit, change or routing.
 type PushEntry struct {
 	// PushID is minted by the receiving node and stable across a failover,
 	// which is what collapses a push decided twice.
@@ -951,8 +855,8 @@ type PushEntry struct {
 	// the engine itself — as its proposer stamped it ([Proposal.Via]), and
 	// what its push row's via column says.
 	//
-	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
-	// field, so every build that meets a push record reads it.
+	// BASE FORMAT ([RecordVersion]): every build that meets a push record
+	// reads it.
 	Via PushVia `json:"via"`
 	// Node is the node that received the push.
 	Node   string `json:"node"`
@@ -963,68 +867,51 @@ type PushEntry struct {
 	Pack            *PackRef `json:"pack,omitempty"`
 	Introduced      []string `json:"introduced,omitempty"`
 	IntroducedCount int      `json:"introduced_count,omitempty"`
-	// Offered is how many commits an attempt's refused commands offered that the repository did
-	// not hold, counted by its receiver in the push's scratch; 0 where it offered none or the count
-	// was not made. VERSION 5 ([OfferedVersion]): an entry carrying it stamps its record there.
+	// Offered is how many commits an attempt's refused commands offered that
+	// the repository did not hold, counted by its receiver in the push's
+	// scratch; 0 where it offered none or the count was not made. VERSION 5
+	// ([OfferedVersion]): an entry carrying it stamps its record there.
 	Offered    int       `json:"offered,omitempty"`
 	ReceivedAt time.Time `json:"received_at"`
 	// Day is the company day a SEAT'S entry was counted against by its
 	// decide's quota (code.limits.pushes_per_seat_day): period.Day's label
 	// on the deciding node's clock in the company's zone, STAMPED BY THE
-	// COMMITTER on every agent entry its record carries and never sent by a
-	// proposer — so the apply adds the entry to the seat's count of that day
-	// (code_seat_days) with no clock and no zone of its own, identically on
-	// every node. Empty on every other entry.
-	//
-	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
-	// field, so every build that meets a push record reads it.
+	// COMMITTER on every agent entry and never sent by a proposer, so the
+	// apply counts it (code_seat_days) with no clock or zone of its own,
+	// identically on every node. Empty on every other entry. BASE FORMAT, as
+	// Via is.
 	Day string `json:"day,omitempty"`
-	// WorkingFor is whom a SEAT'S push was made for (ADR-0109), whatever its
-	// entry wakes: the carrier its proposal states ([Proposal.WrittenFor]) —
-	// whoever the turn that asked the engine write worked for — STAMPED BY THE
-	// COMMITTER on an agent's entry, as Day is, and never sent by a proposer.
-	// nil for a push made for nobody, the seat's own work, and on every entry
-	// no seat pushed. The apply keeps it on the push's row
-	// (code_pushes.working_for) and on each revision the entry's moves add
-	// (code_revisions.working_for), which the engine's later records about
-	// the push read it back from — a revision's facts and a failed check of
-	// its head ([revisionPusher]), and the home's landing of a change the
-	// push merged ([landingPusher]); the entry's routings carry it beside the
-	// pusher ([ChangeRouting.WorkingFor]).
+	// WorkingFor is whom a SEAT'S push was made for (ADR-0109): the carrier
+	// its proposal states ([Proposal.WrittenFor]), STAMPED BY THE COMMITTER
+	// on an agent's entry as Day is, never sent by a proposer; nil for a
+	// seat's own work and on every entry no seat pushed. The apply keeps it on
+	// code_pushes.working_for and on each revision the entry adds
+	// (code_revisions.working_for), which later records read back
+	// ([revisionPusher], [landingPusher]); routings carry it too
+	// ([ChangeRouting.WorkingFor]).
 	//
 	// VERSION 2 ([versionedFields]): an entry carrying it stamps its record
 	// there.
 	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 	// Change is the change this push opens from its options
-	// ([ChangeOption], pushchange.go): STAMPED BY ITS DECIDE, and only where
-	// the decide opens one — its target resolved to the repository's default
-	// branch where the options named none — so the record's apply opens it on
-	// the entry's one branch command, at the head that command set, from the
-	// record alone (revisions.go). A push whose options asked for no change,
-	// whose change was refused, or whose source already heads a live change
-	// carries none: nothing of a change a push did not open is state.
-	//
-	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
-	// field, so every build that meets a push record reads it.
+	// ([ChangeOption], pushchange.go), STAMPED BY ITS DECIDE only where it
+	// opens one, its target resolved to the default branch where unnamed, so
+	// the apply opens it on the entry's one branch command from the record
+	// alone (revisions.go). A push opening no change carries none: nothing of
+	// a change a push did not open is state. BASE FORMAT, as Via is.
 	Change *ChangeOption `json:"change,omitempty"`
-	// Routing is whom the entry concerns ([ChangeRouting]): one routing for
-	// every change its commands MERGE, by setting a target to a change's
-	// head, in number order, and then the change it OPENS from its options,
-	// each naming the entry's pusher as its actor — STAMPED BY ITS DECIDE, and
-	// none where the entry merges and opens nothing, since a push that moves
-	// no change otherwise concerns nobody (concerns.go). Bounded with the
-	// record's bytes by its decide ([routedEntry]).
-	//
-	// BASE FORMAT, as concerns.go's head says.
+	// Routing is whom the entry concerns ([ChangeRouting]): one per change
+	// its commands MERGE, in number order, then the change it OPENS, each
+	// naming the pusher as actor. STAMPED BY ITS DECIDE; none where it merges
+	// and opens nothing (concerns.go). Bounded with the record's bytes
+	// ([routedEntry]). BASE FORMAT, as concerns.go's head says.
 	Routing []ChangeRouting `json:"routing,omitempty"`
-	// Landings is every LANDING the entry makes on a protected branch: each
-	// ok command that moves a branch a protection rule matches onto a
-	// commit — a person's own push under direct_push persons, their recorded
-	// override (ADR-0096), since no seat's push moves a protected branch —
-	// in command order, STAMPED BY ITS DECIDE from the rules its snapshot
-	// holds, so the record's apply writes the branch's landing row, and its
-	// green row where the branch's gate requires no check, without matching
-	// a rule itself. None for an entry that lands on no protected branch.
+	// Landings is every LANDING on a protected branch: each ok command
+	// moving a branch a protection rule matches (a person's direct_push
+	// persons push or recorded override, ADR-0096; no seat's push moves one),
+	// in command order. STAMPED BY ITS DECIDE from its snapshot's rules, so
+	// the apply writes the landing row, and the green row where the gate
+	// requires no check, without matching a rule itself.
 	//
 	// BASE FORMAT, as queuerecords.go's head says.
 	Landings []PushLanding `json:"landings,omitempty"`
@@ -1045,28 +932,23 @@ type Principal struct {
 	Kind       PrincipalKind `json:"kind"`
 	OperatorID string        `json:"operator_id,omitempty"`
 	Seat       string        `json:"seat,omitempty"`
-	// Run is what made a SEAT'S PUSH — the turn, the work item it was charged
-	// to and the model, and for a coding box's push its run and its harness
-	// ([RunProvenance.RunID]) — and nothing on any other principal: an operator
-	// acts with a credential and no run, and a seat that only READS names none
-	// (a read's asker is judged by who it is, never by what it is doing). THE
-	// ZERO VALUE IS "NO RUN", and a value, not a pointer: one spelling of the
-	// absence, omitted from the encoding whole, and a principal stays a value
-	// the cases and the index of pushes compare with ==.
+	// Run is what made a SEAT'S PUSH ([RunProvenance]), and nothing on any
+	// other principal: an operator has no run, and a seat that only READS
+	// names none, since a read's asker is judged by who it is. THE ZERO VALUE
+	// IS "NO RUN", a value rather than a pointer, so the absence has one
+	// spelling and a principal stays comparable with ==.
 	//
-	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
-	// field, so every build that meets a push record reads it.
+	// BASE FORMAT ([RecordVersion]): every build that meets a push record
+	// reads it.
 	Run RunProvenance `json:"run,omitzero"`
 }
 
 // Validate refuses a principal no record or question may carry ([ErrInvalid],
-// naming the field): an operator names its credential, and the person it is
-// bound to by their handle or nobody, and no run; a seat names its handle and
-// no credential, and a run only as [RunProvenance.Validate] admits one. A kind
-// this build does not know is refused, since nothing here could judge what
-// one may do — and so is the engine's own account ([PrincipalSystem]), which
-// asks, reads and writes nothing: only its expiry's push carries it, and
-// [Proposal.Validate] judges that one ([Principal.systemInvalid]).
+// naming the field): an operator names its credential, its bound person's
+// handle or nobody, and no run; a seat names its handle, no credential, and a
+// run only as [RunProvenance.Validate] admits. An unknown kind is refused, and
+// so is [PrincipalSystem]: only its expiry's push carries it, which
+// [Proposal.Validate] judges ([Principal.systemInvalid]).
 func (p Principal) Validate() error {
 	if why := p.invalid(); why != "" {
 		return fmt.Errorf("%w: %s", ErrInvalid, why)
@@ -1075,8 +957,8 @@ func (p Principal) Validate() error {
 }
 
 // systemInvalid is why p is not the engine's own account as an expiry's push
-// carries it, or "": the kind, and NOTHING beside it — no credential, no seat
-// and no run, since the engine acts for nobody when it deletes an idle branch.
+// carries it, or "": the kind and NOTHING beside it, since the engine acts for
+// nobody when it deletes an idle branch.
 func (p Principal) systemInvalid() string {
 	switch {
 	case p.Kind != PrincipalSystem:
@@ -1092,9 +974,8 @@ func (p Principal) systemInvalid() string {
 	return ""
 }
 
-// invalid is why p is no principal, or "" — the one rule [Principal.Validate]
-// and a proposal's validation both state. The engine's own account is none
-// here ([Principal.Validate]).
+// invalid is why p is no principal, or "": the one rule [Principal.Validate]
+// and a proposal's validation share. The engine's own account is none here.
 func (p Principal) invalid() string {
 	switch p.Kind {
 	case PrincipalOperator:
@@ -1127,14 +1008,11 @@ func (p Principal) invalid() string {
 	return ""
 }
 
-// Actor is who a record names as p's actor: the credential an operator acted
-// with — the person's attribution, as every record a write leaves names it
-// (iam.ActorFor), the seat they hold beside it — and a seat's own handle,
-// since a seat acts as itself with no credential — and nobody for the
-// engine's own expiry, which acts for nobody. THE ONE RULE for every
-// record of a principal: a push row's actor, and the reader every read of a
-// `visibility: unit` repository is recorded as, which the usage domain
-// refuses empty.
+// Actor is who a record names as p's actor: an operator's credential (the
+// person's attribution, iam.ActorFor), a seat's own handle, and nobody for the
+// engine's expiry. THE ONE RULE for every record of a principal: a push row's
+// actor, and the reader a `visibility: unit` repository's read is recorded as,
+// which the usage domain refuses empty.
 func (p Principal) Actor() string {
 	if p.Kind == PrincipalAgent {
 		return p.Seat
@@ -1142,14 +1020,11 @@ func (p Principal) Actor() string {
 	return p.OperatorID
 }
 
-// WriterKind is what kind of writer p is, in the identity directory's own
-// words, as iam.ActorFor classes a principal: a seat is an agent; a person,
-// through a credential bound to their human seat, is human; a credential bound
-// to nobody is an operator; and the engine's own account, and the zero
-// principal of a request a repository's home asks, which names nobody, are
-// the system. It is the kind [types.WrittenFor.For] holds whom a write is made
-// for to, so a request's own rule ([writtenForInvalid]) and the estate's check
-// before the request is asked anywhere read one answer.
+// WriterKind is p's writer kind in the identity directory's words, as
+// iam.ActorFor classes it: a seat is an agent, a person's bound credential
+// human, a credential bound to nobody an operator, and the engine and a home's
+// zero principal the system. [types.WrittenFor.For] is held to it, so
+// [writtenForInvalid] and the estate's pre-check read one answer.
 func (p Principal) WriterKind() iam.ActorKind {
 	switch {
 	case p.Kind == PrincipalAgent:
@@ -1162,16 +1037,14 @@ func (p Principal) WriterKind() iam.ActorKind {
 	return iam.ActorSystem
 }
 
-// RunProvenance is what made a seat's push, as the SERVER stamps it from the
-// call that made it — the tool call's turn, its work item and its model, and
-// for a coding box's push the run that pushed and its harness — and
-// never as a commit says it: a commit's headers and trailers are written by
-// whoever made the commit, a seat or the harness in its box, and the
-// engine trusts nothing it did not see itself. Every field is bounded
-// ([MaxProvenanceBytes]) and spelled as the push row stores it.
+// RunProvenance is what made a seat's push as the SERVER stamps it from the
+// call (turn, work item, model, and for a coding box's push its run and
+// harness), never as a commit says it: a commit's headers and trailers are its
+// author's, and the engine trusts nothing it did not see. Every field is
+// bounded ([MaxProvenanceBytes]) and spelled as the push row stores it.
 type RunProvenance struct {
-	// TurnID is the turn that made the write (turnctx.Turn.RunID) — for a
-	// box's push, the turn that launched its run — the one field every run
+	// TurnID is the turn that made the write (turnctx.Turn.RunID), for a
+	// box's push the turn that launched its run: the one field every run
 	// names.
 	TurnID string `json:"turn_id"`
 	// WorkBackend and WorkKey are the work item the turn is charged to
@@ -1180,47 +1053,34 @@ type RunProvenance struct {
 	WorkBackend string `json:"work_backend,omitempty"`
 	WorkKey     string `json:"work_key,omitempty"`
 	// WorkID is that work item's IDENTITY in its tracker
-	// (types.WorkItem.ID) — a key is a label the tracker may give another
-	// item — stamped on a coding box's push from its run's row by the box's
-	// admission, and empty on every other write: what a change the push
-	// opens from its options carries its item by ([PushEntry.Change]), so a
-	// box's `git push -o change` names the work its run was launched for, as
-	// a code_open_change of the same turn does. Set, it names a WorkBackend
-	// ([RunProvenance.Validate]). A RECORD'S FIELD AND NO ROW'S: code_pushes
-	// keeps the item as the history shows it, its tracker and its key, so a
-	// push read back from its row ([PushRow.Run]) carries none — the change
-	// the push opened keeps the identity on its own row.
+	// (types.WorkItem.ID), since a key is a label the tracker may reuse:
+	// stamped on a coding box's push from its run's row at admission, empty
+	// on every other write, so a box's `git push -o change` opens a change
+	// ([PushEntry.Change]) carrying its run's item, as a code_open_change of
+	// the same turn does. Set, it names a WorkBackend. A RECORD'S FIELD AND
+	// NO ROW'S: code_pushes keeps tracker and key, so [PushRow.Run] carries
+	// none; the opened change keeps the identity on its own row.
 	//
-	// BASE FORMAT, as RunID is ([RecordVersion]): the domain landed on main
-	// with it, so every build that meets a push record reads it.
+	// BASE FORMAT, as RunID is.
 	WorkID string `json:"work_id,omitempty"`
-	// WorkProject is that work item's PROJECT in its tracker
-	// (types.WorkItem.Project), carried exactly as WorkID is: stamped on a
-	// coding box's push from its run's row by the box's admission, empty on
-	// every other write, and A RECORD'S FIELD AND NO ROW'S — the change the
-	// push opens keeps it (code_changes.work_project), so the change carries
-	// its item in the one shape a code_open_change of the same turn, or the
-	// engine's own open at the run's collection, gives it, and every wake
-	// built from the change names the item's project (MetaWorkProject).
-	//
-	// BASE FORMAT, as WorkID is ([RecordVersion]): the domain landed on main
-	// with it, so every build that meets a push record reads it.
+	// WorkProject is that work item's PROJECT (types.WorkItem.Project),
+	// carried exactly as WorkID is and kept by the change the push opens
+	// (code_changes.work_project), so the change carries its item in the one
+	// shape every open gives it and every wake built from it names the
+	// project (MetaWorkProject). BASE FORMAT, as RunID is.
 	WorkProject string `json:"work_project,omitempty"`
 	// Model is the executor model of the round that called the tool, empty
 	// where the call named none.
 	Model string `json:"model,omitempty"`
-	// RunID is the LAUNCH behind a box's push — its executor's, the id the
-	// engine minted when it launched the box (sandbox.PendingRun.LaunchID), a
-	// UUID in its canonical spelling — and Harness the harness the
-	// box ran ("claude-code", "opencode"). Gitlet stamps both from the
-	// run's row when it admits the box: what the engine's account of a run's
-	// delivery reads its pushes by (the `run_pushes` read). BOTH OR NEITHER,
-	// and both only on a push git received from a box ([Proposal.Validate]):
-	// an engine-built write's run is the turn that called the tool, and a
-	// person acts with no run at all.
+	// RunID is the LAUNCH behind a box's push (sandbox.PendingRun.LaunchID,
+	// a canonical UUID) and Harness the harness the box ran ("claude-code",
+	// "opencode"), both stamped from the run's row at the box's admission:
+	// the `run_pushes` read finds a run's pushes by them. BOTH OR NEITHER, and
+	// only on a push git received from a box ([Proposal.Validate]): an
+	// engine-built write's run is the calling turn, and a person has none.
 	//
-	// BASE FORMAT ([RecordVersion]): the domain landed on main with these
-	// fields, so every build that meets a push record reads them.
+	// BASE FORMAT ([RecordVersion]): every build that meets a push record
+	// reads them.
 	RunID   string `json:"run_id,omitempty"`
 	Harness string `json:"harness,omitempty"`
 }
@@ -1229,27 +1089,19 @@ type RunProvenance struct {
 // spelling every principal but a seat's push carries.
 func (r RunProvenance) IsZero() bool { return r == RunProvenance{} }
 
-// MaxProvenanceBytes bounds each [RunProvenance] field: a turn id and a run id
-// are UUIDs (36 bytes), a work key a tracker's or a vendor's (Jira's are under
-// 32), a model id a provider's (the longest Bedrock ARN form is about 120), a
-// harness a name the model entry chose ("claude-code",
-// providers.llm.<key>.harness), a work item's id its tracker's (a native task's
-// UUID, `<repository id>#<number>` on GitHub), its project the tracker's key
-// for one (Worklet's and Jira's a short key, GitLab's a group path, fitted
-// where a nested one runs longer). 256 is past every one of them but that
-// path's deepest, and what the bound buys is a push entry whose size is known
-// before it is measured: eight fields at it are twelve kibibytes of a record's
-// mebibyte even where JSON spells every byte in six.
+// MaxProvenanceBytes bounds each [RunProvenance] field: ids are UUIDs (36
+// bytes) or `<repository id>#<number>`, a Jira key is under 32, the longest
+// Bedrock model ARN about 120, a harness a short name, and a GitLab group path
+// as a project is fitted where a nested one runs longer. 256 is past each but
+// that path's deepest, and buys an entry whose size is known before it is
+// measured: eight fields at it are 12 KiB of a record's MiB even where JSON
+// spells every byte in six.
 const MaxProvenanceBytes = 256
 
-// Validate refuses a run no push may carry ([ErrInvalid], naming the field):
-// one that names no turn, a run id that is not a UUID in its canonical
-// spelling, a launch without its harness or a harness without its launch,
-// a work item's id naming no tracker, or a field past [MaxProvenanceBytes],
-// not valid UTF-8, or holding a control
-// character. A stamping site passes every field it copies from outside the
-// code domain through [FitProvenance] first, so a field this refuses is the
-// engine's own bug, never a seat's.
+// Validate refuses a run no push may carry ([ErrInvalid], naming the field).
+// A stamping site passes every field copied from outside the code domain
+// through [FitProvenance] first, so a refusal here is the engine's own bug,
+// never a seat's.
 func (r RunProvenance) Validate() error {
 	if why := r.invalid(); why != "" {
 		return fmt.Errorf("%w: run.%s", ErrInvalid, why)
@@ -1257,12 +1109,10 @@ func (r RunProvenance) Validate() error {
 	return nil
 }
 
-// invalid is why r is no run, or "" — the field named as its JSON does.
-//
-// A RUN ID IS THE LAUNCH'S UUID, CANONICAL, never a label fitted to the bound:
-// the engine minted it, and a `run_pushes` read finds the run's pushes by it
-// whole, so a run id spelled any other way would land a push no read of its
-// run ever names.
+// invalid is why r is no run, or "", naming the field as its JSON does. A RUN
+// ID IS THE LAUNCH'S CANONICAL UUID, never a fitted label: `run_pushes` finds
+// a run's pushes by it whole, so any other spelling lands a push no read of
+// its run names.
 func (r RunProvenance) invalid() string {
 	switch {
 	case r.TurnID == "":
@@ -1312,10 +1162,9 @@ type Command struct {
 	Forced bool          `json:"forced,omitempty"`
 	Result CommandResult `json:"result"`
 	Reason Refusal       `json:"reason,omitempty"`
-	// Detail is an answer's one-sentence specifics for an ng command
-	// ("refs/heads/main is at 1a2b3c4; fetch first"). It travels in
-	// proposals and answers and is NEVER in a record or a row: a sentence
-	// is an answer, not state.
+	// Detail is an ng command's one-sentence specifics ("refs/heads/main is
+	// at 1a2b3c4; fetch first"), in proposals and answers and NEVER in a
+	// record or a row: a sentence is an answer, not state.
 	Detail string `json:"detail,omitempty"`
 }
 
@@ -1372,33 +1221,24 @@ type Purge struct {
 // the outputs' rows and moves the inputs' into code_packs_retired.
 //
 // A MERGE MAKES NO REACHABILITY JUDGEMENT (ADR-0090): its outputs hold every
-// object its inputs held, so no push decided against the inputs can land a ref
-// whose closure a compaction removed, and no fence is needed beside the decide's own
-// check that every input is still live. The outputs are built over the inputs
-// with no pack excluded — an object an input shares with a pack that is not
-// an input is written again rather than left to that pack, because two
-// compactions decided from different snapshots may each retire the pack the
-// other relied on. An expunge, which drops objects, is the one rewrite that
-// needs a fence — the drop epoch its begin moves, which every push is held to
-// ([ExpungeBegin]) — and it is not this record.
-//
-// Every field is in the base format, as [OpCompact] is.
+// object its inputs held, so no push decided against them loses a ref's
+// closure and no fence is needed beyond the decide's check that each input is
+// live. An object an input shares with a non-input pack is written again, as
+// two compactions from different snapshots may each retire the pack the other
+// relied on. Only an expunge needs a fence ([ExpungeBegin]). Every field is in
+// the base format, as [OpCompact] is.
 type Compaction struct {
 	RepoID string `json:"repo_id"`
-	// CompactionID is minted ONCE by the node that builds the compaction — a
-	// bare UUIDv7 (statelog.NewOpID with no name) — and is the record's
-	// operation id: a proposal asked again of the repository's runner-up
-	// after a committer went silent is the same compaction, collapsed by the
-	// operation ledger, and its instant is what the ledger judges a late
-	// retry by and what each output's id is derived at
-	// ([DeriveOutputPackID]).
+	// CompactionID is minted ONCE by the building node, a bare UUIDv7
+	// (statelog.NewOpID with no name), and is the record's operation id: a
+	// proposal re-asked of the runner-up after a committer went silent
+	// collapses in the operation ledger, which judges a late retry by its
+	// instant; each output's id derives from it ([DeriveOutputPackID]).
 	CompactionID string `json:"compaction_id"`
 	// Node is the Gitlet node that built it, for whoever reads the log.
 	Node string `json:"node"`
-	// Seen is the code log's position the builder planned at — the sync
-	// its cache answered the inputs from. The committer decides at or past
-	// it (the publish's session floor), and the record keeps it, so a
-	// compaction says what its author read without a lookup. ONE FIELD: the
+	// Seen is the code log's position the builder planned at; the committer
+	// decides at or past it (the publish's session floor). ONE FIELD: the
 	// proposal carries no second copy, and nothing stamps it again.
 	Seen statelog.Position `json:"seen"`
 	// Retire are the pack ids the outputs replace, sorted and distinct,
@@ -1415,28 +1255,23 @@ type Compaction struct {
 	// layer gathers, and every Add is one of the layer's packs — or both are
 	// empty, a record that publishes a layer over the packs as they stand.
 	//
-	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
-	// field, so every build that meets a publication reads its layer.
+	// BASE FORMAT ([RecordVersion]): every build that meets a publication
+	// reads its layer.
 	Layer *LayerRef `json:"layer,omitempty"`
 }
 
 // LayerRef is ONE published layer of a repository's multi-pack-index chain:
-// git's own incremental multi-pack-index layer, its bitmap, and the
-// commit-graph layer over the same packs, written ONCE by the repository's
-// maintainer and installed by every Gitlet node (ADR-0081's Derived standing).
-// Its bytes are the three files back to back — the multi-pack-index, its
-// bitmap, the commit-graph layer — cut into Parts, each one stored object.
+// git's incremental multi-pack-index layer, its bitmap, and the commit-graph
+// layer over the same packs, written ONCE by the maintainer and installed by
+// every Gitlet node (ADR-0081's Derived standing): the three files back to
+// back, cut into Parts.
 //
 // A LAYER IS CLOSED TOGETHER WITH ITS BASE: it covers every pack live at its
-// plan's position (its compaction's Seen) that no layer below it covers,
-// because git writes a bitmap only over a chain whose packs hold everything
-// their commits reach — measured on git 2.56.0: a layer over all of a
-// history's packs but one is refused ("Packfile doesn't have full closure")
-// and writes no bitmap, and so is a layer over a cut's full packs alone. A
-// pack that lands after the plan stays outside the chain until the next
-// publication, which git reads beside it. The decide holds both halves
-// (compaction.go): every pack the layer names live, and every pack live at
-// the plan that its base does not name in it.
+// plan (its compaction's Seen) no lower layer covers, as git bitmaps only a
+// chain holding all its commits reach (git 2.56.0 refuses one short a pack:
+// "Packfile doesn't have full closure"); a later pack is read beside it until
+// the next publication. compaction.go's decide holds both halves: every named
+// pack live, every pack live at the plan in it or its base.
 type LayerRef struct {
 	// LayerID is the multi-pack-index layer's own trailing checksum, 40
 	// lowercase hex digits: the name git gives the layer's files
@@ -1444,8 +1279,7 @@ type LayerRef struct {
 	// file.
 	LayerID string `json:"layer_id"`
 	// BaseID is the layer directly below it in the chain the record leaves,
-	// "" for the chain's root. A layer file does not name its base — the
-	// chain's order is the only thing that does, which is why the rows'
+	// "" for the root. A layer file does not name its base, so the rows'
 	// order is the chain's authority.
 	BaseID string `json:"base_id,omitempty"`
 	// Replaces are the ids of the TOP layers this one replaces, in chain
@@ -1508,35 +1342,27 @@ func (l LayerRef) Size() int64 { return l.MidxBytes + l.BitmapBytes + l.GraphByt
 func (l LayerRef) Sections() [3]int64 { return [3]int64{l.MidxBytes, l.BitmapBytes, l.GraphBytes} }
 
 // RetireSweep removes a repository's retired pack rows at or below Through,
-// oldest first — the code-retention duty's sweep of what a record retired,
-// once its grace has passed ([Store.RetireSweep]).
+// oldest first, once their grace has passed ([Store.RetireSweep]).
 //
-// PURE IN THE RECORD: the duty decides Through by its own clock against each
-// row's retired_at — the broker's instant — and the apply removes the rows at
-// or below it and reads no clock, so every node removes the same rows, and a
-// suite can drive the grace with the duty's clock where the broker's cannot
-// be moved. The skew between the two clocks is at most twice
-// objstore.AssumedClockSkew while no node raises `clock_skew`, which
-// [RetireGrace] outlasts past the longest read.
+// PURE IN THE RECORD: the duty picks Through by its clock against each row's
+// broker-stamped retired_at, and the apply reads no clock, so every node
+// removes the same rows and a suite drives the grace with the duty's clock.
+// The two clocks differ by at most twice objstore.AssumedClockSkew while no
+// node raises `clock_skew`, which [RetireGrace] outlasts past the longest read.
 type RetireSweep struct {
 	RepoID string `json:"repo_id"`
 	// Through is the highest retired_position whose rows the duty's clock
-	// put past RetireGrace: every row at or below it retired at or before
-	// the decide's now less the grace, and it names whole records'
-	// retirements, never part of one. The apply removes no row above it.
+	// put past RetireGrace, naming whole records' retirements, never part of
+	// one. The apply removes no row above it.
 	Through statelog.Position `json:"through"`
 }
 
-// ExpungeRequest asks for an expunge of a repository's unreachable objects — a
-// person's purge. Its record writes the request and nothing else: the
-// repository's maintainer serves it, with no grace for the objects a ref drop
-// left, through as many begins and commits as the repository's live packs
-// need, and it is SERVED — the repository holds it no more — once no pack of
-// the repository dates its content from before it ([PackRow.Content]): at its
-// own apply, for a repository holding no pack, and at a commit's otherwise. A
-// request asked while one is open WIDENS it: recorded, it moves the
-// repository's open request to its own id and position, since it asks about
-// everything the open one did and what landed since — so the repository's
+// ExpungeRequest asks for an expunge of a repository's unreachable objects, a
+// person's purge; its record writes the request alone. The maintainer serves
+// it with no grace for what a ref drop left, through as many begins and
+// commits as the live packs need, and it is SERVED once no pack dates its
+// content from before it ([PackRow.Content]). A request asked while one is
+// open WIDENS it, moving the open request to its own id and position, so the
 // purge is served only once nothing from before the latest request is left.
 //
 // Every field is in the base format, as [OpExpungeRequest] is.
@@ -1547,39 +1373,30 @@ type ExpungeRequest struct {
 	// request asked again after its answer was lost is the same request,
 	// collapsed by the operation ledger.
 	RequestID string `json:"request_id"`
-	// By is the person who asked, by the credential they asked with and the
-	// human seat it is bound to: the request's attribution, which its
-	// record's actor — the deciding node, as for every expunge record — does
-	// not say.
+	// By is the person who asked, by credential and bound human seat: the
+	// request's attribution, which its record's actor (the deciding node)
+	// does not say.
 	By Principal `json:"by"`
 }
 
-// ExpungeBegin begins an expunge of a repository's packs: the packs it
-// rewrites (Retire) leave code_packs for code_packs_retired, and the packs
-// that replace them join it — Add, holding every object a ref reached when it
-// was planned, LIVE; Dropping, holding the rest, DROPPING ([PackDropping]) —
-// while the repository's drop epoch moves to DropEpoch and ExpungeID is its
-// open expunge until its commit ([ExpungeCommit]). Decided by the
-// repository's committer ([Committer.ProposeExpunge]) and applied as ONE
-// record, which also removes the published layers over its inputs.
+// ExpungeBegin begins an expunge: the packs it rewrites (Retire) move to
+// code_packs_retired, Add (every object a ref reached at planning) joins LIVE
+// and Dropping (the rest) DROPPING ([PackDropping]), the drop epoch moves to
+// DropEpoch, and ExpungeID is open until its [ExpungeCommit]. Decided by the
+// committer ([Committer.ProposeExpunge]) as ONE record, which also removes
+// the published layers over its inputs.
 //
-// IT KEEPS EVERY OBJECT: Add and Dropping hold every object of the inputs,
-// and a cache serves a dropping pack beside the live ones, so no read loses
-// an object to it and it judges no reachability any record needs a fence
-// for. What it decides is which objects a new push may rely on: none in a
-// dropping pack, which a receiver's view of the repository leaves out, and
-// none at all of a push whose receiver read the repository at an earlier drop
-// epoch, which its committer refuses `expunging`.
-//
-// Every field is in the base format, as [OpExpungeBegin] is.
+// IT KEEPS EVERY OBJECT, and a cache serves dropping packs, so no read loses
+// one. It decides what a new push may rely on: nothing dropping, and nothing
+// at all for a receiver that read an earlier drop epoch, which its committer
+// refuses `expunging`. Every field is in the base format, as
+// [OpExpungeBegin] is.
 type ExpungeBegin struct {
 	RepoID string `json:"repo_id"`
-	// ExpungeID is minted ONCE by the node that builds the expunge — a bare
-	// UUIDv7 (statelog.NewOpID with no name) — and is the record's
-	// operation id, the repository's open expunge until its commit, and
-	// what each output's pack id is derived from ([DeriveOutputPackID]):
-	// a begin asked again of the repository's runner-up after a committer
-	// went silent is the same begin, collapsed by the operation ledger.
+	// ExpungeID is minted ONCE by the building node, a bare UUIDv7, and is
+	// the record's operation id (a begin re-asked of the runner-up collapses
+	// in the ledger), the open expunge until its commit, and what each
+	// output's pack id derives from ([DeriveOutputPackID]).
 	ExpungeID string `json:"expunge_id"`
 	// RequestID is the open request this expunge serves, "" for one on the
 	// maintainer's own schedule. PROVENANCE: a commit serves a request by
@@ -1595,13 +1412,11 @@ type ExpungeBegin struct {
 	// DropEpoch is the repository's drop epoch once the begin applies: the
 	// one its row held when the builder planned, plus one.
 	DropEpoch int64 `json:"drop_epoch"`
-	// Grace is how long before the scan a ref drop's object was still kept
-	// reachable: PruneGrace for an expunge on the maintainer's own schedule,
-	// and 0 for one serving a request — a purge drops what a force-push left
-	// at once. The decide reads no ref; the APPLY dates the begin's outputs
-	// by it ([PackRow.Content]): from Seen where it is 0, a purge having
-	// judged everything it kept there, and from the oldest input otherwise,
-	// since what a grace keeps is what a purge still asks to drop.
+	// Grace is how long before the scan a ref drop's object stayed
+	// reachable: PruneGrace on the maintainer's schedule, 0 serving a request
+	// (a purge drops what a force-push left at once). The APPLY dates the
+	// outputs by it ([PackRow.Content]): from Seen at 0, else from the oldest
+	// input, since what a grace keeps a purge still asks to drop.
 	Grace time.Duration `json:"grace"`
 	// Retire are the pack ids the outputs replace, sorted and distinct, each
 	// live when the committer decides — a full pack among them: an expunge is
@@ -1624,36 +1439,29 @@ type ExpungeBegin struct {
 	DropLayers []string `json:"drop_layers,omitempty"`
 }
 
-// ExpungeCommit ends a repository's open expunge: its dropping packs (Retire)
-// leave code_packs for code_packs_retired, where each keeps its object from
-// the collector for [RetireGrace] — so a reader already on one finishes — and
-// its RESCUE (Add) joins code_packs live: what of the dropping packs a ref
-// reached at the rescue's sync, which a push that landed between the
-// expunge's scan and its begin made reachable again, its content dated from
-// the oldest dropping pack it was cut from ([PackRow.Content]). The
-// repository's open expunge is cleared, and its open request with it once no
-// pack of the repository dates its content from before the request.
+// ExpungeCommit ends the open expunge: its dropping packs (Retire) move to
+// code_packs_retired, keeping their objects for [RetireGrace] so a reader on
+// one finishes, and its RESCUE (Add) joins live: what of them a ref reached at
+// the rescue's sync (a push landing between scan and begin), dated from the
+// oldest dropping pack ([PackRow.Content]). The open expunge clears, and its
+// open request once no pack dates its content from before it.
 //
-// ITS ONE PRECONDITION IS ITS EXPUNGE: still open at its epoch, with exactly
-// the dropping packs the commit retires. No ref and no push is read, so a
-// repository pushed to all day still commits — a push checked after the begin
-// relies on no dropping object, and one checked before it is refused
-// `expunging`.
-//
-// Every field is in the base format, as [OpExpungeCommit] is.
+// ITS ONE PRECONDITION IS ITS EXPUNGE, open at its epoch with exactly the
+// dropping packs it retires; no ref or push is read, so a busy repository
+// still commits (a push checked after the begin relies on no dropping object,
+// one checked before it is refused `expunging`). Every field is in the base
+// format, as [OpExpungeCommit] is.
 type ExpungeCommit struct {
 	RepoID string `json:"repo_id"`
 	// ExpungeID is the expunge this commit ends: the repository's open one.
 	ExpungeID string `json:"expunge_id"`
-	// CommitID is minted ONCE by the node that builds the commit — a bare
-	// UUIDv7 — and is the record's operation id and what each rescue pack's
-	// id is derived from ([DeriveOutputPackID]). Not ExpungeID, the begin's
-	// own: the ledger would answer the commit with the begin's record. And
-	// minted a build, never derived from the expunge, so a commit asked again
-	// of the repository's runner-up is the same commit, collapsed by the
-	// ledger, while one its builder built again over a newer sync is another
-	// — answered stale if the first landed, rather than collapsed onto a
-	// record that names other rescue packs.
+	// CommitID is minted ONCE per build, a bare UUIDv7, and is the record's
+	// operation id and what each rescue pack's id derives from
+	// ([DeriveOutputPackID]). Not ExpungeID: the ledger would answer with the
+	// begin's record. Not derived from the expunge: a commit re-asked of the
+	// runner-up collapses, while a rebuild over a newer sync is another,
+	// answered stale rather than collapsed onto a record naming other rescue
+	// packs.
 	CommitID string `json:"commit_id"`
 	// RequestID is the request the expunge serves, "" for none: provenance,
 	// as on the begin.
@@ -1676,31 +1484,23 @@ type ExpungeCommit struct {
 	Add []PackRef `json:"add,omitempty"`
 }
 
-// ExpungeScan records that a scan on a repository's maintainer's own
-// schedule found NO expunge due: the repository's expunge_scanned_at moves to
-// the record's broker instant, so the `expunge_due` listing's weekly arm
-// leaves it out for [ExpungeInterval] ON EVERY NODE ([ReadQuery.ScannedBefore])
-// — whichever Gitlet node maintains it next, after a restart, a rolling upgrade
-// or a Gitlet node joining or leaving, reads the verdict from the rows rather
-// than downloading and walking the repository again, and no Gitlet node lists it
-// every minute meanwhile. A verdict kept in the scanning node's memory alone
-// was lost to each of those, so a fleet-wide deploy scanned every repository
-// in the fleet whatever its last scan, and every Gitlet node read every
-// repository through the estate every minute for the R scans a week of work.
+// ExpungeScan records that a scan on the maintainer's schedule found NO
+// expunge due: expunge_scanned_at moves to the record's broker instant, so
+// `expunge_due`'s weekly arm leaves the repository out for [ExpungeInterval]
+// ON EVERY NODE ([ReadQuery.ScannedBefore]). Whichever node maintains it next,
+// after a restart, an upgrade or a membership change, reads the verdict from
+// the rows rather than walking the repository again; a node-local verdict
+// would not survive those.
 //
-// Decided by the repository's committer, as every expunge record is, by one
-// rule beside the repository's own: no expunge is open on it, since an open
-// one is finished, never judged. Its maintainer appends at most one a
-// repository an ExpungeInterval — and none for a repository an expunge
-// committed in, whose commit moves the same instant.
-//
-// Every field is in the base format, as [OpExpungeScan] is.
+// Decided by the committer only while no expunge is open (an open one is
+// finished, never judged). At most one a repository an ExpungeInterval, and
+// none where an expunge committed, whose commit moves the same instant. Every
+// field is in the base format, as [OpExpungeScan] is.
 type ExpungeScan struct {
 	RepoID string `json:"repo_id"`
-	// ScanID is minted ONCE by the node that scanned — a bare UUIDv7 — and
-	// is the record's operation id, so a scan's record asked again of the
-	// repository's runner-up after a committer went silent is the same
-	// record, collapsed by the operation ledger.
+	// ScanID is minted ONCE by the scanning node, a bare UUIDv7, and is the
+	// record's operation id, so a record re-asked of the runner-up collapses
+	// in the operation ledger.
 	ScanID string `json:"scan_id"`
 	// Node is the Gitlet node that scanned, for whoever reads the log.
 	Node string `json:"node"`
@@ -1712,25 +1512,22 @@ type ExpungeScan struct {
 }
 
 // ImportChunk lands one chunk of a repository's import ([CreateRepo.Import],
-// and a pull mirror's first fill): packs its home fetched from the other
-// host, and the refs they let it set — each a command whose Old is the ref as
-// the repository holds it after the chunks before — as ONE push row `via
-// import` ([ViaImport]) by the engine's own account, a code_ref_drops row for
-// every command that leaves an object ([leavesObject]), and the repository's
-// import_seq moved to Seq. Decided by the repository's committer
-// ([Committer.ProposeImport]) ONLY IN ITS TURN: the repository importing and
-// its import_seq one below Seq, so a chunk asked twice, or after its import
-// moved on, is refused stale rather than landed again.
+// or a pull mirror's first fill): packs its home fetched and the refs they
+// set (each command's Old the ref after the chunks before), as ONE push row
+// `via import` ([ViaImport]) by the engine's own account, a code_ref_drops row
+// per command leaving an object ([leavesObject]), and import_seq moved to Seq.
+// Decided by the committer ([Committer.ProposeImport]) ONLY IN ITS TURN, the
+// repository importing at import_seq one below Seq, so a chunk asked twice or
+// late is refused stale rather than landed again.
 //
 // Every field is in the base format, as [OpImportChunk] is.
 type ImportChunk struct {
 	RepoID string `json:"repo_id"`
-	// ChunkID is minted afresh for every attempt — a bare UUIDv7
-	// (statelog.NewOpID with no name) — and is the record's operation id,
-	// its push row's push id and what each pack's id is derived from
-	// ([DeriveOutputPackID]). Its idempotence is Seq's precondition, never
-	// the id: a chunk built again after a refusal is another attempt, whose
-	// packs are its own.
+	// ChunkID is minted afresh for every attempt, a bare UUIDv7, and is the
+	// record's operation id, its push row's push id and what each pack's id
+	// derives from ([DeriveOutputPackID]). Idempotence is Seq's
+	// precondition, never the id: a rebuilt chunk is another attempt with
+	// its own packs.
 	ChunkID string `json:"chunk_id"`
 	// Node is the Gitlet node that fetched it, for whoever reads the log.
 	Node string `json:"node"`
@@ -1747,14 +1544,12 @@ type ImportChunk struct {
 	Commands []Command `json:"commands,omitempty"`
 }
 
-// ImportDone ends a repository's import: the repository is active from its
-// record on, with imported_at its record's instant, import_error why the
-// import ended short ("" for none) and, where DefaultBranch is set, its
-// default branch moved there — the source's HEAD branch, which its builder
-// names only when the default branch the repository declares is absent from
-// what it imported (M6.md §2.3). Decided by the repository's committer
-// ([Committer.ProposeImport]) only while the repository is importing at
-// import_seq Seq: its last chunk's.
+// ImportDone ends a repository's import: it is active from this record on,
+// with imported_at the record's instant, import_error why the import ended
+// short ("" for none) and, where DefaultBranch is set, its default branch moved
+// to the source's HEAD branch, named only when the declared default is absent
+// from what it imported (M6.md §2.3). Decided by the committer
+// ([Committer.ProposeImport]) only while it is importing at import_seq Seq.
 //
 // Every field is in the base format, as [OpImportDone] is.
 type ImportDone struct {
@@ -1767,34 +1562,25 @@ type ImportDone struct {
 	// DefaultBranch is the branch, by name ("main"), the repository's
 	// default moves to, "" to keep the one it declares.
 	DefaultBranch string `json:"default_branch,omitempty"`
-	// Error is why the import ended short — a permanent refusal: a blob past
-	// code.limits.max_blob_bytes, the repository past
-	// code.limits.repo_max_bytes — in one sentence, "" for an import that
-	// landed whole. The repository keeps what landed.
+	// Error is the one-sentence permanent refusal that ended the import
+	// short (a blob past code.limits.max_blob_bytes, the repository past
+	// code.limits.repo_max_bytes), "" for one that landed whole. The
+	// repository keeps what landed.
 	Error string `json:"error,omitempty"`
 }
 
 // MirrorSync moves a PULL MIRROR ([RepoSettings.MirrorFrom]) onto its source
-// as its home last fetched it: packs of what the source holds and the
-// repository did not, and the refs moved to the source's — each a command
-// whose Old is the ref as the home's copy held it — as ONE push row `via
-// mirror` ([ViaMirror]) by the engine's own account, a code_ref_drops row for
-// every command that leaves an object, and mirror_synced_at moved to the
-// record's instant. Decided by the repository's committer
-// ([Committer.ProposeMirrorSync]): refused stale where a ref it names moved
-// since its home read it — its next round reads them again — and
-// `expunging`, recorded nowhere, where the repository's drop epoch is not the
-// one its home's copy held: its packs were cut against objects an expunge may
-// since have left dropping (M6-D4).
+// as its home last fetched it: packs of what it lacked and refs moved to the
+// source's (each command's Old the home copy's), as ONE push row `via mirror`
+// ([ViaMirror]) by the engine, a code_ref_drops row per command leaving an
+// object, and mirror_synced_at moved to the record's instant. Decided by the
+// committer ([Committer.ProposeMirrorSync]): stale where a named ref moved
+// since the home read it, and `expunging`, recorded nowhere, where the drop
+// epoch differs from the one the home copy's packs were cut against (M6-D4).
 //
-// A sync whose home found the source level with the mirror carries neither
-// a pack nor a command ([MirrorSync.Current]) and moves mirror_synced_at
-// alone: the instant `mirrors_due` orders the pull mirrors by is when each
-// was last brought level with its source, whether that moved a ref or not.
-//
-// Every field is in the base format, as [OpMirrorSync] is: a sync of nothing
-// is the same op with its two lists empty, and takes no versionedFields row of
-// its own.
+// A sync finding the source level carries no pack or command
+// ([MirrorSync.Current]) and moves mirror_synced_at alone, which `mirrors_due`
+// orders by. Base format, as [OpMirrorSync] is; no versionedFields row.
 type MirrorSync struct {
 	RepoID string `json:"repo_id"`
 	// SyncID is minted afresh for every round — a bare UUIDv7 — and is the
@@ -1861,10 +1647,9 @@ type Generation struct {
 
 // DecodeMutation reads the typed payload for one record.
 //
-// THE DISPATCH IS ON (kind, op) AND NOTHING ELSE, so a record whose pair this
-// build does not know is an error naming both rather than a nil payload the
-// applier would treat as an empty one: a pair this build does not know is a
-// newer peer's record rather than an empty one.
+// THE DISPATCH IS ON (kind, op) AND NOTHING ELSE, and an unknown pair is an
+// error naming both rather than a nil payload the applier would take for an
+// empty one: it is a newer peer's record.
 func DecodeMutation(rec MutationRecord) (any, error) {
 	kind, op := rec.Subject.Kind, rec.Op
 	switch {

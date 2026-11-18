@@ -158,7 +158,7 @@ func TestAPermissionRequestIsTheEnginesDecision(t *testing.T) {
 	}
 	if !strings.Contains(d.Question, "Origin Rules: Edit") || !strings.Contains(d.Question, "example.com") ||
 		!strings.Contains(d.Options[0].Label, "expires in 2 hours") ||
-		!strings.Contains(d.Options[0].Detail, "sign in again") {
+		!strings.Contains(trk.patched[0].Comment.Body, "sign in again") {
 		t.Errorf("decision words = %+v, want the builder's name, the zone, the hours and the step-up", d)
 	}
 	if err := d.ValidateRecommendedAt(""); err != nil {
@@ -176,8 +176,8 @@ func TestAPermissionTheProvisionerLacksIsAskedNamingWhatToAdd(t *testing.T) {
 	if got.Failed || len(trk.patched) != 1 {
 		t.Fatalf("result = %+v, want the request posted", got)
 	}
-	if d := trk.patched[0].Comment.Decision; !strings.Contains(d.Options[0].Detail, "must first give") {
-		t.Errorf("the option does not say what the provisioner needs: %+v", d.Options[0])
+	if body := trk.patched[0].Comment.Body; !strings.Contains(body, "must first give") {
+		t.Errorf("the ask %q does not say what the provisioner needs", body)
 	}
 }
 
@@ -216,6 +216,97 @@ func TestAPermissionRequestNobodyCouldGrantIsRefused(t *testing.T) {
 				t.Errorf("refusal %q does not say %q", got.Output, c.says)
 			}
 		})
+	}
+}
+
+// oneChangeDesk is newGrantDesk with a permission granted for one change.
+func oneChangeDesk() *fakeGrantDesk {
+	d := newGrantDesk()
+	d.opts.Grants = append(d.opts.Grants, seataccess.GrantEntry{ID: "Bucket Write", Name: "Bucket Settings: Edit",
+		ScopeKind: "zone", Write: true, MaxHours: 4, Note: "It also changes lifecycle rules, which can delete objects."})
+	return d
+}
+
+// A PERMISSION GRANTED FOR ONE CHANGE IS ASKED FOR ITS TARGET ALONE, for an hour
+// by default, saying what else it allows and offering no permanent grant.
+// Mutation: keep the permanent option and the person can approve it for good.
+func TestAOneChangePermissionIsAskedForItsTargetAlone(t *testing.T) {
+	t.Parallel()
+	trk, desk := newFakeTracker(), oneChangeDesk()
+	why := "Make bucket user-uploads private: its listing is public."
+	got := requestOf(t, trk, desk, map[string]any{"permission": "Bucket Write", "target": "user-uploads", "why": why})
+	if got.Failed {
+		t.Fatalf("the request failed: %s", got.Output)
+	}
+	if len(desk.filed) != 1 || desk.filed[0].Hours != 1 || desk.filed[0].Target != "user-uploads" {
+		t.Fatalf("filed = %+v, want one request for one hour naming its target", desk.filed)
+	}
+	id := desk.filed[0].ID
+	d := trk.patched[0].Comment.Decision
+	if len(d.Options) != 2 || d.Options[0].ID != seataccess.GrantOptionTemporary(id) || d.Options[1].ID != "decline" {
+		t.Fatalf("options = %+v, want the hour's grant and not now, never a permanent one", d.Options)
+	}
+	if !strings.Contains(d.Question, "for one change to user-uploads") || d.Rationale != why {
+		t.Errorf("question %q and rationale %q, want the target asked and the agent's change", d.Question, d.Rationale)
+	}
+	if !strings.Contains(trk.patched[0].Comment.Body, "lifecycle rules, which can delete objects") ||
+		!strings.Contains(d.Options[0].Label, "expires in 1 hour)") {
+		t.Errorf("the ask %q with option %+v does not say what else it allows for its hour",
+			trk.patched[0].Comment.Body, d.Options[0])
+	}
+	for name, c := range map[string]struct {
+		args map[string]any
+		says string
+	}{
+		"no target":  {map[string]any{"permission": "Bucket Write"}, "`target`"},
+		"a sentence": {map[string]any{"permission": "Bucket Write", "target": "the uploads bucket"}, "`target`"},
+		"past bound": {map[string]any{"permission": "Bucket Write", "target": "user-uploads", "hours": 5}, "at most 4 hours"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			trk, desk := newFakeTracker(), oneChangeDesk()
+			got := requestOf(t, trk, desk, c.args)
+			if !got.Failed || len(desk.filed) != 0 || !strings.Contains(got.Output, c.says) {
+				t.Errorf("result %q (filed %d), want a refusal saying %q", got.Output, len(desk.filed), c.says)
+			}
+		})
+	}
+}
+
+// A GRANT IS ASKED WHATEVER ITS NOTE, SCOPE AND TARGET: what applies to the
+// request as a whole rides the body, never an option's detail, and a question
+// too long to name everything names less. Mutation: put the request-wide
+// sentences back in each option's detail and the request is refused.
+func TestAGrantIsAskedWhateverItsNoteScopeAndTarget(t *testing.T) {
+	t.Parallel()
+	trk, desk := newFakeTracker(), oneChangeDesk()
+	note := strings.Repeat("It also changes a bucket's settings. ", 12)
+	desk.opts.Grants[len(desk.opts.Grants)-1].Note = note
+	var scope []any
+	for i := range 12 {
+		zone := fmt.Sprintf("zone-%02d.%s.example.com", i, strings.Repeat("z", 40))
+		desk.opts.GrantScope = append(desk.opts.GrantScope, zone)
+		scope = append(scope, zone)
+	}
+	target := "b" + strings.Repeat("x", 254)
+	got := requestOf(t, trk, desk, map[string]any{"permission": "Bucket Write", "scope": scope,
+		"target": target, "hours": 4, "why": strings.Repeat("w", builtin.MaxAccessReasonBytes)})
+	if got.Failed || len(trk.patched) != 1 {
+		t.Fatalf("the request was not asked: %s", got.Output)
+	}
+	c := trk.patched[0].Comment
+	for _, says := range []string{note, target, scope[11].(string), "sign in again"} {
+		if !strings.Contains(c.Body, strings.TrimSpace(says)) {
+			t.Errorf("the ask's body does not say %q", says)
+		}
+	}
+	for _, o := range c.Decision.Options {
+		if strings.Contains(o.Detail, "bucket's settings") {
+			t.Errorf("option %s carries the request's note: %q", o.ID, o.Detail)
+		}
+	}
+	if err := c.Decision.ValidateRecommendedAt(""); err != nil {
+		t.Errorf("the decision is not one an agent may ask: %v", err)
 	}
 }
 

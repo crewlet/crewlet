@@ -11,17 +11,13 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A RUN REFUSED AFTER A ROTATION IS RELAUNCHED ONCE. A job running when its
-// entry's credential was replaced keeps the old one; refused on it, the round
-// is carried on with the new one rather than failed. Only then: a refusal on
-// the sign-in the entry still uses is an ordinary refusal, a job that is
-// itself that relaunch is not carried on again (so a credential that keeps
-// failing fails the turn), an ending that is not an auth failure is collected,
-// and a run a person's answer or a lost host already carries on is left to
-// that.
+// A RUN REFUSED AFTER A ROTATION IS RELAUNCHED ONCE: a job that kept the
+// replaced credential is carried on with the new one rather than failed. Not
+// when the refusal is on the sign-in still in use, the job is itself that
+// relaunch (a credential that keeps failing fails the turn), the ending is not
+// an auth failure, or a person's answer or a lost host already carries it on.
 //
-// Mutation: drop any one of those conditions from signInReplaced, and a row
-// here fails.
+// Mutation: drop any one condition from signInReplaced and a row fails.
 func TestARunRefusedAfterARotationIsRelaunchedOnce(t *testing.T) {
 	t.Parallel()
 	c, _ := chainCompany(t, chainMember{key: "plan", agent: "claude-code", model: "opus"})
@@ -63,12 +59,10 @@ func TestARunRefusedAfterARotationIsRelaunchedOnce(t *testing.T) {
 }
 
 // A ROUND A REPLACED SIGN-IN CUT OFF IS CARRIED ON IN THE SESSION ITS JOB'S BOX
-// RAN. A job whose launch continued a session its box could not take up ran one
-// of its own, which its box said it started: the relaunch carries the round on
-// in that one, whose transcript holds what the job did and the skills it
-// loaded — never the session the launch chose, which never read them.
+// RAN: a job whose box could not take up the session its launch chose started
+// its own, whose transcript holds what the job did and the skills it loaded.
 //
-// Mutation: build the carried round from the session the launch chose, and the
+// Mutation: carry the round on in the session the launch chose, and the
 // relaunch continues a session that never read what its guard is armed with.
 func TestARotatedRoundIsCarriedOnInTheSessionItsBoxRan(t *testing.T) {
 	t.Parallel()
@@ -110,15 +104,12 @@ func TestALaunchRecordsTheSignInItsJobWasHanded(t *testing.T) {
 	}
 }
 
-// A RUN'S ENDING IS THE SIGN-IN'S IT LAUNCHED WITH. A run launched on a
-// credential since replaced ran on the old one to its end: its refusal is not
-// the new sign-in's last failure or readiness verdict, and its limit benches
-// no new account. A run on the sign-in the entry still uses records as it
-// always did.
+// A RUN'S ENDING IS THE SIGN-IN'S IT LAUNCHED WITH: a run on a since-replaced
+// credential is not the new sign-in's failure, readiness verdict or limit; a
+// run on the sign-in in use records as always.
 //
 // Mutation: record every ending on the entry whatever it launched with, and
-// the refused run becomes the new sign-in's failure, its verdict, and its
-// limit.
+// the refused run becomes the new sign-in's failure, verdict and limit.
 func TestARunsEndingIsTheSignInsItLaunchedWith(t *testing.T) {
 	t.Parallel()
 	// DATED WHEN EACH CASE RUNS, not when the table is built: a parallel case

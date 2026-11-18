@@ -10,23 +10,18 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// WHAT THE OBJECT A WRITE IS ABOUT REFUSES BY ITS STATE IS MARKED [worklet.ErrState],
-// AND WHAT THE REQUEST GOT WRONG [worklet.ErrInvalid] — never both.
+// A write the object's state refuses is marked [worklet.ErrState], and one
+// whose request is wrong [worklet.ErrInvalid], never both (internal/mcp's
+// Refusal). A task frozen in the trash, a project archived before work is
+// filed into it and a person's pins at their cap refuse every argument
+// until somebody restores, reopens or unpins, so `invalid` would send yet
+// another argument. A parent in the trash is the request's fault: the fix is
+// another parent. Each case drives the writer, so a site marking the other
+// sentinel goes red here.
 //
-// The one rule every domain's refusals are classed by (internal/mcp's
-// Refusal): a task frozen in the trash, a project archived before work is
-// filed into it and a person's pins at their cap each refuse the same request
-// until somebody restores, reopens or unpins, so a caller told `invalid` sends
-// another argument to an object that refuses every one. A parent in the trash
-// is the other kind: the call is about the child, and the fix is another
-// parent. Each case is driven through the writer, so a site that marks its
-// refusal with the other sentinel goes red here rather than at a surface.
-//
-// Mutation: mark any one of the state sites back `invalid` (write.go's frozen
-// task, sequence.go's archived project, person.go's pins on the set they
-// leave) and its row goes red; mark the removed parent `refusedByState` and
-// the argument row goes red; drop person.go's request-level pin cap and the
-// over-long set reads as the record's state.
+// Mutation: mark write.go's frozen task, sequence.go's archived project or
+// person.go's pins `invalid`, or the removed parent `refusedByState`, and its
+// row goes red; drop person.go's pin cap and the over-long set reads as state.
 func TestAWriteTheObjectsStateRefusesIsMarkedAsItsState(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -103,12 +98,9 @@ func TestAWriteTheObjectsStateRefusesIsMarkedAsItsState(t *testing.T) {
 		}
 	}
 
-	// AND A PROJECT ARCHIVED BEFORE WORK IS FILED INTO IT, last, because
-	// it closes the project every row above wrote in.
-	// Each NAMES WHO CHANGES IT — the archive's own relation, the project's
-	// lead or an administrator — because a state's sentence sends a person to
-	// whoever can lift it, and "unarchive it first" sent everybody to do what
-	// most of them may not.
+	// Last, a project archived before work is filed into it, since it
+	// closes the project every row above wrote in. The sentence names who
+	// can lift the state (its lead or an administrator): most people cannot.
 	archiveENG(t, r)
 	_, err := r.writer.CreateTask(t.Context(), "op-create", newTask("late"), nil)
 	if !errors.Is(err, worklet.ErrState) || errors.Is(err, worklet.ErrInvalid) {
@@ -129,11 +121,9 @@ func TestAWriteTheObjectsStateRefusesIsMarkedAsItsState(t *testing.T) {
 	}
 }
 
-// forAPerson is whether a refusal's sentence reads for the person a screen
-// shows it to: no em dash (an aside a short sentence does not need), no RFC
-// 3339 instant and no task id — a uuid, or this test's own `frozen`, the id
-// its trashed task is filed under — neither of which a person beside the task
-// acts on.
+// forAPerson is whether a refusal's sentence reads for the person shown it:
+// no em dash, no RFC 3339 instant and no task id (a uuid, or this test's
+// trashed `frozen`), none of which a person beside the task acts on.
 func forAPerson(said string) bool {
 	return !strings.Contains(said, "—") && !rfc3339.MatchString(said) &&
 		!uuidLike.MatchString(said) && !strings.Contains(said, "frozen")

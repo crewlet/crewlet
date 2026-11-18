@@ -18,33 +18,23 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE TRACKER IS CERTIFIED BY THE FRAMEWORK'S OWN SUITE, not by a second one
-// written beside it.
-//
-// The properties every data node's copy rests on — the declaration is
-// consistent, an unknown version still yields an envelope, the same records
-// produce the same rows, and applying a record twice is applying it once —
-// belong to the framework and are the same for every domain it carries. A
-// domain-specific copy of them would be a second opinion about a contract the
-// framework enforces, and the first time the two disagreed the domain's own
-// would be the one that ran.
+// The tracker is certified by the framework's own suite, not a second one
+// beside it: the properties every data node's copy rests on (a consistent
+// declaration, an envelope for an unknown version, deterministic rows, an
+// idempotent apply) are the framework's, and a domain copy would be a
+// second opinion that wins the first time the two disagree.
 func TestTheTrackerIsACertifiedDomain(t *testing.T) {
 	t.Parallel()
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
 		return statelogtest.Candidate{
 			Domain:  worklet.Domain{},
 			Applier: worklet.NewApplier(nil),
-			// Migrate is nil: the tracker's tables ship in the
-			// replicated estate's own migration, so a fresh store
-			// already has them. A domain that created its tables from
-			// test code would be a schema the suite proved and the
-			// migration did not.
+			// Migrate is nil: the tracker's tables ship in the replicated
+			// estate's own migration, so the suite proves the migrated schema.
 			Encode: encodeSuiteRecord,
-			// EVERY ARBITRATED KIND, with the three the apply cases
-			// use first. The declaration case checks that a domain
-			// publishes every kind it arbitrates — an anchor row for a
-			// kind nothing writes is a row nothing ever reads — so a
-			// partial list here would report the FIXTURE as the fault.
+			// Every arbitrated kind, the apply cases' three first: the
+			// declaration case requires a domain to publish every kind it
+			// arbitrates, so a partial list would fault the fixture.
 			Kinds: suiteKinds(),
 			// THE PRODUCTION TABLE, each field carried by a record built
 			// through the writer's own encoder ([carryingSuiteRecord]).
@@ -105,11 +95,9 @@ func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.Replicate
 	return err
 }
 
-// encodeSuiteRecord builds one valid record at an arbitrary version.
-//
-// IT ENCODES AT ANY VERSION, including one above this build's, because that is
-// exactly what a newer peer publishes and what this build has to retain — a
-// writer that refused would leave the deferral contract untestable.
+// encodeSuiteRecord builds one valid record at any version, including one
+// above this build's: that is what a newer peer publishes, and refusing it
+// would leave the deferral contract untestable.
 func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 	at := time.Unix(1_700_000_000, 0).UTC()
 	subject := worklet.Subject{Kind: worklet.ObjectKind(kind), ID: id}
@@ -154,19 +142,16 @@ func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 		Actor:     "suite",
 		ActorKind: worklet.AuthorSystem,
 	}
-	// VERSION ZERO IS THE WRITER'S PATH: the domain's own Encode stamps it,
-	// which is what the suite's stamping case reads back. Any other version
-	// is ENCODED DIRECTLY, because the suite needs exactly the record a peer
-	// at that version would publish — including one above this build's —
-	// and not the version this build would have chosen for it.
+	// Version zero takes the writer's path, whose Encode stamps it for the
+	// suite's stamping case; any other version is encoded directly, exactly as
+	// a peer at that version would publish it.
 	if version == 0 {
 		return record.Encode()
 	}
 	if version >= worklet.WorkingForVersion && id == "suite-b" {
-		// AN AGENT'S WRITE MADE FOR SOMEBODY, on half the objects of a
-		// record version that carries whom it was made for, so the apply
-		// cases hold the history row's column it fills to one value on
-		// every node and through a redelivery (ADR-0109).
+		// An agent's write made for somebody, on half the objects at a
+		// version that carries it, so the apply cases hold the history
+		// row's column to one value everywhere and on redelivery (ADR-0109).
 		record.Actor, record.ActorKind = "dev", worklet.AuthorAgent
 		record.WorkingFor = &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
 	}
@@ -354,9 +339,9 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 	return record.Encode()
 }
 
-// suiteKinds is every kind the domain arbitrates, ordered so the three the
-// apply cases exercise come first: a whole-document object, the task, and a
-// second whole-document object with a different table shape.
+// suiteKinds is every kind the domain arbitrates, the apply cases' three
+// first: a whole-document object, the task, and a second whole-document
+// object with a different table shape.
 func suiteKinds() []string {
 	first := []worklet.ObjectKind{
 		worklet.KindProject, worklet.KindTask, worklet.KindView,
@@ -374,14 +359,10 @@ func suiteKinds() []string {
 	return out
 }
 
-// THE TRACKER'S GATE READER KEEPS THE RULE EVERY READER SHARES, certified by
-// the same family as the knowledge base's.
-//
-// The two readers agreed on which gate they report, on the purge's own id
-// falling through to the eviction, and on the eviction window only because
-// their code looked alike — and the knowledge base's had already drifted to
-// the opposite precedence once. A family both run is what makes agreeing a
-// test rather than a resemblance.
+// The tracker's gate reader keeps the rule every reader shares (which gate
+// is reported, a purge's own id falling through to the eviction, the
+// eviction window), certified by the knowledge base's family too, so the
+// two agreeing is a test rather than a resemblance.
 func TestTheTrackersGateReaderKeepsTheSharedRule(t *testing.T) {
 	t.Parallel()
 	statelogtest.RunGates(t, func(t *testing.T) statelogtest.GateCandidate {
@@ -421,9 +402,8 @@ func TestTheTrackersGateReaderKeepsTheSharedRule(t *testing.T) {
 	})
 }
 
-// kindNames is every kind the tracker writes, as the strings its envelope
-// carries — the build's own list rather than one kept beside it, so a kind
-// added to the domain is a kind the gate family asks about.
+// kindNames is every kind the tracker writes, from the build's own list, so
+// a kind added to the domain is one the gate family asks about.
 func kindNames(kinds []worklet.ObjectKind) []string {
 	out := make([]string, 0, len(kinds))
 	for _, k := range kinds {

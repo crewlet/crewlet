@@ -13,46 +13,22 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A run's harness session, carried between boxes.
-//
-// EVERY RUN NAMES ITS SESSION BEFORE ITS HARNESS STARTS ([Harness.Session]): the one
-// it continues, or a new one minted for it, so the run's record names it
-// whether or not the run lives to report it ([sandbox.RunHandle.SessionID]).
-// The run's script records, before the harness starts, the session it took up,
-// whether that is the one it was asked to continue — and, where it is not, why
-// — and the harness's release ([Paths.SessionRecord]); and once the harness has
-// exited, it packs the session into one archive under the box's work directory
-// ([Paths.SessionCapture]), which [Runner.OpenCapture] streams for a
-// collection to keep. A run handed a session packed in another box
-// ([sandbox.RunRequest.Carried]) has the archive written into its box as it
-// starts ([Paths.SessionCarried]) and restored by its script before its harness
-// takes the session up. What each harness's archive holds, and what it never
-// holds, is the harness's own: see [ClaudeCode] and [OpenCode].
-//
-// A BOX THAT HOLDS THE SESSION IS COMPARED BY ID AND BY THE ARCHIVE'S DIGEST.
-// Its copy is never written over with an archive it already holds — one the
-// box packed itself, or restored before — because that copy is the archive's
-// or newer: a run went on in this box after it, whose own capture may have
-// failed or been refused. A copy that does not hold the archive went no
-// further than an earlier point of the session, which the archive's own box
-// carried on from, so the archive replaces it. The box keeps the digest of
-// every archive of a session its copy holds ([Paths.SessionDigests]): the
-// archive's `cksum`, POSIX's own, written by the script that packed or
-// restored it. A digest the box cannot take keeps the box's copy, which loses
-// nothing a run in the box did.
-//
-// WHETHER A BOX CAN CONTINUE A CARRIED SESSION is asked of the box before the
-// run's brief is written ([Runner.CheckCarry]): its harness's release, read in the
-// box, against the release that wrote the session and the floors each harness
-// sets ([carrier.Continues]).
+// A run's harness session, carried between boxes: see the package doc's
+// section of that name. A box that holds the session is compared by id and by
+// the archive's digest. Its copy is never written over with an archive it
+// already holds (packed or restored there), because that copy is the
+// archive's or newer: a later run there may have failed its capture. A copy
+// that does not hold the archive went no further than an earlier point, which
+// the archive's box carried on from, so the archive replaces it. The box keeps
+// the `cksum` (POSIX's) of every archive its copy holds
+// ([Paths.SessionDigests]), written by the script that packed or restored it;
+// a digest the box cannot take keeps the box's copy, which loses nothing.
 
-// harnessVersionWait bounds [Runner.CheckCarry]'s one read of the box harness's
-// release: a login shell sourcing the image's profile and the harness printing its
-// version, which takes about a second (OpenCode's runtime starting is most of
-// the second its server takes to listen, measured on 2.0.32 —
-// [openCodeListenWait]). Sixty seconds is the room that wait gives a box whose
-// disk or CPU is contended; a box that has not answered by then is not
-// answering, and the caller starts the run fresh rather than wait on it.
+// harnessVersionWait bounds [Runner.CheckCarry]'s one read of the box
+// harness's release: a login shell and `--version`, about a second, mostly
+// the runtime starting, as for [openCodeListenWait]. Sixty seconds is room
+// for a contended disk or CPU; a box silent past it is not answering, and the
+// caller starts the run fresh rather than wait.
 const harnessVersionWait = openCodeListenWait
 
 // sessionRecord is what a run's script recorded of its session before its harness
@@ -63,56 +39,34 @@ type sessionRecord struct {
 	id string
 	// continued says it is the session the run was asked to continue.
 	continued bool
-	// began says the run started a session of its own — the record's
-	// `continued` line reads `no` — so the whole session is the run's
-	// ([sandbox.RunStart]). False for a record whose line is missing or reads
-	// anything else: such a record is not known to have begun its session.
+	// began says the record's `continued` line reads `no`: the run started a
+	// session of its own, so the whole session is the run's
+	// ([sandbox.RunStart]). A missing or other line is not known to have begun.
 	began bool
 	// from is where a run that continued its session began in it: the newest
-	// message the session held before the run, its id decoded off the cursor
-	// the run's script recorded (`from`, [runStartOf]) — "" where the record
-	// names none this build reads, and for a run that did not continue its
-	// session.
+	// message the session held before the run, decoded off the recorded
+	// cursor ([runStartOf]); "" where none is read or the run did not continue.
 	from string
-	// why is why a run asked to continue a session started a new one in its
-	// place, as its script said it ([sandbox.Result.FellBack]), the line as
-	// the box holds it: held to its bound where the run's result is built
-	// ([Runner.Collect]), the one reader of it. "" for every other run.
+	// why is why a run asked to continue a session started a new one
+	// ([sandbox.Result.FellBack]), as the box holds it: bounded by its one
+	// reader, where the result is built ([Runner.Collect]). "" for other runs.
 	why string
 	// release is the harness's `--version`, as it printed it.
 	release string
 }
 
-// parseSessionRecord reads a run's record of its session: `id <id>`,
-// `continued <yes|no>`, `why <why it started anew>` and `release <what
-// --version printed>`, a line each, `why` empty for a run that did not — and,
-// for an OpenCode run that continued its session, `from <cursor>` before the
-// release, where the run began in the session ([openCodeRunStart]).
-//
-// THE FIRST LINE OF EACH KEY IS THE RECORD'S. The script writes the release
-// last, as the harness printed it, and a harness that printed more than one line runs
-// on into lines of its own — an `id` there is the harness's text, never the
-// script's, and so is a `from`, which is read only where it lies before the
-// release. The script writes `why` on one line, whatever the words it
-// quotes held. An id that is not one a harness mints
-// ([sandbox.ValidSessionID]) is no id. `from` is read only where `continued`
-// reads `yes`, and only whole ([runStartOf]); `continued` reading `no` is a
-// run that began its session, and anything else, or no such line, says
-// neither: a start not known, never the whole session.
-//
-// READ WHERE IT LIES, AND NO FURTHER THAN ITS FOUR KEYS. The record is a file
-// the run's own agent can write, as long as the 32 MiB the engine reads whole
-// ([sandbox.MaxFileBytes]), and it is read on every collection and every take
-// of the box's session. Split into a slice of its lines, with a set of every
-// key it named, a record of empty lines cost sixteen times its size, half a
-// GiB, on each of those reads; walked a line at a time it costs nothing past
-// its own bytes, and the walk ends once the four keys are read, since no later
-// line of one is the record's.
-//
-// AND NOTHING IN IT IS HELD HERE: the take reads the id alone, so `why` is
-// held to its bound by the one reader of it, where the run's result is built
-// ([Runner.Collect], [sandbox.BoundFellBack]), rather than redacted on every
-// read of the record and thrown away by all but one.
+// parseSessionRecord reads a run's record of its session, a line each:
+// `id`, `continued <yes|no>`, `why` (why it started anew, one line, else
+// empty), `release` (what --version printed) and, for an OpenCode run that
+// continued, `from <cursor>` before the release ([openCodeRunStart]). The
+// first line of each key is the record's: the release, written last, may run
+// on into the harness's own lines, where an `id` or a `from` is not the
+// script's. An id no harness mints ([sandbox.ValidSessionID]) is no id;
+// `from` is read only whole ([runStartOf]) and where `continued` reads `yes`;
+// a `continued` of neither is a start not known, never the whole session.
+// Walked a line at a time to the fourth key, never split: the record is
+// agent-writable up to [sandbox.MaxFileBytes] and read on every collection
+// and take (TestASessionRecordIsReadWhereItLies).
 func parseSessionRecord(text string) sessionRecord {
 	var (
 		rec                                                   sessionRecord
@@ -163,18 +117,14 @@ var errNoRunStart = errors.New("executor: no start")
 
 // runStartOf is the id of the message cursor names, where cursor is a `next`
 // cursor of a session's message list asked newest first: what an OpenCode
-// run's script records as where the run began ([openCodeRunStart]). "" for
-// anything else.
-//
-// READ WHOLE OR NOT AT ALL, each step refusing what fails. OpenCode's cursor is
-// the unpadded base64url of `JSON.stringify({id, order, direction})` of the
-// page's message (read in the 2.0.32, 2.1.4 and 2.2.7 bundles; measured on
-// 2.0.32 and 2.2.7, testdata/opencode/<version>/context): held to
-// [runStartCursorMax] before it is decoded, decoded strictly, then walked as
-// one object ([eachKey]) whose keys are `id`, `order` and `direction` and no
-// other, each once, each a string. Its order must be `desc` and its direction
-// `next`: a cursor of another order or direction names the session's OLDEST
-// message, from which the whole session would read as the run's. And its id
+// run's script records as where the run began ([openCodeRunStart]); "" for
+// anything else. OpenCode's cursor is the unpadded base64url of
+// `JSON.stringify({id, order, direction})` (read in the 2.0.32, 2.1.4 and
+// 2.2.7 bundles; testdata/opencode/<version>/context),
+// read whole or not at all: held to [runStartCursorMax], decoded strictly and
+// walked as one object ([eachKey]) of exactly those keys, each once, each a
+// string. Order must be `desc` and direction `next`: any other names the
+// session's OLDEST message, reading the whole session as the run's. The id
 // must be one a box may name ([sandbox.ValidMessageID]), whole: two ids cut
 // alike would name one message.
 func runStartOf(cursor string) string {
@@ -219,20 +169,15 @@ func runStartOf(cursor string) string {
 // after a name for OpenCode (`opencode v2.0.32`).
 var releasePattern = regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
 
-// releaseOf is the release a harness's `--version` printed, "2.1.310", or "" where
-// it printed none this code can read — one longer than the executor log
-// records a release at among them.
+// releaseOf is the release a harness's `--version` printed, "2.1.310", or ""
+// where it printed none this code can read.
 //
-// A RELEASE HAS A LENGTH, AND THE PATTERN DOES NOT: its numbers are runs of
-// digits, and what it reads was printed in the box — the session record's
-// `release` line is a file the run's own agent can write, and `--version` is
-// whatever the box's PATH finds — so a run of digits as long as the file read
-// as a release, which the launch's record carried whole and a capture of the
-// session named, for the log to refuse. So what the pattern finds is held to
-// a release's shape ([sandbox.ValidRelease]), the one the launch's record
-// holds it to again: past the log's bound it is refused, never cut, because a
-// shortened release names another one; and read as none, it is what every
-// reader takes a release it cannot read for: a current one.
+// The pattern has no length, but what it reads was printed in the box (the
+// record is agent-writable, `--version` whatever PATH finds), so a file-long
+// run of digits would read as a release. So it is held to a release's shape
+// ([sandbox.ValidRelease]), as the launch's record holds it: past the
+// executor log's bound it is refused, never cut, since a shortened release
+// names another; read as none, every reader takes it for a current one.
 func releaseOf(printed string) string {
 	if release := releasePattern.FindString(printed); sandbox.ValidRelease(release) {
 		return release
@@ -248,13 +193,11 @@ func (r *Runner) captured(ctx context.Context, box sandbox.Sandbox, paths Paths,
 	return r.archiveAt(ctx, box, paths.SessionCapture(), rec)
 }
 
-// archiveAt describes the session archive the box holds at path — the run's
-// capture ([Paths.SessionCapture]), a pack on demand's ([Paths.SessionPackHeld])
-// or a save ([Paths.SessionSave]) —
-// for the session rec names, or nil where there is none: a harness that
-// carries no session, no archive there, a record that names no session, or a
-// path that holds no regular file — the box's own doing, which costs the
-// capture and nothing else.
+// archiveAt describes the session archive the box holds at path (the run's
+// capture [Paths.SessionCapture], a pack on demand's [Paths.SessionPackHeld]
+// or a save [Paths.SessionSave]) for the session rec names, or nil where there
+// is none: a harness that carries no session, no archive, a record naming no
+// session, or a path that is no regular file, which costs only the capture.
 func (r *Runner) archiveAt(ctx context.Context, box sandbox.Sandbox, path string,
 	rec sessionRecord) (*sandbox.SessionArchive, error) {
 
@@ -283,23 +226,17 @@ func (r *Runner) archiveAt(ctx context.Context, box sandbox.Sandbox, path string
 }
 
 // OpenCapture streams the session archive the box's last run packed when its
-// harness exited, described ([sandbox.SessionArchive]) — its harness, its session, its
-// format, the release that wrote it and its size, read before its bytes so a
-// reader can refuse one too large to keep — for the collection that carries it
-// to another box. A nil reader, and a zero description, where the box holds
-// none ([sandbox.Result.Captured] says why there may be none); the caller
-// closes the reader.
+// harness exited, with its description ([sandbox.SessionArchive]) read before
+// its bytes so a reader can refuse one too large to keep, for the collection
+// that carries it to another box. A nil reader and a zero description where
+// the box holds none ([sandbox.Result.Captured] says why); the caller closes
+// the reader.
 //
-// READ AS A STREAM, never whole: an archive grows with its session. The size
-// is the archive's as it was described, and the archive is moved into place
-// whole by the run that packed it, so the stream is one whole archive; a box
-// whose own agent rewrote the file since is the box's doing, which the
-// restorer's checks meet.
-//
-// AND NOTHING MOVES OVER IT WHILE IT IS READ, so a take that opens it again
-// for a second pass ([scrubTar]) reads the archive its first pass read: the
-// run's script moves it into place once, as its harness exits, and no pack the
-// engine makes on demand moves anything there ([Runner.PackCapture]).
+// Streamed, never read whole: an archive grows with its session. The run's
+// script moves it into place whole, once, as its harness exits, and no pack on
+// demand moves anything there ([Runner.PackCapture]), so a take's second pass
+// ([scrubTar]) reads what its first read; an agent rewriting it since is the
+// box's doing, which the restorer's checks meet.
 func (r *Runner) OpenCapture(ctx context.Context, box sandbox.Sandbox) (sandbox.SessionArchive, io.ReadCloser, error) {
 	paths := PathsFor(box)
 	rec, refusal, err := r.readSessionRecord(ctx, box, paths)
@@ -320,20 +257,18 @@ func (r *Runner) OpenCapture(ctx context.Context, box sandbox.Sandbox) (sandbox.
 	return *described, body, nil
 }
 
-// CheckCarry answers whether archive — a session packed in ANOTHER box — can
-// be continued in box, asked of the box before the run is started there and
-// before its brief is chosen (its briefs are written before the box is
-// acquired): the box's harness's release, read in the box with
-// one login-shell exec of its `--version`, the box's own bin directory first
-// on its PATH as the run's wrapper puts it ([withBoxBin]), held against the
-// harness that wrote the session, the archive's format and the harness's own floors
-// ([carrier.Continues]). The release it read is returned either way: the
-// launch hands a brief told by a reading of what the session holds only where
-// it is exactly the release that reading was read for, the writer's
+// CheckCarry answers whether archive, packed in ANOTHER box, can be continued
+// in box, asked before the run starts there and before its brief is chosen
+// (briefs are written before the box is acquired): the box harness's release,
+// read by one login-shell exec of its `--version` with the box's bin directory
+// first on PATH as the wrapper puts it ([withBoxBin]), held against the
+// writer, the archive's format and the harness's floors ([carrier.Continues]).
+// The release read is returned either way: the launch hands a brief told by a
+// reading of the session only where it is exactly the writer's
 // ([sandbox.ExactTelling]).
 //
-// THREE ANSWERS, as a lease's are: it can, it cannot (and why), and the box
-// could not be asked — an error, never read as either.
+// Three answers, as a lease's: it can, it cannot (and why), and an error where
+// the box could not be asked, never read as either.
 func (r *Runner) CheckCarry(ctx context.Context, box sandbox.Sandbox, archive sandbox.SessionArchive) (sandbox.CarryCheck, error) {
 	carries, ok := r.harness.(carrier)
 	if !ok {

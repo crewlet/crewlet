@@ -15,26 +15,14 @@ import (
 )
 
 // A PROVIDER-PARKED SEAT WITH RESUMES WAITING ON IT STAYS QUIET, and resumes
-// each of them once the park releases.
-//
-// Two answers the seat owes are both refused at the turn gate while every
-// member their relaunch could take is at its limit: a harness's entry that
-// sits out a spent plan, in the catalogue this node launches on. A refusal
-// there comes after the node admitted
-// the turn, so the admission is released at once, and a release that woke the
-// seat's other waiting resumes could set them waking each other for as long as
-// the limit lasts. Each refused resume waits on the provider from then on, and
-// the node announces a release only to a turn refused behind it
-// (node.Config.SeatTurnEnded), so the gate is asked once per resume while the
-// park holds, and once more each when it releases.
-//
-// CLAIMED IS A STATUS, NEVER A STAMP. A resume tried again once the park
-// releases is claimed by ClaimForResume's compare-and-swap, which flips its
-// run out of answered, and an admitted resume runs its turn and settles the
-// run; a resume the park still refuses is handed back to answered. So the
-// case waits for each run to leave answered. The run's UpdatedAt is the
-// store's clock and its answer's RecordedAt the case's, two readings that are
-// never equal, so comparing them decided nothing (#958).
+// each once the park releases. Both answers are refused at the turn gate while
+// every member a relaunch could take sits out a spent plan, releasing the
+// node's admission at once; were that release to wake the seat's other
+// resumes, they would wake each other while the limit lasts. A refused resume
+// waits on the provider, and a release is announced only to a turn refused
+// behind it (node.Config.SeatTurnEnded): the gate is asked once per resume while
+// the park holds, once more each on release. The case waits for each run to
+// leave answered (ClaimForResume), never comparing stamps from two clocks.
 //
 // Mutation: lift no limit and readmit nothing, so no run is ever claimed, and
 // the last wait never ends.
@@ -145,16 +133,13 @@ func gatedSpyRuntime(t *testing.T, e *Engine) (*sandbox.Coordinator, *resumeSpy,
 }
 
 // A PARKED SEAT'S ANSWER WAITS FOR THE PROBE'S ANSWER, NOT AT AN INSTANT PAST.
-//
-// The seat is parked on its models' limit and owes a person's answer, which the
-// turn gate refuses while the park stands. From the instant the chain's probe
-// is due until its call comes back, a full run of the entry's harness, that
-// instant is past and the park still stands. The refusal named it, and the
-// answer's retry re-checked at once, over and over: thousands of times a
-// second for as long as the call was out, each re-reading the run, opening the
-// answer's seal and taking the node's admission. What ends that wait is the
-// probe's answer: the call comes back answered, the park is released, and the
-// answer is resumed, once.
+// The seat is parked on its models' limit and owes a person's answer, refused
+// at the turn gate while the park stands. From the instant the chain's probe
+// is due until its call comes back (a full harness run), that instant is past
+// and the park still stands: a retry re-checking at it would spin, each pass
+// re-reading the run, opening the answer's seal and taking the admission. The
+// probe's answer ends the wait: the park is released and the answer resumed
+// once.
 //
 // Mutation: name the probe's instant in the park's refusal whether or not it is
 // still to come (providerParkRefusal), and the gate is asked without end while

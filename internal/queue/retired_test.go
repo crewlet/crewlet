@@ -10,14 +10,10 @@ import (
 
 // A SUBSCRIPTION'S RETIRED COPY IS KEPT BY WHETHER THE MESSAGE FAILED AS
 // ITSELF: with the pair's poison if one of its deliveries did, and with its
-// unhandled deliveries otherwise ([queue.RetiredTo]).
-//
-// A reader that replays a group's unhandled deliveries handles everything that
-// subject holds as a delivery, and never reads the poison subject: a pass's
-// copy kept with the poison is a wake nobody replays, and a failure's kept
-// with the unhandled deliveries is poison handled again at every start. Both
-// backends keep a copy where this answers, so the answer is held here once,
-// and queuetest holds each backend to keeping where it says.
+// unhandled deliveries otherwise ([queue.RetiredTo]). The unhandled subject is
+// replayed and the poison subject never is: a pass kept with the poison is a
+// wake nobody replays, a failure kept with the unhandled is poison handled at
+// every start. queuetest holds each backend to keeping where this says.
 //
 // Mutation: answer the poison subject for a message that never failed, and a
 // passed copy is kept with the poison; answer the unhandled subject for one
@@ -34,13 +30,10 @@ func TestARetiredCopyIsKeptByWhetherTheMessageFailed(t *testing.T) {
 	}
 }
 
-// A NODE'S OWN FAILURE IS NO FAILURE OF THE MESSAGE, and a Nak is.
-//
-// A handler whose node could not reach its broker, or whose stop ended it,
-// answers [queue.NakNode]: returned as any failure is, and never the
-// message's, so a message whose budget it spends is kept with the unhandled
-// deliveries ([queue.Result.FailsMessage]). Every other return is no failure
-// at all.
+// A NODE'S OWN FAILURE IS NO FAILURE OF THE MESSAGE, and a Nak is. A handler
+// whose node lost its broker or was stopped answers [queue.NakNode], so a
+// message whose budget it spends is kept with the unhandled deliveries
+// ([queue.Result.FailsMessage]). Every other return is no failure at all.
 //
 // Mutation: count a node's own failure as the message's, and its row is red.
 func TestANodesOwnFailureIsNoFailureOfTheMessage(t *testing.T) {
@@ -67,9 +60,8 @@ func TestANodesOwnFailureIsNoFailureOfTheMessage(t *testing.T) {
 }
 
 // A DEAD LETTER FITS UP TO THE CEILING LESS ITS FRAMING, AND NOT A BYTE PAST
-// IT, because [queue.LetterFits] is the one rule every keep is held to on
-// every backend: a twin that kept one byte more than the broker carries would
-// certify a keep the broker then refuses.
+// IT: [queue.LetterFits] is every backend's one rule, so a twin keeping a
+// byte more would certify a keep the broker refuses.
 //
 // Mutation: compare with `<` rather than `<=`, and a letter exactly at the
 // ceiling does not fit.

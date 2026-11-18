@@ -9,52 +9,16 @@ import (
 )
 
 // A TRIM FLOOR is what the fleet's trim singleton concluded about one domain,
-// published so that every node can answer for it.
+// published so every node can answer for it: which term came lowest, and for
+// how long, are facts of one evaluation and of a series that no other node can
+// re-derive (the duty moves on a lease and keeps no memory), so the tick
+// writes them, as [NodeStatus] does for an apply.
 //
-// # Why the conclusion is published rather than re-derived
-//
-// The six terms the trim takes a minimum over are readable from anywhere: the
-// positions register, the holds, the backup floor and the stream's own bounds
-// are all fleet-wide facts. Two of the answers are NOT. Which term came
-// lowest is a property of one evaluation, and HOW LONG it has been the lowest
-// is a property of a series of them — and both are exactly what an operator
-// asks for when a log is growing. A node re-deriving the first would get a
-// second opinion about one event (the failure [statelog]'s alarm table is
-// written against), and nothing at all could re-derive the second, because a
-// duty that moves between nodes on a lease carries no memory across the move.
-//
-// So the tick writes what it concluded and every other surface reads it. That
-// is the same shape [NodeStatus] uses for a config apply, and for the same
-// reason: the node that did the work is the only one that can say what it
-// found.
-//
-// # Two sequences, because they answer two different questions
-//
-// TrimTo is what ONE TICK concluded, and it moves in both directions: it is
-// zero on every blocked tick, and it falls whenever the lowest counted node
-// is lower than it was — a readmitted node, a node restored from an old
-// backup, a node that came up on its own history because nobody could donate.
-// That is the right figure for "is the trim moving", and it is the wrong one
-// for "what may already be gone", because a record an EARLIER tick licensed
-// removing does not come back when a later tick concludes less.
-//
-// Floor is that second answer: everything below it may have been removed. It
-// never moves down within a generation, and the trim writes it BEFORE the
-// purge it licenses — so at every instant, including while a purge is in
-// flight and after one that was delayed or retried, no record the trim has
-// ever removed or may yet remove sits at or above it. A floor derived from
-// the counted minimum alone would fail that for exactly the nodes a write
-// fence exists to refuse: a minimum that includes a node can never exceed it.
-//
-// # It has no TTL, for the register's own reason
-//
-// This row lives in the positions bucket, which is the one bucket in the
-// estate with no age at all — see [PositionRegister]. A floor that expired
-// would read as a fleet that has never trimmed, which is indistinguishable
-// from one whose duty has been blocked since the day it started, and those are
-// opposite answers to the only question anyone reads this for. A domain that
-// stops existing has its row removed by the same operator gesture that removes
-// it, never by a clock.
+// [TrimFloor.TrimTo] answers "is the trim moving" and may fall; [TrimFloor.Floor]
+// answers "what may be gone" and never falls within a generation. Floor is not
+// the counted minimum: a minimum that includes a node never exceeds it, so it
+// would clear exactly the nodes a write fence exists to refuse. No TTL
+// ([PositionRegister]): an expired floor would read as a fleet never trimmed.
 
 // TrimTerm is one term's answer as the tick evaluated it.
 //
@@ -103,27 +67,23 @@ type TrimFloor struct {
 	TrimTo uint64 `json:"trim_to"`
 
 	// Floor is the first sequence every data node must hold: every record below
-	// it may have been removed, by this tick or any earlier one at this
-	// generation. It is never lower than TrimTo, never lower than the
-	// previous row's Floor at the same generation, and never lower than
-	// the stream's own first sequence as the tick read it.
+	// it may have been removed, by this tick or an earlier one at this
+	// generation. It is never lower than TrimTo, the previous row's Floor at
+	// the same generation, or the stream's first sequence as the tick read it.
 	//
-	// WRITTEN BEFORE THE PURGE IT LICENSES, which is what makes it an
-	// upper bound on what is gone rather than a report of it: published
-	// after, it would trail a purge by however long the write took to
-	// succeed, and a write fence reading it inside that gap clears a node
-	// the purge has just left below the log.
+	// WRITTEN BEFORE THE PURGE IT LICENSES, so it bounds what is gone rather
+	// than reporting it: written after, a write fence reading it in the gap
+	// would clear a node the purge has just left below the log.
 	Floor uint64 `json:"floor"`
 
 	// BlockedBy names the term that came lowest and permitted nothing, or
 	// that could not be read. Empty while the trim is advancing.
 	BlockedBy string `json:"blocked_by,omitempty"`
 
-	// BlockedSince is when TrimTo last ADVANCED, and it is the field
-	// nothing else can supply: the duty moves between nodes on a lease, so
-	// a value held in the holder's memory would reset on every flap and
-	// `trim_blocked`, which fires on how long a block has lasted, would
-	// never be reached.
+	// BlockedSince is when TrimTo last ADVANCED. Only the row can carry it:
+	// the duty moves between nodes on a lease, so a value in the holder's
+	// memory would reset on every flap and `trim_blocked`, which fires on a
+	// block's duration, would never be reached.
 	BlockedSince time.Time `json:"blocked_since,omitzero"`
 
 	// Terms is every term's answer, so a blocked trim can be read without
@@ -139,55 +99,33 @@ type TrimFloor struct {
 
 // FloorRegister is the fleet's record of what its trim concluded.
 //
-// It is a key class in the positions bucket, beside the node rows, the holds
-// and the backup points, because all four answer one question — what may the
-// log delete — and all four need the same retention, which is none. A second
-// bucket would cost a retention decision, a replica count and a place in every
-// sweep for a fact that is always read with the other three.
+// A key class in the positions bucket beside the node rows, holds and backup
+// points: all four answer what the log may delete and need no retention, so a
+// second bucket would cost a retention decision and a sweep for nothing.
 //
-// NOTHING REMOVES A FLOOR. The domains are a static register compiled into the
-// build, with no gesture that retires one at run time, so there is never a
-// domain whose floor has stopped meaning anything — and each trim tick
-// replaces its domain's row wholesale, so the register holds one row per
-// domain a build has run.
+// NOTHING REMOVES A FLOOR. The domains are compiled into the build with no
+// run-time retirement, and each tick replaces its domain's row wholesale, so
+// the register holds one row per domain a build has run.
 type FloorRegister interface {
 	// PutFloor writes one domain's floor, replacing it wholesale.
 	//
-	// LAST WRITER WINS, and here that is a statement about the duty rather
-	// than about the key: the trim is a fleet singleton, so there is one
-	// writer at a time and a compare-and-set would only make a lease
-	// handover fail on a value the new holder is about to recompute.
+	// LAST WRITER WINS: the trim is a fleet singleton, so a compare-and-set
+	// would only make a lease handover fail on a value the new holder is
+	// about to recompute.
 	PutFloor(ctx context.Context, f TrimFloor) error
 
-	// Floor reads ONE domain's row, as the store's leader holds it: the row
-	// and true, or false where the trim has never written one for that
-	// domain — an answer, not a failure — or the error of a store that did
-	// not answer, which is unknown and never absent.
+	// Floor reads ONE domain's row as the store's leader holds it: false where
+	// the trim never wrote one (an answer), an error where the store did not
+	// answer (unknown, never absent).
 	//
-	// A KEY READ, AND THE REGISTER HAS NO OTHER. Every reader asks about
-	// domains it names — the write fence about one, on every write at an
-	// expectation of zero and only AFTER the write's own read of its subject
-	// (the floor theorem's order, statelog's package doc); the copy's
-	// verdict, the alarm reading, the heartbeat and the trim duty about the
-	// domains this build registers — so a reader asks for each of those keys
-	// and never lists the class. On the KV backend a key read is one request
-	// to the bucket's stream leader, where a listing is a key index read and
-	// an ordered consumer created on the stream and deleted after it, and on
-	// a clustered broker that create and delete are two proposals to the
-	// metadata group every stream and consumer in the fleet is placed
-	// through: the register was a listing, read more than once a second on
-	// every data node, and on a loaded three-member fleet its consumer's
-	// create ran past the client's five-second API timeout and a page create
-	// was refused `floor_unknown` with the register perfectly readable.
+	// A KEY READ, AND THE REGISTER HAS NO OTHER: every reader names its
+	// domains, the write fence only AFTER its write's own read of its subject
+	// (the floor theorem's order, statelog's package doc). A listing costs two
+	// proposals to a clustered broker's metadata group, which under load ran
+	// past the API timeout and refused writes `floor_unknown`.
 	//
-	// A row whose own domain is not the one its key names is refused, not
-	// read: the key is how [FloorRegister.PutFloor] files a domain's row, so
-	// a row under one domain's key naming another is not that domain's
-	// floor, and comparing a cursor against it would compare two logs'
-	// sequences. So is a row that does not decode. Both refusals match
-	// [ErrFloorUnreadable], and a store that did not answer matches
-	// [ErrUnavailable] — two faults with opposite remedies, which a refusal
-	// built on either has to name apart.
+	// A row that does not decode, or names another domain (comparing two logs'
+	// sequences), matches [ErrFloorUnreadable]; a silent store, [ErrUnavailable].
 	Floor(ctx context.Context, domain string) (TrimFloor, bool, error)
 }
 
@@ -195,13 +133,10 @@ type FloorRegister interface {
 // cannot read as that domain's floor: its bytes do not decode, or it names
 // another domain than the key it is filed under.
 //
-// A FAULT OF THE ROW, NEVER OF THE STORE, and the two clear in opposite ways:
-// a store that does not answer ([ErrUnavailable]) clears by itself when it
-// answers again, while such a row clears only once somebody removes it, since
-// the trim carries a floor forward from the row it reads and so never
-// publishes over one it cannot. A refusal that told the first remedy for the
-// second sent an operator to wait for coordination that was answering all
-// along.
+// A FAULT OF THE ROW, NEVER OF THE STORE, with the opposite remedy: a store
+// that does not answer ([ErrUnavailable]) clears by itself, while such a row
+// clears only once somebody removes it, since the trim carries a floor
+// forward from the row it reads. A refusal names the two apart.
 var ErrFloorUnreadable = errors.New("coord: the trim floor row does not read as its domain's floor")
 
 // FloorKey is a domain's key in the register.

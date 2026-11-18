@@ -1428,6 +1428,8 @@ export interface TurnGroup {
    */
   iterations: number;
   live: boolean;
+  /** Whether one of the turn's OWN records failed, the engine's `store.Turns`
+      rule: a nested call's failure is drawn on that call, never on the turn. */
   failed: boolean;
   totalTokens: number;
   trigger: PhaseRecord["trigger"];
@@ -1568,7 +1570,7 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
         span: to > from ? to - from : null,
         iterations: own.reduce((n, p) => Math.max(n, p.iteration), 0),
         live: ordered.some((r) => r.live),
-        failed: ordered.some((r) => r.failed),
+        failed: ordered.some((r) => r.failed && !r.hostPhase),
         totalTokens: ordered.reduce((n, r) => n + r.totalTokens, 0),
         trigger: ordered.find((r) => r.trigger)?.trigger ?? null,
       };

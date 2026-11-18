@@ -23,12 +23,10 @@ const (
 // AgreeObjectBackend records identity unless a backend is recorded, and
 // answers the recorded one ([coord.ObjectStores]).
 //
-// A refused create is read back FROM THE LEADER, for the custody claim's
-// reason: a replica behind the create would answer that nothing is recorded,
-// and the caller would boot against a backend it never compared. A record
-// gone between the refusal and the read — which only an operator removing it
-// does, since the bucket has no age — is created again, within the shared
-// bound ([casRetry], [fleetCASAttempts]).
+// A refused create is read back FROM THE LEADER: a replica behind the create
+// would answer that nothing is recorded, and the caller would boot against a
+// backend it never compared. A record gone before the read is created again,
+// within [casRetry]'s bound.
 func (f *FleetStore) AgreeObjectBackend(ctx context.Context, identity string) (string, error) {
 	if identity == "" {
 		return "", errors.New("coord/kv: an object backend needs an identity")
@@ -46,8 +44,7 @@ func (f *FleetStore) AgreeObjectBackend(ctx context.Context, identity string) (s
 		entry, err := f.get(ctx, f.objects, objectBackendKey)
 		switch {
 		case errors.Is(err, jetstream.ErrKeyNotFound):
-			// GONE between the refusal and the read, which only an
-			// operator removing the record does: the bucket has no age.
+			// Only an operator removes it: the bucket has no age.
 			return false, nil
 		case err != nil:
 			return false, unavailable("read the object backend", err)
@@ -71,12 +68,9 @@ func (f *FleetStore) AgreeObjectBackend(ctx context.Context, identity string) (s
 // compare-and-set on the revision it read from the leader
 // ([coord.ObjectStores]).
 //
-// Its contenders are an operator's own moves and nothing else, since the
-// record is otherwise written once, by the first node to boot against a store
-// ([FleetStore.AgreeObjectBackend]) — so it is far inside the shared bound
-// ([casRetry], [fleetCASAttempts]), and a lost compare-and-set is read again
-// and judged against what won: a move another operator already made to the
-// same store is the answer, and one made elsewhere is [coord.ErrObjectBackendMoved].
+// Its only contenders are operators' moves, far inside [casRetry]'s bound. A
+// lost compare-and-set is judged against what won: a move to the same store is
+// the answer, one elsewhere is [coord.ErrObjectBackendMoved].
 func (f *FleetStore) MoveObjectBackend(ctx context.Context, from, to string) error {
 	if from == "" || to == "" {
 		return errors.New("coord/kv: a move of the object backend names both stores")
@@ -116,8 +110,8 @@ func (f *FleetStore) MoveObjectBackend(ctx context.Context, from, to string) err
 }
 
 // RecordObjectCollection stores the collector's last report, replacing the
-// one before: one writer at a time holds the duty, and a report is a whole
-// account rather than a delta, so the last write is the answer.
+// one before: one writer holds the duty, and a report is a whole account, not
+// a delta.
 func (f *FleetStore) RecordObjectCollection(ctx context.Context, value []byte) error {
 	if len(value) == 0 {
 		return errors.New("coord/kv: a collection report needs a value")

@@ -16,56 +16,32 @@ import (
 
 // The objects, and the two shapes a record carries them in.
 //
-// A small whole-document object — a view, a tag set, a person, a project, a
-// generation, an eviction — travels as FULL POST-STATE:
-// one document field, one upsert, and no patch semantics to get wrong. A task
-// and the field catalogue travel as a TYPED PATCH, because full post-state
-// would put a 64 KiB body on the wire for a status flip, and the catalogue is
-// 200 KiB edited one field at a time.
+// A small object (a view, a tag set, a person, a project) travels as FULL
+// POST-STATE, one upsert. A task and the field catalogue travel as a TYPED
+// PATCH, lest a status flip carry a whole body; a nil field is unchanged:
 //
-// The patch's rule is the one the engine's earlier edit struct already
-// carried, and it is the right one: a nil field is unchanged, and the POINTER
-// is what tells "set this to empty" from "leave it alone" — which a plain
-// string cannot. Two rules travel with it:
-//
-//  1. A named scalar present in the patch carries its COMPLETE new value,
-//     never an excerpt and never a diff. The 600-byte excerpts live in the
-//     notification, where a card is what they are for; a woken seat reads
-//     the complete value from the payload instead (wakeBody), so a comment
-//     is never handed to the seat it addresses cut at a card's length.
-//  2. A collection the write TOUCHES is carried whole; one it does not touch
-//     is absent. That is what makes a record able to rebuild the row — a
-//     32-entry delta map could not represent a write touching 128 field
-//     values at all — and it is affordable because every collection is
-//     capped.
-//
-// And no cap on the patch is tighter than the record's own: the display cap on
-// a notification must never govern what a mutation may carry.
+//  1. A scalar in the patch carries its COMPLETE new value, never an excerpt
+//     (the excerpts are the notification's; a woken seat reads the payload,
+//     wakeBody), so a comment never reaches its seat cut at a card's length.
+//  2. A collection the write TOUCHES is carried whole, one it does not is
+//     absent: that lets a record rebuild the row, and every collection is
+//     capped. No cap on the patch is tighter than the record's own.
 
 // The collection caps. Each is refused at WRITE naming the field, never cut:
 // a value silently truncated is a value a person will look for later.
 const (
 	// MaxTitle and MaxBody bound a task's own text.
 	//
-	// MaxBody IS SIZED AGAINST THE ANSWER THAT RETURNS IT WHOLE, which is
-	// the relationship it did not have: at 64 KiB it was exactly
-	// [builtin.ToolAnswerBytes], so a body at its cap could not be sent
-	// beside ANY envelope — a task alone at the old cap encoded to 65,915
-	// bytes against a 65,536 ceiling, and `get_work_item` on it was
-	// refused for weight with no argument that would narrow it. A cap a
-	// read can never return is a cap that stores what nobody can get back.
-	//
-	// 32 KiB is ≈ 8,000 words, the same ceiling a comment takes, and it
-	// leaves the whole-body read a 2× margin for JSON escaping. Longer
-	// prose than that is a PAGE (`internal/doclet` carries 512 KiB and has
-	// revisions, a title and a history), and the refusal says so, because
-	// a description that long is a document somebody should be able to
-	// find by name rather than a field on a task.
+	// MaxBody IS SIZED AGAINST THE ANSWER THAT RETURNS IT WHOLE: a cap equal
+	// to [builtin.ToolAnswerBytes] leaves no room for any envelope, so
+	// `get_work_item` could never return a body at it. 32 KiB (≈ 8,000
+	// words) leaves that read a 2× margin for JSON escaping; longer prose is
+	// a PAGE (internal/doclet), and the refusal says so.
 	MaxTitle = 256
 	MaxBody  = 32 << 10
 
-	// MaxCommentBody is a comment's, and is the same figure for the same
-	// reason: it is what the single-comment read returns whole.
+	// MaxCommentBody is a comment's, the same figure for the same reason:
+	// the single-comment read returns it whole.
 	MaxCommentBody = 32 << 10
 
 	// MaxWatchers is the routing cap and the fan-out cap at once: an
@@ -76,9 +52,8 @@ const (
 	// MaxWaitReason is a wait's reason: one line a card shows beside the date.
 	MaxWaitReason = 200
 
-	// MaxCollaborators is deliberately far smaller than the watcher cap:
-	// a collaborator is somebody doing the work, and a task with more than
-	// eight is a task nobody owns.
+	// MaxCollaborators is far smaller than the watcher cap: a collaborator
+	// does the work, and a task with more than eight is one nobody owns.
 	MaxCollaborators = 8
 
 	// MaxTagsPerTask is ClickUp's own per-task limit.
@@ -96,25 +71,19 @@ const (
 	MaxOtherRelations = 128
 
 	// MaxEntries bounds the atlas entries one task names, inside
-	// MaxOtherRelations: thirty-two, four times what a turn's systems block
-	// lists, past which the work is about the company at large and its
-	// project is the thing to link.
+	// MaxOtherRelations: four times what a turn's systems block lists, past
+	// which the work is about the company and its project is what to link.
 	MaxEntries = 32
 
-	// MaxRelationNote bounds the one free-text field an edge carries.
-	//
-	// 256 BYTES, which is a sentence saying WHY this task waits on that
-	// one. Anything longer is the conversation, and the conversation has
-	// a comment thread of its own — while every byte here rides on the
-	// task document, is re-encoded by every commit that touches any
-	// relation, and is counted against MaxCommitBytes 128 edges at a
-	// time.
+	// MaxRelationNote bounds an edge's one free-text field, in bytes: a
+	// sentence saying WHY. Longer is the conversation, which has a comment thread;
+	// every byte here is re-encoded by every commit touching any relation
+	// and counted against MaxCommitBytes 128 edges at a time.
 	MaxRelationNote = 256
-	// MaxDependents is the OTHER end, and it is the cap that bounds a
-	// write's declared scope on a blocker: every apply of a blocker
-	// rewrites two columns on every dependent, so the record names each
-	// one — this many at most, beside the blocker's own term, which is one
-	// past [MaxScopeTerms] and so folds the largest project into its
+	// MaxDependents is the OTHER end, and bounds a write's declared scope on
+	// a blocker: every apply of a blocker rewrites two columns on every
+	// dependent, so the record names each — this many plus the blocker's own
+	// term, one past [MaxScopeTerms], so the largest project folds into its
 	// container ([ScopeSet.capped]).
 	MaxDependents = 64
 
@@ -125,28 +94,19 @@ const (
 	MaxChecklistItems      = 64
 	MaxChecklistItemsTotal = 256
 
-	// MaxChecklistName and MaxChecklistItemName bound the tree's text: a
-	// list is headed by a few words and an item is one line, and the
-	// figures are the ones [MaxCommitBytes] counts the tree at — 256
-	// items at a 256-byte line is the "100 KiB" in its arithmetic. A line
-	// longer than that is a task of its own.
+	// MaxChecklistName and MaxChecklistItemName bound the tree's text, at
+	// the figures [MaxCommitBytes] counts it at (256 items at 256 bytes is
+	// its "100 KiB"). A longer line is a task of its own.
 	MaxChecklistName     = 128
 	MaxChecklistItemName = 256
 
 	// MaxMentions bounds a comment's resolved mentions.
 	MaxMentions = 32
 
-	// MaxThreadParticipants bounds the people a REPLY carries with it, so
-	// a thread that has grown a hundred voices does not put a hundred
-	// handles on every subsequent record.
-	//
-	// SIXTEEN, which is the design's own figure for this collection and
-	// is derived from what a thread IS rather than from what a table
-	// holds: past a dozen or so people a comment thread is a meeting, and
-	// the routing that matters there is the mention. The cap does not
-	// silence anybody — a participant beyond it still watches the task
-	// and hears through the watcher arm; what it bounds is how many
-	// handles ride on the record.
+	// MaxThreadParticipants bounds the people a REPLY carries, so a thread
+	// of a hundred voices does not put a hundred handles on every record.
+	// Past a dozen or so a thread is a meeting, routed by mention; a
+	// participant beyond the cap still hears as a watcher.
 	MaxThreadParticipants = 16
 
 	// MaxDepth is the subtask depth, and MaxDescendants the subtree size
@@ -154,11 +114,9 @@ const (
 	MaxDepth       = 7
 	MaxDescendants = 1000
 
-	// BodyRevisionsKept is how many past bodies a task keeps.
-	//
-	// THE PRUNE RIDES THE COMMIT as an explicit list of retired versions,
-	// so every node deletes exactly the same rows at exactly the same
-	// position and no node deletes a durable row on its own authority.
+	// BodyRevisionsKept is how many past bodies a task keeps. The prune
+	// rides the commit ([TaskPatch.Retires]), so no node deletes a durable
+	// row on its own authority.
 	BodyRevisionsKept = 100
 
 	// MaxReferencesPerBody bounds the key scan the applier runs on every
@@ -168,27 +126,14 @@ const (
 )
 
 // checkTextCaps refuses a write whose own text is past the cap its field
-// declares — [MaxTitle], [MaxBody], [MaxCommentBody].
+// declares — [MaxTitle], [MaxBody], [MaxCommentBody] — naming the field.
 //
-// THE PRODUCER THOSE CAPS NEVER HAD. The block above has said since it was
-// written that each is "refused at WRITE naming the field, never cut", and
-// nothing refused any of them: a search for the three constants found their
-// declaration, one alias and four doc comments, and not one comparison. The
-// nearest bound that did fire was [MaxCommitBytes], about forty times these
-// and phrased about the RECORD rather than the field, so a caller past a cap
-// got either silence or a number they could not act on.
+// The read side relies on it: a thread page carries comments WHOLE, as many
+// as fit [CommentPageBytes] and at least one, which holds only while a comment
+// is within [MaxCommentBody]; one stored past it is reachable through no tool.
 //
-// A comment is where that cost is visible, because the read side is built on
-// the promise: a thread page carries every comment WHOLE, as many as fit
-// [CommentPageBytes] and at least one, and that only holds while one comment
-// is within [MaxCommentBody] — a body stored past it would be a page heavier
-// than one tool answer may be, refused for weight, leaving what somebody wrote
-// reachable through no tool at all.
-//
-// BYTES rather than runes, because every ceiling downstream of this is a byte
-// budget: a record's own encoded size, and one tool answer's. And pure over
-// values, for the reason coerce.go gives for the same shape — a rule that can
-// only be exercised through a database is a rule nobody re-reads.
+// BYTES rather than runes, because every ceiling downstream is a byte budget.
+// Pure over values, for coerce.go's reason.
 func checkTextCaps(title, body, comment *string) error {
 	for _, c := range []struct {
 		field TextField
@@ -221,17 +166,11 @@ const (
 // rather than cut. It is [ErrInvalid] — the same request can never land and a
 // shorter one can.
 //
-// TYPED, because the caller has to NAME THE FIELD to a reader who is not
-// reading Go: a model filing a task is told the tool's sentence (a person is
-// told the words for the field this error carries, ADR-0060), and a sentence
-// built from this error's own words said "the title on task
-// 68c5…" about a task that was never created — the create's id is minted
-// before the write and refused with it, so it named nothing anybody could
-// look up. The field, the size and the cap are what a caller can act on, and
-// [builtin]'s refusal composes its sentence from exactly those.
-//
-// AND IT NAMES NO TASK for the same reason: on a create there is none, and on
-// an update the caller named the item it was editing in the call this answers.
+// TYPED, so a caller can NAME THE FIELD to a reader who is not reading Go:
+// [builtin]'s refusal composes its sentence from the field, size and cap, and
+// a person gets the field's own words (ADR-0060). It NAMES NO TASK: a
+// create's id is minted before the write and names nothing anybody can look
+// up, and an update's caller already named the item.
 type TextCapError struct {
 	Field TextField
 	// Size is what was sent and Limit the most the field holds, in bytes.
@@ -271,10 +210,9 @@ func (e *TextCapError) person() caveat.Refusal {
 
 // Spend is a task's running totals, for ever.
 //
-// DERIVED BY THE APPLIER from the turn commits themselves rather than
-// transmitted: the insert of the turn row is what gates the addition, in the
-// same transaction, so the total is a function of the applied records and
-// cannot disagree with them — and a redelivery cannot double-count.
+// DERIVED BY THE APPLIER from the turn commits rather than transmitted: the
+// turn row's insert gates the addition in the same transaction, so the total
+// cannot disagree with the records and a redelivery cannot double-count.
 type Spend struct {
 	Turns      int `json:"turns,omitempty"`
 	Rounds     int `json:"rounds,omitempty"`
@@ -290,10 +228,9 @@ type Spend struct {
 
 // Tombstone is an operator's removal.
 //
-// A TOMBSTONED TASK IS FROZEN — no comment, body, field or relation of it can
-// change — which is what makes a removal an entirely local decision with no
-// walk behind it. There is no expiry and no purge horizon: a restore works at
-// any age.
+// A TOMBSTONED TASK IS FROZEN (no comment, body, field or relation of it can
+// change), which makes a removal a local decision with no walk behind it. No
+// expiry and no purge horizon: a restore works at any age.
 type Tombstone struct {
 	By          string     `json:"by"`
 	Kind        AuthorKind `json:"kind"`
@@ -316,8 +253,7 @@ const (
 	// "duplicated_by" on the canonical.
 	RelationDuplicates RelationKind = "duplicates"
 	// RelationPage names a knowledge-base page. The edge rides the task's
-	// own record and the page is never touched: there is no write to the
-	// pages log at all.
+	// own record; the pages log is never written.
 	RelationPage RelationKind = "page"
 	// RelationEntry names an entry of the company's atlas by its id, never
 	// by its name or key, so no atlas name enters this log. The edge rides
@@ -334,11 +270,8 @@ var RelationKinds = []RelationKind{
 // kind but a page's and an atlas entry's, whose other end is another domain's.
 func (k RelationKind) NamesTask() bool { return k != RelationPage && k != RelationEntry }
 
-// Valid reports whether this is a kind this build knows.
-//
-// A NAMED STRING TYPE WITH A Valid METHOD, so an unknown value off the wire is
-// a value rather than a panic — and so the one place that decides what an edge
-// may be is this list rather than a switch somewhere that forgot a case.
+// Valid reports whether this is a kind this build knows, decided by
+// [RelationKinds] alone rather than by a switch that could forget a case.
 func (k RelationKind) Valid() bool { return slices.Contains(RelationKinds, k) }
 
 // ChangeSettlement is a change (a pull request) a task waits on, merged or
@@ -383,17 +316,14 @@ type Relation struct {
 	CreatedBy string       `json:"created_by,omitempty"`
 	CreatedAt time.Time    `json:"created_at,omitzero"`
 
-	// OneSidedFinal marks an edge whose mirror was refused PERMANENTLY —
-	// by the dependents cap, by a tombstone the blocker acquired since, or
-	// by a blocker that is no longer there. An attention flag a person
-	// resolves, and the duty never retries it.
+	// OneSidedFinal marks an edge whose mirror was refused PERMANENTLY (the
+	// dependents cap, a tombstone on the blocker, a blocker gone): an
+	// attention flag a person resolves, which the duty never retries.
 	//
-	// THE OTHER HALF IS NOT HERE. "The mirror has not been written YET" is
-	// a fact about the blocker's own rows, so the applier derives it —
-	// see the `one_sided` case in writeChildren. A writer stating it would
-	// be stating what it read in another transaction about another
-	// subject, which is why the field existed for so long with no producer
-	// and the repair duty it was declared for had nothing to select.
+	// "Not mirrored YET" is not here: it is a fact about the blocker's own
+	// rows, so the applier derives it (the `one_sided` case in
+	// writeChildren); a writer would be stating another subject's state
+	// read in another transaction.
 	OneSidedFinal bool `json:"one_sided_final,omitempty"`
 }
 
@@ -417,12 +347,11 @@ type Checklist struct {
 // Task is the object almost every record is about.
 //
 // Its VERSION is the composed (generation << 40) | stream sequence of the last
-// arbitrated commit on its own subject — the same integer space as the
-// domain's checkpoint — and ScopedThrough is the highest record that wrote
-// this row FROM ANOTHER SUBJECT. The two are separate because a record may
-// bump the version of objects on its own subject and no others: stamping a
-// neighbour's version from another subject would make that neighbour's next
-// write form an expectation the broker refuses, for ever.
+// arbitrated commit on its own subject (the checkpoint's integer space), and
+// ScopedThrough the highest record that wrote this row FROM ANOTHER SUBJECT.
+// They are separate because a record may bump versions on its own subject
+// only: stamping a neighbour's would make its next write form an expectation
+// the broker refuses for ever.
 type Task struct {
 	V             int    `json:"v"`
 	ID            string `json:"id"`
@@ -433,24 +362,18 @@ type Task struct {
 	FormerKeys []string `json:"former_keys,omitempty"`
 	Project    string   `json:"project"`
 
-	// FiledUnit is IMMUTABLE and is a RECORD OF WHAT WAS TRUE: nothing
-	// rewrites it, and it may legitimately name a unit the chart no longer
-	// has.
-	//
-	// WHAT A WRITE STORES IS THE UNIT'S KEY — `org.Unit.Key`, resolved
-	// through [Units] by whoever holds the chart — so a rename does not
-	// move the work, and a read resolves what it was asked for to the same
-	// key ([unitKeys]).
+	// FiledUnit is IMMUTABLE, a record of what was true: it may name a unit
+	// the chart no longer has. It stores the unit's KEY (`org.Unit.Key`,
+	// via [Units]), so a rename does not move the work; a read resolves to
+	// the same key ([unitKeys]).
 	FiledUnit string `json:"filed_unit,omitempty"`
-	// RoutingUnit is the mutable half — whose lead hears about this task
-	// NOW — and is the only unit field any write touches. It takes the
-	// key and is read back through the same resolution.
+	// RoutingUnit is the mutable half (whose lead hears about this task
+	// NOW) and the only unit field a write touches. It takes the key too.
 	RoutingUnit string `json:"routing_unit,omitempty"`
 
-	// Parent and Depth: Depth is a HINT. The applier derives the real
-	// depth from the closure and enforces the cap against the subtree's
-	// height, because two concurrent re-parents on two nodes can form a
-	// tree no single write could see.
+	// Depth is a HINT: the applier derives the real depth from the closure
+	// and enforces the cap there, because two concurrent re-parents can
+	// form a tree no single write saw.
 	Parent *string `json:"parent,omitempty"`
 	Depth  int     `json:"depth,omitempty"`
 
@@ -458,9 +381,9 @@ type Task struct {
 	Title string `json:"title" untrusted:"name"`
 	Body  string `json:"body,omitempty" untrusted:"fence"`
 
-	// BodyVersion, BodyAuthor and BodyAt say who wrote the CURRENT body,
-	// and are copied into the revision the next write replaces — so every
-	// revision's bytes are a pure function of the state it replaced.
+	// BodyVersion, BodyAuthor and BodyAt describe the CURRENT body and are
+	// copied into the revision the next write makes, so a revision's bytes
+	// are a pure function of the state it replaced.
 	BodyVersion int       `json:"body_version,omitempty"`
 	BodyAuthor  string    `json:"body_author,omitempty"`
 	BodyAt      time.Time `json:"body_at,omitzero"`
@@ -468,10 +391,9 @@ type Task struct {
 	Status      Status      `json:"status"`
 	StatusGroup StatusGroup `json:"status_group"`
 
-	// StatusEnteredAt is the EFFECTIVE instant — the closed form over
-	// every row about this task at or below this position — rather than
-	// the writer's clock, so two nodes at one checkpoint compute the same
-	// value and a duration never depends on whose clock ran fast.
+	// StatusEnteredAt is the EFFECTIVE instant (the closed form over every
+	// row about this task at or below this position), not the writer's
+	// clock, so two nodes at one checkpoint compute the same value.
 	StatusEnteredAt time.Time `json:"status_entered_at,omitzero"`
 
 	Priority Priority `json:"priority"`
@@ -481,10 +403,9 @@ type Task struct {
 	Assignee      string   `json:"assignee,omitempty"`
 	Collaborators []string `json:"collaborators,omitempty"`
 
-	// Watchers is the set and Muted the subtraction, and BOTH travel:
-	// carrying only the difference would make "not a watcher" and
-	// "watching but muted" the same row, and a replay would silently
-	// re-add every unwatched person on the next mention.
+	// Watchers is the set and Muted the subtraction, and BOTH travel: the
+	// difference alone makes "not a watcher" and "muted" one row, and a
+	// replay would re-add every unwatched person on the next mention.
 	Watchers []string `json:"watchers,omitempty"`
 	Muted    []string `json:"muted,omitempty"`
 	// AskWatch is the watchers a question put to them added, who chose
@@ -493,9 +414,8 @@ type Task struct {
 
 	Tags []string `json:"tags,omitempty"`
 
-	// Fields are keyed by field ID ONLY — agents type the slug, and the
-	// write path resolves it — so a rename or a re-declaration never
-	// re-points a stored value.
+	// Fields are keyed by field ID ONLY (the write path resolves the slug
+	// an agent types), so a rename never re-points a stored value.
 	Fields map[string]json.RawMessage `json:"fields,omitempty" untrusted:"name"`
 
 	Relations  []Relation  `json:"relations,omitempty"`
@@ -521,34 +441,26 @@ type Task struct {
 	Points          float64 `json:"points,omitempty"`
 	Spend           Spend   `json:"spend,omitzero"`
 
-	// DoneAt and ClosedAt are stamped BY GROUP rather than by slug: the
-	// first entry into the done group — done OR cancelled — sets the
-	// first, and the first entry into closed sets the second. Both are
-	// cleared on a reopen, so every "recent" filter agrees with the task's
-	// actual state.
+	// DoneAt and ClosedAt are stamped BY GROUP, not slug: the first entry
+	// into done (done OR cancelled) sets one, into closed the other. A
+	// reopen clears both, so every "recent" filter agrees with the state.
 	DoneAt   *time.Time `json:"done_at,omitempty"`
 	ClosedAt *time.Time `json:"closed_at,omitempty"`
 
 	Archived bool `json:"archived,omitempty"`
 
-	// Merging is true while this task's merge walk is running, and
-	// MergeReparent is what that walk INTENDS to do with the subtree. See
-	// [TaskPatch.Merging].
+	// Merging is true while this task's merge walk runs, and MergeReparent
+	// is what the walk INTENDS for the subtree ([TaskPatch.Merging]).
 	//
-	// THE INTENT IS DURABLE BECAUSE THE REPAIR NEEDS IT. The duty that
-	// finishes an abandoned walk cannot otherwise tell a merge that
-	// deliberately left the children where they were from one that
-	// crashed before it moved the first — and re-parenting on the second
-	// guess silently overrides a `move_subtasks: false` somebody typed.
-	// It rides the DOCUMENT rather than a column of its own: nothing
-	// selects on it, and what the duty selects on is `merging`, which
-	// already has its partial index.
+	// The intent is durable because the repair duty cannot otherwise tell a
+	// merge that left the children on purpose from one that crashed before
+	// moving the first, and guessing overrides a `move_subtasks: false`. It
+	// rides the document, not a column: the duty selects on `merging` only.
 	Merging       bool `json:"merging,omitempty"`
 	MergeReparent bool `json:"merge_reparent,omitempty"`
 
-	// Moving is true on a ROOT whose cross-project move has carried it
-	// and has not yet carried every task beneath it. See
-	// [TaskPatch.Moving].
+	// Moving is true on a ROOT whose cross-project move has not yet carried
+	// every task beneath it ([TaskPatch.Moving]).
 	Moving bool `json:"moving,omitempty"`
 
 	ArchivedAt *time.Time `json:"archived_at,omitempty"`
@@ -556,10 +468,10 @@ type Task struct {
 
 	Removed *Tombstone `json:"removed,omitempty"`
 
-	// ChangeSeq counts commits; Reassignments is the budget counter,
-	// charged only when an AGENT changes the assignee and reset by any
-	// human or operator write — because a hand-off is an ownership
-	// transfer down a chart of known height, not a nested ask.
+	// ChangeSeq counts commits; Reassignments is the hand-off budget,
+	// charged only when an AGENT changes the assignee and reset by any human
+	// or operator write: a hand-off moves ownership down a chart of known
+	// height, not a nested ask.
 	ChangeSeq     int `json:"change_seq,omitempty"`
 	Reassignments int `json:"reassignments,omitempty"`
 
@@ -567,11 +479,10 @@ type Task struct {
 	// against.
 	PolicyStamp string `json:"policy_stamp,omitempty"`
 
-	// CreatedAt and UpdatedAt are the AUTHORED instants. Their skew
-	// against the broker's own stored value is published as a number
-	// rather than corrected, because differencing a CLAMPED instant
-	// against a clock reports a large skew on whichever node wrote second
-	// and names it for its neighbour's error.
+	// CreatedAt and UpdatedAt are the AUTHORED instants. Their skew against
+	// the broker's stored value is published, not corrected: differencing a
+	// CLAMPED instant blames whichever node wrote second for its
+	// neighbour's error.
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
@@ -596,10 +507,9 @@ func (t Task) Delivered() bool { return Delivered(t.Status) }
 
 // Comment is a ROW a task's commit produces, not an object of its own.
 //
-// IT HAS NO VERSION AND NO SUBJECT: a comment is a mutation OF the task, so it
-// is arbitrated by the task's own version. Its id is derived from the task,
-// the turn and the body when it is written from a turn, so a retried turn
-// completes rather than duplicating.
+// NO VERSION AND NO SUBJECT: it is arbitrated by the task's own version. Its
+// id is derived from the task, turn and body when a turn writes it, so a
+// retried turn completes rather than duplicating.
 type Comment struct {
 	ID         string     `json:"id"`
 	Task       string     `json:"task"`
@@ -607,28 +517,24 @@ type Comment struct {
 	AuthorKind AuthorKind `json:"author_kind"`
 	Body       string     `json:"body" untrusted:"fence"`
 
-	// Mentions are resolved at WRITE — a unit to its effective lead, and
-	// the assignee and watcher shorthands expanded — because a mention
-	// resolved at read time would name whoever holds the role later.
+	// Mentions are resolved at WRITE (a unit to its effective lead, the
+	// shorthands expanded); at read time they would name a later holder.
 	Mentions []string `json:"mentions,omitempty"`
 
 	ReplyTo *string `json:"reply_to,omitempty"`
 
-	// Ask is set only at creation: a comment becomes a question when it is
-	// written, and turning an old remark into one retroactively would wake
-	// somebody for a conversation that has moved on.
+	// Ask is set only at creation: an old remark turned into a question
+	// would wake somebody for a conversation that has moved on.
 	Ask     string  `json:"ask,omitempty"`
 	Answers *string `json:"answers,omitempty"`
 
-	// Decision is the structure an ask carries when it needs somebody to
-	// choose — see decision.go. Only on the comment that ASKS, and never
-	// changed after: an answer names an option by id, and options edited
-	// under it would turn that answer into an answer to something else.
+	// Decision is the structure an ask carries when somebody must choose
+	// (decision.go). Only on the ASK, never changed after: an answer names
+	// an option by id, and edited options would re-point it.
 	Decision *decision.Decision `json:"decision,omitempty"`
 
-	// Act is what the ask is for, which only the engine sets, from the
-	// structured data of a question it composed (ADR-0125): nil is an ask
-	// for anything else. Immutable, as the decision is.
+	// Act is what the ask is for, set only by the engine on a question it
+	// composed (ADR-0125); nil otherwise. Immutable, as the decision is.
 	Act *delegated.Act `json:"act,omitempty"`
 
 	// Choice is the option an ANSWER chose, by id, checked against the
@@ -640,8 +546,7 @@ type Comment struct {
 	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
 
 	// Withdrawal is why its asker withdrew this question and what covers it
-	// now, set by the resolve that withdrew it; nil on every other comment
-	// and on a question resolved before withdrawals were recorded.
+	// now, set by the resolve that withdrew it; nil otherwise.
 	Withdrawal *Withdrawal `json:"withdrawal,omitempty"`
 
 	// Removed blanks the body and KEEPS the row, so replies still resolve
@@ -655,9 +560,8 @@ type Comment struct {
 // BodyRevision is the body a task held at one version, carried in the same
 // commit that replaces it.
 //
-// NOT AN OBJECT OF ITS OWN: there is no separate subject, no create-only race
-// and nothing to repair, because the revision and the new body land in one
-// transaction on every node.
+// NOT AN OBJECT OF ITS OWN: no subject, no create-only race, nothing to
+// repair, because the revision and the new body land in one transaction.
 type BodyRevision struct {
 	Task       string     `json:"task"`
 	Version    int        `json:"version"`
@@ -669,9 +573,8 @@ type BodyRevision struct {
 
 // KeyAlias is a row created by the commit that mints or moves a key.
 //
-// NEVER DELETED BY A TASK APPLY and never lowered from current by a later one:
-// a former key must go on resolving for the life of the deployment, because it
-// is pasted into chat and typed into tool calls.
+// NEVER DELETED BY A TASK APPLY nor lowered from current by a later one: a
+// former key, pasted into chat and tool calls, resolves for ever.
 type KeyAlias struct {
 	Key     string `json:"key"`
 	TaskID  string `json:"task_id"`
@@ -691,10 +594,8 @@ type Counter struct {
 
 // RankOrder is a project's manual order.
 //
-// THE OBJECT A RANK MOVE MUTATES IS THE PROJECT'S ORDER — a total order over
-// its tasks that no single task owns and no single task's version can protect
-// — which is why it has a subject of its own rather than riding one of the
-// tasks it moves.
+// A rank move mutates the project's total order, which no single task's
+// version can protect, so it has a subject of its own.
 type RankOrder struct {
 	V             int    `json:"v"`
 	Version       uint64 `json:"version"`
@@ -712,9 +613,9 @@ type RankOrder struct {
 // Roster is the org chart's seats in the order of their names: what
 // `sort=assignee` orders by, reconciled from the chart ([Writer.ApplyChart]).
 //
-// THE ORDER IS THE WRITER'S, carried whole: the collation that decides it
-// ([seatsByName]) runs once, where the record is decided, so every data node
-// applies the same places whatever collation tables its own build carries.
+// THE ORDER IS THE WRITER'S, carried whole: its collation ([seatsByName])
+// runs once at decide, so every node applies the same places whatever
+// collation tables its build carries.
 type Roster struct {
 	V             int    `json:"v"`
 	Version       uint64 `json:"version"`
@@ -724,8 +625,7 @@ type Roster struct {
 	Seats []string `json:"seats"`
 
 	// ChartEpoch is the activation the order was taken from
-	// ([configplane.ActivationStamp]), which keeps an older activation
-	// applied late from walking a newer order back.
+	// ([configplane.ActivationStamp]), so a late older one cannot walk it back.
 	ChartEpoch int64 `json:"chart_epoch"`
 
 	UpdatedAt time.Time `json:"updated_at"`
@@ -741,12 +641,11 @@ type Placement struct {
 
 // Eviction is a node's eviction or its readmission.
 //
-// ITS SHAPE VERSION IS PINNED AT ONE FROM THE FIRST RELEASE AND FOR EVER,
-// because this record INSTALLS A GATE: a build that cannot decode a gate must
-// not apply anything above it. The shape evolves additively — an old reader
-// drops an unknown key — and a change to what its apply does is written at a
-// raised RECORD version, never under a new kind ([GateRecordVersion] says
-// why).
+// ITS SHAPE VERSION IS PINNED AT ONE FOR EVER, because this record INSTALLS
+// A GATE: a build that cannot decode it must apply nothing above it. The
+// shape evolves additively (an old reader drops an unknown key), and a
+// change to its apply takes a raised RECORD version, never a new kind
+// ([GateRecordVersion]).
 type Eviction struct {
 	V          int       `json:"v"`
 	Version    uint64    `json:"version"`
@@ -760,8 +659,7 @@ type Eviction struct {
 
 // Generation is a reanchor's record, create-only at an expectation of zero.
 //
-// Two operators deriving the same number race there and exactly one wins,
-// which is first-writer-wins used for the one thing it is perfectly suited to.
+// Two operators deriving the same number race there and exactly one wins.
 type Generation struct {
 	V                   int       `json:"v"`
 	Gen                 uint32    `json:"gen"`
@@ -776,32 +674,23 @@ type Generation struct {
 
 // TaskPatch is the typed patch: a nil field is unchanged.
 //
-// THE POINTER IS WHAT TELLS "set this to empty" FROM "leave it alone", which a
-// plain string cannot — and every collection here is a POINTER TO A SLICE for
-// the same reason: an absent tag list means the write did not touch tags, and
-// an empty one means it cleared them.
+// THE POINTER tells "set this to empty" from "leave it alone", and every
+// collection is a POINTER TO A SLICE for the same reason: absent tags are
+// untouched, an empty list clears them.
 //
 // # The pointer idiom's one exception: the two dates
 //
-// A date has no empty VALUE to point at — the zero instant is January of year
-// one, which every overdue predicate in the tracker reads as the most overdue
-// task the company ever had — so a cleared date is said by its own flag,
-// [TaskPatch.ClearStart] and [TaskPatch.ClearDue], and a date set is always a
-// real instant. It was once a pointer at the zero instant, and a pointer at a
-// value its type's own IsZero calls zero is one an encoder leaving every field
-// at its zero off drops (encoding/json's omitzero asks IsZero through the
-// pointer) — which is how internal/estate's router sends a request to a data
-// node: spelled so, a clear sent through it arrives as no date named at all,
-// and the task keeps the date the tool said it had cleared. A flag's false
-// clears nothing, which is what a patch that does not name the date means.
+// A date has no empty VALUE: the zero instant reads as the most overdue task
+// ever, and internal/estate's router drops a pointer at it (omitzero), so a
+// clear would arrive as no date. A clear is its own flag, [TaskPatch.ClearStart]
+// and [TaskPatch.ClearDue]; a date set is always real.
 type TaskPatch struct {
 	Title *string `json:"title,omitempty"`
 	Body  *string `json:"body,omitempty"`
 
-	// BodyRevision and Retires ride a body write: the revision the write
-	// replaced, and the versions its prune removed. THE PRUNE IS ON THE
-	// COMMIT so every node deletes exactly the same rows at exactly the
-	// same position, rather than each deciding for itself.
+	// BodyRevision and Retires ride a body write: the revision it replaced
+	// and the versions its prune removed. THE PRUNE IS ON THE COMMIT so every
+	// node deletes the same rows at the same position.
 	BodyRevision *BodyRevision `json:"body_revision,omitempty"`
 	Retires      []int         `json:"retires,omitempty"`
 
@@ -816,27 +705,17 @@ type TaskPatch struct {
 	// Mint is the counter value this record took, and THE ONLY WAY A
 	// PATCH MAY WRITE A KEY OR A RANK.
 	//
-	// # Why neither is a plain field
-	//
-	// A key is what people paste into chat and a rank is a position in a
-	// total order no single task owns, so both have exactly two producers
-	// (D144, as D156 restates it): a record carrying a counter value it
-	// minted in that project, and a record on that project's rankorder
-	// subject. A `Key *string` on this struct is a third — an ordinary
-	// edit that can name any key it likes, including one another task
-	// holds — and a `Rank *Rank` is a fourth that races every drag.
-	//
-	// Stated as the MINT, the rule is in the type: the applier derives
-	// both from the value, so a patch that did not mint one cannot write
-	// either, and a patch that did writes exactly what the counter's own
-	// arbitration gave it.
+	// Both have exactly two producers (D144): a record carrying a counter
+	// value minted in that project, and a record on its rankorder subject.
+	// A `Key *string` field could name a key another task holds, and a
+	// `Rank *Rank` would race every drag. The applier derives both from the
+	// mint, so a patch writes exactly what the counter's arbitration gave.
 	Mint *KeyMint `json:"mint,omitempty"`
 
 	// StartAt and DueAt set a date, always a real instant: the writer
 	// refuses the zero instant ([TaskPatch.CheckDates]). ClearStart and
-	// ClearDue take one off — see the type's doc for why a clear is a flag
-	// and not a value — and the writer refuses a patch that both sets and
-	// clears one date, which names two edits of it at once.
+	// ClearDue take one off (the type's doc says why a flag); a patch that
+	// both sets and clears one date is refused.
 	StartAt    *time.Time `json:"start_at,omitempty"`
 	DueAt      *time.Time `json:"due_at,omitempty"`
 	ClearStart bool       `json:"clear_start,omitempty"`
@@ -859,77 +738,48 @@ type TaskPatch struct {
 	Removed  *Tombstone `json:"removed,omitempty"`
 
 	// Merging is set while a merge's child walk runs and cleared by its
-	// last append. It is what makes a duplicate visibly MID-MERGE rather
-	// than silently half-merged, and what the duty selects on to finish a
-	// walk whose holder died.
+	// last append: it makes a duplicate visibly MID-MERGE, and the duty
+	// selects on it to finish a walk whose holder died.
 	//
-	// MergeReparent rides the same append and says what that walk is for.
-	// The two are set by one append, and the applier clears the intent
-	// whenever the marker goes down, so the pair cannot drift into "not
-	// merging, but re-parenting".
+	// MergeReparent rides the same append; the applier clears it whenever
+	// the marker goes down, so the pair never reads "not merging, but
+	// re-parenting".
 	Merging       *bool `json:"merging,omitempty"`
 	MergeReparent *bool `json:"merge_reparent,omitempty"`
 
-	// Moving is the cross-project move's own marker, and it does for that
-	// walk what Merging does for a merge's: it is set by the SAME append
-	// that moves the root, cleared by the move's last one, and it is what
-	// the duty selects on to finish a walk whose holder died.
-	//
-	// ON THE ROOT'S OWN MOVE rather than an append of its own before it,
-	// because the root landing in the target is the moment the subtree is
-	// split: a separate mark could land without the move behind it, or the
-	// move without the mark, and either is a state no reader can tell
-	// from the other.
+	// Moving is the cross-project move's marker, as Merging is a merge's:
+	// set by the SAME append that moves the root (the moment the subtree
+	// splits, so a separate mark could land without the move or the move
+	// without it), cleared by the move's last, and selected on by the duty.
 	Moving *bool `json:"moving,omitempty"`
 
-	// Reassignments is the hand-off counter this write leaves behind,
-	// decided by the WRITER inside its own snapshot — see
-	// [Writer.chargeHandOff]. Carried as a value rather than derived at
-	// apply time because a counter two nodes derive independently is a
-	// counter two nodes can disagree about.
+	// Reassignments is the hand-off counter this write leaves, decided by
+	// the WRITER in its snapshot ([Writer.chargeHandOff]) and carried as a
+	// value, because two nodes deriving it could disagree.
 	Reassignments *int `json:"reassignments,omitempty"`
 
-	// Watch is a MEMBERSHIP gesture rather than a collection write —
-	// "add me" or "take me off" — resolved by the WRITER inside its own
-	// snapshot into the whole Watchers and Muted sets below, exactly as
-	// Reassignments is settled there (see [Writer.chargeHandOff]).
+	// Watch is a MEMBERSHIP gesture ("add me", "take me off") the WRITER
+	// resolves in its decide snapshot into the whole Watchers and Muted sets
+	// below. A caller CANNOT form those sets: they are carried whole, so
+	// `watchers: [me]` would replace everybody watching, and a set read
+	// outside the decide is written from a stale transaction.
 	//
-	// It exists because a caller CANNOT form those sets: the collections
-	// are carried whole, and a tool spelling "watch this" as
-	// `watchers: [me]` replaced everybody already watching — and, because
-	// the change kind is [ChangeWatchers], announced their removal in the
-	// wake it sent. Deciding it anywhere but the decide snapshot means
-	// reading the set in one transaction and writing it in another.
-	//
-	// NEVER ON THE WIRE. The record an applier sees carries the resolved
-	// collections, so a replay writes rows rather than re-deriving a set
-	// from whatever it had applied by then.
+	// NEVER ON THE WIRE: the applier sees the resolved collections, so a
+	// replay writes rows rather than re-deriving a set.
 	Watch *WatchIntent `json:"-"`
 
-	// Relate and Depend are the SAME KIND OF GESTURE for the two halves
-	// of a dependency, and they exist for the same reason Watch does: a
-	// caller cannot form these collections.
-	//
-	// [TaskPatch.Relations] and [TaskPatch.Dependents] are carried whole,
-	// so a tool that read the set in one transaction and wrote it in
-	// another discards every edge that arrived in between — which is
-	// exactly what the merge sequence did before this existed, composing
-	// `append(task.Relations, …)` from a read outside the decide. Worse
-	// for these two than for the watchers: [MaxWaitingOn],
-	// [MaxOtherRelations] and [MaxDependents] are the bounds the sets are
-	// declared under, and a whole-set write has nothing to count against.
-	//
-	// NEVER ON THE WIRE, like Watch: the record an applier sees carries
-	// the resolved collections, so a replay writes rows rather than
-	// re-deriving a set from whatever it had applied by then.
+	// Relate and Depend are the same kind of gesture as Watch, for the two
+	// halves of a dependency: [TaskPatch.Relations] and
+	// [TaskPatch.Dependents] are carried whole, so a set read outside the
+	// decide discards every edge that arrived since, and the caps
+	// ([MaxWaitingOn], [MaxOtherRelations], [MaxDependents]) must be counted
+	// against the set the decide reads. NEVER ON THE WIRE, like Watch.
 	Relate *RelationIntent  `json:"-"`
 	Depend *DependentIntent `json:"-"`
 
-	// Checklist is the same kind of gesture over the checklists, and for
-	// the same reason: [TaskPatch.Checklists] is carried whole, and one
-	// person ticking an item while another adds one is the ordinary way a
-	// checklist is used. Resolved by [settleChecklist] inside the decide;
-	// NEVER ON THE WIRE, like Watch.
+	// Checklist is the same gesture over [TaskPatch.Checklists], where one
+	// person ticks while another adds. Resolved by [settleChecklist] inside
+	// the decide; NEVER ON THE WIRE, like Watch.
 	Checklist *ChecklistIntent `json:"-"`
 
 	// The collections, carried WHOLE when touched.
@@ -944,8 +794,7 @@ type TaskPatch struct {
 	Checklists    *[]Checklist                `json:"checklists,omitempty"`
 	FormerKeys    *[]string                   `json:"former_keys,omitempty"`
 
-	// Comment rides a task write, because a comment is a mutation of the
-	// task and shares its arbitration.
+	// Comment rides a task write and shares its arbitration.
 	Comment *Comment `json:"comment,omitempty"`
 
 	Extra map[string]json.RawMessage `json:"-"`
@@ -953,39 +802,22 @@ type TaskPatch struct {
 
 // Empty reports a patch that would change no field of the item.
 //
-// # Why it is reflection rather than a list of the fields
-//
-// Because the list is what broke. A hand-written conjunction of every pointer
-// on this struct is correct only until somebody adds the next field, and it
-// fails SILENTLY when they do not: the caller sees a successful write, the
-// item is unchanged, and nothing anywhere says a patch was dropped. That is
-// exactly what happened — the version that counted fourteen of these fields
-// missed `Fields` and `RoutingUnit` among others, so `update_work_item` with
-// a custom-field value as its only argument reported success and wrote
-// nothing.
-//
-// Every field here is a pointer, a slice, a map or a clear flag, precisely so
-// that the zero value means "not set" (see the type's own doc) — a flag's
-// false clears nothing — which makes "no field is set" a property of the VALUE
-// rather than of a list somebody maintains. A field added tomorrow is covered
-// the day it is added.
-//
-// It is called once per write, against a broker round trip.
+// REFLECTION rather than a hand-kept list of fields, which fails SILENTLY when
+// a field is added: the write reports success and changes nothing. Every field
+// is a pointer, slice, map or clear flag whose zero means "not set", so "no
+// field is set" is a property of the value and covers a new field the day it
+// lands. It runs once per write, against a broker round trip.
 func (p TaskPatch) Empty() bool { return reflect.ValueOf(p).IsZero() }
 
 // CheckDates refuses a patch whose dates say what no task can hold: a date set
-// to the zero instant, which is no date (see the type's doc), and a date both
-// set and cleared, which is two edits of one date at once — naming the field
-// to send instead. A comment it posts is held to [Comment.CheckInstants].
+// to the zero instant (see the type's doc), or both set and cleared — naming
+// the field to send instead. A comment it posts is held to
+// [Comment.CheckInstants].
 //
 // THE WRITER'S CHECK ([Writer.UpdateTask]), AND THE ESTATE'S BEFORE IT ASKS
-// ANY NODE (internal/estate's tracker.update_task, refused before it is asked):
-// a pointer at the zero instant does not cross to a data node as itself — the
-// estate's wire leaves a field at its zero off, and the data node reads a patch
-// that names no date — so refused only where it ran, the same patch was refused
-// on a data node's own seat and changed nothing, or changed the rest of what it
-// named, from every other node. Refused on the node that asks, before it is
-// sent, it is refused alike wherever it is asked from.
+// ANY NODE (tracker.update_task): the estate's wire drops a zero instant, so a
+// data node would read a patch naming no date and apply the rest. Refused
+// before it is sent, it is refused alike wherever it is asked from.
 func (p TaskPatch) CheckDates() error {
 	for _, date := range []struct {
 		name, clear string
@@ -1008,10 +840,8 @@ func (p TaskPatch) CheckDates() error {
 }
 
 // CheckInstants refuses a task a create carries holding the zero instant as one
-// of its instants — its start, its due date, a finish or an archive stamp —
-// which is no instant: stored, a zero due date is January of year one, the
-// most overdue task the company ever had. An instant a create does not set is
-// left out (nil).
+// of its instants (start, due, finish or archive stamp): stored, a zero due
+// date is the most overdue task ever. An unset instant is nil.
 //
 // [Writer.CreateTask]'s check, and the estate's before it asks any node to
 // create one (tracker.create_task and tracker.create_task_asking), for
@@ -1043,52 +873,38 @@ func (c Comment) CheckInstants() error {
 
 // WatchIntent is one person's membership gesture on a task's watcher set.
 //
-// A HANDLE AND A DIRECTION, never a list: what a person can say about watching
-// is whether THEY watch, and the set as a whole belongs to whoever is looking
-// at all of it. [settleWatch] turns it into that set.
+// A HANDLE AND A DIRECTION, never a list: a person says whether THEY watch,
+// and [settleWatch] turns it into the set.
 type WatchIntent struct {
 	Handle string
 	Watch  bool
 
-	// Auto marks a watch nobody asked for — the one a commenter picks up
-	// by commenting, rather than by pressing watch.
-	//
-	// IT DECIDES WHAT HAPPENS AT THE CAP, which is the whole of it.
-	// [MaxWatchers] says it plainly: "an explicit sixty-fifth watch is
-	// refused, and an automatic one is skipped". Refusing an explicit one
-	// tells the person their gesture did not take, which is true and
-	// actionable. Refusing an automatic one would fail somebody's COMMENT
-	// because sixty-four other people are watching — a write refused for
-	// a reason that has nothing to do with what the writer asked for.
+	// Auto marks a watch nobody asked for (a commenter's). It decides what
+	// happens at [MaxWatchers]: an explicit watch past it is refused, an
+	// automatic one skipped, since refusing it would fail somebody's
+	// COMMENT over something they never asked for.
 	Auto bool
 }
 
 // RelationIntent is a gesture over a task's relation set, resolved inside the
 // writer's own decide snapshot by [settleRelations].
 //
-// TWO SPELLINGS AND NEVER BOTH: Set states the whole collection, Add and
-// Remove state a delta against whatever is there. Both are gestures rather
-// than a collection write, because even a Set has to be counted against
-// [MaxWaitingOn] and [MaxOtherRelations] — and the set it would be counted
-// against is the one the decide reads, not the one the caller happened to see.
+// TWO SPELLINGS, NEVER BOTH: Set states the whole collection, Add and Remove
+// a delta. Even a Set is a gesture: [MaxWaitingOn] and [MaxOtherRelations]
+// are counted against the set the decide reads, not the caller's.
 type RelationIntent struct {
 	// Set replaces the whole collection. Empty and non-nil clears it,
 	// which is what `{set: []}` means.
 	Set []Relation
 
-	// Add and Remove are the delta. Remove matches on (Kind, Other) —
-	// a note is not part of an edge's identity, so removing an edge does
-	// not require quoting the note somebody wrote on it.
+	// Add and Remove are the delta. Remove matches on (Kind, Other): a
+	// note is not part of an edge's identity.
 	Add    []Relation
 	Remove []Relation
 
-	// Final marks edges [Relation.OneSidedFinal], matched on (Kind,
-	// Other) like Remove.
-	//
-	// A GESTURE RATHER THAN A WHOLE SET for the reason the rest of this
-	// type exists: the only writer of it is the repair duty, running
-	// minutes after the edge was authored, and a collection it composed
-	// from its own scan would discard every edge that arrived since.
+	// Final marks edges [Relation.OneSidedFinal], matched like Remove. A
+	// gesture because its only writer, the repair duty, runs minutes later,
+	// and a set from its own scan would discard every edge since.
 	Final []Relation
 }
 
@@ -1098,9 +914,9 @@ func (r *RelationIntent) Whole() bool { return r != nil && r.Set != nil }
 // DependentIntent is the BLOCKER's half: which dependents this commit adds to
 // or removes from [Task.Dependents].
 //
-// IDS RATHER THAN RELATIONS, because the blocker's side of a dependency is not
-// an edge it authored — it is the list of tasks whose own `waiting_on` names
-// it, kept so a close can say who it unblocks without a reverse scan.
+// IDS RATHER THAN RELATIONS: the blocker authored no edge; this lists the
+// tasks whose `waiting_on` names it, so a close names who it unblocks without
+// a reverse scan.
 type DependentIntent struct {
 	Add    []string
 	Remove []string
@@ -1109,9 +925,8 @@ type DependentIntent struct {
 // FieldType is a custom field's type.
 type FieldType string
 
-// The thirteen, and each constant IS the wire value a declaration carries: a
-// field's type is stored on the catalogue document, and coerce.go's table —
-// the one place a value can be REFUSED — switches on exactly these strings.
+// The thirteen; each constant IS the stored wire value, and coerce.go's table
+// (the one place a value is REFUSED) switches on exactly these strings.
 const (
 	FieldText         FieldType = "text"
 	FieldTextarea     FieldType = "textarea"
@@ -1147,11 +962,9 @@ func (f FieldType) Valid() bool {
 
 // The catalogue caps.
 const (
-	// MaxFieldsPerDocument is the cap on ONE declaring document. Fields
-	// are declared at the workspace and on a project, so a task's
-	// effective union is at most twice this BY CONSTRUCTION — which is
-	// what removes the declaration-time union check a deeper hierarchy
-	// would have needed.
+	// MaxFieldsPerDocument caps ONE declaring document. Fields are declared
+	// at the workspace and on a project, so a task's union is at most twice
+	// this by construction, with no declaration-time union check.
 	MaxFieldsPerDocument = 64
 
 	// MaxTypes is the workspace type catalogue's cap.
@@ -1163,16 +976,10 @@ const (
 	MaxOptions            = 128
 	MaxOptionsPerDocument = 2048
 
-	// MaxTagsPerProject is the tag set's cap, and MaxTagLabel bounds one
-	// tag's human-readable half. The SLUG is bounded by its own grammar
-	// (64 characters, [ValidTagSlug]) rather than by a constant, so there
-	// is one place a tag's shape is stated.
-	//
-	// The label takes [MaxViewName] rather than a number of its own, for
-	// the reason that constant gives: a tag is rendered as a chip beside a
-	// title on every row it is on, exactly as a view is rendered on a tab
-	// strip, and a name that does not fit its strip is one nobody can tell
-	// from its neighbour.
+	// MaxTagsPerProject is the tag set's cap, and MaxTagLabel bounds a
+	// tag's label. The SLUG is bounded by its grammar ([ValidTagSlug]), the
+	// one place a tag's shape is stated. The label takes [MaxViewName]'s
+	// reason: a chip beside a title, like a tab, must fit its strip.
 	MaxTagsPerProject = 512
 	MaxTagLabel       = MaxViewName
 
@@ -1184,9 +991,8 @@ const (
 	MaxViewParamKeys   = 32
 	MaxViewName        = 128
 
-	// MaxPriorities and MaxPinnedViews bound a person's own ordering. Each
-	// of their inbox lists is bounded by [inbox.MaxEntries], with the
-	// rules that keep them small.
+	// MaxPriorities and MaxPinnedViews bound a person's own ordering; their
+	// inbox lists are bounded by [inbox.MaxEntries].
 	MaxPriorities  = 32
 	MaxPinnedViews = 32
 	MaxFavorites   = 64
@@ -1217,15 +1023,10 @@ type Rollup struct {
 
 // FieldConfig is everything a field's type may need.
 //
-// EVERY KEY HERE IS DECLARABLE, which is a property somebody has to keep: a
-// setting no surface can set and nothing reads is a knob a reader will one day
-// wire up to whatever they guess it meant. `Tracking` and `Rollup` stay
-// although the tracker refuses both — a refusal has to DECODE what it refuses,
-// and each names something this build could one day compute — while `Project`
-// went, because it named nothing: a field's project is the document it is
-// declared in, which is what [declaredFields] merges, and a second copy of it
-// on the declaration was written by nothing, read by nothing and checked by
-// nothing.
+// EVERY KEY HERE IS DECLARABLE: a setting nothing sets or reads is a knob a
+// reader will wire to a guess. `Tracking` and `Rollup` stay although the
+// tracker refuses both, because a refusal must DECODE what it refuses. A
+// field's project is the document declaring it ([declaredFields]), never a key.
 type FieldConfig struct {
 	Options   []Option `json:"options,omitempty"`
 	Unit      string   `json:"unit,omitempty"`
@@ -1241,9 +1042,8 @@ type FieldConfig struct {
 
 // FieldDef is one custom field's declaration.
 //
-// Values are keyed by ID and agents type the SLUG, which is what lets a field
-// MOVE between the workspace and a project keeping its id — so every stored
-// value survives a move that changes where the field is declared.
+// Values are keyed by ID and agents type the SLUG, so a field MOVES between
+// the workspace and a project keeping its id and every stored value.
 type FieldDef struct {
 	ID          string    `json:"id"`
 	Slug        string    `json:"slug"`
@@ -1254,25 +1054,21 @@ type FieldDef struct {
 	Required    bool      `json:"required,omitempty"`
 
 	// RequiredInSubtasks decides INSTEAD of Required for a task with a
-	// parent, defaulting to false — ClickUp's two separate toggles, and
-	// the default that keeps a required field from being a form to fill
-	// for every step somebody breaks a task into.
+	// parent, default false, so a required field is not a form for every
+	// step a task is broken into.
 	RequiredInSubtasks bool `json:"required_in_subtasks,omitempty"`
 
 	Config FieldConfig `json:"config,omitzero"`
 
-	// Archived is ONE-WAY: values stay on their tasks, leave the value
-	// table, and a restored field is a NEW declaration — because a field
-	// that came back with its old id would silently re-admit values
-	// validated against a definition nobody has seen for a year.
+	// Archived is ONE-WAY: values stay on their tasks but leave the value
+	// table, and a restored field is a NEW declaration, so stale values
+	// validated against an old definition are never re-admitted.
 	Archived       bool `json:"archived,omitempty"`
 	Pinned         bool `json:"pinned,omitempty"`
 	HideFromAgents bool `json:"hide_from_agents,omitempty"`
 
-	// CreatedBy and CreatedAt are the WRITE's, never the caller's — see
-	// [stampFields]. They are served on every catalogue read, and nothing
-	// wrote them: a tag records who declared it and a field did not, which
-	// is the same column on the same kind of vocabulary.
+	// CreatedBy and CreatedAt are the WRITE's, never the caller's
+	// ([stampFields]).
 	CreatedBy string    `json:"created_by,omitempty"`
 	CreatedAt time.Time `json:"created_at,omitzero"`
 }
@@ -1285,9 +1081,8 @@ func (f FieldDef) Label() string { return f.Name }
 
 // TaskType is a classification, and nothing more.
 //
-// It changes no statuses — there is one set — and scopes fields only through
-// AppliesTo. Each carries a description an agent chooses BY, because a type is
-// chosen by meaning exactly as a status is.
+// It changes no statuses (there is one set) and scopes fields only through
+// AppliesTo. Its description is what an agent chooses it BY.
 type TaskType struct {
 	Slug        string `json:"slug"`
 	Name        string `json:"name"`
@@ -1322,7 +1117,7 @@ func (t Tag) Ident() string { return t.Slug }
 func (t Tag) LabelText() string { return t.Label }
 
 // TypeCatalogue and FieldCatalogue are the two workspace catalogues, on two
-// subjects — so a type edit never contends with a field edit.
+// subjects so a type edit never contends with a field edit.
 type TypeCatalogue struct {
 	V         int        `json:"v"`
 	Version   uint64     `json:"version"`
@@ -1354,24 +1149,19 @@ type Project struct {
 
 	Key string `json:"key"`
 
-	// Name, Purpose and Unit are CHART-OWNED: written and rewritten only
-	// by the chart apply, under the activation guard below. A project
-	// genuinely can move between units, so Unit is not immutable — but it
-	// is not a field a tool writes either.
+	// Name, Purpose and Unit are CHART-OWNED: written only by the chart
+	// apply, under the activation guard below; no tool writes Unit.
 	//
-	// UNIT IS THE UNIT'S KEY (`org.Unit.Key`: its id where the chart gave
-	// it one, its name where it did not) rather than its display name,
-	// because a task filed into this project takes its own filed unit from
-	// here and never rewrites it. A reader renders the key back to the
-	// team's current name through [Units].
+	// UNIT IS THE UNIT'S KEY (`org.Unit.Key`), not its display name,
+	// because a task filed here takes its immutable filed unit from it. A
+	// reader renders the key to the current name through [Units].
 	Name    string `json:"name"`
 	Purpose string `json:"purpose,omitempty"`
 	Unit    string `json:"unit,omitempty"`
 
-	// ChartEpoch is the activation the chart-owned fields were last
-	// written from ([configplane.ActivationStamp]) — the guard that stops
-	// an older configuration, applied late on another node, walking a
-	// newer one back.
+	// ChartEpoch is the activation the chart-owned fields were last written
+	// from ([configplane.ActivationStamp]), so a late older one cannot walk
+	// them back.
 	ChartEpoch int64 `json:"chart_epoch,omitempty"`
 
 	Fields          []FieldDef `json:"fields,omitempty"`
@@ -1380,12 +1170,9 @@ type Project struct {
 	// TargetDate is when the project's LEAD means it to be finished: a day
 	// on the company's clock, `YYYY-MM-DD`, empty for no target.
 	//
-	// A DATE AND NOT AN INSTANT, because a target is a day somebody named
-	// and an instant would have to invent the hour and the zone that day
-	// ends in. LEAD-OWNED rather than chart-owned — it is how the team
-	// plans, not a fact the founder wrote in the config — so it is set
-	// through [Writer.WriteProject] and a chart apply carries it through
-	// untouched.
+	// A DATE, not an instant, which would invent an hour and a zone.
+	// LEAD-OWNED, not chart-owned: set through [Writer.WriteProject], and a
+	// chart apply carries it through untouched.
 	TargetDate string `json:"target_date,omitempty"`
 
 	// PolicyVersion moves on a fields edit — NOT on tags.
@@ -1414,25 +1201,14 @@ type TagSet struct {
 // ViewType is the five renderings, and there are no others.
 type ViewType string
 
-// The five, and each constant IS the wire value a saved view stores: the type
-// is what a client picks a renderer by, so these spellings are read by the
-// dashboard as well as by this package.
+// The five; each constant IS the wire value a saved view stores, which the
+// dashboard also reads to pick a renderer.
 //
-// [ViewTimeline] draws the same rows against a DATE AXIS, which is the one
-// arrangement the other three cannot express: a list orders by a column, a
-// board groups by one, and a calendar puts a task on the day it is due — none
-// of them can show that a task spans three weeks, or that it cannot start
-// until another finishes. It is what [TaskRow.Start], [TaskRow.Due] and
-// [TaskRow.WaitingOn] are on the row for.
-//
-// [ViewTable] is the one read by COLUMN rather than by row. A list draws each
-// task as a block a person reads one at a time — title, badges, dates, the
-// seat — which is the right shape for "what is this task" and the wrong one
-// for "which of these forty is the biggest": comparing a field down a list
-// means finding the same badge at a different x on every row. A table puts one
-// field per column and every value at one x, which is what makes a column
-// scannable and sortable at its own head. Same rows, same query, same page —
-// only the arrangement differs, which is exactly what a view TYPE is.
+// [ViewTimeline] draws the rows against a DATE AXIS, the one arrangement that
+// shows a span or a dependency ([TaskRow.Start], [TaskRow.Due],
+// [TaskRow.WaitingOn] are on the row for it). [ViewTable] is read by COLUMN,
+// one field per column, so values compare and sort at their head. Same rows,
+// same query: only the arrangement differs, which is what a view TYPE is.
 const (
 	ViewList     ViewType = "list"
 	ViewBoard    ViewType = "board"
@@ -1443,13 +1219,9 @@ const (
 
 // ViewTypes is that closed set as a value, in the order a strip draws them.
 //
-// ONE LIST rather than a switch beside two hand-kept copies of it. There were
-// three places that had to agree about which renderings exist — [ViewType.Valid],
-// `save_work_view`'s `type` enum and the gate holding those two together — and
-// each was a literal naming four shapes. That gate is what caught the enum
-// offering three; it could not catch a FIFTH shape arriving, because its own
-// "every shape the engine takes is offered" half was the same literal. A
-// rendering added here is offered, accepted and asserted with no second edit.
+// ONE LIST that [ViewType.Valid], `save_work_view`'s `type` enum and the gate
+// holding them together all read, so a rendering added here is offered,
+// accepted and asserted with no second edit.
 var ViewTypes = []ViewType{ViewList, ViewBoard, ViewCalendar, ViewTimeline, ViewTable}
 
 // Container names where an object lives.
@@ -1460,10 +1232,8 @@ type Container struct {
 
 // The container kinds a view may belong to.
 //
-// A CLOSED SET, named so a fourth cannot appear by typo — which is the same
-// reason [CatalogueTypes] and [CatalogueFields] are named. The workspace is
-// the top of the company and carries an empty id, exactly as
-// [WorkspaceContainer] does in the scope grammar.
+// A CLOSED SET, named so another cannot appear by typo. The workspace carries
+// an empty id, as [WorkspaceContainer] does in the scope grammar.
 const (
 	ContainerWorkspace = "workspace"
 	ContainerProject   = "project"
@@ -1482,8 +1252,7 @@ func ValidContainerKind(kind string) bool {
 
 // View is a saved query.
 //
-// Pinning is deliberately NOT on it: a pin is personal, so it lives on the
-// person — otherwise one person's pin would be everybody's.
+// Pinning is NOT on it: a pin is personal, so it lives on the person.
 type View struct {
 	V       int    `json:"v"`
 	Version uint64 `json:"version"`
@@ -1505,11 +1274,9 @@ type View struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
-	// DeletedAt is set on a view somebody deleted, with who deleted it.
-	// The row stays, for a removed file's reason ([Writer.DeleteView]):
-	// every view upsert is guarded by its record's version, and a guard
-	// needs a row to compare against. No read lists, runs or replaces a
-	// deleted view.
+	// DeletedAt and DeletedBy mark a deleted view. The row stays
+	// ([Writer.DeleteView]) because every view upsert is version-guarded
+	// against it; no read lists, runs or replaces a deleted view.
 	DeletedAt *time.Time `json:"deleted_at,omitempty"`
 	DeletedBy string     `json:"deleted_by,omitempty"`
 
@@ -1527,24 +1294,16 @@ type Favorite struct {
 
 // Person is one human's own state: their inbox, their ordering and their pins.
 //
-// The inbox fields and the pins are written ONLY on behalf of the person whose
-// they are; the priorities may ALSO be written by a lead for somebody in their
-// line, which is the one authority here that reaches across people. See
-// person.go for why that is three verbs rather than one.
+// The inbox fields and pins are written ONLY on the person's own behalf; the
+// priorities may ALSO be written by a lead for somebody in their line (see
+// person.go for why that is three verbs).
 //
-// THE INBOX FIELDS ARE THE PERSON'S [inbox.Marks] over this domain's notices,
-// EMBEDDED, so the record keeps the keys it always had — `generation`,
-// `seen_through`, `read`, `unread`, `snoozed`, `primary_reasons` — in the
-// order it always had them, while the rules that move them are the ones
-// every domain's inbox shares.
+// THE INBOX FIELDS ARE THE PERSON'S [inbox.Marks], EMBEDDED, so the record
+// keeps its keys and their order under the rules every domain's inbox shares.
 //
-// A LEAD'S PRIORITY WRITE WAKES ITS PERSON with the `prioritised` reason, and
-// the wake names the task now at the TOP of the list — see
-// [Writer.prioritisedWake] — because every [Notify] this domain carries is
-// task-shaped and "your list changed" with no task on it is a card with
-// nothing to act on. The record also says who set the list:
-// [Person.PrioritiesSetBy], so a person who starts the day on work they did
-// not choose can see who chose it.
+// A lead's priority write wakes its person with `prioritised`, naming the task
+// now at the TOP ([Writer.prioritisedWake]), because every [Notify] here is
+// task-shaped; [Person.PrioritiesSetBy] says who chose the list.
 type Person struct {
 	V       int    `json:"v"`
 	Version uint64 `json:"version"`
@@ -1557,11 +1316,9 @@ type Person struct {
 	PinnedViews []string   `json:"pinned_views,omitempty"`
 	Favorites   []Favorite `json:"favorites,omitempty"`
 
-	// PrioritiesSetBy is WHO last set this list when it was not the person
-	// themselves, and empty when it was. It is how a lead's authority is
-	// made visible — see the type doc — and it is cleared by the person's
-	// own next write, because taking your queue back is the gesture that
-	// says you have seen it.
+	// PrioritiesSetBy is WHO last set this list when it was not the person,
+	// else empty: a lead's authority made visible. The person's own next
+	// write clears it, since taking the queue back says they have seen it.
 	PrioritiesSetBy string    `json:"priorities_set_by,omitempty"`
 	PrioritiesSetAt time.Time `json:"priorities_set_at,omitzero"`
 
@@ -1572,37 +1329,24 @@ type Person struct {
 
 // MaxCommitBytes is the design maximum for one record, envelope included.
 //
-// DERIVED FROM THE MAXIMAL TASK PATCH rather than from a body edit, and the
-// difference is 3×: rule 2 carries a touched collection WHOLE and no cap on
-// the patch is tighter than the record's own, so the worst commit is a patch
-// that touches every collection at every cap — a 32 KiB body at six-fold JSON
-// escaping (192 KiB) plus 128 field values at 4 KiB (512 KiB) plus four
-// textareas at 16 KiB (64 KiB) plus 256 checklist items (100 KiB) plus 192
-// relations (22.5 KiB) plus watchers and tags, plus a maximal notification
-// at 120 KiB.
+// DERIVED FROM THE MAXIMAL TASK PATCH, not a body edit: rule 2 carries a
+// touched collection WHOLE, so the worst commit touches every collection at
+// every cap — a 32 KiB body at six-fold JSON escaping (192 KiB), 128 field
+// values at 4 KiB (512 KiB), four textareas at 16 KiB (64 KiB), 256 checklist
+// items (100 KiB), 192 relations (22.5 KiB), watchers and tags, and a maximal
+// notification (120 KiB). TestTheMaximalCommitFitsItsDesignMaximum measures it.
 //
-// THE NUMBER DID NOT COME DOWN WITH [MaxBody], and that is deliberate: three
-// constants are sized from this one — the applier's fetch, its ack-pending
-// window and the reorder buffer — so lowering it to re-tighten a bound that
-// is already 6.6× inside the broker's ceiling would move three things to buy
-// nothing. What the halved body cap bought is headroom, and
-// TestTheMaximalCommitFitsItsDesignMaximum measures what is actually left
-// rather than restating it here.
-//
-// It is 6.6× inside the broker's own payload ceiling, so an oversized publish
-// is refused client-side rather than closing the connection, and inside the
-// store's own encoded-record refusal.
+// It sizes the applier's fetch, ack-pending window and reorder buffer, and is
+// 6.6× inside the broker's payload ceiling (an oversized publish is refused
+// client-side) and inside the store's encoded-record refusal.
 const MaxCommitBytes = 1_279_262
 
 // KeyMint is a counter value a record took, carried on the record that uses it.
 //
-// ONE NUMBER, even on the root of a moving subtree. The root's record carried
-// the whole range's base and length once, for a repair that would complete an
-// abandoned walk by re-deriving every descendant's number from them; nothing
-// read the two fields, and the re-derivation could not have worked — the
-// subtree's membership moves while a walk is stopped. A move that stopped is
-// finished by its re-run or by the Worklet duty, each on a FRESH range
-// ([Writer.followRoot]).
+// ONE NUMBER, even on the root of a moving subtree: a subtree's membership
+// moves while a walk is stopped, so no range can be re-derived later. A
+// stopped move is finished by its re-run or the Worklet duty, each on a FRESH
+// range ([Writer.followRoot]).
 type KeyMint struct {
 	// N is the counter value this task took. Its key is "<PROJECT>-<n>"
 	// and its rank is the n-th key of the create lattice.

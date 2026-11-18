@@ -6,21 +6,13 @@ import (
 	"testing"
 )
 
-// A PREDICATE COMPILED FOR AN ALIAS NAMES NO OTHER.
-//
-// One predicate is asked of two different tasks ([alias]): of the row a
-// statement returns, and of the task that row's subtree hangs from, which a
-// subquery reads under a name of its own. A clause that wrote `t.` where it
-// should have written its alias would not fail anywhere — inside the subquery
-// `t` is still the OUTER row, so the clause would quietly ask the row's own
-// question of the row instead of its anchor's, and the answer would be another
-// set with nothing in it to say so. So every query the grammar can compile —
-// the gate's registered set in both subtask modes, and a case for every clause
-// the registered set does not reach — is compiled for an alias other than the
-// row's, and must not name the row's alias anywhere.
-//
-// NOT VACUOUS: each compiled predicate must name the alias it was handed, so a
-// compiler that ignored the alias and wrote none would fail here too.
+// A PREDICATE COMPILED FOR AN ALIAS NAMES NO OTHER. One predicate is asked of a
+// row and of the task its subtree hangs from, which a subquery reads under its
+// own alias ([alias]). A clause writing `t.` there fails nowhere: inside the
+// subquery `t` is still the OUTER row, so it silently answers a different set.
+// So every query the grammar compiles (the registered set in both subtask
+// modes, plus [everyClause]) is compiled for another alias and must not name
+// the row's. Not vacuous: each must name the alias it was handed.
 func TestAPredicateCompiledForAnAliasNamesNoOther(t *testing.T) {
 	t.Parallel()
 	row := regexp.MustCompile(`\b` + string(rowAlias) + `\.`)

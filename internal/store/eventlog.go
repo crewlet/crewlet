@@ -161,6 +161,12 @@ type EventRecord struct {
 	// Payload is the full serialized event. Nil on a listing — see above.
 	Payload json.RawMessage `json:"payload,omitempty"`
 
+	// Tokens and Calls are the row's total_tokens and calls columns, what a
+	// spend record cost and how many model calls it made (a launch's are its
+	// harness's rounds), so a listing of runs says both without its payload.
+	Tokens int `json:"tokens,omitempty"`
+	Calls  int `json:"calls,omitempty"`
+
 	// Failed says whether the work this event reports failed. Derived on
 	// read from the event type plus the stored `failed` tag, because a
 	// listing never selects the payload and the tag is all that survives
@@ -844,7 +850,7 @@ func partiesOf(tags map[string]string, seats SeatResolver) []string {
 // listColumns is every column a listing reads. `payload` is absent
 // deliberately — see EventRecord.Payload.
 const listColumns = `event_time, event_id, event_type, source, category,
-	summary, actor, trace_id, span_id, parent_span_id, tags, work_key, node`
+	summary, actor, trace_id, span_id, parent_span_id, tags, work_key, node, total_tokens, calls`
 
 // qualifiedListColumns names the same columns on the log's own table.
 //
@@ -1613,7 +1619,7 @@ func (s EventSnapshot) scan(ctx context.Context, withPayload bool, query string,
 		var tagJSON, payload string
 		dest := []any{&micros, &rec.ID, &rec.Type, &rec.Source,
 			&rec.Category, &rec.Summary, &rec.Actor, &rec.TraceID,
-			&rec.SpanID, &rec.ParentSpanID, &tagJSON, &rec.WorkKey, &rec.Node}
+			&rec.SpanID, &rec.ParentSpanID, &tagJSON, &rec.WorkKey, &rec.Node, &rec.Tokens, &rec.Calls}
 		if withPayload {
 			dest = append(dest, &payload)
 		}

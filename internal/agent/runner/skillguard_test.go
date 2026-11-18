@@ -63,7 +63,7 @@ func (c *capture) startedPhases() []string {
 	return out
 }
 
-// promptsFor is the opening prompt each phase published, as the live view
+// promptsFor is each opening prompt phase ph published, as the live view
 // renders it: the round with RoundNum -1 carries the whole conversation.
 func (c *capture) promptsFor(ph string) []string {
 	c.mu <- struct{}{}
@@ -95,10 +95,9 @@ func (c *capture) kinds() []string {
 
 var _ queue.Publisher = (*capture)(nil)
 
-// guardedRunner is a seat whose surface carries one required skill covering
-// the tool its run will reach for, with the covered tool registered under
-// origin — so the same skill can cover a first-party tool or an MCP server's —
-// and the launcher its executor's runs are handed to.
+// guardedRunner is a seat with one required skill covering slack_post,
+// registered under origin (first-party or an MCP server's), and the launcher
+// its executor's runs are handed to.
 func guardedRunner(t *testing.T, pub queue.Publisher, origin string) (*runner.Runner, *playLauncher) {
 	t.Helper()
 	registry := skills.NewRegistry()
@@ -121,15 +120,12 @@ func guardedRunner(t *testing.T, pub queue.Publisher, origin string) (*runner.Ru
 		origin); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	// THE REAL LOADER, not a stub: the unlock is observed from a
-	// SUCCESSFUL call, so a stub that answered anything would unlock the
-	// tool without ever having produced the body.
+	// The real loader: the unlock follows a SUCCESSFUL load, which a stub
+	// would fake without producing the body.
 	if _, err := builtin.Register(reg, builtin.Deps{
 		ToolSkills: registry,
-		// THE REAL AUTHORITY DECISION, because every builtin is gated at
-		// registration: a nil Authorizer REFUSES, so a fixture without
-		// one would never load the skill and the unlock below could not
-		// happen for a reason that has nothing to do with skills.
+		// A nil Authorizer refuses every builtin, so the skill would never
+		// load, for a reason unrelated to skills.
 		Authorize: builtin.Decide(authz.NoChart{}),
 	}); err != nil {
 		t.Fatalf("builtin.Register: %v", err)
@@ -144,11 +140,8 @@ func guardedRunner(t *testing.T, pub queue.Publisher, origin string) (*runner.Ru
 		Publisher: pub,
 		Turn: runner.Turn{
 			RunID: "t-guard", WorkKey: "wk-t-guard", AgentID: "agent-1",
-			// THE ACTING SEAT, which is what every tool call is
-			// authorized as: [tools.Surface] derives the principal from
-			// it, and a turn with none reaches the authority gate as
-			// nobody — which refuses every builtin, load_tool_skill
-			// included.
+			// The acting seat, the principal [tools.Surface] authorizes
+			// every call as; with none, every builtin is refused.
 			Context: &turnctx.Turn{
 				RunID: "t-guard", WorkKey: "wk-t-guard",
 				Seat: role,
@@ -164,8 +157,7 @@ func guardedRunner(t *testing.T, pub queue.Publisher, origin string) (*runner.Ru
 }
 
 // guardedLaunch launches the executor's run in round on [guardedRunner]'s
-// seat. What the run then calls is the test's to [play] against the surface
-// it was launched with: the one every bridged call is dispatched through.
+// seat, for the test to [play] calls against its bridged surface.
 func guardedLaunch(t *testing.T, pub queue.Publisher, origin string, round int) runner.AgentRunRequest {
 	t.Helper()
 	r, launcher := guardedRunner(t, pub, origin)
@@ -175,18 +167,17 @@ func guardedLaunch(t *testing.T, pub queue.Publisher, origin string, round int) 
 	return launcher.last(t)
 }
 
-// THE GUARD REFUSES A COVERED TOOL, at the dispatch point every call goes
-// through — the bridge's, for an executor's run. Asking harder in the prompt
-// does not stop a model going straight for the tool.
+// THE GUARD REFUSES A COVERED TOOL at the bridge's dispatch, which every call
+// of an executor's run goes through: a prompt cannot stop a model reaching for
+// it.
 func TestTheExecutorIsRefusedAToolBeforeItsSkillIsLoaded(t *testing.T) {
 	t.Parallel()
 	req := guardedLaunch(t, newCapture(), tools.OriginBuiltin, 1)
 	bridged := play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"hi"}`)}})
 
-	// The refusal names the skill to load, by the name the run's harness
-	// lists it under, and the harness's own tool as the loader: the error
-	// IS the recovery path, and the run was never told a key or handed
-	// load_tool_skill.
+	// The refusal is the recovery path: it names the skill as the harness
+	// lists it and the harness's own skill tool, never load_tool_skill,
+	// which the run was not handed.
 	refusal := bridged[0]
 	if !refusal.Failed {
 		t.Fatalf("the covered tool ran before its skill was loaded: %q", refusal.Result)
@@ -197,11 +188,10 @@ func TestTheExecutorIsRefusedAToolBeforeItsSkillIsLoaded(t *testing.T) {
 	}
 }
 
-// THE EXECUTOR'S TOOL SKILLS ARE HANDED TO ITS HARNESS AS ITS OWN: each skill
-// its phase matches, named as its harness lists it, described by its summary
-// — a required one saying so — and with the body a load of it answers. Its
-// prompt lists none. The names are on the parked state, which every later
-// opening of the run's bridge reads a reported load by.
+// THE EXECUTOR'S TOOL SKILLS ARE HANDED TO ITS HARNESS AS ITS OWN: named as
+// the harness lists them, described by their summary (a required one saying
+// so), with the body a load answers; the prompt lists none. The names go on
+// the parked state, by which every later bridge reads a reported load.
 //
 // Mutation: list the skills in the executor's prompt as well, and the run is
 // offered every skill twice; leave the names off the parked state, and a
@@ -236,15 +226,12 @@ func TestTheExecutorsSkillsAreHandedToItsHarness(t *testing.T) {
 	}
 }
 
-// EVERY REFUSAL IS PUBLISHED. Occasional blocks are the guard working; the
-// chronic case — one skill blocked over and over — says the catalogue
-// summary is not landing, and that is invisible in the turn's own record
-// where a block looks like any other failed call.
+// EVERY REFUSAL IS PUBLISHED, so an operator sees the chronic case the turn's
+// record hides (reportingGuard).
 func TestEveryRefusalIsPublishedForOperators(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
-	// A LATER ITERATION, so a refusal stamped with any other number — the
-	// zero a guard built without its iteration reported — is told apart.
+	// A later iteration, so a refusal stamped zero is told apart.
 	req := guardedLaunch(t, pub, tools.OriginBuiltin, 2)
 	play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"hi"}`)}})
 
@@ -258,23 +245,19 @@ func TestEveryRefusalIsPublishedForOperators(t *testing.T) {
 		got.Phase != types.Phase(phase.Execute) {
 		t.Fatalf("the event = %+v", got)
 	}
-	// The iteration the phase ran as, which every other event of the
-	// phase carries: a reader joining refusals to their phase needs it.
+	// The phase's iteration, which joins refusals to their phase.
 	if got.Iteration != 2 {
 		t.Errorf("the refusal names iteration %d, want the phase's 2", got.Iteration)
 	}
-	// EVERY pending skill, not just the one that blocked: a model about to
-	// be blocked twice more is a model an operator needs to see whole.
+	// EVERY pending skill, not just the one that blocked (reportingGuard.report).
 	if !slices.Equal(got.SkillKeys, []string{"chat-conventions"}) {
 		t.Fatalf("skill keys = %v", got.SkillKeys)
 	}
 }
 
-// A REQUIRED SKILL ON AN MCP TOOL IS ENFORCED as its harness was told it is.
-// An executor holds every MCP tool its seat does from its launch, and its
-// harness is handed the skills for every tool in its universe — so the guard
-// is armed over the same universe, and the tool is refused until its skill is
-// read.
+// A REQUIRED SKILL ON AN MCP TOOL IS ENFORCED as its harness was told it is:
+// the guard is armed over the same universe of tools the harness is handed
+// skills for.
 func TestARequiredSkillOnAnMCPToolIsEnforced(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()

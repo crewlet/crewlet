@@ -16,14 +16,11 @@ import (
 
 // A RUNNING DATA NODE ON CHATLET HANDS ITS SEATS EVERY CHAT TOOL.
 //
-// The engine's chat seams are assembled in one place and handed to the tools
-// in another ([Engine.equip]), and a seam left out of the second is not an
-// error anywhere: every chat tool is gated on the half it needs, so a
-// registry equipped with an empty [builtin.ChatDeps] is a registry with no
-// chat tools at all — the domain running, its records applied, its seats woken
-// about messages they have nothing to answer with. So this is the node a
-// company actually boots, and the tools are read off the registry its epoch
-// was equipped with.
+// The chat seams are assembled in one place and handed to the tools in another
+// ([Engine.equip]); a seam dropped from the second is no error, since every
+// chat tool is gated on the half it needs, so an empty [builtin.ChatDeps] is a
+// registry with no chat tools and seats woken with nothing to answer with. So
+// this boots the node a company runs and reads its epoch's registry.
 func TestARunningChatletNodeEquipsEveryChatTool(t *testing.T) {
 	t.Parallel()
 	e, _, _ := trimmedTracker(t)
@@ -45,11 +42,9 @@ func TestARunningChatletNodeEquipsEveryChatTool(t *testing.T) {
 // A RUNNING DATA NODE ARMS THE PRUNE, AND ITS STOP ENDS IT.
 //
 // [TestTheChatPruneIsArmedOnlyWhereTheRoomsAre] holds the duty's own gate;
-// this holds the two lines that reach it. Armed by nothing, a company's
-// message horizon validates, is documented, and deletes nothing for the life
-// of the deployment. Left running at the stop, the duty publishes into a log
-// whose appliers the teardown is closing — and it runs before the core's, so
-// the order is the teardown's own rather than this case's.
+// this holds the two lines that reach it. Unarmed, the message horizon deletes
+// nothing, ever; left running at the stop, the duty publishes into a log whose
+// appliers the teardown is closing (the teardown stops it before the core's).
 func TestARunningChatletNodeArmsThePruneAndItsStopEndsIt(t *testing.T) {
 	t.Parallel()
 	e, _, _ := trimmedTracker(t)
@@ -64,12 +59,10 @@ func TestARunningChatletNodeArmsThePruneAndItsStopEndsIt(t *testing.T) {
 
 // A NODE HOLDING NO DATA RUNS THE CHAT HALF ITS COMPANY DECLARES.
 //
-// A stateless node keeps no copy of chat, so its seats reach it through the
-// router — but whether they reach it at all is the record [Engine.startRemote]
-// keeps of which halves the company runs natively, and a half it forgot is a
-// seat with no chat tools on that node and a working set on every data node,
-// which reads as a seat that is merely quiet. A company on a vendor's chat has
-// no native half to reach, here or anywhere.
+// A stateless node reaches chat through the router, but only for the halves
+// [Engine.startRemote] recorded the company runs natively; a half it forgot
+// leaves the seat with no chat tools on that node, which reads as merely
+// quiet. A company on a vendor's chat has no native half to reach.
 func TestANodeHoldingNoDataRunsTheChatHalfItsCompanyDeclares(t *testing.T) {
 	t.Parallel()
 	const doc = `
@@ -167,17 +160,12 @@ func (r rawChat) applied(rec chatlet.MutationRecord) changefeed.Record {
 
 // A RUNNING DATA NODE'S CHAT FEED WAKES BY WHAT ITS OWN APPLIER DECIDED.
 //
-// [chatlet.Translator] reads a verdict through the estate and the applier the
-// engine hands it ([Engine.feedFor]), and a feed handed neither fails open: it
-// derives every wake from the record alone, which is exactly the behaviour a
-// refused post is wrong under — and indistinguishable from a working feed on
-// every post that landed. So this is the node a company boots, its feed built
-// as the native half builds it, and three posts its applier decided: one by a
-// member of a private room, which wakes; one by somebody the room does not
-// hold, which the applier refused and which wakes nobody; and one by that
-// member after a peer archived the room — the archive a raw record on the
-// room's own subject, with no expectation, as another node's writer publishes
-// it — which the applier refused too.
+// [chatlet.Translator] reads a verdict through the estate and applier
+// [Engine.feedFor] hands it; handed neither, it fails open, deriving every wake
+// from the record alone — wrong for a refused post, and indistinguishable on
+// every post that landed. Three posts into a private room: a member's, which
+// wakes; a non-member's, which the applier refused; and a member's after a
+// peer archived the room (a raw record, no expectation), refused too.
 //
 // Mutation: hand the feed a zero estate in chatRegistrations, or no applier in
 // feedFor, and the refused posts wake; let the applier land a post into an
@@ -232,24 +220,14 @@ func TestARunningChatletNodesFeedWakesByItsOwnApplier(t *testing.T) {
 }
 
 // A RECORD NAMING A ROOM THIS NODE HOLDS NO ROW FOR IS HELD, NEVER COMMITTED —
-// and that is the one shape in which a raw peer patch on a running node is.
+// the one shape in which a raw peer patch on a running node is.
 //
-// Round 4 of the chat series met a raw ChannelPatch, appended on a room's own
-// subject with no expectation, that this node's runner never committed: the
-// wait hung for ten minutes while the same record applied in the chat write
-// harness. Reproduced here, it is not the expectation, the subject's
-// arbitration, a gate or how the record is filed — the archive above is that
-// same record and commits — but the ROW: a patch whose room this node does not
-// hold is, under a strict replay, a record this build applied incorrectly (its
-// create is below it on every node), so the applier refuses it and the runner
-// retries it in place, holding the checkpoint below it, and reports it as its
-// Fault once [statelog.ApplyRetryBudget] has passed — the path a stall takes
-// to take this copy out of service. It is neither retained nor skipped,
-// because a skip would leave this node's rows short of every peer's for good.
-// The harness applied it because its room existed there, created through the
-// store; the engine test's patch named a room no create had made on the node.
-// So the hang was the test's shape and the framework's designed answer to it,
-// not a product fault.
+// Under a strict replay such a patch is a record this build applied wrongly
+// (its create is below it on every node), so the applier refuses it and the
+// runner retries it in place, holding the checkpoint below it, and reports it
+// as its Fault once [statelog.ApplyRetryBudget] passes — the path that takes a
+// stalled copy out of service. It is never retained or skipped: a skip leaves
+// this node's rows short of every peer's for good.
 //
 // Mutation: make the chat applier skip a patch of a missing room (answer 0
 // rows rather than the error) and the record commits.

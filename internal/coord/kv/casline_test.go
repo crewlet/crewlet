@@ -21,16 +21,10 @@ import (
 
 // EVERY FLEET COMPARE-AND-SWAP LOOP OUTNUMBERS ITS HEAD COUNT.
 //
-// The arithmetic the bounds' docs state, held to the constants: the attempts
-// are twice the head count, the backoff's top window spreads that head count
-// over twice as many round trips, and the head count covers the largest fleet
-// the engine is measured at.
-//
-// What it does NOT hold is that coalescing is needed to pass the contract —
-// measured, it is not: with every write a contender of its own, the contract's
-// contended cases pass on these attempts and this backoff alone. Coalescing is
-// held where it can be counted, by the writes a node's charges reach the
-// broker as ([TestANodesChargesOnOneScopeAreOneContender]).
+// The bounds' arithmetic, held to the constants: the attempts are twice the
+// head count, the top backoff window spreads it over twice as many round trips,
+// and the head count covers the largest fleet the engine is measured at.
+// Coalescing is held elsewhere ([TestANodesChargesOnOneScopeAreOneContender]).
 func TestEveryFleetCASLoopOutnumbersItsHeadCount(t *testing.T) {
 	t.Parallel()
 	const measuredFleet = 100 // the hundred nodes kv.go and gate.go were measured with
@@ -84,12 +78,10 @@ func TestAWindowIsCountedInRoundTrips(t *testing.T) {
 // A ROUND TRIP IS NOT ONE ATTEMPT'S.
 //
 // Every window multiplies the round trip by up to 256, so no one attempt may
-// set it. The first sample alone counts for nothing — a process's first
-// attempts on a bucket are its slowest, and a first loss a hundred times slower
-// than the rest used to set its line's every window — the estimate is seeded by
-// the smaller of the first two, and after that one outlying attempt moves it by
-// an eighth of itself however slow it was, while a latency that really rose is
-// followed within a few dozen attempts.
+// set it. A process's first attempts on a bucket are its slowest, so the
+// estimate is seeded by the smaller of the first two; after that one outlying
+// attempt moves it by at most an eighth of itself, while a latency that really
+// rose is followed within a few dozen attempts.
 func TestARoundTripIsNotOneAttempts(t *testing.T) {
 	t.Parallel()
 	const rtt = 3 * time.Millisecond
@@ -293,11 +285,9 @@ func TestABatchDecidesEachChargeWhereASerialOrderWould(t *testing.T) {
 // TAKEN OR WITHDRAWN, NEVER BOTH.
 //
 // A charge whose caller hangs up while it waits behind a batch is WITHDRAWN at
-// once — answered as unreachable, its round on no counter — and one whose
-// caller hangs up after its batch formed is TAKEN: it lands, and its caller is
-// told what it did, never that nothing happened, because the company's half
-// of a charge that landed with the seat's never written would be a partial
-// nobody was told about.
+// once (unreachable, on no counter); one whose batch already formed is TAKEN:
+// it lands and its caller is told so, never that nothing happened, or the
+// company's half could land with the seat's never written and nobody told.
 func TestAChargeIsTakenOrWithdrawnNeverBoth(t *testing.T) {
 	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
@@ -320,8 +310,7 @@ func TestAChargeIsTakenOrWithdrawnNeverBoth(t *testing.T) {
 	defer hangUpTaken()
 	taken := charge(takenCtx, "taken", 10)
 	<-held.reached
-	// Its batch has formed and its write is in flight: the hang-up comes
-	// too late to withdraw it.
+	// Its write is in flight: too late to withdraw it.
 	hangUpTaken()
 
 	waitingCtx, hangUpWaiting := context.WithCancel(t.Context())
@@ -396,9 +385,8 @@ func TestAWriteThatNeverSettlesFailsClosedAsAnOutage(t *testing.T) {
 		waits    int
 		attempts int
 	)
-	// The clock stands still, so every window the line schedules is still
-	// ahead of it when the line waits, however long an attempt took; and a
-	// wait is over the moment it is asked for.
+	// A frozen clock keeps every scheduled window ahead, so every wait is
+	// asked for, and each is over at once.
 	frozen := time.Now()
 	store.tallies.now = func() time.Time { return frozen }
 	store.tallies.after = func(time.Duration) <-chan time.Time {
@@ -451,17 +439,13 @@ func (k countWrites) Update(ctx context.Context, key string, value []byte, revis
 // the broker.
 //
 // [coordtest.ContendedCharges] charges released together through one store
-// reach the broker as fewer than half as many compare-and-swaps — each batch
-// writes once, and the next is everything that queued behind it — where a
-// store that let every charge write for itself writes at least once a charge.
+// reach the broker as fewer than half as many compare-and-swaps, where a store
+// letting every charge write for itself writes at least once a charge.
 //
-// THIS IS THE TEST THAT TELLS THE TWO APART, and the contract's contended
-// cases are not: with every write made a contender of its own, those cases
-// still pass on [fleetCASAttempts] and the round-trip window, because 320
-// contenders spread over up to 256 round trips mostly find their turn. What
-// coalescing buys shows only in what a bound can be sized for — a counter's
-// writers are every round in flight on every node, which no attempt count
-// covers, or the nodes, which [fleetWriters] does.
+// Only this test tells the two apart: the contract's contended cases pass
+// without coalescing too. What coalescing buys is a bound sized in nodes
+// ([fleetWriters]) rather than in every round in flight on every node, which
+// no attempt count covers.
 func TestANodesChargesOnOneScopeAreOneContender(t *testing.T) {
 	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
@@ -497,10 +481,9 @@ func TestANodesChargesOnOneScopeAreOneContender(t *testing.T) {
 	}
 }
 
-// AND JUDGED AGAIN AS ITS BATCH FORMS: a write whose caller hung up before its
-// goroutine could withdraw it — the hang-up and the batch forming in the same
-// instant — is withdrawn by the batch rather than taken, its change never
-// asked, while the write that leads the batch lands.
+// AND JUDGED AGAIN AS ITS BATCH FORMS: a write whose caller hung up in the
+// instant the batch formed is withdrawn by the batch, its change never asked,
+// while the write leading the batch lands.
 func TestAWriteWhoseCallerHungUpIsWithdrawnAsItsBatchForms(t *testing.T) {
 	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
@@ -564,8 +547,8 @@ type probeAnswer struct {
 	panicked any
 }
 
-// probeWrite runs one write of key on its own goroutine — a caller of its own
-// — and answers what that caller got, a panic included.
+// probeWrite runs one write of key on its own goroutine, as a caller of its
+// own, and answers what that caller got, a panic included.
 func probeWrite(ctx context.Context, lines *writeLines[int], kv jetstream.KeyValue, js jetstream.JetStream,
 	key string, change func(int, bool) (int, bool)) chan probeAnswer {
 
@@ -600,13 +583,11 @@ func awaitProbe(t *testing.T, what string, ch chan probeAnswer) probeAnswer {
 
 // A WRITE WHOSE CHANGE PANICS FAILS ALONE, ON ITS OWN CALLER'S GOROUTINE.
 //
-// Other callers' changes run on whichever goroutine leads their batch, so a
-// panic in one of them used to unwind that leader — another caller — and leave
-// the line led by nobody: every write in the batch, and every later write on
-// the key on this node, waiting for ever, the engine's meter among them, whose
-// charges run on a context nothing cancels. Recovered, the panicking write is
-// answered with its panic, which its own caller's goroutine raises again; the
-// batch is decided again without it; and the line runs on.
+// A change runs on whichever goroutine leads its batch, so an unrecovered
+// panic would unwind another caller and leave the line led by nobody, every
+// later write on the key waiting for ever (the meter's on a context nothing
+// cancels). Recovered, the panic is raised again on its own caller's
+// goroutine, the batch is decided without it, and the line runs on.
 func TestAWriteWhoseChangePanicsFailsAlone(t *testing.T) {
 	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
@@ -662,15 +643,12 @@ func encodeTrap(lines *writeLines[int], trap int) {
 }
 
 // AND A PANIC IN THE LINE'S OWN WORK FAILS ITS BATCH, NEVER THE LINE: every
-// write the batch carried is answered with an error naming the panic — nothing
-// it asked for landed — the goroutine that led it raises the panic again so the
-// fault surfaces, and the next write on the key leads a line that runs.
+// write the batch carried gets an error naming the panic (nothing landed), the
+// goroutine that led it raises the panic again, and the next write runs.
 //
-// THE ERROR NAMES WHAT PANICKED, the line's own work, with the stack it
-// panicked on. A write's change that panics is recovered before the line's
-// recover can see it, so the line's recover only ever catches the line's own
-// code — and an error blaming another write would send whoever read it
-// looking for a change closure that never panicked.
+// THE ERROR NAMES THE LINE'S OWN WORK, with the stack it panicked on: a
+// change's panic is recovered before the line's recover sees it, so blaming a
+// write would send its reader after a change that never panicked.
 func TestAPanicInABatchFailsTheBatchNotTheLine(t *testing.T) {
 	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
@@ -712,8 +690,7 @@ func TestAPanicInABatchFailsTheBatchNotTheLine(t *testing.T) {
 		t.Fatalf("the write the batch carried failed with %q, want it to name the line's own work "+
 			"as what panicked, and no write's change", text)
 	}
-	// The stack it panicked on, never the recover's: the encoder's frame is in
-	// it, as it is in the panic the leader raises.
+	// The stack it panicked on, never the recover's: it holds the encoder's frame.
 	if text := got.err.Error(); !strings.Contains(text, "encodeTrap") {
 		t.Fatalf("the write the batch carried failed with %q, want the stack the line panicked on, "+
 			"which names the encoder's frame", text)
@@ -754,8 +731,8 @@ func (g gatedWaits) awaitWait(t *testing.T, what string) time.Duration {
 }
 
 // rememberedLine is key's line idle at level, as a line that lost and landed
-// before leaves it, on a bucket whose round trip is an hour — so no window
-// passes while a case runs and every wait is one the case ends.
+// leaves it, on a bucket whose round trip is an hour, so every wait is one the
+// case ends.
 func rememberedLine[T any](lines *writeLines[T], key string, level int, at time.Time) {
 	lines.trips.observe(time.Hour)
 	lines.trips.observe(time.Hour)
@@ -787,12 +764,9 @@ func batchesOf[T any](lines *writeLines[T], key string) func() [][2]int {
 // A WAIT IS MADE BEFORE A BATCH FORMS, NEVER AFTER.
 //
 // A line whose level outlived its last batch waits a window before its next
-// attempt, and it used to form that batch first: everything that arrived
-// during the wait missed it and queued for the next, which waited a window
-// again — more compare-and-swaps for smaller batches, and a write taken, and
-// so beyond its caller's reach, for the whole of a wait before anything was
-// sent. Waited first, every write that arrives meanwhile is in the attempt that
-// follows.
+// attempt. Waiting first puts every write that arrives meanwhile in that
+// attempt; forming the batch first would leave them for another window, and
+// hold the batch's writes taken, beyond their callers' reach, for the wait.
 func TestWritesQueuedDuringAWaitJoinTheBatchAfterIt(t *testing.T) {
 	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
@@ -826,9 +800,8 @@ func TestWritesQueuedDuringAWaitJoinTheBatchAfterIt(t *testing.T) {
 }
 
 // AND A WAIT HOLDS NOTHING ITS CALLER CANNOT TAKE BACK. A leader whose caller
-// hangs up during the wait is withdrawn — counted nowhere — and the line goes
-// to the next write, which waits out WHAT IS LEFT of the same window rather
-// than a window anew.
+// hangs up during the wait is withdrawn, counted nowhere, and the next write
+// waits out WHAT IS LEFT of the same window, not a window anew.
 func TestALeaderWhoseCallerHangsUpDuringAWaitIsWithdrawn(t *testing.T) {
 	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
@@ -894,11 +867,10 @@ func heldStep(lose bool) updateStep {
 
 // A WRITE A LOST ATTEMPT CARRIED IS WITHDRAWN BEFORE THE NEXT.
 //
-// A lost attempt wrote nothing, so between it and the next a write is no more
-// taken than one that never left the queue: a caller who hung up while it was
-// in flight is answered as the loss comes back, and one who hangs up during the
-// wait that follows is answered at once — neither held for the line's next
-// attempt, neither counted.
+// A lost attempt wrote nothing, so its writes are no more taken than queued
+// ones: a caller who hung up while it was in flight is answered as the loss
+// comes back, one who hangs up in the wait after it at once, and neither is
+// held for the next attempt or counted.
 func TestAWriteALostAttemptCarriedIsWithdrawnBeforeTheNext(t *testing.T) {
 	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
@@ -910,9 +882,8 @@ func TestAWriteALostAttemptCarriedIsWithdrawnBeforeTheNext(t *testing.T) {
 	first, lost := heldStep(false), heldStep(true)
 	kv := scriptedUpdates{KeyValue: store.budgets, key: key, calls: new(atomic.Int64),
 		steps: map[int64]updateStep{2: first, 3: lost}}
-	// The key's first write is its create — an Update at no revision, and
-	// the script's first call — and the second the held one the case's batch
-	// queues behind.
+	// Script call 1 is the key's create (an Update at no revision); call 2
+	// is the held one the case's batch queues behind.
 	if got := awaitProbe(t, "the create", probeWrite(t.Context(), lines, kv, store.js, key, add(1))); got.err != nil {
 		t.Fatalf("create the probe: %+v", got)
 	}
@@ -960,12 +931,10 @@ func TestAWriteALostAttemptCarriedIsWithdrawnBeforeTheNext(t *testing.T) {
 	}
 }
 
-// A ROUND TRIP OUTLIVES ITS LINE. The estimate a window is counted in is the
-// bucket's, refined by every attempt this node makes there, so a line that
-// went idle and comes back to a first loss an outlier slow does not set its
-// window by that one attempt: the loss moves the estimate by an eighth of
-// itself, and the window is two of those round trips, never two of the
-// outlier's.
+// A ROUND TRIP OUTLIVES ITS LINE. The estimate is the bucket's, refined by
+// every attempt this node makes there, so a returning line's outlier first
+// loss moves it by an eighth of itself, and the window is two of those round
+// trips, never two of the outlier's.
 func TestARoundTripOutlivesItsLine(t *testing.T) {
 	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
@@ -1014,10 +983,9 @@ func TestARoundTripOutlivesItsLine(t *testing.T) {
 }
 
 // A LEVEL OUTLIVES ITS LINE'S IDLENESS. A line that lost and then landed is
-// kept when its queue empties, remembering how contended the key was, so the
-// next write after a pause waits a window before its first attempt rather than
-// going straight at a key the other nodes are still waiting out — and once it
-// has sat idle through every window, it is forgotten and swept.
+// kept when its queue empties, so the next write waits a window rather than
+// going straight at a key other nodes are still waiting out; idle through
+// every window, it is swept.
 func TestALevelOutlivesItsLinesIdleness(t *testing.T) {
 	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
@@ -1077,9 +1045,9 @@ func TestALevelOutlivesItsLinesIdleness(t *testing.T) {
 			"when its queue emptied")
 	}
 
-	// A thousand hours on, every window of its level has passed. The sweep
-	// runs once the map has doubled since the last one — here, the remembered
-	// line, a line held mid-write and a third written beside them.
+	// A thousand hours on, every window has passed. The sweep runs once the
+	// map has doubled since the last: here the remembered line, a held line
+	// and a third beside them.
 	now = now.Add(1000 * time.Hour)
 	busy := encodeKey("probe-busy")
 	held := holdFirstWrite(store.budgets, busy)

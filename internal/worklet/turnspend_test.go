@@ -54,10 +54,8 @@ func sampleTurn(task string) worklet.TurnRecord {
 
 // THE WRITER AND THE APPLIER SHARE ONE TURN SHAPE.
 //
-// They were two anonymous structs spelling the same keys, and nothing wrote
-// the record at all — so a key the writer grew and the applier never read
-// would have gone unnoticed for exactly as long as the counters stayed zero.
-// Every field goes in through RecordTurn and must come out on the rows.
+// Every field goes in through RecordTurn and must come out on the rows, so a
+// key the writer grows and the applier never reads fails here.
 func TestTheWriterAndApplierShareOneTurnShape(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -103,10 +101,9 @@ func TestTheWriterAndApplierShareOneTurnShape(t *testing.T) {
 
 // A TURN NAMING NO RUN IS REFUSED AT THE WRITE.
 //
-// A task's turn list groups segments by their run, so a segment that names
-// none belongs to no turn: two of them would fold into one turn nobody ran.
-// Refused where the fact is known, every row the applier stores names one,
-// and the reader groups by it with nothing to fall back to.
+// A task's turn list groups segments by their run, so two segments naming
+// none would fold into one turn nobody ran. Refused at the write, every stored
+// row names one and the reader needs no fallback.
 func TestATurnNamingNoRunIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -127,9 +124,8 @@ func TestATurnNamingNoRunIsRefused(t *testing.T) {
 
 // A REDELIVERED TURN COUNTS ONCE.
 //
-// The op id is the turn row's own id, so a segment recorded twice — a retried
-// resume, a lost acknowledgement — and a record the broker delivers twice all
-// land on one row, and the counters move with the row's insert.
+// The op id is the turn row's own id, so a segment recorded twice and a record
+// delivered twice land on one row, and the counters move with its insert.
 func TestARedeliveredTurnCountsOnce(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -159,10 +155,9 @@ func TestARedeliveredTurnCountsOnce(t *testing.T) {
 // A TURN IS REFUSED ON A TASK THE WRITER CANNOT SEE, AND CHARGED TO A REMOVED
 // ONE.
 //
-// A purge destroys the rows a charge adds to and its marker is permanent; a
-// task this node does not hold has nothing to add to. A tombstone destroys
-// nothing — the work was done on the task whether or not somebody filed it
-// away since — so a removed task is still charged.
+// A purge destroys the rows a charge adds to, and a task this node does not
+// hold has nothing to add to. A tombstone destroys nothing, and the work was
+// done, so a removed task is still charged.
 func TestRecordTurnRefusesATaskItCannotSee(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -201,11 +196,10 @@ func TestRecordTurnRefusesATaskItCannotSee(t *testing.T) {
 
 // A TURN ON A PURGED TASK IS READ PAST, NOT FATAL.
 //
-// A turn is additive: nothing at the broker orders it against a purge of the
-// same task, so a turn decided while the task existed can land after the purge
-// that removed it. Its spend update then finds no row — and every data node
-// applies the same log in the same order, so an applier that stopped there
-// stopped the whole fleet. The deletion gate is what reads it past.
+// Nothing at the broker orders an additive turn against a purge, so a turn
+// decided while the task existed can land after the purge and find no row; an
+// applier that stopped there would stop the whole fleet, which applies the
+// same log. The deletion gate reads it past.
 func TestATurnOnAPurgedTaskIsReadPastNotFatal(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -214,9 +208,8 @@ func TestATurnOnAPurgedTaskIsReadPastNotFatal(t *testing.T) {
 	}
 	r.drain()
 
-	// THE RACE, exactly: the purge is on the log but not yet applied here,
-	// so the turn's decide still sees the task — and its record lands on
-	// the log AFTER the purge.
+	// THE RACE: the purge is on the log but not applied here, so the turn's
+	// decide still sees the task and its record lands AFTER the purge.
 	if _, err := r.writer.PurgeTask(t.Context(), "op-purge", "t-1", "ENG", ""); err != nil {
 		t.Fatalf("PurgeTask: %v", err)
 	}
@@ -257,8 +250,7 @@ func (r *roundTrip) count(query string, args ...any) int {
 // A REOPEN IS A LEAVE FROM A FINISHED GROUP, AND NOTHING ELSE.
 //
 // done → in progress is a reopen; todo → in progress never finished; done →
-// closed stayed finished. A counter that moved on every status change would be
-// a count of status changes under a name that promises something narrower.
+// closed stayed finished.
 func TestAReopenIsCountedOnlyWhenFinishedWorkIsUnfinished(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -295,12 +287,10 @@ func TestAReopenIsCountedOnlyWhenFinishedWorkIsUnfinished(t *testing.T) {
 
 // THE BACKFILL EQUALS THE REPLAY.
 //
-// A node whose checkpoint's rule set differs from this build's — a cursor a
-// reanchor created at derivation 0, or a later rule set — re-derives its
-// columns from the history rows. The column is only fleet-identical if what the
-// re-derivation computes is exactly what the incremental rule would have
-// reached by applying the same records — so zeroed rows must come back to the
-// value the replay wrote.
+// A node whose checkpoint's rule set differs from this build's re-derives its
+// columns from the history rows, and the column is fleet-identical only if
+// that equals what the incremental rule reached: zeroed rows must come back
+// to the value the replay wrote.
 func TestTheReopenBackfillEqualsAReplay(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -417,10 +407,8 @@ func TestMedianAndP90AreOrderStatisticsOfTheWholeSet(t *testing.T) {
 
 // A TASK READ BACK CARRIES THE SPEND ITS TURNS ADDED.
 //
-// A turn adds to the task's columns and never to its document, and the detail
-// read decoded the document — so every task answered a spend of zero however
-// many turns had been charged to it, and the task page said no agent had
-// worked on a task whose turn list showed six. The spend is the columns'.
+// A turn adds to the task's columns, never its document, so the detail read
+// must take the spend from the columns or every task reads a spend of zero.
 func TestADetailReadsTheSpendItsTurnsAdded(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -452,15 +440,11 @@ func TestADetailReadsTheSpendItsTurnsAdded(t *testing.T) {
 // THAT WROTE IT, WHEN THAT NODE APPLIES WHILE IT WAITS.
 //
 // The applier drops the turn under the task's deletion marker and writes no
-// ledger row, so the write's resolution asks the gate reader why — and a
-// reader that covered only the task's own subject answered "nothing gates
-// it" about the turn's, which the resolution can only read as a ledger that
-// lost a row it vouched for: the writer was told the store broke a contract,
-// and its refusal was counted under `error` rather than `deleted`. The two
-// sides of the gate read one rule ([worklet.Applier.Gated] and
-// [worklet.Gates.GatedAt] over the same subjects), and this is the case the
-// other turn test cannot reach, because there nothing applies until the
-// write has already answered `pending`.
+// ledger row, so the write's resolution asks the gate reader why; a reader
+// covering only the task's subject, not the turn's, reports a broken contract
+// counted under `error`. Both sides read one rule ([worklet.Applier.Gated] and
+// [worklet.Gates.GatedAt] over the same subjects). The other purge test cannot
+// reach this: there nothing applies until the write has answered `pending`.
 func TestATurnLandingAfterItsTasksPurgeIsRefusedDeleted(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -523,11 +507,10 @@ func (r *roundTrip) turnRecords(t *testing.T, task string) []worklet.MutationRec
 // A TURN IS SCOPED TO THE PROJECT ITS TASK IS IN, which is the project the
 // task's own row names now — never the one the turn was woken in.
 //
-// The scope is what a deferral is probed with and filed under, so a record
-// scoped to the project a task left is one a deferral in the project it is in
-// does not see. The project is read off the task's row and confirmed in the
-// decide by one shared statement, so a wrong column there would agree with
-// itself; reading the record back is what holds it to the task's project.
+// The scope is what a deferral is probed with, so a record scoped to the
+// project a task left escapes a deferral where it is now. One shared
+// statement reads and confirms the project, so a wrong column would agree
+// with itself; reading the record back holds it to the task's project.
 //
 // Mutations: the statement reading `key` scopes the record to OPS-1; the
 // record's scope losing its container scopes it to no project.

@@ -15,26 +15,14 @@ import (
 
 // A NODE THAT IS BEHIND KEEPS ITS SEATS.
 //
-// # The measured failure this is the regression for
+// "Has this copy ever been whole" ([stateLog.health]'s Drained, the applier's
+// latch) is not "is it level this instant". Conflated, one record not yet
+// applied makes [Engine.SeatsServiceable] report the node's rows wrong, so it
+// sheds every seat it holds on each tracker write and reclaims them an epoch
+// later.
 //
-// [stateLog.health] derived "has this node's copy ever been whole" from "is it
-// level this instant" — one field assigned `lag == 0`, recomputed on every
-// heartbeat. [statelog.Health.Healthy] reads the first and [Engine.SeatsServiceable]
-// reads that, so a single record on the log this node had not applied YET made
-// the node report its own rows WRONG: the sweep released every seat it held
-// and reclaimed them at the next epoch about five seconds later. Running the
-// Nimbus example with dummy model keys, one node shed all seven of its seats
-// six times in eight minutes, each burst on a write to the tracker — which
-// with a real model is every turn on the node interrupted by somebody filing
-// a work item.
-//
-// # Why the appliers are halted rather than the timing raced
-//
-// Because the applier consumes a record in about a millisecond and the state
-// under test is the gap between the append and the apply. Halting the loops
-// makes that gap hold still: the record lands on the log, this node's
-// checkpoint stays where it was, and the two gates are asked the same question
-// they were asked during the bursts.
+// The appliers are halted rather than raced: an apply takes about a
+// millisecond, and halting holds the gap between append and apply still.
 func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
@@ -71,11 +59,8 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 		t.Fatal("the tracker domain is not running")
 	}
 	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
-	// AND FOR THE APPLIER'S OWN DRAIN, which is a separate instant from a
-	// lag of zero: the loop learns the log is empty on the fetch AFTER it
-	// commits the last record, up to [statelog.FetchWait] later. Halting
-	// before then would stage a node that has genuinely never drained,
-	// which is a different case from the one under test.
+	// AND FOR THE APPLIER'S OWN DRAIN, up to [statelog.FetchWait] after a lag
+	// of zero: halted before it, the node has never drained, another case.
 	waitUntil(t, 20*time.Second, "the applier to drain its log",
 		running.runner.Drained)
 	if ok, domain := e.SeatsServiceable(t.Context()); !ok {
@@ -133,15 +118,12 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 			"the whole seat roster moving on every write", domain)
 	}
 
-	// AND THE COPY STILL ANSWERS REQUESTS, which is where this decision
-	// lives now: a copy's fault takes it OUT OF SERVICE rather than
-	// shedding its seats, so the regression above would come back as the
-	// request gate reading a record in flight as a copy that is wrong or
-	// lags. One record is inside the snapshot slack of a copy that has
-	// drained, so it answers while it admits no seat — the two gates asked
-	// of the same instant, disagreeing the same way. Judged otherwise, every
-	// request another node sent it would go to whichever peer happened to be
-	// level, and a single node's own seats would wait for the lagging pass.
+	// AND THE COPY STILL ANSWERS REQUESTS: a copy's fault takes it out of
+	// service rather than shedding seats, so the regression could return as
+	// the request gate. One record is inside a drained copy's snapshot slack,
+	// so it answers while admitting no seat; judged otherwise, every request
+	// would go to whichever peer was level, and a lone node's seats would wait
+	// for the lagging pass.
 	if v := s.judgeCopy(t.Context()); !v.serves(running.domain.Name()) || !v.answers(running.domain.Name()) {
 		t.Fatalf("a copy one record behind is judged %+v, want sound and answering", v)
 	}

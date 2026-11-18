@@ -17,8 +17,8 @@ import (
 	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
-// A PERSON'S VIEWED FILES: the operator tool `code_mark_viewed`, a person's own marks over the files
-// of a change they review, decided by Gitlet on their own record (gitlet.MarkWrite.Files).
+// A PERSON'S VIEWED FILES: the operator tool `code_mark_viewed`, a person's own marks over a change's
+// files, decided by Gitlet on their record (gitlet.MarkWrite.Files).
 
 // CodeMarkViewedTool is the tool's name, its authority row's action.
 const CodeMarkViewedTool = string(authz.ActionCodeMarkViewed)
@@ -155,9 +155,8 @@ func (t *codeMarkViewed) unknown(actor Actor, ref, opID string) tools.Result {
 }
 
 // viewedGestureOf is a call's `viewed` and `unviewed`, or why they are no gesture, in the model's
-// words: none named, more than gitlet.MaxViewedPerMark, a file that is no object or names no path, or
-// a file naming an object id without a mode or the reverse. Paths are kept exactly as sent, in both
-// lists, so a mark and its take-back name the same file. Gitlet checks the rest.
+// words. Paths are kept exactly as sent, in both lists, so a mark and its take-back name the same
+// file; Gitlet checks the rest.
 func viewedGestureOf(tool string, args map[string]any) ([]gitlet.ViewedFile, []string, string) {
 	var viewed []gitlet.ViewedFile
 	if raw, present := args["viewed"]; present && raw != nil {

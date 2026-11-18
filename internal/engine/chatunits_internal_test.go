@@ -26,13 +26,10 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// WHO BELONGS IN A UNIT'S ROOM, as arithmetic over the chart.
-//
-// Separated from the reconcile that writes it, for the reason internal/worklet
-// and internal/textindex separate theirs: a rule exercised only through a
-// database and a broker is a rule nobody re-reads, and this one decides two
-// things that are easy to get quietly wrong — who is IN the room, and which of
-// them every message wakes.
+// WHO BELONGS IN A UNIT'S ROOM, as arithmetic over the chart, apart from the
+// reconcile that writes it: a rule exercised only through a database and a
+// broker is one nobody re-reads, and this one decides who is IN the room and
+// which of them every message wakes.
 func chartFor(t *testing.T) *org.Organization {
 	t.Helper()
 	eng := &org.Unit{
@@ -59,11 +56,8 @@ func handlesOf(members []chatlet.Member) []string {
 	return out
 }
 
-// THE SUBTREE IS IN THE ROOM, not just the direct members.
-//
-// A division's room is where its teams are reachable. The other reading leaves
-// a lead talking to an empty room while the people doing the work sit one
-// level down.
+// THE SUBTREE IS IN THE ROOM, not just the direct members: otherwise a lead
+// talks to an empty room while the people doing the work sit one level down.
 func TestAUnitsRoomHoldsItsWholeSubtree(t *testing.T) {
 	t.Parallel()
 	chart := chartFor(t)
@@ -77,17 +71,13 @@ func TestAUnitsRoomHoldsItsWholeSubtree(t *testing.T) {
 
 // AND EVERY MESSAGE WAKES THIS UNIT'S OWN AGENTS AND NOBODY ELSE.
 //
-// THE THREE CASES ARE ONE RULE AND HAVE TO BE ASSERTED TOGETHER:
+// Three cases of one rule, asserted together: the first alone passes a build
+// that wakes the whole subtree, the expensive failure.
 //
-//   - this unit's own AGENT seat follows everything, because the room is where
-//     it is addressed;
-//   - a DESCENDANT's agent does not, because it has its own room and a message
-//     in a division's room would otherwise be a turn for every agent beneath
-//     it, each with its own executor in a box;
-//   - a HUMAN never does, because a person is addressable and runs no turn.
-//
-// Asserting only the first would pass against a build that woke the entire
-// subtree, which is the expensive failure.
+//   - this unit's own AGENT follows everything: the room is where it is addressed;
+//   - a DESCENDANT's agent does not: it has its own room, and every wake is an
+//     executor in a box;
+//   - a HUMAN never does: a person is addressable and runs no turn.
 func TestOnlyTheUnitsOwnAgentsFollowEverything(t *testing.T) {
 	t.Parallel()
 	chart := chartFor(t)
@@ -308,15 +298,11 @@ func failuresOf(t *testing.T, results []unitRoomResult) {
 // TWO NODES RECONCILING ONE UNIT MAKE ONE ROOM, AND THE ONE THAT LOST THE RACE
 // SUCCEEDS.
 //
-// Every node runs the unit-room reconcile on every apply, so two of them
-// routinely read "no room yet" and both create it. The broker lets one take
-// the name and refuses the other as a name that is taken — which the reconcile
-// used to treat as a failure, logging `chat_unit_room_not_reconciled` at ERROR
-// on every node but one, on every apply, for a room that was exactly as it
-// should be. The refusal now reads the room that took the name and judges it
-// like any room that was already there: this unit's is success, and its
-// membership is already the chart's at this activation, so nothing more is
-// written.
+// Every node reconciles on every apply, so two routinely both create. The
+// broker refuses the loser's name as taken; the loser reads the room that took
+// it and judges it like any existing room — this unit's is success, never
+// `chat_unit_room_not_reconciled` — and its membership is already the chart's
+// at this activation, so nothing more is written.
 func TestTwoNodesReconcilingOneUnitMakeOneRoom(t *testing.T) {
 	t.Parallel()
 	chart := chartFor(t)
@@ -367,10 +353,9 @@ func TestARaceLostToAnotherRoomIsReportedAsTheTakeover(t *testing.T) {
 
 // AN UNKNOWN CREATE, OR AN UNKNOWN MEMBERSHIP, IS NOT A RECONCILED ROOM.
 //
-// Logging it as created told an operator reading the log that the room
-// exists when the create may never have landed; it is reported as not
-// reconciled instead, naming its operation, and the next pass — which reads
-// the row first — decides it again.
+// The create may never have landed, so it is reported as not reconciled,
+// naming its operation, and the next pass — which reads the row first —
+// decides it again.
 func TestAnUnknownUnitRoomWriteIsNotReportedAsDone(t *testing.T) {
 	t.Parallel()
 	chart := chartFor(t)
@@ -400,10 +385,8 @@ func TestAnUnknownUnitRoomWriteIsNotReportedAsDone(t *testing.T) {
 // inherits one gets none of its own.
 //
 // [org.Unit.Channel] is the EFFECTIVE value: a child that names no channel
-// inherits its parent's. The reconcile used to walk that field, so the parent's
-// room was reconciled once more for every child that wrote nothing — whichever
-// unit the walk reached first made it under its own key and subtree, and every
-// other one was refused as a takeover, an ERROR per inheriting unit on every
+// inherits its parent's. Walking it would reconcile the parent's room once per
+// inheriting child, all but the first refused as a takeover at ERROR on every
 // apply. A child that declares a channel of its own still gets that room.
 func TestOnlyAUnitThatDeclaresAChannelGetsARoom(t *testing.T) {
 	t.Parallel()
@@ -467,13 +450,10 @@ func TestOnlyAUnitThatDeclaresAChannelGetsARoom(t *testing.T) {
 }
 
 // EVERY WRITE CARRIES THE ACTIVATION THE CHART CAME FROM — the create and the
-// membership both — so the store can refuse an older chart applied late.
-//
-// The reconcile used to compare the membership itself and write only a set
-// that moved, with no stamp: a node booting on a revision the fleet had since
-// replaced wrote its own chart's team back over the current one. And it used
-// to skip the write whenever the set was unchanged, which also skips the
-// RE-STAMP a newer activation owes a room whose set did not move.
+// membership both — so the store can refuse an older chart applied late (a
+// node booting on a replaced revision would write its team back over the
+// current one). And the write is made even over an unchanged set: a newer
+// activation owes that room a RE-STAMP.
 func TestTheChartsActivationTravelsWithEveryUnitRoomWrite(t *testing.T) {
 	t.Parallel()
 	chart := chartFor(t)
@@ -522,13 +502,10 @@ func TestTheChartsActivationTravelsWithEveryUnitRoomWrite(t *testing.T) {
 // WHAT A PASS LOGS IS WHAT IT DID, and a room that was already right is not
 // news.
 //
-// The reconcile runs on every node at every boot and every apply, so the
-// ordinary outcome is a room that already says what the chart says — and a
-// re-stamp is the ordinary outcome of every activation. The store used to
-// answer a re-stamp as a write, and the reconcile logged
-// chat_unit_room_membership_set for every unit room on every activation,
-// re-activating an unchanged revision (the credential-rotation gesture)
-// included, with a member count beside a membership nobody moved.
+// The reconcile runs on every node at every boot and apply, so its ordinary
+// outcomes — a room already as the chart says, and a re-stamp on every
+// activation (re-activating an unchanged revision, the credential-rotation
+// gesture, included) — log nothing above DEBUG.
 func TestAUnitRoomPassLogsOnlyWhatChanged(t *testing.T) {
 	t.Parallel()
 	failed := errors.New("refused")
@@ -592,15 +569,12 @@ units:
 // THE RECONCILE WRITES ONLY FOR A COMPANY ON CHATLET, AND ONLY WITH AN
 // ACTIVATION — and both refusals are made before the store is asked.
 //
-//   - A company that moved to a vendor surface, or to none, publishes nothing
-//     on chat's log: that is [Engine.chatRetentionPolicy]'s rule for this
-//     domain, and the chat store is built once per process from the first
-//     company, so a revision leaving Chatlet used to go on creating and
-//     re-stamping unit rooms at every boot and every apply of every data node.
-//   - A company no activation has named is applied by its first activation.
-//     Without the guard the store refuses the zero instant
-//     ([chatlet.ErrNoActivation]), so nothing lands — and one ERROR per unit is
-//     logged at every unactivated boot, which no other case would notice.
+//   - A company on a vendor surface, or none, publishes nothing on chat's log
+//     ([Engine.chatRetentionPolicy]'s rule), yet the chat store is built once
+//     per process from the first company, so only this gate stops the writes.
+//   - A company no activation has named is applied by its first activation;
+//     ungated, the store refuses the zero instant ([chatlet.ErrNoActivation]),
+//     one ERROR per unit at every unactivated boot.
 //
 // THE CONTROL is the same company, on Chatlet and activated, opening its room: a
 // gate that refused everything would pass both cases above.
@@ -631,13 +605,12 @@ func TestTheUnitRoomReconcileWritesOnlyForAnActivatedChatletCompany(t *testing.T
 
 // A NODE IN A CAPACITY WINDOW OPENS NO UNIT ROOM — at boot or on an apply.
 //
-// The reconcile's writer is [Engine.ChatStore], which is [Engine.writeSide]'s
-// and is nil in `maintenance` and `seal`: a window is measured against the
-// logs holding still, and a seal's acknowledgement is evidence only because
-// nothing on the node writes. [TestANodeInACapacityWindowAppendsNothingToItsLogs]
-// cannot see this path — it boots with no activation and a company with no
-// units, so the reconcile returns before reaching any writer. This boots the
-// company it acts on, activated, and asks again through an apply.
+// The reconcile writes through [Engine.ChatStore], [Engine.writeSide]'s, nil in
+// `maintenance` and `seal`: a window is measured against the logs holding
+// still, and a seal's acknowledgement is evidence only because nothing writes.
+// [TestANodeInACapacityWindowAppendsNothingToItsLogs] boots unactivated with no
+// units and never reaches a writer, so this boots an activated company with a
+// unit and asks again through an apply.
 //
 // THE CONTROL is the same boot in `normal` opening the room, or a node that
 // never wrote anywhere would pass.
@@ -727,13 +700,10 @@ func unitRoomHeld(t *testing.T, e *Engine, name string) bool {
 
 // A UNIT THAT LOSES ITS LAST SEAT KEEPS ITS ROOM AND LOSES ITS MEMBERS.
 //
-// The "nobody in it gets no room" rule returned before the room was even
-// read, so it skipped an EXISTING room too: a unit with no lead up its chain
-// that lost its last seat kept its last members for good, FollowAll flags
-// included, and every message posted there went on waking an agent the chart
-// had moved to another team — each an executor in a box, in a room its
-// prompt no longer names. The rule is about CREATING a room nobody could
-// reach; a room that exists is restated like any other, as nobody.
+// "Nobody in it gets no room" is about CREATING a room nobody could reach; a
+// room that exists is restated like any other, as nobody. Skipped, it keeps its
+// last members and FollowAll flags for good, every post waking an agent the
+// chart moved to another team.
 func TestAUnitThatLosesItsLastSeatEmptiesItsRoom(t *testing.T) {
 	t.Parallel()
 	staffed := &org.Organization{Name: "acme", Units: []*org.Unit{
@@ -778,11 +748,10 @@ func TestAUnitThatLosesItsLastSeatEmptiesItsRoom(t *testing.T) {
 
 // A ROOM THE CHART NO LONGER NAMES IS STAFFED BY NOBODY — and kept.
 //
-// The chart is the only writer of a unit room's membership: joining, leaving
-// and setting one are refused for this kind. So a unit that stopped declaring
-// its channel, or left the chart, left a room whose members nothing could
-// ever change — its agents following every message in a room their prompt no
-// longer names. The room stays (a transcript is the only copy of what people
+// The chart is the only writer of a unit room's membership (join, leave and
+// set are refused for this kind), so nothing else would empty a room whose
+// unit stopped declaring it or left the chart, its agents following every
+// message there. The room stays (a transcript is the only copy of what people
 // said); its people are what the chart says, which is nobody.
 func TestARoomTheChartNoLongerNamesIsEmptied(t *testing.T) {
 	t.Parallel()
@@ -854,13 +823,10 @@ func TestARoomTheChartNoLongerNamesIsEmptied(t *testing.T) {
 // A ROOM'S STORED UNIT IS READ BACK THROUGH THE CHART'S ONE RESOLVER, so every
 // spelling of one team is that team.
 //
-// A room records its unit's key once, at the create, and the reconcile reads
-// it back at every later activation — a durable unit reference, which
-// [org.Organization.UnitByRef] is the one resolver of: an id or a name, under
-// the fold the admission rule claims a key with. The reconcile used to match
-// it exactly, so a unit whose name changed only in case (one team, to the
-// chart and to the room's own answerer) was refused its room with an
-// ERROR and had it emptied by the sweep, on every pass.
+// A room records its unit's key once, at the create: a durable unit reference,
+// which [org.Organization.UnitByRef] resolves (an id or a name, under the
+// admission rule's fold). An exact match would refuse a unit renamed only in
+// case its room at ERROR and have the sweep empty it, on every pass.
 func TestEverySpellingOfAUnitKeepsItsRoom(t *testing.T) {
 	t.Parallel()
 	staffed := func(name, id string) *org.Organization {
@@ -903,13 +869,10 @@ func TestEverySpellingOfAUnitKeepsItsRoom(t *testing.T) {
 
 // AN ID BEATS ANOTHER UNIT'S NAME, in the per-unit pass and the sweep alike.
 //
-// A stored chart may carry a unit whose id is another unit's name — refused
-// when a document is written, still run when one is stored. The resolver
-// settles it (the id's unit), and the reconcile has to ask it in BOTH places:
-// with an exact match of its own, the sweep found the unit NAMED "platform"
-// first, saw it declare no such room and emptied #plat, while the per-unit
-// pass staffed #plat as the id's — two writes at one activation, on every
-// pass, ending in whichever came last.
+// A stored chart may carry a unit whose id is another unit's name (refused on
+// write, still run when stored). The resolver settles it (the id's unit), and
+// the reconcile must ask it in BOTH places: an exact match in the sweep would
+// empty #plat while the per-unit pass staffs it, two writes on every pass.
 func TestAnIDOwnsTheRoomOverAnotherUnitsName(t *testing.T) {
 	t.Parallel()
 	chart := &org.Organization{Name: "acme", Units: []*org.Unit{
@@ -948,13 +911,11 @@ func TestAnIDOwnsTheRoomOverAnotherUnitsName(t *testing.T) {
 // A ROOM THE CHART STAFFS WITH NOBODY WAKES NO LEAD, and a room it staffs
 // wakes the lead of the unit that owns it.
 //
-// The sweep empties a room whose unit stopped declaring it, and the room's
-// answerer used to resolve that unit's lead regardless, so every
-// message a person posted there woke the old lead under a reason that obliges
-// an answer, from a room no prompt names as theirs: the cost the sweep was
-// written to remove. Both now ask [unitRoomOwner], and this holds them to one
-// answer for every room a pass leaves behind — a room released has no lead,
-// a room kept has its owner's — and to what the routing does with it.
+// Otherwise a person's post in a room the sweep emptied wakes the old lead
+// under a reason that obliges an answer, from a room no prompt names as
+// theirs. The sweep and the room's answerer both ask [unitRoomOwner]; this
+// holds them to one answer for every room a pass leaves — released has no
+// lead, kept has its owner's — and to what the routing does with it.
 func TestARoomsLeadIsTheLeadOfTheUnitThatStillDeclaresIt(t *testing.T) {
 	t.Parallel()
 	before := &org.Organization{Name: "acme", Units: []*org.Unit{
@@ -1060,12 +1021,11 @@ func TestARoomMadeByHandIsAnsweredByItsMostSeniorAgentMember(t *testing.T) {
 
 // A ROOM HELD ELSEWHERE IS REPORTED FOR WHY, WITH THE REMEDY THAT WORKS.
 //
-// The refusal used to read "rename the unit's channel or the room" for every
-// case, and half of it was impossible: a room's name never changes in this
-// build, and an archived room keeps it. Two cases are left now that a room
-// follows its channel to the unit that declares it (see
-// [TestAChannelMovedToAnotherUnitTakesItsRoom]): a room a person opened, and
-// a room another unit declares too. Each says which it is.
+// A room's name never changes in this build (an archived room keeps it), so
+// the remedy never offers renaming the room. A room follows its channel to the
+// unit that declares it ([TestAChannelMovedToAnotherUnitTakesItsRoom]), so two
+// cases are left — a room a person opened, a room another unit declares too —
+// and each says which it is.
 func TestARoomHeldElsewhereSaysWhyAndWhatWorks(t *testing.T) {
 	t.Parallel()
 	engineering := &org.Unit{Name: "engineering", Channel: "eng"}
@@ -1105,15 +1065,12 @@ func TestARoomHeldElsewhereSaysWhyAndWhatWorks(t *testing.T) {
 
 // A CHANNEL MOVED TO ANOTHER UNIT TAKES ITS ROOM WITH IT.
 //
-// A room's unit used to be fixed at its create, so moving a team's channel to
-// the unit that replaces it in a reorg — a document that validates clean —
-// had the new declarer refused the room at ERROR on every apply of every data
-// node, while the sweep emptied it because the unit it was recorded under no
-// longer declared it: the team without the room its prompt names, for good.
-// The room now follows its channel, staffed with the new unit's people and
-// answering to its lead. A node whose rows still say the old unit decides the
-// same, and an older activation, applied late, moves it back no more than it
-// moves the members back.
+// A reorg moving a team's channel to the unit replacing it validates clean, so
+// the room follows its channel, staffed with the new unit's people and
+// answering to its lead; a unit fixed at the create would refuse the new
+// declarer at ERROR while the sweep emptied the room. A node whose rows still
+// say the old unit decides the same, and an older activation, applied late,
+// moves it back no more than it moves the members back.
 func TestAChannelMovedToAnotherUnitTakesItsRoom(t *testing.T) {
 	t.Parallel()
 	before := &org.Organization{Name: "acme", Units: []*org.Unit{
@@ -1199,10 +1156,9 @@ func TestAChannelMovedToAnotherUnitTakesItsRoom(t *testing.T) {
 
 // A UNIT RENAMED WITHOUT AN ID KEEPS ITS ROOM, AND ITS PEOPLE IN IT.
 //
-// [org.Organization.UnitByRef] cannot cover this one — the old name is not a
-// spelling of the new unit — so the room used to be read as the room of a unit
-// the chart no longer has: the renamed unit refused it, and the sweep emptied
-// it. It follows its channel to the renamed unit instead.
+// [org.Organization.UnitByRef] cannot cover this (the old name is no spelling
+// of the new unit), so the room follows its channel to the renamed unit rather
+// than being refused by it and emptied by the sweep.
 func TestAUnitRenamedWithoutAnIDKeepsItsRoom(t *testing.T) {
 	t.Parallel()
 	named := func(name string) *org.Organization {
@@ -1271,13 +1227,11 @@ func TestTwoUnitsDeclaringOneChannelLeaveOneRoomAndOneReport(t *testing.T) {
 
 // THE ROOM READS ARE THE ONE PIECE OF THIS RECONCILE A FAKE CANNOT COVER.
 //
-// Every case above runs against nodeRooms, so the SQL that feeds the real
-// reconcile is never run there — and a wrong column or a lost filter would
-// show up only as one `chat_unit_room_not_reconciled` line per apply, with the
-// rooms the chart stopped naming quietly left staffed. So both reads run
-// against the real schema here: the room that holds a name, and the live unit
-// rooms the sweep walks — an archived one, which takes no message and wakes
-// nobody, and a room of another kind left out.
+// Every case above runs against nodeRooms, so a wrong column or lost filter in
+// the SQL would show only as `chat_unit_room_not_reconciled` per apply, with
+// dropped rooms left staffed. Both reads run against the real schema here: the
+// room holding a name, and the live unit rooms the sweep walks — never an
+// archived one (it takes no message) or a room of another kind.
 func TestTheUnitRoomReadsRunAgainstTheRealSchema(t *testing.T) {
 	t.Parallel()
 	db, estate := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)

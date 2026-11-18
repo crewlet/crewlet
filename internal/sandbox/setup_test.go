@@ -9,13 +9,9 @@ import (
 
 // A SETUP FAILURE SAYS WHICH OF THREE THINGS FAILED: a file the box would not
 // take, a command that exited non-zero, or a command that reported no exit
-// status.
-//
-// One sentence covered all three, so a direct box refusing a file at a system
-// path read "command #0 failed (exit 0)" — no step has a command #0, and exit
-// 0 is success — and a command with no exit status read "failed (exit 0)" as
-// well. Each message here is the one an operator reads in
-// sandbox_setup_failed and an agent reads back from its failed launch.
+// status, never "command #0 failed (exit 0)". Each message here is the one an
+// operator reads in sandbox_setup_failed and an agent reads back from its
+// failed launch.
 func TestASetupFailureSaysWhatFailed(t *testing.T) {
 	t.Parallel()
 
@@ -65,11 +61,10 @@ func TestASetupFailureSaysWhatFailed(t *testing.T) {
 		}
 	})
 
-	// A SIGNAL IS A STATUS TOO, read as a shell reads one. The process a
-	// direct box starts is the command's own shell, and when a signal ends
-	// that shell itself — an OOM kill, a command that execs into a program
-	// that dies of one — the host reported -1, which read "failed (exit -1)":
-	// a status no process exits with, and nothing naming the signal.
+	// A SIGNAL IS A STATUS TOO, read as a shell reads one (128 plus its
+	// number, and named), never -1: a direct box's process is the command's
+	// own shell, which a signal can end itself (an OOM kill, an exec'd
+	// program dying of one).
 	t.Run("a command whose own shell a signal ends", func(t *testing.T) {
 		t.Parallel()
 		box := mustCreate(t, newDirect(t), Spec{Placement: Direct})

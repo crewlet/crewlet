@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-// THE MERGING GUIDANCE NEEDS THE MERGE TOOL: it is rendered, as its own
-// section, for a seat that holds code_merge_change and for no other, so no
-// prompt tells a seat how a merge waits when it can merge nothing.
+// THE MERGING GUIDANCE NEEDS THE MERGE TOOL: it renders, as its own section,
+// only for a seat holding code_merge_change, so no seat that can merge nothing
+// is told how a merge waits.
 //
 // Mutation: the gate dropped (rendered unconditionally) → red.
 func TestTheCodeMergingGuidanceNeedsTheMergeTool(t *testing.T) {

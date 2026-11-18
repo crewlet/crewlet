@@ -17,18 +17,12 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A SUBTREE GESTURE THAT STOPPED PART OF THE WAY THROUGH IS REPORTED AS WHAT
-// IT IS, AND FINISHED FROM THE TOOL.
-//
-// Both answered the root's receipt whatever the walk did — "restored: true"
-// over descendants still in the trash — or, when the walk returned an error,
-// the default failure's "The change was NOT made" about a root that had moved.
-// And the restore could not be finished from the tool at all: the root was
-// back, so the next call was refused as "not in the trash" before the tracker
-// was asked, and everything that went with it stayed there.
+// A subtree gesture that stopped part way is reported as what it is (neither a
+// bare receipt nor "NOT made" about a root that moved), and finished from the
+// tool: the next restore of a root already back reaches the tracker.
 
-// trashSpy is the trash's write side: it records what it was asked to take
-// out of circulation or bring back, and answers what a case sets.
+// trashSpy is the trash's write side: it records what it was asked to remove
+// or restore, and answers what a case sets.
 type trashSpy struct {
 	removed, restored []string
 	answers           []error
@@ -69,9 +63,9 @@ func trashReceipt() worklet.WriteResult {
 	}}
 }
 
-// trashSurface is the operator catalogue — the one these tools are served on —
-// decided by a chart in which the caller leads the item's project, so every
-// case here is about what the tool does once it is allowed.
+// trashSurface is the operator catalogue these tools are served on, decided by
+// a chart in which the caller leads the item's project, so every case is about
+// what the tool does once allowed.
 func trashSurface(t *testing.T, spy *trashSpy) *tools.Registry {
 	t.Helper()
 	trk := newFakeTracker()
@@ -90,20 +84,13 @@ func trashSurface(t *testing.T, spy *trashSpy) *tools.Registry {
 	return reg
 }
 
-// A ROW-DECIDED TOOL ASKS ONCE IT HAS READ THE ROW.
-//
-// Taking an item out of circulation is its PROJECT's lead's, and which project
-// an item is filed under is a stored row rather than an argument — so the
-// registration gate cannot form the object and these tools ask themselves.
-// Decided at the gate on the empty object it had, every caller but an admin
-// was refused as naming no project, and a project's own lead could not clear
-// their own board.
-//
-// Both halves, because the gate stepping aside is only safe if the tool then
-// asks: the lead is admitted, and a colleague holding Worklet but leading
-// nothing — and who did not file the item — is refused with the authority's
-// own answer. Delete the
-// ask from either tool and the second half goes red.
+// A row-decided tool asks once it has read the row: an item's project is a
+// stored row, not an argument, so the registration gate cannot form the object
+// (on its empty object a project's own lead was refused). Both halves, since
+// the gate stepping aside is safe only if the tool asks: the lead is admitted,
+// and a colleague holding Worklet who leads nothing and did not file the item
+// is refused with the authority's own answer. Delete either tool's ask and the
+// second half goes red.
 func TestARowDecidedToolAsksAfterItReads(t *testing.T) {
 	t.Parallel()
 	lead := iam.WithPrincipal(context.Background(), iam.Principal{
@@ -181,8 +168,7 @@ func TestAStoppedRestoreIsReportedAndFinishedFromTheTool(t *testing.T) {
 	}}
 	reg := trashSurface(t, spy)
 
-	// ENG-1 IS LIVE in the fake — the state a stopped restore leaves its
-	// root in, and the one the tool used to refuse before asking.
+	// ENG-1 is live in the fake: the state a stopped restore leaves its root in.
 	got := callNoTurn(t, reg, worklet.RestoreWorkItemTool, map[string]any{"item": "ENG-1"})
 	if got.Failed {
 		t.Fatalf("a restore whose root landed was reported as a failure: %s", got.Output)
@@ -203,7 +189,7 @@ func TestAStoppedRestoreIsReportedAndFinishedFromTheTool(t *testing.T) {
 		t.Errorf("the answer says the change was not made: %s", got.Output)
 	}
 
-	// AND THE NEXT CALL REACHES THE TRACKER, on a root that is back.
+	// The next call reaches the tracker, on a root that is back.
 	if got := callNoTurn(t, reg, worklet.RestoreWorkItemTool,
 		map[string]any{"item": "ENG-1"}); got.Failed {
 		t.Fatalf("finishing the restore from the tool failed: %s", got.Output)
@@ -235,9 +221,8 @@ func TestAStoppedRemovalIsReportedWithWhatFinishesIt(t *testing.T) {
 	}{
 		"unknown": {fmt.Errorf("stopped: %w", worklet.ErrStepUnresolved),
 			"remove_work_item on ENG-1 again, with the same arguments"},
-		// A STEP THIS NODE CANNOT VOUCH FOR is not finished by the same
-		// operation, which stops at the same task here every time — only
-		// a new one decides it afresh.
+		// A step this node cannot vouch for stops the same operation every
+		// time; only a new one decides it afresh.
 		"unvouched": {fmt.Errorf("stopped: %w", worklet.ErrStepUnvouched),
 			"WITHOUT an op_id"},
 	} {

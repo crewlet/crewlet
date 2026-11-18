@@ -21,10 +21,9 @@ import (
 // fan-out of what each committed batch moved, the purge's dependents, and the
 // trash reaper's and the object store's views of it.
 //
-// EVERY DATA NODE RUNS IT, whatever its company keeps and whether or not it has
-// one: the register runs every domain or none ([register]), and an artifact is
-// not a native half a company opts into. A node without `data` holds no estate
-// and reaches artifacts through a data node (internal/estate).
+// EVERY DATA NODE RUNS IT, with or without a company: the register runs every
+// domain or none ([register]), and artifacts are no native half a company opts
+// into. A node without `data` reaches them through a data node (internal/estate).
 
 // openArtifacts builds the artifacts estate's reader and writer over its
 // running domain. A node whose artifacts domain did not come up is a boot
@@ -52,14 +51,13 @@ func (c *core) openArtifacts(e *Engine, sl *stateLog) error {
 	return nil
 }
 
-// ArtifactsEstate is the artifacts estate as every surface reaches it: the
-// tools, the serving origin and the API, on every node, through the estate
-// router (ADR-0025), and false on an engine built with no router.
+// ArtifactsEstate is the artifacts estate as every surface (tools, serving
+// origin, API) reaches it on every node, through the estate router (ADR-0025),
+// and false on an engine built with no router.
 //
 // THE ROUTER'S ON EVERY NODE, for [OperatorWork]'s reason: a data node whose
-// copy is out of service answers from a peer's copy, and a node without `data`
-// reaches a data node's. Its method set is the domain reader's and writer's,
-// so a surface cannot tell which node answered.
+// copy is out of service, or a node without `data`, answers from a peer's,
+// and a surface cannot tell which node answered.
 func ArtifactsEstate(e *Engine) (estate.Artifacts, bool) {
 	if e.router == nil {
 		return estate.Artifacts{}, false
@@ -68,8 +66,7 @@ func ArtifactsEstate(e *Engine) (estate.Artifacts, bool) {
 }
 
 // ArtifactsReader is this node's artifacts read side, or nil on an engine with
-// no core runtime: a node without `data`, which reads artifacts through a data
-// node ([ArtifactsEstate]).
+// no core runtime (a node without `data`: see [ArtifactsEstate]).
 func (e *Engine) ArtifactsReader() *artifactsdomain.Reader {
 	if c := e.core.Load(); c != nil {
 		return c.artifactsReader
@@ -87,15 +84,11 @@ func (e *Engine) ArtifactsWriter() *artifactsdomain.Writer {
 }
 
 // objectEstatesFor is every estate the object store's passes read on a node
-// running n: the native half's, the artifacts log's over artifacts, the
-// assistant log's over assistant and the executor log's over executor, every
-// one of which every data node runs, whatever surfaces the company keeps
-// elsewhere. The collector is started with
-// the native half ([Engine.startNativeCollector]), and every declared table
-// must have its estate ([collect.Sources]), so a reader missing here is a
-// collector [collect.Sources] refuses to build rather than one that reads that
-// domain's objects as nobody's — never a collector over the estates that
-// happen to be present.
+// running n: the native half's and the artifacts, assistant and executor logs',
+// which every data node runs. The collector starts with the native half
+// ([Engine.startNativeCollector]), and every declared table must have its
+// estate ([collect.Sources]), so a reader missing here makes the collector
+// refuse to build rather than read that domain's objects as nobody's.
 func objectEstatesFor(n *native, artifacts *artifactsdomain.Reader,
 	assistant *assistantdomain.Reader, executor *executordomain.Reader) []collect.Estate {
 	estates := n.objectEstates()
@@ -111,12 +104,10 @@ func objectEstatesFor(n *native, artifacts *artifactsdomain.Reader,
 	return estates
 }
 
-// artifactDependents is every domain that keeps state per artifact, which a
-// purge removes before the artifact's own record ([artifactsdomain.Dependent]),
-// in the order listed: the datastore, the one domain beside the artifacts log
-// that keeps state per artifact. Read at each purge, from the core runtime the
-// artifacts writer itself belongs to, so a node whose artifacts writer is up
-// has its datastore writer up too ([core.openArtifactData]).
+// artifactDependents is every domain keeping state per artifact (today the
+// datastore), which a purge removes first, in order ([artifactsdomain.Dependent]).
+// Read at each purge from the core runtime the artifacts writer belongs to, so
+// its datastore writer is up too ([core.openArtifactData]).
 func (e *Engine) artifactDependents() []artifactsdomain.Dependent {
 	c := e.core.Load()
 	if c == nil || c.artifactDataWriter == nil {
@@ -147,11 +138,9 @@ func (e *Engine) artifactSeatKind(ctx context.Context, handle string) (iam.Actor
 // moveFanout is every listener one domain's [Engine.OnArtifactsMoved] or
 // [Engine.OnArtifactDataMoved] registered.
 //
-// SEVERAL LISTENERS AND EACH ITS OWN STOP, unlike the single-slot setters
-// beside it: the serving origin's authorization cache and the socket hub both
-// hear every batch, are built by different halves of the process, and stop at
-// different times. ONE TYPE FOR BOTH LOGS, so the registration, the stop and
-// the copy each listener is handed are written once.
+// SEVERAL LISTENERS, EACH ITS OWN STOP, unlike single-slot setters: the serving
+// origin's authorization cache and the socket hub are built by different halves
+// of the process and stop at different times. One type serves both logs.
 type moveFanout[M any] struct {
 	mu        sync.Mutex
 	next      uint64
@@ -178,9 +167,8 @@ func (f *moveFanout[M]) add(fn func([]M)) (stop func()) {
 	}
 }
 
-// tell hands every listener, in the order they registered, its own copy of
-// the batch, so one listener that keeps or reorders it cannot change what the
-// next one is told.
+// tell hands every listener, in registration order, its own copy of the batch,
+// so a listener that keeps or reorders it cannot change what the next is told.
 func (f *moveFanout[M]) tell(moved []M) {
 	if len(moved) == 0 {
 		return
@@ -201,9 +189,8 @@ func (f *moveFanout[M]) tell(moved []M) {
 	}
 }
 
-// listening reports whether anything is registered to hear this domain's
-// batches: what the live relay's follower asks before it follows a peer
-// ([Engine.liveListening]).
+// listening reports whether anything hears this domain's batches, asked by the
+// live relay's follower before it follows a peer ([Engine.liveListening]).
 func (f *moveFanout[M]) listening() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -214,45 +201,38 @@ func (f *moveFanout[M]) listening() bool {
 // batch moved artifacts (a new version, a narrowing, a trash, a purge), and
 // answers the function that unregisters it.
 //
-// fn IS CALLED ON THE APPLY LOOP'S OWN GOROUTINE, or the live relay
-// follower's, with the next batch waiting behind it, so it must not block:
-// signal and do the work elsewhere. EVERY DATA NODE APPLIES EVERY RECORD, and
-// every node that serves the artifact origin or a socket is a data node, so
-// each hears every movement from its own applier while its copy serves, and a
-// sound peer's, relayed, while it does not (liverelay.go). A movement of kind
-// [artifactsdomain.MoveReset] names no artifact: everything this node decided
-// from its artifact rows may have moved, which is also what every switch of
-// the relay's source is ([Engine.liveGap]).
+// fn RUNS ON THE APPLY LOOP'S GOROUTINE, or the live relay follower's, with the
+// next batch waiting, so it must not block. Every serving node is a data node,
+// hearing its own applier while its copy serves and a sound peer's, relayed,
+// while not (liverelay.go). A [artifactsdomain.MoveReset] names no artifact:
+// anything decided from artifact rows may have moved, as at every switch of the
+// relay's source ([Engine.liveGap]).
 func (e *Engine) OnArtifactsMoved(fn func([]artifactsdomain.Moved)) (stop func()) {
 	return e.artifactsListeners.add(fn)
 }
 
-// artifactsMoved is what the artifacts applier calls after a committed batch:
-// announced to this node's listeners and kept for its relay followers, one
-// source at a time ([Engine.announce]).
+// artifactsMoved is what the artifacts applier calls after a committed batch,
+// announced to listeners and relay followers ([Engine.announce]).
 func (e *Engine) artifactsMoved(moved []artifactsdomain.Moved) {
 	e.announce(liveBatch{Artifacts: moved})
 }
 
 // OnArtifactDataMoved registers what this node does when a committed datastore
-// batch moved documents, and answers the function that unregisters it: the
-// socket hub, which shapes each delta per reader by the collection's read rule
-// and the row's creator the movement carries.
+// batch moved documents (the socket hub, shaping each delta per reader from the
+// read rule and the row's creator the movement carries), and answers the
+// function that unregisters it.
 //
-// fn IS CALLED ON THE APPLY LOOP'S OWN GOROUTINE, or the live relay
-// follower's, and must not block, for [Engine.OnArtifactsMoved]'s reason, and
-// it hears the same one source at a time. A movement with
-// [artifactdata.Moved.Reset] names no store: everything this node decided from
-// datastore rows may have moved.
+// fn must not block, as for [Engine.OnArtifactsMoved], and hears one source at
+// a time. A movement with [artifactdata.Moved.Reset] names no store: anything
+// decided from datastore rows may have moved.
 func (e *Engine) OnArtifactDataMoved(fn func([]artifactdata.Moved)) (stop func()) {
 	return e.artifactDataListeners.add(fn)
 }
 
 // artifactDataMoved is what the datastore applier calls after a committed
-// batch: announced like [Engine.artifactsMoved]. It also samples the company's
-// datastore footprint onto this node's recorder, from the rows the batch just
-// committed, whichever source its listeners hear: the footprint is this node's
-// own rows, and its gauge says so.
+// batch, announced like [Engine.artifactsMoved]. It also samples the footprint
+// from this node's own rows, whichever source its listeners hear; its gauge
+// says so.
 func (e *Engine) artifactDataMoved(moved []artifactdata.Moved) {
 	e.announce(liveBatch{ArtifactData: moved})
 	e.sampleDataFootprint()
@@ -285,8 +265,7 @@ func (c *core) openArtifactData(e *Engine, sl *stateLog) error {
 		Publisher: running.publisher, DB: sl.estate().Reader(),
 		SeatExists: e.artifactSeatExists,
 	}
-	// A NIL RECORDER STAYS A NIL INTERFACE: one wrapped in it would be a
-	// recorder the writer calls into.
+	// A NIL RECORDER STAYS A NIL INTERFACE, never a typed nil the writer calls.
 	if e.metrics != nil {
 		deps.Metrics = e.metrics
 	}
@@ -299,9 +278,9 @@ func (c *core) openArtifactData(e *Engine, sl *stateLog) error {
 	return nil
 }
 
-// runDataFootprint samples the company's datastore footprint each time a
-// committed batch signals, until ctx ends. ONE GOROUTINE, owned by the core's
-// run context, so a sample never runs on the apply loop and never two at once.
+// runDataFootprint samples the datastore footprint each time a committed batch
+// signals, until ctx ends: ONE GOROUTINE, owned by the core's run context, so
+// no sample runs on the apply loop and never two at once.
 func (e *Engine) runDataFootprint(ctx context.Context) {
 	for {
 		select {
@@ -319,9 +298,9 @@ func (e *Engine) runDataFootprint(ctx context.Context) {
 	}
 }
 
-// ArtifactDataEstate is the datastore as every surface reaches it: the tools
-// and the API, on every node, through the estate router (ADR-0025), and false
-// on an engine built with no router.
+// ArtifactDataEstate is the datastore as the tools and the API reach it on
+// every node, through the estate router (ADR-0025), and false on an engine
+// built with no router.
 func ArtifactDataEstate(e *Engine) (estate.ArtifactData, bool) {
 	if e.router == nil {
 		return estate.ArtifactData{}, false

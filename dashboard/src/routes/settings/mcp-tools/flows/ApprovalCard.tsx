@@ -39,13 +39,8 @@ export function heldCallFrom(
   };
 }
 
-export function ApprovalCard({
-  approval,
-  server,
-  tool,
-  seatName,
-  onAnswered,
-}: {
+/** One held call, for its decision row. */
+interface ApprovalProps {
   approval: McpApproval;
   server: Pick<McpMemberServerStatus, "title">;
   /** The tool's row on the server's detail, for its risk; null where it is not listed now. */
@@ -53,8 +48,21 @@ export function ApprovalCard({
   /** A seat's name by its handle, for who answered. */
   seatName: (handle: string) => string;
   onAnswered: () => void;
-}) {
+}
+
+/** One held call as its decision row, answerable in place. */
+export function ApprovalRow({ approval, server, tool, seatName, onAnswered }: ApprovalProps) {
   const now = useNow();
+  return (
+    <HeldCallRow
+      call={heldCallFrom(approval, server, tool, seatName)}
+      now={now}
+      onAnswered={onAnswered}
+    />
+  );
+}
+
+export function ApprovalCard({ approval, server, tool, seatName, onAnswered }: ApprovalProps) {
   const [answered, setAnswered] = useState(approval.status === "answered");
   return (
     <Card padding="none">
@@ -62,9 +70,11 @@ export function ApprovalCard({
         <Card.Title>{answered ? "Approval answered" : "Waiting for your approval"}</Card.Title>
       </Card.Header>
       <ul className="decision-list">
-        <HeldCallRow
-          call={heldCallFrom(approval, server, tool, seatName)}
-          now={now}
+        <ApprovalRow
+          approval={approval}
+          server={server}
+          tool={tool}
+          seatName={seatName}
           onAnswered={() => {
             setAnswered(true);
             onAnswered();

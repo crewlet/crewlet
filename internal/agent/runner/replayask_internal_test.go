@@ -7,15 +7,12 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/structured"
 )
 
-// A SUBMISSION MADE BEFORE A PERSON'S ANSWER IS NOT THE CARRIED-ON ROUND'S. A
-// run carried on by a person's answer keeps the calls it made before its
-// question (ADR-0068), and a `submit_work` among them was made without the
-// answer: replayed, the turn would report it for the work the run did after,
-// or for a run that never submitted again. The cut is the place the row
-// recorded when the continuing job opened ([Resume.Answered]), so it holds
-// where the ask itself is gone from the bounded log, and where the asking job
-// submitted after its own question as well as before it. A round no answer
-// carried on keeps every submission, after a refused ask too.
+// A SUBMISSION MADE BEFORE A PERSON'S ANSWER IS NOT THE CARRIED-ON ROUND'S: the
+// round keeps its earlier calls (ADR-0068), and replaying that `submit_work`
+// would report it for later work. The cut is where the row recorded the
+// continuing job opening ([Resume.Answered]), so it holds when the bounded log
+// lost the ask and when the asker submitted after its question. A round no
+// answer carried on keeps every submission, after a refused ask too.
 //
 // Mutation: replay every submission whatever the cut, or cut after the round's
 // last ask instead, and the cases naming the asking job's submissions report
@@ -63,7 +60,7 @@ func TestASubmissionBeforeTheAnswerIsNotReplayed(t *testing.T) {
 			if replayed != (tc.want != "") || got.Summary != tc.want {
 				t.Fatalf("replayed %q (submitted %v), want %q", got.Summary, replayed, tc.want)
 			}
-			// AND A LOST JOB'S ROUND READS AS SUBMITTED BY THE SAME CALLS
+			// A lost job's round reads as submitted by the same calls
 			// ([submitted]), or a loss after the answer would close the
 			// round on a submission the replay then drops.
 			if submitted(since) != (tc.want != "") {

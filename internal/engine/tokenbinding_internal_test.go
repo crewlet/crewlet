@@ -48,12 +48,9 @@ func boundMachine() iamdomain.Sighting {
 
 // ONLY AN ACTIVE MACHINE BINDS A TIER A TOKEN.
 //
-// `token:<id>` is a machine's name. A PERSON row under it — enrolled before the
-// login grammar was held to its kind, or by a build without that rule — is the
-// finding this guards: honouring it made the deployment's own credential act
-// as whoever had chosen that name. And a suspended or retired machine binds
-// nothing, because a binding is a way of acting and only an active principal
-// may act.
+// `token:<id>` is a machine's name: honouring a PERSON row under it lets
+// whoever chose that name act as the deployment's own credential. A suspended
+// or retired machine binds nothing, because only an active principal may act.
 func TestOnlyAnActiveMachineBindsATierAToken(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -111,14 +108,11 @@ func TestOnlyAnActiveMachineBindsATierAToken(t *testing.T) {
 
 // A BINDING THIS NODE CANNOT VOUCH FOR IS UNKNOWN — and only a BINDING.
 //
-// Unknown is 503 and never "not bound": answered as the bare credential, one
-// actor would author under a seat on one node and under the token's own name
-// on the next. But it is only the WIDENING direction a stale node refuses: a
-// bound row past the stall grace may be a binding the fleet has withdrawn, so
-// honouring it is acting as a seat the token no longer holds — while an
-// unbound answer from the same node is the narrower surface, and the one an
-// operator's break-glass token (normally bound to nothing) must still get on a
-// node whose identity applier is what they came to fix.
+// Unknown is 503, never "not bound", or one actor would author under a seat on
+// one node and as the bare token on the next. A stale node refuses only the
+// WIDENING direction (a bound row may be a withdrawn binding); an unbound
+// answer is narrower, and a break-glass token (normally bound to nothing) must
+// still get it on a node whose identity applier is what it came to fix.
 func TestABindingThisNodeCannotVouchForIsUnknown(t *testing.T) {
 	t.Parallel()
 	past := statelog.StallGrace + time.Second
@@ -158,9 +152,8 @@ func TestABindingThisNodeCannotVouchForIsUnknown(t *testing.T) {
 		})
 	}
 
-	// AND THE NARROWING DIRECTION IS SERVED from the same stale node: no
-	// row, a person's row, or a suspended machine all answer UNBOUND rather
-	// than unknown, so a break-glass token keeps working.
+	// AND THE NARROWING DIRECTION IS SERVED from the same stale node: no row or
+	// a person's row answers UNBOUND, not unknown, so break-glass keeps working.
 	stale := fakeBindings{lag: past, deferred: true,
 		rows: map[string]iamdomain.Sighting{"token:person": func() iamdomain.Sighting {
 			s := boundMachine()
@@ -178,9 +171,8 @@ func TestABindingThisNodeCannotVouchForIsUnknown(t *testing.T) {
 
 // AN ENGINE WITH NO IDENTITY DIRECTORY CANNOT SAY, and says so.
 //
-// It has no identity rows at all — a nil engine, or one with no core runtime
-// — and that is not the same fact as nobody being bound, so the answer is an
-// error, which the guard turns into 503, and never the zero row.
+// Having no identity rows (a nil engine, or one with no core runtime) is not
+// nobody being bound, so the answer is an error, which the guard makes a 503.
 func TestAnEngineWithNoDirectoryCannotSay(t *testing.T) {
 	t.Parallel()
 	var e *Engine

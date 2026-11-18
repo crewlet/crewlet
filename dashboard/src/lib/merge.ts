@@ -24,21 +24,18 @@
  * decides. Treated as a conflict, the person places it; merged, the browser
  * would pick an order and present it as what somebody wrote.
  *
- * OVER THE DASHBOARD'S ONE LINE DIFF (`lib/lineDiff.ts`), the comparison the
+ * OVER THE DESIGN SYSTEM'S LINE DIFF (`compareLines`), the comparison the
  * editor's view of the other save is drawn from, so a merge works on the very
  * edits that view shows. Where that diff does not compare a side with the
  * ancestor (what changed spans more lines than it reads, or more lines were
  * removed and added than it marks), that side's change is the whole document:
  * it conflicts as a whole with any change the other side made, which is honest
- * about a comparison the browser did not make. The design system's own
- * `diffLines` stopped comparing at 2,000 lines a side, so two edits far apart
- * in a longer page conflicted as a whole where they merge cleanly here.
+ * about a comparison the browser did not make.
  *
  * PURE, and in `lib/` for the reason the rest of this directory gives.
  */
 
-import type { MergeClash } from "@crewlethq/ui";
-import { compareLines, linesOf } from "./lineDiff.ts";
+import { compareLines, splitLines, type MergeClash } from "@crewlethq/ui";
 
 /** One side's change to the ancestor: replace `[start, end)` with `lines`. */
 interface Hunk {
@@ -80,11 +77,11 @@ export type Resolution = "mine" | "theirs" | "both";
 function hunks(base: string, edited: string, side: Hunk["side"]): Hunk[] {
   const compared = compareLines(base, edited, 0);
   if (compared.kind !== "compared") {
-    return [{ start: 0, end: linesOf(base).length, lines: linesOf(edited), side }];
+    return [{ start: 0, end: splitLines(base).length, lines: splitLines(edited), side }];
   }
   const out: Hunk[] = [];
   let at = 0; // lines of the ancestor before the next run
-  for (const run of compared.hunks) {
+  for (const run of compared.sections) {
     at += run.skipped;
     const hunk: Hunk = { start: at, end: at, lines: [], side };
     for (const line of run.lines) {
@@ -135,7 +132,7 @@ function over(ancestor: string[], start: number, end: number, made: Hunk[]): str
  * The result is a sequence of clean passages and conflicts, in document order.
  */
 export function merge3(base: string, mine: string, theirs: string): Merge {
-  const ancestor = linesOf(base);
+  const ancestor = splitLines(base);
   const all = [...hunks(base, mine, "mine"), ...hunks(base, theirs, "theirs")].sort(
     (a, b) => a.start - b.start || a.end - b.end,
   );

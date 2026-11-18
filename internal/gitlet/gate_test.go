@@ -68,11 +68,10 @@ func (n *node) gatesOf(name string) []gitlet.RuleGate {
 	return detail.Repo.Gates
 }
 
-// A GATE RIDES ITS SETTINGS RECORD: a create writes a rule's merge gate, a
-// settings change replaces it — a field changed, the gate removed — and a
-// restore carries it back as the declaration names it then; a read of the
-// repository's detail asking for its gates answers it, and a node that
-// applies the same records from zero holds byte-identical rows.
+// A GATE RIDES ITS SETTINGS RECORD: a create writes it, a settings change
+// replaces or removes it, a restore carries it back as declared then; a
+// detail read asking for gates answers it, and a node replaying the records
+// from zero holds byte-identical rows.
 //
 // Mutation: drop the gate column from insertProtections' write — the created
 // repository's rule answers no gate, red.
@@ -115,17 +114,14 @@ func TestAGateRidesItsSettingsRecord(t *testing.T) {
 	}
 }
 
-// THE GATES ARE ANSWERED ONLY TO A READ THAT ASKS FOR THEM, and never on a
-// repository's row. Every read answering the row — the resolution of its name
-// every git request is admitted by, a page of the snapshot every Gitlet node
-// syncs from and keeps in its state file, a resolution of its refs, a listing,
-// its detail — answers each rule as a push is judged by it, with no gate
-// (gitlet.PushRule, which has none to leave out): a repository's gates are up to
-// half a mebibyte of JSON that none of them reads. A read of its detail that
-// asks for them — one repository's, or a refs listing's first page, which
-// carries the detail — answers every gate beside its rule's pattern; one that
-// does not answers none. Every other kind refuses the ask, naming it: a refs
-// listing's later pages, which carry no detail, among them.
+// THE GATES ARE ANSWERED ONLY TO A READ THAT ASKS FOR THEM, never on a
+// repository's row: every read answering the row (a name's resolution, a
+// snapshot page, a refs resolution, a listing, a detail) answers each rule as
+// gitlet.PushRule, sparing them up to half a mebibyte of JSON. A detail read
+// that asks (one repository's, or a refs listing's first page) answers every
+// gate beside its rule's pattern, one that does not answers none, and every
+// other kind refuses the ask, naming it, a refs listing's later pages among
+// them.
 //
 // Mutations: answer the gates on every detail (Reader.repo's ask dropped) — a
 // resolution answers them, red; drop gates from the checks_due listing's
@@ -200,13 +196,10 @@ func TestOnlyAReadThatAsksIsAnsweredTheGates(t *testing.T) {
 	}
 }
 
-// A LIFECYCLE CHANGE KEEPS EVERY GATE IT DOES NOT TOUCH. A tool-made
-// repository's settings change, archive, unarchive and protect request each
-// write its settings WHOLE, formed in the decide from its rules as the
-// snapshot holds them — read whole beside the repository's row, which carries
-// each rule as a push is judged by it and no gate — so a description changed,
-// the repository archived and brought back, or another pattern protected
-// leaves main's gate as it was.
+// A LIFECYCLE CHANGE KEEPS EVERY GATE IT DOES NOT TOUCH. A settings change,
+// archive, unarchive and protect request each write the settings whole,
+// formed in the decide from the rules the snapshot reads whole beside the row
+// (which carries no gate), so each leaves main's gate as it was.
 //
 // Mutation: form the decide's rules from the row's push rules, each with no
 // gate — the first change drops main's gate, red.
@@ -258,21 +251,13 @@ func (n *node) sourcesOf(name string) map[string]gitlet.RuleSource {
 	return out
 }
 
-// A RULE NAMES WHO LAST CHANGED IT, AND WHEN. A person's protect request sets
-// main's rule under their seat and an agent's sets release/*'s under its
-// handle, each at its record's instant; a settings change that edits only the
-// description, and another pattern's protection, carry every rule they do not
-// change with the source it had; a gate added to main moves main's source to
-// that record and leaves release/*'s. A declared repository's rules are the
-// configuration's, naming nobody, and a re-activation that changes only its
-// description keeps them so. A node that replays the same records from zero
-// holds the same sources.
-//
-// EVERY RECORD IS STAMPED BY A CLOCK THE CASE HOLDS, on both nodes alike: a
-// minute past harnessAt for each place in the log — the broker's instant the
-// drain hands the applier — so a rule's instant is its record's, and the
-// order of two is the order of their records in the log, read with no wall
-// clock between them.
+// A RULE NAMES WHO LAST CHANGED IT, AND WHEN: a protect request sources its
+// rule to the asker (a person's seat, an agent's handle) at its record's
+// instant; a record carries every rule it does not change with its source,
+// and gating main moves only main's; a declared rule names nobody, through a
+// re-activation too. A node replaying the records holds the same sources.
+// Both nodes stamp each record a minute past harnessAt per log place, so two
+// rules' order is their records' log order, with no wall clock between.
 //
 // Mutation: stamp every rule a record writes with the record's own source
 // (rulesSourced's comparison dropped) — the release protection moves main's
@@ -348,12 +333,10 @@ func TestARuleNamesWhoLastChangedItAndWhen(t *testing.T) {
 	}
 }
 
-// NO ROW OF A REPOSITORY CARRIES A MERGE GATE, by its type: the row every git
-// request's admission and every resolution of a ref reads (gitlet.RepoRef), each
-// page of the snapshot a Gitlet node syncs by and its cache's state file keeps
-// (gitlet.RepoSnapshot), and each rule a push is judged by (gitlet.PushRule) reach
-// no gitlet.MergeGate anywhere — so no read of them decodes, ships or keeps one,
-// and no consumer of them can take a gate nobody read for a rule with none.
+// NO ROW OF A REPOSITORY CARRIES A MERGE GATE, by its type: gitlet.RepoRef,
+// gitlet.RepoSnapshot, gitlet.RefAnswer and gitlet.PushRule reach no
+// gitlet.MergeGate, so no read of them decodes, ships or keeps one, and no
+// consumer can take a gate nobody read for a rule with none.
 //
 // Mutation: type RepoRef.Protections as []Protection — the row reaches a
 // merge gate, red.
@@ -420,11 +403,9 @@ func TestATagRuleTakesNoGate(t *testing.T) {
 	}
 }
 
-// NO_CODE_CHANGE IS NO CLASS A GATE EXEMPTS BY: it is a revision's class,
-// never a path's, and an approval already carries across a revision that
-// changed nothing — so it is refused in approvals_unless and in a human
-// path's unless, each at the place it is named, and the two path classes are
-// taken in both.
+// NO_CODE_CHANGE IS NO CLASS A GATE EXEMPTS BY: it is a revision's class, not
+// a path's, so it is refused in approvals_unless and a human path's unless,
+// each where it is named, while both path classes are taken in both.
 func TestNoCodeChangeIsNoUnlessClass(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -451,12 +432,11 @@ func TestNoCodeChangeIsNoUnlessClass(t *testing.T) {
 	}
 }
 
-// A GATE IS CANONICAL: CanonicalGate forms its one order — every list sorted,
-// each human path's classes too — from any order, leaving what it was given as
-// it was, so two declarations of one gate in two orders are one gate and
-// encode to the same bytes; and a gate in any other order, or naming a value
-// twice, is refused at the first place it breaks the order, since one
-// declaration must form one record on every node.
+// A GATE IS CANONICAL: CanonicalGate forms its one order from any order,
+// leaving its input as it was, so one gate declared in two orders encodes to
+// the same bytes; a gate out of order, or naming a value twice, is refused
+// where it first breaks the order, since one declaration must form one record
+// on every node.
 func TestAGateIsCanonical(t *testing.T) {
 	t.Parallel()
 	want := aGate()
@@ -518,11 +498,10 @@ func TestAGateIsCanonical(t *testing.T) {
 	}
 }
 
-// A GATE IS HELD TO ITS FORM: every enum one this build knows — none left
-// unset, since a record carries every field its writer resolved — a landing
-// inside its bounds, every glob gitref reads, every check a name, each list
-// inside its bound, and the whole within MaxGateBytes of JSON — each refused
-// at the field it is about.
+// A GATE IS HELD TO ITS FORM, each breach refused at its field: every enum
+// known and none unset (a record carries every field resolved), a landing in
+// bounds, every glob one gitref reads, every check a name, each list in its
+// bound, and the whole within MaxGateBytes of JSON.
 func TestAGateIsHeldToItsForm(t *testing.T) {
 	t.Parallel()
 	many := func(n int, item func(int) string) []string {
@@ -592,12 +571,10 @@ func TestAGateIsHeldToItsForm(t *testing.T) {
 	}
 }
 
-// A GATE REQUIRES EXACTLY THE NAMES A CHECKS FILE GIVES: one rule names a
-// check wherever a name is written (config.ValidCodeCheckName) — a check's own
-// in a repository's .crewlet/checks.yaml and the checks a protection rule
-// requires — so a rule can never require a check no repository can define,
-// which would keep its gate shut for good, and every check a file defines a
-// rule can require.
+// A GATE REQUIRES EXACTLY THE NAMES A CHECKS FILE GIVES: both are held to
+// config.ValidCodeCheckName, so no rule requires a check no repository can
+// define, which would shut its gate for good, and every defined check can be
+// required.
 //
 // Mutation: hold the checks file to a rule of its own that takes an upper-case
 // letter, or the gate to one that takes a `~`, and the names they part on go

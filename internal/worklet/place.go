@@ -8,113 +8,74 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A board drag: one card dropped beside another, in its own lane or in the
-// next one — `place_work_item` ([PlaceWorkItemTool]). Never a move to another
-// project, which re-keys what it carries and is [Writer.MoveTaskToProject].
+// A board drag ([PlaceWorkItemTool]): one card dropped beside another, in its
+// own lane or the next. A move to another project is [Writer.MoveTaskToProject].
 //
-// # Two objects, and therefore two records when the lane changes
-//
-// The ORDER is the project's (see [Writer.MoveTasks] for why it has a subject
-// of its own) and the LANE is the task's status — a field of the task, whose
-// change is history, wakes the people on the task, moves its closure and is
-// what a caller's `if_match` is about. One record has one subject and can be
-// arbitrated on only one of them: carried on the order, a status change would
-// skip the task's own arbitration, history and wake; carried on the task, a
-// placement would stop contending with the drag beside it in the same project,
-// and a key minted from neighbours nobody arbitrated is a guess. So a drop
-// that changes lanes is a SEQUENCE of two appends, stated the way
-// sequence.go states the others:
-//
-//	A on the task (the status, conditioned on if_match) → A on the order
-//	(the placement, conditioned on the version that status wrote).
-//
-// ORDER: the lane first, because it is the half the caller's precondition
-// guards — a stale drag is refused before anything lands. CLAIM: none; each
-// append is arbitrated on its own subject, and two people dragging one card
-// contend at the task and then at the order like any two writers. CRASH
-// RESIDUE: a card in its new lane at the place its old key puts it — a valid
-// board somebody can see and drag again, not a half-state anything reads as
-// broken. REPAIRER: nobody, for that reason; and the call REPORTS the residue
-// ([PlaceResult.Unplaced]) rather than failing, because the lane did change
-// and a caller told "failed" about it would drag it back.
-//
-// # A retry is gated on the OPERATION, never on the state it produced
-//
-// Both steps are named ("lane", "order") under the call's operation id, so a
-// retry is answered from the ledger step by step — the lane change it already
-// made included. The caller therefore sends the lane it DROPPED INTO, whatever
-// the card reads now: a caller that compared it with the card and left it out
-// once the first attempt's lane change had landed would condition the
-// placement on the version it read before that change, and be refused as
-// stale by nobody but itself. A drop into the lane the card is already in, on
-// a card nobody changed since, is decided here to write nothing on the task
-// ([laneOnly]) — which is what makes sending it always safe.
-//
-// # The key is minted INSIDE the decide
-//
-// A drop names the NEIGHBOUR it was dropped beside, never a key. The two keys
-// either side of the gap are read in the same snapshot the broker's
-// expectation is formed from, so a drag that lost a race to another drag in
-// the same project is re-decided against the order that won rather than
-// landing between two keys that no longer bound anything. A key minted by the
-// caller from the order it last rendered is the "guess" the write authority
-// forbids — which is what the drag this replaced did, with the neighbours'
-// keys as its arguments and no caller at all.
+// A drop that changes lanes is a SEQUENCE of two appends, as sequence.go states
+// the others: A on the task (the status, conditioned on if_match) → A on the
+// order (the placement, conditioned on the version that status wrote). Two,
+// because the order is the project's subject ([Writer.MoveTasks]) and the lane
+// the task's status, with its own arbitration, history and wake; one record can
+// be arbitrated on only one. ORDER: the lane first, the half if_match guards.
+// CLAIM: none. CRASH RESIDUE: a card in its new lane at its old key's place, a
+// valid board. REPAIRER: none; the call reports it ([PlaceResult.Unplaced])
+// rather than failing, since a caller told "failed" would drag the lane back.
 
 // Place is one drag: where a card was dropped, as [Writer.PlaceTask] takes it.
 type Place struct {
-	// Task and Project name the card, by id. Project is the one the caller
-	// read it in, and a card that has left it since is refused rather than
-	// placed in a board the caller was not looking at.
+	// Task and Project name the card, by id. A card that has left Project
+	// since is refused, not placed in a board the caller was not looking at.
 	Task    string
 	Project string
 
-	// Before and After name the neighbour it was dropped beside, by task
-	// id — at most one of them. Before is the card it now sits above, After
-	// the card it now sits below. Neither, with a Status, is a drop into a
-	// lane that is empty: the lane changes and the card keeps its key.
+	// Before and After name the neighbour it was dropped beside, by task id,
+	// at most one: Before the card it now sits above, After the one below.
+	// Neither, with a Status, is a drop into an empty lane: the card keeps
+	// its key.
 	Before string
 	After  string
 
-	// Status is the lane it was dropped into, as the caller dropped it —
-	// never compared with the card first (see the file's note on retries);
-	// nil keeps its own.
+	// Status is the lane it was dropped into, as dropped, never compared
+	// with the card first; nil keeps its own. Both steps ("lane", "order")
+	// are named under the operation id, so a retry is answered from the
+	// ledger step by step; a caller that left Status out once its first
+	// attempt's lane landed would condition the placement on the version
+	// before that change and be refused as stale by itself. A drop into the
+	// card's own lane writes nothing on the task ([laneOnly]), so sending it
+	// is always safe.
 	Status *Status
 
 	// IfMatch is the task version the caller read, refused if the card
-	// moved since. Zero omits it. A PLACEMENT'S OWN RECORD NEVER MOVES IT —
-	// the order stamps `scoped_through` — so a person dragging one card
-	// twice is not refused by their own first drag.
+	// moved since; zero omits it. A placement's own record never moves it
+	// (the order stamps `scoped_through`), so a second drag of one card is
+	// not refused by the first.
 	IfMatch uint64
 }
 
 // PlaceResult is what a drag wrote.
 type PlaceResult struct {
 	// Lane is the status change, zero when the drop named no lane. A lane
-	// the card was already in is an APPLIED result with no position: the
-	// step decided there was nothing to write.
+	// the card was already in is an APPLIED result with no position.
 	Lane WriteResult
 
 	// Order is the placement, zero when the card already sat in the gap.
 	Order WriteResult
 
-	// Rank is the card's new key, empty when it did not move — or when the
+	// Rank is the card's new key, empty when it did not move or when the
 	// placement was answered from the ledger, whose row keeps no key.
 	Rank Rank
 
-	// Version is the card's version after the call, which is what the
-	// board's next `if_match` on it states: where a lane step ran and its
-	// outcome is known, the packed position of the record it wrote
-	// (applied or still pending here) or, when it wrote nothing, the
-	// version it read; otherwise the version the drop was conditioned on —
-	// a placement never moves it.
+	// Version is the card's version after the call, the board's next
+	// `if_match`: after a lane step of known outcome, the packed position of
+	// the record it wrote (applied or still pending here), or the version it
+	// read when it wrote nothing; otherwise the drop's own IfMatch, since a
+	// placement never moves it.
 	Version int64
 
 	// Unplaced is why the card changed lanes and did NOT take its place:
-	// the placement was refused after the status landed (a writer moved
-	// the task between the two appends), or the status write's own
-	// outcome is unknown and there is no version to condition the
-	// placement on. Nil whenever the placement landed or none was asked.
+	// the placement was refused after the status landed (a writer moved the
+	// task between the appends), or the status write's outcome is unknown
+	// and there is no version to condition on. Nil otherwise.
 	Unplaced error
 }
 
@@ -156,9 +117,8 @@ func (w *Writer) PlaceTask(ctx context.Context, opID string, place Place,
 		out.Lane = lane
 		if lane.Outcome == statelog.OutcomeUnknown {
 			// AN UNKNOWN HAS NO VERSION, and a placement conditioned on
-			// nothing could land on a task somebody else has since moved.
-			// The version is left as the caller's: the lane change may
-			// never have landed.
+			// nothing could land on a task somebody has since moved. The
+			// version stays the caller's: the lane change may not have landed.
 			if place.Before != "" || place.After != "" {
 				out.Unplaced = fmt.Errorf("worklet: the lane change of %s is "+
 					"unknown (operation %s), so there is no version to place it "+
@@ -169,16 +129,13 @@ func (w *Writer) PlaceTask(ctx context.Context, opID string, place Place,
 			return out, nil
 		}
 		// THE VERSION THE LANE STEP LEFT THE TASK AT is the placement's
-		// precondition. Where the step wrote a record — applied here,
-		// answered from the ledger on a retry, or durable but still PENDING
-		// on this node's applier — that record's packed position IS the
-		// task's version, and the writer waits for this node's applier to
-		// reach it; otherwise the decide would read the task as it was
-		// before the first append and refuse its own sequence. Never the
-		// result's Version there: a pending result carries none, and a
-		// placement conditioned on zero is conditioned on nothing. Only a
-		// step that wrote nothing (the card was already in the lane) has
-		// no position, and its Version is the one it read.
+		// precondition. A record the step wrote (applied, answered from the
+		// ledger, or still PENDING here) has a packed position that IS the
+		// task's version, and the placer waits for this node's applier to
+		// reach it, or the decide would refuse its own sequence. Not the
+		// result's Version: a pending result carries none, and zero
+		// conditions on nothing. A step that wrote nothing has no position,
+		// and its Version is the one it read.
 		if !lane.Position.IsZero() {
 			out.Version = lane.Position.Packed()
 			placer = w.After(lane.Position)
@@ -215,7 +172,11 @@ func (w *Writer) PlaceTask(ctx context.Context, opID string, place Place,
 }
 
 // decidePlace reads the gap inside the order's own snapshot and decides the
-// placements — see [PlaceInGap].
+// placements ([PlaceInGap]). A drop names a neighbour, never a key: reading the
+// keys either side in the snapshot the broker's expectation is formed from
+// re-decides a drag that lost a race against the order that won, where a key
+// the caller minted from its last render is the guess the write authority
+// forbids.
 func decidePlace(ctx context.Context, tx *sql.Tx, place Place,
 	ifMatch uint64) ([]Placement, error) {
 	current, held, err := readTask(ctx, tx, place.Task)
@@ -240,8 +201,7 @@ func decidePlace(ctx context.Context, tx *sql.Tx, place Place,
 		anchor = place.After
 	}
 	if anchor == "" {
-		// A LANE CHANGE INTO AN EMPTY LANE keeps the card's key: there is
-		// nobody in the lane to sit beside.
+		// A LANE CHANGE INTO AN EMPTY LANE keeps the card's key.
 		return nil, nil
 	}
 	neighbour, held, err := readTask(ctx, tx, anchor)
@@ -261,7 +221,7 @@ func decidePlace(ctx context.Context, tx *sql.Tx, place Place,
 	}
 
 	// THE NEIGHBOUR ITSELF IS ON THE SIDE THE DROP PUT IT: after the gap
-	// in the order for `before`, ahead of it for `after`.
+	// for `before`, ahead of it for `after`.
 	pivot := Placement{Task: neighbour.ID, Rank: neighbour.Rank}
 	below, err := gapSide(ctx, tx, place, pivot, false, place.After != "")
 	if err != nil {
@@ -274,8 +234,8 @@ func decidePlace(ctx context.Context, tx *sql.Tx, place Place,
 	placements, err := PlaceInGap(Placement{Task: place.Task, Rank: current.Rank},
 		below, above)
 	if err != nil {
-		// NOT THE CALLER'S TO FIX, and not a race either: the gap holds
-		// keys only the duty's duplicate repair can pull apart.
+		// NOT THE CALLER'S TO FIX, nor a race: the gap holds keys only the
+		// duty's duplicate repair can pull apart.
 		return nil, fmt.Errorf("worklet: %s cannot be placed beside %s until "+
 			"the Worklet duty has repaired the keys around it: %w",
 			place.Task, neighbour.Key, err)
@@ -285,14 +245,12 @@ func decidePlace(ctx context.Context, tx *sql.Tx, place Place,
 
 // gapSideStatement is [gapSide]'s read of one side, named for the plan test.
 //
-// THE PIVOT'S RANK BOUNDS THE SEEK. "Past the pivot in (rank, id) order" is
-// `rank < p OR (rank = p AND id < t)` on the side below, and written that way
-// the disjunction leaves the planner nothing to seek but the project: it read
-// the project's rank index from the far end of the board towards the pivot,
-// keeping nothing until it got there, so a drop near the bottom of a long
-// board read the whole board to take a dozen neighbours. Stated as the range
-// it is — `rank <= p` and then the tie broken on the id — the same rows are a
-// seek on the project and the rank, read nearest first.
+// THE PIVOT'S RANK BOUNDS THE SEEK: written as `rank < p OR (rank = p AND
+// id < t)`, the disjunction leaves the planner only the project to seek, and
+// it reads the rank index from the board's far end towards the pivot, so a
+// drop near a long board's bottom reads the whole board. Stated as the range
+// `rank <= p` with the tie broken on the id, it is a seek on the project and
+// the rank, read nearest first.
 func gapSideStatement(above, inclusive bool) string {
 	cmp, dir := "<", "DESC"
 	if above {
@@ -309,14 +267,11 @@ func gapSideStatement(above, inclusive bool) string {
 		ORDER BY rank ` + dir + `, id ` + dir + ` LIMIT ?`
 }
 
-// gapSide reads one side of the gap a drop opened, nearest first: the rows
-// below the pivot (descending) or above it (ascending), the pivot itself
-// included when the drop put it on this side.
-//
-// OVER EVERY ROW OF THE PROJECT, the trash included: a removed task still
-// holds its key and a restore brings it back to exactly that place, so a key
-// minted over it would be a duplicate the day it returns. And in (rank, id)
-// order, which is the order a board with a shared key renders in.
+// gapSide reads one side of the gap a drop opened, nearest first: below the
+// pivot (descending) or above it (ascending), the pivot included when the
+// drop put it on this side. It reads the trash too: a removed task keeps its
+// key and a restore returns it there, so a key minted over it would be a
+// duplicate. The order is (rank, id), as a board with a shared key renders.
 func gapSide(ctx context.Context, tx *sql.Tx, place Place, pivot Placement,
 	above, inclusive bool) ([]Placement, error) {
 

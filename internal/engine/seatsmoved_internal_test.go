@@ -7,14 +7,10 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
-// AN APPLY ASKS FOR PLACEMENT EXACTLY WHEN WHAT PLACEMENT READS MOVED.
-//
-// Which seats exist and where each may run are the whole of what a sweep reads
-// of the company, so a revision that changes either is one the sweep must see
-// at once, and one that changes neither — a prompt, a model, a re-activated
-// revision rotating a credential — asks for nothing. Order is not a change:
-// the seats are walked off the org, and the same seats in another order are
-// nothing anybody has to claim.
+// AN APPLY ASKS FOR PLACEMENT EXACTLY WHEN WHAT PLACEMENT READS MOVED: which
+// seats exist and where each may run. A revision changing neither (a prompt, a
+// model, a credential rotation) asks for nothing, and the same seats in
+// another order are not a change.
 func TestAnApplyAsksForPlacementExactlyWhenTheSeatsMoved(t *testing.T) {
 	t.Parallel()
 	company := func(t *testing.T, doc string) *Company {

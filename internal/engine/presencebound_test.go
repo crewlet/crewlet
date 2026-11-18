@@ -19,32 +19,15 @@ import (
 // THE PRESENCE LEASE AT ITS WORST FITS ITS BOUND, AND THE BOUND IS THAT WORST
 // CASE ROUNDED UP.
 //
-// A node's presence is re-sent on every heartbeat, so the store bounds it
-// (coord.MaxLeaseMetaBytes), and a presence the store refused would take the
-// node out of its peers' count. The bound is only safe if no legal node can
-// reach it, so it is derived rather than chosen: this builds the presence
-// through the seat host's own assembler (seat.PresenceMeta) with every input
-// at its limit —
-//
-//   - every role, and the longest broker kind;
-//   - placement.MaxLabels labels, each key placement.MaxLabelKeyBytes and each
-//     value placement.MaxLabelValueBytes, made of the characters the grammar
-//     admits that the store's real encoder spells longest — so an encoder
-//     that escaped HTML again would spell `<` in six bytes and fail this;
-//   - the held count and a Gitlet node's budget at the largest integer, and
-//     the withdrawal;
-//   - the status core: every count at the largest integer, the longest
-//     posture and admin posture, the widest timestamp, a build of the
-//     characters the encoder spells longest (which the core cuts to
-//     coord.MaxBuildBytes), and one alarm mark for every kind of the alarm
-//     table, which is what the status carries at most;
-//
-// and holds the constant to that figure rounded up to the next kibibyte, both
-// ways: a new alarm kind or a new core field that pushes the worst case past
-// it fails here, as a bound left larger than its derivation does.
-//
-// Mutations: the bound at 4 KiB, the encoder escaping HTML, the
-// build left uncut, or MaxLabels raised — each red.
+// The store bounds presence (coord.MaxLeaseMetaBytes) and a refused one drops
+// the node from its peers' count, so the bound is derived: seat.PresenceMeta
+// with every input at its limit (every role, the longest broker kind,
+// placement.MaxLabels labels at the key and value limits in the admitted
+// characters the store's encoder spells longest, the held count, a Gitlet
+// budget and every status count at MaxInt, the withdrawal, the longest
+// postures, the widest timestamp, a build cut to coord.MaxBuildBytes, one
+// alarm mark per kind), held to it rounded up to the next KiB both ways.
+// Mutations red: the bound at 4 KiB, HTML escaping, build uncut, MaxLabels up.
 func TestThePresenceLeaseAtItsWorstFitsItsBound(t *testing.T) {
 	t.Parallel()
 	keys := widestDistinct(t, "label key", placement.CheckLabelKey, placement.MaxLabelKeyBytes,

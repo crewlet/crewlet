@@ -11,9 +11,8 @@ import (
 )
 
 // AN AGENT'S REPLY IN A THREAD WAKES ONLY WHO STILL OWES AN ANSWER THERE
-// (ADR-0113). Two agents thanking each other in one thread six times in five
-// minutes were each woken under `thread` by the other's thanks. Every
-// participant is still told, in its inbox; the wake is the open ask's.
+// (ADR-0113), so two agents' thanks do not wake each other. Every participant
+// is still told, in its inbox; the wake is the open ask's.
 func TestAnAgentsReplyInAThreadWakesOnlyWhoStillOwesAnAnswer(t *testing.T) {
 	t.Parallel()
 	thanks := worklet.Notify{Kind: worklet.ChangeComment, Snapshot: worklet.Snapshot{
@@ -163,10 +162,10 @@ func TestAPersonsOpenAskMakesACoAsker(t *testing.T) {
 }
 
 // AN AGENT'S MENTION THAT ASKS NOTHING IS A REFERENCE, through the record it
-// writes (ADR-0113): the measured loop, an agent's "nothing for @qa" stating
-// it asks nothing, wakes no agent, at the version that says so, while asking,
-// a person's mention, and an older build's comment with no statement wake qa,
-// and the person it names is addressed either way.
+// writes (ADR-0113): an agent's "nothing for @qa" stating it asks nothing wakes
+// no agent, at the version that says so, while asking, a person's mention, and
+// an older build's comment with no statement wake qa; the person it names is
+// addressed either way.
 func TestAnAgentsMentionThatAsksNothingWakesNoAgent(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -179,8 +178,8 @@ func TestAnAgentsMentionThatAsksNothingWakesNoAgent(t *testing.T) {
 		woken   bool
 		version int
 	}{
-		// STATED, so its notice rows keep the statement: the version that says so,
-		// and one that tells qa without waking it keeps that too.
+		// STATED: stamped at the version that keeps the statement in its
+		// notice rows (one that tells qa without waking it keeps that too).
 		{"pm", worklet.AuthorAgent, ptr(false), []string{"qa"}, false, worklet.NoticeWokeVersion},
 		{"pm", worklet.AuthorAgent, ptr(true), []string{"qa"}, true, worklet.NoticeAsksVersion},
 		// AN OLDER BUILD'S, with no statement, and one naming its agents

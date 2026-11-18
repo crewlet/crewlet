@@ -79,24 +79,16 @@ func accountBroker(t *testing.T) *server.Server {
 
 // THE APPLIER'S PENDING COUNT ASKS THE BROKER NOTHING.
 //
-// The applier asks it on every run it holds records for, so at least once a
-// committed run, per domain, per data node — and it was a consumer info, which
-// only the consumer's LEADER answers, the server serves only once its main API
-// queue is empty, and a member that still believes in a leader the group has
-// just lost drops without a word: a request on the commit path, its wait added
-// to every linearizable read whose barrier is in the run. Every record the
-// pull delivers already carries the count in its own metadata, so the answer
-// is what the pull holds — the newest delivery's count of what follows it, and
-// what it delivered that no fetch has taken — and a broker that never answers
-// a consumer info changes nothing.
+// The applier asks it at least once per committed run, per domain, per data
+// node. A consumer info is answered only by the consumer's leader, once its
+// main API queue is empty, and a member still believing in a lost leader drops
+// it silently: a wait on the commit path. Every delivered record carries the
+// count in its metadata, so the answer is what the pull holds: the newest
+// delivery's count of what follows it, plus what it delivered that no fetch
+// has taken. Each count is checked against the consumer infos the broker
+// held, never the clock.
 //
-// NOTHING ASKED IS READ OFF THE BROKER, never the clock: every consumer info
-// is held where it would be answered, and each count is followed by a look at
-// how many were. It used to be each count held to a tenth of a second by the
-// test's clock, which a runner that lost that much in a count failed.
-//
-// Mutation: answer the count with a consumer info, as it was, and the broker
-// holds the request the count sent.
+// Mutation: answer the count with a consumer info, and the broker holds one.
 func TestTheApplierPendingCountAsksTheBrokerNothing(t *testing.T) {
 	t.Parallel()
 	ns, q := accountQueue(t, probeDomain())
@@ -111,14 +103,10 @@ func TestTheApplierPendingCountAsksTheBrokerNothing(t *testing.T) {
 	t.Cleanup(cons.Close)
 	const subject = "crewlet.probe.log.task.a"
 	appendN(t, log, subject, 5)
-	// THE CONSUMER'S OWN COUNT OF THE FIVE, before the fetch whose second
-	// record carries it. The server acknowledges an append before it tells
-	// the stream's consumers of it, from a queue of its own, so a fetch made
-	// as the appends return can be served from a count still short of them,
-	// and a delivery's count is what it was when sent: Pending is a hint, and
-	// the case holds it exact. So the case waits for the consumer to have
-	// counted all five — asking its info itself, before the info is held —
-	// and fetches then.
+	// THE CASE WAITS FOR THE CONSUMER TO COUNT ALL FIVE BEFORE THE FETCH: the
+	// server acknowledges an append before it tells the stream's consumers, so
+	// a fetch made as the appends return can carry a count short of them, and
+	// the case holds Pending exact. Its info is asked here, before it is held.
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		info, err := consumerInfo(t, cons)
@@ -232,24 +220,15 @@ func TestAPendingCountBeforeAnyDeliveryIsUnknown(t *testing.T) {
 
 // A GROUP'S ACKNOWLEDGEMENT FLOOR A MEMBER DROPS IS ASKED AGAIN.
 //
-// The trim's feed term reads it on the trim tick, whose lifetime carries no
-// deadline; only the consumer's leader answers it, so one request a member
-// dropped waited out the client's five seconds and left the term unreadable —
-// a trim blocked for the tick over a group that was there all along. And a
-// group never opened is still answered at once as never opened: the hedge
-// asks again only while nobody answers.
+// The trim's feed term reads it on the trim tick, which carries no deadline,
+// and only the consumer's leader answers: one dropped request would wait out
+// the client's five seconds and block the trim for the tick. A group never
+// opened is still answered at once, and asked ONCE: with the read term an
+// hour the hedge's own re-ask is out of reach, so a second request, counted
+// where the broker receives them, is one asked after the answer came.
 //
-// # At once is asked once
-//
-// So the read of a group never opened is held to ONE request, counted where
-// the broker receives them, with the read term an HOUR: the hedge's own re-ask
-// is then out of reach whatever the load, and a second request is one asked
-// after the answer came. It used to be held to one read term by the test's
-// clock, which a runner that lost a second around the read failed.
-//
-// Mutation: settle a not-found as the provisioning read-backs do, and the read
-// asks again after its answer; read a not-found as silence, and it asks until
-// its bound and fails.
+// Mutation: settle a not-found as the provisioning read-backs do, and it is
+// asked after its answer; read it as silence, and it is asked to its bound.
 func TestAGroupAckFloorAMemberDropsIsAskedAgain(t *testing.T) {
 	t.Parallel()
 	ns, q := accountQueue(t, probeDomain())
@@ -296,14 +275,11 @@ func TestAGroupAckFloorAMemberDropsIsAskedAgain(t *testing.T) {
 
 // apiRequests listens for the requests q sends on the broker's API subjects
 // matching subject from here on, and returns the subjects of those sent so
-// far, in the order the broker read them — every request q sent before the
-// call, and none after.
+// far, in the order the broker read them.
 //
-// ON THE SUBJECT THE BROKER'S JETSTREAM SERVES and ON THE QUEUE'S OWN
-// CONNECTION, whose protocol the broker reads in order: the subscription is in
-// place before any request after it arrives, and a flush of the connection is
-// answered only once the broker has handed this connection a copy of every
-// request sent before it — so what it returns is final for those, however
+// It listens on the queue's own connection, which the broker reads in order:
+// a flush is answered only once the broker has handed this connection a copy
+// of every request sent before it, so the result is final for those however
 // late the runner delivers them.
 func apiRequests(t *testing.T, q *Queue, subject string) func() []string {
 	t.Helper()
@@ -338,63 +314,17 @@ func apiRequests(t *testing.T, q *Queue, subject string) func() []string {
 }
 
 // A SUBSCRIPTION LISTING'S PAGES A MEMBER DROPS ARE ASKED AGAIN FOR AS LONG
-// AS ITS CALLER WAITS — and a caller that sets no deadline waits the client's
-// five seconds on a consumers page, as it did when the page was one request.
+// AS ITS CALLER WAITS.
 //
-// Both listings it reads — the stream names, and each stream's consumers —
-// only the metadata leader answers, and a member that still believes in a
-// leader the group has just lost drops a page without a word. A names page is
-// presumed lost after the read term and asked again two seconds after it was
-// sent, whoever the caller. A consumers page is given the four seconds the
-// metadata leader waits for the consumers' own leaders beside the read term,
-// five seconds, which is the client's whole default: a caller whose deadline
-// outlasts that and a re-ask has the page asked again, and one with none — the
-// mailbox sweep, on the maintenance worker's lifetime — asks it once and fails
-// its tick when a member drops it. Each interception is of its own listing's
-// subject, so neither listing's re-ask is the other's.
-//
-// # Two of the cases in a bubble
-//
-// The first case's claim and the third's are about the clock — when a dropped
-// page is asked again, and what deadline each request carries — so both run
-// IN A SYNCTEST BUBBLE ([inBubble]), with the case as the metadata leader on
-// the client the listing is built over ([listerOn], through [jsapi.Meta]'s
-// seam), and each request read off the instant it was asked and the deadline
-// it carried ([armedWaits]), exactly:
-//
-//   - The first drops each page's first request, held until its context
-//     ends, and answers the next with the page. The names page is asked at
-//     none and two seconds and the consumers page at two and eight, every
-//     request carries the caller's deadline, and the listing ends at the
-//     answer.
-//   - The third answers the names page at once and the consumers page never.
-//     Each page is given exactly the client's default, the consumers page is
-//     asked once, and the listing ends on its deadline.
-//
-// Each used to read the machine's clock. The first held the whole listing to
-// a ten-second context against eight seconds of cadence, so a runner that
-// lost two and a half seconds between the pages failed it, and a re-ask a
-// second late passed it. The third timed the listing and held it between the
-// default and a read term past it, so a runner that lost a second and a half
-// between the pages failed it, and a page held half a second past the default
-// passed it. Neither could move into a bubble before the seam: the broker
-// answers the names page, its connection's reader hands each reply in from
-// outside the bubble, and the consumers page went out on that raw connection,
-// where no fake client saw it. The second case stays on the broker, which
-// drops a page where every reader's request goes, whatever the reader was
-// built with ([jsapitest]).
-//
-// Mutation: re-ask a page a second late, or give the consumers page the read
-// term alone, and a page is asked again at the wrong instant; abandon each
-// request at its term, or hold a caller's deadline to the client's default,
-// and a request carries the wrong deadline; give the consumers page half a
-// read term past the client's default, or every page the lookup ceiling, and
-// a deadline-less page is given more than the default; let a request outlive
-// its context, and the listing ends past the page's deadline; put the pages
-// on the client's connection whatever the client, and neither bubbled case
-// hears one; read a page nobody answered as anything but silence, and the
-// listing is not the broker unavailable; never ask a page again, and the
-// first two cases' listings fail.
+// Only the metadata leader answers either listing, and a member believing in
+// a lost leader drops a page silently. A names page is asked again a read term
+// and a re-ask after it was sent; a consumers page is given the metadata
+// leader's four-second wait beside the read term, the client's whole default:
+// a caller whose deadline outlasts that and a re-ask has it asked again, and a
+// deadline-less one (the mailbox sweep) asks it once. The first and third
+// cases, about the clock, run in a synctest bubble ([inBubble]) as the metadata
+// leader ([listerOn]), reading each request's instant and deadline
+// ([armedWaits]); the second stays on the broker ([jsapitest]).
 func TestASubscriptionListingAMemberDropsIsAskedAgain(t *testing.T) {
 	t.Parallel()
 	// listing is a queue holding one subscription, and the stream it is on.
@@ -417,8 +347,11 @@ func TestASubscriptionListingAMemberDropsIsAskedAgain(t *testing.T) {
 		_, q, stream := listing(t)
 		names, consumers := jsapitest.StreamNames(), jsapitest.ConsumerList(stream)
 		// A MEMBER THAT DROPS EACH PAGE'S FIRST REQUEST, held until its
-		// context ends, in front of a leader that answers the next with the
-		// page: the consumers page as the broker gave it.
+		// context ends, in front of a leader that answers the next.
+		// Mutation: re-ask a page a second late, give the consumers page the
+		// read term alone, abandon a request at its term or hold the caller's
+		// deadline to the client's default, and a request is asked at the
+		// wrong instant or carries the wrong deadline.
 		pages := map[string][]byte{names: streamNamesPage(t, stream), consumers: consumersPage(t, q, stream)}
 		sent := map[string]*atomic.Int32{names: new(atomic.Int32), consumers: new(atomic.Int32)}
 		var asked armedWaits
@@ -455,10 +388,7 @@ func TestASubscriptionListingAMemberDropsIsAskedAgain(t *testing.T) {
 			if len(got) != 1 || got[0] != want {
 				t.Errorf("listed %v, want [%v]", got, want)
 			}
-			// Each request as the case received it: its page, and the
-			// instant it was asked and the deadline it carried, from the
-			// call. Exported fields, so a failure prints the durations as
-			// durations.
+			// Exported fields, so a failure prints the durations as durations.
 			type request struct {
 				Page         string
 				At, Deadline time.Duration
@@ -509,6 +439,9 @@ func TestASubscriptionListingAMemberDropsIsAskedAgain(t *testing.T) {
 		namesPage := streamNamesPage(t, stream)
 		// THE CASE IS THE METADATA LEADER: the names page answered at once,
 		// naming the subscription's stream, and its consumers page never.
+		// Mutation: give a page more than the client's default (half a read
+		// term past it, or the lookup ceiling), let a request outlive its
+		// context, or read silence as anything but the broker unavailable.
 		var asked armedWaits
 		lister := listerOn(q, func(ctx context.Context, subject string) (*nats.Msg, error) {
 			if !asked.note(ctx, subject) {
@@ -552,14 +485,11 @@ func TestASubscriptionListingAMemberDropsIsAskedAgain(t *testing.T) {
 }
 
 // answeringJS is a JetStream client that ANSWERS the requests a listing puts
-// on it itself ([jsapi.Meta]'s seam), with whatever answer returns, and has no
-// connection: a request put anywhere but on the client reaches nothing, and
-// fails. So a case can be the metadata leader inside a synctest bubble, where
-// no broker's reply can reach a request — the connection's reader would hand
-// it in from outside the bubble.
-//
-// EMBEDS THE INTERFACE, as this package's other fakes do: a listing asks only
-// Options and Conn of the client it is built over.
+// on it ([jsapi.Meta]'s seam) with answer, and has no connection, so a request
+// put anywhere else fails. A case can then be the metadata leader inside a
+// synctest bubble, which no broker's reply can enter: the connection's reader
+// hands it in from outside. It embeds the interface because a listing asks
+// only Options and Conn of the client it is built over.
 type answeringJS struct {
 	jetstream.JetStream
 	opts   jetstream.JetStreamOptions
@@ -641,32 +571,17 @@ func TestAnAccountLimitAMemberDropsIsAskedAgain(t *testing.T) {
 }
 
 // A GROUP'S ACKNOWLEDGEMENT FLOOR AND AN ACCOUNT LIMIT NOBODY ANSWERS, FOR A
-// CALLER WITH NO DEADLINE, END AT THE CLIENT'S OWN DEFAULT — asked again
-// inside it, and never stretched to the lookup ceiling the reads asked again
-// from the start are held to ([askRead]).
+// CALLER WITH NO DEADLINE (the trim tick; a boot sizing the state logs, which
+// a data pod's startup window counts at five seconds), END AT THE CLIENT'S
+// OWN DEFAULT: asked at none, two and four seconds, never stretched to the
+// lookup ceiling of the reads asked again from the start ([askRead]).
 //
-// Each was one request the client held for its five seconds where the caller
-// set none: the trim tick reads the floor on its lifetime, and a boot sizes
-// the state logs from the account's limit — a data pod's startup window
-// counts that read at five seconds. Hedged, each asks again inside the bound,
-// at none, two and four seconds, and a broker that never answers costs its
-// caller no more than it did.
+// The read runs in a synctest bubble ([inBubble]) against the real broker:
+// nobody answers, so every timer is the bubble's, and the three requests are
+// counted where the broker holds them, behind a sentinel ([heldBefore]).
 //
-// # The read in a bubble, the broker outside it
-//
-// The read runs IN A SYNCTEST BUBBLE ([inBubble]) against the real broker:
-// nobody answers it, so nothing the connection's own reader hands over ever
-// reaches a request of the bubble, and the read's every timer is the bubble's.
-// So it ends at the client's default exactly, and asks at none, two and four
-// seconds exactly — three requests, counted where the broker holds them,
-// behind a sentinel the queue sends after the read. On the machine's clock the
-// end was held only from below and the asking to two or three, a timer the
-// load delayed past the bound missing the third, and a read still asking at
-// fifteen seconds was what told one held to the ceiling apart.
-//
-// Mutation: bound the read by the lookup ceiling, as the reads asked again
-// from the start are, and it asks until the ceiling; bound it by a read term,
-// and it gives up after one request.
+// Mutation: bound the read by the lookup ceiling, and it asks until the
+// ceiling; bound it by a read term, and it gives up after one request.
 func TestADeadlineLessReadNobodyAnswersEndsAtTheClientsDefault(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -745,16 +660,13 @@ func heldBefore(t *testing.T, q *Queue, held *jsapitest.Held, subject string) in
 // and a subject's newest, which a writer waits on, is not.
 //
 // Both replies carry a whole record, base64-encoded, as large as the log's
-// largest: across a link — here a queue dialled to a broker of its own, an
-// external cluster's shape — a re-ask sent while the first reply is still
-// crossing puts the whole record on the link again, ahead of the node's lease
-// renewals, every two seconds until the first lands. So a read by position
-// is presumed lost only once its log's largest reply could have arrived —
-// crossed at the object store's floor, and been handled at the handling pace
-// — for this log's mebibyte, longer than any caller's deadline here — and is
-// asked once. The last-sequence read is the
-// write path's: every create asks it, and a request a member dropped across
-// an election has to be asked again in seconds, so it keeps the read term.
+// largest, and across a link a re-ask sent while the first reply crosses puts
+// the record on the link again, ahead of the node's lease renewals. So a read
+// by position is presumed lost only once its largest reply could have arrived
+// (crossed at the object store's floor and handled at the handling pace; for
+// this log's mebibyte, past any deadline here) and is asked once. The
+// last-sequence read is on every create's path and must be asked again in
+// seconds after an election, so it keeps the read term.
 func TestARecordReadAcrossALinkIsGivenItsRecordsArrival(t *testing.T) {
 	t.Parallel()
 	spec := probeDomain()
@@ -808,33 +720,38 @@ func TestARecordReadAcrossALinkIsGivenItsRecordsArrival(t *testing.T) {
 // A QUEUE'S LINK IS READ OFF HOW ITS OWN CONNECTION WAS MADE, where the queue
 // is built.
 //
-// The reading itself is held below (linkOf); this holds the one site that
-// hands it to a queue, on real queues: a member's own client, a leaf's, and a
-// client of an external cluster, each opened as a node opens one. A member
-// paced as though it crossed a link would hold its reads and writes to
-// crossings they never make; a leaf or an external client left unpaced would
-// hold a large write to the request term alone; a leaf taken for no leaf's
-// link would ask the leader for a reply its link closes on; and an external
-// client taken for a leaf's would read through consumers what one request of
-// the leader answers.
+// TestOnlyAMembersOwnConnectionCrossesNoLink holds the reading (linkOf); this
+// holds the one site that hands it to a queue, on real queues opened as a
+// node opens them. A member paced as if across a link holds its reads and
+// writes to crossings they never make; an unpaced leaf or external client
+// holds a large write to the request term alone; a leaf taken for no leaf asks
+// the leader for a reply its link closes on; an external client taken for a
+// leaf reads through consumers what one request of the leader answers.
 //
-// Mutation: build a queue with any link but its connection's reading, and its
-// row goes red.
+// Mutation: build a queue with any link but its connection's reading.
 func TestAQueueIsPacedByHowItsOwnConnectionWasMade(t *testing.T) {
 	t.Parallel()
 	srv := externaltest.Start(t, queue.MaxPayloadBytes)
 	for _, c := range []struct {
-		name string
-		q    *Queue
-		want link
+		name    string
+		q       *Queue
+		want    link
+		metered bool // the connection's link carries its meter (a member's crosses none)
 	}{
-		{"a member's own client", openForTest(t, Config{}), link{}},
-		{"a leaf's client", openLeafForTest(t, Config{}), link{pace: objstore.MiBPace, leaf: true}},
+		{"a member's own client", openForTest(t, Config{}), link{}, false},
+		{"a leaf's client", openLeafForTest(t, Config{}), link{pace: objstore.MiBPace, leaf: true}, true},
 		{"a client of an external cluster", newQueueWith(t, Config{URL: srv.URL(),
-			Token: externaltest.Token}), link{pace: objstore.MiBPace}},
+			Token: externaltest.Token}), link{pace: objstore.MiBPace}, true},
 	} {
-		if c.q.link != c.want {
-			t.Errorf("%s crosses %+v, want %+v", c.name, c.q.link, c.want)
+		got := c.q.link
+		if metered := got.meter != nil; metered != c.metered {
+			t.Errorf("%s's link is metered %v, want %v", c.name, metered, c.metered)
+		}
+		// The meter is the connection's own, so the reading is compared
+		// without it.
+		got.meter = nil
+		if got != c.want {
+			t.Errorf("%s crosses %+v, want %+v", c.name, got, c.want)
 		}
 	}
 }
@@ -842,14 +759,12 @@ func TestAQueueIsPacedByHowItsOwnConnectionWasMade(t *testing.T) {
 // A MEMBER'S DEAD LETTERS ARE READ GIVEN THE HANDLING OF THE LARGEST REPLY.
 //
 // A member's own connection crosses no link, but a dead letter may be as large
-// as the transport, and the leader's reply to a read of one — eleven
-// megabytes, the entry base64-encoded in JSON — is built by the leader and
-// decoded by this process. Read at the bare read term, such a read was asked
-// again at two seconds and at four while the leader was still building the
-// first reply under load, every re-ask another whole reply, and ran out its
-// five seconds with none of them answered (crewlet/crewlet#1153). So a
-// member's dead letters are read through a leader carrying the transport's
-// ceiling at no pace: its term is the read term and that reply's handling.
+// as the transport, and the leader's reply to a read of one (eleven megabytes,
+// base64 in JSON) is built by the leader and decoded here. At the bare read
+// term it is asked again at two and four seconds while the leader still builds
+// the first reply under load, each re-ask another whole reply, and none is
+// answered inside five seconds. So its term is the read term plus the
+// handling of a reply at the transport's ceiling, at no pace.
 //
 // Mutation: read a member's dead letters through the plain leader, and its
 // term is the bare read term.
@@ -872,32 +787,33 @@ func TestAMembersDeadLettersAreReadGivenTheHandlingOfTheLargestReply(t *testing.
 }
 
 // ONLY A CONNECTION TO THE NODE'S OWN MEMBER CROSSES NO LINK, AND ONLY A
-// LEAF'S CROSSES A LEAF'S — the facts the engine hands the object store as
-// its AcrossLink, and the copy reads decide by, read here off how the queue's
-// connection was made. A member's own connection alone is given no pace: a
-// member's record read is given its reply's handling and no crossing, its
-// reply crossing at most a cluster route. A leaf's and an external cluster's
-// client are paced at the
-// object store's floor, the slowest a link is allowed to be; and only the
-// leaf's has a server on its side of the link that holds what crosses it to
-// its max_payload, which no server holds a delivery to its own client to.
+// LEAF'S CROSSES A LEAF'S: the facts the engine hands the object store as its
+// AcrossLink and the copy reads decide by, read off how the connection was
+// made. A member's own connection alone is given no pace, and its record read
+// the reply's handling and no crossing (its reply crosses at most a cluster
+// route). A leaf's and an external cluster's client are paced at the object
+// store's floor, the slowest a link may be, and carry their link's meter; only
+// the leaf's has a server on its side holding what crosses to its max_payload,
+// which no server holds a delivery to its own client to.
 //
-// Mutation: pace a member's own connection, leave a leaf's or an external
-// cluster's unpaced, take an external dial for a leaf's link or a leaf's for
-// none, and its row goes red; give a member's record read no handling, or a
-// crossing, and its log's does.
+// Mutation: change any row's pace, leaf flag or meter, or give a member's
+// record read no handling or a crossing, and that row goes red.
 func TestOnlyAMembersOwnConnectionCrossesNoLink(t *testing.T) {
 	t.Parallel()
+	// THE METER IS THE LINK'S: a leaf's tunnel's, the external dial's own,
+	// and none for a member, whatever a dial would have handed it.
+	tunnelled, dialled := &LinkMeter{}, &LinkMeter{}
 	for _, c := range []struct {
 		name     string
 		embedded *embeddedServer
 		want     link
 	}{
 		{"a member's own client", &embeddedServer{}, link{}},
-		{"a leaf's client", &embeddedServer{leaf: true}, link{pace: objstore.MiBPace, leaf: true}},
-		{"a client of an external cluster", nil, link{pace: objstore.MiBPace}},
+		{"a leaf's client", &embeddedServer{leaf: true, tunnel: &tunnel{meter: tunnelled}},
+			link{pace: objstore.MiBPace, leaf: true, meter: tunnelled}},
+		{"a client of an external cluster", nil, link{pace: objstore.MiBPace, meter: dialled}},
 	} {
-		if got := linkOf(c.embedded); got != c.want {
+		if got := linkOf(c.embedded, dialled); got != c.want {
 			t.Errorf("%s: its connection crosses %+v, want %+v", c.name, got, c.want)
 		}
 	}

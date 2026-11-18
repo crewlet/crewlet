@@ -15,15 +15,12 @@ import (
 
 // A FLOOR READ IS ONE REQUEST TO THE STREAM'S LEADER AND CREATES NO CONSUMER.
 //
-// That is the whole reason [FleetStore.Floor] exists: the state-log write
-// fence reads a floor on every write at an expectation of zero, and the
-// listing it used to read was an ordered consumer created and deleted on the
-// register's stream — on a clustered broker, two proposals to the metadata
-// group a loaded fleet answered late enough to refuse a page create. Every
-// JetStream API request the client sends is a message on `$JS.API.>`, so a tap
-// on that subject sees exactly what the read cost. The listing beside it is
-// the control: the same tap must see the consumer a listing creates, or a tap
-// that saw nothing would pass a read that lists.
+// That is why [FleetStore.Floor] exists: the state-log write fence reads a
+// floor on every write at an expectation of zero, and a listing's ordered
+// consumer is, on a clustered broker, two metadata-group proposals a loaded
+// fleet answers late enough to refuse a page create. A tap on `$JS.API.>` sees every API request the read
+// sends. The listing is the control: the tap must see a listing's consumer,
+// or a blind tap would pass a read that lists.
 func TestAFloorReadCreatesNoConsumer(t *testing.T) {
 	t.Parallel()
 	ns, nc := embeddedServer(t)
@@ -110,12 +107,10 @@ func TestAFloorReadCreatesNoConsumer(t *testing.T) {
 
 // A ROW THE KEY READ CANNOT VOUCH FOR IS RAISED, never read as no floor.
 //
-// The contract suite cannot plant one — PutFloor validates on the way in and
-// files a row under its own domain's key — so the two shapes are written into
-// the bucket directly: bytes that do not decode, and a well-formed row under
-// another domain's key. Read as absent, either one is a domain whose trim has
-// never run, which clears every write fence against a log the trim may have
-// moved past.
+// PutFloor validates and keys by domain, so the test writes the bucket
+// directly: undecodable bytes, and a valid row under another domain's key.
+// Read as absent, either is a domain whose trim never ran, which clears every
+// write fence against a log the trim may have moved past.
 func TestAFloorRowTheKeyCannotVouchForIsRaised(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
@@ -149,10 +144,9 @@ func TestAFloorRowTheKeyCannotVouchForIsRaised(t *testing.T) {
 	if !strings.Contains(err.Error(), coord.FloorKey("pages")) {
 		t.Fatalf("the refusal %q does not name the key to remove", err)
 	}
-	// AND THE REMEDY IT NAMES IS THE ONE THAT WORKS: nothing in the engine
-	// rewrites a floor it cannot read — the trim carries each floor forward
-	// from its row — so the refusal names removing the key, in the bucket it
-	// is in, and promises no rewrite.
+	// AND IT NAMES THE REMEDY THAT WORKS: nothing rewrites a floor it cannot
+	// read (the trim carries each floor forward from its row), so the refusal
+	// names purging the key in its bucket and promises no rewrite.
 	remove := fmt.Sprintf("nats kv purge %s %s", fleet.positions.Bucket(), coord.FloorKey("pages"))
 	if !strings.Contains(err.Error(), remove) ||
 		strings.Contains(err.Error(), "rewrites it at its next tick") {

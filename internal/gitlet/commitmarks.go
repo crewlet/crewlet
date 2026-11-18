@@ -113,8 +113,8 @@ func (r *Reader) commitMarks(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 }
 
 // commitChecks is where commit's checks stand for each branch, in branch
-// order: one walk of latestChecksOfCommitSQL to a bound, a branch it cut, or
-// one past a rollup's rows, rolled up from those read with More set.
+// order, from one bounded walk of latestChecksOfCommitSQL: a branch the bound
+// cut, or one past a rollup's rows, is rolled up from the rows read, More set.
 func commitChecks(ctx context.Context, tx *sql.Tx, repoID, commit string) ([]TargetChecks, bool, error) {
 	const bound = MaxMarkTargets*maxRollupChecks + 1
 	rows, err := tx.QueryContext(ctx, latestChecksOfCommitSQL, repoID, commit, bound)

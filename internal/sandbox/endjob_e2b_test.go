@@ -22,8 +22,8 @@ func (s *e2bStub) starts() int {
 	return n
 }
 
-// startedScript is the shell line the last command envd was asked to run
-// carried, as the run's envd reads it: `/bin/bash -l -c <script>`.
+// startedScript is the script of the last command envd was asked to run,
+// `/bin/bash -l -c <script>`.
 func (s *e2bStub) startedScript(t *testing.T) string {
 	t.Helper()
 	process, _ := s.body("/process.Process/Start")["process"].(map[string]any)
@@ -36,18 +36,16 @@ func (s *e2bStub) startedScript(t *testing.T) string {
 }
 
 // AN E2B BOX ENDS AND KILLS ITS JOB AS ITS USER. An end request is SIGUSR1 to
-// the job's script by its pid in the VM, sent as the box's user, and a pid
-// that answers nothing there is refused as no process of the job; a pid below
-// 2 — the VM's init, and the forms of a pid that address groups — is refused
-// before envd is asked anything. The kill is every process of the box's user:
-// envd starts a job in envd's own process group, which nothing may signal; and
-// it waits on what is left of the user's processes, never on `kill -0 -1`,
-// which a VM's processes the user cannot signal answer with success for good.
+// the script's pid, as the box's user; a pid with no process is
+// [sandbox.ErrNotJobProcess], and a pid below 2 (init, group forms) is refused
+// before envd is asked. The kill is every process of the user, since envd's
+// own process group holds the job and may not be signalled, and it waits on
+// the user's processes, never `kill -0 -1`, which processes the user cannot
+// signal answer with success for good.
 //
-// Mutation: drop the floor on the pid, and pid 1 is asked of envd; spell the
-// request with `-s USR1` or the kill with a `--`, and busybox ash reads the
-// kill's group as a number it refuses (end-job-scratch/exp-kill.sh); wait on
-// `kill -0 -1`, and every kill in a VM waits out both its graces.
+// Mutation: drop the pid floor, and pid 1 is asked of envd; spell `-s USR1` or
+// `--`, and busybox ash refuses the kill's group; wait on `kill -0 -1`, and
+// every kill in a VM waits out both its graces.
 func TestAnE2BBoxEndsAndKillsItsJobAsItsUser(t *testing.T) {
 	t.Parallel()
 	stub := newE2BStub()

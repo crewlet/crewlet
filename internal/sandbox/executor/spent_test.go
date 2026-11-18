@@ -9,10 +9,9 @@ import (
 )
 
 // A LIVE READING SAYS WHAT THE RUN HAS SPENT SO FAR, so a caller can stop a
-// run at its token cap while it works rather than learn the total once it
-// ended. Each model call is counted once, by its message id, however many
-// lines the stream repeats its usage on, and every token of the call (the
-// uncached prompt, the cache's reads and writes, and the reply) is counted.
+// run at its token cap while it works. Each model call counts once, by its
+// message id, however many lines repeat its usage, and every token of it: the
+// uncached prompt, the cache's reads and writes, and the reply.
 func TestALiveReadingCountsEachModelCallOnce(t *testing.T) {
 	t.Parallel()
 	runner := executor.NewClaudeCode()

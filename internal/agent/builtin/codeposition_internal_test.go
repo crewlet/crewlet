@@ -9,16 +9,11 @@ import (
 
 // EVERY CODE WRITE STATES ITS OUTCOME AND ITS POSITION AS THE ACT TRANSPORT
 // READS THEM: `outcome`, and `position` as the string
-// `<stream>@<generation>:<sequence>`, the two keys every write tool's answer
-// carries for read-your-writes. The act transport lifts them beside the
-// answer (operator.receiptOf) by decoding the answer into a string each, and
-// the dashboard raises its read floor on the code log to that position — so a
-// position spelled as the position's object made the whole decode fail: the
-// outcome went unread (a pending write reported applied) and the reads after
-// the press were asked at no floor, drawn from before it.
-//
-// Decoded here exactly as the transport decodes them, for every answer a code
-// write tool gives.
+// `<stream>@<generation>:<sequence>`. The transport decodes each into a string
+// (operator.receiptOf) and the dashboard raises its code-log read floor to the
+// position, so a position spelled as an object fails the whole decode: the
+// outcome goes unread and later reads ask at no floor. Decoded here exactly as
+// the transport decodes them, for every code write tool's answer.
 //
 // Mutation: spell any answer's position as statelog.Position again → red.
 func TestEveryCodeWriteStatesItsOutcomeAndPositionAsTheActTransportReadsThem(t *testing.T) {

@@ -201,18 +201,15 @@ func TestAPickupIsMootOnceItsItemLeavesTheSeat(t *testing.T) {
 }
 
 // AN ITEM GOES QUIET ON THE SEAT'S LAST WORD, WHATEVER IT WAS (ADR-0122): with
-// nothing from the seat it is quiet since the change that last woke it; a
-// comment moves the instant to the comment's; an answer that leaves the item
-// ready (a priority, an edit of its content) is a last word like any other, so
-// the item comes back a day on it rather than never; a change of who watches is
-// no word; and a status the seat moved is its word too, its pickup handed again
-// for the new status. Every instant is the harness's stated authored clock,
-// moved write by write.
+// nothing from the seat, since the change that last woke it; else since its
+// comment, or an answer that leaves the item ready (a priority, a content
+// edit), so it comes back a day on rather than never; a change of who watches
+// is no word; a status the seat moved hands the pickup again for the new
+// status. Instants are the harness's authored clock, moved write by write.
 //
 // Mutation: hold the item where the seat's last write is typed, and a priority
-// set on a todo item leaves it in the seat's ready work, handed never again;
-// read a change of who watches by its kind, and the priority set beside a
-// watch reads as no word.
+// set on a todo item is handed never again; read a change of who watches by
+// its kind, and the priority set beside a watch reads as no word.
 func TestAnItemGoesQuietOnTheSeatsLastWord(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

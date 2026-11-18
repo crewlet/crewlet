@@ -23,24 +23,17 @@ func (b *bindingTx) QueryContext(ctx context.Context, query string, args ...any)
 	return b.countingTx.QueryContext(ctx, query, args...)
 }
 
-// A PAGE'S READINESS IS READ IN A FIXED NUMBER OF STATEMENTS: a listing judges
-// the readiness of every live change of its page, so what each judges is read
-// a kind of row at a time over the whole page — one change or forty, each
-// holding standing blockers, cost the same statements, readinessStatements
-// where one holds more blockers than a readiness names and one fewer where
-// none does, where a statement a change for the blockers cost forty-six. And
-// each change's blockers are its oldest raised, at most MaxReadinessBlockers
-// of them in that order, however many stand: the change holding twenty-four,
-// raised five, five, five, five and four a review, each review's in the
-// reverse of their ids' order, names its first sixteen, and its read is cut
-// at the position of the sixteenth — the fourth review's — so its fifth
-// review is never read, while a change holding three is read uncut.
+// A PAGE'S READINESS IS READ IN A FIXED NUMBER OF STATEMENTS: one change or
+// forty, each holding blockers, cost readinessStatements, one fewer where none
+// holds more than a readiness names. And a change's blockers are its oldest
+// MaxReadinessBlockers, in order: the one holding twenty-four, raised 5, 5, 5,
+// 5 and 4 a review, each review's in reverse id order, names its first sixteen
+// and is cut at the fourth review's position, never reading the fifth, while a
+// change holding three is read uncut.
 //
-// Mutations: read each change's blockers with a statement of its own → forty
-// changes issue forty-six statements; bind no change's cut → the crowded
-// change is read uncut; leave the blockers past MaxReadinessBlockers on the
-// answer → the crowded change names twenty; name them newest first → the
-// order is wrong.
+// Mutations: a statement a change for the blockers → forty changes issue
+// forty-six; bind no cut → the crowded change is read uncut; keep the blockers
+// past MaxReadinessBlockers → it names twenty; newest first → wrong order.
 func TestAPageOfReadinessesIsReadInAFixedNumberOfStatements(t *testing.T) {
 	t.Parallel()
 	if want := strconv.Itoa(MaxReadinessBlockers - 1); lastBlockerOffset != want {

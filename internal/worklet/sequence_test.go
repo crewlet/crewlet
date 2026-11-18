@@ -14,18 +14,11 @@ import (
 
 // A CREATE'S KEY COMES FROM THE COUNTER, AND ITS RANK COMES FROM THE KEY.
 //
-// # What this pins that no unit test can
-//
-// A create is TWO appends on two subjects: the project's counter, then the
-// task. The number the counter's own arbitration hands out is what makes two
-// nodes minting at once produce two keys rather than one — and the rank is
-// derived from that same number, which is what makes a create's key a pure
-// integer at or above the origin and therefore provably outside every key a
-// drag can mint.
-//
-// Both halves are only observable end to end: the counter's number is formed
-// inside a decision the framework may run several times, and the rank is a
-// column the applier writes.
+// A create appends twice: the project's counter, then the task. The counter's
+// own arbitration gives two nodes minting at once two keys, and the rank,
+// derived from that number, is a pure integer at or above the origin, outside
+// every key a drag can mint. Both show only end to end: the number is formed
+// in a decision the framework may rerun, and the rank is an applier's column.
 func TestACreateTakesItsKeyAndRankFromTheCounter(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -52,9 +45,8 @@ func TestACreateTakesItsKeyAndRankFromTheCounter(t *testing.T) {
 		r.drain()
 	}
 
-	// AND NEW TASKS LAND AT THE TAIL IN CREATION ORDER, which is the
-	// property the counter's monotonicity buys and a fractional mint
-	// would not.
+	// AND NEW TASKS LAND AT THE TAIL IN CREATION ORDER, which the counter's
+	// monotonicity buys and a fractional mint would not.
 	answer := r.ask(map[string]any{"container": "project:ENG", "sort": "rank"})
 	var keys []string
 	for _, row := range answer.Rows {
@@ -68,9 +60,8 @@ func TestACreateTakesItsKeyAndRankFromTheCounter(t *testing.T) {
 
 // A CREATE INTO AN ARCHIVED PROJECT IS REFUSED BEFORE THE COUNTER MOVES.
 //
-// The refusal has to happen in the counter mint's own decision, not after it:
-// a create refused between the two appends has already advanced the project's
-// numbering for a task that will never exist.
+// Refused in the counter mint's own decision: a refusal between the two
+// appends has already advanced the numbering for a task that will never exist.
 func TestACreateIntoAnArchivedProjectMovesNoCounter(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -94,15 +85,13 @@ func TestACreateIntoAnArchivedProjectMovesNoCounter(t *testing.T) {
 
 // A REQUIRED FIELD IS REQUIRED ON A TASK AND NOT ON A SUBTASK.
 //
-// ClickUp ships two toggles and so does this, and the default that matters is
-// the second: one required field on a project would otherwise be a form to
-// fill for every step somebody breaks a task into.
+// The subtask toggle defaults off: one required field on a project would
+// otherwise be a form to fill for every step somebody breaks a task into.
 func TestARequiredFieldDoesNotBlockASubtask(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	// THE PARENT EXISTS FIRST, filed before the policy that would refuse it
-	// landed: a subtask is filed under a real parent in its own project,
-	// and one naming a parent this node does not hold is refused as such.
+	// THE PARENT IS FILED BEFORE THE POLICY that would refuse it: a subtask
+	// naming a parent this node does not hold is refused as such.
 	if _, err := r.writer.CreateTask(t.Context(), "op-parent",
 		newTask("t-parent"), nil); err != nil {
 		t.Fatalf("CreateTask parent: %v", err)
@@ -129,10 +118,9 @@ func TestARequiredFieldDoesNotBlockASubtask(t *testing.T) {
 
 // A BODY NAMING MORE KEYS THAN THE APPLIER LINKS IS WARNED ABOUT, NOT REFUSED.
 //
-// THE APPLY MUST NOT DEPEND ON THE WARNING. Every node resolves the same first
-// sixty-four keys in document order, so the cap is deterministic without it —
-// the warning exists so the person who wrote the body learns that the rest are
-// plain text, rather than discovering it on a page.
+// THE APPLY MUST NOT DEPEND ON THE WARNING: every node resolves the same first
+// [worklet.MaxReferencesPerBody] keys in document order, so the cap is
+// deterministic without it. The warning tells the author the rest are plain text.
 func TestAnOverReferencedBodyWarnsAndStillWrites(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -226,16 +214,11 @@ func taskOf(t *testing.T, r *roundTrip, id string) worklet.Task {
 
 // A TASK THAT NAMES NO UNIT IS FILED INTO ITS PROJECT'S OWN UNIT.
 //
-// `filed_unit` is the unit the work BELONGS to — it is what `unit=` filters
-// on, what a board's `unit` axis groups by, and what the item page labels
-// "Filed into" — and a project already knows which unit owns it, because the
-// chart apply wrote it on the project's own row.
-//
-// Nothing derived it. The one caller that filled the field stamped the FILING
-// SEAT'S team, so an operator — who holds no seat, and therefore no team —
-// filed into ENG and got "Filed into: no unit" on an item whose project said
-// Core, and so did every root-level seat, which belongs to no unit either.
-// This case is the derivation, at the write, where every writer reaches it.
+// `filed_unit` is the unit the work BELONGS to (what `unit=` filters, a board's
+// `unit` axis groups and the item page labels "Filed into"), and the chart
+// apply wrote the project's owning unit on its row. It is derived at the write,
+// where every writer reaches it, not from the filing seat's team, which an
+// operator or a root-level seat does not have.
 func TestATaskNamingNoUnitIsFiledIntoItsProjectsOwnUnit(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
@@ -274,9 +257,8 @@ func TestATaskNamingNoUnitIsFiledIntoItsProjectsOwnUnit(t *testing.T) {
 		t.Errorf("the applied row's filed_unit is %v, want [core]", got)
 	}
 
-	// AN EXPLICIT UNIT IS LEFT ALONE. It is the one thing the project
-	// cannot say: work belonging to another team than the one owning the
-	// project it sits in is what the argument is for.
+	// AN EXPLICIT UNIT IS LEFT ALONE: it says what the project cannot, work
+	// belonging to another team than the project's owner.
 	named := newTask("t-2")
 	named.FiledUnit, named.RoutingUnit = "platform", "platform"
 	if _, err := r.writer.CreateTask(t.Context(), "op-2", named, nil); err != nil {
@@ -288,9 +270,8 @@ func TestATaskNamingNoUnitIsFiledIntoItsProjectsOwnUnit(t *testing.T) {
 			"project's own unit overwrote a stated one", got.FiledUnit)
 	}
 
-	// AND A PROJECT THE CHART GAVE NO UNIT FILES INTO NONE, which is
-	// honest: an empty unit is a fact about the chart rather than a
-	// default to invent.
+	// AND A PROJECT THE CHART GAVE NO UNIT FILES INTO NONE: an empty unit is
+	// a fact about the chart, not a default to invent.
 	unowned := newTask("t-3")
 	unowned.Project, unowned.Key = "LAB", ""
 	if _, err := r.writer.CreateTask(t.Context(), "op-3", unowned, nil); err != nil {
@@ -305,23 +286,15 @@ func TestATaskNamingNoUnitIsFiledIntoItsProjectsOwnUnit(t *testing.T) {
 
 // THE UNIT A CREATE IS FILED INTO HEARS ABOUT IT FROM THE CREATE ITSELF.
 //
-// A create naming no unit is filed into its project's own by the writer,
-// inside its snapshot — after the caller built the notification, from a task
-// that had no routing unit yet. So the wake carried no unit lead: the
-// fallback that reaches a unit's lead when a change names nobody else had only
-// the project's lead to offer on the one record that files the work, while
-// every later change to the same task, snapshotted from a row that holds the
-// unit, offered the unit's lead first. Where the chart resolves the project to
-// no lead of its own — a seat's own project inside a unit, which
-// [org.Organization.LeadsBy] gives none because a member declares where it
-// writes rather than who owns it — an unassigned task filed there reached
-// nobody at all. The case is that project: the unit has a lead and the
-// project resolves to none.
+// The writer files a create naming no unit into its project's own inside its
+// snapshot, after the caller built the notification from a task with no
+// routing unit; the wake must still name the unit's lead, the fallback when a
+// change names nobody else. The case is a project the chart resolves to no
+// lead of its own (a seat's own project inside a unit, which
+// [org.Organization.LeadsBy] gives none) under a unit that has one.
 //
 // AND THE CARD SAYS SO, as the history row does: the applier writes a create's
-// row from every field the task was filed with, the unit the writer settled
-// among them, so a card built from the task the caller handed in named no
-// `routing_unit` while the row beside it did.
+// row from the task as filed, the settled unit included.
 func TestACreateTellsTheLeadOfTheUnitItIsFiledInto(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
@@ -375,10 +348,9 @@ func TestACreateTellsTheLeadOfTheUnitItIsFiledInto(t *testing.T) {
 // cardIsTheHistoryRow holds a create's notification card to the history row
 // the applier wrote for the same create: the same fields, moved the same way.
 //
-// THE ROW IS THE REFERENCE, because it is computed from the task as it was
-// FILED, in the applier's own frame ([worklet.TaskDeltas] over nothing and the
-// stored row), while a card is built by a caller from the task it handed in —
-// before the writer settled what only it can.
+// THE ROW IS THE REFERENCE: it is computed from the task as FILED
+// ([worklet.TaskDeltas] over nothing and the stored row), while a caller builds
+// a card from the task it handed in, before the writer settled what only it can.
 func (r *roundTrip) cardIsTheHistoryRow(what, id string, wake *worklet.Notify) {
 	r.t.Helper()
 	rows := r.strings(`SELECT fields_json FROM tracker_history
@@ -416,16 +388,12 @@ func (r *roundTrip) cardIsTheHistoryRow(what, id string, wake *worklet.Notify) {
 
 // A CREATE'S CARD SAYS WHAT THE WRITER SETTLED, AS ITS HISTORY ROW DOES.
 //
-// A caller builds a create's notification from the task it hands in, and the
-// writer then settles what only the writer can: the tags as the slugs they
-// normalise to and the default type, before the key is minted; and inside the
-// create's own snapshot the project's default assignee and the watch they then
-// hold, the status and priority a create naming none starts at, and the
-// person a question is put to, who follows the item from its first record.
-// The applier writes the create's history row from the task as FILED, so a
-// card left at what the caller handed in disagreed with the row beside it on
-// each of them — and its snapshot routed from an assignee, a status and a
-// watcher list the record does not carry.
+// A caller builds the notification from the task it hands in; the writer then
+// settles the tags' slugs and the default type before the key is minted, and,
+// in the create's snapshot, the project's default assignee and their watch,
+// the starting status and priority, and the person a question is put to, who
+// follows the item from its first record. The card and its snapshot carry what
+// was settled, as the history row, written from the task as FILED, does.
 func TestACreatesCardSaysWhatTheWriterSettled(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -439,9 +407,8 @@ func TestACreatesCardSaysWhatTheWriterSettled(t *testing.T) {
 	r.drain()
 	r.declareTags("api")
 
-	// EVERYTHING THE WRITER SETTLES LEFT FOR IT TO SETTLE: no type, status,
-	// priority or assignee, a tag spelled as a person types it, and a
-	// question put to somebody who is not watching yet.
+	// EVERYTHING LEFT FOR THE WRITER TO SETTLE: no type, status, priority or
+	// assignee, a tag as a person types it, and a question to a non-watcher.
 	task := newTask("t-1")
 	task.Key, task.Type, task.Status, task.StatusGroup, task.Priority = "", "", "", "", ""
 	task.Tags, task.Reporter, task.Watchers = []string{"API"}, "ana", []string{"ana"}

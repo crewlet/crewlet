@@ -25,11 +25,10 @@ type applyHarness struct {
 	applier *worklet.Applier
 	seq     uint64
 
-	// maxVariables is what every collection's insert chunks to. It starts
-	// at the estate's own probed limit, which is what the framework hands
-	// a real apply; a case that wants a CHUNK BOUNDARY it can count sets
-	// its own, because the probed limit and the 1 000-row cap put every
-	// collection the caps permit inside one statement.
+	// maxVariables is what every collection's insert chunks to: the
+	// estate's probed limit, as a real apply gets. A case that needs a chunk
+	// boundary it can count sets its own, since the probed limit and the
+	// 1 000-row cap put every collection the caps permit in one statement.
 	maxVariables int
 }
 
@@ -54,12 +53,9 @@ func (h *applyHarness) apply(rec worklet.MutationRecord, brokerAt time.Time) (in
 	return h.applyAt(rec, brokerAt, h.seq)
 }
 
-// applyAt runs one record at a POSITION THE CALLER CHOOSES.
-//
-// The cases that need it are the ones the ordinary path cannot reach: a record
-// arriving BELOW rows already applied is what a reprocess after an upgrade and
-// a redelivery after an adoption both look like, and both are exactly where a
-// derived value that folded over arrival order would diverge.
+// applyAt runs one record at a position the caller chooses: below rows already
+// applied, as a reprocess after an upgrade or a redelivery after an adoption
+// arrives, where a value folded over arrival order would diverge.
 func (h *applyHarness) applyAt(rec worklet.MutationRecord, brokerAt time.Time,
 	seq uint64) (int, error) {
 	h.t.Helper()
@@ -92,11 +88,8 @@ func (h *applyHarness) applyAt(rec worklet.MutationRecord, brokerAt time.Time,
 		if gated {
 			return &gateError{reason}
 		}
-		// THE REAL PROBED LIMIT, not a left-out zero. MaxVariables is
-		// what every collection's insert chunks to, and a harness that
-		// passed nothing would exercise only the one-row-per-statement
-		// degradation — which is the shape the applier was CONVERTED
-		// AWAY FROM, so the suite would certify the path production
+		// The real probed limit: a zero degrades every insert to a row
+		// per statement, and the suite would certify a path production
 		// does not take.
 		n, err := h.applier.Apply(h.t.Context(), tx, record, statelog.ApplyOptions{
 			Now: brokerAt, StoredAt: brokerAt,
@@ -163,11 +156,8 @@ func taskRecord(id string, op worklet.OpKind, payload any, notify *worklet.Notif
 	}
 }
 
-// filedTask files one plain task into ENG under its own id.
-//
-// THE SEEDER THE READ-SIDE SUITES SHARE, so a case about an activity feed, a
-// blocker or a merge states only what it is about rather than repeating a
-// create.
+// filedTask files one plain task into ENG under its own id: the seeder the
+// read-side suites share, so a case states only what it is about.
 func filedTask(t *testing.T, r *roundTrip, id string) {
 	t.Helper()
 	task := newTask(id)
@@ -178,9 +168,8 @@ func filedTask(t *testing.T, r *roundTrip, id string) {
 	r.drain()
 }
 
-// itoa is strconv.Itoa for a non-negative int, spelled out so a case can
-// compose an id or read a cap back out of a refusal without importing strconv
-// into every file that needs one.
+// itoa is strconv.Itoa for a non-negative int, so a case can compose an id or
+// read a cap out of a refusal without importing strconv.
 func itoa(n int) string {
 	if n == 0 {
 		return "0"
@@ -204,11 +193,8 @@ func newTask(id string) worklet.Task {
 }
 
 // A TURN'S SPEND IS GATED ON ITS OWN INSERT, so a redelivery cannot
-// double-count.
-//
-// The total is a FUNCTION of the applied records rather than a separately
-// transmitted number, which is what makes it impossible for it to disagree
-// with the turns it summarises.
+// double-count: the total is a function of the applied turns, never a
+// separately sent number that could disagree with them.
 func TestATurnsSpendCannotBeCountedTwice(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -237,9 +223,8 @@ func TestATurnsSpendCannotBeCountedTwice(t *testing.T) {
 	if got := h.value(`SELECT spend_input FROM tracker_tasks WHERE id = 't-1'`); got != 1000 {
 		t.Fatalf("after one turn the input spend is %d, want 1000", got)
 	}
-	// THE SAME TURN AGAIN, at a higher position — which is what a
-	// redelivery the ledger no longer collapses, because its retention
-	// sweep removed the row, looks like.
+	// The same turn at a higher position: a redelivery the ledger no
+	// longer collapses, its retention sweep having removed the row.
 	if _, err := h.apply(turn, time.Unix(1_700_000_200, 0).UTC()); err != nil {
 		t.Fatalf("redelivered turn: %v", err)
 	}
@@ -252,11 +237,9 @@ func TestATurnsSpendCannotBeCountedTwice(t *testing.T) {
 	}
 }
 
-// A TURN NAMING A TASK THIS NODE DOES NOT HAVE STOPS THE LOOP.
-//
-// Under a strict replay the create is below this position, so an absent task
-// is a writer's bug rather than a race — and going on would leave a running
-// total nobody can reconcile against the turns it was built from.
+// A TURN NAMING A TASK THIS NODE DOES NOT HAVE STOPS THE LOOP: under a strict
+// replay the create is below it, so an absent task is a writer's bug, not a
+// race, and going on would leave a total nobody can reconcile with its turns.
 func TestATurnForAnAbsentTaskStopsTheLoop(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -275,11 +258,9 @@ func TestATurnForAnAbsentTaskStopsTheLoop(t *testing.T) {
 	}
 }
 
-// THE EVICTION GATE DROPS A RECORD BY ITS POSITION, NOT BY ITS AUTHOR.
-//
-// It depends on nothing but the log's own order, which is what makes it the
-// fence that still holds when coordination cannot be reached at all — and why
-// a record written BEFORE the eviction is applied normally.
+// THE EVICTION GATE DROPS A RECORD BY ITS POSITION, NOT BY ITS AUTHOR: it
+// depends only on the log's order, so it holds when coordination is
+// unreachable, and a record written before the eviction applies normally.
 func TestTheEvictionGateDropsOnlyWhatFollowsIt(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -304,9 +285,8 @@ func TestTheEvictionGateDropsOnlyWhatFollowsIt(t *testing.T) {
 		t.Fatalf("eviction: %v", err)
 	}
 
-	// A RECORD FROM BELOW THE EVICTION, applied after it — which is what a
-	// redelivery looks like once the gate is in place, and the case that
-	// tells a gate keyed on the POSITION from one keyed on the author.
+	// A record from below the eviction applied after it, as a redelivery
+	// arrives: what tells a position-keyed gate from an author-keyed one.
 	redelivered := taskRecord("t-3", worklet.OpCreate, newTask("t-3"), nil)
 	redelivered.Writer = "node-b"
 	redelivered.OpID = "t-3-redelivered"
@@ -335,11 +315,8 @@ func asGate(err error, target **gateError) bool {
 }
 
 // A PURGE'S MARKER IS PERMANENT, AND EVERY LATER RECORD ABOUT THE TASK IS
-// DROPPED.
-//
-// Otherwise a redelivery months later would resurrect rows an operator
-// deliberately removed — which is the one deletion in this design that is
-// meant to be irreversible.
+// DROPPED, or a late redelivery would resurrect rows an operator removed on
+// purpose, in the one deletion meant to be irreversible.
 func TestAPurgedTaskStaysPurged(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -370,14 +347,11 @@ func TestAPurgedTaskStaysPurged(t *testing.T) {
 
 // A PURGE DESTROYS ONE TASK, NOT A SUBTREE — AND LEAVES NO DANGLING PARENT.
 //
-// The purge deleted the row and everything naming it and left each child's
-// `parent_id` pointing at an id that resolves to nothing. No reader can tell
-// that from a parent merely held on another node, and the next edit to such a
-// child derives its depth and root from a chain that stops at nothing.
-//
-// Destroying the children instead would be worse: a purge has no inverse, and
-// "it was under the thing you purged" is not a confirmation anybody gave. So
-// each direct child moves onto the purged task's OWN parent.
+// A child left pointing at a purged id reads like one whose parent is held on
+// another node, and its next edit derives depth and root from a chain that
+// stops at nothing. Purging the children too is worse: a purge has no
+// inverse, and nobody confirmed them. So each direct child moves onto the
+// purged task's own parent.
 func TestAPurgeReParentsItsChildrenRatherThanOrphaningThem(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -411,8 +385,7 @@ func TestAPurgeReParentsItsChildrenRatherThanOrphaningThem(t *testing.T) {
 	if got := h.count("tracker_tasks"); got != 2 {
 		t.Fatalf("%d task rows survive the purge of one task", got)
 	}
-	// AND ITS PARENT RESOLVES. A dangling pointer here is invisible to
-	// every reader and is what the whole case is about.
+	// AND ITS PARENT RESOLVES: a dangling pointer is invisible to readers.
 	var parent sql.NullString
 	if err := h.db.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(),
@@ -426,9 +399,8 @@ func TestAPurgeReParentsItsChildrenRatherThanOrphaningThem(t *testing.T) {
 		t.Errorf("the child's parent is %q (resolves=%v); it should have moved "+
 			"onto the purged task's own parent", parent.String, parent.Valid)
 	}
-	// AND THE DERIVED COLUMNS FOLLOWED. Re-parenting the pointer and
-	// leaving the closure behind is the same dangling reference one join
-	// further away.
+	// AND THE DERIVED COLUMNS FOLLOWED: a moved pointer with a stale
+	// closure is the same dangling reference one join further away.
 	if got := h.value(`SELECT depth FROM tracker_tasks WHERE id = 'child'`); got != 1 {
 		t.Errorf("the moved child is at depth %d rather than 1", got)
 	}
@@ -444,11 +416,9 @@ func TestAPurgeReParentsItsChildrenRatherThanOrphaningThem(t *testing.T) {
 }
 
 // THE EFFECTIVE INSTANT IS A MAX OVER A SET, so a late record RAISES its
-// successors and never lowers them.
-//
-// Two nodes at one checkpoint have seen the same set of rows and a different
-// order of them; a fold over arrival order gives them different answers,
-// permanently, on a column nothing repairs.
+// successors and never lowers them: two nodes at one checkpoint hold the same
+// rows in different orders, and a fold over arrival order would leave them
+// disagreeing for good on a column nothing repairs.
 func TestALateRecordRaisesItsSuccessorsAndNeverLowersThem(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -466,10 +436,9 @@ func TestALateRecordRaisesItsSuccessorsAndNeverLowersThem(t *testing.T) {
 	before := h.value(
 		`SELECT effective_at FROM tracker_history WHERE id = 't-1-create'`)
 
-	// And now one whose broker instant is EARLIER and whose POSITION is
-	// BELOW the rows already applied — which is what a record reprocessed
-	// after an upgrade looks like, and the one case an overwrite would
-	// destroy: every row above it would take this record's older instant.
+	// One with an EARLIER broker instant at a position BELOW the applied
+	// rows, as a record reprocessed after an upgrade arrives: an overwrite
+	// would give every row above it this record's older instant.
 	behind := taskRecord("t-1", worklet.OpPatch,
 		worklet.TaskPatch{Title: ptr("third")}, nil)
 	behind.OpID = "patch-3"
@@ -499,11 +468,9 @@ func TestALateRecordRaisesItsSuccessorsAndNeverLowersThem(t *testing.T) {
 	}
 }
 
-// A QUIET COMMIT WRITES ITS HISTORY ROW AND NO INBOX ROW.
-//
-// "Quiet" means it wakes nobody, and nothing else — so the activity feed is a
-// complete account of what happened rather than an account of what was
-// announced.
+// A QUIET COMMIT WRITES ITS HISTORY ROW AND NO INBOX ROW: quiet means it wakes
+// nobody, and nothing else, so the activity feed records everything that
+// happened, announced or not.
 func TestAQuietCommitIsRecordedAndAnnouncedToNobody(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -540,12 +507,10 @@ func TestAQuietCommitIsRecordedAndAnnouncedToNobody(t *testing.T) {
 
 // A CHANGE ANOTHER WRITER ALREADY MADE RECORDS NO MOVE.
 //
-// A wake is built from the snapshot the writer's tool read OUTSIDE the write's
-// transaction, so two writers setting one status from one stale read both
-// publish a wake claiming todo→done. Only the first apply moves anything; the
-// second compares the row it holds, finds it already done, and its history row
-// must say so — `{}` — rather than store the wake's claim of a move this apply
-// never made, beside the row of the record that did make it.
+// A wake is built from a snapshot read outside the write's transaction, so two
+// writers setting one status from one stale read both claim todo→done. The
+// second apply finds the row already done, and its history row must say `{}`
+// rather than store the wake's claim of a move it never made.
 func TestAChangeAnotherWriterAlreadyMadeRecordsNoMove(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -594,12 +559,10 @@ func TestAChangeAnotherWriterAlreadyMadeRecordsNoMove(t *testing.T) {
 
 // A RECORD THE VERSION GUARD SKIPPED STORES ITS WRITER'S OWN DELTAS.
 //
-// Reprocessed below a successor this node already applied — a record deferred
-// here and read once it could be — it has no document of its own to compare
-// against: the one it would have moved is its successor's. The writer's
-// statement is the only account of what it moved, so that is what its row
-// says, where a comparison against the successor's document would name a move
-// it never made and an empty one would lose it.
+// Reprocessed below a successor already applied (deferred, then read once it
+// could be), it has no document of its own to compare: the one it would have
+// moved is its successor's. So its row holds the writer's statement; comparing
+// against the successor would name a move it never made, and `{}` would lose it.
 func TestARecordTheVersionGuardSkippedStoresItsWritersOwnDeltas(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -635,11 +598,9 @@ func TestARecordTheVersionGuardSkippedStoresItsWritersOwnDeltas(t *testing.T) {
 	}
 }
 
-// THE PROJECT COUNTS ARE MAINTAINED BY THE COMMIT THAT MOVES THEM.
-//
-// An aggregate over every task in every project on every poll is half a
-// million index entries at year five, for three numbers a commit already knows
-// how to move.
+// THE PROJECT COUNTS ARE MAINTAINED BY THE COMMIT THAT MOVES THEM, not
+// aggregated on every poll: half a million index entries at year five, for
+// three numbers a commit already knows how to move.
 func TestTheProjectCountsAreMaintainedRatherThanScanned(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -681,15 +642,13 @@ func TestTheProjectCountsAreMaintainedRatherThanScanned(t *testing.T) {
 
 // A TASK FILED FINISHED IS FINISHED FROM ITS FIRST ROW.
 //
-// A create may name the status it starts in — a person filing into a board's
-// Done lane files a done task, in one record rather than a create followed by
-// a move that could fail after the task was filed in the wrong column. The
-// finish instants and the project census are derived by the applier from the
-// status GROUP on every commit, a create included, so a task created `done`
-// carries `done_at` and counts as done from the start; one created `closed`
-// carries both instants and counts as closed. A create path that skipped the
-// derivation would leave a done task that "finished" at no time, which every
-// "done this week" filter and burn-down quietly drops.
+// A create may name its starting status: filing into a board's Done lane is
+// one record, not a create and a move that could fail in between. The applier
+// derives the finish instants and the project census from the status group on
+// every commit, a create included: created `done` carries `done_at` and counts
+// done, created `closed` carries both and counts closed. Skipping that on a
+// create leaves a done task that finished at no time, which every "done this
+// week" filter and burn-down drops.
 func TestATaskCreatedFinishedIsStampedAndCountedFromItsFirstRow(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -745,11 +704,9 @@ func TestATaskCreatedFinishedIsStampedAndCountedFromItsFirstRow(t *testing.T) {
 	}
 }
 
-// A CYCLE APPLIES COMPLETELY AND RAISES A FLAG.
-//
-// Two concurrent re-parents on two nodes form a shape no single write could
-// see, and both records are legitimately committed. A stalled log is every
-// node stopping over one task's shape; a flag is a repair somebody can make.
+// A CYCLE APPLIES COMPLETELY AND RAISES A FLAG: two concurrent re-parents on
+// two nodes legitimately form a shape no single write could see. A stalled log
+// stops every node over one task; a flag is a repair somebody can make.
 func TestACycleIsFlaggedRatherThanStalling(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -783,39 +740,17 @@ func mustJSON(v any) []byte {
 
 func ptr[T any](v T) *T { return &v }
 
-// ONE SPELLING OF "NOTHING MOVED" IN THE FIELDS COLUMN.
+// ONE SPELLING OF "NOTHING MOVED" IN THE FIELDS COLUMN: `{}`, never `null`.
 //
-// # What this protects
+// `fields_json` comes from the applier's deltas or the record's notification,
+// both [TaskDeltas], whose nil map marshals to `null`. Readers coalesce both,
+// so nothing but a test sees a second spelling until a query compares them.
 //
-// `fields_json` is written from one of two places — the applier's own deltas
-// where it compared two documents, and the RECORD's notification where it did
-// not. Both are [TaskDeltas], and [TaskDeltas] returns a NIL map when nothing
-// moved. `jsonOf` is `json.Marshal`, and a nil map marshals to the literal
-// `null`.
-//
-// So on `notify != nil` alone, every loud commit that moved no field stored
-// `null` in a column whose every other row stores `{}`. Nothing broke:
-// `json_extract` answers NULL against either and the dashboard coalesces. That
-// is exactly why it survived, and exactly what makes it worth a test — two
-// spellings of one fact in one column are indistinguishable until the first
-// query compares them, and then they disagree silently.
-//
-// A LEAD RE-STATING A PRIORITY LIST IS THE CASE TO ASSERT ON, and the choice
-// is load-bearing twice over. It is loud — a lead writing somebody else's
-// queue is the one person write that announces itself, so the row reaches the
-// notification branch at all — and the SECOND statement of one list moves
-// nothing, because `personDeltas` deliberately records who re-ordered a queue
-// and not when (`priorities_set_at` moves on every write and would make every
-// re-statement look like a change).
-//
-// It used to be the FIRST such write, on the argument that a document apply
-// "passes no deltas at all". That is no longer true and was the bug
-// `deltas.go` exists to fix: every document apply now compares the stored
-// object with the record's, so a first priorities write moves `priorities` and
-// `priorities_set_by` and has a real delta to store. A purge looks like the
-// obvious alternative and is not — `Gates.purgeNotify` returns nil unless the
-// project has a lead, so on a harness without one the row takes neither branch
-// and the assertion passes for the wrong reason.
+// The case is a lead re-stating a priority list: loud (writing somebody else's
+// queue announces itself), and moving nothing, since `personDeltas` records who
+// re-ordered a queue, not when. Not the first write: it has a real delta. Not
+// a purge: `Gates.purgeNotify` returns nil without a project lead, so the row
+// would take neither branch and pass for the wrong reason.
 func TestAHistoryRowWithNoDeltasStoresAnEmptyObject(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -823,16 +758,13 @@ func TestAHistoryRowWithNoDeltasStoresAnEmptyObject(t *testing.T) {
 		t.Fatalf("CreateTask: %v", err)
 	}
 	r.drain()
-	// A LEAD WRITING SOMEBODY ELSE'S LIST, because that is what carries a
-	// notification: a person reordering their OWN queue announces nothing,
-	// so a self-write leaves `notified = 0` and never reaches the branch
-	// this case is about.
+	// A lead writing somebody else's list: reordering one's own queue
+	// announces nothing (`notified = 0`) and never reaches the branch.
 	lead := r.writer.As("bob", worklet.AuthorHuman, worklet.Provenance{})
 	for i, op := range []string{"op-prio", "op-prio-again"} {
-		// THE CLOCK MOVES BETWEEN THEM, which is what makes the second
-		// write a real test of the one field `personDeltas` leaves out:
-		// `priorities_set_at` is re-stamped on every lead write, so on a
-		// frozen clock this case would pass whether or not it were
+		// The clock moves between them: `priorities_set_at`, the field
+		// `personDeltas` leaves out, is re-stamped on every lead write, so
+		// on a frozen clock this case would pass whether or not it were
 		// recorded.
 		r.at = wednesday.Add(time.Duration(i) * time.Hour)
 		if _, err := lead.WritePriorities(t.Context(), op, "ana",
@@ -842,9 +774,8 @@ func TestAHistoryRowWithNoDeltasStoresAnEmptyObject(t *testing.T) {
 		r.drain()
 	}
 
-	// THE NEWEST ROW, which is the re-statement. The first write is the
-	// one that moved the list onto an empty record and has a delta of its
-	// own — see TestAPriorityListRecordsTheOrderItMoved.
+	// The newest row is the re-statement; the first write has a delta of
+	// its own (TestAPriorityListRecordsTheOrderItMoved).
 	got := r.strings(`SELECT fields_json FROM tracker_history
 		WHERE subject_kind = ? AND kind = ?
 		ORDER BY log_seq DESC LIMIT 1`,
@@ -854,9 +785,7 @@ func TestAHistoryRowWithNoDeltasStoresAnEmptyObject(t *testing.T) {
 			"asserts nothing about the column it is here for")
 	}
 	// AND THE ROW CARRIED A NOTIFICATION, or the branch under test was
-	// never taken and `{}` below is the untouched initial value rather
-	// than an answer. This is the assertion the first draft of this case
-	// was missing, and it passed either way without it.
+	// never taken and `{}` below is the initial value, not an answer.
 	if notified := r.strings(`SELECT notified FROM tracker_history
 		WHERE subject_kind = ? AND kind = ?
 		ORDER BY log_seq DESC LIMIT 1`,
@@ -877,11 +806,10 @@ func TestAHistoryRowWithNoDeltasStoresAnEmptyObject(t *testing.T) {
 
 // A KIND NOBODY DECLARED FAULTS THE APPLY, rather than applying as nothing.
 //
-// A record of a kind this build has no case for, at a version it can read, is a
-// writer that published a kind it never declared: the dispatch has nothing to
-// hand it to, and the applier's unconditional return after the switch is what
-// makes that mistake visible. It is not a gate — a gate drops a record
-// knowingly — and nothing is written.
+// A kind this build has no case for, at a version it can read, is a writer's
+// undeclared kind; the applier's unconditional return after the dispatch
+// switch makes that visible. It is not a gate (a gate drops a record
+// knowingly), and nothing is written.
 func TestAKindNobodyDeclaredFaults(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -906,12 +834,10 @@ func TestAKindNobodyDeclaredFaults(t *testing.T) {
 // A REMARK'S RECORDS WRITE ONLY WHAT EACH OWNS: a post creates the row, an edit
 // rewrites its words, and neither reaches the column an answer put there.
 //
-// The apply was one upsert of everything the record carried, and a comment
-// record carries no `answered_by` — so it wrote NULL there every time. An
-// author correcting the wording of a question somebody had already answered
-// reopened it on every board, in `asked_of=` and in the answerer's own queue;
-// a post re-sent under an id that already held a row rewrote that row whole,
-// edit and answer included.
+// A comment record carries no `answered_by`, so upserting all it carries
+// would reopen an answered question on every board, in `asked_of=` and in the
+// answerer's queue whenever its author fixed the wording, and a post re-sent
+// under an existing id would rewrite the row whole.
 func TestAnEditOfAQuestionKeepsTheAnswerThatClosedIt(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -1027,12 +953,10 @@ func TestAnEditOfAQuestionKeepsTheAnswerThatClosedIt(t *testing.T) {
 
 // A RESOLVE WRITES THE RESOLUTION AND NOTHING ELSE: that a remark is resolved,
 // who resolved it and when, in its columns and in the document carrying them,
-// beside the words its edit wrote and the answer that closed it.
-//
-// The apply wrote only what a post and an edit own, so a resolve record went
-// the way of a post, found its row already there and wrote nothing: a
-// question resolved without an answer stayed open on every board and in its
-// person's queue, and was missing from what they decided lately.
+// beside the words its edit wrote and the answer that closed it. Applied as a
+// post, it would find its row there and write nothing, leaving a question
+// resolved without an answer open on every board, in its person's queue and
+// out of what they decided lately.
 func TestAResolveWritesTheResolutionAndNothingElse(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -1156,12 +1080,11 @@ func TestAResolveWritesTheResolutionAndNothingElse(t *testing.T) {
 
 // A REMOVAL RECORD TAKES DOWN ONLY A REMARK THE NODE HOLDS.
 //
-// The removal kind is [worklet.Writer.RemoveComment]'s, and its apply blanks
-// and flags the remark's row and keeps it, so a reply under it still resolves.
-// A record of it naming a remark this node does not hold must not take the
-// post's arm, which every kind but an edit, a resolve and a removal takes:
-// there it made the remark up from the removal, closing the ask that remark
-// claimed to answer.
+// [worklet.Writer.RemoveComment]'s apply blanks and flags the remark's row and
+// keeps it, so a reply under it still resolves. One naming a remark this node
+// does not hold must not take the post's arm (every kind but an edit, a
+// resolve and a removal takes it), which would make the remark up and close
+// the ask it claimed to answer.
 //
 // Mutation: drop the removal kind's arm and the removal of a remark the node
 // does not hold writes a row and closes cm-2; make the arm write nothing and
@@ -1277,14 +1200,12 @@ func TestAHistoryRowKeepsAppsOnlyFromTheVersionThatSaysSo(t *testing.T) {
 }
 
 // A HISTORY ROW KEEPS WHOM AN AGENT'S WRITE WAS MADE FOR (ADR-0109), the same
-// on every node: the carrier a version-13 record rode, as its JSON, and NULL
-// for a record that carries none and for one below the carrier's version,
-// which an older build's applier wrote with no such column to fill, whatever
-// it holds. Kept from the carrier's first build on, before the pickup read it,
-// because a replicated migration runs on each node when it opens rather than
-// at a log position: a column a later build began to fill would differ between
-// a node that applied these records before it upgraded and one that applied
-// them after.
+// on every node: a version-13 record's carrier as JSON, and NULL for a record
+// carrying none or below the carrier's version (an older applier had no
+// column to fill), whatever it holds. Filled from the carrier's first build,
+// before anything read it, because a replicated migration runs on each node
+// when it opens, not at a log position: a column a later build began filling
+// would differ between nodes that applied these records before and after.
 //
 // Mutation: drop the fill, and the record made for ada keeps NULL on both
 // nodes; fill the column from a record that carries nobody, and it keeps

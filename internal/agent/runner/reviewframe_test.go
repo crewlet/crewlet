@@ -11,14 +11,9 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 )
 
-// The FRAME REACHES THE MODEL, which is the half a unit test of the helper
-// cannot see.
-//
-// reviewTask's own test proves the string is built; this proves the review
-// phase actually sends it. Wiring the bare trigger back into the user message
-// would leave that one green, and the bare trigger is precisely the bug: next
-// to an `## Earlier rounds` block showing a question the turn had already
-// posted, a reviewer reads it as the sender asking a second time.
+// The FRAME REACHES THE MODEL: reviewTask's own test proves the string is
+// built, this that the review phase sends it. A bare trigger beside an
+// `## Earlier rounds` block reads to a reviewer as the sender asking again.
 func TestTheReviewerReceivesTheTriggerFramedAsTheTurnsOwn(t *testing.T) {
 	t.Parallel()
 	r, prov, _ := fixture(t, &scriptedProvider{
@@ -32,17 +27,16 @@ func TestTheReviewerReceivesTheTriggerFramedAsTheTurnsOwn(t *testing.T) {
 	if !strings.Contains(user, "ALREADY working on") {
 		t.Errorf("the reviewer was handed the trigger bare:\n%s", user)
 	}
-	// And the trigger itself still reaches it verbatim — the frame is
-	// context in front of the evidence, never a rewrite of it.
+	// The trigger still reaches it verbatim: the frame precedes the
+	// evidence, never rewrites it.
 	if !strings.Contains(user, "post the weekly summary") {
 		t.Errorf("the trigger was lost in the framing:\n%s", user)
 	}
 }
 
-// The EXECUTOR is still handed it bare, which is the other half of the same
-// fact: the executor's run is being given the trigger as the thing to do, and
-// a frame saying "you were already working on this" would be false on round 1
-// and would cost the prompt-prefix cache on every round after.
+// The EXECUTOR is still handed it bare: to it the trigger is the thing to do,
+// and "you were already working on this" would be false on round 1 and cost
+// the prefix cache every round after.
 func TestTheExecutorIsStillHandedTheTriggerBare(t *testing.T) {
 	t.Parallel()
 	_, req := launch(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
@@ -56,17 +50,10 @@ func TestTheExecutorIsStillHandedTheTriggerBare(t *testing.T) {
 	}
 }
 
-// The frame does not move between rounds.
-//
-// The review phase re-sends its user message every round and the provider's
-// prefix cache is keyed on those bytes, so a frame that varied per round — a
-// round number in the label, a correction folded in — would cost a cache miss
-// on every round of every turn. That is why this is a plain function of the
-// task and not [Runner.taskFor]'s per-round correction.
-//
-// Driven through two real rounds rather than comparing one call to itself:
-// the property is about what the PHASE sends, and a pure function compared
-// with a pure function is a tautology that cannot fail.
+// The frame does not move between rounds: the provider's prefix cache is keyed
+// on the user message the review re-sends each round, so it is a plain
+// function of the task, not [Runner.taskFor]'s per-round correction. Driven
+// through two real rounds, since the property is what the PHASE sends.
 func TestTheReviewFrameDoesNotMoveBetweenRounds(t *testing.T) {
 	t.Parallel()
 	r, prov, _ := fixture(t, &scriptedProvider{
@@ -90,12 +77,9 @@ func TestTheReviewFrameDoesNotMoveBetweenRounds(t *testing.T) {
 	}
 }
 
-// A TASK'S CHARGE COUNTS THE REVIEWS THAT SENT ITS WORK BACK.
-//
-// The count is taken from the review phases' own records — the decision each
-// one published — as the count of reviews and of those that did not accept
-// is, which the record ending the turn states for the usage domain. Rounds and the phases that ran ride the same tally, because
-// a task's charge reads all three from it.
+// A TASK'S CHARGE COUNTS THE REVIEWS THAT SENT ITS WORK BACK, from the
+// decisions the review phases published, on the same tally as rounds and the
+// phases that ran, which the turn's ending record states for the usage domain.
 func TestTheSpendCountsTheReviewsThatSentWorkBack(t *testing.T) {
 	t.Parallel()
 	r, _, _ := fixture(t, &scriptedProvider{
@@ -116,9 +100,8 @@ func TestTheSpendCountsTheReviewsThatSentWorkBack(t *testing.T) {
 		t.Errorf("sent back = %d over a turn whose reviewer returned the work "+
 			"twice and accepted it once, want 2", spend.SentBack)
 	}
-	// AND THE REVIEWS THEMSELVES, which the record that ends the turn states
-	// whole (types.TurnTally): three ran, and two did not accept — so the
-	// turn was not accepted by its first.
+	// The reviews, stated whole by the turn's ending record
+	// (types.TurnTally): three ran and two did not accept.
 	if spend.Reviews != 3 || spend.Unaccepted != 2 {
 		t.Errorf("reviews = %d, unaccepted = %d over three reviews of which two sent the "+
 			"work back, want 3 and 2", spend.Reviews, spend.Unaccepted)
@@ -129,9 +112,9 @@ func TestTheSpendCountsTheReviewsThatSentWorkBack(t *testing.T) {
 	if len(spend.Phases) != 1 || spend.Phases[0] != "review" {
 		t.Errorf("phases = %v, want the one phase that ran, once", spend.Phases)
 	}
-	// AND WHAT THE LAST SEND-BACK ASKED FOR: the pass that followed it is
-	// the one that answered, so a task's turn card quotes that request —
-	// never the first, and never the acceptance's own empty notes.
+	// The last send-back's request, which the following pass answered, is
+	// what the turn card quotes: not the first, nor the acceptance's empty
+	// notes.
 	if spend.Review != "closer" {
 		t.Errorf("review = %q, want the newest send-back's notes %q",
 			spend.Review, "closer")

@@ -11,13 +11,11 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
-// A ROW'S COMPUTED SIZE IS ITS ENCODING'S LENGTH, EXACTLY. A page is held to
-// its byte budget by these sizes, so a size short of the encoding lets a page
-// past the reply ceiling and one past it cuts pages short. Each row type is
-// filled AT RANDOM, EVERY FIELD by reflection — so a field added to a row
-// without its term in rowbytes.go is filled here and the sizes part — and
-// compared with json.Marshal, hundreds of times over strings that take every
-// escape encoding/json writes.
+// A ROW'S COMPUTED SIZE IS ITS ENCODING'S LENGTH, EXACTLY (rowbytes.go says
+// why). Each row type is filled AT RANDOM, EVERY FIELD by reflection, so a
+// field added to a row without its term in rowbytes.go is filled here and the
+// sizes part, and compared with json.Marshal hundreds of times over strings
+// that take every escape encoding/json writes.
 func TestARowsComputedSizeIsItsEncodingsLength(t *testing.T) {
 	t.Parallel()
 	rng := rand.New(rand.NewPCG(1, 2))

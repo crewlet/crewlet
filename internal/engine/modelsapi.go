@@ -12,22 +12,20 @@ import (
 )
 
 // LocalModel is what THIS node resolved for one entry of its active revision,
-// as Settings › Models reads it beside the fleet's status records: how the entry
-// signs in here, the variable its credential is read from, whether it
-// resolved, and the hint and lifetime of the value it resolved.
+// read by Settings › Models beside the fleet's status records: the sign-in
+// route, the credential's variable, whether it resolved, and the value's hint
+// and lifetime.
 //
-// NOTHING HERE IS PUBLISHED OR STORED. The node's status record carries the
-// route and whether it resolves; the variable's name, the hint and the lifetime
-// are answered only to the person asking this node, which is why they are read
-// here rather than off a record.
+// Nothing here is published or stored: the status record carries only the
+// route and whether it resolves, and the rest is answered only to the person
+// asking this node.
 type LocalModel struct {
 	Key string
 	// Route is harness's sign-in route on this node: token, credentials,
 	// api-key, env, inherit-env, environment or none.
 	Route string
-	// Variable is the variable the entry's credential is read from: its
-	// token's under subscription and inherit-env, its key's under api-key,
-	// "" for a route that reads none.
+	// Variable is the variable the credential is read from: the token's under
+	// token and inherit-env, the key's under api-key, "" otherwise.
 	Variable string
 	Resolves bool
 	// Hint is the resolved credential's ([harness.Provider.CredentialHint]).

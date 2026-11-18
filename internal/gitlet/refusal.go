@@ -30,11 +30,8 @@ const (
 	// RefusalTagMoved is a tag pushed over another value.
 	RefusalTagMoved Refusal = "tag_moved"
 	// RefusalReservedRef is a ref outside refs/heads/ and refs/tags/, one
-	// under the engine's own refs/crewlet/, or one of the two kinds of ref
-	// under refs/heads/seats that are nobody's: the root itself as a branch,
-	// and a seat's namespace as a branch ([gitref.ReservedSeatBranch], which
-	// says why: either would block seats' namespaces under
-	// [RefusalRefConflict]).
+	// under the engine's refs/crewlet/, or refs/heads/seats itself or a seat's
+	// namespace as a branch ([gitref.ReservedSeatBranch] says why).
 	RefusalReservedRef Refusal = "reserved_ref"
 	// RefusalNotPermitted is a command the principal's grant on the
 	// repository does not cover ([Grant.RefRule], ADR-0088).
@@ -50,12 +47,8 @@ const (
 	// RefusalRepoImporting is a write to a repository being imported from
 	// another host ([RepoStatusImporting]) — a push, a change's every write,
 	// an expunge — which takes none until its import is done
-	// ([ImportingDetail]).
-	//
-	// RECORDABLE AS repo_archived IS, though the push decide refuses the
-	// whole push for it, so no record carries it today: a value of
-	// Command.Reason the domain landed on main with, in the base format
-	// ([RecordVersion]).
+	// ([ImportingDetail]). Recordable as repo_archived is, in the base format
+	// ([RecordVersion]), though the push decide refuses the whole push for it.
 	RefusalRepoImporting Refusal = "repo_importing"
 	// RefusalRepoMirrored is a write to a PULL MIRROR ([RepoRef.Mirrored]) —
 	// a push, a change's every write — which moves only by its syncs from
@@ -71,14 +64,10 @@ const (
 	// keeps a ref as a file and a file is never also a directory.
 	RefusalRefConflict Refusal = "ref_conflict"
 	// RefusalDefaultBranch is a deletion of the repository's default branch
-	// ([DefaultBranchRefusal]): the branch its HEAD names, which every clone
-	// checks out and a change is proposed into where it names no target. It
-	// is refused whoever deletes it, by a push, a write or a merge deleting
-	// its source, and lands once another branch is made the default.
-	//
-	// RECORDED, as a protection's refusal is: who tried to delete it is an
-	// audit fact. A build that predates it reads the code as a value and the
-	// detail beside it as it was written.
+	// ([DefaultBranchRefusal]), refused whoever deletes it (a push, a write, a
+	// merge deleting its source) until another branch is made the default.
+	// Recorded, as a protection's refusal is: who tried is an audit fact. An
+	// older build reads the code as a value and its detail as written.
 	RefusalDefaultBranch Refusal = "default_branch"
 	// RefusalUploadExpired is a pack uploaded longer ago than a write may
 	// still name it (objstore.RecordWithin).
@@ -95,120 +84,66 @@ const (
 	// commits them.
 	RefusalBusy Refusal = "busy"
 	// RefusalCompactionBehind is a push carrying a pack into a repository
-	// that holds MaxPacksPerRepo live packs or more: its compaction has not
-	// caught up with its pushes, nothing of the push was decided, and it
-	// lands when it is run again once a compaction has merged the packs. A
-	// push carrying no pack — deletions, refs moved onto commits the
-	// repository holds — adds none, and is never refused for it.
+	// holding MaxPacksPerRepo live packs or more: nothing was decided, and it
+	// lands once compaction has merged the packs. A push carrying no pack is
+	// never refused for it. The push decide refuses it from the rows, counting
+	// its batch's earlier entries' packs ([working.behind]); the receiver,
+	// before upload, from the row read again; one sentence ([BehindDetail]).
 	//
-	// The push decide refuses it, from the rows, counting the packs of its
-	// batch's earlier entries ([working.behind]), and the receiver before it
-	// uploads the push's bundle, from the row it read again — one sentence
-	// for both ([BehindDetail]).
-	//
-	// AN ANSWER ABOUT A PUSH, never recorded on a command ([Refusal.Recorded]):
-	// the decide refuses the whole push and its record carries nothing of it,
-	// so it is no field of the code domain's records and takes no
-	// versionedFields row. The estate router carries it from a committer to
-	// the receiver in [PushAnswer.Refused], where a build that does not know
-	// the code says it by its name, beside the decide's sentence.
+	// An answer about a push, never recorded ([Refusal.Recorded]): the decide
+	// refuses the whole push, so it is no field of the code domain's records
+	// and takes no versionedFields row. The estate router carries it to the
+	// receiver in [PushAnswer.Refused], where a build that does not know it
+	// says its name.
 	RefusalCompactionBehind Refusal = "compaction_behind"
-	// RefusalPushQuota is a SEAT'S push past the pushes its seat may make in
-	// one company day, every repository together
-	// (code.limits.pushes_per_seat_day, [Limits.PushesPerSeatDay]): nothing
-	// of the push was decided, and it lands when it is run again once the
-	// day has turned — the sentence names the instant ([quotaDetail]). A
-	// person's push and a token's are never counted: the bound is on what a
-	// RUNAWAY seat costs the code log, a record a push, which a person's
-	// own hand already bounds.
+	// RefusalPushQuota is a seat's push past code.limits.pushes_per_seat_day
+	// ([Limits.PushesPerSeatDay]), every repository together: nothing was
+	// decided, and it lands once the company day turns ([quotaDetail] names
+	// the instant). A person's or a token's push is never counted: the bound
+	// is on what a runaway seat costs the code log, a record a push.
 	//
-	// UNRECORDED, for that reason: a recorded refusal costs the log an entry
-	// a refused push, so a seat pushing in a loop past its quota would still
-	// cost the log a record a push — the very cost the quota exists to
-	// bound. The push decide refuses the whole push, its record carries
-	// nothing of it, and the batch's other entries go on.
-	//
-	// AN ANSWER ABOUT A PUSH, never recorded on a command ([Refusal.Recorded]),
-	// as compaction_behind is: no field of the code domain's records and no
-	// versionedFields row, carried by the estate router in
-	// [PushAnswer.Refused].
+	// Unrecorded for that reason, since a recorded refusal would still cost
+	// the log an entry a push. An answer about a push, as compaction_behind
+	// is; the batch's other entries go on.
 	RefusalPushQuota Refusal = "push_quota"
-	// RefusalExpunging is a push its receiver checked against the
-	// repository at another drop epoch than the repository's
-	// ([Proposal.DropEpoch]): an expunge began on it since ([ExpungeBegin]),
-	// leaving dropping what the receiver's copy held live, so a command of
-	// the push may name an object the expunge's commit retires. Nothing of
-	// the push was decided, and it lands when it is run again, checked
-	// against the repository as the begin left it — a deletion too, since
-	// the refusal is of the copy the push was checked against, never of a
-	// command.
-	//
-	// The push decide refuses it, from the epoch the proposal carries
-	// against the row's, after the repository's status and before any rule
-	// of the push's own ([ExpungingDetail]).
-	//
-	// AN ANSWER ABOUT A PUSH, never recorded on a command ([Refusal.Recorded]),
-	// as compaction_behind is: no field of the code domain's records and no
-	// versionedFields row, carried by the estate router in
-	// [PushAnswer.Refused].
+	// RefusalExpunging is a push its receiver checked at another drop epoch
+	// than the repository's ([Proposal.DropEpoch]): an expunge began since
+	// ([ExpungeBegin]), so a command may name an object its commit retires.
+	// Nothing was decided; run again, it is checked against the repository as
+	// the begin left it, a deletion too (the refusal is of the copy, not of a
+	// command). The push decide refuses it after the repository's status and
+	// before any rule of the push's own ([ExpungingDetail]). An answer about a
+	// push, as compaction_behind is.
 	RefusalExpunging Refusal = "expunging"
-	// RefusalTooManyChanges is a push that moves more live changes than its
-	// record can carry the rows of beside its own — each change's row, the
-	// revision a head move writes and the author it makes, a merge's and a
-	// close's row (revisions.go) — past [MaxRecordRows] even alone in its
-	// record: a push of hundreds of branches each heading a live change, in
-	// practice a bot's force-push of every change it rebased. A person's push
-	// landing on hundreds of protected branches is refused the same way, each
-	// landing two rows of its own ([PushEntry.Landings]), its sentence naming
-	// them. Nothing of it was decided, and it lands as several pushes of fewer
-	// branches.
-	//
-	// The push decide refuses it, from the change rows and the protection
-	// rules its snapshot holds, counted as the record's apply will write them
-	// ([changeBook], [entryRows]); a push whose rows fit alone but not beside
-	// the entries before it is refused nothing — the committer carries it to
-	// lead its next record.
-	//
-	// AN ANSWER ABOUT A PUSH, never recorded on a command ([Refusal.Recorded]),
-	// as compaction_behind is: no field of the code domain's records and no
-	// versionedFields row, carried by the estate router in
-	// [PushAnswer.Refused].
+	// RefusalTooManyChanges is a push whose live changes' rows (each change's
+	// row, a head move's revision and author, a merge's and a close's row:
+	// revisions.go) and landings on protected branches (two rows each,
+	// [PushEntry.Landings]) take its record past [MaxRecordRows] even alone,
+	// in practice a bot force-pushing every change it rebased. Nothing was
+	// decided; it lands as several smaller pushes. The push decide counts the
+	// rows as the apply writes them ([changeBook], [entryRows]); a push that
+	// fits alone but not beside earlier entries is not refused: the committer
+	// carries it to lead its next record. An answer about a push, as
+	// compaction_behind is.
 	RefusalTooManyChanges Refusal = "too_many_changes"
 	// RefusalUnavailable is the code log or the object store refusing.
 	RefusalUnavailable Refusal = "unavailable"
-	// RefusalStoreFull is a push whose bundle the object store refused
-	// because it has no room for it (objstore.ErrFull): nothing was stored
-	// and nothing proposed.
-	//
-	// NOT unavailable, whose sentence says to run git push again: a full
-	// store refuses the same push the same way until an operator makes the
-	// room it names (objstore.Full), so that sentence sent a person — and a
-	// CI runner on a loop — to push again into a store that could not take
-	// it. The landing's own line names that room; this fixed sentence names
-	// none, since the room is the store's to say.
-	//
-	// AN ANSWER ABOUT A PUSH, decided by the node that received it before
-	// any proposal: never recorded on a command ([Refusal.Recorded]) and
-	// never carried by the estate router, so it is no field of the code
-	// domain's records and takes no versionedFields row.
+	// RefusalStoreFull is a push whose bundle the object store refused for lack
+	// of room (objstore.ErrFull): nothing was stored or proposed. Not
+	// unavailable, whose sentence says to push again: a full store refuses the
+	// same push until an operator makes the room (objstore.Full), which the
+	// landing's own line names. An answer about a push, decided by its receiver
+	// before any proposal: never recorded ([Refusal.Recorded]) nor carried by
+	// the estate router, so no record field and no versionedFields row.
 	RefusalStoreFull Refusal = "store_full"
-	// RefusalForgedCommitter is a CODING BOX'S push whose pack holds a commit
-	// committed as the engine — `engine@<code.identity_domain>`, the address
-	// only the host's own writes carry (ADR-0092), in whatever case it is
-	// written — that the repository does not already hold, or more such
-	// commits than one push is checked for: refused whole by the node that
-	// received it before any byte of its bundle was uploaded, so nothing was
-	// stored and nothing proposed. A box runs code nobody vouches for, and a
-	// commit it stored under the engine's name would read as the host's own
-	// write in every clone's history; a person's push and an import may carry
-	// the engine's commits as git carries any commit — a branch pushed back
-	// from a clone, an export imported again.
-	//
-	// AN ANSWER ABOUT A PUSH, decided by the node that received it before
-	// any proposal, as store_full is: never recorded on a command
-	// ([Refusal.Recorded]) and never carried by the estate router, so it is
-	// no field of the code domain's records and takes no versionedFields
-	// row.
+	// RefusalForgedCommitter is a coding box's push whose pack holds a commit
+	// the repository does not already hold committed as the engine
+	// (`engine@<code.identity_domain>`, in any case; ADR-0092), or more such
+	// commits than one push is checked for: refused whole by its receiver
+	// before any upload. A box runs code nobody vouches for, and such a commit
+	// would read as the host's own write in every clone; a person's push and an
+	// import may carry the engine's commits as git carries any. An answer
+	// about a push, as store_full is.
 	RefusalForgedCommitter Refusal = "forged_committer"
 	// RefusalNotApplied is a push durable on the log and applied nowhere.
 	RefusalNotApplied Refusal = "not_applied"
@@ -308,21 +243,15 @@ func (r Refusal) Sentence() string {
 }
 
 // RepoGone is what became of a repository a push is refused repo_deleted for,
-// as the rows that refuse it hold it: the one input of the sentence that
-// refusal carries ([RepoGone.Detail]).
+// as the rows hold it: the one input of [RepoGone.Detail].
 //
-// ONE CODE, FOUR STATES, FOUR REMEDIES. A repository removed from code.repos
-// is DELETED, and declaring it again brings it back as it was — until its
-// purge begins, code.deleted_retention_days after the deletion at the
-// earliest. Once its purge has begun it is PURGING, which has no undo: the
-// name declared again waits for the purge (code_repo_awaits_purge) and is
-// then a NEW, empty repository. A PURGED one has left only its deletion
-// marker, and its name declared again is likewise a new repository. And an
-// id no record ever created is no repository at all. The code stays one,
-// because what a client does about all four is the same — it cannot push
-// there — but one sentence for the four told a client whose repository was
-// being purged, or was gone, that declaring it again would restore it: the
-// one remedy that is false there.
+// One code, four states, four remedies: DELETED is restored by declaring it
+// again until its purge begins (code.deleted_retention_days on); PURGING has
+// no undo, and its name declared again waits for the purge
+// (code_repo_awaits_purge), then is a new, empty repository; PURGED left only
+// its deletion marker, and its name makes a new repository; an id no record
+// created is none. One code, since a client pushes to none of them; one
+// sentence for all four would promise a false restore.
 type RepoGone struct {
 	// ID is the repository the push named.
 	ID string
@@ -342,24 +271,17 @@ type RepoGone struct {
 	// holds: its purge has completed.
 	Purged bool
 	// ManagedBy is who manages a repository with a row, which decides its
-	// remedy: a declaration restores a repository code.repos declares, and a
-	// restore through the code tools one a tool made. "" — a repository with
-	// no row, whose manager nothing this node holds says — is a
-	// configuration's, the only kind a purged one's marker was written for
-	// before tools made repositories.
+	// remedy: a declaration for code.repos', a code-tools restore for a
+	// tool's. "" (no row) is a configuration's, the only kind a purged one's
+	// marker was written for before tools made repositories.
 	ManagedBy ManagedBy
 }
 
 // Detail is the sentence of a push or a compaction refused repo_deleted for g:
-// what became of the repository and what, if anything, brings it back — by
-// who manages it: a declaration for a repository code.repos declares, a
-// restore through the code tools for one a tool made.
-//
-// A deleted repository's sentence names the instant its purge may begin — the
-// deletion plus the deciding node's retention: the earliest the code-retention
-// duty begins it under that epoch, which runs on a tick and may begin it
-// later. Named as when the purge MAY BEGIN, never as "restorable until", which
-// would promise an instant nothing holds the purge to.
+// what became of the repository and what, by who manages it, brings it back.
+// A deleted one's names when its purge MAY BEGIN (the deletion plus the
+// deciding node's retention; the duty runs on a tick and may begin later),
+// never "restorable until", which nothing holds the purge to.
 func (g RepoGone) Detail() string {
 	named := cmp.Or(g.Name, g.ID)
 	restores, recreates := "declaring it again in code.repos restores it", "declaring its name in code.repos"
@@ -384,11 +306,9 @@ func (g RepoGone) Detail() string {
 }
 
 // ArchivedDetail is the sentence of a push refused repo_archived: which
-// repository, where it is archived — code.repos for a repository it declares,
-// a person's or a seat's tool for one a tool made — and what it still serves.
-// ONE SPELLING for the two places that refuse it (ADR-0008) — the push decide,
-// from the rows, and Gitlet, at a push's advertisement or its request,
-// where a person's git prints it as the reason the push was refused.
+// repository, where it is archived (code.repos, or a tool) and what it still
+// serves. One spelling for the push decide and Gitlet's check at a push's
+// advertisement or request (ADR-0008).
 func ArchivedDetail(name string, managedBy ManagedBy) string {
 	if managedBy == ManagedTools {
 		return fmt.Sprintf("repository %s is archived and read-only: it is fetched, and takes no push "+
@@ -398,39 +318,27 @@ func ArchivedDetail(name string, managedBy ManagedBy) string {
 		"it is fetched, and takes no push", name)
 }
 
-// BehindDetail is the sentence of a push refused compaction_behind: which
-// repository, how many live packs it holds, the most a push may take it to
-// ([MaxPacksPerRepo]), and that nothing was decided. ONE SPELLING for the two
-// places that refuse it (ADR-0008) — the push decide, from the rows and the
-// packs of its batch's earlier entries, and Gitlet before it uploads a
-// push's bundle, from the row it read again.
+// BehindDetail is the sentence of a push refused compaction_behind: the
+// repository, its live packs, the bound ([MaxPacksPerRepo]) and that nothing
+// was decided; one spelling for the push decide and the receiver (ADR-0008).
 //
-// It names the count the repository holds beside the bound rather than
-// calling the count the most it may hold, because a repository can hold more
-// than this build's bound — a later build may raise it, and a fleet in the
-// middle of its upgrade hands the repository back to a committer of this one
-// — and "the most it may hold" beside a larger count says what is not so. It
-// asks for the push again in a minute rather than at once, as busy does not:
-// only a repository whose pushes outran its compaction meets the bound, and a
-// retry within seconds meets it again — uploading nothing, but costing the
-// receiver its read of the row and the client its whole pack's send.
+// It never calls the bound the most a repository may hold: a later build may
+// raise it, and mid-upgrade a repository can hold more. It asks for the push
+// again in a minute, unlike busy: only pushes outrunning compaction meet the
+// bound, and a retry within seconds meets it again, costing the receiver its
+// row read and the client its whole pack's send.
 func BehindDetail(name string, held int64) string {
 	return fmt.Sprintf("%s holds %d live packs, and a push adds none past %d until compaction catches up: "+
 		"nothing was decided; run git push again in a minute", name, held, MaxPacksPerRepo)
 }
 
-// ExpungingDetail is the sentence of a push refused expunging: which
-// repository, the drop epoch its receiver checked it at and the one the
-// repository is at, and that nothing was decided. Formed by the push decide
-// alone: the epoch a receiver carries is its own copy's, so it has nothing to
-// compare it with.
-//
-// It asks for the push again at once, as busy does and compaction_behind does
-// not: the next receive syncs its copy to the repository as the begin left it,
-// and a second begin waits for the first expunge's commit, so a retry meets
-// the refusal again only past another whole expunge. A push checked at an
-// epoch PAST the repository's is no expunge begun since — the rows it was
-// checked against are not the ones deciding it — and is said as it is.
+// ExpungingDetail is the sentence of a push refused expunging: the
+// repository, the drop epoch its receiver checked and the repository's, and
+// that nothing was decided. Formed by the push decide alone: a receiver has
+// only its own copy's epoch. It asks for the push again at once, unlike
+// compaction_behind: the next receive syncs its copy, and a second begin
+// waits for the first expunge's commit. An epoch PAST the repository's is no
+// expunge begun since, and is said as it is.
 func ExpungingDetail(name string, checked, holds int64) string {
 	if checked < holds {
 		return fmt.Sprintf("an expunge of %s's unreachable objects began after this push was checked "+
@@ -475,9 +383,7 @@ func tooManyChangesDetail(changes, landings, rows int) string {
 //
 //  1. a ref [ValidRef] refuses is bad_ref — before anything else, because
 //     no other rule can reason about something that is not a ref;
-//  2. a ref outside refs/heads/ and refs/tags/, one under refs/crewlet/, and
-//     refs/heads/seats or refs/heads/seats/<one component> as a branch, is
-//     reserved_ref ([reservedRef]);
+//  2. a ref [reservedRef] reserves is reserved_ref;
 //  3. a tag whose old and new values are both commits is tag_moved — a tag
 //     may be created and deleted, never moved.
 //
@@ -515,25 +421,17 @@ func Attempted(cmds []Command) bool {
 var attemptRefusals = []Refusal{RefusalProtectedDirect, RefusalProtectedForce, RefusalProtectedDelete,
 	RefusalTagMoved, RefusalReservedRef, RefusalNotPermitted, RefusalDefaultBranch}
 
-// DefaultBranchRefusal is the rule that keeps a repository's default branch,
-// named defaultBranch ("main"), in a repository named repo: a deletion of it is
-// refused default_branch, with its sentence; "" for every other command.
+// DefaultBranchRefusal refuses default_branch, with its sentence, a deletion of
+// repository repo's default branch defaultBranch ("main"); "" for every other
+// command.
 //
-// THE HOST'S RULE, NOT A PROTECTION'S. The default branch is what the
-// repository's HEAD names: deleted, every clone checks nothing out, a change
-// opened with no target proposes into nothing, the Files tab reads an empty
-// repository and every page that starts at the default branch starts nowhere,
-// while the repository still holds every other branch. No setting makes that
-// a state anybody wants, so no rule has to be written to refuse it, and none
-// can allow it: it is refused whoever asks, a person included. The remedy is
-// the one write that leaves the repository whole, another branch made the
-// default first (code_update_repo), and then the old one is a branch like any
-// other.
-//
-// ONE FUNCTION every judge of a deletion asks (ADR-0008): the push decide
-// (after the protections, so a protected default branch is refused by the
-// rule that names it), an engine write's judge, and a merge deleting its
-// source.
+// The host's rule, not a protection's: with HEAD's branch deleted, clones check
+// out nothing and a change with no target proposes into nothing. No setting
+// wants that, so it is refused whoever asks, a person included; the remedy is
+// another branch made the default first (code_update_repo). One function every
+// judge of a deletion asks (ADR-0008): the push decide (after the protections,
+// so a protected default branch is refused by the rule that names it), an
+// engine write's judge, and a merge deleting its source.
 func DefaultBranchRefusal(c Command, repo, defaultBranch string) (Refusal, string) {
 	if c.New != ZeroOID || defaultBranch == "" || c.Ref != branchPrefix+defaultBranch {
 		return "", ""
@@ -563,29 +461,21 @@ func RepoStateRefusal(repo RepoRef) (Refusal, string) {
 	return "", ""
 }
 
-// reservedRef reports a ref no principal pushes: one outside refs/heads/ and
-// refs/tags/, one under the engine's own refs/crewlet/, and the two kinds of
-// ref under refs/heads/seats that are nobody's ([reservedSeatRef]: a branch
-// there beside a directory of its name would block seats' namespaces, which
-// ref_conflict refuses) — so every judge of a push, the decide, the receiver
-// and every engine-built write, refuses them before any grant is read, a
-// person's push included.
+// reservedRef reports a ref no principal pushes: outside refs/heads/ and
+// refs/tags/, under refs/crewlet/, or a seat ref [reservedSeatRef] reserves.
+// Every judge of a push refuses it before any grant is read, a person's push
+// included.
 func reservedRef(ref string) bool {
 	return strings.HasPrefix(ref, reservedPrefix) ||
 		(!strings.HasPrefix(ref, branchPrefix) && !strings.HasPrefix(ref, tagPrefix)) ||
 		reservedSeatRef(ref)
 }
 
-// Protections is a repository's protection rules with each pattern PARSED
-// ONCE ([ParseProtections]) — the form [ProtectionRefusal] asks, because the
-// push decide asks every rule about every command of a batch on the
-// repository's one committer (once a batch, before its publish and outside
-// every snapshot, and again only inside a round whose rules differ —
-// decide.go), and the receiver asks every rule about every command of a
-// push. Parsed per question, a maximal batch's round re-read each pattern and
-// re-checked each ref for every (command, rule) pair — 192 000 of them at
-// three thousand commands and [MaxProtectionsPerRepo] rules, most of the
-// round's cost (doc.go's measured section).
+// Protections is a repository's protection rules with each pattern parsed
+// once ([ParseProtections]): the push decide asks every rule about every
+// command of a batch, and the receiver about every command of a push, and
+// parsing per question cost a maximal round 192 000 re-parses (doc.go's
+// measured section).
 //
 // The zero Protections holds no rule.
 type Protections struct {
@@ -618,35 +508,18 @@ func ParseProtections(rules []PushRule) (Protections, error) {
 	return out, nil
 }
 
-// ProtectionRefusal is the protection rule of the push decide over EVERY rule
-// whose pattern matches the command's ref, for a push made by a principal of
-// kind by — the refusal and the rule that refuses it, the first in the rules'
-// order to refuse it for that reason; "" and the zero Protection when none
-// fires. Every matching rule is consulted, because two rules written for two
-// reasons both hold: any rule with direct_push none, and for anybody but a
-// person any rule with direct_push persons, refuses protected_direct; a
-// deletion any rule does not allow is protected_delete; a force-push any rule
-// does not allow is protected_force — in that order of precedence.
+// ProtectionRefusal is the push decide's protection rule over EVERY rule
+// matching c.Ref (two rules written for two reasons both hold), for a push by
+// a principal of kind by: the refusal and the first rule, in order, refusing
+// for that reason; "" and the zero PushRule when none fires. Precedence:
+// protected_direct (direct_push none, or persons for anybody but a person),
+// then protected_delete, then protected_force.
 //
-// DIRECT_PUSH PERSONS IS A PERSON'S AND NOBODY ELSE'S. Its own words are "a
-// person may push to it", and once seats push it must refuse a seat, or
-// `persons` would mean what a ref no rule matches already means — anyone who
-// may push. So every protection rule refuses every seat's direct push (unset
-// reads persons, and none refuses everybody): a seat's work reaches a
-// protected ref when a person pushes it. by is an operator for a person's
-// push — a credential bound to nobody is refused by its grant before any
-// protection is asked — so only a person passes it.
-//
-// ONE WALK, answering the rule with the refusal. The sentence a refusal
-// carries names that rule, and finding it with a second walk over the rules
-// asked every rule before it about the ref again: twice the cost of the
-// costliest round a repository's rules can make (3.4 s against 1.8 s,
-// doc.go's measured section), every command of it refused. A rule that
-// refuses protected_direct ends the walk, since nothing after it outranks it.
-//
-// c.Ref is a ref: [StatelessRefusal] refuses anything else first, in the
-// decide and in the receiver alike, so the ref is not checked again for every
-// rule — for anything else the answer means nothing (and is never a panic).
+// direct_push persons is a person's alone: every rule refuses a seat's direct
+// push (unset reads persons), and by is an operator only for a person's (an
+// unbound credential's grant refuses it first). One walk also answers the
+// rule: a second doubled the costliest round (doc.go's measured section).
+// c.Ref must be a ref: [StatelessRefusal] refuses anything else first.
 func ProtectionRefusal(c Command, rules Protections, by PrincipalKind) (Refusal, PushRule) {
 	deletion, force := -1, -1
 	for i, p := range rules.patterns {
@@ -674,15 +547,11 @@ func ProtectionRefusal(c Command, rules Protections, by PrincipalKind) (Refusal,
 }
 
 // Atomic is an --atomic push's all-or-nothing rule: when any command is ng,
-// every command that is ok or not yet decided becomes ng atomic, and a noop
-// stays one — it asked for what the ref already holds, which no refusal of
-// its neighbours makes untrue. A push with no refusal is returned unchanged;
-// otherwise the answer is a new slice and cmds is left as it was.
-//
-// ONE FUNCTION the decide and the receiver both call (ADR-0008): the receiver
-// applies it to the refusals it fills in before proposing, so a push it
-// refuses in part never uploads a pack for the rest, and the decide applies it
-// to what it decided — never a second spelling of the rule.
+// every command ok or undecided becomes ng atomic, and a noop stays one (no
+// refusal makes what the ref already holds untrue). A push with no refusal is
+// returned as it is; otherwise a new slice, cmds untouched. One function for
+// the decide and the receiver (ADR-0008): the receiver applies it before
+// proposing, so a part-refused push never uploads a pack for the rest.
 func Atomic(cmds []Command) []Command {
 	if !slices.ContainsFunc(cmds, func(c Command) bool { return c.Result == ResultNG }) {
 		return cmds

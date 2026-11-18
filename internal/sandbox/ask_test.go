@@ -26,11 +26,10 @@ func choosing(question string) *decision.Decision {
 }
 
 // AN ASK IS REFUSED WITH EVERY FAULT AT ONCE, each naming its field (ADR-0059):
-// a run whose ask is refused writes it again, and a refusal naming one fault of
-// several spends that attempt on the next. Nothing is cut or defaulted, a
-// branch included: a shortened branch, or one git would refuse, names nothing a
-// fresh machine could check out, so it is refused to the run that named it
-// rather than dropped where the run is collected.
+// a refusal naming one fault of several spends the run's next attempt on the
+// next. Nothing is cut or defaulted, a branch included: a shortened branch, or
+// one git refuses, names nothing to check out, so it is refused to the run
+// rather than dropped at collection.
 //
 // Mutation: return on the first fault, or drop any one check, and a sentence
 // goes missing.
@@ -71,10 +70,9 @@ func TestAnAskIsRefusedWithEveryFaultAtOnce(t *testing.T) {
 }
 
 // A RUN'S OWN QUESTION IS ALWAYS A CHOICE (ADR-0100), on the record as at the
-// tool: one with no decision, or with one that recommends nothing, is refused,
-// so no write parks a run on a question with nothing for the person to press.
-// A held call's decision is the engine's approval and recommends nothing; the
-// held cases of the store's suite record it as it is.
+// tool: one with no decision, or one that recommends nothing, is refused, so
+// no run parks with nothing for the person to press. A held call's decision
+// recommends nothing; the store suite's held cases cover it.
 //
 // Mutation: drop the clause in ownFaults, and the question in words is
 // accepted.
@@ -97,9 +95,8 @@ func TestAnOwnQuestionIsAlwaysAChoice(t *testing.T) {
 	}
 }
 
-// EACH FAULT IS NAMED ONCE. A run's decision is asked in the ask's own
-// question, and an over-long question is one fault, said once, rather than
-// once for the ask and again for its decision.
+// EACH FAULT IS NAMED ONCE: an over-long question is said once, not for the
+// ask and again for its decision.
 //
 // Mutation: check the ask's question beside its decision's, and it is said
 // twice.
@@ -112,9 +109,7 @@ func TestAnAsksQuestionIsRefusedOnce(t *testing.T) {
 	}
 }
 
-// AT ITS BOUNDS AN ASK IS ACCEPTED, and one byte past each it is refused: the
-// bounds are where the ask travels, and an ask that fits them is never refused
-// for being near one.
+// AT ITS BOUNDS AN ASK IS ACCEPTED, and one byte past each it is refused.
 func TestAnAskIsHeldToItsBoundsAndNoTighter(t *testing.T) {
 	t.Parallel()
 	question := strings.Repeat("q", decision.MaxQuestion)
@@ -149,18 +144,16 @@ func TestAnAskIsHeldToItsBoundsAndNoTighter(t *testing.T) {
 			t.Errorf("branch %q, which git refuses, was accepted", branch)
 		}
 	}
-	// AND ONE THAT IS NOT UTF-8, which git takes and the engine's grammar
-	// does not ([gitref.ValidBranch]): the row it rides is JSON, whose
-	// encoder writes U+FFFD in place of the byte — another branch's name,
-	// one nobody pushed.
+	// AND ONE THAT IS NOT UTF-8, which git takes and [gitref.ValidBranch]
+	// does not: the JSON row would write U+FFFD for the byte, naming a
+	// branch nobody pushed.
 	if err := (Ask{Question: "which?", To: AskToRequester, Branch: "wip/\xff"}).Validate(); err == nil {
 		t.Error("a branch that is not UTF-8 was accepted")
 	}
 }
 
-// AN ASK IS REDACTED IN EVERY TEXT A PERSON OR A MODEL READS, and a branch a
-// redaction would change is dropped rather than recorded as a marker that names
-// no branch. The ask redacted is a copy: the caller's decision is untouched.
+// AN ASK IS REDACTED IN EVERY TEXT A PERSON OR A MODEL READS, a branch a
+// redaction would change is dropped, and the caller's decision is untouched.
 //
 // Mutation: skip any one field in Redacted, and its credential survives.
 func TestAnAskIsRedactedInEveryTextItCarries(t *testing.T) {
@@ -207,11 +200,9 @@ func TestAnAskIsRedactedInEveryTextItCarries(t *testing.T) {
 	}
 }
 
-// AN ANSWER'S CHOICE IS READ BY THE RUN AS IT ASKED IT: the option's label, as
-// the run wrote it, and its id, which the run named it by, then the person's
-// words. A choice the run did not offer is refused, because the run would be
-// told it chose something nobody offered, and so is any choice of an open
-// question.
+// AN ANSWER'S CHOICE IS READ BY THE RUN AS IT ASKED IT: the option's label and
+// id, then the person's words. A choice the run did not offer is refused, and
+// so is any choice of an open question.
 func TestAnAnswerNamesTheOptionItChoseAsTheRunAskedIt(t *testing.T) {
 	t.Parallel()
 	d := choosing("which branch?")

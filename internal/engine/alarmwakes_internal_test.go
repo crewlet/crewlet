@@ -27,12 +27,10 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// AN ALARM WAKES EXACTLY THE SEATS THE HEALTH TOOLS ADMIT. The parser every
-// node's inbound edge runs for the source `alarms` is built from the epoch's
-// chart, and the seats it routes a transition to are the seats the authority
-// table admits to the health tools — the granted one woken, the ungranted one
-// neither woken nor offered them — on a node running no native half at all,
-// since a transition is routed by the chart alone.
+// AN ALARM WAKES EXACTLY THE SEATS THE HEALTH TOOLS ADMIT: the `alarms` parser
+// built from the epoch's chart routes a transition to the granted seat, and the
+// ungranted one is neither woken nor offered the tools, even on a node running no native half, since routing needs
+// only the chart.
 //
 // Mutation: build the parser from every agent seat, or from none, or only
 // where a native half runs, and the case is red.
@@ -95,17 +93,14 @@ func TestAnAlarmWakesExactlyTheSeatsTheHealthToolsAdmit(t *testing.T) {
 }
 
 // AN ALARM'S WAKE IS NOBODY'S ERRAND. A transition reaches a granted seat
-// through the real path — the delivery the outbox publishes, the alarms' own
-// parser and prompt, the notification service's wake — and the turn it wakes
-// names no requester and no sender: the engine's own notice, as its repair on
-// a work item is. So the requester ceiling every code read is decided under
-// (builtin.ceilingOf) bounds nothing in it, and the seat reads on its own
-// grant — never as a turn a stranger woke, which reads no code at all, the
-// code_status the wake's prompt sends it to beside fleet_health among it.
+// through the real path (the outbox's delivery, the alarms' parser and prompt,
+// the notification service's wake), and the turn names no requester and no
+// sender, as the engine's own repair notice does. So the requester ceiling
+// (builtin.ceilingOf) bounds nothing and the seat reads on its own grant —
+// never as a stranger's turn, which reads no code, code_status among it.
 //
-// Mutation: give the alarms' inbound a sender — the node that raised the
-// alarm, say, which no seat or person maps to — and the wake reads as a
-// stranger's: red.
+// Mutation: give the alarms' inbound a sender (the raising node, which no seat
+// or person maps to) and the wake reads as a stranger's: red.
 func TestAnAlarmsWakeIsNobodysErrand(t *testing.T) {
 	t.Parallel()
 	c, err := NewCompany(parseCompany(t, healthToolsCompany))
@@ -191,15 +186,11 @@ func byChange(rec *metrics.Recorder, name string) map[string]uint64 {
 	return out
 }
 
-// AN ALARM TRANSITION IS PUBLISHED UNTIL THE BROKER TAKES IT.
-//
-// What a node's tracker hands on — here a fire and its clear, from a real
-// tracker — is published as the inbound delivery the alarm wakes are derived
-// from: on the inbound topic, under source `alarms`, read back by alarmwake as
-// the very transition the tracker made. A broker that refuses is retried until
-// it takes the delivery, and each transition is taken ONCE and in the order it
-// was made, so the clear never reaches a seat before its fire. The publishes
-// the broker took are counted by change.
+// AN ALARM TRANSITION IS PUBLISHED UNTIL THE BROKER TAKES IT: a real tracker's
+// fire and clear go to the inbound topic under source `alarms`, decode back to
+// the transitions made, are retried through refusals, and are taken ONCE each
+// and in order, so the clear never reaches a seat before its fire; the taken
+// publishes are counted by change.
 //
 // Mutation: drop a transition on its first refused publish, or move on past
 // it, and a case is red.
@@ -327,15 +318,12 @@ func TestAFullAlarmOutboxDropsItsOldestFirst(t *testing.T) {
 	}
 }
 
-// THE ALARM OUTBOX HOLDS SIX FLAPS OF THE WHOLE TABLE — its bound's own
-// derivation ([alarmOutboxCap]), computed from the table and the register
-// rather than restated beside it: every instance the table can raise on a
-// data node — one per node-wide kind, and one a log per per-log kind on every
-// log a data node runs — fired and cleared six times over fits in the bound.
-// A kind added to the table moves the count, as the compaction alarm did when
-// it landed beside the outbox, and so does a log added to the register; this
-// fails once the count moves past what the bound promises, which then has to
-// be raised or its promise restated.
+// THE ALARM OUTBOX HOLDS SIX FLAPS OF THE WHOLE TABLE — [alarmOutboxCap]'s
+// derivation, computed from the table and the register rather than restated:
+// every instance a data node can raise (each node-wide kind, and each per-log
+// kind on every log) fired and cleared six times fits in the bound. A kind or
+// a log added past it fails here, and the bound is raised or its promise
+// restated.
 //
 // Mutation: halve alarmOutboxCap, and the case is red.
 func TestTheAlarmOutboxHoldsSixFlapsOfTheWholeTable(t *testing.T) {
@@ -357,13 +345,10 @@ func TestTheAlarmOutboxHoldsSixFlapsOfTheWholeTable(t *testing.T) {
 }
 
 // EVERY TEXT THAT STATES THE ALARM OUTBOX'S BOUND STATES alarmOutboxCap: the
-// dropped-transitions metric's own description (and the metrics reference
+// dropped-transitions metric's description (and the metrics reference
 // generated from it) and the concept page's paragraph on the outbox each name
 // the figure an operator reads a drop against, and nothing else ties them to
-// the constant — the bound has moved once already (1024 to 2048, when the code
-// log joined the register), and a figure left behind tells an operator the
-// outbox holds what it does not. So each is read where it states the bound and
-// held to the constant.
+// the constant, so a figure left behind would claim a bound the outbox lacks.
 //
 // Mutation: move alarmOutboxCap, or the figure in any of the three texts, and
 // the case is red.

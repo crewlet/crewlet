@@ -19,10 +19,8 @@ import (
 
 // EVERY NODE READS THE WHOLE LOG, which is what makes N identical copies.
 //
-// This is not a work queue. A shared consumer would deliver each record to
-// exactly one node — the opposite of replication, and a failure whose symptom
-// is two nodes' tracker tables quietly disagreeing about different halves of
-// the company.
+// This is not a work queue: a shared consumer would deliver each record to
+// exactly one node, and two nodes' tracker tables would quietly disagree.
 func TestEveryNodeReadsEveryRecord(t *testing.T) {
 	t.Parallel()
 	q, log := openDomain(t, "CREWLET_TEST_LOG", "crewlet.test.log")
@@ -59,11 +57,9 @@ func TestEveryNodeReadsEveryRecord(t *testing.T) {
 
 // A NEW CONSUMER RESUMES FROM THE ROWS, not from the head and not from zero.
 //
-// A consumer created at the head silently skips everything published before it
-// existed, which on a state log is every record the node has not applied. One
-// created at the beginning on a node that has applied a million records is a
-// million redeliveries the applier drops one at a time. The SQL checkpoint is
-// the only durable statement of where this node actually is.
+// One created at the head skips every earlier record the node has not
+// applied; one created at the beginning redelivers everything it has applied.
+// The SQL checkpoint is the only durable statement of where the node is.
 func TestAConsumerResumesFromTheCheckpoint(t *testing.T) {
 	t.Parallel()
 	q, log := openDomain(t, "CREWLET_RESUME_LOG", "crewlet.resume.log")
@@ -89,20 +85,12 @@ func TestAConsumerResumesFromTheCheckpoint(t *testing.T) {
 
 // A CONSUMER THAT AGREES WITH THE ROWS IS KEPT.
 //
-// The ordinary restart: the last run applied and acknowledged everything it
-// was handed, so the consumer's next delivery is already the record after the
-// checkpoint. Rebuilding it would be harmless and is still wrong — it is a
-// replicated delete and create on every boot of every node, for nothing — and
-// it is the direction a judgement that rebuilt whenever in doubt would go.
-// The consumer's own delivery count is what says it was not rebuilt, since
-// every delivery moves it: the consumer the last run made has made its four
-// and the next record's, and one the reopen rebuilt at the checkpoint only
-// the next record's. Its creation instant said so only when the broker's
-// clock had ticked between the two creates.
-//
-// The last run's acknowledgements are awaited at the BROKER before the
-// reopen, because that is the staging this case claims: see
-// [awaitAcknowledged] for why sending them is not the same thing.
+// The ordinary restart: the consumer's next delivery is already the record
+// after the checkpoint, so a rebuild is a replicated delete and create on
+// every boot of every node, for nothing. The delivery count says it was kept:
+// a kept consumer has made the last run's four and the next record's, a
+// rebuilt one only the next record's. The last run's acknowledgements are
+// awaited at the BROKER first ([awaitAcknowledged] says why).
 func TestAConsumerThatAgreesWithTheRowsIsKept(t *testing.T) {
 	t.Parallel()
 	q, log := openDomain(t, "CREWLET_KEEP_LOG", "crewlet.keep.log")
@@ -139,37 +127,15 @@ func TestAConsumerThatAgreesWithTheRowsIsKept(t *testing.T) {
 // A CONSUMER AHEAD OF THE ROWS IS REBUILT AT THEM, and the node replays what
 // its reader had already given away.
 //
-// # The node this is
+// The node's replicated database went BACKWARDS under the same node id while
+// the broker kept its consumer: acknowledged records are never handed over
+// again (a node that never hydrates), delivered ones only after the ack
+// window. Asserted from a checkpoint of nothing and from one partway, off the
+// delivery count, which every delivery moves, a redelivery included: a
+// rebuilt consumer has made exactly the replay's, a kept one five and more.
 //
-// One whose replicated database went BACKWARDS under the same node id —
-// deleted and rebuilt, or restored from a copy older than the broker estate
-// beside it — while the broker kept its consumer. The applier resumes at the
-// checkpoint and waits for the next record; the consumer has already
-// delivered it, so either it was acknowledged and the broker will never hand
-// it over again, or it was not and the broker hands it over only when its ack
-// window expires. The first is a node that never hydrates. The second is one
-// that sits unhydrated for thirty seconds on every such restart.
-//
-// Both are asserted from a checkpoint of nothing (the rows are gone) and from
-// one partway (an older copy), and both are read off what the broker records
-// rather than off a clock: the consumer the reopen leaves is one the reopen
-// CREATED, and the replay is that consumer's own first delivery of each
-// record — never the earlier one handing a record over again once its ack
-// window ran out, which a consumer kept ahead of the rows does for the
-// delivered ones and never for the acknowledged. The consumer's own delivery
-// count says both at once, since every delivery moves it, a redelivery
-// included: a consumer the reopen created has made exactly the deliveries of
-// the replay, and one it kept had made five before the reopen and counts on
-// from there. The replay used to be held to a third of the window by the
-// test's clock, which a runner that lost ten seconds in the reopen failed; and
-// the rebuild was read off the consumer's creation instant, the broker's clock
-// at each create, which two creates inside one tick of it stamp alike.
-//
-// Mutation: keep a consumer that has delivered or acknowledged past the rows,
-// and what the node is missing is not handed over; keep the delivered one
-// under an ack window of a second, and it hands them over again a second late
-// — which the clock passed, as a replay well inside a third of the window,
-// and which the delivery count does not: ten deliveries for a replay of five.
+// Mutation: keep a consumer ahead of the rows, and the records are not handed
+// over, or under a one-second ack window take ten deliveries for five.
 func TestAConsumerAheadOfTheRowsIsRebuiltAtThem(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -190,9 +156,8 @@ func TestAConsumerAheadOfTheRowsIsRebuiltAtThem(t *testing.T) {
 			q, log := openDomain(t, stream, prefix)
 			appendN(t, log, prefix+".task.a", 5)
 
-			// THE LAST RUN: every record handed over, and — in the
-			// acknowledged cases — every one of them acknowledged, which
-			// is what an applier that committed them does.
+			// THE LAST RUN: every record handed over and, in the
+			// acknowledged cases, acknowledged as a committing applier does.
 			first, err := q.DomainConsumer(t.Context(), stream, "node-a", 0)
 			if err != nil {
 				t.Fatalf("open: %v", err)
@@ -206,11 +171,9 @@ func TestAConsumerAheadOfTheRowsIsRebuiltAtThem(t *testing.T) {
 			if len(handed) != 5 {
 				t.Fatalf("the last run was handed %d of 5 records", len(handed))
 			}
-			// THE STAGING IS CONFIRMED AT THE BROKER, because both halves
-			// reopen into a rebuild whatever it holds: acknowledgements
+			// THE STAGING IS CONFIRMED AT THE BROKER: acknowledgements
 			// still queued there read as deliveries in flight, so an
-			// acknowledged case that reopened early would pass as the
-			// delivered case under a name it did not test.
+			// acknowledged case reopened early would test the delivered one.
 			if tc.ack {
 				awaitAcknowledged(t, first, 5)
 			} else if info, err := consumerInfo(t, first); err != nil {
@@ -237,12 +200,9 @@ func TestAConsumerAheadOfTheRowsIsRebuiltAtThem(t *testing.T) {
 					"(acknowledged) or not before the %s ack window (delivered)",
 					tc.after, seqsOf(got), domainConsumerAckWait)
 			}
-			// REBUILT, AND REPLAYED BY WHAT WAS REBUILT: a consumer the
-			// reopen made, whose own deliveries are exactly the records
-			// the node is missing, each once. Its delivery count holds
-			// every delivery, a redelivery included, so it is what tells a
-			// rebuilt consumer from a kept one: the kept one had already
-			// made five, and counts on from there.
+			// REBUILT, AND REPLAYED BY WHAT WAS REBUILT: its delivery count
+			// is exactly the missing records, each once; a kept consumer
+			// had already made five and counts on from there.
 			info, err := consumerInfo(t, again)
 			if err != nil {
 				t.Fatalf("info: %v", err)
@@ -260,12 +220,9 @@ func TestAConsumerAheadOfTheRowsIsRebuiltAtThem(t *testing.T) {
 
 // A CONSUMER HOLDING A CEILING OF DEAD DELIVERIES IS REBUILT.
 //
-// The last run committed its whole pull and died before acknowledging any of
-// it: the checkpoint is exactly where the consumer's delivered position is, so
-// nothing past the rows has been given away — and still nothing new arrives,
-// because every slot of the in-flight ceiling is held for a reader that will
-// never acknowledge, and the broker hands over no more until the ack window
-// frees them. The records are harmless; the thirty seconds are not.
+// The last run committed its whole pull and died before acknowledging it: the
+// checkpoint matches the delivered position, but every in-flight slot is held
+// for a dead reader, so nothing new arrives until the ack window frees them.
 func TestAConsumerHoldingACeilingOfDeadDeliveriesIsRebuilt(t *testing.T) {
 	t.Parallel()
 	q, log := openDomain(t, "CREWLET_CEILING_LOG", "crewlet.ceiling.log")
@@ -308,12 +265,9 @@ func TestAConsumerHoldingACeilingOfDeadDeliveriesIsRebuilt(t *testing.T) {
 
 // A CONSUMER BEHIND THE ROWS IS MOVED UP TO THEM.
 //
-// Correct if left, and costs the redeliveries between for the applier to drop
-// under the in-flight ceiling. That is small after a crash, and it is the whole
-// span an artefact covers after a node ADOPTS a snapshot at boot: the join
-// runs before the consumers are opened, so each one is opened below a
-// checkpoint that just moved — and the runtime adoption's reset was the only
-// thing that ever moved a consumer for that cost.
+// Correct if left, but it costs the redeliveries between for the applier to
+// drop: after a node ADOPTS a snapshot at boot, the artefact's whole span,
+// since each consumer is opened below a checkpoint that just moved.
 func TestAConsumerBehindTheRowsIsMovedUpToThem(t *testing.T) {
 	t.Parallel()
 	q, log := openDomain(t, "CREWLET_BEHIND_LOG", "crewlet.behind.log")
@@ -334,34 +288,15 @@ func TestAConsumerBehindTheRowsIsMovedUpToThem(t *testing.T) {
 
 // A CONSUMER THE BROKER PLACED AT THE FIRST SURVIVOR IS KEPT.
 //
-// A node below the trim floor with no donor comes up on what it has, and its
-// consumer resumes at its checkpoint plus one — a sequence the stream no
-// longer holds. The broker places it at the first survivor instead and reports
-// it as having delivered AND acknowledged through the survivor's predecessor,
-// which is PAST the checkpoint. Comparing the raw numbers calls that
-// acknowledged-past and rebuilds it, on every boot for as long as the node
-// stays below the floor, into exactly the place it already was: the broker
-// skips what the stream no longer holds, so the two positions hand over the
-// same record next.
-//
-// # Both ways the broker places it
-//
-// A consumer CREATED after the purge is placed there outright. One that
-// ALREADY EXISTED is moved there by the purge itself — its start and its ack
-// floor are advanced to the first survivor — so it reports exactly the same
-// position, and is the more common of the two: the trim purges under the
-// consumers of nodes that are running. Neither agrees with the checkpoint in
-// raw numbers; both are kept only through the broker's skip.
-//
-// # What says it was kept
-//
-// The broker's own record that it created none: it announces every consumer
-// it creates ([consumerCreates]), and the reopen is watched for the one
-// announcement a rebuild makes. The delivery count cannot say it here, since
-// the consumer had made no delivery before the reopen, so a rebuilt one
-// counts what a kept one does; and the consumer's creation instant, the
-// broker's clock at each create, said it only when that clock had ticked
-// between the two.
+// A node below the trim floor with no donor resumes at its checkpoint plus
+// one, which the stream no longer holds. The broker places the consumer at the
+// first survivor, delivered AND acknowledged through its predecessor: past the
+// checkpoint in raw numbers, yet handing over the same record next, so a
+// rebuild would repeat on every boot below the floor. A consumer created after
+// the purge is placed there; one that existed is moved there by the purge
+// itself, the commoner case. Kept is read off the broker's create
+// announcements ([consumerCreates]): no delivery preceded the reopen, so the
+// delivery count cannot tell.
 func TestAConsumerPlacedAtTheFirstSurvivorIsKept(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -431,12 +366,10 @@ func TestAConsumerPlacedAtTheFirstSurvivorIsKept(t *testing.T) {
 	}
 }
 
-// WHICH CONSUMERS ARE KEPT, as arithmetic.
-//
-// The broker cases above can each stage one shape; this is every boundary of
-// the judgement, including the ones a stream would take a trim and a crash to
-// stage. The order of the checks is part of what is pinned: a consumer that is
-// both ahead and holding deliveries is reported as the worse of the two.
+// WHICH CONSUMERS ARE KEPT, as arithmetic: every boundary of the judgement,
+// including ones a broker would need a trim and a crash to stage. The order of
+// the checks is pinned too: a consumer both ahead and holding deliveries is
+// reported as the worse of the two.
 func TestWhichConsumersAreKept(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -474,18 +407,14 @@ func TestWhichConsumersAreKept(t *testing.T) {
 
 // THE FIRST SEQUENCE IS READ EXACTLY WHEN IT CAN CHANGE THE ANSWER.
 //
-// An open judges the raw positions first and asks the broker for the stream's
-// first sequence only for the drifts [consumerDrift.firstMatters] names. Both
-// directions of that are a claim about [driftOf], so both are held against it
-// over every consumer state a broker can report on a small stream:
+// An open reads the stream's first sequence only for the drifts
+// [consumerDrift.firstMatters] names, held against [driftOf] both ways over
+// every consumer state of a small stream:
 //
 //   - a drift the gate skips is one NO first sequence changes, or the open
-//     keeps or reports a consumer on an answer the read would have
-//     overturned;
+//     acts on an answer the read would have overturned;
 //   - a drift the gate reads for is one SOME first sequence changes, or the
-//     open spends a metadata request on a fleet's boot path that could not
-//     have mattered — which is what it did for every consumer holding
-//     deliveries in flight, the commonest state a busy restart leaves.
+//     open spends a metadata request on a fleet's boot path for nothing.
 func TestTheFirstSequenceIsReadOnlyWhenItCanChangeTheAnswer(t *testing.T) {
 	t.Parallel()
 	const top = 7
@@ -590,18 +519,11 @@ func fetchUnacked(t *testing.T, c *DomainConsumer, want int) []statelog.Message 
 // acknowledgements applied through `through`, with nothing in flight, and
 // fails the case if it never does.
 //
-// Sending them is not the same thing. [statelog.Message.Ack] is the client's
-// fire-and-forget acknowledgement, and the server only QUEUES each one for the
-// consumer's own goroutine, while a consumer lookup is answered by a separate
-// API worker — nothing orders the two. So a reopen straight after a pull can
-// judge a state from before the acknowledgements landed, which reads as
-// deliveries in flight and is rebuilt: the right decision about the wrong
-// staging, and it failed the keep case about one run in a hundred under the
-// race detector.
-//
-// A BOUNDED WAIT ON WHAT THE BROKER REPORTS, rather than on time: the state
-// is read until it is the one the case claims, and the bound only decides how
-// long a broker that never applies them is given before the case says so.
+// Sending them is not the same thing: [statelog.Message.Ack] is
+// fire-and-forget, the server QUEUES each for the consumer's own goroutine,
+// and a consumer lookup is answered by a separate API worker, so a reopen
+// straight after a pull can judge the state from before they landed and
+// rebuild. The deadline only bounds a broker that never applies them.
 func awaitAcknowledged(t *testing.T, c *DomainConsumer, through uint64) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -633,20 +555,15 @@ func appendN(t *testing.T, log *DomainLog, subject string, n int) {
 }
 
 // consumerCreates watches the broker announce the consumers it creates on
-// stream, from now: a case calls it before the step that may rebuild one, and
-// the function it returns after that step, for the number of times the
-// consumer named name was created in between. A create is the broker's own
-// RECORD of a rebuild, so it tells a kept consumer from a rebuilt one with no
-// clock, where the consumer's creation instant is the broker's clock at each
-// create, which two creates inside one tick of it stamp alike.
+// stream: call it before the step that may rebuild one, and the returned
+// function after it, for how often the consumer named name was created in
+// between. A create is the broker's own RECORD of a rebuild; the creation
+// instant is not, since two creates inside one clock tick stamp alike.
 //
-// THE COUNT IS DECIDED, NOT WAITED FOR. The broker announces a consumer only
-// to a subject somebody listens on, so the subscription is flushed to it
-// before the step. It sends every announcement of one stream's consumers
-// through that stream's one outbound queue, in the order they were created,
-// so the count ends at a fence: a consumer of the case's own, created after
-// the step, whose announcement is the last one read. The bound on that read
-// is liveness, ending only a broker that never announces the fence.
+// The subscription is flushed before the step, as the broker announces only
+// to a subject somebody listens on. One stream's announcements leave through
+// one outbound queue in creation order, so the count ends at a fence consumer
+// created after the step; the read's bound is liveness only.
 func consumerCreates(t *testing.T, q *Queue, stream string) func(name string) int {
 	t.Helper()
 	prefix := server.JSAdvisoryConsumerCreatedPre + "." + stream + "."
@@ -691,30 +608,18 @@ func seqOf(msgs []statelog.Message) uint64 {
 func id(i int) string   { return string(rune('a' + i)) }
 func itoa(i int) string { return string(rune('0' + i)) }
 
-// A CANCELLED CONTEXT ENDS A GROUP'S BLOCKING READ.
+// A CANCELLED CONTEXT ENDS A GROUP'S BLOCKING READ, as a stop.
 //
-// # Why this is a hang rather than a leak
+// [jetstream.MessagesContext.Next] takes no context and blocks until a message
+// arrives or the iterator stops, so on a quiet log a reader that only
+// cancelled waits for ever; the tracker's wake feed sits in this call for the
+// node's life, and shutdown joins it. The wall clock is the assertion, since
+// the hang is the symptom.
 //
-// [jetstream.MessagesContext.Next] takes no context and blocks until a
-// message arrives or the iterator is stopped. A quiet log means it blocks for
-// ever — so a consumer that only cancelled a context and then joined its
-// reader would wait on a goroutine that has no way to notice.
-//
-// It is not hypothetical. The tracker's wake feed sits in exactly this call
-// for the life of a node, and shutdown joins it: without the watcher this
-// asserts, every engine test that stopped before its own context expired
-// wedged, and the only symptom was a suite that never finished.
-//
-// The assertion is the WALL CLOCK, because that is the symptom. A flag saying
-// the watcher exists would go on being true while the block moved elsewhere.
-//
-// AND IT ENDS AS A STOP RATHER THAN AS A FAILURE, which is the second half and
-// is not cosmetic: a cancellation reaches the iterator by two routes at once —
-// the watcher's Drain and the read failing under it — so whichever lands first
-// decides what Next returns, and the losing half must answer the same way. A
-// nil delivery with a nil error is how the change feed above tells a shutdown
-// from a failure, so an error here is an error line on every clean stop of
-// every node.
+// The cancellation reaches the iterator two ways at once (the watcher's Drain
+// and the read failing under it), and either must end in a nil delivery and a
+// nil error: that is how the change feed tells a shutdown from a failure, and
+// an error here is an error line on every clean stop.
 func TestAGroupsBlockingReadEndsWithItsContext(t *testing.T) {
 	t.Parallel()
 	q, log := openDomain(t, "CREWLET_GROUP_CANCEL", "crewlet.groupcancel")
@@ -725,8 +630,7 @@ func TestAGroupsBlockingReadEndsWithItsContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open the group: %v", err)
 	}
-	// NOTHING IS PUBLISHED, deliberately: an empty log is the state a
-	// company spends almost all of its time in, and it is the one where
+	// NOTHING IS PUBLISHED: an empty log, a company's usual state, is where
 	// the blocking read never returns on its own.
 	done := make(chan struct{})
 	var readErr error
@@ -754,9 +658,8 @@ func TestAGroupsBlockingReadEndsWithItsContext(t *testing.T) {
 			"line on every clean stop", readErr)
 	}
 
-	// AND AN EXPLICIT STOP IS THE SAME STOP, so a caller that does both —
-	// which a shutdown ordering change makes ordinary — does not panic on
-	// a second close.
+	// AN EXPLICIT STOP IS THE SAME STOP, so a caller that also stops does
+	// not panic on a second close.
 	if err := group.Stop(); err != nil {
 		t.Errorf("stopping an already-cancelled group: %v", err)
 	}
@@ -769,27 +672,14 @@ func TestAGroupsBlockingReadEndsWithItsContext(t *testing.T) {
 // after the ack window.
 //
 // A fetch whose context ends leaves its pull request standing on the server
-// for the rest of its wait, and a record appended in that window is delivered
-// to it — to a fetch nobody is running. Over a connection that stays open (an
-// applier stopped and another started in the same process) the next pull then
-// waited out the thirty-second ack window for a record already on the log, and
-// a read barrier appended in that window refused every linearizable read as
-// behind for the whole of it. The delivery lands in the handle's standing
-// buffer, and the next fetch takes it; measured against the build that dropped
-// the abandoned pull's inbox, the record never reached the next fetch.
-//
-// AT ONCE IS A FETCH THAT WAITS FOR NOTHING AND ASKS FOR NOTHING, as for a
-// request the client gave up on (below): the record is waited for where the
-// delivery puts it, the handle's buffer, and a fetch that waits for nothing
-// then hands it over. It used to be fetches of half a second until five
-// seconds had passed on the test's clock: the five were the claim, and a build
-// that dropped the delivery passed once they outgrew the ack window. Nothing
-// in internal/fixedwait's inventory counted that, since a time.Time's Before
-// is outside what its gate counts.
+// for the rest of its wait, and a record appended then is delivered to it.
+// Over a connection that stays open the next pull would wait out the ack
+// window for it, and a read barrier appended then refuses every linearizable
+// read as behind. The delivery lands in the handle's buffer, and the next
+// fetch must hand it over waiting for nothing and asking for nothing.
 //
 // Mutation: drop a record that reaches no running fetch, and it never reaches
-// the buffer: in flight until the ack window, when no request of the handle
-// stands to take it.
+// the buffer.
 func TestARecordReachingAnAbandonedPullIsHandedBack(t *testing.T) {
 	t.Parallel()
 	q, log := openDomain(t, "CREWLET_ABANDON_LOG", "crewlet.abandon.log")
@@ -842,27 +732,15 @@ func TestARecordReachingAnAbandonedPullIsHandedBack(t *testing.T) {
 
 // A CLOSED HANDLE TAKES NOTHING THE NEXT READER OF ITS CONSUMER NEEDS.
 //
-// A reader that stops leaves the pull it last sent standing at the broker for
-// the rest of its wait, and the broker serves the oldest request first. Over a
-// connection that outlives the reader — a state log stopped and another opened
-// in the same process — a record appended in that window went to the stopped
-// reader's inbox, and the next reader of the same consumer waited out the
-// thirty-second ack window for it. Closing the handle drops the inbox, so the
-// broker, finding no interest in the old request, serves the new one.
+// A stopped reader's last pull stands at the broker for the rest of its wait,
+// and the broker serves the oldest request first, so over a connection that
+// outlives the reader a record appended then would sit in the stopped
+// reader's inbox until the ack window. Closing the handle drops the inbox, and
+// the broker, finding no interest, serves the next reader's request.
 //
-// READ OFF WHERE THE BROKER DELIVERS THE RECORD, never off the clock. The next
-// reader asks for it before it is appended, beside the closed reader's request
-// still standing, and the case waits until either reader's buffer holds it —
-// which both builds reach at once — and then reads whose it is: the next
-// reader's, which a fetch that waits for nothing hands over, and never the
-// closed reader's, which nobody reads until the ack window. It used to be
-// fetches of half a second until five seconds had passed on the test's clock:
-// the five were the claim, and a handle that kept its pull passed once they
-// outgrew the ack window. Nothing in internal/fixedwait's inventory counted
-// that, since a time.Time's Before is outside what its gate counts.
-//
-// Mutation: close the handle without releasing its pull, and the closed
-// reader's buffer takes the record.
+// Read off whose buffer the record reaches, never the clock. Mutation: close
+// the handle without releasing its pull, and the closed reader's buffer takes
+// the record.
 func TestAClosedHandleTakesNothingTheNextReaderNeeds(t *testing.T) {
 	t.Parallel()
 	q, log := openDomain(t, "CREWLET_CLOSED_LOG", "crewlet.closed.log")
@@ -939,32 +817,15 @@ func TestAClosedHandleTakesNothingTheNextReaderNeeds(t *testing.T) {
 // A RECORD DELIVERED TO A REQUEST THE CLIENT GAVE UP ON IS TAKEN BY THE NEXT
 // FETCH — at once, never after the ack window.
 //
-// The client and the server each decide when a request ends, on their own
-// clocks, and under load they disagree: the server is still serving a request
-// the client has stopped counting. A pull that dropped its inbox when it
-// stopped counting left what the server then delivered on an inbox nobody
-// held, in flight against the consumer until the thirty-second ack window
-// redelivered it — measured on a loaded cluster as apply latency past thirty
-// seconds and drains of a few thousand records taking a minute and a half.
-//
-// The disagreement is made here directly: a request the server will serve
-// for twenty seconds, which the client counts as already over — what a
-// server running later than [pullGrace] looks like from the client. A record
-// appended then is delivered to it; the next fetch must hand it over at once.
-//
-// AT ONCE IS A FETCH THAT WAITS FOR NOTHING AND ASKS FOR NOTHING. The record is
-// waited for where the delivery puts it, the handle's buffer, and then a fetch
-// that waits for nothing must hand it over without sending the broker a
-// request: one sent first is answered that the consumer has nothing, the
-// record being in flight to this client already, and a fetch that read that
-// answer before the record would return empty-handed. It used to be a fetch
-// of five seconds held to one by the test's clock, which a runner that lost a
-// second around the fetch failed.
+// Client and server each end a request on their own clock, so under load the
+// server serves one the client counts as over; made here directly, as a server
+// running later than [pullGrace] looks. The record is awaited in the handle's
+// buffer, and the next fetch must hand it over without asking the broker,
+// which would answer that the consumer has nothing.
 //
 // Mutation: drop a delivery that answers a request the client no longer
-// counts, and it never reaches the buffer; let a fetch hand over the buffer
-// only while a request of its own stands, and it asks the broker for a record
-// it already holds.
+// counts, and it never reaches the buffer; hand over the buffer only under a
+// request of the fetch's own, and it asks the broker for what it holds.
 func TestARecordDeliveredToARequestTheClientGaveUpOnIsTakenByTheNext(t *testing.T) {
 	t.Parallel()
 	q, log := openDomain(t, "CREWLET_LATE_LOG", "crewlet.late.log")
@@ -990,10 +851,9 @@ func TestARecordDeliveredToARequestTheClientGaveUpOnIsTakenByTheNext(t *testing.
 	waitStanding(t, cons)
 	appendN(t, log, "crewlet.late.log.task", 1)
 
-	// DELIVERED BEFORE THE FETCH BEGINS: the record is in the buffer the
-	// next fetch takes from, however late the runner delivered it. A
-	// delivery dropped on its way there is in flight until the ack window,
-	// past the request's twenty seconds, so it never arrives.
+	// DELIVERED BEFORE THE FETCH BEGINS, into the buffer it takes from. A
+	// dropped delivery is in flight until the ack window, past the
+	// request's twenty seconds, so it never arrives.
 	waitUntil(t, "the record delivered to the request the client gave up on to be "+
 		"held for the next fetch", func() bool {
 		p.mu.Lock()
@@ -1024,32 +884,16 @@ func TestARecordDeliveredToARequestTheClientGaveUpOnIsTakenByTheNext(t *testing.
 
 // A STATUS ENDS ONLY THE REQUEST IT NAMES, never the request standing after it.
 //
-// The server answers a request it has finished with a status the client may
-// already have stopped counting the request for: a `409 Batch Completed`
-// follows the record that filled a byte-bounded batch, and a `408` reaches a
-// request presumed gone. Counted against the oldest request, a status that
-// arrived once the next fetch had sent its own ended THAT one, the fetch sent
-// a third, and the server served two — TestAPullHonoursBothOfItsBounds found
-// five records in flight after pulls that returned four.
+// A finished request's status (`409 Batch Completed`, a `408`) can arrive
+// after the client stopped counting it; counted against the oldest request it
+// ends the next one, and the server serves one more than the client counts.
+// Made here under the pull's lock: a no-wait request sent and counted out, the
+// next sent, so the first's `404` comes once the second stands, which must
+// still be counted and serve the next record. A fence behind it, once no
+// longer counted, proves the first's status taken: the callback runs in order.
 //
-// The interleaving is made here rather than waited for: the pull's lock is
-// held while a no-wait request is sent and counted out, as if already ended,
-// and the next is sent, so the server's `404` for the first reaches the
-// callback only after the second is standing. The second must still be
-// counted, and serve the next record.
-//
-// AND IT IS READ BEHIND A FENCE through the same inbox: one more no-wait
-// request, counted, sent once the first's `404` is there, which the server
-// ends with a `404` of its own. The inbox's callback takes its messages one at
-// a time, in the order they arrived, so once the fence is no longer counted
-// the first's status has been taken. The callback's wake used to be the
-// signal, and a wake an earlier status had left behind ended that wait before
-// the first's `404` was taken, which a callback running late made a pass with
-// the bug in.
-//
-// Mutation: count a status against the oldest request, and the first's `404`
-// ends the request standing; let a status end nothing, and the fence is never
-// taken.
+// Mutation: count a status against the oldest request, and the `404` ends the
+// one standing; let a status end nothing, and the fence is never taken.
 func TestAStatusEndsOnlyTheRequestItNames(t *testing.T) {
 	t.Parallel()
 	q, log := openDomain(t, "CREWLET_NAMED_LOG", "crewlet.named.log")
@@ -1144,10 +988,9 @@ func TestAStatusEndsOnlyTheRequestItNames(t *testing.T) {
 	}
 }
 
-// standPhantom makes the client count a request the server never received —
-// which is what a request looks like once the connection it was served on
-// has dropped, or once its ending status was lost: nothing will ever end it
-// but the client's own presumption.
+// standPhantom makes the client count a request the server never received, as
+// after a dropped connection or a lost ending status: only the client's own
+// presumption ever ends it.
 func standPhantom(t *testing.T, cons *DomainConsumer, until time.Duration) {
 	t.Helper()
 	p, err := cons.standing()
@@ -1162,13 +1005,11 @@ func standPhantom(t *testing.T, cons *DomainConsumer, until time.Duration) {
 // A FETCH IS BOUNDED BY ITS WAIT AND THE GRACE even when the request it is
 // waiting on never ends.
 //
-// The ending status is not guaranteed: a dropped connection takes the
-// server's copy of a request with it, and a slow consumer's inbox drops a
-// status like any other message. Past its deadline a fetch counted the
-// request as standing until a delivery woke it to look, and nothing would —
-// so it waited out an HOUR's timer, and the applier calling it applied
-// nothing for that long. The error is the discriminator: a fetch that
-// honours the presumption returns nothing, cleanly, well inside the
+// The ending status is not guaranteed: a dropped connection loses the server's
+// copy of a request, and a slow consumer's inbox drops a status like any
+// message. A fetch that rechecks its deadline only when a delivery wakes it
+// waits on nothing, and its applier applies nothing. The error discriminates:
+// a fetch honouring the presumption returns nothing, cleanly, well inside the
 // context's ten seconds.
 func TestAFetchIsBoundedEvenWhenItsRequestNeverEnds(t *testing.T) {
 	t.Parallel()
@@ -1190,18 +1031,10 @@ func TestAFetchIsBoundedEvenWhenItsRequestNeverEnds(t *testing.T) {
 // A REQUEST LEFT STANDING DOES NOT KEEP THE NEXT FETCH FROM ASKING once it is
 // presumed gone.
 //
-// A fetch sends a request only when none stands, so one an earlier fetch left
-// behind — a caller whose context ended — is what this fetch waits on. If
-// that request's end never comes, the presumption is the only thing that lets
-// this fetch send its own: evaluated only on a wake, it did not, and a record
-// appended meanwhile was delivered to nobody until the fetch's whole wait had
-// passed.
-//
-// THE FETCH WAITS AN HOUR, so one that asks only once its wait has passed asks
-// an hour from now, past every bound here: [waitStanding]'s and the case's own
-// only end waits that such a fetch never ends inside them. It used to wait
-// twenty seconds against waitStanding's five, so the five were the claim: a
-// fetch that asked at its twenty seconds passed any bound past them.
+// A fetch sends a request only when none stands, so it waits on one an earlier
+// fetch left behind; if that one never ends, only the presumption lets this
+// fetch send its own. The fetch waits an hour, so one that asks only once its
+// wait has passed never asks inside [waitStanding]'s or the case's bounds.
 //
 // Mutation: presume a request gone only on a wake, and the fetch does not ask
 // until its hour has passed; never presume one gone, and it does not ask at
@@ -1231,9 +1064,8 @@ func TestARequestLeftStandingDoesNotKeepTheNextFetchFromAsking(t *testing.T) {
 			t.Fatalf("the fetch returned %d record(s) from %d, %v, want sequence 1",
 				len(f.got), seqOf(f.got), f.err)
 		}
-	// LIVENESS: a fetch whose own request stands hands the record over once
-	// it arrives, and one that holds it for its wait returns an hour from
-	// now; this only ends that wait, as the failure it is.
+	// LIVENESS: a passing fetch returns once the record arrives, a failing
+	// one in an hour; this only ends that wait.
 	case <-time.After(15 * time.Second): //fixedwait:liveness
 		t.Fatal("a record appended into a fetch's own request was not handed over")
 	}
@@ -1281,11 +1113,10 @@ func waitWaiting(t *testing.T, cons *DomainConsumer, n int) {
 // A CLOSED HANDLE HANDS BACK WHAT IT HELD, to the next handle on the consumer
 // at once.
 //
-// The next reader of a consumer is not always the handle's next fetch: an
-// engine stopped and another started over the same backends opens a handle of
-// its own, and the first one's buffer is read by nobody. The second fetch's
-// twenty-second wait is inside the consumer's thirty-second ack window, so a
-// record left in that buffer is not handed over at all.
+// An engine stopped and another started over the same backends opens its own
+// handle, and nobody reads the first one's buffer; the second fetch's twenty
+// seconds end inside the thirty-second ack window, so a record left there is
+// never handed over.
 func TestAClosedHandleHandsBackWhatItHeld(t *testing.T) {
 	t.Parallel()
 	q, log := openDomain(t, "CREWLET_HELD_LOG", "crewlet.held.log")
@@ -1294,9 +1125,8 @@ func TestAClosedHandleHandsBackWhatItHeld(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	p := standLong(t, first)
-	// THE SUCCESSOR OPENS while nothing has been delivered, which is what
-	// keeps the consumer rather than rebuilding it — a rebuild would hand
-	// everything over again whatever the first handle did.
+	// THE SUCCESSOR OPENS while nothing has been delivered, so the consumer
+	// is kept: a rebuild would hand everything over again regardless.
 	second, err := q.DomainConsumer(t.Context(), "CREWLET_HELD_LOG", "node-a", 0)
 	if err != nil {
 		t.Fatalf("open the successor: %v", err)
@@ -1323,12 +1153,10 @@ func TestAClosedHandleHandsBackWhatItHeld(t *testing.T) {
 // RECORD.
 //
 // The server serves a consumer's requests oldest first, so the closed handle's
-// request — still standing for most of its twenty seconds — was served before
-// the successor's queued behind it: this is the engine's own case, a read
-// barrier appended into the second engine delivered to the first one's
-// inbox. On a member that SERVES LEAVES, which is a data node's configuration
-// in a fleet with nodes that hold no data, because such a server can find a
-// request's reply across a link as well as on its own clients.
+// still-standing request would be served before the successor's: a read
+// barrier of the second engine delivered to the first one's inbox. Run on a
+// member that SERVES LEAVES, as a data node does in a fleet with non-data
+// nodes, since such a server finds a request's reply across a link too.
 func TestAClosedHandlesStandingRequestDoesNotTakeTheNextRecord(t *testing.T) {
 	t.Parallel()
 	q := newQueueWith(t, Config{
@@ -1386,17 +1214,10 @@ func TestAClosedHandlesStandingRequestDoesNotTakeTheNextRecord(t *testing.T) {
 // A RECORD IS HANDED OVER WITH ITS BURST, not at the end of the wait.
 //
 // One record does not end a pull request, so a fetch that read its request
-// until it ended held a record appended a millisecond in for the rest of the
-// wait: half a second at the applier's own, which was the 99th-percentile
-// apply latency across a hundred and twenty-nine streams. What
-// [statelog.Fetcher] asks is to wait for the FIRST record; the runner decides
-// whether a partial run is worth another fetch.
-//
-// THE FETCH WAITS AN HOUR, so one that held its records for its wait is still
-// holding them when the case gives up on it, and one that handed them over
-// with their burst has returned long before. It used to wait five seconds and
-// be held to one past the append by the test's clock, which a runner that lost
-// a second around the fetch failed.
+// until it ended would hold a record for the rest of the wait.
+// [statelog.Fetcher] waits for the FIRST record; the runner decides whether a
+// partial run is worth another fetch. The fetch waits an hour, so one holding
+// its records for its wait is still holding them when the case gives up.
 //
 // Mutation: hand the buffer over only once the request has ended or the wait
 // has run out, never when the newest delivery says nothing follows it, and the
@@ -1425,9 +1246,8 @@ func TestARecordIsHandedOverWithItsBurst(t *testing.T) {
 		if f.err != nil || len(f.got) == 0 || seqOf(f.got) != 1 {
 			t.Fatalf("the fetch returned %d record(s) from %d, %v", len(f.got), seqOf(f.got), f.err)
 		}
-	// LIVENESS: a fetch that hands its records over with their burst returns
-	// once they arrive, and one that holds them for its wait returns an hour
-	// from now; this only ends that wait, as the failure it is.
+	// LIVENESS: a passing fetch returns once the records arrive, a failing
+	// one in an hour; this only ends that wait.
 	case <-time.After(20 * time.Second): //fixedwait:liveness
 		t.Fatal("a fetch holding appended records was still holding them twenty " +
 			"seconds in — it holds them for its wait of an hour")
@@ -1456,32 +1276,24 @@ func waitUntil(t *testing.T, what string, cond func() bool) {
 // idlePullBudget is the most one pull of an EMPTY log may allocate, heap
 // bytes, whatever the bounds it carries.
 //
-// 64 KiB: an idle applier pulls twice a second ([statelog.FetchWait]), so this
-// is ≤ 128 KiB/s of garbage per domain from a node doing nothing. The pull
-// measures about 6.5 KiB — a subscription, a request, a timer, and the
-// server's side of it in this same process — so the budget is ten times what
-// it needs and still below BOTH of the client library's fetches: the
-// byte-bounded one's 32 MiB (181 MiB/s from three idle consumers, and an OOM
-// kill for a process running a few hundred of them) and the count-only one's
-// ≈ 172 KiB at the applier's four thousand. A figure that grows with the BATCH
-// a pull may receive, rather than with what it did receive, is the defect, and
-// the second is the fix that would have looked like one.
+// 64 KiB: an idle applier pulls twice a second ([statelog.FetchWait]), so
+// ≤ 128 KiB/s of garbage per idle domain. The pull needs about 6.5 KiB (the
+// server's side included, in this process), so this is ten times that and
+// still below BOTH client-library fetches: the byte-bounded one's 32 MiB and
+// the count-only one's ≈ 172 KiB at the applier's four thousand. A figure that
+// grows with the BATCH a pull may receive is the defect.
 const idlePullBudget = 64 << 10
 
 // AN IDLE PULL ALLOCATES FOR WHAT IT RECEIVED, never for the batch it was
 // allowed.
 //
-// The client library's byte-bounded fetch fixes its message count at a
-// million and sizes two channels by it on every call — 32 MiB per pull of a
-// log with nothing in it, and the applier pulls every half second per domain
-// for the life of the node. Its count-only fetch sizes the same channels by
-// the count, ~172 KiB at the applier's four thousand. Neither is a leak, so
-// nothing but the allocation rate shows it, and the rate is the symptom: a
-// process with a few hundred consumers was OOM-killed at 12.7 GB in about a
-// minute.
+// The client library's fetches size two channels by the batch on every call
+// ([idlePullBudget] has the figures), and the applier pulls every half second
+// per domain for the node's life. It is no leak, so only the allocation rate
+// shows it, and for a few hundred consumers that rate is an OOM kill.
 //
-// NOT PARALLEL, because the measurement is the process's own allocation
-// counter and a concurrent case would be counted as this one.
+// NOT PARALLEL: the measurement is the process's own allocation counter, which
+// a concurrent case would add to.
 func TestAnIdlePullAllocatesForWhatItReceived(t *testing.T) {
 	q, _ := openDomain(t, "CREWLET_IDLE_PULL", "crewlet.idlepull")
 	cons, err := q.DomainConsumer(t.Context(), "CREWLET_IDLE_PULL", "node-a", 0)
@@ -1516,14 +1328,10 @@ func TestAnIdlePullAllocatesForWhatItReceived(t *testing.T) {
 
 // ONE PULL HONOURS BOTH OF ITS BOUNDS, and nothing past either is delivered.
 //
-// The applier asks for a count AND a byte total on every pull — one
-// transaction's worth of records, and no more bytes than one transaction
-// should hold — and the client library could send only one of them: its
-// byte-bounded fetch fixed the count at a million, so the count lived only in
-// the consumer's in-flight ceiling. What this asserts is the BROKER's view,
-// not the returned slice: a record delivered and not returned is one the
-// consumer holds in flight until the ack window, so the ack-pending count must
-// equal what came back.
+// The applier asks for a count AND a byte total on every pull, one
+// transaction's worth. Asserted at the BROKER, not on the returned slice: a
+// record delivered and not returned is held in flight until the ack window,
+// so the ack-pending count must equal what came back.
 func TestAPullHonoursBothOfItsBounds(t *testing.T) {
 	t.Parallel()
 	q, log := openDomain(t, "CREWLET_BOUNDS_LOG", "crewlet.bounds.log")
@@ -1580,18 +1388,11 @@ func TestAPullHonoursBothOfItsBounds(t *testing.T) {
 
 // A PULL THE SERVER ENDS AS A FAILURE IS AN ERROR, never an empty batch.
 //
-// The ordinary endings — the wait running out, a bound met — say nothing is
-// there; a consumer deleted under a standing request says nothing CAN be
-// there, and an applier told the first would sit on a log it is no longer
-// reading and report itself caught up.
-//
-// AND IT IS REPORTED WHEN IT COMES, not when the fetch's wait runs out. THE
-// FETCH WAITS AN HOUR, so one that is told of the failure and not woken by it
-// is still waiting when the case gives up on it, and one woken by it has
-// returned long before. It used to wait ten seconds and be held to five by
-// the case's clock: that bound was the only check on the wake, a fetch that
-// reported the failure at its ten seconds passed any bound past them, and a
-// runner that lost five seconds failed one that reported it at once.
+// A wait running out or a bound met says nothing is there; a consumer deleted
+// under a standing request says nothing CAN be, and an applier told the first
+// would sit on a log it no longer reads and report itself caught up. It is
+// reported when it comes: the fetch waits an hour, so one not woken by the
+// failure is still waiting when the case gives up.
 //
 // Mutation: record a refusing status as an ordinary end, and the fetch asks
 // the deleted consumer again rather than reporting anything; record it
@@ -1633,9 +1434,8 @@ func TestAPullEndedAsAFailureReportsIt(t *testing.T) {
 			t.Fatalf("a pull whose consumer was deleted under it returned %v, "+
 				"want the refusal — an empty answer reads as a quiet log", err)
 		}
-	// LIVENESS: a fetch woken by its pull's failure returns once the failure
-	// arrives, and one that is not returns an hour from now; this only ends
-	// that wait, as the failure it is.
+	// LIVENESS: a passing fetch returns once the failure arrives, a failing
+	// one in an hour; this only ends that wait.
 	case <-time.After(20 * time.Second): //fixedwait:liveness
 		t.Fatal("a pull whose consumer was deleted under it went on waiting " +
 			"for its whole expiry")
@@ -1644,20 +1444,16 @@ func TestAPullEndedAsAFailureReportsIt(t *testing.T) {
 
 // A PULL THAT FAILS HANDS BACK WHAT IT HELD, never to the fetch after it.
 //
-// The applier reads a failed fetch as the moment from which the log may be
-// another history — a broker restored under a running node ends its pulls —
-// and gives back every record it holds from before it. A record the pull's
-// own buffer kept across the failure reached the applier after it, as though
-// the broker delivered it then. Here one is delivered to a request still
-// standing after the fetch that sent it returned, the consumer is deleted under
-// that request, and created again at the start as a restored broker's would
-// be: once the pull has been told of the failure, the fetch reports it, and the
-// first record the handle hands over after it is the new consumer's first
-// delivery, never the buffered one from before.
+// The applier reads a failed fetch as the point after which the log may be
+// another history (a broker restored under a running node ends its pulls) and
+// gives back every record from before it; one the pull's buffer kept across
+// the failure would reach it as though delivered after. Staged with a record
+// buffered for a request outliving its fetch, the consumer recreated from the
+// start: the fetch reports the failure, then the new consumer's first record.
 //
-// Mutations: let the failed fetch leave what it held for the fetch after —
-// that fetch hands over the record from before, red; record no failure from a
-// refusing status — the pull is never told, red.
+// Mutations: leave what the failed fetch held for the next, and that hands
+// over the record from before; record no failure from a refusing status, and
+// the pull is never told.
 func TestAFailedPullHandsBackWhatItHeld(t *testing.T) {
 	t.Parallel()
 	const stream = "CREWLET_HANDBACK_LOG"
@@ -1701,16 +1497,12 @@ func TestAFailedPullHandsBackWhatItHeld(t *testing.T) {
 		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 
-	// THE FAILURE: the consumer goes under the standing request — and the
-	// case waits for the PULL to be told, not for the delete to return. The
-	// server answers the deletion twice, with a `409` on the pull's inbox and
-	// with the reply the delete waits on, and the client dispatches the two
-	// on two subscriptions' own goroutines, so nothing orders them: a fetch
-	// made as the delete returns could find the record and no failure yet,
-	// and hand the record over — rightly, since it was delivered before the
-	// failure and the applier gives it back when the next fetch reports one.
-	// In the pull's inbox the record comes before the status, so a pull told
-	// of its failure holds the record still.
+	// THE FAILURE: the case waits for the PULL to be told, not for the
+	// delete to return. The server answers the delete on the pull's inbox
+	// (`409`) and on the delete's reply, dispatched on two goroutines nothing
+	// orders, so a fetch as the delete returns could rightly hand the record
+	// over before any failure. In the pull's inbox the record precedes the
+	// status, so a pull told of its failure still holds the record.
 	if err := q.JetStream().DeleteConsumer(t.Context(), stream, cons.Name()); err != nil {
 		t.Fatalf("delete the consumer: %v", err)
 	}
@@ -1793,11 +1585,11 @@ func BenchmarkAnIdlePull(b *testing.B) {
 }
 
 // A GROUP CREATED FROM A START BEGINS THERE, AND ONE THAT EXISTS WHERE IT
-// STANDS. The start is the caller's record of where the group had got to, and
-// it is for the one case the durable position cannot answer: the consumer is
-// gone and has to be created again. Created at the log's first record instead,
-// a wake feed's group replayed the log's whole retention as wakes. An existing
-// group is the fleet's position, and a start must never move it.
+// STANDS. The start is the caller's record of where the group had got to, for
+// the one case the durable position cannot answer: the consumer is gone.
+// Created at the log's first record instead, a wake feed's group replays the
+// whole retention as wakes. An existing group is the fleet's position, which a
+// start never moves.
 func TestAGroupCreatedFromAStartBeginsThereAndAnExistingOneWhereItStands(t *testing.T) {
 	t.Parallel()
 	q, log := openDomain(t, "CREWLET_GROUP_START", "crewlet.groupstart")

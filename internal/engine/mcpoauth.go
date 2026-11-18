@@ -26,57 +26,17 @@ import (
 )
 
 // SIGNING THE COMPANY IN TO A REMOTE MCP SERVER WITH OAUTH, and keeping it
-// signed in (ADR-0073).
-//
-// A server whose entry carries `oauth` ([config.MCPOAuth]) is reached with an
-// access token the engine is issued under ONE GRANT FOR THE COMPANY, which a
-// person makes once, from the server's page, and the engine renews on every
-// node that runs the server for as long as the vendor honours it.
-//
-// # Where each part of a grant lives
-//
-//   - THE REFRESH TOKEN, and the client a registration issued, are SEALED in
-//     the secret store under the engine's own name for the server,
-//     `mcp/<server>/refresh` ([fleetsecrets.Estate]): a row no operator
-//     surface lists, reveals, sets or deletes, and no `${VAR}` reaches, so
-//     nothing can read it back by construction rather than by a check.
-//   - THE PUBLIC HALF (who signed in and when, the client and the issuer,
-//     the scopes, when it runs out, and why its last renewal failed) is a
-//     coordination record ([coord.MCPGrant]) every node's status answer and
-//     alarm reads.
-//   - THE ACCESS TOKEN is issued AT USE and held in each node's memory
-//     alone ([oauthSource]): never sealed, never in a record, an answer, an
-//     audit or a log line. Each node renews its own as it runs out.
-//
-// # One renewer at a time, fleet-wide
-//
-// A renewal spends the refresh token: OAuth 2.1 rotates it for a client with
-// no secret, and a vendor that sees one used twice may revoke the whole grant.
-// So a renewal on any node holds the server's renewal lease
-// ([oauthRenewalClass]) while it reads the sealed grant, asks the vendor and
-// writes the rotated token back, and the write is at the version it read
-// ([fleetsecrets.Estate.Swap]). The lease keeps two nodes from spending one
-// refresh token; the version keeps a renewal whose lease lapsed under it from
-// writing over the one that took over.
-//
-// # A sign-in is a state the engine signed and spends once
-//
-// `POST /mcp-servers/{name}/oauth` starts one ([Engine.StartMCPSignIn]): the
-// engine reads the server's sign-in metadata (internal/mcp's address check),
-// registers where the client is a registration, mints a PKCE verifier, and
-// keeps everything the callback needs, sealed, on a coordination record that
-// lapses with it ([coord.MCPSignIn]). The person's browser carries only the
-// authorization address: the state in it is the sign-in's id SIGNED under the
-// fleet keyring ([runtoken], domain [mcpOAuthDomain]), so the callback, which
-// is unauthenticated (`GET /webhooks/mcp-oauth`), trusts nothing but that
-// signature, and spends the sign-in by moving it on at the version it read
-// ([Engine.CompleteMCPSignIn]). The verifier never leaves the engine.
-//
-// # Every node starts the server from the new grant
-//
-// A sign-in that completes, and a sign-out, re-activate the revision as a
-// sealed credential does: every node applies again, reads the grant record
-// afresh, and starts or stops the server ([Engine.bearerFor]).
+// signed in (ADR-0075 holds the argument). One grant per server, the company's:
+// its refresh token is sealed at `mcp/<server>/refresh` ([fleetsecrets.Estate]),
+// a row no operator surface or `${VAR}` reaches; its public half is a
+// [coord.MCPGrant]; its access token lives only in each node's memory
+// ([oauthSource]). A renewal holds [oauthRenewalClass]'s lease, as a vendor may
+// revoke a grant whose refresh token is spent twice, and writes the rotated one
+// at the version it read, so a renewer whose lease lapsed cannot overwrite. A
+// sign-in's state is its id signed under the fleet keyring ([mcpOAuthDomain]),
+// all the unauthenticated callback trusts; the PKCE verifier stays sealed on
+// its [coord.MCPSignIn], spent once. A sign-in or sign-out re-activates the
+// revision so every node reads the grant afresh.
 
 // mcpOAuthDomain separates a sign-in's state from every other token the fleet
 // keyring signs.
@@ -84,30 +44,26 @@ const mcpOAuthDomain = "mcp-oauth"
 
 // The bounds of a sign-in and a renewal.
 const (
-	// MCPSignInTTL is how long a sign-in's state is accepted: a person
-	// reading a vendor's consent page, choosing an account and approving,
-	// with room for a second factor. Fifteen minutes, as a Slack install
-	// link's.
+	// MCPSignInTTL is how long a sign-in's state is accepted: a consent page,
+	// an account chosen and a second factor. Fifteen minutes, as a Slack
+	// install link's.
 	MCPSignInTTL = 15 * time.Minute
 
-	// oauthRenewAhead is how long before an access token runs out the
-	// engine renews it. REASONED: a token is checked when a request
-	// arrives, not while a call runs, so this covers the clock between the
-	// engine and the vendor, and a request in flight across the boundary.
+	// oauthRenewAhead is how long before an access token runs out the engine
+	// renews it: a token is checked when a request arrives, so this covers
+	// clock skew with the vendor and a request in flight across the expiry.
 	oauthRenewAhead = 2 * time.Minute
 
-	// oauthFreshWindow is how long a token just issued is sent again rather
-	// than renewed when a server refuses it. REASONED: a token refused
-	// within half a minute of being issued is refused for a reason a
-	// renewal does not change (a scope, a revoked grant), and renewing it
-	// on every refusal would spend the refresh token once per request; this
-	// bounds it to two renewals a minute per node and server.
+	// oauthFreshWindow is how long a just-issued token is sent again rather
+	// than renewed when refused: so young, it was refused for a reason a
+	// renewal does not change (a scope, a revoked grant), and renewing on
+	// every refusal would spend the refresh token per request. It bounds
+	// renewals to two a minute per node and server.
 	oauthFreshWindow = 30 * time.Second
 
-	// oauthRenewalLeaseTTL bounds the renewal lease. REASONED: a renewal is
-	// one request to the token endpoint ([oauth]'s 15-second budget) and two
-	// store writes; thirty seconds outlasts both, and a renewer that dies
-	// holding it costs the next renewal at most that long.
+	// oauthRenewalLeaseTTL bounds the renewal lease: it outlasts one token
+	// request ([oauth]'s 15-second budget) and two store writes, and a renewer
+	// that dies holding it delays the next renewal at most that long.
 	oauthRenewalLeaseTTL = 30 * time.Second
 
 	// oauthRenewalWait is how long a renewal waits for another node's to
@@ -140,9 +96,9 @@ var (
 	ErrNoMCPSignIn = errors.New("engine: this sign-in is not known any more; start it again")
 	// ErrMCPNotSignedIn is a sign-out of a server nobody signed in to.
 	ErrMCPNotSignedIn = errors.New("engine: nobody is signed in to the MCP server")
-	// ErrMCPServiceIdentity is a sign-in to a server the engine signs in to
-	// as a service identity (oauth.grant: client_credentials), which nobody
-	// signs in to: its tokens are issued as it is used.
+	// ErrMCPServiceIdentity is a sign-in to a server the engine reaches as a
+	// service identity (oauth.grant: client_credentials), whose tokens are
+	// issued at use.
 	ErrMCPServiceIdentity = errors.New("engine: the MCP server is signed in to as a service " +
 		"identity with client credentials, and its tokens are issued as it is used; nobody signs in to it")
 )
@@ -158,10 +114,9 @@ type MCPSignInRefusal struct {
 
 func (r *MCPSignInRefusal) Error() string { return "engine: " + r.Reason + ". " + r.Remedy }
 
-// refusedState is the one answer for a state that is forged, edited, lapsed,
-// signed under a key this fleet no longer holds, never minted, or already
-// spent: the only move for any of them is a new sign-in, and telling a caller
-// which tells an attacker the same.
+// refusedState is the one answer for a state forged, edited, lapsed, signed
+// under a retired key, never minted or already spent: each needs a new
+// sign-in, and telling a caller which tells an attacker too.
 var refusedState = &MCPSignInRefusal{
 	Status: http.StatusBadRequest,
 	Reason: "this sign-in link is not one this engine issued, has expired, or was already used",
@@ -193,8 +148,8 @@ type signInSealed struct {
 }
 
 // grantClient is the client a grant was made as. The company's own client's
-// secret is never kept here: it is the configuration's `${VAR}`, resolved at
-// each use, so a rotated secret is the one sent.
+// secret is never kept here but resolved from its `${VAR}` at each use, so a
+// rotated secret is the one sent.
 type grantClient struct {
 	Kind   catalogue.OAuthClient `json:"kind"`
 	ID     string                `json:"id"`
@@ -226,9 +181,8 @@ func (e *Engine) CallbackURL() string {
 	return e.webhookBase + "/webhooks/mcp-oauth"
 }
 
-// ClientMetadataURL is the address of the engine's client metadata document,
-// the client id it signs in as by a published document (cimd), "" where the
-// engine has no public address.
+// ClientMetadataURL is the engine's client metadata document, its client id
+// under cimd, "" where the engine has no public address.
 func (e *Engine) ClientMetadataURL() string {
 	if e.webhookBase == "" {
 		return ""
@@ -263,8 +217,7 @@ type oauthState struct {
 	signerErr  error
 
 	mu sync.Mutex
-	// sources are each server's token source, under the grant it was made
-	// for: a new grant is a new source.
+	// sources are each server's token source; a new grant is a new source.
 	sources map[string]*oauthSource
 	// last are each server's grant as this node last read it, for an apply
 	// whose read fails: a store that blinks is not a sign-out.
@@ -300,7 +253,7 @@ func (e *Engine) fleetReady() (*fleetsecrets.Estate, error) {
 	return fleetsecrets.New(e.backends.Fleet, e.cipher).Estate(), nil
 }
 
-// StartMCPSignIn begins a sign-in to server as by: see the file's comment.
+// StartMCPSignIn begins a sign-in to server as by (ADR-0075).
 func (e *Engine) StartMCPSignIn(ctx context.Context, name string, by iam.Actor) (MCPSignInStarted, error) {
 	server, err := e.oauthServer(name)
 	if err != nil {
@@ -360,10 +313,9 @@ func (e *Engine) StartMCPSignIn(ctx context.Context, name string, by iam.Actor) 
 	if record.Sealed, err = e.cipher.Encrypt(string(sealed), signInAAD(record.ID)); err != nil {
 		return MCPSignInStarted{}, fmt.Errorf("engine: seal a sign-in: %w", err)
 	}
-	// THE LINK IS MADE BEFORE THE SIGN-IN IS STORED, from the id the store
-	// keeps, so a refusal of either leaves the server's sign-in as it was:
-	// stored first, a state or an authorize URL refused after it left a
-	// pending sign-in nobody could finish in place of the one it replaced.
+	// THE LINK IS MADE BEFORE THE SIGN-IN IS STORED (under the id the store
+	// keeps), so a refused state or authorize URL leaves the earlier sign-in,
+	// not a pending one nobody could finish in its place.
 	state, err := signer.Mint(name+stateSep+record.ID.String(), MCPSignInTTL)
 	if err != nil {
 		return MCPSignInStarted{}, fmt.Errorf("engine: the state of server %s's sign-in: %w", name, err)
@@ -479,9 +431,9 @@ func (e *Engine) replaceSignIn(ctx context.Context, record coord.MCPSignIn) (coo
 	return coord.MCPSignIn{}, errors.New("engine: the server's sign-in kept changing; start it again")
 }
 
-// maxRetryRounds bounds a compare-and-set a person's gesture retries: it
-// contends with at most the handful of other people acting on one server at
-// once, so eight lost rounds is a store that is not settling.
+// maxRetryRounds bounds a person's gesture's compare-and-set retries: it
+// contends only with the few people acting on one server at once, so eight
+// lost rounds is a store not settling.
 const maxRetryRounds = 8
 
 // MCPSignIn reads a sign-in by id, for the page that polls it.
@@ -501,11 +453,10 @@ func (e *Engine) MCPSignIn(ctx context.Context, id uuid.UUID) (coord.MCPSignIn, 
 	return coord.MCPSignIn{}, ErrNoMCPSignIn
 }
 
-// CompleteMCPSignIn finishes the sign-in the landing's state names: it
-// verifies and spends the state, exchanges the code, seals the grant and
-// re-activates the revision so every node starts the server under it. It
-// answers the server's name. Every refusal is an [*MCPSignInRefusal]; none
-// quotes the code, a token or the verifier.
+// CompleteMCPSignIn finishes the sign-in the landing's state names: it spends
+// the state, exchanges the code, seals the grant and re-activates the
+// revision, answering the server's name. Every refusal is an
+// [*MCPSignInRefusal]; none quotes the code, a token or the verifier.
 func (e *Engine) CompleteMCPSignIn(ctx context.Context, landing MCPSignInLanding) (string, error) {
 	signer, err := e.oauthSigner()
 	if err != nil {
@@ -519,9 +470,8 @@ func (e *Engine) CompleteMCPSignIn(ctx context.Context, landing MCPSignInLanding
 	if err != nil {
 		return server, err
 	}
-	// DETACHED AND BOUNDED: the browser may go away while the grant is being
-	// sealed, and a grant the vendor issued and the engine dropped is one
-	// nobody can use or revoke.
+	// DETACHED AND BOUNDED: the browser may leave mid-seal, and a grant the
+	// vendor issued and the engine dropped is one nobody can use or revoke.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), oauthStoreBudget+2*time.Minute)
 	defer cancel()
 	session, err := e.spendSignIn(ctx, server, id)
@@ -552,8 +502,8 @@ func (e *Engine) CompleteMCPSignIn(ctx context.Context, landing MCPSignInLanding
 		return fail("the sign-in could not be read on this node", "Start it again from the server's page")
 	}
 	ep := &sealed.Endpoints
-	// THE ISSUER THE CODE CAME FROM (RFC 9207): a code another
-	// authorization server issued is never sent to this one's endpoint.
+	// THE ISSUER (RFC 9207): a code another authorization server issued is
+	// never sent to this one's endpoint.
 	switch {
 	case landing.Issuer != "" && strings.TrimSuffix(landing.Issuer, "/") != strings.TrimSuffix(ep.Issuer, "/"):
 		return fail("the sign-in came back from an authorization server other than the one it was "+
@@ -569,8 +519,7 @@ func (e *Engine) CompleteMCPSignIn(ctx context.Context, landing MCPSignInLanding
 		return fail("the server is no longer signed in to with OAuth", "Add its oauth block, then sign in")
 	}
 	if entry.OAuth.ServiceIdentity() {
-		// CHANGED UNDER THE SIGN-IN: a code exchanged for a server that now
-		// signs in as a service identity would be a grant nothing uses.
+		// CHANGED UNDER THE SIGN-IN: exchanged now, it is a grant nothing uses.
 		return fail("the server now signs in as a service identity, which nobody signs in to",
 			"Nothing to do: the engine issues its tokens as it is used")
 	}
@@ -586,8 +535,7 @@ func (e *Engine) CompleteMCPSignIn(ctx context.Context, landing MCPSignInLanding
 	grant := sealedGrant{Grant: uuid.New(), Refresh: tokens.Refresh, Client: sealed.Client, Endpoints: *ep}
 	by := iam.Actor{Name: session.By, Kind: session.ByKind, OperatorID: session.OperatorID}
 	if err := e.sealGrant(ctx, estate, entry, grant, by); err != nil {
-		// NOT KEPT, SO REVOKED: a grant the vendor issued and nothing holds
-		// is one nobody could end otherwise.
+		// NOT KEPT, SO REVOKED: nobody could end it otherwise.
 		_, _ = oauth.Revoke(ctx, ep, client, tokens.Refresh, "refresh_token")
 		return fail("the grant could not be kept: "+err.Error(), "Start it again from the server's page")
 	}
@@ -621,7 +569,7 @@ func openState(signer *runtoken.Signer, state string) (string, uuid.UUID, bool) 
 	return server, id, true
 }
 
-// spendSignIn moves the pending sign-in id on to completing, at the version it
+// spendSignIn moves the pending sign-in id on to completing at the version it
 // read: the one way a state is spent, on any node.
 func (e *Engine) spendSignIn(ctx context.Context, server string, id uuid.UUID) (coord.MCPSignIn, error) {
 	held, found, err := e.backends.Fleet.MCPSignIn(ctx, server)
@@ -653,7 +601,7 @@ func (e *Engine) endSignIn(ctx context.Context, s coord.MCPSignIn, status coord.
 }
 
 // oauthClient is the client a grant was made as, the company's own client's
-// secret resolved from entry, the server's configuration, now.
+// secret resolved from entry now.
 func (e *Engine) oauthClient(entry *config.MCPServer, c grantClient) (oauth.Client, error) {
 	out := oauth.Client{Kind: c.Kind, ID: c.ID, Secret: c.Secret}
 	if c.Kind != catalogue.ClientOwn {
@@ -671,8 +619,8 @@ func (e *Engine) oauthClient(entry *config.MCPServer, c grantClient) (oauth.Clie
 	return out, nil
 }
 
-// sealGrant seals grant as the server's, over whatever grant it had, whose
-// refresh token is revoked at its vendor.
+// sealGrant seals grant as the server's, revoking the refresh token of any
+// grant it replaces at its vendor.
 func (e *Engine) sealGrant(ctx context.Context, estate *fleetsecrets.Estate, entry *config.MCPServer,
 	grant sealedGrant, by iam.Actor) error {
 
@@ -730,8 +678,8 @@ func (e *Engine) putGrant(ctx context.Context, g coord.MCPGrant) error {
 	return errors.New("the server's grant kept changing")
 }
 
-// grantedScopes is what a grant was granted: what the token answer said, else
-// what was asked for (RFC 6749 reads silence as the request granted).
+// grantedScopes is what the token answer granted, else what was asked for
+// (RFC 6749 reads silence as the request granted).
 func grantedScopes(granted, asked []string) []string {
 	if len(granted) > 0 {
 		return granted
@@ -748,8 +696,8 @@ func instantOrNil(t time.Time) *time.Time {
 	return &t
 }
 
-// vendorSaid is a vendor's error code and description from the landing's
-// query, as a page and a record may hold them: one line, bounded, redacted.
+// vendorSaid is a vendor's error code and description as a page or record may
+// hold them: one line, bounded, redacted.
 func vendorSaid(code, description string) string {
 	said := strings.Join(strings.Fields(code), " ")
 	if d := strings.Join(strings.Fields(description), " "); d != "" {
@@ -787,11 +735,8 @@ func (e *Engine) reloadForGrant(ctx context.Context, server, summary string, by 
 
 // MCPSignOut is what signing out of a server did.
 type MCPSignOut struct {
-	// Revocation is what the vendor was asked: [RevokedAtVendor] where it
-	// revoked the grant, [RevokeNotOffered] where it publishes no
-	// revocation endpoint (the grant is forgotten, and lapses at the
-	// vendor), [RevokeFailed] where it could not be asked or refused (the
-	// grant is forgotten all the same).
+	// Revocation is what the vendor answered; the grant is forgotten here
+	// whatever it was.
 	Revocation MCPRevocation
 	// Said is the vendor's words where the revocation failed.
 	Said string
@@ -815,8 +760,7 @@ var MCPRevocations = []MCPRevocation{RevokedAtVendor, RevokeNotOffered, RevokeFa
 
 // SignOutMCPServer gives up the server's grant: revoked at its vendor where it
 // offers that (RFC 7009), forgotten here, and the revision re-activated so
-// every node stops sending its tokens. [ErrMCPNotSignedIn] where nobody signed
-// in.
+// every node stops sending its tokens; [ErrMCPNotSignedIn] where there is none.
 func (e *Engine) SignOutMCPServer(ctx context.Context, name string, by iam.Actor) (MCPSignOut, error) {
 	entry, err := e.oauthServer(name)
 	if err != nil {
@@ -836,14 +780,13 @@ func (e *Engine) SignOutMCPServer(ctx context.Context, name string, by iam.Actor
 }
 
 // RevokeMCPGrant revokes the grant of entry's server at its vendor where it
-// offers that, and deletes it here (the sealed row, the public record and any
-// sign-in in progress), reporting whether there was one. It re-activates
-// nothing: a removal of the server is itself a revision, and a sign-out
-// re-activates after it ([Engine.SignOutMCPServer]).
+// offers that, and deletes the sealed row, the public record and any sign-in
+// in progress, reporting whether there was a grant. It re-activates nothing:
+// a removal is itself a revision, and [Engine.SignOutMCPServer] re-activates.
 //
-// ENTRY IS THE SERVER AS IT WAS CONFIGURED, which a removal passes from the
-// document before it: the company's own client authenticates its revocation
-// with the secret that entry names, which the configuration no longer does.
+// ENTRY IS THE SERVER AS CONFIGURED BEFORE a removal: the company's own client
+// authenticates the revocation with the secret that entry names, which the
+// new configuration no longer does.
 func (e *Engine) RevokeMCPGrant(ctx context.Context, entry *config.MCPServer) (MCPSignOut, bool, error) {
 	server := entry.Name
 	estate, err := e.fleetReady()
@@ -918,16 +861,14 @@ func (e *Engine) HeldMCPGrant(ctx context.Context, server string) (bool, error) 
 	return found, err
 }
 
-// signInNeeded is a server held back because nobody holds a grant for it, or
-// its vendor refused to renew the one it had: the outcome a pass reports in
-// place of a start.
+// signInNeeded is a server held back, in place of a start, because it has no
+// grant, its vendor refused to renew it, or its address moved.
 type signInNeeded struct {
 	server string
-	// failure is the vendor's words for the renewal it refused, "" where
-	// nobody signed in.
+	// failure is the vendor's words for the renewal it refused, "" where none was.
 	failure string
-	// moved is a grant issued for another address than the one the server
-	// is configured at now, which its tokens are never sent to.
+	// moved is the address the grant was issued for, where the server is no
+	// longer configured.
 	moved string
 }
 
@@ -946,11 +887,11 @@ func (s *signInNeeded) Error() string {
 func (s *signInNeeded) Unwrap() error { return mcp.ErrSignInNeeded }
 
 // bearerFor is the token source a start of server sends with, or why it may
-// not start: nobody signed in, or the grant's renewal was refused for good.
+// not start ([signInNeeded]).
 //
 // READ AFRESH at each pass, from the leader, so the pass a sign-in's
-// re-activation runs reads the grant it wrote; a read that fails takes the
-// grant this node last read, since a store that blinks is not a sign-out.
+// re-activation runs reads the grant it wrote; a failed read takes the grant
+// this node last read, since a store that blinks is not a sign-out.
 func (e *Engine) bearerFor(ctx context.Context, server string) (mcp.BearerSource, *signInNeeded) {
 	if e.backends == nil || e.backends.Fleet == nil {
 		return nil, &signInNeeded{server: server}
@@ -999,15 +940,12 @@ func (e *Engine) bearerFor(ctx context.Context, server string) (mcp.BearerSource
 }
 
 // grantMoved is why g may not be used for server, nil where it may: the
-// address server is configured at now (resolved) is not the resource g was
-// issued for ([mcp.ResourceServes]).
+// server's resolved address now is not the resource g was issued for
+// ([mcp.ResourceServes]).
 //
-// THE GRANT GOES WITH ITS RESOURCE, NOT ITS NAME. A server's entry is
-// rewritten by any configuration write, and the transport sends a source's
-// token to whatever address the spec names: a url moved to another origin
-// would otherwise carry the company's token for one vendor to whoever answers
-// there. A server whose address moved is held back for a sign-in at the new
-// one.
+// THE GRANT GOES WITH ITS RESOURCE, NOT ITS NAME: any configuration write can
+// move a server's url, and the transport sends the token wherever the spec
+// points, so one vendor's token would reach whoever answers at the new origin.
 func (e *Engine) grantMoved(server string, g coord.MCPGrant) *signInNeeded {
 	entry, err := e.oauthServer(server)
 	if err != nil {
@@ -1028,14 +966,13 @@ func (e *Engine) forgetSource(server string) {
 	delete(e.oauth.last, server)
 }
 
-// oauthSource is one server's access token on this node, under one grant: the
-// [mcp.BearerSource] every start of the server under that grant sends with.
-// The token is held here and nowhere else.
+// oauthSource is one server's access token on this node under one grant: the
+// [mcp.BearerSource] its starts send with, and the token's only holder.
 //
-// ONE SOURCE FOR BOTH GRANTS, so a server is sent its token, renews it ahead
-// of its end and renews it once on a 401 by the same path whichever way it is
-// issued: by renewing the company's grant ([oauthSource.renewGrant]), or by
-// signing in as the company's service identity ([serviceIdentity.issue]).
+// ONE SOURCE FOR BOTH GRANTS, so sending, renewing ahead of expiry and the
+// one renewal on a 401 share a path whether the token comes from the
+// company's grant ([oauthSource.renewGrant]) or its service identity
+// ([serviceIdentity.issue]).
 type oauthSource struct {
 	engine *Engine
 	server string
@@ -1064,9 +1001,8 @@ func (s *oauthSource) Token(ctx context.Context) (string, error) {
 	return s.renewLocked(ctx)
 }
 
-// Rejected renews the token a server refused, once: a token renewed since the
-// refused one was sent is answered as it is, and so is one issued within
-// [oauthFreshWindow], which a renewal would not change.
+// Rejected renews the token a server refused, once: one already renewed since,
+// or issued within [oauthFreshWindow], is answered as it is.
 func (s *oauthSource) Rejected(ctx context.Context, refused string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1076,9 +1012,8 @@ func (s *oauthSource) Rejected(ctx context.Context, refused string) (string, err
 	return s.renewLocked(ctx)
 }
 
-// renewLocked is issued a new access token, as a service identity or by
-// renewing the grant, and holds it. Called with s.mu held, which is what
-// keeps two requests on this node from asking at once.
+// renewLocked is issued a new access token and holds it. Called with s.mu
+// held, which keeps two requests on this node from asking at once.
 func (s *oauthSource) renewLocked(ctx context.Context) (string, error) {
 	now := s.engine.now()
 	issue := s.renewGrant
@@ -1093,8 +1028,8 @@ func (s *oauthSource) renewLocked(ctx context.Context) (string, error) {
 	return s.token, nil
 }
 
-// renewGrant renews the company's grant under the fleet's renewal lease: see
-// the file's comment. Called with s.mu held.
+// renewGrant renews the company's grant under the fleet's renewal lease
+// (ADR-0075). Called with s.mu held.
 func (s *oauthSource) renewGrant(ctx context.Context) (oauth.Tokens, error) {
 	e := s.engine
 	estate, err := e.fleetReady()
@@ -1109,8 +1044,8 @@ func (s *oauthSource) renewGrant(ctx context.Context) (oauth.Tokens, error) {
 	case !found || record.Grant != s.grant:
 		return oauth.Tokens{}, &signInNeeded{server: s.server}
 	case record.Failed():
-		// REFUSED FOR GOOD ALREADY, on this node or another: the vendor is
-		// not asked again until somebody signs in.
+		// REFUSED FOR GOOD ALREADY, on any node: the vendor is not asked again
+		// until somebody signs in.
 		return oauth.Tokens{}, &signInNeeded{server: s.server, failure: record.Failure}
 	}
 	if moved := e.grantMoved(s.server, record); moved != nil {
@@ -1161,8 +1096,7 @@ func (s *oauthSource) renewGrant(ctx context.Context) (oauth.Tokens, error) {
 			}
 		}
 		if err != nil {
-			// THE TOKEN IS STILL GOOD for this node's requests; what is lost
-			// is the next renewal, which then asks for a sign-in.
+			// THE TOKEN IS STILL GOOD here; only the next renewal is lost.
 			log.ErrorContext(ctx, "mcp_oauth_rotation_not_kept", "server", s.server, "error", err,
 				"detail", "the vendor rotated the refresh token and the new one could not be kept; "+
 					"the next renewal asks for a sign-in")
@@ -1175,8 +1109,7 @@ func (s *oauthSource) renewGrant(ctx context.Context) (oauth.Tokens, error) {
 }
 
 // holdRenewal takes the server's renewal lease, waiting up to
-// [oauthRenewalWait] for another node's renewal to end, and answers its
-// release.
+// [oauthRenewalWait] for another node's renewal, and answers its release.
 func (e *Engine) holdRenewal(ctx context.Context, server string) (func(), error) {
 	resource := oauthRenewalClass.Resource(server)
 	owner := e.selfNode() + "/" + uuid.NewString()
@@ -1223,8 +1156,8 @@ func (e *Engine) recordRenewalRefused(ctx context.Context, record coord.MCPGrant
 		"detail", "the server needs somebody to sign in to it again")
 }
 
-// recordGrantExpiry records when the server's grant now runs out, where its
-// vendor said and it moved.
+// recordGrantExpiry records when the server's grant now runs out, where the
+// vendor moved it.
 func (e *Engine) recordGrantExpiry(ctx context.Context, record coord.MCPGrant, expiry time.Time) {
 	if record.Expiry != nil && record.Expiry.Equal(expiry) {
 		return
@@ -1235,9 +1168,9 @@ func (e *Engine) recordGrantExpiry(ctx context.Context, record coord.MCPGrant, e
 	}
 }
 
-// testBearer is the token source a test of the saved server sends with: its
-// grant's, or nil where nobody holds one, so the test walks to where the
-// server asks for a sign-in and says so.
+// testBearer is the token source a test of the saved server sends with, nil
+// where it has no grant, so the test reaches the server's sign-in demand and
+// reports it.
 func (e *Engine) testBearer(ctx context.Context, server string) mcp.BearerSource {
 	bearer, missing := e.bearerFor(ctx, server)
 	if missing != nil {
@@ -1262,9 +1195,9 @@ func (e *Engine) MCPSignInAddresses() (string, string) {
 	return e.CallbackURL(), e.ClientMetadataURL()
 }
 
-// RevokeMCPServerGrant is [Engine.RevokeMCPGrant] in the plain words a removal
-// of the server answers (configapi.Grants): what the vendor was asked, its
-// words where it refused, and whether there was a grant.
+// RevokeMCPServerGrant is [Engine.RevokeMCPGrant] in the plain words a
+// server's removal answers (configapi.Grants): the revocation, the vendor's
+// words, and whether there was a grant.
 func (e *Engine) RevokeMCPServerGrant(ctx context.Context, entry *config.MCPServer) (string, string, bool, error) {
 	out, held, err := e.RevokeMCPGrant(ctx, entry)
 	if err != nil {

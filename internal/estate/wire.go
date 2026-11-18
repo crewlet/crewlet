@@ -28,43 +28,29 @@ const SubjectPrefix = "crewlet.estate"
 // Subject is the subject a serving node answers every operation on but a
 // push's proposal, which it answers on [ProposalSubject].
 //
-// THE NODE ID IS ESCAPED as a subject token, because a node id may carry a dot
-// (`node.id` admits one), and a raw dot would split it into two tokens — a
-// subject some other node's escaped id could collide with.
+// The node id is ESCAPED as one subject token: `node.id` admits a dot, and a
+// raw dot would split it into a subject another node's escaped id could match.
 func Subject(nodeID string) string {
 	return SubjectPrefix + "." + coord.DocumentKey(nodeID)
 }
 
 // ProposalSubject is the subject a serving node answers proposals on, a push's
-// and a compaction's — its node's subject with one more token, so no node's
-// [Subject] is ever another's: an escaped id is always exactly one token.
+// and a compaction's: its [Subject] plus one token, so no node's [Subject] is
+// another's, an escaped id being exactly one token.
 func ProposalSubject(nodeID string) string { return laneProposals.subject(nodeID) }
 
 // lane is one of a serving node's registrations ([Serve]): the subject it
 // answers on, and how many of its requests it answers at once.
 //
-// SEPARATE, because an answer that WAITS must never hold a slot an answer that
-// does not is waiting for — a registration's slots are its own, and a request
-// past them waits behind every answer holding one ([queue.EventQueue.Serve]).
-// A push's proposal waits: queued behind its repository's earlier pushes,
-// then for its batch, for as long as its asker's whole attempt — and a
-// compaction's waits in the same queue. Every other operation is a read or a
-// write done now. On one registration, sixty-four queued pushes held every
-// slot the node had — it answered no tracker read, no page write and no git
-// fetch's code.resolve until a batch ended; a reader
-// gave up after [ReadAttempt] and marked it suspect for every domain; and an
-// election stalling the code log stalled every committer with sixty-four
-// pushes in flight, spreading the suspicion across the fleet — while the
-// committer's queue, sized to take a burst whole, could never fill. So
-// proposals have a lane of their own, as wide as everything the committer and
-// its two sibling writers hold at once — each refusing busy at its own
-// node-wide count, so each has its share and none takes another's
-// ([proposalAnswers]) — and a lane answers only the operations declared on it
-// ([op.answeredOn]). A Gitlet node's reads of a repository by object id wait
-// too — on a sync of the node's copy and a git process of up to
-// [GitReadAttempt] — so they have a third lane, and its engine writes, which
-// wait on far more again ([GitWriteAttempt]), a fourth: both registered only
-// where the node serves git ([gitLanes]).
+// SEPARATE, because a request past a registration's slots waits behind every
+// answer holding one ([queue.EventQueue.Serve]), so an answer that WAITS must
+// never hold the slots answers done now need: on one registration, a burst of
+// queued pushes held every slot, starved reads past [ReadAttempt] and got the
+// node suspected fleet-wide. So proposals (a push's, a compaction's) have a
+// lane as wide as the committer and its two sibling writers hold at once
+// ([proposalAnswers]), and a Gitlet node's git reads ([GitReadAttempt]) and
+// engine writes ([GitWriteAttempt]) a third and a fourth ([gitLanes]). A lane
+// answers only the operations declared on it ([op.answeredOn]).
 type lane string
 
 const (
@@ -72,12 +58,10 @@ const (
 	// [Subject].
 	laneShared lane = ""
 
-	// laneProposals answers proposals alone — a push's, a compaction's, an
-	// expunge record's, a change's and a merge queue's, a write of a change's
-	// conversation, which waits its change's turn on the same node, and a
-	// write of a repository's checks, which waits its repository's — on
-	// [ProposalSubject], as many at once as the three components answering
-	// them hold together ([proposalAnswers]).
+	// laneProposals answers proposals alone, on [ProposalSubject]: a push's, a
+	// compaction's, an expunge record's, a change's and a merge queue's, and the
+	// writes of a change's conversation and a repository's checks, each waiting
+	// its change's or repository's turn on the same node ([proposalAnswers]).
 	laneProposals lane = "proposals"
 
 	// laneGitReads answers a repository's git reads alone ([GitCopy]) — on
@@ -86,73 +70,41 @@ const (
 	laneGitReads lane = "git"
 
 	// laneGitWrites answers a repository's ENGINE WRITES alone
-	// ([opCodeGitWrite]) — on the node's subject with one more token — and,
-	// as the reads' lane, only on a node that serves git. Apart from the
-	// reads, because a write holds its answer slot through every wait it
-	// makes — the sync of its copy, its build, its bundle's upload, its
-	// proposal and the wait for its push's row, up to [GitWriteAttempt] —
-	// where a read holds one through a sync and a git process: the
-	// proposals' lesson again, a slot held through a wait is one every
-	// other request of its registration waits behind, so a burst of writes
-	// on the reads' lane would hold the slots every seat's read of every
-	// repository on the node is answered through. It HOLDS at most
-	// [gitWritesHeld] writes at once, and answers the next at once. What
-	// bounds the git a node's writes run is the seat git-work share, never
-	// this lane: BenchmarkEngineWrite's sixty-four writes at once
-	// (internal/gitlet/host) were all in flight with none queued for a slot,
-	// every write past the share's wait answered unready rather than held —
-	// so a write waits on the share or nothing.
+	// ([opCodeGitWrite]), on the node's subject plus one token, only on a node
+	// that serves git. Apart from the reads because a write holds its slot
+	// through every wait it makes (its copy's sync, build, upload, proposal and
+	// its push's row, up to [GitWriteAttempt]), so a burst of writes on the
+	// reads' lane would hold the slots every read on the node waits for. It
+	// holds at most [gitWritesHeld] and answers the next at once; the seat
+	// git-work share, never this lane, bounds the git a node's writes run
+	// (BenchmarkEngineWrite, internal/gitlet/host).
 	laneGitWrites lane = "git-writes"
 )
 
 // gitWritesHeld is how many engine writes a Gitlet node HOLDS at once for its
-// peers on its writes' lane ([laneGitWrites]), each through every wait it
-// makes, up to [GitWriteAttempt]; a write a peer asks past them is answered AT
-// ONCE, before its arguments are decoded or its git half asked: `behind`, at
-// its share (gitlet.UnreadyShare), which its walk moves on from without demoting
-// the node — the next Gitlet node holding a copy builds it, or the walk ends
-// unserved, saying why ([Router.routeGit]).
-//
-// SIXTY-FOUR, queue.ConcurrentAnswers, the lane's width before it answered at
-// once: what a held write waits on is mostly no git at all — its upload, its
-// proposal, its push's row — while its build takes a unit of the node's seat
-// git-work share (gitlet.SeatWorkWrite) and gives it back before it lands, so
-// the share, never this bound, bounds the git a node's writes run, and this
-// bounds what they hold ([lane.answers] states the figure, measured).
-//
-// ANSWERED AT ONCE, NEVER LEFT TO WAIT FOR A SLOT, because a request a
-// registration has no slot for waits in its broker client's buffer, and the
-// broker client drops one past that buffer's bound, unheard by its asker
-// ([queue.EventQueue.Serve]): nats.go holds a subscription's pending messages
-// to 64 MiB (its DefaultSubPendingBytesLimit) and drops the rest as a slow
-// consumer, which the node logs naming no subject. A write is up to a
-// mebibyte as the wire spells it (gitlet.MaxCommitPayloadBytes), so some
-// sixty-four waiting behind a full lane — 128 large writes in flight against
-// one Gitlet node — overflowed it, and the asker of a dropped one heard
-// nothing for its whole attempt, then took the healthy node for a gone one:
-// asked it last for every operation for [suspectFor], so every repository it
-// is home to sent its reads and writes to a runner-up that downloaded a copy
-// of each. Answered at once, the asker hears the node is busy within the
-// milliseconds an admission takes.
-//
-// This node's own seats' writes are asked in process and hold none of these:
-// they are bounded by their turns, and hold nothing a peer's request does.
+// peers on [laneGitWrites], each up to [GitWriteAttempt]: queue.ConcurrentAnswers,
+// since a held write mostly waits on no git and the seat git-work share
+// (gitlet.SeatWorkWrite) bounds its build, so this bounds only what writes hold
+// ([lane.answers] has the measured figure). A write past them is answered AT
+// ONCE, before decoding: `behind` at its share (gitlet.UnreadyShare), which the
+// walk moves on from without demoting the node ([Router.routeGit]). Left to
+// wait, it sits in the broker client's buffer, which nats.go drops past 64 MiB
+// (DefaultSubPendingBytesLimit) unheard ([queue.EventQueue.Serve]) — some
+// sixty-four writes of gitlet.MaxCommitPayloadBytes — and its asker suspects a
+// healthy home for [suspectFor]. This node's own seats' writes are asked in
+// process and hold none of these.
 const gitWritesHeld = queue.ConcurrentAnswers
 
 // lanes is every registration EVERY serving node makes, the shared one first.
 var lanes = []lane{laneShared, laneProposals}
 
 // gitLanes is every registration a node that serves GIT makes beside [lanes]
-// ([ServerOptions.Git]), and no other node: a node without the gitlet role has no
-// git half, and a lane it answered only `no_backend` on would still cost each
-// of its slots a goroutine for nothing a git walk could not learn from the
-// presence view. A Gitlet node registers them from boot, before it has
-// built Gitlet, so its askers hear `no_backend` rather than the silence of an
-// unregistered subject, which they would read as a node gone and suspect for
-// every operation — and registers both or neither ([Serve]'s EVERY LANE OR
-// NONE): a Gitlet node answering its reads and no write would be heard as gone by
-// every write's walk, no answerer on its subject, and so asked last for every
-// operation and reported to both placements while it served.
+// ([ServerOptions.Git]), and no other: a node without the gitlet role would
+// only answer `no_backend` there, a goroutine per slot for what the presence
+// view already says. Registered from boot, before Gitlet is built, so askers
+// hear `no_backend` rather than an unregistered subject's silence, read as a
+// node gone; and both or neither ([Serve]'s EVERY LANE OR NONE), since a node
+// answering reads and no writes is heard as gone by every write's walk.
 var gitLanes = []lane{laneGitReads, laneGitWrites}
 
 // subject is the subject node answers this lane on.
@@ -163,40 +115,18 @@ func (l lane) subject(node string) string {
 	return Subject(node) + "." + string(l)
 }
 
-// answers is how many of this lane's requests a node answers at once.
+// answers is how many of this lane's requests a node answers at once. The git
+// reads' lane is as wide as the shared one: it only SEPARATES git reads, and
+// the seat git-work share (gitlet.GitShare) bounds the git running, in-process
+// reads included, answering `share` at once where a narrower lane would leave
+// reads waiting unseen in the broker's buffer.
 //
-// The git reads' lane is as wide as the shared one, queue.ConcurrentAnswers:
-// the lane SEPARATES git reads from the slots the node answers its replicated
-// reads and pushes' resolves through, and what bounds the git work RUNNING is
-// the node's seat git-work share (gitlet.GitShare, half its read lane), which
-// holds this node's own seats' in-process reads too — a lane bound would hold
-// only the remote askers, and a narrower one would only leave reads waiting
-// unseen in the broker's buffer where the share answers them `share` at once.
-//
-// The git writes' lane answers the [gitWritesHeld] writes it holds and
-// queue.ConcurrentAnswers more, which it answers AT ONCE: a write past the
-// held ones, refused `share` before its arguments are decoded — work done
-// now, as wide as every registration answering work done now — so a burst
-// past the held writes is answered rather than left waiting in the broker
-// client's buffer.
-//
-// What a full writes' lane holds is MEASURED (TestWhatAHeldGitWriteHolds,
-// TestAnEngineWriteTheRuleAdmitsCrossesTheWireAtItsBound): a held write's
-// slot holds its request as the broker delivered it — the payload, at most
-// gitlet.MaxCommitPayloadBytes as JSON spells it, and some 7 KiB beside it at
-// the longest the engine stamps the rest — the request as admitted, its
-// arguments copied out of it, and the write decoded, which the git half holds
-// to its end: about 3 MiB a slot at the bound, three payloads and what is
-// beside them (3.02 payloads measured), so about 200 MiB for the
-// sixty-four; an at-once answer holds the first two, some 2 MiB, for the
-// milliseconds its admission takes — 31 ms measured, under -race on two
-// cores; and a held write's staged pack, at most gitlet.MaxWritePackBytes, is
-// on the cache's volume rather than in memory. Past both, a request waits in
-// the broker client's buffer only behind the at-once answers ahead of it,
-// each a few milliseconds' work, so the buffer fills only under some
-// sixty-four more mebibyte writes inside those milliseconds — some 192 at one
-// Gitlet node at once, where 128 in flight overflowed it before — and past that
-// a write is still dropped unheard ([queue.EventQueue.Serve]).
+// The writes' lane answers [gitWritesHeld] held writes and queue.ConcurrentAnswers
+// more, refused `share` at once. MEASURED (TestWhatAHeldGitWriteHolds,
+// TestAnEngineWriteTheRuleAdmitsCrossesTheWireAtItsBound): a held slot ~3 MiB
+// at gitlet.MaxCommitPayloadBytes (3.02 payloads), ~200 MiB for sixty-four, its
+// pack on disk; an at-once answer ~2 MiB for ~31 ms (-race, two cores). Past
+// both, only ~192 such writes at one node overflow its client, unheard.
 func (l lane) answers() int {
 	switch l {
 	case laneProposals:
@@ -216,32 +146,24 @@ func (l lane) String() string {
 }
 
 // Actor is who a write is attributed to, as it crosses the wire: the author
-// (Handle), what sort of author it is (Kind), and in its provenance the
-// CREDENTIAL the write was made through ([worklet.Provenance.OperatorID]):
-// the triple every record carries, as [iam.ActorFor] writes it, beside the
-// turn and chain that produced it.
+// (Handle), its sort (Kind), and in its provenance the CREDENTIAL it was made
+// through ([worklet.Provenance.OperatorID]), as [iam.ActorFor] writes it.
 //
-// The tracker's rule is that a writer acts as exactly one party, derived from
-// an identity the caller cannot choose per call: the seat bound into a turn,
-// or the principal a request resolved to. The serving node derives its writer
-// from what arrives here and from nothing else, so the history row names the
-// same author either node would have written — and what arrives is the actor
-// inside a request the fleet SIGNED ([Envelopes]), so no party on the broker
-// can name one.
+// A writer acts as exactly one party, derived from an identity the caller
+// cannot choose per call (the seat bound into a turn, or the principal a
+// request resolved to). The serving node derives its writer from this alone,
+// so the history row names the author either node would have, and it arrives
+// in a request the fleet SIGNED ([Envelopes]), so no party on the broker can
+// name one.
 type Actor struct {
 	Handle string             `json:"handle"`
 	Kind   worklet.AuthorKind `json:"kind"`
 
-	// Provenance is the credential, the turn and the chain behind the write,
-	// and whom it is written for. Left off the wire only where every field of
-	// it is at Go's zero, as any field an operation takes is ([encodeInput]):
-	// never an agent's this build sends, whose being stated is no zero, so an
-	// agent's stated for nobody crosses as an empty object; but an older
-	// build, knowing no carrier, sends an agent's provenance that carries
-	// nothing as no member at all, the merge queue's close of a landed
-	// change's item among them. So the actor's own decoder states whom its
-	// writes are for whether or not a provenance arrived
-	// ([Actor.UnmarshalJSONFrom]).
+	// Provenance is the credential, turn and chain behind the write, and whom
+	// it is written for. Left off the wire only where all of it is zero
+	// ([encodeInput]); an older build sends an agent's empty provenance as no
+	// member at all, so the actor's own decoder states whom its writes are for
+	// either way ([Actor.UnmarshalJSONFrom]).
 	Provenance worklet.Provenance `json:"provenance"`
 
 	// Records asks the serving node to answer which work items the write
@@ -252,35 +174,25 @@ type Actor struct {
 }
 
 // UnmarshalJSONFrom decodes the actor of a request this node serves, and
-// states whom its writes are for, WHATEVER ARRIVED ([types.WrittenFor.Received]):
-// no node asks a write whose actor may write nothing ([actorWrites]), and an
-// older node, knowing no carrier, sends an agent's provenance that carries
-// nothing as no member at all. So it is stated here, on the actor, and never
-// where a provenance arrived: there, such a write would arrive stating
-// nothing, which the tracker refuses for good, and a write the older node
-// owes (the merge queue's close) would be retried until the roll completed.
+// states whom its writes are for WHATEVER ARRIVED ([types.WrittenFor.Received]):
+// an older node sends an agent's empty provenance as no member at all, and
+// stated only where a provenance arrived, such a write would state nothing,
+// which the tracker refuses for good. No node asks a write whose actor may
+// write nothing ([actorWrites]).
 //
-// THROUGH THE CALLER'S OWN DECODER, and so under the caller's options: on the
-// wire ([decodeInput]) a member the serving build does not declare, beside
-// the provenance, inside it or inside its carrier, refuses the request, named
-// at its path, as one anywhere else in what an operation takes does. An
-// UnmarshalJSON would be handed bytes and decode them again under
-// encoding/json's own defaults, which drop such a member without a word.
-//
-// NO ENCODER OF ITS OWN: what crosses is the plain encoding of its fields
-// under the caller's options, which every gate over what an operation takes
-// reads it as (wirerule_test.go's inputTypes walks into it).
+// THROUGH THE CALLER'S OWN DECODER, so under its options: on the wire
+// ([decodeInput]) an undeclared member anywhere in it refuses the request,
+// named at its path; an UnmarshalJSON would re-decode under encoding/json's
+// defaults, which drop it silently. No encoder of its own: its fields' plain
+// encoding is what every wire gate reads (wirerule_test.go's inputTypes).
 func (a *Actor) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	type wire Actor
 	if err := jsonv2.UnmarshalDecode(dec, (*wire)(a)); err != nil {
-		// UNWRAPPED, against the rule that an error wraps with %w: json/v2
-		// hands its caller a *jsonv2.SemanticError a method returns as it
-		// is, and wraps any other in a second one, typed as this actor and
-		// placed wherever the decoder stopped. [decodeInput] names the
-		// member it refuses from the first SemanticError it finds, so
-		// returned bare that is the decoder's own, at the member's path as
-		// the decoder recorded it, never a position json/v2 inferred, which
-		// is the member's only because that is where the decoder stops.
+		// UNWRAPPED, against the %w rule: json/v2 passes a method's
+		// *jsonv2.SemanticError through as is and wraps any other error in
+		// one placed where the decoder stopped, and [decodeInput] names the
+		// refused member from the first SemanticError, so returned bare it
+		// keeps the member's real path.
 		return err
 	}
 	a.Provenance.WrittenFor = a.Provenance.WrittenFor.Received()
@@ -288,22 +200,16 @@ func (a *Actor) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 }
 
 // actorWrites is why an actor named who, of kind, whose writes are for
-// writtenFor, may write nothing ([types.WrittenFor.For]): an agent's actor that
-// states nobody it writes for, or a carrier on any other kind's. Nil where it
-// may write.
+// writtenFor, may write nothing ([types.WrittenFor.For]): an agent's actor
+// that states nobody, or a carrier on any other kind's. Nil where it may write.
 //
-// THE CHECK EVERY WRITE'S ACTOR IS HELD TO BEFORE IT IS ASKED ANYWHERE, this
-// node's own copy in process included, so the answer is the same from every
-// node: the tracker's, by the router itself for every operation that runs as
-// an actor ([callAs]); a page or chat write's, whose arguments hold the
-// actor, by its own [op.refusedBeforeAsking]; and a code write's, whose
-// request holds its asker, by its own too ([codeWrites]). A serving node
-// cannot make it, because it cannot tell what never arrived from what an
-// older node, knowing no carrier, never sent: it reads both as stated nobody
-// ([Actor.UnmarshalJSONFrom], Doclet's and Chatlet's own, and each code
-// write's request's), and the turn the write woke would work for the writing
-// seat, every app. Each domain's writer keeps its own check, for a write that
-// reaches it another way.
+// EVERY WRITE'S ACTOR IS HELD TO IT BEFORE IT IS ASKED ANYWHERE, this node's
+// own copy included, so every node answers alike: a tracker write's by
+// [callAs], a page or chat write's by its [op.refusedBeforeAsking], a code
+// write's by [codeWrites]. A serving node cannot check it: it reads an absent
+// carrier and an older node's unsent one alike as stated nobody, and the woken
+// turn would work for the writing seat, every app. Each domain's writer keeps
+// its own check, for a write that reaches it another way.
 func actorWrites(who string, kind iam.ActorKind, writtenFor types.WrittenFor) error {
 	if _, err := writtenFor.For(kind); err != nil {
 		return fmt.Errorf("estate: a write as %q is asked of no node: %w", who, err)
@@ -312,14 +218,12 @@ func actorWrites(who string, kind iam.ActorKind, writtenFor types.WrittenFor) er
 }
 
 // codeWrites is the check every code write is held to before it is asked
-// anywhere ([op.refusedBeforeAsking]): that the asker its request holds —
-// inside it, since no code operation runs as an actor — may state whom the
-// write is made for as the request states it ([actorWrites], by the kind of
-// writer the asker is: gitlet.Principal.WriterKind). The six writes a seat's
-// call forms declare it: a push, a change's lifecycle and its conversation, a
-// write of a merge queue, a merge and an engine write. The node that decides
-// the request holds the rest of the carrier's rule (gitlet's
-// writtenForUnder).
+// anywhere ([op.refusedBeforeAsking]): that the asker its request holds (no
+// code operation runs as an actor) may state whom the write is for
+// ([actorWrites], by gitlet.Principal.WriterKind). Six writes declare it: a
+// push, a change's lifecycle and conversation, a merge queue's write, a merge
+// and an engine write. The deciding node holds the rest of the carrier's rule
+// (gitlet's writtenForUnder).
 func codeWrites(asker gitlet.Principal, writtenFor types.WrittenFor) error {
 	return actorWrites(asker.Actor(), asker.WriterKind(), writtenFor)
 }
@@ -338,14 +242,12 @@ const (
 	opRead opClass = iota
 
 	// opIdempotentWrite carries an operation id the caller minted once, and
-	// the ledger answers a repeat with the first copy's result — so an
-	// unanswered one is asked of the next data node under the same id. So
-	// is one a node answered `unvouched` ([statelog.Result.Unvouched]):
-	// that node's ledger cannot say whether the operation landed, and
-	// another node's may, so the answer is not final until every node has
-	// been asked. One that no node ran, where some node never answered, is
-	// [ErrOutcomeUnknown], never [ErrUnserved]: a node that did not answer
-	// may have run it.
+	// the ledger answers a repeat with the first copy's result, so an
+	// unanswered one, or one a node answered `unvouched`
+	// ([statelog.Result.Unvouched]: its ledger cannot say whether it landed,
+	// another's may), is asked of the next data node under the same id. One
+	// no node ran while some never answered is [ErrOutcomeUnknown], never
+	// [ErrUnserved]: the silent one may have run it.
 	opIdempotentWrite
 
 	// opOnceWrite has no id a caller holds, so a repeat is a second write.
@@ -355,17 +257,9 @@ const (
 )
 
 // opOrigin is who originates a write: a SURFACE, on somebody's behalf, or the
-// ENGINE, recording what its own runs did.
-//
-// A DIFFERENT QUESTION FROM THE CLASS, which says what a failover may repeat:
-// the origin says who may make the write at all, and so what a surface must be
-// ready to answer about it. A surface's write — a seat's tool, a person's
-// request, the operator's own MCP — is somebody's, and a refusal of it is
-// somebody's to read, so the person's write surface classes it and names the
-// object it was about ([SurfaceWriteDomains]). The engine's is nobody's: no
-// tool, no person and no operator surface asks for it, so no surface has a
-// refusal of it to class or an object of it to name, and none may hold the
-// facade it is made through.
+// ENGINE, recording what its own runs did. A different question from the
+// class: it says who may make the write at all (package doc, "Who originates a
+// write: a surface, or the engine").
 type opOrigin int
 
 const (
@@ -389,14 +283,11 @@ type request struct {
 
 	Op string `json:"op"`
 
-	// Args and Actor are the operation's INPUTS — its arguments, and the
-	// actor it runs as — each encoded by the asking router under the wire's
-	// rule for them ([encodeInput]) and decoded by the serving node under
-	// the same rule ([decodeInput]): a key goes on the wire only where it
-	// carries a value, and a key the serving build does not declare refuses
-	// the request rather than vanish from it. The rest of the envelope is
-	// the router's own protocol, which a build reads as encoding/json always
-	// has.
+	// Args and Actor are the operation's INPUTS, its arguments and the actor
+	// it runs as, crossing under the wire's rule ([encodeInput],
+	// [decodeInput]): a key only where it carries a value, and a key the
+	// serving build does not declare refuses the request. The rest of the
+	// envelope is the router's own protocol, read as encoding/json always has.
 	Args  json.RawMessage `json:"args,omitempty"`
 	Actor json.RawMessage `json:"actor,omitempty"`
 
@@ -414,23 +305,19 @@ type request struct {
 	// From is the asking node, for the serving node's log.
 	From string `json:"from,omitempty"`
 
-	// AcceptLagging is the asker's LAST RESORT: every data node that is not a
-	// worse one to ask has run nothing, so this one runs the operation
-	// although its copy lags its logs or the node is behind the company's
-	// configuration ([unservedLagging]) — held to the floors above and to the
-	// read's own level, which are what make its answer sound. Never an
-	// operation that JUDGES A GRANT ([op.judgesGrant]): a node behind the
-	// configuration refuses one whatever the asker says, since being asked
-	// last makes no grant judged from the chart the fleet replaced sound.
+	// AcceptLagging is the asker's LAST RESORT: every better data node ran
+	// nothing, so this one runs the operation although its copy lags or it is
+	// behind the company's configuration ([unservedLagging]), held to the
+	// floors and the read's own level. Never for an operation that JUDGES A
+	// GRANT ([op.judgesGrant]), which a node behind the configuration refuses
+	// whatever the asker says.
 	AcceptLagging bool `json:"accept_lagging,omitempty"`
 
-	// Spent is what the request already paid for on the nodes the asker
-	// asked before this one ([statelog.Spent]): the read index one of them
-	// established, which this node's linearizable read waits for rather than
-	// append a barrier of its own; every position one of them waited its
-	// whole bound for, which this node waits for no longer; every log a
-	// barrier ran out on, which it appends no second barrier to. Absent on a
-	// request's first ask.
+	// Spent is what the request already paid for on the nodes asked before
+	// ([statelog.Spent]): a read index one established, which this node's
+	// linearizable read waits for instead of a barrier of its own; positions
+	// one waited its whole bound for, waited for no longer here; logs a
+	// barrier ran out on, given no second barrier. Absent on a first ask.
 	Spent *statelog.Spent `json:"spent,omitempty"`
 }
 
@@ -442,17 +329,13 @@ func (r request) Binding() (string, time.Time) { return r.ID, r.Deadline }
 type unservedReason string
 
 const (
-	// unservedNoBackend: this node runs no native backend for the op's
-	// half — the company is on a vendor for it, or the runtime is not up —
-	// OR a half it does run DECLINED before it ran anything ([declined],
-	// [ranNothing]): a code half refusing gitlet.ErrNotServing — a
-	// committer stopping, a node in a maintenance mode that publishes
-	// nothing, a refusal about this node, a half with no reader — or an
-	// identity directory asked to MAC a machine token's answer under a key
-	// the node does not hold ([opIdentityMachineToken]). Either way
-	// nothing ran, so every class moves on; the reply's Detail then carries
-	// the half's own cause ([ranNothingDetail]), so a node that has the
-	// backend and answered no_backend says why.
+	// unservedNoBackend: this node runs no native backend for the op's half
+	// (a vendor serves it, or the runtime is not up), OR a half it runs
+	// DECLINED before running anything ([declined], [ranNothing]): a code half
+	// refusing gitlet.ErrNotServing, or an identity directory asked to MAC a
+	// machine token's answer under a key it lacks ([opIdentityMachineToken]).
+	// Nothing ran, so every class moves on; Detail carries the half's own
+	// cause ([ranNothingDetail]).
 	unservedNoBackend unservedReason = "no_backend"
 
 	// unservedNotEstablished: this node's copy admits no seat yet — the
@@ -467,33 +350,17 @@ const (
 	unservedLagging unservedReason = "lagging"
 
 	// unservedBehindConfig: this node is confirmed behind the company's
-	// configuration ([Backend.Current] false) — a worse node to ask as a
-	// lagging copy is, and asked again the same way, told to answer anyway,
-	// when no better node runs the operation: after every copy that only
-	// lags, whose answer is held to the current configuration where this
-	// node's is decided under the one the fleet replaced
-	// ([Router.lastResort]). The Detail names the configuration, and the
-	// copy's lag too where both hold.
+	// configuration ([Backend.Current] false), a worse node asked only after
+	// every copy that merely lags ([Router.lastResort]); Detail names the
+	// configuration, and the copy's lag where both hold. A reason of its own
+	// because it LASTS until the node's apply succeeds, so askers remember it
+	// ([Router.markBehindConfig]).
 	//
-	// A REASON OF ITS OWN BECAUSE IT LASTS. A lag closes as the applier
-	// catches up; a node stays behind its configuration until its apply
-	// succeeds — a stuck one until a person acts — so the asker REMEMBERS
-	// this answer ([Router.markBehindConfig]) and asks the node only as the
-	// last resort meanwhile. Folded into `lagging`, which nobody remembers,
-	// every request any router made sent it a refusal's round trip first —
-	// a push its whole proposal — for as long as it stayed behind.
-	//
-	// AND IT IS THE HARD ARM'S ANSWER TOO: an operation that judges a grant
-	// from the chart ([op.judgesGrant]) is answered `behind_config` by such a
-	// node even when it is asked last, told to answer anyway — the Detail
-	// then says it decides no grant ([decidesNoGrant]) — so the last resort
-	// meets the refusal again and the walk ends unserved. So is a SEAT'S git
-	// read on such a Gitlet node, whose git half judges no seat
-	// (gitlet.UnreadyBehindConfig, [reply.Unready]): the posture is the
-	// node's, so every asker remembers it for the node's data operations as
-	// well, while the git walk, which takes no lag gate, moves on from it as
-	// from any Gitlet node that ran nothing — and lets the next one fill a copy
-	// ([Router.routeGit]).
+	// It is the HARD ARM's answer too ([op.judgesGrant], [decidesNoGrant]),
+	// and a seat's git read from such a Gitlet node (gitlet.UnreadyBehindConfig,
+	// [reply.Unready]), remembered for its data operations too while the git
+	// walk moves on ([Router.routeGit]). See the package doc, "A node behind the
+	// company's configuration is a worse node too".
 	unservedBehindConfig unservedReason = "behind_config"
 
 	// unservedBehind: this node could not reach the caller's floor within
@@ -552,14 +419,12 @@ type reply struct {
 	Unserved unservedReason `json:"unserved,omitempty"`
 	Detail   string         `json:"detail,omitempty"`
 
-	// Unready is, for a GIT operation the node's git half could not answer
-	// (gitlet.ErrGitUnready, answered `behind`, or `behind_config` for that
-	// reason), the reason it gave — which the walk reads to know whether
-	// the one node it lets fill a copy is still that one
-	// (gitlet.UnreadyReason.PassesFill), since `behind` alone says the node
-	// ran nothing and not whether a copy is coming there. Empty on every
-	// other reply, and from a build that sends none: the walk then keeps its
-	// filler, as it did before the reason crossed ([Router.routeGit]).
+	// Unready is, for a GIT operation the git half could not answer
+	// (gitlet.ErrGitUnready: `behind`, or `behind_config` for that reason),
+	// the reason it gave, which tells the walk whether the one node it lets
+	// fill a copy still is that one (gitlet.UnreadyReason.PassesFill). Empty
+	// on every other reply, and from a build that sends none: the walk then
+	// keeps its filler ([Router.routeGit]).
 	Unready gitlet.UnreadyReason `json:"unready,omitempty"`
 
 	// Result is the operation's answer, and Err its failure. At most one.
@@ -571,12 +436,11 @@ type reply struct {
 	// asker drops them rather than carrying a floor nobody can satisfy.
 	Obsolete []string `json:"obsolete,omitempty"`
 
-	// Written is every work item the operation's writes COMMITTED to on
-	// this node, for a request whose actor asked ([Actor.Records]) — what a
-	// writer in the asking process would have reported into the turn's
-	// [worklet.WriteLog] itself. Reported whatever the answer, an error
-	// included, since a walking gesture's earlier steps committed whether
-	// or not a later one failed.
+	// Written is every work item the operation's writes COMMITTED to on this
+	// node, for a request whose actor asked ([Actor.Records]): what a writer
+	// in the asking process would have reported into the turn's
+	// [worklet.WriteLog]. Reported whatever the answer, an error included,
+	// since a walking gesture's earlier steps committed either way.
 	Written []types.WorkItem `json:"written,omitempty"`
 
 	// Committed is the kinds of change those writes were, for the asking
@@ -595,14 +459,12 @@ type opSpec struct {
 	args   reflect.Type
 	result reflect.Type
 
-	// domain is the domain whose COPY the operation reads — the verdict the
-	// router and the server ask before running it here ([LocalBackends.For],
-	// ADR-0079) — or [SeatCopy] for admission's ping. floorStream is that
-	// domain's log, the one log its floors are on ([Router.floorsFor],
-	// [ready]), or empty for an operation that carries no floor
-	// ([op.floorless]): what it reads is not the log's rows at a position
-	// (see [opWorkSearch]) or it asks about the copy itself ([opPing]). A
-	// gate over the registry names every such operation.
+	// domain is the domain whose COPY the operation reads, whose verdict is
+	// asked before running it here ([LocalBackends.For], ADR-0079), or
+	// [SeatCopy] for admission's ping. floorStream is that domain's log, the
+	// one its floors are on ([Router.floorsFor], [ready]), or empty for an
+	// operation that carries none ([op.floorless]), which a gate over the
+	// registry names.
 	domain      string
 	floorStream string
 
@@ -612,11 +474,10 @@ type opSpec struct {
 	// the one above.
 	alsoReads []string
 
-	// copies is what the router keys where it STAYS and whom it passes
-	// over by: the domain, and every domain the operation also reads —
-	// since a node that serves one of them may not serve the other, and a
-	// node that ran an operation over both copies is the one to ask for
-	// that operation, not for either domain's alone ([Router.order]).
+	// copies is what the router keys where it STAYS and whom it passes over
+	// by: the domain plus every domain also read, since a node that ran an
+	// operation over both copies is the one to ask for that operation, not
+	// for either domain's alone ([Router.order]).
 	copies string
 
 	// actor says whether the operation acts AS somebody, which a request
@@ -645,10 +506,9 @@ type opSpec struct {
 	judges func(args any) bool
 
 	// asked is the check the ASKING node makes of the arguments before the
-	// request runs anywhere ([op.refusedBeforeAsking]), nil for every
-	// operation that declares none. On the declaration rather than the
-	// typed handle, as judges is, so a gate over the registry can ask it
-	// of every operation.
+	// request runs anywhere ([op.refusedBeforeAsking]), nil where none is
+	// declared. On the declaration, as judges is, so a gate over the
+	// registry can ask it of every operation.
 	asked func(args any) error
 
 	// lane is the registration a serving node answers the operation on —
@@ -686,11 +546,11 @@ type op[A, R any] struct {
 	// [op.repeatableWhen]. Nil for every other operation.
 	repeatable func(A) bool
 
-	// key names the node an operation PREFERS: the arguments' routing key —
-	// a push's repository — over which the router orders every data node by
-	// [rendezvous.Order], this one included ([Router.keyedOrder]). Nil for
-	// every operation any data node answers equally, which is asked of this
-	// node first and of the node that answered last. See [op.keyedBy].
+	// key names the node an operation PREFERS: the arguments' routing key (a
+	// push's repository), over which the router orders every data node by
+	// [rendezvous.Order], this one included ([Router.keyedOrder]). Nil where
+	// any data node answers equally: asked of this node first, then of the
+	// node that answered last. See [op.keyedBy].
 	key func(A) string
 
 	// home stamps a GIT operation's arguments with whether the node asked
@@ -704,37 +564,18 @@ type op[A, R any] struct {
 	attempt func(A, Timing) time.Duration
 }
 
-// refusedBeforeAsking declares a check the ASKING node makes of an operation's
-// arguments before the request runs anywhere — this node's own copy in process,
-// or a data node it routes to — refusing with check's error whatever check
-// refuses, so nothing is asked.
+// refusedBeforeAsking declares a check the ASKING node makes of the arguments
+// before the request runs anywhere, in process or routed, refusing with
+// check's error. A property of the asking side, like [op.keyedBy].
 //
-// FOR A VALUE THE WIRE DOES NOT CARRY AS ITSELF. A field at its zero is left
-// off the wire ([encodeInput]), and a pointer whose type's own IsZero calls
-// what it points at zero is such a field: it crosses as no value at all, and
-// the serving node decodes nil. A writer that refuses such a value where it
-// runs refused it on a data node's own seats and was handed nil from every
-// other node — one request, two answers, by which node asked. Checked where
-// the request is asked, it is refused alike from every node; the writer keeps
-// its own check for whatever reaches it another way. The wire gate holds every
-// such field to a reason ([zeroThroughPointer], wirerule_test.go), and a field
-// refused here names its check there.
-//
-// AND FOR AN ACTOR THAT MAY WRITE NOTHING, held in a page or chat write's
-// arguments ([actorWrites]), or a code write's asker that may state nothing
-// of whom it writes for ([codeWrites]): a serving node reads a carrier that
-// never arrived as stated nobody, whichever build left it off, so the actor
-// is held to it where the write is asked, as [callAs] holds the actor every
-// tracker operation runs as. A DECLARATION, NOT A LIST: every operation whose
-// arguments hold a page or chat actor must declare it, or be named with why
-// not, and every one whose request holds a code asker beside whom it is made
-// for must declare it, which
-// TestEveryOperationHoldingAPageOrChatActorRefusesOneThatCannotWrite and
-// TestEveryCodeWriteRefusesAnAgentsRequestThatStatesNobody hold over the
-// registry, so a new write cannot forget it.
-//
-// A property of the asking side, like [op.keyedBy]: the server runs the
-// operation as it always did.
+// For a value the wire does not carry as itself: a zero field, or a pointer at
+// a value its type's IsZero calls zero, crosses as nothing ([encodeInput]), so
+// a writer refusing it where it runs answers by which node asked (the wire
+// gate's [zeroThroughPointer], wirerule_test.go, names each such check). And
+// for an actor that may write nothing ([actorWrites], [codeWrites]), which a
+// serving node cannot tell from an older build's unsent carrier: every such
+// write declares it, as TestEveryOperationHoldingAPageOrChatActorRefusesOneThatCannotWrite
+// and TestEveryCodeWriteRefusesAnAgentsRequestThatStatesNobody hold.
 func (o op[A, R]) refusedBeforeAsking(check func(A) error) op[A, R] {
 	name := o.spec.name
 	o.spec.asked = func(args any) error {
@@ -761,27 +602,20 @@ func (o op[A, R]) attemptBy(of func(A, Timing) time.Duration) op[A, R] {
 
 // registry is every operation this build serves, keyed by name.
 //
-// ONE TABLE FOR BOTH HALVES. The client asks an operation through the same
-// value the server dispatches on, so an operation the client can send is by
-// construction one the server knows — and the wire gate walks this table,
-// so a new operation's types are checked the moment it is declared.
+// ONE TABLE FOR BOTH HALVES: the client asks through the value the server
+// dispatches on, so every operation it can send is one the server knows, and
+// the wire gate checks a new operation's types the moment it is declared.
 var registry = map[string]*opSpec{}
 
 // SurfaceWriteDomains is every domain a SURFACE writes through this router, by
-// its state-log name, sorted — read off the operation table, so a domain whose
-// first surface write is declared is in it from that line on.
+// its state-log name, sorted, read off the operation table so a new surface
+// write's domain is in it at once.
 //
-// EXPORTED for the gates that must cover every domain a surface writes: a
-// surface that classes a writer's refusal or names a write's object outside a
-// tool (internal/agent/builtin's WriterClass and ObjectArgs) declares each
-// domain once, and a domain a surface writes here and not declared there is a
-// person's content refusal answered as a fault.
-//
-// THE ENGINE'S OWN WRITES ARE NOT IN IT ([originEngine]). No tool, no person
-// and no operator surface makes one, so a surface has no refusal of them to
-// class and no object of them to name: declaring the executor log there could
-// only be met by borrowing an argument some operator tool takes for something
-// else, and that is a declaration the surfaces would then answer by.
+// EXPORTED for the gates covering every domain a surface writes:
+// internal/agent/builtin's WriterClass and ObjectArgs declare each, and one
+// missing there answers a person's content refusal as a fault. The engine's
+// own writes ([originEngine]) are not in it: no surface makes one, so none has
+// a refusal of them to class or an object of them to name.
 func SurfaceWriteDomains() []string {
 	seen := map[string]bool{}
 	for _, spec := range registry {
@@ -807,41 +641,18 @@ func (s *opSpec) surfaceWrite() bool {
 	return s.class != opRead && s.domain != SeatCopy && s.origin == originSurface
 }
 
-// define declares an operation, with the domain whose copy it reads — and
-// whose log its floor is on, unless it is declared [op.floorless] — or
-// [SeatCopy] for one that asks about the copy a seat is served by, or
-// [GitCopy] for one a Gitlet node answers from its git half, which carries no
-// floor at all ([op.keyedOnGit]). Package-level, at init: a duplicate name is
-// a build that cannot serve, so it panics rather than silently shadowing, and
-// so does a domain this package knows no log for, whose copy no verdict
-// judges and whose floor no log holds.
+// define declares an operation on the domain whose copy it reads and whose log
+// its floor is on ([op.floorless] drops the floor), on [SeatCopy] for one
+// about the copy a seat is served by, or on [GitCopy] for a Gitlet node's git
+// half ([op.keyedOnGit]). At init: a duplicate name, or a domain with no known
+// log, panics, since that build cannot serve.
 //
-// # A FIELD'S ZERO MEANS WHAT AN OLDER BUILD DOES
-//
-// A is the operation's arguments as the wire carries them, and every field of
-// it, at every depth, crosses only where it holds a value: the router leaves a
-// field at its zero off the wire ([encodeInput]), and the serving node decodes
-// its absence as Go's zero. So a field a later build adds to A — or to any type
-// A holds — must mean, at its zero, exactly what a build without the field
-// does: a request that does not use it is then served by a data node of either
-// build, and only one that sets it is refused by a data node that does not
-// declare it ([decodeInput], [ErrUnknownKeys]) rather than run without it. A
-// field whose zero would mean something else would change what every older
-// build's request means, so spell it so that its zero does not: a flag `Keep`
-// whose zero keeps nothing is spelled `Drop`, whose zero drops nothing.
-//
-// A TYPE'S OWN IsZero DECIDES THAT ZERO where it has one, as encoding/json/v2's
-// OmitZeroStructFields asks it — and it asks it THROUGH a pointer, so a pointer
-// at a value such a type calls zero crosses as nil, exactly as a nil pointer
-// does: a pointer at a type with its own IsZero crosses only where it points at
-// what that type calls non-zero. The wire gate holds every such type to a
-// reason its absence drops nothing a reader misses (wirerule_test.go's
-// zeroByMethod), and every pointer at one to a reason no reader tells nil from
-// a pointer at that zero (zeroThroughPointer). Where one would, the field is
-// reshaped until none does: a clear said by a flag of its own
-// (worklet.TaskPatch.ClearDue), a bound held as a value whose zero means unset
-// (worklet.ShowClosed.Since), or a value no request may carry refused before it
-// is asked ([op.refusedBeforeAsking]).
+// A FIELD'S ZERO MEANS WHAT AN OLDER BUILD DOES: a field of A, at any depth,
+// crosses only where non-zero ([encodeInput]), so one a later build adds must
+// mean at its zero what a build without it does (`Drop`, never `Keep`). A
+// type's own IsZero decides that zero, through a pointer too, which then
+// crosses as nil; the wire gate holds each to a reason (wirerule_test.go's
+// zeroByMethod, zeroThroughPointer), else it is reshaped or refused ([op.refusedBeforeAsking]).
 func define[A, R any](name string, class opClass, domain string, actor bool,
 	serve func(ctx context.Context, b Backend, actor *Actor, args A) (R, error),
 ) op[A, R] {
@@ -881,10 +692,9 @@ func define[A, R any](name string, class opClass, domain string, actor bool,
 				"names nobody — a write whose author was not stated is not an "+
 				"audit trail", name)
 		}
-		// THE HARD ARM, after the arguments are decoded and before anything
-		// runs, on the in-process path and the wire's alike: a node behind
-		// the company's configuration judges no grant from its chart,
-		// whatever the asker said ([op.judgesGrant]).
+		// THE HARD ARM, after decoding and before anything runs, in process and
+		// on the wire alike: a node behind the company's configuration judges
+		// no grant from its chart, whatever the asker said ([op.judgesGrant]).
 		if spec.judges != nil && b.Current != nil && !b.Current() && spec.judges(args) {
 			return zero, errDecidesNoGrant
 		}
@@ -907,14 +717,11 @@ func (o op[A, R]) floorless() op[A, R] {
 	return o
 }
 
-// alsoReads declares that this operation reads the rows of other domains as
-// well as its own — a page's backlinks name the tasks that link to it — so
-// the verdict of each is asked before it runs here, and a node whose copy of
-// any of them is out of service answers `out_of_service` naming that copy,
-// which sends the asker on to a node whose copies of all of them serve
-// (ADR-0079). Routed on its own domain alone, it answered from a copy the node
-// had stopped serving. Its FLOOR stays on its own domain's log: a second
-// floor would hold it to an applier its answer does not wait on.
+// alsoReads declares that this operation also reads other domains' rows (a
+// page's backlinks name the tasks linking to it), so each one's verdict is
+// asked before it runs here, and an out-of-service copy answers
+// `out_of_service` naming it (ADR-0079). Its FLOOR stays on its own domain's
+// log: a second floor would hold it to an applier its answer does not wait on.
 func (o op[A, R]) alsoReads(domains ...string) op[A, R] {
 	for _, d := range domains {
 		if _, known := floorStreams[d]; !known || d == o.spec.domain {
@@ -944,19 +751,16 @@ func unservedCopy(ctx context.Context, local LocalBackends, spec *opSpec) (Backe
 }
 
 // answeredOn declares the lane a serving node answers this operation on, and
-// the one the router asks it on — see [lane]. An operation whose answer waits
-// on a queue of its own is answered on a lane of its own, so its slots are
-// never the ones every other operation waits for. Package-level, at init.
+// the one the router asks it on — see [lane]. Package-level, at init.
 func (o op[A, R]) answeredOn(l lane) op[A, R] {
 	switch {
 	case !slices.Contains(lanes, l) && !slices.Contains(gitLanes, l):
 		panic(fmt.Sprintf("estate: %s is answered on %s, which no node serves", o.spec.name, l))
 	case slices.Contains(gitLanes, l) != o.spec.git:
-		// A GIT LANE ANSWERS GIT OPERATIONS AND NOTHING ELSE, since only a
-		// node serving git registers one: a data operation declared on it
-		// would be asked of a subject no data node without the gitlet role
-		// answers, and a git operation on another lane would hold a slot
-		// that lane's answers wait for.
+		// A git lane answers git operations alone: only a node serving git
+		// registers one, so a data operation there goes unanswered by a data
+		// node without the gitlet role, and a git operation elsewhere would
+		// hold that lane's slots.
 		panic(fmt.Sprintf("estate: %s is answered on %s, and a git lane answers git operations alone",
 			o.spec.name, l))
 	}
@@ -972,27 +776,16 @@ func (o op[A, R]) ungated() op[A, R] {
 }
 
 // answeredWhole declares a READ whose answer a caller carries into another
-// request through this router — a version's files a publish carries on, a
-// view's prior a save hands back, a catalogue a model is told to send back
-// whole, a list's expanded query its read asks, a page's cursor the next page
-// asks by — so the answer crosses under the rule an operation's inputs do: the
-// serving node leaves a field at its zero off it, and the asking router reads
-// it whole or refuses it ([ErrUnknownKeys], its Answer set) rather than drop
-// what a newer data node said and send the rest on.
-//
-// THE OTHER DIRECTION OF THE SAME LOSS. A data node of an older build running
-// a newer writer's request would run it short, and so would a node of an older
-// build that read a newer data node's answer, kept what it declares of it and
-// sent that on: a write records the newer field gone, and a read is answered
-// as though it had never been asked — and nothing says so either way. A read
-// nobody carries is not declared: a field a reader drops from what it shows
-// loses nothing, and refusing it would only blind an older node to data it can
-// show most of. So where one read is both shown and carried, the carried read
-// is an operation of its own, answering what the shown one answers
-// ([opArtifactVersionCarried] beside [opArtifactVersion]), and only the caller
-// that carries it asks it. TWO-SIDED in the wire gate (answeredWholeBy): every
-// read declared names the request its answer is carried into, and a read
-// declared and no longer carried fails it.
+// request through this router (a version's files a publish carries on, a
+// page's cursor the next page asks by), so the answer crosses under the
+// inputs' rule: the asking router reads it whole or refuses it
+// ([ErrUnknownKeys], its Answer set) rather than silently drop what a newer
+// data node said and send the rest on. A read only shown is not declared:
+// dropping a field it shows loses nothing. Where one read is both, the carried
+// one is its own operation ([opArtifactVersionCarried] beside
+// [opArtifactVersion]). The wire gate is two-sided (answeredWholeBy): every
+// declared read names the request it is carried into, and one no longer
+// carried fails it.
 func (o op[A, R]) answeredWhole() op[A, R] {
 	if o.spec.class != opRead {
 		panic(fmt.Sprintf("estate: %s is a write, and a write's answer is never refused: by the time it "+
@@ -1002,20 +795,12 @@ func (o op[A, R]) answeredWhole() op[A, R] {
 	return o
 }
 
-// byEngine declares a write the ENGINE originates ([originEngine]): one no
-// surface makes, kept out of [SurfaceWriteDomains] and reached only through a
-// facade the engine alone is handed. A property of the declaration rather than
-// of the request, since the asking node's router carries a surface's write and
-// the engine's alike; what holds the class is the gate over the packages that
-// serve a person or a model.
-//
-// A READ HAS NO ORIGINATOR a surface could be — the engine's reads are
-// ordinary reads, gated like every other — so declaring one is a build that
-// cannot mean what it says, and panics. One read's ANSWER is the engine's
-// alone, chat.turn_thread's, which hands over whom each chat message was
-// written for: no declaration says so, since the class is about writes, and the
-// gate over the packages that serve a person or a model holds it instead
-// ([TurnThreads]).
+// byEngine declares a write the ENGINE originates ([originEngine]): kept out
+// of [SurfaceWriteDomains] and reached only through a facade the engine alone
+// is handed; the gate over the packages serving a person or a model holds the
+// class. A read panics: the engine's reads are ordinary reads. One read's
+// ANSWER is the engine's alone, chat.turn_thread's (whom each message was
+// written for), held by that same gate rather than a declaration ([TurnThreads]).
 func (o op[A, R]) byEngine() op[A, R] {
 	if o.spec.class == opRead {
 		panic(fmt.Sprintf("estate: %s is a read, and only a write has an originator: "+
@@ -1025,17 +810,13 @@ func (o op[A, R]) byEngine() op[A, R] {
 	return o
 }
 
-// repeatableWhen declares a once-write that is IDEMPOTENT for the calls whose
-// arguments say so: a page or chat write whose actor carries the caller's own
-// operation key ([doclet.Actor.OpKey], [chatlet.Actor.OpKey]) derives its operation
-// id — and a create its page's or its room's id, a post its message's — from
-// that key and what the write says rather than minting one per call, so a
-// repeat under it is the same operation and the ledger answers it with the
-// first copy's outcome. Such a call fails over as an
-// [opIdempotentWrite] does; one without a key is still never repeated
-// ([opOnceWrite]). A property of the ASKING side, since the class is what the
-// asker may do with an unanswered request, and the server runs the operation
-// the same way either way.
+// repeatableWhen declares a once-write IDEMPOTENT for the calls whose
+// arguments say so: a page or chat write whose actor carries the caller's
+// operation key ([doclet.Actor.OpKey], [chatlet.Actor.OpKey]) derives its
+// operation id, and a create's or post's object id, from that key, so a repeat
+// is the same operation the ledger answers with the first outcome, failing
+// over as an [opIdempotentWrite]; one without a key stays [opOnceWrite]. A
+// property of the ASKING side: the server runs it the same either way.
 func (o op[A, R]) repeatableWhen(keyed func(A) bool) op[A, R] {
 	if o.spec.class != opOnceWrite {
 		panic(fmt.Sprintf("estate: %s is not a once-write, so nothing about its "+
@@ -1046,42 +827,28 @@ func (o op[A, R]) repeatableWhen(keyed func(A) bool) op[A, R] {
 }
 
 // keyedBy declares that the operation is asked of the data nodes in the
-// rendezvous order of key(args) rather than this node first — see
-// [Router.route]'s keyed walk and the package doc's "A push is asked of its
-// repository's committer". The key travels with the call, never on the wire:
-// it is a property of the ASKING side, like [op.repeatableWhen], since only
-// the asker chooses whom to ask, and a serving node runs the operation the
-// same way whoever chose it. Arguments that name no key are refused before
-// any node is asked, because "no node preferred" would put one repository's
-// pushes on as many committers as there are askers.
+// rendezvous order of key(args) rather than this node first ([Router.route];
+// package doc, "A push is asked of its repository's committer"). The key never
+// crosses the wire: only the asker chooses whom to ask. Arguments naming no
+// key are refused before any node is asked, since "no node preferred" would
+// spread one repository's pushes over as many committers as there are askers.
 func (o op[A, R]) keyedBy(key func(A) string) op[A, R] {
 	o.key = key
 	return o
 }
 
 // keyedOnGit declares an operation on a repository's GIT OBJECTS, asked of the
-// Gitlet nodes rather than the data nodes (ADR-0089): in [rendezvous.Order] of
-// key(args) over every live Gitlet node — the repository's HOME first, its
-// runner-up next — with a node that ran nothing for it asked last for
-// [suspectFor] and one that went silent last of all, no sticky node, and this
-// node at its place, in process, where it is a Gitlet node ([Router.routeGit]).
+// Gitlet nodes in [rendezvous.Order] of key(args), home first (ADR-0089,
+// [Router.routeGit]; package doc, "A repository's git work is asked of its
+// home Gitlet node"). Defined on [GitCopy]: no copy verdict, dispatch floor or
+// lag gate holds it back, its floor travelling in its arguments
+// (gitlet.GitQuery.Fresh). At init, before [op.answeredOn] names its lane.
 //
 // home stamps each attempt's arguments with whether the node asked is the one
-// node of the walk that may FILL a copy it does not hold: the walk's
-// EFFECTIVE HOME — the first node of the order once its demotions are applied
-// — and in its place the next node only where that one said no copy serving
-// the read is coming there ([Router.routeGit]). Every other Gitlet node holding
-// none answers at once that it holds none, so a read of a repository nobody
-// holds costs the fleet one download at a time rather than one a Gitlet node.
-// The walk calls it on every attempt, over whatever the caller set, so no
-// caller chooses it.
-//
-// The operation must be defined on [GitCopy], which it reads instead of a
-// domain's copy: no copy verdict holds it back, no floor is waited for at
-// dispatch — its floor travels in its arguments, as gitlet.GitQuery.Fresh, and
-// is the Gitlet node's cache's sync level — and no lag gate applies, since a Gitlet
-// node syncs its copy through the router from whichever data node serves.
-// Package-level, at init, before [op.answeredOn] names its lane.
+// that may FILL a copy it does not hold: the walk's effective home, or the
+// next node where that one said no copy is coming. Every other node holding
+// none says so at once, so an unheld repository costs one download, not one
+// per Gitlet node. The walk sets it on every attempt, so no caller chooses it.
 func (o op[A, R]) keyedOnGit(key func(A) string, home func(A, bool) A) op[A, R] {
 	if o.spec.domain != GitCopy {
 		panic(fmt.Sprintf("estate: %s is keyed on the Gitlet nodes, and reads the %q copy rather than %q",
@@ -1094,26 +861,17 @@ func (o op[A, R]) keyedOnGit(key func(A) string, home func(A, bool) A) op[A, R] 
 }
 
 // judgesGrant declares an operation that JUDGES A GRANT from the serving
-// node's chart wherever pred holds of its decoded arguments — a read whose
-// asker is a seat, whose grant on a repository is the chart's (ADR-0088). On
-// a node CONFIRMED behind the company's configuration ([Backend.Current]
-// false: shed or stuck, never lag alone) such an operation is answered
-// [errDecidesNoGrant] before it runs — `behind_config`, saying it decides no
-// grant ([decidesNoGrant]) — EVEN WHEN IT IS ASKED LAST, told to answer
-// anyway: a revision the node failed to apply may be the one that revoked the
-// grant, and being asked last makes no answer judged by the chart the fleet
-// replaced sound. So the soft arm sends the walk to every current data node
-// first, the last resort asks this node again, it refuses again, and the walk
-// ends [ErrUnserved] — the safe answer where the only data node may be
-// judging by a revoked grant.
+// node's chart wherever pred holds of its decoded arguments (a seat's read,
+// whose grant on a repository is the chart's, ADR-0088). A node CONFIRMED
+// behind the configuration ([Backend.Current] false) answers it
+// [errDecidesNoGrant] before it runs, EVEN ASKED LAST: the revision it failed
+// to apply may have revoked the grant, so the walk ends [ErrUnserved] (package
+// doc, "A node behind the company's configuration is a worse node too").
 //
-// A DECLARATION, NOT A LIST: every operation on a domain's copy whose
-// arguments carry a gitlet.Principal named Asker must declare whether it judges
-// one, which TestEveryOperationThatJudgesAGrantIsDeclared holds over the
-// registry. A git operation is outside it: its node judges the grant and
-// refuses a seat itself when behind its configuration (gitlet.ErrGitUnready,
-// `behind_config`), and the walk moves on from that as from any node that ran
-// nothing.
+// A DECLARATION, NOT A LIST: TestEveryOperationThatJudgesAGrantIsDeclared
+// holds every operation on a domain's copy whose arguments carry a
+// gitlet.Principal Asker to it. A git operation is outside it: its node
+// refuses a seat itself when behind (gitlet.ErrGitUnready, `behind_config`).
 func (o op[A, R]) judgesGrant(pred func(A) bool) op[A, R] {
 	o.spec.judges = func(args any) bool {
 		a, ok := args.(A)

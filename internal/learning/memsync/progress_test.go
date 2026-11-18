@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// A HYDRATION BOUNDED BY ITS PROGRESS (crewlet/crewlet#1065).
+// A HYDRATION BOUNDED BY ITS PROGRESS.
 //
 // The cases here run on a bubble's clock over the model changelog
 // (copyfake_test.go): a copy that delivers slowly, one that stops answering,
@@ -28,16 +28,15 @@ func diaryContent(t *testing.T, s *Syncer, id string) string {
 // A HYDRATION WHOSE MEMORY TAKES LONGER THAN FIFTEEN SECONDS TO CROSS
 // COMPLETES.
 //
-// A hydration was bounded by a flat fifteen seconds, so a seat whose rows took
-// longer than that to cross a slow link was refused at every sweep, however
-// steadily they arrived. It is bounded by its progress now: forty notes each
-// arriving a second and a half after the last, a minute in all and each off
-// the second after which the replay asks the consumer what it says of itself,
-// which says the delivery is still crossing, all arrive.
+// A hydration is bounded by its progress, not a flat time, so a seat whose
+// rows cross a slow link steadily is never refused for taking long: forty
+// notes a second and a half apart, a minute in all, each past the second after
+// which the replay probes the consumer (which says the delivery is still
+// crossing), all arrive.
 //
-// Mutation: put the fifteen seconds back, or measure the silence from the
-// table's start rather than from the last word the replay heard, and this
-// goes red.
+// Mutation: bound the hydration by a flat fifteen seconds, or measure the
+// silence from the table's start rather than from the last word the replay
+// heard, and this goes red.
 func TestAHydrationWhoseMemoryTakesLongerThanFifteenSecondsToCrossCompletes(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -99,15 +98,14 @@ func TestACopyThatStopsAnsweringRefusesTheSeatAfterItsStall(t *testing.T) {
 	})
 }
 
-// A REPLACEMENT PUBLISHED AROUND THE BARRIER IS CARRIED (#1066's residual 1).
+// A REPLACEMENT PUBLISHED AROUND THE BARRIER IS CARRIED.
 //
-// A note the changelog held before the hydration's barrier is replaced before
-// the replay reaches it: its replacement lies past the barrier, and the
-// copy's running count has not caught up with it as the barrier is delivered,
-// so the barrier says nothing follows. A replay that ended there carried
-// neither version of the note. It reads on to an end barrier it publishes once
-// a barrier at or past its hydration's has arrived, which lies past the
-// replacement on the changelog's order, so the replacement arrives first.
+// A note held before the hydration's barrier is replaced before the replay
+// reaches it: the replacement lies past the barrier, and the copy's running
+// count has not caught up as the barrier is delivered, so the barrier says
+// nothing follows; ending there carries neither version. The replay reads on
+// to an end barrier, published once a barrier at or past the hydration's
+// arrives, which lies past the replacement, so the replacement arrives first.
 //
 // Mutation: end at the first barrier at or past the hydration's, or at a
 // count of nothing more, or publish the end barrier before that barrier
@@ -141,13 +139,13 @@ func TestAReplacementPublishedAroundTheBarrierIsCarried(t *testing.T) {
 	})
 }
 
-// A COUNT ONE TOO HIGH ENDS THE TABLE AT ITS END BARRIER (#1066's residual 2).
+// A COUNT ONE TOO HIGH ENDS THE TABLE AT ITS END BARRIER.
 //
 // Every delivery's count says one more message follows than the copy holds,
-// as the server's count can for a moment where its delivery skipped a removed
-// row before the removal reached the count. A replay that ended on a count of
-// nothing more asked for that message and waited out its budget. It ends at
-// its end barrier's delivery, whatever the count says.
+// as the server's can for a moment after its delivery skipped a removed row
+// the count has not yet seen. Ending on a count of nothing more would wait out
+// the budget for that message; the table ends at its end barrier's delivery,
+// whatever the count says.
 //
 // Mutation: end a table on a count of nothing more, and this goes red.
 func TestACountOneTooHighEndsTheTableAtItsEndBarrier(t *testing.T) {
@@ -173,15 +171,13 @@ func TestACountOneTooHighEndsTheTableAtItsEndBarrier(t *testing.T) {
 	})
 }
 
-// A REPLAY ON A COPY THAT NEVER CATCHES UP IS PLACED AGAIN AT REACHED + 1
-// (#1066's residual 3).
+// A REPLAY ON A COPY THAT NEVER CATCHES UP IS PLACED AGAIN AT REACHED + 1.
 //
-// The first copy the diary's replay is placed on holds the changelog only to
-// the note before its newest, and never applies the rest: a member still
-// catching its copy up after a restart. A replay that waited for its copy held
-// the hydration until its budget ran out, and refused the seat. The replay is
-// placed again, from one past the last sequence it received, and the copy it
-// lands on has applied the barrier: the hydration carries every note once.
+// The diary's first copy holds the changelog only to the note before its
+// newest and never applies the rest, as a member still catching up after a
+// restart. Waiting on it would hold the hydration until its budget ran out.
+// The replay is placed again one past the last sequence it received, on a
+// copy that has applied the barrier: every note is carried once.
 //
 // Mutation: refuse at once rather than place the replay again, or place it
 // again from the start of the stream, and this goes red.
@@ -211,12 +207,11 @@ func TestAReplayOnACopyThatNeverCatchesUpIsPlacedAgainAtReachedPlusOne(t *testin
 
 // A WRITER THAT NEVER STOPS CANNOT HOLD A HYDRATION OPEN.
 //
-// A writer of the seat that keeps writing during its hydration (#511's
-// window) keeps messages arriving for ever, and arriving messages are
-// progress, so with no total the replay itself must end. It ends at its end
-// barrier, which it publishes once: every note the changelog held before the
-// hydration's barrier is carried, the one the writer replaced around it as
-// its replacement, and the hydration returns while the writer goes on.
+// A writer of the seat that keeps writing during its hydration keeps messages,
+// which are progress, arriving for ever, so the replay must end on its own: at
+// its end barrier, published once. Every note held before the hydration's
+// barrier is carried, the one replaced around it as its replacement, and the
+// hydration returns while the writer goes on.
 //
 // Mutation: end a table only once its copy says it holds nothing more, and
 // this goes red: the copy never does.
@@ -274,14 +269,14 @@ func TestAWriterThatNeverStopsCannotHoldAHydrationOpen(t *testing.T) {
 
 // A PULL HOLDS AT MOST fetchBatch ROWS AND ONE WINDOW'S BYTES.
 //
-// A thousand ordinary notes take one pull in this node's own process, where
-// they took four at 256 rows a pull; fetchBatch and 44 more take two; notes of
-// 10 KiB fill a pull's bytes before its count; and across a link no pull asks
-// for or carries more than the window that crosses within one lease heartbeat
-// at the floor.
+// A thousand ordinary notes take one pull in this node's own process;
+// fetchBatch and 44 more take two; notes of 10 KiB fill a pull's bytes before
+// its count; and across a link no pull asks for or carries more than the
+// window that crosses the floor within what a request's term leaves after its
+// own round trip.
 //
-// Mutation: put fetchBatch back at 256, or drop the window across a link, and
-// this goes red.
+// Mutation: set fetchBatch to 256, or drop the window across a link, and this
+// goes red.
 func TestAPullHoldsAtMostFetchBatchRowsAndOneWindowsBytes(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -375,7 +370,8 @@ func TestADroppedFirstPullRemakesTheConsumer(t *testing.T) {
 // every request it makes keeps its own bound, and the hydration as a whole has
 // none, so a seat that is merely large is never refused for its size.
 //
-// Mutation: put the fifteen seconds back, and this goes red.
+// Mutation: give the hydration a deadline, as a flat fifteen seconds, and this
+// goes red.
 func TestAHydrationRunsWithoutADeadlineOfItsOwn(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)

@@ -599,6 +599,11 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
+    name: "crewlet-diff-view__body",
+    why: "uilet's DiffView writes it on the box its lines sit in. styles/frame.css drops its border and rounding where a change's file card holds the diff (`.code-file__diff`, the DiffView's `className`), so the lines run flush under the file's head; the shell's sheet, since a lazy one may carry no kit rule. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-app-shell__content",
     why: "uilet's AppShell writes it on the content column. styles/frame.css lifts its prose-width cap, because this product's screens are tables, boards and charts and a cap throws away the width a wide window bought, and names its gap as `--toolbar-host-gap`, which a toolbar in the column hands back below itself. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
@@ -990,9 +995,7 @@ describe("every class the dashboard names", () => {
 // the Gitlet workspace's (a repository's code, history and settings, a
 // change's conversation and files, the listings), which every module drawing
 // a `code-` class imports — Home's changes waiting on a person and Settings ›
-// Gitlet among them — and `diff.css`, the one diff's, which every screen
-// drawing a diff reaches through `components/DiffView.tsx`; and
-// `gitlet-code.css`, code coloured by kind in Gitlet, which
+// Gitlet among them; and `gitlet-code.css`, code coloured by kind in Gitlet, which
 // `routes/gitlet/syntax.tsx` imports. Each is appended after the entry's sheets, so
 // each of its rules must select a class of the screen it arrives with, or a
 // tie it wins would change other screens from the moment a reader first
@@ -1049,10 +1052,6 @@ const LAZY_SHEETS: Readonly<Record<string, { importer: string; owns: RegExp }>> 
   "atlas.css": {
     importer: "routes/atlas/parts.tsx",
     owns: /\.atlas-[a-z_-]+\b/,
-  },
-  "diff.css": {
-    importer: "components/DiffView.tsx",
-    owns: /\.diff-view(?:__[a-z]+|--[a-z]+)?(?![\w-])/,
   },
   "gitlet.css": {
     importer: "routes/gitlet/ui.tsx",

@@ -32,18 +32,12 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// The serving half: what a data node answers with.
-//
-// Declared here, by the consumer, and kept to exactly what the operations
-// below and in codeops.go call — the seat surface's tools, Gitlet, and
-// the operator's own surfaces: the dashboard and REST routes and the
-// operator's MCP. Those reach the estate through this node's router as a
-// seat's tools do, so a node whose copy of the operation's domain is out of
-// service answers its operator from a peer's copy rather than its own, and a
-// node holding no data serves them at all. And the identity directory's three
-// reads, which a node holding no data asks for its seats, its party registry
-// and the requests it serves; and the engine's own chat, whose every read is
-// answered FOR a viewer it names.
+// The serving half: what a data node answers with, declared here by the
+// consumer and kept to what the operations below and in codeops.go call. The
+// operator's own surfaces (dashboard, REST, the operator's MCP) reach the
+// estate through this node's router as a seat's tools do, so a node whose copy
+// of a domain is out of service answers them from a peer's copy, and a node
+// holding no data serves them at all.
 
 // TrackerReader is the tracker's read side the surfaces ask of.
 type TrackerReader interface {
@@ -121,15 +115,12 @@ type TrackerWriter interface {
 	RemoveFile(ctx context.Context, opID, project, path string, ifMatch uint64) (worklet.WriteResult, error)
 	RecordTurn(ctx context.Context, opID string, turn worklet.TurnRecord) (worklet.WriteResult, error)
 
-	// The operator's writes, which no seat is handed: saved views, the
-	// catalogue, a person's own state, rewriting or taking down a remark,
-	// the trash and the purge.
+	// The operator's writes, which no seat is handed.
 	//
-	// ViewPrior is the READ a save is decided on — a save replaces a view
-	// whole by id, so who may make one is a question about the view it
-	// overwrites as well as the one it writes — and it is on the writer
-	// because the save that follows it is: the caller asks one seam both
-	// questions, and the write refuses a prior that no longer holds.
+	// ViewPrior is the READ a save is decided on: a save replaces a view
+	// whole by id, so who may make it depends on the view it overwrites too.
+	// It is on the writer because the save is, and the save refuses a prior
+	// that no longer holds.
 	ViewPrior(ctx context.Context, id string) (worklet.ViewPrior, error)
 	WriteView(ctx context.Context, opID string, view worklet.View,
 		prior worklet.ViewPrior) (worklet.WriteResult, error)
@@ -178,10 +169,9 @@ type PageReader interface {
 	TurnsMovedPages(ctx context.Context, q doclet.TurnsMovedQuery) (map[string]bool, error)
 }
 
-// PageWriter is the knowledge base's write side. The author is an argument
-// of every call rather than a derived writer, which is Doclet's store's own
-// shape, and so is the caller's operation key ([doclet.Actor.OpKey]), which
-// rides on that author.
+// PageWriter is the knowledge base's write side. The author, carrying the
+// caller's operation key ([doclet.Actor.OpKey]), is an argument of every call,
+// as Doclet's store takes it.
 type PageWriter interface {
 	Create(ctx context.Context, actor doclet.Actor, in doclet.NewPage) (doclet.Written, error)
 	SavePage(ctx context.Context, actor doclet.Actor, pageID string, save doclet.Save) (doclet.Written, error)
@@ -202,12 +192,11 @@ type PageWriter interface {
 }
 
 // KnowledgeSearcher is the Doclet knowledge search over this node's corpus,
-// with the one question a caller asks of an empty answer.
+// with Building, which a caller asks of an empty answer.
 //
-// ANSWER, NOT THE BEST-EFFORT SEARCH: a search that could not run is an error
-// here ([doclet.Searcher.Answer]), because the asking node has to tell "the
-// knowledge base could not be searched" from "nothing matched" — and an empty
-// answer carried back over the wire reads as the second.
+// ANSWER, NOT THE BEST-EFFORT SEARCH ([doclet.Searcher.Answer]): a search that
+// could not run must be an error, since an empty answer carried back over the
+// wire reads as "nothing matched".
 type KnowledgeSearcher interface {
 	Answer(ctx context.Context, q knowledge.Query) (knowledge.Result, error)
 	Building(ctx context.Context) bool
@@ -220,18 +209,15 @@ type BacklinkReader interface {
 	LinkedFrom(ctx context.Context, pageID string) (search.Backlinks, error)
 }
 
-// UsageReader is the usage domain's read side (ADR-0020): what each node's
-// seats, schedules and people did each company day — the spend, activity and
-// skill-reader answers the operator's surfaces draw.
+// UsageReader is the usage domain's read side (ADR-0020): the spend, activity
+// and skill-reader answers the operator's surfaces draw.
 //
-// EVERY READ THAT GROWS WITH A WINDOW IS ASKED A PAGE AT A TIME, resuming
-// after the group the page before it ended on and cut by [usage.Fill] at a
-// budget — [usagePageBytes] for an answer that crosses the wire, none for one
-// this node gives itself ([Backend.pageBytes]): a ninety-day window of a
-// company's spend is tens of megabytes of rows, and a reply crosses one
-// message. The schedule runs are already a page the caller sizes, the elided
-// counts are numbers, and a server's tool calls are one row per tool and seat
-// that called it, which the window does not multiply ([opUsageServerToolCalls]).
+// A READ THAT GROWS WITH ITS WINDOW IS ASKED A PAGE AT A TIME, resuming after
+// the group the previous page ended on and cut by [usage.Fill] at a budget
+// ([Backend.pageBytes]): a ninety-day window is tens of megabytes of rows, and
+// a reply is one message. The schedule runs are a page the caller sizes, the
+// elided counts are numbers, and [opUsageServerToolCalls] does not grow with
+// the window.
 type UsageReader interface {
 	SpendPage(ctx context.Context, q usage.SpendQuery, after usage.Group, budget int) (usage.Page[usage.SpendRow], error)
 	SeatTurnsPage(ctx context.Context, q usage.SpendQuery, after usage.Group, budget int) (usage.Page[usage.TurnsRow], error)
@@ -247,20 +233,16 @@ type UsageReader interface {
 	RepoReadsElided(ctx context.Context, q usage.RepoReadsQuery) (int64, error)
 }
 
-// IdentityReader is the identity directory's read side, as a node holding no
-// data asks it: the two questions its seats and its party registry put to the
-// directory — whose record a login names, and who holds the seats, every one
-// for the registry and ONE for a turn composing the person it acts for — the
-// one a request presenting a machine token puts, and no others.
+// IdentityReader is the identity directory's read side as a node holding no
+// data asks it: whose record a login names, who holds the seats (every one for
+// the party registry, ONE for a turn composing the person it acts for), and
+// the row a presented machine token is checked against.
 //
-// FACTS AND NOT VERDICTS, exactly as [iamdomain.Reader] answers them: the row a
-// login binds and how far the serving node can vouch for it, the seats the
-// directory binds, and the row a machine token is checked against. What a
-// stalled applier or a retained record MEANS — and the chart a binding is
-// resolved against, the Tier A tokens a node declares, and whether a token is
-// good — are the ASKING node's, because the request path that decides on them
-// is there and a verdict formed on another node would be a second opinion
-// about whose seat a login is, or about whose credential a bearer is.
+// FACTS, NOT VERDICTS, as [iamdomain.Reader] answers them. What a stalled
+// applier or a retained record means, the chart a binding resolves against,
+// the declared Tier A tokens and whether a token is good are the ASKING
+// node's: its request path decides on them, and a verdict formed elsewhere
+// would be a second opinion about whose seat a login or a credential is.
 type IdentityReader interface {
 	PersonByLoginVouched(ctx context.Context, login string) (iamdomain.Sighting,
 		iamdomain.Vouch, error)
@@ -271,14 +253,11 @@ type IdentityReader interface {
 
 // ChatReader is the engine's own chat's read side.
 //
-// THE VIEWER IS AN ARGUMENT OF EVERY READ, which is the domain's own shape
-// rather than a choice made here: a room's contents are not a fact about the
-// company the way a page is, so every read is answered for one seat and answers
-// a room that seat may not read exactly as one nobody holds — on whichever data
-// node answers it, because the rule is the reader's own ([chatlet.Visible]),
-// judged against the membership rows in the read's own snapshot there. The
-// viewer is the SEAT the asking node resolved its caller to; the serving reader
-// refuses an empty one rather than reading it as anybody.
+// THE VIEWER IS AN ARGUMENT OF EVERY READ, the domain's own shape: every read
+// is answered for one seat, and a room that seat may not read is answered
+// exactly as one nobody holds, on whichever node answers ([chatlet.Visible],
+// judged against that snapshot's membership rows). The viewer is the seat the
+// asking node resolved its caller to; the reader refuses an empty one.
 type ChatReader interface {
 	Channels(ctx context.Context, viewer string, q chatlet.ChannelsQuery,
 		fresh statelog.Freshness) (chatlet.ChannelListing, error)
@@ -303,11 +282,10 @@ type ChatReader interface {
 	// The reader's own views ([ChatReaderViews], chatreader.go).
 	ChatReaderViews
 
-	// Readable is every room the viewer may READ, which is wider than the
-	// rooms it is in. It is no operation of its own: it is the
-	// authorization half of a search ([opChatSearch]), resolved on the node
-	// that holds the index the search reads, so the set and the hits are
-	// one copy's answer, and so are the names the hits are shown under.
+	// Readable is every room the viewer may READ, wider than the rooms it is
+	// in: no operation of its own, but the authorization half of
+	// [opChatSearch], resolved on the node whose index the search reads, so
+	// the set, the hits and the names they are shown under are one copy's.
 	Readable(ctx context.Context, viewer string,
 		fresh statelog.Freshness) ([]chatlet.ReadableRoom, error)
 
@@ -315,28 +293,17 @@ type ChatReader interface {
 	At() statelog.Position
 }
 
-// ChatWriter is the engine's own chat's write side. The author is an argument
-// of every call, as the knowledge base's is, because one node's chat serves
-// every seat and every person through one store — and so is the caller's
-// operation key ([chatlet.Actor.OpKey]), which rides on that author.
+// ChatWriter is the engine's own chat's write side. The author, carrying the
+// caller's operation key ([chatlet.Actor.OpKey]), is an argument of every
+// call, since one node's chat serves every seat through one store.
 //
-// WHAT A CALLER WAS ADMITTED TO DO CROSSES AS A VALUE, never as the grants it
-// was decided from, for [removeCommentArgs]'s reason: a moderator's take-down
-// ([chatlet.MessageAuthority]) and an archive ([chatlet.ChannelAuthority]) are
-// decided on the asking node, which holds the grants and the chart, and judged
-// against the message's author and the room's unit in the serving node's own
-// snapshot. A room's retention is its own gesture ([ChatWriter.SetRetention]),
-// an admin's on a surface that asks a fresh proof of who they are, rather than
-// a field any member's patch could carry.
-//
-// # What it deliberately does not carry
-//
-// A UNIT ROOM'S MEMBERSHIP. The org chart is its sole writer, and the chart's
-// apply runs where the estate is held, against that data node's own write
-// side — the tracker's projects and the knowledge base's containers are
-// written the same way — so no surface on any node has a unit room's members
-// to set, and an operation for it would be a second writer the chart cannot
-// see.
+// An admission crosses as a VALUE, never the grants, for [removeCommentArgs]'
+// reason: a take-down ([chatlet.MessageAuthority]) or an archive
+// ([chatlet.ChannelAuthority]) is decided on the asking node and judged in the
+// serving node's snapshot. Retention is an admin's own gesture
+// ([ChatWriter.SetRetention]), never a field a member's patch could carry. No
+// operation sets a unit room's MEMBERSHIP: the chart's apply on each data node
+// is its sole writer, and an operation would be one the chart cannot see.
 type ChatWriter interface {
 	CreateChannel(ctx context.Context, actor chatlet.Actor, in chatlet.NewChannel) (chatlet.Written, error)
 	OpenDirect(ctx context.Context, actor chatlet.Actor, participants []string) (chatlet.Written, bool, error)
@@ -366,9 +333,8 @@ type ChatWriter interface {
 	Unreact(ctx context.Context, actor chatlet.Actor, channelID, messageID,
 		emoji string) (chatlet.Written, error)
 
-	// The admin's writes, which no seat is handed: a room's retention, and
-	// the destructions — the compliance erase and a room's prune, each under
-	// the operation id the caller derived, as a purge is.
+	// The admin's writes, which no seat is handed; the erase and the prune
+	// take the operation id the caller derived, as a purge does.
 	SetRetention(ctx context.Context, actor chatlet.Actor, channelID string,
 		days *int) (chatlet.Written, error)
 	Erase(ctx context.Context, actor chatlet.Actor, opID, channelID string,
@@ -377,14 +343,11 @@ type ChatWriter interface {
 		cutoff time.Time) (chatlet.Written, error)
 }
 
-// ChatSearcher is the chat keyword index over this node's corpus.
-//
-// THE INDEX, NOT A SEARCH FOR A VIEWER: it takes the visible rooms on the
-// query and refuses a query naming none ([search.ErrNoViewer]). Which rooms
-// those are is resolved from the viewer by [opChatSearch], beside it, on the
-// same node — and so is whether the index has caught up with the transcript
-// ([search.ChatIndexer.Ready]), which is a fact about that node's index and
-// that node's copy.
+// ChatSearcher is the chat keyword index over this node's corpus, not a search
+// for a viewer: it takes the visible rooms on the query and refuses a query
+// naming none ([search.ErrNoViewer]). [opChatSearch] resolves those rooms from
+// the viewer, and asks the index's readiness ([search.ChatIndexer.Ready]), on
+// the same node.
 type ChatSearcher interface {
 	SearchMessages(ctx context.Context, q search.ChatQuery) ([]search.ChatHit, error)
 	Ready(ctx context.Context) (bool, error)
@@ -392,11 +355,10 @@ type ChatSearcher interface {
 
 // Backend is one data node's answer to every operation, over its copy of the
 // estate, resolved PER REQUEST: a node that booted with no company brings its
-// native runtime up at its first apply, and a request that arrives before then
-// is answered "not here" rather than refused for ever.
+// native runtime up at its first apply, and a request before then is answered
+// "not here" rather than refused for ever.
 //
-// A nil half is a half this node does not run, and an operation on it is
-// answered [unservedNoBackend] — the company is on a vendor for it.
+// A nil half is one this node does not run, answered [unservedNoBackend].
 type Backend struct {
 	Tracker    TrackerReader
 	Writer     func(Actor) TrackerWriter
@@ -415,32 +377,28 @@ type Backend struct {
 	// operation is then answered "no backend here".
 	Code CodeServer
 
-	// Git is this node's git half — its query server — set by the
-	// dispatcher for a GIT operation alone ([GitCopy]: the router's
-	// in-process run and the server's git arm) and nil on every backend a
-	// copy hands out: a git operation reads no domain's copy.
+	// Git is this node's git query server, set by the dispatcher for a GIT
+	// operation alone ([GitCopy]) and nil on every backend a copy hands out:
+	// a git operation reads no domain's copy.
 	Git GitServer
 
-	// Identity is the identity directory, which every data node holds from
-	// boot whatever its company keeps — nil only where the node's core
-	// runtime is not up yet, which is answered like any half it does not
-	// run.
+	// Identity is the identity directory, held from boot by every data node;
+	// nil only until the core runtime is up, answered like any half it does
+	// not run.
 	Identity IdentityReader
 
-	// Artifacts is the artifacts estate, which every data node runs from
-	// boot whatever its company keeps: its reader and its writer, each nil
-	// where the node's core runtime is not up yet, and the writer nil too
-	// where the node publishes nothing ([ArtifactsHalf]).
+	// Artifacts is the artifacts estate, run from boot by every data node
+	// ([ArtifactsHalf]): each side nil until the core runtime is up, and the
+	// writer nil where the node publishes nothing.
 	Artifacts ArtifactsHalf
 
 	// ArtifactData is the artifact datastore, which every data node runs
 	// from boot beside the artifacts estate ([ArtifactDataHalf]).
 	ArtifactData ArtifactDataHalf
 
-	// Executor is the executor log, which every data node runs from boot
-	// whatever its company keeps: its reader, and its writer only while the
-	// node publishes, each nil where the core runtime is not up yet
-	// ([ExecutorHalf]).
+	// Executor is the executor log, run from boot by every data node
+	// ([ExecutorHalf]): its writer only while the node publishes, each side
+	// nil until the core runtime is up.
 	Executor ExecutorHalf
 
 	// Access is the access log, which every data node runs from boot, on the
@@ -452,60 +410,43 @@ type Backend struct {
 	Atlas AtlasHalf
 
 	// Reached waits until this node's applier of the floor's log has reached
-	// a position — the floor every request carries, the node's own included:
-	// every record through it that writes a row committed, and every barrier
-	// decoded ([statelog.Runner.WaitReached]). A floor may be a barrier — a
-	// read answers with the position its rows are current through — and a
+	// a position, every request's floor the node's own included: every
+	// row-writing record through it committed and every barrier decoded
+	// ([statelog.Runner.WaitReached]). A floor may be a barrier (a read
+	// answers with the position its rows are current through), and a
 	// barrier's own commit is nothing the request reads.
 	Reached func(ctx context.Context, at statelog.Position) error
 
 	// Answers is whether this copy OF THE OPERATION'S DOMAIN may answer a
-	// request now ([statelog.Health.Answers]): serving — drained since its
-	// applier started and within the snapshot slack of its log's end — or
-	// level this instant. A copy that does not LAGS: it is asked only once
-	// every data node whose copy does not has run nothing, by a remote asker
-	// and by this node's own router alike — a worse node to ask, never no
-	// node ([Router.route]). A lagging knowledge base never holds back a
-	// tracker read (ADR-0079), for the reason a floor on another domain's log
-	// is not waited for ([ready]).
+	// request now ([statelog.Health.Answers]): serving (drained since its
+	// applier started and within the snapshot slack of its log's end) or
+	// level this instant. A copy that does not LAGS: a worse node, asked only
+	// once every copy that does has run nothing ([Router.route]; package doc,
+	// "A domain's copy that is WRONG is out of service; one that LAGS is a
+	// worse node"). Another domain's lag never holds it back (ADR-0079, [ready]).
 	//
-	// NOT A SEAT'S ADMISSION, which refuses at a lag of one: a busy
-	// company has a record in flight on most instants, and a request gate
-	// that refused then sent every read — this node's own seats' included —
-	// to whichever peer happened to be level, or to none. What a read must
-	// see of its own node's writes is what the floors carry.
+	// NOT A SEAT'S ADMISSION ([Backend.Admits]), which refuses at a lag of
+	// one: a busy company nearly always has a record in flight, and such a
+	// gate would send every read to whichever peer happened to be level, or
+	// to none. What a read must see of its node's writes, the floors carry.
 	Answers func(ctx context.Context) bool
 
-	// Admits is whether a SEAT may attach to this copy now: established at
-	// a lag of zero on every domain that gates seat admission — the gate
-	// every node's seat admission asks of the copy that will serve it
-	// ([Router.Serves]). Only admission's ping reads it.
+	// Admits is whether a SEAT may attach to this copy now: at a lag of zero
+	// on every domain that gates seat admission ([Router.Serves]). Only
+	// admission's ping reads it.
 	Admits func(ctx context.Context) bool
 
-	// Current is whether this node serves the company's configuration —
-	// false exactly while the control plane has CONFIRMED it behind the
-	// epoch the fleet activated (shed or stuck), never on lag alone, which
-	// every rollout produces on every node but the first to apply. Nil is
-	// current.
+	// Current is whether this node serves the company's configuration: false
+	// exactly while the control plane has CONFIRMED it behind the fleet's
+	// activated epoch (shed or stuck), never on lag alone. Nil is current.
 	//
-	// A node behind it is a WORSE NODE TO ASK, never no node, as a copy
-	// that lags its log is ([ready]): what it supplies from its own epoch
-	// — the chart a tracker write resolves a person and a lead by, a
-	// unit a read renders, a search's scope, the code limits a push is
-	// decided under — is the configuration the fleet replaced, so every
-	// other data node is asked first and this one answers when none of
-	// them does; and since that lasts, an asker that has heard it once
-	// remembers it ([unservedBehindConfig], [Router.markBehindConfig])
-	// rather than send the node a refusal's round trip on every request.
-	// Refused instead, a fleet whose only data node failed an
-	// apply would answer none of its tracker, pages or usage operations,
-	// although the stale answer is one that arises anyway: every reader of
-	// a handle, a lead or a unit already meets one a revision has changed.
-	//
-	// THE CONFIRMATION IS THE CONTROL PLANE'S, and its bound is about a
-	// minute: confirmed configplane.LagGrace after the node first reads the
-	// new pointer — or sooner, where its own apply fails while a peer has
-	// applied — and moved at the node's next posture decision.
+	// A node behind it is a WORSE NODE TO ASK, never no node (package doc, "A
+	// node behind the company's configuration is a worse node too"): every
+	// other data node is asked first, and an asker that heard it once
+	// remembers it ([unservedBehindConfig], [Router.markBehindConfig]). The
+	// confirmation comes in about a minute: configplane.LagGrace after the
+	// node first reads the new pointer, or sooner where its own apply fails
+	// while a peer has applied, and moves at its next posture decision.
 	Current func() bool
 
 	// ServerSeams are the node's own: the dispatcher sets them on every
@@ -513,26 +454,18 @@ type Backend struct {
 	ServerSeams
 
 	// verifiers are the keys a machine token's narrowed answer is MAC'd
-	// under ([TokenFacts]) — the node's own, from its envelopes, which the
-	// dispatcher sets on every backend it hands an operation: the server for
-	// a request off the wire, this node's router for one it runs in-process.
-	// A NODE'S, never its copy's, as [ServerSeams] are, and set by the
-	// dispatcher for the same reason: a backend is resolved per request, the
-	// keyring once per process.
+	// under ([TokenFacts]), from the node's envelopes: a NODE'S, never its
+	// copy's, so the dispatcher (the server, or this node's router
+	// in-process) sets them on every backend it hands an operation, as
+	// [ServerSeams]; a backend is resolved per request, the keyring once.
 	verifiers verifierKeys
 
 	// pageBytes is the most one answer of a PAGED read carries before it is
-	// cut ([usage.Fill]): [usagePageBytes] where the serving half answers a
-	// request off the wire, and zero — one page, the whole read — where
-	// this node's own router runs the operation in-process. Only the server
-	// sets it.
-	//
-	// THE IN-PROCESS ANSWER IS NOT PAGED because nothing carries it: paged,
-	// this node's own spend screen was N read transactions instead of one, a
-	// JSON encoding of every row to measure a page no message would hold,
-	// and N snapshots of the estate where the whole read is one. A failover
-	// gains nothing from it either — an in-process read that fails before it
-	// lands is asked of a peer from its first page.
+	// cut ([usage.Fill]): [usagePageBytes] when the server answers a request
+	// off the wire, and zero (the whole read, one page) when this node's
+	// router runs it in-process: nothing carries that answer, and paging it
+	// costs N transactions and snapshots plus an encoding of every row. Only
+	// the server sets it.
 	pageBytes int
 }
 
@@ -554,23 +487,19 @@ type ServerSeams struct {
 // errNoHalf is an operation on a half this node does not run.
 var errNoHalf = errors.New("estate: this node runs no native backend for this operation")
 
-// declined is a half that RAN NOTHING for a reason of its own — a code
-// committer that refused before it appended anything ([ranNothing]), or a node
-// holding no key a machine token's answer could be MAC'd under
-// ([opIdentityMachineToken]): read as errNoHalf by the router and the server
-// alike, so every class moves on from it with the same arguments, and worded
-// as the half's own refusal, which the walk's account keeps
-// ([ranNothingDetail]).
+// declined is a half that RAN NOTHING for a reason of its own: a code committer
+// that refused before appending ([ranNothing]), or a node holding no key to MAC
+// a machine token's answer under ([opIdentityMachineToken]). The router and
+// the server read it as errNoHalf, so every class moves on from it alike, and
+// the walk's account keeps its wording ([ranNothingDetail]).
 type declined struct{ cause error }
 
 func (d declined) Error() string   { return d.cause.Error() }
 func (d declined) Unwrap() []error { return []error{errNoHalf, d.cause} }
 
 // ranNothingDetail is what a node's answer says of a half that ran nothing:
-// that the node runs none, or — for a half that declined — the half's own
-// reason, so an estate nobody served names why each node passed (a committer
-// stopping, a node that publishes nothing) rather than claiming it has no
-// backend.
+// that the node runs none, or a declined half's own reason, so an estate
+// nobody served names why each node passed.
 func ranNothingDetail(self, op string, err error) string {
 	var why declined
 	if errors.As(err, &why) {
@@ -583,33 +512,25 @@ func ranNothingDetail(self, op string, err error) string {
 // ([Backend.Admits]): nothing ran, and the asker moves on.
 var errNotAdmitting = errors.New("estate: this copy admits no seat yet")
 
-// SeatCopy is the domain an operation names when what it asks about is the
-// copy a SEAT is served by, rather than one domain's: every domain whose health
-// gates seat admission ([statelog.Domain.GatesSeatAdmission]) in service at
-// once (ADR-0079). Admission's ping names it ([opPing]), and so does
-// [Router.Serves].
+// SeatCopy is the domain an operation names when it asks about the copy a SEAT
+// is served by: every domain that gates seat admission
+// ([statelog.Domain.GatesSeatAdmission]) in service at once (ADR-0079).
+// [opPing] and [Router.Serves] name it.
 //
-// EMPTY, and no operation that reads a domain's rows may name it: the gate over
-// the registry holds every other operation to a domain this package knows
+// No operation that reads a domain's rows may name it
 // (TestEveryOperationNamesTheCopyItReads).
 const SeatCopy = ""
 
-// The domains an operation may read, and each one's log — the one its floor is
-// on unless it is floorless ([op.floorless]), from the domain's own
-// declaration. An operation's floor is on its OWN domain's log and no other:
-// see [ready].
+// The domains an operation may read, and each one's log: the one its floor is
+// on unless it is floorless ([op.floorless]). The floor is on its OWN domain's
+// log and no other ([ready]).
 //
-// THE ELEVEN DOMAINS AN OPERATION READS OR WRITES, and not the other two the
-// estate carries: the vectors are written by a fleet duty, never through an
-// operation, and no operation reads their rows at a position — the searches
-// that rank by them read them as an index, which carries no floor at all — and
-// the Dashboard Assistant's conversations are read and written only where the
-// API runs, on a data node, from that node's own copy, so no request carries
-// them across the router. The executor and access logs are among the eleven
-// though no surface writes either: the engine records a seat's executor
-// session and what it told the seat wherever the seat runs, a node without
-// `data` included, and only a data node publishes ([originEngine],
-// executor.go, access.go).
+// ELEVEN of the estate's thirteen domains: a fleet duty writes the vectors and
+// the searches read them as an index, never at a position, and the Dashboard
+// Assistant's conversations are read and written only on the data node the API
+// runs on. The executor and access logs are here though no surface writes
+// them: a seat's node records them, `data` or not, and only a data node
+// publishes ([originEngine], executor.go, access.go).
 var (
 	trackerDomain      = worklet.Domain{}.Name()
 	pagesDomain        = doclet.Domain{}.Name()
@@ -694,19 +615,15 @@ type viewsArgs struct {
 var opViews = define("tracker.views", opRead, trackerDomain, false, views)
 
 // THE STRIP A VIEW IS SAVED AGAIN FROM, ANSWERED WHOLE ([op.answeredWhole]):
-// save_work_view replaces a view whole, by an id list_work_views lists, with
-// what its call sends — so a call that changes one thing of a view re-sends
-// the rest as the listing showed it (internal/agent/builtin), and a newer
-// build's field on a view this build would drop is refused here rather than
-// saved away on every node. Its own operation, so a screen that only shows the
-// strip is not refused one ([opArtifactVersionCarried] says why).
+// save_work_view replaces a view whole, so a call changing one thing re-sends
+// the rest as list_work_views showed it (internal/agent/builtin), and a newer
+// build's field this build would drop is refused here rather than saved away.
+// Its own operation, so a screen that only shows the strip is not refused one
+// ([opArtifactVersionCarried] says why).
 //
-// NOT A SAVE THAT KEEPS WHAT IT DOES NOT NAME, which would need no read whole:
-// a field a save leaves at its zero crosses exactly as one an older build
-// never sent ([define]), so a decide merging with the stored view could not
-// tell a field cleared from one unknown, and no save could clear a field
-// without a clear of its own — the patch shape [worklet.Writer.WriteView]
-// declines for a query small enough to re-state whole.
+// Not a save that keeps what it does not name: a field left at its zero
+// crosses exactly as one an older build never sent ([define]), so a merge
+// could not tell cleared from unknown ([worklet.Writer.WriteView]).
 var opViewsCarried = define("tracker.views_carried", opRead, trackerDomain, false,
 	views).answeredWhole()
 
@@ -779,13 +696,12 @@ var opExpandedQuery = define("tracker.expanded_query", opRead, trackerDomain, fa
 // THE WORKSPACE CATALOGUE, as a screen shows it: read leniently.
 var opCatalogue = define("tracker.catalogue", opRead, trackerDomain, false, catalogue)
 
-// THE CATALOGUE A CALLER SENDS BACK, ANSWERED WHOLE ([op.answeredWhole]): the
-// catalogue's writes replace every type and every field, each declaration whole,
-// and write_work_catalogue's description tells a model to read the catalogue
-// with get_work_catalogue and send back what it gave (internal/agent/builtin) —
-// so a newer build's field on a type or a field this build would drop is
-// refused rather than written away. Its own operation, so a screen that only
-// shows the catalogue is not refused one ([opArtifactVersionCarried] says why).
+// THE CATALOGUE A CALLER SENDS BACK, ANSWERED WHOLE ([op.answeredWhole]): its
+// writes replace every declaration whole, and write_work_catalogue tells a
+// model to send back what get_work_catalogue gave (internal/agent/builtin), so
+// a newer build's field this build would drop is refused rather than written
+// away. Its own operation, so a screen that only shows the catalogue is not
+// refused one ([opArtifactVersionCarried] says why).
 var opCatalogueCarried = define("tracker.catalogue_carried", opRead, trackerDomain, false,
 	catalogue).answeredWhole()
 
@@ -941,13 +857,12 @@ var opProjects = define("tracker.projects", opRead, trackerDomain, false,
 // ONE PROJECT, as a screen shows it: read leniently.
 var opProject = define("tracker.project", opRead, trackerDomain, false, project)
 
-// ONE PROJECT A CALLER SENDS BACK, ANSWERED WHOLE ([op.answeredWhole]): a
-// project's field declarations are replaced whole by write_project, whose
-// description tells a model to read them with describe_project first and send
-// the whole set (internal/agent/builtin) — so a newer build's field on a
-// declaration this build would drop is refused rather than written away. Its own
-// operation, so a screen that only shows the project is not refused one
-// ([opArtifactVersionCarried] says why).
+// ONE PROJECT A CALLER SENDS BACK, ANSWERED WHOLE ([op.answeredWhole]):
+// write_project replaces the field declarations whole, sent as describe_project
+// read them (internal/agent/builtin), so a newer build's field this build would
+// drop is refused rather than written away. Its own operation, so a screen
+// that only shows the project is not refused one ([opArtifactVersionCarried]
+// says why).
 var opProjectCarried = define("tracker.project_carried", opRead, trackerDomain, false,
 	project).answeredWhole()
 
@@ -970,10 +885,9 @@ type workSearchArgs struct {
 }
 
 // THE RANKED SEARCH READS THE INDEX OVER THE TRACKER'S ROWS, so it runs only on
-// a copy whose tracker is in service — and it CARRIES NO FLOOR: the lexical
-// index is maintained by each node's own walk on its own schedule behind the
-// applier, so a floor on the log would promise a visibility the index does not
-// give.
+// a copy whose tracker is in service, and CARRIES NO FLOOR: each node's own
+// walk maintains the index behind its applier, so a floor would promise a
+// visibility the index does not give.
 var opWorkSearch = define("tracker.search", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a workSearchArgs) (worklet.SearchAnswer, error) {
 		if b.WorkSearch == nil {
@@ -1147,16 +1061,9 @@ var opTurnPlaces = define("tracker.turn_places", opRead, trackerDomain, false,
 
 // ---- the tracker's writes ------------------------------------------------ //
 
-// A PROJECT'S FILES, as rows: the listing, one file with the object holding
-// its bytes, and the two writes. The BYTES never cross here — every node,
-// stateless or not, streams them to and from the one object store the whole
-// fleet shares through its own client, and asks this service only for the row
-// that names them.
-//
-// The two operations whose shape names the object are named for what they
-// carry (`tracker.read_file`, `tracker.write_file`). An operation a node does
-// not serve is answered `unserved`, which sends the router on to a node that
-// does.
+// A PROJECT'S FILES, as rows. The BYTES never cross here: every node streams
+// them to and from the fleet's one object store through its own client, and
+// asks this service only for the row that names them.
 var opFiles = define("tracker.files", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q worklet.FileQuery) (worklet.FileListing, error) {
 		if b.Tracker == nil {
@@ -1214,11 +1121,9 @@ type recordTurnArgs struct {
 	Turn worklet.TurnRecord
 }
 
-// A TURN'S SPEND, recorded by the node that ran the turn — which on a node
-// without `data` is a node with no applier, so it crosses like any other
-// write. It carries its operation id, so an unanswered one is asked again of
-// the next node: the applier adds a turn's spend only for a new operation, and
-// a repeat under the same id counts nothing twice.
+// A TURN'S SPEND, recorded by the node that ran the turn, which may hold no
+// applier. Its operation id makes asking the next node again safe: the
+// applier adds a turn's spend only for a new operation.
 var opRecordTurn = define("tracker.record_turn", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a recordTurnArgs) (worklet.WriteResult, error) {
 		w, err := writerFor(b, actor)
@@ -1298,12 +1203,10 @@ type placedTask struct {
 	Unplaced *wireError
 }
 
-// A DROP ON THE BOARD is a WALKING gesture on one task — its lane, then its
-// place among its neighbours — each step under an operation id derived from
-// the one the caller minted, so the whole of it is asked again of the next
-// holder under the same id, and a step that holder's ledger answers is not
-// written twice. A step one holder answered unvouched is not final
-// ([unvouched]).
+// A DROP ON THE BOARD WALKS one task (its lane, then its place among its
+// neighbours), each step under an operation id derived from the caller's, so
+// the whole is asked again of the next holder and a step its ledger answers is
+// not written twice. A step answered unvouched is not final ([unvouched]).
 var opPlaceTask = define("tracker.place_task", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a placeTaskArgs) (placedTask, error) {
 		w, err := writerFor(b, actor)
@@ -1463,15 +1366,12 @@ type viewPriorArgs struct {
 	ID string
 }
 
-// WHAT A SAVE WOULD REPLACE, read for the caller to decide its authority on
-// and hand back to the save. A READ, so it is asked anywhere and repeated
-// freely — and floored like every tracker read, since the asker may have
-// written the view through another node a moment ago. The save that follows
-// it refuses a prior that has moved in its own snapshot, wherever it runs, so
-// a stale answer here is a refusal there rather than a wrong overwrite. And
-// ANSWERED WHOLE ([op.answeredWhole]), because the save hands the answer back:
-// a field a newer build adds to the prior is what that build's save is
-// decided against, and dropped here it would reach the decide as its zero.
+// WHAT A SAVE WOULD REPLACE, read for the caller to decide its authority on and
+// hand back to the save. A READ, floored like every tracker read; the save
+// refuses a prior that has moved in its own snapshot, so a stale answer here
+// is a refusal there, never a wrong overwrite. ANSWERED WHOLE
+// ([op.answeredWhole]) because the save hands it back: a newer build's field
+// dropped here would reach that build's decide as its zero.
 var opViewPrior = define("tracker.view_prior", opRead, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a viewPriorArgs) (worklet.ViewPrior, error) {
 		w, err := writerFor(b, actor)
@@ -1545,20 +1445,18 @@ type markInboxArgs struct {
 	OpID   string
 	Handle string
 	// Seen is how far the asker read the Worklet's log, which the decide
-	// on whichever holder answers waits for ([worklet.Writer.MarkInbox]).
-	// ADDITIVE ON THE WIRE: an older peer decodes past it and decides as it
-	// always did, and an older sender's request carries the zero position,
-	// which waits for nothing.
+	// waits for ([worklet.Writer.MarkInbox]). ADDITIVE ON THE WIRE: an older
+	// peer decodes past it, and an older sender's zero position waits for
+	// nothing.
 	Seen      statelog.Position
 	Gesture   inbox.Gesture[worklet.Reason]
 	Authority worklet.PersonAuthority
 }
 
 // A GESTURE, never the lists: the tracker resolves it against the record its
-// own decide reads, so a caller never sends back a list it read in another
-// transaction — on whichever holder answers. And the CALLER'S FLOOR rides with
-// it rather than in this node's session: it is how far one person's page read
-// the log, a claim this request alone is held to.
+// own decide reads, on whichever holder answers, so a caller never sends back
+// a list read in another transaction. The CALLER'S FLOOR rides with it, not in
+// this node's session: it is one person's page's claim, held to this request.
 var opMarkInbox = define("tracker.mark_inbox", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a markInboxArgs) (worklet.WriteResult, error) {
 		w, err := writerFor(b, actor)
@@ -1707,9 +1605,8 @@ type purgeTaskArgs struct {
 	Reason  string
 }
 
-// A PURGE crosses like every other tracker write — its operation id is what a
-// repeat after an unanswered one collapses on, and the purge's own ledger row
-// answers that repeat with the first outcome — and its refusals keep their
+// A PURGE's operation id is what a repeat after an unanswered one collapses
+// on, its ledger row answering with the first outcome; its refusals keep their
 // identity, so an operator re-running one is told it is purged, not behind.
 var opPurgeTask = define("tracker.purge_task", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a purgeTaskArgs) (worklet.WriteResult, error) {
@@ -1817,10 +1714,9 @@ var opRevision = define("pages.revision", opRead, pagesDomain, false,
 // create its page's id, so a repeat under it is the same operation.
 func keyed(actor doclet.Actor) bool { return strings.TrimSpace(actor.OpKey) != "" }
 
-// chatKeyed is [keyed] for a chat write: one whose actor carries the caller's
-// own operation key ([chatlet.Actor.OpKey]), from which the chat store derives the
-// operation id — and a message's, or a new room's — bound to what the gesture
-// asks, so a repeat under it is the same operation.
+// chatKeyed is [keyed] for a chat write ([chatlet.Actor.OpKey]): the chat store
+// derives the operation id, and a message's or a new room's, from the key and
+// what the gesture asks.
 func chatKeyed(actor chatlet.Actor) bool { return strings.TrimSpace(actor.OpKey) != "" }
 
 // pageActorWrites is the check every page write is held to before it is asked
@@ -1928,11 +1824,10 @@ var opEditComment = define("pages.edit_comment", opOnceWrite, pagesDomain, false
 
 // ---- the operator's page writes ------------------------------------------ //
 
-// The knowledge base's writes no seat is handed — the trash, the purge and a
-// remark's take-down — routed for the reason the operator's tracker writes are.
-// Each is a once-write made repeatable by the caller's key, as every page write
-// is: unkeyed, a second trash is a second record and a second purge a refusal
-// of its own first copy.
+// The knowledge base's writes no seat is handed, routed as the operator's
+// tracker writes are. Each is a once-write made repeatable by the caller's key:
+// unkeyed, a second trash is a second record and a second purge a refusal of
+// its own first copy.
 
 type pageRefArgs struct {
 	Actor  doclet.Actor
@@ -2070,28 +1965,22 @@ var opKnowledgeBuilding = define("knowledge.building", opRead, pagesDomain, fals
 // ---- the usage domain's reads ------------------------------------------- //
 
 // THE USAGE DOMAIN'S READS cross like every other domain's, so a node whose
-// usage copy is out of service answers its operator's spend and activity
-// screens from a peer's copy rather than from the one it stopped serving
-// (ADR-0079). FLOORLESS: no write this node makes lands on the usage log —
-// every node publishes its own days from its own event log — so there is no
-// position an operator's read must see, and the rows are compacted, one per
-// object, each replaced whole.
+// usage copy is out of service is answered from a peer's (ADR-0079).
+// FLOORLESS: no write this node makes lands on the usage log (every node
+// publishes its own days from its own event log), and its rows are compacted,
+// each replaced whole.
 //
-// FIVE OF THEM ARE PAGED (see [UsageReader]) when a PEER answers them: each
-// reply is one page of the read, and the asker asks again after the group it
-// ended on ([allPages]). This node's own answer is the whole read, one page
-// ([Backend.pageBytes]).
+// FIVE ARE PAGED when a PEER answers ([UsageReader], [allPages]); this node's
+// own answer is the whole read ([Backend.pageBytes]).
 
 // usagePageBytes is the most a page of a routed usage read carries before it
 // is cut at the next record's edge: A QUARTER OF THE MESSAGE
-// ([queue.MaxPayloadBytes]). A page may run past it by one group — one
-// record's rows, never split (usage.Group) — and a record is itself one
-// message, measured under 1 MiB at its caps
-// (usage.TestAFullSeatDayRecordFitsOneMessage); re-encoded as read rows each
-// carrying its group's key it is at most a few times that, which the other
-// three quarters hold (TestAUsagePageFitsOneMessage). A reply past the message
-// is refused rather than dropped ([server.encodeReply]), so a pathological group
-// fails loudly.
+// ([queue.MaxPayloadBytes]). A page may run one group past it (a record's rows
+// are never split, usage.Group); a record is one message, under 1 MiB at its
+// caps (usage.TestAFullSeatDayRecordFitsOneMessage), and as read rows a few
+// times that, which the other three quarters hold
+// (TestAUsagePageFitsOneMessage). A reply past the message is refused, never
+// dropped ([server.encodeReply]).
 const usagePageBytes = queue.MaxPayloadBytes / 4
 
 // usagePageArgs is one page of a paged usage read: the read's query, and the
@@ -2170,12 +2059,10 @@ var opUsageReadsElided = define("usage.reads_elided", opRead, usageDomain, false
 	}).floorless()
 
 // A SERVER'S TOOL CALLS ARE ONE ANSWER, NOT PAGED: one row per (tool, seat)
-// the server's calls name over the window, summed across every node and day,
-// so a longer window adds no row — the answer grows with the server's tools
-// and the seats that called them. At the couple of hundred bytes a row
-// encodes to, one message ([queue.MaxPayloadBytes]) holds some forty thousand
-// of them, a server of a hundred tools called by four hundred seats; a reply
-// past it is refused rather than dropped ([server.encodeReply]).
+// summed across nodes and days, so a longer window adds no row. At a couple of
+// hundred bytes a row, one message ([queue.MaxPayloadBytes]) holds some forty
+// thousand: a hundred tools called by four hundred seats. A reply past it is
+// refused, never dropped ([server.encodeReply]).
 var opUsageServerToolCalls = define("usage.server_tool_calls", opRead, usageDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q usage.ServerToolCallsQuery) ([]usage.ServerToolCallsRow, error) {
 		if b.Usage == nil {
@@ -2211,11 +2098,9 @@ type repoReadsArgs struct {
 	Budget int
 }
 
-// A REPOSITORY'S READERS ARE PAGED BY THEIR ASKER, unlike the reads above: a
-// person walks them a page at a time through a surface that answers one page
-// per request — a tool answer, a REST page — so the page is the asker's, at the
-// budget it names, and the wire's own ([usagePageBytes]) bounds it only where
-// it is the smaller.
+// A REPOSITORY'S READERS ARE PAGED BY THEIR ASKER: a person walks them a page
+// per request (a tool answer, a REST page), so the page is the budget the
+// asker names, bounded by the wire's ([usagePageBytes]) where that is smaller.
 var opUsageRepoReads = define("usage.repo_reads", opRead, usageDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a repoReadsArgs) (usage.Page[usage.RepoReader], error) {
 		if b.Usage == nil {
@@ -2241,14 +2126,11 @@ type linkedFromArgs struct {
 	PageID string
 }
 
-// A PAGE'S BACKLINKS READ BOTH CORPORA — the pages and the tasks whose bodies
-// link to it, named from the rows of each, a task's linked-page relations
-// included — so they run only where this node's copies of the knowledge base
-// AND the tracker are in service ([op.alsoReads], ADR-0079). Read straight off
-// a node's own index, a node whose pages or tracker copy had stopped serving
-// merged a peer's page with links derived from rows it no longer answered for,
-// presented as complete. They carry no floor, for [opKnowledgeSearch]'s
-// reason: the links are rows of an index no log position describes.
+// A PAGE'S BACKLINKS READ BOTH CORPORA, pages and tasks (a task's linked-page
+// relations included), so they run only where this node's knowledge base AND
+// tracker copies are in service ([op.alsoReads], ADR-0079): otherwise a peer's
+// page would be merged with links from rows this node no longer answers for.
+// No floor, for [opKnowledgeSearch]'s reason.
 var opLinkedFrom = define("knowledge.linked_from", opRead, pagesDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a linkedFromArgs) (search.Backlinks, error) {
 		if b.Backlinks == nil {
@@ -2259,28 +2141,21 @@ var opLinkedFrom = define("knowledge.linked_from", opRead, pagesDomain, false,
 
 // ---- the identity directory ---------------------------------------------- //
 
-// A node holding no data runs seats, and its seats ask the identity directory
-// two things: whose record a login names, which every person verb resolves
-// before it is decided ([iam.OwnerOf]), and who holds each human seat, which
-// the party registry routes inbound messages by and an agent's roster is cut
-// by. A node holding no data that serves requests asks a third: the row a
-// presented machine token is checked against ([TokenFacts]). ADR-0025 gives
-// such a node no replicated estate and no applier, so each is asked of a data
-// node, floored on the identity log like any read of rows a log derives.
+// A node holding no data runs seats, which ask the directory whose record a
+// login names ([iam.OwnerOf]) and who holds each human seat (the party
+// registry's routing, an agent's roster); serving requests, it also asks for a
+// presented machine token's row ([TokenFacts]). It holds no replicated estate
+// (ADR-0025), so each is asked of a data node, floored on the identity log.
 
 // Binding is the part of a directory row a binding question reads: who holds
-// the login, what kind of principal they are, how far through enrolment they
-// got, and the seat the row binds.
+// the login, their kind and enrolment stage, and the seat the row binds.
 //
-// NOTHING ELSE CROSSES. [iamdomain.Sighting] also carries the row's credential
-// verifiers and its grants; the asking node decides nothing on either — a
-// binding is about a seat, and a credential is verified only where it is
-// presented — and a verifier on the broker is a value the asker has no use for
-// and an observer would. So the serving node narrows the row before it answers,
-// and this type is what makes that narrowing a property of the wire rather than
-// of every caller's restraint. The one question whose answer carries grants is
-// a seat's requester ([opRequester]): the asking node decides a turn's ceiling
-// on them, so they are what it asks for — and still never a verifier.
+// NOTHING ELSE CROSSES. [iamdomain.Sighting] also carries credential verifiers
+// and grants; the asking node decides nothing on either (a credential is
+// verified only where it is presented), and a verifier on the broker is of use
+// only to an observer. This type makes the narrowing a property of the wire,
+// not of every caller's restraint. Only [opRequester]'s answer carries grants,
+// since the asker decides a turn's ceiling on them, and never a verifier.
 type Binding struct {
 	ID    string
 	Kind  iam.Kind
@@ -2349,21 +2224,18 @@ type heldRequester struct {
 	Held      bool
 }
 
-// WHO HOLDS ONE HUMAN SEAT, AND WITH WHAT GRANTS — [opSeatHolders]' answer for
-// that seat alone, by the same rule, with the holder's grants beside it, read
-// as two seeks and one document's decode on the serving node
-// ([iamdomain.Reader.Requester]). It is what a seat's turn composes the person
-// it acts for from, at most once per call of a tool that decides an app or a
-// relation for somebody (the requester ceiling), so it must cost the same
-// however many people the company has hired or removed, where the whole set
-// grows with both. An error is UNKNOWN and crosses as one, never "nobody holds
-// it", which a turn would read as a seat the chart alone speaks for.
+// WHO HOLDS ONE HUMAN SEAT, AND WITH WHAT GRANTS: [opSeatHolders]' answer for
+// one seat, plus grants, in two seeks and one decode
+// ([iamdomain.Reader.Requester]). A turn composes the person it acts for from
+// it, up to once per call of a tool that decides for somebody (the requester
+// ceiling), so its cost must not grow with the company's people. An error is
+// UNKNOWN and crosses as one, never "nobody holds it", which a turn would read
+// as a seat the chart alone speaks for.
 //
-// A NEW NAME, NEVER A RESHAPED ANSWER: the seat's holder alone was asked as
-// identity.seat_holder, and this answers more. A node that does not know this
-// name leaves it unserved and the asker moves on to one that does — an answer
-// with no grants is never decoded as a person who holds none, nor as one who
-// holds every app — and a later change to what it means takes another name.
+// A NEW NAME, NEVER A RESHAPED ANSWER: a node that does not know it leaves it
+// unserved and the asker moves on, so an answer without grants is never read
+// as a person holding none or every app; a change to its meaning takes
+// another name.
 var opRequester = define("identity.requester", opRead, identityDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a seatArgs) (heldRequester, error) {
 		if b.Identity == nil {
@@ -2376,21 +2248,16 @@ var opRequester = define("identity.requester", opRead, identityDomain, false,
 		return heldRequester{Requester: requester, Held: held}, nil
 	})
 
-// WHAT A PRESENTED MACHINE TOKEN IS CHECKED AGAINST, read in one snapshot —
-// the credential, its owner as this node holds them now, and how far this node
-// can vouch for both — and answered NARROWED: the verifier withheld, and a MAC
-// over it and the asker's nonce, under the key the asker named, in its place
-// ([TokenFacts]). Whether the token is good is decided on the asking node,
-// which holds the presented secret, by the one table every node decides a
-// token by ([credential.CheckToken]). An error is UNKNOWN and crosses as one,
-// never "no such token", which would be a 401 to a pipeline whose credential
-// is fine.
+// WHAT A PRESENTED MACHINE TOKEN IS CHECKED AGAINST, read in one snapshot (the
+// credential, its owner, how far this node vouches for both) and answered
+// NARROWED: the verifier withheld, a MAC over it and the asker's nonce in its
+// place, under the key the asker named ([TokenFacts]). The asking node, which
+// holds the presented secret, decides ([credential.CheckToken]). An error is
+// UNKNOWN, never "no such token", which would 401 a sound credential.
 //
 // A KEY THIS NODE DOES NOT HOLD RUNS NOTHING, as a request signed under one
-// does ([Envelopes]): it is a fact about this node, which an operator changes
-// by adding the key, so the router asks a node that holds it — and it is
-// checked before the row is read, so a node that could not MAC an answer
-// reads nothing for it.
+// does ([Envelopes]): the router asks a node that holds it, and the key is
+// checked before the row is read.
 var opIdentityMachineToken = define("identity.machine_token", opRead, identityDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a machineTokenArgs) (TokenFacts, error) {
 		if b.Identity == nil {
@@ -2411,27 +2278,16 @@ var opIdentityMachineToken = define("identity.machine_token", opRead, identityDo
 
 // ---- the engine's own chat ---------------------------------------------- //
 //
-// THE KNOWLEDGE BASE'S CLASSES, for the knowledge base's reason: a chat write
-// names its author and its caller's key ([chatlet.Actor.OpKey]) on its own
-// arguments, and the store derives the operation — and a message's or a new
-// room's id — from that key and what the gesture asks, so a call that carries
-// one is the same operation however often it is asked, and one that carries
-// none is minted afresh by the store on whichever node runs it: a repeat would
-// be a second message. So every gesture is a once-write that turns repeatable
-// under the caller's key ([op.repeatableWhen]), and the two that take a whole
-// operation id from their caller — the erase and the prune — are idempotent
-// writes, as a purge is.
+// THE KNOWLEDGE BASE'S CLASSES: the store derives a chat write's operation id
+// (and a message's or a new room's) from the caller's key on its actor
+// ([chatlet.Actor.OpKey]) and the gesture; unkeyed, it mints one afresh, and a
+// repeat would be a second message. So every gesture is a once-write
+// repeatable under the key ([op.repeatableWhen]); the erase and the prune take
+// a whole operation id and are idempotent writes, as a purge is.
 //
-// EVERY READ IS ANSWERED FOR ITS VIEWER, and the viewer is in the SIGNED body
-// ([Envelopes]): the serving reader decides which rooms that seat may read from
-// the membership rows in its own snapshot, so a request naming a viewer is a
-// request to be shown what that seat may see, and an unsigned one would have
-// been a private room read as anybody.
-//
-// AND EVERY ONE CARRIES THE CHAT LOG'S FLOOR, the search included: what a seat
-// may read is decided by membership ROWS, and a seat that has just joined a
-// room — through whichever data node took the join — must find it among the
-// rooms its next read and its next search cover.
+// EVERY READ IS ANSWERED FOR ITS VIEWER, in the SIGNED body ([Envelopes]), or a
+// private room could be read as anybody; and carries the chat log's FLOOR, the
+// search included: a seat that just joined a room must find it.
 
 type chatChannelsArgs struct {
 	Viewer string
@@ -2506,14 +2362,12 @@ var opChatThread = define("chat.thread", opRead, chatDomain, false,
 		return b.Chat.Thread(ctx, a.Viewer, a.Query, a.Fresh)
 	})
 
-// THE ENGINE'S TURN-START THREAD READ: chat.thread's one read with whom each
-// of its messages was written for ([chatlet.TurnThread]), which no reader is
-// ever handed. An operation of its own rather than a member on chat.thread's
-// answer, whose type every reader's surface holds and which an older data
-// node would refuse to answer with a member it does not declare. Asked only
-// through [TurnThreads], which the engine alone builds; an older data node
-// does not declare it, answers it unserved, and the facade reads the plain
-// thread instead.
+// THE ENGINE'S TURN-START THREAD READ: chat.thread with whom each message was
+// written for ([chatlet.TurnThread]), which no reader is handed. Its own
+// operation, not a member on chat.thread's answer, which every reader's
+// surface holds and an older data node would refuse; asked only through
+// [TurnThreads], which the engine alone builds and which reads the plain
+// thread where an older node answers it unserved.
 var opChatTurnThread = define("chat.turn_thread", opRead, chatDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a chatThreadArgs) (chatlet.TurnThread, error) {
 		if b.Chat == nil {
@@ -2550,13 +2404,10 @@ var opChatDirectory = define("chat.directory", opRead, chatDomain, false,
 	})
 
 // ChatQuery is one ranked search of the company's chat, as it crosses: the
-// VIEWER whose rooms it searches, never the rooms.
-//
-// THE VISIBLE SET IS NOT A FIELD, which is the whole point of this type beside
-// [search.ChatQuery]: which rooms somebody may read is an authorization fact,
-// and a caller able to supply it is a caller able to supply the wrong one. The
-// serving node resolves it from the viewer, on the copy whose index it then
-// reads.
+// VIEWER whose rooms it searches, never the rooms. Unlike [search.ChatQuery],
+// the visible set is not a field: it is an authorization fact a caller must
+// not supply, resolved by the serving node from the viewer, on the copy whose
+// index it reads.
 type ChatQuery struct {
 	// Viewer is the seat the search is FOR. Required — the reader refuses a
 	// read for nobody.
@@ -2566,10 +2417,9 @@ type ChatQuery struct {
 	Text string
 
 	// Channel narrows to one room, empty for every room the viewer may
-	// read. It is INTERSECTED with the visible set rather than trusted, so
-	// naming a room the viewer may not read answers nothing rather than
-	// refusing: a refusal confirms the room exists, and "there is no such
-	// room" and "you may not see it" must read identically from outside.
+	// read. INTERSECTED with the visible set, never trusted: a room the
+	// viewer may not read answers nothing, since a refusal would confirm it
+	// exists.
 	Channel string
 
 	// Author narrows to one speaker's handle, empty for anybody.
@@ -2578,10 +2428,8 @@ type ChatQuery struct {
 	// Limit bounds the hits; zero takes the index's own default.
 	Limit int
 
-	// Fresh is the level the VISIBLE SET is read at. The index itself has
-	// none — each node maintains it behind its applier — so this is the
-	// level of the only half that can be behind and that also decides what
-	// may be seen.
+	// Fresh is the level the VISIBLE SET is read at; the index has none,
+	// each node maintaining it behind its applier.
 	Fresh statelog.Freshness
 }
 
@@ -2591,31 +2439,22 @@ type ChatSearchAnswer struct {
 	Hits []search.ChatHit
 
 	// Rooms are the rooms the hits were said in, by id, each with the name
-	// and kind a hit in it is shown under ([chatlet.ReadableRoom]), as a
-	// mention carries its room's ([chatlet.Mention]): "#launch" rather than an
-	// id nobody reads, and a direct conversation, which has no name, by its
-	// kind. FROM THE SEARCH'S OWN VISIBLE SET ([ChatReader.Readable]), read
-	// in the transaction that admitted each room, never from a read beside
-	// it, so a hit is shown under the name of the room the search was
-	// allowed to read.
+	// and kind a hit is shown under ([chatlet.ReadableRoom]), as a mention
+	// carries its room's ([chatlet.Mention]). FROM THE SEARCH'S OWN VISIBLE
+	// SET ([ChatReader.Readable]), never a read beside it, so a hit is shown
+	// under the name of the room the search was allowed to read.
 	Rooms map[string]chatlet.ReadableRoom
 
-	// Searched is how many rooms the search covered — zero for a viewer
-	// who may read none, which is an answer rather than a refusal.
+	// Searched is how many rooms the search covered: zero for a viewer who
+	// may read none, an answer rather than a refusal.
 	Searched int
 
-	// Building says the answering node's index was not caught up with the
-	// transcript it holds for the whole of the search ([ChatSearcher.Ready]),
-	// so the hits may be drawn from the part of it the walk had reached, or
-	// from an index a rebuild is about to drop: "the index is still
-	// building", which a seat and a screen must not read as "nobody said
-	// that" — it would act on that by asking again, or by deciding nothing
-	// was ever agreed.
-	//
-	// ON THE ANSWER rather than an operation of its own beside it, unlike
-	// the knowledge base's ([opKnowledgeBuilding]): the readiness is the
-	// ANSWERING node's walk's, and a second call could be answered by
-	// another node, whose index says nothing about these hits.
+	// Building says the answering node's index was not caught up with its
+	// transcript for the whole search ([ChatSearcher.Ready]): the hits may be
+	// partial or from an index a rebuild will drop, which a seat must not
+	// read as "nobody said that". On the answer, not an operation of its own
+	// as [opKnowledgeBuilding] is: the readiness is the ANSWERING node's walk's,
+	// and a second call could reach another node.
 	Building bool
 
 	// Position is the answering copy's applied position on the chat log,
@@ -2624,31 +2463,17 @@ type ChatSearchAnswer struct {
 	Position statelog.Position
 }
 
-// THE VISIBLE SET AND THE HITS ARE ONE NODE'S, which is why this is one
-// operation rather than a read of the set followed by a search: two hops could
-// be answered by two copies, and a set resolved on one and handed to another
-// node's index would be an authorization fact crossing the wire — the very
-// thing [ChatQuery] has no field for.
+// THE VISIBLE SET AND THE HITS ARE ONE NODE'S, hence one operation: two hops
+// could reach two copies, and a set handed to another node's index would be an
+// authorization fact crossing the wire, the field [ChatQuery] lacks.
 //
-// A VIEWER WHO MAY READ NOTHING IS ANSWERED, NOT REFUSED. The index's own
-// [search.ErrNoViewer] is for a caller that lost its viewer; handed an empty
-// set here, it would turn an ordinary state into an error a seat reports as a
-// broken tool. A viewer who is NOBODY is still refused — by the reader, whose
-// visible set is the first thing read.
-//
-// THE INDEX IS ASKED WHETHER IT IS READY ON BOTH SIDES OF THE SEARCH, and the
-// answer is building unless it was ready at both. Readiness moves in both
-// directions while a search runs: a rebuild asked for meanwhile — an adoption
-// replaced the estate — leaves hits drawn from the index of the copy it
-// replaced, which only the ask after the search can see, and a walk that
-// caught up meanwhile leaves hits drawn from the part it had reached, which
-// only the ask before can see. Either one alone answers "caught up" for a
-// list that was not.
-//
-// A READINESS THIS NODE COULD NOT READ IS BUILDING. The field promises "these
-// hits may not cover every message"; a node that could not tell cannot make
-// the opposite promise, and failing the search over it would answer a seat
-// with a broken tool where hits it can show exist.
+// A viewer who may read nothing is ANSWERED, not refused ([search.ErrNoViewer]
+// is for a caller that lost its viewer); a viewer who is nobody is refused by
+// the reader. Readiness is asked on BOTH SIDES of the search and must hold at
+// both: a rebuild started meanwhile shows only after, a walk that caught up
+// meanwhile only before. A readiness this node could not read is BUILDING: it
+// cannot promise full coverage, and failing the search would break a tool
+// whose hits exist.
 var opChatSearch = define("chat.search", opRead, chatDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q ChatQuery) (ChatSearchAnswer, error) {
 		if b.Chat == nil || b.ChatSearch == nil {
@@ -2746,12 +2571,10 @@ type chatPatchChannelArgs struct {
 	ChannelID string
 	Patch     chatlet.ChannelPatch
 
-	// Authority is the caller's answer from the authority table — whether
-	// it may move this room's archive, and the unit the room was recorded
-	// under when that was decided — decided on the asking node, which holds
-	// the grants and the chart, and judged against the room as the serving
-	// node's own snapshot holds it: an archive decided on a unit the room
-	// has since left is refused as a conflict there.
+	// Authority is the caller's answer from the authority table: whether
+	// it may move this room's archive, and the room's unit when decided.
+	// Decided on the asking node, judged against the serving node's
+	// snapshot: a room that has since left that unit is a conflict.
 	Authority chatlet.ChannelAuthority
 }
 
@@ -2950,20 +2773,16 @@ type chatSetRetentionArgs struct {
 	Actor     chatlet.Actor
 	ChannelID string
 
-	// Days is the room's override, and ABSENT CLEARS IT — a POINTER that
-	// crosses as one, because [chatlet.RetentionForever] is zero and is a real
-	// setting: a present 0 keeps the room for ever, and a wire that
-	// collapsed it into an absent one would hand the room the company's
-	// horizon and the retention duty a year of somebody's decisions.
+	// Days is the room's override, and ABSENT CLEARS IT. A pointer, because
+	// [chatlet.RetentionForever] is zero and real: a present 0 keeps the room
+	// for ever, and collapsed into absent it would take the company's horizon.
 	Days *int
 }
 
-// A ROOM'S RETENTION IS ITS OWN WRITE, never a field of a patch: a shorter
-// horizon is a prune on a delay, so who may set one is an admin's to decide on
-// a surface that asks a fresh proof of who they are, and an operation every
-// member's patch could reach would be a destruction any member could schedule.
-// Repeatable under its caller's key like every chat gesture, and a surface that
-// takes one always has a key to give it.
+// A ROOM'S RETENTION IS ITS OWN WRITE, never a patch field: a shorter horizon
+// is a delayed prune, an admin's to set on a surface that asks a fresh proof of
+// who they are, never one any member's patch could schedule. Every surface
+// taking one has a key to make it repeatable.
 var opChatSetRetention = define("chat.set_retention", opOnceWrite, chatDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a chatSetRetentionArgs) (chatlet.Written, error) {
 		if b.ChatWriter == nil {
@@ -3021,17 +2840,15 @@ type Served struct {
 	Chat bool
 }
 
-// opPing is ADMISSION's question, asked of a data node: whether its copy
-// admits a seat now ([Backend.Admits]), and which halves it runs natively. A
-// copy that does not is passed over, like a node that ran nothing — see
-// [Router.Serves].
+// opPing is ADMISSION's question to a data node: whether its copy admits a seat
+// now ([Backend.Admits]) and which halves it runs natively; a copy that does
+// not is passed over ([Router.Serves]).
 //
-// IT ASKS THE SEAT COPY ([SeatCopy]): a data node one of whose seat-gating
-// domains is out of service answers `out_of_service`, and a wrong copy of any
-// other domain withholds nothing. NO FLOOR, and past the serving gate on
-// purpose: it asks whether the copy is ready for a seat, which is its own
-// stricter gate, not whether it has reached this node's writes. And NO
-// ARGUMENTS: the one estate is the only thing it can be about.
+// It asks the SEAT COPY ([SeatCopy]), so one out-of-service seat-gating domain
+// answers `out_of_service`; another domain's wrong copy withholds nothing. NO
+// FLOOR, and past the serving gate on purpose: admission is its own stricter
+// gate, not whether the copy reached this node's writes. NO ARGUMENTS: the one
+// estate is all it can be about.
 var opPing = define("estate.ping", opRead, SeatCopy, false,
 	func(ctx context.Context, b Backend, _ *Actor, _ struct{}) (Served, error) {
 		if b.Admits != nil && !b.Admits(ctx) {

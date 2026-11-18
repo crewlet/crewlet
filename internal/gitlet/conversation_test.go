@@ -27,10 +27,9 @@ import (
 // broker as a record on the change's own subject, applied by the shipped
 // applier and answered from the change's rows.
 
-// writerOn is a change writer on n over pub, at the harness's clock, judging a
-// seat and a reviewer by the grant tests' chart, with a recorder of its own. A
-// gate is opened before the writer stops, so a case that fails while holding
-// one still ends.
+// writerOn is a change writer on n over pub at the harness's clock, judging by
+// the grant tests' chart, with its own recorder. Its cleanup opens a gate before
+// the stop, so a case that fails holding one still ends.
 func writerOn(t testing.TB, n *node, pub gitlet.Publisher,
 	tune ...func(*gitlet.ChangeWriterOptions)) (*gitlet.ChangeWriter, *metrics.Recorder) {
 
@@ -61,11 +60,9 @@ func writerOn(t testing.TB, n *node, pub gitlet.Publisher,
 	return w, rec
 }
 
-// directory is the identity directory as these cases' change writers ask it
-// who holds a human seat (gitlet.People): every seat held by an active person
-// using every app, but for the persons grants names, who hold exactly what it
-// says — and every read refused with broken where that is set. It counts the
-// seats it was asked about.
+// directory is the gitlet.People these cases' writers ask: every seat an active
+// person using every app, but the persons grants names hold exactly that, and
+// every read fails with broken when it is set. It records each seat asked.
 type directory struct {
 	grants map[string][]iam.Grant
 	broken error
@@ -94,9 +91,8 @@ func (d *directory) seats() []string {
 	return slices.Clone(d.asked)
 }
 
-// discussed is a change opened by dev from feature into main on a fresh
-// repository named name — the repository the unit Engineering owns — and its
-// id.
+// discussed opens a change by dev from feature into main on a fresh repository
+// named name, owned by unit Engineering, and returns both ids.
 func discussed(t *testing.T, n *node, name string) (repo, change string) {
 	t.Helper()
 	c, _ := committerOn(t, n, n.pub)
@@ -106,9 +102,8 @@ func discussed(t *testing.T, n *node, name string) (repo, change string) {
 	return repo, opened.ChangeID
 }
 
-// conversing is a write of a change's conversation by asker under an operation
-// id of its own, made for nobody but the asker: set fills in the one record it
-// carries.
+// conversing is a write by asker under its own operation id, written for nobody
+// but the asker; set fills in its one record.
 func conversing(asker gitlet.Principal, set func(w *gitlet.ConversationWrite)) gitlet.ConversationWrite {
 	w := gitlet.ConversationWrite{OpID: statelog.NewOpID(time.Now(), "code_comment_on_change"), Asker: asker,
 		WrittenFor: types.ForNobody()}
@@ -160,8 +155,8 @@ func requireConversed(t testing.TB, res gitlet.ConversationResult, err error) {
 	}
 }
 
-// requireConversationRefused fails t unless res is refused under code with a
-// sentence holding says, and nothing was appended to n's log since before.
+// requireConversationRefused fails t unless res is refused with refusal, its
+// detail holding says, and n's log has not moved since before.
 func requireConversationRefused(t *testing.T, n *node, before uint64, res gitlet.ConversationResult, err error,
 	refusal gitlet.ConversationRefusal, says string) {
 
@@ -204,10 +199,9 @@ func (n *node) reviewer(change, reviewer string) (reviewerRow, bool) {
 }
 
 // A CONVERSATION'S RECORD IS THE CHANGE'S OWN: a comment lands as one record on
-// the change's subject — never the repository's — written by the writer's
-// node as its own work, its scope the repository's path and the change's, and
-// it is no proposal of the committer's: a push held in the repository's
-// committer, mid-publish, holds no comment back.
+// the change's subject, never the repository's, written as the writer's node's
+// own work and scoped to the repository's path and the change's; it is no
+// committer proposal, so a push held mid-publish holds no comment back.
 //
 // Mutation: publish the record on the repository's subject, or queue it with
 // the committer's proposals, and it waits behind the held push.
@@ -253,11 +247,11 @@ func (n *node) recordAt(p statelog.Position) gitlet.MutationRecord {
 	return rec
 }
 
-// A CONVERSATION WAITS FOR THE CALLER'S FLOOR: the asker read the change on a
-// node ahead of the writer's, and a reply formed against a comment it was
-// shown is decided past it — or, where the writer's node cannot reach it in
-// its budget, decided nothing (ErrNotServing), so the router asks the
-// runner-up, never refused thread_gone by a node that has not seen the thread.
+// A CONVERSATION WAITS FOR THE CALLER'S FLOOR: a reply to a comment the asker
+// read on a node ahead of the writer's is decided past that comment or, where
+// the writer's node cannot reach it in its budget, not at all (ErrNotServing,
+// so the router asks the runner-up) — never refused thread_gone by a node that
+// has not seen the thread.
 //
 // Mutation: publish with no session floor, and the reply is refused
 // thread_gone on the node behind.
@@ -497,8 +491,8 @@ func TestAnAskForReviewMovesOnlyWhatItChanges(t *testing.T) {
 // A THREAD IS RESOLVED BY ITS STARTER, AN AUTHOR, A MAINTAINER OR A PERSON: a
 // seat that started the thread, wrote the change or maintains the repository
 // marks it resolved or open again, as any person does, naming who resolved
-// it; any other seat is refused not_permitted; a thread's state it is in is
-// answered unchanged; and a reply is no thread.
+// it; any other seat is refused not_permitted; a move to the state it is
+// already in is answered unchanged; and a reply is no thread.
 //
 // Mutation: let any reader resolve a thread, and the reviewer's resolution of
 // another's thread lands.
@@ -548,11 +542,10 @@ func TestAThreadIsResolvedByItsStarterAnAuthorAMaintainerOrAPerson(t *testing.T)
 	}
 }
 
-// ONE CHANGE'S WRITES ARE TAKEN ONE AT A TIME: while one write of a change is
-// publishing, a second write of the same change waits its turn on the node,
-// never publishing beside it — two would read one anchor and one lose a round
-// — while a write of another change goes on; and once the first is answered,
-// the second lands.
+// ONE CHANGE'S WRITES ARE TAKEN ONE AT A TIME: while one write of a change
+// publishes, a second of the same change waits its turn on the node (two would
+// read one anchor and one lose a round), a write of another change goes on, and
+// the second lands once the first is answered.
 //
 // Mutation: drop the single flight, and the second write reaches the
 // publisher beside the first.
@@ -601,12 +594,11 @@ func TestOneChangesWritesAreTakenOneAtATime(t *testing.T) {
 	}
 }
 
-// A CLOSED WRITER TAKES NOTHING NEW AND FINISHES WHAT IT STARTED — the first
-// half of its stop, which a teardown takes for every writer of the node before
-// it drains any: once closed, a write arriving and one waiting its change's
-// turn are each answered ErrNotServing, appending nothing, so the router asks
-// the runner-up; and the publish already in flight is not cut short, landing
-// and answered applied once its record goes through.
+// A CLOSED WRITER TAKES NOTHING NEW AND FINISHES WHAT IT STARTED (the first half
+// of its stop, which a teardown runs on every writer of the node before
+// draining any): a write arriving or waiting its change's turn is answered
+// ErrNotServing, appending nothing, so the router asks the runner-up; the
+// publish in flight is not cut short and is answered applied once it lands.
 //
 // Mutation: make Close a no-op, and the write arriving after it waits its turn
 // and lands; cancel the publishes in Close, and the one in flight is answered
@@ -662,15 +654,13 @@ func TestAClosedWriterTakesNothingNewAndFinishesWhatItStarted(t *testing.T) {
 	}
 }
 
-// A BURST PAST THE WRITER'S BOUNDS IS REFUSED BUSY AT ONCE, the committer's
-// rule for a proposal: a write of a change that already has as many writes
-// holding or waiting for its turn as one change takes, a write of any change
-// once the node holds its whole count across changes, and one whose bytes
-// would pass what the node holds are each refused busy, undecided, the moment
-// they arrive — naming the bound — never left holding the node's answer slot
-// while they wait to be refused; another change's write is still taken while
-// one change is full; and each refused write appends nothing, its place given
-// back, so the writes taken land once the held publish goes through.
+// A BURST PAST THE WRITER'S BOUNDS IS REFUSED BUSY AT ONCE, as the committer
+// refuses a proposal: a write past the per-change count, the node's count across
+// changes or the node's bytes is refused busy, undecided, naming the bound, the
+// moment it arrives, never holding the node's answer slot while it waits; a
+// full change leaves another change's writes taken; and a refused write appends
+// nothing and gives its place back, so the writes taken land once the held
+// publish goes through.
 //
 // Mutation: drop the per-change count (or the node's), and the write past it
 // waits for its turn and lands rather than being refused at once.
@@ -689,8 +679,7 @@ func TestABurstPastTheWritersBoundsIsRefusedAtOnce(t *testing.T) {
 	}
 	gate := newGate(n.pub)
 	w, rec := writerOn(t, n, gate)
-	// EVERY WRITE OF THE BURST WEIGHS THE SAME: one body, and ids of one
-	// length.
+	// EVERY WRITE OF THE BURST WEIGHS THE SAME: one body, ids of one length.
 	burst := func(on string) gitlet.ConversationWrite { return saying(repo, on, ada, "", "One of a burst.") }
 	weight, err := gitlet.ConversationWeight(burst(change))
 	if err != nil {
@@ -764,13 +753,12 @@ func TestABurstPastTheWritersBoundsIsRefusedAtOnce(t *testing.T) {
 	}
 }
 
-// BenchmarkAChangesWritesInTurn is one change's single flight draining: its
-// writes one after another through the writer, each decided, published,
-// applied on a real embedded member and answered from the rows before the
-// next takes the turn — what a write of a change's turn costs on a healthy
-// log, which MaxChangeWritesWaiting's doc reads the drain of a full turn from.
-// Run it bounded: -run '^$' -bench '^BenchmarkAChangesWritesInTurn$'
-// -benchtime 64x -count 1, one turn's worth.
+// BenchmarkAChangesWritesInTurn drains one change's single flight, each write
+// decided, published, applied on a real embedded member and answered from the
+// rows before the next takes the turn: the per-write cost on a healthy log that
+// MaxChangeWritesWaiting's doc reads a full turn's drain from. Run it bounded:
+// -run '^$' -bench '^BenchmarkAChangesWritesInTurn$' -benchtime 64x -count 1,
+// one turn's worth.
 func BenchmarkAChangesWritesInTurn(b *testing.B) {
 	n := newNode(b)
 	repo := changeRepo(b, n, "web")
@@ -815,12 +803,11 @@ func TestAWriteWaitsItsTurnOnlyWhileItsAttemptHasRoom(t *testing.T) {
 }
 
 // A SEAT'S WRITE, EVERY ASK OF REVIEWERS AND EVERY MERGEABILITY NEED THE
-// DECIDING NODE'S CHART: on a node that holds none yet the writer decides
-// nothing of them and says so about itself (ErrNotServing), so the router asks
-// the repository's runner-up — a mergeability's readiness is the chart's to
-// judge, whose approvals count and who maintains the repository; a person's
-// comment is decided there as ever. And a node confirmed behind the company's
-// configuration decides none of them either.
+// DECIDING NODE'S CHART (a mergeability's readiness turns on whose approvals
+// count and who maintains the repository): a node holding none yet decides none
+// of them and answers ErrNotServing, so the router asks the repository's
+// runner-up, while a person's comment is decided there as ever; a node
+// confirmed behind the company's configuration decides none of them either.
 func TestAWriteTheChartJudgesNeedsTheDecidingNodesChart(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -1113,11 +1100,10 @@ func (n *node) dump(table string) []string {
 }
 
 // seedConversation writes a change's conversation straight into a node's
-// estate — reviewers, participants and comments of the width given each, and
-// its row weighing them — the bulk a purge has to clear. A COMMENT STANDS FOR
-// THE WIDTH ITS ROW STATES, as seedChanges' bodies do: its body carries at
-// most a kilobyte, and its body_bytes and the conversation's text_bytes the
-// width given.
+// estate (the reviewers, participants and comments counted, and its row
+// weighing them): the bulk a purge has to clear. A COMMENT STANDS FOR THE WIDTH
+// ITS ROW STATES, as seedChanges' bodies do: its body holds at most a kilobyte,
+// its body_bytes and the conversation's text_bytes say width.
 func (n *node) seedConversation(repoID, changeID string, reviewers, participants, comments int, width int64) {
 	n.t.Helper()
 	ctx := n.t.Context()
@@ -1430,17 +1416,14 @@ func TestAPurgeCutsAConversationByItsFindingsAndReviewsToo(t *testing.T) {
 	}
 }
 
-// A REVIEW REQUEST NAMES ONLY A GITLET HOLDER (ADR-0110).
-//
-// Reading a change is reading its repository's code, and an ask for review is
-// how a change hands somebody its whole diff, so a person is asked only where
-// the identity directory says the seat's holder uses Gitlet: a person given
-// every app but Gitlet is refused not_permitted, naming them and the
-// permission, and nothing is appended; a person holding it is asked as ever;
-// and a directory that cannot say answers the ask busy, undecided, appending
-// nothing — never a refusal of somebody who may well use the app. The
-// directory is asked about the persons the ask names and nobody else: not the
-// agent seat beside them, which its grant on the repository decides.
+// A REVIEW REQUEST NAMES ONLY A GITLET HOLDER (ADR-0110): an ask hands somebody
+// the change's whole diff, so a person is asked only where the identity
+// directory says the seat's holder uses Gitlet. A person given every app but
+// Gitlet is refused not_permitted, naming them and the permission, appending
+// nothing; a person holding it is asked as ever; a directory that cannot say
+// answers busy, undecided, appending nothing, never refusing somebody who may
+// well use the app. Only the persons the ask names are looked up, not the agent
+// seat beside them, which its grant on the repository decides.
 //
 // Mutation: drop the person rule from decideReviewers, and the contractor is
 // asked; read nobody from the directory, and the broken directory's ask lands.

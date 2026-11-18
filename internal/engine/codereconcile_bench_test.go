@@ -9,17 +9,13 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 )
 
-// BenchmarkAChangedActivation is the reconcile of code.repos at the most
-// repositories a document may declare ([config.CodeMaxRepos]), end to end on
-// one booted data node as the reconciler runs it
-// ([Engine.decideCodeRepos]): the fence, the walk of the rows, the batch
-// read, every decision side by side, and this node's real applier committing
-// what they append — in the four activations a company meets: the first that
-// declares them all (a create each), one that changes nothing, one that
-// declares none (a deletion each), and one that declares them all again (a
-// restore each). Each phase is reported as seconds an activation: how long
-// after its apply the last repository it changed has its record applied here,
-// which no apply waits for ([codeReconciler]).
+// BenchmarkAChangedActivation is the reconcile of code.repos at
+// [config.CodeMaxRepos], end to end on one booted data node as the reconciler
+// runs it ([Engine.decideCodeRepos]), with this node's real applier, in the
+// four activations a company meets: the first declaring them all (a create
+// each), one changing nothing, one declaring none (a deletion each), and one
+// declaring them all again (a restore each). Each is reported as seconds an
+// activation until its last record is applied here ([codeReconciler]).
 //
 //	go test ./internal/engine -run '^$' -bench BenchmarkAChangedActivation -benchtime 1x
 //

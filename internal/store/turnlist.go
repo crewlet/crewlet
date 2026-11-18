@@ -120,6 +120,14 @@ func failedRow(col func(string) string) (string, []any) {
 		" IN (" + holders + "))", args
 }
 
+// turnFailedRow is [failedRow] over a turn's OWN records. A nested record
+// (`host_phase` set: a worker, or a phase's round-cap judge) fails only
+// itself: the phase that called it reads its failure as an answer.
+func turnFailedRow() (string, []any) {
+	expr, args := failedRow(nil)
+	return "(" + expr + " AND host_phase = '')", args
+}
+
 // errorText and kindText are a failure record's message and class: the
 // record's own fields, a provider chain's `last_error` fields where it ran
 // out, and for the kind the failure's event type where the record names no
@@ -248,14 +256,15 @@ type Turn struct {
 	Phases     int `json:"phases"`
 	Iterations int `json:"iterations"`
 
-	// Failed is whether ANY event of this turn was a failure, which is a
-	// different question from the outcome: a turn can recover from a
+	// Failed is whether ANY of this turn's own events was a failure, which
+	// is a different question from the outcome: a turn can recover from a
 	// failed provider call and still end well, and an operator looking for
-	// what is going wrong wants both.
+	// what is going wrong wants both. A worker's or a judge's failure is
+	// that record's alone ([turnFailedRow]).
 	Failed bool `json:"failed"`
 
 	// Error and ErrorKind are WHY IT FAILED: the message and the class of a
-	// failure record of this turn, empty for a turn that carried none. The
+	// failure record of this turn's own, empty for a turn that carried none. The
 	// turn's own completion speaks first (its `error` is the failure that
 	// ended it), then any other failed record (a failed phase, a provider
 	// chain that ran out, a breached guard), so a turn that died before it
@@ -296,7 +305,9 @@ type Turn struct {
 	// extension judge, the seat's own for the work.
 	Models string `json:"models,omitempty"`
 
-	// Summary is what the turn set out to do, in the agent's own words.
+	// Summary is what the turn did, as its NEWEST completion says it: its last
+	// review's account of what landed, or its final answer. A parked turn
+	// completes once per segment, and an earlier one describes rounds since redone.
 	Summary string `json:"summary,omitempty"`
 
 	// Trigger is what woke it, from the first phase record.
@@ -374,8 +385,9 @@ type TurnQuery struct {
 	Server string
 	Tool   string
 
-	// Failed narrows to turns that carried a failure, or to those that did
-	// not. Nil is both, which is not the same as false.
+	// Failed narrows to turns that carried a failure of their own
+	// ([Turn.Failed]), or to those that did not. Nil is both, which is not
+	// the same as false.
 	Failed *bool
 
 	// Before is an exclusive cursor on the listing's own order — the turn's
@@ -633,10 +645,9 @@ type TurnPartial struct {
 	// DurationMS is the SUM of the completions' own measurements.
 	DurationMS int `json:"duration_ms"`
 
-	// Summary, WorkItem and Trigger are the MAXIMUM of their values, as
-	// the SQL takes them; WorkItem is the completion's work item AS
-	// STORED — JSON text — and is decoded only when the turn is finished,
-	// because the maximum is a maximum of that text.
+	// Summary and WorkItem are RANKED TEXT, the newest completion's value behind its
+	// instant ([newestKey]), so a maximum across logs is the turn's end as within one;
+	// WorkItem's value is JSON, decoded in [TurnPartial.Turn]. Trigger is the maximum.
 	Summary  string `json:"summary,omitempty"`
 	WorkItem string `json:"work_item,omitempty"`
 	Trigger  string `json:"trigger,omitempty"`
@@ -657,6 +668,20 @@ const originSep = "\x1f"
 const originKey = "CASE WHEN COALESCE(json_extract(tags, '$.trigger_origin'), '') <> '' " +
 	"THEN printf('%020d', event_time) || char(31) || json_extract(tags, '$.trigger_origin') " +
 	"|| char(31) || COALESCE(json_extract(tags, '$.trigger_reason'), '') END"
+
+// newestKey is the SQL that ranks a completion's value by when it was recorded,
+// as [originKey] does, or NULL on any other row or where the value is NULL. Its
+// one placeholder is the completion's type.
+func newestKey(value string) string {
+	return "CASE WHEN event_type = ? AND (" + value + ") IS NOT NULL " +
+		"THEN printf('%020d', event_time) || char(31) || (" + value + ") END"
+}
+
+// newestOf is a partial's ranked newest text without its rank.
+func newestOf(ranked string) string {
+	_, value, _ := strings.Cut(ranked, originSep)
+	return value
+}
 
 // originOf decodes a partial's ranked origin text, or nil: the tags it was
 // ranked from, read by the one rule a record's tags are ([OriginOfTags]).
@@ -683,16 +708,16 @@ func (p TurnPartial) Turn() Turn {
 		TotalTokens: p.TotalTokens,
 		CacheRead:   p.CacheRead, CacheWrite: p.CacheWrite,
 		Models:  strings.Join(p.Models, ","),
-		Summary: p.Summary, Trigger: p.Trigger,
+		Summary: newestOf(p.Summary), Trigger: p.Trigger,
 		Origin: originOf(p.Origin),
 	}
 	t.Complete, t.Parked = segmentState(p.LastEnded, p.LastParked)
-	if p.WorkItem != "" {
+	if item := newestOf(p.WorkItem); item != "" {
 		// A record whose item does not decode is a row with no item,
 		// not a failed listing: the item is a label on the row, and
 		// one unreadable completion must not cost the page.
 		var named types.WorkItem
-		if json.Unmarshal([]byte(p.WorkItem), &named) == nil && named.ID != "" {
+		if json.Unmarshal([]byte(item), &named) == nil && named.ID != "" {
 			t.WorkItem = &named
 		}
 	}
@@ -1103,7 +1128,7 @@ const (
 // its derived table selects, so each aggregate, the HAVING and the ORDER BY
 // read a column it carries.
 const turnColumns = `turn_id, work_key, agent_id, agent_role, event_time, event_type,
-	iteration, tags, payload, input_tokens, output_tokens, total_tokens,
+	iteration, host_phase, tags, payload, input_tokens, output_tokens, total_tokens,
 	cache_read_tokens, cache_write_tokens, model, spend_stage`
 
 // partialsSQL is the statement [EventLog.TurnPartials] and
@@ -1186,7 +1211,7 @@ func (q TurnQuery) partialsSQL(at time.Time, read turnRead, probe int, from time
 	// could be selected by `failed=true` and then render without the mark,
 	// which is the same defect one layer down from the one [failedRow]
 	// describes.
-	failedExpr, failedArgs := failedRow(nil)
+	failedExpr, failedArgs := turnFailedRow()
 	failedAgg := "MAX(CASE WHEN " + failedExpr + " THEN 1 ELSE 0 END)"
 	if q.Failed != nil && !shares {
 		want := "0"
@@ -1231,10 +1256,8 @@ func (q TurnQuery) partialsSQL(at time.Time, read turnRead, probe int, from time
 		                THEN event_time END),
 		       SUM(CASE WHEN event_type = ?
 		                THEN COALESCE(json_extract(payload, '$.duration_ms'), 0) END),
-		       MAX(CASE WHEN event_type = ?
-		                THEN COALESCE(json_extract(payload, '$.plan_summary'), '') END),
-		       MAX(CASE WHEN event_type = ?
-		                THEN json_extract(payload, '$.work_item') END),
+		       MAX(` + newestKey("COALESCE(json_extract(payload, '$.plan_summary'), '')") + `),
+		       MAX(` + newestKey("json_extract(payload, '$.work_item')") + `),
 		       MAX(COALESCE(json_extract(tags, '$.trigger'), '')),
 		       MIN(` + originKey + `),
 		       ` + failureText(failedExpr, errorText) + `,

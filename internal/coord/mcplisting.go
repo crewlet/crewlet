@@ -15,58 +15,31 @@ import (
 
 // WHAT EACH NODE'S MCP SERVERS LIST, read by the whole fleet (ADR-0074).
 //
-// A node knows what the servers it runs list, and nothing else does: a shared
-// server's tools are filed into every node's own registry, but a per-agent
-// server's children run only on the node holding each seat, so no node's
-// registry holds the company's whole catalogue. Every node therefore
-// publishes, per server, the union of what its own instances list, and every
-// reader takes the union of the live nodes' records.
-//
-// # Who has to agree on it
-//
-// The whole company, now: a screen on any node shows a server whose children
-// run on another, and the tool catalogue a node pushes names tools no
-// instance of its own serves. It is too large for the presence heartbeat,
-// which is re-sent every beat (a listing is tens of kilobytes where a status
-// row is a few hundred bytes), so it is a record of its own, written when it
-// changes.
-//
-// # Two classes in the positions register
-//
-// A listing is one record per (server, node), [MCPListingKey]; each tool's
-// definition, its schemas and its words whole, is one record per definition
-// digest, [MCPDefinitionKey], written create-only, so a definition every
-// seat's child of a server lists is stored once however many nodes and
-// instances list it. Both live in the positions
-// register, the bucket with no age, for the reason its other classes do: an
-// age would forget the listing of a server that has not changed in a week,
-// which is a server whose listing is exactly right. Removal is a decision:
-// the node removes its own listing when it stops running a server or shuts
-// down, and the maintenance sweep removes what a node that died left behind.
-//
-// # Swept with the node's presence, and held to its incarnation
-//
-// A listing carries the presence epoch of the node that wrote it. A reader
-// counts it only while that node holds its presence AT THAT EPOCH
-// ([LiveMCPListings]): a node that died stops counting the moment its
-// presence lapses, and a node that restarted, or lapsed and re-claimed its
-// presence, is a new incarnation whose listings are not counted until it
-// writes them again, which it does at once (a new epoch is its signal that a
-// sweep may have removed them). The sweep removes exactly what readers
-// already ignore.
-//
-// # Every tool, bounded by bytes, and somebody else's words
-//
-// A listing names EVERY tool its node's instances list, because what it does
-// not name is never reviewed, so a call to it would ask a person for ever
-// (ADR-0078). It is bounded by the bytes it is stored as rather than by a
-// count of tools: each tool's identity (its names, digest, parts and hints) is
-// always on it, and its words give way first ([MCPListing.Bounded]).
-// Every field of a listing but its counts came from a remote MCP server, so
-// every one is bounded where the record is built and again by the store that
-// writes it, and a reader treats them as the server's words. A record's key names its server and node, and a store stamps both
-// from the key it files the record under, so a node can describe only its
-// own listing of the server the key names.
+// A per-agent server's children run only on the node holding each seat, so no
+// node's registry holds the company's whole catalogue: every node publishes,
+// per server, the union of what its own instances list, and a reader takes the
+// union over the live nodes. The whole company agrees on it, and at tens of
+// kilobytes it is too large for the presence heartbeat, so it is a record of
+// its own, written when it changes.
+
+// A listing is one record per (server, node), [MCPListingKey]; a tool's
+// definition whole is one create-only record per digest, [MCPDefinitionKey],
+// stored once however many listings name it. Both live in the positions
+// register, the bucket with no age, since an age would forget a listing that
+// is right because it has not changed. A node removes its own listing when it
+// stops running the server or shuts down; the maintenance sweep removes a dead
+// node's. A reader counts a listing only while its node holds presence AT THE
+// EPOCH it was written under ([LiveMCPListings]), so the sweep removes only
+// what readers already ignore, and a node at a new epoch rewrites its listings
+// at once.
+
+// A listing names EVERY tool, since an unnamed one is never reviewed and a call
+// to it would ask a person for ever (ADR-0078). It is bounded by its stored
+// bytes, not a tool count: each tool's identity (names, digest, parts, hints)
+// always stays and its words give way first ([MCPListing.Bounded]). Every field
+// but the counts is a remote server's words, bounded where the record is built
+// and again by the store, which stamps server and node from the key, so a node
+// can describe only its own listing.
 
 // MCPListingClass and MCPDefinitionClass are the key classes the records are
 // filed under in the positions register.
@@ -124,14 +97,12 @@ func IsMCPDigest(s string) bool {
 // bytes and an invalid byte three, so a bound on the raw text would let a
 // record grow several times past it.
 const (
-	// MaxMCPListingBytes bounds one listing's record, encoded. 896 KiB keeps
-	// it, with its key and headers, under the 1 MiB a NATS server carries by
-	// default, as every coordination record stays. It holds the identity of
-	// the most tools the engine takes from one server (internal/mcp's
-	// MaxServerTools, 1,024) at about 775 bytes each at their longest, with
-	// room for their words; the largest server seen in use, at 461 tools,
-	// writes about 300 KiB with its words whole. A listing whose identities
-	// alone are past it is refused, never cut.
+	// MaxMCPListingBytes bounds one listing's record, encoded: 896 KiB keeps
+	// it, with its key and headers, under a NATS server's default 1 MiB. It
+	// holds internal/mcp's MaxServerTools (1,024) identities at about 775
+	// bytes each at their longest, with room for words (461 tools with whole
+	// words take about 300 KiB). A listing whose identities alone are past it
+	// is refused, never cut.
 	MaxMCPListingBytes = 896 << 10
 
 	// MaxMCPToolTitleBytes bounds a tool's title on a listing, and
@@ -156,22 +127,19 @@ const (
 	MaxMCPToolSchemaBytes = 64 << 10
 
 	// MaxMCPToolWordsBytes bounds one definition's words whole, as stored:
-	// its title, the title its hints carry and its description, together. The engine
-	// bounds nothing a server sends and hands a model every byte of a
-	// description on every request, so 64 KiB, some 16,000 tokens of one
-	// tool, is past any description a server usefully sends (real ones run
-	// to a few KiB). A definition whose words are longer is listed without
-	// its record, and a change to it is said rather than shown.
+	// its title, its hints' title and its description together. A model is
+	// handed every byte on every request, so 64 KiB (some 16,000 tokens) is
+	// past any useful description; real ones run to a few KiB. A definition
+	// past it is listed without its record, and a change to it is said
+	// rather than shown.
 	MaxMCPToolWordsBytes = 64 << 10
 
-	// MaxMCPListingDefinitionBytes bounds the records one listing keeps,
-	// every kept definition's schemas and words together, as stored: a tool whose
-	// definition waits for a review is kept first, so its change can be
-	// shown, then the rest in name order while they fit, and a tool past
-	// the budget is listed without its record. Held by the node that builds
-	// the listing, since a listing names its records by digest and a store
-	// writing it cannot weigh them. 1 MiB is eight of the largest
-	// definitions, and hundreds of the definitions real servers publish.
+	// MaxMCPListingDefinitionBytes bounds the records one listing keeps, as
+	// stored: a tool whose definition waits for a review first, so its change
+	// can be shown, then the rest in name order while they fit; a tool past
+	// it is listed without its record. Held by the node building the listing,
+	// since a store sees only digests. 1 MiB is eight of the largest
+	// definitions, and hundreds of real ones.
 	MaxMCPListingDefinitionBytes = 1 << 20
 )
 
@@ -546,10 +514,8 @@ func SortMCPListings(listings []MCPListing) {
 // presence now AT THE EPOCH the listing was written under, presence being
 // [Backend.ListLive] of [ClassNode]. In the order given.
 //
-// THE ONE FILTER, for every reader: a node that died, drained or restarted
-// stops counting the moment its presence lapses or moves to a new epoch, and
-// a reader that filtered on the node alone would count a restarted node's
-// previous incarnation until the new one wrote over it.
+// THE ONE FILTER, for every reader: filtering on the node alone would count a
+// restarted node's previous incarnation until the new one wrote over it.
 func LiveMCPListings(listings []MCPListing, presence []Lease) []MCPListing {
 	live := make(map[string]int64, len(presence))
 	for _, lease := range presence {

@@ -256,6 +256,29 @@ func takeChunkLocked(sub *subscription, m *consumer) []*events.Event {
 	return chunk
 }
 
+// takeLaneLocked removes up to max_batch of the lane's events from the mailbox,
+// in the order it holds them: what a drain already under way asks the broker's
+// lane for between partitions. A topic with no lane has none.
+func takeLaneLocked(sub *subscription, m *consumer) []*events.Event {
+	if !queue.HasLane(sub.topic) {
+		return nil
+	}
+	n := m.options.EffectiveMaxBatch()
+	var lane []*events.Event
+	rest := make([]*events.Event, 0, len(sub.mail))
+	for _, ev := range sub.mail {
+		if len(lane) < n && queue.Prioritized(ev) {
+			lane = append(lane, ev)
+			continue
+		}
+		rest = append(rest, ev)
+	}
+	if len(lane) > 0 {
+		sub.mail = rest
+	}
+	return lane
+}
+
 // takeOneLocked removes the event a single-event consumer is handed next: the
 // lane's first on a laned topic, as [takeChunkLocked] takes a batch, and the
 // head of the mailbox otherwise.
@@ -303,8 +326,17 @@ func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consume
 		inChunk[ev] = struct{}{}
 	}
 
-	for i, part := range parts {
+	for i := 0; i < len(parts); i++ {
 		b.mu.Lock()
+		if i > 0 && deliverableLocked(m) {
+			// THE LANE BEFORE EVERY PARTITION, as the broker's drain asks it.
+			lane := takeLaneLocked(sub, m)
+			for _, ev := range lane {
+				sub.drained[ev], inChunk[ev] = struct{}{}, struct{}{}
+			}
+			parts = append(parts[:i:i], queue.JoinLane(parts[i:], lane, m.batchKey, sameEvent)...)
+		}
+		part := parts[i]
 		if !deliverableLocked(m) {
 			// BLOCKED — by an earlier partition in this very batch, or by
 			// something that landed between them. Stop dispatching and put

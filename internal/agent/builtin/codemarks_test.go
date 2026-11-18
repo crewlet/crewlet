@@ -10,12 +10,11 @@ import (
 )
 
 // A CODE MARK IS A PERSON'S OWN, FROM THEIR ASSISTANT: the operator catalogue
-// serves code_mark_inbox beside Gitlet's writes — not without them —
-// no seat's registry holds it, and a person's call is one gesture on the
-// record of the human seat they hold, named by the arguments' record ids and
-// never by a handle the call could name — the tool takes none, and refuses one
-// as it refuses every argument it does not read; a gesture that marks nothing
-// is refused before anything is asked.
+// serves code_mark_inbox beside Gitlet's writes, not without them; no seat's
+// registry holds it; and a call is one gesture on the record of the caller's
+// human seat, named by record ids, never by a handle (the tool refuses one, as
+// every argument it does not read); a gesture that marks nothing is refused
+// before anything is asked.
 //
 // Mutations: add code_mark_inbox to CodeTools, and a seat's registry holds it;
 // offer it over the code reads alone, and a surface that changes no code marks
@@ -68,15 +67,14 @@ func TestACodeMarkIsAPersonsOwnFromTheirAssistant(t *testing.T) {
 	writes.mu.Unlock()
 }
 
-// A CODE MARK CARRIES THE CALLER'S FLOOR: `seen`, how far the caller read the
-// code log, reaches Gitlet as the mark's Seen — which its decide waits
-// for, so a notice the person was shown is never refused by a node not yet at
-// it — a call naming none carries the zero position, and a `seen` that is no
-// position, or one on another log, is refused before anything is asked.
+// A CODE MARK CARRIES THE CALLER'S FLOOR: `seen` reaches Gitlet as the mark's
+// Seen, which its decide waits for, so a notice the person was shown is never
+// refused by a node not yet at it; no `seen` carries the zero position, and one
+// that is no position, or on another log, is refused before anything is asked.
 //
 // Mutation: drop `Seen: seen` from the write the tool asks for, and the floor
-// never reaches Gitlet, red; accept a position on any log, and
-// Worklet's position is asked, red.
+// never reaches Gitlet, red; accept a position on any log, and Worklet's
+// position is asked, red.
 func TestACodeMarkCarriesTheCallersFloor(t *testing.T) {
 	t.Parallel()
 	host := newGitletHost()

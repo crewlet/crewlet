@@ -9,35 +9,25 @@ import (
 )
 
 // A CODE SEARCH OF ONE REPOSITORY ([GitSearch], M6-D12, M6-D13) is a git
-// read like any other: the keyed walk asks the repository's Gitlet nodes in
-// their order, and the one that answers judges the asker's grant from its own
-// chart. What differs is how it reads. A `search: indexed` repository's
-// default branch is read through the trigram index its first [IndexHolders]
-// Gitlet nodes keep of its tip (internal/gitlet/cache's DerivedCodeIndex): the
-// plan's candidates among the tip's files, confirmed line by line with Go's
-// regexp. Everything else — a `search: grep` repository, a `ref:` other than
-// the indexed tip, a node that holds no index — is read with git grep over
-// the strings of the plan's most selective clause (one `-E` alternation of
-// them, escaped: codeindex.Plan.Grep), its lines confirmed with the same
-// regexp, so both paths answer RE2's matches, and the same ones.
+// read like any other, keyed walk and grant judged by the answering node. A
+// `search: indexed` repository's default branch is read through the trigram
+// index its first [IndexHolders] nodes keep of its tip (internal/gitlet/cache's
+// DerivedCodeIndex); everything else (a `search: grep` repository, another
+// ref, a node holding no index) is git grep over the plan's most selective
+// clause (codeindex.Plan.Grep). Both confirm lines with Go's regexp, so both
+// answer RE2's matches, and the same ones.
 //
-// THE QUERY CROSSES AS ITS PARTS — the text, the mode, the case and the
-// filters (codeindex.Query) — never as a compiled pattern: the Gitlet node makes
-// the expression and its plan by the one grammar the asker validated it
-// with, so a node and its asker cannot read one search two ways, and a
-// refusal names what the person or the seat wrote. An estate request, never
-// a record, so it moves no RecordVersion and takes no versionedFields row; the
-// domain landed on main with it.
+// THE QUERY CROSSES AS ITS PARTS (codeindex.Query), never a compiled pattern,
+// so node and asker read one search one way and a refusal names what the
+// asker wrote. An estate request: no RecordVersion, no versionedFields row.
 
 const (
 	// MaxSearchHits is the most lines one search answers: about 128 bytes a
-	// hit — a path, a line number, MaxSearchLineBytes of text at the most and
-	// a blob's id — so a full answer's 500 fill most of MaxGitAnswerBytes'
-	// 56 KiB without passing it.
+	// hit, so 500 fill most of MaxGitAnswerBytes' 56 KiB without passing it.
 	MaxSearchHits = 500
-	// MaxSearchLineBytes is the most of a matching line a hit carries, cut
-	// on a rune's boundary: enough to read the match in its line, and what
-	// keeps a minified file's one long line from filling an answer alone.
+	// MaxSearchLineBytes is the most of a matching line a hit carries, cut on
+	// a rune's boundary, so a minified file's one long line cannot fill an
+	// answer alone.
 	MaxSearchLineBytes = 256
 	// MaxSearchContext is the most lines a search answers on each side of a
 	// hit: the screen draws three, and each costs a hit MaxSearchLineBytes more.
@@ -52,13 +42,12 @@ const (
 	// it is skipped by the index (codeindex.MaxFileBytes) and dropped from
 	// git grep's answer by its size, so both paths answer the same lines.
 	MaxIndexedFileBytes = codeindex.MaxFileBytes
-	// SearchBudget is what one search may spend reading and confirming, its
-	// git included: the state log's resolve budget, the time a person waits
-	// on a write's answer. A search that runs it out answers the hits it
-	// found by then, Truncated — never nothing, and never late: a search's
-	// cost is the corpus's, which another node would read as slowly. A grep
-	// search asking context reads its hits' files after it, until its answer
-	// falls due, answering the files read by then.
+	// SearchBudget is what one search may spend, its git included: the time a
+	// person waits on a write's answer. A search that runs it out answers the
+	// hits found by then, Truncated — never nothing and never late, since
+	// another node would read the same corpus as slowly. A grep search asking
+	// context reads its hits' files until its answer falls due, answering those
+	// read by then.
 	SearchBudget = statelog.DefaultResolveBudget
 )
 
@@ -106,18 +95,16 @@ type SearchQuery struct {
 	PerFile int `json:"per_file,omitempty"`
 	// After, where set, is the place in the search's order the answer
 	// continues from: only lines AFTER it are answered, so Limit counts the
-	// lines past it alone ([SearchAfter]). The domain landed on main with it,
-	// as with the rest of this request.
+	// lines past it alone ([SearchAfter]).
 	After *SearchAfter `json:"after,omitempty"`
 }
 
-// SearchAfter is a place in one repository's search order — its paths'
-// bytes, then their numbers — named as the hit sent last names it: the path
-// as itself or, where it is not UTF-8, by PathB64 alone ([GitPath]'s pair),
-// and the line. A search continued after it reads no file whose path sorts
-// before the path, and answers no line of the path itself at or before the
-// line, so a page of a long search costs the lines from its place on and
-// never again the lines an earlier page answered ([SearchAfterOf]).
+// SearchAfter is a place in one repository's search order (paths' bytes, then
+// line numbers), named as the last hit sent names it: the path, or PathB64
+// alone where it is not UTF-8 ([GitPath]'s pair), and the line. A search
+// continued after it reads no file sorting before the path and answers no
+// line of the path at or before the line, so a page never re-reads what an
+// earlier page answered ([SearchAfterOf]).
 type SearchAfter struct {
 	Path    string `json:"path,omitempty"`
 	PathB64 string `json:"path_b64,omitempty"`
@@ -198,13 +185,10 @@ func (q SearchQuery) validate() error {
 	return nil
 }
 
-// SearchAnswer is a search's lines: every line of the commit searched the
-// expression matches — after the query's After, where it names one — in the
-// order of their paths' bytes and then their numbers, as many as the query's
-// limit; each hit with where it matched, and the lines around it and its
-// file's total where the query asked them. A search that stops early stops in
-// that order, so its hits are always the FIRST lines of what it searched:
-// every line before its last is among them.
+// SearchAnswer is a search's lines: every matching line of the commit (after
+// the query's After), in order of path bytes then line number, up to the
+// query's limit. A search that stops early stops in that order, so its hits
+// are always the FIRST lines of what it searched.
 type SearchAnswer struct {
 	Hits []SearchHit `json:"hits"`
 	// Tip is the commit searched, whole; Ref the whole ref the query's Ref
@@ -213,12 +197,10 @@ type SearchAnswer struct {
 	Ref string `json:"ref,omitempty"`
 	// Via is how the commit was read.
 	Via SearchVia `json:"via"`
-	// SkippedFiles is how many of the commit's files, of those the paths
-	// admit, the search did not read for their size (past
-	// MaxIndexedFileBytes) — and, on the index path, as binaries, which git
-	// grep -I passes over unsaid — plus every file a line of which was past
-	// what a search runs its expression on (codeindex.Plan.LineBytes). It
-	// counts files the search passed, which can lie past a truncated answer's last hit.
+	// SkippedFiles counts the admitted files the search did not read: past
+	// MaxIndexedFileBytes, binaries on the index path (git grep -I passes
+	// over them unsaid), and any with a line past codeindex.Plan.LineBytes.
+	// It can count files past a truncated answer's last hit.
 	SkippedFiles int `json:"skipped_files,omitempty"`
 	// Truncated says the search stopped before it had read every file that
 	// could match: at its limit of hits, or at SearchBudget. Hits is then
@@ -243,10 +225,10 @@ type SearchHit struct {
 	// [start, end) into Text as answered, in order, none empty or past Text's
 	// cut, at most MaxSearchHitMatches. Absent is none answered.
 	Matches [][2]int `json:"matches,omitempty"`
-	// Before and After are the file's lines just before and after this one,
-	// the query's Context of each at most, each cut as Text is. A line a nearer
-	// hit of the same answer carries is not carried again, so Before starts
-	// after the previous hit's After and After ends before the file's next hit.
+	// Before and After are up to the query's Context of the file's lines on
+	// each side, cut as Text is. A line a nearer hit carries is not carried
+	// again: Before starts after the previous hit's After, and After ends
+	// before the file's next hit.
 	Before []string `json:"before,omitempty"`
 	After  []string `json:"after,omitempty"`
 	// FileMatches is how many lines of the file matched, where the query

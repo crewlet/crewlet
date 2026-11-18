@@ -9,31 +9,20 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A RECORD'S SCOPE: every object its apply may write and every object its
-// decide read (M5-D33), stated by the WRITER and readable at every version. A
-// SUPERSET of what the apply writes, because a record decided from rows a
-// record this node could not decode left stale is as wrong as one that writes
-// over them: a write is probed against the paths it reads, and a record names
-// what it read, so a node behind on any of it decides nothing from it.
+// A RECORD'S SCOPE: every object its apply may write AND every object its
+// decide read (M5-D33), stated by the writer and readable at every version, so
+// a node behind on any of it decides nothing from it. A node that cannot
+// decode a record files the deferral under it; a later read or write probes it.
 //
-// It is what a node that cannot decode a record files the deferral under, and
-// what a later read or write probes to discover it is behind. The framework
-// knows one thing about a path — a hierarchy written left to right, from which
-// it computes containment — so the alphabet nests: everything is under the
-// domain, and a repository's path is beside its name's rather than under it,
-// because a repository is filed by its id, which never changes, while its name
-// is a claim on an address that a purge releases for another repository to
-// take.
-//
-// CARRIED AS RESOLVED PATHS rather than as terms a reader composes, which is
-// the difference from the tracker's and the knowledge base's scope: every
-// code record's objects are known to its writer by id alone, so there is no
-// container a reader would have to look up, and a build that cannot interpret
+// The framework computes containment from a left-to-right hierarchy, so the
+// alphabet nests under the domain; a repository's path is beside its name's,
+// not under it, because the id never changes while a purge releases the name.
+// Carried as RESOLVED PATHS, unlike the tracker's and the knowledge base's
+// terms: a writer knows every object by id, so a build that cannot interpret
 // a path still indexes it.
 
-// The path alphabet. The domain letter is `c`, distinct from every other
-// domain's, so a deferral row an operator reads out of a stuck fleet names its
-// domain.
+// The path alphabet. The domain letter `c` is distinct from every other
+// domain's, so a deferral row read out of a stuck fleet names its domain.
 const (
 	pathDomain     = "c"
 	pathName       = "n"
@@ -53,50 +42,35 @@ func NamePath(token string) string { return pathDomain + "/" + pathName + "/" + 
 // write.
 func RepoPath(id string) string { return pathDomain + "/" + pathRepo + "/" + id }
 
-// ChangePath is one change's conversation: who is asked to review it, its
-// comments, who takes part and its counters — everything a record on the
-// change's own subject may write. BESIDE the repository's path rather than
-// under it, as a repository's is beside its name's: a change is filed by its
-// id, and its repository is named in each record's payload. A record on a
-// change's subject names BOTH paths ([ChangeWriter]): its decide reads what
-// the repository's records write — the change's row, the repository's status
-// — so a record of the repository's this node could not decode leaves the
-// conversation's decide reading stale rows, and the scope probe must find it;
-// and the deletion gate reads the repository the record is about off this
-// scope, never the payload ([gatedRepo]). A MERGEABILITY names the
-// repository's checks too ([ChecksPath]): the readiness it stamps judges the
-// merge gate, which reads them ([JudgeGate]), beside the position of its
-// head's checks it was judged at ([Mergeability.ChecksPosition]).
+// ChangePath is one change's conversation: everything a record on the
+// change's own subject may write (reviewers, comments, participants,
+// counters). BESIDE the repository's path, since a change is filed by its id.
+// A record on a change's subject names BOTH paths ([ChangeWriter]): its decide
+// reads the change's row and the repository's status, which the repository's
+// records write, and the deletion gate reads its repository off this scope
+// ([gatedRepo]). A MERGEABILITY also names [ChecksPath]: the merge gate it
+// judges reads them ([JudgeGate], [Mergeability.ChecksPosition]).
 func ChangePath(id string) string { return pathDomain + "/" + pathChange + "/" + id }
 
-// ChecksPath is one repository's checks: every row a record on its checks
-// subject may write — its check rows and their logs. BESIDE the repository's
-// path rather than under it, as a change's is, because the two APPLIES write
-// apart: a check's record never writes the repository's rows, and of the
-// repository's own records only its purge writes a check's — whose every
-// step names this path beside the repository's ([Store.PurgeStep]). The
-// DECIDES do not read apart, so a record names what its decide reads beside
-// what its apply writes (M5-D33): a check's write, decided by the
-// [ChecksWriter], reads the repository's row on every arm — archived or
-// deleted, and the owner and visibility a seat's rerun is judged by — and the
-// changes a dispatch queues at, a rerun's authors are read from and a failed
-// head's routing names, so its record names [RepoPath] beside this path and
-// [ChangePath] of each of those changes (checkswriter.go's checksScope); and
-// a mergeability, a merge and an enqueue read the checks a gate judges, so
-// theirs name this path. The deletion gate reads the repository off the
-// checks subject alone, never the scope ([gatedRepo]).
+// ChecksPath is one repository's checks: its check rows and their logs.
+// BESIDE the repository's path because the APPLIES write apart: a check's
+// record never writes the repository's rows, and of the repository's records
+// only its purge writes a check's, each step naming both ([Store.PurgeStep]). The DECIDES do not read apart, so a check's
+// record also names [RepoPath] and the [ChangePath] of each change it reads
+// (checkswriter.go's checksScope), and a mergeability, a merge and an enqueue
+// name this path for the checks a gate judges. The deletion gate reads the
+// repository off the checks subject, never the scope ([gatedRepo]).
 func ChecksPath(repoID string) string { return pathDomain + "/" + pathChecks + "/" + repoID }
 
 // PersonPath is one person's code inbox: the marks a record on their subject
-// writes, and nothing else. BESIDE the repositories' and the changes' paths,
-// as a change's is beside its repository's: a mark's decide reads the notices
-// it names, which the records on changes' subjects write, but a mark makes
-// none of them stale, and the inbox reads the domain's path, which covers
-// both.
+// writes, and nothing else. BESIDE the changes' paths: a mark's decide reads
+// notices records on changes write, but makes none of them stale, and the
+// inbox reads the domain's path, which covers both.
 func PersonPath(handle string) string { return pathDomain + "/" + pathPerson + "/" + handle }
 
-// ViewedPath is one person's viewed marks: the rows a viewed record writes. BESIDE their inbox's
-// path, so a build that retains a viewed record holds none of their inbox marks back.
+// ViewedPath is one person's viewed marks: the rows a viewed record writes.
+// BESIDE their inbox's path, so a retained viewed record holds back no inbox
+// mark.
 func ViewedPath(handle string) string { return pathDomain + "/" + pathViewed + "/" + handle }
 
 // ActivationPath is the activation fence's row.
@@ -106,43 +80,27 @@ func ActivationPath() string { return pathDomain + "/" + pathActivation }
 // what an unreadable scope reads as.
 func DomainPath() string { return pathDomain }
 
-// MaxScopePaths caps a record's declared scope at what the widest record this
-// domain forms names: a checks dispatch names its repository and its checks
-// beside the path of each change it queues at — up to [MaxDispatchRows] of
-// them, since each head and each attempt is a row of it — and a landing names
-// up to [MaxLandEntries] changes beside the same two. So it is two more than
-// the wider of those, 502, and NO WRITER WIDENS A SET TO [DomainPath()] TO FIT
-// IT: one whose set is wider is a bug [validScope] refuses.
-//
-// It was sixteen, a writer past it naming the domain, and that was an outage
-// of the whole code domain on every node holding ANY record it cannot decode,
-// as every older node of a rolling upgrade does: a routine edit of a checks
-// file, or its first adoption, makes every live change into its target due
-// again, so a target with fifteen open changes dispatched under the domain.
-// That record met the deferred one, of whatever repository, and was retained
-// beside it; its domain scope then met every later record of every repository,
-// each retained in turn, and every write and every scoped read there was
+// MaxScopePaths caps a record's scope at what the widest record names: a
+// checks dispatch names its repository, its checks and each change it queues
+// at (up to [MaxDispatchRows]), a landing up to [MaxLandEntries] changes
+// beside the same two; so 502. NO WRITER WIDENS A SET TO [DomainPath()] TO FIT
+// IT ([validScope] refuses a wider one): a domain-wide scope meets every
+// deferred record of every repository, and on a node that cannot decode one
+// (any older node in a rolling upgrade) every later write and scoped read is
 // answered `deferred`. Named change by change, a record meets only a deferred
-// record about something its decide read.
-//
-// The width is the code domain's own choice and costs what the framework
-// carries: a change's path is 40 bytes, 43 as JSON, so the widest scope adds
-// about 22 KB to a record whose payload is held to [MaxDispatchBytes], half of
-// [MaxRecordBytes]; the framework's deferral probe reads the roots as one
-// row-set CTE rather than a chain of ORs (statelog's tables.go, probed clean
-// there at a thousand), which every widest dispatch's decide runs
-// (TestTheWidestDispatchNamesEachChangeItQueuesAt), and a retained record's
-// index rows insert in chunks.
+// record about something its decide read. Cost: a change's path is 43 bytes
+// as JSON, so about 22 KB beside a payload held to [MaxDispatchBytes], and
+// the framework's deferral probe reads the roots as one row-set CTE
+// (TestTheWidestDispatchNamesEachChangeItQueuesAt).
 const MaxScopePaths = 2 + max(MaxDispatchRows, MaxLandEntries)
 
 // Scope is a record's scope on the wire.
 //
-// ITS DECODER NEVER FAILS: a missing, non-array, empty or malformed scope — a
-// non-string element, an empty string, a leading or trailing "/", an empty
-// segment, whitespace in a segment — reads as [DomainPath()], the widest
-// claim. This runs on a node reading a newer build's record, and the only
-// honest reading of a blast radius it cannot parse is "everything"; an error
-// here would fail the envelope pass that exists so such a record can be filed.
+// ITS DECODER NEVER FAILS: a missing, non-array, empty or malformed scope
+// ([wellFormed]) reads as [DomainPath()], the widest claim. A node reading a
+// newer build's record can only honestly read a blast radius it cannot parse
+// as "everything"; an error would fail the envelope pass that lets such a
+// record be filed.
 type Scope []string
 
 // UnmarshalJSON reads a scope, widening anything unreadable to the domain.
@@ -151,10 +109,7 @@ func (s *Scope) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &paths); err != nil || len(paths) == 0 {
 		*s = Scope{DomainPath()}
 		//nolint:nilerr // WIDEST-ON-UNREADABLE IS THE CONTRACT: this runs on
-		// a node decoding a record a newer build wrote, and returning the
-		// decode error here would fail the envelope pass that exists so
-		// such a record can be filed, gated and reprocessed rather than
-		// dropped.
+		// a node decoding a newer build's record ([Scope]).
 		return nil
 	}
 	for _, p := range paths {
@@ -187,11 +142,11 @@ func wellFormed(p string) bool {
 	return true
 }
 
-// validScope refuses a scope a WRITER cannot mean: empty — which would claim
-// the record makes nothing stale, the one claim a record no build may be able
-// to decode must never make — over [MaxScopePaths], or a path malformed or
-// outside the alphabet. The reader is lenient ([Scope.UnmarshalJSON]); the
-// writer is not, because a writer that cannot say what it touches is a bug.
+// validScope refuses a scope a WRITER cannot mean: empty (claiming the record
+// makes nothing stale, which an undecodable record must never claim), over
+// [MaxScopePaths], or a path malformed or outside the alphabet. The reader is
+// lenient ([Scope.UnmarshalJSON]); a writer that cannot say what it touches is
+// a bug.
 func validScope(paths []string) error {
 	if len(paths) == 0 {
 		return errors.New("gitlet: a record's scope names nothing, which would " +

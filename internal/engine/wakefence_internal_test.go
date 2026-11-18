@@ -20,15 +20,10 @@ import (
 // THE MESSAGE A CHAT WAKE HANDS A SEAT IS FENCED UNDER THE TURN'S OWN TOKEN, on
 // the engine's own chat and on a vendor's alike (ADR-0040).
 //
-// The trigger is the one place a seat reads somebody's words in its user
-// message, and it was the one place they arrived bare: the same message in a
-// thread was fenced in the system prompt and verbatim in the trigger beside
-// it, so a message that spelled a closer and an instruction addressed the seat
-// directly. The wake is fenced where it is delivered, under a token minted for
-// it, and the turn moves that fence onto its own token — so the ask the runner
-// is handed carries one fence of the turn's, holding the whole message, and
-// nothing outside it opens or closes one: not the message, and not a display
-// name that tries.
+// Bare in the trigger, a message spelling a closer would address the seat. The
+// wake is fenced at delivery under its own token and the turn moves the fence
+// onto its token: the ask holds one fence of the turn's around the whole
+// message, and neither the message nor a display name opens or closes one.
 //
 // Mutation: describe the turn's task with no token and the fence keeps the
 // wake's; drop the re-key and the forged closer in the display name survives
@@ -88,10 +83,9 @@ func TestTheMessageAChatWakeHandsASeatIsFencedUnderTheTurnsToken(t *testing.T) {
 }
 
 // A COALESCED CHAT TRIGGER REACHES THE TURN AS ONE TOKEN'S FENCES. Two wakes in
-// one conversation are merged before the turn, each fenced under a token of its
-// own at delivery; the merge carries both messages under the latest's token,
-// and the turn moves that onto its own — so the turn's ask holds both messages,
-// each in a fence of the turn's, and neither wake's token.
+// one conversation, each fenced under its own token at delivery, merge under
+// the latest's token, and the turn moves that onto its own: its ask holds both
+// messages, each in a fence of the turn's, and neither wake's token.
 func TestACoalescedChatTriggerReachesTheTurnUnderItsToken(t *testing.T) {
 	t.Parallel()
 	o := firstPartyChart(t)

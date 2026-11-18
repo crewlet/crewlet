@@ -36,11 +36,10 @@ roles:
     integrations: {ssh: {enabled: %s, level: operate, hosts: [%s]}}
 `
 
-// TURNING SSH OFF STOPS ISSUANCE AT ONCE: what a seat reaches is read off the
-// running document at every call, so with the integration off, the seat off,
-// or the host taken from the seat, a read and an operate command are refused
-// as reaching no server and no certificate is ever signed: this node never so
-// much as builds its runner.
+// TURNING SSH OFF STOPS ISSUANCE AT ONCE: reach is read off the running
+// document at every call, so with the integration off, the seat off, or the
+// host taken from the seat, a read and an operate command are refused as
+// reaching no server, and the node never even builds its runner.
 //
 // Mutation: read the reach once when the deps are built, and every case runs.
 func TestTurningSSHOffStopsIssuanceAtOnce(t *testing.T) {

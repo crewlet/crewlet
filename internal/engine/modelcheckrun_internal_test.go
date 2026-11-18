@@ -16,8 +16,8 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// checkNode is a node, named node, recording its model checks in fleet, with
-// its checks running until the case ends.
+// checkNode is a node named node recording its model checks in fleet, running
+// checks until the case ends.
 func checkNode(t *testing.T, fleet coord.Fleet, node string) *Engine {
 	t.Helper()
 	e := &Engine{backends: &Backends{Fleet: fleet}, testNode: node}
@@ -26,8 +26,8 @@ func checkNode(t *testing.T, fleet coord.Fleet, node string) *Engine {
 	return e
 }
 
-// heldCheck is a check a case ends: it answers what the case sends it, or
-// stops with its context.
+// heldCheck is a check the case ends: it answers what the case sends, or stops
+// with its context.
 type heldCheck struct {
 	started chan struct{}
 	finish  chan json.RawMessage
@@ -47,12 +47,10 @@ func (h *heldCheck) run(ctx context.Context) (json.RawMessage, error) {
 	}
 }
 
-// A CHECK IS ANSWERED RUNNING, AND ENDS ON ITS NODE'S TIME. A check with its
-// smoke calls outlasts what a proxy lets a request wait, so the start answers
-// once its hold is over with the check running — its node, its deadline its
-// budget and the end's write past the start — and the check goes on to record
-// what it found, which any node then reads. One that ends within the hold is
-// answered ended.
+// A CHECK IS ANSWERED RUNNING, AND ENDS ON ITS NODE'S TIME. Past its hold the
+// start answers the check running (its node, its deadline the budget plus the
+// end's write), and the check records what it found for any node to read. One
+// that ends within the hold is answered ended.
 //
 // Mutation: run the check on the request's context, or answer only once it
 // ended, and this is red.
@@ -94,11 +92,9 @@ func TestACheckIsAnsweredRunningAndEndsOnItsNodesTime(t *testing.T) {
 	})
 }
 
-// ONE CHECK OF AN ENTRY AT A TIME, ACROSS THE FLEET. A second ask of the entry
-// as it runs, with the same smoke, is handed the running check, which is the
-// check it would make, and runs nothing; a draft, or the other smoke setting,
-// is refused naming the running check, since its answer is not the one asked
-// for. A check that ended, or one lost with a node that stopped, is replaced.
+// ONE CHECK OF AN ENTRY AT A TIME, ACROSS THE FLEET. The same ask is handed the
+// running check and runs nothing; a draft or the other smoke setting is
+// refused naming it. An ended check, or one lost with its node, is replaced.
 //
 // Mutation: run every ask, hand back a draft's, or keep a lost check, and this
 // is red.
@@ -142,7 +138,7 @@ func TestOneCheckOfAnEntryRunsAtATimeAcrossTheFleet(t *testing.T) {
 			t.Fatalf("a check over an ended one = %+v (%v), want a new check on node-b", next, err)
 		}
 
-		// A CHECK WHOSE NODE STOPPED WITHOUT ENDING IT is lost at its
+		// A check whose node stopped without ending it is lost at its
 		// deadline, and the next ask replaces it.
 		gone := coord.ModelCheck{ID: uuid.New(), Entry: "opus", Node: "node-c", Smoke: true, StartedAt: time.Now(),
 			Deadline: time.Now().Add(time.Minute), By: "jane.doe", ByKind: iam.ActorHuman}
@@ -160,11 +156,10 @@ func TestOneCheckOfAnEntryRunsAtATimeAcrossTheFleet(t *testing.T) {
 	})
 }
 
-// A CHECK OUTLIVES NOTHING IT SHOULD NOT. A node that stops ends the checks it
-// runs saying so, whatever their harness runs made of the cancellation, which
-// would read as a vendor that did not answer, and takes no check after; a
-// check that answers nothing, or past what its record keeps, ends saying why;
-// and a check's record answers no reader past its linger.
+// A CHECK OUTLIVES NOTHING IT SHOULD NOT. A stopping node ends its checks
+// saying so, not with what the harness made of the cancellation, and takes no
+// check after; a check answering nothing, or past what its record keeps, ends
+// saying why; and no reader reads a record past its linger.
 //
 // Mutation: record a stopped check's own answer, take a check after the stop,
 // or read a lapsed record, and this is red.
@@ -175,8 +170,7 @@ func TestACheckOutlivesNothingItShouldNot(t *testing.T) {
 		e.startModelChecks(t.Context())
 		cut := func(ctx context.Context) (json.RawMessage, error) {
 			<-ctx.Done()
-			// What the doctor makes of a cancelled run: a line saying the
-			// vendor did not answer.
+			// The doctor's reading of a cancelled run: the vendor did not answer.
 			return json.RawMessage(`{"ok":false,"failure":"timeout","lines":[]}`), nil
 		}
 		running, err := e.StartModelCheck(t.Context(), ModelCheckAsk{Entry: "sonnet", Smoke: true, By: checkingJane,

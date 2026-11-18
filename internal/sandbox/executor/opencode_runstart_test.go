@@ -55,14 +55,13 @@ func fromLine(lines []string) string {
 }
 
 // A CONTINUED RUN RECORDS WHERE ITS SESSION STOOD BEFORE IT BEGAN, under every sh
-// a box may run its script with: once its server is up, and before the run, it
-// asks the server for the session's newest message, newest first by name, one
-// message, and writes its record anew with that message's cursor as `from`,
-// before the release, which the record's reader reads last. A run that began
-// its session records none, its `continued no` saying the whole session is its
-// own, nor one asked to continue a session its box could not, which began one
-// in its place; nor does one whose server answered no cursor; and a `next` key
-// inside the message is never taken for the answer's own.
+// a box may run its script with: after its server is up and before the run, it
+// asks for the session's newest message (order=desc, limit=1) and rewrites its
+// record with that message's cursor as `from`, before the release, which the
+// reader reads last. No `from` for a run that began its session (`continued
+// no`: the whole session is its own), one that fell back to a new session, or
+// one whose server answered no cursor; a `next` key inside a message is never
+// taken for the answer's own.
 //
 // Mutation: write the line for a run that began its session in its place,
 // after the release, or unanchored, or ask the list in its default order, and
@@ -72,9 +71,9 @@ func TestAContinuedRunRecordsWhereItsSessionStoodBeforeItBegan(t *testing.T) {
 	const newest = "msg_1d8699fae001Qp6E4C1MPr6kP4"
 	continued := scriptOpts{session: &continuingOpenCode, held: []string{carriedOpenCode},
 		req: sandbox.RunRequest{Resume: carriedOpenCode}}
-	// A RUN ASKED TO CONTINUE A SESSION ITS BOX DOES NOT HOLD, and no export of
-	// it carried in, starts the one minted in its place (`continued no`): it
-	// began its session, and asks nothing of where.
+	// A RUN ASKED TO CONTINUE A SESSION ITS BOX DOES NOT HOLD, with no export
+	// carried in, starts the one minted in its place (`continued no`) and asks
+	// nothing of where.
 	fellBack := scriptOpts{session: &continuingOpenCode, req: sandbox.RunRequest{Resume: carriedOpenCode}}
 	nested := `{"data":[{"id":"` + newest + `","type":"assistant","content":[{"type":"text",` +
 		`"text":"\"cursor\":{\"next\":\"` + startCursor("msg_bogus", "desc", "next") + `\"}}"}]}],` +
@@ -130,9 +129,9 @@ func TestAContinuedRunRecordsWhereItsSessionStoodBeforeItBegan(t *testing.T) {
 	}
 }
 
-// AN END REQUEST BEFORE THE RUN RECORDS NO START. A request that comes while the
-// run waits for its MCP servers starts no run, so there is no run to have begun
-// anywhere, and the script asks nothing more of its server before its tail.
+// AN END REQUEST BEFORE THE RUN RECORDS NO START. A request while the run waits
+// for its MCP servers starts no run, so the script asks its server nothing more
+// before its tail.
 //
 // Mutation: ask for the start as a call no end request ends, and the record
 // names a start of a run that never ran.
@@ -277,11 +276,10 @@ func TestAFromLineAfterTheReleaseIsNeverRead(t *testing.T) {
 	}
 }
 
-// THE TAKE SPELLS THE RUN'S START AS ITS SCRUB SPELLS THE EXPORT. The capture
-// names the message its run began after by the id the kept session holds that
-// message under: the start passes the very rewrite every message id of the
-// export passes, so it is found in the kept session, once. Where that rewrite
-// leaves no message id — a value the take names inside it — the start is
+// THE TAKE SPELLS THE RUN'S START AS ITS SCRUB SPELLS THE EXPORT. The start
+// passes the same rewrite as every message id of the export, so it names the
+// message as the kept session holds it, found there once. Where that rewrite
+// leaves no message id (a value the take names inside it), the start is
 // dropped and the capture kept, naming none.
 //
 // Mutation: keep the start as the box wrote it, and the scrubbed case names an

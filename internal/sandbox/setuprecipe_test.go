@@ -16,42 +16,32 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// THE GUIDE'S STOCK-IMAGE RECIPE SAYS WHICH OF ITS FAILURES A WAIT CLEARS.
-// docs/concepts/code-sandbox.md recommends it for a local instance, and it
-// downloads on every new box, so how its failures are classed is how a setup
-// failure is classed on the recommended path: a registry or a download server
-// still failing on its side once the command's own retries ran out exits 75,
-// a download that failed for now, and everything else keeps its own status,
-// a setup a person has to fix. A recipe that put `|| exit 75` on a whole
-// command would class a pin that names nothing as a download a wait clears;
-// one that never exits 75 classes an outage as a broken setup.
-// The step runs as the page writes it, under sh, with npm, curl and the
-// checksum tool answering as each case has them, and nothing on its PATH that
-// reaches a network.
+// THE GUIDE'S STOCK-IMAGE RECIPE SAYS WHICH OF ITS FAILURES A WAIT CLEARS:
+// docs/concepts/code-sandbox.md recommends it, and it downloads on every new
+// box. A registry or download server still failing on its side after the
+// command's own retries exits 75; everything else (a pin naming nothing, a
+// refused connection, a timeout, a bad checksum) keeps its own status, a
+// setup a person fixes. The step runs as the page writes it, under sh, with
+// stubbed npm, curl and checksum tool and nothing on PATH that reaches a
+// network.
 //
-// Mutation: end the npm install or a fetch with `|| exit 75` and the 404,
-// refused and timeout rows go red; drop either `exit 75` and the 5xx rows
-// do; mark the checksum check `|| exit 75` and the mismatch row does; drop
-// the replay of npm's own words and the npm rows do; leave a stub that cannot
-// run and the rows that run it go red rather than reaching the host's own.
+// Mutation: `|| exit 75` on the npm install or a fetch reddens the 404,
+// refused and timeout rows; dropping either `exit 75` the 5xx rows; `|| exit
+// 75` on the checksum the mismatch row; dropping npm's own words the npm rows.
 func TestTheGuidesStockImageRecipeIsToldByWhoClearsIt(t *testing.T) {
 	t.Parallel()
 	step := stockImageRecipe(t)
 	stubs := t.TempDir()
-	// WRITTEN WHERE NO FORK CAN HOLD ONE OPEN ([sandbox.WriteExecutable]):
-	// the subtests exec them through sh beside every case of this binary
-	// that forks, and a stub a fork inherited open for writing is one Linux
+	// Written where no fork can hold one open ([sandbox.WriteExecutable]):
+	// a stub a concurrent fork inherited open for writing is one Linux
 	// refuses to run (ETXTBSY).
 	for name, body := range recipeStubs {
 		sandbox.WriteExecutable(t, filepath.Join(stubs, name), body)
 	}
-	// THE STUBS ARE ALL THE STEP CAN RUN, with the host's own copy of each
-	// tool it needs that reaches nothing linked in beside them
-	// ([recipeTools]), and PATH is that one directory. A shell that cannot
-	// run a stub (on a TMPDIR mounted noexec, say) goes on down PATH, and
-	// down the host's it found the host's own npm or curl: the case made a
-	// real install or a real download, and was classed by whatever that met.
-	// With nothing else on PATH, a stub that does not run fails the case.
+	// PATH is this one directory: the stubs plus the host's own copy of each
+	// tool that reaches nothing ([recipeTools]). A shell that cannot run a
+	// stub (a noexec TMPDIR) would otherwise go on down PATH to the host's
+	// real npm or curl; here the case fails instead.
 	for _, tool := range recipeTools {
 		host, err := exec.LookPath(tool)
 		if err != nil {
@@ -164,10 +154,9 @@ if [ -n "${NPM_CODE:-}" ]; then
 fi
 echo "added 3 packages in 2s"
 `,
-	// curl as its retries ended: TARBALL and SUMS are the status the
-	// download's last answer had, or exit:N for one that never reached
-	// HTTP (a refused connection, a timeout), which curl reports as 000 and
-	// its own exit status.
+	// curl as its retries ended: TARBALL and SUMS are the last answer's
+	// status, or exit:N for one that never reached HTTP (a refused
+	// connection, a timeout), which curl reports as 000 and exit status N.
 	"curl": `#!/bin/sh
 out=
 url=

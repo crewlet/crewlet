@@ -9,14 +9,11 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// THE DOCTOR'S LIST AND THE ENGINE'S REGISTRY ARE THE SAME LIST.
-//
-// `crewlet llm doctor` checks an executor entry's harness against
-// executor.Names(); the engine builds its runner map here. Nothing connects
-// them, and a drift fails in the direction that is hardest to see: the doctor
-// passes the entry, the deploy script goes green, and the seat's first turn
-// refuses with "no harness runner registered" — which is precisely the
-// failure the probe exists to catch, reintroduced by the check for it.
+// THE DOCTOR'S LIST AND THE ENGINE'S REGISTRY ARE THE SAME LIST. `crewlet llm
+// doctor` checks an executor entry's harness against executor.Names() and the
+// engine builds its runner map here, with nothing connecting them: a drift
+// passes the entry at the doctor and refuses the seat's first turn with "no
+// harness runner registered", the very failure the doctor exists to catch.
 func TestTheDoctorsRunnerListIsTheEngineList(t *testing.T) {
 	t.Parallel()
 	built := sandboxRunners()
@@ -37,11 +34,9 @@ func TestTheDoctorsRunnerListIsTheEngineList(t *testing.T) {
 	}
 }
 
-// THE BRIDGE VARIABLE IS SPELLED TWICE AND MUST MEAN ONE THING.
-//
-// The provider package names it rather than importing the API package — a leaf
-// depending on an edge for one string — so this is what stops the two from
-// drifting. A drift is silent: `doctor` would tell an operator to set a
+// THE BRIDGE VARIABLE IS SPELLED TWICE AND MUST MEAN ONE THING: the provider
+// package names it rather than import the API package (a leaf on an edge) for
+// one string, and a drift is silent, `doctor` telling an operator to set a
 // variable the engine never reads.
 func TestTheBridgeVariableIsSpelledOnce(t *testing.T) {
 	t.Parallel()

@@ -19,18 +19,15 @@ import (
 
 // A SEAT'S MEMORY TRAVELS ON AN EXTERNAL BROKER TOO.
 //
-// A seat's memory follows it between nodes over the changelog (adr/0014), and
-// the topology whose seats move between machines most is the one dialling an
-// external cluster. The syncer was built over the embedded broker's second
-// connection, which is nil by design when the node dialled out — so on
-// exactly that topology it came up nil, and every seat forgot what it had
-// learned each time placement moved it, with nothing logged.
+// A seat's memory follows it between nodes over the changelog (adr/0014). The
+// syncer must not ride the embedded broker's second connection, nil by design
+// on an external broker: there it would come up nil, and every seat placement
+// moved would forget what it had learned, with nothing logged.
 func TestSeatMemoryTravelsOnAnExternalBroker(t *testing.T) {
 	t.Parallel()
-	// THROUGH externaltest, whose server's account states a limit: a server
-	// started here with none made the node stand this machine's free disk in
-	// for its broker's limit, and a fresh node's reservations refused the boot
-	// on a runner short of them.
+	// Through externaltest, whose account states a limit: with none, the node
+	// takes this machine's free disk as its broker's limit, and a runner short
+	// of a fresh node's reservations refuses the boot.
 	broker := externaltest.Start(t, queue.MaxPayloadBytes)
 
 	b := testBootstrap(t)
@@ -58,21 +55,18 @@ func TestSeatMemoryTravelsOnAnExternalBroker(t *testing.T) {
 }
 
 // scriptedMemory is the memory syncer as a cycle, a flush and a release call
-// it: each seat's own pass is played by a script, and so is its backlog, a
-// cycle's call and a flush's alike, and it records the seats the running cycle
-// or flush called, those it called on a bound already spent, and those whose
-// call returned with nothing wrong, for each call, and every call in the order
-// it was made, a release's turn of the seat to releasing and its forgetting of
-// the seat among them.
+// it: scripts play each seat's own pass and backlog, and it records, per kind,
+// the seats the running cycle or flush called, those called on a bound already
+// spent and those that returned with nothing wrong, plus every call in the
+// order made, a release's Releasing and Forget among them.
 type scriptedMemory struct {
-	// play is seat's own pass, handed the bound and runOut, which spends it
-	// as a seat the cycle cannot carry does before its call returns; first
-	// says the cycle called nothing before it, own pass or backlog, so the
-	// call has the whole cycle.
+	// play is the seat's own pass, handed runOut, which spends the bound as a
+	// seat the cycle cannot carry does before its call returns; first says the
+	// cycle called nothing before it, so the call has the whole cycle.
 	play func(ctx context.Context, seat string, first bool, runOut func()) (memsync.Carried, error)
 
-	// playBacklog is seat's backlog, handed the same; nil is a backlog that
-	// carries what it holds and returns with nothing wrong.
+	// playBacklog is the seat's backlog, handed the same; nil carries what it
+	// holds and returns with nothing wrong.
 	playBacklog func(ctx context.Context, seat string, runOut func()) (memsync.Carried, error)
 
 	runOut context.CancelFunc
@@ -191,9 +185,8 @@ func (m *scriptedMemory) flush(t *testing.T, seat string) []reportLine {
 // table answers.
 var carriedWhole = memsync.Carried{Rows: 6, Marked: 3}
 
-// draining is what a call its bound cut after its rows moved marks answers,
-// in either range, a seat's own pass or its backlog: the rows the changelog
-// acknowledged, each of which moved a mark.
+// draining is what a call (own pass or backlog) the bound cut after its rows
+// moved marks answers: the rows the changelog acknowledged, each moving a mark.
 var draining = memsync.Carried{Rows: 428, Marked: 428, StoppedIn: "agent_diary"}
 
 // nothingAcknowledged is what a call the bound cut before the changelog
@@ -231,13 +224,11 @@ func (h *heldReads) Held() []string {
 
 // A CYCLE ITS FIRST SEAT USES UP CARRIES THE NEXT SEAT ON THE NEXT.
 //
-// Every seat the node holds shares a cycle's thirty seconds, one after
-// another. Each cycle used to start at the first sorted seat and call every
-// seat whatever was left of its bound, so a seat whose backlog outlasted a
-// cycle had every cycle, and each seat after it was called on a bound already
-// spent, which failed it at once: none was carried while the backlog lasted
-// (crewlet/crewlet#1033). A cycle now stops at its bound, and the next starts
-// after the seat that had the whole cycle.
+// Every held seat shares a cycle's thirty seconds in turn. A cycle stops at
+// its bound, and the next starts after the seat that had the whole cycle:
+// always started at the first sorted seat, a seat whose backlog outlasts a
+// cycle would have every cycle, and each seat after it, called on a spent
+// bound, would fail at once.
 //
 // Mutation: start every cycle at the first sorted seat, start the next at the
 // seat the bound cut whatever its place, keep calling seats once the bound
@@ -273,9 +264,9 @@ func TestACycleTheFirstSeatUsesUpCarriesTheNextSeatOnTheNext(t *testing.T) {
 
 // A SEAT THAT RAN A CYCLE OUT BEHIND ANOTHER GOES FIRST IN THE NEXT.
 //
-// A seat whose publish fits in a whole cycle, but not in what a seat before it
-// left of one, runs every cycle out when it comes second. Started after it,
-// the next cycle would put it second again, and it would never complete.
+// A seat whose publish fits a whole cycle but not what the seat before it
+// leaves runs every cycle out when second; started after it, the next cycle
+// would put it second again, and it would never complete.
 //
 // Mutation: start the next cycle after the seat the bound cut, wherever it
 // was, and b never completes.
@@ -307,9 +298,9 @@ func TestASeatThatRanOutBehindAnotherGoesFirstNext(t *testing.T) {
 // A CYCLE THAT RAN OUT BETWEEN SEATS STARTS AT THE FIRST IT DID NOT REACH.
 //
 // A seat's publish can return with nothing wrong just as the bound runs out.
-// The seats after it were not reached, so the next cycle starts at the first of
-// them: not at the first sorted seat, and not at the seat that completed, which
-// would have the cycle again ahead of the seats it held back.
+// The next cycle starts at the first seat after it: not the first sorted seat,
+// and not the seat that completed, which would have the cycle again ahead of
+// the seats it held back.
 //
 // Mutation: start the next cycle at the first sorted seat, or at the seat
 // whose publish returned, and this goes red.
@@ -339,15 +330,11 @@ func TestACycleThatRanOutBetweenSeatsStartsAtTheFirstNotReached(t *testing.T) {
 
 // A LONE SEAT THAT RUNS EVERY CYCLE OUT IS CARRIED EVERY CYCLE.
 //
-// The next cycle, or the next backlogs' turn, starts after the turn that had
-// the whole cycle, wrapping round, and a lone turn is its own next: after the
-// last of an order comes the first. A lone seat's own pass shares every cycle
-// with the backlogs' turn, so one that runs every cycle out is called in
-// every cycle, after the backlogs' turn in every other, and what that case
-// holds is the lap. Within the backlogs' turn a lone seat's backlog is the
-// first and the only call of every turn, so one that runs every turn out
-// holds the wrap, without which the turn indexes past the end of its order
-// to find the seat after it.
+// The next cycle, or backlogs' turn, starts after the turn that had the whole
+// cycle, wrapping round, so a lone turn is its own next. A lone seat's own
+// pass that runs every cycle out is still called every cycle (the lap case);
+// a lone backlog is every backlogs' turn's only call, so it holds the wrap,
+// without which the turn indexes past the end of its order.
 //
 // Mutation: take the turn after it without wrapping round, and the backlog's
 // case panics.
@@ -361,8 +348,8 @@ func TestALoneSeatThatRunsEveryCycleOutIsCarriedEveryCycle(t *testing.T) {
 		// own and backlog are the lone seat's calls, nil where it carries
 		// all it holds.
 		own, backlog func(ctx context.Context, runOut func()) (memsync.Carried, error)
-		// called is what of a cycle's calls the case holds to want: the
-		// seat's own passes, or every call in its order.
+		// called picks the calls compared with want: the seat's own passes,
+		// or every call in order.
 		called func(m *scriptedMemory) []string
 		want   []string
 	}{{
@@ -403,11 +390,9 @@ func TestALoneSeatThatRunsEveryCycleOutIsCarriedEveryCycle(t *testing.T) {
 
 // EVERY SEAT IS CARRIED WITHIN TWO CYCLES FOR EACH SEAT THAT RUNS ONE OUT.
 //
-// The bound the rule keeps ([memorySync.resume]), in the case that reaches its
-// whole-cycle half: of four seats, a and c run every cycle out and b and d
-// fit. With k = 2 seats the cycles run out at, a and c each have a whole cycle
-// in every 2k = 4 consecutive cycles, and b and d, which no cycle cuts here,
-// each complete in every four as well.
+// The bound [memorySync.resume] keeps, in its whole-cycle half: of four seats,
+// a and c run every cycle out and b and d fit. With k = 2, a and c each have a
+// whole cycle, and b and d each complete, in every 2k = 4 consecutive cycles.
 //
 // Mutation: when the cycle's first seat ran out, start the next cycle at the
 // seat after the one after it, and b and d never complete.
@@ -450,24 +435,11 @@ func TestEverySeatIsCarriedWithinTwoCyclesForEachSeatThatRunsOut(t *testing.T) {
 
 // NO SEAT WAITS MORE THAN TWO CYCLES FOR EACH TURN A CYCLE RUNS OUT IN.
 //
-// The bound the rule keeps ([memorySync.resume]), in the cases that show what
-// it counts. Its k is every seat whose own pass a cycle runs out in, a seat
-// that fits a whole cycle but was reached with less of one left included: of
-// three seats that each need two thirds of a cycle, none needs more than one,
-// and yet the cycles run out at all three, each when a cycle reaches it
-// second. Its 2k is the cycles between two that reach a seat, which a seat
-// sorted after a burst can wait in full: of a, b and c, where b's own pass
-// needs a little over two cycles once, a completes and the first cycle runs
-// out at b, b has the whole second, and c waits both, 2k for k = 1, before
-// the third reaches it. And the backlogs' turn is one more turn a cycle can
-// run out in, which holds the turns after it back two more cycles: two for
-// each turn the cycles run out in, the backlogs' among them, is 2k + 2 for k
-// seats. Of a, b, c and d, in cycles from b's turn, where c's own pass runs
-// out twice and the backlogs' turn moves nothing in two, a waits four, 2k + 2
-// for k = 1.
-//
-// A seat is reached when a cycle calls its own pass with time left: one
-// called on a bound already spent carries nothing.
+// The bound [memorySync.resume] keeps, 2k cycles for the k turns cycles run
+// out in (2k + 2 for k seats, with the backlogs' turn), in the cases that show
+// what k counts: seats reached with less than a whole cycle, a burst making
+// the seat after it wait the full 2k, and the backlogs' turn. A seat is
+// reached when its own pass is called with time left.
 //
 // Mutation: start every cycle at the first sorted seat, and the seat after
 // the one each cycle runs out at is never reached; start the cycle after a
@@ -480,14 +452,13 @@ func TestNoSeatWaitsMoreThanTwoCyclesForEachTurnACycleRunsOutIn(t *testing.T) {
 		seats []string
 		// from is the turn the first cycle starts at.
 		from string
-		// outlasts says the seat's own pass runs its cycle out, as the
-		// seat's n-th call, first saying the cycle called nothing before it;
-		// backlogsOutlast says the backlogs' turn does, moving nothing, as
-		// that turn's n-th, nil for one that carries all it holds.
+		// outlasts says the seat's own pass, as its n-th call, runs its cycle
+		// out (first: nothing called before it); backlogsOutlast says so of
+		// the backlogs' n-th turn, moving nothing, nil if it carries all.
 		outlasts        func(seat string, n int, first bool) bool
 		backlogsOutlast func(n int) bool
-		// ranOutAt is the turns the case's cycles run out in, and waited the
-		// most cycles in a row a seat goes unreached.
+		// ranOutAt is the turns the cycles run out in; waited the most
+		// cycles in a row a seat goes unreached.
 		ranOutAt []string
 		waited   int
 	}{{
@@ -576,11 +547,10 @@ func TestNoSeatWaitsMoreThanTwoCyclesForEachTurnACycleRunsOutIn(t *testing.T) {
 // A SEAT WHOSE PUBLISH FAILS WITH TIME LEFT HAS HAD ITS PUBLISH, AND THE ORDER
 // HOLDS.
 //
-// A refusal or a broker error while the cycle still has time is that seat's
-// failure, not the cycle's: the seats after it are carried in the same cycle,
-// and the next cycle starts where it would have, at the first seat. Read as
-// the bound running out, it left the seats after it for the next cycle, and
-// started that at the seat that failed.
+// A refusal or broker error with time left is that seat's failure, not the
+// cycle's: the seats after it are carried in the same cycle, and the next
+// starts at the first seat. Read as the bound running out, it would leave
+// those seats for the next cycle and start that at the failed seat.
 //
 // Mutation: read any error as the bound running out, and c is not carried.
 func TestASeatWhosePublishFailsWithTimeLeftKeepsTheOrder(t *testing.T) {
@@ -614,28 +584,16 @@ func TestASeatWhosePublishFailsWithTimeLeftKeepsTheOrder(t *testing.T) {
 
 // A CYCLE THAT RAN OUT WITH NOTHING MARKED IS A WARNING.
 //
-// A cycle whose bound runs out says so in one line, at a level progress
-// decides ([syncReport.lines]), naming the pass of the call it ran out in,
-// where the next cycle starts and the turns it did not reach, the backlogs'
-// turn among them, and, when it ran out in the backlogs' turn, where that
-// turn starts next and the seats whose backlog it did not reach. A call whose
-// rows moved a mark before the cut is a backlog draining, which every seat's
-// first cycles after an acquisition are, or a burst of the seat's own, and is
-// said at INFO. A call that moved no mark warns, and so does a seat that had
-// the whole cycle and was cut inside a whole-each-cycle table, whatever it
-// marked; a seat that had only part of a cycle is given a whole one next. A
-// cycle that ran out between two calls, the one before it whole, is said at
-// INFO. A call refused with time left warns of its own, a seat's own pass and
-// its backlog alike, and the turns a cycle did not reach say nothing: its one
-// line names them. The next cycle starts at the first seat after a backlogs'
-// turn that moved a mark, wherever the call it was cut in stood.
+// A run-out is one line ([syncReport.lines]) naming its pass, the turns not
+// reached and where the next cycle and backlogs' turn start: INFO if the cut
+// call moved a mark or the cycle ran out between calls, WARN if it moved none
+// or a whole-cycle seat was cut in a whole-each-cycle table whatever it marked
+// (a part-cycle seat gets a whole one next). A refusal with time left warns.
 //
-// Mutation: say every run-out at INFO, or every one as a warning, or every
-// backlog's cut as a warning, or warn for any cut inside a whole-each-cycle
-// table whatever the seat's place, or leave the pass, the backlogs' turn or
-// where it starts next out of a line, or judge a cut backlogs' turn's marks
-// by its last call alone, or call a backlog on a bound already spent, and
-// this goes red.
+// Mutation: say every run-out at one level, or every backlog's cut as a
+// warning, or warn for any whole-each-cycle cut whatever the seat's place,
+// drop the pass, the backlogs' turn or its next start from a line, judge a
+// cut backlogs' turn by its last call alone, or call a spent bound's backlog.
 func TestACycleThatRanOutWithNothingMarkedIsAWarning(t *testing.T) {
 	t.Parallel()
 	type script = func(ctx context.Context, runOut func()) (memsync.Carried, error)
@@ -789,11 +747,10 @@ func said(lines []reportLine) []string {
 // THE NEXT BACKLOGS' TURN STARTS WHERE THE LAST RAN OUT, WHATEVER THE HOST
 // HOLDS NOW.
 //
-// The held seats are read again as every backlogs' turn begins, sorted, and
+// The held seats are read again as each backlogs' turn begins, sorted, and
 // rotated to start at the seat the last turn ran out at. A seat released
-// since is no longer there, and the turn starts at the first seat after it,
-// which the last turn did not reach either; a seat taken since takes its
-// sorted place.
+// since starts it at the seat after it, which the last turn did not reach
+// either; a seat taken since takes its sorted place.
 //
 // Mutation: read a resume the node no longer holds as the first seat, and the
 // released case goes red.
@@ -849,16 +806,11 @@ func cutAfterMarks(ctx context.Context, runOut func()) (memsync.Carried, error) 
 
 // A RELEASE'S FLUSH CARRIES THE SEAT'S OWN PASS BEFORE ITS BACKLOG.
 //
-// A release flushes what the cycles have not carried, in a cycle's order:
-// what the seat wrote while held here and its tables sent whole, then, while
-// the bound has time, the rows this node held for it when it took it. The
-// flush used to be one publish, the backlog and the seat's own rows in one
-// stamp order, so a release soon after an acquisition or a restart flushed old
-// rows and lost the new (#1039). Each call is said on its own, at the level of
-// what it lost: an own pass that returned an error warns, and so does a
-// backlog that failed with time left; a backlog the bound cut, or that the
-// bound left no time to begin, is said at INFO, the seat's own rows having
-// gone.
+// A release flushes the seat's own pass (what it wrote while held here and its
+// whole tables), then, while the bound has time, its backlog: one publish in
+// stamp order would flush old rows and lose the new. Each call is said at the
+// level of what it lost: an own pass that errs warns, as does a backlog failed
+// with time left; one cut or never begun, the own rows gone, is INFO.
 //
 // Mutation: carry the backlog first, skip it after an own pass refused with
 // time left, call it on a bound already spent, warn for every backlog the
@@ -939,12 +891,10 @@ func TestAReleaseFlushCarriesTheSeatsOwnPassBeforeItsBacklog(t *testing.T) {
 
 // A CYCLE TAKES THE BACKLOGS' TURN AFTER THE LAST SEAT'S, WHEREVER IT STARTS.
 //
-// A cycle's turns are the held seats', sorted, and the backlogs' turn after
-// the last of them, rotated to start where the last cycle ran out. A seat
-// released since starts the cycle at the turn after its own, which the last
-// cycle did not reach either, and for a seat that sorted after every one
-// still held that is the backlogs' turn. No handle can name the backlogs'
-// turn, so no seat is ever taken for it.
+// A cycle's turns are the held seats', sorted, then the backlogs' turn,
+// rotated to start where the last cycle ran out. A seat released since starts
+// it at the turn after its own: the backlogs' turn for one sorted after every
+// held seat. No handle can name the backlogs' turn, so no seat is taken for it.
 //
 // Mutation: put the backlogs' turn before the seats', start the cycle after a
 // released last seat at the first seat, or name the backlogs' turn as a seat
@@ -992,13 +942,10 @@ func TestACycleTakesTheBacklogsTurnAfterTheLastSeatsWhereverItStarts(t *testing.
 
 // EVERY HELD SEAT'S OWN PASS COMES BEFORE ANY SEAT'S BACKLOG.
 //
-// A cycle carries what each seat it holds wrote while held here, and its
-// tables sent whole, before the rows this node held for any seat when it took
-// it: a turn for each seat, its own pass, in sorted order, and then the
-// backlogs' turn, every seat's backlog. Each seat's own pass and its backlog
-// in one turn, seat after seat, left what a seat wrote behind the backlogs of
-// the seats sorted before it, and a crash before those had drained lost it
-// (#1039).
+// A cycle carries each held seat's own pass, in sorted order, before the
+// backlogs' turn: with each seat's own pass and backlog in one turn, what a
+// seat wrote would wait behind the backlogs of the seats sorted before it,
+// and a crash before those drained would lose it.
 //
 // Mutation: take the backlogs' turn before the seats', carry a seat's backlog
 // in its own turn, or carry the first seat's own pass alone, and this goes
@@ -1016,14 +963,11 @@ func TestEveryHeldSeatsOwnPassComesBeforeAnySeatsBacklog(t *testing.T) {
 
 // THE BACKLOGS HAVE THEIR TURN WHILE A SEAT'S OWN PASS RUNS EVERY CYCLE OUT.
 //
-// A seat's own pass can outlast a cycle for as long as the seat keeps
-// writing (#1041), or as long as its profiles and skills, which every own
-// pass sends whole, outlast one (#1040). The backlogs' turn is a
-// turn of the rotation, so the cycles that pass the seat reach it, every
-// seat's backlog with it, that seat's own included. Begun only once every
-// seat's own pass had returned, the backlogs would have no cycle while one
-// seat's own pass ran every cycle out; and each seat's own pass and its
-// backlog in one turn never reached that seat's backlog.
+// A seat's own pass can outlast a cycle while the seat keeps writing, or
+// while its profiles and skills, sent whole by every own pass, outlast one.
+// The backlogs' turn is a turn of the rotation, so the cycles that pass that
+// seat reach every backlog, its own included; begun only after every own pass
+// returned, or paired with each seat's own pass, they would never be reached.
 //
 // Mutation: take the backlogs' turn only after every seat's own pass, or call
 // a seat's backlog on a bound already spent, and this goes red.
@@ -1056,11 +1000,10 @@ func TestTheBacklogsHaveTheirTurnWhileASeatsOwnPassRunsEveryCycleOut(t *testing.
 
 // THE BACKLOGS TAKE TURNS IN WHAT THE OWN PASSES LEAVE.
 //
-// The backlogs' turn carries the held seats' backlogs by the rotation's rule,
-// from where its own last turn ran out, apart from where the cycles start: a
-// backlog longer than what the seats' own passes leave of a cycle drains over
-// as many cycles as it needs, the backlogs after it are carried meanwhile,
-// and every cycle still starts with the seats' own passes.
+// The backlogs' turn rotates from where its own last turn ran out, apart from
+// where the cycles start: a backlog longer than what the own passes leave of
+// a cycle drains over as many cycles as it needs, the backlogs after it are
+// carried meanwhile, and every cycle still starts with the own passes.
 //
 // Mutation: start every backlogs' turn at the first seat, or where the cycle
 // starts, or start the cycle where the backlogs' turn does, and this goes
@@ -1107,12 +1050,10 @@ func TestTheBacklogsTakeTurnsInWhatTheOwnPassesLeave(t *testing.T) {
 
 // A BACKLOGS' TURN THAT REACHED EVERY SEAT STARTS THE NEXT AT THE FIRST.
 //
-// A backlogs' turn that ran out starts the next where it ran out, and one
-// that called every held seat's backlog has left no seat behind, so the next
-// starts at the first seat: kept where an earlier turn ran out, it would start
-// a later turn part-way through the seats for no seat's sake. Here the first
-// cycle's backlogs' turn runs out in b's backlog after moving marks, the
-// second's starts at b and reaches every seat, and the third's starts at a.
+// A backlogs' turn that ran out starts the next where it ran out; one that
+// reached every seat starts the next at the first, not part-way through for
+// no seat's sake. Here the first turn runs out in b's backlog after moving
+// marks, the second starts at b and reaches every seat, the third starts at a.
 //
 // Mutation: keep the last resume after a backlogs' turn that reached every
 // seat, and this goes red.
@@ -1150,11 +1091,10 @@ func TestABacklogsTurnThatReachedEverySeatStartsTheNextAtTheFirst(t *testing.T) 
 
 // THE BACKLOGS' TURN READS THE SEATS HELD AS IT BEGINS.
 //
-// A cycle's lap reads the seats held as the cycle begins, and its backlogs'
-// turn reads them again as that turn begins. A seat released while the seats'
-// own passes ran is not called again, its release having carried what it
-// held, and a seat taken meanwhile has its backlog called: its boundary is set
-// if its hydration has completed, and otherwise its backlog carries nothing.
+// The lap reads the held seats as the cycle begins, the backlogs' turn again
+// as it begins. A seat released meanwhile is not called, its release having
+// carried what it held; a seat taken meanwhile has its backlog called, which
+// carries nothing until its hydration has set its boundary.
 //
 // Mutation: carry the backlogs of the seats the lap began with, and this goes
 // red.
@@ -1172,12 +1112,10 @@ func TestTheBacklogsTurnReadsTheSeatsHeldAsItBegins(t *testing.T) {
 // A SEAT THAT RAN A CYCLE OUT BEHIND ANOTHER GOES FIRST NEXT, THOUGH THE
 // BACKLOGS' TURN WAS NOT REACHED.
 //
-// A seat whose own pass fits a whole cycle, but not what the turns before it
-// leave of one, runs a cycle out when it comes second, and the next cycle
-// starts at it, so that it completes. The backlogs' turn after it, which that
-// cycle did not reach, waits its place in the rotation: started at the
-// backlogs' turn instead, the next cycle puts the seat behind it and behind
-// the seat sorted before it, second again, and the seat never completes.
+// A seat whose own pass fits a whole cycle but not what the turns before it
+// leave runs a cycle out when second, and the next cycle starts at it. The
+// unreached backlogs' turn waits its place: started there instead, the next
+// cycle would put the seat second again, and it would never complete.
 //
 // Mutation: start the next cycle at the backlogs' turn whenever a cycle did
 // not reach it, and b never completes.
@@ -1214,25 +1152,15 @@ func TestASeatThatRanOutBehindAnotherGoesFirstNextThoughTheBacklogsWereNotReache
 // A BACKLOGS' TURN THAT HAD A WHOLE CYCLE AND MOVED NOTHING HANDS THE NEXT
 // CYCLE TO THE SEATS.
 //
-// A backlogs' turn that a cycle reached late and cut before the changelog
-// acknowledged anything of it starts the next cycle, so that it has a whole
-// one, and that whole cycle goes to the backlog it was cut in: a backlog's
-// next row can need more of a cycle than the seats' own passes leave. Cut so
-// with the whole cycle, it moved nothing for want of something time does not
-// give (a backlog's next row no cycle can carry, a broker that acknowledges
-// nothing), and the next cycle starts at the turn after it, the first seat's,
-// and the next backlogs' turn at the seat after the one it was cut in. So the
-// cycles alternate: one carries every seat's own pass and reaches a backlog
-// late, the next is that backlog's alone, and the backlogs move on a seat in
-// every two cycles. Started at the backlogs' turn again, no cycle would carry
-// a seat's own pass again; never started there, the backlogs would never have
-// a whole cycle; and a seat whose row no whole cycle carries, kept for the
-// next backlogs' turn, would hold every other seat's backlog back.
+// A late backlogs' turn cut with nothing acknowledged starts the next cycle:
+// its cut backlog's next row may need more than the own passes leave. Cut so
+// with the whole cycle, time cannot help: the next cycle goes to the seats,
+// lest none carry an own pass, and the next backlogs' turn starts after the
+// cut seat, lest a row no cycle carries hold every other backlog back.
 //
 // Mutation: start the next cycle at a backlogs' turn that moved nothing
-// whether or not it had the whole cycle, or never there, or start the next
-// backlogs' turn at the seat a whole turn was cut in with nothing, or after
-// the seat a late one was, and this goes red.
+// whatever cycle it had, or never there, or start the next backlogs' turn at
+// the seat a whole turn was cut in, or after a late one's, and this goes red.
 func TestABacklogsTurnThatHadAWholeCycleAndMovedNothingHandsTheNextCycleToTheSeats(t *testing.T) {
 	t.Parallel()
 	m := &scriptedMemory{play: completes, playBacklog: func(ctx context.Context, _ string,
@@ -1261,18 +1189,13 @@ func TestABacklogsTurnThatHadAWholeCycleAndMovedNothingHandsTheNextCycleToTheSea
 
 // A BACKLOG THAT NEEDS A WHOLE CYCLE HAS ONE WHILE ANOTHER SEAT'S DRAINS.
 //
-// A seat's backlog whose next row needs more than the seats' own passes leave
-// of a cycle moves only in a cycle the backlogs' turn starts. A late backlogs'
-// turn cut in it with nothing moved starts the next cycle for it, and the
-// next backlogs' turn starts at that same seat, though it was the late turn's
-// first. Passed for having had all the late turn had, as the rule within the
-// turn alone would pass it, the seat handed that whole cycle to the next
-// seat's backlog; while that one drained, every cycle after it went to the
-// seats' own passes and reached this backlog late again, and it moved in none
-// of them. Here a's backlog moves only as a cycle's first call, and b's
-// moves marks in every cycle that reaches it without ever draining, so a's
-// has a whole cycle in every three: one reaches it late, the next is its
-// own, and the one after carries b's.
+// A backlog whose next row needs more than the own passes leave moves only in
+// a cycle the backlogs' turn starts. A late turn cut in it with nothing moved
+// starts the next cycle and the next backlogs' turn at that same seat, though
+// it was the late turn's first; passed instead, its whole cycle would go to
+// the next seat's backlog, and while that drained it would never move. Here
+// a's moves only as a cycle's first call and b's moves marks without ever
+// draining, so a's has a whole cycle in every three.
 //
 // Mutation: start the next backlogs' turn after a late turn's first seat cut
 // with nothing, and a's backlog never moves.
@@ -1305,14 +1228,11 @@ func TestABacklogThatNeedsAWholeCycleHasOneWhileAnotherSeatsDrains(t *testing.T)
 
 // A BACKLOGS' TURN CUT AFTER MOVING MARKS HANDS THE NEXT CYCLE TO THE SEATS.
 //
-// A backlog longer than what the seats' own passes leave of a cycle, such as
-// the whole store a restart leaves a data node to carry back for each seat it
-// held (#1039's second case), is cut cycle after cycle while it drains.
+// A backlog longer than what the own passes leave of a cycle, such as the
+// store a restart leaves a data node to carry back, is cut cycle after cycle.
 // Moving marks, it needs no whole cycle, so the next cycle starts at the
-// first seat rather than at the backlogs' turn, and every cycle carries every
-// seat's own rows before any backlog. Started at the backlogs' turn, as the
-// rotation's rule alone would start it, every other cycle would carry the
-// backlogs first, and what a seat wrote meanwhile would wait behind them.
+// first seat: started at the backlogs' turn, as the rotation alone would,
+// every other cycle would put what a seat wrote behind the backlogs.
 //
 // Mutation: drop the exception, and this goes red.
 func TestABacklogsTurnCutAfterMovingMarksHandsTheNextCycleToTheSeats(t *testing.T) {

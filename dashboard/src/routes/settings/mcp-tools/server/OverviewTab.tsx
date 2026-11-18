@@ -22,6 +22,7 @@ import {
   TableTextCell,
   Text,
   Tooltip,
+  TableEntityCell,
 } from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import type { McpApproval, McpMemberServerStatus } from "~/contract/mcp.ts";
@@ -32,6 +33,7 @@ import { ApprovalCard } from "../flows/ApprovalCard.tsx";
 import type { OnFlow } from "../parts.tsx";
 import { Alarms } from "../servers/Alarms.tsx";
 import { failureWords, INSTANCE } from "../words.ts";
+import { plainSeat } from "~/app/frame/cells.tsx";
 
 /** Each state, the one to look at first: a failed instance leads the default order. */
 const STATE_ORDER: readonly ServerDetail["instances"][number]["state"][] = [
@@ -74,7 +76,12 @@ function InstanceGrid({
           // Who it is is the point of the list: it keeps a readable width.
           floor: "12rem",
           sortValue: who,
-          cell: (i) => <TableTextCell>{who(i)}</TableTextCell>,
+          cell: (i) =>
+            i.seat ? (
+              <TableEntityCell {...plainSeat(data.seat(i.seat))} />
+            ) : (
+              <TableTextCell>{who(i)}</TableTextCell>
+            ),
         },
         {
           key: "node",
@@ -145,20 +152,11 @@ function unanswered(detail: ServerDetail): string {
 }
 
 /**
- * The calls this server's tools hold for a person's answer, as the decision
- * rows the Inbox draws. AN ANSWERED CALL STAYS as the line saying what was
- * answered, until the page is drawn afresh: the engine drops a call from the
- * answer once its run carries on, which would take the line away mid-read.
+ * The calls this server's tools hold for a person's answer. AN ANSWERED CALL
+ * STAYS until the page is drawn afresh: the engine drops it once its run
+ * carries on, which would take the row away mid-read.
  */
-export function HeldCalls({
-  server,
-  detail,
-  data,
-}: {
-  server: McpMemberServerStatus;
-  detail: ServerDetail;
-  data: McpData;
-}) {
+export function useKeptCalls(server: McpMemberServerStatus, data: McpData): McpApproval[] {
   const all =
     data.answer?.reading === "admin"
       ? data.answer.approvals.filter((a) => a.server === server.name)
@@ -178,9 +176,23 @@ export function HeldCalls({
       return next ?? was;
     });
   }, [all]);
+  return [...kept.values()];
+}
+
+/** The calls this server's tools hold, each a card of the decision row the Inbox draws. */
+export function HeldCalls({
+  server,
+  detail,
+  data,
+}: {
+  server: McpMemberServerStatus;
+  detail: ServerDetail;
+  data: McpData;
+}) {
+  const kept = useKeptCalls(server, data);
   return (
     <>
-      {[...kept.values()].map((a) => (
+      {kept.map((a) => (
         <ApprovalCard
           key={a.id}
           approval={a}

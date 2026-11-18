@@ -22,8 +22,8 @@ const RequestAccessTool = toolname.RequestAccess
 // MaxAccessReasonBytes bounds the reason, a decision's rationale.
 const MaxAccessReasonBytes = decision.MaxRationale
 
-// declineOption is the option that grants nothing.
-const declineOption = "decline"
+// declineOption is the option that grants nothing, in both forms of the tool.
+const declineOption = seataccess.GrantDecline
 
 // requestAccess asks for access as a decision on a work item: one option per
 // grant, named by its catalogue key so the change is built by the engine for
@@ -81,8 +81,13 @@ func (t *requestAccess) Parameters() map[string]any {
 			"hours": map[string]any{"type": "integer", "minimum": seataccess.MinGrantHours,
 				"maximum": seataccess.MaxGrantHours,
 				"description": fmt.Sprintf("How long the change needs it, %d to %d hours; %d when left out. "+
-					"The person may grant it for good instead.", seataccess.MinGrantHours,
-					seataccess.MaxGrantHours, seataccess.DefaultGrantHours)},
+					"The person may grant it for good instead, except a permission granted for one change, "+
+					"which lasts %d hour when left out and never past its own bound.", seataccess.MinGrantHours,
+					seataccess.MaxGrantHours, seataccess.DefaultGrantHours, seataccess.MinGrantHours)},
+			"target": map[string]any{"type": "string",
+				"description": "What the one change you need it for changes, as the integration names it, " +
+					"such as a bucket's name. Required for a permission granted for one change; the person " +
+					"and your access are told it."},
 			"why": map[string]any{"type": "string",
 				"description": fmt.Sprintf("What you tried and what the access is for, in at "+
 					"most %d bytes. It is the person's reason to say yes.", MaxAccessReasonBytes)},
@@ -127,7 +132,8 @@ func (t *requestAccess) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refused, nil
 	}
 	name := turn.Seat.Name
-	question := fmt.Sprintf("Allow %s to %s?", name, key.Does())
+	question := decision.FittingQuestion(fmt.Sprintf("Allow %s to %s?", name, key.Does()),
+		fmt.Sprintf("Allow this agent to %s?", key.Does()))
 	// THE ENGINE'S OWN OPTIONS, the one path a grant's reserved id is admitted on.
 	posted := map[string]any{
 		"item": argString(args, "item"), "body": why, "ask": person, "asks": true,
@@ -136,7 +142,7 @@ func (t *requestAccess) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"recommended": string(key), "rationale": why,
 			"options": []any{
 				map[string]any{"id": string(key), "label": "Allow it",
-					"detail": fmt.Sprintf("%s can %s. You review the exact change first.", name, key.Does())},
+					"detail": fmt.Sprintf("The agent can %s. You review the exact change first.", key.Does())},
 				map[string]any{"id": declineOption, "label": "Not now",
 					"detail": "Nothing changes, and the agent is told."},
 			},

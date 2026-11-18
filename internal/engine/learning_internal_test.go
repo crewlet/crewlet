@@ -9,11 +9,8 @@ import (
 )
 
 // EACH REVISION GETS ITS OWN PASSES, and a company with no model gets only the
-// one that calls none.
-//
-// The loops run whatever the last apply handed them, so what is asserted here
-// is the handover itself: what a revision turns on, what it leaves off, and
-// that the passes needing a model are left off, quietly, until one exists.
+// one that calls none: the loops run whatever the last apply handed them, so
+// the handover itself is what is asserted.
 func TestEachRevisionHandsTheLoopsItsOwnPasses(t *testing.T) {
 	t.Parallel()
 	e := engineOver(t)
@@ -66,17 +63,13 @@ roles:
 	}
 }
 
-// COMPACTION RESOLVES ITS SEAT BY HANDLE, NOT BY DISPLAY NAME.
+// COMPACTION RESOLVES ITS SEAT BY HANDLE, NOT BY DISPLAY NAME: the handle is
+// what the org chart resolves and [learning.CompleteFunc] passes, and a lookup
+// by name resolves nobody, so every compaction fails and memory stays unfolded.
 //
-// The handle is what the org chart resolves and what [learning.CompleteFunc]
-// passes. It was the display name, and on any company whose seats declare a
-// handle it resolved nobody: every compaction failed, the memory it was meant
-// to fold stayed whole, and the failure was logged on a path whose whole
-// contract is best effort.
-//
-// The lookup is what this pins, so the case ends at the seat rather than at a
-// model: a resolved seat with no auxiliary chain gets a DIFFERENT refusal, and
-// telling those two apart is the whole assertion.
+// The case ends at the seat rather than at a model: a resolved seat with no
+// auxiliary chain gets a different refusal, and telling those apart is the
+// assertion.
 func TestCompactionResolvesItsSeatByHandle(t *testing.T) {
 	t.Parallel()
 	e := engineOver(t)
@@ -93,8 +86,8 @@ roles:
     llm: gateway
     llm_auxiliary: gateway
 `)
-	// THE FIXTURE MUST BE ABLE TO TELL THE TWO APART. With the handle and
-	// the display name the same, a lookup by either works.
+	// The fixture must tell the two apart: were handle and name the same, a
+	// lookup by either would work.
 	if c.Org.Role("Senior Developer") != nil {
 		t.Fatal("the fixture's display name resolves a seat, so this case cannot " +
 			"tell a lookup by handle from one by name")
@@ -111,27 +104,22 @@ roles:
 			"this company fails and its memory is never folded", err)
 	}
 
-	// AND THE DISPLAY NAME IS NOT AN ADDRESS, which is what says the
-	// assertion above is the handle working rather than any string
-	// resolving.
+	// The display name is not an address, so the assertion above is the
+	// handle working, not any string resolving.
 	_, err := complete(t.Context(), "Senior Developer", "system", "user")
 	if err == nil || !strings.Contains(err.Error(), "no seat with that handle") {
 		t.Errorf("a display name resolved a seat: %v", err)
 	}
 }
 
-// AN EPISODE IS CONDENSED ON ITS SEAT, FOUND BY HANDLE.
+// AN EPISODE IS CONDENSED ON ITS SEAT, FOUND BY HANDLE: the pass names the
+// seat by the handle the episodes are keyed on ([learning.FitFunc]), and a
+// lookup by display name resolves nobody, so every oversized field would be
+// refused rather than condensed.
 //
-// The compaction pass names the seat whose episode a field belongs to by the
-// handle the episodes are keyed on ([learning.FitFunc]), and the org chart
-// resolves a handle and nothing else. A lookup by display name found nobody
-// on any company whose seats declare a handle, so every oversized field was
-// refused rather than condensed and the summary call carried it whole — or
-// was not made at all.
-//
-// Ended at the lookup, as the compaction case above is: a text already under
-// its budget is returned untouched by a seat that resolved, so only the
-// refusal names a lookup that failed.
+// Ended at the lookup, as the compaction case is: a text under its budget is
+// returned untouched by a seat that resolved, so only the refusal names a
+// failed lookup.
 func TestEpisodeCondensingResolvesItsSeatByHandle(t *testing.T) {
 	t.Parallel()
 	e := engineOver(t)

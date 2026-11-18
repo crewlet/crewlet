@@ -9,17 +9,11 @@ import (
 
 // AN UNBLOCKED DEPENDENT IS FOUND AFTER A GAP OF ANY LENGTH.
 //
-// # The failure this exists to catch
-//
-// The repair used to ask for status changes in the last five minutes. A duty
-// that did not run for six — a lease flap, a singleton moving, a node restart
-// — left every dependent unblocked in that window untold FOR EVER, because
-// nothing ever looked further back. A wall-clock window on a repair is a
-// repair with a hole exactly the size of the outage it exists to survive.
-//
-// So the scan is bounded by the position it last read to, and this case is a
-// scan from ZERO over records written long before it: any clock-bounded query
-// finds nothing here, and a position-bounded one finds the dependent.
+// A wall-clock window on the repair has a hole the size of the outage it must
+// survive (a lease flap, a singleton moving, a restart), so the scan is bounded
+// by the log position it last read to. This case scans from ZERO over records
+// written long before: a clock-bounded query finds nothing, a position-bounded
+// one finds the dependent.
 func TestAnUnblockedDependentIsFoundAfterAGapOfAnyLength(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -27,9 +21,8 @@ func TestAnUnblockedDependentIsFoundAfterAGapOfAnyLength(t *testing.T) {
 	dependent.Relations = []worklet.Relation{{
 		Kind: worklet.RelationWaitingOn, Other: "t-1",
 	}}
-	// THE DEPENDENT HAS AN ASSIGNEE, because the notice's only recipient
-	// IS the assignee — an unassigned dependent is owed nothing, and a
-	// fixture without one would assert a wake with nobody to receive it.
+	// THE DEPENDENT HAS AN ASSIGNEE, the notice's only recipient: an
+	// unassigned one is owed nothing.
 	dependent.Assignee = "alice"
 	for _, task := range []worklet.Task{blocker, dependent} {
 		if _, err := r.writer.CreateTask(t.Context(), "op-"+task.ID, task, nil); err != nil {
@@ -52,8 +45,8 @@ func TestAnUnblockedDependentIsFoundAfterAGapOfAnyLength(t *testing.T) {
 	}
 	r.drain()
 
-	// FROM ZERO, which is what a repair that has never run reads and what
-	// one returning from an outage of any length reads.
+	// FROM ZERO, as a repair that has never run, or is back from an outage
+	// of any length, reads.
 	scan := scanUnblocked(t, r, 0)
 	if len(scan.Pending) != 1 || scan.Pending[0].Task != "t-2" {
 		t.Fatalf("the scan found %+v, and t-2 is workable and has not been "+
@@ -77,10 +70,9 @@ func TestAnUnblockedDependentIsFoundAfterAGapOfAnyLength(t *testing.T) {
 	}
 }
 
-// A DEPENDENT WITH ANY BLOCKER STILL OPEN IS NOT WORKABLE.
-//
-// The repair asks "has every blocker cleared", not "has a blocker cleared" —
-// and the difference is somebody woken for work they still cannot start.
+// A DEPENDENT WITH ANY BLOCKER STILL OPEN IS NOT WORKABLE: the repair asks
+// "has every blocker cleared", or it wakes somebody for work they still cannot
+// start.
 func TestADependentWithASecondOpenBlockerIsNotTold(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -95,10 +87,8 @@ func TestADependentWithASecondOpenBlockerIsNotTold(t *testing.T) {
 		{Kind: worklet.RelationWaitingOn, Other: "t-1"},
 		{Kind: worklet.RelationWaitingOn, Other: "t-2"},
 	}
-	// AN ASSIGNEE, because the notice has no other recipient and the scan
-	// skips a dependent with nobody to tell. This case is about the
-	// EVERY-BLOCKER rule, so the assignment is scaffolding rather than
-	// what it asserts — see TestAnUnassignedDependentIsNotToldAboutItself.
+	// AN ASSIGNEE as scaffolding: the scan skips a dependent with nobody to
+	// tell (TestAnUnassignedDependentIsNotToldAboutItself).
 	dependent.Assignee = "alice"
 	if _, err := r.writer.CreateTask(t.Context(), "op-t-3", dependent, nil); err != nil {
 		t.Fatalf("CreateTask t-3: %v", err)
@@ -140,12 +130,10 @@ func scanUnblocked(t *testing.T, r *roundTrip, since uint64) worklet.UnblockScan
 
 // AN UNBLOCKED NOTICE NAMES THE TASK BY ITS KEY, NOT BY ITS UUID.
 //
-// [Snapshot.Key] is read as the ADDRESSABLE name by three different things —
-// `tracker_notifications.subject_key`, the wake metadata's `item_key`, and the
-// prompt's "Read **<key>** with get_work_item" block — and the scan used to
-// put the task's uuid in it. The notice is the ONLY wake the blocker side
-// ever gets, so it told the one person who needed it to go and fetch
-// `3f2a…` by name, and left the one row in that column that is not a key.
+// [Snapshot.Key] is read as the ADDRESSABLE name by
+// `tracker_notifications.subject_key`, the wake metadata's `item_key` and the
+// prompt's "Read **<key>** with get_work_item" block, and this notice is the
+// only wake the dependent gets.
 func TestAnUnblockedNoticeNamesTheKeyRatherThanTheID(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -154,8 +142,7 @@ func TestAnUnblockedNoticeNamesTheKeyRatherThanTheID(t *testing.T) {
 		Kind: worklet.RelationWaitingOn, Other: "t-1",
 	}}
 	dependent.Assignee = "alice"
-	// THE KEYS ARE MINTED BY THE WRITER, so the case reads them back
-	// rather than asserting against a literal it chose.
+	// THE WRITER MINTS THE KEYS, so the case reads them back.
 	for _, task := range []worklet.Task{blocker, dependent} {
 		task.Key = ""
 		if _, err := r.writer.CreateTask(t.Context(), "op-"+task.ID, task, nil); err != nil {
@@ -203,16 +190,11 @@ func TestAnUnblockedNoticeNamesTheKeyRatherThanTheID(t *testing.T) {
 
 // AN UNASSIGNED DEPENDENT IS NOT SCANNED, because there is nobody to tell.
 //
-// The notice's only recipient is the dependent's own assignee — every other
-// routing arm reads a snapshot field this record does not carry — so a repair
-// record for an unassigned task names NOBODY, and the duty manufactured one on
-// a timer for every unassigned dependent that became workable: a full routing
-// snapshot on the durable log, a change-feed delivery and an ack for every
-// node in the company, a parse, and no inbox row at the end of it.
-//
-// Skipping costs nothing: the scan's window is bounded by the log position
-// rather than by the told-stamp, so a skipped dependent is never found again
-// rather than found repeatedly.
+// The notice's only recipient is the assignee (every other routing arm reads a
+// snapshot field this record lacks), so a record for an unassigned task costs
+// a routing snapshot on the durable log and a delivery and ack on every node,
+// and lands in no inbox. Skipping is free: the window is bounded by log
+// position, not the told-stamp, so a skipped dependent is not found again.
 func TestAnUnassignedDependentIsNotToldAboutItself(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -252,29 +234,14 @@ func TestAnUnassignedDependentIsNotToldAboutItself(t *testing.T) {
 
 // A DEPENDENT IS FOUND WHEN ITS BLOCKER CLOSED UNDER SOME OTHER WORD.
 //
-// # The failure this exists to catch
-//
-// The scan selected `kind = 'status'`, which is the word the WRITER chose for
-// a patch that may have moved several things — not what the row records. The
-// case is a QUIET CANCEL filed under another word: `StatusCancelled` is in the
-// `done` group, whose own description names this path. So the apply stamps
-// each task finished and clears every dependency edge naming it a blocker —
-// the dependents are workable — while the record itself announces whatever
-// else the patch moved.
-//
-// Two things made it permanent rather than merely late. Such a record wakes
-// nobody, and nothing outside [worklet.Writer.TellUnblocked] ever fills
-// `Snapshot.Unblocked`, so this scan is the ONLY path by which those people
-// hear. And the horizon was computed
-// from the same predicate, so it advanced past the record on the next status
-// row anywhere in the log and never reconsidered it: the file's own promise
-// that "a gap of any length is caught up on the next tick" did not hold for a
-// row the predicate could not name.
-//
-// The fix is the one [Applier.stampStatusEntered] is gated by — the row's own
-// status delta decides, not its kind — and this case is written against a kind
-// that is not `status`
-// so that a scan keyed back on the announced word goes red.
+// A row's kind is the word the WRITER chose for a patch that may move several
+// things; a QUIET CANCEL filed under another kind still moves the blocker into
+// the `done` group and clears every edge naming it, so the dependents are
+// workable. Such a record wakes nobody and only [worklet.Writer.TellUnblocked]
+// fills `Snapshot.Unblocked`, so this scan is the ONLY way they hear. As
+// [Applier.stampStatusEntered] is, the scan is gated on the row's own status
+// delta, not its kind; this case uses a kind that is not `status` so a scan
+// keyed back on the announced word goes red.
 func TestADependentIsFoundWhenItsBlockerClosedUnderAnotherKind(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -290,9 +257,8 @@ func TestADependentIsFoundWhenItsBlockerClosedUnderAnotherKind(t *testing.T) {
 		r.drain()
 	}
 
-	// THE BLOCKER IS CANCELLED BY A WRITE THAT CALLS ITSELF A FIELD EDIT,
-	// which is exactly the shape this scan exists for: quiet, a status
-	// into the `done` group, and a kind that is not `status`.
+	// THE BLOCKER IS CANCELLED BY A QUIET WRITE THAT CALLS ITSELF A FIELD
+	// EDIT, into the `done` group.
 	cancelled := worklet.StatusCancelled
 	points := 0.0
 	if _, err := r.writer.UpdateTask(t.Context(), "op-cancel", "t-1", "ENG",
@@ -310,38 +276,24 @@ func TestADependentIsFoundWhenItsBlockerClosedUnderAnotherKind(t *testing.T) {
 			"cleared. A scan keyed on the ANNOUNCED word misses it, and "+
 			"nothing else ever tells this person", scan.Pending)
 	}
-	// AND THE HORIZON COVERS ONLY WHAT THE SCAN LOOKED AT. It is computed
-	// from the SAME predicate as the rows, which is what makes advancing
-	// it safe: a horizon over a wider set steps past records the rows
-	// predicate never saw, and that is what made this permanent rather
-	// than merely late.
+	// AND THE HORIZON COVERS ONLY WHAT THE SCAN LOOKED AT: it shares the
+	// rows' predicate, since a horizon over a wider set steps past records
+	// the rows predicate never saw, and they are never reconsidered.
 	if scan.Through == 0 {
 		t.Fatal("the scan advanced to no position, so the next tick re-reads " +
 			"every record for ever")
 	}
-	// RE-READ FROM ZERO, which is what a repair that has never run reads
-	// and what one returning from an outage of any length reads: the
-	// dependent is still owed, because nobody has told them.
+	// RE-READ FROM ZERO: the dependent is still owed until somebody tells
+	// them.
 	if again := scanUnblocked(t, r, 0); len(again.Pending) != 1 {
 		t.Errorf("a second scan from zero found %+v, want the same dependent "+
 			"still owed — it has not been told yet", again.Pending)
 	}
 }
 
-// AND THE INDEX THE SCAN NO LONGER USES IS GONE.
-//
-// An index is maintained on every applied commit. One with no query behind it
-// is the write cost of a reader that does not exist — and both of these named
-// their reader in a comment, which is what made them look alive:
-// `tracker_history_kind_seq_idx` named this repair, which stopped selecting on
-// `kind`, and `tracker_history_kind_idx` named "every report's window
-// predicate" when no query in the tree filters or orders on `effective_at` at
-// all.
-//
-// A COMMENT NAMING A READER IS A CLAIM. The same failure outlived these two:
-// `tracker_status_spans_group_idx` named cycle time and lead time, neither of
-// which has ever existed here, and migration 0013 kept a whole table on the
-// strength of it before 0014 checked and dropped it.
+// AND THE INDEXES NOTHING READS ARE GONE: an index costs a write on every
+// applied commit. This repair no longer selects on `kind`, and no query filters
+// or orders on `effective_at`.
 func TestTheDeadHistoryIndexesAreGone(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -355,8 +307,7 @@ func TestTheDeadHistoryIndexesAreGone(t *testing.T) {
 				"nothing reads it", dead)
 		}
 	}
-	// AND THE ONE THAT REPLACED THEM IS THERE, so this asserts a swap
-	// rather than a deletion.
+	// AND THE ONE THAT REPLACED THEM IS THERE: a swap, not a deletion.
 	if got := r.strings(`SELECT name FROM sqlite_master
 		WHERE type = 'index' AND name = 'tracker_history_status_seq_idx'`); len(got) != 1 {
 		t.Error("the repair's own index is absent, so the scan it serves " +

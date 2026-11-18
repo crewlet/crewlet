@@ -32,15 +32,10 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// The working indicator, end to end from the frame that owns a turn.
-//
-// THROUGH A REAL TRANSPORT, deliberately. The defect these cases exist for was
-// not a broken driver — both backends' posters were complete and tested — it
-// was that nothing in production ever called one, so every test in the tree
-// passed while no agent had ever raised an indicator on a running company.
-// Asserting against the notify layer alone would reproduce exactly that: the
-// only assertion that can catch it is one that starts at [Engine.runTurn] and
-// ends at what a chat backend was asked to do.
+// The working indicator, end to end from the frame that owns a turn, through a
+// real transport: asserting against the notify layer alone cannot catch a
+// poster nothing in production calls. Only an assertion from [Engine.runTurn]
+// to what a chat backend was asked to do can.
 
 // workspace is a Slack that records the statuses it was asked to show.
 type workspace struct {
@@ -49,9 +44,8 @@ type workspace struct {
 	mu       sync.Mutex
 	statuses []string
 	// posted is closed and replaced on every recorded status, so a waiter
-	// that took it under the same lock as its snapshot cannot miss the post
-	// that follows. A counted channel would drop one the moment a buffer
-	// filled, which is the flake a wait helper must not have.
+	// that took it under the same lock as its snapshot cannot miss the next
+	// post; a counted channel would drop one once its buffer filled.
 	posted chan struct{}
 }
 
@@ -71,25 +65,23 @@ func newWorkspace(t *testing.T) *workspace {
 			ws.mu.Unlock()
 		}
 		w.Header().Set("Content-Type", "application/json")
-		// One identity for auth.test and ok for everything else: the thread
-		// read a turn makes on this token is answered with an empty thread.
+		// One identity for auth.test, ok for everything else: a turn's
+		// thread read on this token gets an empty thread.
 		_, _ = w.Write([]byte(`{"ok":true,"user_id":"U0BOT","team_id":"T0ACME"}`))
 	}))
 	t.Cleanup(ws.Close)
 	return ws
 }
 
-// shown is what the workspace was asked to display, raises and clears alike —
-// Slack clears by setting an EMPTY status, so the empty string in this list is
-// the indicator coming down.
+// shown is what the workspace was asked to display, raises and clears alike:
+// Slack clears by setting an empty status, so "" is the indicator coming down.
 func (w *workspace) shown() []string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return append([]string(nil), w.statuses...)
 }
 
-// raises counts the non-empty statuses: how many times an agent was announced
-// as working, as opposed to cleared.
+// raises counts the non-empty statuses: announcements, not clears.
 func (w *workspace) raises() int {
 	var n int
 	for _, s := range w.shown() {
@@ -102,28 +94,19 @@ func (w *workspace) raises() int {
 
 // WHAT IS PROMISED, AND WHEN — the rule every wait below is written against.
 //
-// No post is made by the goroutine that asked for one. A raise and a phase
-// change both sit on a turn's critical path, so they write the session's state
-// and wake the session's own goroutine, which makes the request; and the
-// teardown CANCELS that goroutine before it clears, so a post still in flight
-// is abandoned and a post not yet started is skipped. Both are deliberate: the
-// indicator is cosmetic, every one of its failures is swallowed, and a turn
-// must never wait on a chat backend.
-//
-// So what a session promises is this: WHILE IT IS LIVE, its state reaches the
-// backend. Once its last holder has ended, the only post promised is the clear
-// — made synchronously by the ending turn, which is why it is the one thing a
-// case can read straight after [Engine.runTurn].
-//
-// Every case here therefore waits for a raise or a phase line WHILE THE TURN
-// IS STILL RUNNING, which is where a person sees it and the only window the
-// code promises it in. Waiting for one after the turn ended asserts a property
-// the engine deliberately does not have, and measured at GOMAXPROCS=1 it lost
-// the post roughly one run in twelve.
+// The session's own goroutine makes every post: a raise or a phase change
+// only writes its state and wakes it, and the teardown cancels it before
+// clearing, so a post in flight is abandoned and one not started is skipped
+// (the indicator is cosmetic; a turn never waits on a chat backend). So a
+// session's state reaches the backend only WHILE IT IS LIVE; after its last
+// holder ends, the only promised post is the clear, made synchronously by the
+// ending turn. Every case therefore waits for a raise or phase line while the
+// turn is still running; waiting after it ended asserts a property the engine
+// does not have.
 
-// postDeadline is the failsafe on a post that IS promised — a bound on a hang,
-// never a retry until something passes. Ten seconds is far past a loopback
-// request under any load this suite puts on a machine.
+// postDeadline bounds a hang on a post that IS promised, never a retry until
+// something passes: ten seconds is far past a loopback request under any load
+// this suite puts on a machine.
 const postDeadline = 10 * time.Second
 
 // awaitShown blocks until the workspace has been asked for n statuses.
@@ -147,11 +130,9 @@ func (w *workspace) awaitAnyOf(t *testing.T, want []string) []string {
 	})
 }
 
-// await blocks until the workspace's record satisfies done.
-//
-// The snapshot and the wake channel are taken under ONE lock, so a post
-// landing between them wakes this wait rather than being missed — which is
-// what makes this a synchronisation rather than a poll with a deadline.
+// await blocks until the workspace's record satisfies done. The snapshot and
+// the wake channel are taken under one lock, so a post landing between them
+// wakes this wait rather than being missed.
 func (w *workspace) await(t *testing.T, want string, done func([]string) bool) []string {
 	t.Helper()
 	timeout := time.NewTimer(postDeadline)
@@ -173,14 +154,9 @@ func (w *workspace) await(t *testing.T, want string, done func([]string) bool) [
 }
 
 // firstOf reports where the first of these lines sits in what the workspace
-// was shown, or -1.
-//
-// A POSITION rather than a membership test, and that is the whole of it:
-// [workspace.awaitAnyOf] returns only once one of its lines is present, so a
-// case that then checks for their presence restates the wait and cannot fail.
-// WHERE a line sits relative to the raise is what the wait does not promise,
-// and it is what says the phase seam moved the words rather than that the
-// indicator merely reached the workspace at all.
+// was shown, or -1. A position, not membership: [workspace.awaitAnyOf]
+// already promises presence, so only where a line sits relative to the raise
+// shows the phase seam moved the words.
 func firstOf(shown, want []string) int {
 	for i, line := range shown {
 		if slices.Contains(want, line) {
@@ -190,9 +166,9 @@ func firstOf(shown, want []string) int {
 	return -1
 }
 
-// raisedNothing asserts the deterministic half of "no indicator": a session is
-// created by Begin itself, so a driver holding none can never post — where an
-// empty request log alone could be a post still in flight.
+// raisedNothing asserts "no indicator" deterministically: only Begin creates a
+// session, so a driver holding none can never post, where an empty request
+// log alone could be a post still in flight.
 func (e *Engine) raisedNothing(t *testing.T, ws *workspace) {
 	t.Helper()
 	if live := e.notify.slack.Status().Live(); len(live) != 0 {
@@ -203,9 +179,8 @@ func (e *Engine) raisedNothing(t *testing.T, ws *workspace) {
 	}
 }
 
-// refusingProvider stands in for the seat's model. No case here reaches it:
-// every turn below ends on a guard that costs no provider call, and a refusal
-// rather than a canned answer is what says so out loud.
+// refusingProvider stands in for the seat's model, which no case reaches:
+// every turn ends on a guard before a provider call, and a refusal says so.
 type refusingProvider struct{}
 
 func (refusingProvider) Model() string { return "refusing" }
@@ -214,19 +189,13 @@ func (refusingProvider) Complete(context.Context, llm.Request) (*llm.Completion,
 }
 
 // scripted answers each phase with its own submission, chosen from the tools
-// the request offers — the phases are what the offered tools distinguish, and a
-// flat sequence would drift the moment one phase took a round more.
+// the request offers (a flat sequence drifts once a phase takes a round more),
+// as a harness on the real session ([phasedHarness]).
 //
-// `waiting` is what makes the end-to-end cases deterministic. It runs on the
-// turn's own goroutine, before the phase's answer, so a case can hold the turn
-// open until the indicator it is about to assert on has actually reached the
-// workspace — the window where that post is promised. Without it a case
-// asserts a post the teardown is racing, which is the flake this fixture is
-// written against; see "WHAT IS PROMISED, AND WHEN" above.
-//
-// A harness on the real session ([phasedHarness]): the phase's tools reach it
-// over MCP and it calls the submission there, so `waiting` runs as the harness
-// run starts — still on the turn's goroutine, and still before the answer.
+// waiting runs on the turn's own goroutine as the harness run starts, before
+// the answer, so a case can hold the turn open until the indicator it asserts
+// on has reached the workspace: the window where that post is promised (see
+// "WHAT IS PROMISED, AND WHEN" above).
 type scripted struct{ waiting func(reviewing bool) }
 
 func (scripted) Model() string { return "scripted" }
@@ -251,14 +220,10 @@ func (s scripted) run(offered []string) llmtest.Run {
 }
 
 // indicating builds an engine whose one seat is on a Slack workspace, with a
-// company that REFUSES A TURN AT ITS DEPTH GUARD.
-//
-// The guard is the fixture's whole trick: [turn.Run] checks the delegation
-// depth before it opens a phase, so every case below drives the real runTurn —
-// its prefetch, its runner build, its completion event — without a model call
-// and without the network. What it cannot exercise is a turn that suspends;
-// that is [TestAnIndicatorSurvivesOnlyWhatIsStillWorking], on the same rule
-// the engine drives keepAlive off.
+// company that refuses a turn at its depth guard: [turn.Run] checks the
+// delegation depth before opening a phase, so a case drives the real runTurn
+// (prefetch, runner build, completion event) with no model call or network.
+// A turn that suspends is [TestAnIndicatorSurvivesOnlyWhatIsStillWorking]'s.
 func indicating(t *testing.T, mode notify.StatusMode) (*Engine, *workspace) {
 	t.Helper()
 	return indicatingWith(t, mode, refusingProvider{})
@@ -293,8 +258,8 @@ func indicatingWith(t *testing.T, mode notify.StatusMode, prov llm.Provider) (*E
 	}
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
 
-	// A COORDINATION STORE, as every engine `crewlet run` builds has one —
-	// see [starting] for what a turn needs it for.
+	// A coordination store, as every `crewlet run` engine has ([starting]
+	// says what a turn needs it for).
 	e := withSessions(t, &Engine{backends: &Backends{Queue: q, Fleet: coordmem.NewFleet()}})
 	e.epoch.current.Store(&Company{
 		Org:    organization,
@@ -310,13 +275,9 @@ func indicatingWith(t *testing.T, mode notify.StatusMode, prov llm.Provider) (*E
 	return e, ws
 }
 
-// chatTrigger is one inbound Slack message in one channel, stamped the way the
-// Slack parser stamps what it parses.
-//
-// THE CHANNEL IS AN ARGUMENT because a session is keyed on (handle, channel,
-// thread): two triggers in one channel are one indicator that two turns hold,
-// which is the shape [TestAnIndicatorSurvivesOnlyWhatIsStillWorking] has to
-// keep apart from two independent turns.
+// chatTrigger is one inbound Slack message in channel, stamped as the Slack
+// parser stamps it. The channel is an argument because a session is keyed on
+// (handle, channel, thread): two triggers in one channel share one indicator.
 func chatTrigger(channel string) *events.Event {
 	ev := events.New(types.ExternalNotification{
 		NotificationSource: slack.Backend, SourceEventType: "message",
@@ -332,16 +293,10 @@ func chatTrigger(channel string) *events.Event {
 	return ev
 }
 
-// A CHAT-TRIGGERED TURN RAISES AN INDICATOR AND CLEARS IT. The whole of the
-// defect: the subsystem existed, the engine held the driver set, and no turn
-// ever called it — so this is the case that fails on the code as it was.
-//
-// The raise is asserted from INSIDE the turn, which is both where a person
-// sees it and the only window it is promised in: the executor's run calls its
-// model with the turn parked on it, and the model does not answer until the
-// workspace has heard the raise. The clear is asserted after, because the
-// segment that ends the turn makes that one itself. See "WHAT IS PROMISED,
-// AND WHEN" above.
+// A CHAT-TRIGGERED TURN RAISES AN INDICATOR AND CLEARS IT. The raise is
+// asserted from inside the turn, the only window it is promised in: the model
+// does not answer until the workspace has heard it. The clear is asserted
+// after, since the segment that ends the turn makes it.
 func TestAChatTriggeredTurnRaisesTheIndicatorAndClearsIt(t *testing.T) {
 	t.Parallel()
 	var (
@@ -368,10 +323,8 @@ func TestAChatTriggeredTurnRaisesTheIndicatorAndClearsIt(t *testing.T) {
 		t.Fatalf("collecting the run: %v", err)
 	}
 
-	// TWO CHECKS, not one compound. awaitShown returns at least one status or
-	// fails, so an empty record here means the wait itself did not survive —
-	// which is a different report from the one below, where the workspace was
-	// told something and the something was a clear.
+	// Two checks: an empty record means the wait itself failed, a different
+	// report from a workspace whose first status was a clear.
 	if len(raised) == 0 {
 		t.Fatal("the raise the turn waited for never reached the workspace")
 	}
@@ -389,11 +342,9 @@ func TestAChatTriggeredTurnRaisesTheIndicatorAndClearsIt(t *testing.T) {
 	}
 }
 
-// THE INDICATOR OPENS ON THE EXECUTOR'S PHASE, which is what makes the phase
-// seam's first report free: every turn's first phase is the executor's, so a
-// turn that opened on the `default` pool would spend a second request saying
-// what the first one said — and `default` would stop meaning what its config
-// field documents, a phase added later with no pool of its own.
+// THE INDICATOR OPENS ON THE EXECUTOR'S PHASE, every turn's first, so the
+// phase seam's first report costs no request; opening on the `default` pool
+// would also break what that field documents (a later phase with no pool).
 func TestTheIndicatorOpensOnTheExecutorsPhase(t *testing.T) {
 	t.Parallel()
 	e, ws := indicating(t, notify.StatusAlways)
@@ -403,17 +354,15 @@ func TestTheIndicatorOpensOnTheExecutorsPhase(t *testing.T) {
 	if s == nil {
 		t.Fatal("no indicator was raised")
 	}
-	// The pool's own line for that phase, at this session's seed and no
-	// rotation: the pick is deterministic, which is what lets a test name
-	// the phase a raise came out of.
+	// The pool's line for that phase at this session's seed and no
+	// rotation: the pick is deterministic.
 	want := notify.NewPhrases(nil).Pick(phase.Execute.String(), "run-open", 0)
 	if got := ws.awaitShown(t, 1)[0]; got != want {
 		t.Errorf("the indicator opened on %q, want the executor's %q", got, want)
 	}
-	// And the seam's first report costs nothing, because it names the phase
-	// the indicator is already showing. Proved by what comes NEXT rather than
-	// by a pause: a phase that IS new posts, so if the executor's own report
-	// had cost a request the second status would be another executor line.
+	// The seam's first report costs nothing, proved by what comes next: a new
+	// phase posts, so a costly executor report would make the second status
+	// another executor line.
 	s.Phase(phase.Execute.String())
 	s.Phase(phase.Review.String())
 	if got := ws.awaitShown(t, 2)[1]; !slices.Contains(notify.PhasePhrases[phase.Review.String()], got) {
@@ -422,18 +371,14 @@ func TestTheIndicatorOpensOnTheExecutorsPhase(t *testing.T) {
 	}
 }
 
-// AND THE SEAM IS WIRED, so the words move as the turn moves. The reviewer is
-// what makes that observable: the opening raise is already the executor's, so
-// a turn whose indicator never reached a review line is a turn whose phases
-// reached nobody.
+// AND THE SEAM IS WIRED, so the words move as the turn moves: the opening
+// raise is already the executor's, so only a review line shows it.
 func TestTheIndicatorFollowsTheTurnsPhases(t *testing.T) {
 	t.Parallel()
 	reviews := notify.PhasePhrases[phase.Review.String()]
-	// The reviewer's own call is what holds the turn open until its phase
-	// line has landed: the seam fires before a phase's first provider call,
-	// so by the time this runs the post it asks for is on its way and
-	// nothing is racing it. A case that waited afterwards would be waiting
-	// on a post the teardown had already cancelled.
+	// The reviewer's call holds the turn open until its phase line lands
+	// (the seam fires before a phase's first provider call); waiting after
+	// the turn would wait on a post the teardown cancelled.
 	var (
 		e     *Engine
 		ws    *workspace
@@ -442,13 +387,9 @@ func TestTheIndicatorFollowsTheTurnsPhases(t *testing.T) {
 	model := scripted{
 		waiting: func(reviewing bool) {
 			if !reviewing {
-				// THE RAISE HAS TO HAVE LANDED FIRST, or there is no
-				// order to assert: the session's own goroutine makes
-				// every post, so a phase change that beats it to the
-				// first one leaves the raise never separately shown and
-				// the reviewer's line sitting at index 0. The executor's
-				// run calling its model is where that can be waited for
-				// from inside the turn.
+				// The raise must land first, or there is no order to
+				// assert: a phase change beating it to the session's
+				// goroutine puts the reviewer's line at index 0.
 				ws.awaitShown(t, 1)
 				return
 			}
@@ -465,15 +406,12 @@ func TestTheIndicatorFollowsTheTurnsPhases(t *testing.T) {
 	if err != nil || !res.Suspended {
 		t.Fatalf("runTurn = %+v, %v; want the turn parked on its executor's run", res, err)
 	}
-	// THE REVIEWER RUNS IN THE SEGMENT THE RUN'S COLLECTION RESUMES, which is
-	// what this case needs the turn to reach.
+	// The reviewer runs in the segment the run's collection resumes.
 	if err := rig.collect(t, "run-phases"); err != nil {
 		t.Fatalf("collecting the run: %v", err)
 	}
-	// WHERE THE REVIEWER'S LINE SITS, not that it is there: the wait above
-	// returned because it is there, so asserting that again asserts nothing.
-	// What the seam has to do is MOVE the words, from the executor's opening
-	// raise to the reviewer's line and in that order.
+	// Where the reviewer's line sits, not that it is there (the wait says
+	// so): the seam must move the words from the raise to the reviewer.
 	if len(moved) == 0 || !slices.Contains(notify.PhasePhrases[phase.Execute.String()], moved[0]) {
 		t.Fatalf("the workspace first heard %v, want the executor's opening raise", moved)
 	}
@@ -484,18 +422,15 @@ func TestTheIndicatorFollowsTheTurnsPhases(t *testing.T) {
 	}
 }
 
-// A TURN NOBODY IS WATCHING A COMPOSER FOR RAISES NOTHING. A schedule tick, an
-// A2A ask, a sandbox completion and a work-item assignment all reach a seat the
-// same way and none of them stamps a transport — so there is no chat
-// conversation to raise an indicator in, and no person to read it.
+// A TURN NOBODY IS WATCHING A COMPOSER FOR RAISES NOTHING: a schedule tick, an
+// A2A ask, a sandbox completion and a work-item assignment stamp no transport,
+// so there is no conversation to raise one in.
 func TestANonChatTriggerRaisesNoIndicator(t *testing.T) {
 	t.Parallel()
 	e, ws := indicating(t, notify.StatusAlways)
 
-	// The wake a schedule publishes, its conversation's stamp aside — a key
-	// names no chat surface, and only a transport's stamp raises an indicator
-	// ([chatMetadataOf]) — and the same shape a delegation and a tracker
-	// assignment arrive in.
+	// A schedule's wake, the shape a delegation and a tracker assignment
+	// share: only a transport's stamp raises an indicator ([chatMetadataOf]).
 	tick := events.New(types.TaskAssigned{
 		TaskID: "t-1", RoleName: "SWE", Description: "write the standup note",
 		Schedule: "standup",
@@ -506,15 +441,12 @@ func TestANonChatTriggerRaisesNoIndicator(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("runTurn: %v", err)
 	}
-	// A scheduled fire's conversation is its schedule's, no chat surface's,
-	// and nobody is watching a composer.
 	e.raisedNothing(t, ws)
 }
 
 // AND NEITHER DOES A CHAT MESSAGE NOBODY ADDRESSED TO THIS SEAT. The mode
-// decision is the driver's — the engine must not re-implement it, and must not
-// leave it unasked either: a passive channel message wakes every bot in the
-// room, and lighting up N indicators is noise rather than signal.
+// decision is the driver's, which the engine must ask, not re-implement: a
+// passive channel message wakes every bot in the room.
 func TestAnUnaddressedChatTriggerRaisesNoIndicator(t *testing.T) {
 	t.Parallel()
 	e, ws := indicating(t, notify.StatusAddressed)
@@ -532,24 +464,16 @@ func TestAnUnaddressedChatTriggerRaisesNoIndicator(t *testing.T) {
 	e.raisedNothing(t, ws)
 }
 
-// AN INDICATOR SURVIVES A TURN ONLY WHILE SOMETHING IS STILL WORKING.
-//
-// The keep-alive case is a turn that suspended into a detached executor the
-// engine has established is coming back: the box is running, the same turn
-// resumes when it reports, and the person who asked is still waiting — so
-// taking it down would say the agent had stopped in the middle of the longest
-// thing it does. Every other ending clears.
-//
-// Driven through [endWorkingStatus] rather than a whole turn, because that
-// function IS the rule both turn frames read. WHAT ESTABLISHES the fact it is
-// given is the frames' own business, and the cases below it drive that
-// end to end.
+// AN INDICATOR SURVIVES A TURN ONLY WHILE SOMETHING IS STILL WORKING: a turn
+// suspended into a detached executor established as coming back keeps it up,
+// since the person is still waiting; every other ending clears. Driven
+// through [endWorkingStatus], the rule both turn frames read; the cases below
+// drive what establishes its input end to end.
 func TestAnIndicatorSurvivesOnlyWhatIsStillWorking(t *testing.T) {
 	t.Parallel()
 	e, ws := indicating(t, notify.StatusAlways)
-	// One conversation per case: a second turn in the SAME channel would
-	// JOIN the first's session rather than raise its own, so a case that
-	// shared one would be asserting the reference count instead of the rule.
+	// One conversation per case: a second turn in the same channel would
+	// join the first's session, asserting the reference count, not the rule.
 	raise := func(key, channel string) *notify.StatusSession {
 		s := e.beginWorkingStatus(t.Context(), "swe", key,
 			[]*events.Event{chatTrigger(channel)})
@@ -569,10 +493,8 @@ func TestAnIndicatorSurvivesOnlyWhatIsStillWorking(t *testing.T) {
 		t.Fatal("the kept-alive indicator is not live")
 	}
 
-	// And an ending clears — done, failed, skipped, a guard breach, a
-	// runner that could never be built, and a suspension whose run was
-	// settled instead of recorded are all the same fact here: nothing is
-	// working any more.
+	// Any other ending (done, failed, skipped, a guard breach, an unbuildable
+	// runner, a suspension settled instead of recorded) clears.
 	before := len(ws.shown())
 	ending := raise("run-end", "D0END")
 	ws.awaitShown(t, before+1)
@@ -586,18 +508,12 @@ func TestAnIndicatorSurvivesOnlyWhatIsStillWorking(t *testing.T) {
 }
 
 // AND "STILL WORKING" IS THE RUN'S ROW, NOT THE TURN'S INTENT TO SUSPEND.
-//
-// [turn.Result.Suspended] says the executor asked to park. Whether anything
-// can ever resume it is what [Engine.persistSuspension] answers, and its three
-// answers are three different facts: a row that landed is a run the completion
-// poll resumes, a row that could not be written is a run already settled and
-// reclaimed, and a store that could not answer is neither — the write may well
-// have landed, and the settle that follows declines a row that is no longer
-// launching.
-//
-// AN UNKNOWN THEREFORE COUNTS AS WORKING, the same reading internal/coord takes
-// of an unreachable store: read as loss, a two-second store blip takes the
-// indicator down in the middle of the longest thing an agent does.
+// [Engine.persistSuspension] answers three ways: a row that landed is resumed
+// by the completion poll, a row not written is a run already settled, and a
+// store that could not answer is neither (the write may have landed; the
+// settle declines a row no longer launching). An unknown counts as working,
+// as internal/coord reads an unreachable store: read as loss, a store blip
+// takes the indicator down mid-run.
 func TestOnlyARecordedSuspensionKeepsTheIndicatorUp(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -618,18 +534,12 @@ func TestOnlyARecordedSuspensionKeepsTheIndicatorUp(t *testing.T) {
 	}
 }
 
-// END TO END: A SUSPENSION NOTHING RECORDED TAKES THE INDICATOR DOWN.
-//
-// This is the failure the rule above exists for, and it is reachable on a
-// single node with no seat movement at all: the turn launches its executor and
-// returns Suspended, the suspension is not recorded, the run is settled and its
-// box reclaimed — and the turn never comes back. Keyed on the intent, the
-// indicator said "is thinking…" every refresh interval for the life of the
-// process, which is exactly what [notify.StatusDriver.ClearFor] was added to
-// bound and what nothing else would ever have taken down.
-//
-// Through the real launch, which every turn's executor takes, over a run store
-// whose answer to the suspension is the case.
+// END TO END: A SUSPENSION NOTHING RECORDED TAKES THE INDICATOR DOWN. Reachable
+// on one node with no seat movement: the turn suspends, the suspension is not
+// recorded, the run is settled and the turn never returns, so an indicator
+// keyed on the intent would refresh for the life of the process, with only
+// [notify.StatusDriver.ClearFor] to bound it. Through the real launch, over a
+// run store whose answer to the suspension is the case.
 func TestASuspendedTurnKeepsItsIndicatorOnlyIfItsRunWasRecorded(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -641,28 +551,24 @@ func TestASuspendedTurnKeepsItsIndicatorOnlyIfItsRunWasRecorded(t *testing.T) {
 			live:    1,
 		},
 		"a run no longer launching when its turn parks": {
-			// MarkSuspended finds nothing launching — a run something
-			// ended between its launch and its turn's park — so the
-			// suspension has nowhere to go and the run is settled.
+			// MarkSuspended finds nothing launching (the run ended
+			// before its turn parked), so the run is settled.
 			pending: func(store sandbox.PendingStore) sandbox.PendingStore {
 				return endedRuns{PendingStore: store}
 			},
 			live: 0,
 		},
 		"a store that could not answer, whose write landed": {
-			// The honest unknown: the row is open to the poll, so the
-			// settle that follows the error declines it and the hold
-			// stays up for the run that IS coming back.
+			// The row is open to the poll, so the settle after the
+			// error declines it and the hold stays up.
 			pending: func(store sandbox.PendingStore) sandbox.PendingStore {
 				return unwritableRuns{PendingStore: store, landed: true}
 			},
 			live: 1,
 		},
 		"a store that could not answer, whose write was lost": {
-			// The same answer over a row still launching: the settle
-			// ends the run, and the run's stop takes down the hold the
-			// turn was about to leave up — keyed by the run, the one key
-			// the stop knows it by.
+			// Over a row still launching the settle ends the run, and
+			// its stop takes down the hold, keyed by the run.
 			pending: func(store sandbox.PendingStore) sandbox.PendingStore {
 				return unwritableRuns{PendingStore: store}
 			},
@@ -671,8 +577,8 @@ func TestASuspendedTurnKeepsItsIndicatorOnlyIfItsRunWasRecorded(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			e, ws := indicating(t, notify.StatusAlways)
-			// THE TURN'S DEPTH IS UNDER THE FIXTURE'S CAP here, so the
-			// turn runs to its executor's launch.
+			// Under the fixture's depth cap, so the turn reaches its
+			// executor's launch.
 			e.Company().Config.TurnEngine.DelegationDepthLimit = 3
 			rigRunsOn(t, e, tc.pending(sandbox.NewCoordStore(coordmem.NewFleet())), nil)
 
@@ -694,17 +600,10 @@ func TestASuspendedTurnKeepsItsIndicatorOnlyIfItsRunWasRecorded(t *testing.T) {
 	}
 }
 
-// A SUSPENDED TURN'S INDICATOR IS HELD UNDER ITS RUN, which is what its resume
-// and its stop name it by.
-//
-// The suspension's row is keyed on the run (ADR-0017), so a box's completion
-// resumes it as that run and a park or a settle reports that run stopped. Held
-// under the WORK KEY, the indicator the dispatch raised was found by neither:
-// the resume found no hold to take back and raised none (a completion carries
-// no chat metadata), the stop released nothing, and the indicator the
-// suspension kept alive went on saying "is thinking…" until the seat moved or
-// the node stopped. Driven through [Engine.runTurn], with the run and the work
-// key apart, because every case that seeded the hold by hand named both alike.
+// A SUSPENDED TURN'S INDICATOR IS HELD UNDER ITS RUN, the key its resume and
+// its stop name it by: the suspension's row is keyed on the run (ADR-0017).
+// Held under the work key, neither finds it and it stays up until the seat
+// moves. Driven through [Engine.runTurn] with the run and work key apart.
 //
 // Mutation: begin the dispatch's indicator under req.WorkKey, and the rejoin
 // finds nothing and the stop leaves it live.
@@ -727,10 +626,8 @@ func TestASuspendedTurnsIndicatorIsHeldUnderItsRun(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			e, ws := indicating(t, notify.StatusAlways)
-			// THE REAL LAUNCH, which every turn's executor takes: it writes
-			// the run's row under req.RunID and parks the turn on it, so the
-			// hold is the one production raises and the row is the one its
-			// resume and its stop name.
+			// The real launch writes the run's row under req.RunID and parks
+			// the turn on it, so hold and row are the ones production makes.
 			rigRuns(t, e, nil)
 
 			res, err := e.runTurn(t.Context(), Request{
@@ -754,8 +651,7 @@ func TestASuspendedTurnsIndicatorIsHeldUnderItsRun(t *testing.T) {
 }
 
 // unwritableRuns is a run store whose suspension write fails without saying
-// whether it landed — the one answer that is neither "resumable" nor "lost".
-// landed says which it secretly was: the write made, or never made.
+// whether it landed; landed says which it secretly was.
 type unwritableRuns struct {
 	sandbox.PendingStore
 	landed bool
@@ -778,17 +674,10 @@ func (endedRuns) MarkSuspended(context.Context, string, sandbox.Suspension) (boo
 	return false, nil
 }
 
-// A RUN THAT PARKED ON A QUESTION TAKES ITS INDICATOR DOWN.
-//
-// The other half of the keep-alive, and the one the suspension rule cannot
-// answer: the run was recorded, the turn IS coming back, and the agent has
-// nonetheless stopped — everything now waits on the person the question was
-// asked of. An indicator that keeps saying "is thinking…" at that person is
-// worse than none at all, because it tells the one human who could unblock the
-// work that nobody is waiting on them.
-//
-// AND IT IS ONE TURN'S HOLD, not the seat's indicators: a second turn in the
-// same thread is still working and keeps its own.
+// A RUN THAT PARKED ON A QUESTION TAKES ITS INDICATOR DOWN, though recorded and
+// coming back: everything waits on the person asked, and "is thinking…" would
+// tell them nobody is waiting on them. It is one turn's hold: a second turn in
+// the same thread keeps its own.
 func TestAParkedRunTakesItsIndicatorDown(t *testing.T) {
 	t.Parallel()
 	e, ws := indicating(t, notify.StatusAlways)
@@ -828,29 +717,18 @@ func TestAParkedRunTakesItsIndicatorDown(t *testing.T) {
 	}
 }
 
-// AND SO DOES A RUN THE ENGINE DESTROYS — through the coordinator the engine
-// itself builds.
-//
-// The park's counterpart, and the one settleFailed reaches: a suspension whose
-// row DID land keeps the indicator up because a box is working, and a settle is
-// the moment that stops being true. The turn never returns to say so, so
-// without [sandbox.CoordinatorOptions.Stopped] the indicator heartbeat outlives
-// the process.
-//
-// Driven through [Engine.startSandbox] rather than a coordinator this case
-// assembled, because the whole defect class on this path is a complete
-// subsystem with no caller: an option declared and never passed is exactly what
-// a test holding its own coordinator cannot see.
-//
-// AND IT IS ONE TURN'S HOLD, not the seat's indicators: a second turn working
+// AND SO DOES A RUN THE ENGINE DESTROYS (settleFailed): the turn never returns
+// to say so, so without [sandbox.CoordinatorOptions.Stopped] the indicator
+// outlives the process. Driven through [Engine.startSandbox], the coordinator
+// the engine builds, because an option declared and never passed is what a
+// test holding its own coordinator cannot see. One turn's hold: a second turn
 // in the same thread keeps its own.
 func TestASettledRunTakesItsIndicatorDown(t *testing.T) {
 	t.Parallel()
 	e, ws := indicating(t, notify.StatusAlways)
 	e.backends.Fleet = coordmem.NewFleet()
 	company := e.Company()
-	// The double, which is the whole catalogue this case needs: the run is
-	// settled before it ever has a box.
+	// The double suffices: the run is settled before it ever has a box.
 	company.Config.Providers.Sandbox = &config.SandboxProvider{Fake: true}
 	manager, err := buildSandbox(company.Config, e.resolver(), e.sandboxOtel, nil)
 	if err != nil {
@@ -897,8 +775,8 @@ func TestASettledRunTakesItsIndicatorDown(t *testing.T) {
 	if live := e.notify.slack.Status().Live(); len(live) != 1 {
 		t.Fatalf("the second turn's indicator went down with the settle: %v", live)
 	}
-	// AND THE SETTLED TURN'S HOLD IS GONE, which is what the last holder
-	// ending proves: with the hold still counted the clear below never comes.
+	// The settled turn's hold is gone: still counted, the clear below would
+	// never come.
 	endWorkingStatus(t.Context(), alongside, false)
 	if shown := ws.shown(); shown[len(shown)-1] != "" {
 		t.Errorf("the settled turn's hold outlived the run it was held for: %v", shown)
@@ -908,15 +786,10 @@ func TestASettledRunTakesItsIndicatorDown(t *testing.T) {
 	}
 }
 
-// AND A PERSON'S ANSWER RAISES ONE AGAIN.
-//
-// The park released the hold, so a resume that only ever rejoined would work
-// through the answer in silence — the exact gap this indicator exists to
-// close, at the one moment a person has just asked for something. A run
-// resumed by an ANSWER is woken by an ordinary chat message, so the trigger
-// carries the conversation to raise in; a run resumed by a BOX is not, and a
-// resume that invented a conversation for it would be claiming a thread it
-// cannot prove it is in.
+// AND A PERSON'S ANSWER RAISES ONE AGAIN, since the park released the hold and
+// a rejoin-only resume would work through the answer in silence. An answer is
+// an ordinary chat message carrying its conversation; a box's completion is
+// not, and must not claim a thread it cannot prove it is in.
 func TestAnAnsweredClarificationRaisesTheIndicatorAgain(t *testing.T) {
 	t.Parallel()
 	e, ws := indicating(t, notify.StatusAlways)
@@ -925,9 +798,8 @@ func TestAnAnsweredClarificationRaisesTheIndicatorAgain(t *testing.T) {
 	if answered == nil {
 		t.Fatal("the answer that resumed a parked run raised no indicator")
 	}
-	// AND IT SAYS SO. The park released the hold, so there was none to take
-	// back, and the caller's retry rule reads exactly this answer — see
-	// [TestAResumeThatHandsWorkBackToAPersonClearsItsIndicator].
+	// And it reports no rejoin, which the caller's retry rule reads
+	// ([TestAResumeThatHandsWorkBackToAPersonClearsItsIndicator]).
 	if rejoined {
 		t.Error("the answer route reported a rejoined hold, so a retry would keep " +
 			"an indicator up over a wait on the person who just answered")
@@ -936,9 +808,8 @@ func TestAnAnsweredClarificationRaisesTheIndicatorAgain(t *testing.T) {
 		t.Errorf("the workspace was asked for %q, want the indicator raised", got)
 	}
 
-	// A completion carries no chat conversation, and with no hold left to
-	// take back there is nothing to raise: a parked run's row deliberately
-	// keeps no chat metadata.
+	// A completion carries no conversation and finds no hold: a parked
+	// run's row keeps no chat metadata.
 	completion := events.New(types.ExecutorFinished{TurnID: "run-box"}, events.TraceContext{})
 	if s, rejoined := e.resumeWorkingStatus(t.Context(), "swe", "run-box", completion); s != nil || rejoined {
 		t.Errorf("a box's completion raised %v (rejoined %v), want neither",
@@ -946,20 +817,14 @@ func TestAnAnsweredClarificationRaisesTheIndicatorAgain(t *testing.T) {
 	}
 }
 
-// A RESUMED TURN TAKES BACK THE INDICATOR ITS SUSPENSION KEPT ALIVE.
-//
-// Two halves of one rule: it must not raise a SECOND indicator over the one
-// that is already up — the hold is one turn id, so a rejoin is idempotent where
-// a second raise would reset the words a reader is watching — and it must end
-// that hold when the resumed turn ends, or the indicator this node is
-// re-asserting outlives every turn there is.
+// A RESUMED TURN TAKES BACK THE INDICATOR ITS SUSPENSION KEPT ALIVE: it raises
+// no second one (the hold is one turn id, so a rejoin is idempotent where a
+// raise would reset the words), and it ends that hold when the turn ends.
 func TestAResumedTurnRejoinsTheIndicatorItKeptAlive(t *testing.T) {
 	t.Parallel()
 	reviews := notify.PhasePhrases[phase.Review.String()]
-	// The resumed turn's reviewer holds it open until its phase line has
-	// landed, for the reason [TestTheIndicatorFollowsTheTurnsPhases] gives:
-	// the post is promised while the session is live and cancelled by the
-	// teardown, so it is asserted from inside the turn.
+	// The resumed turn's reviewer holds it open until its phase line lands,
+	// as in [TestTheIndicatorFollowsTheTurnsPhases].
 	var (
 		e     *Engine
 		ws    *workspace
@@ -976,7 +841,7 @@ func TestAResumedTurnRejoinsTheIndicatorItKeptAlive(t *testing.T) {
 	seat := company.Org.AgentSeatByHandle("swe")
 
 	// The turn that suspended into its executor's run, holding its indicator
-	// under the run's id — the one the run's row names it by.
+	// under the run's id.
 	suspended := e.beginWorkingStatus(t.Context(), "swe", "run-1",
 		[]*events.Event{chatTrigger("D0ANA")})
 	ws.awaitShown(t, 1)
@@ -1000,22 +865,16 @@ func TestAResumedTurnRejoinsTheIndicatorItKeptAlive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resumeTurn: %v", err)
 	}
-	// NOT A SECOND RAISE. The hold is one turn id, so a rejoin is
-	// idempotent — where a second Begin would reset the words a reader is
-	// watching and leave a count that needs two Ends to clear.
+	// Not a second raise, which would reset the words and need two Ends
+	// to clear.
 	if got := ws.raises(); got != 2 {
 		t.Errorf("the resumed turn produced %d raises, want the one it kept "+
 			"alive plus its reviewer's phase: %v", got, ws.shown())
 	}
-	// And its phases moved the words, which is the resume path's own OnPhase
-	// wiring: without it a resumed turn shows whatever the suspended half
-	// last said, for however long the box's answer takes to work through.
-	//
-	// ASSERTED AS A POSITION, for the reason [TestTheIndicatorFollowsTheTurnsPhases]
-	// gives: the wait returned because a reviewer line is present, so where it
-	// sits is the only thing left that the wait did not already answer. Second,
-	// straight after the line the suspension left standing — which is also what
-	// says the rejoin did not redraw that line on its way back in.
+	// Its phases moved the words (the resume path's own OnPhase wiring),
+	// asserted as a position as in [TestTheIndicatorFollowsTheTurnsPhases]:
+	// second, straight after the line the suspension left, which also says
+	// the rejoin did not redraw it.
 	if len(moved) == 0 || !slices.Contains(notify.PhasePhrases[phase.Execute.String()], moved[0]) {
 		t.Fatalf("the workspace first heard %v, want the line the suspended half left up", moved)
 	}
@@ -1031,24 +890,13 @@ func TestAResumedTurnRejoinsTheIndicatorItKeptAlive(t *testing.T) {
 	}
 }
 
-// A RESUME THAT NEVER REACHED ITS TURN KEEPS THE INDICATOR IT TOOK BACK.
-//
-// Three ways a resume ends without ending its turn, and every one is a RETRY:
-// a reply this build cannot read routes the completion back to a peer, a
-// runner that could not be built — no provider registry, an unbuildable
-// chain, an MCP registry error — returns before the loop, and a turn that
-// broke without writing outside the engine returns after it. All three leave
-// the coordinator to revert its claim so the same conversation is resumed
-// again. The box's work is intact and somebody is still waiting on it.
-//
-// And unlike the dispatch path, nothing here can put a cleared indicator back:
-// a redelivered TRIGGER raises a fresh one, where a redelivered COMPLETION has
-// only the hold to take back, because a parked run's row carries no chat
-// metadata.
-//
-// THE COMPLETION ROUTE ONLY, which is what the kept-alive hold below makes
-// this: the answer route has the opposite answer on all three, and
-// [TestAResumeThatHandsWorkBackToAPersonClearsItsIndicator] is that half.
+// A RESUME THAT NEVER REACHED ITS TURN KEEPS THE INDICATOR IT TOOK BACK. Each
+// of [resumeRetries] is a retry: the coordinator reverts its claim, the box's
+// work is intact and somebody is still waiting. Nothing else can put a cleared
+// indicator back: a redelivered completion has only the hold, as a parked
+// run's row carries no chat metadata. The completion route only; the answer
+// route is the opposite
+// ([TestAResumeThatHandsWorkBackToAPersonClearsItsIndicator]).
 func TestAResumeThatCouldNotStartKeepsItsIndicator(t *testing.T) {
 	t.Parallel()
 	for name, derail := range resumeRetries {
@@ -1089,20 +937,14 @@ func TestAResumeThatCouldNotStartKeepsItsIndicator(t *testing.T) {
 }
 
 // resumeRetries are the three ways [Engine.resumeTurn] ends without ending its
-// turn, each derailing the company it is handed and reporting the run's Reply
-// to use.
-//
-// NAMED BY THE RETURN EACH ONE ACTUALLY TAKES, because for a while two of them
-// were one: an unresolvable provider chain does not fail the runner BUILD —
-// the chain is assembled and the phase's first call is what has nothing to
-// dial — so a case named for the build was in fact exercising the turn that
-// broke, and the return before the loop was covered by nothing at all.
+// turn, each derailing the company it is handed and returning the run's Reply.
+// Named by the return each takes: an unresolvable provider chain does not fail
+// the runner build, it fails the phase's first call.
 var resumeRetries = map[string]func(*Company) string{
 	"a reply this build cannot read": func(*Company) string { return "nonsense" },
 	"a runner that could not be built": func(c *Company) string {
-		// No provider registry at all, which is the one shape RunnerFor
-		// itself refuses: a resume landing after a revision removed every
-		// provider.
+		// No provider registry, the one shape RunnerFor refuses: a
+		// revision removed every provider.
 		c.Models = nil
 		return "tool"
 	},
@@ -1114,24 +956,12 @@ var resumeRetries = map[string]func(*Company) string{
 	},
 }
 
-// AND A RESUME THAT HANDS THE WORK BACK TO A PERSON CLEARS ITS OWN.
-//
-// The other half of the retry rule, and the two are opposites because the
-// claim reverts to where it came FROM. A completion was claimed from a live
-// run, so a retry finds a box still working; a person's ANSWER was claimed
-// from a question still open, so the revert puts the run back to awaiting that
-// same person. Holding an indicator over that wait is the lie the park exists
-// to stop — told to the one human who could move the work, moments after they
-// tried to.
-//
-// Nothing is left claiming work, which is the asymmetry's other half — and it
-// has to be cleared HERE, because nothing else will: the coordinator's revert
-// reports no stop (the same revert on the completion route puts a run back to
-// a box that is still working), and the delivery that carried the answer is
-// REQUEUED rather than run, so no fresh turn comes along to raise one in its
-// place. The next attempt at that message raises its own, exactly as this one
-// did. A completion has no such second life: it is the run finishing, not a
-// person talking, so a redelivered one has only the hold to take back.
+// AND A RESUME THAT HANDS THE WORK BACK TO A PERSON CLEARS ITS OWN: the claim
+// reverts to where it came from, and an answer was claimed from a question
+// still open, so the run awaits that person again and an indicator would lie
+// to them. It must clear here: the revert reports no stop, and the answer's
+// delivery is requeued rather than run, so no fresh turn replaces it; the next
+// attempt raises its own.
 func TestAResumeThatHandsWorkBackToAPersonClearsItsIndicator(t *testing.T) {
 	t.Parallel()
 	for name, derail := range resumeRetries {
@@ -1140,9 +970,8 @@ func TestAResumeThatHandsWorkBackToAPersonClearsItsIndicator(t *testing.T) {
 			company := e.Company()
 			seat := company.Org.AgentSeatByHandle("swe")
 
-			// NO HOLD TO TAKE BACK, which is what makes this the answer
-			// route: the park released it, and the answer is an ordinary
-			// chat message that raises a fresh one.
+			// No hold to take back makes this the answer route: the park
+			// released it, and the answer raises a fresh one.
 			err := e.resumeTurn(t.Context(), resumeInput{
 				Company: company,
 				Run: sandbox.PendingRun{
@@ -1159,9 +988,8 @@ func TestAResumeThatHandsWorkBackToAPersonClearsItsIndicator(t *testing.T) {
 			if err == nil {
 				t.Fatal("the resume did not fail, so this case asserts nothing")
 			}
-			// The clear is the one post promised after the session's last
-			// holder ends — the raise may still have been in flight and
-			// been cancelled, so the record's END is what this reads.
+			// Only the clear is promised after the last holder ends (the
+			// raise may have been cancelled), so this reads the record's end.
 			if shown := ws.shown(); len(shown) == 0 || shown[len(shown)-1] != "" {
 				t.Errorf("the workspace last heard %v, want the clear: the run is "+
 					"awaiting the same person again", shown)
@@ -1174,18 +1002,14 @@ func TestAResumeThatHandsWorkBackToAPersonClearsItsIndicator(t *testing.T) {
 	}
 }
 
-// THE METADATA IS THE TRIGGER'S OWN, taken rather than reconstructed: the
-// channel and the thread anchor a status is raised in are exactly the ones the
-// chat parser stamped, which is what makes the indicator appear where the
-// reply will land and what makes the thread block, the reply target and the
-// indicator agree about which conversation a turn is in.
+// THE METADATA IS THE TRIGGER'S OWN, taken rather than reconstructed, so the
+// indicator, the thread block and the reply target agree on the conversation.
 func TestTheIndicatorsConversationComesOffTheTrigger(t *testing.T) {
 	t.Parallel()
 	chat := chatTrigger("D0ANA")
 	tracker := events.New(types.ExternalNotification{
 		NotificationSource: "jira", SourceEventType: "comment", Sender: "ana",
-		// A tracker's notification carries metadata too — and none of it
-		// addresses a conversation any chat backend can raise a status in.
+		// A tracker's metadata addresses no chat conversation.
 		Metadata: map[string]string{"issue_key": "ENG-42", "project": "ENG"},
 	}, events.TraceContext{})
 	task := events.New(types.TaskAssigned{TaskID: "t-1", RoleName: "SWE"},
@@ -1208,15 +1032,11 @@ func TestTheIndicatorsConversationComesOffTheTrigger(t *testing.T) {
 	}
 }
 
-// A NODE THAT HANDS A SEAT ON TAKES ITS INDICATORS DOWN.
-//
-// The kept-alive session is why this has to exist. A turn suspended into a
-// detached executor leaves its indicator up deliberately, and the resume
-// lands on whichever node holds the seat WHEN THE BOX REPORTS — so a node that
-// released the seat in between would otherwise re-assert "is thinking…" every
-// refresh interval, for a turn it is not running, until the process died. It is
-// the chat-surface twin of the `terminated` event this same hook publishes,
-// except that a stale indicator is a live request rather than a stale row.
+// A NODE THAT HANDS A SEAT ON TAKES ITS INDICATORS DOWN: a kept-alive
+// indicator's resume lands on whichever node holds the seat when the box
+// reports, so a node that released it would otherwise refresh "is thinking…"
+// for a turn it is not running until the process died. The chat twin of the
+// `terminated` event this hook publishes.
 func TestReleasingASeatTakesItsIndicatorDown(t *testing.T) {
 	t.Parallel()
 	e, ws := indicating(t, notify.StatusAlways)
@@ -1239,13 +1059,9 @@ func TestReleasingASeatTakesItsIndicatorDown(t *testing.T) {
 	}
 }
 
-// A TEARDOWN TAKES A DETACHED CONTEXT, and this is the case that says why.
-//
-// The ending an indicator reports is often the cancellation itself — a shed
-// seat, a drained node, a turn that ran out of its wall clock — and a clear
-// made on a dead context does nothing at all, which leaves the indicator
-// claiming the agent is still working until the backend expires it. The same
-// rule the rest of the engine's rollbacks follow.
+// A TEARDOWN TAKES A DETACHED CONTEXT: the ending is often the cancellation
+// itself (a shed seat, a drained node, a wall-clock cap), and a clear on a dead
+// context does nothing, leaving the indicator up until the backend expires it.
 func TestTheClearSurvivesTheCancellationThatEndedTheTurn(t *testing.T) {
 	t.Parallel()
 	e, ws := indicating(t, notify.StatusAlways)

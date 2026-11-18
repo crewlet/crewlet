@@ -32,14 +32,13 @@ import (
 // leakedToken is a credential a box or a tool put in an error the engine quotes.
 const leakedToken = "ghp_" + "Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4zAb7d"
 
-// executorLogSpy is the executor log's writes as a case reads them: every end
-// a turn's ending recorded, and EVERY ATTEMPT AT ONE, counted — the log refuses
-// a second end of a turn ([executordomain.ErrTurnEnded]), which the engine
-// reads as the end it already has, so a turn ended twice shows only in the
-// count ([awaitEnds]). An end tombstones its turn, as the log's does: a capture
-// of an ended turn is refused. These cases' engines keep no session — they have
-// no object store — so the order of a capture and its turn's end is the
-// sandbox package's cases' to hold, where the keep is the case's.
+// executorLogSpy records the executor log's writes: every end recorded, and
+// EVERY ATTEMPT AT ONE, counted, since the log refuses a second end of a turn
+// ([executordomain.ErrTurnEnded]) and the engine reads that as the end it has,
+// so a turn ended twice shows only in the count ([awaitEnds]). An end
+// tombstones its turn: a capture of an ended turn is refused. These engines
+// keep no session (no object store), so the sandbox package's cases hold the
+// order of a capture and its turn's end.
 type executorLogSpy struct {
 	mu    sync.Mutex
 	ends  []executordomain.NewEnd
@@ -48,9 +47,8 @@ type executorLogSpy struct {
 }
 
 // Begin answers a turn's first read held wherever it names a base, as the log
-// does where nothing moved the base before it landed. What a begin carries is
-// the conversation cases' to read (conversation_internal_test.go's headLog);
-// these cases are about how a turn ends.
+// does when nothing moved the base. What a begin carries is conversation_internal_test.go's headLog's to check; these
+// cases are about how a turn ends.
 func (s *executorLogSpy) Begin(_ context.Context, _ executordomain.Call,
 	n executordomain.NewBegin) (executordomain.BeginResult, error) {
 	return executordomain.BeginResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied},
@@ -132,13 +130,11 @@ func loggingReviewCase(t *testing.T, model *reviewWatch,
 	return e, rig, spy
 }
 
-// awaitEnds is every end recorded for turnID once there are want of them: a
-// turn's end is owed on its run's record and recorded by the run's ending, off
-// the frame that ended the turn, so a case waits for it. It waits a little past
-// the count too, and FAILS the case on an end asked of the log more often than
-// it was recorded: the log's refusal of a second end is taken by the engine for
-// the end it already has, so a turn ended by two paths records one end and
-// shows only in the asking.
+// awaitEnds is every end recorded for turnID once there are want of them: the
+// run's ending records it off the frame that ended the turn, so a case waits.
+// It waits a little past the count and FAILS the case on an end asked of the
+// log more often than recorded: the engine takes the log's refusal of a second
+// end for the end it has, so a turn ended by two paths shows only there.
 func awaitEnds(t *testing.T, spy *executorLogSpy, turnID string, want int) []executordomain.NewEnd {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -155,14 +151,11 @@ func awaitEnds(t *testing.T, spy *executorLogSpy, turnID string, want int) []exe
 }
 
 // A RESUMED TURN THAT ENDS RECORDS ITS END ON THE EXECUTOR LOG, once, with the
-// turn's OWN decision — the one its completion carries — and how its reply
-// went.
+// turn's OWN decision (the one its completion carries) and how its reply went.
+// A turn that parks again is [TestAResumeThatParksAgainRecordsNoEndUntilItsTurnEnds]'s.
 //
 // Mutation: drop the end from recordResume, or take the decision off the
-// reviewer's last word, and the end is missing or says another decision than
-// the turn's. (A turn that parked again is
-// [TestAResumeThatParksAgainRecordsNoEndUntilItsTurnEnds]'s: this one's
-// reviewer never sends a round back.)
+// reviewer's last word, and the end is missing or names another decision.
 func TestAResumedTurnsEndIsRecordedWithItsOwnDecision(t *testing.T) {
 	t.Parallel()
 	e, spy := loggingEngine(t)
@@ -216,12 +209,11 @@ func TestAStoppedParkedTurnEndsAsStoppedOnTheExecutorLog(t *testing.T) {
 }
 
 // A LAUNCH STOPPED BEFORE ITS TURN PARKED ENDS ON THE EXECUTOR LOG FROM THE
-// STOP'S OWN ENDING, once — never from the frame that launched it, which is
-// still unwinding to its park: the ending records the end after its read has
-// taken the job's session, and an end the frame recorded first would refuse
-// that session by its tombstone.
+// STOP'S OWN ENDING, once, never from the launching frame: the ending records
+// the end after its read has taken the job's session, which an earlier end's
+// tombstone would refuse.
 //
-// Mutation: record the end from the dispatch path's refused park again, or hand
+// Mutation: record the end from the dispatch path's refused park, or hand
 // the ending a stop only where a turn parked, and the end comes before the
 // stop's capture, or nowhere.
 func TestALaunchStoppedBeforeItsParkEndsOnTheExecutorLogOnce(t *testing.T) {
@@ -247,9 +239,8 @@ func TestALaunchStoppedBeforeItsParkEndsOnTheExecutorLogOnce(t *testing.T) {
 }
 
 // A TURN LOST WITH ITS RUN ENDS AS LOST ON THE EXECUTOR LOG, by the run's own
-// ending — the loss its collection decided once the run's box was found gone —
-// with the loss it recorded, and whether its reply reached anybody as the turn's
-// own calls say: here a turn nobody was waiting on, which has nobody to miss it.
+// ending once its box is found gone, with the loss recorded and whether its
+// reply reached anybody as the turn's calls say (here nobody was waiting).
 //
 // Mutation: drop the loss's account from the ending ([sandbox.CoordinatorOptions.TurnLost]),
 // or record it after the row's delete, and a lost turn ends nowhere.
@@ -284,21 +275,16 @@ func TestALostTurnEndsAsLostOnTheExecutorLog(t *testing.T) {
 	}
 }
 
-// A STOP'S ACCOUNT OF WHETHER THE TURN REPLIED READS EVERY ROUND'S CALLS: a turn
-// that replied in an earlier round and was stopped in a later one replied, and
-// one whose calls were elided from the log, the kept ones showing none, or
-// whose log the ending could not read, is not known to have — never "did not
-// reply" off half a log, or none. Unless the log kept the dropped calls'
-// identities: a reply among them replied, and a tally of other tools is a
-// turn known not to have. And a log holding a call still in flight, its outcome
-// unknown, is a turn not known to have replied either: that call may be the
-// reply.
+// A STOP'S ACCOUNT OF WHETHER THE TURN REPLIED READS EVERY ROUND'S CALLS: a
+// reply in an earlier round counts; a log with elided calls whose kept ones
+// show no reply, or one the ending could not read, is unknown, never "did not reply". The
+// dropped calls' kept identities decide it (a reply among them replied, only
+// other tools did not), and a call still in flight leaves it unknown: it may
+// be the reply.
 //
 // Mutation: read the current round's calls alone, answer an elided log with a
-// definite no, or read an unread log as an empty one, and the turn's end says
-// a reply that went out did not; ignore the identities, and a reply from the
-// middle of a long run is unknown; ignore the calls in flight, and a reply
-// still running is said not to have gone.
+// definite no, read an unread log as empty, ignore the identities, or ignore
+// the calls in flight, and a row below misreports the reply.
 func TestAStopsAccountReadsEveryRoundsCalls(t *testing.T) {
 	t.Parallel()
 	e, _ := loggingEngine(t)
@@ -395,15 +381,12 @@ func TestALostPickupsRunIsHeldToItsItem(t *testing.T) {
 	}
 }
 
-// THE CALL A PERSON APPROVED IS A DELIVERY OF ITS TURN. A tool at Needs approval
-// that reaches the party waiting is held, and the run parks on it; the person
-// allows it once, the resume makes it on the engine host, and the job that
-// carries the work on opens. Whether the turn replied is read off the run's row
-// — by a stop's or a loss's account of the turn, and by the collection's own
-// delivery check over the round's calls — and the call was nowhere on it: the
-// job carrying the work on clears the held call, whose result was the only
-// trace of it. A reply that went out was recorded as one that did not, and the
-// next turn told so.
+// THE CALL A PERSON APPROVED IS A DELIVERY OF ITS TURN. A Needs-approval tool
+// that reaches the party waiting is held and the run parks; the person allows
+// it once, the resume makes it on the engine host, and the carry-on job opens,
+// clearing the held call, whose result was its only trace. Whether the turn replied is read off the run's row
+// (by a stop's or loss's account, and by the collection's delivery check), so
+// the made call must be on its log, or a reply that went out reads as none.
 //
 // Mutation: drop the call's append to the log after its result is recorded
 // ([sandbox.PendingStore.RecordHeldResult]), or have heldCommit record it as
@@ -483,9 +466,8 @@ func TestTheCallAPersonApprovedIsADeliveryOfItsTurn(t *testing.T) {
 	}
 	// NEITHER ITS ARGUMENTS NOR THEIR DIGEST RIDE ITS RECORD: they are sealed
 	// on the held call, and a digest in the clear would confirm a guess at
-	// them. The record says the call's identity is withheld, which a later
-	// segment's call log counts as a call of its tool whose arguments are not
-	// known.
+	// them. The record marks the identity withheld, which a later segment's
+	// call log counts as a call of its tool with unknown arguments.
 	recorded, _, err := store.Get(ctx, "run-1")
 	if err != nil {
 		t.Fatalf("reading the run the call was approved on: %v", err)
@@ -533,9 +515,8 @@ func TestTheCallAPersonApprovedIsADeliveryOfItsTurn(t *testing.T) {
 }
 
 // THE ENGINE'S VIEW OF A SEAT'S TOOLS SAYS WHICH WRITES IT PRESUMES, as the
-// runner's does: an account of a turn's calls read off this surface would
-// otherwise name as an act a search through a tool that no hint marks as a
-// read or as a write.
+// runner's does, or an account of a turn's calls would name as an act a search
+// through a tool no hint marks as a read or a write.
 //
 // Mutation: leave PresumedWrites out of deliverySurface, and the search is
 // named as an act.
@@ -561,12 +542,11 @@ func TestTheEnginesViewOfASeatsToolsSaysWhichWritesItPresumes(t *testing.T) {
 }
 
 // THE END CARRIES THE TURN'S OWN DECISION AND BREACH, NEVER THE REVIEWER'S LAST
-// WORD: a turn the loop failed on a guard after its reviewer said `done` ended
-// failed, saying which guard; what the reviewer said landed and what stopped a
-// blocked round are carried; a stop says who stopped it and why; and a turn
-// abandoned, after it broke or as its first launch failed once its run was
-// recorded, ended failed, saying so, with the error that abandoned it redacted
-// in its own account, before any path to the log redacts it again.
+// WORD: a turn failed on a guard after its reviewer said `done` ends failed,
+// naming the guard; what the reviewer said landed and what stopped a blocked
+// round are carried; a stop names who and why; and a turn abandoned after it
+// broke, or as its first launch failed once its run was recorded, ends failed
+// saying so, its error redacted in its own account before any path to the log redacts it.
 //
 // Mutation: read the decision off LastReview, drop the breach's account, leave
 // the stop's author off, or quote an abandoned turn's or launch's error
@@ -660,10 +640,9 @@ func TestTheEndSaysWhatTheEngineAnsweredAColleague(t *testing.T) {
 	}
 }
 
-// A RESUMED SEGMENT THAT PARKS AGAIN RECORDS NO END — its turn goes on, on the
-// run its reviewer's send-back relaunched — and the turn's one end, with the
-// decision that ended it, is recorded once the relaunched run's segment ends
-// it.
+// A RESUMED SEGMENT THAT PARKS AGAIN RECORDS NO END (its turn goes on, on the
+// run its reviewer's send-back relaunched); the turn's one end, with the
+// decision that ended it, is recorded once the relaunched run's segment ends it.
 //
 // Mutation: owe the end of a resumed segment that parked again, and the turn's
 // end carries that segment's send-back rather than the decision that ended it.
@@ -690,10 +669,9 @@ func TestAResumeThatParksAgainRecordsNoEndUntilItsTurnEnds(t *testing.T) {
 }
 
 // A RESUMED TURN A PERSON STOPPED BEFORE ITS FIRST ROUND ENDS AS STOPPED ON THE
-// EXECUTOR LOG, ONCE: the stop lands once the run's completion is claimed —
-// which leaves the claimed run to its turn — and the resumed turn's fence closes
-// it at its first round, owing the end on the run's record for the run's ending
-// to record, with who stopped it and why.
+// EXECUTOR LOG, ONCE: the stop lands once the run's completion is claimed
+// (leaving the claimed run to its turn), and the resumed turn's fence closes it at its first round, owing the end on the
+// run's record for the run's ending to record, with who stopped it and why.
 //
 // Mutation: drop the end from the resumed turn's stop, or record it from the
 // frame and again from the ending, and the turn ends nowhere, or twice.
@@ -724,11 +702,10 @@ func TestAResumedTurnStoppedAtItsFirstRoundEndsAsStopped(t *testing.T) {
 
 // A SEND-BACK WHOSE RELAUNCHED RUN IS STOPPED BEFORE ITS PARK ENDS ON THE
 // EXECUTOR LOG FROM THE STOP'S OWN ENDING, ONCE: the resumed segment that
-// relaunched it records nothing, so the end is recorded after the stop's read
-// has taken the relaunched job's session, which the end's tombstone would
-// otherwise refuse.
+// relaunched it records nothing, so the end follows the stop's read of the
+// relaunched job's session, which the end's tombstone would refuse.
 //
-// Mutation: record the end from the resumed segment's refused park again, and
+// Mutation: record the end from the resumed segment's refused park, and
 // the turn's end is asked of the log twice.
 func TestARelaunchStoppedBeforeItsParkEndsOnTheExecutorLogOnce(t *testing.T) {
 	t.Parallel()
@@ -756,13 +733,11 @@ func TestARelaunchStoppedBeforeItsParkEndsOnTheExecutorLogOnce(t *testing.T) {
 	}
 }
 
-// WHAT THE ENGINE ANSWERED A COLLEAGUE IS WHAT ITS REPLY DID, read off the reply
-// itself: an answer the channel took is replied; the same answer again, to the
-// channel the first one closed — the frame that ends the turn repeated after a
-// crash — is closed and still replied, since the channel holds that answer; one
-// to a channel closed with nothing said on it is closed and not replied; and
-// one the service refused for anything else is not replied either. Each says
-// what it sent.
+// WHAT THE ENGINE ANSWERED A COLLEAGUE IS WHAT ITS REPLY DID: an answer the
+// channel took is replied; the same answer again to the channel it closed (the
+// ending frame repeated after a crash) is closed and still replied; one to a
+// channel closed with nothing said is closed, not replied; one the service
+// refused otherwise is not replied. Each says what it sent.
 //
 // Mutation: say replied before the reply is sent, ignore its error, or read
 // every closed channel as never answered, and a row below reads otherwise.
@@ -811,8 +786,8 @@ func TestWhatTheEngineAnsweredAColleagueIsWhatItsReplyDid(t *testing.T) {
 
 // A STOP DECIDED ON THE RUN A TURN WAS LAUNCHING IS TOLD FROM ONE THE TURN'S OWN
 // FENCE MET, however the turn's frames wrap it: the run's ending answers the
-// first kind's colleague and records its end, from the run's record, and the
-// frame the second's. Answered by both, the asker woke to two answers.
+// first kind's colleague and records its end, the frame the second's, so the
+// asker never wakes to two answers.
 //
 // Mutation: leave the run's own stop unmarked at its launch, or read the mark
 // off the outer error alone, and a row below reads otherwise.
@@ -836,11 +811,10 @@ func TestAStopDecidedOnTheRunIsToldFromTheTurnsOwn(t *testing.T) {
 }
 
 // A RESUMED TURN THAT PANICS ONCE IT HAS BEGUN ENDS FAILED ON THE EXECUTOR LOG,
-// saying it panicked and with what, redacted. The coordinator settles a begun
-// turn that broke without a word of its own, and the frame that owes the turn's
-// end on every other way out is what panicked: it ended nowhere. A turn that
-// panics before it began owes nothing here — its run's ending announces it
-// lost, and owes the turn's end itself.
+// saying it panicked and with what, redacted: the coordinator settles a begun
+// turn that broke silently, and the frame owing the end on every other exit is
+// the one that panicked, so nothing else would end it. A turn that panics before it began owes nothing here:
+// its run's ending announces it lost and owes the end itself.
 //
 // Mutation: drop the end from the panic's recovery, or owe it for a resume
 // whose turn never began, and a row below differs.

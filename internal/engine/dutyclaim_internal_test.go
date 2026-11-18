@@ -16,14 +16,11 @@ import (
 // A DUTY CLAIMED BESIDE THE NODE'S OWN LOOP WAITS FOR THAT LOOP'S CLAIM, AND
 // FOR NOTHING ELSE.
 //
-// TestTheRunningEstateIsTheDeclaredEstate claims the retention duty on a node
-// whose own retention loop claims the same lease under the same owner. A claim
-// made while the loop's is minting its epoch is answered ErrClaimInFlight,
-// and a one-shot claim read that as failure: the test failed in CI whenever
-// the loop's first tick landed there. Held mid-mint here, the claim is
-// answered so, waits for the sibling to commit, and holds the duty. A store
-// that cannot answer is an ErrUnavailable that is not that one, and fails at
-// once.
+// As TestTheRunningEstateIsTheDeclaredEstate does, beside the node's own
+// retention loop under the same owner: a claim made while the loop's mints its
+// epoch is answered ErrClaimInFlight, so claimHeld waits for the sibling to
+// commit and then holds the duty. A store that cannot answer is a different
+// ErrUnavailable, and fails at once.
 func TestADutyClaimedBesideItsOwnLoopWaitsForIt(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

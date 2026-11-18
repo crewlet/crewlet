@@ -19,31 +19,18 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A CHANGELOG AND ITS COPIES, PLAYED ON A BUBBLE'S CLOCK.
-//
-// The cases about how long a hydration waits, and on what, run in a synctest
-// bubble, where a minute of a copy that stopped answering passes at once and a
-// check that something did NOT happen moves the bubble's clock past every
-// bound in play before it reads again. A real broker cannot run there: its
-// read loop is outside the bubble, and a reply it hands a channel made inside
-// one panics. So the changelog here is a model of one, and each consumer a
-// hydration makes is a model of the COPY it is placed on:
-//
-//   - The changelog is the leader's log of every publish, in sequence order
-//     ([fakeChangelog]); a copy holds the log as far as it has applied it, one
-//     message per subject, the last at or below that point, which is how a
-//     copy behind still holds a row the leader has since replaced, or an
-//     earlier hydration's barrier.
-//   - A consumer delivers its copy's store in sequence order from where it
-//     was made to begin, reading the store at each delivery as the server's
-//     getNextMsg does, so a row replaced before the consumer reached it is
-//     delivered as its replacement, past where it stood.
-//   - Each delivery takes as long as its copy's script says to cross, an idle
-//     heartbeat is sent every heartbeat a pull is held with nothing to
-//     deliver, and a pull ends at its expiry, its count or its bytes, as the
-//     server ends one.
-//
-// What a copy does is its [copyScript], per table and per placement.
+// A CHANGELOG AND ITS COPIES, PLAYED ON A BUBBLE'S CLOCK: the timing cases
+// run in a synctest bubble, where a real broker cannot (its read loop is
+// outside the bubble, and its reply to a channel made inside one panics). So
+// the changelog is a model ([fakeChangelog]), and each consumer a model of the
+// copy it is placed on, behaving as its [copyScript] says:
+//   - a copy holds the last message per subject at or below how far it has
+//     applied the log, so a copy behind still holds a replaced row or an
+//     earlier hydration's barrier;
+//   - a consumer reads its copy at each delivery, as the server's getNextMsg
+//     does, so a row replaced before it was reached comes as its replacement;
+//   - each delivery takes its script's crossing time, and a pull ends at its
+//     expiry, count or bytes, with idle heartbeats while it has nothing.
 
 // fakeChangelog is the leader's log of every publish to the memory changelog,
 // in the order it acknowledged them: the op at index i was acknowledged at
@@ -51,11 +38,11 @@ import (
 type fakeChangelog struct {
 	mu  sync.Mutex
 	ops []fakeOp
-	// moved is closed, and replaced, by every publish, so a consumer waiting
-	// for its copy to hold more wakes.
+	// moved is closed and replaced by every publish, waking a consumer that
+	// waits for its copy to hold more.
 	moved chan struct{}
-	// lags is the sequences the copies' running count has not caught up
-	// with yet: a delivery's count leaves them out ([fakeConsumer.pending]).
+	// lags is the sequences the copies' running count leaves out
+	// ([fakeConsumer.pending]).
 	lags map[uint64]bool
 }
 
@@ -101,8 +88,8 @@ func (c *fakeChangelog) lagged(seq uint64) {
 }
 
 // view is what a copy that has applied the log through applied holds of the
-// subjects filter matches: the last message on each subject at or below
-// applied, in sequence order.
+// subjects filters match: each subject's last message at or below applied, in
+// sequence order.
 func (c *fakeChangelog) view(applied uint64, filters []string) []fakeMsg {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -137,45 +124,42 @@ func (c *fakeChangelog) waiting() <-chan struct{} {
 
 // copyScript is how the copy one consumer is placed on behaves.
 type copyScript struct {
-	// behind says the copy has applied the changelog only through holdsTo:
-	// it holds nothing the changelog acknowledged past it, until it catches
-	// up ([copyScript.catchUpAfter]). Otherwise the copy has applied
-	// everything the changelog acknowledged, as it acknowledges it.
+	// behind says the copy has applied the changelog only through holdsTo
+	// until it catches up ([copyScript.catchUpAfter]); otherwise it applies
+	// each publish as it is acknowledged.
 	behind  bool
 	holdsTo uint64
-	// catchUpAfter is how long after the consumer was placed a copy behind
-	// applies the rest, and 0 for one that never does.
+	// catchUpAfter is how long after placement a copy behind applies the
+	// rest, and 0 for one that never does.
 	catchUpAfter time.Duration
 	// every is how long each delivery takes to reach the replay.
 	every time.Duration
-	// silentAfter, when above 0, is the deliveries after which the copy
-	// says nothing more: no delivery, no heartbeat, no status, no answer
-	// to its consumer's info.
+	// silentAfter, when above 0, is the deliveries after which the copy says
+	// nothing more: no delivery, heartbeat, status or info answer.
 	silentAfter int
-	// dropFirstPull is a consumer whose first pull never reached it, as a
+	// mute is a copy silent from its placement on.
+	mute bool
+	// dropFirstPull is a consumer whose first pull never reaches it, as a
 	// cluster drops a new consumer's first pull.
 	dropFirstPull bool
-	// overcounts is how many messages more than the copy holds every
+	// overcounts is how many more messages than the copy holds every
 	// delivery's count says follow it.
 	overcounts uint64
-	// placed, when set, is called once the consumer is placed, before the
-	// reply that made it is counted: a publish racing the replay, landing
-	// before it has read anything.
+	// placed, when set, runs once the consumer is placed, before the reply
+	// that made it is counted: a publish racing the replay before it reads.
 	placed func()
 	// loses, when above 0, is the delivery, counted from the consumer's
 	// first, that the link loses.
 	loses uint64
-	// refuses, when set, is the description of the `409` every pull asked of
-	// the consumer is refused with: a consumer deleted under its pulls, or a
-	// limit the broker holds them to.
+	// refuses, when set, is the description of the `409` every pull is
+	// refused with: a consumer deleted under its pulls, or a broker limit.
 	refuses string
 	// maxBatch, when above 0, is the most messages the consumer takes in one
-	// pull, as the reply that made it says; a pull asking more is refused
-	// (`409 Exceeded MaxRequestBatch of N`), as the broker refuses one.
+	// pull; a pull asking more is refused (`409 Exceeded MaxRequestBatch of
+	// N`), as the broker refuses one.
 	maxBatch int
-	// firstPullAfter, when above 0, is how long the consumer's first pull
-	// takes to reach it: a pull held back by a slow link, which the consumer
-	// holds no word of until then.
+	// firstPullAfter, when above 0, is how long the first pull takes to
+	// reach the consumer across a slow link; it knows nothing of it until then.
 	firstPullAfter time.Duration
 	// probeUnanswered is a consumer whose info nobody answers, while its
 	// deliveries arrive.
@@ -183,9 +167,8 @@ type copyScript struct {
 }
 
 // fakeCopies is every consumer one hydration makes on the model changelog,
-// and what each was asked: the scripts say how each table's placements
-// behave, in order, the last repeating; a table with none is served by a
-// copy that holds everything at once.
+// and what each was asked. scripts gives each table's placements in order, the
+// last repeating; a table with none gets a copy that holds everything at once.
 type fakeCopies struct {
 	log     *fakeChangelog
 	scripts map[string][]copyScript
@@ -201,8 +184,8 @@ type fakeCopies struct {
 	inFlight, mostInFlight int
 }
 
-// openedCopy is one consumer a hydration made: for which table, how, and
-// whether the context it was made on carried a deadline of its own.
+// openedCopy is one consumer a hydration made: its table, its config, and
+// whether the context it was made on carried a deadline.
 type openedCopy struct {
 	table    string
 	cfg      jetstream.ConsumerConfig
@@ -268,8 +251,8 @@ func (c *fakeCopies) place(ctx context.Context, cfg jetstream.ConsumerConfig) *f
 	return cons
 }
 
-// placing is [fakeCopies.place], with the copy's placed hook run once the
-// consumer stands, outside every lock.
+// placing is [fakeCopies.place], then the copy's placed hook, outside every
+// lock.
 func (c *fakeCopies) placing(ctx context.Context, cfg jetstream.ConsumerConfig) *fakeConsumer {
 	cons := c.place(ctx, cfg)
 	if cons.script.placed != nil {
@@ -316,20 +299,20 @@ type fakeConsumer struct {
 	// that never does.
 	caught chan struct{}
 
-	// pos is the stream sequence of the last message the consumer
-	// delivered, or the one before where it begins.
+	// pos is the stream sequence the consumer last delivered, or the one
+	// before where it begins.
 	pos uint64
-	// sent is the consumer's count of its deliveries, and arrived the count
-	// of the last one that reached the replay.
+	// sent counts the consumer's deliveries; arrived is the count of the
+	// last one that reached the replay.
 	sent, arrived uint64
 	pull          *fakePull
 	pullsAsked    int
 	// inflight is a delivery on its way, arriving when arrival fires, or at
-	// once where it is nil.
+	// once where arrival is nil.
 	inflight *fakeMsg
 	arrival  *time.Timer
-	// completed is a pull whose count ran out with bytes to spare: the next
-	// word is its Batch Completed.
+	// completed is a pull whose count ran out with bytes to spare: its Batch
+	// Completed is the next word.
 	completed bool
 	stopped   bool
 }
@@ -343,8 +326,8 @@ type fakePull struct {
 	// heartbeats (nil where it asked for none).
 	expiry *time.Timer
 	beat   *time.Ticker
-	// dropped is a pull the consumer has not received: never, where
-	// reaches is nil, and otherwise once reaches fires.
+	// dropped is a pull the consumer has not received: never where reaches
+	// is nil, otherwise once reaches fires.
 	dropped bool
 	reaches <-chan time.Time
 	// refusal, when set, is the status the consumer refuses the pull with.
@@ -360,8 +343,8 @@ func (f *fakeConsumer) applied() uint64 {
 	return f.copies.log.last()
 }
 
-// catching is what a copy still behind waits on to catch up: never, for one
-// that never does, and nil for one that is not behind or has caught up.
+// catching is what a copy still behind waits on to catch up: a channel that
+// never closes for one that never does, nil once caught up or never behind.
 func (f *fakeConsumer) catching() <-chan struct{} {
 	if !f.script.behind {
 		return nil
@@ -383,9 +366,8 @@ func (f *fakeConsumer) held() []fakeMsg {
 		func(m fakeMsg) bool { return m.seq <= f.pos })
 }
 
-// pending is the copy's running count of what follows the consumer's
-// position: what it holds past it, less what the count has not caught up
-// with, and more by what the script says it overcounts.
+// pending is the copy's running count of what follows the consumer: what it
+// holds past it, less the lagged sequences, plus the script's overcount.
 func (f *fakeConsumer) pending() uint64 {
 	n := uint64(0)
 	for _, m := range f.held() {
@@ -398,16 +380,15 @@ func (f *fakeConsumer) pending() uint64 {
 
 // silent reports a copy that says nothing more.
 func (f *fakeConsumer) silent() bool {
-	return f.script.silentAfter > 0 && f.sent >= uint64(f.script.silentAfter)
+	return f.script.mute || f.script.silentAfter > 0 && f.sent >= uint64(f.script.silentAfter)
 }
 
-// fakeReply is the acknowledgement subject a delivery comes with, which the
-// broker counts against a pull's bytes beside the subject and the payload.
+// fakeReply is a delivery's acknowledgement subject, which the broker counts
+// against a pull's bytes beside the subject and the payload.
 const fakeReply = "$JS.ACK.KV_x.memory.replay.1.1.1.1700000000000000000.0"
 
-// deliver takes the next message the copy holds, moving the consumer past it,
-// and answers it, or nil where the copy holds none; lost says the link lost
-// it.
+// deliver moves the consumer past the next message its copy holds and
+// answers it, or nil where it holds none; lost says the link lost it.
 func (f *fakeConsumer) deliver() (msg *fakeMsg, lost bool) {
 	held := f.held()
 	if len(held) == 0 {
@@ -437,12 +418,10 @@ func fakeSize(m fakeMsg) int {
 }
 
 // fakeJS is the changelog's JetStream for a hydration on a bubble's clock:
-// its identity read, its barriers' publishes and its count of the retired
-// tables, all answered by the model changelog at once unless a case says
-// otherwise. A replay's consumers are the copies' ([fakeCopies]).
-//
-// Embedded rather than stubbed: anything else called on it is a nil
-// interface's panic, which is a case reaching further than it means to.
+// the identity read, barrier publishes and retired tables' counts, answered
+// by the model changelog at once unless a case says otherwise; a replay's
+// consumers are the copies' ([fakeCopies]). Embedded rather than stubbed: any
+// other call panics on the nil interface, a case reaching further than meant.
 type fakeJS struct {
 	jetstream.JetStream
 	log     *fakeChangelog
@@ -453,19 +432,22 @@ type fakeJS struct {
 
 	// identityUnanswered is a changelog whose info nobody answers.
 	identityUnanswered bool
-	// ackAfter, when set, is how long the acknowledgement of the nth
-	// publish of a barrier asked (from 1, each request counted) takes to
-	// come, the publish stored as it comes; a negative one never comes.
+	// identityAt, when set, is when the changelog's info is first answered,
+	// as a reply held behind a link's other traffic.
+	identityAt time.Time
+	// ackAfter, when set, is how long the nth barrier publish's
+	// acknowledgement takes (from 1, each request counted), the publish
+	// stored as it comes; a negative one never comes.
 	ackAfter func(n int) time.Duration
-	// countUnanswered is a count of a retired table whose create nobody
+	// countUnanswered is a retired table's count whose create nobody
 	// answers.
 	countUnanswered bool
 
 	mu sync.Mutex
 	// publishes is the barrier publishes asked so far.
 	publishes int
-	// countAsked is when the first create of a retired table's count was
-	// asked, and deleteBounds the time each consumer's deletion was given.
+	// countAsked is when a retired table's count was first asked, and
+	// deleteBounds the bound each consumer's deletion was given.
 	countAsked   time.Time
 	deleteBounds []time.Duration
 }
@@ -480,6 +462,15 @@ func (j *fakeJS) Stream(ctx context.Context, _ string) (jetstream.Stream, error)
 	if j.identityUnanswered {
 		<-ctx.Done()
 		return nil, ctx.Err()
+	}
+	if wait := time.Until(j.identityAt); !j.identityAt.IsZero() && wait > 0 { //fixedwait:measure how long the bubble's clock has to run to the instant the case scripted
+		answered := time.NewTimer(wait) //fixedwait:simulated an identity reply held behind a link's other traffic
+		defer answered.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-answered.C:
+		}
 	}
 	return fakeStream{info: &jetstream.StreamInfo{Config: jetstream.StreamConfig{
 		Name:     topics.MemoryStream,
@@ -558,9 +549,8 @@ type countedConsumer struct {
 
 func (c countedConsumer) CachedInfo() *jetstream.ConsumerInfo { return c.info }
 
-// capturingJS takes every row a publish of a seat sends, in order, so a case
-// can put a seat's memory as a real publish carries it onto the model
-// changelog.
+// capturingJS records every row a seat's publish sends, in order, so a case
+// can put a seat's memory onto the model changelog as a real publish does.
 type capturingJS struct {
 	jetstream.JetStream
 	ops []fakeOp
@@ -593,8 +583,8 @@ func onto(log *fakeChangelog, ops []fakeOp) []uint64 {
 	return seqs
 }
 
-// notesOnto puts n diary notes of size bytes each on the model changelog,
-// ids prefix and a number, and answers their ids.
+// notesOnto puts n diary notes of size bytes each, ids prefix plus a number,
+// on the model changelog and answers their ids.
 func notesOnto(t *testing.T, log *fakeChangelog, prefix string, n, size int) []string {
 	t.Helper()
 	spec := registered(t, "agent_diary")
@@ -711,9 +701,9 @@ func (f *fakeConsumer) ended() {
 	f.pull = nil
 }
 
-// Next is the next word on the replay's inbox before ctx ends. A word that is
-// ready is answered ahead of ctx's ending, so [fakeConsumer.Ready] reads what
-// the inbox holds on a context already over.
+// Next is the next word on the replay's inbox before ctx ends. A ready word
+// wins over ctx's ending, so [fakeConsumer.Ready] can read the inbox on a
+// context already over.
 func (f *fakeConsumer) Next(ctx context.Context) (jsapi.Event, error) {
 	for {
 		switch {
@@ -746,7 +736,7 @@ func (f *fakeConsumer) Next(ctx context.Context) (jsapi.Event, error) {
 			return jsapi.Event{}, ctx.Err()
 		case f.pull.dropped:
 			// A PULL THE CONSUMER HAS NOT RECEIVED: nothing comes until it
-			// does, and never for one it never will.
+			// does.
 			select {
 			case <-f.pull.reaches:
 			default:
@@ -862,9 +852,9 @@ func (f *fakeConsumer) arrive() (jsapi.Event, error) {
 	return ev, nil
 }
 
-// Quiet answers what the consumer says of itself to a replay that heard
-// nothing for a while, as jsapi.Pulls.Quiet reads its info; a copy that says
-// nothing more answers nothing until ctx ends.
+// Quiet is what the consumer says of itself to a replay that heard nothing
+// for a while, as jsapi.Pulls.Quiet reads its info; a silent copy answers
+// nothing until ctx ends.
 func (f *fakeConsumer) Quiet(ctx context.Context, _ time.Duration) (jsapi.QuietSays,
 	*jetstream.ConsumerInfo, error) {
 

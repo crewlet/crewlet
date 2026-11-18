@@ -55,7 +55,7 @@ func TestAToolsDigestNamesTheServersDefinitionAlone(t *testing.T) {
 	b := NewBridge(discardLogger(), Supervision{})
 	s := b.newServer(Spec{Name: "github", ToolPrefix: "gh_",
 		AnnotationOverrides: map[string]Annotations{"create_issue": {Destructive: Yes}}}, func() {})
-	tool := newTool(s, base, s.spec)
+	tool := newTool(s, base, *s.spec())
 	if tool.Name() != "gh_create_issue" || tool.Annotations().Destructive != Yes {
 		t.Fatalf("the tool is %q with destructive %v, want the prefix and the override applied",
 			tool.Name(), tool.Annotations().Destructive)

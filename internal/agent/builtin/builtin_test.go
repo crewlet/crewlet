@@ -71,15 +71,9 @@ func turnFor(t *testing.T, handle string) *turnctx.Turn {
 	return &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: seat, Org: o}
 }
 
-// registered builds a registry over the given deps and returns one tool.
-// registered builds one tool through the real registration path.
-//
-// IT WIRES A REAL AUTHORIZER, over the real table, rather than a helper that
-// allows: every tool is gated at registration now, and a fixture that
-// bypassed the gate would exercise a path production does not have. What the
-// cases here vary is the PRINCIPAL — see [callerHolding] — so a case about a
-// refusal states the grants it is refused for rather than reaching past the
-// decision.
+// registered builds one tool through the real registration path, under the
+// real authority decision ([gated]); a case about a refusal states the grants
+// it is refused for ([callerHolding]) rather than reaching past the decision.
 func registered(t *testing.T, deps builtin.Deps, name string) tools.Callable {
 	t.Helper()
 	deps = gated(deps)
@@ -107,12 +101,10 @@ func callFor(t *testing.T, tool tools.Callable, turn *turnctx.Turn, args map[str
 	return res
 }
 
-// gated installs the real authority decision on deps that state none.
-//
-// THE REAL ONE, over the real table, rather than a helper that allows: every
-// tool is gated at registration now, and a fixture that bypassed the gate
-// would exercise a path production does not have. What a case varies is the
-// PRINCIPAL — see [callerHolding].
+// gated installs the real authority decision on deps that state none, never a
+// helper that allows: a fixture that bypassed the gate would exercise a path
+// production does not have. What a case varies is the PRINCIPAL
+// ([callerHolding]).
 func gated(deps builtin.Deps) builtin.Deps {
 	if deps.Authorize == nil {
 		deps.Authorize = builtin.Decide(authz.NoChart{})
@@ -132,21 +124,15 @@ func gated(deps builtin.Deps) builtin.Deps {
 	return deps
 }
 
-// everyGrant is the caller a case that is not about authority acts as.
-//
-// NAMED FOR WHAT IT IS rather than called `ctx`: a fixture reading
-// `tool.Call(ctx, …)` says nothing about who is calling, and every one of
-// these calls now goes through a real authority decision. The cases that ARE
-// about authority use [callerHolding] and state the grants they are refused
-// for.
+// everyGrant is the caller a case that is not about authority acts as, named
+// so the call says who is calling; a case about authority uses
+// [callerHolding] and states the grants it is refused for.
 func everyGrant() context.Context { return callerHolding(iam.AllGrants...) }
 
 // colleagueCaller is the caller a case about AUTHORITY acts as: a seat holding
-// every app — which is what a seat always holds — and NOT admin.
-//
-// ADMIN IS THE WHOLE POINT of the distinction. Every relation class checks it
-// before it asks the chart, so a case using [everyGrant] against a chart that
-// refuses everything is allowed anyway and asserts nothing at all.
+// every app, as a seat always does, and NOT admin. Every relation class checks
+// admin before it asks the chart, so [everyGrant] against a chart that refuses
+// everything is allowed anyway and asserts nothing.
 func colleagueCaller() context.Context {
 	return callerHolding(iam.Apps...)
 }
@@ -163,17 +149,12 @@ func personHolding(grants ...iam.Grant) context.Context {
 	return iam.WithPrincipal(context.Background(), p)
 }
 
-// callerHolding is a context carrying a seat that holds the named grants.
-//
-// A SEAT rather than a person, because that is what calls a builtin in a
-// turn: [iam.KindSeat] is what the authority table's own-record and colleague
-// classes compare against, and a fixture acting as a person would answer
-// differently on exactly the rules a seat's tools go through.
-//
-// OUTSIDE ANY TURN, SAID SO ([builtin.OutsideAnyTurn]): a seat's decision with
-// nothing bound is refused, so a case calling a tool directly states the
-// ceiling it means; a call through a gate with a turn binds the turn's own
-// over it.
+// callerHolding is a context carrying a SEAT that holds the named grants, as
+// in a turn: the authority table's own-record and colleague classes compare
+// against [iam.KindSeat], so a person would answer differently on exactly
+// those rules. It is [builtin.OutsideAnyTurn]: a seat's decision with nothing
+// bound is refused, so a direct call states the ceiling it means, and a call
+// through a gate with a turn binds the turn's own ceiling over it.
 func callerHolding(grants ...iam.Grant) context.Context {
 	return builtin.OutsideAnyTurn(iam.WithPrincipal(context.Background(), iam.Principal{
 		ID:   uuid.MustParse("018f3a9c-0000-7000-8000-00000000fee1"),
@@ -202,11 +183,9 @@ func TestATooWithNoBackingIsOmittedNotBroken(t *testing.T) {
 
 func TestEveryBuiltinDeclaresWhetherItIsARead(t *testing.T) {
 	t.Parallel()
-	// THE DELIVERY GATE reads this. A turn that planned to act and then
-	// only read delivered nothing, and the gate can see that only if it
-	// knows which calls were reads — unannotated counts as NOT a known
-	// read, so a read-only builtin left unannotated makes every recall
-	// look like a delivery.
+	// THE DELIVERY GATE reads this to tell a turn that only read from one
+	// that delivered. Unannotated counts as NOT a known read, so a read-only
+	// builtin left unannotated makes every recall look like a delivery.
 	reg := tools.NewRegistry()
 	if _, err := builtin.Register(reg, gated(fullDeps(t))); err != nil {
 		t.Fatalf("Register: %v", err)
@@ -221,19 +200,12 @@ func TestEveryBuiltinDeclaresWhetherItIsARead(t *testing.T) {
 	}
 }
 
-// EVERY BUILTIN ALSO SAYS WHETHER IT WRITES WHERE A HUMAN CAN READ, and that
-// is a different question with a different consumer: the sub-agent guard, not
-// the delivery gate.
+// EVERY BUILTIN ALSO SAYS WHETHER IT WRITES WHERE A HUMAN CAN READ, for a
+// different consumer: the sub-agent guard, not the delivery gate.
 //
-// mcp.WritesToSharedSurface asks "would a sub-agent calling this write to a
-// surface a human reads, under the parent agent's identity?" Its rule is
-// `ReadOnly == No` AND `OpenWorld != No`, and the middle term is a TRI-STATE —
-// so a private-state write that leaves OpenWorld unset is classified as a
-// public one. Three builtins did: the diary, the refined skill and the
-// onboarding marker were denied to workers their parent had explicitly granted
-// them, on the strength of a hint nobody had set. internal/mcp/probe.go
-// reaches past the SDK to stop a third-party server producing that shape by
-// accident; these produced it by hand.
+// mcp.WritesToSharedSurface's rule is `ReadOnly == No` AND `OpenWorld != No`,
+// and OpenWorld is a TRI-STATE: a private-state write that leaves it unset is
+// classified as public, and denied to a worker its parent granted it.
 //
 // The table is EVERY builtin, so a new one cannot be added without deciding
 // which side of the guard it is on.
@@ -298,10 +270,8 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		// another, and every key in it changes.
 		worklet.MoveWorkItemTool: true,
 
-		// AND THE RANKED SEARCH IS A READ. It sat on the default arm,
-		// whose ReadOnly=No with OpenWorld unset is exactly what
-		// WritesToSharedSurface reads as TRUE — so a worker granted it
-		// was refused it, while list_work_items beside it was admitted.
+		// AND THE RANKED SEARCH IS A READ, declared so: the default arm's
+		// ReadOnly=No with OpenWorld unset reads as a shared write.
 		worklet.SearchWorkItemsTool: false,
 
 		// A PROJECT'S FILES: reading one is a read, and writing or
@@ -482,10 +452,9 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 	}
 }
 
-// AN UNSET OPEN-WORLD HINT IS NOT "PRIVATE". The classifier's own documented
-// rule, restated here because three builtins were written against the opposite
-// reading of it — and because the fail-closed default is the half a fix in the
-// other direction would quietly remove.
+// AN UNSET OPEN-WORLD HINT IS NOT "PRIVATE": the classifier's fail-closed
+// default, held here because a fix in the other direction would quietly
+// remove it.
 func TestAnUnsetOpenWorldHintStillReadsAsAPublicWrite(t *testing.T) {
 	t.Parallel()
 	unset := tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No}
@@ -534,10 +503,9 @@ func TestAnAmbiguousLookupRefusesToGuess(t *testing.T) {
 }
 
 // A PERSON'S `${VAR}` CONTACT RESOLVES THROUGH THE LOOKUP THE NODE HANDS IN
-// ([builtin.Deps.Env]), never the process environment behind it. An id sealed
-// in the node's secret store, or set in an environment the node was handed, is
-// the id notification routing mentions that person by, so it is the id a
-// colleague must be found by. The variable is one no process sets.
+// ([builtin.Deps.Env]), never the process environment behind it: the id the
+// node resolves is the one notification routing mentions that person by, so a
+// colleague is found by it. The variable is one no process sets.
 func TestALookupResolvesAContactThroughTheNodesOwnLookup(t *testing.T) {
 	t.Parallel()
 	turn, handed := handedFounder(t, "CREWLET_BUILTIN_TEST_HANDED_SLACK_ID")
@@ -637,41 +605,28 @@ func TestAnAskCarriesTheCallingSeatNotAnArgument(t *testing.T) {
 		t.Errorf("sender role = %q, so the answering prompt cannot say who asked",
 			got.SenderRole)
 	}
-	// The chain travels so the answering seat can refuse past the cap
-	// rather than discovering the loop at runtime.
-	//
-	// THE TURN'S OWN DEPTH, unincremented. a2a.Service.Open is the
-	// chokepoint that adds the hop, and adding one here too charged two
-	// per ask against a default limit of three — so a colleague's first
-	// reply could not be answered, and a two-message exchange died as an
-	// engine guard breach rather than as a conversation.
+	// The chain travels so the answering seat can refuse past the cap. THE
+	// TURN'S OWN DEPTH, unincremented: a2a.Service.Open is the chokepoint
+	// that adds the hop, so adding one here too would charge two per ask,
+	// halving the configured budget.
 	if got.DelegationDepth != 0 || len(got.DelegationChain) != 1 {
 		t.Errorf("delegation = depth %d chain %v, want this turn's own depth "+
 			"and a chain naming the asker", got.DelegationDepth, got.DelegationChain)
 	}
-	// AND THE TURN THAT IS ASKING, which is what the three audit records
-	// this ask publishes are read back by: EventLog.Turn is
-	// `WHERE turn_id = ?`, so an ask that hands over no run id cannot
-	// appear on the page of the turn that made it — and the panel that
-	// names colleagues fails EMPTY rather than saying so.
-	//
-	// THE RUN, not the work key, and both travel. A redelivered trigger
-	// re-derives one work key across several runs, so a pointer naming the
-	// unit of work could not say which attempt did the asking. See
-	// ADR-0017.
+	// AND THE TURN THAT IS ASKING: EventLog.Turn reads the ask's audit
+	// records by `turn_id`, so without the run id the ask is missing from
+	// its turn's page, silently. THE RUN as well as the work key: a
+	// redelivered trigger re-derives one work key across several runs
+	// (ADR-0017).
 	if got.TurnID != "run-1" || got.WorkKey != "wk-1" {
 		t.Errorf("the ask names turn %q / work %q, want the asking turn's",
 			got.TurnID, got.WorkKey)
 	}
 }
 
-// ONE ASK IS ONE HOP, wherever the turn started.
-//
-// The pairing that makes the rule visible: whatever depth the asking turn is
-// at, the tool passes it through and the service adds exactly one. Charging
-// twice halves an operator's configured budget in the direction nobody
-// chose, and the config field states the rule — a turn triggered by another
-// agent inherits its depth plus one.
+// ONE ASK IS ONE HOP, wherever the turn started: the tool passes the turn's
+// depth through and the service adds exactly one, as the config field states
+// (a turn triggered by another agent inherits its depth plus one).
 func TestAnAskChargesOneHopFromTheTurnsOwnDepth(t *testing.T) {
 	t.Parallel()
 	for _, depth := range []int{0, 1, 2, 7} {
@@ -1159,31 +1114,19 @@ func fullDeps(t *testing.T) builtin.Deps {
 		Onboarding: &onboardingStore{},
 		// AND THE WITHDRAWAL, both its halves.
 		Withdraw: builtin.WithdrawDeps{Resolver: (&resolverFake{}).as, Desk: &deskFake{}},
-		// EVERY builtin, so a test that asks "is each one classified"
-		// is asking about the whole set rather than the subset this
-		// helper happened to wire.
+		// EVERY builtin, so a test that asks "is each one classified" asks
+		// about the whole registry: a dependency left out omits its tools,
+		// and the tables above then check them against nothing.
 		ToolSkills: toolSkills{}, Knowledge: searcher{},
-		// THE TRACKER AND THE KNOWLEDGE BASE INCLUDED. Left out, the
-		// classification table below was silently about eleven builtins
-		// rather than the whole registry — which is how
-		// get_work_catalogue was registered with no annotation arm at
-		// all, defaulted to a public write, and denied to every worker
-		// its parent granted it while list_work_items beside it was
-		// admitted.
+		// THE TRACKER AND THE KNOWLEDGE BASE INCLUDED.
 		Work: builtin.WorkDeps{
 			Reader: newFakeTracker(), Writer: newFakeTracker().as,
 			ProjectWriter: func(builtin.Actor) builtin.ProjectWriter {
 				return newFakeTracker()
 			},
-			// THE TWO SEQUENCES AND THE SEARCH, so every tool this
-			// package registers is actually registered here. Left out,
-			// the table below classified tools that were never in the
-			// snapshot — which is how a pure READ came to sit on the
-			// default arm's shared-write verdict unnoticed.
+			// THE TWO SEQUENCES AND THE SEARCH.
 			Merges: newFakeTracker().merges,
-			// AND THE MOVE, which this list lacked from the day the
-			// tool arrived — so the table below never saw it, and its
-			// shared-write verdict was checked by nothing.
+			// AND THE MOVE.
 			Moves:  newFakeTracker().moves,
 			Search: newFakeTracker(),
 			// AND THE PROJECT FILES, both halves and the store their
@@ -1204,34 +1147,26 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// nothing and no box.
 		Render: builtin.RenderDeps{Renderer: &fakeRenderer{},
 			Turns: builtin.NewRenderTurns(func() time.Time { return fakeAt })},
-		// AND GITLET, whose twelve read tools register only over
-		// Gitlet and the requester ceiling's halves beside it, and whose
-		// writes only where its writes are wired too: left out, every walk over
-		// this fixture met their authority rows as rules no registered tool
-		// answers.
+		// AND GITLET: its reads register only with the requester ceiling's
+		// halves beside it, its writes only where writes are wired too. Left
+		// out, an authority row reads as a rule no registered tool answers.
 		Code: writeDeps(newGitletHost(), &codeWrites{}),
 		// AND THE HEALTH TOOLS, over a lease table and the Gitlet nodes' status
-		// scatter, each with the requester ceiling's halves beside it —
-		// fleet_health's its own, code_status's code half wired as the code
-		// reads are: left out, their two rows read as rules no registered
-		// tool answers.
+		// scatter, each with the requester ceiling's halves beside it
+		// (code_status's code half wired as the code reads are).
 		Health: builtin.HealthDeps{Leases: coordmem.New(), Requesters: codeRequesters(),
 			Chart: chartLeads, Status: &statusAsker{}, Code: codeDeps(newGitletHost())},
 		// AND THE SSH TOOLS, over a document that reaches no server, with the
-		// requester ceiling's halves beside them: left out, their two rows
-		// read as rules no registered tool answers.
+		// requester ceiling's halves beside them.
 		SSH: builtin.SSHDeps{Servers: &fakeServers{cfg: &config.Company{}}, Requesters: codeRequesters(),
 			Chart: chartLeads},
-		// AND A DELEGATE'S VERDICT, over a desk holding no request: left
-		// out, its row reads as a rule no registered tool answers.
+		// AND A DELEGATE'S VERDICT, over a desk holding no request.
 		Delegated: builtin.DelegatedDeps{Desk: &fakeDesk{}},
-		// AND THE ATLAS, over the settings acme runs: left out, its three
-		// rows read as rules no registered tool answers; and an agent's two
+		// AND THE ATLAS, over the settings acme runs, and an agent's two
 		// records in it, over its log and a day's count.
 		Atlas:       builtin.AtlasDeps{Settings: runsAcme},
 		AtlasRecord: builtin.AtlasRecordDeps{Log: newAtlasLedger(), Allow: (&dayCounter{}).allow},
-		// AND CHATLET, all three halves: left out, its nine tools
-		// were classified by nothing in the table below.
+		// AND CHATLET, all three halves.
 		Chat: chatDeps(newFakeChat()),
 		// AND THE SEAT'S OWN SESSIONS, all three parts, which the two
 		// session tools register only with.

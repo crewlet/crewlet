@@ -9,53 +9,38 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// A RUN ASKS A PERSON IN THE SHAPE A DECISION IS ASKED: ADR-0068.
+// A RUN ASKS A PERSON IN THE SHAPE A DECISION IS ASKED (ADR-0068): through
+// `ask_and_wait` (internal/agent/builtin), as an [Ask] whose [decision.Decision]
+// offers options the answer names by id and recommends one (ADR-0100). The
+// tool validates it whole before anything is written, so the run can still fix
+// a malformed ask, and [PendingStore.RecordAsk] records it on the job's row.
 //
-// An executor that cannot go on without a person's answer asks through one
-// tool over its bridge (`ask_and_wait`, internal/agent/builtin), and what it
-// asked is an [Ask]: the question in one sentence, its context in Markdown,
-// and a [decision.Decision] whose options the answer names by id, with the
-// one the run recommends and why (ADR-0100). The tool validates it whole
-// before anything is written, so a malformed ask is refused to the run while
-// it can still fix it; the store records it on the job's row
-// ([PendingStore.RecordAsk]); and the collection parks the run on what the
-// row holds, never on anything read out of the box.
-//
-// THE ROW IS THE ONE COPY. The ask is written onto the fields the parked
-// question is read from ([PendingRun.Question], [PendingRun.QuestionContext],
-// [PendingRun.Decision], [PendingRun.Audience], [PendingRun.Branch]) by the
-// write that records it, under the job that asked, and every reader (the park,
-// the answer, the dashboard, the resume) reads them there. A job's question is
-// cleared when the next job opens, exactly as a parked question always was.
+// THE ROW IS THE ONE COPY: written under the job that asked onto
+// [PendingRun.Question], [PendingRun.QuestionContext], [PendingRun.Decision],
+// [PendingRun.Audience] and [PendingRun.Branch], where the park, the answer,
+// the dashboard and the resume read it, never out of the box. A job's
+// question is cleared when the next job opens.
 
 // The bounds of an ask beside its decision's own ([decision.MaxQuestion] and
-// the rest). Each is refused at the tool naming the field, never cut.
+// the rest), each refused at the tool naming the field, never cut.
 const (
-	// MaxAskContextBytes bounds an ask's context.
-	//
-	// SIZED TO WHERE IT TRAVELS, and it travels further than anything else a
-	// run writes: it is a field of the run's coordination row, read and
-	// written whole on every status flip and every listing of active runs
-	// for as long as it waits; the park's announcement; the pane a person
-	// answers it from; and, once answered, the prompt of the run that
-	// carries the work on, which that run's harness re-sends with every request
-	// it makes from then on. 16 KiB is about four thousand tokens: a page of
-	// prose, the bound a run's whole free-text question was held to before
-	// asks were structured, so no context that fitted then is refused now.
-	// Longer is the report put in the wrong place, or a page the context
-	// should link to.
+	// MaxAskContextBytes bounds an ask's context, SIZED TO WHERE IT TRAVELS:
+	// the run's coordination row (read and written whole on every status flip
+	// and active-run listing while it waits), the park's announcement, the
+	// answer pane, and the continuing run's prompt, which its harness re-sends
+	// with every request. 16 KiB, about 4k tokens, is a page of prose; longer
+	// is a report in the wrong place, or a page the context should link to.
 	MaxAskContextBytes = 16 << 10
 
-	// MaxAskToBytes bounds who an ask is put to: `requester`, `team`,
-	// `manager`, or a colleague's handle or name. A handle is a short slug
-	// and a person's name a few words; a label past this names nobody the
-	// chart has, and would only reach the seat's lead chain by fallback.
+	// MaxAskToBytes bounds who an ask is put to. A handle is a short slug and
+	// a name a few words; a label past this names nobody the chart has, and
+	// would only reach the seat's lead chain by fallback.
 	MaxAskToBytes = 128
 )
 
-// The audiences an ask names in words, beside a colleague's handle or name.
-// Resolved against the chart when the run parks (internal/engine's audience
-// resolver), which is where each is defined.
+// The audiences an ask names in words, beside a colleague's handle or name,
+// each defined by internal/engine's audience resolver, which resolves it
+// against the chart when the run parks.
 const (
 	AskToRequester = "requester"
 	AskToTeam      = "team"
@@ -65,8 +50,8 @@ const (
 // Ask is what an executor asked a person.
 type Ask struct {
 	// Question is what the run needs answered, in one sentence: the title
-	// a person reads first. Held to [decision.MaxQuestion], the bound a
-	// decision's question has, because it is drawn in the same place.
+	// a person reads first. Held to [decision.MaxQuestion] because it is
+	// drawn where a decision's question is.
 	Question string
 
 	// Context is what the person needs to answer well, in Markdown: what
@@ -75,12 +60,10 @@ type Ask struct {
 	Context string
 
 	// Decision is the choice the person is asked to make. Required: every
-	// question a run puts to a person offers options and recommends one
-	// (ADR-0100), and the person answers in words through "Something else".
-	// Nil only on a row recorded before that, read as it was stored. Its
-	// Question is the ask's own, and it never carries an `inform`: a run's
-	// answer resumes the run itself, and there is no answered turn of the
-	// seat's to hold to a promise.
+	// run's question offers options and recommends one (ADR-0100), and words
+	// come through "Something else". Nil only on a row recorded before that.
+	// Its Question is the ask's own, and it carries no `inform`: the answer
+	// resumes the run itself, so no answered turn holds a promise.
 	Decision *decision.Decision
 
 	// To is who the run puts the question to: [AskToRequester],
@@ -93,22 +76,20 @@ type Ask struct {
 	// arrives ([PendingRun.Branch]). Empty where it pushed nothing.
 	Branch string
 
-	// Held is the call to a tool at Needs approval the question asks a
-	// person about, nil for a question the run asked itself (ADR-0077).
-	// Its Decision is [HeldDecision], and it is recorded onto the row with
-	// the question ([PendingRun.HeldCall]), its LaunchID the job's.
+	// Held is the call to a tool at Needs approval the question asks
+	// about, nil for a question the run asked itself (ADR-0077). Its
+	// Decision is [HeldDecision]; it is recorded with the question
+	// ([PendingRun.HeldCall]), its LaunchID the job's.
 	Held *HeldCall
 }
 
 // Validate is the whole contract of an ask, every fault at once (ADR-0059),
-// each marked [decision.ErrInvalid], each named once, and each named as the
-// run's arguments carry it (`question`, `options[0].label`, `recommended`):
-// the ask's own fields ([Ask.ValidateOwn]) and its decision's, which sit at
-// the top of those arguments. Nothing is trimmed, defaulted or cut.
-//
-// The run's own question is an agent's, held to the recommendation
+// each marked [decision.ErrInvalid] and named once, as the run's arguments
+// carry it (`question`, `options[0].label`, `recommended`): the ask's own
+// fields ([Ask.ValidateOwn]) and its decision's. Nothing is trimmed,
+// defaulted or cut. The run's own question is held to the recommendation
 // ([decision.Decision.ValidateRecommendedAt]); a held call's is the engine's
-// own approval, with no view to recommend, held to the shape alone.
+// approval, with no view to recommend, held to the shape alone.
 func (a Ask) Validate() error {
 	found := a.ownFaults()
 	if a.Decision != nil {
@@ -123,10 +104,9 @@ func (a Ask) Validate() error {
 	return decision.Join(found)
 }
 
-// ValidateOwn is the ask's own contract, without its decision's shape: what a
-// caller that checks the decision itself (`ask_and_wait`, against the world as
-// well as its shape) joins its own refusal to. The question is the decision's
-// where the ask has one, and checked there once rather than twice.
+// ValidateOwn is the ask's own contract, without its decision's shape, for a
+// caller that checks the decision itself (`ask_and_wait`). Where the ask has a
+// decision, the question is checked there, once.
 func (a Ask) ValidateOwn() error { return decision.Join(a.ownFaults()) }
 
 func (a Ask) ownFaults() []error {
@@ -141,11 +121,9 @@ func (a Ask) ownFaults() []error {
 	}
 	note(decision.CheckText("context", a.Context, MaxAskContextBytes, false))
 	note(decision.CheckText("to", a.To, MaxAskToBytes, true))
-	// THE ENGINE'S ONE GRAMMAR OF A BRANCH (ADR-0008), whose length rule is
-	// the bound: one git refuses, one that is not UTF-8 (the row is JSON, so
-	// its bytes would be replaced and it would arrive as another branch's
-	// name), or one past [gitref.MaxBranchBytes], a ref no push to
-	// Gitlet can create.
+	// THE ENGINE'S ONE GRAMMAR OF A BRANCH (ADR-0008): it refuses what git
+	// does, non-UTF-8 (the JSON row would turn it into another branch's
+	// name), and past [gitref.MaxBranchBytes], a ref no push to Gitlet makes.
 	if a.Branch != "" && !gitref.ValidBranch(a.Branch) {
 		note(fieldRefusal("branch", fmt.Sprintf("is %q, which is not a branch name git "+
 			"accepts (or is not UTF-8, or is past %d bytes): name the branch exactly as you "+
@@ -164,8 +142,8 @@ func (a Ask) ownFaults() []error {
 	if d := a.Decision; d != nil {
 		if d.Question != a.Question {
 			// ONE QUESTION, never two that can disagree: the tool builds
-			// the decision from the ask's own question, so a mismatch is
-			// a caller assembling the value by hand.
+			// the decision from the ask's question, so a mismatch is a
+			// caller assembling the value by hand.
 			note(fieldRefusal("question", "differs from its decision's; a run's "+
 				"decision is asked in the ask's own words"))
 		}
@@ -185,17 +163,14 @@ func fieldRefusal(field, what string) error {
 }
 
 // Redacted is the ask with a secret it carries replaced by its marker, in
-// every text a person or a model reads: the question, the context, and each
-// part of the decision. Redacted where it is recorded, as everything read
-// out of a run is, because the row, the announcement and the continuing
-// run's prompt keep it.
+// every text a person or a model reads. Redacted where it is recorded,
+// because the row, the announcement and the continuing run's prompt keep it.
 func (a Ask) Redacted() Ask {
 	a.Question = redact.Secrets(a.Question)
 	a.Context = redact.Secrets(a.Context)
-	// A BRANCH IS AN IDENTIFIER, so one a redaction would change is
-	// dropped rather than recorded as its marker, which names no branch a
-	// fresh machine could check out: its answer then tells a re-seeded run
-	// in general terms to check out the branch it pushed.
+	// A BRANCH IS AN IDENTIFIER: one a redaction would change is dropped,
+	// since a marker names no branch to check out, and the answer then
+	// tells a re-seeded run in general terms to check out what it pushed.
 	if redact.Secrets(a.Branch) != a.Branch {
 		a.Branch = ""
 	}
@@ -211,9 +186,7 @@ func (a Ask) Redacted() Ask {
 		d.Rationale = redact.Secrets(d.Rationale)
 		d.Evidence = make([]decision.Evidence, len(a.Decision.Evidence))
 		for i, evidence := range a.Decision.Evidence {
-			// THE REFERENCE TOO: a url the run cites can carry a token in
-			// its query, and a marker in its place leaves a link that
-			// names where it went without what opened it.
+			// THE REFERENCE TOO: a cited url can carry a token in its query.
 			evidence.Ref = redact.Secrets(evidence.Ref)
 			evidence.Label = redact.Secrets(evidence.Label)
 			d.Evidence[i] = evidence
@@ -230,8 +203,8 @@ const (
 	// AskRecorded is an ask on the job's row, which the run parks on once
 	// its harness ends.
 	AskRecorded AskOutcome = "recorded"
-	// AskAlreadyAsked is a job that asked a question already, which stands.
-	// A run asks one question at a time, because one answer resumes it.
+	// AskAlreadyAsked is a job that asked a question already, which stands:
+	// one answer resumes a run, so it asks one question at a time.
 	AskAlreadyAsked AskOutcome = "already_asked"
 	// AskNotRunning is a row that does not hold this job running, so
 	// nothing can park on the ask: the job ended, was stopped, or was
@@ -250,17 +223,14 @@ func (r PendingRun) asked() bool { return r.Question != "" }
 
 // AskedBy reports whether job `launch` is the job the row holds and has asked
 // a person a question ([PendingStore.RecordAsk]): the job is then parking, and
-// its run's only remaining move is to end.
-//
-// A job the row no longer holds has asked nothing the row records, whatever it
-// called: its question, if any, went with it.
+// its run's only remaining move is to end. A job the row no longer holds has
+// asked nothing, whatever it called: its question went with it.
 func (r PendingRun) AskedBy(launch string) bool {
 	return launch != "" && r.LaunchID == launch && r.asked()
 }
 
-// withoutQuestion is the row as a collection that parks nothing reads it: the
-// job's question, its context, its decision, its audience, its branch and any
-// call it held gone, whatever the job asked on its way out.
+// withoutQuestion is the row as a collection that parks nothing reads it:
+// everything the job asked on its way out gone.
 func withoutQuestion(r PendingRun) PendingRun {
 	r.Question, r.QuestionContext, r.Decision, r.Audience, r.Branch = "", "", nil, "", ""
 	r.HeldCall = nil
@@ -268,13 +238,9 @@ func withoutQuestion(r PendingRun) PendingRun {
 }
 
 // AnswerText is the answer a parked run reads, from what a person gave: the
-// option they chose, as the run's own decision names it, and their words. A
-// choice the decision does not offer is an error, because the run would be
-// told it chose something nobody offered.
-//
-// THE RUN READS THE CHOICE IN WORDS AND BY ID, because it is what it asked:
-// the label is what it wrote for the option, and the id is what it named it
-// by in its own reasoning.
+// option they chose and their words. A choice the decision does not offer is
+// an error, because the run would be told it chose something nobody offered.
+// The choice reads as the label the run wrote and the id it reasoned with.
 func AnswerText(d *decision.Decision, choice, words string) (string, error) {
 	words = strings.TrimSpace(words)
 	if choice == "" {

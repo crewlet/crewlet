@@ -15,18 +15,13 @@ import (
 
 // THE COMMITTER STOPS BEFORE THE ESTATE STOPS ANSWERING.
 //
-// Withdrawing the estate subject cancels every answer in flight before it
-// waits for them — the queue's contract for every Serve — and a proposal still
-// queued in the committer is one of them: answered with its own cancellation,
-// which the router hands back to the receiving node as the push's FINAL
-// answer, so a person's push fails with `context canceled`, possibly after its
-// batch landed. A committer stopped first answers every queued proposal "not
-// serving" — the runner-up decides it under the same push id — and finishes
-// the batch in flight with its real outcome before anything is cancelled. (A
-// withdrawn subject costs no wait either way: an ask finds no responder at
-// once.) The teardown is one function read by nobody twice, so its order is
-// held here, from the source: the behavioural form, a peer's queued proposal
-// decided by the runner-up during a stop, needs a fleet.
+// Withdrawing the estate subject cancels every answer in flight (the queue's
+// Serve contract), a proposal queued in the committer among them, and the
+// router hands that cancellation back as the push's FINAL answer (`context
+// canceled`), possibly after its batch landed. A committer stopped first answers queued proposals
+// "not serving" (the runner-up decides them under the same push id) and
+// finishes its batch in flight. Held from the source: the behavioural form
+// needs a fleet.
 func TestTheCommitterStopsBeforeTheEstateStopsAnswering(t *testing.T) {
 	t.Parallel()
 	at := teardownOrder(t)
@@ -48,11 +43,9 @@ func TestTheCommitterStopsBeforeTheEstateStopsAnswering(t *testing.T) {
 
 // THE CODE-RETENTION LOOP STOPS BEFORE THE DUTIES ARE GIVEN BACK.
 //
-// The loop claims its duty afresh every turn, so one still running when the
-// teardown releases the node's duties takes the code-retention duty straight
-// back — and the node exits holding it, keeping every other node from purging
-// for the duty's whole TTL. Every duty loop is stopped before the release; this
-// one is held to it from the source, as the committer's order is above.
+// The loop claims its duty afresh every turn, so one still running after the
+// release takes the duty back and the node exits holding it, keeping every
+// other node from purging for the duty's whole TTL.
 func TestTheCodeRetentionLoopStopsBeforeTheDutiesAreReleased(t *testing.T) {
 	t.Parallel()
 	at := teardownOrder(t)
@@ -73,13 +66,10 @@ func TestTheCodeRetentionLoopStopsBeforeTheDutiesAreReleased(t *testing.T) {
 
 // THE ADMISSION IS WITHDRAWN ONLY ONCE EVERY STATE-LOG PUBLISHER HAS STOPPED.
 //
-// The admission says "this process may be publishing", and it is the one
-// thing that keeps a capacity coordinator from taking its exclusion while
-// this node runs (statelog.AdmissionBlocks): withdrawn while a loop still
-// appends, the coordinator may seal a log this node is still writing — the
-// moving quantity the window exists to stop. Every loop the teardown stops
-// that appends to a log is named here, each held to precede the withdrawal,
-// from the source, as the committer's order is above.
+// The admission is what keeps a capacity coordinator from taking its exclusion
+// while this node may publish (statelog.AdmissionBlocks): withdrawn while a
+// loop still appends, the coordinator may seal a log this node is writing.
+// Every teardown loop that appends to a log is named below.
 //
 // Mutation: move any of them after `e.withdraw(ctx)` and its row goes red.
 func TestEveryStateLogPublisherStopsBeforeTheAdmissionIsWithdrawn(t *testing.T) {
@@ -115,15 +105,11 @@ func TestEveryStateLogPublisherStopsBeforeTheAdmissionIsWithdrawn(t *testing.T) 
 // THE SANDBOX IS STOPPED ONLY BY THE TEARDOWN, AND THE TEARDOWN COMES ONLY AFTER
 // THE DRAIN.
 //
-// The sandbox coordinator holds this process's taker lease until its last keep
-// has ended, through a drain that gives presence up at its first step while the
-// node's turns finish and their captures upload: a peer settles a capture whose
-// taker's lease is gone as one that will never be kept, and the turn's end then
-// tombstones the turn before the draining node's record lands — the turn's last
-// session lost. So the coordinator is stopped in one place, the teardown, and
-// the engine's stop drains before it tears down. Held from the source, as the
-// teardown's own order is above: the behavioural form, a drain with a keep
-// under way on a member of a fleet, needs the fleet.
+// The sandbox coordinator holds the taker lease until its last keep ends,
+// through a drain that gives presence up first while captures still upload: a
+// peer settles a capture whose taker's lease is gone as never kept, and the
+// turn is tombstoned before its last session lands. Held from the source: the
+// behavioural form needs a fleet.
 //
 // Mutation: stop the sandbox from the drain, or from anywhere but the teardown,
 // or tear down before draining in Stop, and a check below goes red.
@@ -262,12 +248,10 @@ func teardownOrder(t *testing.T) map[string]int {
 }
 
 // THE COMMITTER AND ITS WRITERS ARE CLOSED FIRST AND DRAINED TOGETHER, under
-// the teardown's one bound ([stopTogether]): while the committer drains a
-// batch a broker election holds, its sibling writer is already closed — a
-// write arriving then is answered not serving and taken to the runner-up,
-// never admitted and published on a node that is stopping — and the writer's
-// publish already in flight finishes inside the bound beside the committer's
-// drain, rather than being handed a context the committer's drain had spent.
+// the teardown's one bound ([stopTogether]): while the committer drains a batch
+// an election holds, the writer is already closed (a new write goes to the
+// runner-up), and its publish in flight finishes inside the bound rather than
+// on a context the committer's drain spent.
 //
 // Mutation: stop them one after another, and the writer is still open while
 // the committer drains; close them first and still drain one after another,
@@ -316,11 +300,9 @@ func TestTheCodeWritersAreClosedFirstAndDrainedTogether(t *testing.T) {
 	}
 }
 
-// stoppingWriter is a writer as the teardown stops it ([closingWriter]): Close
-// marks it closed, and Stop closes it and drains — a stuck one until its
-// context ends, as a committer whose batch an election holds; another until
-// its publish in flight finishes or its context ends — recording how its
-// context stood as the drain ended.
+// stoppingWriter is a [closingWriter]: Stop closes it and drains (a stuck one,
+// like a committer an election holds, until its context ends; another until
+// its publish in flight finishes), recording its context's error at the end.
 type stoppingWriter struct {
 	closed   atomic.Bool
 	stuck    bool

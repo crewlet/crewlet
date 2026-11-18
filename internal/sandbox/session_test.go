@@ -23,30 +23,28 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
-// sessionWrites is the executor log's writes as a case plays them, answered as
-// the engine answers them ([LogAnswer]): every capture and end asked, in the
-// order asked, and what each attempt answers. An END TOMBSTONES ITS TURN, as
-// the log's does: a capture of an ended turn is refused, so a case can see an
-// end that came before the turn's last capture; and a second end of a turn
-// lands as the first, as the log's refusal of an end already made does.
+// sessionWrites plays the executor log's writes, answered as the engine
+// answers them ([LogAnswer]): every capture and end asked, in order, and each
+// attempt's answer. An END TOMBSTONES ITS TURN, as the log's does: a later
+// capture of the turn is refused, so a case sees an end that came first; a
+// second end of a turn lands as the first.
 type sessionWrites struct {
 	mu       sync.Mutex
 	captures []capturedRecord
 	ends     []EndRecord
 	order    []string
 	ended    map[string]bool
-	// refuse answers every capture attempt while it is set, as a log that
-	// did not answer does.
+	// refuse, while set, answers every capture attempt as a silent log does.
 	refuse error
-	// holding, while set, answers no capture attempt until the attempt's own
-	// context ends, as a log that holds on to a write does.
+	// holding, while set, answers no capture attempt before its own context
+	// ends, as a log holding on to a write does.
 	holding bool
 }
 
-// Begin answers a turn's first read held wherever it names a base and the turn
-// has not ended, as the log does where nothing moved the base before it landed.
-// What a begin carries is the conversation cases' to read (conversationLog);
-// these cases launch turns that read no conversation.
+// Begin answers a turn's first read held where it names a base and the turn
+// has not ended, as the log does when nothing moved the base. What a begin
+// carries is for the conversation cases (conversationLog); these launch turns
+// that read none.
 func (w *sessionWrites) Begin(_ context.Context, b BeginRecord) (BeginAnswer, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -119,8 +117,8 @@ func (w *sessionWrites) answer(err error) {
 	w.refuse = err
 }
 
-// holdOn makes every capture attempt from here on wait for its own context to
-// end, answered by nothing.
+// holdOn makes every later capture attempt wait, unanswered, for its own
+// context to end.
 func (w *sessionWrites) holdOn() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -145,9 +143,9 @@ func (w *sessionWrites) calls() []string {
 	return slices.Clone(w.order)
 }
 
-// sessionKeep is the engine's part of keeping a session, as a case plays it:
-// the handed secrets "sealed" as the turn they belong to beside their bytes, a
-// spool of the archive as it came, and an upload that keeps what it read.
+// sessionKeep plays the engine's part of keeping a session: the handed
+// secrets "sealed" as their turn's beside their bytes, a spool of the archive
+// as it came, and an upload that keeps what it read.
 type sessionKeep struct {
 	mu     sync.Mutex
 	policy SessionPolicy
@@ -155,16 +153,15 @@ type sessionKeep struct {
 	// coordinator ages the key against that clock ([objstore.RecordWithin]).
 	now    func() time.Time
 	putErr error
-	// sealErr, when set, fails every seal once its archive has streamed into
-	// the spool: a spool left half written. refuseSealOf, when set, fails the
-	// seal of the one archive whose bytes it holds, the same way, and
-	// refusePutOf the upload of the one spool whose bytes it holds: a case's
-	// two reads of one job told apart by what each took.
+	// sealErr, when set, fails every seal after its archive has streamed into
+	// the spool, leaving it half written. refuseSealOf fails the same way the
+	// seal of the archive holding its bytes, and refusePutOf the upload of the
+	// spool holding its bytes: a case's two reads of one job told apart by what
+	// each took.
 	sealErr                   error
 	refuseSealOf, refusePutOf []byte
-	// gate, when set, holds every upload until it is closed: a keep that
-	// takes its time. mintGate, when set, holds every keep at its first step,
-	// before its upload, the same way.
+	// gate, when set, holds every upload until closed; mintGate holds every
+	// keep at its first step, before its upload.
 	gate     chan struct{}
 	mintGate chan struct{}
 	// uploaded is what every upload read.
@@ -273,15 +270,13 @@ const handedToken = "the-entrys-own-token"
 //
 // EVERY CASE OF A KEEPING OR A LOGGING RIG RUNS IN ONE ([keepingRig],
 // [loggingRig]). A rig cuts a record's budget to 200 ms and ages a capture on
-// its own clock, which only a case moves, while an end, or a read standing by,
-// waits for a capture on the clock it runs on: an end for each capture's whole
-// life from when it first sees it ([captureLife], over an hour), a read
-// standing by for the capture it stands by for ([standbyWait]). On
-// the machine's clock a runner starved for those 200 ms inside a keep's stamp
-// of its capture's outcome left the capture begun with nothing to settle it,
-// and the end's wait outlasted the package's timeout (#1022). In the bubble
-// the budget is spent by the stamp's own waits alone, and a wait that runs out
-// its bound does so in virtual time.
+// a clock only the case moves, while an end or a read standing by waits for a
+// capture on the clock it runs on: an end for the capture's whole life
+// ([captureLife], over an hour), a read for [standbyWait]. On the machine's
+// clock a starved runner spends the 200 ms inside a keep's stamp, leaving the
+// capture begun with nothing to settle it and the end's wait past the
+// package's timeout; in the bubble only the stamp's own waits spend the
+// budget, and a wait that runs out its bound does so in virtual time.
 func inBubble(t *testing.T, f func(*testing.T)) {
 	t.Helper()
 	synctest.Test(t, f)
@@ -291,15 +286,13 @@ func inBubble(t *testing.T, f func(*testing.T)) {
 var bubbleEpoch = time.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC)
 
 // mustBeBubbled fails t unless it runs in a synctest bubble ([inBubble]): its
-// clock must read within a year of [bubbleEpoch], where every bubble's starts
-// and from where it moves by the case's own waits alone. No case waits a year,
-// and the machine's clock passed that in 2001.
+// clock must read within a year of [bubbleEpoch], where every bubble's clock
+// starts and moves by the case's own waits alone. No case waits a year, and
+// the machine's clock passed that in 2001.
 //
-// THE RIGS' BINDING AT RUN TIME. Their bubble declarations bind them where they
-// are written, and internal/fixedwait verifies that at every reference to them;
-// it judges a bubble lexically, so a literal written inside one but handed to
-// something that runs it after the bubble — the outer t's Cleanup — passes it.
-// This check does not.
+// It checks the rigs' binding at run time: internal/fixedwait judges their
+// bubble declarations lexically, so a literal written inside a bubble but run
+// after it (by the outer t's Cleanup) passes fixedwait, not this.
 //
 //fixedwait:bubble
 func mustBeBubbled(t *testing.T) {
@@ -313,10 +306,10 @@ func mustBeBubbled(t *testing.T) {
 // keepingRig is a coordinator rig that keeps sessions: its runner's boxes hold
 // one, and its records are the case's to read and to answer.
 //
-// ONLY IN A BUBBLE ([inBubble]), which it checks ([mustBeBubbled]): its budgets
-// are cut to a record's 200 ms, and its waits for a capture read the run's row
-// on production's tick ([captureWaitTick]), which only the bubble's clock makes
-// cheap — an end's wait that runs out its bound takes a thousand reads, not
+// ONLY IN A BUBBLE ([inBubble]), checked by [mustBeBubbled]: its budgets are
+// cut to a record's 200 ms, and its waits for a capture read the run's row on
+// production's tick ([captureWaitTick]), which only the bubble's clock makes
+// cheap: an end's wait that runs out its bound takes a thousand reads, not
 // millions.
 //
 //fixedwait:bubble
@@ -515,18 +508,17 @@ func TestANewRoundFoldsItsTurnsEarlierCallsIntoTheLog(t *testing.T) {
 }
 
 // A CAPTURE'S PLACE ONLY GROWS ON THE ROW, AND IS ITS TAKE'S. A newer capture
-// takes the row, the same one moves on only to its outcome and only by the
-// take that reserved it — the instant it stamped the place at — nothing older
-// or backwards lands, and a capture that landed is the turn's kept one
-// wherever it is newer than that — an unresolved capture answered after a newer
-// one began included. A take's own stamp asked again, the store's answer to
-// the first lost, is answered taken: the place is its own.
+// takes the row; the same one moves on only to its outcome, only by the take
+// that reserved it (the instant it stamped); nothing older or backwards lands;
+// and a landed capture is the turn's kept one wherever newer than that, even
+// an unresolved one answered after a newer one began. A take's own stamp
+// asked again, the first answer lost, is answered taken.
 //
-// Mutation: let an equal place take any state, or any take's stamp, keep only
-// the newest attempt, or answer a stamp the row holds already as not taken, and
-// a late `begun` takes a landed capture back, another read's refusal settles a
-// place it never held, the answered older capture is never kept, or a take
-// reads its own reservation as another read's.
+// Mutation: let an equal place take any state or take's stamp, keep only the
+// newest attempt, or answer the row's own stamp as not taken, and a late
+// `begun` takes a landed capture back, another read's refusal settles a place
+// it never held, the answered older capture is never kept, or a take reads
+// its own reservation as another read's.
 func TestACapturesPlaceOnlyGrowsOnTheRow(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -576,21 +568,18 @@ func TestACapturesPlaceOnlyGrowsOnTheRow(t *testing.T) {
 	}
 }
 
-// A COLLECTION TAKES THE JOB'S SESSION BEFORE IT PAUSES THE BOX AND KEEPS IT
-// OFF THE READ: the archive the run's script packed at its harness's exit,
-// scrubbed of what the launch handed the box and bounded by the archive's
-// bound, spooled, and from then uploaded and recorded off the read, which goes
-// on to pause the box, at the launch's ordinal and its own, its digest kept in
-// the box, stamped landed on the row with what the job had answered and read
-// through; and the launch's own record says what was taken, and which session
-// it ran. That the keep waits on nothing the read does after its take is
-// [TestACollectionsKeepStartsOnceItsTakeIsSpooled]'s.
+// A COLLECTION TAKES THE JOB'S SESSION BEFORE IT PAUSES THE BOX, AND KEEPS IT
+// OFF THE READ: the archive the script packed at its harness's exit, scrubbed
+// of what the launch handed the box, bounded, spooled, uploaded and recorded
+// at the launch's ordinal and its own, its digest kept in the box, and stamped
+// landed with what the job answered and read through; the launch's record
+// says what was taken and which session it ran. That the keep waits on nothing
+// after the take is [TestACollectionsKeepStartsOnceItsTakeIsSpooled]'s.
 //
-// Mutation: take the session after the pause (the fake reads no paused box),
-// pack it on demand for a job that packed its own, drop what the box was
-// handed from the scrub, stamp before the record lands, leave the record's
-// fields off `executor_collected`, or leave the spool behind the keep, and a
-// check here goes red.
+// Mutation: take after the pause (the fake reads no paused box), pack on
+// demand for a job that packed its own, drop the handed secrets from the
+// scrub, stamp before the record lands, leave its fields off
+// `executor_collected`, or leave the spool behind, and a check goes red.
 func TestACollectionTakesTheSessionBeforeThePauseAndKeepsItOffTheRead(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -645,15 +634,13 @@ func TestACollectionTakesTheSessionBeforeThePauseAndKeepsItOffTheRead(t *testing
 }
 
 // A COLLECTION'S KEEP STARTS ONCE ITS TAKE IS SPOOLED, never behind what its
-// read does after the take. A collection goes on after its take to record how
-// its job's harness ended, pause the box and record the pause, and a
-// collection of a box this node hosts reads under its admission, which has no
-// deadline: a keep started only once the read returned waited on a pause only
-// the box's backend bounds, and the stamp of what came of the capture waited
-// with it, past the budget every reader of a begun capture holds it to. Here
-// the box's pause blocks until the case lets it go, and within a keep's whole
-// budget the capture is uploaded once, recorded once and stamped landed while
-// the pause still blocks.
+// read does after the take: recording how the harness ended, pausing the box
+// and recording the pause. A collection of a box this node hosts reads under
+// its admission, which has no deadline, so a keep started once the read
+// returned waits on a pause only the box's backend bounds, and its capture's
+// stamp with it, past the budget every reader of a begun capture holds it to.
+// Here the pause blocks until the case lets it go, and within a keep's whole
+// budget the capture is uploaded, recorded and stamped landed once each.
 //
 // Mutation: start the keep only once the read returns (`defer c.keepLater`),
 // and nothing is uploaded, recorded or stamped while the pause blocks.
@@ -710,12 +697,11 @@ func TestACollectionsKeepStartsOnceItsTakeIsSpooled(t *testing.T) {
 // A COLLECTION'S RECORD OF ITS BOX'S PAUSE IS HELD TO THE ROOM ITS READ LEAVES
 // IT ([Coordinator.pauseRoom]): a teardown's grace and this node's crossing of
 // one change of the run's row. A collection of a box this node hosts reads
-// under its admission, which has no deadline, and the store's contract
-// promises no bound to a caller that sets none: held to the read's context
-// alone, a store that never answered the record held the read, and the resume
-// of the turn it collects for, for as long as it did not. Here the store never
-// answers it, and the collection returns exactly that room after the pause.
-// Exact, in a bubble.
+// under its admission, which has no deadline, and the store promises no bound
+// to a caller that sets none: held to the read's context alone, a store that
+// never answers holds the read, and its turn's resume, indefinitely. Here the
+// store never answers, and the collection returns exactly that room after the
+// pause (exact, in a bubble).
 //
 // Mutation: record the pause under the read's context alone, and the
 // collection is still waiting a minute past its room.
@@ -813,20 +799,14 @@ func TestAJobTakenOnceItHadEndedIsNotTakenAgain(t *testing.T) {
 	}
 }
 
-// A RECORD THE LOG DOES NOT ANSWER IS ASKED AGAIN UNDER ITS ONE OPERATION — the
-// operation its turn, its launch and its place derive — and is left UNRESOLVED
-// on the row once its budget is spent; the turn's end asks it once more under
-// that same operation before it records the end, and the next launch's capture
-// is another operation.
-//
-// The operation is derived from the record's place by the engine, which states
-// the record as the log's (internal/engine's
-// TestTheSandboxsRecordsAreTheLogsUnderTheOperationTheirPlaceDerives); here,
-// every attempt carries the one place.
-//
-// IN A SYNCTEST BUBBLE, so the asks again are counted against the rig's record
-// budget on the bubble's clock, which only their own waits advance: on the wall
-// clock a starved runner could spend the budget inside the first ask.
+// A RECORD THE LOG DOES NOT ANSWER IS ASKED AGAIN UNDER ITS ONE OPERATION —
+// derived from its turn, its launch and its place — and left UNRESOLVED on the
+// row once its budget is spent; the turn's end asks it once more under that
+// operation before recording the end, and the next launch's capture is
+// another operation. The engine derives the operation from the place
+// (internal/engine's TestTheSandboxsRecordsAreTheLogsUnderTheOperationTheirPlaceDerives);
+// here every attempt carries the one place. In a bubble ([inBubble]), so the
+// asks are counted against the record budget on a clock only their waits move.
 //
 // Mutation: stamp the place anew per attempt, skip the end's ask, or keep the
 // last launch's place for the next, and the places below stop matching or
@@ -995,10 +975,10 @@ func TestTheSwitchOffKeepsNothingAndStillEndsTheTurn(t *testing.T) {
 // the session its script left, final, and reclaims the box after; the capture
 // is recorded before the turn's end, which says the turn was stopped.
 //
-// Mutation: take the stop's session on the frame that decided it, as the read
-// once did, packed as it stands, or after the reclaim (the fake reads no
-// reclaimed box), and the frame is held for an upload, the job's own end is
-// packed over, or there is no box left to read.
+// Mutation: take the stop's session on the frame that decided it, packed as
+// it stands, or after the reclaim (the fake reads no reclaimed box), and the
+// frame is held for an upload, the job's own end is packed over, or there is
+// no box left to read.
 func TestAStopTakesItsSessionOffTheFrameAndBeforeTheReclaim(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -1094,15 +1074,14 @@ func (s *failsAReadOfABegunCapture) Get(ctx context.Context, turnID string) (Pen
 	return run, found, err
 }
 
-// A READ THAT FAILS WHILE A CAPTURE IS KEPT IS NO ANSWER. A turn's end waits for
-// the turn's capture to land, reading the run's row on a tick, because the end
-// tombstones the turn and a capture recorded after it is refused. A read that
-// failed ended that wait: the end was recorded over the capture still being
-// kept, its tombstone refused the turn's last session, and the end named the
-// capture begun and never finished.
+// A READ THAT FAILS WHILE A CAPTURE IS KEPT IS NO ANSWER. A turn's end waits
+// for the turn's capture to land, reading the run's row on a tick, because the
+// end tombstones the turn and a capture recorded after it is refused. A failed
+// read ending that wait would record the end over the capture still being
+// kept, its tombstone refusing the turn's last session.
 //
-// Mutation: end the wait on a read that failed ([Coordinator.awaitCapture]), and
-// the end comes before the capture, which the log refuses.
+// Mutation: end the wait on a read that failed ([Coordinator.awaitCapture]),
+// and the end comes before the capture, which the log refuses.
 func TestAReadThatFailsWhileACaptureIsKeptIsNoAnswer(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -1144,11 +1123,10 @@ func TestAReadThatFailsWhileACaptureIsKeptIsNoAnswer(t *testing.T) {
 	})
 }
 
-// AN END NAMES WHAT ITS OWN ASK OF AN UNRESOLVED CAPTURE SETTLED, even where the
-// row cannot be read back after it: the end asks the log again for a capture
-// whose record was never answered, and stamps the answer; a read of the row that
-// then failed left the end naming a capture that had just landed as one whose
-// record was never answered.
+// AN END NAMES WHAT ITS OWN ASK OF AN UNRESOLVED CAPTURE SETTLED, even where
+// the row cannot be read back after it: the end asks the log again for a
+// capture whose record was never answered and stamps the answer, so a failed
+// read after it cannot leave the end naming a just-landed capture unanswered.
 //
 // Mutation: drop what settleCapture answered where the read after it fails
 // ([Coordinator.settleUnresolved]), and the end names the landed capture unkept.
@@ -1429,26 +1407,18 @@ func TestACaptureTheSeatsBudgetCannotHoldIsNotUploaded(t *testing.T) {
 	})
 }
 
-// EVERY COLLECTION TAKES WHAT ITS JOB LEFT, AND SAYS WHETHER THE JOB HAD ENDED:
-// a job that is over is taken as over, and final — the archive the run's
-// script packed at its harness's exit, as it is, and for a job that ended
-// without packing (one that failed before it got there) one the runner packs
-// now where the script left none ([SessionTake.Pack]). A job its turn's cap
-// passed while it still ran is ENDED first, as a stop's is, and so is one
-// whose poll cannot say whether it still works, since a poll that cannot say
-// is no reason to leave a job working past its cap: each is taken as its end
-// left it, and final.
+// EVERY COLLECTION TAKES WHAT ITS JOB LEFT, AND SAYS WHETHER THE JOB HAD ENDED.
+// A job that is over is taken final: the archive its script packed at the
+// harness's exit, or, for one that ended without packing, one the runner packs
+// now ([SessionTake.Pack]). A job past its turn's cap, or whose poll cannot say
+// whether it still works, is ENDED first, as a stop's is, and taken final as
+// its end left it. ONLY A JOB ITS END COULD NOT STOP (its script went on and
+// the kill could not reach it) is packed as it stands and NOT final, so a
+// retried collection takes it again rather than passing over what it did.
 //
-// AND ONLY A JOB ITS END COULD NOT STOP — its script heard the request and
-// went on, and the kill past the wait could not reach it — is packed now as it
-// stands and NOT final, so a collection retried after it takes the job again
-// rather than passing over what it did meanwhile.
-//
-// Mutation: read a job that never packed as one with nothing to take, or as
-// one still working, pack a job its cap ended as it stands rather than ending
-// it, as the collection once did, take a job whose poll failed as it stands,
-// or call the capture of a job its end could not stop final, and a row below
-// differs.
+// Mutation: read a job that never packed as having nothing to take or as still
+// working, pack a capped or unpollable job as it stands, or call the capture of
+// a job its end could not stop final, and a row below differs.
 func TestEveryCollectionTakesWhatItsJobLeft(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

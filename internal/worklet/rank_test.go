@@ -8,11 +8,9 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A MINTED KEY IS STRICTLY BETWEEN ITS NEIGHBOURS, AT EVERY SHAPE.
-//
-// The whole of the manual order rests on this one property: a drag writes one
-// row, and it is correct only if the key it wrote sorts where the person
-// dropped it.
+// A MINTED KEY IS STRICTLY BETWEEN ITS NEIGHBOURS, AT EVERY SHAPE: the manual
+// order rests on it, since a drag writes one row and is right only if that
+// key sorts where the person dropped it.
 func TestAMintedKeyLandsStrictlyBetweenItsNeighbours(t *testing.T) {
 	t.Parallel()
 	pairs := [][2]worklet.Rank{
@@ -46,12 +44,9 @@ func TestAMintedKeyLandsStrictlyBetweenItsNeighbours(t *testing.T) {
 	}
 }
 
-// THE TWO ORDERINGS THE MAGNITUDE HEAD EXISTS FOR.
-//
-// Both are plain byte comparisons and both are false for any encoding that
-// decrements the first character instead of borrowing through it. They are
-// asserted as literals because they are what a reader checks the design
-// against.
+// THE TWO ORDERINGS THE MAGNITUDE HEAD EXISTS FOR, as literals a reader checks
+// the design against: plain byte comparisons, false for any encoding that
+// decrements the first character instead of borrowing through it.
 func TestTheHeadOrdersAcrossItsOwnBoundaries(t *testing.T) {
 	t.Parallel()
 	for _, pair := range [][2]string{{"Zz", "a0"}, {"azz", "b100"}, {"A0", "Zz"}} {
@@ -62,13 +57,9 @@ func TestTheHeadOrdersAcrossItsOwnBoundaries(t *testing.T) {
 	}
 }
 
-// REPEATED HEAD INSERTION GROWS THE KEY LOGARITHMICALLY, NOT LINEARLY.
-//
-// This is the capacity the flat encoding did not have: decrementing the first
-// character gave THIRTY head placements per project, ever. The bound is
-// 2 + ceil(log62(n)); at 100 000 insertions that is 5 and the real answer is
-// 4, so it is a bound rather than an equality — which is the honest way to
-// state it and the reason the test asserts ≤ rather than ==.
+// REPEATED HEAD INSERTION GROWS THE KEY LOGARITHMICALLY, NOT LINEARLY. The
+// bound is 2 + ceil(log62(n)): 5 at 100 000 insertions against a measured 4,
+// hence ≤ rather than ==.
 func TestRepeatedHeadInsertionGrowsLogarithmically(t *testing.T) {
 	t.Parallel()
 	const inserts = 100_000
@@ -100,12 +91,10 @@ func TestRepeatedHeadInsertionGrowsLogarithmically(t *testing.T) {
 	}
 }
 
-// A TAIL DRAG NEVER WIDENS THE INTEGER PART.
-//
-// A drag to the end subdivides the gap below the next integer position rather
-// than consuming one, so it cannot exhaust the create lattice however many
-// times it runs — which is what makes "a create can never collide with a
-// move" a statement about the value rather than about a counter.
+// A TAIL DRAG NEVER WIDENS THE INTEGER PART: it subdivides the gap below the
+// next integer position rather than consuming one, so it never exhausts the
+// create lattice, and "a create never collides with a move" holds of the
+// value rather than of a counter.
 func TestRepeatedTailDragsDoNotConsumeTheCreateLattice(t *testing.T) {
 	t.Parallel()
 	max, err := worklet.IntegerAt(1000)
@@ -134,15 +123,11 @@ func TestRepeatedTailDragsDoNotConsumeTheCreateLattice(t *testing.T) {
 	}
 }
 
-// THE TWO MINT SETS ARE DISJOINT BY THE SHAPE OF THE VALUE ALONE.
-//
-// The proof mentions no counter, no high-water mark, no staleness and no
-// in-flight create — which is why it survives out-of-order create landings
-// and head placements, on which the bound this replaces failed with no
-// concurrency at all.
+// THE TWO MINT SETS ARE DISJOINT BY THE SHAPE OF THE VALUE ALONE: no counter,
+// high-water mark or in-flight create enters it, so it survives out-of-order
+// create landings and head placements.
 func TestTheTwoMintSetsAreDisjointByShape(t *testing.T) {
 	t.Parallel()
-	// Every create's key.
 	for n := uint64(1); n <= 5_000; n++ {
 		key, err := worklet.IntegerAt(n)
 		if err != nil {
@@ -155,7 +140,6 @@ func TestTheTwoMintSetsAreDisjointByShape(t *testing.T) {
 			t.Fatalf("create %d minted %q, which is also a head placement", n, key)
 		}
 	}
-	// Every head placement.
 	head := worklet.Rank(worklet.RankOrigin)
 	for i := range 200 {
 		next, err := worklet.KeyBetween("", head)
@@ -172,7 +156,6 @@ func TestTheTwoMintSetsAreDisjointByShape(t *testing.T) {
 		}
 		head = next
 	}
-	// And every other move.
 	between, err := worklet.KeysBetween("a0", "a1", 64)
 	if err != nil {
 		t.Fatalf("KeysBetween: %v", err)
@@ -188,11 +171,9 @@ func TestTheTwoMintSetsAreDisjointByShape(t *testing.T) {
 	}
 }
 
-// A CREATE'S KEY IS STRICTLY THE NEW MAXIMUM.
-//
-// New tasks land at the tail in creation order, absolutely and with no
-// arbitration of their own — and a drag can never overtake one, because every
-// move's key is strictly below the next integer a create will mint.
+// A CREATE'S KEY IS STRICTLY THE NEW MAXIMUM: new tasks land at the tail in
+// creation order, and no drag overtakes one, since every move's key is below
+// the next integer a create will mint.
 func TestACreatesKeyIsStrictlyTheNewMaximum(t *testing.T) {
 	t.Parallel()
 	prev := worklet.Rank("")
@@ -219,11 +200,9 @@ func TestACreatesKeyIsStrictlyTheNewMaximum(t *testing.T) {
 	}
 }
 
-// THE INTEGER LATTICE IS THE SAME SEQUENCE WHETHER IT IS COMPUTED OR WALKED.
-//
-// A create computes its key directly from the counter, because walking would
-// make every create on a mature project O(its own age). The two must agree, or
-// a project's order silently depends on how its keys were produced.
+// THE INTEGER LATTICE IS THE SAME SEQUENCE WHETHER IT IS COMPUTED OR WALKED. A
+// create computes its key from the counter (walking is O(the project's age));
+// if the two disagreed, the order would depend on how its keys were produced.
 func TestTheComputedLatticeMatchesTheWalkedOne(t *testing.T) {
 	t.Parallel()
 	walked := worklet.Rank(worklet.RankOrigin)
@@ -244,11 +223,8 @@ func TestTheComputedLatticeMatchesTheWalkedOne(t *testing.T) {
 	}
 }
 
-// NO MINTED KEY'S FRACTION ENDS IN '0'.
-//
-// A trailing zero is a key with a shorter equal, so one position would have
-// two spellings — and the index that is supposed to make an order unique
-// would accept both.
+// NO MINTED KEY'S FRACTION ENDS IN '0': a trailing zero gives one position two
+// spellings, and the index that makes an order unique would accept both.
 func TestNoMintedFractionEndsInZero(t *testing.T) {
 	t.Parallel()
 	keys, err := worklet.KeysBetween("a0", "a1", 256)
@@ -271,11 +247,9 @@ func TestNoMintedFractionEndsInZero(t *testing.T) {
 	}
 }
 
-// A SPREAD OF N KEYS IS ASCENDING, DISTINCT AND SHORT.
-//
-// Short is the point: a chain of 256 keys each minted after the last would
-// make the final one 256 characters long, which is the length the re-spread
-// exists to remove. Splitting at the midpoint is what keeps them near the
+// A SPREAD OF N KEYS IS ASCENDING, DISTINCT AND SHORT. Short is the point: a
+// chain of 256 keys each minted after the last ends 256 characters long, the
+// length the re-spread exists to remove; a midpoint split keeps them near the
 // gap's own depth.
 func TestASpreadIsAscendingDistinctAndShort(t *testing.T) {
 	t.Parallel()
@@ -308,12 +282,10 @@ func TestASpreadIsAscendingDistinctAndShort(t *testing.T) {
 			"the threshold that triggered it — the repair would trigger itself",
 			len(keys), longest)
 	}
-	// AND IT IS AS SHORT AS THE GAP ALLOWS, which is the property the
-	// midpoint split buys over a chain. Fitting n keys into one gap needs
-	// ceil(log62(n+1)) fractional characters; the bound below allows the
-	// integer part, that minimum and one character of slack. A chain
-	// minted from the left satisfies the threshold above and blows
-	// straight through this, which is the difference the split is for.
+	// AND AS SHORT AS THE GAP ALLOWS: n keys in one gap need
+	// ceil(log62(n+1)) fractional characters, and the bound adds the integer
+	// part and one character of slack. A chain minted from the left passes
+	// the threshold above but fails this.
 	minimum := 0
 	for span := 1; span <= len(keys); span *= len(worklet.RankDigits) {
 		minimum++
@@ -325,11 +297,9 @@ func TestASpreadIsAscendingDistinctAndShort(t *testing.T) {
 	}
 }
 
-// AN ILL-FORMED KEY IS REFUSED RATHER THAN COMPARED.
-//
-// A length-invalid key still compares, which is exactly why it has to be
-// caught here: nothing downstream would notice, and the order would be wrong
-// in a way no index could report.
+// AN ILL-FORMED KEY IS REFUSED RATHER THAN COMPARED: a length-invalid key still
+// compares, so nothing downstream, no index included, would notice the order
+// going wrong.
 func TestAnIllFormedKeyIsNotValid(t *testing.T) {
 	t.Parallel()
 	for _, bad := range []worklet.Rank{
@@ -347,15 +317,10 @@ func TestAnIllFormedKeyIsNotValid(t *testing.T) {
 	}
 }
 
-// A RE-SPREAD'S KEYS ARE SHORT, ORDERED AND INSIDE THEIR OWN INTEGER.
-//
-// # The failure this exists to catch
-//
-// The walk first minted its keys with KeysBetween, which subdivides by
-// repeated bisection — so half of them crowded against the upper bound and
-// inherited its length. Re-spreading a project whose keys were 69 characters
-// long produced keys that were 70: the walk that exists to SHORTEN keys
-// lengthened them, and the project came back for another walk immediately.
+// A RE-SPREAD'S KEYS ARE SHORT, ORDERED AND INSIDE THEIR OWN INTEGER. Minted by
+// bisection (KeysBetween), half would crowd against the upper bound and
+// inherit its length, so the walk that exists to shorten keys would lengthen
+// them and the project would need another walk at once.
 func TestRespreadKeysAreShortOrderedAndBounded(t *testing.T) {
 	t.Parallel()
 	for _, n := range []int{1, 2, 63, 64, 1_000, 10_000} {
@@ -382,9 +347,8 @@ func TestRespreadKeysAreShortOrderedAndBounded(t *testing.T) {
 					"and the board's order would be undefined between them",
 					n, keys[i-1], i-1, key, i)
 			}
-			// INSIDE THE RESERVE, which is what makes "one integer
-			// position below the minimum" enough room for the whole
-			// walk.
+			// INSIDE THE RESERVE, which is why one integer position
+			// below the minimum is room for the whole walk.
 			if !strings.HasPrefix(string(key), "a0") || key == "a0" {
 				t.Fatalf("%q is not strictly inside the integer it was minted "+
 					"in, so the walk can collide with whatever holds the "+
@@ -394,11 +358,9 @@ func TestRespreadKeysAreShortOrderedAndBounded(t *testing.T) {
 	}
 }
 
-// A RE-SPREAD'S KEY IS NEVER ONE A CREATE COULD HAVE MINTED.
-//
-// The two mint sets are disjoint by the SHAPE of the value, which is what
-// makes the proof survive a paused create, an out-of-order landing and a
-// numbering gap alike — none of which a bound computed from the counter did.
+// A RE-SPREAD'S KEY IS NEVER ONE A CREATE COULD HAVE MINTED: the mint sets are
+// disjoint by the value's shape, which a paused create, an out-of-order
+// landing or a numbering gap cannot break.
 func TestARespreadNeverMintsIntoTheCreateLattice(t *testing.T) {
 	t.Parallel()
 	keys, err := worklet.RespreadKeys("a0", 500)

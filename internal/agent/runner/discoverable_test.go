@@ -21,14 +21,11 @@ import (
 
 // THE EXECUTOR'S SYSTEM PROMPT LISTS NOTHING IT HOLDS, AND IT HOLDS EVERY TOOL.
 //
-// Every tool — first-party and every MCP server's — is on the executor's
-// surface from its launch, and an offered tool's whole definition reaches the
-// run over the tool bridge, under the server it comes from. The system prompt
-// used to list each first-party tool again, description and all — with every
-// builtin wired that copy was ~17 KB, most of the prompt, paid on every turn of
-// every run — and later the MCP servers left for the run to discover. Its
-// harness keeps a large server's tools out of the requests that do not need
-// them by itself now, so the prompt lists neither.
+// Every tool, first-party and MCP, is on the executor's surface from launch,
+// and its whole definition reaches the run over the tool bridge, under its
+// server; the harness keeps a large server's tools out of requests that do not
+// need them. A copy in the prompt (~17 KB with every builtin wired) would be
+// paid on every turn of every run.
 //
 // REAL BUILTINS, registered by the builtin package itself, so the
 // descriptions a regression would duplicate are the ones production sends.
@@ -102,9 +99,7 @@ func (anySearcher) Search(context.Context, knowledge.Query) knowledge.Result {
 }
 
 // THE REVIEW'S RULE ABOUT A TOOL FOLLOWS THE SEAT'S SURFACE: `a2a_ask` is
-// named where the registry carries it. Unconditional, it was prose about a
-// tool on every review of every seat in the company, most of which cannot
-// call it.
+// named only where the registry carries it, not on every seat's review.
 func TestTheReviewNamesOnlyTheToolsTheSeatHolds(t *testing.T) {
 	t.Parallel()
 	review := func(t *testing.T, opts buildOpts) string {

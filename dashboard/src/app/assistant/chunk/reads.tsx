@@ -64,15 +64,32 @@ import { cellText, factText, ProseBlock, ReplyProse, type CardHandlers } from ".
 import { mentionsOf, readsOf, type Mention, type Read } from "./mentions.ts";
 import { Sources, sourcesOf } from "./sources.tsx";
 import { openInApp } from "./openInApp.ts";
+import { seatLookup, useOrgIndex } from "~/lib/seats.ts";
+import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 
 type EntityKind = NonNullable<AssistantEntityCard["kind"]>;
 
-/** A record's glyph; an artifact's is its kind's, which its card's subtitle names. */
+/** A record's glyph; an artifact's is its kind's, which its card's subtitle names, and a seat's its face. */
 function entityGlyph(entity: AssistantEntityCard): ReactNode {
   const kind = entity.subtitle ?? "";
   if (entity.kind === "artifact" && isArtifactKind(kind))
     return <ArtifactKindGlyph kind={kind} size="xs" />;
+  if (entity.kind === "seat") return <SeatGlyph handle={entity.id} />;
   return entity.kind ? KIND_GLYPH[entity.kind]() : <FileTextGlyph size="xs" />;
+}
+
+/** A seat record's face, off the chart: an agent its character, a person their initials. */
+function SeatGlyph({ handle }: { handle: string }) {
+  const seat = seatLookup(useOrgIndex())(handle);
+  return (
+    <SeatAvatar
+      name={seat.name}
+      kind={seat.kind === "human" ? "human" : "agent"}
+      avatar={seat.avatar}
+      size="text"
+      decorative
+    />
+  );
 }
 
 /** Each kind of record as the glyph its chip carries: decoration, the words are read. */

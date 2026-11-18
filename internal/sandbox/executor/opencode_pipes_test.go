@@ -11,20 +11,13 @@ import (
 )
 
 // NO OPENCODE ANSWER IS READ THROUGH A PIPE. Into a pipe, OpenCode 2.0.32 and
-// 2.1.4 stop writing an answer after a 64 KiB multiple and exit 0, while into a
-// regular file every release measured writes it whole, so every answer of
-// OpenCode's that a run's script or a pack's script reads goes to a file and is
-// read back from there. This holds every script the runner renders to that,
-// one rule with no exception: no `opencode` call inside a command
-// substitution, and none in a pipeline element a `|` follows, whether the call
-// is that element or sits in a group, a subshell or a compound command that is,
-// or in a function called there; each finding names its line. The run's
-// script is rendered for a run that starts a session and for one that
-// continues one, its copy compared or replaced, steered and with MCP servers,
-// so with the readiness loop, its shadow check and the notes' cancel in it, as
-// well as the login's import and exports every run's script carries; and the
-// pack's for a pack on demand. A scan that saw none of the script's calls
-// would prove nothing, so it has to have seen every kind the scripts make.
+// 2.1.4 stop an answer after a 64 KiB multiple and exit 0; into a regular file
+// every release measured writes it whole. So no rendered script has an `opencode` call
+// inside a command substitution or in a pipeline element a `|` follows, itself
+// or in a group, subshell, compound command or function there; each finding
+// names its line. Scanned: a run's script that starts, continues or replaces
+// its session's copy, steered and with MCP servers, and a pack's on demand. A
+// scan that missed a kind of call the scripts make would prove nothing.
 //
 // Mutation: put any one call back into `$(…)`, or the export back into
 // `| gzip`, and this goes red.
@@ -72,12 +65,12 @@ func TestNoOpenCodeAnswerIsReadThroughAPipe(t *testing.T) {
 }
 
 // THE PIPE SCANNER SEES EVERY WAY A SCRIPT CAN HAND OPENCODE A PIPE, and none
-// that writes a file: a call inside `$(…)`, inside backquotes, inside one in
-// double quotes or in arithmetic, in a case or a for's words; a call a `|`
-// follows, or a group, subshell or compound command around it that one
-// follows, or a function called in either place, however deep; and a trap's
-// body. A construct it does not read is an error, never a pass. Without each
-// row, the structural test above could pass a script it misread.
+// that writes a file: `$(…)` or backquotes, also within double quotes,
+// arithmetic, or case and for words; a `|` after the call or after a group,
+// subshell or compound command around it; a function called there, however
+// deep; a trap's body. A construct it does not read is an error, never a pass.
+// Without each row, TestNoOpenCodeAnswerIsReadThroughAPipe could pass a
+// misread script.
 func TestThePipeScannerSeesEveryWayOfReadingThroughAPipe(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -135,12 +128,11 @@ func TestThePipeScannerSeesEveryWayOfReadingThroughAPipe(t *testing.T) {
 	}
 }
 
-// openCodePipes reads a POSIX sh script and answers the second word of every
-// OpenCode call it makes (`opencode api …` is "api"), and every call whose
-// output a pipe carries: inside a command substitution, or in a pipeline
-// element a `|` follows, at any level of grouping. A function whose body makes
-// such a call, directly or through another such function, is a call wherever
-// it is called. A construct the scanner does not read is an error.
+// openCodePipes answers the second word of every OpenCode call a POSIX sh
+// script makes (`opencode api …` is "api"), and every call whose output a pipe
+// carries: in a command substitution, or in a pipeline element a `|` follows,
+// at any grouping depth. Calling a function that makes such a call, at any
+// remove, is such a call. A construct the scanner does not read is an error.
 func openCodePipes(script string) (calls, piped []string, err error) {
 	cmds, err := scanShell(script)
 	if err != nil {

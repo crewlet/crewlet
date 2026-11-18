@@ -14,50 +14,26 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE WAKE FEEDS' DEAD LETTERS, as an operator lists and discards them:
-// `GET /feeds/dead-letters` and `POST /feeds/dead-letters/{id}/discard`
-// (internal/api), which `crewlet feeds` is a client of.
+// THE WAKE FEEDS' DEAD LETTERS, as an operator lists and discards them
+// (`GET /feeds/dead-letters`, `POST /feeds/dead-letters/{id}/discard`, and
+// `crewlet feeds`). A discard exists because an entry no build will ever read
+// keeps `feed_dead_lettered` raised for the whole retention, burying the next
+// one that matters; the operator's decision is recorded as theirs (a WARN and
+// `crewlet.tracker.feed.dead_letter_discarded`).
 //
-// # Why an operator may discard one at all
-//
-// A replay clears an entry once a node starts able to read it, and the
-// retention lets one go after `stream.event_retention_hours`. Neither is a
-// decision anybody makes: an entry no build will ever read — a record sealed
-// under a key retired fleet-wide, one no build translates and none will — keeps
-// `feed_dead_lettered` raised for the whole retention, and an alarm that stands
-// for a month for a loss already accepted is one nobody reads when the next
-// entry, the one that matters, joins it. So an operator who has decided an
-// entry's wake can be lost discards it, and the decision is recorded as
-// theirs: a WARN naming who pressed, and
-// `crewlet.tracker.feed.dead_letter_discarded`.
-//
-// # Through the ledger, never the raw queue
-//
-// A discarded entry vanishes as an expired one does, so a peer's alarm reading
-// that saw it within a beat of its expiry would count it as a wake the
-// retention lost ([deadLetterWatch]). The discard drops it through this node's
-// [deadLetterLedger], which takes the claim the expiry count takes ([goneKey]),
-// so the entry is accounted for once fleet-wide, as discarded.
-//
-// # Every node answers alike, and reads no frame
-//
-// The entries are the broker's, so every node serving the API lists the same
-// ones — each from a copy of the dead-letter stream that can be a moment
-// behind the broker's own ([queue.EventQueue.DeadLettersOn]) — and which feeds
-// exist is the register's declaration ([declaredFeedSources]), never the logs
-// this node happens to have running. A listing and a discard read the header
-// each entry is kept under and never its frame: what an operator decides by is
-// what the feed recorded of the record, and a record may be as large as its
-// log admits.
+// It drops through this node's [deadLetterLedger], taking the expiry count's
+// claim ([goneKey]), so a peer's alarm ([deadLetterWatch]) never counts it as
+// a wake the retention lost. Every node lists alike: feeds come from the
+// register ([declaredFeedSources]), not this node's running logs, and only
+// each entry's header is read, never its frame, which can be huge.
 
 // FeedDeadLetters is the wake feeds' dead letters, for the operator surfaces.
 type FeedDeadLetters struct {
-	// ledger is this node's one dead-letter ledger, which every feed's
-	// replay and the alarm reading share ([Engine.deadLetterLedger]).
+	// ledger is this node's one dead-letter ledger, shared with every feed's
+	// replay and the alarm reading ([Engine.deadLetterLedger]).
 	ledger *deadLetterLedger
 
-	// sources is every wake feed this build declares, in the register's
-	// order.
+	// sources is every wake feed this build declares, in register order.
 	sources []changefeed.Source
 
 	// metrics counts each discard; nil counts nothing.
@@ -68,9 +44,7 @@ type FeedDeadLetters struct {
 }
 
 // FeedDeadLetters is this engine's operator surface over the wake feeds' dead
-// letters, or nil on an engine that keeps none — a literal a case builds
-// without a queue — which the API refuses by name rather than serving over
-// nothing.
+// letters, or nil on an engine with no queue, which the API refuses by name.
 func (e *Engine) FeedDeadLetters() *FeedDeadLetters {
 	if e.deadLetterLedger == nil {
 		return nil
@@ -79,18 +53,12 @@ func (e *Engine) FeedDeadLetters() *FeedDeadLetters {
 		metrics: e.metrics, now: func() time.Time { return time.Now().UTC() }}
 }
 
-// declaredFeedSources is the wake feed every domain this build registers
-// declares, in the register's order: the feeds whose dead letters an operator
-// lists and discards.
-//
-// THROUGH [Engine.feedFor], the one door a feed is built through, over each
-// domain's declaration alone — a ZERO ENGINE AND A BARE LOG, as the register's
-// boot check builds each feed ([checkFeedEntry]) — because a feed's source is
-// its translator's own constant: nothing of this node is read, so a node whose
-// logs are not running names the same feeds as one that runs them all. A
-// domain whose feed disagrees with its declaration is left out, and never
-// boots: [checkRegister] refuses that build on every data node, which is every
-// node that serves the API.
+// declaredFeedSources is the wake feed every registered domain declares, in
+// register order. Built through [Engine.feedFor] on a ZERO ENGINE AND A BARE
+// LOG, as [checkFeedEntry] does, since a source is its translator's constant:
+// a node whose logs are not running names the same feeds as any other. A
+// domain whose feed fails is left out; [checkRegister] refuses that build on
+// every data node, which is every node serving the API.
 func declaredFeedSources() []changefeed.Source {
 	var out []changefeed.Source
 	for _, domain := range registeredDomains() {
@@ -105,14 +73,13 @@ func declaredFeedSources() []changefeed.Source {
 // FeedDeadLetterListing is every wake feed's dead letters, as an operator
 // reads them.
 type FeedDeadLetterListing struct {
-	// At is when the answering node listed them, on its clock: what each
-	// entry's age and the time it has left are read against.
+	// At is when the answering node listed them, on its clock, which each
+	// entry's age and remaining time are read against.
 	At time.Time `json:"at"`
 
-	// Feeds is every wake feed this build declares, in the register's order:
-	// one holding no entry included, and one whose listing failed named
-	// with why rather than left out, since an unread feed is not an empty
-	// one.
+	// Feeds is every wake feed this build declares, in register order, empty
+	// ones included and a failed one named with why: an unread feed is not
+	// an empty one.
 	Feeds []FeedDeadLetterFeed `json:"feeds"`
 }
 
@@ -129,17 +96,13 @@ type FeedDeadLetterFeed struct {
 	// none, and null beside a ListError.
 	Entries []FeedDeadLetter `json:"entries"`
 
-	// ListError is why the subject could not be listed, absent where it
-	// was.
+	// ListError is why the subject could not be listed, absent if it was.
 	ListError string `json:"list_error,omitempty"`
 }
 
-// FeedDeadLetter is one dead letter as an operator reads it: what the feed that
-// kept it recorded of the record, and when the broker kept it and lets it go.
-//
-// NEVER THE RECORD'S FRAME: sealed bytes no person reads, which only a replay
-// opens, and a record may be as large as its log admits — a listing of them
-// would carry megabytes to say nothing.
+// FeedDeadLetter is one dead letter as an operator reads it: what the feed
+// recorded of the record, and when the broker kept it and lets it go. NEVER
+// THE RECORD'S FRAME: sealed bytes only a replay opens, possibly megabytes.
 type FeedDeadLetter struct {
 	// ID is the broker's sequence for the entry: what a discard names,
 	// unique across every dead-letter subject and never reused.
@@ -148,10 +111,10 @@ type FeedDeadLetter struct {
 	// Source is the feed whose subject holds the entry.
 	Source string `json:"source"`
 
-	// Stream, Position and Key are where the record was delivered from — its
-	// log, its sequence there and the subject it arrived on — and
-	// Generation the log's generation and OpID the record's operation id,
-	// both absent where the node that gave up never read the envelope.
+	// Stream, Position and Key are the record's log, sequence there and
+	// arrival subject; Generation the log's generation and OpID the record's
+	// operation id, both absent where the node that gave up never read the
+	// envelope.
 	Stream     string `json:"stream,omitempty"`
 	Position   uint64 `json:"position,omitempty"`
 	Generation uint64 `json:"generation,omitempty"`
@@ -175,19 +138,14 @@ type FeedDeadLetter struct {
 	KeptAt    time.Time `json:"kept_at"`
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
 
-	// DecodeError is why this build could not read the entry's header — a
-	// newer build kept it, or it is no feed's header at all — absent where
-	// it could. Such an entry is still listed, by everything the broker
-	// says of it, and can still be discarded: a build that cannot read an
-	// entry can still let it go.
+	// DecodeError is why this build could not read the entry's header (a
+	// newer build's, or no feed's), absent where it could. Such an entry is
+	// still listed by what the broker says and can still be discarded.
 	DecodeError string `json:"decode_error,omitempty"`
 }
 
-// List is every wake feed's dead letters, read from the broker now.
-//
-// A FEED WHOSE LISTING FAILED IS NAMED WITH ITS ERROR, never left out and never
-// answered as empty: an operator deciding what to discard, or whether anything
-// is left, reads an unread feed as a question still open.
+// List is every wake feed's dead letters, read from the broker now. A feed
+// whose listing failed is named with its error, never left out or empty.
 func (f *FeedDeadLetters) List(ctx context.Context) FeedDeadLetterListing {
 	out := FeedDeadLetterListing{At: f.now(), Feeds: make([]FeedDeadLetterFeed, 0, len(f.sources))}
 	for _, src := range f.sources {
@@ -207,8 +165,8 @@ func (f *FeedDeadLetters) List(ctx context.Context) FeedDeadLetterListing {
 	return out
 }
 
-// letterOf is the entry k of src's subject as an operator reads it: what the
-// broker says of it, and what its header says where this build can read it.
+// letterOf is the entry k of src's subject as an operator reads it: the
+// broker's facts, plus its header where this build can read it.
 func letterOf(src changefeed.Source, k queue.Kept) FeedDeadLetter {
 	out := FeedDeadLetter{ID: k.Seq, Source: src.Name, KeptAt: k.StoredAt, ExpiresAt: k.Expires}
 	letter, err := changefeed.DecodeDeadLetter(k.Header)
@@ -229,17 +187,16 @@ type FeedDeadLetterDiscard struct {
 	// ID is the entry's broker sequence, as a listing names it.
 	ID uint64
 
-	// By is who pressed — the author, their kind and the credential they
-	// pressed it through — named on the line the discard leaves.
+	// By is who pressed (author, kind, credential), named on the discard's
+	// log line.
 	By iam.Actor
 }
 
 // ErrNoDeadLetter is a discard naming an id no wake feed's dead letters hold:
-// never one, an entry a replay, its expiry or another discard took first, or
-// an entry on another `dlq.` subject — a subscription's poison, which is no
-// feed's to discard. Nothing was removed. An entry kept a moment ago can read
-// as none while the copy the listing read catches up, and a discard asked
-// again finds it.
+// never one, already taken by a replay, expiry or another discard, or on
+// another `dlq.` subject (a subscription's poison). Nothing was removed. A
+// just-kept entry can read as none until the listed copy catches up; a
+// retried discard finds it.
 var ErrNoDeadLetter = errors.New("engine: no wake feed holds a dead letter by that id")
 
 // DeadLettersUnread is a discard whose id no wake feed that could be listed
@@ -284,27 +241,15 @@ func (e *DeadLettersUnread) Unwrap() []error {
 // Discard drops the dead letter req.ID from whichever wake feed's subject
 // holds it, through this node's ledger, and answers the entry it dropped.
 //
-// # Found by listing every feed's subject
+// The id is the broker sequence alone, but a drop names a subject, so the
+// feeds' subjects are listed until one holds it. Only wake feeds' subjects are
+// asked, so a discard never reaches another `dlq.` subject's entry
+// ([ErrNoDeadLetter]); with a feed unlisted and no hit the answer is
+// [DeadLettersUnread], never "no such entry".
 //
-// A discard names the entry by the broker's sequence alone, which is unique
-// across every dead-letter subject, and the drop has to name the subject too:
-// so the feeds' subjects are listed until one holds it, and only that one is
-// dropped from. An id on no feed's subject — a subscription's poison under
-// another `dlq.` subject among them — is [ErrNoDeadLetter] and nothing is
-// dropped: no subject outside the wake feeds' is ever asked of, so a discard
-// can never reach a dead letter some other part of the engine keeps. Where a
-// feed could not be listed and no other holds the id, the answer is
-// [DeadLettersUnread], never a "no such entry" a feed that did not answer
-// could contradict.
-//
-// # Counted only where this discard is the account of the entry's going
-//
-// The queue answers a drop of an entry already gone as done, so an entry a
-// replay or another discard dropped, or the retention let go, between the
-// listing and the drop would read as discarded here. The ledger says whether
-// this drop's claim on the entry's going was the first ([deadLetterLedger.drop]);
-// where it was not, the discard removed nothing, and answers [ErrNoDeadLetter]
-// rather than count a wake lost — a replay's wake was published.
+// The queue answers a drop of an already-gone entry as done, so only a first
+// claim on its going ([deadLetterLedger.drop]) counts; otherwise it answers
+// [ErrNoDeadLetter] rather than count a replay's published wake as lost.
 func (f *FeedDeadLetters) Discard(ctx context.Context, req FeedDeadLetterDiscard) (FeedDeadLetter, error) {
 	if req.ID == 0 {
 		return FeedDeadLetter{}, fmt.Errorf("%w: a dead letter's id is never 0", ErrNoDeadLetter)
@@ -329,8 +274,8 @@ func (f *FeedDeadLetters) Discard(ctx context.Context, req FeedDeadLetterDiscard
 		ErrNoDeadLetter, req.ID)
 }
 
-// discard drops the entry k from src's subject, and counts and records the
-// loss where this drop is the account of the entry's going.
+// discard drops the entry k from src's subject, counting and recording the
+// loss only where this drop is the first claim on its going.
 func (f *FeedDeadLetters) discard(ctx context.Context, src changefeed.Source, subject string,
 	k queue.Kept, by iam.Actor) (FeedDeadLetter, error) {
 

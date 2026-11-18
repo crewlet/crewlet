@@ -6,11 +6,9 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A NODE'S CATALOGUE CREDITS A RUN'S COMMITS AS THE COMPANY SAYS: on for a
-// company that says nothing (providers.sandbox.commit_attribution is on unless
-// turned off), naming the run it is asked about, and off for one that set
-// false — so a revision that turns the credit off reaches every launch made
-// under the catalogue it builds.
+// A NODE'S CATALOGUE CREDITS A RUN'S COMMITS AS THE COMPANY SAYS: on, naming
+// the run, unless providers.sandbox.commit_attribution is false, so a revision
+// turning it off reaches every launch under the catalogue it builds.
 //
 // Mutation: hand the manager no AttributeCommits, or always true, and this
 // goes red.

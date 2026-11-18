@@ -10,11 +10,9 @@ import (
 )
 
 // A WITHDRAWN QUESTION SAYS WHY. An asker withdraws its own open question by
-// posting a reason in the question's thread and resolving the question with a
-// [Withdrawal] naming that reason, and what now covers the question where
-// something does (another work item, or a link such as a pull request). The
-// person it was put to reads both on the card that closed, rather than seeing
-// the question only disappear.
+// replying with a reason and resolving it with a [Withdrawal] naming that
+// reply and, where something does, what now covers it (a work item or a
+// link), so the person it was put to reads why rather than seeing it vanish.
 
 // MaxReplacementURLBytes bounds the link a withdrawal names: the length a
 // browser keeps in its address bar, far past any pull request's address.

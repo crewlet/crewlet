@@ -20,14 +20,9 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE PROPOSAL: one push as the receiving node hands it to a committer, and
-// the answer it gets back.
-//
-// A proposal carries EVERY command the client sent. The receiver may already
-// have refused some of them — a blob past the limit, a rule no state decides,
-// a protection — and those arrive ng with their reason; the committer decides
-// the rest against the rows and the record states the result of each, so a
-// push row is the whole answer the client was given.
+// A proposal carries EVERY command the client sent: those the receiver already
+// refused arrive ng with their reason, the committer decides the rest, and the
+// record states each, so a push row is the whole answer the client was given.
 
 // Proposal is one push, decided by the repository's committer.
 type Proposal struct {
@@ -37,11 +32,10 @@ type Proposal struct {
 	PushID    string    `json:"push_id"`
 	RepoID    string    `json:"repo_id"`
 	Principal Principal `json:"principal"`
-	// Via is how the push's pack was built, stamped by its builder — the
-	// relay's git, or the engine's own — and carried whole into the record's
-	// entry and the push row: a push's history says how it was made as the
-	// code that made it saw it, never as a commit says. It rides the estate's
-	// wire as it rides the record, in the base format ([PushEntry.Via]).
+	// Via is how the push's pack was built (the relay's git or the engine's
+	// own), stamped by its builder and carried into the entry and the push row,
+	// never read from a commit. It rides the wire in the record's base format
+	// ([PushEntry.Via]).
 	Via PushVia `json:"via"`
 	// Node is the node that received the push.
 	Node   string `json:"node"`
@@ -57,66 +51,45 @@ type Proposal struct {
 	// receiver ([PushEntry.Offered]); 0 on every other proposal.
 	Offered    int       `json:"offered,omitempty"`
 	ReceivedAt time.Time `json:"received_at"`
-	// Seen is the code log's position the receiving node checked the push
-	// against — its linearizable sync before receive-pack ran, the state the
-	// client's commands were formed from and the thin pack's bases were read
-	// at — zero for a receiver that read none. The committer DECIDES FROM A
-	// SNAPSHOT AT OR PAST IT ([Committer]): the repository's committer is
-	// usually another node, which may be behind what the receiver saw — a
-	// node that just became the committer, or one a few records short of a
-	// repository an activation has just created — and from below it the
-	// decide would refuse a command whose old value the client was shown
-	// (stale, "fetch first") or the repository itself (repo_deleted), and
-	// refuse it again after the client fetched, until it caught up. It is a
-	// PER-PROPOSAL floor, never this node's: it is somebody else's writes,
-	// and only the decide that answers this push has to see them. Never
-	// recorded — a push row says what the push did, not what was read to
-	// receive it.
+	// Seen is the code log position the receiving node synced to before
+	// receive-pack ran, the state the client's commands and the thin pack's
+	// bases were read at; zero for a receiver that read none. The committer
+	// DECIDES FROM A SNAPSHOT AT OR PAST IT ([Committer]): it may be behind the
+	// receiver, and from below would refuse as stale or repo_deleted a command
+	// whose old value the client was shown, again after every fetch. A
+	// PER-PROPOSAL floor, never the node's, and never recorded.
 	Seen statelog.Position `json:"seen,omitzero"`
-	// DropEpoch is the repository's drop epoch as the receiving node checked
-	// the push against it — the epoch the objects of the copy receive-pack
-	// checked the push's objects over hold (internal/gitlet/cache's
-	// Synced.DropEpoch): its synced row's ([RepoRef.DropEpoch]) once the copy
-	// holds every pack where the rows place it, and the epoch before while an
-	// expunge's begin's inputs, holding what it made dropping, are still among
-	// the copy's live objects. The committer refuses the push `expunging`
-	// WHOLE where the repository's epoch is another ([RefusalExpunging]): an
-	// expunge's begin since has left dropping objects that copy held live, and
-	// a ref landed onto one would name an object the expunge's commit retires.
-	// The snapshot that synced the copy reads every page at one epoch
-	// (Reader.Snapshot). Never recorded, as Seen is not.
+	// DropEpoch is the epoch of the objects of the copy receive-pack checked the
+	// push over (internal/gitlet/cache's Synced.DropEpoch): its synced row's
+	// ([RepoRef.DropEpoch]) once the copy holds every pack the rows place, the
+	// epoch before while an expunge's begin's inputs are still among its live
+	// objects. The committer refuses the push `expunging` WHOLE where the
+	// repository's epoch is another ([RefusalExpunging]): an expunge begun since
+	// may have left dropping an object that copy held live, which a ref landed
+	// onto would name past the expunge's commit retiring it. The
+	// copy's sync reads every page at one epoch (Reader.Snapshot). Never recorded.
 	DropEpoch int64 `json:"drop_epoch,omitempty"`
-	// Change is the change the push's options ask for ([ParseChangeOptions]),
-	// as its receiver read them — its title filled in from the subject of
-	// the commit the push sets its source to where the options named none —
-	// or nil for a push that asks for none. A proposal carries one only
-	// beside exactly one command setting a branch ([ChangeSource]), which its
-	// receiver judges first. Its decide opens it in the push's own entry
-	// ([PushEntry.Change]), names the live change its source already heads,
-	// or answers why it opened none ([PushAnswer.Change]); it never refuses
-	// the push. It rides the estate's wire as it rides the record, in the
-	// base format ([PushEntry.Change]).
+	// Change is the change the push's options ask for ([ParseChangeOptions]) as
+	// its receiver read them, the title filled from the subject of the commit the
+	// push sets its source to where the options named none; nil for none. It
+	// rides only beside exactly one command setting a branch ([ChangeSource]).
+	// Its decide opens it in the push's entry ([PushEntry.Change]), names the
+	// live change its source already heads, or answers why it opened none
+	// ([PushAnswer.Change]); it never refuses the push. It rides the wire in the
+	// record's base format.
 	Change *ChangeOption `json:"change,omitempty"`
 	// WrittenFor is whom a SEAT'S push is made for (ADR-0109), as
-	// [ChangeProposal.WrittenFor] is: whoever the turn that asked an engine
-	// write works for, handed on by the Gitlet node that built it
-	// ([EngineWrite.WrittenFor]), or stated nobody for a push made for the
-	// seat alone — a coding box's among them, its run's row holding no
-	// carrier for its code writes. A person's states nothing, and so does the
-	// engine's own expiry, which carries nobody. Held to the principal by
-	// [writtenForInvalid]: a push carries no ceiling, its builder having held
-	// it to the write's or the run's already.
+	// [ChangeProposal.WrittenFor] is: whoever the turn asking an engine write works
+	// for ([EngineWrite.WrittenFor]), or nobody stated for a seat-only push, a
+	// coding box's among them; a person's and the expiry's state nothing. Held to
+	// the principal by [writtenForInvalid], its builder having held the ceiling.
 	//
-	// A proposal is no record, so this field takes no versionedFields row; the
-	// push's entry its committer stamps it on carries it ([PushEntry.WorkingFor],
-	// [Proposal.entryWith]), which takes one. It crosses the estate's wire to
-	// whichever data node decides it, and a node of a build without it refuses
-	// a push carrying somebody, naming args.written_for, so the walk asks one
-	// that reads it, and a node of a build that does not know its carrier's
-	// kind, or an app a credential's carrier names, refuses it alike, naming
-	// args.written_for.kind or args.written_for.apps[] ([unknownToThisBuild]);
-	// one made for nobody sends no member, as such a build does. What such a
-	// build sends arrives stated nobody ([Proposal.UnmarshalJSONFrom]).
+	// A proposal is no record, so it takes no versionedFields row; the entry its
+	// committer stamps does ([PushEntry.WorkingFor], [Proposal.entryWith]). A
+	// build without the field, or not knowing its kind or an app, refuses a push
+	// carrying somebody, naming args.written_for (.kind, .apps[]), so the walk
+	// asks another ([unknownToThisBuild]); one made for nobody sends no member,
+	// and an older build's arrives stated nobody ([Proposal.UnmarshalJSONFrom]).
 	WrittenFor types.WrittenFor `json:"written_for,omitzero"`
 }
 
@@ -124,18 +97,16 @@ type Proposal struct {
 type ProposeResult struct {
 	// Outcome is applied, pending or unknown for a push in a record, an
 	// attempt's among them ([Attempted]), and empty for one answered with no
-	// record of its own: every command noop or ng and no attempt, or a
-	// refusal of the whole push. A push answered from the row an
-	// earlier record applied it as is applied, and its Answer says
-	// Collapsed.
+	// record of its own: every command noop or ng and no attempt, or a refusal
+	// of the whole push. A push answered from an earlier record's row is
+	// applied, its Answer Collapsed.
 	Outcome statelog.Outcome `json:"outcome,omitempty"`
-	// Position is where the push's record landed — the row's own for an
-	// applied push, the record's for a pending one, and for a not_applied
-	// refusal, or a repo_deleted one the code log made after the append, the
-	// position of the batch's own record, which applies nowhere. Never
-	// another operation's record: a refusal the log made at one of those
-	// (statelog.Unavailable.Landed) names no record of the push, and a
-	// position read as this one told a client its push was durable there.
+	// Position is where the push's record landed: the row's own for an applied
+	// push, the record's for a pending one, and for a not_applied refusal, or a
+	// repo_deleted one the code log made after the append, the batch's own
+	// record, which applies nowhere. Never another operation's record
+	// (statelog.Unavailable.Landed), which would tell a client its push was
+	// durable there.
 	Position statelog.Position `json:"position,omitzero"`
 	// OpID is the batch's operation id, which an unknown outcome names.
 	OpID   string     `json:"op_id,omitempty"`
@@ -155,56 +126,43 @@ type PushAnswer struct {
 	// same code.
 	Refused Refusal `json:"refused,omitempty"`
 	// Detail is a whole-push refusal's one sentence of specifics, and every
-	// command the refusal covers carries the SAME sentence as its own
-	// Detail — one placement whichever path formed the refusal (the decide,
-	// for a repository deleted or archived, at its pack bound, at a seat's
-	// day's quota, at another drop epoch than the push was checked at, or for
-	// the live changes it moves; the
-	// committer, for busy, unavailable, not_applied and a deletion the log
-	// refused), so a reader of the answer or of a command finds it. A
-	// command the receiver had already refused keeps its own. Empty when
-	// Refused is.
+	// command the refusal covers carries the SAME sentence as its Detail,
+	// whichever path (the decide or the committer) formed the refusal, so a
+	// reader of the answer or of a command finds it. A command the receiver had
+	// already refused keeps its own. Empty when Refused is.
 	Detail string `json:"detail,omitempty"`
 	// Collapsed is a push answered from a row an EARLIER record applied: a
 	// forwarded or failed-over proposal of a push that had already landed.
 	Collapsed bool `json:"collapsed,omitempty"`
-	// Change is what the push's change came to ([Proposal.Change]), nil for
-	// a push that asked for none, one no record carries, and one whose
-	// answer cannot say: for an applied push, the change it opened where the
-	// rows hold one of its id ([PushChangeID]) — the one fact they hold
-	// whichever round of the batch decided the record — and otherwise the
-	// decision's, the live change its source headed (numbered from its row)
-	// or why it opened none; for a pending or unknown push, the decision's,
-	// tentative until the record resolves, as its commands are.
+	// Change is what the push's change came to ([Proposal.Change]), nil for a
+	// push that asked for none, one no record carries, and one whose answer
+	// cannot say. For an applied push, the change it opened where the rows hold
+	// one of its id ([PushChangeID]), the one fact they hold whichever round
+	// decided the record, else the decision's: the live change its source headed
+	// or why it opened none. For a pending or unknown push, the decision's,
+	// tentative as its commands are.
 	Change *ChangeAnswer `json:"change,omitempty"`
 }
 
 // maxDetailBytes is the longest Detail a receiver may fill in on a command it
-// refused: one sentence, which names NO REF — git prints the ref beside the
-// reason anyway — and at most one protection's pattern, which may be as long
-// as a ref (MaxRefNameBytes, gitref's pattern grammar), beside its words. So
-// the bound is that pattern and room for the words of the longest sentence a
-// receiver forms ([ProtectionDetail]'s, 61 bytes: a seat's push under a
-// direct_push persons rule); every sentence Gitlet writes into a
-// proposal is held under it by a test, at its longest.
+// refused: one sentence naming NO REF (git prints it beside the reason), with
+// at most one protection's pattern, as long as a ref (MaxRefNameBytes), plus
+// room for the longest sentence's words ([ProtectionDetail]'s, 61 bytes). A
+// test holds every sentence Gitlet writes into a proposal under it.
 const maxDetailBytes = MaxRefNameBytes + 64
 
 // Validate refuses a proposal this domain cannot decide, wrapping
-// [ErrInvalidProposal] and naming the field. The receiver forms proposals, so
-// a refusal here is the receiver's bug — never a client's push refused.
+// [ErrInvalidProposal] and naming the field: the receiver forms proposals, so
+// a refusal here is the receiver's bug, never a client's push refused.
 //
-// BUT FIRST, A VALUE WHOM THE PUSH IS MADE FOR NAMES THAT THIS BUILD DOES NOT
-// KNOW, which is no receiver's bug — a coding box's run's row may hold one a
-// newer build wrote — and is answered as the proposal's decoder answers it on
-// the wire, never as ErrInvalidProposal, whatever else the proposal holds
-// ([unknownToThisBuild]): this build cannot judge the push at all, and a
-// committer of a build that knows the value does.
+// BUT FIRST, a whom-it-is-made-for value this build does not know (a newer
+// build may have written it into a run's row) is no receiver's bug: it is
+// answered as the decoder answers it ([unknownToThisBuild]), never as
+// ErrInvalidProposal, so a committer that knows it judges it.
 //
-// A PACK'S SIZES MUST LAY OUT A BUNDLE: a row whose sizes describe no bundle
-// names an object no cache can install, so it is refused here, before it is
-// published, rather than by the first fetch. The applier does not check them
-// again — it is a pure function of the record, and refusing there would stop
-// the log on every node.
+// A PACK'S SIZES MUST LAY OUT A BUNDLE, refused here before it is published
+// rather than by the first fetch; the applier, a pure function of the record,
+// does not check again, since refusing there would stop the log on every node.
 func (p Proposal) Validate() error {
 	_, err := p.measure()
 	return err
@@ -231,49 +189,22 @@ func (p Proposal) measure() (int, error) {
 const EntryRoom = MaxRecordBytes - recordOverheadBytes
 
 // ValidateCommands holds a push's COMMANDS to what one push may carry, BEFORE
-// ITS WORK: every rule [Proposal.Validate] holds a proposal's commands to —
-// at least one and at most [MaxCommandsPerPush], each ref in its
-// [RecordedRef] form and named once, two ids that differ, undecided or
-// refused under a code a record carries — and the push's entry to
-// [EntryRoom] with everything the work may yet add at its largest
-// ([Proposal.completed]): every command forced and decided, a pack, the most
-// introduced ids a row lists, the push's id and the receive instant at their
-// longest spellings, the push --atomic, and for a seat's push the company day
-// and whom it was made for, which its committer stamps ([entryBound]). p is
-// the proposal as the receiver holds it once it has read the client's
-// commands, before receive-pack runs: its principal — a seat's run with it —
-// whom it is made for ([Proposal.WrittenFor]), how it is being built
-// ([Proposal.Via]), its node and its commands, with the receiver's refusals
-// that need no object;
-// every other field is ignored but its change ([Proposal.Change]), which the
-// receiver learns only from the options receive-pack hands its hook and asks
-// this again with before it proposes one — its title, where the options
-// named none, still to be filled in and measured at its longest
-// ([ChangeOption.measured]): a change too wide for the entry
-// beside the commands at their largest is answered to its pusher and left
-// out, so the push lands without it. The principal, whom the push is made for
-// and the way are MEASURED AS STAMPED, since every proposer stamps them before
-// its work: no work adds to them, so taking them at a largest that is not
-// theirs would refuse a push that fits — and a measure without whom it is made
-// for would be short of the entry its committer stamps by that carrier.
-//
-// WHAT IT REFUSES IS THE CLIENT'S PUSH, never the receiver's bug: the client
-// chose the commands, and every other field is taken at its largest. A push
-// that passes here passes [Proposal.Validate]'s budget whatever its work
-// adds, so a push too wide for its record is refused before receive-pack, the
-// object-store put and the estate's round trip are spent on it — where it was
-// once refused by its committer, with the receiver's own proposal, after all
-// three. Plain refs fit easily: [MaxCommandsPerPush] commands at
-// [MaxRefNameBytes] take under half the room. What reaches it is a ref JSON
-// spells long — `&`, `<` and `>` six bytes each, U+2028 and U+2029 two bytes
-// for each of their three — of which some six hundred refs of the longest are
-// enough.
+// ITS WORK: every rule [Proposal.Validate] holds commands to, and the entry to
+// [EntryRoom] with everything the work may add at its largest
+// ([Proposal.completed], [introducedShare]). p is as the receiver holds it
+// before receive-pack: principal, whom it is made for, way, node and commands,
+// MEASURED AS STAMPED, with the refusals that need no object; every other
+// field is ignored but its change, which the receiver asks again with once the
+// hook's options name it ([ChangeOption.measured]), leaving out one too wide.
+// WHAT IT REFUSES IS THE CLIENT'S PUSH, before receive-pack, the object-store
+// put and the estate round trip are spent on it; one passing here passes
+// Validate's budget whatever its work adds. Only some six hundred longest refs
+// of characters JSON escapes (`&`, `<`, `>`, U+2028, U+2029) reach the bound.
 func (p Proposal) ValidateCommands() error {
 	switch {
 	case !p.Via.proposed():
-		// THE ASKER'S OWN BUG, never the client's: a measure of an entry
-		// whose way is unstamped is short of the entry that will be
-		// proposed, by up to the longest way's spelling.
+		// The asker's own bug, never the client's: an unstamped way measures
+		// short by up to the longest way's spelling.
 		return fmt.Errorf("%w: via: %q is not one of %s — a push is measured as built", ErrInvalidProposal,
 			p.Via, words.Or(proposedVias()))
 	case len(p.Commands) == 0:
@@ -289,11 +220,8 @@ func (p Proposal) ValidateCommands() error {
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidProposal, err)
 	}
-	// THE INTRODUCED IDS AT THEIR MOST ARE ADDED, NOT ENCODED: JSON spells
-	// an object's members one after another, so what they add to an entry is
-	// the same bytes whatever else it holds — and encoding the thousand ids
-	// for every push read cost each one 50 KB and a tenth of a millisecond
-	// to learn one number.
+	// The introduced ids at their most are added, not encoded: they add the
+	// same bytes to any entry, and encoding a thousand ids per push costs 50 KB.
 	if bound += introducedShare(); bound > EntryRoom {
 		return &TooWideError{Bytes: bound, Room: EntryRoom}
 	}
@@ -302,15 +230,13 @@ func (p Proposal) ValidateCommands() error {
 
 // completed is p with everything a push's work may add to its entry at its
 // largest but the introduced ids ([introducedShare]), for
-// [Proposal.ValidateCommands]: each command forced and refused by the receiver
-// under the longest code a record carries — what the hook's checks (stale, a
-// blob, a protection) write into the proposal, beside which [entryBound] still
-// adds [commandResultBound] for the committer's decision — a pack whose every
-// field is spelled at its longest, the push id and the receive instant at
-// their longest spellings, and the push --atomic. The principal, its run among
-// it, the way, whom the push is made for and the change stay as their proposer
-// stamped them: no work adds to them, and [entryBound] measures the change's
-// target, and a title its receiver is still to fill in, at their longest.
+// [Proposal.ValidateCommands]: each command forced and refused under the
+// longest recorded code (the hook's checks; [entryBound] adds
+// [commandResultBound] for the decision), the largest pack, push id and
+// receive instant, and --atomic. The principal, the way, whom it is made for
+// and the change stay as stamped: no work adds to them, and taking them larger
+// would refuse a push that fits ([entryBound] measures the change's target
+// and an unfilled title at their longest).
 func (p Proposal) completed() Proposal {
 	w := p
 	w.PushID, w.Atomic = largestEntry().PushID, true
@@ -372,14 +298,11 @@ var largestEntry = sync.OnceValue(func() PushEntry {
 })
 
 // ValidateUnstored is [Proposal.Validate] of a proposal whose pack is not yet
-// STORED — its sizes, its object count and its checksum known from the push's
-// own files, its object's key and digest not until the put returns: the pack
-// is measured and checked as it will be once stored, a key and a digest
-// having one spelling's length each. So the receiver holds its proposal to
-// every rule the committer will, once the commits the push introduces are
-// listed and while its bundle is still uploading, and stops the upload of a
-// push no committer could take rather than store a bundle no row will name.
-// A pack already stored is refused: Validate is the check of that.
+// STORED: its sizes, count and checksum known, its key and digest not until
+// the put returns, so measured at their one spelling's length. The receiver
+// thus stops, mid-upload, a push no committer could take rather than store a
+// bundle no row will name. A pack already stored is refused: Validate checks
+// that.
 func (p Proposal) ValidateUnstored() error {
 	if p.Pack != nil {
 		if !p.Pack.Object.IsZero() || p.Pack.Hash != "" {
@@ -416,16 +339,12 @@ func (p Proposal) validFields() error {
 		return fmt.Errorf("%w: repo_id: %q is not a UUID in its canonical lowercase spelling",
 			ErrInvalidProposal, p.RepoID)
 	}
-	// WHO PUSHES: a person, through a credential bound to their human seat,
-	// or a seat, by its handle and the run that made the push — through a
-	// tool, whose write the engine builds and whose run is the turn that
-	// called it, or through the coding box of a run it launched, whose push
-	// git receives and names that run and its harness beside the turn.
-	// The decide holds a seat's push to its grant on the chart (rule 2b,
-	// decide.go) before any protection, so a seat's push is a proposal like a
-	// person's; a token bound to nobody fetches only. And the engine, on its
-	// own account, deletes seats' idle branches — its expiry and no other
-	// push, the two paired both ways.
+	// Who pushes: a person through a credential bound to their human seat, or a
+	// seat by its handle and the run that made the push (a tool call's turn, or
+	// its coding box's run); the decide holds a seat's push to its grant (rule
+	// 2b, decide.go). A token bound to nobody fetches only, and the engine's own
+	// account pushes the expiry of seats' idle branches and nothing else, the
+	// two paired both ways.
 	why := p.Principal.invalid()
 	if p.Principal.Kind == PrincipalSystem {
 		why = p.Principal.systemInvalid()
@@ -443,26 +362,20 @@ func (p Proposal) validFields() error {
 		return fmt.Errorf("%w: principal.seat: a push names the person its token is bound to — a "+
 			"token bound to nobody fetches only", ErrInvalidProposal)
 	case p.Principal.Kind == PrincipalAgent && p.Principal.Run.IsZero():
-		// THE SERVER STAMPS THE RUN on every seat's push — its turn, at
-		// least — from the call that made it: a seat's push naming none is
-		// its proposer's bug, and a row naming no run would say nothing of
-		// what made it.
+		// The server stamps the run (its turn at least) on every seat's push,
+		// so one naming none is its proposer's bug.
 		return fmt.Errorf("%w: principal.run: a seat's push names the run that made it — its turn at "+
 			"least, stamped by the engine from the call", ErrInvalidProposal)
 	case p.Principal.Kind == PrincipalAgent && p.Via == ViaGit && p.Principal.Run.RunID == "":
-		// A SEAT'S PUSH GIT RECEIVED IS ITS CODING BOX'S — a seat's own
-		// writes are tool calls, which the engine builds — and Gitlet
-		// stamps the run that pushed and its harness from the run's row
-		// when it admits the box: one naming neither is its proposer's bug,
-		// and its row would be one no read of that run's pushes finds.
+		// A seat's push git received is its coding box's, whose run Gitlet
+		// stamps on admitting it: one naming none is its proposer's bug, and
+		// no read of that run's pushes would find its row.
 		return fmt.Errorf("%w: principal.run.run_id: a seat's push git received is its coding box's, "+
 			"which names the run that made it and its harness, stamped by the engine from the run's row",
 			ErrInvalidProposal)
 	case p.Via == ViaEngine && p.Principal.Run.RunID != "":
-		// AN ENGINE-BUILT WRITE IS A TOOL CALL'S, whose run is the turn that
-		// called it — an executor's box pushes through git — so one naming an
-		// executor is its proposer's bug, and a read of that run's pushes
-		// would answer a write the run never made.
+		// An engine-built write is a tool call's, whose run is its turn: one
+		// naming an executor would list under a run that never made it.
 		return fmt.Errorf("%w: principal.run.run_id: a push the engine built is a tool call's, whose run "+
 			"is its turn: it names no executor", ErrInvalidProposal)
 	case !p.Via.proposed():
@@ -503,10 +416,8 @@ func (p Proposal) validFields() error {
 			return err
 		}
 	}
-	// AN ENGINE-BUILT PUSH IS ONE COMMIT ON ONE REF: the engine builds a
-	// write as one ref update, so a proposal of it moving more, or held
-	// together by --atomic — which one command has nothing to hold together
-	// with — is no push the engine built.
+	// An engine-built push is one commit on one ref, so one moving more,
+	// or --atomic, is no push the engine built.
 	switch {
 	case p.Via == ViaEngine && len(p.Commands) != 1:
 		return fmt.Errorf("%w: commands: %d, and a push the engine built moves exactly one ref",
@@ -575,14 +486,11 @@ func (p Proposal) validOffered() error {
 }
 
 // validExpiry holds the ref lifecycle's push ([ViaExpiry]) to what its step
-// forms (retention_expiry.go): only DELETIONS, each of a branch in some seat's
-// namespace ([Holdable]; whose namespace it is is the decide's question) off
-// the commit its listing read, none decided yet — the receivers' refusals are
-// a client's, and the expiry has none — and nothing else of a push: no pack, no
-// introduced commit, no --atomic, no change. And it names the position of the
-// page it was listed from ([Proposal.Seen]), which its decide keeps every
-// branch held since by (rule 4b, [ExpiryRule]): an expiry naming none would
-// order no hold recorded after its listing.
+// forms (retention_expiry.go): only undecided DELETIONS of branches in a
+// seat's namespace ([Holdable]; whose is the decide's question), and no
+// pack, introduced commit, --atomic or change. It names its listing page's
+// position ([Proposal.Seen]), by which its decide keeps every branch held
+// since (rule 4b, [ExpiryRule]); naming none would order no hold after it.
 func (p Proposal) validExpiry() error {
 	for i, c := range p.Commands {
 		switch {
@@ -678,13 +586,11 @@ func (p Proposal) validPack() error {
 	return nil
 }
 
-// entryWith is the record entry p becomes with cmds as its decided commands,
-// counted against day: every field of the proposal, no Detail on any command
-// — a sentence is an answer, not state — and, on a SEAT'S entry alone, the
-// company day its decide counted it against ([PushEntry.Day]) and whom the
-// push was made for ([PushEntry.WorkingFor]), which the committer stamps and
-// no proposer sends. ONE BUILDER for the entry the decide records and the one
-// [entryBound] measures, so a push is measured carrying what it will carry.
+// entryWith is the record entry p becomes with cmds decided, counted against
+// day: no Detail on any command (a sentence is an answer, not state) and, on
+// a SEAT'S entry alone, the day ([PushEntry.Day]) and whom it was made for
+// ([PushEntry.WorkingFor]), which the committer stamps. ONE BUILDER for the
+// entry the decide records and the one [entryBound] measures.
 func (p Proposal) entryWith(cmds []Command, day string) PushEntry {
 	stored := make([]Command, len(cmds))
 	for i, c := range cmds {
@@ -727,15 +633,10 @@ const (
 )
 
 // entryBound is the most bytes p's entry can take in a push record: the
-// entry encoded as proposed — a seat's carrying the day its decide stamps, at
-// its longest ([longestDay]), and whom it was made for, as its decide stamps
-// it ([Proposal.entryWith]), and its change as its decide would open it,
-// the target it stamps, and a title its receiver is still to fill in, at
-// their longest where the options named none
-// ([ChangeOption.measured]), and an operator's landings as its decide would
-// stamp them, every branch it moves onto a commit a protected one, green
-// ([measuredLandings]) — plus what deciding can add to each command, plus the
-// comma between it and the next entry.
+// entry as [Proposal.entryWith] builds it, a seat's day at [longestDay], its
+// change as its decide would open it ([ChangeOption.measured]) and an
+// operator's landings at their most ([measuredLandings]), plus what deciding
+// adds to each command and the comma before the next entry.
 func entryBound(p Proposal) (int, error) {
 	e := p.entryWith(p.Commands, longestDay)
 	e.Change = p.Change.measured()
@@ -747,36 +648,15 @@ func entryBound(p Proposal) (int, error) {
 	return len(b) + len(p.Commands)*commandResultBound + 1, nil
 }
 
-// rowBound is the most rows p's entry can make its record's apply touch of what
-// its proposal alone says: its push row, its pack, its pusher's day but an
-// expiry's ([pusherDayRows]), [commandRows] for every
-// command the receiver did not refuse, and for a SEAT'S push the
-// [seatDayRows] its day's count takes. What only the repository's rows say —
-// the live changes its commands move ([changeBook]) and the landings it makes
-// on protected branches ([PushEntry.Landings]) — the decide counts from its
-// snapshot ([entryRows]), carrying an entry they take past the record's rows
-// to lead the next one and refusing one they take past a record of its own
-// (too_many_changes). Reserved here, a person's push would be charged two
-// landing rows for every branch it moves, protected or not, and three maximal
-// pushes of fast-forwards would no longer share a record.
-//
-// # A deletion keeps a row for the sweep so no record this committer forms removes
-//
-// The applier holds MaxTombstonesPerRepo after every record with two moves:
-// its sweep takes the oldest past the bound within what the record's rows
-// leave of MaxRecordRows, and a record whose new tombstones that room cannot
-// match writes its deletions as REMOVALS and raises the repository's mark to
-// its own position (apply_push.go) — which sends every cache synced before the
-// record, on every Gitlet node holding the repository, to read it whole, and
-// stops each such node's maintenance on it for the full round. Counted as its
-// ref alone, a deletion left the sweep less room than the record's own
-// deletions need: three pushes of a thousand deletions shared one record whose
-// sweep had 995 rows for 3 000 new tombstones, and a record filled to the row
-// bound left it none. With a row kept for the sweep, a record's sweep always
-// has one for every tombstone it makes, the removal is left to records no
-// committer of this build forms, and what that costs is batching alone: one
-// maximal deletion push a record rather than three, a record still under half
-// the lane's time budget (doc.go's measured section).
+// rowBound is the most rows p's entry can make its record's apply touch of
+// what its proposal alone says: its push row, its pack, its pusher's day but
+// an expiry's ([pusherDayRows]), [commandRows] for every command the receiver
+// did not refuse, and a seat's [seatDayRows]. The live changes its commands
+// move ([changeBook]) and its landings ([PushEntry.Landings]) only the rows
+// say: the decide counts them from its snapshot ([entryRows]), leading the
+// next record with an entry past this one's rows and refusing one past a
+// record of its own (too_many_changes). Reserved here, a person's push would
+// be charged two landing rows a branch, protected or not.
 func rowBound(p Proposal) int {
 	rows := 1
 	for _, c := range p.Commands {
@@ -828,12 +708,9 @@ func measuredLandings(principal Principal, cmds []Command) []PushLanding {
 func lands(c Command) bool { return strings.HasPrefix(c.Ref, branchPrefix) && c.New != ZeroOID }
 
 // entryRows is the most rows a DECIDED entry makes its record's apply touch
-// besides the changes its commands move: its push row, its pusher's day but an
-// expiry's ([pusherDayRows]), [commandRows] for every
-// command that applies, its pack, and for a seat's entry the [seatDayRows]
-// its day's count takes — [rowBound] of the commands its decide found ok —
-// and [landingRows] for each landing its decide stamped, which the decide
-// admits an entry by and [withinRecord] holds the record to.
+// besides the changes its commands move: [rowBound] of the commands its
+// decide found ok, plus [landingRows] for each landing it stamped. The decide
+// admits an entry by it and [withinRecord] holds the record to it.
 func entryRows(e PushEntry) int {
 	rows := 1
 	for _, c := range e.Commands {
@@ -854,27 +731,24 @@ func entryRows(e PushEntry) int {
 }
 
 // seatDayRows is the most rows a seat's entry makes its record's apply touch
-// in code_seat_days ([countSeatDays]): the seat's row of the day its entry is
-// counted against, and the one day beyond the seat's two newest that the
-// count forgets. COUNTED
-// ONCE AN ENTRY, which overstates a record carrying a seat's entries twice —
-// they share the seat's two rows — and so only closes a batch earlier at the
-// row bound, never lets its apply pass it. The ONE count the batcher
-// ([rowBound]) and the decide's own check ([withinRecord]) take.
+// in code_seat_days ([countSeatDays]): the seat's row of its day, and the one
+// day beyond the seat's two newest the count forgets. Counted once an entry,
+// it overstates a record carrying one seat's entries twice, which only closes
+// a batch earlier. The ONE count [rowBound] and [withinRecord] take.
 const seatDayRows = 2
 
-// commandRows is the most rows one command that applies makes its record's
-// apply touch: its ref; the object it moved its ref off ([leavesObject], a
-// code_ref_drops row), for a forced update and a deletion; and for a
-// deletion the old tombstone the record's sweep may have to take to keep the
-// repository inside MaxTombstonesPerRepo once the deletion's own is written —
-// a deletion three, a forced update two, any other one. The ONE count the
-// batcher ([rowBound]) and the decide's own check ([withinRecord]) take, so
-// what a batch is formed by is what its record is held to. A drop row is the
-// record's own write rather than a horizon's, which takes only what is left:
-// uncounted, three maximal forced pushes would share a record writing 6 007
-// rows, past MaxRecordRows, and a deletion's drop would take the row kept for
-// its sweep.
+// commandRows is the most rows one applying command makes its record's apply
+// touch: its ref; for a forced update or a deletion, the object it moved off
+// ([leavesObject], a code_ref_drops row, the record's own write, unlike a
+// horizon's); and for a deletion a row kept for the sweep. The ONE count [rowBound] and
+// [withinRecord] take, so a batch is formed by what its record is held to.
+//
+// The kept row lets the applier's sweep always match a record's new
+// tombstones within MaxRecordRows (MaxTombstonesPerRepo), so it never writes
+// deletions as REMOVALS and raises the repository's mark (apply_push.go),
+// which sends every synced cache on every Gitlet node to read it whole and
+// stops their maintenance on it for a round. The cost is batching alone: one
+// maximal deletion push a record (doc.go's measured section).
 func commandRows(c Command) int {
 	rows := 1
 	if c.New == ZeroOID {

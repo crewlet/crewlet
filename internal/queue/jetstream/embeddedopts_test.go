@@ -10,19 +10,12 @@ import (
 )
 
 // TestTheEmbeddedServerCarriesWhatTheContractPromises pins the two options
-// whose absence is invisible until the day they are needed.
-//
-// Neither can be caught by an ordinary behavioural case. An unset MaxPayload
-// leaves the broker at nats-server's 1 MiB default, which every test payload
-// fits inside — its cost used to be one oversized delivery in production,
-// refused forever, and is now every boot refused by the queue's own check
-// (TestAnEmbeddedBrokerWithoutTheCeilingFailsTheBootAndBlamesTheBuild), which
-// this pins at its source. An unset SyncAlways leaves the file store on a
-// 2-minute background flush, and nothing short of cutting power to the host
-// tells the difference.
-//
-// So they are asserted where they are decided, on the options a Config
-// produces, rather than through behaviour that cannot be provoked.
+// whose absence no behavioural case provokes, where a Config decides them. An
+// unset MaxPayload leaves nats-server's 1 MiB default, which every test payload
+// fits, and fails every boot at the queue's own check
+// (TestAnEmbeddedBrokerWithoutTheCeilingFailsTheBootAndBlamesTheBuild); an
+// unset SyncAlways leaves the file store on a 2-minute background flush, which
+// only a power cut tells apart.
 func TestTheEmbeddedServerCarriesWhatTheContractPromises(t *testing.T) {
 	t.Parallel()
 
@@ -41,15 +34,10 @@ func TestTheEmbeddedServerCarriesWhatTheContractPromises(t *testing.T) {
 		}
 	})
 
-	// THE FSYNC IS THE OPERATOR'S SETTING, not an inference from the
-	// replica count. The inference this replaces — a replicated member has
-	// a quorum, so it needs no fsync — is true of one failure class and was
-	// applied to five: a rack losing power takes a majority together, and a
-	// three-node fleet on one rack is what a first production deployment
-	// looks like.
-	//
-	// The replica count is asserted to have NO effect here, which is the
-	// half a "does it pass through" test would miss.
+	// THE FSYNC IS THE OPERATOR'S SETTING, never inferred from the replica
+	// count: a quorum survives one failure class, but a rack losing power takes
+	// a majority together, and a first fleet is three nodes on one rack. The
+	// rows assert the replica count has NO effect.
 	for _, tc := range []struct {
 		name     string
 		cfg      Config
@@ -90,20 +78,16 @@ func TestTheEmbeddedServerCarriesWhatTheContractPromises(t *testing.T) {
 
 // A MEMBER'S CLIENT LISTENER IS FOR THIS HOST, AND NOBODY IS TOLD OF IT.
 //
-// A clustered member must open a client listener — nats-server starts routing
-// only once one is — and nothing of this process dials it: every connection
-// is in process. Bound on every interface, as it was, it was open to anything
-// that could reach the machine, and its URL, on the host's external address,
-// was gossiped through every member to every client in their INFO. So it binds
-// loopback and advertises nothing, and a member that routes nowhere — solo, a
-// member with only a leaf listener, a leaf — opens none at all.
+// A clustered member must open one (nats-server routes only once it has), yet
+// every connection of this process is in process: bound wider it is open to
+// anything reaching the machine, and advertised its URL is gossiped into every
+// client's INFO. So it binds loopback and advertises nothing, and a member that
+// routes nowhere (solo, leaf listener only, a leaf) opens none. What a live
+// member's client discovers is jetstreamtest's
+// TestAMembersOwnClientDiscoversNoPeer.
 //
-// Asserted on the options, where it is decided: what a client of a live
-// member discovers is jetstreamtest's TestAMembersOwnClientDiscoversNoPeer.
-//
-// Mutations: leave Host empty → the clustered row, red; leave NoAdvertise
-// off → the clustered row, red; let a member with only a leaf listener listen
-// → its row, red.
+// Mutations: leave Host empty or NoAdvertise off → the clustered row, red; let
+// a member with only a leaf listener listen → its row, red.
 func TestAMembersClientListenerIsLoopbackAndUnadvertised(t *testing.T) {
 	t.Parallel()
 	member := Config{ServerName: "a", ClusterName: "c", ClusterPort: 6222,
@@ -141,10 +125,9 @@ func TestAMembersClientListenerIsLoopbackAndUnadvertised(t *testing.T) {
 	}
 }
 
-// TestTheClientIsToldTheCeiling is the other half: setting MaxPayload on the
-// server is only useful because the client learns it from the server's INFO
-// and refuses an oversized publish itself. That local refusal is what makes an
-// over-limit delivery a reportable error rather than a dropped connection.
+// TestTheClientIsToldTheCeiling is the other half: the client learns
+// MaxPayload from the server's INFO and refuses an oversized publish itself,
+// making an over-limit delivery a reportable error, not a dropped connection.
 func TestTheClientIsToldTheCeiling(t *testing.T) {
 	t.Parallel()
 	e, err := startEmbedded(t.Context(), Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
@@ -167,22 +150,15 @@ func TestTheClientIsToldTheCeiling(t *testing.T) {
 // EVERY SERVER AUTHENTICATES, AND ONLY A CLUSTERED MEMBER ROUTES — WITH ITS
 // OWN KEY, ON EVERY ROUTE IT DIALS.
 //
-// Every server this package starts — solo, clustered, a member serving leaves,
-// a leaf — hands every client and leaf link to the one authenticator, and sends
-// every connection a nonce to sign (with a custom authenticator the server
-// builds no nkey table and would send none). Only a clustered member has
-// routes for it to decide, declares the system account its membership code
-// reaches — under its default name, which the metadata group's own state is
-// stored under — and presents its route credential both ways a route can
-// carry one: as the cluster block's username, which gossiped routes take, and
-// in every explicit route's URL, which is all a route's CONNECT carries. No
-// server keeps a user list of its own: the authenticator decides, so a list
-// beside it would be a second one nothing reads. And each start mints its own
-// key for this process.
-//
-// Mutations: omit the router authenticator → the member row, red; leave the
-// system key in the server's own nkey list → the user-list row, red; give the
-// explicit routes no credential → the route-URL row, red.
+// Every server hands every client and leaf link to the one authenticator, with
+// no user list beside it, and sends each a nonce (a custom authenticator builds
+// no nkey table, so none would go out). Only a clustered member authenticates
+// routes, declares the system account under its default name (the metadata
+// group's state is stored there), and presents its route credential both ways:
+// the cluster block's username, for gossiped routes, and each explicit route's
+// URL, all its CONNECT carries. Each start mints its own key. Mutations, each
+// red: no router authenticator; the system key in the server's own nkey list;
+// no credential on the explicit routes.
 func TestEveryServerAuthenticatesAndOnlyAClusteredMemberRoutes(t *testing.T) {
 	t.Parallel()
 	member := Config{ServerName: "a", ClusterName: "c", ClusterPort: 6222,
@@ -258,13 +234,11 @@ func TestEveryServerAuthenticatesAndOnlyAClusteredMemberRoutes(t *testing.T) {
 	}
 }
 
-// A FLEET LISTENER WITH NO KEYS IS REFUSED BEFORE ANYTHING IS BUILT.
-//
-// Every route and leaf link is authenticated with a key derived from
-// secrets.keys, so a member that opens a route or a leaf listener, names a
-// peer, or dials a leaf link with no keyring would refuse every peer or be
-// refused by every one: a fleet that never forms. A solo member and a cluster
-// that is only named open and dial nothing, and need no key.
+// A FLEET LISTENER WITH NO KEYS IS REFUSED BEFORE ANYTHING IS BUILT: every
+// route and leaf link authenticates with a key derived from secrets.keys, so a
+// member with a route or leaf listener, a named peer or a leaf link and no
+// keyring would form no fleet. A solo member and a cluster only named dial
+// nothing and need no key.
 //
 // Mutations: allow a zero FleetAuth → every refused row, red; refuse a named
 // cluster that routes nowhere → its row, red.

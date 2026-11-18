@@ -5,14 +5,13 @@ import (
 	"testing"
 )
 
-// THE STANDARD WINDOW IS THE HARNESS'S OWN, model by model and route by route,
-// as Claude Code 2.1.310 and 2.1.322 hold a run to it where nothing served or
-// opted into raises it: claude-opus-4-6 and claude-sonnet-4-6 at 200,000 on every
-// route though their pin is 1,000,000; an alias at the window of the model it
-// names on the route (`opus` claude-opus-4-6 on Foundry, `sonnet` and `haiku`
-// older models off Anthropic's API); no model and `default` at 200,000 on every
-// route, the account's default possibly one of those; a route this build does
-// not know as the least of every route off Anthropic's. The pin never moves.
+// THE STANDARD WINDOW IS THE HARNESS'S OWN, by model and route, as Claude Code
+// 2.1.310 and 2.1.322 hold a run where nothing raises it: claude-opus-4-6 and
+// claude-sonnet-4-6 at 200,000 on every route though pinned at 1,000,000; an
+// alias at its model's window on the route (`opus` is claude-opus-4-6 on
+// Foundry, `sonnet` and `haiku` older models off Anthropic's API); no model and
+// `default` at 200,000 everywhere, the account's default possibly one of those;
+// an unknown route as the least off Anthropic's. The pin never moves.
 //
 // Mutation: take the pin for the standard window, or read every route as
 // Anthropic's, and a row goes red.
@@ -57,11 +56,10 @@ func TestTheStandardWindowIsTheHarnessesOwn(t *testing.T) {
 }
 
 // SENDS WHOLE IS THE HARNESS'S THRESHOLD: Claude Code compacts where its count of
-// the conversation, the brief and what the resume attaches reaches its window less
-// its reply reserve and its compaction buffer, so a bound whose sum with the
-// brief's charge and the turn's attachments is below that point sends whole, and
-// one at it does not, the harness compacting where its count is at least the
-// threshold. At a 200,000-token window the point is 167,000.
+// the conversation, the brief and the resume's attachments reaches its window
+// less its reply reserve and compaction buffer, so a bound whose sum with the
+// brief's charge and the attachments is below that point sends whole, and one
+// at it does not. At a 200,000-token window the point is 167,000.
 //
 // Mutation: compare with <=, leave the brief's charge or the turn's attachments
 // out, or judge under the pin, and a case goes red.
@@ -87,9 +85,8 @@ func TestSendsWholeIsTheHarnessesThreshold(t *testing.T) {
 }
 
 // NO BOUND, OR A WINDOW THIS BUILD DOES NOT KNOW, MAY COMPACT: no count, a mark,
-// a figure that is no count, an unknown model, and a known window whose standard
-// one is not stated each read as a session its harness may compact first,
-// whatever the brief.
+// a figure that is no count, an unknown model, and a known window with no
+// standard one stated, whatever the brief.
 //
 // Mutation: read a mark as a bound of 0, or a standard window of 0 as one, and a
 // case goes red.
@@ -114,10 +111,10 @@ func TestNoBoundOrAnUnknownWindowMayCompact(t *testing.T) {
 	}
 }
 
-// A REPORTED WINDOW BELOW THE STANDARD DECIDES: the run that left the copy reported
-// holding its model to 200,000 tokens (the account's default, an alias its box
-// retargeted, a switch that holds every model there), so a count of 150,000 under
-// a standard window of 1,000,000 may compact.
+// A REPORTED WINDOW BELOW THE STANDARD DECIDES: a run that reported holding its
+// model to 200,000 tokens (the account's default, an alias its box retargeted, a
+// switch holding every model there) may compact at 150,000 under a standard
+// window of 1,000,000.
 //
 // Mutation: ignore the reported window, and this goes red.
 func TestAReportedWindowBelowTheStandardDecides(t *testing.T) {
@@ -128,9 +125,9 @@ func TestAReportedWindowBelowTheStandardDecides(t *testing.T) {
 	}
 }
 
-// A REPORTED WINDOW NEVER RAISES THE STANDARD: a figure a box writes can add
-// telling and never remove it, so a run that reports 1,000,000 for a model the
-// harness holds to 200,000 is judged at 200,000.
+// A REPORTED WINDOW NEVER RAISES THE STANDARD: a figure a box writes may make a
+// continuation read as cut off, never as whole, so a run reporting 1,000,000 for
+// a model the harness holds to 200,000 is judged at 200,000.
 //
 // Mutation: take the larger of the two, and this goes red.
 func TestAReportedWindowNeverRaisesTheStandard(t *testing.T) {
@@ -167,10 +164,9 @@ func TestEveryCountMarkAndRouteIsValid(t *testing.T) {
 	}
 }
 
-// THE WORSE OF TWO COUNTS IS THE ONE THAT TELLS MORE: none where either is none,
-// since either may be the copy resumed; a mark, the first in precedence, where
-// either holds one; else the larger bound, beside the smaller window either
-// reported.
+// THE WORSE OF TWO COUNTS IS THE ONE THAT TELLS MORE ([ResumedCount.Worse]):
+// none, the first mark in precedence, or the larger bound beside the smaller
+// window.
 //
 // Mutation: take the first count's bound, or the larger window, and a case goes
 // red.
@@ -192,15 +188,13 @@ func TestTheWorseOfTwoCountsIsTheOneThatTellsMore(t *testing.T) {
 	}
 }
 
-// A JOB THAT RESTARTED ITS SESSION IS KNOWN BY ITS NEWEST RESTART'S IDENTITY: the
-// newest place its thread restarts at, as a whole read of the job's copy finds
-// it, against the one the job's launch handed it. A compaction the job made moves
-// it; a trim that kept the newest restart does not, however many older ones it
-// dropped; a fresh session that restarted, and a basis not known where the
-// thread restarts anywhere, have restarted; a count marked for what its bytes
-// cannot bound is read by its restart as a bound is, since the mark says nothing
-// of where the thread restarts; and a count that did not read the thread whole
-// cannot say, which is read as restarted.
+// A JOB THAT RESTARTED ITS SESSION IS KNOWN BY ITS NEWEST RESTART'S IDENTITY,
+// against the one its launch handed it. A compaction the job made moves it; a
+// trim that kept the newest restart does not, however many older ones it
+// dropped; a fresh session that restarted, and an unknown basis with any
+// restart, have restarted; a marked count is read by its restart as a bound is,
+// since the mark says nothing of where the thread restarts; and a count not read
+// whole cannot say, which reads as restarted.
 //
 // Mutation: drop the comparison, compare a count of restarts, read an unread
 // count as not restarted, or a marked one as unread, and a case goes red.

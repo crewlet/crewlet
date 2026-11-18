@@ -34,20 +34,17 @@ roles:
     kind: human
 `
 
-// THE SIGNER FALLS BACK TO THE IDENTITY DOMAIN for every seat whose role
-// states no address a commit may name as written: none, one git would cut, and
-// a `${VAR}` reference — read AS WRITTEN, never resolved through this node's
-// environment, which a retry on another Gitlet node need not share, so the
-// variable set here changes nothing — while a valid address is the author's
-// own. A role name git would cut falls back to the handle. The committer is
-// the engine at the identity domain, its default seats.invalid — and the
-// address a coding box's pack may hold no new commit of (Committer) is that
-// same committer, read off the same epoch; a seat the
-// chart does not hold, and a node holding no epoch, sign nothing, about this
-// node, and a node holding no epoch names no committer either.
+// THE SIGNER FALLS BACK TO THE IDENTITY DOMAIN for every seat whose role states
+// no address a commit may name as written: none, one git would cut, and a
+// `${VAR}` reference, read AS WRITTEN and never resolved through this node's
+// environment (so the variable set here changes nothing); a valid address is
+// the author's own, and a name git would cut falls back to the handle. The
+// committer, and Committer's address, is the engine at the identity domain
+// (default seats.invalid); a seat the chart lacks and a node with no epoch sign
+// nothing, about this node, and the latter names no committer.
 //
-// Mutations: read the role's ResolvedEmail — the referenced seat signs with
-// the variable's value, red; Committer spelled from the default domain — the
+// Mutations: read the role's ResolvedEmail → the referenced seat signs with
+// the variable's value, red; Committer spelled from the default domain → the
 // example.org row names seats.invalid, red.
 func TestTheSignerFallsBackToTheIdentityDomain(t *testing.T) {
 	t.Setenv("JANE_EMAIL", "jane@example.com")

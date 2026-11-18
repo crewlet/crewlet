@@ -54,6 +54,15 @@ describe("a file's patch", () => {
     expect(hunks[1]!.skipped).toBe(5);
   });
 
+  // GIT'S OWN HUNK LINE IS KEPT, its section words with it, for a diff that
+  // draws it. Mutation: keep only the numbers, and this fails.
+  test("keeps each hunk's header as git wrote it", () => {
+    expect(parsePatch(PATCH).map((h) => h.header)).toEqual([
+      "@@ -2,3 +2,3 @@ package app",
+      "@@ -10,2 +10,3 @@",
+    ]);
+  });
+
   // A NEW FILE starts at 0 on its older side, which holds nothing.
   test("reads a file added whole as every line added from 1", () => {
     const hunks = parsePatch(
@@ -62,6 +71,7 @@ describe("a file's patch", () => {
     expect(hunks).toEqual([
       {
         skipped: 0,
+        header: "@@ -0,0 +1,2 @@",
         lines: [
           { kind: "add", text: "a", before: null, after: 1 },
           { kind: "add", text: "b", before: null, after: 2 },

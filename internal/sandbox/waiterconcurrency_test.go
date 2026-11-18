@@ -13,19 +13,16 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
-// A BOX THAT DOES NOT ANSWER DELAYS NO OTHER BOX. The tick polled its boxes one
-// after another, so a box whose envd held a request open for its ten-minute
-// silence bound held every box behind it — their completions unannounced and
-// their keepalives unsent, toward a fifteen-minute TTL. Now each box is
-// polled beside the others: a stuck box's neighbour is polled, found done and
-// announced while the stuck one is still being waited on.
+// A BOX THAT DOES NOT ANSWER DELAYS NO OTHER BOX: each box is polled beside the
+// others, so one whose envd holds a request open for its ten-minute silence
+// bound holds back no neighbour's completion or keepalive (against a
+// fifteen-minute TTL).
 //
-// READ IN A BUBBLE, once every goroutine of the case is blocked: the stuck
-// box's poll then waits on its release, and the done box has been polled and
-// announced beside it, with no time having passed at all. A wait of ten
-// seconds for the announcement failed a runner that lost them.
+// READ IN A BUBBLE, once every goroutine is blocked: the stuck box's poll waits
+// on its release, and the done box has been polled and announced beside it with
+// no time passed.
 //
-// Mutation: poll the boxes one after another again, and the done box is not
+// Mutation: poll the boxes one after another, and the done box is not
 // announced until the stuck one is released.
 func TestABoxThatDoesNotAnswerDelaysNoOtherBox(t *testing.T) {
 	t.Parallel()
@@ -78,10 +75,9 @@ func TestABoxThatDoesNotAnswerDelaysNoOtherBox(t *testing.T) {
 	})
 }
 
-// A BOX'S POLL IS BOUNDED, however long the box takes to answer: it lasted as
-// long as the box's slowest request, which for a command is ten minutes of
-// silence. Abandoned at the bound, the poll is that box's loss alone, and a
-// later pass asks again.
+// A BOX'S POLL IS BOUNDED, however long the box takes to answer (a command's
+// request may sit ten minutes silent): abandoned at the bound, the poll is that
+// box's loss alone, and a later pass asks again.
 func TestABoxsPollIsBounded(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -177,24 +173,18 @@ func TestABoxIsPolledByOnePollAtATime(t *testing.T) {
 	}
 }
 
-// THE LOOP KEEPS EVERY OTHER BOX'S CADENCE WHILE ONE BOX IS HELD. A loop that
-// waited for each pass's slowest poll would set every box's cadence to a held
-// box's bound rather than the interval, and stretch the pass past the duty's
-// own TTL. A pass returns once its walk has started: the next one comes on
-// schedule, passes the held box over and polls the rest.
+// THE LOOP KEEPS EVERY OTHER BOX'S CADENCE WHILE ONE BOX IS HELD: a pass
+// returns once its walk has started, so the next comes on schedule, passes the
+// held box over and polls the rest. Waiting for each pass's slowest poll would
+// set every box's cadence to the held box's bound and stretch a pass past the
+// duty's own TTL.
 //
-// Counted by EVENTS, and ended by them: the held box's first poll is released
-// once the healthy box has been polled three times while it runs. What is left
-// of a rate is three passes inside the poll's ten-second bound, five hundred
-// intervals, which a loop that keeps the cadence misses only when the machine
-// stalls for seconds. A hold ended by its bound at one second asked for three
-// passes inside that second — some fifty on an idle machine — and a loaded run
-// of the whole suite under the race detector gave it two.
+// Counted and ended by EVENTS: the held poll is released once the healthy box
+// has been polled three times during it, three passes inside the ten-second
+// bound (five hundred intervals), missed only if the machine stalls for seconds.
 //
 // Mutation: wait for the pass's tasks in the loop, and the neighbour is polled
-// at most once while the held box's first poll runs — by the pass that started
-// it — so the hold runs to its bound and the case goes red however fast the
-// machine is.
+// at most once during the hold, which runs to its bound and goes red.
 func TestTheLoopKeepsEveryOtherBoxsCadenceWhileOneIsHeld(t *testing.T) {
 	t.Parallel()
 	const want = 3
@@ -208,9 +198,8 @@ func TestTheLoopKeepsEveryOtherBoxsCadenceWhileOneIsHeld(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The backstop: five hundred intervals. A loop that ties the healthy box
-	// to the held one always reaches it; one that keeps the cadence reaches
-	// it only when the machine stalls for seconds.
+	// The backstop, five hundred intervals: reached by a loop that ties the
+	// healthy box to the held one, or by a machine stalled for seconds.
 	waiter.pollBound = 10 * time.Second
 
 	var (
@@ -276,16 +265,13 @@ func TestTheLoopKeepsEveryOtherBoxsCadenceWhileOneIsHeld(t *testing.T) {
 	}
 }
 
-// A POLL ENDS WITH THE DUTY THAT AUTHORISED IT. A poll outlives the pass that
-// started it, and the duty it was started under lapses a TTL after its claim:
-// past that a peer may hold the duty and poll the same box, so the poll is
-// bounded by the claim — its TTL less one interval — wherever that comes
-// before the poll's own bound.
+// A POLL ENDS WITH THE DUTY THAT AUTHORISED IT: a poll outlives its pass, and
+// past the duty's TTL a peer may hold the duty and poll the same box, so the
+// poll is bounded by the claim (its TTL less one interval) where that comes
+// before its own bound.
 //
-// IN A BUBBLE, where the poll's end is the duty's to the instant: the poll
-// waits on its context alone, and the clock moves only to the timers that end
-// it. A bound of seconds on the machine's clock passed a poll that outlived
-// its duty by less.
+// IN A BUBBLE, so the poll's end is the duty's to the instant: the poll waits
+// on its context alone, and the clock moves only to the timers that end it.
 //
 // Mutation: bound a poll by [pollBound] alone, and it runs on for the ten
 // seconds this case gives it.
@@ -331,10 +317,9 @@ func TestAPollEndsWithTheDutyThatAuthorisedIt(t *testing.T) {
 }
 
 // A DUTY LOST STOPS EVERY POLL IT AUTHORISED, at once rather than at the
-// claim's deadline: a peer holds the duty now and works the same boxes. And a
-// box whose reach was STOPPED is not counted as one that did not answer — the
-// stop says nothing about the box — so a run is never given up on because its
-// node lost the duty.
+// claim's deadline: a peer now works the same boxes. A box whose reach was
+// STOPPED is not counted as one that did not answer, so a run is never given
+// up on because its node lost the duty.
 //
 // Mutation: leave in-flight polls running when a claim is refused, and the
 // poll runs to the ten-second bound; count a stopped reach as a failure, and
@@ -347,11 +332,9 @@ func TestADutyLostStopsEveryPollItAuthorised(t *testing.T) {
 	waiter, err := NewWaiter(WaiterOptions{
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesRemote,
 		Interval: 20 * time.Millisecond, DutyTTL: time.Minute,
-		// Held until the poll has reached the box, and a peer's from the
-		// next pass on. Lost on the second pass whatever had happened, it
-		// hung the case when the first walk had not started its poll
-		// before that pass 20 ms later stood it down, which a loaded
-		// runner does: nothing then polled the box at all.
+		// Held until the poll has reached the box, a peer's from then on:
+		// lost on a fixed pass, it could stand the first walk down before
+		// that walk polled the box at all.
 		ClaimDuty: func(context.Context) (bool, error) { return !reached.Load(), nil },
 		Now:       func() time.Time { return rig.now },
 	})
@@ -395,9 +378,9 @@ func TestADutyLostStopsEveryPollItAuthorised(t *testing.T) {
 }
 
 // A RECLAIM THAT WON ITS FLIP KILLS THE BOX, whatever ends its task: the flip
-// released the row, so nothing else names the box any more, and a kill
-// abandoned with the task — at its deadline, or by a stop — left a paused
-// snapshot billed with nobody to reclaim it.
+// released the row, so nothing else names the box, and a kill abandoned with
+// the task (at its deadline, or by a stop) would leave a paused snapshot billed
+// with nobody to reclaim it.
 //
 // Mutation: kill under the task's own context, and the box survives.
 func TestAReclaimThatWonItsFlipKillsTheBoxWhateverEndsItsTask(t *testing.T) {
@@ -428,14 +411,12 @@ func (s stopAfterFlip) ExpirePause(ctx context.Context, turnID string) (bool, er
 	return won, err
 }
 
-// A WALK WHOSE AUTHORITY HAS ENDED STARTS NOTHING. It takes no slot, even
-// where a slot is free at the same moment: both cases of the wait are ready
-// then, and Go picks between them at random, so a walk that took the slot
-// would start a task it no longer has the authority for — one whose deadline
-// may already have passed, which then counts a box it never asked as one that
-// did not answer. And it registers no task: asked under the lock a stand-down
-// stops everything under, a task is either stopped by a stand-down or refused
-// after it, never started between the two with nothing left to stop it.
+// A WALK WHOSE AUTHORITY HAS ENDED STARTS NOTHING. It takes no slot even where
+// one is free: both cases of the wait are ready, Go picks at random, and a task
+// started without authority (its deadline perhaps passed) counts a box it
+// never asked as one that did not answer. And it registers no task: asked under
+// the lock a stand-down stops everything under, a task is stopped by a
+// stand-down or refused after it, never started between the two.
 //
 // Mutation: drop the second look after the slot is taken, and about half of
 // these attempts take one; drop the walk's check from the registration, and a

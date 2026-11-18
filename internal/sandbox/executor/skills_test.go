@@ -11,9 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// handedSkills are two skills a run is handed as its own: one required, one
-// advisory, the first described in prose that holds what a YAML scalar would
-// read as structure.
+// handedSkills are a required and an advisory skill, the first described in
+// prose a plain YAML scalar would read as structure.
 func handedSkills() []sandbox.Skill {
 	return []sandbox.Skill{
 		{Name: "mcp-github", Description: `Read / search code: issues, "PRs" & <reviews>.`,
@@ -97,11 +96,10 @@ func TestAClaudeCodeRunTakesItsSkillsAsAPluginOfItsOwn(t *testing.T) {
 }
 
 // A CLAUDE CODE RUN'S SKILLS ARE ADDED BY THE BOX'S RELEASE: at or after
-// 2.1.118, the first whose hooks call an MCP tool, the run starts with its
-// plugin, and on the settings that keep the plugin's hook on. On an older
-// release a run with a required skill is refused before its harness starts —
-// every call to a tool the skill covers would be refused for good — and a run
-// whose skills are advisory starts without them.
+// claudeSkillsFloor the run starts with its plugin, on the settings that keep
+// its hook on. On an older release a run with a required skill is refused
+// before its harness starts (its tools would be refused for good), and one with
+// advisory skills starts without them.
 //
 // Mutation: add the plugin on any release, and an older one lists skills whose
 // loads it never reports; refuse an advisory run, and a box short of one release
@@ -136,10 +134,10 @@ func TestAClaudeCodeRunsSkillsAreAddedByItsRelease(t *testing.T) {
 	}
 }
 
-// AN OPENCODE RUN TAKES ITS SKILLS AS A DIRECTORY ITS CONFIGURATION NAMES: a
-// directory per skill named as the skill is listed — the id OpenCode loads a
-// skill by — and, in `plugins`, the plugin that reports each load, its one
-// option the skill route, read from a file as the notes plugin's is.
+// AN OPENCODE RUN TAKES ITS SKILLS AS A DIRECTORY ITS CONFIGURATION NAMES: one
+// per skill, named as the skill is listed (OpenCode's id for it), and in
+// `plugins` the load-reporting plugin, its one option the skill route, read
+// from a file as the notes plugin's is.
 //
 // Mutation: name a skill's directory by its own name, and OpenCode lists it as
 // a name the engine never told the run's model; leave the plugin out, and no
@@ -208,10 +206,8 @@ type noSkills struct{ executor.ClaudeCode }
 func (noSkills) HandsSkills() bool { return false }
 
 // A RUN IS REFUSED SKILLS IT COULD NOT BE HELD TO, before anything reaches its
-// box: handed to a harness that takes none, with nowhere to report a load,
-// under a name no harness reads a skill by, or two under one name. Each would
-// start a run without the skills the engine holds its tools to — or name a
-// directory outside the run's own.
+// box: to a harness that takes none, with nowhere to report a load, under a
+// name no harness reads a skill by, or two under one name (refuseSkills).
 func TestARunIsRefusedSkillsItCouldNotBeHeldTo(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
@@ -242,10 +238,9 @@ func TestARunIsRefusedSkillsItCouldNotBeHeldTo(t *testing.T) {
 	}
 }
 
-// A RUN HANDED SKILLS DIALS ITS SKILL ROUTE AS THE BOX SEES THE ENGINE: the
-// route is written in the engine host's network, and a loopback one reaches
-// nothing from inside a container — so the runner moves it as it moves the
-// bridge's own address.
+// A RUN HANDED SKILLS DIALS ITS SKILL ROUTE AS THE BOX SEES THE ENGINE: a
+// loopback route reaches nothing from inside a container, so the runner moves
+// it as it moves the bridge's own address.
 func TestARunsSkillRouteIsDialledAsTheBoxSeesTheEngine(t *testing.T) {
 	t.Parallel()
 	runner := executor.NewOpenCode()

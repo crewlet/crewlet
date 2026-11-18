@@ -11,36 +11,22 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// Who is carrying how much, across every project at once.
-//
-// # Why this is its own reader rather than a screen adding some up
-//
-// A caller that wanted "who is carrying the most" over the whole company had
-// to fan out one grouped read per project and sum the rows itself — N round
-// trips to answer one question, with the arithmetic written once per surface.
-// This is one read, in one transaction, over the same rows.
-//
-// # It counts OPEN work
-//
-// Every open task assigned to somebody, whatever its dates, because "is this
-// person overloaded" is a question about their whole queue. The three shapes
-// of trouble ride beside the totals rather than being folded into them: a
-// person whose whole queue is blocked has a different problem from one who is
-// simply busy.
+// Who is carrying how much, across every project at once, in one read and one
+// transaction, so no surface fans out a read per project and sums the rows.
+// It counts every OPEN assigned task whatever its dates: "is this person
+// overloaded" is about their whole queue.
 
 // WorkloadQuery asks who is carrying how much.
 type WorkloadQuery struct {
-	// Unit narrows to the people whose open work sits in projects owned by
-	// this unit, named by either of its spellings — its id or its name.
-	// Empty is the whole company.
+	// Unit narrows to open work in projects this unit owns, named by its id
+	// or its name. Empty is the whole company.
 	Unit string
 
 	// Units resolves that reference — see [Units]. Nil matches it
-	// literally, which is the honest answer for a surface with no chart.
+	// literally, the honest answer for a surface with no chart.
 	//
-	// NOT SERIALISED: an interface a JSON encoder writes as `{}` and
-	// cannot decode back. A surface that sends this across a wire has the
-	// far side attach ITS OWN chart — see internal/estate.
+	// NOT SERIALISED: JSON writes an interface as `{}` and cannot decode it
+	// back, so the far side of a wire attaches ITS OWN chart (internal/estate).
 	Units Units `json:"-"`
 
 	Level     statelog.ReadLevel
@@ -52,10 +38,9 @@ type WorkloadQuery struct {
 
 // MaxWorkloadHandles is how many people one answer names.
 //
-// Two hundred and fifty-six: an order of magnitude above the seat count any
-// configuration in this tree describes, and a bound at all, because the axis
-// is "everybody with open work" and that set is not knowable before the read.
-// A company past it is one whose workload is not a screen anyway.
+// 256 is an order of magnitude above the seat count of any configuration in
+// this tree; a bound is needed at all because "everybody with open work" is
+// not knowable before the read.
 const MaxWorkloadHandles = 256
 
 // WorkloadRow is one person's load.
@@ -65,17 +50,14 @@ type WorkloadRow struct {
 	// Open is how many open tasks they hold.
 	Open int `json:"open"`
 
-	// Points and EstimateMinutes are the two measures a company may size
-	// in, both carried rather than one chosen: which one a company uses
-	// differs by team, so a company-wide answer that picked one would be
-	// wrong for everybody sizing in the other.
+	// Points and EstimateMinutes are both carried, never one chosen: teams
+	// size in different measures, and picking one is wrong for the other.
 	Points          float64 `json:"points"`
 	EstimateMinutes int     `json:"estimate_min"`
 
-	// Blocked, Overdue and Unscheduled are the three shapes of "this is
-	// not simply work in progress", carried beside the totals because a
-	// person whose whole queue is blocked has a different problem from one
-	// who is simply busy.
+	// Blocked, Overdue and Unscheduled ride beside the totals, not folded
+	// in: a person whose whole queue is blocked has a different problem
+	// from one who is simply busy.
 	Blocked     int `json:"blocked"`
 	Overdue     int `json:"overdue"`
 	Unscheduled int `json:"unscheduled"`
@@ -111,8 +93,7 @@ func (r *Reader) Workload(ctx context.Context, q WorkloadQuery, now time.Time,
 	var out WorkloadAnswer
 	served, err := r.log.Read(ctx, statelog.Query{
 		Level: q.Level,
-		// THE DOMAIN, for [Reader.MyWork]'s reason: this question is
-		// about every container at once, and a narrower closure would
+		// THE DOMAIN, as in [Reader.MyWork]: a narrower closure would
 		// certify the answer complete while a deferred record in some
 		// project held work that belongs in it.
 		Scope:     statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
@@ -172,19 +153,16 @@ func workloadStatement(units []string, dayStart int64) (string, []any) {
 func readWorkload(ctx context.Context, tx *sql.Tx, q WorkloadQuery,
 	now time.Time, loc *time.Location, out *WorkloadAnswer) error {
 
-	// THE DAY BOUNDARY the overdue count is against, resolved exactly as
-	// [readMyWork] resolves it and for the same reason: the company's own
-	// midnight, so a person's overdue count here is the number of tasks a
-	// board marks overdue for them.
+	// The company's own midnight, resolved as [readMyWork] does, so the
+	// overdue count matches what a board marks overdue.
 	anchor, err := period.Resolve("today", now, loc)
 	if err != nil {
 		return err
 	}
 	dayStart := store.EncodeTime(anchor.At)
 
-	// THE UNIT'S KEY, through the chart — see [unitKeys]. A workload
-	// narrowed to a team is read from a screen that got the unit from
-	// somewhere else, so its id and its name both have to work.
+	// Through the chart ([unitKeys]): the unit came from another screen,
+	// so its id and its name both have to work.
 	statement, args := workloadStatement(unitKeys(q.Units, []string{q.Unit}), dayStart)
 	rows, err := tx.QueryContext(ctx, statement, args...)
 	if err != nil {

@@ -12,30 +12,16 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// RANKED SEARCH OVER WORK ITEMS, which is the half of "find the thing I half
-// remember" the board's query language cannot answer.
+// RANKED SEARCH OVER WORK ITEMS: the half of "find the thing I half remember"
+// the board's query language cannot answer.
 //
-// # Why this is the tracker's and not the knowledge seam's
+// It is the tracker's own verb over the same index, not a widening of
+// [knowledge.Searcher]: that seam is backend-neutral (Confluence, with no work
+// items, may answer it), and its page-shaped [knowledge.Hit] fits no work item.
 //
-// `search_knowledge` reads through [knowledge.Searcher], which is
-// BACKEND-NEUTRAL by design and has Confluence behind it on a company that
-// runs one — and Confluence has no work items. Widening that seam to carry
-// tasks would make "what do we already know about this" depend on which
-// backend answered, which is the one thing that package exists to prevent. Its
-// [knowledge.Hit] is page-shaped for the same reason: a space key, a page id
-// and an ancestor chain, none of which a work item has.
-//
-// So the tracker gets its own verb, over the same index, exactly as it has its
-// own board beside the wiki's own list.
-//
-// # What the board's `q` is, and why it is not this
-//
-// The grammar's `q` is a SUBSTRING of the key or the title, composed into the
-// board query with every other filter — a cheap predicate that pages, sorts
-// and groups with the rest, and the right tool for "the item whose key I am
-// half sure of". It cannot see a description, it cannot rank, and no amount of
-// filtering turns it into either. Both stay: one narrows a list, the other
-// orders a corpus.
+// The board's `q` stays beside it: a SUBSTRING of the key or title that pages,
+// sorts and groups with every other filter, but cannot see a description or
+// rank. One narrows a list, the other orders a corpus.
 
 // Ranked is one work item as a ranked search answers it.
 type Ranked struct {
@@ -44,10 +30,8 @@ type Ranked struct {
 
 	// KeyCollision is [TaskRow.KeyCollision] for a hit: the key is one
 	// another task claimed first, so it opens THAT task and this hit is
-	// reached by its id. A ranked answer is the list a person opens an
-	// item FROM, which is exactly where a hit that opens its neighbour
-	// would be indistinguishable from one that does not. See
-	// [ItemAddress].
+	// reached by its id ([ItemAddress]). A list a person opens items from
+	// must tell a hit that opens its neighbour from one that does not.
 	KeyCollision bool `json:"key_collision,omitempty"`
 
 	Title    string `json:"title" untrusted:"name"`
@@ -55,20 +39,13 @@ type Ranked struct {
 	Type     string `json:"type"`
 	Status   Status `json:"status"`
 	Assignee string `json:"assignee,omitempty"`
-	// Priority is the item's own, so a ranked answer says how much a hit
-	// matters beside what it is — the palette draws it as the Board does,
-	// and a seat weighing which of twenty hits to open reads it as the
-	// board's reader would.
+	// Priority is the item's own, so a hit says how much it matters beside
+	// what it is, as the Board draws it.
 	Priority Priority `json:"priority"`
-	// Rank is this hit's 1-based place in the answer.
-	//
-	// A PLACE AND NOT A SCORE, because a place is what the fan-out
-	// actually produces: [search.Answer] carries fused KEYS, best first,
-	// and the arithmetic that ordered them — score within a method, RRF
-	// across methods, per slice — is finished before a coordinator sees
-	// them. A `score` field here could only ever have serialised zero,
-	// which is the same defect as every other value in this tree with no
-	// writer, wearing a number's clothes.
+	// Rank is this hit's 1-based place in the answer: a place, not a
+	// score, because [search.Answer] carries fused KEYS, best first, the
+	// scoring (per method, RRF across methods) finished before a
+	// coordinator sees them, so a `score` here could only serialise zero.
 	Rank int `json:"rank"`
 
 	// Snippet is the index's own excerpt, which is what makes a ranked
@@ -119,11 +96,9 @@ type RankedCandidates struct {
 	knowledge.Outcome
 }
 
-// Ranker is the index seam, declared here because this is the caller.
-//
-// THE INDEX IS THIS NODE'S OWN and the rows are the fleet's, which is why the
-// two halves of this search are two reads rather than a join — the same estate
-// boundary every other reader here crosses the same way.
+// Ranker is the index seam, declared here because this is the caller. The
+// index is this node's own and the rows are the fleet's, so the two halves of
+// a search are two reads rather than a join.
 type Ranker interface {
 	// Candidates is each method the query's mode runs, its top candidates
 	// for the text with their scores, by the index's own document key —
@@ -137,12 +112,10 @@ type Ranker interface {
 	Building(ctx context.Context) bool
 }
 
-// SearchLimit is how many ranked items one search answers with.
-//
-// TWENTY, which is a screen and is also what a model can weigh in one read. A
-// ranked answer is not a board: the caller's next move is to open one or two
-// of them, so the value of the twenty-first is near zero while its cost in an
-// answer's budget is the same as the first's.
+// SearchLimit is how many ranked items one search answers with: twenty, a
+// screen and what a model can weigh in one read. The caller opens one or two,
+// so the twenty-first is worth near zero yet costs the answer's budget as much
+// as the first.
 const SearchLimit = 20
 
 // MaxSearchLimit caps what a caller may ask for.
@@ -159,22 +132,16 @@ func NewSearcher(db store.ReplicatedReader, rank Ranker) *Searcher {
 	return &Searcher{db: db, rank: rank}
 }
 
-// ErrIndexBuilding reports an index that has not caught up.
-//
-// ITS OWN SENTINEL, because the caller's answer differs from every other
-// refusal: nothing is wrong, the company's work is simply not all searchable
-// yet, and the honest thing to tell a seat is "ask again" rather than "there
-// is nothing" — which it would otherwise act on by filing a duplicate.
+// ErrIndexBuilding reports an index that has not caught up. Its own sentinel:
+// nothing is wrong, the work is not all searchable yet, and a seat told "there
+// is nothing" rather than "ask again" would file a duplicate.
 var ErrIndexBuilding = fmt.Errorf("worklet: the search index is still building")
 
 // Search ranks the company's work items against plain text, up to q's limit
-// items, best first.
-//
-// THE FUSED ORDER IS WALKED PAST AN ITEM REMOVED SINCE IT WAS INDEXED, rather
-// than cut first and filtered after: the index is behind this node's rows by
-// design, so a removed leader costs the answer that item and never a place. And
-// THE PLACE IS COUNTED OVER WHAT SURVIVES, so the numbering has no gap a reader
-// would take for a result that went missing.
+// items, best first. The fused order is walked past an item removed since it
+// was indexed rather than cut first and filtered after (the index lags this
+// node's rows by design), so a removed leader costs that item, never a place;
+// and the place is counted over what survives, so the numbering has no gap.
 func (s *Searcher) Search(ctx context.Context, q SearchQuery) (SearchAnswer, error) {
 	switch {
 	case s == nil || s.rank == nil || s.db.IsZero():
@@ -199,13 +166,11 @@ func (s *Searcher) Search(ctx context.Context, q SearchQuery) (SearchAnswer, err
 		return SearchAnswer{}, err
 	}
 	answer := SearchAnswer{Hits: make([]Ranked, 0, limit), Outcome: ranked.Outcome}
-	// AN EXACT KEY IS ITS TASK, AND IT LEADS. The index ranks words, and a
-	// key is not one: "ENG-2" splits into "eng" and "2", which rank every
-	// body that mentions ENG-2 (its subtasks, the tasks it blocks) above
-	// the task itself, and the task is often not ranked at all. A person
-	// who types a key into a box that says "a key, or words from its
-	// title" means that task, so it is placed first, by the key directory
-	// a point read resolves through, and the ranking follows without it.
+	// AN EXACT KEY IS ITS TASK, AND IT LEADS: the index ranks words, and
+	// "ENG-2" splits into "eng" and "2", ranking every body that mentions it
+	// above the task itself, if it ranks the task at all. So the task the key
+	// directory resolves it to is placed first, and the ranking follows
+	// without it.
 	listed := make(map[string]bool, len(keyed))
 	for _, row := range keyed {
 		if len(answer.Hits) == limit {
@@ -219,18 +184,12 @@ func (s *Searcher) Search(ctx context.Context, q SearchQuery) (SearchAnswer, err
 		if len(answer.Hits) > 0 {
 			return answer, nil
 		}
-		// THE GATE IS ASKED ONLY ON AN EMPTY ANSWER, because that is the
-		// only answer it changes: a search that found something has
-		// found it whether or not the index is still catching up, and
-		// asking every time would put one indexed count on every call.
-		//
-		// AND ONLY WHEN THE WORDS WERE RANKED. The gate is the LEXICAL
-		// index's state; a semantic search never read that index, and
-		// one that ran nothing at all (no provider, a failed query
-		// vector) already carries the degradation that explains its
-		// empty answer — which "still building" would throw away,
-		// telling the reader to wait for something that will not
-		// change what they were told.
+		// THE GATE IS ASKED ONLY ON AN EMPTY ANSWER, the only one it changes
+		// (asking every time costs an indexed count per call), AND ONLY WHEN
+		// THE WORDS WERE RANKED: the gate is the LEXICAL index's state. A
+		// semantic search never read it, and one that ran nothing already
+		// carries the degradation that explains its empty answer, which "still
+		// building" would hide.
 		if lexicalRan(ranked.ServedMode) && s.rank.Building(ctx) {
 			return SearchAnswer{}, ErrIndexBuilding
 		}
@@ -250,10 +209,9 @@ func (s *Searcher) Search(ctx context.Context, q SearchQuery) (SearchAnswer, err
 			continue
 		}
 		if !held {
-			// INDEXED AND GONE. The index is behind this node's own
-			// rows by design — see the indexer's own orphan sweep —
-			// so a hit whose item has been removed since is walked
-			// past rather than reported as an item nobody can open.
+			// INDEXED AND GONE: the index lags this node's rows by design (the
+			// indexer's orphan sweep), so a hit whose item was removed since is
+			// walked past, not reported as an item nobody can open.
 			continue
 		}
 		row.Snippet, row.Rank = doc.Snippet, len(answer.Hits)+1
@@ -284,12 +242,10 @@ func rankedItemsStatement(n int) string {
 
 // keyedItemsStatement is [Searcher.keyed]'s read, named for the plan test:
 // the task the key directory opens a key on, then any other live task whose
-// own key it is (a duplicate the engine flags `key_collision`), in that order.
-//
-// THE DIRECTORY FIRST, in [taskReadScopeStatement]'s order, because it holds
-// every key a task answers to (the current one and those a move or a rename
-// left it) and opens a key two tasks hold on the one that claimed it: the
-// hit that leads is the task a point read of the key returns.
+// own key it is (a duplicate flagged `key_collision`). The directory leads, in
+// [taskReadScopeStatement]'s order: it holds every key a task answers to (and
+// those a move or rename left it) and opens a shared key on the task that
+// claimed it, so the leading hit is what a point read of the key returns.
 const keyedItemsStatement = `
 		SELECT t.id, t.key, t.key_collision, t.project_key, t.type, t.title,
 		       t.status, t.assignee, t.priority

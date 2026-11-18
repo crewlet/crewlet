@@ -9,9 +9,9 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// writeLog records every item a writer reports, in order and undeduplicated,
-// so a case can see exactly what reached the turn — the dedupe is the turn's
-// set's job, and a log that did it here would hide a writer reporting twice.
+// writeLog records every item a writer reports, in order and undeduplicated:
+// deduping is the turn's set's job, and doing it here would hide a writer
+// reporting twice.
 type writeLog struct {
 	mu      sync.Mutex
 	items   []types.WorkItem
@@ -42,14 +42,11 @@ func (l *writeLog) got() []types.WorkItem {
 	return slices.Clone(l.items)
 }
 
-// A TURN'S WRITER REPORTS EVERY TASK ITS RECORDS COMMIT TO, AND NOTHING ELSE.
-//
-// This is what lets a turn nothing at dispatch named an item for be charged,
-// at completion, to the one item it wrote. So the report has to be exact in
-// both directions: a create and an edit each name their task — by id, with the
-// key and project a person reads — while a write to something that is not a
-// work item (a project's settings) and a write the broker refused name
-// nothing. Either mistake charges a turn to the wrong thing, silently.
+// A TURN'S WRITER REPORTS EVERY TASK ITS RECORDS COMMIT TO, AND NOTHING ELSE:
+// a turn dispatch named no item for is charged, at completion, to the one item
+// it wrote, so a create and an edit each name their task (by id, with key and
+// project), while a write to a non-work-item (a project's settings) or one that
+// did not commit names nothing. Either mistake charges a turn to the wrong thing, silently.
 func TestTheWriterRecordsWhatARunWrote(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -83,8 +80,7 @@ func TestTheWriterRecordsWhatARunWrote(t *testing.T) {
 		}
 	}
 
-	// NOT A WORK ITEM: a project's settings are a write, but charging a
-	// turn to one would charge it to something no per-item figure names.
+	// NOT A WORK ITEM: no per-item figure names a project's settings.
 	before := len(log.got())
 	if _, err := w.WriteDocument(t.Context(), "op-project-2",
 		worklet.ProjectSubject("OPS"), "", worklet.Project{
@@ -94,9 +90,8 @@ func TestTheWriterRecordsWhatARunWrote(t *testing.T) {
 		t.Fatalf("project write: %v", err)
 	}
 	r.drain()
-	// AND NOT A WRITE THAT DID NOT COMMIT: a create whose task is already
-	// filed is answered from its row with nothing published, and a write
-	// that published nothing is no write.
+	// AND NOT A WRITE THAT DID NOT COMMIT: a create of an already filed task
+	// is answered from its row, publishing nothing.
 	if _, err := w.CreateTask(t.Context(), "op-t-1-again", newTask("t-1"), nil); err != nil {
 		t.Fatalf("a create of the filed t-1 made again: %v", err)
 	}
@@ -106,9 +101,8 @@ func TestTheWriterRecordsWhatARunWrote(t *testing.T) {
 	}
 }
 
-// A WRITER THAT IS NOT A TURN'S REPORTS NOTHING, and writes exactly as before:
-// every surface that is not a turn — an operator, a duty on a tick — builds its
-// writer without a log, and the report must never be what makes it fail.
+// A WRITER THAT IS NOT A TURN'S REPORTS NOTHING, and still writes: an operator
+// or a duty builds its writer without a log, and the report must never fail it.
 func TestAWriterWithNoLogStillWrites(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

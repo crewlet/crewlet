@@ -10,15 +10,12 @@ import (
 )
 
 // A BARRIER COSTS THE CODE LOG WHAT ITS CENSUS SAYS. The git census
-// (gitlet.GitReadsPerDay) is the barriers that fill a tenth of the log's ceiling,
-// priced at BarrierRecordBytes each: a figure that UNDER-states a barrier sizes
-// the census past what the tenth holds, so the log fills before the alarm says
-// anything; one that wildly OVER-states it fires census_drift on a git host the
-// log has plenty of room for. So it is held to a real append through the
-// domain's own read index, on a real broker: a thousand barriers move the
-// stream by at most a thousand times the figure, and by at least half of it —
-// at the first generation, whose envelope carries no generation at all, and at
-// the last, whose generation is the widest number a barrier can carry.
+// (gitlet.GitReadsPerDay) prices each barrier at BarrierRecordBytes: an
+// understated figure lets the log fill before the alarm speaks, a wildly
+// overstated one fires census_drift on a log with room. So a thousand real
+// appends through the domain's read index, on a real broker, must move the
+// stream by at most a thousand times the figure and at least half of it, at
+// the first generation (none in the envelope) and the last (the widest).
 func TestABarrierCostsTheCodeLogWhatTheCensusSays(t *testing.T) {
 	t.Parallel()
 	for name, generation := range map[string]uint32{
@@ -37,8 +34,7 @@ func TestABarrierCostsTheCodeLogWhatTheCensusSays(t *testing.T) {
 			if err != nil {
 				t.Fatalf("build the gate reserve: %v", err)
 			}
-			// SIGNED AS EVERY BARRIER A NODE APPENDS IS, since the frame is
-			// part of what the log stores and so of what a barrier costs it.
+			// Signed as a node's barriers are: the frame is part of the cost.
 			index, err := statelog.NewReadIndex(gitlet.Domain{}, spec, log, log.Members, testSigner(t), reserve,
 				gitlet.EncodeBarrier, func() uint32 { return generation }, nil)
 			if err != nil {

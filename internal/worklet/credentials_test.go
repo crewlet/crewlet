@@ -33,12 +33,9 @@ func (r *roundTrip) recipients(task string) []string {
 	return out
 }
 
-// A CREDENTIAL IS NEVER A NOTICE'S RECIPIENT. A token that files an item and
-// watches it is its reporter and its watcher, and has no Inbox and no turn, so
-// a notice to it is read by nobody: every change on the item tells its
-// assignee and its other watchers, and no row names the token, whatever the
-// reason it would have heard under. The item still names the token as its
-// reporter.
+// A CREDENTIAL IS NEVER A NOTICE'S RECIPIENT. A token reporting and watching
+// an item has no Inbox and no turn, so no notice row names it, whatever the
+// reason; the item's assignee and other watchers still hear.
 //
 // Mutation: drop the writer's filter, or let any recipient field through, and
 // this goes red.

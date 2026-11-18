@@ -20,55 +20,18 @@ import (
 var ErrUnauthenticatedBroker = errors.New(
 	"jetstream: an external NATS server must authenticate its clients")
 
-// requiresAuthentication refuses an external server whose INFO line — info,
-// the first the connection read, nil where it read none — says it admits a
-// client that presents nothing. server is [serverOf]'s name for it.
+// requiresAuthentication refuses an external server whose INFO line (info,
+// nil where the connection read none) says it admits a client presenting
+// nothing; server is [serverOf]'s name for it. Tier A refuses a node that
+// presents nothing (config's Stream.presentsCredential); only the server can
+// say whether it admits everybody else, to every subject the stream carries.
 //
-// # Why the engine refuses it at all
-//
-// The stream is this company's write-ahead log and its coordination store:
-// every event, every seat's mail, every state-log record and every lease.
-// Signing (ADR-0031) keeps a forged record from being applied, but anything a
-// server admits reads all of it and writes every subject an unsigned message
-// rides. An external cluster's admission is its operator's — and a server
-// that admits anybody makes everything that can reach its port a reader and
-// a writer of this company. Tier A refuses a node that presents nothing
-// (config's Stream.presentsCredential); this is the half only the server can
-// answer, since a node presenting a token to a server that does not ask for
-// one is admitted all the same, and so is everybody else.
-//
-// # What admits it
-//
-// `auth_required`, which nats-server sets wherever it holds any authorization
-// — a token, users, nkeys, an operator, a custom authenticator — and clears
-// where it binds an anonymous client to a no_auth_user. Or `tls_required`
-// AND `tls_verify` together: every client must then present a certificate
-// the server verifies before it says anything.
-//
-// NOT A PRESENTED CERTIFICATE. A server holding `tls { }` without `verify`
-// announces neither auth_required nor tls_verify, and admits a client that
-// presents nothing — measured against v2.15.1 — whatever this node presents.
-// TLS settings never set auth_required (configureAuthorization counts none of
-// them), which is why tls_verify is read beside it.
-//
-// NOT tls_verify ON ITS OWN. `tls_verify` with `tls_required` false is the
-// mixed mode `allow_non_tls`: a plaintext client presents no certificate and
-// is admitted.
-//
-// # Where the INFO comes from
-//
-// nats.go parses no tls_verify, so the line is read off the wire by the dial's
-// recording dialer ([infoDialer]): the NATS protocol sends INFO in plaintext,
-// before any TLS upgrade, as the first line of every connection. An INFO the
-// dialer did not see is a refusal saying so, never a pass: a check that
-// passed on what it could not read would admit exactly the server it exists
-// to refuse.
-//
-// # What it cannot see
-//
-// The server this dial reached, as [carriesTheContract] judges it: a client
-// dialling a cluster reconnects to whichever member answers, so the remedy
-// names every server of the cluster.
+// Admitted: `auth_required` (any authorization; cleared by a no_auth_user), or
+// `tls_required` AND `tls_verify`. TLS alone is not (measured, v2.15.1):
+// `tls { }` without verify sets neither, and tls_verify without tls_required
+// is allow_non_tls, admitting a plaintext client. An INFO [infoDialer] did not
+// see is a refusal, never a pass. Only the server this dial reached is judged
+// ([carriesTheContract]), so the remedy names them all.
 func requiresAuthentication(server string, info []byte) error {
 	if info == nil {
 		return fmt.Errorf("%w: this node read no INFO from %s before its connection "+
@@ -102,21 +65,14 @@ func requiresAuthentication(server string, info []byte) error {
 
 // heldToAuthentication hands nc back where the INFO of the server it is
 // connected to admits it, and closes it and answers the refusal where it does
-// not — [heldToTheContract]'s shape. recorded is the dialer nc dialled
+// not ([heldToTheContract]'s shape). recorded is the dialer nc dialled
 // through, and url the stream.url it dialled.
 //
-// # The INFO of the server the client is ON
-//
-// Not the newest connection the dialer opened. The dial reconnects forever,
-// and nats.go dials the next member of a pool at once, with no wait, when the
-// server drops the connection: a member restarting or leaving in lame-duck
-// mode between the connect and this check — the rolling restart an external
-// cluster's operator makes routinely — leaves the dialer's newest connection
-// on a member whose INFO is not read yet. So the line judged is the one whose
-// server_id is the id the client says it is connected to
-// ([infoDialer.sealedInfo]), and a client on no server at all — its server
-// gone between the connect and here, its reconnect not completed — is refused
-// as that, never as a server that sent no INFO.
+// The INFO judged is the one whose server_id the client says it is on, not the
+// dialer's newest: nats.go redials the next member at once when a server drops
+// (a rolling restart, lame-duck), so the newest may be one whose INFO is
+// unread. A client on no server at all is refused as that, not as a server
+// that sent no INFO.
 func heldToAuthentication(nc *nats.Conn, recorded *infoDialer, url string) (*nats.Conn, error) {
 	id := nc.ConnectedServerId()
 	info := recorded.sealedInfo(id)
@@ -137,55 +93,30 @@ func heldToAuthentication(nc *nats.Conn, recorded *infoDialer, url string) (*nat
 	return nc, nil
 }
 
-// infoLineMax bounds the INFO line a recorded connection keeps.
+// infoLineMax bounds the INFO line a recorded connection keeps; nats.go reads
+// the line with no bound of its own.
 //
-// 64 KiB, against what a server sends: an INFO is its fixed fields plus one
-// connect_urls entry — and, with websocket enabled, one ws_connect_urls entry
-// — per member it advertises. The fixed fields measured 419 bytes on a
-// standalone nats-server v2.15.1 with JetStream and a token (externaltest's
-// server, 2026-10-31), and stay under a kilobyte with a cluster's name, a
-// domain, a nonce, a git commit and the TLS flags beside them; an entry is
-// `"host:port",`, about twenty bytes for the pod IP a member advertises by
-// default and at most 262 for the longest DNS name (253 bytes) a
-// client_advertise can give, so 64 KiB holds a cluster of more than a hundred
-// members advertising both lists by their longest names, and of thousands by
-// IP. nats.go reads the line with no bound of its own. A line past this is not
-// kept, and its connection is refused as one whose INFO was not read rather
-// than judged on a prefix.
+// 64 KiB: the fixed fields stay under a kilobyte (419 bytes measured on a
+// standalone nats-server v2.15.1 with JetStream and a token), and each member
+// advertised adds a connect_urls (and, with websocket, ws_connect_urls) entry
+// of ~20 bytes by pod IP, at most 262 by the longest DNS name: over a hundred
+// members by longest names, thousands by IP. A longer line is refused as an
+// INFO not read, never judged on a prefix.
 const infoLineMax = 64 << 10
 
-// infoDialer is the external dial's TCP dialer: it dials one member of the
-// pool within the attempt's budget, and keeps the first line every connection
-// it opens reads — the server's INFO, which carries the tls_verify nats.go
-// does not parse ([requiresAuthentication]).
+// memberDialer dials one member of a broker named by host and port, within a
+// budget for the whole attempt; the external dial ([infoDialer]) and a leaf's
+// tunnel ([tunnel]) both reach a member through it.
 //
-// # Why it resolves the member's name itself
-//
-// A custom dialer replaces the client's, and the client applies its budget
-// only to its own: without one, nats.go resolves a member's hostname to every
-// address it has and shortens its dialer's timeout to the budget divided by
-// their number, so one attempt at a member takes the budget IN TOTAL. Handed
-// a custom dialer it hands that dialer each resolved address in turn, and
-// each would take the whole budget: N × 2 s on the common Kubernetes shape,
-// one stream.url name (a headless or round-robin service) resolving to every
-// pod of the NATS cluster — 6 s an attempt for three members, 10 s for five,
-// on every pass of the reconnect loop, against the lease TTL the coordination
-// store riding this connection renews (see [externalHandshake]). So the dial
-// asks the client to skip its lookup (nats.SkipHostLookup) and does what the
-// client did: resolve the host, shuffle the addresses — the client's
-// spreading of its connections across the members behind one name, which
-// Go's own serial dial over a name's addresses does not do — and dial each
-// with an equal share of the budget, stopping at the first that answers. The
-// lookup is bounded by the same figure, where the client's was not bounded.
-//
-// # Which INFO it answers for
-//
-// The one whose server_id the client names ([infoDialer.sealedInfo]), and for
-// one dial only: the dial seals the dialer once it has asked, and a
-// connection opened after that — every reconnect for the connection's life —
-// is handed to the client unwrapped and recorded nowhere, so what it keeps is
-// bounded by the connections one connect opens.
-type infoDialer struct {
+// It resolves the name itself: nats.go hands a custom dialer each of a name's
+// addresses with the whole budget (N times it per pass, against the lease TTL
+// [externalHandshake] guards, when a headless service resolves to every pod).
+// So the client skips its lookup (nats.SkipHostLookup); this resolves within
+// the budget, shuffles (spreading connections; Go's serial dial does not) and
+// dials each address with an equal share. A leaf's tunnel needs the same:
+// through a proxy nats-server names only the host (v2.15.2, leafnode.go), so
+// Go's first address would send every leaf behind one name to one member.
+type memberDialer struct {
 	// budget bounds the lookup of a member's name, and then the dials to
 	// its addresses together.
 	budget time.Duration
@@ -194,52 +125,31 @@ type infoDialer struct {
 	// partition.
 	lookup  func(ctx context.Context, host string) ([]string, error)
 	connect func(ctx context.Context, network, address string) (net.Conn, error)
-
-	mu     sync.Mutex
-	sealed bool
-	opened []*infoConn
 }
 
-// newInfoDialer is the dialer an external dial goes through, each attempt at
-// a member bounded by budget.
-func newInfoDialer(budget time.Duration) *infoDialer {
+// newMemberDialer dials a member within budget an attempt, through the
+// system's resolver and Go's TCP dial.
+func newMemberDialer(budget time.Duration) memberDialer {
 	var tcp net.Dialer
-	return &infoDialer{
+	return memberDialer{
 		budget:  budget,
 		lookup:  net.DefaultResolver.LookupHost,
 		connect: tcp.DialContext,
 	}
 }
 
-// Dial opens one connection to the member at address, recording the line it
-// reads first until the dial seals the dialer.
-func (d *infoDialer) Dial(network, address string) (net.Conn, error) {
-	c, err := d.dialMember(network, address)
-	if err != nil {
-		return nil, err
-	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.sealed {
-		return c, nil
-	}
-	recorded := &infoConn{Conn: c}
-	d.opened = append(d.opened, recorded)
-	return recorded, nil
-}
-
 // dialMember dials the member at address — host:port, as the client hands it
-// with its own lookup skipped — within one attempt's budget: see
-// [infoDialer].
-func (d *infoDialer) dialMember(network, address string) (net.Conn, error) {
+// with its own lookup skipped, or as a leaf names it in its CONNECT — within
+// one attempt's budget, or until ctx ends: see [memberDialer].
+func (d *memberDialer) dialMember(ctx context.Context, network, address string) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
 	}
 	addrs := []string{host}
 	if net.ParseIP(host) == nil {
-		ctx, cancel := context.WithTimeout(context.Background(), d.budget)
-		addrs, err = d.lookup(ctx, host)
+		lookup, cancel := context.WithTimeout(ctx, d.budget)
+		addrs, err = d.lookup(lookup, host)
 		cancel()
 		if err != nil {
 			return nil, err
@@ -251,11 +161,11 @@ func (d *infoDialer) dialMember(network, address string) (net.Conn, error) {
 	}
 	share := d.budget / time.Duration(len(addrs))
 	for _, addr := range addrs {
-		ctx, cancel := context.WithTimeout(context.Background(), share)
+		attempt, cancel := context.WithTimeout(ctx, share)
 		var c net.Conn
 		// Cancelled once the dial returns, which leaves a connection it
 		// made be: the context bounds the dial, never the connection.
-		c, err = d.connect(ctx, network, net.JoinHostPort(addr, port))
+		c, err = d.connect(attempt, network, net.JoinHostPort(addr, port))
 		cancel()
 		if err == nil {
 			return c, nil
@@ -263,6 +173,66 @@ func (d *infoDialer) dialMember(network, address string) (net.Conn, error) {
 	}
 	// The last address's failure, as the client answered for its own.
 	return nil, err
+}
+
+// infoDialer is the external dial's TCP dialer: it dials a member within the
+// attempt's budget ([memberDialer]), meters every connection, reconnects
+// included, as a socket of the node's data link ([LinkMeter]; none for a dial
+// that is not, a command's), and keeps each connection's first line: the INFO,
+// sent in plaintext before any TLS upgrade, whose tls_verify nats.go does not
+// parse ([requiresAuthentication]); for one dial only, as sealedInfo seals it.
+//
+// The client asks for a socket only once it has given up the last, so each
+// Dial closes the one before: nats.go's reconnect loop (v1.55.0, doReconnect)
+// leaves a failed handshake's socket to the finalizer, which the meter's hold
+// keeps from ever running, leaking a descriptor per failed attempt.
+type infoDialer struct {
+	memberDialer
+	// meter counts every connection the dialer opens; nil for none.
+	meter *LinkMeter
+
+	mu     sync.Mutex
+	sealed bool
+	opened []*infoConn
+	// last is the socket the dialer handed its client last, closed when
+	// the client asks for the next.
+	last net.Conn
+}
+
+// newInfoDialer is the dialer an external dial goes through, each attempt at
+// a member bounded by budget, and every connection it opens counted by meter
+// (nil for none).
+func newInfoDialer(budget time.Duration, meter *LinkMeter) *infoDialer {
+	return &infoDialer{memberDialer: newMemberDialer(budget), meter: meter}
+}
+
+// Dial opens one connection to the member at address, metered, and recording
+// the line it reads first until the dial seals the dialer.
+func (d *infoDialer) Dial(network, address string) (net.Conn, error) {
+	// THE CLIENT GAVE THE LAST ONE UP: see [infoDialer].
+	d.mu.Lock()
+	given := d.last
+	d.last = nil
+	d.mu.Unlock()
+	if given != nil {
+		_ = given.Close()
+	}
+	// NO CALLER'S CONTEXT reaches a dial the client makes for itself, a
+	// reconnect's among them: the attempt's budget bounds it.
+	c, err := d.dialMember(context.Background(), network, address)
+	if err != nil {
+		return nil, err
+	}
+	c = d.meter.wrap(c)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.sealed {
+		recorded := &infoConn{Conn: c}
+		d.opened = append(d.opened, recorded)
+		c = recorded
+	}
+	d.last = c
+	return c, nil
 }
 
 // sealedInfo is the INFO line read by the connection whose server_id is

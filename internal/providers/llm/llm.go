@@ -352,9 +352,9 @@ const (
 	// can run it.
 	KindRateLimit
 
-	// KindAuth is a login the harness reports expired or missing. Retryable
-	// across the chain, so a seat keeps working while somebody signs the
-	// harness in again.
+	// KindAuth is a login the harness reports expired, missing or not entitled
+	// to the harness. Retryable across the chain, so a seat keeps working while
+	// somebody signs the harness in again or changes what its account allows.
 	KindAuth
 
 	// KindTimeout is a call that ran out of time — the harness's own wall-clock

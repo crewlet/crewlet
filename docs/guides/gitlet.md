@@ -157,8 +157,10 @@ ref moved, as you:
 - **Branches**: **New branch** at a branch, a tag or a commit
   (`code_create_branch`), and **Delete** at the head the row shows
   (`code_delete_branch`), after a confirmation;
-- a commit's page: **Revert** and **Cherry-pick** onto a branch you choose
-  (`code_revert`, `code_cherry_pick`); a conflict commits nothing.
+- a commit's page bar: **Browse files**, **Revert** and **Cherry-pick** onto
+  a branch you choose (`code_revert`, `code_cherry_pick`); a conflict commits
+  nothing. A commit's page says how it was pushed and how it landed, with the
+  gate it merged through.
 
 Its protection rules are set on its **Settings** tab ([Protecting a
 branch](#protecting-a-branch)), and it is deleted and restored there too
@@ -498,7 +500,8 @@ change's page on its files. A seat is woken instead, told the change, why it
 hears and the tool that answers ([Who a change
 wakes](../concepts/gitlet.md#who-a-change-wakes)).
 
-**Ask for a review.** **Request review** on the change's page names
+**Ask for a review.** **Request review**, in the change page's **Review** menu or as
+**Request** at the head of its rail's Reviewers, names
 reviewers by handle, with a note; a seat or your assistant asks with
 `code_request_review`, which also withdraws an ask. An author of the change,
 anybody who reviews the repository and any person may ask, at most 32
@@ -512,24 +515,34 @@ revision touches paths the repository's `path_owners` name asks their owners
 itself, once its home has read the revision ([Path
 owners](../concepts/gitlet.md#path-owners)).
 
-**Read it.** **Conversation** is the change's description, its merge box —
-every condition to merge with where it stands, and the merge controls — and
-its activity in the order its records landed, beside a rail of whom it asked
-for a review and where each stands; **Files** is a revision's
-diff — the head unless you pick another, or what changed since an earlier
-revision — with each finding under the lines it points at, and one whose
-lines have changed since drawn above the diff, never dropped. A seat reads the
+**Read it.** **Conversation** is the change's timeline: its description, then
+every revision, review, ask for review and thread in the order its records landed,
+then its merge box (a section per condition to merge with where it stands, and the merge
+controls) and a comment box (markdown, **Mod+Enter** sends), beside a rail of whom it
+asked for a review and where each stands, its readiness, branches, checks, participants
+and whether it notified you; **Revisions** lists its revisions,
+**Checks** the checks that judge it, and **Files changed** is every file a
+revision changes on one page, beside its tree (the head unless you pick
+another, or what changed since an earlier revision), with each finding under the lines it points at, and one whose
+lines have changed since drawn above the diff, never dropped; **More** is where
+it came from and whom it notified. A seat reads the
 same with `code_get_change`, a part at a time ([Reading a
 conversation](../concepts/gitlet.md#reading-a-conversation)).
+
+**Edit it.** **Edit**, in the description's menu, changes the change's title and
+description; a seat or your assistant does the same with `code_update_change`.
 
 **Review it.** On the head revision, pick lines by their numbers and draft a
 finding under them: how much it weighs (`blocker`, `major`, `minor`, `nit`),
 what it is about, a title, a body and, on the new side, the lines you suggest
 in their place. Drafts stay in the browser tab until **Approve**, **Request
-changes** or **Comment** sends them all as ONE review with your summary — a
+changes** or **Comment** (the page bar's **Review**, or **Finish review** on
+Files changed) sends them all as ONE review with your summary: a
 review and every finding it raises are one record, never half there. A seat
 reviews with `code_review_change`. Anybody who reviews the repository, and
-any person, may review — never an author of the change.
+any person, may review, never an author of the change. Edit a draft where it stands; filter the files by name, extension or findings,
+and press `t` to go to a file. Mark a file **Viewed** to fold it until a revision changes it,
+and filter to the Unviewed ones.
 
 - **A request for changes stands until its reviewer reviews again.** A push
   answers none: the reviewer's next review, approving or asking again, does.
@@ -572,7 +585,7 @@ or, where the gate lets none of them, the lead of the repository's owner
 ([Who a change wakes](../concepts/gitlet.md#who-a-change-wakes)) — and
 merge it as [Merging a change](#merging-a-change) says.
 
-**Who heard about it.** The page's **Notified** tab is whom each record about the
+**Who heard about it.** The page's **More** tab is whom each record about the
 change reached, newest first, each with the one reason they heard under; the
 same answer is `GET /gitlet/repos/{name}/changes/{n}/routing` ([A change's
 questions](../reference/api-endpoints.md#a-changes-questions)).
@@ -657,38 +670,42 @@ change; a seat cannot override.
 ### From the change's page
 
 A live change's page (**Gitlet › Changes**, then the change) carries the same
-call in its **Conversation**'s merge box, under the description, each control
+call in its **Conversation**'s merge box, after its timeline, each control
 made as you and never ahead of the engine's answer:
 
-- **Where its gate stands** — how many of its conditions are met, each
-  condition with where it stands, and the first one that is not, judged with
-  *you* as the merger, so a reader without the authority to merge into the
-  target is told so before pressing anything.
+- **Where its gate stands**: a section for its reviews, its checks (each check's
+  latest attempt, how long it ran and whether it is required, with **Details**),
+  its findings, its facts and whether it merges, each judged with *you* as the
+  merger, then the count and what it still waits on. **Re-request** in the reviews
+  section asks again everyone whose review is not an approval of the head.
 - **Merge**, or **Add to queue** where the target's gate requires a check, with
   how it merges (**Merge commit**, **Squash** or **Fast-forward**), **Delete
   its branch** — left unticked, the rule above decides — and **Close ENG-42
   once it merges** where the change names a work item. It sends the head the
   page shows as `expected_head`, so a push that landed since you opened the
   page is refused rather than merged unseen. While the gate is unmet the
-  button is held with the gate's own sentence.
+  button is held with the gate's own sentence, and a line beside it says what
+  the press will do.
 - **Override**, a person's alone: a dialog that asks your reason, says what
   the gate still waits on, and merges directly past it — even into a branch
   whose merges land through its queue. The reason is kept with the merge
-  (the change's Provenance tab shows it) and the override is audited.
-- **Re-run checks** — every check of the change's head whose latest attempt
-  did not pass, each at its next attempt (`code_rerun_checks` with
-  `all_failed`).
-- **Rebase**: the change's commits replayed onto its target's tip
+  (the change's More tab shows it) and the override is audited.
+- **Re-run failed checks**, in the checks section where one failed: every check
+  of the change's head whose latest attempt did not pass, each at its next
+  attempt (`code_rerun_checks` with `all_failed`).
+- **Rebase**, in the merges section: the change's commits replayed onto its target's tip
   ([Rebasing a change](#rebasing-a-change)), after a confirmation that says
   its branch moves by one forced push from the head the page shows.
-- **Take out of the queue**: a queued change leaves its target's merge queue
-  and stays open (`code_dequeue_change`), after a confirmation; held while
-  the change is not queued. **Gitlet › Queue** offers the same on each entry.
+- **Take out of the queue**, in the queue's section while the change is queued:
+  it leaves its target's merge queue and stays open (`code_dequeue_change`),
+  after a confirmation. **Gitlet › Queue** offers the same on each entry.
 
 A merged change shows **Revert** in their place ([Reverting a
 change](#reverting-a-change)): a confirmation that says what it opens, with a
 box to merge the revert once it is open. A finding that still stands is
-answered on the **Files** tab with **Answer finding**: Resolved, Won't fix or
+answered under its review or on the **Files changed** tab: **Resolve** in one press, for
+an author of the change, or
+**Answer** with Resolved, Won't fix or
 Disputed by an author, or Dismiss by its raiser, a maintainer or a person
 (`code_resolve_finding`).
 

@@ -17,33 +17,18 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 )
 
-// "RESTART" ON AN MCP SERVER'S PAGE, FLEET-WIDE.
-//
-// A server's instances are each node's own children: the shared servers' one
-// child on every node, and each held seat's own on the node that holds it. So a
-// restart a person asks for through one node is a coordination record
-// ([coord.MCPRestart]), one per server and one per seat a person restarted one
-// instance of, and every node keeps a watched copy of the class, as it does of
-// the model retries (modelretry.go). On a record stamped later than the last
-// one it applied for that entry, a node restarts every instance it runs whose
-// state began BEFORE the stamp ([mcp.Bridge.RestartBefore]):
-//
-//   - a serving instance's session is ended, and its bridge's supervisor
-//     starts a fresh one at once;
-//   - an instance that is down is tried now, its restart schedule started
-//     again, rather than at the schedule's next attempt (up to five minutes
-//     away);
-//   - a seat's child whose first start failed, which no bridge keeps (the
-//     seat's runner retries it), gets a pass now that starts a new series.
-//
-// A record that names a seat is acted on by the node holding the seat alone:
-// no other node runs that seat's child, and a node that cannot prove it holds
-// the seat starts nothing for it (the supervision's own rule, mcpsupervise.go).
-//
-// Order-free and idempotent: a node that hears a record late, twice, or after a
-// restart restarts exactly what it would have restarted on time, and nothing
-// that started since. The record goes with its server: the apply that removes
-// the server deletes it ([Engine.clearRemovedMCPRestarts]).
+// "RESTART" ON AN MCP SERVER'S PAGE, FLEET-WIDE. Each node runs its own
+// instances, so a restart asked of one node is a [coord.MCPRestart] record per
+// server or restarted seat, watched by every node like the model retries
+// (modelretry.go). On a record stamped after the last it applied for that
+// entry, a node restarts every instance it runs whose state began BEFORE the
+// stamp ([mcp.Bridge.RestartBefore]): a serving session ends and its supervisor
+// starts anew; a down instance is tried now, its schedule restarted, not up to
+// five minutes later; a seat's child whose first start failed (no bridge keeps
+// it) gets a pass now. Only a node that proves it holds a record's seat acts on
+// it (mcpsupervise.go). A record heard late, twice or after a node restart
+// restarts what it would have on time and nothing started since; the apply
+// removing its server or seat deletes it ([Engine.clearRemovedMCPRestarts]).
 
 // The refusals of a restart request, each naming what the person can change.
 var (
@@ -144,9 +129,7 @@ func (e *Engine) applyMCPRestart(ctx context.Context, r coord.MCPRestart) {
 			done = append(done, e.restartSeatChild(s, r, cause))
 		}
 	} else {
-		// THE SEAT'S HOLDER ALONE: every node hears the record, and only the
-		// one that runs the seat's children, and can prove it holds the
-		// seat, acts on it.
+		// THE SEAT'S HOLDER ALONE acts on it (the block atop this file).
 		s := e.seatChildrenOf(r.Seat)
 		if s == nil || !s.held() {
 			return

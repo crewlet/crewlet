@@ -10,16 +10,15 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 )
 
-// THE FILE CONTRACT, ON EVERY BACKEND. The twin first, because every runner
-// and coordinator test reads a box through it, and a twin that answers what
-// no real box would makes each of those tests a claim about nothing.
+// THE FILE CONTRACT, ON EVERY BACKEND. The twin first: every runner and
+// coordinator test reads a box through it, so a twin answering what no real
+// box would makes each of them a claim about nothing.
 //
-// The twin and the two local boxes run at [contractCap]: what they read is
-// memory or the engine host's own files, so nothing between them and the file
-// could hold a limit of its own, and every branch the cap cases reach is the
-// same at any size. That each of them reads by [sandbox.MaxFileBytes] in
-// production is [TestEveryBoxReadsWholeUpToMaxFileBytes]'s; E2B, whose reads
-// cross envd's transport, runs at the real cap in e2b_test.go.
+// The twin and the two local boxes run at [contractCap]: they read memory or
+// the host's own files, where nothing could hold a limit of its own, and every
+// cap branch is the same at any size. Their production reads by
+// [sandbox.MaxFileBytes] are [TestEveryBoxReadsWholeUpToMaxFileBytes]'s; E2B,
+// whose reads cross envd's transport, runs at the real cap in e2b_test.go.
 func TestTheFakeKeepsTheFileContract(t *testing.T) {
 	t.Parallel()
 	sandboxtest.Box(t, contractCap, func(*testing.T) sandbox.Sandbox {
@@ -44,19 +43,18 @@ func TestAContainerBoxKeepsTheFileContract(t *testing.T) {
 }
 
 // contractCap is the whole-read cap the in-process backends keep the file
-// contract at: a MiB, past the largest file the suite reads whole and the
-// tail it reads, and a thirty-second of what it would build at the real one.
+// contract at: a MiB, past the largest file and tail the suite reads, and a
+// thirty-second of what it would build at the real one.
 const contractCap = 1 << 20
 
-// ONLY ABSENCE IS EMPTY ON THE ENGINE HOST. A local box's whole read answered
-// every failure to open or read a file as an empty one, so a report the
-// engine could not read collected as a run that wrote none — where a remote
-// box's envd answers the same failure as an error, which a collection retries
-// and a person can act on. A path under a FILE cannot be resolved at all, and
-// says so rather than claiming it lies outside the box.
+// ONLY ABSENCE IS EMPTY ON THE ENGINE HOST. A local box answers a file it
+// cannot open or read with an error, as a remote box's envd does, which a
+// collection retries and a person can act on; an empty answer would collect as
+// a run that wrote no report. A path under a FILE cannot be resolved, and says
+// so rather than claiming it lies outside the box.
 //
-// A DIRECTORY stands in for an unreadable file because it is one on every
-// host and for every user, the root this suite may run as included.
+// A DIRECTORY stands in for an unreadable file: it is one on every host and for
+// every user, root included.
 func TestALocalBoxAnswersAFileItCannotReadAsAnError(t *testing.T) {
 	t.Parallel()
 	for name, fresh := range map[string]func(*testing.T) sandbox.Sandbox{

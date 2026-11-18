@@ -33,21 +33,18 @@ func aWrite() gitlet.EngineWrite {
 	}
 }
 
-// AN ENGINE WRITE IS HELD TO ONE RULE by every party to it — the tool that asks
-// it, the router that carries it, the Gitlet node that builds it — and refused
-// ErrInvalid naming the field: each kind takes the fields it needs and no
-// other; a seat names its run — its turn, never an executor, whose box pushes
-// through git — and a person their human seat; the operation is one this
-// engine mints; the payload, the operations, every path and the depth of every
-// path it names are bounded; one operation names a path; a link takes its
-// target as text alone; and the message is what git writes as given.
+// AN ENGINE WRITE IS HELD TO ONE RULE by the tool, the router and the building
+// Gitlet node alike, refused ErrInvalid naming the field: each kind takes only
+// its own fields; a seat names its turn (never an executor, whose box pushes
+// through git), a person their human seat; the engine mints the operation;
+// payload, operations, paths and path depth are bounded; one operation names a
+// path; a link's target is text alone; git writes the message as given.
 //
-// Mutations: admit a blob_oid for a link — its row passes, red; count a move's
-// destination as no path — the colliding row passes, red; let a seat's run
-// name an executor — its row passes, and its build would land as a proposal
-// its committer refuses, red; drop the depth bound, or hold a move's
-// destination to none — a path one component past it passes, red; refuse a
-// path at the bound — the write at it is refused, red.
+// Mutations, each red: admit a blob_oid for a link, count a move's destination
+// as no path, or let a seat's run name an executor (it would land as a proposal
+// its committer refuses) — its row passes; drop the depth bound, or hold a
+// move's destination to none — a path one component past it passes; refuse a
+// path at the bound — the write at it is refused.
 func TestAnEngineWriteIsHeldToOneRule(t *testing.T) {
 	t.Parallel()
 	if err := aWrite().Validate(); err != nil {
@@ -208,15 +205,11 @@ func TestAnEngineWritesPushIsItsOperations(t *testing.T) {
 }
 
 // AN ENGINE WRITE'S PAYLOAD IS MEASURED AS THE WIRE SPELLS IT: its operations
-// or its suggestions and its message together, each as encoding/json encodes
-// it — a '<' in six bytes — against gitlet.MaxCommitPayloadBytes, for every kind
-// that carries any. A commit_files or an apply_suggestions whose message of
-// '<' is half the bound as text is refused, as is a revert's or a
-// cherry-pick's message of '<' one character past the bound as JSON spells
-// it; the write exactly at the bound is admitted, whichever kind carries it.
-// Measured by its length, the '<' message of a mebibyte crossed the wire at
-// six, and a revert's message — bounded by nothing — at up to the transport's
-// whole eight.
+// or suggestions and its message, each as encoding/json encodes it (a '<' in
+// six bytes), against gitlet.MaxCommitPayloadBytes for every kind carrying any
+// — by length, a mebibyte of '<' crossed as six. Half the bound of '<' as text
+// (commit_files, apply_suggestions) or one character past it as JSON spells it
+// (revert, cherry-pick) is refused; exactly at the bound is admitted.
 //
 // Mutations: measure the message by its length — the half-bound '<' messages
 // and the one-past ones pass, red; bound only a commit_files' payload — the
@@ -315,15 +308,13 @@ func TestAnEngineWritesPayloadIsMeasuredAsTheWireSpellsIt(t *testing.T) {
 }
 
 // A TREE PATH GIT WOULD REFUSE IS REFUSED BY NAME, before anything is read:
-// every name git's own check of a tree flags — fsck, which the build's
-// index-pack --strict and the relay's receive.fsckObjects run — written into a
-// tree with mktree and checked by `git fsck` on every run, is a name
-// ValidTreePath refuses; and it refuses more (a control character, a
-// backslash, a code point HFS+ ignores), which no tool needs in a name it
-// writes. The ordinary names beside them pass both, and so does a path deeper
-// than a write may name: depth is a bound of what one write carries
-// (gitlet.MaxTreePathDepth), never of a name, which a check's report path is
-// held to as well.
+// every name fsck flags (run by the build's index-pack --strict and the
+// relay's receive.fsckObjects), written into a tree with mktree and checked by
+// `git fsck` each run, ValidTreePath refuses — and more (a control character,
+// a backslash, a code point HFS+ ignores), which no tool writes. Ordinary
+// names pass both, as does a path deeper than a write may name: depth bounds
+// one write (gitlet.MaxTreePathDepth), never a name: the name rule is what a
+// check's report path is held to as well.
 //
 // Mutations: drop the `:` rule — `.GIT::$INDEX_ALLOCATION`, which fsck flags,
 // passes, red; hold a name to the write's depth bound — the deep path is

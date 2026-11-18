@@ -55,10 +55,8 @@ func TestAStdioServerKeepsItsCommandAndArguments(t *testing.T) {
 	if !reflect.DeepEqual(got.Args, []string{"--root", "/src"}) {
 		t.Fatalf("args = %v", got.Args)
 	}
-	// THE OTHER TRANSPORT'S FIELDS ARE CLEARED. A stdio server carrying a
-	// url or headers is a config nobody wrote, and leaving one there lets a
-	// future runner render a credential into a file the transport never
-	// reads.
+	// THE OTHER TRANSPORT'S FIELDS ARE CLEARED, so no runner renders a
+	// credential into a file the transport never reads.
 	if got.URL != "" || got.Headers != nil {
 		t.Fatalf("a stdio server carried http fields: %+v", got)
 	}
@@ -89,14 +87,9 @@ func TestTheRenderedServerDoesNotAliasTheConfiguration(t *testing.T) {
 	}
 }
 
-// AN UNRECOGNISED TRANSPORT IS SKIPPED, not rendered as stdio.
-//
-// The field used to be a bare `string` and the renderer branched on
-// `== "http"`, so anything else — a typo, a transport a newer build knows and
-// this one does not — fell through to the stdio branch and yielded a server
-// with an empty command. The agent inside the box then spends a round failing
-// to launch it, and nothing anywhere says why. Skipping is what an unknown
-// NAME already did, and this is the same class of mistake.
+// AN UNRECOGNISED TRANSPORT IS SKIPPED, not rendered as stdio: a typo or a
+// newer build's transport would yield a server with an empty command the agent
+// spends a round failing to launch, as an unknown NAME would.
 func TestAServerWithAnUnrecognisedTransportIsSkipped(t *testing.T) {
 	t.Parallel()
 	source := append(servers(), MCPServer{
@@ -113,9 +106,8 @@ func TestAServerWithAnUnrecognisedTransportIsSkipped(t *testing.T) {
 	}
 }
 
-// EMPTY MEANS STDIO, which is the default an operator gets by saying nothing.
-// Refusing it would drop every server that did not name a transport — which
-// is most of them.
+// EMPTY MEANS STDIO, the default: refusing it would drop every server that
+// names no transport, most of them.
 func TestTheTransportSetIsClosedAndEmptyMeansStdio(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

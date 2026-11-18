@@ -1,222 +1,15 @@
-// How this package reads a whole bucket: ONE ORDERED PASS, CERTIFIED against
-// the stream's own key index, rather than a listing plus a fetch per key.
-//
-// A KV bucket is a stream, and its keys are subjects under it. The obvious
-// listing — ask for the key names, then Get each one — costs a round trip per
-// key ON TOP of an ordered ephemeral consumer created and destroyed per call:
-// two JetStream metadata proposals on a clustered bucket, for a question that
-// is one pass over the stream. Several of a node's fifteen-second duty loops
-// read a bucket on every tick, so that cost is paid continuously rather than
-// at the edges.
-//
-// A pass is still a consumer created and deleted, which is why no state-log
-// read and no seat's write waits on a listing: the state-log write fence
-// listed the trim floors on every write at an expectation of zero, and on a
-// loaded three-member fleet the consumer's create ran past the client's
-// five-second API timeout and refused a page create with the register
-// perfectly readable. It reads its one domain's floor by key now
-// ([FleetStore.Floor]). What still lists does so on a duty loop's own clock or
-// once per operator gesture — a readmission, the retention report, a backup.
-//
-// So the walk is ONE pass that carries each key AND its value together, and
-// the filter goes to the BROKER rather than to a client-side test.
-//
-// # A pass cannot tell that it is complete, so it is certified
-//
-// The pass is the client's key watcher, and the watcher decides where "the
-// initial values" end by GUESSING. nats.go (jetstream/kv.go, WatchFiltered)
-// sends its end marker when `received >= initPending || delta == 0`: the
-// count of messages delivered so far against the consumer's pending count at
-// creation, or the consumer's num_pending on the delivery just made. Neither
-// is exact on these buckets, and the reason is that every bucket here keeps
-// ONE revision per key.
-//
-// An overwrite of a key the pass has not reached yet REMOVES the revision the
-// pass was about to deliver and appends the replacement at the tail. The
-// server decrements the consumer's num_pending for that removal synchronously,
-// inside the write (stream.go storeUpdates -> consumer.decStreamPending), and
-// increments it for the replacement ASYNCHRONOUSLY, off the stream's signal
-// queue (signalConsumersLoop -> processStreamSignal). A delivery inside that
-// window reports num_pending 0 while the key's only revision is still ahead of
-// the cursor, and the watcher ends the initial values there. The count guess
-// fails the other way round: a later revision of a key ALREADY delivered counts
-// as one of the initial values, so the count is reached while a key whose
-// revision was removed has not been delivered at all.
-//
-// Measured against the embedded broker, with five presence leases and three of
-// them renewed in tight loops: 848 of 3634 ListLive(ClassNode) calls missed at
-// least one live lease. One pass ended after `node.n1@4 pending=1` and
-// `node.n3@8 pending=0`; n0, n2 and n4 — all three live throughout — arrived
-// after the marker at revisions 353 to 355. Every membership read is a listing
-// (seat placement divides by ListLive(ClassNode)), so a miss is a live node
-// that looks gone; and the trim takes a MINIMUM across the positions rows
-// every data node heartbeats, so a missed row raises the floor and deletes log
-// records that node still needs.
-//
-// The one exact "the cursor is at the tail" fact is the consumer's own store
-// EOF, and the broker does not hand it to a pass that could use it: a push
-// consumer sees it only as an idle heartbeat seconds later, and a pull request
-// reports it only after delivering something — its empty case is decided by
-// the same pending counter up front, or by an expiry timer, which a request
-// that merely waited in a busy server's queue also trips. A pass therefore
-// cannot certify itself, and a listing that trusted one would be guessing.
-//
-// So every listing is CERTIFIED against the stream's per-subject index: a
-// stream info with a subject filter names every key that has a message at one
-// instant — answered by the stream LEADER, from the index the store keeps
-// under its own lock, so it is not the replica-served, block-hinted read the
-// last section rules out — and, past the hundred thousand keys one answer
-// holds, every key that has a message throughout the pages it is read in
-// ([jsapi.Leader.Subjects] overlaps them so). A key it names that the pass did
-// not deliver LIVE — never delivered at all, or delivered as a delete or
-// purge marker — is read by itself, from the leader as well: "Every
-// certifying answer is the LEADER's" below says why neither read is taken
-// from anything else, and "A tombstone the pass delivered is not an answer"
-// why a marker is read again. That closes the hole exactly: a key live from
-// the moment the index is first asked until its own read is reported has a
-// message throughout the index read, so it is named by the index, and it is
-// either delivered live by the pass or read.
-//
-// What that costs is ONE PASS, as before; one index read, which is one API
-// request for each hundred thousand keys of the class, run BESIDE
-// the pass rather than after it, so that on a network their round trips
-// overlap the pass's own; and one leader read for each key the pass lost or
-// delivered as a marker. The lost keys are zero without concurrent writes and
-// bounded by the keys written while the listing ran — or, for a pass that went
-// [passIdle] without a delivery and was ended there ([passOver] says why it
-// is), by the keys the index named that it had not reached. The markers are
-// bounded by the ESTATE: a bucket the broker never ages keeps a record's
-// marker until [FleetStore.SweepMarkers] removes it, [coord.MarkerRetention]
-// after it was written, so a listing re-reads the records removed in the last
-// few hours and never every record ever removed. It is never a read per key
-// unless the broker stopped delivering the pass for a whole [passIdle]. Measured
-// against the embedded broker, where the server's own work rather than the
-// network is the cost, a listing of twenty quiet keys took 0.95 ms certified
-// against 0.75 ms for the bare pass.
-//
-// Two more things fall out of certifying rather than streaming. Each key is
-// handed to the caller ONCE, at the newest revision the listing read. The
-// count guess above is how a pass delivers one key at two revisions —
-// measured at 2 in 5000 passes with every key rewritten — and the callers that
-// append (the budget usage, the fleet view, the sandbox runs, every positions
-// class) listed it twice. And a listing that FAILS hands the caller nothing,
-// rather than the half it read before the failure.
-//
-// # Every certifying answer is the LEADER's
-//
-// A certification is only as good as the store that answers it, and a
-// clustered bucket has one store per replica. The bucket handle's own Get is
-// a DIRECT get on every bucket here — the client's KV layer creates a bucket
-// with allow_direct and reads a key through `$JS.API.DIRECT.GET` whenever the
-// stream allows it — and a direct get is answered by whichever replica the
-// broker picks from a queue group every replica joins once it is about 90%
-// synchronised (nats-server stream.go subscribeToDirect, and the sync
-// threshold in jetstream_cluster.go). None of them leaves that group when it
-// falls behind, so a replica that has not applied a write answers NOT FOUND
-// for a key the leader's index named. Measured on a three-member cluster with
-// one member cut off: the quorum committed the key, and the cut member's
-// direct get answered "key not found" to its own client. A certification that
-// read back through Get took that answer as "deleted since the index was
-// read", which is the one conclusion it exists to rule out, and the key live
-// throughout the listing was absent from it.
-//
-// So the certifying read is `$JS.API.STREAM.MSG.GET` with `last_by_subj`,
-// which only the stream leader answers — a member that is not the leader stays
-// silent, and one whose group has no leader refuses — so a read that cannot
-// reach the leader FAILS rather than answering from a copy. The client has no
-// call for it on a stream that allows direct gets (jetstream/stream.go getMsg
-// switches to the direct API on that flag alone), so this package asks for it
-// on the wire, addressed in the API the client speaks ([jsapi.API.Subject]),
-// and decodes the answer the way the client's own KV Get does.
-//
-// It is not only the certification's. A listing met the replica that is
-// behind first, and every read of one key has the same exposure — a claim's
-// read-back, a renew's, a fleet record's — so every single-key read in this
-// package is this one, and none is a direct get: kv.go's "Every single-key
-// read is the leader's" is that rule and what it costs.
-//
-// The index read has the matching hole, and it is closed the same way. A
-// stream info is the leader's EXCEPT while the group has no leader, when every
-// member answers from its own store rather than stay silent (jetstream_api.go
-// jsStreamInfoRequest), and a member that had not applied the last writes
-// before the leader went away names less than the quorum holds — measured on
-// the same cut member, once it held its group leaderless: its index named one
-// key of the two the quorum held. That answer names no leader, and
-// [keysUnder] refuses it: a listing during an election is the third answer,
-// never a short one.
-//
-// # A tombstone the pass delivered is not an answer
-//
-// The pass is an R1 ordered consumer, which the broker places on a random
-// member of the stream's group (jetstream_cluster.go createGroupForConsumer),
-// so it reads that member's copy rather than the leader's — measured, a pass
-// hosted on a follower missed the newest write in up to 3 of every 100
-// listings, and one hosted on the leader never did. For a key it delivered as a
-// Put that is only lag — a stale revision, never a missing key.
-// A MARKER is different: a key DELETED AND RE-CREATED before the listing
-// began, read by a pass on a member that had applied the delete and not yet
-// the re-creation, comes back as a tombstone although the key was live
-// throughout. So a marker the pass delivered is treated exactly as a key it
-// never delivered: when the index names the key it is read from the leader,
-// and the leader's answer — the live value, a marker, or nothing — is what the
-// listing holds. A marker for a key the index does NOT name needs no read:
-// the leader held no message on it at an instant inside the listing, so the
-// key was not live throughout, and absent is a correct answer for it.
-//
-// That read is paid once per marker the leader still holds, which is why the
-// markers do not stay: every bucket the broker never ages is swept of the ones
-// older than [coord.MarkerRetention] (markers.go), and that sweep is what
-// keeps this read bounded by the records removed recently rather than by every
-// record ever removed. The sweep changes no answer — a key whose marker is
-// gone reads exactly as one never written, here and in [createKey] — so its
-// horizon is a cost, never a correctness, bound.
-//
-// # Past one page of the index
-//
-// The broker's page size for that index, jetstream_api.go JSMaxSubjectDetails:
-// 100,000 keys under one filter. Past it the index is read a page at a time
-// ([jsapi.Leader.Subjects]), and the pages OVERLAP: the leader cuts every page
-// out of a list it sorts for that request alone, so a key removed before a
-// page boundary between two page reads shifts the next one back across it,
-// into the page already read — and the client's offset paging, which counted
-// what it had to find the next offset, left that key uncertified. So each
-// later page is asked from one key before where the last ended, and asked
-// again from further back unless it begins at or before that key, which names
-// every key with a message throughout the read, at any size. What grows with the class is what each
-// page costs the leader, a sort of all of it (internal/jsapi's
-// BenchmarkASubjectListing).
-//
-// # The batched direct read, and why it is not here
-//
-// `$JS.API.DIRECT.GET` with `multi_last` asks for the last message on every
-// matching subject in ONE request/reply, with no consumer at all — which is
-// exactly the shape of this question, and it was tried. It is not here, for
-// two independent reasons, either of which alone is disqualifying:
-//
-//   - IT IS SERVED BY ANY REPLICA. That is the whole reason it is fast, and
-//     it is why internal/queue/jetstream/stream.go sets allowDirect false on
-//     every stream the framework reads a last-message answer from, and why the
-//     certifying read above is not the bucket's own Get: a follower may be
-//     behind an acknowledged write, so the read can miss a record the quorum
-//     already has. Most of this estate would survive that — a liveness
-//     judgement decides what to ATTEMPT and the CAS at the revision it read
-//     decides what happens — but two reads have no arbitration behind them.
-//     The protocol gate lets a claim through a mixed-version upgrade when it
-//     misses an older-protocol peer, and the trim floor takes a MINIMUM
-//     across the positions rows, so a row it cannot see RAISES the floor and
-//     deletes log records a node has not applied yet. That one is data loss.
-//
-//   - IT ANSWERED WRONG ON ONE REPLICA, which is the reason that does not
-//     depend on the first. A KV bucket keeps one message per subject, so
-//     every Put deletes the one before it, and the server resolves multi_last
-//     through a per-subject last-BLOCK index that this churn leaves stale
-//     (filestore.go's multiLastSeqsByLastBlockLocked carries the unresolved
-//     case explicitly). Measured against a single-node embedded broker, a
-//     read of a populated key class came back EMPTY several times a run — and
-//     an empty answer is the one failure this estate cannot survive, because
-//     "no rows" is a legitimate answer everywhere it is asked.
-//
-// Do not reintroduce it without an answer to both. A benchmark is not one.
+// How this package reads a whole bucket: ONE ORDERED PASS over the client's key
+// watcher, carrying each key with its value and filtered at the broker, then
+// CERTIFIED against the stream leader's per-subject key index. Never a key
+// listing plus a Get per key (a round trip per key on top of a consumer per
+// call), and never the batched direct read, which any replica answers. A pass
+// cannot tell that it is complete, so every key the index names that it did
+// not deliver LIVE is read by itself from the leader ([certify]). The argument
+// is the package doc's: "Every listing is ONE CERTIFIED PASS, and never the
+// client's ListKeys", "A pass cannot tell that it is complete, so it is
+// certified", "A tombstone the pass delivered is not an answer" and "The
+// batched direct read, and why it is not here", which a reintroduction of that
+// read must answer.
 
 package kv
 
@@ -236,55 +29,34 @@ import (
 	"github.com/crewlet/crewlet/internal/jsprovision"
 )
 
-// eachEntry walks the latest revision of every LIVE key in a bucket, handing
-// each entry — its key AND its value together — to visit, once per key and in
-// key order.
-//
-// A visit that returns an error stops the walk and that error is returned
-// unwrapped, so a caller keeps its own vocabulary rather than having this
-// function guess at it. Deletes are filtered, so a tombstoned key is never
-// visited and no caller has to recognise one.
+// eachEntry hands visit the latest revision of every LIVE key in a bucket — key
+// AND value together — once per key, in key order. A visit's error stops the
+// walk and is returned unwrapped, so a caller keeps its own vocabulary. Deletes
+// are filtered: no caller sees a tombstone.
 func eachEntry(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue,
 	visit func(jetstream.KeyValueEntry) error) error {
 
 	return eachEntryUnder(ctx, js, kv, jetstream.AllKeys, kv.Bucket(), visit)
 }
 
-// eachEntryUnder is [eachEntry] over the keys matching one filter.
+// eachEntryUnder is [eachEntry] over the keys matching one filter, which the
+// BROKER applies: a key is a subject token path (coord/keys.go), and the
+// positions register holds eight classes a whole-bucket walk would move on
+// every read of one.
 //
-// THE BROKER DOES THE FILTERING, which is the whole point. A key is a subject
-// token path under its bucket (coord/keys.go), so a class of keys written by
-// [coord.DocumentKey] is a subject wildcard the broker can match — and the
-// shared positions register holds EIGHT classes, so a walk that read the whole
-// bucket moved all eight to use one, on every heartbeat, trim tick and alarm
-// evaluation that reads a class.
-//
-// The filter is in the KEY's vocabulary rather than the subject's — "floor.>"
-// and not "$KV.crewlet_x.floor.>" — because a key is what the caller holds and
-// what the watcher takes. Each walk composes its own, and there is
-// deliberately no default: an empty filter read as "everything" would turn a
-// caller that lost its class value into one that walks the whole register and
-// decodes eight classes as one. The certification's index read narrows by the
-// same filter, so the two halves of one listing can never be answering about
-// different keys.
-//
-// `what` names the listing a failure could not complete — the bare name, which
-// every message composes into "read <what>" — and a filtered walk names its
-// LISTING rather than its bucket. Eight classes share the positions register,
-// so "read crewlet_positions" is the same sentence for all of them: it names
-// the file an operator would inspect and never the duty that stalled.
-//
-// `js` is the client both leader reads go through — the index, and each
-// certifying read. See [keysUnder] for why the index is not the bucket
-// handle's own status call, and [leaderReader] for why a certifying read is
-// not the bucket handle's own Get.
+// The filter is in the KEY's vocabulary ("floor.>", not "$KV.crewlet_x.floor.>")
+// and has no default: an empty filter read as "everything" would decode eight
+// classes as one. The index read narrows by the same filter, so both halves of
+// a listing answer about the same keys. `what` names the LISTING, not the
+// bucket, in "read <what>", since eight classes share one bucket. `js` carries
+// both leader reads: the index ([keysUnder]) and each certifying read
+// ([leaderReader]).
 func eachEntryUnder(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue,
 	keys, what string, visit func(jetstream.KeyValueEntry) error) error {
 
-	// Resolved BEFORE the pass, although only a listing that lost a key
-	// uses it: a client built on an API this engine does not speak would
-	// otherwise fail only on the listings that happened to race a write,
-	// which reads as a flaky broker rather than as the wiring mistake it is.
+	// Resolved BEFORE the pass, though only a listing that lost a key uses it:
+	// a client on an API this engine does not speak would otherwise fail only
+	// on the listings that raced a write, reading as a flaky broker.
 	read, err := newLeaderReader(js, kv)
 	if err != nil {
 		return fmt.Errorf("coord/kv: read %s: %w", what, err)
@@ -303,11 +75,9 @@ func listUnder(ctx context.Context, js jetstream.JetStream, read *leaderReader, 
 	}
 	defer p.close()
 	latest, err := p.walk(ctx, what)
-	// STOPPED THE MOMENT THE PASS ENDS, on every path and before anything is
-	// certified: every write landing after the end is pushed into the
-	// client's blocking 256-entry handoff and a listing reads none of it, so
-	// a watcher left running past its pass is the abandoned listing that
-	// handoff parks a goroutine and a server-side consumer on for ever.
+	// STOPPED THE MOMENT THE PASS ENDS, before certifying: later writes go into
+	// the client's blocking 256-entry handoff, which nothing reads, and would
+	// park a goroutine and a server-side consumer on it for ever.
 	p.stop()
 	if err != nil {
 		return err
@@ -319,30 +89,16 @@ func listUnder(ctx context.Context, js jetstream.JetStream, read *leaderReader, 
 }
 
 // watchUnder opens a WATCH over the keys matching one filter and answers its
-// first answer CERTIFIED, exactly as a listing's is, beside the watcher that
-// answer was read from — still open, so the caller reads every change after
-// the answer from the same consumer and no write can fall between the two.
+// first answer CERTIFIED as a listing's is, beside the still-open watcher, so
+// the caller reads every later change from the same consumer and no write
+// falls between the two. The client's end marker is never waited on: it can
+// come early (package doc, "A pass cannot tell that it is complete, so it is
+// certified") or never ([passOver]).
 //
-// A watch's first answer IS a listing, and has a listing's two holes: the
-// count guess (the file doc) ends the initial values while a key live
-// throughout is still ahead of the cursor, and a pass whose pending messages
-// were all removed before it reached them is never ended at all ([passOver]).
-// A watch that took the client's end marker as its answer therefore answered
-// short whenever the guess came early, and held its caller with no answer at
-// all until something else was written under its filter. Certified, the answer
-// holds every key live from before the watch began until the answer was given,
-// and the end marker is never waited on.
-//
-// The answer carries markers, as [listUnder]'s does until [visitLive] drops
-// them, so the caller knows which revision of each key it already holds: the
-// consumer can deliver one again after the answer — a key the pass had not
-// reached when it was ended, or one the leader's read was ahead of it on — and
-// a revision at or below the answer's is not a change. Writes that land while
-// the answer is certified wait in the client's handoff for the caller, which
-// reads them next.
-//
-// The caller owns the watcher it is handed, and stops it. On a failure there
-// is none, and nothing is left running.
+// The answer keeps markers, so the caller knows the revision of each key it
+// holds: the consumer can deliver one again after the answer, and a revision
+// at or below the answer's is not a change. The caller owns and stops the
+// watcher; on a failure there is none and nothing is left running.
 func watchUnder(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue,
 	keys, what string) (map[string]jetstream.KeyValueEntry, jetstream.KeyWatcher, error) {
 
@@ -374,15 +130,11 @@ type keyIndex struct {
 }
 
 // pass is one certified pass under way: the watcher it reads, and the key
-// index read running BESIDE it.
-//
-// The index read is valid whenever it is taken before the reads that act on it
-// (see the file doc), so there is no ordering to keep, and it is started first
-// so that on a network its round trips overlap the ones the pass spends
-// creating its consumer. Its goroutine is the caller's: cancelled and joined by
-// [pass.close] on every return, including a pass that failed and no longer
-// needs the answer. Stopping the watcher is the caller's as well, because a
-// listing stops it the moment the pass ends and a watch goes on reading it.
+// index read running BESIDE it, started first so its round trips overlap the
+// consumer's creation (an index taken before the reads that act on it is
+// valid). [pass.close] cancels and joins the index goroutine on every return.
+// Stopping the watcher is the caller's: a listing stops it at the pass's end,
+// and a watch reads on.
 type pass struct {
 	w       jetstream.KeyWatcher
 	indexed chan keyIndex
@@ -402,12 +154,9 @@ func beginPass(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValu
 		names, err := keysUnder(indexCtx, js, kv, keys)
 		p.indexed <- keyIndex{names: names, err: err}
 	}()
-	// Watch rather than WatchAll, so this transport narrows server-side too.
-	//
-	// NOT IgnoreDeletes: a key removed while the pass ran is delivered as its
-	// value and then as its marker, and a pass that dropped the marker would
-	// list the value it replaced. certify reads a marker from the leader and
-	// visitLive is where a tombstone stops.
+	// Watch rather than WatchAll, so the filter narrows server-side too. NOT
+	// IgnoreDeletes: a key removed mid-pass arrives as its value then its
+	// marker, and dropping the marker would list the value it replaced.
 	w, err := kv.Watch(ctx, keys)
 	if err != nil {
 		p.close()
@@ -454,11 +203,11 @@ func (p *pass) close() {
 }
 
 // watchWalk is a pass NOTHING certifies — the marker sweep's — over a watcher
-// it opens and stops on every return, which is what leaves it no early-return
-// path that leaks one. [passOver] says why its quiet counts from the start.
+// it opens and stops on every return, so no early return leaks one. [passOver]
+// says why its quiet counts from the start.
 func watchWalk(ctx context.Context, kv jetstream.KeyValue, keys, what string) (map[string]jetstream.KeyValueEntry, error) {
-	// Watch, and not IgnoreDeletes, for [beginPass]'s reasons: what the
-	// sweep is after is the markers.
+	// Watch, not IgnoreDeletes, for [beginPass]'s reasons: the sweep is after
+	// the markers.
 	w, err := kv.Watch(ctx, keys)
 	if err != nil {
 		return nil, unavailable("read "+what, err)
@@ -469,54 +218,17 @@ func watchWalk(ctx context.Context, kv jetstream.KeyValue, keys, what string) (m
 }
 
 // passOver is the PASS: one walk over an ordered ephemeral consumer, answering
-// the newest revision it saw of every key it saw — a delete or purge marker
-// included, because a key deleted WHILE the pass ran is delivered first as a
-// value and then as its marker, and dropping the marker would leave the stale
-// value standing. [certify] reads a marker again from the leader rather than
-// trusting it (see the file doc).
-//
-// The only transport — the file doc says why the batched read is not one. It
-// carries the key AND the value together, so there is still no Get per name
-// here, and its honesty rule is the whole of it: a CLOSED CHANNEL is a failure
-// named as one, and the pass ENDS in exactly two ways — the nil entry, or
-// [passIdle] without a delivery once the key index has answered (from the
-// start, for a pass nothing certifies). Neither is proof that it saw every
-// key; that proof is [certify]'s, which is the only reason the second way is
-// allowed at all.
-//
-// # Why a pass that has gone quiet is ended rather than waited for
-//
-// Because the nil entry can NEVER come for it. The client sends that marker
-// on a delivery — once it has received as many messages as the consumer had
-// pending when it was made, or one reports nothing pending — so a pass whose
-// pending messages are all REMOVED before it reaches them receives nothing and
-// waits for ever. Every bucket here keeps one message per key under an age, a
-// purge or a delete marker's sweep, so that is an ordinary instant rather than
-// a corner: the last counters of a window ageing out between the consumer's
-// creation and its first delivery. Measured as a listing of an idle budget
-// bucket blocked inside this loop for nine minutes and forty-two seconds,
-// until the test binary's own timeout ended it; a caller whose context
-// carries no deadline — a duty loop's — would have waited for ever, holding a
-// server-side consumer the whole time.
-//
-// Ending it is SAFE because the certification already closes any hole a pass
-// leaves: every key the index named and the pass did not deliver is read from
-// the leader, whatever the reason it was not delivered, so a pass ended early
-// costs leader reads and never a key. That is also why the quiet is only
-// counted once the index HAS answered — before that there is nothing to
-// certify the pass against, and the pass is all there is to wait on.
-//
-// A pass NOTHING certifies — indexed nil, the marker sweep's — owes nobody a
-// complete answer (a marker it misses is swept on the next tick), so its quiet
-// counts from the start. It meets the same removals: a marker another sweep
-// purged between this one's consumer and its first delivery.
-//
-// It returns the index too when it received it, and says so, so the caller
-// reads the channel only when the pass did not.
-//
-// The watcher is the CALLER's, and the pass leaves it running: a listing stops
-// it the moment this returns ([listUnder]), and a watch reads its changes from
-// it next ([watchUnder]).
+// the newest revision it saw of each key, markers included (a key deleted
+// mid-pass arrives as its value, then its marker; [certify] rereads markers).
+// A closed channel is a failure. The pass ENDS on the nil entry, or after
+// [passIdle] without a delivery once the index has answered (from the start
+// when indexed is nil: a marker the sweep misses goes next tick). The nil entry
+// NEVER comes for a pass whose pending messages were all removed (aged, purged,
+// swept) before it reached them, so waiting would hold a deadline-free caller
+// and a server-side consumer for ever; ending is safe because [certify] reads
+// every indexed key it lacks. It says whether it took the index, so the caller
+// reads the channel only when it did not. The watcher stays running: the
+// caller stops it ([listUnder]) or reads on ([watchUnder]).
 func passOver(ctx context.Context, w jetstream.KeyWatcher, what string,
 	indexed <-chan keyIndex) (map[string]jetstream.KeyValueEntry, keyIndex, bool, error) {
 
@@ -524,10 +236,9 @@ func passOver(ctx context.Context, w jetstream.KeyWatcher, what string,
 	var (
 		index    keyIndex
 		answered bool
-		// quiet is armed when the index answers — at the start, for a
-		// pass with no index — and re-armed by every delivery after it;
-		// nil until then, so it never ends a pass before there is
-		// something to certify it against.
+		// quiet is armed when the index answers (at the start without one) and
+		// re-armed by each later delivery; nil until then, so it never ends a
+		// pass before there is something to certify it against.
 		quiet *time.Timer
 		idle  <-chan time.Time
 	)
@@ -550,9 +261,8 @@ func passOver(ctx context.Context, w jetstream.KeyWatcher, what string,
 			quiet = time.NewTimer(passIdle)
 			idle = quiet.C
 		case <-idle:
-			// QUIET for a whole passIdle: the pass is waiting on
-			// messages removed before it reached them, or on a consumer
-			// that has stopped delivering. certify reads what it lacks.
+			// QUIET for a whole passIdle: waiting on removed messages or a
+			// consumer that stopped delivering. certify reads what it lacks.
 			return latest, index, answered, nil
 		case kve, ok := <-w.Updates():
 			if !ok {
@@ -573,22 +283,17 @@ func passOver(ctx context.Context, w jetstream.KeyWatcher, what string,
 // passIdle is how long a pass may go without a delivery, once the key index has
 // answered, before it is ended and [certify] reads what it lacks.
 //
-// FIVE SECONDS, which is the client's own idleness interval for exactly this
-// consumer: an ordered consumer asks the server for an idle heartbeat after
-// five seconds with nothing to deliver (nats.go js.go,
-// orderedHeartbeatsInterval), so this is the point at which the broker itself
-// would call the pass idle. A pass that is still delivering re-arms it on every
-// entry and never meets it, so it is reached only by a pass that will not end
-// on its own or by a server that paused a delivering pass for a whole idle
-// interval. Shorter, a busy server's pause turns the rest of a large pass into
-// one leader read per key; longer, a listing that met removed messages holds
-// its caller longer. It is a cost bound and never a correctness one — see
-// [passOver].
+// Five seconds is the client's own idleness interval for this consumer (nats.go
+// js.go orderedHeartbeatsInterval), where the broker itself calls it idle. A
+// delivering pass re-arms it on every entry. Shorter, a busy server's pause
+// turns the rest of a large pass into a leader read per key; longer, a pass
+// that met removed messages holds its caller longer. A cost bound, never a
+// correctness one ([passOver]).
 const passIdle = 5 * time.Second
 
 // keep records kve unless the listing already holds a newer revision of its
-// key. A pass delivers in stream order, so its later delivery of a key IS the
-// newer one; the comparison is here so the rule does not depend on that.
+// key. A pass delivers in stream order, so its later delivery IS the newer one;
+// the comparison keeps the rule from depending on that.
 func keep(latest map[string]jetstream.KeyValueEntry, kve jetstream.KeyValueEntry) {
 	if prev, seen := latest[kve.Key()]; seen && prev.Revision() > kve.Revision() {
 		return
@@ -597,21 +302,15 @@ func keep(latest map[string]jetstream.KeyValueEntry, kve jetstream.KeyValueEntry
 }
 
 // keysUnder reads the stream's per-subject index: every key under the filter
-// that has a message at the instant the stream leader answers.
+// with a message at the instant the stream leader answers, one request a page,
+// each asked again while nobody answers it ([jsapi.Leader.Subjects]): a member
+// still believing in a lost leader drops the request without a word, so a page
+// rather than the whole index is what is retried.
 //
-// ONE REQUEST A PAGE, each asked again while nobody answers it
-// ([jsapi.Leader.Subjects]): only the leader answers the index, so a member
-// that still believes in a leader its group has just lost drops it without a
-// word, and a page is the unit the broker answers. It was the client's
-// listing behind a fresh stream handle — two requests, the handle's own
-// unfiltered info and then the index — asked whole as one read, so a dropped
-// or merely slow page started the whole index again from its first.
-//
-// An answer that names NO LEADER is refused with [errIndexLeaderless]: it is
-// a member's own copy, given while its group elects (see the file doc), and it
-// can name less than the quorum committed. A solo broker and an R1 stream both
-// name the server that answered, so only a replicated group between leaders
-// is refused.
+// An answer naming NO LEADER is refused with [errIndexLeaderless]: it is one
+// member's own copy while its group elects, and can name less than the quorum
+// committed. A solo broker and an R1 stream name the server that answered, so
+// only a replicated group between leaders is refused.
 func keysUnder(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue, keys string) ([]string, error) {
 	leader, err := jsapi.NewLeader(js, bucketStream(kv))
 	if err != nil {
@@ -623,11 +322,9 @@ func keysUnder(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValu
 		for subject := range subjects {
 			key, ok := strings.CutPrefix(subject, pre)
 			if !ok {
-				// The broker matched this subject against a filter that
-				// begins with the prefix, so a subject without it is a
-				// broker that did not do what it was asked. Dropping it
-				// would be the silent short answer this file exists to
-				// prevent.
+				// The filter begins with the prefix, so a subject without it
+				// is a broker answering something else; dropping it would be
+				// the silent short answer this file exists to prevent.
 				return fmt.Errorf("the key index answered %q, which is not under %q", subject, pre)
 			}
 			names = append(names, key)
@@ -643,23 +340,17 @@ func keysUnder(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValu
 	return names, nil
 }
 
-// leaderInfo is stream's info as its LEADER answered it — a lease bucket's
-// last write, the store's clock — through a handle of each request's own,
-// asked as a metadata read ([jsprovision.ReadBounded]).
+// leaderInfo is stream's info as its LEADER answered it (a lease bucket's last
+// write, the store's clock), asked as a metadata read ([jsprovision.ReadBounded]).
 //
-// ASKED AGAIN WHILE NOBODY ANSWERS, because nobody but the leader does: a
-// member that still believes in a leader its group has just lost takes the
-// request and returns without a word (server/jetstream_api.go,
-// jsStreamInfoRequest: "only the stream leader should answer"). Sent as one
-// request, it waited for its caller's deadline — or for the client's
-// five-second default — for a reply nobody would send, where a request asked
-// again is answered by the new leader; and a request behind a backed-up queue
-// is still listened for while the next is out, since it is answered late
-// rather than never. A caller with no deadline keeps those five seconds,
-// asked again inside them. A HANDLE OF EACH REQUEST'S OWN, because the
-// requests of one read can be out together and the client caches each reply
-// on the handle that fetched it with no lock — the same reason lane.stream
-// exists.
+// ASKED AGAIN WHILE NOBODY ANSWERS: only the leader answers (jetstream_api.go
+// jsStreamInfoRequest), so a member that still believes in a lost leader drops
+// the request, and one request would wait out its caller's deadline or the
+// client's five-second default where a retry reaches the new leader; a late
+// request stays listened for while the next is out. A caller with no deadline
+// is held to those five seconds. A HANDLE OF EACH REQUEST'S OWN, because they
+// can be out together and the client caches each reply on its handle with no
+// lock (lane.stream's reason).
 func leaderInfo(ctx context.Context, js jetstream.JetStream, stream string) (*jetstream.StreamInfo, error) {
 	return jsprovision.ReadBounded(ctx, js.Options().DefaultTimeout, func(ctx context.Context) (*jetstream.StreamInfo, error) {
 		// js.Stream is itself the info request: the handle carries what it
@@ -675,15 +366,12 @@ func leaderInfo(ctx context.Context, js jetstream.JetStream, stream string) (*je
 // errUndecodableHeaders is a message the leader holds whose headers do not
 // decode, so nothing can say whether it is a value or a marker.
 //
-// A FACT ABOUT THE STORED MESSAGE, not about the read: the leader answered,
-// and will answer the same bytes until the key is written again. No writer in
-// this engine stores one — the client encodes every header it sends — so it is
-// a message published raw by something else, or corrupted. Every read that
-// meets one still answers it as unknown, which is right wherever a key's value
-// is a fact the caller must have; the custody claim alone tells it apart,
-// because for it a record nothing can read is a definite answer about one
-// batch ([coord.ErrCustodyUndecidable]), and read as an outage it would stop
-// every batch the keeper settles after it.
+// A fact about the STORED message, not the read: the leader answers the same
+// bytes until the key is rewritten. No writer here stores one (the client
+// encodes every header), so it was published raw or corrupted. Every read
+// answers it as unknown, except the custody claim, for which an unreadable
+// record is a definite answer about one batch ([coord.ErrCustodyUndecidable]):
+// read as an outage it would stop every batch the keeper settles after it.
 var errUndecodableHeaders = errors.New("the leader holds a message whose headers do not decode")
 
 // errIndexLeaderless is a key index a member answered from its own copy while
@@ -693,22 +381,16 @@ var errIndexLeaderless = errors.New("the key index was answered while the " +
 	"than the quorum committed")
 
 // certify reads, one at a time, every key the index named that the pass did
-// not deliver LIVE — a key it never delivered, and a key whose newest revision
-// in the pass is a delete or purge marker — and records what each read found.
+// not deliver LIVE — never delivered, or delivered as a delete or purge marker,
+// which may be a replica's view between a delete and a re-creation (package
+// doc, "A tombstone the pass delivered is not an answer") — and records what
+// each read found.
 //
-// The marker is read again because the pass may have been served by a replica
-// that applied a key's delete and not yet its re-creation (see the file doc):
-// its tombstone says what that replica held, not what the key holds.
-//
-// ErrKeyNotFound is an answer, not a failure: the leader holds no message on
-// the key any more — it aged out under the bucket's TTL, was removed outright,
-// or its marker was swept, between the index read and this one — and a key
-// that is gone is correctly absent from the listing. A delete or purge marker
-// the leader answers is recorded like any other revision and left out by
-// [visitLive]. Anything else is the third answer — a listing that could not be
-// certified is not a listing, and a read the leader did not answer is the case
-// that matters most: it is the one a behind replica would have answered "not
-// found".
+// ErrKeyNotFound is an answer: the leader no longer holds the key (aged out,
+// removed, or its marker swept since the index read), so it is rightly absent.
+// A marker the leader answers is recorded and dropped by [visitLive]. Anything
+// else fails the listing, above all a read the leader did not answer: the
+// case a replica that is behind would have answered "not found".
 func certify(ctx context.Context, read *leaderReader, what string,
 	latest map[string]jetstream.KeyValueEntry, indexed []string) error {
 
@@ -728,17 +410,14 @@ func certify(ctx context.Context, read *leaderReader, what string,
 	return nil
 }
 
-// leaderReader reads a key's newest message from the stream LEADER, decoded
-// as the bucket handle decodes an entry: the bucket's half of
-// [jsapi.Leader], which is the one leader read every caller in the engine
-// shares — the request, its address across a leaf link and the reading of
-// the leader's answer.
+// leaderReader reads a key's newest message from the stream LEADER, decoded as
+// the bucket handle decodes an entry: the bucket's half of [jsapi.Leader], the
+// one leader read the engine shares.
 //
-// NOT the bucket handle's Get, which on these buckets is a direct get any
-// replica may answer — see the file doc for what that cost. And not the
-// client's GetLastMsgForSubject either, which is the same direct get: the
-// client picks the API from the stream's allow_direct flag alone and offers
-// no way to ask for the other one.
+// NOT the bucket handle's Get, nor the client's GetLastMsgForSubject: on these
+// buckets both are a direct get any replica may answer (package doc, "Every
+// single-key read is the leader's"), and the client picks the API from the
+// stream's allow_direct flag alone.
 type leaderReader struct {
 	leader *jsapi.Leader
 	bucket string
@@ -746,11 +425,10 @@ type leaderReader struct {
 }
 
 // newLeaderReader addresses the leader reads of kv's stream in the API js
-// speaks — given, for a bucket whose values are budgeted to what one key holds
-// ([holdingLarge]), the crossing of a reply that large at the pace the bucket
-// was opened with, as a read a writer waits on is (jsapi.Leader.Deciding): its
-// value and the most header a write leaves on it ([kvHeaderBytes]), the largest
-// message the bucket's stream holds — what [Reach.readCrossing] counts it at.
+// speaks. For a bucket whose values are budgeted to what one key holds
+// ([holdingLarge]), a read waits as a writer's does (jsapi.Leader.Deciding) for
+// the largest message the stream holds, a value plus [kvHeaderBytes], to cross
+// at the bucket's pace: what [Reach.readCrossing] counts it at.
 func newLeaderReader(js jetstream.JetStream, kv jetstream.KeyValue) (*leaderReader, error) {
 	leader, err := jsapi.NewLeader(js, bucketStream(kv))
 	if err != nil {
@@ -777,12 +455,11 @@ func (r *leaderReader) last(ctx context.Context, key string) (jetstream.KeyValue
 	return r.entry(key, msg)
 }
 
-// at answers key's message at one revision as the stream leader holds it —
-// the leader's answer to what the bucket handle's GetRevision asks a replica.
-// A revision the key no longer holds — a later write replaced it, or it was
-// purged — is [jetstream.ErrKeyNotFound], which is what GetRevision says of
-// one; a replica says it of a revision it has not applied YET as well, which
-// is the answer this exists not to give.
+// at answers key's message at one revision as the stream leader holds it: the
+// leader's answer to the bucket handle's GetRevision, which a replica gives. A
+// revision the key no longer holds (replaced or purged) is
+// [jetstream.ErrKeyNotFound], as GetRevision says; a replica also says it of a
+// revision not applied YET, the answer this exists not to give.
 func (r *leaderReader) at(ctx context.Context, key string, revision uint64) (jetstream.KeyValueEntry, error) {
 	msg, err := r.leader.At(ctx, revision)
 	switch {
@@ -791,8 +468,8 @@ func (r *leaderReader) at(ctx context.Context, key string, revision uint64) (jet
 	case err != nil:
 		return nil, err
 	case msg.Subject != r.pre+key:
-		// A REVISION ANOTHER KEY HOLDS is not this key's at that revision:
-		// what GetRevision answers it, for the same reason.
+		// A REVISION ANOTHER KEY HOLDS is not this key's: GetRevision
+		// answers it the same way.
 		return nil, jetstream.ErrKeyNotFound
 	}
 	return r.entry(key, msg)
@@ -840,12 +517,11 @@ func getLatest(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValu
 	return read.live(ctx, key)
 }
 
-// operationOf reads what a stored KV message IS from its headers — the
-// client's own rule (nats.go jetstream/kv.go get), because an entry this read
-// decoded differently from the pass's would list a key the pass would have
-// dropped or drop one it would have listed. The KV-Operation values are the
-// KV protocol's (ADR-8), which neither library exports as constants. Headers
-// that do not decode are [errUndecodableHeaders].
+// operationOf reads what a stored KV message IS from its headers by the
+// client's own rule (nats.go jetstream/kv.go get): decoded differently from the
+// pass, it would list a key the pass dropped or drop one it listed. The
+// KV-Operation values are the KV protocol's (ADR-8), which neither library
+// exports. Headers that do not decode are [errUndecodableHeaders].
 func operationOf(raw []byte) (jetstream.KeyValueOp, error) {
 	if len(raw) == 0 {
 		return jetstream.KeyValuePut, nil
@@ -893,11 +569,9 @@ func (e leaderEntry) Created() time.Time              { return e.created }
 func (e leaderEntry) Delta() uint64                   { return 0 }
 func (e leaderEntry) Operation() jetstream.KeyValueOp { return e.op }
 
-// visitLive hands each live key to visit, once, in key order.
-//
-// Key order because a map iterates in a different order every time, and an
-// unstable listing turns any downstream ordering bug into one that reproduces
-// once in ten runs.
+// visitLive hands each live key to visit, once, in key order: a map iterates
+// differently every time, and an unstable listing turns a downstream ordering
+// bug into one that reproduces once in ten runs.
 func visitLive(latest map[string]jetstream.KeyValueEntry,
 	visit func(jetstream.KeyValueEntry) error) error {
 

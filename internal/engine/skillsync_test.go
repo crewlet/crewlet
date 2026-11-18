@@ -43,15 +43,9 @@ func wikiWithOneSkill(t *testing.T, key string) *httptest.Server {
 	return server
 }
 
-// CONNECTING THE KNOWLEDGE BASE LOADS ITS SKILLS, AND DISCONNECTING IT RETIRES
-// THEM.
-//
-// Neither used to happen: the skills walk ran once, at boot, from the
-// notification wiring, and no apply ever reached the registry. So a company
-// that connected Confluence after starting loaded no skills until the process
-// restarted, and one that disconnected it went on serving the disconnected
-// wiki's guidance for the life of the process, under a credential the
-// revision had just revoked.
+// CONNECTING THE KNOWLEDGE BASE BY AN APPLY LOADS ITS SKILLS, AND DISCONNECTING
+// IT RETIRES THEM, with no restart: otherwise a disconnected wiki's guidance
+// is served for the process's life, under a credential the revision revoked.
 func TestConnectingTheKnowledgeBaseLoadsItsSkillsAndDisconnectingRetiresThem(t *testing.T) {
 	t.Parallel()
 	wiki := wikiWithOneSkill(t, "deploy")
@@ -89,9 +83,8 @@ knowledge:
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	// DISCONNECTED. The revision names another knowledge backend, so the
-	// wiki's skills describe a stack this company no longer runs, and they
-	// go with the apply rather than with the next restart.
+	// DISCONNECTED: the revision names another backend, so the wiki's skills
+	// go with the apply.
 	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc), time.Now()); err != nil {
 		t.Fatalf("Apply without confluence: %v", err)
 	}

@@ -16,20 +16,11 @@ func keysOf(got []chartContainer) []string {
 	return out
 }
 
-// THE KNOWLEDGE CONTAINERS A COMPANY NAMES ARE OBJECTS, and until this
-// resolver had a caller they were not.
-//
-// [doclet.Store.EnsureContainer] had none at all (its own doc says it "runs on
-// every boot for every unit's space" and nothing ever ran it), so
-// `pages_containers` was empty in every deployment: the Doclet rail said
-// "this node knows about no containers yet" beside a company whose agents had
-// written pages, and `GET /containers` answered an empty list for ever.
-//
-// A page merely NAMES its container, so the pages were fine and only the thing
-// that lists them was missing — which is exactly why nothing caught it. Every
-// read that TAKES a container worked; only the read that ENUMERATES them was
-// empty, and an empty enumeration is indistinguishable from a company that has
-// no containers.
+// THE KNOWLEDGE CONTAINERS A COMPANY NAMES ARE OBJECTS
+// ([doclet.Store.EnsureContainer]). A page only NAMES its container, so with
+// none materialised every read that takes a container works while the one that
+// enumerates them (`GET /containers`, the Doclet rail) answers an empty list,
+// indistinguishable from a company with no containers.
 func TestEverySpaceTheChartNamesBecomesAContainer(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
@@ -37,8 +28,7 @@ func TestEverySpaceTheChartNamesBecomesAContainer(t *testing.T) {
 		Roles: []*org.Role{
 			{Name: "SWE", DeclaredHandle: "swe"},
 			// A SEAT'S OWN SPACE, one level down from its unit's: a
-			// founder naming one on a seat meant a container for that
-			// seat's own writing.
+			// container for that seat's own writing.
 			{Name: "DevRel", DeclaredHandle: "devrel", Space: "DEVREL"},
 		},
 	}}}
@@ -56,11 +46,9 @@ func TestEverySpaceTheChartNamesBecomesAContainer(t *testing.T) {
 	}
 }
 
-// THE RESERVED TWO ARE MATERIALISED TOO, because the engine writes into them.
-//
-// A container the engine itself writes into and cannot list is the same defect
-// one layer in: tool-skill pages and the org's own root pages would sit in
-// containers the Doclet rail refuses to name.
+// THE RESERVED TWO ARE MATERIALISED TOO, because the engine writes into them:
+// tool-skill pages and the org's own root pages would otherwise sit in
+// containers the Doclet rail cannot name.
 func TestTheReservedContainersAreMaterialisedFromTheirOwnAccessors(t *testing.T) {
 	t.Parallel()
 	skills := "SKILLS"
@@ -73,10 +61,9 @@ func TestTheReservedContainersAreMaterialisedFromTheirOwnAccessors(t *testing.T)
 	}
 }
 
-// THE ROOT'S PURPOSE IS TRUE OF A SPACE WITH NO PAGES. It heads the space
-// beside its page count, and it promised "the Onboarding page every seat reads
-// first" beside "0 pages" on every new company: the Onboarding page is a page
-// somebody titles so, and the purpose says it as that convention.
+// THE ROOT'S PURPOSE IS TRUE OF A SPACE WITH NO PAGES: it heads the space
+// beside "0 pages" on a new company, so it names the Onboarding page as a
+// convention (a page somebody titles so), never as present.
 //
 // Mutation: put back a purpose that names the page as present and this fails.
 func TestTheRootSpacesPurposeHoldsBeforeAnythingIsWritten(t *testing.T) {

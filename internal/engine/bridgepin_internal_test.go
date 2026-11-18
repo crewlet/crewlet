@@ -195,12 +195,10 @@ func (b bridgedRun) row(t *testing.T, turnID string) sandbox.PendingRun {
 
 // A LAUNCHED RUN'S CALLS STOP WHEN A PERSON STOPS ITS SEAT. The run outlives
 // the turn that launched it, so the seat's fence is handed to its session and
-// asked before every call the box makes: once a person's pause asks the seat's
-// running work to stop, a call is refused rather than made — through the real
-// launcher and the real bridge, because the fence is one field of wiring in
-// LaunchExecutor and nothing else can show it was set. The refused call is on
-// the run's record in its place, failed and never started, so a reader of the
-// run sees the box asked after the stop and was turned away.
+// asked before every call: after a pause that stops running work, a call is
+// refused, and recorded in its place failed and never started, so a reader
+// sees the box was turned away. Through the real launcher and bridge, because
+// the fence is one field of wiring in LaunchExecutor.
 //
 // Mutation: drop the Fence from the session LaunchExecutor opens, and the
 // stopped seat's call runs.
@@ -245,9 +243,8 @@ func TestALaunchedRunsCallsStopWhenAPersonStopsItsSeat(t *testing.T) {
 }
 
 // A LAUNCH BINDS ITS BRIDGE SESSION TO ITS JOB, so the box's calls are filed
-// under it. Driven through the real launcher and the real bridge, because the
-// binding is one line of wiring in LaunchExecutor and nothing else can show it
-// was made.
+// under it. Through the real launcher and bridge, because the binding is one
+// line of wiring in LaunchExecutor.
 //
 // Mutation: drop the launch's Opened hook, and the call is filed under nothing.
 func TestALaunchedRunsBridgedCallIsFiledUnderItsJob(t *testing.T) {
@@ -266,18 +263,16 @@ func TestALaunchedRunsBridgedCallIsFiledUnderItsJob(t *testing.T) {
 	}
 }
 
-// A LAUNCH HANDS ITS RUN'S HARNESS THE SKILLS ITS RUNNER HANDED, and the run's
-// bridge hears every load of one: the box is given the skills and where to
-// report a load — the bridge's own tool for it, under the names the bridge
-// serves — the bridge lists no load_tool_skill to a harness with a loader of
-// its own, and a load the harness reports is on the run's row as its
-// load_tool_skill call of the skill's key, which a rebuild of the run replays.
-// Driven through the real launcher and bridge, because each is a line of
-// wiring in LaunchExecutor and openBridge that nothing else can show was made.
+// A LAUNCH HANDS ITS RUN'S HARNESS THE SKILLS ITS RUNNER HANDED, AND HEARS
+// EVERY LOAD: the box gets the skills and the bridge's own tool to report a
+// load to; the bridge lists no load_tool_skill to a harness with its own
+// loader; and a reported load is on the run's row as a load_tool_skill call of
+// the skill's key, which a rebuild replays. Through the real launcher and
+// bridge, because each is a line of wiring in LaunchExecutor and openBridge.
 //
-// Mutation: leave the skills off the session the launch opens, and the report
-// is recorded nowhere; leave the wiring off the opening, and the box is handed
-// skills with nowhere to report a load.
+// Mutation: leave the skills off the launch's session, and the report is
+// recorded nowhere; leave the wiring off the opening, and the box has nowhere
+// to report a load.
 func TestALaunchHandsItsHarnessItsSkillsAndHearsTheirLoads(t *testing.T) {
 	t.Parallel()
 	loader := newHeldTool(toolname.LoadToolSkill)
@@ -322,12 +317,10 @@ func TestALaunchHandsItsHarnessItsSkillsAndHearsTheirLoads(t *testing.T) {
 }
 
 // A RUN CARRIED ON AFTER A PERSON'S ANSWER NUMBERS ITS CALLS AFTER THE ASKING
-// RUN'S. The log keeps the asking job's calls as the round's, and the
-// collection that closes the round reads them by their place: a continuation
-// whose bridge session counted from one again put its first call beside the
-// asking run's first, and every reader of the round — its record, the log its
-// reviewer reads, its submissions, where the last one made wins — had the two
-// runs' calls interleaved. Driven through the real launcher, store and bridge,
+// RUN'S. The log keeps the asking job's calls as the round's, and every reader
+// of the round (its record, the reviewer's log, its submissions, where the last
+// wins) reads them by place, so a continuation counting from one again would
+// interleave the two runs' calls. Through the real launcher, store and bridge,
 // because the number reaches the session through the launch's own wiring.
 //
 // Mutation: open the job's session without the LastSeq the launch was told,
@@ -361,15 +354,12 @@ func TestACarriedOnRunsCallsAreNumberedAfterTheAskingRuns(t *testing.T) {
 	}
 }
 
-// A SESSION'S FIRST CALL, OUTLIVING ITS JOB, IS NOT THE NEXT JOB'S.
-//
-// The case a session that learned its job from the row got wrong: the harness
-// opens with a delegate call, which is still running engine-side when the
-// box is collected and the reviewer relaunches the run — the row now holds the
-// next job. A session that had not yet landed an append learned that job's
-// name from the row and filed the late call, and its spend, on the next job's
-// record, whose resume then paid for it as its own. Bound before its box
-// existed, the session names its own job, and the store refuses it.
+// A SESSION'S FIRST CALL, OUTLIVING ITS JOB, IS NOT THE NEXT JOB'S. The
+// harness opens with a delegate call still running when the reviewer relaunches
+// the run and the row holds the next job. A session learning its job from the
+// row would file the late call and its spend on the next job's record, whose
+// resume would pay for it; bound before its box existed, the session names its
+// own job, and the store refuses it.
 func TestABridgedSessionsFirstCallOutlivingItsJobIsNotTheNextJobs(t *testing.T) {
 	t.Parallel()
 	delegate := newHeldTool("delegate")

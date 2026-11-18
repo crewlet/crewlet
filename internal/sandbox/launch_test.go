@@ -20,11 +20,9 @@ func launchReq(turnID string) LaunchRequest {
 		Turn: TurnRef{
 			TurnID: turnID, AgentID: sweID, AgentHandle: "swe", Role: "SWE",
 			WorkKey: "wk-1", WorkSince: launchWorkSince,
-			// A DIRECT MESSAGE, the one shape where the two keys differ:
-			// the conversation an answer is matched on is the bare
-			// channel, while the partition the kick-off arrived in is a
-			// thread inside it. Equal ones here would let a launch that
-			// copied one field onto both look correct.
+			// A DIRECT MESSAGE, the one shape where the two keys differ
+			// (the bare channel, and a thread inside it): equal ones would
+			// let a launch that copied one field onto both look correct.
 			PartitionKey: "chat:D1:root-1", ConversationKey: "chat:D1",
 			Reply:   "tool",
 			TraceID: "tr-1", SpanID: "sp-1",
@@ -39,11 +37,9 @@ func launchReq(turnID string) LaunchRequest {
 var launchWorkSince = time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
 
 // A LAUNCH IS STAMPED WITH THE LEASE ITS SEAT IS HELD UNDER, asked of the
-// coordinator's own [CoordinatorOptions.Lease] rather than handed in by each
-// launch path, so a path cannot forget it: the row carries the lease, and the
-// node's every later write carries it back off the row — which is what lets
-// the seat's next holder fence this node out. Launched unfenced, the row sat
-// at the zero epoch, which constrains nothing.
+// coordinator's own [CoordinatorOptions.Lease] so no launch path can forget it:
+// the node's every later write carries it back off the row, which lets the
+// seat's next holder fence this node out. A zero epoch constrains nothing.
 func TestALaunchIsStampedWithTheLeaseItsSeatIsHeldUnder(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -99,9 +95,8 @@ func TestALaunchStartsTheJobAndRecordsWhatOutlivesTheTurn(t *testing.T) {
 		t.Fatalf("Launch = %+v, want a box and a command", res)
 	}
 	run := rig.get("t1")
-	// LAUNCHING, not running. The job is executing, and the turn that
-	// started it has not yet written the conversation a resume re-enters —
-	// so nothing may poll or claim it yet. See [StatusLaunching].
+	// LAUNCHING, not running: nothing may poll or claim it yet. See
+	// [StatusLaunching].
 	if run.Status != StatusLaunching {
 		t.Fatalf("status = %q, want %q", run.Status, StatusLaunching)
 	}
@@ -112,24 +107,21 @@ func TestALaunchStartsTheJobAndRecordsWhatOutlivesTheTurn(t *testing.T) {
 		t.Fatalf("the brief was not persisted: %+v", run)
 	}
 	// THE DELIVERY OBLIGATION, persisted because the resumed turn never
-	// sees its trigger: without it a turn somebody asked for comes back
-	// from its executor free to end in silence.
+	// sees its trigger: without it an asked-for turn could end in silence.
 	if run.Reply != "tool" {
 		t.Fatalf("who is waiting was not persisted: %+v", run)
 	}
-	// BOTH CONVERSATION VALUES, because the row asks two questions of them
-	// and one construction site forgetting one is exactly how this field
-	// was empty at every site for the life of the feature.
+	// BOTH CONVERSATION VALUES: the row asks two questions of them, and a
+	// construction site can forget either.
 	if run.PartitionKey != "chat:D1:root-1" || run.TraceID != "tr-1" {
 		t.Fatalf("the routing and trace were not persisted: %+v", run)
 	}
 	if run.ConversationKey != "chat:D1" {
 		t.Fatalf("the run has nowhere to report back to: %+v", run)
 	}
-	// THE UNIT OF WORK AND WHEN IT BEGAN, together: the resumed turn
-	// derives its writes' operation ids from both, and an id derived from
-	// the key under another instant is a DIFFERENT operation from the one
-	// the first half of the turn wrote under.
+	// THE UNIT OF WORK AND WHEN IT BEGAN, together: the resumed turn derives
+	// its writes' operation ids from both, and the key under another instant
+	// is a DIFFERENT operation from the first half's.
 	if run.WorkKey != "wk-1" || !run.WorkSince.Equal(launchWorkSince) {
 		t.Fatalf("the row keeps work %q begun at %s, want %q begun at %s",
 			run.WorkKey, run.WorkSince, "wk-1", launchWorkSince)
@@ -156,11 +148,9 @@ func TestALaunchIsAnnouncedAndRoutedToTheSeat(t *testing.T) {
 	}
 }
 
-// A LAUNCH RECORDS THE ITEM ITS TURN IS ON, on the row and on the announcement.
-//
-// The row is what the resumed turn reads its item from — the event that
-// resumes it names none — and the announcement is what a running-runs panel
-// reads, which cannot join back to a turn that parked days ago.
+// A LAUNCH RECORDS THE ITEM ITS TURN IS ON, on the row and on the announcement:
+// the event that resumes the turn names none, and a running-runs panel cannot
+// join back to a turn that parked days ago.
 func TestALaunchRecordsTheItemItsTurnIsOn(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -182,16 +172,13 @@ func TestALaunchRecordsTheItemItsTurnIsOn(t *testing.T) {
 }
 
 // THE ANNOUNCEMENT NAMES ITS JOB: the launch id the store minted and when it
-// recorded the launch — what pairs the start with the job's own record
-// (`executor_collected`), and what a request for the running job's live
-// output names. A turn can
-// launch more than one job, so without it a watcher could not say which of
-// them is still running.
+// recorded the launch, which pair the start with the job's own record
+// (`executor_collected`) and name the running job's live output. A turn can
+// launch more than one job.
 //
-// THE CLOCK MOVES ON BETWEEN THE TWO: the store dates the job as it opens it,
-// and the box is made after that, a second later on the rig's clock, so an
-// announcement that dated the job as it went out names another instant than
-// the row's, where the rig's clock left standing read them equal.
+// THE CLOCK MOVES ON BETWEEN THE TWO: the box is made a second after the store
+// dates the job, so an announcement dated as it went out would name another
+// instant than the row's, which a standing clock would hide.
 func TestTheStartedEventNamesTheJobItAnnounces(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -214,9 +201,8 @@ func TestTheStartedEventNamesTheJobItAnnounces(t *testing.T) {
 }
 
 // The full brief goes to the run; the wire carries its first line as the
-// run's label — WHOLE, because a row too narrow for it is the renderer's to
-// elide, and a label cut to a width put half a sentence on the run's page as
-// its title.
+// run's label, WHOLE: eliding to a width is the renderer's, and a label cut
+// here puts half a sentence on the run's page as its title.
 func TestTheStartedEventCarriesTheBriefsFirstLineWhole(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -235,14 +221,10 @@ func TestTheStartedEventCarriesTheBriefsFirstLineWhole(t *testing.T) {
 }
 
 // The agent is asked the task, and told as a standing instruction what its box
-// already provides — so it does not spend rounds rediscovering it — on the
+// already provides (so it does not spend rounds rediscovering it) on the
 // channel its harness adds to its own system prompt. Each text carries its own
-// half and nothing of the other's.
-//
-// There is no success-criteria section: it came from the planner's declared
-// criteria, and with one loop there is no separate plan to declare them. What
-// "done" means is the executor's own brief, written by the frame that will
-// read the answer.
+// half and nothing of the other's, and there is no success-criteria section:
+// what "done" means is the brief, written by the frame that reads the answer.
 func TestTheHarnessIsToldItsTaskAndItsEnvironment(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -281,10 +263,10 @@ func TestTheHarnessIsToldItsTaskAndItsEnvironment(t *testing.T) {
 	}
 }
 
-// A RUN'S STANDING INSTRUCTIONS LEAD WITH THE SEAT'S SYSTEM PROMPT: it reaches
-// the runner ahead of the environment and the ask, whole, opened by the note
-// that says it is the role rather than the coding tool's own prompt, and none
-// of it in the brief — which is the turn's ask, once, as the runner hands it.
+// A RUN'S STANDING INSTRUCTIONS LEAD WITH THE SEAT'S SYSTEM PROMPT: whole,
+// ahead of the environment and the ask, opened by the note that it is the role
+// rather than the coding tool's own prompt, and none of it in the brief, which
+// is the turn's ask, once.
 //
 // AND THE RUN IS NAMED THE SAME WAY LIVE AND FROM ITS RECORD: by its caller's
 // label where it gave one (the launch names its turn's task, since the brief
@@ -336,13 +318,10 @@ func TestARunsOwnSystemTextLeadsItsStandingInstructions(t *testing.T) {
 	}
 }
 
-// THE HARNESS IS TOLD IT MAY ASK, and whom — the addendum the engine
-// composes rides the standing instructions the box is started with. Without it
-// a run held the ask tool with no word of when to use it, so a run blocked on
-// a decision could not park on a question at all.
-//
-// And the row records WHO ASKED, which is what the park resolves a question to
-// "the requester" against days later.
+// THE HARNESS IS TOLD IT MAY ASK, and whom, in the standing instructions the
+// box starts with: a run holding the ask tool with no word of when to use it
+// cannot park on a question. And the row records WHO ASKED, which the park
+// resolves "the requester" against days later.
 func TestTheHarnessIsToldHowToAskAndTheRowWhoAsked(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -362,10 +341,9 @@ func TestTheHarnessIsToldHowToAskAndTheRowWhoAsked(t *testing.T) {
 }
 
 // THE ROW CARRIES THE CREDENTIAL A TOKEN'S TURN IS WORKED FOR (ADR-0109): every
-// segment that resumes the turn, and every call its box makes after a
-// takeover, is still bounded by that credential and the apps its write
-// carried, and the row is the one place they reach those frames from. A turn
-// no credential woke carries neither.
+// resuming segment, and every call the box makes after a takeover, stays
+// bounded by that credential and its write's apps, which reach them only from
+// the row. A turn no credential woke carries neither.
 //
 // Mutation: leave the launch's credential off the row — the row names none.
 func TestTheRowCarriesTheCredentialATokensTurnIsWorkedFor(t *testing.T) {
@@ -438,11 +416,10 @@ func TestALaunchThatNamesNoHarnessIsRefused(t *testing.T) {
 	}
 }
 
-// THE ENTRY THE RUN WAS LAUNCHED ON IS THE JOB'S, on its record: the member of
-// the seat's executor chain that took it, which a fallback makes other than
-// the head. The launch's record its collection publishes is filed under it, so
-// spend by provider names the entry that ran — and a relaunch on another entry
-// files the next job under that one rather than carrying the first.
+// THE ENTRY THE RUN WAS LAUNCHED ON IS THE JOB'S, on its record: the executor
+// chain member that took it (a fallback's, not the head), so spend by provider
+// names the entry that ran, and a relaunch on another entry files the next job
+// under that one.
 func TestAJobRecordsTheEntryItWasLaunchedOn(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -471,11 +448,10 @@ func TestAJobRecordsTheEntryItWasLaunchedOn(t *testing.T) {
 }
 
 // THE SIGN-IN A JOB WAS HANDED, AND WHY IT FOLLOWS THE JOB BEFORE IT, ARE THE
-// JOB'S: the collection compares the one against the entry's sign-in to tell a
-// refusal on a replaced credential from an ordinary one, and reads the other
-// so that a job already relaunched for that reason is not relaunched again. So
-// both survive the store's launch write, which rebuilds the record from
-// scratch, and a later launch replaces both with its own.
+// JOB'S: the collection tells a refusal on a replaced credential by the one,
+// and by the other does not relaunch a job twice for it. Both survive the
+// store's launch write, which rebuilds the record, and a later launch replaces
+// both.
 //
 // Mutation: drop either from the store's rebuilt record, or let a launch keep
 // the previous job's reason, and this fails.
@@ -510,10 +486,9 @@ func TestAJobRecordsTheSignInItWasHandedAndWhyItFollows(t *testing.T) {
 	}
 }
 
-// A box that nothing names is billed for until its TTL and collected by
-// nobody. The launch kills its own box and the ending reclaims the box the row
-// names, which here are one box — killed by both, which a provider answers as
-// the reclaim it wanted — and nothing else is killed.
+// A box nothing names is billed for until its TTL. The launch kills its own
+// box and the ending reclaims the row's, here the same box (a provider answers
+// the second kill as the reclaim it wanted), and nothing else is killed.
 func TestABoxIsReclaimedWhenTheJobCannotStart(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -529,12 +504,9 @@ func TestABoxIsReclaimedWhenTheJobCannotStart(t *testing.T) {
 }
 
 // A crash between the row and the box leaves a record recovery can act on;
-// the reverse ordering leaves a box nothing names.
-//
-// Asserted at the moment the box is created rather than after the launch
-// returns: a launch that fails closes the row it opened, so afterwards there is
-// nothing to see either way, and only the provider's own view of the store
-// can tell the two orderings apart.
+// the reverse ordering leaves a box nothing names. Asserted as the box is
+// created: a failed launch closes its row, so afterwards the two orderings
+// look alike.
 func TestTheRowExistsBeforeTheBoxDoes(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -558,11 +530,10 @@ func TestTheRowExistsBeforeTheBoxDoes(t *testing.T) {
 	}
 }
 
-// THE JOB IS NAMED BEFORE ITS BOX EXISTS. A run's bridge session
-// files every call the box makes under the name a launch hands it, so the name
-// has to reach it before the box can make one — and it has to be the name the
-// row holds, which is the one the store minted. Learned later, from the row,
-// a call that outlived its job would learn whichever job the row held by then.
+// THE JOB IS NAMED BEFORE ITS BOX EXISTS, with the name the store minted: a
+// run's bridge session files every call the box makes under it, and learned
+// later from the row, a call that outlived its job would get whichever job
+// the row held by then.
 //
 // Mutation: call Opened after the box is created, or hand it anything but the
 // store's answer, and this goes red.
@@ -614,9 +585,8 @@ func TestALaunchNamesItsJobBeforeItsBoxExists(t *testing.T) {
 		t.Fatalf("the launch named %v, and the row holds job %q", witness.named, run.LaunchID)
 	}
 
-	// AND WHAT THE NAMING ANSWERS REACHES THE BOX beside the servers the
-	// launch was given: an endpoint that names the job, which only exists
-	// once the job does.
+	// AND THE NAMING'S ENDPOINT REACHES THE BOX beside the launch's servers:
+	// it names the job, so it only exists once the job does.
 	started := rig.runner.Started()
 	if len(started) != 1 {
 		t.Fatalf("%d jobs started, want 1", len(started))
@@ -644,10 +614,9 @@ func TestALaunchNamesItsJobBeforeItsBoxExists(t *testing.T) {
 	}
 }
 
-// A JOB THAT CANNOT BE NAMED TO WHAT SERVES ITS BOX IS NOT LAUNCHED. The naming
-// is what mints the box's endpoint, and a run with no endpoint is a
-// harness with none of the seat's tools: the launch is abandoned before
-// any box exists, and its row ended, rather than started blind.
+// A JOB THAT CANNOT BE NAMED TO WHAT SERVES ITS BOX IS NOT LAUNCHED: the naming
+// mints the box's endpoint, without which the harness has none of the seat's
+// tools, so the launch is abandoned and its row ended before any box exists.
 //
 // Mutation: ignore the naming's error, and a box is created and its job run.
 func TestALaunchWhoseJobCannotBeNamedStartsNothing(t *testing.T) {
@@ -717,10 +686,9 @@ func (w *rowWitness) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	return w.FakeProvider.Create(ctx, spec)
 }
 
-// A launch that opened a row and then failed must CLOSE it. A run left
-// launching is polled by nothing and claimed by nothing — it just holds its
-// seat's busy count, and its box where it got that far, until the seat happens
-// to move to another node and recovery reaps it.
+// A launch that opened a row and then failed must CLOSE it: a run left
+// launching is polled and claimed by nothing, and holds its seat's busy count
+// (and its box) until the seat moves and recovery reaps it.
 func TestEveryFailedLaunchClosesTheRowItOpened(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -741,8 +709,7 @@ func TestEveryFailedLaunchClosesTheRowItOpened(t *testing.T) {
 			if _, err := rig.launchVia(t.Context(), rig.manager, launchReq("t1")); err == nil {
 				t.Fatal("a launch that could not finish reported success")
 			}
-			// Closed means gone: a launching row left behind is polled by
-			// nothing and claimed by nothing.
+			// Closed means gone.
 			rig.finished("t1")
 		})
 	}
@@ -768,12 +735,10 @@ func launchWithoutBrief() LaunchRequest {
 }
 
 // launchVia launches through a coordinator of its own over the rig's store and
-// queue, for a case about the launch rather than about what a coordinator
-// counts: the rig's own coordinator, where it has one, is left untouched. The
-// seat is held under [rigLease], as a real node's is. On the rig's one clock,
-// as the store is: a launch reads a kept box's age off the date the store gave
-// it ([KeptBoxMaxAge]), and a wall clock read against the rig's fixed instant
-// would find every box months old.
+// queue, leaving the rig's coordinator untouched, with the seat held under
+// [rigLease]. It runs on the rig's clock: a launch reads a kept box's age off
+// the store's date ([KeptBoxMaxAge]), and a wall clock against the rig's fixed
+// instant would find every box months old.
 func (r *waiterRig) launchVia(ctx context.Context, m *Manager, req LaunchRequest) (LaunchResult, error) {
 	r.t.Helper()
 	c, err := NewCoordinator(CoordinatorOptions{
@@ -791,11 +756,9 @@ func (r *waiterRig) launchVia(ctx context.Context, m *Manager, req LaunchRequest
 	return c.Launch(ctx, m, req)
 }
 
-// THE ANNOUNCEMENT NAMES THE MEMBER THAT TOOK THE RUN, and its model: a launch
-// picks the first member of the seat's executor chain that can take it, so a
-// fallback runs a job on an entry other than the chain's head — and which
-// entry's plan a running job is spending is what a person watching it asks,
-// long before its own record is collected.
+// THE ANNOUNCEMENT NAMES THE MEMBER THAT TOOK THE RUN, and its model: a fallback
+// runs a job on an entry other than the executor chain's head, and whose plan
+// a running job spends is asked long before its record is collected.
 //
 // Mutation: drop either field from the announcement and this goes red.
 func TestTheStartedEventNamesTheMemberThatTookTheRun(t *testing.T) {

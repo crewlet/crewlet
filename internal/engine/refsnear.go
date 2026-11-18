@@ -11,14 +11,11 @@ import (
 
 // refsNearLimit reads code_refs_near_limit's figure from this node's code log
 // rows at now ([gitlet.Reader.RefsNearLimit]), and false where this node
-// measures none: a node with no runtime holding the code log's rows — no data
-// role — and one whose company hosts no code, whose repositories take no push
-// for the bound to refuse.
+// measures none: no data role, or a company that hosts no code.
 //
 // EVERY DATA NODE, never only a Gitlet node: the figure is a fact of the estate
-// each holds, so every data node reports the same repositories, as an estate's
-// own alarms are reported — and a fleet with no Gitlet node live still has
-// repositories near the bound, whose pushes wait on one.
+// each holds, as an estate's own alarms are, and a fleet with no Gitlet node
+// live still has repositories near the bound.
 func (e *Engine) refsNearLimit(ctx context.Context, now time.Time) (gitlet.RefsNear, bool, error) {
 	n := e.native.Load()
 	c := e.Company()
@@ -33,20 +30,17 @@ func (e *Engine) refsNearLimit(ctx context.Context, now time.Time) (gitlet.RefsN
 }
 
 // measureRefs takes code_refs_near_limit's figure on the trim's tick and keeps
-// it for the tick's reports, the vector coverage's idiom
-// ([retention.measureCoverage]).
+// it for the tick's reports, as [retention.measureCoverage] does.
 //
-// ON THE TICK AND NEVER ON A REPORT: the reading is a walk of every
-// repository row and a count over each one's refs near the bound — its live
-// refs and its tombstones, up to gitlet.MaxRefsPerRepo +
-// gitlet.MaxTombstonesPerRepo index entries a repository — while a report is
-// assembled on every alarm beat, operator request and dashboard poll, and the
-// figure moves over days: a quarter-hour is a resolution it is honest at.
+// ON THE TICK, NEVER ON A REPORT: the reading walks every repository's live
+// refs and tombstones (up to gitlet.MaxRefsPerRepo +
+// gitlet.MaxTombstonesPerRepo index entries each), a report is built on every
+// alarm beat, operator request and dashboard poll, and the figure moves over
+// days, so a quarter-hour resolution is honest.
 //
-// A MEASUREMENT THAT FAILS LEAVES NOTHING rather than the last figure, and is
-// said once a tick (`code_refs_near_limit_unread`): an unread estate is not one
-// near the bound, and the push decide still refuses a create at it
-// repo_refs, naming the bound, whatever the alarm knows.
+// A FAILED MEASUREMENT LEAVES NOTHING rather than the last figure, logged once
+// a tick (`code_refs_near_limit_unread`): an unread estate is not one near the
+// bound, and the push decide refuses a create at it (repo_refs) regardless.
 func (r *retention) measureRefs(ctx context.Context) {
 	if r.refs == nil {
 		return
@@ -63,9 +57,8 @@ func (r *retention) measureRefs(ctx context.Context) {
 }
 
 // refsReading copies the tick's code_refs_near_limit figure into out, with the
-// two decisions it was judged at — the bound and the lifecycle's window — which
-// the detail names and this framework cannot import. Nothing where the tick
-// measured none.
+// bound and the lifecycle's window it was judged at, which the detail names
+// and statelog cannot import. Nothing where the tick measured none.
 func (r *retention) refsReading(out *statelog.Reading) {
 	r.mu.Lock()
 	near, known := r.refsNear, r.refsNearKnown

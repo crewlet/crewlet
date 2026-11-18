@@ -11,42 +11,23 @@ import (
 
 // A LOG THAT LOST WHAT A PEER'S ROWS HOLD REFUSES EVERYBODY'S WRITES.
 //
-// A broker restored from an older copy is seen by the nodes whose rows are
-// newer than the copy — their checkpoints are past the log's end, or the log
-// diverged from them — and by nothing else. A node whose rows were the copy's
-// age sees a log that is its own history, so it went on writing: every write
-// acknowledged, applied on its own node, and appended after the restored end.
-// If the operator then keeps the newer node's rows — its restored reanchor,
-// which follows the log from its end — those writes are applied nowhere: lost
-// after being acknowledged, and the longer the fleet went on, the more of them.
-// Only the operator can say which history the fleet keeps, and a write made
-// before they have is one made on a guess.
-//
-// So the fleet's own register decides it: a peer on the stream this node's
-// rows are keyed to, in the same generation, not evicted, whose published
-// position is past the log's end — confirmed against the log, which must not
-// hold the record at it — or which says the log diverged from its rows, stops
-// this node's writes until it is resolved ([statelog.ErrLogTruncated]). Its
-// reads go on: they are the log's own history. The eviction of the peer is the
-// one write that is not refused, because it is one of the operator's ways out.
-//
-// # What it cannot see
-//
-// A peer whose row does not yet say so: after a whole broker restore the
-// register is the copy's too, so a newer node that has not booted since — or
-// has not yet published — is at the copy's position in it, and writes made
-// before it does land. What this fence bounds is how many there are; that there
-// are any is what the newer node's restored reanchor finds and names, refusing
-// to discard them without the operator's word ([statelog.ReanchorInputs.Unheld]).
+// After a broker restore from an older copy only the nodes with newer rows see
+// it; one at the copy's age writes on, and if the operator keeps the newer
+// rows (their restored reanchor) those acknowledged writes are applied nowhere.
+// Only the operator can pick the history, so a peer on this node's keyed
+// stream, same generation, not evicted, whose position is past the log's end
+// (confirmed: the log must not hold that record) or which reports divergence
+// stops this node's writes until resolved ([statelog.ErrLogTruncated]). Reads
+// go on; evicting that peer, a way out, is allowed. A peer whose row is still
+// the copy's is unseen: the fence bounds the writes before it publishes, and
+// its reanchor discards none unasked ([statelog.ReanchorInputs.Unheld]).
 
-// truncation is the peer whose rows hold records one domain's log lost, as the
-// register rows and one reading of the log's end (last) show it — nil when no
-// peer's do, or for a domain that claims no identity, whose nodes' rows differ
-// by design.
+// truncation is the peer whose rows hold records one domain's log lost, by the
+// register rows and one reading of the log's end (last); nil when none does, or
+// for a domain that claims no identity, whose nodes' rows differ by design.
 //
-// A READ THAT FAILS IS AN ERROR, and the caller leaves the verdict where it was:
-// a register nobody could list, or a log that could not be asked, is neither a
-// peer that holds more nor one that does not.
+// A READ THAT FAILS IS AN ERROR and the caller keeps its verdict: an unread
+// register or log shows neither a peer that holds more nor one that does not.
 func (s *stateLog) truncation(ctx context.Context, running *runningLog,
 	rows []coord.NodePositions, at statelog.Position, last uint64) (*statelog.Truncation, error) {
 
@@ -59,9 +40,8 @@ func (s *stateLog) truncation(ctx context.Context, running *runningLog,
 	var candidates []string
 	for _, row := range rows {
 		pos, runs := row.Domains[name]
-		// THE SAME STREAM AND THE SAME GENERATION ONLY: a sequence in
-		// another generation, or on another stream at this one, is a
-		// number in another space and past nothing this log holds.
+		// THE SAME STREAM AND GENERATION ONLY: a sequence in another is in
+		// another number space and past nothing this log holds.
 		if !runs || row.NodeID == s.nodeID || pos.Generation != at.Generation ||
 			!sameStream(pos.StreamCreatedAt, keyed) {
 			continue
@@ -84,16 +64,14 @@ func (s *stateLog) truncation(ctx context.Context, running *runningLog,
 	var found *statelog.Truncation
 	for _, node := range candidates {
 		if evicted[node] {
-			// A PEER THE FLEET EVICTED is not coming back, and what its
-			// rows held is on no disk the fleet will read again.
+			// A PEER THE FLEET EVICTED holds rows no disk will read again.
 			continue
 		}
 		pos := ahead[node]
 		if !pos.LogDiverged {
-			// CONFIRMED AGAINST THE LOG ITSELF: an end read from a member
-			// that has not caught up is below a healthy peer's position
-			// too, and a record the log holds at the peer's checkpoint
-			// says the end was that member's.
+			// CONFIRMED AGAINST THE LOG: an end read from a lagging member
+			// is below a healthy peer too; a record held at the peer's
+			// checkpoint says the end was that member's.
 			_, _, _, held, readErr := running.log.At(ctx, pos.Seq)
 			if readErr != nil {
 				return nil, fmt.Errorf("engine: read %s's record at peer %s's "+

@@ -95,6 +95,7 @@ import { TurnWhatCell, UnsettledCell, plainSeat } from "~/app/frame/cells.tsx";
 import { openState, runningNow, UNSETTLED, type OpenState } from "~/lib/turns.ts";
 import type { EventSeries, TurnRow, TurnsAnswer } from "~/protocol/index.ts";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 
 /** A day, the window a slow read offers instead of a longer one. */
 const DAY_MS = 86_400_000;
@@ -360,7 +361,11 @@ export function Turns() {
           onChange={(value) => setSeat(String(value))}
           options={[
             { value: "", label: "Every seat" },
-            ...seats.map((s) => ({ value: s.handle, label: s.name })),
+            ...seats.map((s) => ({
+              value: s.handle,
+              label: s.name,
+              leading: <ChoiceFace seat={s} />,
+            })),
           ]}
           ariaLabel="Seat"
           menuClassName="seat-filter-menu"
@@ -635,7 +640,7 @@ function TurnState({
           failed turn: "failure" here beside "failed" there read as two
           states. */}
       {t.failed && (
-        <Tag variant="danger" title="at least one event of this turn was a failure">
+        <Tag variant="danger" title="at least one of this turn's own records was a failure">
           failed
         </Tag>
       )}

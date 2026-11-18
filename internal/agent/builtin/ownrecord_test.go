@@ -87,16 +87,10 @@ func ownRecordToolsDecidedBy(t *testing.T, person *personSpy, views *viewStore,
 	return out
 }
 
-// YOUR OWN QUEUE IS NEVER LOOKED UP.
-//
-// `set_priorities` with no handle — or with the caller's own — sent the
-// caller's own name through the fuzzy colleague resolver like anybody else's.
-// An unbound `jane.doe` holding admin resolved to the seat `jane` and set THAT
-// seat's priorities; the same caller without admin was refused their own
-// queue; and the refusal listed the roster. The queue a caller names by
-// omission or by either of their own names is the record every other write of
-// theirs is kept under, for each of the three shapes of caller, with the
-// tracker alone and with admin.
+// YOUR OWN QUEUE IS NEVER LOOKED UP: `set_priorities` naming the caller by
+// omission or by either of their own names writes the record every other write
+// of theirs is kept under — never a seat the fuzzy resolver finds, never a
+// refusal — for each shape of caller, with the tracker alone and with admin.
 func TestYourOwnQueueIsNeverLookedUp(t *testing.T) {
 	t.Parallel()
 	for _, c := range ownRecordCallers {
@@ -130,12 +124,10 @@ func TestYourOwnQueueIsNeverLookedUp(t *testing.T) {
 // A NAME NOBODY ANSWERS TO IS REFUSED NAMING THE ROSTER — to a caller the
 // roster question is answered for, and to nobody else.
 //
-// A miss listed every seat in the company, and an ambiguity the seats it
-// matched, to whoever made the write — so the list is in the refusal exactly
-// when `lookup_colleague` would have been answered. That is everybody the
-// table resolves today, because the roster is everybody's overview; the guard
-// is still asked of the table rather than assumed, so a surface whose decision
-// refuses the roster question withholds the list.
+// The list is in the refusal exactly when `lookup_colleague` would be
+// answered. The table answers it for everybody today, but the guard asks the
+// table rather than assuming, so a surface that refuses the roster question
+// withholds the list.
 func TestAMissedNameListsTheRosterToWhoeverMayReadIt(t *testing.T) {
 	t.Parallel()
 	refuseRoster := func(next builtin.Authorizer) builtin.Authorizer {
@@ -177,14 +169,10 @@ func TestAMissedNameListsTheRosterToWhoeverMayReadIt(t *testing.T) {
 	}
 }
 
-// A PERSONAL VIEW IS THE CALLER'S OWN RECORD.
-//
-// `save_work_view` took a free `owner` handle, so a bound person typing their
-// login saved a view under a name no strip of theirs reads — and one who
-// marked it protected was then refused their own next save, which the tracker
-// checks against the name the writer acts under. `personal: true` is the only
-// way to say it now, and the owner is the one name every other record of theirs
-// is kept under.
+// A PERSONAL VIEW IS THE CALLER'S OWN RECORD: `personal: true` saves it under
+// the one name every other record of theirs is kept under — the name their
+// strip reads, and the one the tracker checks a protected view's next save
+// against.
 func TestAPersonalViewIsTheCallersOwnRecord(t *testing.T) {
 	t.Parallel()
 	for _, c := range ownRecordCallers {
@@ -208,9 +196,8 @@ func TestAPersonalViewIsTheCallersOwnRecord(t *testing.T) {
 		}
 	}
 
-	// AND THE SCHEMA OFFERS NO NAME TO GIVE IT: a personal view is always
-	// the caller's own, so there is no argument through which to name
-	// somebody else's.
+	// AND THE SCHEMA OFFERS NO NAME TO GIVE IT: no argument names somebody
+	// else's personal view.
 	for _, tool := range ownRecordTools(t, &personSpy{}, &viewStore{}) {
 		if tool.Name() != worklet.SaveWorkViewTool {
 			continue
@@ -223,10 +210,10 @@ func TestAPersonalViewIsTheCallersOwnRecord(t *testing.T) {
 }
 
 // directory is the identity directory as a person verb reads it, over
-// [ownRecordCompany]: `jane.doe` holds no seat — the finding's own case, a
-// login that RESEMBLES the seat `jane` ("Jane Doe") — `j.bound` holds the seat
-// `jane`, `dev.person` holds `dev`, and `leaver.person` is bound to a seat the
-// chart has since removed. err makes every lookup unknown.
+// [ownRecordCompany]: `jane.doe` holds no seat but RESEMBLES the seat `jane`
+// ("Jane Doe"), `j.bound` holds `jane`, `dev.person` holds `dev`, and
+// `leaver.person` is bound to a seat the chart has since removed. err makes
+// every lookup unknown.
 type directory struct {
 	err   error
 	asked []string
@@ -344,15 +331,11 @@ func whose(t *testing.T, verb personVerb, person *personSpy, got tools.Result) s
 // SOMEBODY ELSE'S LOGIN NAMES THEIR HOLDER'S RECORD, and a login is never a
 // seat — on every verb that names whose record it acts on.
 //
-// Two defects, one cause: the name was never resolved to a record. An
-// administrator naming the unbound `jane.doe` through `set_priorities`, or
-// `PUT /worklet/people/jane.doe/priorities`, had the login sent through the fuzzy
-// colleague resolver, which set the priorities of the seat `jane` ("Jane
-// Doe"); and every other verb read or wrote a login LITERALLY, so a person the
-// directory binds to a seat — `j.bound`, who holds `jane` — was read an empty
-// inbox and written marks under the login, where nothing of hers reads them.
-// And a login that is somebody's resolves before the table is asked, so a lead
-// naming their report by login is admitted as the lead they are.
+// A login resolves through the directory to its holder's record: never through
+// the fuzzy colleague resolver (the unbound `jane.doe` is not the seat `jane`)
+// and never taken literally (`j.bound`'s record is `jane`). It resolves before
+// the table is asked, so a lead naming their report by login is admitted as
+// their lead.
 func TestSomebodyElsesLoginNamesTheirHoldersRecord(t *testing.T) {
 	t.Parallel()
 	admin := iam.Principal{Kind: iam.KindMachine, Login: "token:admin"}
@@ -421,11 +404,11 @@ func TestYourOwnLoginIsYourOwnRecordOnEveryVerb(t *testing.T) {
 // A LOGIN THAT NAMES NOBODY IS NOT A ROSTER, and a directory that cannot say
 // is not "nobody".
 //
-// A login nobody holds is decided on the name as typed FIRST — which nobody
-// leads, so only admin passes — and only then refused as naming no
-// record: "nobody holds that" before "you may not" would tell a caller with no
-// authority over anybody which logins exist. A directory this node cannot read
-// is the undecidable arm, never a guess in either direction.
+// A login nobody holds is decided on the name as typed FIRST (nobody leads it,
+// so only admin passes) and only then refused as naming no record: "nobody
+// holds that" before "you may not" would tell a caller with no authority which
+// logins exist. A directory this node cannot read is the undecidable arm,
+// never a guess either way.
 func TestALoginThatNamesNobodyIsNotARoster(t *testing.T) {
 	t.Parallel()
 	admin := as(iam.Principal{Kind: iam.KindMachine, Login: "token:admin"},
@@ -478,10 +461,9 @@ func TestALoginThatNamesNobodyIsNotARoster(t *testing.T) {
 // SOMEBODY ELSE'S RECORD NAMED BY A SEAT IS WRITTEN EXACTLY, never looked up.
 //
 // [builtin.MarkInboxFor] and [builtin.SetPinsFor] are an HTTP route's writes,
-// and the route's path is a record's name — so a name that is neither the
-// caller's nor a login must be a seat the chart has EXACTLY. The fuzzy
-// colleague resolver turned it into whichever seat it resembled; what they
-// refuse instead is a name no record could be kept under.
+// whose path is a record's name, so a name that is neither the caller's nor a
+// login must be a seat the chart has EXACTLY; any other name is refused, never
+// resolved to a seat it resembles.
 func TestSomebodyElsesSeatIsWrittenExactly(t *testing.T) {
 	t.Parallel()
 	admin := as(iam.Principal{Kind: iam.KindMachine, Login: "token:admin"},
@@ -495,8 +477,8 @@ func TestSomebodyElsesSeatIsWrittenExactly(t *testing.T) {
 			written string
 		}{
 			{"dev", "dev"},
-			// A NAME NO RECORD IS KEPT UNDER is refused rather than
-			// resolved: prose, and a seat-shaped name the chart lacks.
+			// A NAME NO RECORD IS KEPT UNDER is refused: prose, and a
+			// seat-shaped name the chart lacks.
 			{"Jane Doe", ""},
 			{"nobody", ""},
 		} {
@@ -519,15 +501,11 @@ func TestSomebodyElsesSeatIsWrittenExactly(t *testing.T) {
 // A CALLER WITH NO AUTHORITY LEARNS NOTHING FROM THE DIRECTORY — not even when
 // this node cannot read it.
 //
-// The authority used to be decided AFTER the lookup, and the directory's
-// answers differ by login: a login nobody holds was refused on the name as
-// typed, while a held one this node could not place answered undecidable
-// carrying the directory's own words — "j.bound is bound to jane". A caller
-// who leads nobody read which logins exist, and whose seat each holds, off the
-// difference. Decided first, every one of those is the same refusal, and the
-// directory is never asked. A caller who leads somebody may still be admitted
-// on the record, so for them the node honestly cannot say — in words that are
-// not the directory's.
+// The directory's answers differ by login (unheld, held, unreadable, in its
+// own words), so authority is decided before the lookup: a caller who leads
+// nobody gets one refusal for every login, and the directory is never asked.
+// A caller who may be admitted on the record (a lead, an admin) is told the
+// node cannot say, in words that are not the directory's.
 func TestACallerWithNoAuthorityLearnsNothingFromTheDirectory(t *testing.T) {
 	t.Parallel()
 	// `dev` leads nobody in [handleChart]; `lead` leads `dev`.
@@ -577,9 +555,9 @@ func TestACallerWithNoAuthorityLearnsNothingFromTheDirectory(t *testing.T) {
 				}
 			}
 
-			// A LEAD MAY BE ADMITTED ON THE RECORD, so a node that cannot
-			// read the directory cannot say — and an admin may be
-			// told that too. Neither hears the directory's own words.
+			// A LEAD OR AN ADMIN MAY BE ADMITTED ON THE RECORD, so an
+			// unreadable directory is undecidable for them, told in words
+			// that are not the directory's.
 			undecidable := func(who string, caller context.Context) {
 				got := verb.call(caller, personDeps(&personSpy{}, blind()), "j.bound")
 				if verb.ownerOnly && who == "a lead" {

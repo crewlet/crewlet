@@ -110,11 +110,11 @@ export const seatAvatarKey = (handle: string) => `\u0000avatar:${handle}`;
 /** An agent's avatar as the one label [seatAvatarKey] carries. */
 export const avatarLabel = (avatar: AgentAvatar): string => `${avatar.character} ${avatar.color}`;
 
-/** The avatar a [seatAvatarKey] label names, or nothing where no page published one. */
+/** The avatar a [seatAvatarKey] label names for a seat, or nothing where no page published one. */
 function avatarOfLabel(label: string | undefined): AgentAvatar | undefined {
   if (!label) return undefined;
   const [character, color] = label.split(" ");
-  return avatarOf({ character, color });
+  return avatarOf({ character, color }) ?? undefined;
 }
 
 /**

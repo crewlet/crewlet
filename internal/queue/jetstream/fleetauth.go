@@ -16,12 +16,11 @@ import (
 // RouteKeyDomain, LeafKeyDomain and ClientKeyDomain are the derivation domains
 // of the fleet's three listener credentials. Each key of secrets.keys derives
 // an unrelated secret under each ([runtoken.DeriveKey]), so a route password
-// captured on the wire is worth nothing on a leaf or a client listener, and
-// none of them is a run token's, a session's or a state-log record's key.
-//
-// The `crewlet.<surface>.v1` convention every other consumer of the keyring
-// names its domain by; a format that changes takes a new version, so a node on
-// the old one is refused by name rather than admitted on a stale derivation.
+// captured on the wire opens no leaf or client listener, and none is a run
+// token's, a session's or a state-log record's key. They follow the keyring's
+// `crewlet.<surface>.v1` convention: a changed format takes a new version, so
+// a node on the old one is refused by name rather than admitted on a stale
+// derivation.
 const (
 	RouteKeyDomain  = "crewlet.broker.route.v1"
 	LeafKeyDomain   = "crewlet.broker.leaf.v1"
@@ -32,20 +31,14 @@ const (
 // listeners: one credential per key of the Tier A keyring under each
 // listener's domain.
 //
-// EVERY KEY IS ACCEPTED AND THE ACTIVE ONE PRESENTED, the rule every consumer
-// of the keyring follows (internal/runtoken's package doc), so the keyring's
-// rotation runbook moves the broker with no step of its own: a node that has
-// added a key accepts a peer still presenting the old one, and a node that has
-// flipped its active key presents a credential every peer that added it holds.
+// EVERY KEY IS ACCEPTED AND THE ACTIVE ONE PRESENTED (internal/runtoken's
+// package doc), so the keyring's rotation runbook moves the broker with no
+// step of its own.
 //
-// The zero value is a broker given no keyring — a test's solo member, an
-// external client — and a broker that opens or dials a fleet listener refuses
-// it ([ErrNoFleetKeys]). Every node the engine starts carries a keyring (Tier
-// A requires one on every node), so the engine never builds the zero value.
-//
-// IT HOLDS SECRETS AND PRINTS NONE: [FleetAuth.LogValue] and
-// [FleetAuth.String] name key ids, so a [Config] logged or printed whole
-// carries no credential.
+// The zero value (no keyring: a test's solo member) refuses to open or dial a
+// fleet listener ([ErrNoFleetKeys]); Tier A gives every node a ring. IT HOLDS
+// SECRETS AND PRINTS NONE: [FleetAuth.LogValue] and [FleetAuth.String] name
+// key ids only.
 type FleetAuth struct {
 	routes      map[string]routeKey // route username (runtoken.KeyTag) → credential
 	routeActive string              // the route username this node presents
@@ -78,15 +71,11 @@ var ErrNoFleetKeys = errors.New("jetstream: this broker opens or joins a fleet "
 // none of its keys cannot present anything, and is refused wrapping
 // [runtoken.ErrNoKeyring], as [runtoken.New] refuses it.
 //
-// # One derivation, the keyring's own
-//
-// [runtoken.DeriveKey] derives each key on its own, bound to the domain and
-// the configured id, and [runtoken.KeyTag] names it without disclosing the id.
-// internal/iam/session already uses both for a credential of its own shape. A
-// second derivation here would be a second spelling of the rule one rotation
-// runbook governs; and the material arrives resolved (Tier A expands its whole
-// document before decoding it), so two nodes that spell one key differently
-// derive the same credentials.
+// It uses the keyring's own derivation, as internal/iam/session does:
+// [runtoken.DeriveKey] per key under the domain and its id, named by
+// [runtoken.KeyTag]; a second derivation would be a second spelling of the
+// rule one rotation runbook governs. The material arrives resolved (Tier A expands its document
+// before decoding), so two nodes spelling one key differently agree.
 func FleetAuthFrom(m runtoken.Material) (FleetAuth, error) {
 	if len(m.Keys) == 0 {
 		return FleetAuth{}, nil
@@ -127,11 +116,9 @@ func FleetAuthFrom(m runtoken.Material) (FleetAuth, error) {
 // OperatorCredential is the active key's operator nkey: the seed `crewlet
 // fleet broker credential` writes for the nats tool, its public key, and the
 // configured id it derives from. A Material that cannot sign is
-// [ErrNoFleetKeys].
-//
-// THE OPERATOR PRESENTS IT AND NO NODE DOES: every member accepts every key's
-// operator nkey on its loopback client listener, and nothing in the engine
-// dials that listener ([Server.ClientListener]).
+// [ErrNoFleetKeys]. Only the operator presents it: every member accepts every
+// key's on its loopback client listener, which nothing in the engine dials
+// ([Server.ClientListener]).
 func OperatorCredential(m runtoken.Material) (seed []byte, public, id string, err error) {
 	if !m.Usable() {
 		return nil, "", "", fmt.Errorf("%w: secrets.keys holds no key "+
@@ -153,10 +140,9 @@ func OperatorCredential(m runtoken.Material) (seed []byte, public, id string, er
 // derivedNkey is one key's nkey user under domain: its encoded seed and its
 // public key, from the 32 bytes [runtoken.DeriveKey] derives.
 //
-// AN NKEY, never a password, wherever the listener lets one be presented:
-// what crosses the network is a public key and a signature over the
-// connection's own nonce, never the secret — so a leaf link and an operator's
-// connection give nothing away to whatever answers at the address they dial.
+// AN NKEY, never a password, wherever a listener accepts one: only a public
+// key and a signature over the connection's nonce cross the network, so a
+// leaf link or an operator gives nothing away to whatever answers its dial.
 func derivedNkey(domain string, key runtoken.KeyMaterial) (seed, public string, err error) {
 	kp, err := nkeys.FromRawSeed(nkeys.PrefixByteUser,
 		runtoken.DeriveKey(domain, key.ID, key.Material))
@@ -198,8 +184,8 @@ func (a FleetAuth) LogValue() slog.Value {
 		slog.String("accepts", strings.Join(a.ids, ",")))
 }
 
-// String renders [FleetAuth.LogValue]'s ids, for its reason: `%v` and `%+v` of
-// a [Config] would otherwise print every derived secret.
+// String renders [FleetAuth.LogValue]'s ids: `%v` and `%+v` of a [Config]
+// would otherwise print every derived secret.
 func (a FleetAuth) String() string {
 	if a.IsZero() {
 		return "no keys"
@@ -207,8 +193,7 @@ func (a FleetAuth) String() string {
 	return fmt.Sprintf("presents %s, accepts %s", a.activeID, strings.Join(a.ids, ","))
 }
 
-// GoString is [FleetAuth.String], for `%#v`'s sake: the one verb String does
-// not cover would print the derived secrets too.
+// GoString is [FleetAuth.String], for `%#v`, which String does not cover.
 func (a FleetAuth) GoString() string { return a.String() }
 
 // acceptedIDs is every key id this node accepts, sorted — the `accepts` of its

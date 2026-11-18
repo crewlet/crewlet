@@ -10,12 +10,9 @@ import (
 )
 
 // convergedPass is a vendor whose world already matches the company: nothing
-// outstanding, so nothing to write.
-//
-// It counts the writes it WOULD make, which is the clause the suite exists
-// for. A pass over a company that needs work is allowed to write; a pass over
-// one that does not is the state the loop spends its life in, and a stray
-// write there is a credential rotated every ten minutes for ever.
+// outstanding, so nothing to write. It counts the writes it WOULD make: a
+// converged pass is the state the loop spends its life in, and a stray write
+// there is a credential rotated every ten minutes for ever.
 type convergedPass struct {
 	kind   integration.Kind
 	writes int
@@ -40,24 +37,13 @@ func (p *convergedPass) Run(ctx context.Context, _ setup.PassInput) ([]integrati
 	return p.findings, nil
 }
 
-// THE ADAPTER'S OWN HALF OF THE CONTRACT, and only that half.
-//
-// This used to claim to be where integrationtest's contract binds, on the
-// reasoning that passConverger is the one implementation in the tree and every
-// surface reaches the loop through it. That reasoning is true and the
-// conclusion was wrong: the pass it was pointed at is the stub below, whose
-// Run returns (nil, nil), so "a converged pass writes nothing" — the clause the
-// whole suite exists for — was true because nothing happened. Seven real
-// reconcilers went uncertified while a green test said otherwise, which is the
-// worst state a suite can be in.
-//
-// The contract binds in each third-party app's own package now, where a world
-// can be stood up converged and its writes counted. What is left here is worth
-// keeping and is worth being honest about: the ADAPTER is on the path of every
-// pass, so its own behaviour — the kind it reports, that the kind does not move
-// across passes, that it adds no writes of its own, that it does not turn a
-// cancelled context into a clean report — is a contract too, and one no vendor
-// harness exercises.
+// THE ADAPTER'S OWN HALF OF THE CONTRACT, and only that half: the stub pass
+// below writes nothing by construction, so integrationtest's contract binds in
+// each third-party app's own package, where a world can be stood up converged
+// and its writes counted. The adapter (passConverger) is on every pass's path,
+// so its own behaviour is a contract no vendor harness exercises: the kind it
+// reports, that the kind does not move across passes, that it adds no writes,
+// and that it does not turn a cancelled context into a clean report.
 func TestTheAdapterMeetsTheContract(t *testing.T) {
 	t.Parallel()
 	var pass *convergedPass
@@ -92,17 +78,13 @@ providers:
 
 // EVERY SURFACE THE LOOP KNOWS HAS AN ANSWER IN THE DOCUMENT TEST.
 //
-// [config.Company.DeclaresIntegration] is keyed on the surface's own string so
-// the config tier does not import integration, which means nothing in either
-// package can notice a [integration.Kind] added there and forgotten here. This
-// is where both are in scope, so this is where it is checked.
-//
-// The empty company is what makes it work. An unknown surface deliberately
-// answers TRUE — the caller deletes a status row on false, and an older node in
-// a rolling upgrade must not erase a newer node's — so a kind that fell through
-// to that default would look configured in a company that configures nothing.
-// A kind nobody handled therefore fails here rather than quietly keeping a row
-// alive for ever.
+// [config.Company.DeclaresIntegration] is keyed on the surface's string so the
+// config tier does not import integration, so only here, with both in scope,
+// can a [integration.Kind] added there and forgotten here be noticed. An
+// unknown surface deliberately answers TRUE (the caller deletes a status row on
+// false, and an older node in a rolling upgrade must not erase a newer node's),
+// so over the empty company a kind that fell through looks configured, and
+// fails here rather than keeping a row alive for ever.
 func TestEverySurfaceHasADocumentTest(t *testing.T) {
 	t.Parallel()
 	empty := companyFor(t, `

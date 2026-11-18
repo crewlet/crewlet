@@ -25,15 +25,12 @@ import (
 const atlasWakeDutyName = atlaswake.DutyName
 
 // atlasWakeDutyTTL is how long the duty survives without a re-claim: the
-// longest pass it admits plus two ticks to renew in, as the collect duty's
-// is sized from its longest visit.
+// longest pass it admits plus two ticks to renew in.
 const atlasWakeDutyTTL = atlaswake.PassDeadline + 2*atlaswake.Tick
 
-// atlasDriftSources are the places a drift is read from: the claims and the
-// records an entry's health is joined from. A read that misses one of them
-// may be missing a drift, so a pass over it forgets nothing. Gitlet, read
-// only as somebody, and the sources that say only who uses an entry are not
-// among them.
+// atlasDriftSources are the sources an entry's health is joined from; a read
+// missing one may miss a drift, so a pass over it forgets nothing. Gitlet (read
+// only as somebody) and the sources saying only who uses an entry are not here.
 var atlasDriftSources = []gather.SourceName{
 	gather.SourceSettings, gather.SourceLog, gather.SourceIntegrations, gather.SourceToolServers,
 	gather.SourceNodes, gather.SourceServerTests, gather.SourceAlarms,
@@ -93,13 +90,10 @@ func (e *Engine) atlasDrift(ctx context.Context) (atlaswake.Reading, bool, error
 		return atlaswake.Reading{}, false, nil
 	}
 	deps := AtlasToolDeps(e)
-	// GITLET IS READ ONLY AS SOMEBODY (ADR-0127), and the duty is nobody:
-	// a Gitlet repository's drift reaches its people in Review.
-	//
-	// STALE, AS THE COLLECT DUTY READS: a linearizable read appends a barrier
-	// to every log it reads, and a duty must not write to the logs every
-	// five minutes to look at them. A copy a pass behind tells a drift a
-	// pass later, which a wake that is one a day loses nothing to.
+	// As nobody: Gitlet is read only as somebody (ADR-0127), so a repository's
+	// drift reaches its people in Review. STALE, because a linearizable read
+	// appends a barrier to every log it reads, and a once-a-day wake loses
+	// nothing to a copy a pass behind.
 	answer, running := deps.AtlasRead(ctx, nil, "", gitlet.Principal{},
 		statelog.Freshness{Level: statelog.ReadStale}, time.Now().UTC())
 	if !running {
@@ -121,12 +115,10 @@ func (e *Engine) atlasDrift(ctx context.Context) (atlaswake.Reading, bool, error
 	return atlaswake.ReadingOf(answer.View, whole, agent, seen), true, nil
 }
 
-// seatTakesWork reports whether seat handle would start a turn on a wake
-// now: an agent seat the chart holds, not paused, held by a node, not parked
-// on its budget and not parked by its holder (a spent budget below a launch's
-// floor, or every model at its limit). The four reasons a seat is stopped
-// (livestate.StoppedReasons), read where each is agreed. Three-valued: an
-// error is a read that could not be made.
+// seatTakesWork reports whether seat handle would start a turn on a wake now:
+// an agent seat the chart holds that none of livestate.StoppedReasons stops
+// (paused, unheld, parked on its budget, parked by its holder), each read where
+// it is agreed. An error is a read that could not be made.
 func (e *Engine) seatTakesWork(ctx context.Context, handle string) (bool, error) {
 	company := e.Company()
 	if company == nil || company.Org == nil {

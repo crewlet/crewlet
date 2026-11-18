@@ -342,8 +342,9 @@ node but an agent seat is drawn on the same neutral surface. The company's
 card and its table row carry the company's own logo, the square mark of the
 brand adopted in Company › Brand or else its primary logo, and the company's
 glyph where it has none. An agent's character and colour are the ones its
-author chose (see [A seat](#a-seat)), the original Crewlet in purple until
-somebody does: they are never a hash of a name, so a renamed seat keeps them.
+author chose (see [A seat](#a-seat)), or until somebody does, the ones the
+engine picks from the seat's handle: never from its name, so a renamed seat
+keeps them.
 The selected node's card takes the accent on its own edge. Each seat says what
 it is doing (see [The running company](#the-running-company)), and the chart is
 drawn on a dotted field, which says it pans before you drag it.
@@ -811,7 +812,7 @@ credentials are written in the configuration document.
 | Name | Prose; two seats may share a name. An existing seat keeps its handle through a rename, and with it its memory and mailbox, but an agent seat that is renamed onboards again: its onboarding progress is stamped with its own name and the names of the units above it. |
 | Handle | The address every lead, `manages` entry and mention names the seat by, and the seat's identity: its mailbox, schedules and everything it has learned (its diary, episodes, skills, profiles of colleagues and executor sessions) are keyed on it. Editable on a seat this draft added, and shown and not edited on a saved one, where **Replace this seat…** gives the role another handle (see [Replacing a seat](#replacing-a-seat)). |
 | Kind | Never. A seat keeps the kind it was added with; see [A seat keeps its kind](#a-seat-keeps-its-kind). |
-| Profile icon: character, color | Agent seats. One of the thirty Crewlet characters and one of six colours, written to the seat's `avatar`. The chosen character and colour are the seat's badge on every screen and its node on both charts. A seat that never chose is drawn as the original Crewlet in purple, and changing only one of the two writes only that one. |
+| Profile icon: character, color | Agent seats. One of the thirty Crewlet characters and one of six colours, written to the seat's `avatar`. The chosen character and colour are the seat's badge on every screen and its node on both charts. A seat that never chose is drawn as the look the engine picks from its handle, and changing only one of the two writes only that one. |
 | Email | The address inbound Jira and GitHub payloads identify the seat by, written as typed. |
 | Goal, backstory, responsibilities | |
 | Behavioral guidelines | Agent seats. |
@@ -913,9 +914,10 @@ agent seat), a per-seat Datadog role, GitLab tiers beyond developer and
 maintainer, and flags that grant access to everything (an empty repository
 list already does).
 
-Two more things the builder deliberately does not have. A colour nobody
-chose: an agent seat is drawn in the colour its profile icon names and a
-person's seat and a unit in none, so no hue is ever made from a name. And the
+Two more things the builder deliberately does not have. A colour made
+from a name: an agent seat is drawn in the colour its profile icon names, or
+the one the engine picks from its handle, and a person's seat and a unit in
+none. And the
 zoom is the chart's own:
 zoom in, zoom out and fit are buttons on the chart and keys while it has focus
 (plus, minus and zero), the percentage between the buttons opens a field to

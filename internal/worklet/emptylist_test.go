@@ -9,20 +9,16 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// AN ANSWER'S LIST IS EMPTY, NEVER NULL — asserted on the ENCODED answer,
-// because the defect it protects against is a wire shape rather than a Go one.
+// AN ANSWER'S LIST IS EMPTY, NEVER NULL, asserted on the ENCODED answer since
+// the defect is a wire shape. `ProjectListing.Projects` carries no
+// `omitempty`, so a nil slice reaches a client as `"projects": null`, and the
+// dashboard's landing screen decides on `projects?.length === 0`, false for
+// `undefined`: a company on its first day, the state its
+// where-a-project-comes-from panel exists for, would get the work list
+// instead.
 //
-// `ProjectListing.Projects` carries no `omitempty`, so a nil slice reaches a
-// client as `"projects": null` — which is neither "some" nor "none" but a
-// third state, and the dashboard's landing screen read it as neither: it asks
-// `projects?.length === 0` to decide whether to draw the panel that says where
-// a project comes from, and `undefined === 0` is false. So a company on its
-// very first day — the one state that panel exists for — got the ordinary work
-// list instead. Every fixture in the client's own suite said `[]`, which is
-// what a fixture written by somebody who already knows the answer says.
-//
-// THE EMPTY COMPANY IS THE HARNESS WITHOUT ITS PROJECT, which is the state a
-// company is actually in the moment it boots.
+// THE EMPTY COMPANY IS THE HARNESS WITHOUT ITS PROJECT, the state a company
+// boots in.
 func TestAnEmptyProjectListingEncodesAnEmptyArray(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
@@ -45,21 +41,17 @@ func TestAnEmptyProjectListingEncodesAnEmptyArray(t *testing.T) {
 	if !strings.Contains(string(encoded), `"projects":[]`) {
 		t.Fatalf("an empty listing does not carry `\"projects\":[]`: %s", encoded)
 	}
-	// AND THE CENSUS SAYS IT IS THE COMPANY rather than the segment, which
-	// is what stops a reader of the empty answer guessing — see
-	// [worklet.ProjectCensus].
+	// AND THE CENSUS SAYS IT IS THE COMPANY, not the segment, so a reader of
+	// the empty answer need not guess ([worklet.ProjectCensus]).
 	if listing.Census.Active != 0 || listing.Census.Archived != 0 {
 		t.Fatalf("an empty company's census is %+v", listing.Census)
 	}
 }
 
-// THE SAME RULE ON THE DETAIL'S OWN LISTS, asserted on the Go value because
-// `history` and `links` carry `omitempty` and an absent field is the same
-// bytes whether the slice was nil or empty.
-//
-// That tag is the ONLY thing between these two readers and the defect above,
-// and it is a formatting choice somebody could reasonably drop — so the
-// invariant is held where it is actually decided, in the reader.
+// THE SAME RULE ON THE DETAIL'S OWN LISTS, asserted on the Go value: `history`
+// and `links` carry `omitempty`, so nil and empty encode alike. That tag is
+// all that stands between these readers and the defect above, and somebody
+// could drop it, so the invariant is held where it is decided, in the reader.
 func TestATaskDetailsListsAreEmptyRatherThanNil(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -78,10 +70,7 @@ func TestATaskDetailsListsAreEmptyRatherThanNil(t *testing.T) {
 	if len(detail.Links) != 0 {
 		t.Fatalf("a freshly created task has %d links", len(detail.Links))
 	}
-	// THE HISTORY IS NOT ASSERTED, and that is a statement rather than an
-	// omission: a create writes a history row, so every task this reader
-	// can find has at least one and there is no empty answer to catch a nil
-	// with. `readHistory` holds the same rule — and sizes its slice to the
-	// page, which is why the line is there at all — but nothing here can
-	// go red over it, and a case that cannot fail is worse than none.
+	// THE HISTORY IS NOT ASSERTED, deliberately: a create writes a history
+	// row, so no findable task has an empty history to catch a nil with.
+	// `readHistory` holds the same rule, but no case here could go red over it.
 }

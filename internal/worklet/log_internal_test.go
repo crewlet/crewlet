@@ -7,13 +7,12 @@ import (
 
 // AN ABSENT LOGGER IS THE TRACKER'S OWN, AT BOTH PLACES THAT TAKE ONE.
 //
-// Both read an absent logger as a discarding one and the engine hands neither
-// a logger, so the housekeeping duty's `tracker_one_sided_repair_failed` and
-// the parser's `tracker_merge_marker_without_target` — the two lines that say
-// a repair is NOT happening — went nowhere on every node. The tree-wide guard
-// in internal/logging refuses a discarding handler; what it cannot see is a
-// default that still writes but loses `component=worklet` (the process-wide
-// `slog.Default()`) or drops a level, and that is what this pins.
+// The engine hands neither a logger, and the housekeeping duty's
+// `tracker_one_sided_repair_failed` and the parser's
+// `tracker_merge_marker_without_target` are the lines that say a repair is NOT
+// happening. internal/logging's tree-wide guard refuses a discarding handler;
+// this pins what it cannot see, a default that loses `component=worklet` (the
+// process-wide `slog.Default()`) or drops a level.
 func TestEveryWorkletLoggerGivenNoneIsThePackagesOwn(t *testing.T) {
 	t.Parallel()
 	for name, got := range map[string]*slog.Logger{

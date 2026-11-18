@@ -27,11 +27,9 @@ func refsAlarm(alarms []statelog.Alarm) (statelog.Alarm, bool) {
 }
 
 // THE REFS ALARM IS MEASURED ON THE TRIM'S TICK, never on a report: ten
-// evaluations between two ticks — the beats, operator requests and dashboard
-// polls a quarter-hour holds — read the rows once, at the tick, and each
-// carries the tick's figure with the bound and the window it was judged at. A
-// tick whose read fails leaves the alarm silent, not standing on the last
-// figure, and says so once — at the tick, never at every evaluation.
+// evaluations between two ticks read the rows once, at the tick, and each
+// carries its figure with the bound and window it was judged at. A tick whose
+// read fails leaves the alarm silent, not on the last figure, and logs once.
 //
 // Mutation: read the rows in retention.reading rather than on the tick — ten
 // reads, red; keep the last figure when a read fails — the alarm stands, red;
@@ -94,13 +92,11 @@ func TestTheRefsAlarmIsMeasuredOnTheTrimTick(t *testing.T) {
 }
 
 // THE REFS ALARM FIRES ON A RUNNING NODE (alarmwiring_internal_test.go's
-// rule): a data node of a company hosting code, whose estate holds a
-// repository with more than half the ref bound live, every one set within the
-// lifecycle's window — past the point — raises code_refs_near_limit through
-// the retention loop the engine built: its trim tick's evaluation takes the
-// measurement, and the report every surface reads carries it to the table.
-// The rows are seeded into the node's estate, the bulk no push of a case could
-// make in reasonable time.
+// rule): a data node whose repository holds more than half the ref bound live,
+// all set within the lifecycle's window, raises code_refs_near_limit through
+// the retention loop the engine built — the trim tick measures, the report
+// carries it. The rows are seeded directly: no push could make that bulk in
+// reasonable time.
 //
 // Mutation: drop the measurement from retention.evaluate — silent, red; drop
 // the refs field from startRetention's literal — silent, red; drop

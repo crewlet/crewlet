@@ -14,24 +14,15 @@ import (
 
 // A DECLARED STORE LIMIT IS THE LIMIT THE BUDGET REPORTS.
 //
-// # What this holds together
+// [Config.StoreMaxBytes] reaches the budget only by being handed to
+// nats-server as its JetStreamMaxStore, so nothing else fails if it stops
+// being passed: [Queue.StreamBudget] would go on reporting [BudgetServerStore]
+// for a cap the operator did not choose.
 //
-// [Config.StoreMaxBytes] is the one lever an operator has over an embedded
-// broker's cap, and it works by being handed to nats-server as its own
-// JetStreamMaxStore rather than by being read anywhere in this package. So
-// nothing in the budget's own code mentions it, and nothing would fail if the
-// option stopped being passed: [Queue.StreamBudget] would go on reporting
-// [BudgetServerStore], truthfully, for a cap the operator did not choose.
-// This is the test that ties the two ends together.
-//
-// # Why the read-back is the assertion rather than the option
-//
-// Because there are two levers and only one of them is enforced on both
-// topologies. Setting the ACCOUNT's limit satisfies an account read and leaves
-// a clustered create unbounded; setting the SERVER's bounds both and is
-// invisible to an account read. A test asserting that the option was passed
-// would pass with the wrong lever set, which is exactly the mistake that
-// reinstates sizing a company's logs from free disk.
+// The read-back is the assertion, not the option: the ACCOUNT's limit
+// satisfies an account read but leaves a clustered create unbounded, while the
+// SERVER's bounds both and is invisible to an account read, so asserting the
+// option would pass with the wrong lever set.
 func TestADeclaredStoreLimitIsTheBudgetsLimit(t *testing.T) {
 	t.Parallel()
 	const declared = int64(9) << 30
@@ -67,15 +58,11 @@ func (f accountInfoFails) AccountInfo(context.Context) (*jetstream.AccountInfo, 
 // A BROKER THAT CANNOT SAY WHAT ITS ACCOUNT ALLOWS STILL SAYS WHAT IT IS HELD
 // TO.
 //
-// The two halves come from different places and fail independently: an
-// embedded server's own cap is a struct field in this process and cannot fail
-// to answer, while the account's limit is a round trip — and on an embedded
-// broker it is a limit nobody sets, so it is nearly always "unstated" anyway.
-// Failing the whole read on it therefore threw away the one number this node
-// definitely had, for the one that is usually absent: [internal/engine] reads
-// a failure here as "no limit" and sizes its state logs from FREE DISK, which
-// is looser than the cap that just went unread and is the arithmetic that cap
-// exists to replace.
+// An embedded server's cap is a struct field in this process and cannot fail;
+// the account's limit is a round trip, nearly always unstated on an embedded
+// broker. Failing the whole read on it would make [internal/engine] read "no
+// limit" and size its state logs from FREE DISK, the arithmetic the cap exists
+// to replace.
 func TestAnUnreadableAccountStillReportsTheServersOwnCap(t *testing.T) {
 	t.Parallel()
 	const declared = int64(9) << 30
@@ -125,22 +112,13 @@ func TestAnUnreadableAccountFailsWhereItIsTheOnlyLimit(t *testing.T) {
 // A STREAM THE ACCOUNT HAS NO LIMIT FOR NAMES THE CLASS, AND IS NOT REPORTED AS
 // A STREAM THAT IS NOT THERE.
 //
-// # The refusal nothing classified
-//
-// `no JetStream default or applicable tiered limit present` (10120) is what the
-// broker answers when the account's limits are tiered and carry none for the
-// replica class this node's streams land in — before it compares a byte, so no
-// smaller ceiling would be accepted either. It matched neither
-// [jsprovision.OutOfCapacity] nor [jsprovision.Unplaceable], so it fell through
-// to the read-back this path keeps for a peer that won the race: it spent
-// [jsprovision.ReadBack] asking after a stream the broker had just refused to
-// make and appended `(and it is not there: stream not found)` to the sentence
-// that said what was wrong.
-//
-// So the assertions are the two halves of the fix — the clause that names the
-// class and the levers, and the ABSENCE of the read-back — plus the one attempt
-// that says this is not the capacity refusal's grace wearing another code: a
-// limit table is not changed by a member arriving.
+// `no JetStream default or applicable tiered limit present` (10120) is the
+// broker's answer when tiered account limits carry none for this node's
+// replica class, before any byte is compared. It is neither
+// [jsprovision.OutOfCapacity] nor [jsprovision.Unplaceable], and must not fall
+// to the [jsprovision.ReadBack] kept for a peer that won the race. Asserted:
+// the clause naming the class and the levers, no read-back, and one attempt
+// (a limit table is not changed by a member arriving, so no capacity grace).
 func TestAStreamWithNoApplicableLimitNamesTheTierAndIsNotReadBack(t *testing.T) {
 	t.Parallel()
 	q := newQueueWith(t, Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: 8 << 30})
@@ -149,11 +127,9 @@ func TestAStreamWithNoApplicableLimitNamesTheTierAndIsNotReadBack(t *testing.T) 
 		ErrorCode: 10120, Code: 400,
 		Description: "no JetStream default or applicable tiered limit present",
 	}}
-	// THE REPLICA COUNT IS SET AFTER THE OPEN, because it is the class the
-	// clause has to name and an embedded broker with no peers cannot bring
-	// its own streams up at three. Nothing is put back: this queue is this
-	// test's own, and a restore that has to outlive an assertion is the
-	// shape that left the case above asserting nothing.
+	// THE REPLICA COUNT IS SET AFTER THE OPEN: it is the class the clause
+	// names, and an embedded broker with no peers cannot bring its own
+	// streams up at three. Nothing is put back: this queue is this test's.
 	q.js, q.cfg.Replicas = js, 3
 
 	err := q.EnsureDomainStream(t.Context(), DomainStream{
@@ -192,20 +168,12 @@ func TestAStreamWithNoApplicableLimitNamesTheTierAndIsNotReadBack(t *testing.T) 
 
 // AND A CONSUMER GETS THE SAME ANSWER, ON BOTH OF THE PATHS THAT CREATE ONE.
 //
-// # Why a consumer is in this at all
-//
-// Because the server resolves a consumer's limits through the SAME table as a
-// stream's — acc.selectLimits, in server/consumer.go — so an account with no
-// tier for this node's replica class refuses one for exactly the same reason
-// and with exactly the same code. Both consumer paths read a failed create
-// back, so unclassified both reported a consumer that is "not there": a seat's
-// mailbox, or a state-log reader, that an operator would go looking for
-// instead of looking at the account.
-//
-// Two paths rather than one because they are two shapes with two read-backs —
-// [Queue.ensureDurableConsumer]'s create-then-read and [Queue.DomainConsumer]'s
-// create-then-take-as-it-is — and a rule written into one of them is a rule
-// the other can drift from.
+// The server resolves a consumer's limits through the same table as a
+// stream's (acc.selectLimits, server/consumer.go), so it refuses one with the
+// same code. Both consumer paths read a failed create back, and would report a
+// seat's mailbox or a state-log reader as "not there". Both paths, because
+// [Queue.ensureDurableConsumer] creates then reads and [Queue.DomainConsumer]
+// creates then takes it as it is, and one can drift from the other.
 func TestAConsumerWithNoApplicableLimitNamesTheTierOnBothPaths(t *testing.T) {
 	t.Parallel()
 	refusal := &jetstream.APIError{
@@ -257,11 +225,10 @@ func TestAConsumerWithNoApplicableLimitNamesTheTierOnBothPaths(t *testing.T) {
 // capacityJS is a broker whose create is refused for want of room, and which
 // counts how many times it was asked.
 //
-// IT WRAPS A REAL ONE, so everything the refusal path then reads — the limit
-// in force, what is already reserved — comes from a broker that genuinely has
-// those numbers. Only the create's answer is substituted, because the wire
-// shape under test is one a solo embedded server in a test binary cannot
-// produce: it takes a metadata leader with peers to refuse a placement.
+// It wraps a real one, so what the refusal path then reads (the limit in
+// force, what is reserved) is genuine; only the create is substituted, since a
+// solo embedded server cannot refuse a placement: that takes a metadata leader
+// with peers.
 type capacityJS struct {
 	jetstream.JetStream
 	refusal *jetstream.APIError
@@ -280,12 +247,9 @@ func (f *capacityJS) CreateStream(context.Context, jetstream.StreamConfig) (
 }
 
 // noLimitConsumerJS is a broker whose CONSUMER create is refused for having no
-// applicable limit, and which counts how many times it was asked.
-//
-// IT WRAPS A REAL ONE for [capacityJS]'s reason: everything the path then does
-// — the budget, the breadcrumb, the read-back this must not reach — runs
-// against a genuine JetStream. The lookup answers not-found on purpose,
-// because that is what makes a read-back visible.
+// applicable limit, and which counts how many times it was asked. It wraps a
+// real one for [capacityJS]'s reason; the lookup answers not-found so that a
+// read-back would be visible.
 type noLimitConsumerJS struct {
 	jetstream.JetStream
 	refusal *jetstream.APIError

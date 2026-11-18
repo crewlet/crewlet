@@ -29,7 +29,7 @@
  * seat a new id. So every text field first asks whether its box changed.
  */
 
-import { avatarOf, type AgentAvatar } from "~/lib/avatar.ts";
+import { lookOf, type AgentAvatar } from "~/lib/avatar.ts";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { readCeiling, tokenBudgetError } from "~/lib/budget.ts";
 import { ceilingText } from "~/lib/ceilings.ts";
@@ -94,8 +94,8 @@ export interface SeatForm {
   readonly contact: Readonly<Record<HumanContactKey, string>>;
   readonly availability: string;
   /**
-   * How an agent seat is drawn, each part as the document writes it or its
-   * default where it is absent; null for a person, who has no avatar.
+   * How an agent seat is drawn, each part as the document writes it or as the
+   * running seat is served; null for a person, and for an agent nothing says yet.
    */
   readonly avatar: AgentAvatar | null;
   /**
@@ -224,7 +224,12 @@ export function budgetForm(budget: unknown): BudgetForm {
   ) as Record<BudgetWindow, string>;
 }
 
-export function seatForm(data: ConfigRole, accessLevel: string): SeatForm {
+/** A seat's form; `served` is the running seat's look, for a part its author left out. */
+export function seatForm(
+  data: ConfigRole,
+  accessLevel: string,
+  served: AgentAvatar | null | undefined,
+): SeatForm {
   const contact = isRecord(data.contact) ? data.contact : {};
   return {
     name: text(data.name),
@@ -239,7 +244,7 @@ export function seatForm(data: ConfigRole, accessLevel: string): SeatForm {
       CONTACT_IDENTITIES.map(({ key }) => [key, text(contact[key])]),
     ) as Record<HumanContactKey, string>,
     availability: text(data.availability),
-    avatar: data.kind === "human" ? null : avatarOf(data.avatar),
+    avatar: data.kind === "human" ? null : lookOf(data.avatar, served),
     llm: llmChain(data.llm),
     tokenBudget: budgetForm(data.token_budget),
     schedules: scheduleToggles(data),
@@ -489,14 +494,16 @@ export function seatParts(
       textPart(["contact", identity], initial.contact[identity], form.contact[identity], line),
     ),
     ...textPart(["availability"], initial.availability, form.availability, prose),
-    // ONE PART PER HALF, never the whole block: a colleague's new character
-    // survives an update that only changed this seat's colour, and a half
-    // nobody touched is never written, so a part the document leaves to its
-    // default stays left to it.
-    ...(initial.avatar !== null && form.avatar !== null
+    // ONE PART PER HALF, never the whole block: a half nobody touched is never
+    // written, so a part the document leaves to the engine stays left to it.
+    ...(form.avatar !== null
       ? [
-          ...changed(["avatar", "character"], initial.avatar.character, form.avatar.character),
-          ...changed(["avatar", "color"], initial.avatar.color, form.avatar.color),
+          ...changed(
+            ["avatar", "character"],
+            initial.avatar?.character ?? "",
+            form.avatar.character,
+          ),
+          ...changed(["avatar", "color"], initial.avatar?.color ?? "", form.avatar.color),
         ]
       : []),
     ...(form.llm !== null && initial.llm !== null

@@ -27,44 +27,16 @@ import (
 
 // WHERE AN AGENT'S FILES COME FROM: five sources, one write path.
 //
-// Inline text (`content`, `files[...].content`) rides the call itself, at most
-// [artifacts.MaxInlineBytes] decoded across it, because anything larger cannot
-// have been typed by a model and belongs in one of the other two. An executor's
-// box (`from_sandbox`, `source.sandbox`) and a project's file
-// (`from_project_file`) are STREAMED: their digests are taken first — a box's
-// file by reading it, a project's from its row — the publish pipeline reserves
-// their bytes in an upload intent, and each file is then put through the
-// engine's own transfer leg, so the bytes a version names were reserved before
-// they moved and are read back verified before the version is decided. A
-// project file is copied rather than shared, because the object store never
-// shares one object between two rows (ADR-0026). A logo or a face of the
-// company's adopted brand (`from_brand`) is copied by the publish pipeline
-// itself from the adoption's snapshot, named by its slot and never by a path or
-// an object, so a copy reads only what an administrator adopted.
-//
-// # The box is walked by the engine, and never uploads
-//
-// A sandbox is never handed a URL or a credential: the tool, running on the
-// node that holds the seat and therefore the run's box, lists the directory
-// through the box itself, treats the listing as untrusted, holds every path to
-// the workspace and the published-path grammar again, and streams each file
-// out. One more file than a version holds is a refusal, never a truncation.
-//
-// # A project's file is read as read_project_file reads it
-//
-// Through the one copy read beside that tool ([WorkDeps.copyFrom]): decided by
-// its verb, its path held to the tracker's rule, and every refusal in its words
-// ([fileReadFailure], [fileContent], [fileContentFailure]), so a seat told why
-// a copy failed is told what the read would have told it. One thing differs,
-// the class of a project or a file that is not there: the caller's argument to
-// change, since a copy only NAMES its source, where the read is ABOUT the file
-// and answers not-found. Its bytes are read whole, at the transfer, and held
-// to the row's digest before any of them moves: a page read can be held only
-// to its length ([objstore.Store.ReadAt]), a whole read to the digest, so
-// content that is not the file's is refused as the damage it is before a byte
-// of it is stored. The publish pipeline's own check would catch it only after
-// storing it, and answer it as a file that changed while it was being
-// published: a conflict, which invites a retry that reads the same bytes.
+// Inline text (`content`, `files[...].content`) is at most
+// [artifacts.MaxInlineBytes] decoded per call: anything larger was not typed
+// by a model and belongs in a streamed source. A box's file (`from_sandbox`,
+// `source.sandbox`) and a project's file (`from_project_file`) are STREAMED:
+// digests first, the bytes reserved in an upload intent, then each file put
+// through the engine's transfer leg and read back verified before the version
+// is decided. A project file is copied, never shared: the object store never
+// shares one object between two rows (ADR-0026). A brand logo or face
+// (`from_brand`) is copied by the pipeline from the adoption's snapshot, named
+// by slot, never by path, so a copy reads only what an administrator adopted.
 
 // artifactFile is one path of the next version and where its bytes come from:
 // exactly one of inline, stream, brand and remove.
@@ -294,7 +266,9 @@ func (s *fileSources) brandSlot(p, raw string) (brandformat.Slot, *tools.Result)
 	return "", &r
 }
 
-// openBox reattaches the box this turn's executor runs in, once per call.
+// openBox reattaches the box this turn's executor runs in, once per call. A
+// sandbox is never handed a URL or a credential: this node, which holds the
+// run's box, lists and reads every file through the box itself.
 func (s *fileSources) openBox(ctx context.Context) (ArtifactBox, *tools.Result) {
 	if s.box != nil {
 		return s.box, nil
@@ -360,7 +334,8 @@ func (s *fileSources) boxFile(ctx context.Context, published, raw string) (artif
 }
 
 // addBoxDir appends every regular file under dir in the box, each published
-// at its path below dir: the whole file set of a build.
+// at its path below dir: the whole file set of a build. One more file than a
+// version holds is a refusal, never a truncation.
 func (s *fileSources) addBoxDir(ctx context.Context, raw string) *tools.Result {
 	dir, refusal := s.boxPath(raw)
 	if refusal != nil {
@@ -373,9 +348,8 @@ func (s *fileSources) addBoxDir(ctx context.Context, raw string) *tools.Result {
 	listed, err := box.Files(ctx, dir, artifacts.MaxFilesPerVersion+1)
 	switch {
 	case errors.Is(err, ErrNotADirectory):
-		// THE CALLER'S PATH, as a file's is ([fileSources.digest]): it was
-		// told as a fault of this node, and the model gave up on a publish
-		// one corrected argument would have made.
+		// THE CALLER'S PATH, as a file's is ([fileSources.digest]), never
+		// told as a fault of this node: one corrected argument fixes it.
 		r := failed(fmt.Sprintf("%s: %s isn't a directory in your workspace: "+
 			"it's missing, or it's a file or a link. Name the directory the build wrote its "+
 			"output to. Nothing was published.", s.tool, dir))
@@ -416,10 +390,9 @@ func (s *fileSources) addBoxDir(ctx context.Context, raw string) *tools.Result {
 	}
 	slices.Sort(listed)
 	for _, got := range listed {
-		// THE LISTING IS THE BOX'S, AND UNTRUSTED: every path it names is
-		// held to the directory asked for and to the published-path
-		// grammar again, and one that is not is refused by name rather
-		// than skipped.
+		// THE LISTING IS THE BOX'S, AND UNTRUSTED: every path is held to
+		// the directory asked for and the published-path grammar again,
+		// and one that fails is refused by name, never skipped.
 		if path.Clean(got) != got || !strings.HasPrefix(got, prefix) {
 			r := refused(tools.RefusalInvalid, fmt.Sprintf("%s: the box listed %q under "+
 				"%q, which is not a path inside it. Nothing was published.", s.tool,
@@ -453,9 +426,9 @@ func (s *fileSources) digest(ctx context.Context, from string,
 	}
 	rc, err := open(ctx)
 	if err != nil {
-		// A PATH THAT NAMES NO FILE is the caller's to change: a box streams
-		// only a regular file, and one that is missing, a directory or a
-		// link is refused by name. It was told as a fault of this node.
+		// A PATH THAT NAMES NO FILE is the caller's to change, never a
+		// fault of this node: a box streams only a regular file, and one
+		// that is missing, a directory or a link is refused by name.
 		if errors.Is(err, sandbox.ErrNotRegularFile) {
 			r := failed(fmt.Sprintf("%s: %s isn't a file in your workspace: "+
 				"it's missing, or it's a directory or a link. Name a file written there. "+
@@ -485,10 +458,15 @@ func (s *fileSources) digest(ctx context.Context, from string,
 	return &streamedFile{hash: hash, size: n, open: open, from: from, unread: unread}, nil
 }
 
-// projectFile is a project's file, copied, decided and read as
-// read_project_file reads it ([WorkDeps.copyFrom]): its digest and size are
-// the row's, and its bytes are read whole and held to the row's digest when
-// the transfer opens them.
+// projectFile is a project's file, copied as read_project_file reads it
+// ([WorkDeps.copyFrom]): decided by its verb, its path held to the tracker's
+// rule, every refusal in that read's words ([fileReadFailure],
+// [fileContentFailure]), except that a missing project or
+// file is the caller's argument to change, since a copy only NAMES its
+// source. Its digest and size are the row's, and its bytes are read whole at
+// the transfer and held to that digest before any of them is stored: the
+// pipeline's own check comes only after storing, and answers a conflict that
+// invites a retry reading the same bytes.
 func (s *fileSources) projectFile(ctx context.Context, published string,
 	ref map[string]any) (artifactFile, *tools.Result) {
 
@@ -516,9 +494,8 @@ func (s *fileSources) projectFile(ctx context.Context, published string,
 		if err != nil {
 			return nil, err
 		}
-		// THE WHOLE FILE IS READ, so it is held to the row's digest here,
-		// as a page read cannot be ([objstore.Store.ReadAt] checks a
-		// length): bytes that are not the file's never reach the upload.
+		// A WHOLE READ can be held to the row's digest, as a page read
+		// cannot ([objstore.Store.ReadAt] checks only a length).
 		if got := objstore.HashOf(data); got != obj.Hash {
 			return nil, fmt.Errorf("%w: %s hashes to %s, and its row says %s",
 				objstore.ErrCorrupt, obj.Key, got, obj.Hash)
@@ -660,19 +637,14 @@ func (s *fileSources) streamedInline(f artifactFile) artifactFile {
 	return f
 }
 
-// boxFailure is a read of a publish's source that failed, nothing having been
-// published, as a model is told it: by the class the sandbox backend marked the failure with
-// ([sandbox.WhyOf]) — the box's provider not answering, at a limit, refusing
-// the company's key, or a setup that cannot reach the box — and otherwise as
-// the condition or fault of this node it is ([nodeFailure]). A project file's
-// content is not read here: it is told as read_project_file tells it
-// ([fileContentFailure]).
-//
-// A PROVIDER'S OUTAGE IS NOT THIS NODE'S FAULT. Every such failure was told as
-// one, "not something trying again clears", so a publish whose box E2B was
-// slow to answer was abandoned by a model told that waiting would not help.
-// The error itself goes to the node's log here, as a fault's does in
-// [faulted].
+// boxFailure is a failed read of a publish's source, nothing published, as a
+// model is told it: by the class the sandbox backend marked it with
+// ([sandbox.WhyOf]) — the provider not answering, at a limit, refusing the
+// company's key, or a setup that cannot reach the box — and otherwise as the
+// condition or fault of this node it is ([nodeFailure]). A provider's outage
+// is never told as this node's fault, which would say waiting cannot help.
+// The error goes to the node's log here, as a fault's does in [faulted]. A
+// project file's content is told by [fileContentFailure] instead.
 func boxFailure(ctx context.Context, tool string, err error, stopped string) tools.Result {
 	const fact = "Nothing was published."
 	why, classed := sandbox.WhyOf(err)
@@ -683,9 +655,9 @@ func boxFailure(ctx context.Context, tool string, err error, stopped string) too
 		log.WarnContext(ctx, "builtin_box_read_failed", "tool", tool, "error", err.Error())
 		return nodeFailure(ctx, tool, ctx.Err(), stopped, fact)
 	case !classed:
-		// A CONDITION IS WRITTEN HERE: [nodeFailure] logs only a fault, so a
-		// box read a coordination store or a deadline stopped left nothing
-		// in the log that said what stopped it.
+		// A CONDITION IS LOGGED HERE: [nodeFailure] logs only a fault, and
+		// a box read stopped by the coordination store or a deadline would
+		// leave nothing in the log saying why.
 		if _, condition := Condition(err); condition {
 			log.WarnContext(ctx, "builtin_box_read_failed", "tool", tool, "error", err.Error())
 		}
@@ -717,8 +689,7 @@ func boxFailure(ctx context.Context, tool string, err error, stopped string) too
 			"that).", fact, "Tell whoever asked that an administrator needs to fix the "+
 			"sandbox setup; the node's log says what."))
 	}
-	// A class no box read meets (setup_unavailable, a launch's own: its setup
-	// step's download failing for now) is told by the classification every
-	// tool shares ([Condition]), which words every class there is.
+	// A class no box read meets (setup_unavailable, a launch's own) is told
+	// by the classification every tool shares ([Condition]).
 	return nodeFailure(ctx, tool, err, stopped, fact)
 }

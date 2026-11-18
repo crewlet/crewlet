@@ -12,27 +12,19 @@ import (
 
 // # Where a wake feed's group starts when it has to be created again
 //
-// A wake feed's durable group is the fleet's position on its log, and while
-// it exists every open resumes from it. When it is gone and its log is not (an
-// operator's delete, a broker that lost its consumer state), the next open
-// creates it, and created with nothing to go on it starts at the log's first
-// retained record: a week of a company's chat or tracker records derived into
-// wakes again, which the feed's dedupe layers, remembering minutes, let
-// through, so agents were woken again for work they had already done.
-//
-// So every node consuming a group records the group's acknowledgement floor in
-// the fleet's coordination store as it advances ([coord.FeedMark]), and a group
-// created again starts at the record after it. A group that exists is opened
-// where it stands whatever the mark says.
+// A wake feed's durable group is the fleet's position on its log. When it is
+// gone and its log is not (an operator's delete, a broker that lost its
+// consumer state), a group created with nothing to go on starts at the log's
+// first retained record, and the feed's dedupe, remembering minutes, lets
+// those wakes through again. So each consuming node records the group's
+// acknowledgement floor in the coordination store ([coord.FeedMark]), and a
+// group created again starts at the record after it. A group that exists is
+// opened where it stands whatever the mark says.
 
-// feedMarkEvery is how often a node consuming a group records its floor.
-//
-// TEN SECONDS: what a recreated group replays is what the fleet acknowledged
-// since the mark was last written, and ten seconds of a company's records is
-// a handful of wakes, which the claim (five minutes) and the deterministic wake
-// id collapse. Each write is one broker read and, when the floor moved, one
-// compare-and-set, per node per group, which is nothing beside the feed's own
-// traffic.
+// feedMarkEvery is how often a node consuming a group records its floor: ten
+// seconds of acknowledged records is what a recreated group replays, a handful
+// of wakes the claim (five minutes) and the deterministic wake id collapse.
+// Each write is one broker read and, when the floor moved, one compare-and-set.
 const feedMarkEvery = 10 * time.Second
 
 // feedMarkWriteBudget bounds one mark's read and write, so a slow store holds
@@ -80,8 +72,8 @@ func (f domainFeed) position(group string) (feedPosition, bool) {
 
 // start is where a group created by this open should start: the record after
 // the fleet's recorded floor, or zero (the log's first retained record) when
-// there is no mark this node can use. It never fails an open: a mark that
-// cannot be read is the old behaviour, said in a line.
+// there is no mark this node can use. It never fails an open: an unreadable
+// mark starts at zero, with a warning.
 func (p feedPosition) start(ctx context.Context) uint64 {
 	gen, known := p.generation()
 	if !known {
@@ -99,9 +91,9 @@ func (p feedPosition) start(ctx context.Context) uint64 {
 	case !found || mark.Generation != gen:
 		return 0
 	}
-	// A MARK PAST THE LOG'S END is from a longer log than this one, a
-	// stream recreated under the same generation, and starting from it
-	// would skip every record this log takes until it got there.
+	// A MARK PAST THE LOG'S END is from a longer log, a stream recreated
+	// under the same generation: starting from it would skip every record
+	// this log takes until it got there.
 	if _, last, boundsErr := p.log.Bounds(ctx); boundsErr == nil && mark.Floor > last {
 		log.WarnContext(ctx, "changefeed_mark_past_log", "stream", p.stream, "group", p.group,
 			"mark", mark.Floor, "last", last,

@@ -16,14 +16,13 @@ import (
 
 // A CHECK'S BOX READS ITS COMMIT WHERE THE API SERVES IT: the base the engine
 // gives the check runner (checkCodeBase, from CREWLET_BOX_GIT_URL), with a
-// repository's name and a read after it, is a path under auth.BoxGitletPrefix —
-// the route auth leaves public for the box — that the API's three box reads
-// are mounted to answer (host.PatternBoxGitletTree, Blob and Diff, routed here
-// by a mux of those very patterns), on the very listener the box clones from
-// under auth.BoxGitPrefix, whatever path that listener sits at behind a
-// balancer. A base that does not end in the box git route gives none, which
-// checkrun.New refuses. The runner spelled its own "/box/gitlet" before, held
-// to the route by nothing.
+// repository's name and a read after it, is a path under auth.BoxGitletPrefix,
+// the route auth leaves public for the box, that the API's three box reads
+// answer (host.PatternBoxGitletTree, Blob and Diff, routed here by a mux of
+// those patterns), on the listener the box clones from under
+// auth.BoxGitPrefix, whatever path that listener sits at behind a balancer. A
+// base that does not end in the box git route gives none, which checkrun.New
+// refuses.
 func TestACheckBoxReadsItsCommitWhereTheAPIServesIt(t *testing.T) {
 	t.Parallel()
 	reads := http.NewServeMux()

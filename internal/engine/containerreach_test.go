@@ -9,18 +9,10 @@ import (
 )
 
 // A LINUX HOST WHOSE API BINDS LOOPBACK CANNOT BE REACHED FROM ITS CONTAINER
-// BOXES, AND SAYS SO.
-//
-// A container box dials the engine host by its runtime's name for it, which on
-// Linux arrives from the container's bridge network, never on 127.0.0.1. With
-// the API bound to loopback every bridged call and every telemetry export
-// failed as a connection the box could not make, with nothing on the engine
-// side to say why. The advisory names the field to change, and stays quiet
-// wherever the bind does answer or is not the one a box dials: another OS, a
-// wider bind, a public listener that is the one boxes dial, a node without
-// the ingress role, which serves its probes alone, a node without the seats
-// role, which starts no box on its host for its bind to cut off, or a company
-// with no container cell.
+// BOXES, AND SAYS SO: the advisory names the field to change, and stays quiet
+// wherever the bind answers or is not the one a box dials — another OS, a
+// wider bind, a public listener boxes dial instead, a node without ingress or
+// without seats, or a company with no container cell.
 func TestALoopbackBindOnLinuxWarnsAContainerCompany(t *testing.T) {
 	t.Parallel()
 	container := sandboxCompany(t, "container")

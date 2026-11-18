@@ -14,10 +14,9 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// reportingWriter is a node's writer for one actor, reporting the task a
-// create committed to into the actor's turn's set as the tracker's write
-// authority does: only for a write it KNOWS committed, so an unvouched answer
-// names nothing.
+// reportingWriter reports a created task into the actor's turn's set as the
+// tracker's write authority does: only for a write it KNOWS committed, so an
+// unvouched answer names nothing.
 type reportingWriter struct {
 	*fakeNode
 	log worklet.WriteLog
@@ -32,8 +31,8 @@ func (w reportingWriter) CreateTask(ctx context.Context, opID string, task workl
 	return out, err
 }
 
-// EditComment is the TRACKER's remark edit — the node's own EditComment is the
-// knowledge base's, and a writer for one actor answers the tracker's.
+// EditComment is the TRACKER's remark edit, which a writer for one actor
+// answers; the node's own EditComment is the knowledge base's.
 func (w reportingWriter) EditComment(_ context.Context, opID, _, _, _, _ string,
 	_ *worklet.Notify) (worklet.WriteResult, error) {
 	w.note("task_comment_edit")
@@ -43,8 +42,8 @@ func (w reportingWriter) EditComment(_ context.Context, opID, _, _, _, _ string,
 	return worklet.WriteResult{}, nil
 }
 
-// RemoveComment is the TRACKER's remark take-down, for EditComment's reason:
-// the node's own RemoveComment is the knowledge base's.
+// RemoveComment is the TRACKER's remark take-down; the node's own is the
+// knowledge base's.
 func (w reportingWriter) RemoveComment(_ context.Context, opID, _, _, _ string,
 	_ worklet.CommentAuthority) (worklet.WriteResult, error) {
 	w.note("task_comment_remove")
@@ -171,11 +170,10 @@ func (f *fakeNode) PlaceTask(_ context.Context, opID string, place worklet.Place
 	return res, nil
 }
 
-// A WRITE ANOTHER NODE RAN IS IN THE ASKING TURN'S SET, because the set is in
-// the asking process and no wire carries it: the router asks the holder to name
-// what it committed to and adds each item itself. Without it a seat on a node
-// without `data` that filed one task was charged to nothing, whatever it spent
-// on it — the dispatch-time rules name no item for a turn that created its own.
+// A WRITE ANOTHER NODE RAN IS IN THE ASKING TURN'S SET: no wire carries the
+// set, so the router asks the holder to name what it committed to and adds each
+// item itself. Otherwise a seat on a node without `data` that filed a task is
+// charged to nothing — dispatch-time rules name no item a turn created itself.
 func TestAWriteAnotherNodeRanIsInTheAskingTurnsSet(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -190,8 +188,7 @@ func TestAWriteAnotherNodeRanIsInTheAskingTurnsSet(t *testing.T) {
 		t.Fatalf("the asking turn's set holds %v, want the task the holder committed to", got)
 	}
 
-	// A TURN THAT HOLDS NO SET ASKS FOR NONE: the holder collects nothing
-	// for a writer that is not a turn's.
+	// A TURN THAT HOLDS NO SET ASKS FOR NONE.
 	node := f.nodes["data-a"]
 	if _, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-2",
 		worklet.Task{Project: "ENG"}, nil); err != nil {
@@ -207,9 +204,8 @@ func TestAWriteAnotherNodeRanIsInTheAskingTurnsSet(t *testing.T) {
 }
 
 // A WALK THAT ASKED PAST AN UNVOUCHED HOLDER COLLECTS FROM EVERY HOLDER THAT
-// RAN IT, not only the one whose answer is kept — and a holder that could not
-// say whether it committed names nothing, so the item is in the set exactly
-// because the holder that vouched for it committed it.
+// RAN IT, not only the one whose answer is kept; an unvouched holder names
+// nothing, so the item is in the set once, from the holder that vouched.
 func TestAWalkCollectsWhatEveryHolderCommittedTo(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b")
@@ -253,14 +249,12 @@ func TestALocalWriteReportsIntoTheTurnsSetOnce(t *testing.T) {
 // A KEYED PAGE WRITE NOBODY ANSWERED IS ASKED AGAIN, UNDER ITS KEY — and an
 // unkeyed one never is.
 //
-// The key is what makes a repeat the same operation: the pages store derives
-// the operation id — and a new page's id, and a comment's — from it and what
-// the write says, so the next holder's ledger collapses a write the silent one
-// may have made. Without one the store mints a fresh id per call and a second
-// holder would write a second page or a second comment. EVERY PAGE WRITE says
-// where its key is — the actor's operation key, or for a comment made from a
-// turn the turn's own — and a predicate reading the wrong one either repeats an
-// unkeyed write or strands a keyed one.
+// The pages store derives the operation id (and a new page's or comment's id)
+// from the key, so the next holder's ledger collapses what the silent one may
+// have written; unkeyed, it mints a fresh id per call and a repeat writes a
+// second page or comment. Every page write is covered, since a predicate
+// reading the wrong key (the actor's, or a turn comment's own) either repeats
+// an unkeyed write or strands a keyed one.
 func TestAKeyedPageWriteNobodyAnsweredIsAskedAgainUnderItsKey(t *testing.T) {
 	t.Parallel()
 	since := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
@@ -314,8 +308,8 @@ func TestAKeyedPageWriteNobodyAnsweredIsAskedAgainUnderItsKey(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			// A FLEET PER HALF: the holder that answered last is asked
-			// first, so the second half on the first's fleet would never
-			// meet the silent holder at all.
+			// first, so a shared fleet's second half never meets the
+			// silent holder.
 			silentFirst := func(t *testing.T) (*fleet, *fakeNode) {
 				f := newFleet(t, "data-a", "data-b")
 				_, first := f.first(t, f.client)
@@ -347,9 +341,9 @@ func TestAKeyedPageWriteNobodyAnsweredIsAskedAgainUnderItsKey(t *testing.T) {
 }
 
 // A DROP WHOSE ORDER STEP A HOLDER COULD NOT VOUCH FOR IS ASKED OF THE NEXT,
-// under the same operation: the unvouched outcome is on the SECOND of the
-// gesture's two steps, inside a named field of the answer, and a router that
-// read only the first would hand the board a placement nobody knows landed.
+// under the same operation: the unvouched outcome is on the SECOND of two
+// steps, and a router reading only the first would hand the board a placement
+// nobody knows landed.
 func TestADropWhoseOrderStepIsUnvouchedIsAskedOfTheNextHolder(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b")

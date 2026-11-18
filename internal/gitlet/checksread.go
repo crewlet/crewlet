@@ -22,53 +22,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A REPOSITORY'S CHECKS, READ: what became of each attempt of each check of
-// each commit, as its row on the code log holds it — six kinds of read.
-//
-//   - `checks` ([ReadChecks]) lists attempts, held to the asker's grant: one
-//     repository's, newest ended first and every attempt not yet ended after
-//     them (code_checks_finished_idx, read backwards); one change's of it —
-//     its head's, or a commit it names, CHECKED FOR ITS TARGET — by name and
-//     attempt, or one commit's for every target or for the one it names (all
-//     code_checks' key), each of those also as each check's LATEST attempt
-//     alone ([CheckQuery.Latest]: what a check stands at, one page); or
-//     the WINDOW — no repository named — every repository's attempts that
-//     ended at or after a moment and, where it names one, before its end,
-//     newest ended first (code_checks_recent_idx, sought from the end down),
-//     each kept only where its repository is one the asker reads, so a page
-//     is the rows it READ and may be short, as a listing of changes across
-//     repositories is; or, asked where each check STANDS
-//     ([CheckQuery.Standing], checkstanding.go), each key's latest attempt of
-//     a live subject, running ones included, in a recent or a failing-first
-//     order, with the change it judges. Every shape takes a check's name
-//     and a state as NARROWINGS, each the STATEMENT'S, never a filter of what
-//     a page read ([CheckQuery.State]): a repository's and the window's seek an index
-//     that leads with the narrowing (narrowedPlaces), and a change's and a
-//     commit's test it inside their walk of one commit's attempts. The
-//     dashboard's Checks section's facets.
-//   - `check` ([ReadCheck]) is one attempt whole: the row, the definition it
-//     ran under, its tail, the failures its ending named, and the log a
-//     failed run kept.
-//   - `checks_due` ([ReadChecksDue]) is the home's: the live changes whose head
-//     no dispatch for its target names its target's checks file, or whose
-//     head's attempt its infrastructure ended is due a requeue, each with
-//     what it owes, the targets due a reading of their checks file again,
-//     and the protected targets owing tip work (dueCheckWork's doc).
-//   - `check_box` ([ReadCheckBox]) is a check's box's admission's: the one
-//     attempt its token names, by its key (code_checks' own), as its row
-//     stands — the engine's own read, held to no grant, since the box is no
-//     principal and the row is what admits it.
-//   - `checks_queued` ([ReadChecksQueued]) is a Gitlet node's claim walk: the
-//     attempts waiting for a runner whose definitions name one cell, oldest
-//     queued first, each with its definition and its repository's name —
-//     the engine's own, as `check_box` is (queuedChecks' doc).
-//   - `checks_running` ([ReadChecksRunning]) is a repository's home's sweep:
-//     the repositories holding a running attempt, or one repository's
-//     running attempts — the engine's own too (runningChecks' doc).
-//
-// EVERY LISTING IS A KEYSET over its index's own order, its cursor the last
-// row's place in it, so a page resumes exactly where the one before ended
-// whatever lands meanwhile, and every page is one seek and one walk.
+// A REPOSITORY'S CHECKS, READ: six kinds of read of the code log's check rows.
+//   - `checks` ([ReadChecks]), held to the asker's grant: a repository's attempts
+//     newest ended first; a change's (its head's, CHECKED FOR ITS TARGET) or a
+//     commit's, each also as each check's latest alone ([CheckQuery.Latest]); the
+//     window across repositories, whose page is the rows it READ, so may be short;
+//     or where each check stands ([CheckQuery.Standing], checkstanding.go). A name
+//     and a state narrow the STATEMENT, never filter a page ([narrowedPlaces]).
+//   - `check` ([ReadCheck]): one attempt whole, with definition, tail, failures, log.
+//   - `checks_due`, `check_box`, `checks_queued`, `checks_running`: the engine's
+//     own, held to no grant (dueCheckWork, checkBox, queuedChecks, runningChecks).
+// EVERY LISTING IS A KEYSET over its index's order, so a page resumes exactly
+// where the last ended whatever lands meanwhile, at one seek and one walk.
 
 // checkColumns is a check row as a listing reads it: every column but the
 // three wide ones only a `check` read carries (def, failures, tail) — url and
@@ -141,10 +106,9 @@ func latestCheckIn(ctx context.Context, tx *sql.Tx, key CheckKey) (CheckRow, boo
 	return r, true, nil
 }
 
-// checksResolver is the scope a read of a repository's checks naming it by
-// NAME is about, read in the read's own transaction: its name's claim and,
-// where the claim names a repository, its row — which its grant is judged
-// from — and its checks.
+// checksResolver is the scope of a checks read naming its repository by NAME,
+// resolved in the read's own transaction: the name's claim and, where it names
+// a repository, its row (which the grant is judged from) and its checks.
 func checksResolver(name string) statelog.Resolver {
 	token := NameToken(name)
 	return func(ctx context.Context, tx *sql.Tx) (statelog.ScopeSet, error) {
@@ -156,18 +120,13 @@ func checksResolver(name string) statelog.Resolver {
 	}
 }
 
-// checksQuery is the framework read a `checks`, `check`, `checks_due`,
-// `check_box`, `checks_queued` or `checks_running` read resolves to. A listing
-// is a SET READ — of the repository it names, of the domain for the window —
-// so an attempt a deferred record holds back is listed as its row stands; a
-// `check` read is a POINT READ, which a record this node deferred on the
-// repository's checks refuses, as a change's detail is refused, rather than
-// answer an attempt around it, and so is a `check_box` read, of the checks of
-// the repository its key names by id; the home's listing is a set read of the
-// domain, or of the one repository's rows and checks; and a claim walk and the
-// home's sweep are set reads too — of the domain, or of the one repository's
-// checks — each claim and each ending they lead to decided again by the
-// repository's checks writer from its own snapshot.
+// checksQuery is the framework read each checks kind resolves to. A listing,
+// the home's `checks_due`, the claim walk and the home's sweep are SET READS
+// (of the domain, or of the one repository named), so an attempt a deferred
+// record holds back is listed as its row stands; each claim or ending they
+// lead to is decided again by the checks writer from its own snapshot. A
+// `check` and a `check_box` read are POINT READS, which a record this node
+// deferred on the repository's checks refuses, as a change's detail is.
 func (q ReadQuery) checksQuery(fresh statelog.Freshness) statelog.Query {
 	switch q.Kind {
 	case ReadCheck:
@@ -197,11 +156,11 @@ func (q ReadQuery) checksQuery(fresh statelog.Freshness) statelog.Query {
 }
 
 // validateChecks is [ReadQuery.validate]'s rules for a `checks` and a `check`
-// read, beyond every principal read's: a `checks` read narrows a repository's
-// listing to a change or a commit — a commit's for one branch where it names
-// a target, and each check's latest attempt alone where it asks — or bounds
-// the window — never both, and never an attempt's name; a `check` read names
-// its repository and its one attempt whole, and is neither paged nor bounded.
+// read beyond every principal read's: a `checks` read narrows a repository's
+// listing to a change or a commit (for one branch where it names a target, at
+// each check's latest where it asks) or bounds the window, never both and
+// never naming an attempt; a `check` read names its repository and one attempt
+// whole, neither paged nor bounded.
 func (q ReadQuery) validateChecks() error {
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
 	c := q.Checks
@@ -285,11 +244,10 @@ func (q ReadQuery) validateChecks() error {
 }
 
 // validateChecksDue is [ReadQuery.validate] for a `checks_due` read: the
-// engine's own, so it names NO asker and no seat it reads for, for the
-// `compaction_due` read's reason; its own question, REQUIRED, with the instant
-// a target's reading is due again by, and its one repository, where it names
-// one, by id in its canonical spelling; and nothing else a listing names,
-// since a page is MaxSnapshotItems rows.
+// engine's own, so NO asker and no seat, for `compaction_due`'s reason; its
+// question, REQUIRED, with the instant a target's reading is due again by and
+// any one repository by its canonical id; and nothing else, since a page is
+// MaxSnapshotItems rows.
 func (q ReadQuery) validateChecksDue() error {
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
@@ -341,11 +299,10 @@ func (q ReadQuery) validateChecksDue() error {
 	return nil
 }
 
-// validateCheckBox is [ReadQuery.validate] for a `check_box` read: the
-// engine's own — a check's box's admission — so it names NO asker and no seat
-// it reads for, since the box is no principal and judged as one it would be
-// refused as one nobody named; its attempt by its key, whole, as the box's
-// token names it; and nothing else a read names, since it reads one row.
+// validateCheckBox is [ReadQuery.validate] for a `check_box` read, a check's
+// box's admission: NO asker and no seat, since the box is no principal and,
+// judged as one, would be refused as nobody named; its attempt's whole key, as
+// the box's token names it; and nothing else, since it reads one row.
 func (q ReadQuery) validateCheckBox() error {
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
@@ -387,12 +344,11 @@ func (q ReadQuery) validateCheckBox() error {
 	return nil
 }
 
-// validateChecksQueued is [ReadQuery.validate] for a `checks_queued` read: the
-// engine's own — a runner's claim walk — so it names NO asker and no seat it
-// reads for, for `check_box`'s reason; its question, REQUIRED, naming the
-// cell its attempts' definitions name, or none; a page of at most
-// MaxSnapshotItems attempts and the cursor it resumes after; and nothing else
-// a read names, since it lists every repository's queued attempts.
+// validateChecksQueued is [ReadQuery.validate] for a `checks_queued` read, a
+// runner's claim walk: NO asker and no seat, for `check_box`'s reason; its
+// question, REQUIRED, naming a cell or none; a page of at most
+// MaxSnapshotItems and its cursor; and nothing else, since it lists every
+// repository's queued attempts.
 func (q ReadQuery) validateChecksQueued() error {
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
 	switch r := q.ChecksQueued; {
@@ -436,11 +392,10 @@ func (q ReadQuery) validateChecksQueued() error {
 	return nil
 }
 
-// validateChecksRunning is [ReadQuery.validate] for a `checks_running` read:
-// the engine's own — a repository's home's sweep — naming no asker and no
-// seat; its question, REQUIRED, with its one repository, where it names one,
-// by id in its canonical spelling; a cursor only beside none, since a
-// repository's running attempts are read in one page; and nothing else.
+// validateChecksRunning is [ReadQuery.validate] for a `checks_running` read, a
+// home's sweep: no asker and no seat; its question, REQUIRED, with any one
+// repository by its canonical id; a cursor only without one, since a
+// repository's running attempts are one page; and nothing else.
 func (q ReadQuery) validateChecksRunning() error {
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
 	switch r := q.ChecksRunning; {
@@ -486,24 +441,16 @@ func (q ReadQuery) validateChecksRunning() error {
 }
 
 // queuedChecks serves one page of a `checks_queued` read: the attempts waiting
-// for a runner whose definitions name the read's cell (ChecksQueuedQuery's
-// RunIn, "" for the ones naming none), OLDEST QUEUED FIRST, on
-// code_checks_queued_idx — each with the definition it was queued under and
-// its repository's name, after the cursor (queuedCursor) — of every repository
-// a runner may still claim in, active or archived: a deleted repository
-// refuses every claim (repo_deleted), so its queued attempts wait for its
-// purge and are read and skipped, as the backlog's walk skips them.
+// for a runner whose definitions name the read's cell ("" for none), OLDEST
+// QUEUED FIRST on code_checks_queued_idx after the cursor (queuedCursor), each
+// with its definition and repository name. A deleted repository's are skipped,
+// as the backlog's walk skips them: every claim is refused repo_deleted.
 //
-// BY CELL, because a runner reads only what it can claim now: the cells it
-// has room in (internal/gitlet/checkrun's walk), each one seek, so one cell's
-// backlog never costs a node's walk in another (replicated 0131). OLDEST
-// FIRST within it, because that is the order a fleet's runners take the queue
-// in: every Gitlet node walks it from its head, and the one a repository's git
-// order ranks first claims each attempt first, so the attempts waiting longest
-// are the ones claimed first wherever they fall in the order. A page is a
-// limit's rows at most and the page's byte budget — a definition is the widest
-// field, some hundreds of bytes for a usual check — and names where the next
-// resumes.
+// BY CELL, because a runner reads only the cells it has room in
+// (internal/gitlet/checkrun), so one cell's backlog never costs a walk of
+// another (replicated 0131). OLDEST FIRST, because every Gitlet node walks the
+// queue from its head, so the longest waiting are claimed first. A page is
+// bounded by rows and bytes; a definition, the widest field, is some hundreds.
 func (r *Reader) queuedChecks(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
 	limit := min(limitOr(q.Limit, r.pageRows), r.pageRows)
 	var (
@@ -564,13 +511,11 @@ func queuedCursor(row CheckRow) string {
 }
 
 // runningChecks serves a `checks_running` read: with no repository, a page of
-// the repositories holding a running attempt, by id after the cursor — the
-// running index's leading column, grouped, so a page is one range of a
-// partial index holding only what runs now; with one, that repository's
-// running attempts, every one in ONE page: they are bounded by the boxes the
-// fleet's runners hold at once — gitlet.max_checks on each Gitlet node and the
-// remote cells — far under a page's MaxSnapshotItems, and the home that
-// sweeps them ends what it finds and reads the rest again at its next pass.
+// the repositories holding a running attempt, by id after the cursor (one range
+// of the running partial index's leading column, grouped); with one, its
+// running attempts in ONE page, bounded by the boxes the fleet's runners hold
+// at once (gitlet.max_checks a Gitlet node, plus the remote cells), far under
+// MaxSnapshotItems; the sweeping home reads any rest at its next pass.
 func (r *Reader) runningChecks(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
 	if id := q.ChecksRunning.RepoID; id != "" {
 		rows, err := tx.QueryContext(ctx, runningChecksSQL, id, r.pageRows)
@@ -727,12 +672,10 @@ func checksOfTarget(ctx context.Context, tx *sql.Tx, cursor string, c CheckQuery
 	return tx.QueryContext(ctx, statement, repoID, oid, target, name, attempt, limit, c.Name, string(c.State))
 }
 
-// narrowedRepoChecks serves a page of a repository's listing narrowed by c —
-// by a check's name, a state or both — in the listing's own order (newest
-// ended first, then the attempts not yet ended), its rows those
-// [narrowedPlaces] seeks after the cursor's place and nothing else, so a page
-// is full wherever the narrowing holds as many rows after it, whatever the
-// repository's history around them.
+// narrowedRepoChecks serves a page of a repository's listing narrowed by c (a
+// check's name, a state or both) in the listing's order, its rows only those
+// [narrowedPlaces] seeks after the cursor, so a page is full wherever the
+// narrowing holds that many rows, whatever history surrounds them.
 func (r *Reader) narrowedRepoChecks(ctx context.Context, tx *sql.Tx, q ReadQuery, c CheckQuery,
 	repo RepoRef, limit int, out *ReadAnswer) error {
 
@@ -763,11 +706,9 @@ func (r *Reader) narrowedRepoChecks(ctx context.Context, tx *sql.Tx, q ReadQuery
 }
 
 // checksWindow serves one page of the window: every repository's attempts
-// that ended at or after c.Since and before c.Until, newest ended first, each
-// kept where its repository is one the asker — and the seat it reads for —
-// may read. A page after a cursor is bounded by the cursor's place, which a
-// page of this window names only below its end, so a cursor at or past the
-// end is no place in it and is refused.
+// that ended in [c.Since, c.Until), newest ended first, each kept where the
+// asker and its seat may read its repository. A cursor at or past the end is
+// refused: this window's pages name places only below it.
 func (r *Reader) checksWindow(ctx context.Context, tx *sql.Tx, q ReadQuery, c CheckQuery, chart Roster,
 	limit int, out *ReadAnswer) error {
 
@@ -820,13 +761,12 @@ func (r *Reader) checksWindow(ctx context.Context, tx *sql.Tx, q ReadQuery, c Ch
 	return nil
 }
 
-// narrowedWindow serves a page of the window narrowed by c — a check's name,
-// an ENDED state (validateChecks refuses another: the window holds endings)
-// or both — between since and until, newest ended first, its places those
-// [narrowedPlaces] seeks after the cursor's and nothing else. The asker's
-// grant is tested on the places a page read, as the unnarrowed window's is,
-// and only a place it keeps has its row read: a place it shuts out is a
-// cursor's place, never a row read for nobody.
+// narrowedWindow serves a page of the window narrowed by c (a check's name, an
+// ENDED state, which validateChecks holds it to as the window holds endings,
+// or both), newest ended first, its places only those [narrowedPlaces] seeks
+// after the cursor's. The grant is tested on the places, as the unnarrowed
+// window's is, and only a kept place's row is read: a shut-out place is a
+// cursor's, never a row read for nobody.
 func (r *Reader) narrowedWindow(ctx context.Context, tx *sql.Tx, q ReadQuery, c CheckQuery, chart Roster,
 	since, until int64, limit int, out *ReadAnswer) error {
 
@@ -892,21 +832,17 @@ func endedCheckStates() []CheckState {
 	return slices.DeleteFunc(CheckStates(), func(s CheckState) bool { return !s.Ended() })
 }
 
-// narrowedPlaces is the first limit places after from, in the listing's
-// order, of the attempts c narrows a repository's listing (repoID) or the
-// window (repoID "", ending at or after since) to — SOUGHT, never filtered
-// out of a walk of everything: a STATE alone seeks the index leading with the
-// state (code_checks_state_idx for a repository's, which holds every state;
-// code_checks_state_recent_idx for the window's, which holds the endings),
-// and a CHECK'S NAME the index leading with the name and then the state
-// (code_checks_name_idx; code_checks_name_recent_idx) — one seek where c
-// names a state too, and one a state, their places merged, where it names
-// none: every state a repository holds, the five endings the window does.
-// Each seek is a covering read of at most limit places and no row, so a page
-// reads at most seven times limit index entries (a repository's listing
-// narrowed by a name alone) and never a place the narrowing does not hold:
-// what a page costs follows the rows it answers, never the history around
-// them.
+// narrowedPlaces is the first limit places after from, in the listing's order,
+// of the attempts c narrows a repository's listing (repoID) or the window
+// (repoID "", ended at or after since) to — SOUGHT, never filtered from a walk
+// of everything. A state alone seeks the index leading with it
+// (code_checks_state_idx; the window's code_checks_state_recent_idx, of
+// endings), a name the one leading with the name then the state
+// (code_checks_name_idx; code_checks_name_recent_idx): one seek with a state,
+// else one a state, merged — every state for a repository, the five endings
+// for the window. Each seek is a covering read of at most limit places, so a
+// page reads at most seven times limit entries (a name alone, a repository's
+// seven states) and costs what its rows do, never the history around them.
 func narrowedPlaces(ctx context.Context, tx *sql.Tx, repoID string, c CheckQuery, from checkPlace, since int64,
 	limit int) ([]checkPlace, error) {
 
@@ -979,11 +915,10 @@ func seekPlaces(ctx context.Context, tx *sql.Tx, repoID, name string, state Chec
 	return out, rows.Err()
 }
 
-// narrowedRows is the row at each place, as a listing reads it — one seek of
-// code_checks' key each — where keep keeps the place (every one where keep is
-// nil), and where it does not the place alone, its key and its ending: what
-// a page's cursor is minted from. The places were read in tx, so each row is
-// there.
+// narrowedRows is the row at each place as a listing reads it (one seek of
+// code_checks' key each) where keep keeps it (every one where keep is nil),
+// else the place alone, its key and ending, which a page's cursor is minted
+// from. The places were read in tx, so each row is there.
 func narrowedRows(ctx context.Context, tx *sql.Tx, places []checkPlace,
 	keep func(checkPlace) bool) ([]CheckRow, error) {
 
@@ -1019,12 +954,11 @@ func scanChecks(rows *sql.Rows) ([]CheckRow, error) {
 	return out, rows.Err()
 }
 
-// pageChecks files the rows a listing READ into out — those keep keeps, the
-// window's asker's grant, and every one where keep is nil — until the page's
-// byte budget, and names where the
-// next page resumes: after the last row it served where the budget ended it,
-// and after the last row it READ where it read a whole page, so a page the
-// grant kept little of still advances.
+// pageChecks files the rows a listing READ into out (those keep, the window's
+// grant, keeps; every one where keep is nil) until the page's byte budget, and
+// names where the next page resumes: after the last row served where the budget
+// ended it, else after the last row READ where it read a whole page, so a page
+// the grant kept little of still advances.
 func (r *Reader) pageChecks(scanned []CheckRow, keep func(CheckRow) bool, limit int,
 	cursor func(CheckRow) string, out *ReadAnswer) {
 
@@ -1106,49 +1040,18 @@ func (r *Reader) check(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 	return nil
 }
 
-// THE HOME'S DUE CHECK WORK, READ FROM THE ROWS: a `checks_due` read
-// ([ReadChecksDue]) is what a repository's home Gitlet node polls for, and is
-// nudged into reading, to learn what it owes the checks of the changes it is
-// home to. A LIVE change on an ACTIVE repository, its target a live branch,
-// owes its home a DISPATCH of its head's checks where no dispatch of its head
-// for its target names the checks file its target's row holds — a head never
-// dispatched, a change retargeted since, a target whose checks file changed
-// since (checksdispatch.go). The home reads the file at the target's tip,
-// queues what it defines at the head for the target, and records the
-// dispatch, which takes the head off the list by its own row whether the file
-// defined many checks or none: the rows are the work list, and it converges
-// on what the home decided, never on whether an attempt exists — a target with
-// no checks file, every repository that has not adopted checks, has none for
-// ever. A live change owes its home a REQUEUE too, where its head's latest
-// attempt of a check for its target ended errored for its infrastructure
-// below [AutoRequeueAttempts], until the next attempt's row is there. And a
-// target branch of a live change owes its home a READING of its checks file
-// again where its branch moved past the tip its row was read at and that
-// reading was recorded at or before [ChecksDueQuery.RefreshBefore] — the
-// home's clock less its refresh — so a target pushed to on every landing is
-// read at the home's pace, and only a file that changed makes its heads due.
-// And a repository owes its home the TIP WORK of each protected target holding
-// a landing its tip checks have not judged (tipwork.go, ADR-0098).
-//
-// TWO SHAPES, as `changes_due`'s, and over the same index: with no repository
-// it pages the repositories holding such a change or such a target, by id,
-// walking code_changes_open_idx grouped on its leading column; with one it
-// pages that repository's due heads by source branch, each with its target's
-// tip and the position that moved it there — the tip whose checks file the
-// home reads — and what it owes ([CheckWork], read in the same snapshot), and
-// on its FIRST PAGE its targets due a reading ([ReadAnswer.DueTargets]),
-// walking its targets' rows by their key, and from it on, on pages of their
-// own before its heads' ([ReadAnswer.TipsNext]), its tip work
-// ([ReadAnswer.DueTips]), walking its targets' rows of tip work
-// (code_tips_due, one a target). The listing of repositories is the union of
-// the two listings, one keyset page of each after the cursor merged into one.
-// Every change is tested by its
-// dispatch's key and its target's, one seek of each, and by
-// code_checks_requeue_idx, which holds only the attempts a requeue reads.
-//
-// READ STALE BY DEFAULT, as every duty listing is: a head listed a moment late
-// is dispatched at the next pass, and one listed after its dispatch landed is
-// answered from the rows by the writer, which records nothing twice.
+// dueCheckWork serves a `checks_due` read ([ReadChecksDue]): the check work a
+// repository's home owes, whose list the rows are. A live change on an active
+// repository into a live branch is due a DISPATCH while no dispatch of its head
+// names its target's current checks file (checksdispatch.go: recorded however
+// many checks the file defines, none included, so a repository without checks
+// owes none), and a REQUEUE while its head's latest attempt ended errored for
+// infrastructure below [AutoRequeueAttempts]; its target is due a READING once
+// it moved past the tip last read and that reading is no later than
+// [ChecksDueQuery.RefreshBefore], so a busy target is read at the home's pace;
+// a protected target with an unjudged landing is due TIP WORK (tipwork.go,
+// ADR-0098). Two shapes, as `changes_due`'s (changesdue.go). READ STALE: a late
+// listing waits a pass, and the writer records nothing twice.
 func (r *Reader) dueCheckWork(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
 	refresh := store.EncodeTime(q.ChecksDue.RefreshBefore)
 	if q.ChecksDue.RepoID == "" {
@@ -1276,21 +1179,15 @@ func repoIDsIn(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]st
 }
 
 // BacklogScan is the most overdue attempts one reading of the checks' backlog
-// counts: 1 024. The reading walks the queued attempts IN THE ORDER THEY FELL
-// OVERDUE (code_checks_overdue_idx: each its queued instant plus its own
-// definition's timeout), so every row it reads is one past its own timeout
-// and its count is exact up to the bound — never the oldest QUEUED, which are
-// not the first overdue when timeouts differ: a thousand attempts of a
-// fifty-minute check queued a minute before a one-minute lint filled a walk
-// by queued instant with none of them overdue, and the lint stuck behind them
-// was never read. Past the bound the reading says there are more
-// ([ChecksBacklog.More]) rather than count them: a thousand attempts past
-// their own timeouts is a fleet with no runner at all, which the alarm names
-// either way. So a reading every AlarmInterval on every data node is one
-// range of one partial index, a thousand entries at most, each read with its
-// row for the instant it was queued and its repository's key for whether a
-// runner may still claim it — and the entries of a deleted repository's
-// attempts, until its purge removes them, are read and skipped the same way.
+// counts: 1 024. The reading walks queued attempts IN THE ORDER THEY FELL
+// OVERDUE (code_checks_overdue_idx: queued instant plus the definition's own
+// timeout), so every row read is past its own timeout and the count is exact
+// up to the bound; a walk by queued instant is wrong when timeouts differ, as
+// a short lint queued behind a thousand long checks is never read. Past the
+// bound the reading says More rather than count: a thousand overdue attempts
+// is a fleet with no runner, which the alarm names either way. So each reading
+// (every AlarmInterval, every data node) is one range of one partial index, a
+// thousand entries at most, a deleted repository's read and skipped.
 const BacklogScan = 1024
 
 // ChecksBacklog is what a node's alarm reads of the queued checks
@@ -1306,24 +1203,15 @@ type ChecksBacklog struct {
 }
 
 // ChecksBacklog reads the queued attempts this node's rows hold that have
-// waited longer than their OWN timeout — the timeout_seconds of the
-// definition each was queued under — by now, in the order they fell overdue
-// and at most [BacklogScan] of them: the threshold of the code_checks_backlog
-// alarm is every check's own (ADR-0015), never one of the alarm's. An attempt
-// queued with no definition — one a person's CI reports, which no runner of
-// the engine claims — is never overdue.
-//
-// AN ATTEMPT NO RUNNER CAN CLAIM IS NOBODY'S BACKLOG: one of a repository that
-// is deleted, being purged or gone is not counted. Every write of such a
-// repository's checks is refused repo_deleted — a runner's claim and the
-// home's cancel alike — so its queued attempts stay queued until the purge
-// removes them, up to code.deleted_retention_days later; counted, they raised
-// the alarm on every data node for that long, its remedy sending an operator
-// to Gitlet nodes that were healthy. Each is tested by its repository's key as
-// the walk reads it, so it takes no place in the count.
-//
-// A STALE read of this node's rows, as every alarm's reading is: the alarm
-// says what this node holds.
+// waited longer than their OWN timeout (the timeout_seconds of the definition
+// each was queued under) by now, at most [BacklogScan] of them: the
+// code_checks_backlog alarm's threshold is every check's own (ADR-0015). One
+// queued with no definition, which a person's CI reports, is never overdue.
+// One NO RUNNER CAN CLAIM is nobody's backlog: a deleted, purging or gone
+// repository's checks refuse every write repo_deleted, so its attempts stay
+// queued until the purge (up to code.deleted_retention_days) and, counted,
+// would raise the alarm on every data node and send an operator to healthy
+// Gitlet nodes. A STALE read, as every alarm's is: it says what this node holds.
 func (r *Reader) ChecksBacklog(ctx context.Context, now time.Time) (ChecksBacklog, error) {
 	query := statelog.Freshness{Level: statelog.ReadStale}.Query(
 		statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
@@ -1398,18 +1286,14 @@ func checksBacklogIn(ctx context.Context, tx *sql.Tx, now time.Time) (ChecksBack
 // cursorTarget spells a target branch in a cursor.
 var cursorTarget = base64.RawURLEncoding
 
-// checksWalk is how a `checks` listing q spells the cursor that resumes it
-// after a row it served, by the walk its question takes: the window's where it
-// names no repository ([windowCursor]); one commit's attempts for one target
-// — a change's at its head, or a commit's beside the branch it names — by
-// name and attempt ([nameAttemptCursor]); one commit's for every target
-// ([targetCursor]); a repository's, newest ended first ([endedCursor]); and a
-// standing listing's, by its phase ([standingCursorOf]).
-// A latest listing ([CheckQuery.Latest]) walks the same key and resumes
-// alike: after a check's latest attempt, its next check.
-// THE ONE CHOICE: the reader pages by it and [ReadQuery.ChecksCursor] answers
-// from it, so a page's own cursor and one a caller asks for after any of its
-// rows are spelled alike.
+// checksWalk is how a `checks` listing q spells the cursor resuming it after a
+// row, by the walk its question takes: a standing listing's by its phase
+// ([standingCursorOf]); the window's ([windowCursor]); one commit's attempts for
+// one target, a change's or a commit's beside its branch ([nameAttemptCursor]);
+// one commit's for every target ([targetCursor]); else a repository's newest
+// ended first ([endedCursor]). A latest listing ([CheckQuery.Latest]) walks the
+// same key. THE ONE CHOICE: the reader pages by it and [ReadQuery.ChecksCursor]
+// answers from it, so a page's cursor and a caller's are spelled alike.
 func checksWalk(q ReadQuery) func(CheckRow) string {
 	c := CheckQuery{}
 	if q.Checks != nil {
@@ -1524,29 +1408,18 @@ func cutWindowCursor(s string) (int64, string, string, string, string, int, bool
 	return at, repo, oid, target, name, attempt, ok && rest != ""
 }
 
-// The reads of a repository's checks, each registered in plan_test.go, so the
-// pinned driver's planner is held to the key each is written for: one attempt
-// by code_checks' key, whole or as a listing reads it; the latest attempt of
-// one check of one commit for one target, the key read backwards from its
-// (repository, commit, target, name) prefix; one commit's attempts for every
-// target after a (target, name, attempt) on the key, or for one target after
-// a (name, attempt) — what a change's attempts are — and the same two walks
-// keeping each check's latest attempt alone; a repository's newest ended
-// first, from the top or after a place, on code_checks_finished_idx read
-// backwards; and the window's, on code_checks_recent_idx read backwards from
-// its end, or from a cursor's place below it, down to its start. Each
-// keyset's >= beside its OR is what keeps the index's range seek
-// (planner.go).
+// The reads of a repository's checks, each registered in plan_test.go so the
+// pinned driver's planner is held to the key each is written for: code_checks'
+// key for one attempt, one check's latest (its prefix read backwards) and a
+// commit's attempts for every target or one, with their latest-only twins;
+// code_checks_finished_idx and code_checks_recent_idx, read backwards, for a
+// repository's newest ended first and the window. Each keyset's >= beside its
+// OR keeps the index's range seek (planner.go).
 //
-// A NARROWING ([CheckQuery.State], a Name) is the statement's. A commit's and
-// a change's walks test it beside their keyset — a name ?7 and a state ?8,
-// each where it is not empty — so the statement reads on until its page is full
-// of what the narrowing holds: a walk of one commit's attempts, at most
-// MaxCheckAttempts of each check its target's file declares
-// (MaxChecksPerFile) a target, which is all such a walk can read whatever it
-// is asked. A repository's and the window's seek an index that leads with
-// the narrowing instead — the PLACES statements below — since what their
-// walks hold is the history, which no narrowing bounds.
+// A NARROWING ([CheckQuery.State], a Name) is the statement's: a commit's and a
+// change's walks test it by their keyset (name ?7, state ?8, each where set),
+// bounded anyway by MaxCheckAttempts × MaxChecksPerFile a target; a repository's
+// and the window's, whose history nothing bounds, seek an index leading with it.
 const (
 	checkRowSQL = `SELECT ` + checkColumns + ` FROM code_checks INDEXED BY ` + checksKey + `
 		WHERE repo_id = ? AND commit_oid = ? AND target_ref = ? AND name = ? AND attempt = ?`
@@ -1566,13 +1439,11 @@ const (
 		WHERE repo_id = ?1 AND commit_oid = ?2 AND target_ref = ?3 AND name >= ?4 AND (name > ?4 OR attempt > ?5)
 			AND (?7 = '' OR name = ?7) AND (?8 = '' OR state = ?8)
 		ORDER BY name, attempt LIMIT ?6`
-	// THE LATEST ATTEMPTS ([CheckQuery.Latest]): the same walks of the key,
-	// each row kept only where the key holds no later attempt of its check —
-	// one seek of its (repository, commit, target, name) prefix above the
-	// row's attempt. A page is then a row a check, never its history; the
-	// walk still reads a check's earlier attempts, at most MaxCheckAttempts
-	// a check, so a page of MaxChecksPerFile checks reads at most 640 rows of
-	// the key and sends 64.
+	// THE LATEST ATTEMPTS ([CheckQuery.Latest]): the same walks, each row kept
+	// only where one seek of its check's prefix finds no later attempt. A page
+	// is a row a check; the walk still reads earlier attempts, so a page of
+	// MaxChecksPerFile checks reads at most 640 key rows (MaxCheckAttempts
+	// each) and sends 64.
 	latestOfCommitSQL = `SELECT ` + checkColumns + ` FROM code_checks AS k INDEXED BY ` + checksKey + `
 		WHERE k.repo_id = ?1 AND k.commit_oid = ?2 AND k.target_ref >= ?3
 			AND (k.target_ref > ?3 OR k.name > ?4 OR (k.name = ?4 AND k.attempt > ?5))
@@ -1605,16 +1476,14 @@ const (
 					OR (name = ?6 AND attempt < ?7))))))))
 		ORDER BY finished_at DESC, repo_id DESC, commit_oid DESC, target_ref DESC, name DESC, attempt DESC
 		LIMIT ?8`
-	// THE NARROWED LISTINGS' PLACES (narrowedPlaces), each a covering read
-	// of the index that leads with its narrowing, the narrowing its leading
-	// equalities and the cursor's place a keyset after them, newest ended
-	// first: a repository's attempts in one state, on code_checks_state_idx;
-	// a repository's of one check in one state, on code_checks_name_idx; the
-	// window's in one ending, on code_checks_state_recent_idx; and the
-	// window's of one check in one ending, on code_checks_name_recent_idx —
-	// the two window indexes' partial predicate repeated verbatim. A first
-	// page's place is above every ending (a repository's: MaxInt64) or the
-	// window's end, with an empty key, which no row's key sorts below.
+	// THE NARROWED LISTINGS' PLACES (narrowedPlaces), newest ended first: each
+	// a covering read of the index leading with its narrowing, as its leading
+	// equalities, the cursor's place a keyset after them — a repository's by
+	// state (code_checks_state_idx) or name and state (code_checks_name_idx),
+	// the window's by ending (code_checks_state_recent_idx) or name and ending
+	// (code_checks_name_recent_idx), their partial predicate repeated verbatim.
+	// A first page's place is above every ending (a repository's: MaxInt64) or
+	// the window's end, with an empty key, which no row's key sorts below.
 	repoStatePlacesSQL = `SELECT finished_at, commit_oid, target_ref, attempt, name
 		FROM code_checks INDEXED BY code_checks_state_idx
 		WHERE repo_id = ?1 AND state = ?2 AND finished_at <= ?3
@@ -1652,14 +1521,12 @@ const (
 			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = k.repo_id
 				AND r.status IN ('active', 'archived'))
 		ORDER BY k.overdue_at, k.repo_id, k.commit_oid, k.target_ref, k.name, k.attempt LIMIT ?2`
-	// THE CLAIM WALK: the queued attempts naming one cell (?1), oldest
-	// queued first after a place, on code_checks_queued_idx — its partial
-	// predicate repeated verbatim, the cell its leading column's equality,
-	// and the >= beside the keyset's OR what keeps its range seek — each with
-	// its definition and its repository's name, and kept only where its
-	// repository is one a runner may still claim it in, by the repository's
-	// key. A first page is the place before every attempt: an instant of 0,
-	// which no queued attempt has.
+	// THE CLAIM WALK: the queued attempts naming one cell (?1), oldest queued
+	// first after a place, on code_checks_queued_idx (its partial predicate
+	// verbatim, the cell its leading equality, the >= beside the keyset's OR
+	// keeping its range seek), each with its definition and repository name,
+	// kept only where a runner may still claim in its repository. A first
+	// page's place is instant 0, which no queued attempt has.
 	queuedChecksSQL = `SELECT ` + checkColumns + `, def,
 			(SELECT r.name FROM code_repos AS r WHERE r.id = code_checks.repo_id)
 		FROM code_checks INDEXED BY code_checks_queued_idx
@@ -1679,19 +1546,16 @@ const (
 		WHERE state = 'running' AND repo_id > ?1 GROUP BY repo_id ORDER BY repo_id LIMIT ?2`
 	runningChecksSQL = `SELECT ` + checkColumns + ` FROM code_checks INDEXED BY code_checks_running_idx
 		WHERE repo_id = ?1 AND state = 'running' LIMIT ?2`
-	// THE HOME'S LISTING, changes_due's two statements with the facts' test
-	// replaced by the checks' work: a head is due while no dispatch of it for
-	// its target names the checks file its target's row holds — one seek of
-	// each key — or while its latest attempt of a check for its target is
-	// one its infrastructure ended below ?4 (AutoRequeueAttempts) and no next
-	// attempt follows it — code_checks_requeue_idx, then code_checks' key —
-	// and, in the listing of repositories, a target due a reading beside it,
-	// by its row's key, where its branch moved past the tip it was read at
-	// and the reading is no later than ?3. A repository's page answers both
-	// tests of each change it lists, which say what its home owes it. The
-	// targets due a reading of one repository walk its targets' rows by their
-	// key, each tested against its branch and a live change into it, which
-	// code_changes_target_idx holds the live changes of by target.
+	// THE HOME'S LISTING: changes_due's two statements with the checks' work
+	// as the test. A head is due while no dispatch of it for its target names
+	// its target's checks file (one seek of each key), or while its latest
+	// attempt of a check ended by infrastructure below ?4 (AutoRequeueAttempts)
+	// with no next attempt (code_checks_requeue_idx, then code_checks' key);
+	// the listing of repositories also takes a target due a reading, where its
+	// branch moved past the tip read and the reading is no later than ?3. A
+	// repository's page answers both tests of each change, which say what its
+	// home owes; its targets due a reading walk their rows by key, each tested
+	// against its branch and a live change into it (code_changes_target_idx).
 	headUndispatched = `NOT EXISTS (SELECT 1 FROM code_check_dispatches AS d INDEXED BY ` +
 		checkDispatchesKey + `
 		CROSS JOIN code_check_targets AS g INDEXED BY ` + checkTargetsKey + `

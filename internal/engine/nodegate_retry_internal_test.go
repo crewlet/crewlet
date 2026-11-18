@@ -23,29 +23,14 @@ import (
 // A GESTURE THAT REACHED ONE LOG AND NOT THE OTHER SAYS SO, AND A RETRY UNDER
 // THE SAME OPERATION FINISHES IT WITHOUT WRITING ANY LOG TWICE.
 //
-// Two shapes, because an `unknown` answer is two different facts and the retry
-// has to be right for both: the pages record never landed, or it landed and the
-// answer was lost. In both, the tracker's log — which held the record durably
-// the first time — answers the retry from its own rows at the position it
-// already holds, and gains no record.
+// Two shapes, because `unknown` is two facts: the pages record never landed,
+// or it landed and the answer was lost. In both, the tracker's log answers the
+// retry from its own rows at the position it already holds.
 //
-// DURABLY, NOT APPLIED. The write's answer for a record that landed on its log
-// before this node's applier reached it is `pending`, and the gate counts that
-// as done ([DomainGate.done]): every node applies it as it gets there. The
-// case asserted `applied`, which decided on how fast the applier ran rather
-// than on what the gate did, and failed on a loaded runner whose applier was
-// behind the write's wait (crewlet/crewlet#1100). What the gate must not do
-// with a log that holds the record is write it again, which the retry's counts
-// below hold.
-//
-// # And it is the rows answering, not the broker
-//
-// Every log here is written through a recorder that WITHHOLDS the message id,
-// so the broker's duplicate window — two minutes, and an operator finishing a
-// partial gesture is routinely later — cannot collapse a second append onto the
-// first. What the case counts is appends that reached the broker at all. With
-// the id on the wire the log's end would not move either way, and a lookup that
-// never found the operation passed as one that did.
+// The tracker is held to durable, not applied: `pending` counts as done
+// ([DomainGate.done]), and asserting `applied` would test the applier's speed.
+// Every log is written through a [recorder] that withholds the message id, so
+// the broker's duplicate window cannot hide a second append: the rows answer.
 func TestAPartialGateIsReportedAndARetryFinishesIt(t *testing.T) {
 	t.Parallel()
 	for name, landed := range map[string]bool{
@@ -59,10 +44,9 @@ func TestAPartialGateIsReportedAndARetryFinishesIt(t *testing.T) {
 			const away = "node-away"
 			identity := identityLogs(t, s)
 
-			// THE ENGINE'S OWN GATE over recorded logs, with the pages
-			// log's write made to answer `unknown` once — the one fault a
-			// real broker hands a caller that nothing on this side can
-			// resolve.
+			// THE ENGINE'S OWN GATE over recorded logs, the pages log's
+			// write answering `unknown` once: the fault nothing on this side
+			// can resolve.
 			flaky, logs, recs := recordingGate(t, e, back)
 			faulted := false
 			trackerName, pagesName := worklet.Domain{}.Name(), doclet.Domain{}.Name()
@@ -155,13 +139,9 @@ func TestAPartialGateIsReportedAndARetryFinishesIt(t *testing.T) {
 	}
 }
 
-// A GESTURE ID CARRIED TO ANOTHER NODE IS THAT NODE'S OWN OPERATION.
-//
-// Each log's operation was derived from the gesture's id, its sign and the log
-// alone, so evicting node-b under the id an eviction of node-a had used was
-// answered from node-a's ledger entries — complete, at node-a's positions — and
-// nothing was written for node-b on any log. Inside the broker's duplicate
-// window the append itself would have collapsed onto node-a's record as well.
+// A GESTURE ID CARRIED TO ANOTHER NODE IS THAT NODE'S OWN OPERATION: each log's
+// operation is derived from the node too, or evicting node-b under node-a's
+// gesture id is answered from node-a's ledger and writes nothing for node-b.
 func TestAGestureIDCarriedToAnotherNodeEvictsThatNode(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
@@ -204,12 +184,8 @@ func TestAGestureIDCarriedToAnotherNodeEvictsThatNode(t *testing.T) {
 }
 
 // AN EVICTION RETRIED UNDER ITS ID AFTER A READMISSION TOOK THE NODE BACK IS
-// REFUSED, AND WRITES NOTHING.
-//
-// The ledger held the eviction's operation, so the retry was answered "applied"
-// at the eviction's old position on every log — while every row said the node
-// was counted again. The operation did happen; it is not what the node's
-// standing rests on any more, and a retry is not a new eviction.
+// REFUSED, AND WRITES NOTHING: the ledger holds the operation, but the node's
+// standing no longer rests on it, and a retry is not a new eviction.
 func TestAnEvictionRetriedAfterItsReadmissionIsSuperseded(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
@@ -270,15 +246,13 @@ func TestAnEvictionRetriedAfterItsReadmissionIsSuperseded(t *testing.T) {
 // A RETRY THROUGH A NODE WHOSE APPLIER HAS NOT REACHED THE FIRST RECORD WRITES
 // NO SECOND ONE.
 //
-// Checked in front of the write, the retry missed the ledger on such a node
-// and then decided unconditionally: its append was refused against the first
-// record, the publisher waited for the applier to reach it — and the next
-// round's decision, which never looked, wrote the gate again against the
-// anchor it had just caught up to. Past the broker's duplicate window that is
-// a second record on the log, moving the eviction's position and restarting
-// its fence window. The retry here starts while the tracker's applier is
-// halted and lets it resume only once the write has found itself behind, with
-// message ids withheld so the broker's window plays no part.
+// Such a node misses the ledger in front of the write; its append is refused
+// against the first record and the publisher waits for the applier to reach
+// it. The next round must look again rather than write against the anchor it
+// caught up to: past the broker's duplicate window that is a second record,
+// moving the eviction's position and restarting its fence window. The retry
+// starts with the tracker's applier halted and resumes it once the write has
+// found itself behind; message ids are withheld ([recorder]).
 func TestARetryThroughALaggingApplierWritesNoSecondRecord(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
@@ -343,12 +317,9 @@ func TestARetryThroughALaggingApplierWritesNoSecondRecord(t *testing.T) {
 	}
 }
 
-// A LOG WHOSE LEDGER CANNOT BE READ ANSWERS WITH THAT ERROR AND IS NOT WRITTEN.
-//
-// The lookup in front of the write read `err == nil && done`, so a ledger this
-// node could not read was one that said the operation never landed, and the
-// gate went out again. The pages log's ledger is taken away here; the tracker's
-// log, whose ledger is intact, is written as ever.
+// A LOG WHOSE LEDGER CANNOT BE READ ANSWERS WITH THAT ERROR AND IS NOT WRITTEN:
+// an unreadable ledger does not say the operation never landed. The pages
+// log's ledger is taken away; the tracker's, intact, is written as ever.
 func TestAnUnreadableLedgerIsThatLogsErrorAndNothingIsWritten(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
@@ -367,9 +338,7 @@ func TestAnUnreadableLedgerIsThatLogsErrorAndNothingIsWritten(t *testing.T) {
 		t.Fatalf("evict: %v", err)
 	}
 	got := byDomain(res)
-	// DURABLE, NOT APPLIED: a record that landed before this node's applier
-	// reached it answers `pending`, which the gate counts as done
-	// (crewlet/crewlet#1100).
+	// DURABLE, NOT APPLIED: `pending` counts as done ([DomainGate.done]).
 	if !got[trackerName].done() {
 		t.Fatalf("the tracker's log, whose ledger reads, answered %+v, want its record "+
 			"durable (applied, or pending until this node's applier reaches it)", got[trackerName])
@@ -383,11 +352,9 @@ func TestAnUnreadableLedgerIsThatLogsErrorAndNothingIsWritten(t *testing.T) {
 	}
 }
 
-// A NODE ID NO NODE COULD RUN UNDER IS REFUSED BEFORE ANYTHING IS JUDGED.
-//
-// It becomes a subject token on every identity log, so a typo carrying a
-// wildcard was an append the broker refused on every log — reported, through
-// the refusal classifier's catch-all, as each log being full.
+// A NODE ID NO NODE COULD RUN UNDER IS REFUSED BEFORE ANYTHING IS JUDGED: it is
+// a subject token on every identity log, where a wildcard is an append the
+// broker refuses, which the refusal classifier's catch-all reads as a full log.
 func TestAGateOnANodeIDNoNodeCouldHaveIsRefused(t *testing.T) {
 	t.Parallel()
 	var wrote gateWrites
@@ -406,13 +373,11 @@ func TestAGateOnANodeIDNoNodeCouldHaveIsRefused(t *testing.T) {
 
 // AN OPERATION ID THE GRAMMAR DID NOT MINT IS REFUSED BEFORE ANYTHING IS JUDGED.
 //
-// Every log's operation is derived from the gesture's id, and the publisher
-// reads the instant it was minted at to decide whether its ledger can vouch
-// for a retry: an id carrying none reads as minted at the epoch, so after any
-// ledger sweep the gesture answered `unknown` on every log without publishing
-// anything, however often it was run. The HTTP route refused such an id and
-// the gate itself took it. Mutation: drop the gate's own check and these reach
-// the logs.
+// The publisher reads the id's mint instant to decide whether its ledger can
+// vouch for a retry: an id carrying none reads as minted at the epoch, so after
+// any ledger sweep the gesture answers `unknown` on every log for ever. The
+// gate checks it itself, not only the HTTP route. Mutation: drop the gate's
+// own check and these reach the logs.
 func TestAGateUnderAnOperationIDTheGrammarDidNotMintIsRefused(t *testing.T) {
 	t.Parallel()
 	var wrote gateWrites
@@ -430,13 +395,10 @@ func TestAGateUnderAnOperationIDTheGrammarDidNotMintIsRefused(t *testing.T) {
 	}
 }
 
-// FORCE DECIDES AN UNREADABLE LEASE LISTING AS IT DECIDES A HELD LEASE.
-//
-// The listing is the judgement's only input, and force is the operator saying
-// it does not decide this node. Refusing a forced eviction with a 500 because
-// coordination could not be listed made force work only when it was least
-// needed: an absent node most wants evicting during exactly such a fault.
-// Unforced, the unreadable listing is still refused, and by name.
+// FORCE DECIDES AN UNREADABLE LEASE LISTING AS IT DECIDES A HELD LEASE: force
+// says the listing, the judgement's only input, does not decide this node, and
+// an absent node most wants evicting during exactly such a fault. Unforced,
+// the unreadable listing is still refused, and by name.
 func TestForceEvictsPastALeaseListingNobodyCouldRead(t *testing.T) {
 	t.Parallel()
 	var wrote gateWrites
@@ -462,13 +424,10 @@ func TestForceEvictsPastALeaseListingNobodyCouldRead(t *testing.T) {
 	}
 }
 
-// A GESTURE WHOSE CALLER GOES AWAY AFTER THE JUDGEMENT IS FINISHED ANYWAY.
-//
-// Its request's context was the gesture's, so a dropped connection between the
-// two logs cancelled the second write and left the node evicted on one log and
-// counted on the other, with no answer for anybody to read the operation id
-// out of. The logs are written at once now, so the second write here waits for
-// the first to have dropped the caller before it looks.
+// A GESTURE WHOSE CALLER GOES AWAY AFTER THE JUDGEMENT IS FINISHED ANYWAY, or a
+// dropped connection leaves the node evicted on one log and counted on the
+// other, with no answer to read the operation id from. The logs are written at
+// once, so the second write here waits for the first to drop the caller.
 func TestAGestureIsFinishedWhenItsCallerGoesAway(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
@@ -503,12 +462,11 @@ func TestAGestureIsFinishedWhenItsCallerGoesAway(t *testing.T) {
 // EVERY LOG'S OPERATION IS DISTINCT PER SIGN, PER LOG AND PER NODE, AND NO TWO
 // GESTURES SPELL ONE.
 //
-// A node id may hold dots and a gesture id may hold anything, so a plain dotted
-// join spelled gesture `x` on node `y.evict.tracker.z` and gesture
-// `x.evict.tracker.y` on node `z` as the same operation — one ledger row
-// answering two gestures. And every id is the grammar's: the steps after the
-// gesture are two segments, whatever the node holds, the second naming its
-// log readably however the node had to be written.
+// A node id may hold dots and a gesture id anything, so a plain dotted join
+// spells gesture `x` on node `y.evict.tracker.z` and gesture
+// `x.evict.tracker.y` on node `z` alike: one ledger row answering two. And
+// every id is the grammar's: two segments after the gesture, the second naming
+// its log readably however the node had to be written.
 func TestADomainOperationIDNamesOneOperation(t *testing.T) {
 	t.Parallel()
 	type parts struct {
@@ -544,13 +502,10 @@ func TestADomainOperationIDNamesOneOperation(t *testing.T) {
 // A LOG IS ADVISED A RETRY ONLY WHERE RUNNING THE GESTURE AGAIN CAN FINISH IT,
 // AND THE ADVICE IS AN ACTION RATHER THAN A FLAG.
 //
-// Every incomplete answer told the operator to run the command again with
-// -op-id. For an evicted node, a log rebuilt under it, a full log or an
-// operation superseded since, the same command fails the same way for ever.
-// And the advice was a sentence in the command line's vocabulary, which the
-// dashboard rendered word for word beside a dialog with no -op-id, -api or
-// -force: the remedy is now a closed set of actions each surface renders in its
-// own words, and the sentence beside it names none of them.
+// For an evicted node, a log rebuilt under it, a full log or an operation
+// superseded since, the same command fails the same way for ever. The remedy
+// is a closed set of actions each surface renders in its own words (the
+// dashboard has no -op-id, -api or -force), so its detail names no flag.
 func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 	t.Parallel()
 	refused := func(reason statelog.Reason) DomainGate {
@@ -619,8 +574,8 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		// ANOTHER NODE'S COPY, which this node's append was collapsed onto:
 		// the gate is about that node, and this one — counted, or it would
 		// have been refused before appending — finishes the gesture itself
-		// once the window has passed. Sent to another node, the operator was
-		// told the node they ran it on was evicted when it was not.
+		// once the window has passed. Sent to another node, the operator
+		// would be told their node is evicted when it is not.
 		"evicted, another node's copy": {gate: copied(statelog.ReasonEvicted),
 			actions: []statelog.GateAction{retry},
 			detail:  "node node-x's copy, which this node's own write was collapsed onto, and it applies nowhere because that node is evicted, a fact about node node-x and not about this one. The broker holds its operation id for the log's duplicate window, 2m0s, from when it landed. Once that has passed, the same gesture under the same operation id finishes it here"},
@@ -651,11 +606,9 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 			detail: "from_a_newer_build"},
 		"eviction unknown": {gate: refused(statelog.ReasonEvictionUnknown),
 			actions: []statelog.GateAction{retry}, detail: "eviction state"},
-		// THE SHAPE A TOO-LARGE RECORD ACTUALLY HAS — a typed refusal whose
-		// detail names the limit that refused it and what moves it. A bare
-		// wrapped queue.ErrTooLarge stood here, which the state log never
-		// answers, so this row certified a branch no refusal reached while
-		// the real one was advised in its reason's name alone.
+		// THE SHAPE A TOO-LARGE RECORD ACTUALLY HAS: a typed refusal whose
+		// detail names the limit that refused it and what moves it, never a
+		// bare queue.ErrTooLarge, which the state log never answers.
 		"too large": {gate: DomainGate{Stream: "CREWLET_PAGES_LOG",
 			Err: &statelog.Unavailable{Reason: statelog.ReasonRecordTooLarge,
 				Detail: "the record is 9000000 bytes before its signature and no " +
@@ -701,15 +654,11 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 // A REFUSAL THAT CLEARS BY ITSELF IS NEVER ADVISED THAT NO RETRY CLEARS IT, and
 // one with no sentence of its own is advised in its own words.
 //
-// The table above names the reasons the gate has a sentence for. Every other
-// reason fell through to one arm that offered no action and named the reason
-// alone — which told an operator no retry cleared `eviction_unknown`, a state
-// the next read clears, and reduced a too-large record and a refusal the broker
-// named to a word, when the refusal's own detail is what says which limit to
-// raise or what the broker objected to. So every reason this build names is
-// walked: a retryable one offers the retry, the framework's own class
-// ([statelog.Reason.Retryable]) deciding rather than a list here, and every
-// one either carries its refusal's detail or is one the table gives a sentence.
+// Every reason this build names is walked, not only the table's: a retryable
+// one offers the retry ([statelog.Reason.Retryable] decides, not a list here;
+// `eviction_unknown` clears on the next read), and every one carries its
+// refusal's detail, which says which limit to raise or what the broker
+// objected to, unless the table above gives it a sentence of its own.
 //
 // Mutation: drop the retryable arm and the eviction_unknown case and the first
 // half goes red; stop carrying the detail and the second does.
@@ -905,10 +854,9 @@ func publishCaughtUp(t *testing.T, back *Backends, identity []*runningLog, node 
 	}
 }
 
-// AN UNVOUCHED UNKNOWN REACHES THE ANSWER AS ONE. The gate kept only a log's
-// outcome and position, so the state log's own "this node cannot vouch for the
-// operation" was dropped between the write and the remedy, and the answer
-// advised the same gesture here — which answers `unknown` again for ever.
+// AN UNVOUCHED UNKNOWN REACHES THE ANSWER AS ONE: the state log's "this node
+// cannot vouch for the operation" survives to the remedy, which sends the
+// gesture elsewhere, since here it answers `unknown` again for ever.
 func TestAnUnvouchedGateLogIsSentToAnotherNode(t *testing.T) {
 	t.Parallel()
 	answer := func(unvouched bool) gateWrite {

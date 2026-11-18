@@ -18,27 +18,21 @@ import (
 )
 
 // THE REVERT: code_revert_change undoes a MERGED change by a change of its own
-// (M5-D25) — ONE ENGINE WRITE (gitlet.WriteRevertChange) the repository's Gitlet
-// node builds: what the change's merge brought into its target undone onto
-// the target's tip, as one commit on a new branch — the seat's own
-// (refs/heads/seats/<handle>/revert-<n>) or, for a person, revert-<n> —
-// whose push's record opens "Revert <repo>!<n>" into the same target. So a
-// revert is never a move of the target: it is a change, gated, reviewed and
-// merged as every change is. A branch of that name already there answers
-// `exists`: a revert of the change is already under way.
+// (M5-D25), ONE engine write (gitlet.WriteRevertChange): its merge undone onto
+// the target's tip as one commit on a new branch ([revertBranch]), whose push
+// opens "Revert <repo>!<n>" into the same target. A revert never moves the
+// target: it is a change, gated, reviewed and merged as every change is. A
+// branch of that name already there answers `exists`: a revert is under way.
 //
-// Asked to (`merge`), the revert's change is merged as a SECOND write of the
-// same operation's step ([stepTwo], statelog.StepOpID), from the commit the
-// revert made — merged, queued at its place, or not merged and why, said
-// beside the opened change ("opened; site!8 not merged: …"), never as a
-// refusal of the revert, which landed: the revert is the call's gesture and
-// its merge the consequence, as a merge's close of its work item is.
+// Asked to (`merge`), its change is merged as a SECOND write of the same
+// operation ([stepTwo], statelog.StepOpID), from the revert's commit; a merge
+// that did not happen is said beside the opened change, never as a refusal of
+// the revert, which landed (as a merge's close of its work item is).
 
 // CodeRevertChangeTool is the revert tool's name: its authority row's action.
 const CodeRevertChangeTool = string(authz.ActionCodeRevertChange)
 
-// revertVerb is the verb a revert's operation is named by (m3-w1's op rule;
-// M5's verbs).
+// revertVerb is the verb a revert's operation is named by ([opIDFor]).
 const revertVerb = "code-revert"
 
 type codeRevertChange struct{ deps CodeDeps }
@@ -94,7 +88,7 @@ func (t *codeRevertChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err := w.Validate(); err != nil {
 		return codeWriteFailure(ctx, tool, cv.g.c.actor, repo.Name, err), nil
 	}
-	// THE BRANCH IT CREATES IS HELD before the write is sent, with no read
+	// The branch it creates is held before the write is sent, with no read
 	// ([CodeDeps.branch]): a seat's revert branch is its own namespace's.
 	if refusal := t.deps.branch(ctx, turn, tool, cv.g.c, repo, false, w.Ref); refusal != nil {
 		return *refusal, nil
@@ -125,7 +119,7 @@ func (t *codeRevertChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			unknownNext(false, sameCall(cv.g.c.actor, tool), fmt.Sprintf("List %s's changes with %s",
 				repo.Name, CodeListChangesTool), "the same revert would be pushed twice")), nil
 	case res.Command.Result == gitlet.ResultNG && res.Command.Reason == gitlet.RefusalStale:
-		// A NEW BRANCH THAT IS THERE: this change's revert, begun already.
+		// The new branch is there: this change's revert, begun already.
 		return refusedBy(tools.RefusalExists, writeRefusalError(string(res.Command.Reason), res.Command.Detail),
 			fmt.Sprintf("%s: branch %s exists already, so a revert of %s is under way; find its change with "+
 				"%s, or delete the branch with %s to revert again.", tool, branch, cv.g.ref(), CodeListChangesTool,
@@ -147,11 +141,9 @@ func (t *codeRevertChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // opened says on out which change the revert's push opened, or why none was,
 // and answers its number — 0 where its record has not said it yet.
 //
-// WHY NONE WAS IS A SENTENCE A PERSON READS TOO (the act route answers a
-// person the same fields, ADR-0060), so it names no tool and no class: the
-// refusal's class rides beside it as a value (ChangeRefusal), and the
-// repository's changes, which list the change once its record says it, are
-// named as a person finds them.
+// Why none was is a sentence a person reads too (the act route answers the
+// same fields, ADR-0060), so it names no tool and no class: the class rides
+// beside it as ChangeRefusal.
 func (t *codeRevertChange) opened(out *codeRevertAnswer, repo string, ch *gitlet.ChangeAnswer) int64 {
 	switch {
 	case ch == nil:
@@ -172,12 +164,10 @@ func (t *codeRevertChange) opened(out *codeRevertAnswer, repo string, ch *gitlet
 	return ch.Number
 }
 
-// mergeStep is the revert's step two: the change it opened merged — at the
-// commit the revert made, into the reverted change's target — as the caller,
-// under the operation's [stepTwo], its source deleted as a merge's default
-// deletes a seat's, decided by the Gitlet node that builds the merge
-// ([deleteSource]); what became of it said on out, a merge that did not
-// happen as a residue beside the opened change, never as a refusal.
+// mergeStep is the revert's step two: the change it opened merged at the
+// revert's commit into the reverted change's target, as the caller, under the
+// operation's [stepTwo]; what became of it is said on out, a merge that did
+// not happen as a residue, never as a refusal.
 func (t *codeRevertChange) mergeStep(ctx context.Context, turn *turnctx.Turn, cv conversing, op string,
 	res gitlet.EngineWriteResult, number int64, out *codeRevertAnswer) {
 
@@ -197,10 +187,9 @@ func (t *codeRevertChange) mergeStep(ctx context.Context, turn *turnctx.Turn, cv
 			CodeMergeChangeTool, CodeGetChangeTool))
 		return
 	}
-	// ITS BRANCH'S DELETION IS THE DEFAULT, the Gitlet node's to decide as it
-	// judges the merge (gitlet.EngineWrite.DeleteSource): a seat's revert
-	// branch is deleted unless a gate over the target keeps it, a person's
-	// kept.
+	// DeleteSource unset: the Gitlet node applies a merge's default
+	// ([deleteSource]): a seat's revert branch goes unless a gate over the
+	// target keeps it, and a person's stays.
 	g := cv.g
 	w := written(ctx, turn, g.c, gitlet.EngineWrite{Kind: gitlet.WriteMergeChange, RepoID: g.repo.ID,
 		OpID: statelog.StepOpID(op, stepTwo), Fresh: revertFresh(t.deps.writeFresh(turn, g.c, g.repo),
@@ -246,10 +235,10 @@ func revertBranch(asker gitlet.Principal, number int64) string {
 	return branchRoot + leaf
 }
 
-// revertFresh is a revert's freshness: the caller's write floor raised to at,
-// the position its change was read merged at (or the revert's push landed
-// at, for its merge), so the Gitlet node's copy holds the commit it builds from
-// — a person's write is linearizable already.
+// revertFresh is the caller's write floor raised to at, where the change was
+// read merged (or, for its merge, where the revert's push landed), so the
+// Gitlet node's copy holds the commit it builds from; a person's write is
+// linearizable already.
 func revertFresh(f statelog.Freshness, at statelog.Position) statelog.Freshness {
 	if f.Level == statelog.ReadLinearizable {
 		return f
@@ -258,9 +247,8 @@ func revertFresh(f statelog.Freshness, at statelog.Position) statelog.Freshness 
 }
 
 // codeRevertAnswer is what code_revert_change says: the change it reverts,
-// the branch and commit the revert made, the change its push opened — or why
-// none was — and, asked to merge it, merged, queued at its place, or the
-// residue saying why not.
+// the revert's branch and commit, the change its push opened or why none was,
+// and, asked to merge it, merged, queued at its place, or why not.
 type codeRevertAnswer struct {
 	Repo            string           `json:"repo"`
 	RenamedTo       string           `json:"renamed_to,omitempty"`

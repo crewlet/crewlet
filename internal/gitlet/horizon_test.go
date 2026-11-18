@@ -131,15 +131,12 @@ func TestATombstoneIsSweptAndRaisesTheMark(t *testing.T) {
 }
 
 // A SWEEP KEEPS PACE WITH BULK DELETION: a repository whose pushes each round
-// make a thousand refs and delete the thousand the previous round made — a
-// CI's per-build tags, a branch clean-up — keeps a thousand live refs and,
-// once each delete is past RefTombstoneHorizon, no more tombstones than the
-// last round made. A sweep of a fixed share a record fell behind that by about
-// 936 rows a record and kept every tombstone it ever made; the sweep takes
-// what the record's row budget left, so the table converges. The round's two
-// pushes are two records, as the committer forms them: a thousand deletions,
-// each counted with its sweep's room and the object it left, share no record
-// with a thousand creates.
+// make a thousand refs and delete the previous round's thousand (a CI's
+// per-build tags, a branch clean-up) keeps a thousand live refs and, once each
+// delete is past RefTombstoneHorizon, no more tombstones than the last round
+// made, because the sweep takes what the record's row budget left rather than
+// a fixed share. A round's two pushes are two records, as the committer forms
+// them: the thousand deletions share no record with the thousand creates.
 func TestTheTombstoneSweepKeepsPaceWithBulkDeletion(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -192,7 +189,7 @@ func TestTheTombstoneSweepStaysInsideTheRecordsRowBudget(t *testing.T) {
 	for i := range MaxCommandsPerPush {
 		cmds = append(cmds, move(fmt.Sprintf("refs/heads/new-%04d", i), ZeroOID, oid(fmt.Sprint(i))))
 	}
-	// Its day and pusher rows come on top of the budget, as an older build's sweep takes the same rows.
+	// Its day and pusher rows come on top of the budget, so every build's sweep takes the same rows.
 	const activity = pushDayRows + pusherDayRows
 	if written := e.applyCounting(pushOf(t, "repo-a", pushEntry("big", cmds...))); written != MaxRecordRows+activity {
 		t.Fatalf("the record wrote and removed %d rows, want exactly its budget of %d and its %d activity rows: "+

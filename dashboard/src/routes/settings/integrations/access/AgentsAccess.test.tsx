@@ -294,7 +294,7 @@ test("a change is a draft, and the review shows the engine's plan and saves agai
 });
 
 // THE REVIEW IS ONE CARD PER AGENT: the change as labels and values in one
-// grid, so "On Datadog" and "Role at Datadog" line up, then the next sync's
+// grid, its turning on said by the tag alone, then the next sync's
 // steps as a timeline whose rail keeps the order, each node a glyph rather
 // than a number and no lead-in sentence above them. Crewlet's own steps carry
 // no mark at all. Mutation: draw the steps as a numbered list again and the
@@ -327,9 +327,10 @@ test("the review is a card per agent, its change as labels and values, then its 
   expect(within(review).getByText("Turned on")).toBeTruthy();
   const change = review.querySelector(".crewlet-change-list")!;
   expect(change.className).not.toContain("crewlet-change-list--inline");
+  // TURNED ON IS SAID ONCE, by the tag: no "On Datadog: Off to On" row repeats it.
   expect(
     [...change.querySelectorAll(".crewlet-change-list__label")].map((l) => l.textContent),
-  ).toEqual(["On Datadog", "Role at Datadog"]);
+  ).toEqual(["Role at Datadog"]);
   expect(screen.queryByText(/the next sync will:/)).toBeNull();
 });
 
@@ -413,6 +414,7 @@ test("several agents are several cards, and the one turned off is drawn as dange
     [...card.querySelectorAll(".crewlet-timeline__item")].map((i) => i.getAttribute("data-state"));
   const [pm, qa, sre] = cards as [HTMLElement, HTMLElement, HTMLElement];
   expect(word(pm)).toBe("Turned off");
+  expect(pm.querySelector(".crewlet-change-list")).toBeNull();
   expect(pm.className).toContain("crewlet-card--rail-danger");
   expect(states(pm)).toEqual(["danger", "danger"]);
   expect(within(pm).getByText(/Crewlet disables the service account/)).toBeTruthy();
@@ -2165,6 +2167,66 @@ test("a Scaleway grant is worded by projects, by name, and its whole reach is th
     permission: "KubernetesFullAccess",
     scope: ["22222222-2222-4222-8222-222222222222"],
   });
+});
+
+// A PERMISSION GRANTED FOR ONE CHANGE IS OFFERED FOR IT ALONE: what else it
+// allows, an hour or four and never Permanent, and a held grant's target.
+// Mutation: offer GRANT_HOURS for it and Permanent is a choice.
+test("a Scaleway bucket grant is offered for one change, an hour up to four, saying what else it allows", async () => {
+  const answer = scalewayGrantsAnswer();
+  const lane = answer.seats.find((s) => s.handle === "sre")!.lanes.scaleway!;
+  lane.desired.grants = [
+    ...(lane.desired.grants ?? []),
+    {
+      id: "gcccccccccc",
+      permission: "ObjectStorageBucketsWrite",
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+      granted_by: "Ada",
+      granted_at: new Date().toISOString(),
+      reason: "make it private",
+      request: "abcdefghij",
+      target: "user-uploads",
+    },
+  ];
+  draw(answer);
+  expect(
+    screen.getByText(/^ObjectStorageBucketsWrite · The agent's own projects · for user-uploads · /),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Add grant" }));
+  const dialog = screen.getByRole("dialog", { name: "Add a grant for SRE" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "SRE's new Scaleway permission" }));
+  const bucket = screen
+    .getAllByRole("option")
+    .find((o) => o.textContent?.startsWith("ObjectStorageBucketsWrite"))!;
+  expect(bucket.textContent).toContain("For one change, up to 4 hours");
+  fireEvent.mouseDown(bucket);
+  const caution = within(dialog).getByText(/lifecycle rules, which can expire and delete objects/);
+  expect(caution.textContent).toContain("for at most 4 hours, never permanently");
+  expect(caution.textContent).toContain("asks you to sign in again");
+  const lengths = within(dialog)
+    .getAllByRole("radio")
+    .map((r) => r.textContent);
+  expect(lengths).toEqual(["1 hour", "4 hours"]);
+  expect(within(dialog).getByRole("radio", { name: "1 hour" }).getAttribute("aria-checked")).toBe(
+    "true",
+  );
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Why SRE needs it" }), {
+    target: { value: "close the public listing" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Add grant" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  await screen.findByRole("dialog", { name: "Review changes to Scaleway" });
+  const seats = calls.plan[0] as {
+    seats: { sre: { scaleway: { grants: Record<string, unknown>[] } } };
+  };
+  const added = seats.seats.sre.scaleway.grants.at(-1)!;
+  expect(added).toMatchObject({
+    permission: "ObjectStorageBucketsWrite",
+    reason: "close the public listing",
+  });
+  const hours = (Date.parse(String(added.expires_at)) - Date.now()) / 3_600_000;
+  expect(hours).toBeGreaterThan(0.9);
+  expect(hours).toBeLessThanOrEqual(1);
 });
 
 // ADD GRANT PICKS ONE PERMISSION FROM THE LIVE CATALOGUE, a write marked as

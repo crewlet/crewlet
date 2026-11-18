@@ -8,39 +8,16 @@ import (
 )
 
 // PriorWorkHeader introduces the prior-work ledger: what an EARLIER ROUND of
-// this same turn already did.
-//
-// Each phase rebuilds its LLM conversation per iteration, so without this the
-// model re-plans a delivery that already fired. The (read) distinction is the
-// load-bearing part: a read's results are genuinely gone and must be
-// re-fetched, while anything else changed the world and a human reads the
-// second copy as a duplicate. The markers are the ledger's own
-// (ledger.FormatCalls), so the header reads the lines below it rather than a
-// vocabulary of its own.
-//
-// AND AN EARLIER ROUND'S DELIVERY IS CITABLE, which the header says because a
-// model forbidden to repeat a write it cannot cite is caught between the two:
-// the engine reads the whole turn's record (turn.Record), and a round sent
-// back for a re-read that believed otherwise submitted with no citation, or
-// went looking for some other surface to deliver on.
-//
-// NOT EVERY `→ error` FAILED. A call an executor run's log still held in
-// flight when its round was read is on the round's record failed, so no
-// delivery check or citation takes it for something done, and its line says
-// its outcome is unknown and that what it did may have taken effect
-// (internal/agent/runner's UnfinishedNote). Under a rule that every `→ error`
-// did not take effect and is to be retried, a run would make such a call
-// again: a second post or delegation, the duplicate this header exists to
-// prevent. So the rule excepts it in the line's own terms, as every rule such
-// a call is read by does ([ContinuedRoundRules], [ReviewHeader],
-// [lateCallsHeader]).
-//
-// AND A LINE COUNTING CALLS BY TOOL IS READ BY THE SAME RULES. A record that
-// no longer lists calls one by one counts them by tool (ledger.FormatElided):
-// a long run's middle its row dropped, a parked turn's rounds condensed past
-// their calls, and rounds a park dropped whole, which are drawn as nothing
-// else. Told only how to read a marked line, a model read a counted call as
-// one it could make again — the duplicate this header exists to prevent.
+// this turn already did, so the model does not redo a delivery that fired.
+// A `(read)`'s results are gone and must be re-fetched; anything else changed
+// the world, and a second copy is a duplicate. The markers are the ledger's
+// own (ledger.FormatCalls). An earlier delivery is citable (the engine reads
+// the whole turn.Record), or a model barred from repeating it submits uncited
+// or delivers elsewhere. An `→ error` whose outcome is unknown
+// (internal/agent/runner's UnfinishedNote) may have taken effect, so it is
+// excepted, as in [ContinuedRoundRules], [ReviewHeader] and [lateCallsHeader];
+// a line counting calls by tool (ledger.FormatElided) is read by the same
+// rules, or a counted call is made again.
 const PriorWorkHeader = "## Already done earlier in this turn" +
 	"\nAn earlier round of this turn was sent back. Every call below marked" +
 	" `→ success` ALREADY RAN:" +
@@ -61,52 +38,37 @@ const PriorWorkHeader = "## Already done earlier in this turn" +
 	" delivery ADDS to it — reply in its thread, edit the item — rather than" +
 	" re-sending it, and is not a duplicate."
 
-// UserMessage is the per-round content of an executor turn.
-//
-// This is the half of the prompt that is ALLOWED to move. The prior-work
-// ledger grows as a turn iterates, so putting it in a system prompt would
-// invalidate the provider's prefix cache on every loop — which is the whole
-// reason the system prompts above take no ledger at all.
-//
-// The reviewer does not use it: its evidence is assembled once per round and
-// is a system-prompt fact, not something that accumulates as its own loop
-// runs.
+// UserMessage is the per-round content of an executor turn: the half of the
+// prompt ALLOWED to move (package doc, "Byte-stability across rounds"). The
+// reviewer does not use it: its evidence is fixed per round, a system-prompt
+// fact.
 type UserMessage struct {
-	// TaskDescription is the ask. Rendered as "(no description)" when
-	// empty, so the model is told there is no task rather than being handed
-	// a blank.
+	// TaskDescription is the ask; empty renders "(no description)" rather
+	// than a blank.
 	TaskDescription string
 
-	// PriorWork is the rendered iteration ledger — empty on the first
-	// iteration of every turn, which is the common case, so the message
-	// stays byte-identical to its pre-ledger form until a self_iterate
-	// actually happens.
+	// PriorWork is the rendered iteration ledger, empty on a turn's first
+	// iteration.
 	PriorWork string
 
 	// Endings is how this conversation's earlier turns ended, rendered whole
-	// with its own heading by [BuildConversationEndings] — empty on a
-	// conversation's first turn, on a turn that serves no conversation, and
-	// in a company that keeps no session. Rendered once, at the turn's
-	// dispatch, and frozen on its park, so every brief of the turn carries
-	// the same bytes.
+	// with its own heading by [BuildConversationEndings]; empty on a
+	// conversation's first turn, a turn serving none, and a company keeping no
+	// session. Rendered at the turn's dispatch and frozen on its park, so every
+	// brief carries the same bytes.
 	Endings string
 
 	// CapabilityChanges is what changed in the seat's access since it was
-	// last told, rendered whole with its own heading (internal/capability's
-	// ChangesBlock). Computed at the turn's dispatch and frozen on its park
-	// beside Endings, so every brief of the turn carries the same bytes;
-	// empty when nothing changed and on the seat's first told turn.
+	// last told, with its own heading (internal/capability's ChangesBlock),
+	// frozen like Endings; empty when nothing changed and on the seat's first
+	// told turn.
 	CapabilityChanges string
 
 	// Steered is every note a person sent this turn that the brief carries,
-	// each rendered by [SteerMessage]: the ones the turn has already read, in
-	// the order read, then the ones this brief is the first to read.
-	//
-	// IN THE BRIEF, LAST, because the run it opens is a fresh session: a
-	// phase the engine drives carries a read note in its conversation, after
-	// its opening, and a run has no conversation of the engine's to carry
-	// it in — so a correction a reviewer read would otherwise bind every
-	// phase of the turn but the one that does the work again.
+	// each rendered by [SteerMessage]: those already read, in order, then
+	// those this brief reads first. In the brief because the run it opens is
+	// a fresh session with no engine conversation to carry them, so a note
+	// the reviewer read would otherwise miss the phase that redoes the work.
 	Steered []string
 }
 
@@ -114,33 +76,20 @@ type UserMessage struct {
 // told.
 const KeyCapabilityChanges = "capability_changes"
 
-// taskHeader introduces the ask.
-//
-// A HEADING, like the two blocks it sits between, and that is the whole of the
-// change from the bare "Task:" label it replaces — the word is the same word.
-// The label was the one block of this message that was not a section of it,
-// so under any structural reading of the document the ask belonged to
-// whatever heading preceded it: with the conversation's earlier turns told
-// above it, the newest thing anybody said was filed inside that account,
-// whose own text points at "the task below" as a sibling. The dashboard's
-// prompt outline reads the same structure and drew the same wrong picture.
+// taskHeader introduces the ask as a HEADING, like the blocks around it: a
+// bare label files the ask under whatever heading precedes it (the earlier
+// turns' endings), for the model and the dashboard's outline alike.
 const taskHeader = "## Task"
 
 // BuildPhaseUserMessage renders the executor's user message.
 //
-// The three parts run oldest to newest — how this conversation's earlier
-// turns ended, then the ask, then earlier rounds of THIS turn (which happened
-// after the ask arrived) — so the most recent context sits nearest the
-// model's answer. All three are top-level headings: they are peers, and a
-// reader that nests them gets the ask wrong.
+// The parts run oldest to newest (earlier turns' endings, the ask, earlier
+// rounds of THIS turn), so the newest context sits nearest the answer; all
+// are top-level peer headings, since nesting them misreads the ask.
 //
-// The TASK IS ONE SECTION of the outline, whatever it carries. It is a
-// trigger's whole body — a chat notification with the engine's own "## Triage"
-// and "## Thread context" written into it, a pull request whose description
-// opens on its own "# Title" — and every heading in it belongs to the ask, not
-// beside it. The endings and the ledger are one section each for the same
-// reason: their entries are "###" lines, and an account quoted in one can
-// hold anything.
+// The task is ONE outline section whatever headings it carries (a trigger's
+// whole body: a notification's "## Triage", a pull request's "# Title"); so
+// are the endings and the ledger, whose quoted entries can hold anything.
 func BuildPhaseUserMessage(m UserMessage) Prompt {
 	task := m.TaskDescription
 	if task == "" {
@@ -150,8 +99,8 @@ func BuildPhaseUserMessage(m UserMessage) Prompt {
 	if m.Endings != "" {
 		b.Heading("conversation_endings", m.Endings)
 	}
-	// AFTER THE ENDINGS AND BEFORE THE ASK: an access change is news the
-	// seat reads before it decides how to do what it was asked.
+	// Before the ask: the seat reads an access change before deciding how
+	// to do it.
 	if m.CapabilityChanges != "" {
 		b.Heading(KeyCapabilityChanges, m.CapabilityChanges)
 	}
@@ -160,8 +109,7 @@ func BuildPhaseUserMessage(m UserMessage) Prompt {
 		b.Heading("prior_work", PriorWorkHeader+"\n"+m.PriorWork)
 	}
 	for i, note := range m.Steered {
-		// A key per note: a section's key is unique within its prompt,
-		// and each note is its own heading.
+		// Section keys are unique within a prompt.
 		b.Heading(fmt.Sprintf("steered_%d", i+1), note)
 	}
 	return b.Build()
@@ -169,26 +117,14 @@ func BuildPhaseUserMessage(m UserMessage) Prompt {
 
 // SteerMessage is a person's note to a running turn, as the model reads it.
 //
-// RUNTIME-NEUTRAL AND FACTUAL, because the same text is read in every place a
-// note lands: as a user message at the opening of a run of the engine's loop,
-// in an executor's brief, and inside its run where its harness places what a hook
-// hands it — after tool results, or as it is about to finish
-// (internal/agent/steer). So it says nothing about WHERE it arrived, which would
-// be false in all but one of them, and states only what holds everywhere — and
-// each has cost a turn when a bare note left the model to guess: WHO sent it,
-// through what, so a note from the person who runs the company is not weighed
-// like text a tool returned; that it arrived while the work was UNDER WAY, so
-// the model neither restarts the task nor reads it as a new request needing its
-// own reply; and that it STANDS for the rest of the turn and is the later word
-// where it and the task disagree, so a correction made early still binds the
-// work done at the end. Plain statements rather than commands, because a vendor
-// warns that command-like text a hook adds can trip a model's guard against
-// instructions arriving from where they should not. The note itself is last and
-// verbatim.
-//
-// Phase-neutral on purpose: the reviewer reads the same message as the
-// executor. For one the note is an instruction and for the other it is part
-// of what the work is now judged against, and one sentence says both.
+// Runtime- and phase-neutral: the same text lands in the engine's loop, an
+// executor's brief and, via a hook, inside its run (internal/agent/steer), so
+// it says nothing of where it arrived. It says WHO sent it (not weighed like
+// tool output), that the work was UNDER WAY (no restart, no reply of its own),
+// and that it STANDS for the turn as the later word over the task. Plain
+// statements, not commands: command-like hook text can trip a model's
+// injection guard. The executor reads an instruction, the reviewer what the
+// work is judged against. The note is last and verbatim.
 func SteerMessage(sender, note string) string {
 	who, lead := sender, sender
 	if strings.TrimSpace(sender) == "" {

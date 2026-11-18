@@ -12,61 +12,26 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// Aggregates over the answer's WHOLE set, not over its page.
+// Totals are over the answer's WHOLE set, never its page: one over the page
+// would change as somebody scrolled, which a header's number must not. All
+// share the answer's predicate, so they are columns of one pass ([MaxTotals]
+// is eight: each is a cheap expression over the same rows, and eight is more
+// than a header renders). A total names its COLUMN, the index comment's own
+// spelling (`spend_tokens:sum`), since a metric name would drift from it.
 //
-// A total is what the question adds up to — "how much work is on this board",
-// "what has this epic cost" — and a page is fifty rows of it. Computing one
-// over the page would make it change as somebody scrolled, which is the one
-// thing a number on a header must not do.
-//
-// # ONE STATEMENT, N AGGREGATES
-//
-// Every total shares the answer's own predicate, so they are columns of one
-// pass rather than one query each. [MaxTotals] bounds the list at eight
-// because each entry is another expression over the same rows — cheap — and
-// eight is already more than a header renders.
-//
-// # Why a total names its COLUMN rather than a metric
-//
-// `spend_tokens:sum` is the DDL's own spelling, written into the index comment
-// beside the index that serves it. A metric vocabulary on top ("cost",
-// "effort") would be a second name for one column and the two would drift: the
-// index comment names the column, so the grammar does too.
-//
-// # Why a total reads EVERY value and a sort reads one
-//
-// A multi-valued field is several rows per task, and the two operations want
-// opposite things from that. A SUM of it is the sum of the values — all of
-// them, or it is not a sum — while a SORT has to pick exactly one or the join
-// multiplies every task by its own value count and the page repeats rows. So
-// the aggregate here is unpinned and [sortTerms] pins `seq = 0`, and the
-// difference is the operations' rather than an oversight. `count` is the third
-// answer again: it counts TASKS, distinct, because "how many have this set" is
-// what a header means by it.
-//
-// # And why a custom field's total reads a different table
-//
-// A declared field's values live in `tracker_field_values`, keyed by field id
-// and typed per column, so `f.<slug>:sum` is an aggregate over that table
-// rather than a column of the task — taken over the answer's own tasks' rows,
-// each read by the table's key ([matchedValues]). The value indexes 0002
-// declared name "their totals", and a total driven from them read every value
-// the field holds in the company to keep the answer's.
+// A total reads EVERY value of a multi-valued field, where [sortTerms] pins
+// `seq = 0` because a sort over them all repeats rows; `count` counts distinct
+// TASKS. A custom field's total reads `tracker_field_values` by its key over
+// the answer's own tasks ([matchedValues]), never by the field's value index,
+// which reads every value the field holds in the company.
 
-// The aggregate operations.
+// The aggregate operations: a CLOSED SET, because an op reaches the statement
+// as a NAME. An asked-for `count` is exact, unlike [Answer.TotalHint], which
+// stops at a ceiling so that a poll is not a scan.
 //
-// A CLOSED SET, because an op reaches the statement as a NAME. `count` is
-// there and is not the same as the answer's own [Answer.TotalHint]: the hint
-// stops at a ceiling because an exact count over an unbounded set turns a poll
-// into a scan, and a count ASKED FOR is a caller who wants the number and has
-// said so.
-//
-// `median` and `p90` are ORDER STATISTICS, answered by nearest rank: the value
-// at 1-based position ⌈p·n⌉ of the set's non-null values in ascending order —
-// so the median of four values is the second, never an average of two. A
-// value the set does not hold would be a number no task has, and a header
-// saying "median 3.5 points" over a board of 3s and 4s describes nobody. The
-// same rule answers both, which is why they are two names for one expression.
+// `median` and `p90` are ORDER STATISTICS by nearest rank: the value at 1-based
+// position ⌈p·n⌉ of the set's non-null values ascending, so the median of four
+// is the second, never an average: a value no task has describes nobody.
 const (
 	TotalSum    = "sum"
 	TotalAvg    = "avg"
@@ -98,11 +63,8 @@ func orderStatistic(op string) bool {
 	return false
 }
 
-// totalColumns is what a total may be taken over, beside a custom field.
-//
-// THE SUMMABLE COLUMNS AND NOTHING ELSE: a sum over a status is a number with
-// no meaning, and a grammar that accepted it would answer one rather than
-// refuse.
+// totalColumns is what a total may be taken over beside a custom field: the
+// summable columns only, since a sum over a status is a number with no meaning.
 var totalColumns = map[string]string{
 	"spend_tokens":      "t.spend_tokens",
 	"spend_turns":       "t.spend_turns",
@@ -142,29 +104,24 @@ type Total struct {
 	Column string `json:"column"`
 	Op     string `json:"op"`
 
-	// Value is the number, and ABSENT when no row contributed one — which
-	// is not zero: "nothing is estimated" and "everything is estimated at
-	// nothing" are different facts, and a header rendering the second for
-	// the first is how an empty board reads as free.
+	// Value is the number, ABSENT when no row contributed one: "nothing is
+	// estimated" is not "everything is estimated at nothing", and rendering
+	// the second for the first makes an empty board read as free.
 	Value *float64 `json:"value,omitempty"`
 
 	// At is the instant, for an order statistic — min, max, median, p90 —
 	// over a date column.
 	At *time.Time `json:"at,omitempty"`
 
-	// instant is decided at COMPILE time, from the column's declared
-	// type, and carried here rather than re-derived at scan time: a
-	// custom field's min is an instant or a number depending on its
-	// DECLARATION, which the scan cannot see and the compiler already
-	// resolved.
+	// instant is decided at compile time and carried: a custom field's min
+	// is an instant or a number by its DECLARATION, which the scan cannot
+	// see.
 	instant bool
 
-	// rank is an order statistic's p over [rankDenominator], zero for
-	// every other op, and ranked the FROM … WHERE clause over the values it
-	// is taken from, with rankArgs its arguments. The statement's own
-	// column for such a total is the COUNT of those values, and the value
-	// itself is read by a second statement once the count says which
-	// position to read — see [readRanked].
+	// rank is an order statistic's p over [rankDenominator] (zero for any
+	// other op), ranked the FROM … WHERE clause over its values and
+	// rankArgs its arguments. The statement's column for such a total is
+	// the COUNT of those values; [readRanked] reads the value itself.
 	rank     int
 	ranked   string
 	value    string
@@ -200,10 +157,8 @@ func compileTotals(entries []string, fields map[string]resolvedField) (
 			total.value, total.ranked, total.rankArgs = rankedValues(column, fields)
 		}
 		if instant {
-			// ONLY AN ORDER STATISTIC ANSWERS AN INSTANT: it is one of
-			// the set's own values. A sum of dates is a number of
-			// microseconds since 1970, which is a value nothing renders
-			// and nobody meant.
+			// ONLY AN ORDER STATISTIC ANSWERS AN INSTANT, being one of the
+			// set's own values; a sum of dates is microseconds since 1970.
 			if !orderStatistic(op) {
 				return nil, nil, nil, fmt.Errorf("worklet: %s is a date, and "+
 					"%s over dates is a number of microseconds rather than a "+
@@ -244,9 +199,8 @@ func totalExpr(column, op string, fields map[string]resolvedField) (
 				"is taken over a number or a date", field.Slug, field.Type)
 		}
 		if op == TotalCount {
-			// A COUNT OF A FIELD IS "HOW MANY TASKS SET IT", which is
-			// the honest reading and the one a header wants — never
-			// how many VALUE ROWS a multi-valued field produced.
+			// A COUNT OF A FIELD IS HOW MANY TASKS SET IT, never how many
+			// VALUE ROWS a multi-valued field produced.
 			return `(SELECT COUNT(DISTINCT v.task_id) ` + matchedValues + `
 			         WHERE v.field_id = ? AND ` + liveFieldValue + `)`,
 				[]any{field.ID}, false, nil
@@ -264,9 +218,8 @@ func totalExpr(column, op string, fields map[string]resolvedField) (
 			[]any{field.ID}, value == "at", nil
 	}
 	if op == TotalCount && column == "tasks" {
-		// THE ONE COUNT THAT NAMES NO COLUMN, because "how many" is the
-		// commonest total there is and `tasks:count` is what a caller
-		// writes for it.
+		// THE ONE COUNT THAT NAMES NO COLUMN: `tasks:count`, the
+		// commonest total.
 		return "COUNT(*)", nil, false, nil
 	}
 	expr, known := totalColumns[column]
@@ -287,22 +240,16 @@ func totalExpr(column, op string, fields map[string]resolvedField) (
 	return strings.ToUpper(op) + "(" + expr + ")", nil, instantColumns[column], nil
 }
 
-// matchedValues is where a total over a custom field reads its values from:
-// each task of the answer's set, and that task's own rows of the field, read
-// by the table's key ([fieldValuesKey]) — so a total costs the set it totals
-// rather than every value the field holds in the company, which is what
-// driving it from the field's value index read, inside one project as at the
-// workspace.
+// matchedValues is where a custom field's total reads its values: each task of
+// the answer's set, then that task's own rows by the table's key
+// ([fieldValuesKey]), so a total costs the set it totals rather than every
+// value the field holds in the company.
 //
-// A CROSS JOIN, which in this engine as in SQLite is an inner join whose
-// tables are read in the order written: the matched set first, then each
-// task's values. Written as a plain JOIN the planner chose the order by its
-// estimates, which no statistics anchor and any clause of the answer's
-// predicate moves — and measured at the workspace, once the subtask rollup's
-// probe of each row's root changed the matched set's estimate, it read the
-// value table's whole key index first and scanned the matched set again for
-// every value, which is every value of every field in the company for one
-// header.
+// A CROSS JOIN, which this engine, like SQLite, reads in the order written. A
+// plain JOIN leaves the order to estimates no statistics anchor and any clause
+// of the predicate moves, and the plan that reads the value table's key index
+// first scans the matched set again per value: every value of every field for
+// one header.
 const matchedValues = `FROM matched m
 		         CROSS JOIN tracker_field_values v INDEXED BY ` + fieldValuesKey + `
 		           ON v.task_id = m.id`
@@ -322,11 +269,9 @@ func rankedValues(column string, fields map[string]resolvedField) (string, strin
 	return expr, `FROM matched t WHERE ` + expr + ` IS NOT NULL`, nil
 }
 
-// readTotals runs the one statement every total is a column of.
-//
-// A COMMON TABLE EXPRESSION HOLDS THE MATCHED SET, so a custom field's
-// correlated aggregate and a task column's plain one read the same rows — and
-// the predicate is evaluated once rather than once per total.
+// readTotals runs the one statement every total is a column of. A common table
+// expression holds the matched set, so field and column aggregates read the
+// same rows and the predicate is evaluated once rather than once per total.
 func readTotals(ctx context.Context, tx *sql.Tx, set taskSet,
 	totals []Total, exprs []string, exprArgs []any) ([]Total, error) {
 
@@ -334,9 +279,8 @@ func readTotals(ctx context.Context, tx *sql.Tx, set taskSet,
 		return nil, nil
 	}
 	query := totalsStatement(set, exprs)
-	// THE EXPRESSION ARGUMENTS COME AFTER THE PREDICATE'S, because the
-	// common table expression is written first and its placeholders are
-	// bound in statement order.
+	// THE EXPRESSION ARGUMENTS FOLLOW THE PREDICATE'S: the common table
+	// expression is written first, and placeholders bind in statement order.
 	args := append(append([]any{}, set.args...), exprArgs...)
 
 	cells := make([]any, len(totals))
@@ -381,13 +325,11 @@ func (t Total) answered(number float64, held bool) Total {
 // readRanked reads an order statistic's value: the one at 1-based position
 // ⌈rank·n/100⌉ of the set's n values in ascending order.
 //
-// A SECOND STATEMENT over the same predicate, in the same read transaction,
-// so it sees exactly the set the count was taken over. It is not folded into
-// the first as a subquery because the engine does not resolve the common
-// table expression inside a LIMIT or OFFSET expression ("no such table:
-// matched", measured), and a window function would number every row of the
-// set to read one. An EMPTY set has no position to read and answers absent,
-// like every other aggregate over nothing.
+// A SECOND STATEMENT in the same read transaction, so it sees the set the count
+// was taken over. Not a subquery of the first: the engine does not resolve the
+// common table expression inside LIMIT or OFFSET ("no such table: matched"),
+// and a window function would number every row to read one. An EMPTY set
+// answers absent, like every aggregate over nothing.
 func readRanked(ctx context.Context, tx *sql.Tx, set taskSet,
 	total Total, n int64) (float64, bool, error) {
 

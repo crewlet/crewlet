@@ -14,13 +14,8 @@ import (
 )
 
 // A RECORD WAKES SOMEBODY, OR IS HANDLED FOR A REASON THIS BUILD CAN NAME.
-//
-// # Why every "no" is an ACK and not a nak
-//
-// A record naked for having nothing to say comes back for ever: the consumer
-// redelivers it, the same node decides the same thing, and the feed's position
-// never advances past it — so every later record in the company waits behind a
-// rank move nobody wanted to hear about. A decision is handling.
+// Every "no" is an ack, not a nak: a naked record is redelivered and decided
+// the same way for ever, and every later record waits behind it.
 func TestTheFeedWakesOnlyWhatCarriesANotification(t *testing.T) {
 	t.Parallel()
 	at := time.Unix(1_700_000_000, 0).UTC()
@@ -34,9 +29,8 @@ func TestTheFeedWakesOnlyWhatCarriesANotification(t *testing.T) {
 			wakes: true,
 		},
 		"a task change nobody announced": {
-			// The absence is on the RECORD rather than a parameter to
-			// the feed, so a redelivery months later still knows not to
-			// wake anybody — which a runtime flag could not.
+			// The absence is on the record, so a redelivery months later
+			// still wakes nobody.
 			record: feedRecord(worklet.TaskSubject("t-1"), worklet.OpPatch, nil, at),
 		},
 		"a rank move": {
@@ -50,9 +44,7 @@ func TestTheFeedWakesOnlyWhatCarriesANotification(t *testing.T) {
 			record: feedRecord(worklet.BarrierSubject(), worklet.OpBarrier, nil, at),
 		},
 		"a trimmed record, whatever it carries": {
-			// MACHINERY, like the barrier: the trim's record removes
-			// anchors and is about no object anybody watches, so it is
-			// named as one — a notification on it wakes nobody.
+			// Machinery, like the barrier: a notification on it wakes nobody.
 			record: feedRecord(worklet.TrimmedSubject(statelog.Position{
 				Stream: topics.TrackerLogStream, Generation: 1, Seq: 40}),
 				worklet.OpTrimmed, &worklet.Notify{Kind: worklet.ChangeFields}, at),
@@ -103,14 +95,10 @@ func TestTheFeedWakesOnlyWhatCarriesANotification(t *testing.T) {
 	}
 }
 
-// THE WHOLE RECORD TRAVELS IN THE BODY, INCLUDING WHAT THIS BUILD CANNOT READ.
-//
-// The node that WINS a feed message is rarely the one running the seat it
-// wakes, and is often behind on its own rows — so routing from a local read
-// would use a stale head or block the feed until it caught up. And a parser on
-// a newer node reading a record an older node relayed must see everything the
-// writer wrote, which is why the body is the record's own bytes rather than a
-// struct this build knows how to fill in.
+// THE WHOLE RECORD TRAVELS IN THE BODY, INCLUDING WHAT THIS BUILD CANNOT READ:
+// the winning node routes from the record's own snapshot, not a local read
+// (see [worklet.Translator]), and a newer parser sees everything the writer
+// wrote.
 func TestTheFeedBodyIsTheWholeRecord(t *testing.T) {
 	t.Parallel()
 	record := feedRecord(worklet.TaskSubject("t-1"), worklet.OpPatch,
@@ -126,8 +114,7 @@ func TestTheFeedBodyIsTheWholeRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	// A FIELD FROM A NEWER BUILD, carried through the record's own
-	// unknown-key retention.
+	// A field from a newer build, kept by the record's unknown-key retention.
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &raw); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -162,14 +149,8 @@ func TestTheFeedBodyIsTheWholeRecord(t *testing.T) {
 }
 
 // A RECORD A NEWER BUILD WROTE IS DEFERRED TO A PEER ON THAT BUILD, never
-// answered "no wake".
-//
-// Its envelope reads, so this node knows it is a task's change, and its version
-// is past what this build decodes, so the notification rules are a newer
-// build's. Answered "no wake", the feed would acknowledge it — and the feed's
-// consumer is the fleet's, so no peer on the newer build would ever see it and
-// its wake would be gone (#838): what `ActorApps` records lost on an older node
-// during a roll. It answers the feed's deferral instead.
+// answered "no wake": the feed's consumer is the fleet's, so an ack here would
+// lose its wake for every peer.
 //
 // Mutation: answer the future-version arm with no wake, and the deferral is
 // gone.

@@ -21,13 +21,10 @@ import (
 
 // THE REGISTER IS THE ONLY PLACE A FLEET CAN SEE ANOTHER NODE'S ARTEFACT.
 //
-// These cases exist because the five snapshot fields on [coord.NodePositions]
-// had three readers and no writer at all. The trim's snapshot term counts
-// donors from them and refuses to remove anything until two counted nodes hold
-// one — so on every fleet of two or more, the term was permanently unknown and
-// the log of every domain grew for the life of the deployment, while the
-// applied term, the backup term and every operator surface reported a healthy
-// fleet.
+// The trim's snapshot term counts donors from the snapshot fields on
+// [coord.NodePositions] and removes nothing until two counted nodes hold one.
+// Left unwritten, every fleet of two or more grows every domain's log for
+// ever while every operator surface reports it healthy.
 
 // A TAKEN SNAPSHOT REACHES THE ROW, per domain and with its own generation.
 func TestTheRowCarriesTheSnapshotThisNodeHolds(t *testing.T) {
@@ -174,11 +171,10 @@ func TestASkipWithNothingOnDiskStillPublishesItsReason(t *testing.T) {
 
 // A SNAPSHOT OF AN EMPTY DOMAIN IS STILL A SNAPSHOT.
 //
-// One artefact covers every domain, so a node that snapshots while its newest
-// domain's log is still empty covers that domain at position zero — a real
-// file a joiner adopts. Reading "holds none" off the sequence would leave the
-// fleet permanently one donor short of the two the trim's snapshot term needs,
-// and it would do so for every domain rather than only the empty one.
+// One artefact covers every domain, so a domain whose log is still empty is
+// covered at position zero, a real file a joiner adopts. Reading "holds none"
+// off the sequence would leave the fleet one donor short of the two the
+// trim's snapshot term needs, for every domain, for ever.
 func TestADomainSnapshottedWhileEmptyStillCountsAsADonor(t *testing.T) {
 	t.Parallel()
 	taken := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
@@ -205,13 +201,10 @@ func TestADomainSnapshottedWhileEmptyStillCountsAsADonor(t *testing.T) {
 	}
 }
 
-// writeTestSnapshot lays down a complete artefact — the manifest AND the bytes
-// beside it, because [newestSnapshot] refuses one without the other on the
-// rule the backup manifest states: the manifest is written last, so a
-// directory entry without its file is the debris of a run that did not finish.
-//
-// THE MANIFEST NAMES ITS FILE, as a take's does: written before the name was
-// set, it named none, and the bytes check passed on the directory itself.
+// writeTestSnapshot lays down a complete artefact: the manifest AND the bytes
+// beside it, since [newestSnapshot] refuses a manifest without its file as the
+// debris of an unfinished run. The manifest names its file, as a take's does:
+// one naming none passes the bytes check on the directory itself.
 func writeTestSnapshot(t *testing.T, dir string, m statelog.Manifest) {
 	t.Helper()
 	m.V = statelog.ManifestVersion
@@ -237,12 +230,10 @@ func writeTestSnapshot(t *testing.T, dir string, m statelog.Manifest) {
 
 // WHAT A SKIPPED TICK SAYS, which is the whole of [reportForSkip].
 //
-// The loop retries a skip every thirty seconds for as long as it holds, so
-// "report it" and "report it every time" are not the same instruction — and
-// the second one is what the default topology got. `sole_node` is the steady
-// state of a ONE-NODE company, which is the supported shape rather than a
-// degraded fleet, so warned per tick it is a line every thirty seconds for the
-// life of a healthy deployment.
+// The loop retries a skip for as long as it holds, so a skip is reported when
+// its reason changes, not per tick: `sole_node` is a one-node company's
+// steady, supported state, and reported per tick it is a line every retry for
+// the life of a healthy deployment.
 func TestASkippedTickSaysSomethingOnlyWhenTheReasonChanges(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -352,17 +343,10 @@ func TestTheSoleNodeLineDoesNotPromiseThatPeersWillFixIt(t *testing.T) {
 
 // A RESTART IS NOT A NODE THAT HAS NEVER SNAPSHOTTED.
 //
-// The loud branch asks whether this node HOLDS an artefact, and it has to,
-// because the obvious spelling — a flag set when this process took one — is
-// the same question only until the first restart. A node that snapshotted
-// yesterday and was restarted skips for `recent`: its artefact is inside the
-// operator's interval, its register row advertises it, and a peer can adopt
-// from it. A process-scoped flag is false at that moment, so every restart
-// warned that the node had never taken a snapshot while simultaneously
-// publishing the one it holds.
-//
-// `Have` is read from the DIRECTORY, so it survives a restart the way the
-// artefact does.
+// The loud branch asks whether this node HOLDS an artefact (`Have`, read from
+// the directory), not whether this process took one: a node restarted after
+// yesterday's snapshot skips for `recent` while its row advertises the
+// artefact, and a process-scoped flag would warn that it never took one.
 func TestARestartDoesNotClaimTheNodeHasNeverSnapshotted(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -407,16 +391,13 @@ func TestANodeHoldingNothingIsStillReported(t *testing.T) {
 
 // A NUDGE WAKES THE SNAPSHOT LOOP, AND NOTHING ELSE DOES BEFORE ITS WAIT IS UP.
 //
-// A reanchor, an adoption and the restore of an installed artefact each leave
-// this node holding an artefact no joiner will take, and each wakes the loop
-// rather than leaving the fleet without a donor for the length of whichever
-// wait the loop is in: the interval — a day — after a snapshot it took, and
-// the skip retry after one it declined. Both waits are exercised here with the
-// interval at a day, so a tick that comes early can only be the nudge.
+// A reanchor, an adoption and a restore each leave this node an artefact no
+// joiner will take, so each wakes the loop rather than leave the fleet without
+// a donor for the wait it is in: the interval (a day here) after a take, the
+// skip retry after a decline. So a tick that comes early is the nudge.
 //
-// THE DECLINE IS `deferred`, a skip the retry waits out flat at thirty
-// seconds. A boot skip retries a second later ([snapshotWaits.after]), and a
-// nudged tick could not be told from that one.
+// THE DECLINE IS `deferred`, retried flat at [snapshotSkipRetry]: a boot skip
+// retries a second later ([snapshotWaits.after]), like a nudged tick.
 func TestANudgeWakesTheSnapshotLoopOutOfEitherWait(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -462,12 +443,10 @@ func TestANudgeWakesTheSnapshotLoopOutOfEitherWait(t *testing.T) {
 // TIME.
 //
 // `unhydrated`, `sole_node` and `lagging` each end seconds into a healthy boot,
-// and a flat thirty-second retry put a restarted node's first artefact — and
-// the donor the fleet counts with it — half a minute after it could have been
-// taken. Doubling, so a node that stays in one for its whole life (a single
-// node is `sole_node` for ever) settles on the ceiling rather than asking
-// every second. Each gap is held to at least the wait it was scheduled for —
-// a timer never fires early, so the lower bound is the one that cannot flake.
+// so a flat retry delays a restarted node's first artefact and the donor the
+// fleet counts with it. The wait doubles to a ceiling, so a node that stays in
+// one for life (a single node is `sole_node` for ever) does not ask every
+// second. Each gap is held only to its lower bound: a timer never fires early.
 func TestABootSkipIsRetriedOnADoublingWait(t *testing.T) {
 	t.Parallel()
 	waits := snapshotWaits{Interval: 24 * time.Hour,
@@ -500,8 +479,7 @@ func TestABootSkipIsRetriedOnADoublingWait(t *testing.T) {
 			t.Fatalf("retry %d came %v after the attempt before it, want at "+
 				"least %v: the retry does not wait out its doubling", i+1, gap, want)
 		}
-		// AND SOON AT FIRST: a retry that waited the ceiling from the start
-		// is the flat half-minute this replaced.
+		// AND SOON AT FIRST, not at the ceiling.
 		if i == 0 && gap >= waits.Retry/2 {
 			t.Fatalf("the first retry came %v after the boot's tick, want well "+
 				"inside the %v ceiling: a boot skip is retried soon", gap, waits.Retry)
@@ -616,11 +594,10 @@ func TestATakenSnapshotWakesTheHeartbeat(t *testing.T) {
 
 // THE HEARTBEAT PUBLISHES AT ONCE, AGAIN ON EVERY TICK, AND ON A NUDGE.
 //
-// Every tick is what notices a RUNNING node fall below the floor or behind a
-// peer's reanchor ([stateLog.publishPositions]), so the loop that re-invokes
-// the publish is pinned here under an interval a test can wait out — the
-// cases that drive the publish directly certify what one publish does, and
-// none of them would notice a heartbeat that published once and stopped.
+// Every tick is what notices a running node fall below the floor or behind a
+// peer's reanchor ([stateLog.publishPositions]); the cases that drive one
+// publish directly would not notice a heartbeat that published once and
+// stopped.
 func TestTheHeartbeatPublishesOnEveryTickAndNudge(t *testing.T) {
 	t.Parallel()
 	t.Run("on every tick", func(t *testing.T) {
@@ -667,11 +644,10 @@ func awaitPublish(t *testing.T, published <-chan struct{}, what string) {
 
 // AN APPLIER'S FIRST DRAIN WAKES THE SNAPSHOT LOOP.
 //
-// `unhydrated` is the commonest boot skip and an applier's first drain is the
-// moment it ends, so the engine hands every applier it builds the loop's nudge
-// rather than leaving the loop to find out on its retry. Built here through
-// the engine's own [stateLog.start], over an empty log: the loop's first fetch
-// comes back with nothing, which is the drain.
+// `unhydrated` is the commonest boot skip and an applier's first drain ends
+// it, so every applier the engine builds gets the loop's nudge rather than
+// leaving it to the retry. Built through [stateLog.start] over an empty log,
+// whose first empty fetch is the drain.
 func TestAnAppliersFirstDrainWakesTheSnapshotLoop(t *testing.T) {
 	t.Parallel()
 	s, q, appendTo := aProvisionedTrackerLog(t)
@@ -716,14 +692,12 @@ func (c *countingTaker) await(t *testing.T, what string) {
 
 // A REANCHOR, AN ADOPTION AND A RESTORE EACH WAKE THE LOOP ON A RUNNING NODE.
 //
-// Each leaves the node holding an artefact at a generation a joiner refuses —
-// or, for the restore, possibly the donor's file under an artefact of its own —
-// and until the loop takes another, the peers the event left behind have no
-// donor. The loop is first left waiting out its interval behind a snapshot it
-// took, so the only thing that can run it again inside the test is a nudge
-// the event gives it: its own, or the first drain of an applier it relaunched
-// ([stateLog.snapshotNudge]) — two paths to one wake, and this fails only when
-// the event takes neither.
+// Each leaves the node an artefact a joiner refuses (for the restore, possibly
+// the donor's file under an artefact of its own), so until the loop takes
+// another the peers have no donor. The loop is parked behind its interval
+// first, so only a nudge runs it again: the event's own, or the first drain
+// of an applier it relaunched ([stateLog.snapshotNudge]); this fails only
+// when the event gives neither.
 func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -798,23 +772,16 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 }
 
 // parkSnapshotLoop leaves a running node's snapshot loop waiting out its
-// interval — a day — behind a snapshot it has just taken, and returns what the
-// loop last published. From then on nothing but a nudge runs the loop again.
+// interval (a day) behind a snapshot it just took, and returns what the loop
+// last published; from then on only a nudge runs the loop.
 //
-// A PEER IS COUNTED so a tick can take one — a row naming the tracker's log,
-// which is what the trim counts it on: a node alone declines as `sole_node`
-// and keeps retrying, which would put a tick of its own inside any window a
-// test watched.
-//
-// AFTER THE BOOT'S OWN TICK, and then nudged, so the take comes at once
-// rather than on the boot skip's retry. Before that tick has concluded a nudge
-// could land while it was still declining, which wastes it. Once one has, the
-// take comes from the nudge or from the retry, whichever is first; a nudge
-// that arrived while that take was running runs one more tick at once, which
-// declines as `recent` and waits until the artefact is stale — a day — like
-// the take does ([snapshotWaits.after]). So whichever tick was last, the loop
-// is parked behind the interval, and what this returns is the value it parked
-// behind: it waits for the nudge to have been taken and the value to hold.
+// A PEER IS COUNTED on the tracker's log, as the trim counts it, so a tick can
+// take: a node alone declines as `sole_node` and keeps retrying inside any
+// window a test watches. The nudge follows the boot's own tick, since one
+// landing while that tick declines is wasted. A nudge arriving during the
+// take runs one more tick, which declines as `recent` and also waits the
+// interval ([snapshotWaits.after]), so the loop parks either way; this waits
+// until no nudge is pending and the value holds.
 func parkSnapshotLoop(t *testing.T, e *Engine) *snapshotHeld {
 	t.Helper()
 	s := e.core.Load().log
@@ -856,15 +823,11 @@ func parkSnapshotLoop(t *testing.T, e *Engine) *snapshotHeld {
 	return parked
 }
 
-// TestANodeHoldingAShortArtefactIsADonorForNothing.
-//
-// [statelog.Offer.Usable] refuses an artefact that names no position for a
-// domain the RECIPIENT registers, and it refuses it WHOLESALE — there is no
-// partial adoption. So a node whose newest artefact predates a domain can
-// donate it to nobody, for any domain, and stamping the domains it does cover
-// would have the trim count this node as holding a snapshot it can never hand
-// over. That is the arithmetic that lets a log trim past records no joiner
-// could then replay.
+// TestANodeHoldingAShortArtefactIsADonorForNothing: [statelog.Offer.Usable]
+// refuses WHOLESALE an artefact naming no position for a domain the recipient
+// registers, so one predating a domain donates nothing. Stamping the domains
+// it covers would have the trim count a donor that can never hand over, and
+// trim past records no joiner could replay.
 func TestANodeHoldingAShortArtefactIsADonorForNothing(t *testing.T) {
 	t.Parallel()
 	row := coord.NodePositions{
@@ -901,11 +864,9 @@ func TestANodeHoldingAShortArtefactIsADonorForNothing(t *testing.T) {
 	}
 }
 
-// TestAnArtefactNamingADomainThisNodeDroppedStillStamps is the other side of
-// the same rule, and the reason it is a subset test rather than an equality
-// one: an artefact from an OLDER build names domains this one no longer
-// registers, and that is not a reason to refuse it. What matters is that it
-// covers everything this node runs.
+// TestAnArtefactNamingADomainThisNodeDroppedStillStamps is why the rule is a
+// subset test, not equality: an artefact from an OLDER build may name domains
+// this one no longer registers; it need only cover everything this node runs.
 func TestAnArtefactNamingADomainThisNodeDroppedStillStamps(t *testing.T) {
 	t.Parallel()
 	taken := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
@@ -937,12 +898,11 @@ func TestAnArtefactNamingADomainThisNodeDroppedStillStamps(t *testing.T) {
 // THE DONOR OFFERS THE NEWEST ARTEFACT IN THE SNAPSHOT ROOT, BY THE NAME ITS
 // MANIFEST CARRIES.
 //
-// Every data node keeps the one estate, so the donor has one thing to offer:
-// the newest complete artefact in the directory its loop writes to, never one
-// whose bytes are gone, and fetched from the file the manifest names rather
-// than a name derived beside it. And it is told nothing of this node's write
-// standing: a barred machine back with its files serves no writes from the
-// copy it keeps, and that copy may be the fleet's only one.
+// Every data node keeps the one estate, so the donor offers the newest
+// complete artefact in its loop's directory, never one whose bytes are gone,
+// fetched from the file its manifest names. It is told nothing of this node's
+// write standing: a barred machine back with its files serves no writes, but
+// its copy may be the fleet's only one.
 func TestTheDonorOffersTheNewestArtefactInTheRoot(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -985,13 +945,11 @@ func TestTheDonorOffersTheNewestArtefactInTheRoot(t *testing.T) {
 // A SNAPSHOT'S RECIPIENTS ARE THE COUNTED NODES OTHER THAN THIS ONE — and this
 // one need not be counted at all.
 //
-// A machine an eviction barred, back with its files, is not counted on the logs
-// its eviction gates once the fence window has passed, and the copy it keeps
-// may be the fleet's only one. Judged as "fewer than two counted", the one
-// joiner beside it read as nobody to donate to: no artefact was taken, and the
-// joiner waited on a donor that never had one. So the count subtracts this node
-// only where it is counted: one joiner is one recipient whether or not the node
-// asking is counted beside it, and a node counted alone has none.
+// A machine an eviction barred, back with its files, is not counted on the
+// logs its eviction gates once the fence window passes, yet its copy may be
+// the fleet's only one: judged as "fewer than two counted", a joiner beside
+// it waits on a donor that never takes an artefact. So this node is
+// subtracted only where it is counted, and a node counted alone has none.
 func TestASnapshotsRecipientsAreTheCountedNodesOtherThanThisOne(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

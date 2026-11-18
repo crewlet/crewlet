@@ -25,16 +25,13 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// A turn's own auxiliary spend, held by the turn's own meter.
-//
-// The meter learned only from its own charges' answers, and a turn's auxiliary
-// calls — its context assembly, every rewrite its ledger and tools ask for —
-// reach the same counters by another route, a post-charge that refuses
-// nothing. So a window one of them took past its ceiling was one the turn's
-// next round was sent into, billed by the vendor, and then refused. These
-// cases drive the REAL turn frame, because the property is about the order of
-// its steps: the meter has to exist before the first auxiliary call and be the
-// thing that call is charged through.
+// A turn's own auxiliary spend, held by the turn's own meter: its auxiliary
+// calls (context assembly, every rewrite its ledger and tools ask for) reach
+// the counters by a post-charge that refuses nothing, so a window one of them
+// filled must hold the next round rather than send it to be billed and
+// refused. These cases drive the REAL turn frame, since the property is the
+// order of its steps: the meter exists before the first auxiliary call and
+// charges it.
 
 // countedProvider counts its calls and answers each the same way.
 type countedProvider struct {
@@ -65,12 +62,10 @@ func (p *countedProvider) called() int {
 }
 
 // budgetedTurn is an engine over the in-memory fleet, running one seat whose
-// day is capped at dayCeiling, with its text phases and its auxiliary model on
-// two providers a case can count, and one memory in its diary — so the turn's
-// context assembly asks the auxiliary model, once, which of the seat's
-// memories bear on the task, before the executor's first round and through
-// the turn's meter. Its executor launches on [runnerKey], where a case that
-// rigs the run gets one.
+// day is capped at dayCeiling, its text phases and auxiliary model on two
+// counted providers, and one memory in its diary — so context assembly asks
+// the auxiliary model once, through the turn's meter, before the executor's
+// first round. Its executor launches on [runnerKey], where a rigged run gets one.
 type budgetedTurn struct {
 	e          *Engine
 	pub        *pub
@@ -111,10 +106,9 @@ func newBudgetedTurn(t *testing.T, dayCeiling, auxTokens int) *budgetedTurn {
 		id.String(): {"Ana wants the deploy status in one line."},
 	})
 	r.e = withSessions(t, &Engine{backends: &Backends{Queue: r.pub, Fleet: r.fleet, Store: db}})
-	// NO ONBOARDING PASS: the store that keeps the seat's diary keeps its
-	// onboarding marker too, and a seat with none runs that pass — calls on
-	// its main model — before its executor launches, which is not what these
-	// cases count.
+	// NO ONBOARDING PASS: a seat with no onboarding marker in this store
+	// would run it on its main model before launching, which these cases
+	// do not count.
 	noOnboarding := 0
 	r.e.epoch.current.Store(&Company{
 		Org: r.org, Models: models, Tools: tools.NewRegistry(),
@@ -154,12 +148,10 @@ func (r *budgetedTurn) seatDay(t *testing.T) int {
 
 // A TURN WHOSE CONTEXT TAKES ITS SEAT PAST ITS DAY SENDS NO ROUND.
 //
-// The budget park found room, so the turn started; asking which of its
-// memories bear on the task then cost more than the day had left. That spend
-// is real — the counter holds it whole — and every round after it is certain
-// to be refused, so the executor's first round must be held before it is sent
-// rather than sent, billed and refused. The turn ends on the budget, naming
-// the window the context assembly filled.
+// The budget park found room, but the memory filter then cost more than the
+// day had left: the counter holds that spend whole and every later round is
+// sure to be refused, so the executor's first round is held, not sent, billed
+// and refused. The turn ends on the budget, naming the window context filled.
 //
 // Mutation: have [recordedProvider.Complete] charge the seat's counter without
 // the turn's meter hearing of it, and the executor's first round is sent into
@@ -217,8 +209,7 @@ func TestATurnsJudgeAsksTheTurnsMeter(t *testing.T) {
 }
 
 // A TURN WHOSE CONTEXT FITS LAUNCHES ITS EXECUTOR, so the case above is about
-// the window being full and not about a turn whose context spent anything at
-// all.
+// a full window, not any context spend at all.
 //
 // Mutation: hold the executor's first round wherever the turn's context made
 // an auxiliary call, whatever room is left, and no run launches here.
@@ -237,14 +228,12 @@ func TestATurnWhoseContextFitsItsDayLaunchesItsExecutor(t *testing.T) {
 	}
 }
 
-// A DISPATCHED TURN'S LAUNCH READS ITS OWN DELIVERY'S WAIT, end to end through
-// the turn's frame: the frame hands its executor's launcher the ids of the
-// events the turn was dispatched for, under which a park of the seat recorded
-// the window a launch of that delivery was refused below its floor in. In a
-// day that leaves the launch its static floor and less than its brief beside
-// it, the delivery that waited a turnover goes out held at the static floor,
-// and another delivery of the seat, in the same window, never waited and is
-// refused at its floor.
+// A DISPATCHED TURN'S LAUNCH READS ITS OWN DELIVERY'S WAIT, end to end: the
+// frame hands its launcher the ids of the events it was dispatched for, under
+// which a park recorded the window a launch was refused below its floor in. In
+// a day leaving the static floor but not the brief beside it, the delivery
+// that waited a turnover goes out held at the static floor, and another
+// delivery of the seat, which never waited, is refused at its floor.
 //
 // Mutation: build the turn's launcher without the events it was dispatched
 // for, and the delivery that waited is refused at its floor.
@@ -259,10 +248,9 @@ func TestADispatchedTurnsLaunchReadsItsOwnDeliverysWait(t *testing.T) {
 			t.Parallel()
 			r := newBudgetedTurn(t, ceiling, aux)
 			rig := rigRuns(t, r.e, nil)
-			// HALF THE DAY SPENT, and the turn's own context the aux more
-			// before its launch reads the day: the launch is left half the
-			// ceiling less the aux, and the static floor is a token below
-			// that, so a launch held at it goes out and one with its brief
+			// HALF THE DAY SPENT, plus aux by the turn's context: the launch
+			// is left half the ceiling less aux, a token above the static
+			// floor, so a launch held at it goes out and one with its brief
 			// beside it is refused.
 			id, ok := r.org.AgentIDFor(r.seat)
 			if !ok {

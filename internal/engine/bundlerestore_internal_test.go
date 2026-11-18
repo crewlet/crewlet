@@ -23,11 +23,10 @@ import (
 )
 
 // BUILDING AN EPOCH WRITES NO LOGIN; RUNNING ONE RESTORES IT. [NewCompany] is
-// what `crewlet validate` calls, so a configured credential bundle restored
-// while the providers were constructed wrote a login onto whatever host
-// validated the document. The restore is [Company.restoreBundles], which a
-// node's boot and every apply make before the epoch is published — the cases
-// below hold those two call sites; this one holds the helper.
+// what `crewlet validate` calls, so a restore there would write a login onto
+// whatever host validated the document. The restore is
+// [Company.restoreBundles], made by a node's boot and every apply before the
+// epoch is published: the cases below hold those call sites, this the helper.
 func TestAnEpochRestoresItsBundlesOnlyWhenItIsRun(t *testing.T) {
 	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	profile, err := harnessprofile.Load("claude-code", nil)
@@ -76,10 +75,9 @@ roles:
 }
 
 // A BOOT RESTORES THE CONFIGURED BUNDLE, through [New] itself: a container
-// rebuilt on every deploy comes up on an empty state volume, and the bundle —
-// here the conventional variable `crewlet llm export -secret-store` writes —
-// is what signs it in before its first turn. The restore moved out of the
-// provider's constructor into the engine, and a boot that lost the call came up
+// rebuilt on every deploy comes up on an empty state volume, and the bundle
+// (here the conventional variable `crewlet llm export -secret-store` writes)
+// signs it in before its first turn. A boot that lost the call comes up
 // signed out with every test of the helper still green.
 //
 // NOT PARALLEL: it sets the variable the bundle is read from.
@@ -141,14 +139,11 @@ func TestAnApplyRestoresTheBundleOnlyForARevisionItPublishes(t *testing.T) {
 
 // THE BUNDLE IS IN PLACE BEFORE THE EPOCH IS CURRENT, and on an apply only once
 // nothing can refuse the revision. A turn can start the moment the pointer
-// moves, so a restore made after it lets the epoch's first call run signed out;
-// one made before a stage that can still refuse writes a login for a revision
-// that is never published. And on an apply the revision's reflection workers
-// are swapped in behind the running seats only after the restore too: they
-// serve those seats' reflections from the moment they are swapped, so a swap
-// ahead of it ran a pass on the revision's models signed out. None of these
-// orders is visible from outside a running node, so the calls are read out of
-// the source.
+// moves, so a later restore lets the epoch's first call run signed out; one
+// before a stage that can still refuse writes a login for a revision never
+// published. Apply's reflection workers, serving the running seats from their
+// swap, are swapped in only after the restore too. No order is visible from
+// outside a running node, so the calls are read out of the source.
 //
 // Mutation: move the restore below installEpoch in New or in Apply, or above
 // any `return configplane.StatusError` in Apply, or move Apply's
@@ -297,22 +292,15 @@ roles:
     llm: subscription
 `
 
-// AN EPOCH DOES NOT UNDO A LOGOUT. The directory `crewlet llm logout` empties
-// is exactly what a configured bundle restores into, so every apply and every
-// boot after a logout put back the very login the operator had just removed —
-// a compromised one, typically. The restore declines while the logout stands,
-// and the epoch is still built and run: the entry runs signed out, as the
-// operator asked — and says so as what it is, naming the logout and the way
-// back, rather than as a bundle that failed to restore.
+// AN EPOCH DOES NOT UNDO A LOGOUT. `crewlet llm logout` empties the directory
+// a configured bundle restores into, so the restore declines while the logout
+// stands rather than put back the login the operator removed; the entry runs
+// signed out, warned as the logout with the way back, not a failed restore.
 //
 // NOT PARALLEL: it sets the conventional variable and PATH, and swaps the
-// process's log.
-//
-// claude-code's logout runs the vendor's own `claude auth logout`, so the test
-// puts a `claude` that only exits 0 first on PATH: what is under test is the
-// engine's rule, never the vendor's binary, and a test that used whichever
-// `claude` the machine happened to have passed where one was installed and
-// failed on a runner with none.
+// process's log. A `claude` that only exits 0 goes first on PATH for the
+// vendor's `claude auth logout`: the engine's rule is under test, not the
+// machine's binary.
 //
 // Mutation: treat harness.ErrLoggedOut as a bundle to restore anyway, and the
 // login is back here; warn it as a failed restore, and the warning is wrong.
@@ -372,14 +360,12 @@ func TestAnEpochDoesNotUndoALogout(t *testing.T) {
 	}
 }
 
-// AN ENTRY MOVED TO ANOTHER HARNESS DOES NOT RESTORE THE OLD HARNESS'S BUNDLE, even
-// where the two keep their login under one file name. The bundle is keyed by
-// the entry, so the epoch after the move restores the one exported from pi
-// into codex's empty login — and pi's `auth.json` is a name codex keeps too,
-// so it was written there: a credential codex cannot read, which as a login
-// already present then kept every later restore out, the replacement bundle
-// included. The epoch warns it as a bundle that failed, naming the harness it was
-// exported from, and writes nothing.
+// AN ENTRY MOVED TO ANOTHER HARNESS DOES NOT RESTORE THE OLD HARNESS'S BUNDLE,
+// even where both keep their login under one file name (pi's and codex's
+// `auth.json`). The bundle is keyed by the entry, so after the move codex's
+// empty login would get pi's credential, which codex cannot read and which,
+// as a login present, keeps every later restore out. The epoch warns it as a
+// failed bundle naming the harness it was exported from, and writes nothing.
 //
 // NOT PARALLEL: it sets the conventional variable and swaps the process's log.
 //

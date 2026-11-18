@@ -11,11 +11,10 @@ import (
 
 // ---- the upload reservations ------------------------------------------ //
 
-// The uploads bucket holds three classes of key: the ONE ledger of every hold
-// the company has outstanding, one record per upload, and one save ledger per
-// seat ([coord.SaveAllowances]). Two segments for a record or a save ledger,
-// each under its own class, and one for the ledger, so no upload id or seat
-// handle can ever spell another class's key.
+// The uploads bucket holds the ONE ledger of every hold the company has
+// outstanding, one record per upload and one save ledger per seat
+// ([coord.SaveAllowances]). The ledger's key has one segment and the others
+// two, each under its own class, so no upload id or seat spells another's key.
 const uploadLedgerKey = "ledger"
 
 // uploadRecordKey is one upload's record key.
@@ -24,10 +23,9 @@ func uploadRecordKey(upload string) string { return coord.DocumentKey("upload", 
 // saveLedgerKey is one seat's save ledger key.
 func saveLedgerKey(seat string) string { return coord.DocumentKey("save", seat) }
 
-// UploadLedger reads the reservation ledger from the stream LEADER, for the
-// reason every single-key read here does ([getLatest]): a replica behind the
-// last reservation would hand the next one a total it has already spent, and
-// its compare-and-set would then lose for nothing.
+// UploadLedger reads the reservation ledger from the stream LEADER
+// ([getLatest]): a replica behind the last reservation would hand the next one
+// a total already spent, and its compare-and-set would lose for nothing.
 func (f *FleetStore) UploadLedger(ctx context.Context) ([]byte, uint64, error) {
 	return f.uploadValue(ctx, uploadLedgerKey, "read the upload ledger")
 }
@@ -63,17 +61,16 @@ func (f *FleetStore) SwapUploadRecord(ctx context.Context, upload string, value 
 
 // DeleteUploadRecord removes one upload's record while it is still at revision.
 //
-// A DELETE, NOT A PURGE: the bucket ages every message, its marker included, so
-// the marker goes on its own and nothing sweeps it (the purge rule is for the
-// buckets no clock ages, markers.go).
+// A DELETE, NOT A PURGE: this bucket ages every message, its marker included,
+// so nothing need sweep it (the purge rule is for buckets no clock ages,
+// markers.go).
 func (f *FleetStore) DeleteUploadRecord(ctx context.Context, upload string, revision uint64) (bool, error) {
 	if upload == "" {
 		return false, errors.New("coord/kv: an upload record needs an upload")
 	}
 	if revision == 0 {
 		// The client drops a LastRevision of 0 and deletes unconditionally,
-		// so a caller that never read a revision would remove whatever was
-		// there: a record another node had just claimed.
+		// which would remove a record another node had just claimed.
 		return false, nil
 	}
 	err := f.uploads.Delete(ctx, uploadRecordKey(upload), jetstream.LastRevision(revision))

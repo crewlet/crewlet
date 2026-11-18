@@ -93,3 +93,9 @@ test("every other sticky band starts below it, never at zero", () => {
     ).toContain("var(--sticky-top)");
   }
 });
+
+// A FILE'S HEAD IN A CHANGE'S STACK sticks under the files' toolbar, so the gate
+// above cannot pass by the head being gone. Mutation: `top: 0` on the head.
+test("a file's head sticks under the files' toolbar", () => {
+  expect(stickyTops().get("gitlet.css .code-file__head")).toBe("var(--sticky-top)");
+});

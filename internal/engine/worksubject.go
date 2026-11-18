@@ -12,52 +12,31 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// Which work item a turn is on.
+// Which work item a turn is on (ADR-0022): ONE item or none, never split (a
+// split would invent a ratio), by the first of these rules that names one:
 //
-// A turn is charged to ONE work item or to none, and this file is the whole of
-// the rule that decides which. The rules are tried in order and the
-// first that names an item wins:
+//  1. TRIGGER: the wake names it — a Worklet wake, a code wake on a change
+//     implementing one (ADR-0097), a Jira, GitHub or GitLab issue webhook.
+//  2. ASKED_BY: an answer to a colleague's ask inherits the asker's item.
+//  3. RESUME: the parked executor's row recorded it.
+//  4. SOLE_WRITE: the turn's writes committed to exactly one; at completion
+//     only, when "exactly one" is a fact; see [completedWorkItem].
 //
-//  1. TRIGGER: the event that woke the turn names the item, a Worklet
-//     wake, a code wake about a change that implements one (ADR-0097), or a
-//     Jira, GitHub or GitLab webhook about one issue.
-//  2. ASKED_BY — the turn answers a colleague's ask, and inherits the item the
-//     ASKING turn was on. Help given on a task is work on that task.
-//  3. RESUME — the turn resumes from its parked executor, whose row recorded
-//     the item it was on when it parked.
-//  4. SOLE_WRITE — nothing above named an item, and the turn's own writes
-//     committed to exactly one. Resolved AT COMPLETION ONLY, because only then
-//     is "exactly one" a fact rather than a guess; see [completedWorkItem].
-//
-// Otherwise the turn is on nothing, which is the ordinary case for a chat wake
-// and is recorded as an absent `work_item` rather than a null one. A turn is
-// NEVER SPLIT between items: one that touches three tasks is charged to the one
-// it was woken for, or — woken for none — to none, because a split would have
-// to invent a ratio nothing in the turn states.
-//
-// Rules 1 to 3 are all read off something that EXISTED BEFORE THE TURN RAN — a
-// trigger, an ask, a row — which is why they are resolved at dispatch and
-// stamped on every event the turn publishes from its first. Rule 4 is the only
-// one that depends on what the turn did.
+// Rules 1-3 read what existed before the turn ran, so they resolve at dispatch
+// and stamp every event; a turn on nothing leaves `work_item` absent, not null.
 
 // workItemNamer is what a notification source declares when its wakes can be
-// about one work item: the item a wake's metadata names, if it names one.
-//
-// DECLARED HERE, by the one caller, and implemented by each source's own
-// prompt — the package that already owns what that source's metadata keys
-// mean. A source that does not implement it (chat, a pager) names no item, and
-// that is the honest answer rather than a gap.
+// about one work item: the item a wake's metadata names, if any. Each source's
+// own prompt implements it, as the owner of its metadata keys; a source without
+// it (chat, a pager) names no item.
 type workItemNamer interface {
 	WorkItem(metadata map[string]string) (types.WorkItem, bool)
 }
 
-// workItemNamers are the sources whose wakes can name an item, by source.
-//
-// A FIXED SET rather than the node's routed prompts, because the question is
-// about the EVENT, not about this node's configuration: a wake already on a
-// seat's inbox was routed by whichever node took the webhook, and an
-// integration disconnected since then does not change which issue it was
-// about. Each is a stateless value type, so holding them here costs nothing.
+// workItemNamers are the sources whose wakes can name an item, by source: a
+// fixed set rather than this node's routed prompts, because a wake was routed
+// by whichever node took the webhook, and an integration disconnected since
+// does not change which issue it was about.
 var workItemNamers = func() map[string]workItemNamer {
 	namers := map[string]workItemNamer{}
 	for _, source := range []interface {
@@ -69,14 +48,9 @@ var workItemNamers = func() map[string]workItemNamer {
 	return namers
 }()
 
-// workItemOf resolves rules 1 and 2 for one dispatch: the item the trigger
-// names, or the one the asking turn was on.
-//
-// OFF THE PARTITION'S FIRST EVENT, the same event [Engine.describeTurn] takes
-// the trigger from — a coalesced partition is one conversation, and the first
-// constituent is the one whose thread the turn is answering. Reading the item
-// from a different event than the trigger would let a turn's own record
-// disagree with itself about what woke it.
+// workItemOf resolves rules 1 and 2 for one dispatch, off the partition's
+// first event: the one [Engine.describeTurn] takes the trigger from, so a
+// turn's record cannot disagree with itself about what woke it.
 func workItemOf(req Request) (*types.WorkItem, types.WorkItemBasis) {
 	for _, ev := range req.Events {
 		if ev == nil {
@@ -107,8 +81,7 @@ func workItemOfEvent(ev *events.Event) (*types.WorkItem, types.WorkItemBasis) {
 		if ask.WorkItem == nil || ask.WorkItem.ID == "" {
 			return nil, ""
 		}
-		// A COPY, because the event is shared with every other reader
-		// of this delivery and the turn owns its own value.
+		// A COPY: the event is shared with every reader of this delivery.
 		item := *ask.WorkItem
 		return &item, types.BasisAskedBy
 	}
@@ -117,8 +90,8 @@ func workItemOfEvent(ev *events.Event) (*types.WorkItem, types.WorkItemBasis) {
 
 // resumedWorkItem is rule 3: the item a parked run recorded at launch.
 //
-// A run launched by a turn charged to no item carries none, and resumes on
-// nothing — which is what that turn's first half was charged to as well.
+// A run launched by a turn charged to no item resumes on nothing, as its
+// first half was.
 func resumedWorkItem(run sandbox.PendingRun) (*types.WorkItem, types.WorkItemBasis) {
 	if run.WorkItem == nil || run.WorkItem.ID == "" {
 		return nil, ""
@@ -130,13 +103,9 @@ func resumedWorkItem(run sandbox.PendingRun) (*types.WorkItem, types.WorkItemBas
 // completedWorkItem is the item a turn's completion is charged to: the one it
 // was on from dispatch, or — rule 4 — the one item its writes committed to.
 //
-// A SEGMENT THAT PARKED IS NOT CHARGED BY RULE 4, because it has not finished
-// writing: the resumed segment may write a second item, and a sole write
-// concluded at the park would then have named an item the whole turn was not
-// on alone. The segment that finishes the turn decides, over everything the
-// turn wrote: the half before a park travels on the parked turn's state
-// (execstate.State.Written) and seeds the resumed segment's set, so "exactly
-// one" is judged over the turn rather than over its last segment.
+// A parked segment concludes no sole write: the resumed segment may write a
+// second item. The writes before a park ride execstate.State.Written into the
+// resumed segment's set, so "exactly one" is judged over the whole turn.
 func completedWorkItem(item *types.WorkItem, basis types.WorkItemBasis,
 	written *turnctx.Written, suspended bool,
 ) (*types.WorkItem, types.WorkItemBasis) {

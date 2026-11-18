@@ -15,13 +15,10 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
-// logless is a company that keeps nothing native — every backend a vendor's, no
-// code — and the base of each revision these cases activate. The node they
-// stand up boots with NO company: a data node runs its native runtime for any
-// company it holds, whatever its backends, so the runtime that builds
-// Gitlet on this node is the one its FIRST company brings up at that company's
-// apply — and a revision that turns Gitlet on under a runtime already
-// running only says it needs a restart (native_backend_needs_restart).
+// logless is a company that keeps nothing native, the base of each revision
+// these cases activate. Their node boots with NO company, because Gitlet is
+// built by the runtime its FIRST company's apply brings up; turning Gitlet on
+// under a running runtime only says native_backend_needs_restart.
 const logless = `
 name: Acme
 tracker:
@@ -35,14 +32,11 @@ roles:
 
 // AN APPLIED EPOCH LOGS ITS CROSS-TIER WARNINGS ONCE, AND A REFUSED APPLY NONE.
 //
-// The node's own Tier A is half of every such warning — here an explicit
-// cache budget below the default repository size limit, beside a revision
-// that hosts code — so it is said on the node, at the apply that makes it
-// true: once for the epoch, not again at the next tick, which applies nothing.
-// And never while the apply is REFUSED — here the runtime it brings up cannot
-// build Gitlet, because the cache's directory holds somebody else's
-// file — which every retry would otherwise repeat, for a revision the node is
-// not serving.
+// Here Tier A's cache budget sits below the default repository size limit,
+// beside a revision that hosts code. The warning is said once for the epoch,
+// not again at the next tick, and never while the apply is REFUSED (the
+// cache's directory holds somebody else's file, so Gitlet cannot be built),
+// which every retry would repeat for a revision the node is not serving.
 //
 // Mutation: warn whatever the apply's status, and the refused ticks log it.
 func TestAnAppliedEpochLogsItsTierWarnings(t *testing.T) {
@@ -97,16 +91,12 @@ func TestAnAppliedEpochLogsItsTierWarnings(t *testing.T) {
 	}
 }
 
-// A GITLET NODE COMPARES THE BUDGET IT DERIVED WITH THE REPOSITORY LIMIT. An unset
-// gitlet.cache_max_bytes is the default on every Gitlet node, and the budget it
-// derives from the cache's volume is the one a repository at its size limit
-// must fit in; the documents alone cannot know it, so the node that sized its
-// cache says so at the apply. Here the cache's volume has 64 GiB free and the
-// broker storing its streams there may still write three quarters of it, so
-// the derived budget is half of the 16 GiB left less the spools — read off a
-// disk the case sets, never off the machine running it — and a company
-// allowing a repository of a tebibyte, the largest limit there is, is told the
-// cache cannot hold one.
+// A GITLET NODE COMPARES THE BUDGET IT DERIVED WITH THE REPOSITORY LIMIT. With
+// gitlet.cache_max_bytes unset, the budget comes from the cache's volume,
+// which neither document knows. Here the volume has 64 GiB free, 48 of them
+// the broker's, so the budget is half of the 16 GiB left less the spools (a
+// disk the case sets, never the machine's), and a company allowing a
+// one-tebibyte repository, the largest limit, is told the cache cannot hold it.
 //
 // Mutation: hand the warning the documents' budget rather than the one the
 // node derived, and nothing is said.
@@ -137,14 +127,11 @@ func TestAGitletNodeComparesItsDerivedBudget(t *testing.T) {
 }
 
 // A NODE BOOTED ON A COMPANY SAYS EACH CROSS-TIER WARNING ONCE, at the apply of
-// the activation it booted with. The reconciler's first tick applies that very
-// activation — its progress begins at no epoch applied — so a line logged by
-// the boot as well said every warning twice on every configured node, where
-// every other apply warning was said once.
+// the activation it booted with: the reconciler's first tick applies that very
+// activation, so a boot line as well would say every warning twice.
 //
-// NOT PARALLEL: the boot logs through the process-wide logger, which this case
-// swaps to read it, and the reconciler is given none of its own so that it
-// writes there too.
+// NOT PARALLEL: the case swaps the process-wide logger the boot writes to, and
+// gives the reconciler none of its own so that it writes there too.
 //
 // Mutation: log the boot company's warnings in engine.New as well, and the
 // count is two.

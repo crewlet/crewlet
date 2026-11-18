@@ -16,397 +16,158 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// WHICH OF A ROUND'S CALLS A CLAUDE CODE SESSION HOLDS, READ OFF ITS KEPT
-// ARCHIVE ([Runner.ReadHoldings]).
+// WHICH OF A ROUND'S CALLS A CLAUDE CODE SESSION HOLDS, read off its kept
+// archive ([Runner.ReadHoldings]). The argument, its measurements and what it
+// leaves are ADR-0073's amendment "a cut-off session's archive is read for the
+// calls whose logged results it holds"; this comment names the rules the code
+// below cites.
 //
-// Claude Code files a model's call under the id it sent the bridge
-// ([sandbox.BridgeCall.CallID]): the call's use in an assistant record, its
-// result in a user record after it, in the thread of whoever made the call,
-// the session's main thread or one of its subagents'. So a kept archive says,
-// of each call a relaunch asks about, which records name it and in which
-// thread ([sandbox.CallRecords]), and of each subagent whose thread names one,
-// whether the session holds that subagent's work as done and answered
-// ([sandbox.SubagentThread]); [sandbox.SessionHoldings.Holds] alone turns
-// those facts into a verdict. The reading reads the session's main thread and
-// each depth-one subagent's thread and metadata. A deeper thread (a
-// Workflow's, a nested agent's) is a member it does not read, so a call
-// recorded only there is absent from the reading, and told in the main list.
-//
-// THE WALK, member by member as the take's scrub wrote the archive
-// ([eachMember]), the reading's context asked before each:
-//
-//   - every member's RAW name first: one named by an absolute path or through
-//     a `..` element is no reading, whichever member it is, since a tar that
-//     restores it can write over the file a resumed session reads
-//     ([claudeMemberOf]);
-//   - each name, cleaned, is named through the line layer and never by a rule
-//     of the reading's own ([claudeMemberOf]): the session's main thread, and
-//     each subagent's thread and metadata beside it, are read, and every other
-//     member (another session's file, a deeper thread, `agent-.jsonl`, the
-//     session's saved compaction under either of its names) is passed over,
-//     its bytes read through the archive's meter as tar moves past it;
-//   - a member the reading reads, held twice under two spellings, is no
-//     reading, since tar restores the last copy and the reading could have
-//     read the other; a main thread that is no regular file is no reading, as
-//     the box refuses one, and a subagent's member that is no regular file is
-//     passed over, which leaves that subagent unread or unlinked;
-//   - more subagents named than [holdingsMaxAgents] is no reading;
-//   - a thread is read a whole line at a time ([threadReader]), the context
-//     asked between lines, every head fed to that thread's own restarts
-//     ([threadRestarts.See]), and every user and assistant record's message
-//     decoded ([threadLine.Message]) and its calls counted, wherever it lies
-//     and whoever's it is ([holdingsWalk.mainRecord]); rule 2 reads in
-//     subagent A's thread the records of A's `agentId` and `isSidechain`
-//     true. Every other line counts for nothing; but every line of the main
-//     thread is handed to the model of Claude Code's resume ([threadChain]),
-//     and every line of A's thread to the model of A's own load of it
-//     (newThreadChain(A)), each of which decides once its thread is read
-//     whole which records that load hands its model and in what orders;
-//   - a subagent's metadata is one JSON document, read whole within
-//     [holdingsMetaMaxBytes] and decoded by the reading itself
-//     ([subagentMetaOf]).
-//
-// MEMBER ORDER IS THE BOX'S: a subagent's thread can come before the main
-// thread, and its metadata before its thread or after it. So every fact is
-// gathered thread by thread, and nothing is decided before the stream has
-// ended. A result, an answer or a notification is filed only under a fact
-// that already exists: an asked call's, which exists from the start, or a
-// leg's, once the main thread's call of it was read ([legFact]). One read
-// before its call answers nothing and is kept nowhere: no thread measured
-// writes one so, and a leg left unanswered leaves its subagent unreported, the
-// safe direction. So no fact grows with a thread's results.
-//
-// A SAVED COMPACTION IS NO QUESTION OF THE READING'S ([claudePrecompact]): it
-// bears on whether a continuation's first request hands its model a summary in
-// place of the history the archive holds, which a reading's caller is to judge
-// before it uses a reading at all (ADR-0073's amendment on this reading).
-//
-// TWO METERS, ONE BUDGET. The archive's gzip stream is metered at
-// [threadPlainMax] by the scrub's own meter ([boundedPlain]), which also bounds
-// what tar passes over unread; and each member the reading reads is handed
-// what is left of that budget once what the members before it handed out is
-// counted ([handedReader]), so the reading's bound is the reader's own,
-// whatever members an archive holds: a sparse member hands out holes its
-// stream does not hold, which only the second meter sees.
-//
-// THE STREAM IS READ TO ITS END BEFORE ANYTHING IS DECIDED. What the session
-// store streams is provisional until io.EOF, and tar stops at its end of
-// archive, so the reading drains the stream itself. gzip may already have read
-// past tar's end and met the store's fault there: the drain meets it again
-// because the store's stream latches its error. The gzip trailer is not
-// checked: every byte under it came from a chunk the store authenticated.
-//
+// Claude Code files a call's use and its result under the id it sent the
+// bridge ([sandbox.BridgeCall.CallID]), in the thread of whoever made it. The
+// reading gathers facts ([sandbox.CallRecords], [sandbox.SubagentThread]), and
+// [sandbox.SessionHoldings.Holds] alone turns them into a verdict. It reads the
+// main thread and each depth-one subagent's thread and metadata, so a call
+// recorded only in a deeper thread is absent from the reading, and told.
+
+// THE WALK ([eachMember]), ctx asked before each member and line: a RAW name
+// that is absolute or holds `..` is no reading, since a restore could write
+// over the session's own files; a cleaned name is classed by
+// [claudeMemberOf] alone, every other member passed over through the
+// archive's meter; and a member the reading reads held twice is no reading,
+// since tar restores the last copy. MEMBER ORDER IS THE BOX'S, so facts are
+// gathered thread by thread and nothing is decided before the stream ends: a
+// result, an answer or a notification is filed only under a fact that already
+// exists (an asked call's, or a leg's once its call was read, [legFact]), and
+// one read before its call is kept nowhere, the safe direction, so no fact
+// grows with a thread's results.
+
+// TWO METERS, ONE BUDGET: the gzip stream is metered at [threadPlainMax] by
+// the scrub's meter ([boundedPlain]), and the members read share what is left
+// of that budget ([handedReader]), since a sparse member hands out holes its
+// stream does not hold. THE STREAM IS READ TO io.EOF before anything is
+// decided: the store's stream is provisional until then and latches its
+// error, so the drain meets again a fault gzip met past tar's end. The gzip
+// trailer is not checked: the store authenticated every chunk under it.
+
+// THE GATE: the resuming release ([sandbox.HoldingsAsk.Resumer]) is one
+// [claudeResumeRead] names, a set and never a range, and every chained
+// record's writer is at or past [holdingsWriterFloor] ([writerBelowFloor]). It
+// reads the release, never the box's settings: a managed settings file can
+// switch either resume switch back on ([claudeResumeSwitches]), the precompact
+// one read by the model ([threadChain], THE LARGE FILE), the interrupted
+// turn's the caller's question (the amendment's WHAT THE GATE CANNOT CLOSE), as
+// are a saved compaction ([claudePrecompact]) and a continuation's first
+// request. Every failure is no reading, never a refusal ([holdingsError]). A
+// line's or the archive's bound passed in a subagent's thread ends the whole
+// reading, since uses and results are counted over the whole archive; the
+// model's bounds there leave that subagent not whole.
+
 // LIVE ONLY WHERE THE RESUME HANDS ITS MODEL BOTH RECORDS AND ITS REQUEST
-// PAIRS THEM. Which records Claude Code's resume hands its model of a thread,
-// and in what orders, is the model's, which the reading cites and never
-// restates ([threadChain]): in the main thread the walk from its leaf, what it
-// recovers and hangs off the replies on it and its tails, less what the
-// retraction filter and the drop of malformed attachments take; in a
-// subagent's thread what that subagent's own load of it hands
-// (newThreadChain(agent)); each read from the shipped code of the releases
-// [claudeResumeRead] names, under every variant the reading cannot see. The
-// reading adds two rules of its own, and nothing else:
+// PAIRS THEM. What the resume hands, and in what orders, is [threadChain]'s,
+// cited and never restated: in the main thread `claude --resume`'s load, in a
+// subagent's that subagent's own (newThreadChain(agent)). The reading adds two
+// rules of its own, each telling where in doubt. THE LAST RESTART, its forward
+// guard: in the main thread a result, a leg's answer and a task notification
+// count only past the last restart ([threadRestarts.See], [holdingsWalk.live]),
+// and a subagent's thread that restarts at all is not whole (rule 2), since a
+// later release that cut a thread there would hand less than lies before it.
+
+// THE PAIRING RULE, the conservative rule (C) ([holdingsPairing]), read off
+// the orders the model hands, never the file's: a call is held only where its
+// use carries a reply id (C0); one use and one result of its id are counted
+// over every user and assistant record of its thread's file, no batch's list
+// or split id folds it, its id is none Claude Code writes of its own (held by
+// C4), and its use names a bridged tool (C1, [claudeBridgedToolPrefix],
+// [holdingsWalk.idsFold]); the resume hands both under every variant (C2);
+// and on EVERY order it hands, the result follows the first record of the
+// use's reply, each record from there to the later of the two is a plain
+// record of that reply or a plain results record (C3, C4), none before that
+// first record holds a result of the reply's calls (C5), and no compaction's
+// boundary lies at or after it (C6).
+
+// NOT LIVE in any thread: a result its harness replaced with a preview
+// ([threadLine.ReplacedResults]), or a record a retraction names
+// ([threadLine.Retracted]), which the resume drops (so C2 tells it); no load
+// of a subagent's thread filters retractions, so a subagent's thread holding
+// one is not whole. RULE 4, THE LOGGED RESULT: a call is held only through its
+// one result, whose is_error is the log's failure and whose text
+// ([resultText]) matches the log's output by digest, whole or by length and
+// opening ([sandbox.CallRecords.Whole], [sandbox.HoldingsOpeningBytes]). It
+// meets rule 3: a result written without the call's outcome (a resume's, a
+// stopped harness's) never carries the log's text, so no mark is read.
+
+// RULE 2, A SUBAGENT CUT OFF WITH THE SESSION: a call in a subagent's thread is
+// held only where the subagent is reported ([holdingsWalk.unreported]) and the
+// pairing rule holds on every order its own load hands
+// ([holdingsWalk.subagentEnd]). It is reported only where all five hold:
 //
-//   - THE PAIRING RULE, the conservative rule (C) ([holdingsPairing]). A call
-//     is held only where the record of its use carries a reply id (C0); one
-//     use of its id and one result are counted over every user and assistant
-//     record of its thread's file, chained or not, the thread's own or not, no
-//     batch's list or split id folds it into another call, its use names a
-//     tool of the bridge's own MCP server ([claudeBridgedToolPrefix]), and its
-//     id is none Claude Code's request writes of its own, whose results record
-//     is no plain one (C1, [holdingsWalk.mainRecord], [holdingsWalk.idsFold],
-//     held by C4 for such an id); the resume hands both records under every
-//     variant (C2); and on EVERY order it hands ([threadChain.EachOrder]), the
-//     result comes after the first record of the use's reply, every record
-//     from that one to the later of the use and the result is a plain record
-//     of that reply or a plain results record (C3, C4), no record before that
-//     first one holds a result of a call the reply made (C5), and no
-//     compaction's boundary lies at or after it (C6). Never by where a record
-//     lies in the file: an attempt the harness withdrew can lie past every
-//     restart and be handed to no model, and a result handed after another
-//     reply is handed with no call. The rule TELLS, knowingly, shapes the
-//     request does pair that it cannot place, none of them measured: a call it
-//     tells that the session held is only told again, the safe direction.
-//   - THE LAST RESTART, the reading's own forward guard beside the model's
-//     truth: in the main thread a result, a leg's own answer and a task
-//     notification each count only where its line follows the thread's last
-//     restart ([threadRestarts.See], [holdingsWalk.live]), and a subagent's
-//     thread that restarts at all is not whole (rule 2). The model says what
-//     the releases it was read from hand; a later one that cut a thread at a
-//     microcompaction's boundary, a span replaced or a later root would hand
-//     less than lies before it, and a result there is told, the safe
-//     direction.
-//
-// A leg's own answer is paired by the same rule in the main thread, and a
-// task notification counts only where the resume hands its record under every
-// variant. Measured (probe T, both releases): a continuation hands its model
-// each whole-line result of its main thread the chain or its recovery holds
-// after its last restart, verbatim and with its call, the results of parallel
-// calls off the chain among them. In a subagent's thread a call is held only
-// where the subagent is reported and the pairing rule holds of the call on
-// every order its own load hands ([holdingsWalk.subagentEnd]).
-//
-// A RESULT ITS HARNESS REPLACED IS NOT LIVE, in whichever thread: behind a
-// flag Anthropic's servers set, Claude Code hands its model a preview in
-// place of the largest of the results a reply's calls returned past a budget,
-// records the replacement beside the result's own record, which keeps the
-// whole output, and hands it again on resume ([threadLine.ReplacedResults]).
-// So a result such a record names was never handed whole, and its call is
-// told, which is no more than telling again where a continuation's flag is
-// off. A record that replaces in no shape Claude Code writes is no reading in
-// the main thread, and leaves a subagent's thread not whole.
-//
-// NOR IS A RECORD A RETRACTION NAMES, in whichever thread
-// ([threadLine.Retracted]): where a model's reply is refused as it streams and
-// Claude Code moves the request to another model, or it retries a reply whose
-// call it could not parse, it takes that attempt's records back out of the
-// conversation and names them, and a resume drops every record so named,
-// whatever chain it lies on ([threadChain]'s retraction filter), so the
-// pairing rule's C2 tells a call such a record holds. No load of a subagent's
-// thread runs that filter, so a subagent's thread holding any such list is not
-// whole (rule 2): what its model was handed is not what its file holds. A
-// record that retracts in no shape Claude Code writes is no reading in the
-// main thread.
-//
-// RULE 4, THE LOGGED RESULT: a call is held only through its one result, whose
-// is_error is the log's failure and whose text ([resultText]) is the log's
-// output: every byte of it where the log kept the output whole, and else as
-// long as it and opening alike ([sandbox.HoldingsOpeningBytes]), compared by
-// digests the reading keeps of the text, its whole where it is no longer than
-// the log keeps an output whole ([sandbox.CallRecords.Whole]); a result whose
-// content is no string and no one text block has no text a log's output can
-// match. Rule 3 is met by it: a result written by a process that never saw
-// the call's outcome (a resume's for a call it found open, a stopped harness's
-// own, the text of a call its harness gave up on) never carries the log's
-// text, so no mark such a process writes is read.
-//
-// RULE 2, A SUBAGENT CUT OFF WITH THE SESSION. A call in a subagent's thread
-// is one the continued session holds only through that subagent's answer in
-// the main thread: so the reading REPORTS a subagent ([subagentFacts]) only
-// where all five of these hold, each read off the records alone, and off the
-// ONE CONVERSATION the subagent's own load of its thread hands, as the model
-// of that load says it ([threadChain] in its subagent mode), which is what a
-// SendMessage continuation hands its model.
-//
-//  1. LINKED: its metadata is one object, read by exact keys, naming the call
-//     that started it (`toolUseId`, an id the log keeps), a depth of exactly
-//     the integer 1, a request shape, and a description or none; and that
-//     call is exactly one counted Agent or Task call of the main thread.
-//  2. WHOLE: no line of its thread is no record, and its member does not end
-//     in a torn piece, which its own load may read as one more record; every
-//     user and assistant record is its own, its `agentId` and `isSidechain`
-//     true, and its message, its stop reason, its mark of an API error and
-//     the model of its reply decode; no record names another agent, replaces
-//     results or lists a batch's calls in no shape Claude Code writes; its
-//     thread never restarts; no reply of it is one its model refused, and no
-//     record of it takes records back; the model of its own load places it
-//     ([threadChain.Unknown]); and THE STRICT RULE: every record of its own
-//     that no record of its own continues is that load's leaf or one it hands
-//     ([wholeOf]), so its file holds no branch of its conversation its model
-//     was not handed, and a thread in which the load finds no conversation
-//     fails it.
-//  3. EVERY LEG ANSWERED, LIVE IN THE MAIN THREAD. Its legs are the call that
-//     started it, and every SendMessage call of the main thread to it, but one
-//     its own result refused (`success`, the literal false); a SendMessage
-//     whose result is missing stays a leg, and one sent under an id the log
-//     keeps none of is a leg nothing can answer ([holdingsWalk.leg]). The
-//     call that started it is answered by its own result's record (`status`
-//     "completed" naming it, no error, of a subagent its metadata says the
-//     call waited for), where the pairing rule pairs the call's use with that
-//     one, the id's one use and one result counted over every user and
-//     assistant record of the main thread, which holds no batch's list and no
-//     result of a split id at all, since a leg's id is known only once its
-//     call is read ([holdingsWalk.mainEnd]); or by a task notification of it
-//     the resume hands its model under every variant. A SendMessage is
-//     answered only by such a notification of it. Each answer counts only
-//     past the main thread's last restart. AN ANSWER CARRYING A HANDBACK
-//     ANSWERS NO LEG, the call's own or a notification, nor does any answer
-//     of a leg one of whose answers carries one: under a handback the
-//     subagent's report never reaches the main thread's model through it
-//     ([carriesHandback], [textHandback]).
-//     A NOTIFICATION IS AN ANSWER: a continuation hands its model the
-//     notification's record verbatim (probe T, T10, on 2.1.310 and 2.1.322),
-//     and its lines name the subagent and the leg ([textNotice]). An
-//     answer is read off a record of that one result alone, since a record's
-//     own toolUseResult is that record's, never one call's of several.
-//  4. NO UNSEEN LEG: its file starts no more legs (a user record of its own
-//     that is not the results of its calls alone, its prompt among them,
-//     wherever it lies) than the main thread gave it; a message the main
-//     thread holds no call of, a skill's text among them, is one more.
-//  5. EVERY LEG FINISHED, along every order its own load hands: the first of
-//     its user and assistant records starts a leg, and each stretch from one
-//     leg's start to the next ends on a reply of text or thinking alone,
-//     whose text says something, with which its model ended its turn: its
-//     stop reason "end_turn", no API error and a model other than
-//     "<synthetic>", Claude Code's own whole test of a reply with which its
-//     model ended its turn. A subagent answers with the text of its last reply
-//     that says something, so a stretch ending on one of thinking alone
-//     answers with an earlier reply's text ([wholeOf]). A reply that wrote
-//     text and then called a tool is two records, the text's first, each
-//     saying it stopped for the call: a thread cut between the two ends on
-//     text, which only the stop reason tells from a finished reply. A request
-//     that failed for good leaves a reply the harness wrote itself, the
-//     error's text, stopped at "stop_sequence" and marked an API error
-//     ([threadLine.APIError]), on which the harness ends the subagent and
-//     answers the call that started it as completed: no model read what that
-//     request carried, a call's result among it. And every reply the harness
-//     writes itself in place of a model's is of the model "<synthetic>"
-//     ([threadLine.Model]), which its test passes over whatever it says of its
-//     stop.
-//
-// A subagent not reported says which condition failed first, in words for
-// the log ([sandbox.SubagentThread.Why]). An origin, an answer's toolUseResult
-// or a SendMessage's `to` that does not decode costs only the fact it could
-// have been: no notification, no answer, a send to no subagent, each the safe
-// direction, and condition 4 the backstop of the last.
-//
-// EVERY OUTCOME. A reading: the stream read to its end within every bound, and
-// each asked call's records counted. No reading, whole, and never a refusal of
-// the relaunch, where the session's id names no thread; the ask asks about no
-// call, holds more than a round's log lists, or asks about a call whose id is
-// none the log keeps or is carried by another call of the ask; THE GATE: the
-// release that continues the session ([sandbox.HoldingsAsk.Resumer]: the
-// writer's, the relaunch's best word, a brief told by the reading handed only
-// to a box whose harness answers that release before its brief is chosen) is
-// unread, or is none of the releases the model of the resume was read from
-// ([claudeResumeRead], a set and never a range, since a release before, between
-// or after them may hand its model otherwise and the model says nothing of it);
-// its writer is older than [holdingsWriterFloor], or unknown, as the row
-// records it or as a chained record of the main thread names it
-// ([writerBelowFloor]); its caller left
-// while it waited for its slots, or between members or lines; the archive did
-// not open, is no gzip or no tar, or inflates past its bound; a member is named
-// absolutely or through `..`; a member it reads is held twice; the main thread
-// is no regular file, or is not there; a line of it is past its bound or is no
-// record, a user or assistant record's message does not decode, or a record
-// replaces results or lists a batch's calls in no shape Claude Code writes; the
-// model of Claude Code's resume cannot place the main thread, whatever shape it
-// met first ([threadChain.Unknown]: among them a progress record, a marked
-// checkpoint, a sidechain's record, a record of no lowercase canonical uuid, a
-// retraction list or a compaction's metadata in no shape Claude Code writes, a
-// result the resume may hang under another record than its parent, a thread
-// past 5,242,880 bytes a large-file reader may read otherwise, and a thread
-// past the model's bounds); a line of a subagent's thread is past its bound, or
-// its member or metadata past the archive's budget; more subagents than
-// [holdingsMaxAgents], or more legs than [holdingsMaxLegs]; or the stream does
-// not end at io.EOF. A chained record of a subagent's thread whose writer is
-// older than the floor, or unknown, leaves that subagent not whole, its calls
-// told under it. The error says which, in words a relaunch logs
-// ([holdingsError]). WHY A LINE'S OR THE ARCHIVE'S BOUND PASSED IN A SUBAGENT'S
-// THREAD ENDS THE WHOLE READING: a call's threads, uses and results are counted
-// over the whole archive, and a reading cut part way vouches for none of them.
-// The model's bounds in a subagent's thread end nothing: past them the model
-// files nothing more, but every message is still decoded and its calls counted
-// ([holdingsWalk.subagentThread]), and the subagent is not whole.
-//
-// THE GATE READS THE RELEASE ALONE, never the box's settings. A managed
-// settings file, which Claude Code applies after the run's own pinned settings,
-// can still switch on either of the resume's two switches
-// ([claudeResumeSwitches]). The precompact switch moves which large-file reader
-// loads a thread past 5,242,880 bytes, and the model reads both, so a main
-// thread the two may load otherwise is no reading, and a subagent's not whole
-// ([threadChain], THE LARGE FILE). The interrupted turn's switch has the
-// continuation run again the turn its last process was cut off in, which acts
-// at its first request: its caller's question rather than the reading's, and
-// one neither can see in the box, which ADR-0073's amendment on this reading
-// leaves.
-//
-// THE BOUNDS, AND WHAT A READING HOLDS. The archive's plaintext at
-// [threadPlainMax], what its read members hand out at the same budget, a line
-// at [threadLineMax], what the model of Claude Code's resume, or of a
-// subagent's own load, files of a thread at its bounds
-// ([threadChainMaxRecords], [threadChainMaxCalls]), a metadata at
-// [holdingsMetaMaxBytes], the asked calls at [sandbox.MaxBridgeCalls],
-// subagents at [holdingsMaxAgents], legs at [holdingsMaxLegs], and every
-// chained record's writer, and the session's, at its floor. At its worst a
-// reading holds the line reader's buffer; one line and the slice that gathered
-// it; the line's raw keys and its message's decode, each at most a line; what
-// the message's calls keep (a line of the smallest results keeps about three
-// and a half times the line); one result's text; a metadata; the model of one
-// thread, at most [threadChainMaxRecords] records and
-// [threadChainMaxCalls] call ids, past either of which it files nothing more
-// ([threadChain], THE BOUNDS), and the pairing rule's mark of each of its
-// records, two bytes a record ([holdingsPairing]), one thread's at a time; and
-// its facts: a few words and an id of at most [sandbox.MaxBridgeCallIDBytes]
-// for each asked call, each leg and each notification, and for each subagent a
-// few more and a description of at most [holdingsDescriptionBytes], about 2 MiB
-// at the bounds. EVERY ID IT KEEPS IS ONE THE CALL-ID RULE HOLDS: a call under
-// any other is kept as no leg ([holdingsWalk.leg]), and a metadata naming one
-// keeps none ([subagentMetaOf]), since an id is the box's word, as long as a
-// line, and nothing can link, answer or notice a call under one. MEASURED on
-// two cores (BenchmarkAReadingAtItsBounds, whose doc says how each figure is
-// read off the runtime's GC trace), one case a process, in three runs: a time
-// is the slower of two at the default GOGC, what is HELD AT MOST the largest
-// live heap a collection left during the read in any of the three, one with the
-// collector run at every tenth of the heap's growth (GOGC=10), and a peak the
-// largest heap at the default. ITS WORST is the coincident one: a line at the
-// line's bound of the smallest results a message holds, read after a main
-// thread at both bounds of the model of the resume, so decoded beside all the
-// model filed before the line passes its bounds, 102 MiB held at most, its heap
-// peaking at 181 MiB, in 1.7 s: within the about 133 MiB a seat's read for
-// words, the other taker of the seats' one slot, holds at its worst
-// ([SeatTranscriptReadsAtOnce]). That line alone, 75 MiB held at most and a
-// peak of 123 MiB, in 0.22 s; the thread at both bounds alone, 2^17 replies
-// each making a call and naming a parent written after it, a reading in 1.5 s,
-// 42 MiB held at most; the model's other bounds, its calls and its retractions
-// and kept uuids, 0.26 s and 0.36 s, 12 and 11 MiB. 255 MiB of ordinary lines,
-// the plaintext's bound, each reply under its own id, read in 2.7 s holding 33
-// MiB; the slowest lines measured for their size, a line at the line's bound of
-// blocks of a kind no reader names, 8 MiB in 0.34 s, so an archive of them to
-// the plaintext's bound, which gzip shrinks to almost nothing, reads in about
-// 11 s by that rate (computed, not measured whole); 1,024 subagents in 0.13 s;
-// 96 Agent calls under ids of a mebibyte and 1,024 metadata naming ids of
-// 65,000 bytes, which held 97.7 and 65.3 MiB live before the reading kept no
-// such id, in 0.94 s and 0.16 s holding 8 and 2 MiB; and an ordinary kept
-// session, a 1.6 MiB archive, in 68 ms.
+//  1. LINKED: its metadata ([subagentMetaOf]) names the call that started it,
+//     exactly one counted Agent or Task call of the main thread.
+//  2. WHOLE: every line a record of its own, no torn tail, no restart, no
+//     refused reply, no retraction, every writer at the floor, the model of its
+//     load places it ([holdingsWalk.subagentLine] has each check), and THE
+//     STRICT RULE ([wholeOf]).
+
+//  3. EVERY LEG ANSWERED, LIVE past the main thread's last restart: the call
+//     that started it by its own completed foreground result the pairing rule
+//     pairs ([holdingsWalk.mainEnd]) or by a task notification the resume
+//     hands under every variant ([textNotice]); each SendMessage to it its
+//     result did not refuse ([holdingsWalk.leg]) by a notification. AN ANSWER
+//     CARRYING A HANDBACK ANSWERS NO LEG, nor does any answer of a leg one of
+//     whose answers does ([carriesHandback], [textHandback]).
+//  4. NO UNSEEN LEG: its file starts no more legs ([legStart]) than the main
+//     thread gave it.
+//  5. EVERY LEG FINISHED along every order its own load hands
+//     ([unfinishedLeg], [finishedReply]).
+
+// A subagent not reported says which condition failed first
+// ([sandbox.SubagentThread.Why]). An origin, an answer's toolUseResult or a
+// SendMessage's `to` that does not decode costs only the fact it could have
+// been, the safe direction, condition 4 the backstop of the last.
+
+// THE BOUNDS: the plaintext and what read members hand out at
+// [threadPlainMax], a line at [threadLineMax], the model at
+// [threadChainMaxRecords] and [threadChainMaxCalls], a metadata at
+// [holdingsMetaMaxBytes], the ask at [sandbox.MaxBridgeCalls], subagents at
+// [holdingsMaxAgents], legs at [holdingsMaxLegs]; every id kept is one the
+// call-id rule holds ([holdingsWalk.leg], [subagentMetaOf]), since an id is the
+// box's word, as long as a line. MEASURED (BenchmarkAReadingAtItsBounds, whose
+// doc says how): the worst, a line of the smallest results at its bound after a
+// main thread at both of the model's bounds, holds 102 MiB live and peaks at
+// 181 MiB in 1.7 s, within the about 133 MiB a seat's read for words holds at
+// its worst ([SeatTranscriptReadsAtOnce]); an ordinary session reads in 68 ms.
 
 // holdingsWriterFloor is the oldest Claude Code release whose sessions a
 // reading reads ([ClaudeCode.holdingsFloor]).
 //
-// 2.1.310, THE OLDEST RELEASE THE READING'S RULES WERE MEASURED ON: the probes
-// that settled them (T among them) ran 2.1.310 and 2.1.322. The reading
-// decides from the shape of what a release recorded, and a release older than
-// any measured could record a restart in a shape the restart rule does not
-// know, which would read as none and hold a result its continuation is not
-// handed. Not the carry floor a writer is held to ([claudeCarriedWriterFloor],
-// 2.1.300), which says what another box can continue: a question of the
-// harness's resume, not of how its records read. A writer below it, none
-// recorded, and one whose release this code cannot read, a number past what
-// an int holds among it, are no reading ([readsRelease]). The carry gate
-// ([ClaudeCode.Continues]) takes a release it cannot read for a current one
-// on purpose ([releaseAtLeast]), failing open toward continuing a session,
-// where the reading fails closed, because what it counts held is never told
-// again.
-//
-// IT HOLDS EACH RECORD'S WRITER, NOT THE SESSION'S LAST ALONE: a box at the
-// carry's floor continues a session an older release wrote, so a session
-// continued across releases carries the records of each, and the reason above
-// is about the shape of what each release recorded. So the session's last
-// writer, as its row records it, is held to it before anything is opened
-// ([Runner.ReadHoldings]), and every record in a chain a reading reads, as
-// Claude Code's resume reads one ([threadHead.Chained]), by the release it
-// names ([writerBelowFloor]): in the main thread no reading, in a subagent's
-// thread not whole.
+// 2.1.310, the oldest release the reading's rules were measured on (the probes
+// ran 2.1.310 and 2.1.322): an older one could record a restart in a shape the
+// restart rule does not know, and hold a result its continuation is not
+// handed. Not the carry floor ([claudeCarriedWriterFloor]), which asks what a
+// box can continue. A writer below it, unrecorded or unreadable is no reading
+// ([readsRelease]): the carry gate fails open on an unreadable release
+// ([releaseAtLeast]), the reading closed, since what it holds is never told
+// again. Held of the row's last writer before anything is opened
+// ([Runner.ReadHoldings]) and of every chained record's ([writerBelowFloor]).
 const holdingsWriterFloor = "2.1.310"
 
-// holdingsMaxAgents is the most subagents a reading reads the members of.
+// holdingsMaxAgents is the most subagents a reading reads the members of; past
+// it, no reading.
 //
-// 1,024, AS MANY CALLS AS A PERSON'S READ REMEMBERS WHILE THEIR RESULTS ARE TO
-// COME ([maxPendingCalls]): the probes ran at most two subagents a session,
-// and a real corpus's main threads (probe P6) started 64 at depth one in all.
-// Each costs a reading a few words and a description of at most
-// [holdingsDescriptionBytes]. Past it, no reading.
+// 1,024, as many calls as a person's read remembers pending
+// ([maxPendingCalls]): the probes ran at most two subagents a session, and a
+// real corpus's main threads (probe P6) started 64 at depth one in all. Each
+// costs a few words and a description ([holdingsDescriptionBytes]).
 const holdingsMaxAgents = 1024
 
 // holdingsMaxLegs is the most legs a reading keeps of the main thread: its
 // Agent, Task and SendMessage calls, each task notification it files under
 // one, and each subagent sent a message under an id the call-id rule refuses.
+// Past it, no reading.
 //
-// FOUR FOR EACH SUBAGENT A READING READS ([holdingsMaxAgents]): a real
-// corpus's main threads (probe P6) made 50 Agent calls in all. Each costs a
-// reading a few words and ids the call-id rule holds, at most
-// [sandbox.MaxBridgeCallIDBytes] each: a call under any other id is kept as no
-// leg ([holdingsWalk.leg]). Past it, no reading.
+// Four per subagent a reading reads ([holdingsMaxAgents]): a real corpus's
+// main threads (probe P6) made 50 Agent calls in all. Each costs a few words
+// and ids of at most [sandbox.MaxBridgeCallIDBytes] ([holdingsWalk.leg]).
 const holdingsMaxLegs = 4 * holdingsMaxAgents
 
 // holdingsMetaMaxBytes is the most of a subagent's metadata a reading reads.
@@ -420,10 +181,9 @@ const holdingsMetaMaxBytes = 64 << 10
 // read.
 //
 // ONE KIBIBYTE: the relaunch's telling cuts a description to
-// ledger.ValueLimit, 200 runes, at most 800 bytes, so a kibibyte keeps at
-// least 256 runes, and a longer description still reads as longer. Kept whole,
-// every metadata's description would be held until the walk ends, 1,024 of
-// 64 KiB; cut, a mebibyte at most.
+// ledger.ValueLimit, 200 runes (at most 800 bytes), so a kibibyte keeps at
+// least 256 runes and a longer one still reads as longer. Held until the walk
+// ends, 1,024 cut descriptions are a mebibyte at most rather than 64 MiB.
 const holdingsDescriptionBytes = 1 << 10
 
 // The tools whose calls are a subagent's legs: the two that start one, and the
@@ -452,17 +212,15 @@ const (
 	// subagent's leg ([finishedReply]).
 	claudeEndedTurn = "end_turn"
 	// claudeBridgedToolPrefix opens the name Claude Code gives each tool of
-	// the bridge's MCP server, the only tool a logged call is a call of: it
-	// names an MCP server's tool `mcp__<server>__<tool>` (2.1.322's kk
-	// @283568191 and `mcp__${bn(n)}__` @283570915, its bn @282974138 keeping
-	// a name of letters, digits, `_` and `-` as it is; 2.1.310's IH
-	// @237581955 and `mcp__${En(n)}__` @237584365), and the bridge serves the
-	// box as config.ToolServerName, which config reserves against every
-	// server a company declares. Spelled out here because config imports this
-	// package; a test holds the two to each other. Every asked call's use
-	// names such a tool unless a box rewrote its transcript, and a call whose
-	// use does not is told (C1, [holdingsPairing]): Claude Code's request
-	// clears or withholds the results of other tools by their names.
+	// the bridge's MCP server, served as config.ToolServerName, which config
+	// reserves: `mcp__<server>__<tool>` (2.1.322's kk @283568191 and
+	// `mcp__${bn(n)}__` @283570915, its bn @282974138 keeping letters,
+	// digits, `_` and `-`; 2.1.310's IH @237581955 and `mcp__${En(n)}__`
+	// @237584365). Spelled out because config imports this package; a test
+	// holds the two to each other. Every logged call's use names such a tool
+	// unless a box rewrote its transcript, and one that does not is told
+	// (C1, [holdingsPairing]): Claude Code's request clears or withholds
+	// other tools' results by their names.
 	claudeBridgedToolPrefix = "mcp__crewlet__"
 	// claudeSyntheticModel is the model of a reply Claude Code writes itself
 	// in place of a model's ([threadLine.Model]), which finishes no
@@ -482,23 +240,13 @@ func (ClaudeCode) holdingsFloor() string { return holdingsWriterFloor }
 
 // checkHoldings holds ask, and the session archive names, to what a reading
 // answers, before anything is opened: a session whose id names a thread
-// ([claudeMainThread]); a resumer's release whose resume [threadChain] models
-// ([claudeResumeRead]); and an ask of 1 to [sandbox.MaxBridgeCalls]
-// calls, at least one of them asked, each asked call's id one the log keeps
-// ([sandbox.ValidCallID]) and carried by no other call of the ask, asked or
-// not.
-//
-// ONLY A RESUMER WHOSE RESUME THE MODEL WAS READ FROM, never one at or after a
-// floor: a call is held only where the resume hands its model the call's
-// records ([threadChain]), and that is the resuming release's code, which the
-// model was read from for a set of releases alone. A release before, between or
-// after them may load, relink, walk or drop records otherwise, and a reading of
-// it could hold a call its model was never handed. A release this code cannot
-// read, and an unread one, are outside the set as well.
-//
-// AN ID ANOTHER CALL CARRIES IS NO READING, NEVER A GUESS: the session files
-// both calls' records under the one id, so no record says whose it is, and an
-// ask that holds two such calls is a telling that broke its own rule.
+// ([claudeMainThread]); a resumer [claudeResumeRead] names, never one at or
+// after a floor, since a release outside the set the model was read from may
+// load, relink, walk or drop records otherwise; and 1 to
+// [sandbox.MaxBridgeCalls] calls, at least one asked, each asked call's id one
+// the log keeps ([sandbox.ValidCallID]) and carried by no other call of the
+// ask: the session files both calls' records under that one id, so no record
+// says whose it is.
 func (ClaudeCode) checkHoldings(archive sandbox.SessionArchive, ask sandbox.HoldingsAsk) error {
 	if _, ok := claudeMainThread(archive.SessionID); !ok {
 		return &holdingsError{why: "the session's id names no Claude Code thread"}
@@ -878,27 +626,16 @@ func (w *holdingsWalk) mainThread(ctx context.Context, member io.Reader) error {
 }
 
 // writerBelowFloor is why line, a whole line of a thread the reading reads, is
-// a record in a chain ([threadHead.Chained]) no release at or after
-// [holdingsWriterFloor] wrote, and what gave it where something did; "" where
-// the record is in no chain, or a release at or after the floor wrote it. Its
-// `version` absent, no string, or a release this code cannot read or older
-// than the floor ([readsRelease]) is each below it.
+// a chained record ([threadHead.Chained]) no release at or after
+// [holdingsWriterFloor] wrote (its `version` absent, no string, unreadable or
+// older, [readsRelease]), and what gave it where something did; "" otherwise.
 //
-// IN A CHAIN AS CLAUDE CODE'S RESUME READS ONE, never by `parentUuid` alone: a
-// user, assistant, attachment or system record that carries none roots a
-// chain the resume walks ([threadRestarts.See]), and the reading reads it (a
-// thread's brief, a call's use or result, a subagent's prompt), so it is held
-// to the floor as any other record the reading reads.
-//
-// EVERY CHAINED RECORD, NOT THE LAST WRITER ALONE: a box at the carry's floor
-// or after it continues a session an older release wrote
-// ([claudeCarriedWriterFloor]), so a session can hold records of a release no
-// rule of the reading was measured on beside those of the release its row
-// records, the floor's reason holds of every one of them
-// ([holdingsWriterFloor]), and each names its own writer ([threadLine.Version]).
-// In the main thread no reading; in a subagent's thread not whole, so its calls
-// are told under it. The bookkeeping, a record of no other type that carries
-// no `parentUuid`, is held to nothing: no rule reads it.
+// CHAINED AS CLAUDE CODE'S RESUME READS IT, never by `parentUuid` alone: a
+// user, assistant, attachment or system record without one roots a chain the
+// resume walks ([threadRestarts.See]), and the reading reads it. Every chained
+// record, not the last writer alone, since a box continues a session an older
+// release wrote ([claudeCarriedWriterFloor]). Any other record without a
+// `parentUuid` is bookkeeping no rule reads, held to nothing.
 func writerBelowFloor(line threadLine) (string, error) {
 	if !line.Head.Chained() {
 		return "", nil
@@ -995,17 +732,12 @@ func folded(chain *threadChain, id string) bool {
 // mainEnd decides, once the main thread is read whole into chain and pairing,
 // which of its calls the request a resumed session sends pairs, and files it
 // on each fact of the main thread: each asked call's and each leg's first use
-// and first result paired by the pairing rule ([holdingsPairing]); a leg's
-// own answer, and each task notification, only where its line follows the
-// main thread's last restart, as a result's is ([holdingsWalk.live]); and a
-// notification only where the resume hands its model its record under every
-// variant. No reading where End's context ended, or where the model cannot
-// place the thread ([threadChain.Unknown]).
-//
-// THE LAST RESTART IS THE READING'S OWN FORWARD GUARD, beside the model's
-// truth: the model says what 2.1.310 and 2.1.322 hand, and a release after
-// them that cut the thread at a microcompaction's boundary, a span replaced
-// or a later root would hand less than lies before one.
+// and first result by the pairing rule ([holdingsPairing]); a leg's own
+// answer and each task notification only past the last restart
+// ([holdingsWalk.live], THE LAST RESTART in the file comment); and a
+// notification only where the resume hands its record under every variant.
+// No reading where End's context ended, or where the model cannot place the
+// thread ([threadChain.Unknown]).
 func (w *holdingsWalk) mainEnd(ctx context.Context, chain *threadChain, pairing *holdingsPairing) error {
 	if err := chain.End(ctx); err != nil {
 		return err
@@ -1073,17 +805,12 @@ func (w *holdingsWalk) mainEnd(ctx context.Context, chain *threadChain, pairing 
 // task notification.
 //
 // EVERY USER AND ASSISTANT RECORD OF THE FILE, chained or not, the main
-// thread's own or not, before or after any restart: the resume loads and
-// walks each such record whatever its `isSidechain` or `agentId` says, and its
-// request keeps the first use of a call's id and the first result of it in
-// the message after that use. So a second record carrying an asked call's id
-// is another carrier of it, which may stand in its place, and counting it
-// tells the call, its uses or results past one; a leg's the same
-// ([holdingsWalk.mainEnd]). MEASURED: no user or assistant record of the
-// probes' main threads lacks `isSidechain` or carries an `agentId` but a
-// sidechain's, which is no reading ([threadChain]), and none of the 11,727
-// user, assistant, attachment and system records of their 521 thread files
-// lacks a `parentUuid`, so nothing measured moves.
+// thread's own or not, before or after any restart: the resume loads each
+// whatever its `isSidechain` or `agentId` says, and its request keeps the
+// first use of an id and the first result after it, so a second carrier of an
+// asked or a leg's id may stand in its place, and counting it tells the call
+// ([holdingsWalk.mainEnd]). Nothing the probes' 521 thread files hold moves by
+// it.
 func (w *holdingsWalk) mainRecord(line threadLine, message threadMessage, record int32) error {
 	calls := message.Calls()
 	for _, call := range calls {
@@ -1149,18 +876,14 @@ func (w *holdingsWalk) count(thread string, call threadCall, n int, record int32
 }
 
 // leg files call, a model's call in the main thread, record in its chain, as a
-// leg of subagents' work where it is one: an Agent or Task call, or a
-// SendMessage call.
+// leg of subagents' work where it is an Agent, Task or SendMessage call.
 //
 // ONLY UNDER AN ID THE LOG KEEPS ([sandbox.ValidCallID]), the rule a
-// metadata's `toolUseId` and a notification's leg are held to, so a leg under
-// any other id is one nothing can link, answer or notice; and an id is the
-// box's word, as long as a line, which a leg filed under it would hold until
-// the walk ends. So an Agent or Task call under such an id is kept as nothing,
-// its subagent linked to no call; and a SendMessage under one keeps only the
-// subagent it was sent to ([holdingsWalk.sentUnnamed]), which it leaves
-// unreported: its result is filed under that id too, so not even a refusal of
-// it is read, and that subagent's calls stay told, the safe direction.
+// metadata's `toolUseId` and a notification's leg are held to: nothing can
+// link, answer or notice a leg under any other, and that id, as long as a
+// line, would be held until the walk ends. So an Agent or Task call under one
+// is kept as nothing, and a SendMessage under one keeps only its subagent
+// ([holdingsWalk.sentUnnamed]), which stays unreported, the safe direction.
 func (w *holdingsWalk) leg(call threadCall, record int32) error {
 	switch call.Name {
 	case claudeToolAgent, claudeToolTask, claudeToolSendMessage:
@@ -1279,19 +1002,15 @@ func originOf(line threadLine) string {
 }
 
 // subagentThread reads subagent agent's thread, whose bytes member hands out,
-// a whole line at a time, into a, the model of the subagent's own load of it
-// ([threadChain], newThreadChain(agent)) and the pairing rule's marks
-// ([holdingsPairing]), and once it is read whole, what rule 2 and the pairing
-// rule read off the one conversation that load hands
-// ([holdingsWalk.subagentEnd]).
+// a whole line at a time, into a, the model of its own load ([threadChain],
+// newThreadChain(agent)) and the pairing rule's marks ([holdingsPairing]), and
+// once it is read whole, what rule 2 and the pairing rule read off the one
+// conversation that load hands ([holdingsWalk.subagentEnd]).
 //
-// IT READS ON past every line that leaves the subagent not whole, a line that
-// is no record and every line past the model's bound among them: the calls
-// each user and assistant record names are counted whatever came before it,
-// so a call no reading of the thread could hold is still told under its
-// heading, and a second carrier of an asked id past the bound still tells it.
-// Only the line reader's own bounds, or a fault of the member's reader, end the
-// reading.
+// IT READS ON past every line that leaves the subagent not whole, the model's
+// bound among them, so every record's calls are still counted: each is told
+// under its heading, and a second carrier of an asked id still tells it. Only
+// the line reader's own bounds, or a fault of the member's reader, end it.
 func (w *holdingsWalk) subagentThread(ctx context.Context, agent string, a *subagentFacts,
 	member io.Reader) error {
 
@@ -1328,15 +1047,12 @@ func (w *holdingsWalk) subagentThread(ctx context.Context, agent string, a *suba
 // subagentLine reads line, one of subagent agent's thread, into a, chain and
 // pairing.
 //
-// A RETRACTION LIST LEAVES IT NOT WHOLE, whatever it names: a harness writes
-// one only beside a refused reply's fallback or a malformed reply's retry, or
-// on a failed request's reply, and no load of a subagent's thread filters by
-// it ([threadLine.Retracted]), so what its model was handed is not what its
-// file holds. And so does A REPLY ITS MODEL REFUSED (its stop reason
-// "refusal"): on a refusal Claude Code moves the request to another model and
-// takes the refused attempt's records back, a call among them, where the
-// subagent's file then holds that attempt on its conversation and records no
-// fallback (2.1.322's refusal lanes @296208832, 2.1.310's @249540334).
+// A RETRACTION LIST LEAVES IT NOT WHOLE, whatever it names: no load of a
+// subagent's thread filters by one ([threadLine.Retracted]), so what its model
+// was handed is not what its file holds. So does A REPLY ITS MODEL REFUSED:
+// Claude Code takes the refused attempt's records back and moves to another
+// model, and the subagent's file keeps that attempt and records no fallback
+// (2.1.322's refusal lanes @296208832, 2.1.310's @249540334).
 func (w *holdingsWalk) subagentLine(agent string, a *subagentFacts, chain *threadChain, pairing *holdingsPairing,
 	line threadLine) {
 
@@ -1453,30 +1169,17 @@ func (w *holdingsWalk) subagentEnd(ctx context.Context, agent string, a *subagen
 }
 
 // wholeOf files on a, once its subagent's thread is read whole into chain and
-// pairing, why its thread is not whole where it is not, and else the first
-// leg of its work that ends on no finished reply along a conversation its own
-// load hands, if any (rule 2's conditions 2 and 5, the file comment):
-//
-//   - the model of its own load places its thread ([threadChain.Unknown]);
-//   - THE STRICT RULE: every record of its own that no record of its own
-//     continues, a compaction's boundary aside, is its load's leaf or one
-//     that load hands ([threadChain.OwnLeaves]), so its file holds no branch
-//     of its conversation its model was not handed: a reply that finished a
-//     leg on another branch than the one its call's result lies on is one;
-//   - ALONG EVERY ORDER its load hands ([threadChain.EachOrder]), the first of
-//     its user and assistant records starts a leg, and each stretch from one
-//     leg's start to the next, or to the end, ends on a reply that finished
-//     it ([finishedReply]) and says something ([threadMessage.Says]): a
-//     subagent answers its caller with the text of its last reply that says
-//     something, so a stretch ending on a reply that says nothing answers
-//     with an earlier one's, perhaps written before its call's result was
-//     (2.1.322's pkn @302170267 through t5t @302157349, 2.1.310's Owr
-//     @255311767 through POt @255299110).
-//
-// No record's answer turns on a variant there: its own load runs neither q1t
-// nor a retraction filter, and the tails' two orders hand the same records,
-// so every record is handed or not under every variant alike, and the orders
-// part only where the tails do.
+// pairing, why its thread is not whole, else the first leg that ends on no
+// finished reply along an order its own load hands (rule 2's conditions 2 and
+// 5): the model of its load places it ([threadChain.Unknown]); THE STRICT
+// RULE, every own record no own record continues, a compaction's boundary
+// aside, is its load's leaf or handed ([threadChain.OwnLeaves]); and along
+// every order ([threadChain.EachOrder]) each leg ends on a reply that finished
+// it ([finishedReply]) and says something ([threadMessage.Says]), since a
+// subagent answers with its last reply that says something (2.1.322's pkn
+// @302170267 through t5t @302157349, 2.1.310's Owr @255311767 through POt
+// @255299110). No answer turns on a variant: its load runs neither q1t nor a
+// retraction filter, and the tails' two orders hand the same records.
 func wholeOf(a *subagentFacts, chain *threadChain, pairing *holdingsPairing) {
 	if why, unknown := chain.Unknown(); unknown {
 		a.notWhole(fmt.Sprintf("the model of its own load cannot place it (%s)", why), nil)
@@ -1558,28 +1261,18 @@ func legStart(message threadMessage) bool {
 	return blocks.Len() == 0 || !blocks.All(blockToolResult)
 }
 
-// finishedReply reports whether an assistant record of blocks,
-// whose reply stopped for stop and names model as the model that wrote it,
-// and which its harness wrote in place of a failed request's reply where
-// apiError, ends a leg: a reply with which its model ended its turn, as
-// Claude Code itself tests one (its stop reason "end_turn", no API error and
-// a model other than "<synthetic>"), of blocks of text and thinking alone, at
-// least one.
+// finishedReply reports whether an assistant record of blocks, stopped for
+// stop and written by model, ends a leg: text and thinking blocks alone, at
+// least one, with which its model ended its turn as Claude Code tests it
+// (stop "end_turn", no apiError, a model other than "<synthetic>").
 //
-// "END_TURN" ALONE, never any stop but a call's: every reply the harness
-// writes itself stops at "stop_sequence", a failed request's error and a
-// resume's "No response requested." among them, and no model read what came
-// before either; and a reply cut at its token bound ("max_tokens") or refused
-// ended no turn its model chose to end. Each leaves its leg unfinished, the
-// safe direction.
-//
-// AND A MODEL'S OWN, never a reply of the model "<synthetic>", whatever it
-// says of its stop: that is the model of every reply the harness writes in
-// place of a model's ([threadLine.Model]), and the harness's own test passes
-// over each such reply before it reads a stop. No such reply 2.1.310 or
-// 2.1.322 builds says "end_turn", so the stop alone already leaves each one's
-// leg unfinished; the test is still the harness's whole one, so a release
-// that builds one saying so finishes no leg no model ended.
+// "END_TURN" ALONE: a reply that wrote text then called a tool is two records,
+// each stopped for the call, so a thread cut between them ends on text only
+// the stop tells apart; one cut at "max_tokens" or refused ended no turn. An
+// apiError reply is the harness's own to a failed request, after which it
+// answers the starting call completed though no model read what that request
+// carried. "<synthetic>" marks every reply the harness writes itself
+// ([threadLine.Model]): none says "end_turn", but the test is its whole one.
 func finishedReply(blocks threadBlocks, stop, model string, apiError bool) bool {
 	if blocks.Len() == 0 || apiError || stop != claudeEndedTurn || model == claudeSyntheticModel {
 		return false

@@ -3,6 +3,7 @@ package builtin_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -226,5 +227,31 @@ func TestARenderRefusesArgumentsItCannotRead(t *testing.T) {
 	}
 	if len(r.renderer.got) != 0 {
 		t.Fatalf("the renderer was asked %d times", len(r.renderer.got))
+	}
+}
+
+// THE CAPS A CALL IS REFUSED AT ARE STATED BEFORE IT IS MADE: each refusal costs
+// a round of the seat's whole context, so the shot, render and file caps are in
+// the descriptions the model reads, from the constants the refusals check.
+func TestTheArtifactToolsStateTheCapsTheyRefuseAt(t *testing.T) {
+	t.Parallel()
+	r := newRenderRig(t, requesters{}, &fakeShotBox{})
+	render, _ := r.reg.Lookup(builtin.RenderArtifactTool)
+	for _, want := range []string{fmt.Sprintf("at most %d shots", artifacts.RenderShots),
+		fmt.Sprintf("at most %d times", artifacts.TurnRenders)} {
+		if !strings.Contains(render.Tool.Description(), want) {
+			t.Errorf("render_artifact's description does not say %q", want)
+		}
+	}
+	files := fmt.Sprintf("at most %d new files", artifacts.MaxFilesPerPublish)
+	for _, name := range []string{builtin.CreateArtifactTool, builtin.PublishArtifactTool} {
+		entry, _ := r.reg.Lookup(name)
+		props := entry.Tool.Parameters()["properties"].(map[string]any)
+		for _, param := range []string{"files", "source"} {
+			desc, _ := props[param].(map[string]any)["description"].(string)
+			if !strings.Contains(desc, files) {
+				t.Errorf("%s's `%s` does not say %q", name, param, files)
+			}
+		}
 	}
 }

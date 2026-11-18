@@ -11,13 +11,11 @@ import (
 )
 
 // A LATER APPLY'S REFLECTION WORKERS GO LIVE ONLY WHEN THE APPLY SWAPS THEM IN.
-// The running seats' reflections are served by whatever workers the dispatcher
-// holds, so workers swapped in as soon as they were built ran the revision's
-// models before its configured credential bundles were restored — a pass on an
-// entry the revision signs in from its bundle ran signed out. Built
-// by prepareReflection, they wait for the swap it returns, which the apply
-// makes after the restore ([TestTheBundleIsRestoredBeforeTheEpochIsCurrent]
-// holds that order).
+// The dispatcher serves running seats with whatever workers it holds, so ones
+// live as soon as built would run the revision's models before its credential
+// bundles are restored, signed out. prepareReflection's workers wait for the
+// swap it returns, which the apply makes after the restore
+// ([TestTheBundleIsRestoredBeforeTheEpochIsCurrent] holds that order).
 //
 // Mutation: swap the workers inside prepareReflection rather than in what it
 // returns, and the running workers are gone before the swap here.

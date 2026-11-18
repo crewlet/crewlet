@@ -9,14 +9,11 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// WHAT A SEAT REMEMBERS REACHES IT DEFUSED (ADR-0040). A synthesized skill
-// and a note are what a model wrote after reading other people's words — the
-// synthesizer and the persist decider read the turn's messages, and the seat
-// itself wrote notes mid-turn about what it read — so a skill or a note can
-// carry what it read: the turn's closer, an instruction, a forged opener
-// claiming the seat wrote what follows. Each tool that hands one back
-// neutralises it under the turn's token, so none of it opens or closes a
-// fence.
+// WHAT A SEAT REMEMBERS REACHES IT DEFUSED (ADR-0040). A synthesized skill or
+// a note is a model's writing after reading other people's words, so it can
+// carry what it read: the turn's closer, an instruction, a forged opener.
+// Each tool handing one back neutralises it under the turn's token, so none
+// of it opens or closes a fence.
 func TestWhatASeatRemembersReachesItDefused(t *testing.T) {
 	t.Parallel()
 	turn, b := readerTurn(t)

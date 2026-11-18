@@ -21,11 +21,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE assertion whose absence was the bug. Every one of these tables ships a
-// Purge and an index for it, and every migration says the rows are swept —
-// and if nothing ever calls any of them, all of them grow for the life of the
-// deployment. A store gaining a Purge with no entry here
-// now fails this list rather than going quietly unswept.
+// THE ENGINE'S SWEEP NAMES EVERY SHORT-HORIZON JOB. Each table ships a Purge
+// and an index for it, and with nothing calling them every one grows for the
+// life of the deployment; a store gaining a Purge gains an entry here.
 func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{})
@@ -34,236 +32,139 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 	if w == nil {
 		t.Fatal("the engine armed no retention sweep")
 	}
-	// STARTED, not merely constructed. A worker that was built and never
-	// run looks identical from every other vantage point to one quietly
-	// doing its job — which is exactly how a full set of Purge methods
-	// ships with nothing ever calling them.
+	// Started, not merely constructed: a worker never run looks, from
+	// everywhere else, like one doing its job.
 	if !w.Running() {
 		t.Fatal("the sweep was built but never started")
 	}
 	got := w.Jobs()
 	slices.Sort(got)
 	want := []string{
-		// NOT HERE: webhook_deliveries, rate_limits, turn_completions
-		// and config_apply_status. All four moved to the coordination
-		// store, where a bucket's own age is the retention and the
-		// BROKER expires the records — so there is nothing on this node
-		// left to sweep.
+		// Not webhook_deliveries, rate_limits, turn_completions or
+		// config_apply_status: coordination buckets, which the broker
+		// ages.
 		"a2a_channels",
 		"a2a_channels_idle",
 		// The access log's operation ledger, swept per node like every
 		// domain's.
 		"access_ops",
-		// The diary sweep earns its place here the hard way: Expire
-		// shipped with the diary, diary.go described the background
-		// sweep, and for as long as this list did not name it, nothing
-		// anywhere called it — expired short-term memories stayed rows
-		// every recall scanned, forever.
+		// The diary's Expire has no other caller: unswept, expired
+		// short-term memories stay rows every recall scans.
 		"agent_diary",
-		// AND THE NOTES AN UPGRADE OR AN ACCESS CHANGE HELD BACK, retired a
-		// held note's life after they were first held (learning.HeldNoteLife).
+		// Notes an upgrade or an access change held back, retired a held
+		// note's life later (learning.HeldNoteLife).
 		"agent_diary_held",
 		"agent_diary_long",
-		// A COMMENT RECORD'S NOTICES to people, divergent, each node's own,
+		// A comment record's notices to people, divergent, each node's own,
 		// swept at the company's inbox horizon (artifactsdomain.NoticeJobs).
 		"artifact_notifications",
-		// THE DATASTORE LOG'S operation ledger, the per-node table every
-		// strict state log keeps, swept for the pages log's reason below.
-		// Its documents, history and tombstones are NOT here: all
-		// Replicated, their retention rides each record (the hot history's
-		// week and byte bound, pruned in the write's own transaction).
+		// The datastore log's operation ledger (see pages_ops). Its
+		// documents, history and tombstones are Replicated: their
+		// retention rides each record.
 		"artifactdata_ops",
-		// THE ARTIFACTS LOG'S, for the same reason. The artifacts' own
-		// history and their trashed rows are NOT here: both are Replicated,
-		// so their retention rides a record (the history's term in the
-		// applier, the trash through the trash reaper) rather than a local
-		// delete.
+		// The artifacts log's. Its history and trash are Replicated,
+		// retired by a record (the applier's history term, the trash
+		// reaper), not a local delete.
 		"artifacts_ops",
-		// THE ASSISTANT LOG'S, for the same reason. Its conversations are
-		// NOT here: they are Replicated, so their retention rides a record
-		// (the trash reaper's retention purge) rather than a local delete.
-		// Nor its anchors, which the trim removes (see pages_ops below).
+		// The assistant log's. Its conversations are Replicated (the trash
+		// reaper's retention purge), and its anchors go by the trim (see
+		// pages_ops).
 		"assistant_ops",
-		// The atlas log's operation ledger, swept per node like every
-		// domain's.
+		// The atlas log's operation ledger (see pages_ops).
 		"atlas_ops",
-		// THE CHAT LOG'S operation ledger, per node, for the reason every
-		// registered domain's is (see pages_ops below), and not its
-		// anchors, for the same reason as every domain's.
+		// The chat log's operation ledger, and not its anchors (see
+		// pages_ops).
 		"chat_ops",
-		// EACH HUMAN SEAT'S CHAT READ STATE, a coordination record with
-		// no age: without this entry the cursors, mutes and
-		// do-not-disturb of every seat anybody ever read a room as were
-		// kept for the life of the deployment, long after the company
-		// stopped having the seat.
+		// Each human seat's chat read state, a coordination record with no
+		// age: unswept, a removed seat's cursors, mutes and do-not-disturb
+		// stay for the life of the deployment.
 		"chat_read_state",
-		// THE CODE LOG'S NOTICES, a person's and a seat's, each kind its
+		// The code log's notices, a person's and a seat's, each kind its
 		// own horizon: per node, because the table is divergent.
 		"code_notifications",
 		"code_notifications_agents",
-		// THE CODE LOG'S, a per-node job for the reason pages_ops gives
-		// below.
+		// The code log's operation ledger (see pages_ops).
 		"code_ops",
-		// THE CONFIGURATION ARCHIVE, which had no horizon at all: every
-		// node adopts its own copy of every revision it has ever met,
-		// one row per config write holding the whole document, and
-		// nothing deleted from it — every seat's address among it,
-		// which this is what eventually removes.
-		//
-		// PER NODE for the reason the ops ledgers below are: each node
-		// holds its own copy, so a singleton would tidy the node with
-		// the duty and let the table grow for ever on every other.
+		// The configuration archive: each node keeps a whole-document row
+		// per revision it has met, every seat's address among them. Per
+		// node, since each holds its own copy (see pages_ops).
 		"company_config",
-		// THE COORDINATION STORE'S REMOVAL MARKERS. A bucket no clock
-		// ages keeps the marker every removal leaves for the life of
-		// the deployment, and every listing that meets one reads it
-		// again from the stream leader — so without this entry a
-		// listing's cost grew with every record the company had ever
-		// removed, with nothing anywhere saying so.
+		// The coordination store's removal markers: an unaged bucket keeps
+		// every removal's marker, and every listing reads each again from
+		// the stream leader, so a listing's cost grows with every removal.
 		"coordination_markers",
-		// Added the same way the diary was: the table shipped with a
-		// memsync entry that republishes every row to every peer on
-		// every cycle, and no horizon anywhere — so it grew with the
-		// deployment's AGE rather than its size, and this list not
-		// naming it was the only place that showed.
+		// Memsync republishes every row to every peer each cycle, so
+		// unswept the table grows with the deployment's age.
 		"counterparty_profiles",
 		"events",
-		// THE EXECUTOR LOG'S operation ledger, per node, for the reason
-		// every registered domain's is. Its sessions are NOT here: they are
-		// Replicated, so their retention rides a record (the trash reaper's
-		// retention delete) rather than a local delete — and nor is its
-		// anchor table, which the trim removes like every domain's (below).
+		// The executor log's operation ledger. Its sessions are Replicated
+		// (the trash reaper's retention delete), and its anchors go by the
+		// trim (see pages_ops).
 		"executor_ops",
-		// THE IDENTITY ESTATE'S, which sorts here, swept on every data
-		// node by the same per-node job every other domain's is: every data
-		// node runs every domain in the register, whatever its other roles,
-		// so every data node holds rows in it to sweep.
-		//
-		// The estate's OTHER retention — the authentication trail's two
-		// horizons — is deliberately NOT here: it is a record on the
-		// log rather than a local delete, because those rows are
-		// identity-claimed and two nodes sweeping on their own clocks
-		// would hold different bytes. See internal/iamdomain's sweep.
+		// The identity estate's ledger, per data node like every domain's.
+		// Not its authentication trail's horizons: those rows are
+		// identity-claimed, so a record on the log retires them, never one
+		// node's clock (internal/iamdomain's sweep).
 		"iam_ops",
-		// AND ITS SESSION SUBJECTS' OWN, the one ledger kind with a
-		// horizon shorter than its domain's: a row per sign-in and per
-		// sign-out, whose op ids nobody re-asks after their request.
-		// A job of its own, so its deletions are counted under a name
-		// that says which rows went.
+		// Its session subjects' ledger: a shorter horizon (op ids nobody
+		// re-asks after the request), in a job of its own so its deletions
+		// are counted by name.
 		"iam_ops_session",
-		// THE FLEET'S MCP LISTINGS, in the positions register, which no
-		// clock may age: a listing no reader counts any more (its node
-		// died, or claimed its presence again under a new epoch) and a
-		// schema no listing has named for two sweeps. Nothing else
-		// removes them, so a node rebuilt under a new id would leave its
-		// listings, and every schema they named, for the life of the
-		// deployment (ADR-0074).
+		// The fleet's MCP listings in the positions register, which no clock
+		// may age: a listing no reader counts and a schema no listing named
+		// for two sweeps. Nothing else removes them (ADR-0074).
 		"mcp_listings",
-		// EVERY REGISTERED DOMAIN'S OPERATION LEDGER, and they are on
-		// this list for exactly the reason the list exists: each
-		// `<domain>_ops` migration says the table is swept and ships
-		// `<domain>_ops_swept_idx` for the range delete, and nothing
-		// swept any of them — a row per applied record, kept for ever,
-		// on every node. They are also the list's first PER-NODE jobs:
-		// the rows record what THIS applier wrote, so under the fleet
-		// singleton they would be tidied on one node and grow for ever
-		// on the others.
+		// Every registered domain's `<domain>_ops` ledger, a row per applied
+		// record. Per node, because the rows record what THIS applier
+		// wrote: a fleet singleton would tidy one node only.
 		//
-		// NOT EACH DOMAIN'S ANCHOR TABLE BESIDE IT, although an
-		// arbitration anchor is also a row per subject on every node:
-		// anchors are REPLICATED rows, so a per-node delete below a
-		// floor each node read for itself would be a second writer of
-		// rows every copy must hold alike (ADR-0002). The trim removes
-		// them with a trimmed record every applier takes at one
-		// position (ADR-0080), and a `<domain>_anchors` job here would
-		// be that second writer back.
-		//
-		// NOR GITLET'S RETIRED PACKS, `code_packs_retired`, for the
-		// same reason: replicated rows, which the code-retention duty's
-		// retire_sweep records remove once gitlet.RetireGrace has passed —
-		// every applier at one position — and a job here deleting them by
-		// one node's clock would be the second writer again. The
-		// references gate reviews that table's sweep as the duty's, and
-		// TestARetirementIsSweptByARecordTheEngineRuns holds the duty the
-		// engine runs to publishing it. NOR ITS CHECKS past
-		// gitlet.CheckHistory, `code_checks` and `code_check_logs`, for the
-		// same reason again: every ending removes its own repository's,
-		// and the duty's checks_sweep records an idle repository's.
+		// Not a domain's anchors: Replicated rows, so a per-node delete
+		// would be a second writer of rows every copy holds alike
+		// (ADR-0002); the trim retires them by record (ADR-0080). Nor
+		// Gitlet's `code_packs_retired` (the code-retention duty's
+		// retire_sweep after gitlet.RetireGrace,
+		// TestARetirementIsSweptByARecordTheEngineRuns) or `code_checks`
+		// and `code_check_logs` past gitlet.CheckHistory (each ending, and
+		// the duty's checks_sweep), for the same reason.
 		"pages_ops",
-		// NEITHER NATIVE BACKEND SWEEPS ANY MORE, and the absence of
-		// their entries is the point. The knowledge base had three —
-		// a change retention, a revision prune and an orphan collector
-		// — and adopting the log removed all three: the prune RIDES
-		// EACH COMMIT as the record's own list of retired versions, the
-		// orphans cannot occur because a create is one transaction, and
-		// the history is a Replicated table an applier owns, so a
-		// delete here on one node's own authority is exactly what the
-		// identity claim forbids.
-		// THE PARTS A DETACHED RUN KEEPS BESIDE ITS RECORD — a launch's
-		// suspended conversation and bridged tool log — whose record is
-		// gone: a write that raced the run's end, or a process that
-		// stopped between the end's two removals. Their bucket is
-		// ageless, so without this entry such a part stayed for the life
-		// of the deployment, a conversation's megabytes among them.
+		// No native backend sweeps rows: the knowledge base's prune rides
+		// each commit, a create is one transaction, and history is a
+		// Replicated table only an applier deletes.
+		// The parts a detached run keeps beside its record (a suspended
+		// conversation, a bridged tool log) once the record is gone, in an
+		// ageless bucket.
 		"scheduled_runs",
-		// The one job that deletes BROKER state rather than rows: a
-		// removed seat's mailbox, retired after its grace period. Named
-		// here because a mailbox nothing retires retains mail for a seat
-		// nobody runs for the life of the deployment, and the only symptom
-		// is a stream that never shrinks.
+		// The one job deleting broker state: a removed seat's mailbox,
+		// retired after its grace, or the stream keeps its mail for ever.
 		"seat_mailboxes",
-		// The TRACKER'S OWN JOBS, and they are a different kind of
-		// thing from every entry above: nothing here deletes anything.
-		// Its records are a LOG, which is trimmed by the retention gate
-		// rather than swept — so what these do is finish work a crash
-		// left half-done and tell the tasks a close unblocked. They are
-		// on this list because the list is what says a job exists at
-		// all, and a job nobody registered is a re-spread that never
-		// runs and a board that stays wrong.
+		// The tracker's own jobs delete nothing (its records are a log the
+		// retention gate trims): they finish what a crash left half-done
+		// and tell tasks a close unblocked. Unregistered, a job never runs.
 		"tracker_abandoned_merges",
 		"tracker_abandoned_moves",
 		"tracker_duplicate_ranks",
-		// AND THE POLL OF THE PULL REQUESTS TASKS WAIT ON, for what no
-		// webhook delivered (ADR-0121).
+		// The poll of the pull requests tasks wait on, for what no webhook
+		// delivered (ADR-0121).
 		"tracker_linked_changes",
-		// AND A TASK FILED BEHIND A MOVE THAT HAS FINISHED: a create a
-		// lagging node decided before it heard of the move, accepted after
-		// the walk's last append, lands in the old project under a root in
-		// the new one, and nothing but this carries it.
+		// A create a lagging node decided before it heard of a finished
+		// move lands in the old project under a root in the new one; only
+		// this carries it.
 		"tracker_move_stragglers",
-		// AND A PERSON'S INBOX, which IS a range delete and is the one
-		// entry on this list that deletes something a person reads. The
-		// table shipped `tracker_notifications_swept_idx ON
-		// (created_at)` naming "the per-node inbox retention sweep",
-		// the horizon is a validated company setting with a default and
-		// bounds, and its own doc calls it "the one horizon here that
-		// deletes anything" — and nothing deleted anything, so every
-		// routed change kept a row per recipient for the life of the
-		// deployment, on every node.
-		//
-		// PER NODE, because the table is Divergent: what it holds
-		// depends on the epoch's own horizon, so two nodes legitimately
-		// hold different rows and a singleton would tidy one and let
-		// the rest grow. What ages out is a POINTER — the history row
-		// behind each notice is never swept.
+		// A person's inbox, the one entry deleting something a person
+		// reads, at the company's inbox horizon. Per node, because the
+		// table is Divergent; what ages out is a pointer, never the
+		// history row behind it.
 		"tracker_notifications",
-		// AND THE ONE-SIDED DEPENDENCY REPAIR, which is the same kind
-		// of thing: a dependency is two commits on two subjects, the
-		// mirror is best effort because the authored edge is durable
-		// without it, and this writes the one that did not land. Its
-		// repair is LOUD — the authored commit routes to the
-		// DEPENDENT's parties, so the blocker's assignee was never told
-		// at all — which makes it the only wake that side ever gets.
-		// Unregistered, a half-written dependency stays half-written
-		// and nobody hears about it.
+		// The one-sided dependency repair: the mirror of a dependency's
+		// two commits is best effort, and this writes the one that did not
+		// land, the only wake the blocker's assignee gets.
 		"tracker_one_sided",
 		"tracker_ops",
 		"tracker_respread",
 		"tracker_unblocked",
-		// NOT `vectors_*` OR `usage_*`: the compacted domains keep no
-		// operation ledger, so there is no ledger of theirs to sweep —
-		// and a job named after one that does not exist is a sweep that
-		// reports itself working while purging nothing.
+		// Not `vectors_*` or `usage_*`: compacted domains keep no ledger,
+		// and a job named for one would report itself working while
+		// purging nothing.
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("swept tables:\n got %v\nwant %v", got, want)
@@ -271,11 +172,9 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 }
 
 // THE NODE THE ENGINE BUILDS REGISTERS EVERY SEAT'S MAILBOX WITH THE FLEET.
-// The sweep above can only retire a mailbox the registry remembers, and the
-// registry is fed by the node's walk. A node built without it creates every
-// mailbox exactly as before and remembers none, so every removed seat's mail is
-// retained for ever with nothing failing anywhere: the unit suites in node and
-// maintenance each pass against their own fakes while the engine joins neither.
+// The sweep retires only a mailbox the registry remembers, fed by the node's
+// walk; without it a removed seat's mail is kept for ever, while the node and
+// maintenance unit suites each pass against their own fakes.
 func TestTheEngineRegistersEverySeatMailboxWithTheFleet(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{})
@@ -302,37 +201,15 @@ func TestTheEngineRegistersEverySeatMailboxWithTheFleet(t *testing.T) {
 
 // A GRACEFUL STOP GIVES EVERY FLEET DUTY BACK, AND ONLY THE DUTIES.
 //
-// A duty is claimed per tick and its lease outlives several ticks (45 minutes
-// for this sweep, three hours for the learning passes), and a restarted process
-// is a new incarnation that cannot re-claim what the old one held. Kept, every
-// deploy that restarted the holder left the duty dark for its whole TTL. A
-// setup hold under the same prefix is different: it belongs to a pass that may
-// still be running, and giving it back would let a second writer in mid-pass.
-// BACKENDS THE TEST OWNS, and what that buys is narrower than this comment
-// once claimed. It used to say that reading through engine-owned backends
-// makes every post-stop lease read answer "definitively not held" whichever
-// the truth was. That is false in both topologies this test can run in, and
-// it is worth saying why, because it asserted the exact thing
-// [internal/coord] exists to deny — that an unreachable store reads as an
-// empty one.
+// A duty's lease outlives several ticks (45 minutes for this sweep, three
+// hours for the learning passes) and a restarted process cannot re-claim the
+// old incarnation's, so a duty kept goes dark for its whole TTL. A setup hold
+// under the same prefix belongs to a pass that may still be running, and
+// giving it back would let a second writer in mid-pass.
 //
-// Under the default coordination type the store is coordmem, which
-// [engine.Backends.Close] does not touch at all: Close takes down the queue,
-// the connection, the embedded server and the SQL store, and Coord is not
-// among them. Under embedded-kv a post-close read is coord.ErrUnavailable,
-// never (nil, nil) — kv's readOne answers (nil, nil) for a missing KEY and
-// wraps every other failure. So neither configuration produces the race the
-// old rationale was written against.
-//
-// What supplying them actually buys is a lifetime this test controls, which
-// matters only if this case is ever moved onto embedded-kv: then an
-// engine-owned Close would make both reads ERROR rather than observe, and an
-// assertion reading only the error would call that a pass. Keeping the shape
-// is cheap; keeping the old explanation was not, because a wrong WHY in a
-// test is the next reader's wrong diagnosis.
-//
-// The reason the assertions below are observable is the HOLD NAME, and that
-// reason is stated where it belongs, at the hold itself.
+// The test owns the backends so their lifetime is its own: on embedded-kv an
+// engine-owned Close would make the reads below error rather than observe.
+// What makes them observable is the hold's name (see holdName).
 func TestAStoppedEngineGivesItsDutiesBackAndKeepsItsHolds(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -356,17 +233,11 @@ func TestAStoppedEngineGivesItsDutiesBackAndKeepsItsHolds(t *testing.T) {
 	if held, err := leases.Get(ctx, duty); err != nil || held == nil || held.Owner != owner {
 		t.Fatalf("precondition: the sweep's tick did not leave %s held by this node: (%v, %v)", duty, held, err)
 	}
-	// A HOLD NO PRODUCTION PATH CAN CLAIM, which is the other half of making
-	// this observable. What the rule is about is the PREFIX — a `worker:`
-	// lease that is not a recorded duty — and any name satisfies that. But a
-	// real `setup-provision-<kind>` is the lease held while ANYTHING writes
-	// at that integration, a tick of the reconcile loop included
-	// ([setupDutyName]), and this engine takes it under the very owner below.
-	// Named for a live kind, the hold is not this test's: a reconcile tick
-	// landing in the window renews it and releases it when its work ends, so
-	// the assertion fails on a second writer rather than on the rule. The
-	// suffix is deliberately not an [integration.Kind], and the guard keeps
-	// it that way — a kind added later would quietly restore the collision.
+	// A hold no production path can claim. The rule is about the `worker:`
+	// prefix, but a real `setup-provision-<kind>` is taken under this owner
+	// by anything writing at that integration ([setupDutyName]), so a
+	// reconcile tick would renew and release it mid-test. The guard keeps
+	// the suffix off every [integration.Kind].
 	const holdName = "setup-provision-no-such-surface"
 	for _, kind := range integration.Kinds {
 		if holdName == "setup-provision-"+string(kind) {
@@ -374,10 +245,8 @@ func TestAStoppedEngineGivesItsDutiesBackAndKeepsItsHolds(t *testing.T) {
 				"tick takes this lease: pick a suffix that is not a kind", holdName)
 		}
 	}
-	// THE LEASE IS CHECKED, not just the error. A refused claim is the
-	// ordinary (nil, nil) here — a peer holding it — so a precondition
-	// reading only err calls a refusal success and leaves the assertion
-	// below failing for a reason that is not the rule it is about.
+	// The lease is checked, not just the error: a refused claim is the
+	// ordinary (nil, nil).
 	hold := coord.WorkerResource(holdName)
 	if got, _, err := leases.TryAcquire(ctx, hold, coord.AcquireOptions{
 		Owner: owner, TTL: 5 * time.Minute, Ungated: true,
@@ -397,22 +266,16 @@ func TestAStoppedEngineGivesItsDutiesBackAndKeepsItsHolds(t *testing.T) {
 
 // AN IDLE ASK OUTLASTS THE LONGEST SILENCE OF ONE THAT IS STILL OWED.
 //
-// The idle sweep spares every channel whose ask waits somewhere the engine can
-// see it — an executor's record, an inbox held by a run, a pause or a spent
-// budget window — and closes the rest once they have been quiet for
-// [maintenance.ChannelIdleTimeout]. What it cannot see is an ask in flight: a
-// delivery a node that died held unacknowledged, invisible for the broker's
-// ack wait, redelivered once the seat's next holder takes its lease, and then
-// up to two dispatch segments — one ahead of it, and its own — before a launch
-// writes a run's record, each bounded by a first turn's onboarding pass. A
-// timeout shorter than that closes the channel of an ask that is about to be
-// answered, and the answer is refused when it comes.
+// The idle sweep closes a channel quiet for [maintenance.ChannelIdleTimeout]
+// unless its ask waits where the engine can see it. An ask in flight it cannot
+// see: a dead node's unacknowledged delivery (the broker's ack wait),
+// redelivered once the seat's next holder takes its lease, then up to two
+// dispatch segments, each bounded by an onboarding pass, before a run's record
+// is written. A shorter timeout closes the channel of an ask about to be
+// answered, and the answer is refused.
 //
-// FOUR CONSTANTS IN FOUR PACKAGES, and nothing else connects them: the broker's
-// ack wait is sized to the queue, the lease to the seat host, the onboarding
-// claim to its pass. Only the ORDER is asserted, for the reason
-// TestARevisionOutlivesTheAuditRowThatNamesIt gives: a demanded multiple would
-// fail a sound change and be edited to say so.
+// Four constants in four packages, nothing else connecting them; only the
+// order is asserted, for TestARevisionOutlivesTheAuditRowThatNamesIt's reason.
 func TestAnIdleAskOutlastsTheSilenceOfOneStillOwed(t *testing.T) {
 	t.Parallel()
 	silence := jetstream.DefaultAckWait + seat.SeatLeaseTTL + 2*runner.ClaimTTL
@@ -427,42 +290,26 @@ func TestAnIdleAskOutlastsTheSilenceOfOneStillOwed(t *testing.T) {
 }
 
 // The tick must stay shorter than every horizon, or a table sits past its
-// own horizon for the difference and the horizon stops describing the table.
-// [maintenance.New] enforces this at runtime by raising a short horizon; this
-// asserts the SHIPPED ones never need raising, so nobody discovers the rule
-// from a warning in production.
+// horizon for the difference. [maintenance.New] raises a short horizon at
+// runtime; this asserts the shipped ones never need raising.
 func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 	t.Parallel()
 	for table, horizon := range map[string]time.Duration{
-		// NOT turn_completions, and NOT chat_thread_follows: both are
-		// retained by a COORDINATION bucket now, whose age no sweep
-		// here ticks against. coordtest holds those horizons — the
-		// ledger's to the catchup ceiling, the follows' to its own
-		// declared constant.
+		// Not turn_completions or chat_thread_follows: coordination
+		// buckets age them, and coordtest holds those horizons.
 		"scheduled_runs":        maintenance.ScheduledRunRetention,
 		"a2a_channels":          maintenance.ChannelRetention,
 		"a2a_channels_idle":     maintenance.ChannelIdleTimeout,
 		"counterparty_profiles": maintenance.CounterpartyRetention,
 		"seat_mailboxes":        maintenance.MailboxRetirementGrace,
 		"chat_read_state":       maintenance.ChatReadForgetGrace,
-		// NO NATIVE BACKEND HAS A ROW-SWEEP ENTRY, and the absence is
-		// the point rather than an omission. Every one is a state-log
-		// domain: its records are a log the retention gate trims, and
-		// its durable rows are written by an applier — so there is no
-		// per-node sweep of ROWS to give a horizon to, and a delete on
-		// one node's own authority is what the identity claim forbids.
-		// Chat's message horizon is no exception: it is a prune RECORD
-		// a fleet duty publishes to the log, applied on every node.
-		//
-		// Their OPERATION LEDGERS are the exception, and they are here
-		// under one entry because every domain takes the same horizon:
-		// the ledger is framework bookkeeping about what THIS applier
-		// wrote, not a durable row any peer reads.
+		// No native backend has a row sweep: an applier writes its rows,
+		// and chat's message horizon is a prune record a fleet duty
+		// publishes. Their operation ledgers are the exception, one entry
+		// since every domain takes the same horizon.
 		"<domain>_ops": statelog.OpsRetention,
-		// BUT ONE KIND, the identity estate's sessions, whose op ids
-		// nobody re-asks after their request and whose rows go in an
-		// hour — the shortest horizon the sweep keeps, and the one a
-		// longer tick would most easily outgrow.
+		// The identity estate's sessions go in an hour, the shortest
+		// horizon the sweep keeps.
 		"iam_ops_session": iamdomain.SessionOpsRetention,
 	} {
 		if horizon <= maintenance.Interval {
@@ -473,9 +320,8 @@ func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 }
 
 // A scheduler claim answers "did this fire already run?", so deleting a row a
-// tick could still evaluate lets that fire run TWICE. Its floor is the catchup
-// ceiling, not a number somebody liked. The completion ledger is held to the
-// same rule in coordtest, against coord.LedgerRetention.
+// tick could still evaluate lets that fire run twice: its floor is the catchup
+// ceiling. coordtest holds the completion ledger to coord.LedgerRetention.
 func TestTheScheduleHorizonOutlastsTheCatchupCeiling(t *testing.T) {
 	t.Parallel()
 	for name, horizon := range map[string]time.Duration{
@@ -488,8 +334,5 @@ func TestTheScheduleHorizonOutlastsTheCatchupCeiling(t *testing.T) {
 	}
 }
 
-// The delivery horizon and the rate-window sweep are GONE, not forgotten:
-// both moved to the coordination store, where the bucket's own age is the
-// retention and the broker expires the records. The equivalent guard is
-// coordtest's TestTheRetentionsOutlastWhatTheyCover, which holds the bucket
-// ages against the cadences they have to outlast.
+// The delivery horizon and the rate window are coordination buckets the broker
+// ages; coordtest's TestTheRetentionsOutlastWhatTheyCover is their guard.

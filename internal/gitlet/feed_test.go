@@ -80,24 +80,18 @@ func writtenBy(w *types.NotificationWriter) string {
 	return fmt.Sprintf("%s %q for %s", w.Kind, w.Seat, whom)
 }
 
-// THE CODE FEED DERIVES ONLY WAKES, AND ONLY SEATS': a record about a change
-// is relayed exactly when its routing tells a seat something, and the parser
-// wakes exactly those seats — each once, under the reason the record's routing
-// gives it, with an id derived from the record, the change and the seat, the
-// change's name, who wrote what it announces, and the change as what starts
-// the turn it wakes, under that seat's own reason. A person the same record
-// tells is never queue-woken: their notice row is written all the same, and
-// is where they read it. A record that tells nobody but its actor, or only
-// persons, is acknowledged with no delivery, as is a push that moves no
-// change; a record of a newer build is deferred to a peer on that build.
+// THE CODE FEED DERIVES ONLY WAKES, AND ONLY SEATS': a change's record is
+// relayed exactly when its routing tells a seat something, and the parser wakes
+// each such seat once, under its own reason, with an id from the record, the
+// change and the seat, the change's name, its announcer, and the change as the
+// turn's start. A person is never queue-woken: their notice row is where they
+// read it. A record telling only its actor or persons, and a push moving no
+// change, are acknowledged undelivered; a newer build's record is deferred.
 //
-// Mutation: drop the person filter in the parser → the open wakes founder;
-// relay a record whatever its routing tells (drop wakesASeat) → the ask of a
-// person alone, and the aside nobody hears, are relayed; derive the wake id
-// from the change rather than the record → the comment's wakes collapse into
-// the ask's; name no origin, or one reason for every recipient, → the ask's
-// and the comment's origins are wrong; answer a newer build's record "no
-// wake" → it is not deferred, and the feed would acknowledge it fleet-wide.
+// Mutation: drop the person filter → the open wakes founder; drop wakesASeat →
+// the person-only ask and unheard aside relay; wake id from the change → the
+// comment's wakes collapse into the ask's; one reason or no origin → wrong
+// origins; a newer record answered "no wake" → acknowledged fleet-wide.
 func TestTheCodeFeedDerivesOnlyWakes(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -203,10 +197,8 @@ func TestTheCodeFeedDerivesOnlyWakes(t *testing.T) {
 		t.Error("a push that moves no change is relayed")
 	}
 
-	// A NEWER BUILD'S RECORD: the envelope reads, the payload's rules are not
-	// this build's, so it is DEFERRED to a peer on that build — never
-	// answered "no wake", which the feed would acknowledge for the whole
-	// fleet (#838).
+	// A NEWER BUILD'S RECORD is DEFERRED to a peer on that build, never
+	// answered "no wake", which the feed would acknowledge fleet-wide.
 	future := feedRecord(t, n, askSeat.Position)
 	var body map[string]any
 	if err := json.Unmarshal(future.Payload, &body); err != nil {
@@ -231,14 +223,10 @@ func TestTheCodeFeedDerivesOnlyWakes(t *testing.T) {
 }
 
 // A RELAYED CODE RECORD A NEWER BUILD WROTE IS DEFERRED TO A PEER THAT READS
-// IT, on the parser's side of the relay as on the feed's.
-//
-// The feed on a newer node relays the record's wake, and whichever node wins
-// the delivery parses it, so an older node meets the record here too. Refused
-// as a payload nobody can read, the notify service acked it on the one group
-// every node takes inbound mail from, and the wake was gone for the fleet
-// (crewlet#993); answered with the spine's deferral, the service passes it to
-// a peer on the newer build.
+// IT, on the parser's side of the relay as on the feed's: whichever node wins
+// the delivery parses a newer feed's wake, and a refusal as unreadable is acked
+// on the one group every node takes inbound mail from, losing the wake
+// fleet-wide; the spine's deferral passes it to a peer on the newer build.
 //
 // Mutation: return the decode's error as it is, and no deferral reaches the
 // service.
@@ -263,23 +251,18 @@ func TestARelayedCodeRecordANewerBuildWroteIsDeferredToAPeer(t *testing.T) {
 	}
 }
 
-// A CODE WAKE IS WRITTEN FOR WHOM ITS AGENT WROTE IT (ADR-0109): the wake a
-// seat's code record starts states the seat as its writer and whom its routing
-// says the seat wrote for, so the turn it starts works for them, held to what
-// they may use — dev's comment naming cto, made for founder, a version-2
-// record, wakes cto written by dev for founder. A person writes for nobody but
-// themselves, and so does the engine on every record but the merge queue's two
-// about an enqueue, which carry whom it was made for beside no actor
-// (TestAnEjectionAndAnUnmadeCloseWakeForWhomTheirEnqueueWasMade): the same
-// comment's routing with its actor founder's, or nobody's, and the carrier
-// forged on it, wakes cto written for nobody. And dev's comment made for
-// nobody, a version-1 record, wakes cto written by dev for nobody: the seat's
-// own work.
+// A CODE WAKE IS WRITTEN FOR WHOM ITS AGENT WROTE IT (ADR-0109): it states the
+// seat as its writer and whom its routing says the seat wrote for — dev's
+// comment naming cto, made for founder (version 2), wakes cto written by dev
+// for founder. A person, and the engine on all but the merge queue's two
+// records about an enqueue
+// (TestAnEjectionAndAnUnmadeCloseWakeForWhomTheirEnqueueWasMade), write for
+// nobody: that comment with founder's actor or none, carrier forged, wakes cto
+// for nobody; a version-1 record made for nobody wakes cto by dev for nobody.
 //
 // Mutations: writerOf handing the writer no carrier — dev's comment made for
-// founder wakes cto written for nobody, red; writerOf handing the engine's
-// carrier on every op — the engine's comment with the carrier forged on
-// wakes cto for founder, red.
+// founder wakes cto for nobody, red; writerOf handing the engine's carrier on
+// every op — the engine's forged-carrier comment wakes cto for founder, red.
 func TestACodeWakeIsWrittenForWhomItsAgentWroteIt(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -351,20 +334,16 @@ func TestACodeWakeIsWrittenForWhomItsAgentWroteIt(t *testing.T) {
 }
 
 // A BATCHED RECORD TELLS A HANDLE ABOUT EACH OF ITS CHANGES: the committer
-// folds pushes from unrelated clients into one record, so two pushes of one
-// record each open a change that mentions the same seat and the same person.
-// The seat is woken about each change — two wakes, each about its own change,
-// each id derived from the record, that change and the seat — and the seat
-// and the person each keep a notice row a change. The person's inbox lists
-// the two apart, by ids a mark names one at a time, and a page of one notice
-// holds both, since it closes between two records and never inside one.
+// folds unrelated pushes into one record, here two each opening a change that
+// mentions the same seat and person. The seat gets two wakes, each id from the
+// record, its change and the seat; seat and person keep a notice row a change;
+// the person's inbox lists the two apart, by ids a mark names singly, and a
+// page of one holds both, since a page closes between records, never inside.
 //
-// Mutation: offer one record's routings to one builder (the add-once rule
-// across the record), and the second change wakes nobody and writes no row;
-// derive the wake id from the record and the seat alone, and the two wakes
-// share an id, the second collapsing into the first; name an inbox notice by
-// its record alone, and founder's two notices carry one id; end an inbox page
-// at its limit, and a page of one shows one of the record's two notices.
+// Mutation: one builder for the record's routings (add-once across the record)
+// → the second change wakes nobody, writes no row; wake id from record and seat
+// → the second collapses into the first; inbox notice named by its record →
+// founder's two share an id; a page ended at its limit → it shows one of two.
 func TestABatchedRecordTellsAHandleAboutEachOfItsChanges(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -485,12 +464,10 @@ func TestACheckRecordNoRoutingRidesIsAcknowledgedUndecoded(t *testing.T) {
 	}
 }
 
-// A REPLAY OF THE RECORDS FROM BEFORE CHANGES WAKES NOBODY: the code feed's
-// consumer is new, and a new consumer starts from the first record its log
-// still holds — every repository created, every push, every setting from
-// before a change existed. Not one of them carries a routing, so the replay
-// that turning the feed on makes is acknowledged record by record and wakes
-// no seat about history.
+// A REPLAY OF THE RECORDS FROM BEFORE CHANGES WAKES NOBODY: a new code feed
+// consumer starts from the first record its log holds — repositories, pushes
+// and settings from before changes existed — and none carries a routing, so
+// turning the feed on acknowledges each and wakes no seat about history.
 //
 // Mutation: relay every record about a repository (drop the routing test in
 // Translate) → the pushes are relayed.
@@ -597,11 +574,13 @@ func TestACodeWakeIsAboutItsChange(t *testing.T) {
 	}
 }
 
-// A VIEWED KEY RECORD WAKES NOBODY, UNREAD: a repository's viewed key routes nobody, so its record is
-// acknowledged off its envelope, and the feed never decodes the record that carries a key; the same
-// bytes on another repository record are decoded and refused.
+// A VIEWED KEY RECORD WAKES NOBODY, UNREAD: a repository's viewed key routes
+// nobody, so its record is acknowledged off its envelope and the feed never
+// decodes the record that carries a key; the same bytes on another repository
+// record are decoded and refused.
 //
-// Mutation: drop the viewed key's arm in wakesAnybody, and the record is decoded and refused, red.
+// Mutation: drop the viewed key's arm in wakesAnybody, and the record is
+// decoded and refused, red.
 func TestAViewedKeyRecordWakesNobodyUnread(t *testing.T) {
 	t.Parallel()
 	record := func(op gitlet.OpKind) changefeed.Record {

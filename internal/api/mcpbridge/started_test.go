@@ -14,8 +14,8 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 )
 
-// told is what a session's [mcpbridge.Session.Started] was told, and what the
-// run had called by then.
+// told records what [mcpbridge.Session.Started] was told, and the calls made by
+// then.
 type told struct {
 	mu   sync.Mutex
 	said []bool
@@ -23,8 +23,7 @@ type told struct {
 	calledBefore []int
 }
 
-// hook is a [mcpbridge.Session.Started] that records what it is told against
-// the calls calls holds at that moment.
+// hook is a [mcpbridge.Session.Started] recording into t.
 func (t *told) hook(calls *ledger) func(context.Context, bool) {
 	return func(_ context.Context, fellBack bool) {
 		t.mu.Lock()
@@ -52,14 +51,9 @@ func postPingTo(t *testing.T, client *http.Client, url string) int {
 	return res.StatusCode
 }
 
-// THE TOKEN A JOB'S BOX DIALS SAYS WHICH SESSION IT STARTED. A launch that
-// continues a session hands the box two tokens of the job: the one Open
-// answers, for that session, and the job's other, for a session of its own its
-// script starts in that one's place. Both reach the one opening; the first
-// request on either tells the session which the box started — before that
-// request is served, so before the run's first call — and a later request on
-// the other token is refused, since the box started one session and holds that
-// token no longer. Told once, whichever request comes first.
+// THE TOKEN A JOB'S BOX DIALS SAYS WHICH SESSION IT STARTED: the first request
+// on either of the job's two tokens tells the session once, before the run's
+// first call is served, and the other token is refused afterwards.
 //
 // Mutation: tell the session nothing, tell it after the first call is served,
 // read every token as the session the launch chose, or serve the other token
@@ -104,10 +98,9 @@ func TestTheTokenABoxDialsSaysWhichSessionItStarted(t *testing.T) {
 	}
 }
 
-// A BOX CANNOT SAY A SESSION ITS TOKEN DOES NOT NAME. Which session a box
-// started is in what the fleet signs, so a token whose subject was rewritten to
-// name the other session — what the run's model could try with the token it
-// holds — is no token at all, and tells the session nothing.
+// A BOX CANNOT SAY A SESSION ITS TOKEN DOES NOT NAME: the session is in what
+// the fleet signs, so a token the model rewrote to name the other session is no
+// token, and tells the session nothing.
 //
 // Mutation: read the session off anything but the signed subject, and the
 // rewritten token is served as a session of the box's own.
@@ -132,11 +125,9 @@ func TestABoxCannotSayASessionItsTokenDoesNotName(t *testing.T) {
 	}
 }
 
-// A RELAYED REQUEST TELLS THE SESSION TOO. A box dials the fleet's address,
-// and the node it lands on relays the request to the seat's holder: that is as
-// much the run's first request as one that reached the holder's own route, so
-// the holder tells the session which session the box started before it serves
-// the relayed request — the MCP endpoint's as much as the notes route's.
+// A RELAYED REQUEST TELLS THE SESSION TOO: a request relayed to the seat's
+// holder is as much the run's first as a direct one, so the holder tells the
+// session before serving it, on the MCP endpoint as on the notes route.
 //
 // Mutation: leave the relay's MCP routes serving the MCP handler alone, and the
 // relayed run's first call is served before the session is told.
@@ -177,13 +168,9 @@ func TestAJobsIDCannotCarryTheMarkOfItsOtherToken(t *testing.T) {
 	}
 }
 
-// A REQUEST THAT ARRIVES WHILE THE SESSION IS BEING TOLD WAITS FOR IT. The first
-// request on either token tells the session which session the box started
-// before it is served, and a request on the same opening that comes in
-// meanwhile — the harness's own MCP client racing a notes poll or a skill's
-// report — must not be served against the guard the telling is about to put
-// right: it waits until the session has been told, and only then reaches its
-// tool.
+// A REQUEST THAT ARRIVES WHILE THE SESSION IS BEING TOLD WAITS FOR IT: a call
+// racing the first request (a notes poll or a skill's report) must not be
+// served against the guard the telling is about to put right.
 //
 // Mutation: let the first request go before the session is told — record the
 // opening's word and unlock, then tell it — and the racing call reaches the
@@ -216,7 +203,6 @@ func TestARequestArrivingWhileTheSessionIsToldWaitsForIt(t *testing.T) {
 		t.Fatal("the first request never told the session which session its box started")
 	}
 
-	// THE RACING CALL, on the same opening, while the session is being told.
 	pool := httpxtest.Pool(t)
 	called := make(chan error, 1)
 	go func() {

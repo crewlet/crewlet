@@ -21,10 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// The company's own retrieval_limit, honoured. It was validated (1..20),
-// schema'd and documented as "Episode-query hits returned", and read by
-// nothing: setting `retrieval_limit: 20` produced a new revision and changed
-// nothing an operator could observe.
+// The company's own retrieval_limit is what query_episodes recalls by default.
 func TestQueryEpisodesHonoursTheConfiguredRetrievalLimit(t *testing.T) {
 	t.Parallel()
 	episodes := &countingEpisodes{}
@@ -36,8 +33,7 @@ func TestQueryEpisodesHonoursTheConfiguredRetrievalLimit(t *testing.T) {
 	if episodes.limit != 17 {
 		t.Errorf("recalled %d turns, want the company's 17", episodes.limit)
 	}
-	// The model's own argument still wins, and is still bounded by what a
-	// prompt can carry rather than by what an operator asked for.
+	// The model's own argument wins, bounded by what a prompt can carry.
 	callFor(t, tool, turn, map[string]any{"limit": 3})
 	if episodes.limit != 3 {
 		t.Errorf("recalled %d turns, want the model's 3", episodes.limit)
@@ -75,10 +71,8 @@ func (c *countingEpisodes) ForConversation(_ context.Context, _, _ string, limit
 	return nil, nil
 }
 
-// The body cap. It was documented as a runaway guard — "Ceiling on a refined
-// skill's body" — and enforced nowhere: refine_skill clipped only the note it
-// records beside the archived version, and never measured the body it stored.
-// A skill that grows an annotation per turn grows without bound.
+// The body cap (max_body_chars) holds on what refine_skill stores, or a skill
+// that grows an annotation per turn grows without bound.
 func TestARefinementOverTheBodyCapIsRefused(t *testing.T) {
 	t.Parallel()
 	skills := &recordingSkills{skill: learning.Skill{ID: "s-1", Name: "deploys", Version: 3}}
@@ -102,12 +96,10 @@ func TestARefinementOverTheBodyCapIsRefused(t *testing.T) {
 	}
 }
 
-// ONE STORE, ONE RULE. Three writers share the diary's content bound and they
-// used to disagree: reflect_and_persist refused an over-long note naming the
-// limit, while mark_onboarded and refine_skill's `reason` silently clipped at
-// the same number and reported success. A clipped note is worse than a refused
-// one — the seat reads back half of what it wrote and cannot tell — and the
-// refusal has to NAME the limit or a model has nothing to aim at.
+// ONE STORE, ONE RULE: every writer sharing the diary's content bound refuses
+// an over-long note. A clipped note is worse than a refused one — the seat
+// reads back half of what it wrote and cannot tell — and the refusal NAMES the
+// limit or a model has nothing to aim at.
 func TestEveryDiaryWriterRefusesAnOverLongNoteAndNamesTheCap(t *testing.T) {
 	t.Parallel()
 	over := strings.Repeat("z", learning.MaxContentChars+1)
@@ -165,9 +157,8 @@ func TestEveryDiaryWriterRefusesAnOverLongNoteAndNamesTheCap(t *testing.T) {
 	}
 }
 
-// And the history bound reaches the store. `max_versions_kept` was hardcoded
-// at 10, so a company that set 3 or 40 got 10 either way — with the store's
-// own comment noting the prune is the ONLY bound on that table.
+// The company's `max_versions_kept` reaches the store: its prune is the ONLY
+// bound on the skill-version table.
 func TestARefinementCarriesTheConfiguredVersionBound(t *testing.T) {
 	t.Parallel()
 	skills := &recordingSkills{skill: learning.Skill{ID: "s-1", Name: "deploys", Version: 3}}
@@ -211,11 +202,9 @@ func (r *recordingSkills) MarkLoaded(context.Context, string, time.Time) learnin
 	return learning.Use{}
 }
 
-// The skill lifecycle's telemetry. `skill_used` was a registered type with a
-// topic, a summary and a category, and NOTHING anywhere constructed it: the
-// builtin bumped a database counter and said nothing, so "are the skills the
-// synthesizer drafts ever loaded again" — the one question skill induction has
-// to answer to be worth its cost — was answerable only by diffing a column.
+// Loading a skill publishes skill_used: it answers "are the skills the
+// synthesizer drafts ever loaded again", the one question skill induction has
+// to answer to be worth its cost.
 func TestLoadingASkillIsPublished(t *testing.T) {
 	t.Parallel()
 	out := &recordingTelemetry{}
@@ -315,11 +304,9 @@ func (r *recordingTelemetry) Publish(_ context.Context, topic string, ev *events
 
 // --- the pull side of the turn-start prefetch's two searches -------------- //
 
-// The re-query-after-recon path the docs lean on, and which did not exist:
-// query_episodes declared `conversation` and `limit` and nothing else, so the
-// escape hatch for a thin trigger (a pointer with no content, where the
-// prefetch block deliberately renders a hint instead of a search) had nothing
-// to search with.
+// query_episodes searches by meaning on `query`: the docs' escape hatch for a
+// thin trigger (a pointer with no content, where the prefetch block renders a
+// hint instead of a search).
 func TestQueryEpisodesSearchesByMeaning(t *testing.T) {
 	t.Parallel()
 	recall := &fakeRecall{hits: []learning.Hit{
@@ -347,25 +334,14 @@ func TestQueryEpisodesSearchesByMeaning(t *testing.T) {
 	}
 }
 
-// "Nothing resembles this" and "this company cannot search by meaning" send
-// a model to opposite places, and so does a search that FAILED: each says
-// which it is. They were one sentence, "no embeddings are configured", which
-// every embedder timeout told a model on a company that has them.
-//
-// AND ONLY A FAILURE THAT MAY CLEAR IS CALLED ONE. Every failure that was not
-// "no embeddings" used to answer "calling again may answer" — a revoked key
-// too, which the embeddings package classifies as a configuration no request
-// will avoid, so an executor asked again, was refused identically, and spent
-// rounds of every turn on it until an operator fixed providers.embeddings.
-// Each case is the error as the recall path really hands it over: the
-// provider's classified error, wrapped twice on the way.
-//
-// AND THE CLASS SAYS THE SAME AS THE SENTENCE, for a reader that is not a
-// model: what this deployment runs, or an embedder's answer, is a CONDITION
-// (or, for a query the embedder refuses, the argument's); only an episode store
-// that broke is a FAULT of the node — internal_error, its error in the node's
-// log and never in the sentence, where a database path reaches a model's
-// prompt and a person's screen and helps neither.
+// "Nothing resembles this", "no embeddings here" and "the search FAILED" send
+// a model to different places, so each says which. Only a failure that may
+// clear says "calling again may answer": a configuration no request avoids (a
+// revoked key) would cost an executor rounds of every turn. Each error is as
+// the recall path hands it over, the provider's classified error wrapped twice.
+// The class agrees with the sentence: setup or an embedder's answer is a
+// CONDITION (a refused query, the argument's); only a broken episode store is
+// internal_error, its error (a database path) logged, never in the sentence.
 //
 // Mutation: class the store's failure through similarityFailure's embedder
 // arms and its case goes red as unavailable with the path in the sentence;
@@ -461,12 +437,9 @@ func TestQueryEpisodesSaysWhyItCouldNotSearchByMeaning(t *testing.T) {
 	}
 }
 
-// A SEARCH THAT COULD NOT REACH A SEAT'S TURNS NEVER CALLS ITS WORK NEW. After
-// a model change every turn the seat took has a vector of the old model, which
-// recall does not compare, so a search finding nothing told the seat "This is
-// new work" about work it did last week. What it did not search is said, with
-// where those turns can be read; "new work" is kept for a seat whose whole
-// history was searched.
+// A SEARCH THAT COULD NOT REACH A SEAT'S TURNS NEVER CALLS ITS WORK NEW: turns
+// with another model's vector are not compared, so it says how many it did not
+// search and where to read them. "New work" is for a fully searched history.
 func TestQueryEpisodesSaysWhatItCouldNotSearch(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -510,8 +483,8 @@ func TestQueryEpisodesSaysWhatItCouldNotSearch(t *testing.T) {
 	}
 }
 
-// A SIMILARITY ANSWER SAYS IT IS RANKED BY SIMILARITY. It was headed "your N
-// most recent turns", so a model read the closest match as its latest work.
+// A SIMILARITY ANSWER SAYS IT IS RANKED BY SIMILARITY, or a model reads the
+// closest match as its latest work.
 func TestQueryEpisodesHeadsASimilaritySearchAsMostSimilar(t *testing.T) {
 	t.Parallel()
 	recall := &fakeRecall{hits: []learning.Hit{{Episode: learning.Episode{TaskSummary: "a past turn"}}}}
@@ -551,9 +524,7 @@ func TestQueryEpisodesFiltersByOutcome(t *testing.T) {
 	}
 }
 
-// refresh_memory's own escape hatch. It declared `limit` and nothing else, so
-// the mid-turn re-filter its own docs describe — with the per-turn cap and the
-// idempotency cache — was advertised and absent.
+// refresh_memory re-filters mid-turn on a `context_hint`, as its docs describe.
 func TestRefreshMemoryRefiltersOnAHint(t *testing.T) {
 	t.Parallel()
 	recall := &fakeRecall{notes: []learning.DiaryEntry{
@@ -580,11 +551,10 @@ func TestRefreshMemoryRefiltersOnAHint(t *testing.T) {
 	}
 }
 
-// THE RE-FILTER IS TOLD WHO IS ASKING, as the turn-start filter was. Its one
-// hard rule is per subject — a preference about somebody not party to the task
-// does not apply — and a re-filter built without the turn's senders could not
-// tell the person asking from anybody else, so a note about one colleague
-// surfaced on a turn another one started.
+// THE RE-FILTER IS TOLD WHO IS ASKING, as the turn-start filter is: its hard
+// rule is per subject (a preference about somebody not party to the task does
+// not apply), so without the senders a note about one colleague surfaces on a
+// turn another started.
 func TestRefreshMemoryTellsTheFilterWhoIsAsking(t *testing.T) {
 	t.Parallel()
 	recall := &fakeRecall{}
@@ -601,11 +571,9 @@ func TestRefreshMemoryTellsTheFilterWhoIsAsking(t *testing.T) {
 	}
 }
 
-// THE RE-FILTER IS THE TURN'S OWN SPEND: its model call runs mid-turn for the
-// turn's work, so it is filed under the turn's attribution — its run, its unit
-// of work and the tally its work item is charged from — exactly as the
-// turn-start filter is. Handed nothing, the seam would refuse it and the tool
-// would recall nothing at all.
+// THE RE-FILTER IS THE TURN'S OWN SPEND, filed under the turn's attribution
+// (its run, unit of work and tally) as the turn-start filter is. Handed none,
+// the seam refuses it and the tool recalls nothing.
 func TestRefreshMemoryFilesTheFilterUnderTheTurn(t *testing.T) {
 	t.Parallel()
 	recall := &fakeRecall{}
@@ -661,12 +629,9 @@ func TestRefreshMemoryCapsDistinctHintsAndNotRepeats(t *testing.T) {
 	}
 }
 
-// A REPEAT IS ANSWERED FROM THE LEDGER, not merely left uncharged.
-//
-// The filter is an auxiliary model call. If a repeat re-ran it for free the
-// cap would bound nothing: a model alternating two hints could spend a
-// completion per round for the rest of the turn without ever taking a third
-// slot.
+// A REPEAT IS ANSWERED FROM THE LEDGER, not merely left uncharged: re-running
+// the auxiliary filter for free, a model alternating two hints would spend a
+// completion per round without ever taking a third slot.
 func TestARepeatedHintCostsNoSecondFilterCall(t *testing.T) {
 	t.Parallel()
 	recall := &fakeRecall{notes: []learning.DiaryEntry{

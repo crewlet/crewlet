@@ -13,36 +13,21 @@ import (
 // THE ROWS A COLLECTION PRODUCES DO NOT DEPEND ON HOW MANY STATEMENTS WROTE
 // THEM.
 //
-// Every child collection an applied task carries — watchers, collaborators,
-// tags, relations, dependents, checklists, dependency edges and the key
-// directory — is written as a MULTI-ROW insert chunked to the estate's
-// parameter limit. That limit is a property of the engine and of nothing the
-// record says, so it is exactly the input a correct applier's OUTPUT cannot
-// see: one row per statement, six rows per statement and the whole collection
-// in one must leave byte-identical tables.
-//
-// It is the guard the conversion to [store.InsertRows] needs and could not get
-// anywhere else. Every other case in this package runs at the probed limit,
-// where the caps put every collection inside a single statement — so a bind
-// that drifted one column at a chunk boundary, or a row template that is only
-// valid when it appears once, would pass the whole suite. Here the SAME record
-// is applied at five limits and the tables are compared against each other.
-//
-// Zero is one of them deliberately: an [statelog.ApplyOptions] with no probed
-// limit degrades to a row per statement, which is the shape this applier had
-// before the conversion and therefore the reference the other four are judged
-// against.
+// Every child collection of an applied task (watchers, collaborators, tags,
+// relations, dependents, checklists, dependency edges, the key directory) is
+// a multi-row insert ([store.InsertRows]) chunked to the estate's parameter
+// limit, an engine property the applier's output must not show. Every other
+// case runs at the probed limit, where each collection fits one statement, so
+// a bind drifting a column at a chunk boundary, or a row template valid only
+// once, would pass them all. Here one record is applied at five limits and
+// the tables compared; zero, a row per statement, is the reference.
 func TestACollectionsRowsSurviveEveryChunkWidth(t *testing.T) {
 	t.Parallel()
 
-	// The tables every collection in the fixture below lands in, plus the
-	// two derived from it — read in a fixed order so two dumps compare.
-	// AND THE COUNT EACH ONE OWES, stated here rather than derived from the
-	// fixture, because a comparison of five dumps against each other is
-	// blind to a fault they all share: a bind swapped in a row template is
-	// wrong identically at every width. These numbers are what the fixture
-	// below declares, and they are what makes this case able to fail on a
-	// defect that is not width-dependent at all.
+	// The tables the fixture's collections land in, plus the two derived
+	// from it, read in a fixed order so dumps compare. Each count is stated
+	// rather than derived: dumps compared with each other are blind to a
+	// fault they share, such as a bind swapped identically at every width.
 	tables := []struct {
 		name, order string
 		want        int
@@ -60,11 +45,10 @@ func TestACollectionsRowsSurviveEveryChunkWidth(t *testing.T) {
 		{"tracker_task_keys", "key", 3},
 	}
 
-	// The limits, in rows-per-statement terms for the widest template
-	// here: 0 degrades to one row, 4 chunks a two-column collection two
-	// rows at a time and a nine-column one at one row, 20 puts six rows of
-	// a three-column collection in a statement and 200 covers the whole
-	// fixture — with the probed limit last, which is what production runs.
+	// In rows per statement: 0 degrades to one row, 4 chunks a two-column
+	// collection two rows at a time and a nine-column one at one, 20 puts
+	// six rows of a three-column one in a statement, 200 covers the
+	// fixture, and the probed limit (-1) runs last, as production does.
 	dumps := map[int][]string{}
 	for _, limit := range []int{0, 4, 20, 200, -1} {
 		h := newApplyHarness(t)
@@ -88,12 +72,11 @@ func TestACollectionsRowsSurviveEveryChunkWidth(t *testing.T) {
 		}
 		dumps[effective] = lines
 
-		// TWO SPOT CHECKS ON COLUMNS A BIND SWAP WOULD MOVE, because a
-		// row count survives two columns trading places. `muted` is the
-		// watcher template's third bind and comes from a set the task
-		// carries separately; `one_sided` is the relations template's
-		// CASE, which is 1 exactly for the waiting_on edges whose
-		// blocker does not list this task back.
+		// Spot checks on columns a bind swap would move, which a row count
+		// survives: `muted` is the watcher template's third bind, from a set
+		// the task carries separately; `one_sided` is the relations
+		// template's CASE, 1 exactly for the waiting_on edges whose blocker
+		// does not list this task back.
 		if got := h.value(
 			`SELECT COUNT(*) FROM tracker_watchers WHERE muted = 1`); got != 2 {
 			t.Errorf("at a limit of %d, %d watchers are muted, want 2",
@@ -147,9 +130,8 @@ func chunkTask(id string) worklet.Task {
 	task.Tags = []string{"alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta"}
 
 	at := time.Unix(1_700_000_000, 0).UTC()
-	// BOTH RELATION KINDS, because only `waiting_on` reaches the CASE in
-	// the relations template and only `waiting_on` writes a dependency
-	// edge — a fixture of one kind would exercise one arm of each.
+	// Both relation kinds: only `waiting_on` reaches the relations
+	// template's CASE and writes a dependency edge.
 	for i := range 6 {
 		task.Relations = append(task.Relations, worklet.Relation{
 			Kind: worklet.RelationWaitingOn, Other: fmt.Sprintf("blocker-%02d", i),

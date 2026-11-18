@@ -110,11 +110,9 @@ func declaredTypes(schemas map[string]map[string]any) map[string]map[string]bool
 
 // THE ADVERTISED TYPE IS THE TYPE THE TOOL READS (ADR-0059): an argument no
 // schema declares as a string is never read as free text (argString, or a
-// `.(string)` assertion) except to quote it back in a refusal. A field
-// advertised as a number, a boolean or a list but read as text is one the
-// surface's check would refuse a value of that the tool reads, which is the
-// drift this holds the tree to. Read with any helper of argval's, a value
-// is read by the same rule the check holds it to.
+// `.(string)` assertion) except to quote it back in a refusal; otherwise the
+// surface's check would refuse a value the tool reads. argval's helpers read
+// by the check's own rule.
 //
 // Mutation: read `limit` with argString in a tool and this names the call.
 func TestNoArgumentIsReadAsTextAgainstItsType(t *testing.T) {
@@ -215,10 +213,11 @@ var readKinds = []string{"string", "[]any", "[]string", "bool", "float64", "floa
 
 // NO ARGUMENT IS READ BY A RULE OF ITS OWN (ADR-0059): a raw .(string),
 // .([]any), .(bool) or numeric assertion reads a value differently from the
-// check at the surface, which reads it through argval, so the check admitted
-// `{"set": "GP-12"}` as the list of one it is while the tool read it as no
-// list and cleared every relation. Every such read goes through argval; an
-// object (.(map[string]any)) is read the same both ways and is not listed.
+// surface's check, which reads through argval: the check admits
+// `{"set": "GP-12"}` as a list of one that `.([]any)` reads as no list,
+// clearing every relation. Every
+// such read goes through argval; an object (.(map[string]any)) reads the same
+// both ways and is not listed.
 //
 // Mutation: read a set with `raw.([]any)` and this names the assertion.
 func TestNoArgumentIsReadByARuleOfItsOwn(t *testing.T) {
@@ -281,9 +280,8 @@ func ownReads(fset *token.FileSet, file *ast.File) []string {
 	return found
 }
 
-// THE ARGUMENT GATE SEES EVERY SHAPE (#423 review): a type switch reads a value
-// by its cases as surely as an assertion does, and the first version of the
-// gate skipped it.
+// THE ARGUMENT GATE SEES EVERY SHAPE: a type switch reads a value by its cases
+// as surely as an assertion does.
 //
 // Mutation: drop the type switch from ownReads and its fixture is not named.
 func TestTheArgumentGateSeesEveryShape(t *testing.T) {
@@ -313,15 +311,14 @@ case []any:
 var numberReads = []string{"strconv.Atoi", "strconv.ParseInt", "strconv.ParseUint",
 	"strconv.ParseFloat", "fmt.Sscan", "fmt.Sscanf", "fmt.Sscanln", "big.ParseFloat"}
 
-// A DECLARED NUMBER IS READ BY ITS TYPE'S READER ALONE (ADR-0059, #423
-// re-verify): the check admitted "1e3" as an integer by argval.Whole while
-// argInt read it by fmt.Sscanf's prefix as 1. So no file here parses a
-// number by any other function, and every key read with argInt is declared an
-// integer wherever a builtin's schema declares it, and every key read with
-// argFloat a number, so the check holds the value to the rule it is read by.
+// A DECLARED NUMBER IS READ BY ITS TYPE'S READER ALONE (ADR-0059): any other
+// parse can disagree with the check (argval.Whole admits "1e3", which a
+// fmt.Sscanf prefix reads as 1). So no file here parses a number by another
+// function, and a key read with argInt is declared an integer wherever a
+// schema declares it, one read with argFloat a number.
 //
 // Mutation: read `limit` with strconv.Atoi, or declare get_inbox's `limit` a
-// number again while argInt reads it, and this names it.
+// number while argInt reads it, and this names it.
 func TestADeclaredNumberIsReadByItsTypesReader(t *testing.T) {
 	t.Parallel()
 	declared := map[string]map[string]bool{}
@@ -370,9 +367,9 @@ func TestADeclaredNumberIsReadByItsTypesReader(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// A KEY IS HELD TO ITS OWN FILE'S DECLARATION where the file has one,
-		// since one key ("since") is an integer to one tool and a timestamp
-		// to another, and to every builtin's otherwise.
+		// A key is held to its own file's declaration where there is one
+		// ("since" is an integer to one tool, a timestamp to another), and
+		// to every builtin's otherwise.
 		local := declaredIn(file)
 		ast.Inspect(file, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)

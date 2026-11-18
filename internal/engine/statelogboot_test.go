@@ -22,57 +22,16 @@ import (
 
 // A FRESH NODE DOES NOT ASK THE FLEET FOR A SNAPSHOT.
 //
-// # The comparison, and its three zero cases
-//
-// A node asks the fleet for a snapshot when its checkpoint on some domain is
-// below what that domain's log still holds, and what the log holds is read off
-// the stream's first sequence — which is "zero" in three different ways:
-//
-//   - a stream NOBODY HAS WRITTEN TO reports a first sequence of 0, and a last
-//     of 0;
-//   - a stream that HAS BEEN WRITTEN TO reports 1 or more, and exactly 1 until
-//     something trims it;
-//   - a stream written to and then PURGED OF EVERYTHING reports one past its
-//     last — as empty as the first case, and nowhere near 0.
-//
-// A node that has applied nothing has a checkpoint of 0, and the record it
-// needs next is 1. It is behind only when the log's first sequence is PAST
-// that next record, and each nearby reading of the comparison asks on one of
-// the cases above: a join taken whenever the first sequence is above the
-// checkpoint asks on the second — "the log starts at 1 and I am at 0" read as a
-// missed record — and one taken at equality asks on the first, which is every
-// brand-new company there is.
-//
-// This case is the brand-new company, whose logs have never been written;
-// [TestANodeWithTheWholeLogAheadOfItDoesNotAsk] is the second case. Neither is
-// a silent bug when it goes wrong, and where it costs is a FLEET: every member
-// runs a donor, a donor with nothing usable stays silent, and so a node that
-// asks wrongly spends the whole [statelog.OfferWindow] refusing every read and
-// write — on every boot of every node a company adds. A node alone pays almost
-// nothing, which is exactly why the wall clock could not see it; see below.
-//
-// # Why the ASK is what is observed, and not the wall clock
-//
-// This case used to bound the whole boot's wall clock under the window, and
-// that was wrong in both directions. It failed in CI at 5.37s with the join
-// correctly declined — no `statelog_below_the_floor` line in the log — because
-// everything the boot does before the join is inside that interval too: the
-// embedded broker, every coordination bucket, two migrated databases and three
-// state-log streams, under the race detector on a contended four-core runner.
-// And it could NOT fail on its own staging: a lone node has nothing listening
-// on [statelog.SubjectOffer] when it joins, since its own donor starts later,
-// so the broker answers an ask with "no responders" in a couple of
-// milliseconds — and a join broken to ask on every boot still passed.
-//
-// So the assertion is the ask itself, heard by a tap on the one subject every
-// snapshot ask crosses. A donor listens on nothing else, so the tap hears an
-// ask whichever code path sends it; no load on the machine can produce one or
-// hide one; and the tap is a SILENT RESPONDER, which is exactly what a fleet
-// whose donors hold nothing looks like — an ask costs the whole window here,
-// as it would in production, rather than the broker's shortcut. And the
-// silence it reports is evidence only because
-// [TestANodeTheFleetHasMovedPastAsksForASnapshotAtBoot] shows the same tap
-// hearing an ask when the boot makes one.
+// A log's first sequence is 0 on a stream never written, 1 on one written and
+// untrimmed, and last+1 on one purged. A node at checkpoint 0 needs record 1, so
+// it is behind only when the first sequence is PAST 1: asking whenever it
+// exceeds the checkpoint asks on the second case
+// ([TestANodeWithTheWholeLogAheadOfItDoesNotAsk]); asking at equality asks on
+// the first, every brand-new company, which is this case. On a fleet a wrong
+// ask costs each boot a whole [statelog.OfferWindow] of refused reads and writes.
+// The ask is asserted, not the wall clock (a lone node's ask fails fast on "no
+// responders"), by a silent tap on [statelog.SubjectOffer], which
+// [TestANodeTheFleetHasMovedPastAsksForASnapshotAtBoot] proves can hear.
 func TestAFreshNodeDoesNotAskTheFleetForASnapshot(t *testing.T) {
 	t.Parallel()
 	boot, company, backends := joinBackends(t)
@@ -90,24 +49,18 @@ func TestAFreshNodeDoesNotAskTheFleetForASnapshot(t *testing.T) {
 	}
 }
 
-// AND NOR DOES A NODE WITH THE WHOLE LOG AHEAD OF IT.
-//
-// The second zero case, and the one a reading of the comparison can actually
-// get wrong: a log that has been written and never trimmed starts at 1, and a
-// node at checkpoint 0 against it has missed nothing — its next record is the
-// log's first. That node is a machine added to a company whose trim has not
-// run yet, or one whose replicated estate was lost before it did. A brand-new
-// company cannot stand in for it, because its logs are the first case, at 0:
-// a join taken whenever the first sequence is above the checkpoint declines
-// there and asks here.
+// AND NOR DOES A NODE WITH THE WHOLE LOG AHEAD OF IT: a log written and never
+// trimmed starts at 1, and a node at checkpoint 0 has missed nothing. That is a
+// machine added before the trim ran, or one whose replicated estate was lost.
+// A brand-new company cannot stand in for it: its logs start at 0, where a join
+// taken whenever the first sequence exceeds the checkpoint still declines.
 func TestANodeWithTheWholeLogAheadOfItDoesNotAsk(t *testing.T) {
 	t.Parallel()
 	boot, company, backends := joinBackends(t)
 
-	// A PEER HAS ALREADY WRITTEN to the tracker's log, so it starts at 1
-	// and nothing has trimmed it. A barrier is the record any build reads
-	// and that writes no rows, so what it changes is the log's bounds and
-	// nothing this node's rows could say.
+	// A PEER HAS ALREADY WRITTEN to the tracker's log, untrimmed, so it
+	// starts at 1. A barrier is read by any build and writes no rows, so
+	// it changes only the log's bounds.
 	q, ok := backends.Queue.(*jetstream.Queue)
 	if !ok {
 		t.Fatalf("the stream is %T", backends.Queue)
@@ -115,15 +68,11 @@ func TestANodeWithTheWholeLogAheadOfItDoesNotAsk(t *testing.T) {
 	spec := worklet.Domain{}.Stream()
 	if err := q.EnsureDomainStream(t.Context(), jetstream.DomainStream{
 		Name: spec.Name, Subjects: spec.Subjects,
-		// AT THE FLOOR A BOOT SIZES A LOG TO, not at the ceiling the
-		// domain declares. A ceiling is a reservation the broker grants
-		// in full, and a stream that already exists keeps its own: the
-		// domain's declared ceiling and a fresh node's floor together
-		// are more than a test broker holds (brokertest.StoreMaxBytes),
-		// so the boot that follows would be refused one of the logs it
-		// creates — a failure of this staging, not of the join.
-		// The floor is the least the engine itself creates a log at, so
-		// this is a log a peer could have made on a small disk.
+		// AT THE FLOOR A BOOT SIZES A LOG TO, a log a peer could make on
+		// a small disk, not the domain's declared ceiling: an existing
+		// stream keeps its own, and that beside a fresh node's floors is
+		// more than a test broker holds (brokertest.StoreMaxBytes), so
+		// the boot would be refused a log for this staging's sake.
 		MaxBytes:      engine.MinDomainCeiling,
 		MaxPerSubject: spec.MaxPerSubject, MaxAge: spec.MaxAge,
 		Duplicates: spec.Duplicates,
@@ -167,23 +116,14 @@ func TestANodeWithTheWholeLogAheadOfItDoesNotAsk(t *testing.T) {
 	}
 }
 
-// AND A NODE THE FLEET HAS MOVED PAST DOES ASK — which is what makes the
-// silence of the two cases above mean anything.
-//
-// Without it the tap could be deaf and both would pass: the subject renamed on
-// one side, the ask moved to a connection or a transport the tap cannot see,
-// or a subscription the server never registered. So this is the same tap on
-// the same boot with one fact changed to make the node genuinely behind, and
-// the cheapest such fact: a node with no checkpoint joining a fleet whose trim
-// has published a floor at generation 1. The records before a re-anchor are
-// not on the log to be replayed, so the node must adopt — and, the tap
-// answering nothing, it comes up on what it has one [statelog.OfferWindow]
-// later.
-//
-// It is the TAP's control rather than the comparison's: a node with no
-// checkpoint in a fleet past generation 0 is behind before any sequence is
-// compared. The comparison's own positive case, a checkpoint the trim has
-// purged past, is TestANodeBelowTheFloorAdoptsWhileRunning's.
+// AND A NODE THE FLEET HAS MOVED PAST DOES ASK, which is what makes the two
+// silences above mean anything: without it a deaf tap (a renamed subject, an
+// ask on another transport, a subscription never registered) passes both.
+// One fact changes: a node with no checkpoint joins a fleet whose trim has
+// published a floor at generation 1, so it must adopt, and with the tap
+// answering nothing it comes up one [statelog.OfferWindow] later. This is the
+// TAP's control, not the comparison's; that positive case, a checkpoint the
+// trim purged past, is TestANodeBelowTheFloorAdoptsWhileRunning's.
 func TestANodeTheFleetHasMovedPastAsksForASnapshotAtBoot(t *testing.T) {
 	t.Parallel()
 	boot, company, backends := joinBackends(t)
@@ -209,11 +149,9 @@ func TestANodeTheFleetHasMovedPastAsksForASnapshotAtBoot(t *testing.T) {
 }
 
 // joinBackends opens the estate a boot's join runs against, so a test can
-// reach the broker before [engine.New] does.
-//
-// SUPPLIED rather than engine-owned only for that reach: the join takes its
-// connection from [engine.Backends.Queue] either way, so a boot on these is
-// the boot `crewlet run` makes.
+// reach the broker before [engine.New] does. The join takes its connection
+// from [engine.Backends.Queue] either way, so a boot on these is the boot
+// `crewlet run` makes.
 func joinBackends(t *testing.T) (*config.Bootstrap, *config.Company, *engine.Backends) {
 	t.Helper()
 	boot := bootstrap(t, func(b *config.Bootstrap) {
@@ -264,19 +202,14 @@ func tapSnapshotAsks(t *testing.T, backends *engine.Backends) *snapshotTap {
 	return &snapshotTap{nc: nc, sub: sub}
 }
 
-// drain returns every ask published before it was called, without waiting on
-// a timer.
+// drain returns every ask published before it was called, without a timer.
 //
-// TWO FLUSHES ARE THE BARRIER, the asker's and this one.
-// [statelog.CollectOffers] flushes its request before it starts collecting,
-// and a flush returns only once the server has answered a PING sent AFTER the
-// publish — so by the time [engine.New] returns, the server has processed any
-// ask the boot made and routed it to this tap, queued on this connection ahead
-// of anything the server sends it later. The PONG answering the flush below is
-// such a thing, and a connection's reads are in order, so once it is back
-// every ask is already pending on the subscription. A timeout would be a guess
-// at how long routing takes, and a guess too short passes a case by not having
-// waited.
+// TWO FLUSHES ARE THE BARRIER. [statelog.CollectOffers] flushes its request
+// before collecting, and a flush returns only once the server answers a PING
+// sent AFTER the publish, so when [engine.New] returns the server has routed
+// any ask to this tap. The PONG answering the flush below queues behind it on
+// this connection, whose reads are in order, so once it is back every ask is
+// pending. A timeout would guess at routing time, and a short guess passes.
 func (s *snapshotTap) drain(t *testing.T) []statelog.OfferRequest {
 	t.Helper()
 	if err := s.nc.Flush(); err != nil {
@@ -303,15 +236,11 @@ func (s *snapshotTap) drain(t *testing.T) []statelog.OfferRequest {
 	return out
 }
 
-// EVERY REGISTERED DOMAIN REPORTS A ROW, and a domain that does not gate seat
-// admission still reports one.
-//
-// The two are different questions. Seat admission asks whether a seat's tools
-// would answer wrongly, and the vector domain deliberately says "that is not
-// mine to say" — a company whose embeddings are behind has a search that is
-// less good, not a tracker that lies. The fleet view asks how far along this
-// node's copies are, which is a fact about every one of them: a domain missing
-// from that count is one an operator cannot watch fall behind.
+// EVERY REGISTERED DOMAIN REPORTS A ROW, including one that does not gate seat
+// admission. Admission asks whether a seat's tools would answer wrongly, which
+// the vector domain declines (stale embeddings make search worse, not the
+// tracker wrong); the fleet view asks how far each copy is, and a domain
+// missing from it is one an operator cannot watch fall behind.
 func TestEveryDomainReportsItsOwnReplicationRow(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{})

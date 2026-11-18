@@ -1,0 +1,15 @@
+---
+name: file-issue
+description: "Open or add to an issue on crewlet/crewlet — a bug you noticed that your change does not touch, a tuning knob you did not tune, or a series' tracking issue. Covers searching the open issues first, the bug-report template, the label and type, and setting the organization's Priority and Effort fields. Use whenever you are about to open an issue or add to one."
+---
+
+# Opening an Issue
+An issue is for what lies outside your change (`CLAUDE.md`, "Fix the Bugs That Affect Your Work" and "Tuning Knobs Are Findings Too"). It is as public and permanent as a commit, and a security bug never gets one (`SECURITY.md`).
+- **Write it as a bug report** — search the open issues first and add to one that already describes it. Otherwise open one per bug on `.github/ISSUE_TEMPLATE/bug_report.md`, labelled `bug` and typed `Bug`, saying: what is wrong and how it shows; where (a permalink, or `path:line` at a commit SHA); under Environment, that commit in place of a release when you found it in the source; and the proper fix you would make.
+- **Set `Priority` and `Effort` when you open it** — every issue you open (a bug, a knob, a series' tracking issue) gets both organization issue fields, as `issue_fields` on the `issue_write` call that creates it. With `parent_issue_number`, which cannot be combined with them, set them right after with `method: update`.
+  - Read the valid options with `list_issue_fields`, not from memory. Today `Priority` is `Urgent` / `High` / `Medium` / `Low` and `Effort` is `High` / `Medium` / `Low`. Judge both from what the issue says.
+  - `Priority` is the cost of leaving it broken: `Urgent` for data loss, a stuck fleet or a red `main`; `High` for a wrong answer a user can reach; `Medium` for a defect with a workaround or a narrow trigger; `Low` for polish and a knob with a mild cost.
+  - `Effort` is the size of the proper fix, never of a workaround: `Low` for one package and its test, `Medium` for several packages or a doc-and-schema sweep, `High` for a refactor or a coordinated change across components.
+  - Leave `Start date` and `Target date` unset. If the repository lacks the fields or the call refuses them, say so in the summary; never skip them silently.
+  - Adding to an existing issue, leave the fields its owner set unless the new evidence changes them, and say what you changed.
+- **A knob you did not tune** gets an issue naming the value you would set and why: your best-justified call, marked, with a concrete recommendation and its tradeoff.

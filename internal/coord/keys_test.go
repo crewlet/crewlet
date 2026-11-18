@@ -8,14 +8,9 @@ import (
 )
 
 // A KEY WITH AN EMPTY SEGMENT DECODES TO NOTHING, wherever the empty segment
-// sits.
-//
-// An empty segment is a caller that lost a value on its way to
-// [coord.DocumentKey], and the grammar's answer is that the key it builds is
-// one [coord.DocumentSegments] refuses, so every listing skips it. A decode
-// that accepted one would hand every listing a record naming nothing — a lease
-// on no seat, a follow on no thread — for its reader to act on as if a writer
-// had meant it.
+// sits: [coord.DocumentSegments] refuses it, so every listing skips the key
+// rather than hand its reader a record naming nothing (a lease on no seat, a
+// follow on no thread) to act on as if a writer had meant it.
 func TestAKeyWithAnEmptySegmentIsRefused(t *testing.T) {
 	t.Parallel()
 	for name, key := range map[string]string{

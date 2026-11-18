@@ -11,8 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// loginHeldBy is a person row under a login, bound to a seat decided at 900 — or
-// to none, for an empty seat.
+// loginHeldBy is a person row under a login, bound to seat, or to none for an
+// empty one.
 func loginHeldBy(login, seat string, stage iam.Stage) iamdomain.Sighting {
 	return iamdomain.Sighting{
 		ID: "018f3a9c-0000-7000-8000-00000000" + login[:4], Kind: iam.KindPerson,
@@ -22,12 +22,8 @@ func loginHeldBy(login, seat string, stage iam.Stage) iamdomain.Sighting {
 
 // A LOGIN NAMES THE RECORD ITS HOLDER ACTS UNDER — their seat as the chart
 // knows it now, or the login for somebody bound to none — through the SAME
-// two tables a request of theirs resolves through.
-//
-// The surfaces read somebody else's login literally: an administrator's
-// `jane.doe`, for a person bound to a seat, read an empty inbox and wrote pins
-// and inbox marks under the login, where no screen of hers reads them. A
-// record written under one name and read under another is a record nobody has.
+// two tables a request of theirs resolves through: a record written under one
+// name and read under another is a record nobody has.
 func TestALoginNamesTheRecordItsHolderActsUnder(t *testing.T) {
 	t.Parallel()
 	chart := companyChart()
@@ -47,14 +43,11 @@ func TestALoginNamesTheRecordItsHolderActsUnder(t *testing.T) {
 	}{
 		{"a bound person's login is their seat's record", "jane.doe", "platform-lead"},
 		{"an unbound person's login is their own record", "bo.smith", "bo.smith"},
-		// SUSPENSION DOES NOT MOVE A RECORD: unsticking the queue of
-		// somebody who is away is what writing another's record is for.
+		// Suspension does not move a record ([recordThrough]).
 		{"a suspended person's record is still their seat's", "away.gone", "platform-lead"},
 		{"a bound Tier A token acts as its seat", "token:ops", "platform-lead"},
-		// A TIER A TOKEN IS HELD BY ITS ENTRY AND NOT BY A ROW, so a
-		// token this node declares with no row is its own record rather
-		// than nobody's — and an inactive binding is dropped exactly as
-		// the request path drops it.
+		// A declared token with no row is its own record, and an inactive
+		// binding is dropped as the request path drops it.
 		{"a Tier A token nobody enrolled is its own record", "token:new", "token:new"},
 		{"a suspended token's binding binds nothing", "token:off", "token:off"},
 	} {
@@ -87,14 +80,11 @@ func declares(ids ...string) func(string) bool {
 // NOBODY, AND A HOLDER WHOSE SEAT IS GONE, ARE TWO ANSWERS — and neither is
 // what a node that cannot say gives.
 //
-// A login nobody holds, and a token login this node's Tier A declares no entry
-// for, name no record. A
-// holder bound to a seat the chart has removed, or to an agent's seat, names
-// none this node can say either: their record is not under the login, and
-// writing it there is the second record nobody reads.
-// Every other failure is UNKNOWN — a 503 — because "nobody" read off a
-// directory or a chart this node could not read is a guess about whose record
-// to write.
+// A login nobody holds, or a token login no Tier A entry here declares, names
+// no record. A holder bound to a removed seat or an agent's names none either:
+// writing under the login would be a second record nobody reads. Every other
+// failure is UNKNOWN (a 503): "nobody" off a directory or chart this node
+// could not read is a guess about whose record to write.
 func TestNobodyAndAGoneSeatAreAnswersAndABlindNodeIsNot(t *testing.T) {
 	t.Parallel()
 	rows := map[string]iamdomain.Sighting{
@@ -127,9 +117,8 @@ func TestNobodyAndAGoneSeatAreAnswersAndABlindNodeIsNot(t *testing.T) {
 			companyChart(), "ghost.person", nil},
 		{"an organisation this node cannot read", fakeBindings{rows: rows},
 			seatTable{seatErr: errors.New("no company yet")}, "jane.doe", nil},
-		// A TOKEN LOGIN IS HELD BY ITS TIER A ENTRY. A typo is nobody's —
-		// and so is a login whose entry is gone although the directory
-		// still binds it, since no credential can act as it here.
+		// A token login is held by its Tier A entry: a typo is nobody's,
+		// and so is one whose entry is gone though a row still binds it.
 		{"a token login no entry declares", fakeBindings{rows: rows},
 			companyChart(), "token:opps", iam.ErrNoHolder},
 		{"a bound token login no entry declares any more",
@@ -167,15 +156,10 @@ func TestAnEngineWithNoDirectoryCannotSayWhoseRecord(t *testing.T) {
 	}
 }
 
-// A TOKEN LOGIN IS HELD BY THE ENTRY THIS NODE BOOTED WITH, read from its own
-// Tier A — the wiring half of [holderRecordOf]'s rule, on a real node.
-//
-// The rule is tested over an injected list above; what that cannot see is a
-// node that never hands its configuration over, which answers ErrNoHolder for
-// every token — so an administrator could not reach a real token's own record
-// either, and nothing failed. The typo beside it is the defect itself: an
-// entry nobody declares named its own record, so `set_priorities` wrote a
-// queue under a credential that does not exist.
+// A TOKEN LOGIN IS HELD BY THE ENTRY THIS NODE BOOTED WITH — the wiring half
+// of [holderRecordOf]'s rule, on a real node. The injected list above cannot
+// see a node that never hands its configuration over, which answers
+// ErrNoHolder for every token, real ones included.
 func TestATokenLoginIsHeldByTheEntryThisNodeBootedWith(t *testing.T) {
 	t.Parallel()
 	e := bootDirectoryNodeWith(t, nil, func(b *config.Bootstrap) {

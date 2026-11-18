@@ -12,50 +12,28 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// THE PURGE: code_purge_unreachable, a person's request that a repository's
-// objects no ref reaches be dropped — the leaked secret force-pushed away, the
-// history a deleted branch left — which the repository's MAINTAINER serves by
-// expunging them (internal/gitlet/compact), with no grace for what a ref drop
-// left: a purge is asked because something must go now.
+// code_purge_unreachable: a person's request that a repository's objects no
+// ref reaches (a secret force-pushed away, a deleted branch's history) be
+// dropped now: the repository's maintainer expunges them with no grace
+// (internal/gitlet/compact).
 //
-// # A person's, and a maintainer's
+// A person's, with a fresh proof (authz.ActionCodePurgeUnreachable: human-only,
+// step-up), so no model's say-so erases the company's code; and a maintainer's,
+// needing the repository's grant at maintain or above. Every person maintains every
+// repository (ADR-0085), so that refuses only a principal a future grant ranks
+// lower. A credential bound to nobody purges nothing ([gitlet.UnboundDetail]):
+// the request names who asked.
+
+// The request's id is the call's operation ([opIDFor]), so the same call made
+// again (after an `unknown` or a lost answer) is the same request, answered from
+// the committer's ledger. A request made while another is open widens that one
+// (gitlet.ExpungeRequest): a repository holds ONE open purge, served once
+// nothing from before the latest request is left.
 //
-// The authority table holds it to a person with a fresh proof of who they
-// are (authz.ActionCodePurgeUnreachable: human-only, step-up), so no seat is
-// offered it and no model's say-so erases what the company's code held; and
-// the tool holds it to the repository's grant, maintain or above, read once
-// the repository is — every person maintains every repository (ADR-0085), so
-// what that refuses is a principal of a kind a future grant ranks lower. A
-// credential bound to nobody purges nothing ([gitlet.UnboundDetail]): the
-// request names the person who asked, for its attribution, and nobody is no
-// one a purge may be answered to.
-//
-// # One request, however often it is asked
-//
-// The request's id is the call's operation (m3-w1's rule, [opIDFor]): the act
-// transport's key, a turn-less assistant's `op_id`, so the same call made
-// again — after an `unknown`, or a lost answer — is the same request, which
-// the repository's committer's ledger collapses and answers from its own
-// record. A request asked while another is open WIDENS that one to itself
-// (internal/gitlet's ExpungeRequest): the repository holds ONE open purge,
-// served once nothing from before the latest request is left.
-//
-// # What the answer says still holds the objects
-//
-// A request is answered once its record lands, long before its maintainer
-// serves it, so the answer says what a person needs to know about a purge
-// that is not done: the request, where its record landed, the Gitlet node that
-// will serve it ([CodePlacement]), and what still holds the objects after it
-// is served — every Gitlet node's cache until it syncs past the commit, every
-// backup taken before the commit for as long as it is kept (and, on the nats
-// object store, every backup taken before the store deletes them: a nats
-// backup is a snapshot of the bucket's stream, which carries every byte the
-// bucket holds, a retired object's among them), and the object store for
-// [gitlet.RetireGrace] after the commit, until the retired rows' sweep and the
-// store's next collection take them (and a versioned S3 bucket for as long as
-// its own rules keep a deleted object's noncurrent version). The
-// repository's detail (code_get_repo's `expunge`) says when the commit
-// landed.
+// The answer comes once the record lands, long before the purge is served, so
+// it names the node that will serve it ([CodePlacement]) and what still holds
+// the objects after: Gitlet nodes' caches until they sync past the commit,
+// backups ([purgeBackupsBefore]) and the object store ([purgeStoreUntil]).
 
 // CodePurgeUnreachableTool is the purge's name: its authority row's action.
 const CodePurgeUnreachableTool = string(authz.ActionCodePurgeUnreachable)
@@ -64,7 +42,7 @@ const CodePurgeUnreachableTool = string(authz.ActionCodePurgeUnreachable)
 // before the import ([ImportWrites]): M6's first write.
 func PurgeWrites() []string { return []string{CodePurgeUnreachableTool} }
 
-// purgeVerb is the verb a purge's operation is named by (m3-w1's op rule).
+// purgeVerb is the verb a purge's operation is named by ([opIDFor]).
 const purgeVerb = "code-purge"
 
 // CodePlacement is where a repository's work is placed, as the purge's answer
@@ -156,9 +134,8 @@ func (t *codePurgeUnreachable) CallForTurn(ctx context.Context, turn *turnctx.Tu
 		return *refusal, nil
 	}
 	if c.asker.Kind != gitlet.PrincipalOperator || c.asker.Seat == "" {
-		// THE TABLE'S RULE AGAIN, here where the request is formed: a seat
-		// is refused before the call reaches a tool, and a request a seat
-		// could send would be refused by every committer.
+		// The table's rule again, where the request is formed: every committer
+		// refuses a seat's request too.
 		return refusedBy(tools.RefusalForbidden, gitlet.ErrNotPermitted, tool+": a purge is a person's, "+
 			"through a credential bound to their human seat."), nil
 	}

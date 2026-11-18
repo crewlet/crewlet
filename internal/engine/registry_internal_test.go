@@ -12,20 +12,15 @@ import (
 
 // AN EPOCH IS NEVER CURRENT BEFORE ITS PARTIES ARE INDEXED.
 //
-// Boot used to publish its company and index it only in startNotifications,
-// the last step of construction. The integration reconcile loop is armed
-// before that step and runs a pass the moment it starts, and a pass
-// re-resolves the seat identities a tracker or a code host names people by,
-// registering each into [Engine.Registry]. Inside that window the registry was
-// nil, and the registration panicked in the loop's goroutine, which ends the
-// process. It was reachable on every node that won the duty while booting, and
-// was seen as an intermittent crash of the end-to-end suite.
+// The integration reconcile loop is armed before boot finishes and runs a pass
+// at once, registering the seat identities a tracker or code host names people
+// by into [Engine.Registry]. An epoch published with a nil registry panics that
+// goroutine, which ends the process.
 func TestAnEpochIsIndexedBeforeItIsPublished(t *testing.T) {
 	t.Parallel()
 	e, company := routingEngine(t, resolvingInstance(t))
-	// routingEngine publishes the company the way a test that skips the
-	// boot path would; take that back so this is a node with nothing
-	// current and nothing indexed, which is what boot starts from.
+	// routingEngine publishes the company; take that back, so the node starts
+	// as boot does, with nothing current and nothing indexed.
 	e.epoch.current.Store(nil)
 
 	e.installEpoch(t.Context(), company)
@@ -39,7 +34,7 @@ func TestAnEpochIsIndexedBeforeItIsPublished(t *testing.T) {
 		t.Fatal("the registry published with the epoch does not index that epoch's seats")
 	}
 
-	// And the reader that crashed: a reconcile pass straight after boot.
+	// And the reader that panicked: a reconcile pass straight after boot.
 	if found := e.resolveRouting(t.Context(), integration.KindJira, nil); len(found) != 0 {
 		t.Fatalf("findings = %+v, want the seat resolved against the instance", found)
 	}
@@ -50,11 +45,10 @@ func TestAnEpochIsIndexedBeforeItIsPublished(t *testing.T) {
 
 // AN APPLY'S EARLIER INDEX IS KEPT, AND ONLY FOR THE EPOCH IT WAS BUILT FROM.
 //
-// An apply indexes the new company before it rebuilds the vendor wiring, and
-// that wiring registers seat identities into the new registry. Publishing must
-// not rebuild the registry over them, which would drop every identity the
-// rebuild registered. A registry built from any other company is not an index
-// of the one being published, however alike their documents are.
+// An apply indexes the new company before rebuilding the vendor wiring, which
+// registers seat identities into it, so publishing must not rebuild the
+// registry over them. A registry built from any other company is not an index
+// of the one published, however alike their documents are.
 func TestPublishingKeepsTheIndexBuiltForThatEpoch(t *testing.T) {
 	t.Parallel()
 	e, company := routingEngine(t, "https://jira.example.com")

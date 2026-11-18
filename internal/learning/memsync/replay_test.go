@@ -17,12 +17,10 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A SEAT'S MEMORY IS REPLAYED A TABLE AT A TIME, IN THE REGISTRY'S ORDER
-// (crewlet/crewlet#1051).
+// A SEAT'S MEMORY IS REPLAYED A TABLE AT A TIME, IN THE REGISTRY'S ORDER.
 //
-// The cases below publish a seat through the syncer, as the node holding it
-// does, onto the package's broker, and hydrate a store that never held it, as
-// the node placement moves the seat to does.
+// The cases publish a seat through the syncer, as its holder does, and hydrate
+// a store that never held it, as the node placement moves the seat to does.
 
 // sequenceOf is the stream sequence of the changelog's one message on subject.
 func sequenceOf(t *testing.T, conn *nats.Conn, subject string) uint64 {
@@ -64,17 +62,12 @@ func storeHolds(t *testing.T, db *store.DB) int {
 // A SKILL REPUBLISHED AFTER ITS VERSION HYDRATES ONTO A STORE THAT NEVER HELD
 // THE SEAT.
 //
-// Every publish sends a seat's skills again, whole, and a skill's version
-// once, so from the seat's second publish on the changelog, which keeps one
-// message per subject, holds the skill's only copy after its version. One
-// replay of the seat in the changelog's order wrote the version first, and on
-// a store that did not hold the skill its foreign key refused the fetch and
-// the seat with it: on a node that never held the seat, which is where
-// placement moves it, on a satellite at every boot, and on a node that lost
-// its store. Replayed a table at a time in the registry's order, every skill
-// is written before its versions whatever order the changelog holds them in:
-// the version and its skill a few rows apart, in one pull of the single
-// replay, and with more notes between them than a pull asks for, in two.
+// Every publish resends a seat's skills whole and a version once, so from the
+// second on the changelog (one message per subject) holds the skill's only copy
+// after its version, and a replay in the changelog's order has its foreign key
+// refuse the seat on any store lacking the skill. A table at a time in the
+// registry's order writes every skill before its versions: here a few rows
+// apart in one pull, and with more notes between than a pull asks for, in two.
 //
 // Mutation: replay the seat in one pass in the changelog's order, or replay
 // the tables out of the registry's order, and this goes red.
@@ -156,15 +149,11 @@ func TestASkillRepublishedAfterItsVersionHydratesOntoAStoreThatNeverHeldTheSeat(
 
 // A FAILED PULL REPORTS NONE OF THE ROWS ITS TRANSACTION ROLLED BACK.
 //
-// A hydration writes each pull's rows in one transaction, so a row the store
-// refuses rolls back every row of its pull. They were counted as they were
-// written, inside the transaction, so a hydration that failed reported rows it
-// had rolled back: with the store holding none of the seat's rows, it said it
-// had carried some. A pull's rows are counted once its transaction commits, so
-// a failed hydration reports exactly the rows it left in the store. The row
-// the store refuses here is an episode carrying nothing but its id, which
-// breaks the table's NOT NULL columns, behind the seat's own episode in one
-// pull and behind the diary.
+// A row the store refuses rolls back its whole pull's transaction, so a pull's
+// rows are counted once it commits and a failed hydration reports exactly the
+// rows it left in the store. The refused row is an episode carrying only its id
+// (breaking the table's NOT NULL columns), in one pull behind the seat's own
+// episode, and behind the diary.
 //
 // Mutation: count each row as it is written, inside the transaction, and this
 // goes red.
@@ -201,17 +190,13 @@ func TestAFailedPullReportsNoneOfTheRowsItsTransactionRolledBack(t *testing.T) {
 
 // A VERSION WHOSE SKILL THE CHANGELOG DOES NOT HOLD IS LEFT OUT, NOT REFUSED.
 //
-// A skill's versions are replayed after every skill the changelog holds, so a
-// version whose skill is still not in the store is one whose skill the
-// changelog does not hold at all, as here — a skill written after a publish
-// read the seat's skills and refined before it read their versions, by a node
-// that stopped holding the seat before a publish carried the skill — or one
-// the store skipped for holding another skill of the seat's under its name.
-// Written, the version broke its foreign key and refused the seat, on every
-// node whose store lacked the skill, and for good once the store that held it
-// was gone, over a row nothing reads without its skill. It is left out, every
-// other row is carried, and the hydration's memory_rows_not_carried line
-// counts it, the one word anywhere that a carried row was dropped.
+// Versions replay after every skill the changelog holds, so a version still
+// missing its skill is one whose skill the changelog never got (a skill written
+// and refined between a publish's read of the skills and of their versions, by
+// a node that lost the seat before publishing again) or one the store skipped
+// for another of the seat's skills under its name. Nothing reads it without its
+// skill, so rather than break its foreign key and refuse the seat it is left
+// out, counted on memory_rows_not_carried, the only word a row was dropped.
 //
 // Mutation: write a version without looking for its skill, or leave it out
 // without counting it, and this goes red.
@@ -263,13 +248,11 @@ func TestAVersionWhoseSkillTheChangelogDoesNotHoldIsLeftOutNotRefused(t *testing
 
 // EVERY REFERENCE BETWEEN CARRIED TABLES NAMES A PARENT REPLAYED FIRST.
 //
-// A hydration writes each table's rows in the table's own turn, so a child's
-// rows follow every parent the changelog holds only where the registry lists
-// the parent first, and a child whose parent is nowhere is left out, rather
-// than refusing the seat, only where its entry names the parent. The schema is
-// where a reference is declared, so the registry is held to it: every foreign
-// key of a carried table is to a carried table, named on the child's entry,
-// and listed before it.
+// A child's rows follow its parents' only where the registry lists the parent
+// first, and an orphan is left out rather than refusing the seat only where its
+// entry names the parent. The schema declares references, so the registry is
+// held to it: every foreign key of a carried table is to a carried table, named
+// on the child's entry, and listed before it.
 //
 // Mutation: list synthesized_skill_versions before synthesized_skills, or
 // drop its parent, and this goes red.
@@ -333,20 +316,16 @@ func TestEveryReferenceBetweenCarriedTablesNamesAParentReplayedFirst(t *testing.
 
 // A ROW ON ANOTHER TABLE'S SUBJECTS IS REFUSED, NOT WRITTEN OUT OF ITS TURN.
 //
-// A replay reads one table's subjects and writes what it reads in that table's
-// turn, and the turns' order is what writes a skill before its versions. A row
-// whose body names another table is one no build publishes, since a row's
-// subject is built from its own table's name, and written in the turn it was
-// read in it would be written out of its own: it is refused, as a row that
-// does not decode is. The row here, on the diary's subjects, says it is an
-// episode, and holds every column either table requires — a whole diary note
-// and a whole episode at once, whose `kind` both tables take — so that the
-// store would take it written as either: only the refusal fails the
-// hydration, and only by name.
+// A replay writes what it reads off one table's subjects in that table's turn,
+// and the turns' order writes a skill before its versions. A row whose body
+// names another table is one no build publishes (a subject is built from its
+// row's table) and would be written out of its turn: it is refused, as an
+// undecodable row is. The row here, on the diary's subjects, is a whole diary
+// note and a whole episode at once (they share `kind`), so the store would
+// take it as either and only the refusal, by name, fails the hydration.
 //
-// Mutation: write what a replay reads without holding each row's table to the
-// replay's, as the table its subjects name or as the one its body names, and
-// this goes red.
+// Mutation: write a row without holding its body's table to the one its
+// subjects name, and this goes red.
 func TestARowOnAnotherTablesSubjectsIsRefused(t *testing.T) {
 	t.Parallel()
 	conn := broker(t)
@@ -391,14 +370,11 @@ func (g *pullGate) wait() {
 
 // A HYDRATION HOLDS NO WRITE WHILE A PULL IS ON THE WIRE.
 //
-// A pull hands its rows over as they cross the link, and a hydration that
-// read them inside the pull's transaction held this store's write, and so
-// every other writer of the node, for as long as they took to arrive: up to a
-// stall, for a pull a copy that stopped answering never ends. A transaction's
-// body may also run again ([store.DB.Tx]), and a pull's rows read inside it
-// are gone the second time. The rows are staged whole before the transaction
-// begins, so the store takes another writer's write while the pull is still
-// on its way.
+// Read inside its transaction, a pull's rows would hold the store's write, and
+// every other writer of the node, until they arrive: up to a stall, for a copy
+// that stopped answering. A transaction's body may also run again
+// ([store.DB.Tx]), with the pull's rows gone the second time. So the rows are
+// staged whole before the transaction begins.
 //
 // Mutation: open the pull's transaction before reading its rows, and this
 // goes red.
@@ -452,14 +428,13 @@ func TestAHydrationHoldsNoWriteWhileAFetchIsOnTheWire(t *testing.T) {
 }
 
 // remakingJS deletes the changelog and provisions it again from its own
-// configuration, stamped anew as the queue stamps every create, once: as the
-// hydration publishes its barrier, so the barrier lands on the new changelog,
-// where atBarrier says so, and otherwise the first time a replay deletes its
-// consumer, between the first table's replay and the second's. Made again
-// there, the new changelog is given what one in use since would hold: rows of
-// another seat's, until its sequences have run past the last the lost one gave,
-// the barrier's among them, and a barrier of the seat's past them, another
-// hydration's.
+// configuration, freshly stamped, once: with atBarrier, as the hydration
+// publishes its barrier, so the barrier lands on the new changelog; otherwise
+// the first time a replay deletes its consumer, between the first table's
+// replay and the second's. Remade there, it is given what a changelog in use
+// since would hold: another seat's rows until its sequences pass the lost
+// one's last (the barrier's among them), then another hydration's barrier of
+// the seat's.
 type remakingJS struct {
 	jetstream.JetStream
 	atBarrier bool
@@ -502,12 +477,11 @@ func (j *remakingJS) remakePastTheBarrier(ctx context.Context) error {
 	return err
 }
 
-// remake deletes the changelog and creates it again, empty, stamped by the
-// create that makes it ([statelog.StampCreatedAt]): the recreation a node's
-// identity check exists for. It answers the last sequence the lost changelog
-// had given. Two stamps are compared at a microsecond, and this one is minted
-// after the publish and the hydration that the first one's create preceded, so
-// the two differ with no wait for the clock to move.
+// remake deletes the changelog and creates it again, empty and stamped by its
+// create ([statelog.StampCreatedAt]): the recreation a node's identity check
+// exists for. It answers the lost changelog's last sequence. Stamps compare at
+// a microsecond, and this one is minted after the publish and hydration the
+// first create preceded, so the two differ with no wait for the clock.
 func remake(ctx context.Context, client jetstream.JetStream) (uint64, error) {
 	lost, err := client.Stream(ctx, topics.MemoryStream)
 	if err != nil {
@@ -522,23 +496,16 @@ func remake(ctx context.Context, client jetstream.JetStream) (uint64, error) {
 	return lost.CachedInfo().State.LastSeq, err
 }
 
-// A CHANGELOG MADE AGAIN UNDER A HYDRATION REFUSES THE SEAT, WHERE ITS BARRIER
-// CANNOT SEE IT.
+// A CHANGELOG MADE AGAIN UNDER A HYDRATION REFUSES THE SEAT.
 //
-// A hydration reads the changelog's identity, publishes its barrier, and then
-// reads the tables one after another across its whole budget. A changelog made
-// again after the barrier is EMPTY and has lost it, so a table's replay on it
-// waits for a barrier that never comes, and the seat is refused. Two
-// recreations the barrier cannot see: one between the identity's reading and
-// the barrier, which takes the barrier itself, so every table's replay
-// delivers it and no row; and one between two tables whose sequences have run
-// past the barrier's and which holds a barrier of the seat's past it, another
-// hydration's, so every later table's replay delivers that and no row. Either
-// way the hydration reported success with the rows read before the changelog
-// was made again, or none — a seat silently missing its memory, which reading
-// the identity first exists to refuse. It is read again after the last table,
-// and the seat is refused, the rows already written reported as what it left
-// in the store.
+// The barrier cannot see two recreations, after which a table's replay
+// delivers a barrier and no row: one between the identity's read and the
+// barrier, which takes the barrier itself, and one between two tables, whose
+// sequences run past the barrier's to another hydration's barrier of the
+// seat's. Either would report success with only the rows read before, a seat
+// silently missing its memory, so the identity is read again after the last
+// table and the seat refused, the rows already written reported as what it
+// left in the store.
 //
 // Mutation: read the identity only before the barrier, and this goes red.
 func TestAChangelogMadeAgainUnderAHydrationRefusesTheSeat(t *testing.T) {

@@ -9,13 +9,12 @@ import (
 )
 
 // BenchmarkHomeOf is what a Gitlet node pays to judge every repository the
-// backstop pass of the home's change work lists against ONE reading of who
-// serves git ([Router.HomeOf]): repos=10000 ids over a fleet of
-// gitlet-nodes={8,16}, this node one of them and home to its share — ns/repo, the
-// one read of the placement included, and home, the repositories it is home
-// to. It is what each listed repository this node is NOT home to costs a
-// pass, since every Gitlet node lists the same rows and only a repository's home
-// works them (internal/gitlet/home's Backstop).
+// home's backstop pass lists against ONE reading of who serves git
+// ([Router.HomeOf]): 10000 repos over 8 or 16 Gitlet nodes, this node one of
+// them, reporting ns/repo (the placement read included) and home, the
+// repositories it is home to. Every Gitlet node lists the same rows and only a
+// repository's home works them (internal/gitlet/home's Backstop), so this is
+// what each repository it is NOT home to costs a pass.
 func BenchmarkHomeOf(b *testing.B) {
 	for _, n := range []int{8, 16} {
 		b.Run(fmt.Sprintf("repos=10000/gitlet-nodes=%d", n), func(b *testing.B) {

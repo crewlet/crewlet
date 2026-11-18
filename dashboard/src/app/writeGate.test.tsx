@@ -201,18 +201,34 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "Close and Reopen — and the dialogs each opens",
     suite: "routes/gitlet/change/ChangePage.test.tsx",
   },
+  "routes/gitlet/change/AskDialog.tsx": {
+    why: "asking reviewers from the page bar and the rail (code_request_review)",
+    suite: "routes/gitlet/change/ChangePage.test.tsx",
+  },
+  "routes/gitlet/change/Rail.tsx": {
+    why: "a change rail's Request and re-request (code_request_review)",
+    suite: "routes/gitlet/change/ChangePage.test.tsx",
+  },
+  "routes/gitlet/change/ReviewDialog.tsx": {
+    why: "the review sent with its drafts (code_review_change), from the page bar and Finish review",
+    suite: "routes/gitlet/change/ChangePage.test.tsx",
+  },
   "routes/gitlet/change/Conversation.tsx": {
     why: "a change's comment, a reply to a thread or a finding, and a thread's Resolve",
     suite: "routes/gitlet/change/ChangePage.test.tsx",
   },
-  "routes/gitlet/change/Files.tsx": {
-    why: "a finding's Apply suggestion, on the line the finding is on",
+  "routes/gitlet/change/Description.tsx": {
+    why: "a change's Edit of its title and description (code_update_change)",
+    suite: "routes/gitlet/change/ChangePage.test.tsx",
+  },
+  "routes/gitlet/change/Finding.tsx": {
+    why: "a finding's Apply suggestion and Resolve, on the conversation and on Files changed",
     suite: "routes/gitlet/change/ChangePage.test.tsx",
   },
   "routes/gitlet/change/Merge.tsx": {
     why:
-      "a change's merge controls — Merge or Add to queue, Override and its dialog, and " +
-      "Re-run checks — each a WriteButton held with the gate's sentence",
+      "a change's merge box: Merge or Add to queue, Override and its dialog, Re-run " +
+      "failed checks and Re-request, each a WriteButton held with the gate's sentence",
     suite: "routes/gitlet/change/ChangePage.test.tsx",
   },
   "routes/gitlet/ImportRepo.tsx": {
@@ -262,7 +278,7 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
   },
   "routes/gitlet/commit/CommitWrites.tsx": {
-    why: "a commit's Revert and Cherry-pick (code_revert, code_cherry_pick) and their dialogs",
+    why: "a commit reverted or picked from the page bar (code_revert, code_cherry_pick)",
     suite: "routes/gitlet/commit/CommitPage.test.tsx",
   },
   "routes/gitlet/change/ChangeWrites.tsx": {
@@ -273,6 +289,10 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
   },
   "routes/gitlet/change/FindingAnswer.tsx": {
     why: "a standing finding's Answer finding (code_resolve_finding)",
+    suite: "routes/gitlet/change/ChangePage.test.tsx",
+  },
+  "routes/gitlet/change/Viewed.tsx": {
+    why: "a change's file marked viewed (code_mark_viewed)",
     suite: "routes/gitlet/change/ChangePage.test.tsx",
   },
   "routes/gitlet/commit/ComparePage.tsx": {

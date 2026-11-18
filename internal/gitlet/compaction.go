@@ -16,94 +16,61 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A COMPACTION, DECIDED: a Gitlet node that merged some of a repository's packs
-// into fewer asks the repository's committer to record it, and the committer
-// decides it in ONE snapshot, alone, as a record of its own (OpCompact) on the
-// repository's subject — so everything that moves a repository's packs has one
-// writer, its committer, and contends on one subject.
-//
-// # What the decide holds a compaction to
-//
-// Against the rows of one snapshot, in this order; the first rule that fails
-// is the answer, and none of them writes anything:
-//
-//  1. the repository: absent, deleted or being purged is repo_deleted, in the
-//     sentence of the state it is in ([RepoGone]); archived is decided, since
-//     an archived repository is still read and every read of it pays for
-//     every pack it holds;
-//  2. every input: exactly one row, of part `pack`, live ([liveInput]) and not
-//     full ([PackRow.Full]), and named by no published layer the record does
-//     not replace — else stale, naming the first that is not: a compaction,
-//     an expunge or a purge moved it first, an expunge left it dropping, a
-//     pack grew full under the plan's feet, or a publication put it in a
-//     layer, and the next pass plans again from the rows;
-//  3. every output: a bundle [PackRef.Check] admits — the pack and both its
-//     indexes within MaxPackBytes, the one rule every holder of a row applies
-//     — else pack_too_large, and its key minted within objstore.RecordWithin
-//     of the decision ([uploadExpired]) — else upload_expired;
-//  4. the arithmetic: the outputs hold no more objects than the inputs' ROWS
-//     count — else the decision is an error ([ErrInvalidProposal]): a builder
-//     that invented objects is a bug, refused before any record and logged.
-//     No lower bound, since inputs that share objects are merged into outputs
-//     that hold each once. And no size rule (code.limits.repo_max_bytes): a
-//     compaction adds no content, and the one way its outputs can outweigh its
-//     inputs — a delta whose base went to an earlier output of a cut, written
-//     whole — moves a repository already near its ceiling by an object, where
-//     refusing it would leave that repository unable to compact at all.
-//
-// A compaction that carries a published layer — a PUBLICATION — is held to
-// the layer's own seven rules (publication.go): 6g, no expunge open, with the
-// repository's row, and 6a–6f after the rules above. Nothing else is read — no
-// ref, no protection, no push — so a decide costs the repository's row, its
-// published chain (at most MaxPublishedLayers rows, by the key) and a seek of
-// the key an input, and a publication its live packs besides; the rows of two
-// snapshots are never paired.
-//
-// # A merge makes no reachability judgement
-//
-// Every object of the inputs is in the outputs ([Compaction], ADR-0090), so no
-// push decided against the inputs can land a ref whose closure a compaction
-// removed: a compaction is decided against the inputs alone, never against the
-// refs, and the subject's compare-and-set orders it with every push.
+// A COMPACTION is decided by the repository's committer alone, in one snapshot,
+// as its own record (OpCompact) on the repository's subject (package doc, "A
+// compaction merges packs, decided alone"). [decideCompaction]'s rules, in
+// order, the first failing being the answer and none writing anything:
+//  1. the repository absent, deleted or purging is repo_deleted ([RepoGone]);
+//     archived is decided, since every read of it pays for every pack;
+//  2. each input one live `pack` row ([liveInput]), not full ([PackRow.Full]),
+//     in no published layer the record does not replace, else stale, naming it;
+//  3. each output a bundle [PackRef.Check] admits, else pack_too_large, keyed
+//     within objstore.RecordWithin ([uploadExpired]), else upload_expired;
+//  4. outputs holding no more objects than the inputs' rows, else
+//     [ErrInvalidProposal]: a builder's bug, refused before any record.
+
+// Rule 4 has no lower bound, since shared objects merge once, and no size rule
+// (code.limits.repo_max_bytes): a compaction adds no content, its outputs
+// outweigh its inputs only by a delta written whole (its base in an earlier
+// output of the cut), and refusing that would leave a repository near its
+// ceiling unable to compact. A PUBLICATION (carrying a layer) is held to
+// publication.go's rules besides: 6g (no expunge open) first, off the
+// repository's row, then 6a–6f after these. A decide reads only the
+// repository's row, its published chain (at most MaxPublishedLayers rows), a
+// seek per input and a publication's live packs — no ref, protection or push;
+// two snapshots' rows are never paired.
+
+// A MERGE MAKES NO REACHABILITY JUDGEMENT ([Compaction], ADR-0090): every
+// input object is in the outputs, so no push decided against the inputs lands
+// a ref whose closure a compaction removed; a compaction is decided against
+// its inputs alone, and the subject's compare-and-set orders it with every
+// push.
 
 // Validate refuses a proposal no committer could decide ([ErrInvalidProposal],
-// naming the field), before it is queued: a repository id that is no
-// repository's, a compaction id that is no bare UUIDv7 (the record's operation
-// id, whose instant the ledger and every output id read), a node id config
-// does not admit, a Seen that is no position on the code log, inputs that are
-// not sorted and distinct or number fewer than two or more than
-// MaxCompactInputs, outputs that number none, more than MaxCompactOutputs or
-// more than the inputs, an output whose pack id is not its derivation
-// ([DeriveOutputPackID]) or whose bundle [PackRef.Check] refuses, and a
-// compaction past what one record may carry. A PUBLICATION — one carrying a
-// Layer — may carry no inputs and no outputs at all, and is refused for a
-// layer [LayerRef.Check] refuses (with [ErrInvalidLayer] beside it), an
-// output that is not one of the layer's packs, or as many replaced layers as
-// a chain holds. What the inputs and the chain hold is the decide's to judge,
-// from the rows: the proposal does not carry it.
+// naming the field), before it is queued: a repository id that is no canonical
+// UUID, a compaction id that is no bare UUIDv7 (the record's operation id,
+// whose instant the ledger and every output id read), a node id config does
+// not admit, a Seen off the code log, inputs not sorted and distinct or
+// outside 2..MaxCompactInputs, outputs outside 1..MaxCompactOutputs or more
+// than the inputs, an output whose pack id is not [DeriveOutputPackID]'s or
+// whose bundle [PackRef.Check] refuses, and a record past its bytes. A
+// PUBLICATION may carry no inputs and no outputs, and is refused for a layer
+// [LayerRef.Check] refuses ([ErrInvalidLayer] beside it), an output not among
+// the layer's packs, or as many replaced layers as a chain holds. What the
+// inputs and the chain hold is the decide's to judge, from the rows.
 func (p CompactionProposal) Validate() error {
 	_, err := p.measure()
 	return err
 }
 
-// ValidateUnstored is [CompactionProposal.Validate] of a proposal whose
-// outputs are not yet STORED — each output's sizes, object count and checksum
-// known from the files its build wrote ([LayBundle]), its object's key and
-// digest not until its put returns: every output is measured and checked as it
-// will be once stored, a key and a digest having one spelling's length each,
-// exactly as [Proposal.ValidateUnstored] measures a push's pack. So the Gitlet
-// node that built a compaction holds it to every rule its committer will
-// before a byte of it is uploaded (internal/gitlet/compact), and a compaction
-// no committer could take — an output past the bundle rule, more outputs than
-// it may write, a record past its bytes — stores nothing. An output already
-// stored is refused: Validate is the check of that.
-//
-// A PUBLICATION'S LAYER is held the same way: its parts are not stored either,
-// so the layer carries none, and each is stood in by the part the layer's
-// sections cut into — its size the cut's, its key and digest one spelling's
-// length each — so the layer is held to every rule its row must meet
-// ([LayerRef.Check]) and the record to its bytes with every part named. A
-// layer that already names a part is refused, as a stored output is.
+// ValidateUnstored is [CompactionProposal.Validate] of a proposal whose outputs
+// are built ([LayBundle]) but not yet STORED: each output's key and digest stand
+// in at one spelling's length, as [Proposal.ValidateUnstored] does a push's
+// pack, so the node that built it (internal/gitlet/compact) holds it to every
+// rule its committer will before a byte is uploaded. A PUBLICATION'S LAYER is
+// held the same way, each part stood in at its section cut's size, so the layer
+// meets [LayerRef.Check] and the record its bytes with every part named. An
+// output or a layer part already stored is refused: Validate checks those.
 func (p CompactionProposal) ValidateUnstored() error {
 	stand := largestEntry().Pack
 	add := make([]PackRef, len(p.Compaction.Add))
@@ -217,18 +184,14 @@ func (p CompactionProposal) validFields() error {
 }
 
 // ProposeCompaction decides one compaction as a batch of its own in the
-// repository's queue and answers what became of it — the push's queue and
-// bounds ([Committer.Propose]): a full queue or a node holding its bytes is
-// busy at once, a compaction whose caller's deadline leaves too little for a
-// batch and its answer is busy undecided, a stopping committer answers
-// [ErrNotServing], and a proposal that is not one answers
-// [ErrInvalidProposal]. ctx bounds only this caller's wait.
-//
-// APPLIED IS ANSWERED FROM THE ROWS: the outputs' rows the record applied, at
-// its position — or, collapsed onto an earlier record of the same compaction
-// id, at that record's — never from the decision. A refusal that decided
-// nothing appends nothing: the outputs are named by no row, and the collector
-// takes them past its grace.
+// repository's queue, under a push's bounds ([Committer.Propose]): busy at
+// once past a full queue or the node's bytes, busy undecided when the caller's
+// deadline leaves too little for a batch, [ErrNotServing] from a stopping
+// committer, [ErrInvalidProposal] for an invalid proposal. ctx bounds only
+// this caller's wait. APPLIED IS ANSWERED FROM THE ROWS the record applied (at
+// an earlier record's position where the ledger collapsed it onto one), never
+// from the decision; a refusal appends nothing, and the collector takes its
+// unnamed outputs past its grace.
 func (c *Committer) ProposeCompaction(ctx context.Context, p CompactionProposal) (CompactResult, error) {
 	bytes, err := p.measure()
 	if err != nil {
@@ -250,12 +213,11 @@ type compactDecision struct {
 	version int64
 }
 
-// decideCompaction is one round's decision of c over the rows tx holds — see
-// this file's head for the rules, in their order, and publication.go's for a
-// publication's. Pure over (the rows, c, retention, now): retention is the
-// deciding epoch's code.deleted_retention_days, which a repo_deleted refusal
-// names the purge's earliest instant by, and now the decide's clock, which an
-// output's key and a layer part's are judged by.
+// decideCompaction is one round's decision of c over the rows tx holds, by the
+// rules at this file's head (and publication.go's for a publication). Pure over
+// the rows, c, retention (the epoch's code.deleted_retention_days, by which a
+// repo_deleted refusal names the purge's earliest instant) and now (by which an
+// output's key and a layer part's are judged).
 func decideCompaction(ctx context.Context, tx *sql.Tx, c Compaction, retention time.Duration,
 	now time.Time) (compactDecision, error) {
 
@@ -358,18 +320,15 @@ func withinCompaction(d statelog.Decision, c Compaction) error {
 	return nil
 }
 
-// compact publishes one compaction as ONE record and answers it — the
-// compaction's batch of its own, under the committer's own lifetime and one
-// CommitBudget, as a push batch's ([Committer.commit]).
+// compact publishes one compaction as ONE record and answers it, under the
+// committer's lifetime and one CommitBudget, as [Committer.commit] does a batch.
 //
-// ITS OPERATION ID IS THE COMPACTION'S OWN, never one minted for the batch: a
-// compaction its asker hands to the repository's runner-up after this node
-// went silent is the same compaction there, and the ledger collapses it onto
-// the record that landed rather than deciding it again — which would find its
-// inputs retired and answer it stale. ITS SESSION IS ITS SEEN: decided from a
-// snapshot that holds the rows its builder planned from, or — where this node
-// cannot reach them in time — refused behind, about this node, so the runner-up
-// decides it.
+// ITS OPERATION ID IS THE COMPACTION'S OWN, never the batch's: asked again of
+// the runner-up after a failover, the ledger collapses it onto the record that
+// landed rather than deciding it again, which would find its inputs retired
+// and answer it stale. ITS SESSION IS ITS SEEN: decided from rows at least as
+// new as its plan, or refused behind where this node cannot reach them in
+// time, so the runner-up decides it.
 func (c *Committer) compact(repoID string, q *queued) {
 	ctx, cancel := context.WithTimeout(c.life, CommitBudget)
 	defer cancel()
@@ -426,10 +385,8 @@ func (c *Committer) compactAnswer(ctx context.Context, comp Compaction, last com
 		if !res.Position.IsZero() {
 			return c.appliedCompaction(ctx, comp, res.Position)
 		}
-		// NOTHING WAS APPENDED: the decide refused it, and its last round
-		// says why. A publish that answered with no record and no decision
-		// broke the publisher's contract, and says so rather than answering
-		// from nothing.
+		// NOTHING WAS APPENDED: the decide refused it, and its last round says
+		// why; no record and no refusal breaks the publisher's contract.
 		if !decided || last.refusal == "" {
 			return CompactResult{}, fmt.Errorf("gitlet: the publish of compaction %s answered applied with "+
 				"no record and decided no refusal", comp.CompactionID)
@@ -441,19 +398,15 @@ func (c *Committer) compactAnswer(ctx context.Context, comp Compaction, last com
 	return CompactResult{Outcome: statelog.OutcomeUnknown}, nil
 }
 
-// appliedCompaction answers a compaction whose record applied at at, FROM THE
-// ROWS: every output a row of part `pack` added at at — in code_packs, or in
-// code_packs_retired where a later compaction has since retired it, which
-// moves the row and keeps when it was added — and a publication's layer a row
-// of code_layers added at at. One read, in one transaction.
-//
-// An output or a layer that is in none is a record that applied and wrote
-// rows this node does not hold: no committer of this domain forms that, so it
-// is logged at ERROR and answered unknown — never applied, which would hand
-// its builder outputs and a layer to adopt that no row names. A layer a later
-// publication replaced before this answer read the rows is answered so too:
-// its rows are gone, since a replaced layer keeps none, and the one publisher
-// of a repository plans its next publication only once this one is answered.
+// appliedCompaction answers a compaction whose record applied at at FROM THE
+// ROWS, in one read: every output a `pack` row added at at, in code_packs or
+// (retired since by a later compaction, keeping its added position)
+// code_packs_retired, and a publication's layer a code_layers row added at at.
+// Anything missing is rows this node does not hold, which no committer of this
+// domain forms: logged at ERROR and answered unknown, never applied, which
+// would hand its builder outputs and a layer no row names. A layer a later
+// publication replaced first is answered so too, its rows gone; a
+// repository's one publisher plans the next only once this one is answered.
 func (c *Committer) appliedCompaction(ctx context.Context, comp Compaction, at statelog.Position) (CompactResult,
 	error) {
 
@@ -486,10 +439,9 @@ func (c *Committer) refusedCompaction(ctx context.Context, comp Compaction, err 
 	var refusal *statelog.Unavailable
 	switch {
 	case errors.Is(err, ErrInvalidProposal):
-		// THE BUILDER'S BUG, the decide's rule 4 — or a publication's 6b or
-		// 6e, its planner's: refused before any record, and said where an
-		// operator reads the node that decided, under the name of what built
-		// it.
+		// THE BUILDER'S BUG (the decide's rule 4, or a publication's 6b or 6e,
+		// its planner's): refused before any record and logged on the deciding
+		// node under the name of what built it.
 		msg := "code_compaction_invalid"
 		if comp.Layer != nil {
 			msg = "code_publication_invalid"
@@ -611,12 +563,9 @@ func distinct(ids []string) []string {
 	return out
 }
 
-// outputsMissing is everything comp wrote at at that no table holds, each
-// named ("output <pack id>", "layer <layer id>"): an output not in code_packs
-// and not in code_packs_retired, where a row a later compaction retired keeps
-// the position it was added at — the retired table read only for the outputs
-// code_packs lacks — and a publication's layer not in code_layers as added at
-// at.
+// outputsMissing names everything comp wrote at at that no table holds
+// ("output <pack id>", "layer <layer id>"): an output in neither pack table
+// ([packsLacking]) and a publication's layer not in code_layers as added at at.
 func outputsMissing(ctx context.Context, tx *sql.Tx, comp Compaction, at statelog.Position) ([]string, error) {
 	var missing []string
 	if comp.Layer != nil {
@@ -647,12 +596,11 @@ func idsOf(refs []PackRef) []string {
 	return ids
 }
 
-// packsLacking is every pack of ids whose row added at at no pack table of
-// repoID holds — in code_packs in any state, or in code_packs_retired, where a
-// row a later record retired keeps the position it was added at, that table
-// read only for the ids code_packs lacks — by pack id: what a rewrite's
-// answer reads of the outputs its record applied ([outputsMissing], and an
-// expunge's).
+// packsLacking is every pack of ids with no `pack` row added at at in repoID's
+// code_packs (any state) or code_packs_retired (where a later record's
+// retirement keeps the added position; read only for the ids code_packs
+// lacks): what a rewrite's answer reads of its record's outputs
+// ([outputsMissing], and an expunge's).
 func packsLacking(ctx context.Context, tx *sql.Tx, repoID string, ids []string, at statelog.Position) (
 	[]string, error) {
 

@@ -15,17 +15,14 @@ import (
 )
 
 // aheadRegister is the coordination store of a node whose broker's clock runs
-// ahead of its own: every positions row it hands back carries the instant the
-// store took it moved `ahead` later, as a broker member whose clock stood that
-// far ahead of this node's would have stamped it — the rows of other nodes a
-// case writes included, so every row's instant is the one member's clock. While
-// `blind` is set its listing of the register fails, as a store the node cannot
-// reach answers.
+// `ahead` of its own: every positions row it hands back, the other nodes' a
+// case writes included, carries the store's instant moved that much later, as
+// one member's clock would stamp them all. While `blind` is set its listing
+// fails, as an unreachable store answers.
 //
-// A LISTING CAN ALSO BE HELD OR FAILED ON ITS OWN, by the context it is asked
-// under ([listingHeld], [listingBlind]): a case runs the beat it means to slow
-// down or blind under such a context, while the node's own heartbeat and the
-// alarm reading's listings go through as they are.
+// A listing can also be held or failed on its own, by the context it is asked
+// under ([listingHeld], [listingBlind]), so a case slows or blinds one beat
+// while the node's own heartbeat and the alarm reading's listings go through.
 type aheadRegister struct {
 	wrappedFleet
 
@@ -81,37 +78,18 @@ func (f *aheadRegister) Positions(ctx context.Context) ([]coord.NodePositions, e
 	return rows, err
 }
 
-// A BROKER MEMBER WHOSE CLOCK STANDS MORE THAN AN HOUR FROM THE FLEET'S FIRES
-// `clock_skew` — measured by the running node's own position heartbeat off the
-// register, and evaluated through the retention loop's own reading, report and
-// gauge — AND THE ALARM STANDS FOR AS LONG AS THE HEARTBEAT IS BEATING.
+// A BROKER MEMBER OVER AN HOUR OFF THE FLEET'S CLOCK FIRES `clock_skew` ON A
+// RUNNING NODE, AND THE ALARM STANDS WHILE THE HEARTBEAT BEATS.
 //
-// The broker cannot be given a clock of its own here, so the register stands
-// in for one: the node's coordination store, wrapped to hand its row back
-// stored an hour and a minute after the node stamped it — what a node reads of
-// a member that far ahead of it. The node is the fleet's only data node, so the
-// fleet's clock is its own and the clock the alarm names is the member's.
-// Everything else is the running node's: the heartbeat that writes and reads
-// the row, the measure it takes, the reading that carries it and the table
-// that judges it. Fifty minutes is silent — the rule's own boundary is
-// statelog.TestAClockOffTheFleetsRaisesClockSkew's, and the measure here also
-// carries the beat's own work between its stamp and its write, which a loaded
-// runner can stretch to seconds.
+// The register stores the node's row 61m after its stamp; the node is the only
+// data node, so the member is named. 50m is silent, leaving room for the beat's
+// own work (statelog.TestAClockOffTheFleetsRaisesClockSkew has the boundary).
+// Kept in beats, the alarm stands, its since unmoved, through slow listings and
+// one blind beat; two blind beats drop it, and a clock back in time clears it.
 //
-// A MEASURE IS KEPT IN BEATS, never by an age counted from the beat that took
-// it. So a raised alarm stands — never cleared and raised again, its standing
-// instant unmoved — at every evaluation while the next beat's listing is slow,
-// whatever the instant, and across one beat that cannot read the register
-// between two slow listings. Two beats in a row that cannot read drop it, and
-// a clock back in time clears it.
-//
-// Mutation: leave the heartbeat's measure out of the reading (skewReading's
-// call in retention.reading), or measure a row's stamp against its previous
-// stamp rather than the store's instant, and the alarm never fires; drop a
-// measure by its age from the beat that took it, as the alarm once did, and
-// the slow arms fail; drop it at the first beat that could not read, and the
-// arm between two slow listings fails; keep it past two, and the blind arm
-// fails.
+// Mutation: drop skewReading from retention.reading or measure a stamp against
+// its previous one (never fires); drop a measure by age, at the first miss, or
+// keep it past two (the slow, between and blind arms fail).
 func TestTheClockSkewAlarmFiresOnARunningNode(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -247,27 +225,15 @@ func TestTheClockSkewAlarmFiresOnARunningNode(t *testing.T) {
 	}
 }
 
-// ON A RUNNING NODE, `clock_skew` NAMES THE CLOCK THAT MOVED: the node's own
-// heartbeat reads the register — its own row and two peers' — and its own
-// retention loop judges what it measured.
+// ON A RUNNING NODE, `clock_skew` NAMES THE CLOCK THAT MOVED: its heartbeat
+// reads its own row and two peers', and its retention loop judges them. Every
+// row is stored `ahead` of this node's clock, as one member's clock stamps them
+// all, and each peer's is stamped by the peer's clock. Three fleets:
 //
-// The broker cannot be given a clock of its own here, so the register stands
-// in for one: every row it hands back is stored `ahead` of this node's clock,
-// as one member's clock stamps them all, and each peer's row is stamped by the
-// peer's own clock as the case sets it. Three fleets of three data nodes, each
-// read from this node:
-//
-//   - the member leading the register is a PEER whose clock runs ninety
-//     minutes ahead: every row but that member's own is stored ninety minutes
-//     after it was stamped. This node keeps the fleet's time, so it names the
-//     member — never its own clock, which is what it said when it was measured
-//     against the member alone;
-//   - this node IS the member, its clock ninety minutes ahead of both peers':
-//     the register stores every row by this node's clock, so its own row reads
-//     in time. It names its own clock, where measured against the member alone
-//     it read nothing while both peers blamed their own;
-//   - this node's clock runs ninety minutes ahead, and the member is a peer
-//     keeping the fleet's time: it names its own clock, and not the member's.
+//   - a peer leads the register, 90m ahead: this node names the member;
+//   - this node IS the member, 90m ahead of both peers: its own row reads in
+//     time, and it names its own clock;
+//   - this node runs 90m ahead and a peer in time leads: it names its own.
 //
 // Mutation: measure each node against the member alone (the median left out),
 // and the first two fleets name the wrong clock.
@@ -347,16 +313,11 @@ func TestClockSkewNamesTheClockThatMovedOnARunningNode(t *testing.T) {
 }
 
 // THE CLOCK THAT MOVED IS THE ONE NAMED, on every node's reading of one
-// register, judged by the alarm table.
-//
-// Each case is one register as the broker hands it back: every row stamped by
-// its node's clock and stored by the clock of the member leading the register.
-// The case the alarm got wrong when each node was measured against the member
-// alone is the first: three data nodes on an embedded broker, whose member, a,
-// has a clock ninety minutes ahead — a stamps and stores its own row by one
-// clock, so it read nothing, while b and c each raised clock_skew about their
-// own clocks. Against the fleet's clock — the median of the three — a raises
-// it about its own clock, and b and c name the member.
+// register, judged by the alarm table. Each case is one register as the broker
+// hands it back: every row stamped by its node's clock and stored by the
+// member's. The first is what measuring against the member alone got wrong: on
+// an embedded broker whose member a runs ninety minutes ahead, a reads nothing
+// of its own row while b and c blame their own clocks.
 //
 // Mutation: measure each node against the member alone, take the mean for the
 // median, read a row the broker stored far from this node's own, or judge

@@ -10,13 +10,13 @@ import (
 	"net/http/httptrace"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go/middleware"
 
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/sockcount"
 )
 
 // stallSamples is how many times a write's socket is read inside one stall
@@ -46,45 +46,6 @@ type stallBound struct {
 // newStallBound is the stall bound d, sampled [stallSamples] times.
 func newStallBound(d time.Duration) stallBound {
 	return stallBound{stall: d, sample: d / stallSamples}
-}
-
-// errUncountable is a connection whose count of unacknowledged bytes this
-// node cannot read: no TCP socket under it, or a platform without the call.
-var errUncountable = errors.New("s3obj: this connection's unacknowledged bytes cannot be read")
-
-// unacked is how many bytes c's socket has sent that the far end has not yet
-// acknowledged — and those it has not yet sent: `SIOCOUTQ` on Linux, the
-// send buffer's `SO_NWRITE` on darwin, each holding a byte until the far
-// end's kernel takes it ([socketUnacked]).
-//
-// THROUGH THE CONNECTION'S OWN DESCRIPTOR, held open for the call by
-// SyscallConn().Control, so a sample racing the connection's close reads an
-// error — no change — never another socket's count. A TLS connection is read
-// through the TCP socket under it.
-func unacked(c net.Conn) (int, error) {
-	for {
-		inner, ok := c.(interface{ NetConn() net.Conn })
-		if !ok {
-			break
-		}
-		c = inner.NetConn()
-	}
-	sc, ok := c.(syscall.Conn)
-	if !ok {
-		return 0, errUncountable
-	}
-	raw, err := sc.SyscallConn()
-	if err != nil {
-		return 0, err
-	}
-	var (
-		n    int
-		nerr error
-	)
-	if err := raw.Control(func(fd uintptr) { n, nerr = socketUnacked(fd) }); err != nil {
-		return 0, err
-	}
-	return n, nerr
 }
 
 // stalled is an attempt the bucket stopped moving for the stall bound: it took
@@ -146,12 +107,12 @@ func isStalled(err error) bool {
 // (a Read of it returning — the time spent INSIDE that Read is the body's
 // source's and is never counted against the bucket); the socket's count of
 // bytes the far end has not acknowledged changing between two samples
-// ([unacked], read at every connection the transport hands the attempt and
-// then every [stallBound.sample]); a connection, a `100 Continue` and the
-// answer's headers; and every byte of an answer the SDK reads itself — all
-// but GetObject's, whose body is handed to the store and read at its reader's
-// pace, which the store's own [objstore.Stall] watch bounds from the reader's
-// side: a watch here would end a download a slow PERSON paces.
+// ([sockcount.Unacked], read at every connection the transport hands the
+// attempt and then every [stallBound.sample]); a connection, a `100 Continue`
+// and the answer's headers; and every byte of an answer the SDK reads
+// itself — all but GetObject's, whose body is handed to the store and read at
+// its reader's pace, which the store's own [objstore.Stall] watch bounds from
+// the reader's side: a watch here would end a download a slow PERSON paces.
 //
 // BOTH THE BODY AND THE SOCKET, because the kernel hides a bucket's pace from
 // the body's reader: its send buffer and the far end's receive buffer take
@@ -177,9 +138,9 @@ func isStalled(err error) bool {
 // unread and landed, at 185.8 s. From the node's side it is a bucket that
 // stopped; a slow NETWORK in front of a healthy bucket is never ended.
 //
-// A CONNECTION WHOSE COUNT CANNOT BE READ ([errUncountable]) is never ended
-// here — its deadline still ends it — because a watch blind to the socket
-// would end every write at the floor; on the two platforms the engine builds
+// A CONNECTION WHOSE COUNT CANNOT BE READ ([sockcount.ErrUncountable]) is
+// never ended here — its deadline still ends it — because a watch blind to
+// the socket would end every write at the floor; on the two platforms the engine builds
 // for, every connection to the bucket is a TCP socket it can read.
 //
 // ONE REQUEST TO A SOCKET: the bucket's transport speaks HTTP/1.1 alone
@@ -337,8 +298,8 @@ func (w *watch) gotConn(info httptrace.GotConnInfo) {
 	defer w.mu.Unlock()
 	w.last = time.Now()
 	w.conn, w.counted, w.blind = info.Conn, false, false
-	switch n, err := unacked(info.Conn); {
-	case errors.Is(err, errUncountable):
+	switch n, err := sockcount.Unacked(info.Conn); {
+	case errors.Is(err, sockcount.ErrUncountable):
 		w.blind = true
 	case err == nil:
 		w.count, w.counted = n, true
@@ -369,7 +330,7 @@ func (w *watch) tick() {
 	}
 	now := time.Now()
 	if w.conn != nil && !w.blind {
-		if n, err := unacked(w.conn); err == nil {
+		if n, err := sockcount.Unacked(w.conn); err == nil {
 			if w.counted && n != w.count {
 				w.last = now
 			}

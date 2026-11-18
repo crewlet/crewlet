@@ -50,15 +50,10 @@ func (s *recordSpy) WritePriorities(_ context.Context, _, handle string, _ []str
 	return s.wrote(handle)
 }
 
-// A VIEW STRIP IS ITS READER'S, AND NOBODY ELSE'S IS REACHABLE.
-//
-// `list_work_views` took a free `viewer` argument, so any caller — a seat, or
-// the operator's assistant — rendered another person's personal views and
-// pins by naming them. The strip is the caller's own now, under the SAME name
-// their pins and personal views are written with, so it shows exactly what
-// they arranged — and a `viewer` sent anyway is REFUSED by name rather than
-// dropped, so a caller who meant somebody else's strip is told it is not
-// theirs to name instead of being shown their own as if it were.
+// A VIEW STRIP IS ITS READER'S, AND NOBODY ELSE'S IS REACHABLE: it is rendered
+// under the SAME name the caller's pins and personal views are written with,
+// and a `viewer` sent anyway is REFUSED by name rather than dropped, so a
+// caller who meant somebody else's strip is not shown their own as if it were.
 func TestAViewStripIsTheCallersOwn(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -130,18 +125,12 @@ func TestAViewStripIsTheCallersOwn(t *testing.T) {
 // A PERSONAL VERB IS DECIDED ON THE RECORD IT WRITES.
 //
 // `my_work`, `mark_inbox` and `set_pins` name nobody: the gate decides them on
-// the CALLER's own record, and the tool then reads or writes the record under
-// the actor's handle. Those have to be one value, or the call is authorised
-// against one person's record and lands on another's — and they were two
-// functions that happened to agree, one reading the seat before the login and
-// the other a machine's login and never its seat.
-//
-// Three callers: a person bound to a seat (both are the SEAT), a Tier A token
-// whose id is spelled like a seat in this company (both are its whole LOGIN,
-// never the seat's handle), and a machine credential carrying a seat, which is
-// the one the two copies disagreed on. Each is checked by the owner the
-// authority was actually ASKED about against the handle the record was read
-// or written under.
+// the CALLER's own record and the tool reads or writes under the actor's
+// handle, which must be one value, or a call authorised on one record lands on
+// another. Three callers: a person bound to a seat (the SEAT), a Tier A token
+// spelled like a seat (its whole LOGIN, never the seat's handle), and a machine
+// credential carrying a seat (its LOGIN). Each compares the owner the authority
+// was ASKED about with the handle the record was read or written under.
 func TestAPersonalVerbIsDecidedOnTheRecordItWrites(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {

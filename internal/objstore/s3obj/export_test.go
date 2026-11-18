@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
-	"net"
 	"net/http"
 	"slices"
 	"time"
@@ -78,13 +77,6 @@ func Watching(next s3.HTTPClient, stall time.Duration) *WatchedClient {
 
 // Live is how many of c's attempts are being watched now.
 func (c *WatchedClient) Live() int { return int(c.live.Load()) }
-
-// Unacked is [unacked]: c's bytes its far end has not acknowledged, and
-// whether they could be read.
-func Unacked(c net.Conn) (int, bool) {
-	n, err := unacked(c)
-	return n, err == nil
-}
 
 // BucketProtocols is what the client [bucketClient] builds for bundle speaks:
 // HTTP/1.1, and whether HTTP/2 too.

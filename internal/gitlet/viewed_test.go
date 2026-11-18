@@ -33,8 +33,7 @@ var (
 	blobX, blobY, blobZ = oidOf("X"), oidOf("Y"), oidOf("Z")
 )
 
-// viewedChange is one change a viewed case marks the files of: its repository, its id, its number,
-// its version and where it was opened.
+// viewedChange is one change a viewed case marks the files of.
 type viewedChange struct {
 	repo, id string
 	number   int64
@@ -42,8 +41,7 @@ type viewedChange struct {
 	at       statelog.Position
 }
 
-// viewedRepo is a fresh repository named name with a change open from each of the branches named,
-// into main, opened by dev in that order.
+// viewedRepo is a fresh repository with a change open by dev from each branch into main, in order.
 func viewedRepo(t *testing.T, n *node, name string, branches ...string) []viewedChange {
 	t.Helper()
 	n.chart = testChart()
@@ -161,9 +159,8 @@ func TestAViewedMarkIsThePersonsOwn(t *testing.T) {
 
 // THE FIRST VIEWED MARK OF A REPOSITORY RECORDS ITS KEY: founder's first mark lands a viewed_key
 // record on the repository's subject, decided by the node as the system under the gesture's step op
-// id and stamped ViewedVersion, then the viewed record on founder's; bea's next mark lands one
-// record. Two persons' first marks on another repository at once land one key, and both marks
-// digest under it.
+// id and stamped ViewedVersion, then the viewed record on founder's; bea's next lands one record.
+// Two persons' concurrent first marks on another repository land one key, both digesting under it.
 //
 // Mutations: skip the key step, and the first mark errs, red; drop the key publish's arbitration,
 // and two key records land, red.
@@ -321,6 +318,25 @@ func TestAViewedDigestIsKeyedByItsRepository(t *testing.T) {
 		t.Fatal("a mark is not digested under its own repository's key")
 	case onWeb.PathDigest == hex.EncodeToString(bare[:]):
 		t.Fatal("a path's digest is its bare SHA-256")
+	}
+}
+
+// A VIEWED DIGEST IS THE ONE THE DASHBOARD COMPUTES: the vector routes/gitlet/change/viewed.test.ts
+// holds, so the engine's digest and the screen's stay one reading.
+func TestAViewedDigestIsTheOneTheDashboardComputes(t *testing.T) {
+	t.Parallel()
+	key := gitlet.ViewedKey("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+	const path = "internal/render/page.go"
+	if got := key.PathDigest(path); got != "af0f83b2429025ab636e20b293f5f898d3b3c10ab93d594412234f460285ebae" {
+		t.Errorf("PathDigest(%q) = %s", path, got)
+	}
+	if got := key.FileDigest(path, "3b18e512dba79e4c8300dd08aeb37f8e728b8dad", "100644"); got !=
+		"558c14cd8105c9319ef44064c0d064f71c7d4e7fb8d2f7a57304fe52cffbed4c" {
+		t.Errorf("FileDigest(%q) = %s", path, got)
+	}
+	if got := key.FileDigest("web/src/legacy.ts", "", ""); got !=
+		"24f4e4b25a25d96127370b75a3f9e2a89dc52cf0bb56c2febb2f500512635940" {
+		t.Errorf("a deletion's FileDigest = %s", got)
 	}
 }
 
@@ -696,8 +712,7 @@ func TestTheWidestViewedRecordFitsItsBudgets(t *testing.T) {
 // answer but founder's own page of his marks, no ErrBadCursor, no format of a key record under any
 // verb, and no log line of the key; founder's page carries it.
 //
-// Mutations: drop String or Format (%v or %d prints it, red); answer the key beside an empty page
-// (red).
+// Mutations: drop String or Format (%v or %d prints it, red); answer the key beside an empty page, red.
 func TestNoAnswerLogOrErrorCarriesAViewedKey(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

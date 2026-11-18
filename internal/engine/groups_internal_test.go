@@ -24,20 +24,16 @@ const modulePath = "github.com/crewlet/crewlet"
 var perSeatGroups = []string{"AgentInboxGroup", "AgentControlGroup", "AgentReflectGroup"}
 
 // EVERY FLEET-WIDE GROUP THE TREE SUBSCRIBES IS DECLARED, AND EVERY DECLARED
-// GROUP IS SUBSCRIBED — the two directions of groups.go's table.
+// GROUP IS SUBSCRIBED — the two directions of groups.go's table. An undeclared
+// group is attached on every node without anyone asking whether its handler
+// needs data; a declared group nothing subscribes is a stale claim a reader
+// trusts.
 //
-// The first is the one that keeps a node without `data` honest: a group
-// somebody subscribed without declaring is attached on every node, and the
-// question of whether its handler needs data was never asked. The second
-// keeps the table true: a declaration nothing subscribes is one a reader
-// trusts about a group that no longer exists.
-//
-// Read off the SOURCE, every Subscribe and SubscribeBatch call outside the
-// queue package itself (its backends and its suite subscribe whatever a case
-// names). A group argument must resolve — to a declared constant, a literal,
-// or a seat's own group from `topics` — and one that does not is a failure
-// naming where it is, because a group this test cannot read is one it cannot
-// hold to the table.
+// Read off the source: every Subscribe and SubscribeBatch call outside the
+// queue package (whose backends and suite subscribe whatever a case names). A
+// group argument must resolve to a declared constant, a literal or a seat's own
+// group from `topics`; one that does not fails, since this test cannot hold it
+// to the table.
 func TestEveryFleetGroupSaysWhetherItNeedsData(t *testing.T) {
 	t.Parallel()
 	subscribed, unreadable := fleetSubscriptions(t, sourcetree.Root(t))
@@ -67,21 +63,17 @@ func TestEveryFleetGroupSaysWhetherItNeedsData(t *testing.T) {
 	}
 }
 
-// subscribeMethods are the queue verbs that attach a consumer group, which
-// is what the gate above reads the source for — and, being identifiers, what
-// a file must spell to make such a call at all.
+// subscribeMethods are the queue verbs that attach a consumer group; being
+// identifiers, they are also what a file must spell to make such a call.
 var subscribeMethods = []string{"Subscribe", "SubscribeBatch"}
 
 // fleetSubscriptions is every fleet-wide group the Go source under root's
 // internal/ subscribes, with where, and where a call's group cannot be read.
 //
-// IN TWO PASSES, because parsing the whole of internal/ to find a handful of
-// calls was nine seconds under the race detector. The first parses only the
-// files that spell a subscribe verb (sourcetree.Identifiers) — every caller
-// is among them. The second parses every file of the only two places a
-// caller's group constant is looked up: the caller's own package, and each of
-// this module's packages it imports. So every constant the gate could resolve
-// before, it resolves now.
+// In two passes, so the whole of internal/ is never parsed: the first parses
+// only the files that spell a subscribe verb (sourcetree.Identifiers), which
+// hold every caller; the second every file where a caller's group constant can
+// be declared — its own package and each module package it imports.
 func fleetSubscriptions(t *testing.T, root string) (map[string][]string, []string) {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -186,16 +178,12 @@ func fleetSubscriptions(t *testing.T, root string) (map[string][]string, []strin
 	return subscribed, unreadable
 }
 
-// THE GATE ABOVE, ON A TREE WHOSE VERDICT IS KNOWN — through the same read,
-// prefilter and two passes.
-//
-// The second pass is the one a prefilter could quietly break: a group named
-// by a constant in a file of its own, which spells no subscribe verb and so
-// is never a caller, must still be read. So the planted constants live in
-// exactly such files — one in the caller's own package, one in a package it
-// imports — beside a literal, a seat's own group, a group no constant names,
-// the queue package's own subscriptions, and a file that does not even parse
-// and names no verb, which the gate must never open.
+// THE GATE ABOVE, ON A TREE WHOSE VERDICT IS KNOWN. The planted constants live
+// in files that spell no subscribe verb (one in the caller's package, one in a
+// package it imports), which the prefilter must still read; beside them sit a
+// literal, a seat's own group, a group no constant names, the queue package's
+// own subscriptions, and an unparsable file naming no verb, which the gate must
+// never open.
 func TestTheGroupGateReadsAConstantFromAFileThatSubscribesNothing(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

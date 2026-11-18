@@ -175,13 +175,11 @@ func (launcherStub) LaunchExecutor(context.Context, runner.AgentRunRequest) (run
 	return runner.Launched{}, nil
 }
 
-// A NOTE THAT MISSED THE TURN IS REPORTED EXPIRED.
-//
-// Taken while the turn's first segment ran, never read because the segment
-// ended without launching a run that would have carried it: the person was
-// answered `pending`, and the turn's record is the only place that can say what
-// became of it. The closer every first segment calls on its way out reports it,
-// on the turn, as sent — and a note sent after the end is answered closed.
+// A NOTE THAT MISSED THE TURN IS REPORTED EXPIRED: taken while the first
+// segment ran and never read because it ended without launching a run, it was
+// answered `pending`, so only the turn's record can say what became of it. The
+// closer every first segment calls reports it as sent, and a later note is
+// answered closed.
 func TestANoteThatMissedTheTurnIsReportedExpired(t *testing.T) {
 	t.Parallel()
 	desk := mustSteerDesk(t, steerRing)
@@ -230,13 +228,10 @@ func TestANoteThatMissedTheTurnIsReportedExpired(t *testing.T) {
 // sweAgent is the fixture seat's derived id, as a desk files it.
 const sweAgent = "0f1d4c07-6d2a-4e2b-9a3c-5b8e17d04c21"
 
-// A PROBE SAYS WHOSE TURN IT IS AND TAKES NOTHING.
-//
-// Who may steer a turn is decided on the turn's seat, and the serving node
-// learns the seat only from the running node — so it asks first, and only an
-// offer after a decision hands the note over. A probe that took a note would
-// put it in front of the turn before anybody decided whether the person could
-// send it.
+// A PROBE SAYS WHOSE TURN IT IS AND TAKES NOTHING: who may steer is decided on
+// the turn's seat, which the asking node learns only from the running node, so
+// it probes first. A probe that took a note would put it before the turn ahead
+// of the decision whether the person may send it.
 func TestAProbeNamesTheTurnsSeatAndTakesNothing(t *testing.T) {
 	t.Parallel()
 	d := mustSteerDesk(t, steerRing)
@@ -268,13 +263,11 @@ func TestAProbeNamesTheTurnsSeatAndTakesNothing(t *testing.T) {
 	}
 }
 
-// ONLY A NOTE THE FLEET SIGNED REACHES A TURN. The running node offers a note
-// as the person it names, on the asking node's decision that they may steer
-// the turn — so a note anything the broker admitted could write would put
-// words in front of a running agent under anybody's name. Three ways to try —
-// no signature, a signature under the fleet's key id with somebody else's
-// material, and the fleet's signature over a note altered after it was made —
-// and none is answered or offered.
+// ONLY A NOTE THE FLEET SIGNED REACHES A TURN: a note is offered as the person
+// it names, so an unsigned one would put words before a running agent under
+// anybody's name. Unsigned, signed under the fleet's key id with other
+// material, and the fleet's signature over an altered note: none is answered
+// or offered.
 func TestOnlyANoteTheFleetSignedReachesATurn(t *testing.T) {
 	t.Parallel()
 	d := mustSteerDesk(t, steerRing)
@@ -323,10 +316,9 @@ func TestAReplayedNoteIsAnsweredByNobody(t *testing.T) {
 }
 
 // A NOTE UNDER A KEY THE RUNNING NODE DOES NOT HOLD IS ANSWERED UNVERIFIED by
-// that node alone, and nothing is offered: the key is a fact about the node,
-// which an operator changes by adding it, so the person is told that rather
-// than `unknown` — and a node the turn is not on stays silent, as it does for
-// any note not its own.
+// that node alone, offering nothing: an operator fixes it by adding the key, so
+// the person is told that rather than `unknown`. A node the turn is not on
+// stays silent.
 func TestANoteUnderAnUnheldKeyIsAnsweredUnverified(t *testing.T) {
 	t.Parallel()
 	rotated := recordseal.Keyring{ActiveID: "k2", Keys: []recordseal.Key{
@@ -346,8 +338,7 @@ func TestANoteUnderAnUnheldKeyIsAnsweredUnverified(t *testing.T) {
 			"alone saying it could not verify it", got)
 	}
 	// AND NAMING ITSELF AND THE KEYS IT HOLDS, which the asking node logs as
-	// the node to add the key on: as a sentence about "this node" the asking
-	// node's log read it as itself. Mutation: drop either field and this fails.
+	// the node to add the key on. Mutation: drop either field and this fails.
 	if u := got[0].Unverified; u.Node != "node-steer" || !slices.Equal(u.HeldKeys, []string{"k1"}) {
 		t.Errorf("the running node answered %+v, want itself and the one key it holds", u)
 	}
@@ -397,11 +388,10 @@ func launchedRun(t *testing.T, store *sandbox.CoordStore, runs *runSteers, turnI
 	return opened
 }
 
-// handToRecord plays a turn's launch handing its first segment's box over: the
-// hand-over begins, the write that creates the run's record carries what the
-// box held, written — whatever runs between that write and the launch saying
-// so — and the hand-over is settled as recorded. It answers the record as the
-// launch opened it.
+// handToRecord plays a launch handing its first segment's box over: the write
+// that creates the run's record carries what the box held, the written callback
+// runs between that write and the settle, and the hand-over is settled
+// recorded. It answers the record as the launch opened it.
 func handToRecord(t *testing.T, d *steerDesk, store *sandbox.CoordStore, turnID string,
 	brief []steer.Note, written func(),
 ) sandbox.PendingRun {
@@ -437,13 +427,10 @@ func recordedNotes(t *testing.T, store *sandbox.CoordStore, turnID string) (all,
 	return all, waiting
 }
 
-// AN OFFER RACING THE LAUNCH IS NEVER ANSWERED CLOSED. A note that read "no
-// record" a moment before the launch wrote one is scattered to the node that
-// held the turn's box: it lands in the box and rides the write that creates the
-// record, or meets the turn being handed and waits for that write, or finds the
-// turn handed and is filed on the record by that node — and every way it waits
-// there for the run, under the person's request id, behind the note the box
-// held first.
+// AN OFFER RACING THE LAUNCH IS NEVER ANSWERED CLOSED. Scattered to the node
+// that held the box, it rides the record's write from the box, waits for that
+// write while the turn is handing, or is filed on the record once handed; every
+// way it waits on the record behind the note the box held first.
 //
 // Mutation: answer the box's `closed` without looking again, file an offer that
 // meets the hand-over at once rather than after the write, or hand the box's
@@ -503,16 +490,13 @@ func TestAnOfferRacingTheLaunchIsNeverAnsweredClosed(t *testing.T) {
 }
 
 // THE BOX'S NOTES ARE ON THE RECORD AHEAD OF ONE FILED THERE AS IT IS WRITTEN.
-// Once the launch's write lands, any node's steer_turn finds the record and
-// files on it directly — before this node's launch has gone on to anything
-// else. The box's notes ride that write, so they are first, and they are
-// counted against the turn's bounds before the direct filing is: a box that
-// held as many notes as may wait leaves the direct filing answered `full`,
-// never a note the box accepted refused and expired in its place.
+// Once the launch's write lands, any node's steer_turn files on the record
+// directly. The box's notes ride that write, so they come first and count
+// against the bounds first: a full box leaves the direct filing answered
+// `full`, never a note the box accepted refused and expired in its place.
 //
-// Mutation: file the box's notes on the record after its write, one
-// compare-and-swap each, as the hand-over did, and the direct filing lands first
-// and the last of the box's notes is refused.
+// Mutation: file the box's notes after the write, one compare-and-swap each,
+// and the direct filing lands first and the box's last note is refused.
 func TestTheBoxsNotesAreOnTheRecordAheadOfOneFiledAsItIsWritten(t *testing.T) {
 	t.Parallel()
 	d, store, p := handingDesk(t)
@@ -549,10 +533,9 @@ func TestTheBoxsNotesAreOnTheRecordAheadOfOneFiledAsItIsWritten(t *testing.T) {
 	}
 }
 
-// AN OFFER THAT MEETS THE HAND-OVER WAITS FOR THE WRITE. Between the box's
-// intake ending and the write that creates the record the note has nowhere it
-// could land behind the box's notes, so it waits — and is filed on the record
-// the moment that write lands, behind them.
+// AN OFFER THAT MEETS THE HAND-OVER WAITS FOR THE WRITE: until the record
+// exists it has nowhere to land behind the box's notes, so it waits and is
+// filed behind them once the write lands.
 //
 // Mutation: answer the offer from the box (closed), or file it before the
 // write, and this goes red.
@@ -591,8 +574,7 @@ func TestAnOfferThatMeetsTheHandOverWaitsForTheWrite(t *testing.T) {
 }
 
 // A LAUNCH THAT FAILS BEFORE ITS WRITE GIVES THE BOX ITS NOTES BACK: no record
-// holds them, so they are the box's again — at its front, read first by
-// whatever reads the box next — and the turn takes notes in its box again.
+// holds them, so they return to the box's front, and the box takes notes again.
 //
 // Mutation: leave the box handed, or drop what it held, and this goes red.
 func TestALaunchThatFailsBeforeItsWriteGivesTheBoxItsNotesBack(t *testing.T) {
@@ -654,10 +636,9 @@ func TestEveryNoteAcceptedAcrossTheHandOverIsOnTheRecord(t *testing.T) {
 	}
 }
 
-// A HANDED PROBE NAMES THE SEAT: a lead's request that read "no record" asks the
-// fleet whose turn it is, and the node that handed the box over answers for the
-// turn's seat — so the decision is taken on it and the offer that follows is
-// filed on the record.
+// A HANDED PROBE NAMES THE SEAT: a request that read "no record" asks whose
+// turn it is, and the node that handed the box over answers with the seat, so
+// the decision is taken on it and the following offer is filed on the record.
 func TestAHandedProbeNamesTheSeat(t *testing.T) {
 	t.Parallel()
 	d, store, _ := handingDesk(t)
@@ -671,10 +652,9 @@ func TestAHandedProbeNamesTheSeat(t *testing.T) {
 	}
 }
 
-// A FAILED LAUNCH EXPIRES ITS BOX'S NOTES THROUGH THE SEGMENT'S CLOSE: a launch
-// that never went hands nothing over, so the box is the segment's still, and
-// what it holds when the segment ends is recorded expired by the close every
-// segment makes — once.
+// A FAILED LAUNCH EXPIRES ITS BOX'S NOTES THROUGH THE SEGMENT'S CLOSE: it
+// handed nothing over, so what the box holds when the segment ends is recorded
+// expired, once, by the closer rather than the desk.
 func TestAFailedLaunchExpiresItsBoxNotes(t *testing.T) {
 	t.Parallel()
 	d, _, _ := handingDesk(t)
@@ -700,16 +680,13 @@ func TestAFailedLaunchExpiresItsBoxNotes(t *testing.T) {
 }
 
 // A LAUNCH THAT FAILS AFTER ITS WRITE LEAVES ITS NOTES TO THE RECORD'S ENDING.
-// The write that creates the record holds the brief's notes, read by the job it
-// opens, and the box's, waiting — and the launch can still fail after it, its
-// box not made, its harness not started. Nothing is handed back: the segment's close
-// reports nothing, and the run's ending, which every such failure decides,
-// reports every one of them expired — the brief's too, read by a job that never
-// started — once, under its own ids.
+// The record's write holds the brief's notes (read by the job it opens) and the
+// box's (waiting); a launch failing after it hands nothing back, so the
+// segment's close reports nothing and the run's ending reports every one
+// expired, the brief's too, once, under its own ids.
 //
-// Mutation: hand the brief's notes back to the box as a failed launch did, or
-// leave a never-started job's brief reads out of the ending's, and a note is
-// reported twice or never.
+// Mutation: hand the brief's notes back to the box, or leave a never-started
+// job's brief reads out of the ending's, and a note is reported twice or never.
 func TestALaunchThatFailsAfterItsWriteLeavesItsNotesToTheRecordsEnding(t *testing.T) {
 	t.Parallel()
 	d, store, p := handingDesk(t)

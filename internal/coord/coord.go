@@ -214,6 +214,47 @@
 //
 // Every error is UNKNOWN, and the safe direction is not to save: a save its
 // node could not count is one that may pass the seat's budget.
+//
+// # Maintenance mode
+//
+// A stream's byte ceiling is changed only while no request to it can be
+// outstanding, whichever way the number moves: the broker refuses a reduction
+// below current usage, so usage must be observed while nothing can move it,
+// and a raise is as unsafe, because what makes a configuration write safe is
+// knowing which requests are in flight. Closing a client does not retire one:
+// a request the broker has received and queued lives in a server's receive
+// buffer and connection state, and closing cancels only the client's wait.
+// Both die with the broker PROCESS, so the fleet restarts into a mode that
+// starts every broker and no publisher, and the exclusion is structural
+// rather than observed.
+//
+// The exclusion and the operation are ONE record ([MaintenanceOperation]),
+// because maintenance exists exactly while an operation is unresolved. As two
+// records, an interrupted activation (state written, operation not yet
+// created) is byte-identical to a finished resize whose cleanup was cut short,
+// so any rule reading one releases the exclusion while a coordinator is still
+// preparing; one record has no halves to crash between. Three things are
+// deliberately not this record:
+//
+//   - THE COORDINATOR'S LEASE ([MaintenanceResource]) has a TTL, so another
+//     maintenance-mode node can take the operation over. The record has none:
+//     a key that forgets admits a publisher, and a coordinator that is paused,
+//     GC-stalled or partitioned has not finished its operation.
+//   - AN ADMISSION ([Admission]) is one node's POSITIVE record that it intends
+//     to publish: a handshake, not an absence check. A node writes its
+//     admission, then re-reads the operation; a coordinator writes the
+//     operation, then reads the admissions, deleting the operation again over
+//     one whose process still holds its node's presence and issuing no
+//     request while any other stands. Either order is safe, because a node
+//     that slipped in between leaves a durable key the coordinator's later
+//     read sees, where an absence would have let it proceed.
+//   - AN ACK ([MaintenanceAck]) is one participant's evidence that its
+//     process restarted for the operation's current attempt; the seal is
+//     established from these. Per node, because the barrier is about
+//     processes, not a fleet-wide fact anybody could assert. Per LOG, because
+//     a fleet resizing two logs restarts once for both and each boot
+//     acknowledges each window: one per node, one window's acknowledgement
+//     would replace the other's.
 package coord
 
 import (
@@ -227,115 +268,64 @@ import (
 	"github.com/google/uuid"
 )
 
-// ProtocolVersion is the seat-host protocol this build speaks.
+// ProtocolVersion is the seat-host protocol this build speaks. A node refuses
+// to claim while a live presence or seat lease ([ProtocolGateCounts]) is held
+// at a LOWER protocol (ADR-0016): builds that disagree on what holding a lease
+// means are each correct and jointly wrong. Looking only down keeps older
+// nodes working, so schema evolution is additive-only and a downgrade across a
+// bump needs a full drain: a lower build takes over lapsed leases unchecked.
 //
-// A rolling upgrade puts a vN and a vN+1 node on the same coordination store
-// and the same topics at once. That is fine as long as both agree on what
-// HOLDING A LEASE MEANS — and catastrophic when they do not: two nodes that
-// disagree about whether a seat's inbox consumer is owner-only, or about
-// whether a turn claim fences a resume, will each be individually correct
-// and jointly wrong.
-//
-// So the rule is asymmetric, deliberately: a node refuses to claim anything
-// while a live PRESENCE OR SEAT lease is held at a LOWER protocol — the two
-// classes that say a node of that build is alive or still running seats
-// ([ProtocolGateCounts], which says why a duty is not one). The check only
-// ever looks down, so the lower-protocol nodes keep working and are never
-// refused; the higher ones wait, visibly, until the last lower lease lapses.
-// A rolling deploy converges because that is what a rolling deploy does.
-//
-// Two consequences worth stating plainly. Schema evolution here is
-// additive-only: a field the lower-protocol build does not know is invisible
-// to it, one it requires is a crash. And a downgrade across a bump needs a full drain,
-// because the gate only ever refuses a HIGHER-protocol claim beside a lower
-// lease, so a lower-protocol build takes over a higher node's expired leases
-// unchecked.
-//
-// Bump this when the MEANING of holding a lease changes, never when
-// something merely gains a field. At this version, holding a seat means
-// consulting the completion ledger before a delivery, claiming one means
-// this node satisfies the role's placement, running one means charging its
-// rounds to the WINDOWED token counters, and a seat's lease, its mailbox and
-// every subject addressed to it are named by the seat's ID — the agent id
-// derived from its handle (ADR-0013) — never by the handle itself. The bar
-// is silent corruption in a mixed fleet: two builds running seats side by
-// side that charged different counters would each see only their own share
-// of the company's spend, and every cap would bind late — by as much as the
-// other build had spent.
-//
-// Version 1 is every build there has been: no build that held a lease to
-// another meaning was ever released, so the number restarted rather than
-// carrying a history of meanings nothing runs.
+// Bump it when the MEANING of holding a lease changes, never for a new field.
+// At 1, holding a seat means consulting the completion ledger before a
+// delivery, satisfying the role's placement, charging the WINDOWED token
+// counters, and naming its lease, mailbox and subjects by the seat's ID
+// (ADR-0013), never its handle.
 const ProtocolVersion = 1
 
 // ProtocolGateCounts reports whether a lease on resource is one the protocol
-// gate judges — and so one [Backend.FleetProtocolFloor] counts. Every backend
-// asks this one function, so the twin and the store cannot disagree about it.
+// gate judges, and so one [Backend.FleetProtocolFloor] counts; every backend
+// asks this one function so the twin and the store agree.
 //
-// PRESENCE AND SEATS, AND NOTHING ELSE, because the gate's question is "is a
-// node of a lower protocol live, or still running seats", and those two
-// classes are the whole answer. A `node:` lease is what says a node is alive:
-// it lapses one seat lease TTL after the node stops. A `seat:` lease is the
-// thing whose MEANING [ProtocolVersion] versions, and it is held past
-// presence — a drain gives presence up at its first step and keeps serving
-// its seats until each is handed over — so presence alone would let a newer
-// node claim beside a draining older one.
-//
-// A DUTY (`worker:`) IS NOT COUNTED, and counting it was a fleet-wide stall:
-// a duty is claimed ungated (see [AcquireOptions.Ungated]) and outlives its
-// holder by its TTL, which runs to [MaxDutyTTL]. When the last node of the
-// older build crashed mid-upgrade, its presence and seats lapsed within one
-// seat lease TTL while its duty leases stayed live for up to three hours, and
-// every newer node's seat claim was refused for all of it — a fleet that could
-// not place a seat for hours after a crash, over a lease that says nothing
-// presence does not already say while its holder lives. The same holds for
-// every other class a claim takes — the tracker's walk claims, held for as
-// long as the walk runs — none of which is the seat-host protocol and each of
-// which is held by a node whose presence or seats already speak for it.
+// PRESENCE AND SEATS ONLY: the gate asks whether a lower-protocol node is
+// alive or still running seats. A seat lease outlives presence through a
+// drain, so presence alone would let a newer node claim beside a draining
+// older one. A DUTY (`worker:`) or any other class is not counted: it is
+// claimed ungated ([AcquireOptions.Ungated]) and outlives its holder by up to
+// [MaxDutyTTL], so counting it stalls every newer seat claim for hours after
+// an older node crashes, over a lease its presence and seats already speak for.
 func ProtocolGateCounts(resource string) bool {
 	return ClassNode.Holds(resource) || ClassSeat.Holds(resource)
 }
 
 // ErrUnavailable is the canonical "store could not answer" error. Backends
-// wrap their transport failures in it. Callers should not switch on it — but
-// it gives the common case one name in logs and lets tests assert the
-// tri-state deliberately.
+// wrap their transport failures in it; it gives the common case one name in
+// logs and lets tests assert the tri-state.
 //
-// NOT SWITCHED ON, because the rule runs the other way: an error is unknown
-// unless the contract the method belongs to names it as a definite answer — a
-// compare-and-set that lost its race ([ErrActivationRaced],
-// [ErrMaintenanceMoved], [ErrObjectBackendMoved]), a request the store will
-// not honour as asked ([ErrTTLTooLong]), and a custody record the store holds
-// and nothing can read ([ErrCustodyUndecidable], see the package doc). A
-// caller that read "not ErrUnavailable" as definite would take every
-// failure a backend did not wrap for a fact.
+// Callers do not switch on it: an error is unknown unless its method's
+// contract names it a definite answer — a lost compare-and-set
+// ([ErrActivationRaced], [ErrMaintenanceMoved], [ErrObjectBackendMoved]), a
+// request the store will not honour ([ErrTTLTooLong]), an unreadable custody
+// record ([ErrCustodyUndecidable]). Reading "not ErrUnavailable" as definite
+// would take every failure a backend did not wrap for a fact.
 var ErrUnavailable = errors.New("coordination store unavailable")
 
 // ErrWriteUnknown marks an [ErrUnavailable] that came AFTER a write was sent:
 // the store's answer to it was lost, so the write may have landed.
 //
-// A WRITE'S OWN THIRD ANSWER, and it exists for the methods that read before
-// they write. A caller of a plain compare-and-set knows its one call was the
-// write, so any error there is unknown and needs no marker; a caller of a
-// read-modify-write cannot tell a read that failed — after which nothing was
-// written — from a put whose reply never came, and the two ask opposite
-// things of it: one is "nothing changed, ask again", the other "it may have
-// changed, look before saying it did not". A method that marks this says so
-// in its contract ([ChatReads] does), and every error such a method returns
-// WITHOUT it changed nothing.
+// For methods that read before they write, whose caller otherwise cannot tell
+// a failed read (nothing changed: ask again) from a lost put reply (it may
+// have changed: look first). A method that marks it says so in its contract
+// ([ChatReads] does), and every error it returns WITHOUT it changed nothing.
 var ErrWriteUnknown = errors.New("coord: the write was sent and its answer was lost")
 
 // ErrClaimInFlight is a claim answered while another claim of the same
 // resource BY THE SAME OWNER is still minting its fencing epoch: neither a
-// grant nor a refusal is true yet, and the sibling is one store round trip
-// from committing, or from giving the record back.
+// grant nor a refusal is true yet, and the sibling is one round trip from
+// committing or giving the record back.
 //
-// AN [ErrUnavailable], which errors.Is reports it as: it is the unknown arm
-// of the tri-state, and every caller that branches on ErrUnavailable (a
-// scheduler failing closed for a tick, a duty passing the unknown through)
-// treats it exactly as before. Named so that a caller which knows the sibling
-// is its own, and that it ends, can tell it apart from a store that cannot
-// answer at all.
+// It is an [ErrUnavailable] under errors.Is, the tri-state's unknown arm, so
+// every caller branching on that treats it alike; named so a caller that
+// knows the sibling is its own can tell it from an unreachable store.
 var ErrClaimInFlight error = claimInFlight{}
 
 // claimInFlight is [ErrClaimInFlight]'s type: comparable, so errors.Is finds
@@ -350,104 +340,43 @@ func (claimInFlight) Error() string {
 func (claimInFlight) Is(target error) bool { return target == ErrUnavailable }
 
 // ErrTTLTooLong reports a claim or renew asking for a TTL the store cannot
-// honour.
-//
-// An ERROR, never a [Refusal]: nobody else holds the resource, the caller
-// asked for a deadline the store cannot keep. And never a silent clamp,
-// because a heartbeat computes its next tick from [Lease.ExpiresAt], so a
-// deadline quietly cut short has the holder renewing too late and losing what
-// it still holds.
+// honour. An error, never a [Refusal] (nobody else holds the resource), and
+// never a silent clamp: a heartbeat schedules from [Lease.ExpiresAt], so a
+// deadline quietly cut short has the holder renewing too late.
 var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 
-// MaxDutyTTL is the longest TTL any lease outside seats and presence may be
-// claimed with — a fleet duty (a `worker:` resource), a tracker walk's claim,
-// any class a caller leases under a name of its own — and
-// the TTL every backend must be able to honour for one, whatever TTL it runs
-// its seat leases on. Named for the duty that sizes it.
+// MaxDutyTTL is the longest TTL a lease outside seats and presence
+// ([HeldToSeatTTL]) — a `worker:` duty, a walk's claim, any caller's class —
+// may ask for, and every backend honours up to it whatever its seat lease TTL:
+// a duty outlives several of its own ticks, unrelated to how fast a dead
+// node's seats move. The embedded KV caps a lease at its bucket's age, so
+// every backend, the twin included, enforces it through [CheckLeaseTTL], and
+// the contract suite certifies both sides of it.
 //
-// # Why this ceiling is the contract's and not the seat lease's
-//
-// A seat lease and a duty lease want opposite TTLs. A seat is renewed on a
-// heartbeat, so its TTL is a few heartbeats and a dead node's seats move within
-// a minute. A duty is re-claimed once per TICK of the work it guards, and a
-// tick runs from ten seconds (the scheduler) to an hour (the learning passes),
-// so a duty TTL has to outlive several of its own ticks or it moves to a peer
-// on ordinary jitter. A caller's claim is the same kind of lease: the tracker
-// sizes a walk's claim from the walk's own heartbeat, which has nothing to do
-// with how fast a dead node's seats should move.
-//
-// The embedded KV backend fixes a lease's expiry as its BUCKET's age, so it
-// can only honour TTLs up to the bucket it writes into. For as long as duties
-// shared the seat lease bucket, every duty claim longer than the seat lease
-// TTL (45 seconds by default) was refused, and on every `embedded-kv` fleet
-// the retention sweep, the mailbox retirement, the integration reconcile, the
-// learning passes and every integration setup pass failed on their lease claim
-// and never ran at all, with one warning per attempt as the only symptom. The
-// in-memory twin honoured any TTL, so no single-node test could see it. Moving
-// the duties out fixed exactly the duties: every other class stayed in the
-// seat lease bucket, so the tracker's 60-second walk claim was refused on the
-// same fleets — every cross-project move and every merge failed before its
-// first append — and the twin hid that too, because the ceiling it enforced
-// was the duties' alone.
-//
-// So the ceiling is stated HERE, for every class [HeldToSeatTTL] leaves out,
-// every backend enforces it through [CheckLeaseTTL], and a TTL the embedded KV
-// cannot keep is refused by the twin too, in the tests that run against it.
-// The contract suite certifies both halves on every backend, for a duty and
-// for a class of a caller's: a lease at exactly this TTL is honoured, one
-// beyond it is an error wrapping [ErrTTLTooLong].
-//
-// # Why three hours
-//
-// The longest duty the engine claims: the learning passes tick hourly and
-// their lease survives three of those ticks, the same
-// "one missed tick must not move the duty" ratio every other duty follows. An
-// engine test asserts that this is exactly the longest duty TTL, so the number
-// cannot drift away from the duty that justifies it; every other lease it
-// bounds is far shorter (the tracker's longest, a walk's claim, asks for a
-// minute). Raising it is safe on a running fleet (the KV backend only ever
-// raises its duty bucket's age); lowering it leaves an existing bucket older
-// than it needs to be, which costs nothing, because no record there is judged
-// by the bucket's age.
-//
-// It is also the removal-marker horizon, [MarkerRetention], by definition
-// rather than by coincidence: no operation that read a record before it was
-// removed outlives the claim it runs under, so none is still acting on that
-// read when the marker goes. Moving this moves that, which lengthens or
-// shortens the tail of markers a listing re-reads and changes no answer.
+// Three hours: the hourly learning passes' lease survives three ticks, as
+// every duty's does (an engine test pins it to the longest duty TTL). It is
+// also [MarkerRetention]'s horizon by definition: no operation outlives the
+// claim it runs under. Raising it is safe on a running fleet; lowering, free.
 const MaxDutyTTL = 3 * time.Hour
 
-// HeldToSeatTTL reports whether a lease on resource is one a backend holds to
-// the TTL it runs its SEAT leases on — a seat or a node's presence — rather
-// than to [MaxDutyTTL]. Every backend asks this one function, so the twin and
-// the store cannot disagree about which leases the seat TTL bounds.
+// HeldToSeatTTL reports whether a lease on resource is held to the backend's
+// SEAT lease TTL — a seat or a node's presence — rather than to [MaxDutyTTL];
+// every backend asks this one function so the twin and the store agree.
 //
-// SEATS AND PRESENCE, AND NOTHING ELSE, because those two are the leases
-// renewed on the seat heartbeat: the operator's
-// `coordination.lease_ttl_seconds` is how fast a dead node's seats move and
-// how soon its presence stops counting, and that is the whole of what it is
-// for. Every other lease is sized from the work it guards, so tying one to
-// the seat TTL makes a knob tuned for failover silently refuse — or, set long,
-// silently permit — a duty or a walk nobody tuned it for.
-//
-// The same two classes as [ProtocolGateCounts], for a different reason: that
-// one asks which leases say a node of some build is alive or still running
-// seats, this one which leases share the seat heartbeat. Neither answer is
-// derived from the other, so a class added to one is not thereby added to
-// the other.
+// Only those two renew on the seat heartbeat. `coordination.lease_ttl_seconds`
+// is how fast a dead node's seats move, and holding any other lease to it
+// would make a failover knob silently refuse or permit work nobody tuned it
+// for. The set matches [ProtocolGateCounts] for a different reason, so a class
+// added to one is not thereby added to the other.
 func HeldToSeatTTL(resource string) bool {
 	return Class(ResourceSegments(resource)[0]).HeldToSeatTTL()
 }
 
-// CheckLeaseTTL refuses a claim or a renew whose TTL exceeds [MaxDutyTTL] on
-// any lease the seat lease TTL does not hold ([HeldToSeatTTL]), and accepts
-// everything else. A seat or presence lease is left to the backend, which
-// holds it to the seat lease TTL it runs on.
-//
-// Backends MUST call this rather than comparing the constant themselves, so the
-// rule and its message have one implementation, and so a backend that can
-// honour longer TTLs (the in-memory twin can honour any) still refuses the
-// ones another backend cannot.
+// CheckLeaseTTL refuses a claim or renew whose TTL exceeds [MaxDutyTTL] on any
+// lease the seat lease TTL does not hold ([HeldToSeatTTL]); a seat or presence
+// lease is left to the backend. Backends MUST call it rather than compare the
+// constant, so the rule has one message and a backend able to honour longer
+// TTLs (the twin) still refuses what another backend cannot.
 func CheckLeaseTTL(resource string, ttl time.Duration) error {
 	if HeldToSeatTTL(resource) || ttl <= MaxDutyTTL {
 		return nil
@@ -458,59 +387,34 @@ func CheckLeaseTTL(resource string, ttl time.Duration) error {
 		ErrTTLTooLong, resource, ttl, MaxDutyTTL)
 }
 
-// ExclusiveThrough is the last instant a holder may count on a lease that a
-// claim or a renewal answered as held, having been ASKED at asked: its TTL from
-// that moment, less margin.
+// ExclusiveThrough is the last instant a holder may count on a lease a claim
+// or renewal answered as held, having been ASKED at asked: asked plus ttl,
+// less margin.
 //
-// FROM THE ASKING, never from the answer: the store stamps a lease's expiry on
-// its own clock when it applies the call, which is after the caller asked, so
-// on the caller's clock the lease ends no earlier than asked plus its TTL. It
-// is an interval the caller measures on its own clock from an instant of its
-// own — never its clock compared with the store's deadline, which
-// [Lease.ExpiresAt] forbids. LESS A MARGIN, which the caller names as one
-// interval of its own cadence: the store's clock is not the caller's — a step
-// forward on it ends the lease early — and a caller that looks once an interval
-// learns the end has come up to an interval late. Inside the window no peer can
-// have claimed the lease, so the holder's work is exclusive; past it the holder
-// cannot say so, which is the unknown ADR-0005 has a holder stop at. A margin
-// at or past the TTL leaves a window that has already ended.
-//
-// ONE RULE FOR EVERY CALLER (ADR-0008): the sandbox waiter bounds each box's
-// poll by the claim that started it, the engine keeps a long duty's work going
-// on what its renewals confirmed, and the sandbox keeps an executor session on
-// what its taker lease's renewals confirmed ([ClassTaker]).
+// From the asking, never the answer: the store stamps expiry later, when it
+// applies the call, so on the caller's own clock the lease ends no earlier —
+// and the caller never compares its clock with the store's ([Lease.ExpiresAt]).
+// The margin, one interval of the caller's cadence, covers the store's clock
+// stepping ahead and a check up to an interval late. Past the window the
+// holder cannot claim exclusivity, the unknown ADR-0005 stops at; a margin at
+// or past ttl leaves no window. One rule for every caller (ADR-0008): the
+// sandbox waiter, the engine's kept duty, the taker lease ([ClassTaker]).
 func ExclusiveThrough(asked time.Time, ttl, margin time.Duration) time.Time {
 	return asked.Add(ttl - margin)
 }
 
-// KeptRenewals is how many times a lease is renewed in one TTL where the work
-// it guards goes on only inside the window its renewals confirm: a fleet duty
-// whose tick outlasts its lease (internal/engine's kept duty, which the count
-// was set for) and an engine process's taker lease ([ClassTaker]), which took
-// the count up rather than presence's cadence it was first specified with.
+// KeptRenewals is how many times a lease is renewed per TTL where the work it
+// guards goes on only inside the window its renewals confirm: internal/engine's
+// kept duty and the taker lease ([ClassTaker]), one count for both (ADR-0008).
 //
-// FOUR, SO THE WORK SURVIVES ONE MISSED RENEWAL. The work goes on only inside
-// [ExclusiveThrough] of its last confirmed renewal less one renewal interval,
-// the margin every caller of it names, so a confirmation buys three intervals
-// of the four a lease holds: the renewal due at the first interval may go
-// unanswered for the whole of it, and the one due at the second is still
-// asked inside the window, with an interval to answer in. For a taker's keep
-// at the seat lease TTL's 45-second default, the TTL that lease is claimed
-// with, that is an 11.25-second interval, a 33.75-second window and an
-// 11.25-second margin. Renewed a third of a TTL apart — the cadence a seat and
-// a node's presence are renewed on (seat.HeartbeatRatio) and a duty is claimed
-// on, where no work is fenced by a window of its own — the window holds two
-// intervals, and the renewal after one miss falls exactly on its end: at that
-// default the interval and the margin were 15 seconds and the window 30, and
-// one store blip, a renewal lost to a leader election, fenced every keep under
-// a lease no peer could yet read as lapsed, as it would end a half-hour pass
-// of the kept duty under its own TTL. More would tolerate a longer outage at
-// the price of a renewal written more often; four survive that one realistic
-// failure with a quarter of the lease left as the margin against the store's
-// clock running ahead of the holder's.
-//
-// ONE COUNT FOR BOTH (ADR-0008): written twice, the rule is what would differ
-// between them.
+// FOUR, SO THE WORK SURVIVES ONE MISSED RENEWAL. Work stops at
+// [ExclusiveThrough] of the last confirmed renewal less one interval, so a
+// confirmation buys three of the four intervals: the next renewal may go
+// unanswered for a whole interval and the one after is still asked inside the
+// window (at the 45-second seat TTL: 11.25 s intervals, a 33.75 s window). At
+// three a TTL (seat.HeartbeatRatio) the renewal after one miss lands exactly
+// on the window's end, so one store blip fences every keep. More buys a
+// longer outage with more writes; four leave a quarter as clock margin.
 const KeptRenewals = 4
 
 // Lease is a held lease. Epoch is the fencing token: thread it into writes.
@@ -525,22 +429,12 @@ type Lease struct {
 	// clocks to decide ownership.
 	ExpiresAt time.Time
 
-	// AcquiredAt is when THIS TENURE began, on the store's clock like
-	// ExpiresAt: stamped when the epoch is minted — a takeover, a first
-	// claim, or the same owner re-claiming after its own lease lapsed — and
-	// carried unchanged through every renewal, whether by [Backend.Renew] or
-	// by a live holder's own re-claim. It moves exactly when Epoch moves,
-	// because both answer one question: since when has this holder held
-	// this without a gap. An operator reading "node-2 since 08:02" is
-	// reading a tenure, and a stamp that followed the heartbeat would say
-	// "since a few seconds ago" about a seat that has not moved all day.
-	//
-	// Every lease a backend returns carries one — the contract suite
-	// asserts it on every read path — and a renewal never restamps it,
-	// since the moment it would stamp is the renewal's and not the claim's.
-	//
-	// Nothing decides ownership by it. It is a fact for a person to read,
-	// and the fencing token is still Epoch alone.
+	// AcquiredAt is when THIS TENURE began, on the store's clock: stamped
+	// when the epoch is minted and carried through every renewal and live
+	// re-claim, so it moves exactly when Epoch does — "node-2 since 08:02"
+	// reads a tenure, not the last heartbeat. Every read path carries it
+	// (the contract suite asserts so). Nothing decides ownership by it;
+	// Epoch alone fences.
 	AcquiredAt time.Time
 
 	// Preferred is a stickiness hint naming the node that last held this
@@ -551,28 +445,17 @@ type Lease struct {
 
 	Protocol int
 
-	// Meta is what the holder IS, beyond that it holds this. Node presence
-	// carries the node's roles and labels here so a peer can answer "is
-	// this node eligible for this seat" with no membership service. Empty
-	// for everything else. A key the holder did not write reads as absent,
-	// and each reader states what absent means for its question (placement
-	// reads absent roles as every role, never as a node with no roles).
+	// Meta is what the holder IS, beyond that it holds this: node presence
+	// carries its roles and labels so a peer can judge seat eligibility
+	// with no membership service. A key the holder did not write reads as
+	// absent, and each reader states what absent means (placement reads
+	// absent roles as every role).
 	//
-	// A CALLER MAY NOT DEPEND ON THE GO TYPE OF A META VALUE, only on the
-	// value. Backends are free to store it however they like, and the
-	// shipped two disagree: the in-memory twin hands back what was
-	// written, while the embedded-NATS store round-trips through JSON, so
-	// a number written as an int reads back as a float64 and a []string as
-	// a []any. Both are conforming — nothing in the suite requires the
-	// type to survive — so meta["replicas"].(int) is correct against one
-	// and panics against the other, at a call site nothing else would ever
-	// exercise.
-	//
-	// The alternative was to REQUIRE the JSON shape, which sounds tidier
-	// and would make every backend pay for a round trip nothing needs, to
-	// let callers type-assert a shape that says nothing about what the
-	// value means. Read a meta value the way placement.rolesFromMeta does:
-	// accept either shape, and treat anything else as absent.
+	// A CALLER MAY NOT DEPEND ON A META VALUE'S GO TYPE: the twin hands
+	// back what was written while the KV store round-trips JSON (an int
+	// reads back as float64, a []string as []any), and both conform. Read
+	// it as placement.rolesFromMeta does: accept either shape, and treat
+	// anything else as absent.
 	Meta map[string]any
 }
 
@@ -606,134 +489,55 @@ type AcquireOptions struct {
 	TTL time.Duration
 	// Preferred is the stable node id recorded as the stickiness hint.
 	Preferred string
-	// Protocol is the claiming build's protocol version.
-	//
-	// ZERO MEANS THIS BUILD (ProtocolVersion), not "oldest". The
-	// distinction is the difference between a safe omission and a
-	// fleet-wide stall. A named default of 1 makes leaving it out
-	// harmless; a struct zero makes leaving it out the DANGEROUS case.
-	// Read as
-	// "oldest", a single AcquireOptions{Owner, TTL} anywhere in the
-	// engine would hold a live lease below every newer node's floor and
-	// stall the fleet's claims — looking exactly like a rolling upgrade
+	// Protocol is the claiming build's protocol version. ZERO MEANS THIS
+	// BUILD ([ProtocolVersion]), not "oldest": read as oldest, one
+	// AcquireOptions{Owner, TTL} anywhere would hold a live lease below
+	// every newer node's floor and stall the fleet's claims like an upgrade
 	// that never finishes.
 	Protocol int
 	// Meta rides with the record; see Lease.Meta.
 	Meta map[string]any
 
-	// Ungated skips the lower-protocol refusal. The protocol is the
-	// SEAT-host protocol ([ProtocolVersion]): what HOLDING A SEAT means. So a
-	// claim may skip it only where it is not a seat's and must go on through
-	// the rolling upgrade the gate exists for, and says why at its call — a
-	// claim that may wait for the upgrade to finish, as a tracker walk's
-	// does, stays gated:
+	// Ungated skips the lower-protocol refusal, which guards what HOLDING A
+	// SEAT means ([ProtocolVersion]). A claim skips it only where it is not
+	// a seat's and must go on through a rolling upgrade, saying why at its
+	// call; one that may wait, as a tracker walk's does, stays gated. Node
+	// presence: a newer node unable to register is missing from the roster,
+	// so its peers over-take shares. Non-seat work: a fleet duty and a hold
+	// on one (internal/schedule), a server's OAuth renewal lease
+	// (internal/engine), a check run's remote slot (internal/gitlet/checkrun)
+	// and the taker lease ([ClassTaker]).
 	//
-	// Node presence: membership is not work. A newer-protocol node that
-	// cannot register itself during the rolling upgrade is invisible in the
-	// membership read — its peers then divide the seats by a count that
-	// excludes it and each take a larger share, while its own capacity also
-	// excludes itself.
-	//
-	// Work that is not a seat's, which would otherwise stall until the last
-	// lower-protocol lease lapses: a fleet singleton duty and a hold on one
-	// (internal/schedule), which keep running on whichever build takes them
-	// — and for the same reason a duty lease holds no claim back
-	// ([ProtocolGateCounts]); a server's OAuth renewal lease
-	// (internal/engine) and a check run's remote slot (internal/gitlet/checkrun);
-	// and an engine process's taker lease ([ClassTaker]), whose captures are
-	// kept through a rolling upgrade as at any other time.
-	//
-	// Ungated skips the check, never the stamp: the lease carries the
-	// claiming build's protocol like any other. On presence the stamp is
-	// what the gate reads, so a presence lease holds a newer claim back
-	// while a build at that protocol holds it; on a duty it is a fact for a
-	// reader of the lease and holds nothing back.
+	// It skips the check, never the stamp: on presence the stamp is what the
+	// gate reads; on a duty it holds nothing back ([ProtocolGateCounts]).
 	Ungated bool
 }
 
-// Backend is the lease surface. Implemented by the in-memory twin, by the
-// embedded KV, and by any external coordination store. All implementations
-// run under ONE contract suite; a backend the suite has not certified does
-// not exist.
+// Backend is the lease surface: the in-memory twin, the embedded KV or any
+// external store, each certified by ONE contract suite (coordtest), and every
+// method follows the package doc's tri-state.
 //
-// Every method follows the tri-state described in the package doc.
-//
-// A BACKEND MUST SERVE ITS OWN WRITES, PER RESOURCE. A claim, renew or
-// release that has returned must be visible to this caller's next read of
-// THAT resource. A class listing may LAG — see a recent change late: ListLive
-// is how a node discovers peers, and a peer claimed a second ago and
-// discovered a second late is a placement that converges a second later. Lag
-// is never licence to DROP: a key live from before a listing began until
-// after it ended is in that listing, however often it was rewritten in
-// between. A renew is the write every live lease takes on every heartbeat, so
-// a listing that loses a key under rewrite loses live peers exactly when a
-// fleet is healthiest — a live node that looks gone to placement, an owner
-// whose drain looks finished, a minimum that rises over a row it never saw.
-// The conformance suite holds every backend to it with listings read
-// throughout a churn of renews and rewrites (coordtest's
-// "…_throughout_a_listing_is_in_every_listing" cases).
-//
-// And a listing that cannot establish it answers UNKNOWN — an error, never a
-// shorter list, since "no rows" is a legitimate answer everywhere one is
-// asked. On the KV backend that is not free, and internal/coord/kv's walk.go
-// is where it is argued: a pass cannot tell that it is complete, so every
-// listing is certified against the stream's own key index; a key the index
-// names that the pass lost, or delivered only as a delete marker — which a
-// replica behind a re-creation serves for a key live throughout — is read
-// again from the stream LEADER, never through a direct get any replica
-// answers; and an index answered while the stream has no leader is refused,
-// so a listing during a leader election is unknown rather than short. Its one
-// bound is a size: past the broker's 100,000-subject page for that index, a
-// key the pass also lost can go uncertified.
-//
-// Those markers are the one record of a removal a backend may keep, and no
-// answer may rest on one: every read that meets a marker asks what the key
-// holds NOW. That is what lets [Markers] sweep them, and the suite holds it by
-// sweeping every marker at once and every answer staying what it was.
-//
-// It reads like an implementation detail and it is the whole basis of mutual
-// exclusion: a claim you cannot read back cannot exclude anybody, and the
-// seat host acts on reads that follow its own writes — the heartbeat renews a
-// seat a heartbeat after winning it, the next sweep lists what it holds, and a
-// claim the gate refused asks FleetProtocolFloor, which must count the lease
-// that refused it.
-// The twin makes it true for free, being a mutex over a map, and so did the KV
-// backend while a suite ran it on one member — which is how it went unstated
-// while the suite enforced it in about twenty places without naming it. On a
-// replicated bucket it is not free: a read any replica may answer can be
-// behind a write the quorum acknowledged, and the KV backend's claims answered
-// "not held" for leases they had won until every read it acts on became the
-// stream leader's (internal/coord/kv, "Every single-key read is the
-// leader's"). coordtest.RunShared is what holds a backend to it across
-// handles on different members.
-//
-// What it forecloses is asynchronous replication across the coordination
-// store, which nothing has asked for. Taking it up means changing this
-// sentence deliberately, not discovering it.
+// A BACKEND SERVES ITS OWN WRITES, PER RESOURCE: a claim, renew or release
+// that returned is visible to this caller's next read of that resource, or a
+// claim excludes nobody (package doc, "A definite answer is a CURRENT one";
+// coordtest.RunShared checks it across members). A class listing may LAG but
+// never DROP a key live throughout it (coordtest's
+// "…_throughout_a_listing_is_in_every_listing" cases); one that cannot
+// establish that answers UNKNOWN, never a shorter list (internal/coord/kv's
+// walk.go). No answer rests on a removal marker, which lets [Markers] sweep.
 type Backend interface {
-	// TryAcquire claims resource for the owner, or reports why it may not.
+	// TryAcquire claims resource for the owner. Exactly one of the three is
+	// set: the lease, a [Refusal] (definitively not granted, and why), or an
+	// error (UNKNOWN).
 	//
-	// Exactly one of the three is set: the lease (granted), a [Refusal]
-	// (definitively not granted, and why), or an error (UNKNOWN).
-	//
-	// Succeeds when the resource is unclaimed, its lease has expired, or
-	// the owner already holds it — in which case it doubles as a renew and
-	// KEEPS the epoch. The epoch increments on every ownership change and
-	// on a same-owner re-acquire after expiry.
-	//
-	// Refuses [RefusedHeld] while another owner holds a live lease on the
-	// resource, WHATEVER THE GATE WOULD SAY: a claim that cannot write
-	// judges no gate. Otherwise refuses [RefusedProtocol] while any live
-	// lease the gate counts ([ProtocolGateCounts]: presence and seats) is
-	// held at a lower protocol, unless Ungated. See [Refusal] for why the
-	// reason is part of the answer.
-	//
-	// Any lease outside seats and presence ([HeldToSeatTTL]) — a duty, a
-	// tracker walk's claim, any class a caller leases — is honoured at any
-	// TTL up to [MaxDutyTTL] whatever TTL the backend's seat leases run on,
-	// and refused beyond it with an error wrapping [ErrTTLTooLong]. A seat
-	// or presence lease may be refused beyond the seat lease TTL the
-	// backend runs on, the same way.
+	// It succeeds when the resource is unclaimed, lapsed, or already this
+	// owner's — then it doubles as a renew and KEEPS the epoch; an ownership
+	// change or a same-owner re-claim after expiry bumps it. It refuses
+	// [RefusedHeld] while another owner holds it, whatever the gate would
+	// say, else [RefusedProtocol] while a lease [ProtocolGateCounts] counts
+	// is held at a lower protocol, unless Ungated. A lease outside
+	// [HeldToSeatTTL] is honoured up to [MaxDutyTTL] and refused beyond it
+	// with [ErrTTLTooLong]; a seat or presence lease, past the seat TTL.
 	TryAcquire(ctx context.Context, resource string, opts AcquireOptions) (*Lease, Refusal, error)
 
 	// Renew extends a lease the caller already holds at this epoch.
@@ -759,30 +563,18 @@ type Backend interface {
 	// roster.
 	ListLive(ctx context.Context, class Class) ([]Lease, error)
 
-	// WatchLive streams every write to a lease of one class made after it
-	// returns — a claim, a renewal, a takeover, a release — as the
-	// [LeaseWrite] it left, in the order the store applied them, until ctx
-	// ends or the watch fails, when the channel is closed. A CLOSED
-	// CHANNEL says nothing about any lease: the watcher stopped hearing,
-	// and watches again.
+	// WatchLive streams every write to a lease of class made after it
+	// returns (claim, renewal, takeover, release) as a [LeaseWrite], in
+	// store order, until ctx ends or the watch fails and the channel
+	// closes; a closed channel says nothing about any lease.
 	//
-	// A HINT, NEVER AN ANSWER. A write says the class's roster may have
-	// changed; ListLive is still what says what the roster IS, because a
-	// watch cannot: a lease that LAPSES is no write and need not be
-	// delivered, a watch says nothing about what was held before it began,
-	// and a write it delivers may already be superseded. What it buys is
-	// LATENCY — a roster listed once a heartbeat learns that a node joined
-	// or left the moment it did rather than a heartbeat later
-	// ([LeaseView]). Only a write that names the lease's holder, or names
-	// none, is a write of the lease: a backend whose claim passes through
-	// a state of its own before it has a fencing token (the KV backend's
-	// claiming record) does not deliver that state, which holds nothing.
-	//
-	// Starting it is bounded by ctx, or by the store's own request budget
-	// where ctx carries no deadline, and a store that cannot start one
-	// answers an error (UNKNOWN) rather than a channel that will never
-	// speak. The consumer drains the channel: a backend may hold every
-	// later write behind one it has not read.
+	// A HINT, NEVER AN ANSWER: a lapse is no write, nothing before the
+	// watch is told, and a delivered write may be superseded, so ListLive
+	// still says what the roster IS; the watch buys LATENCY ([LeaseView]).
+	// A claim's state before it has a fencing token (the KV's claiming
+	// record) is not delivered. Starting is bounded by ctx or the store's
+	// request budget and fails as UNKNOWN, never a silent channel; the
+	// consumer drains it, as a backend may hold later writes behind it.
 	WatchLive(ctx context.Context, class Class) (<-chan LeaseWrite, error)
 
 	// PreferredResources returns resources of this class whose stickiness
@@ -791,12 +583,10 @@ type Backend interface {
 	PreferredResources(ctx context.Context, class Class, nodeID string) (map[string]struct{}, error)
 
 	// FleetProtocolFloor returns the lowest protocol among the live leases
-	// the gate counts ([ProtocolGateCounts]), and whether there were any.
-	// The observability half of the gate: a claim refused [RefusedProtocol]
-	// asks it for the floor to name, so it counts EXACTLY what the gate
-	// counts — a duty left out of one and counted in the other would name a
-	// protocol nothing is being refused over, and send an operator looking
-	// for an older node that is not there.
+	// the gate counts ([ProtocolGateCounts]), and whether there were any. A
+	// claim refused [RefusedProtocol] names this floor, so it counts EXACTLY
+	// what the gate counts, or an operator goes looking for an older node
+	// that is not there.
 	FleetProtocolFloor(ctx context.Context) (int, bool, error)
 }
 
@@ -818,24 +608,12 @@ type LeaseWrite struct {
 	Epoch int64
 }
 
-// Refusal is why a claim was definitively not granted.
+// Refusal is why a claim was definitively not granted. The zero value is "not
+// refused": a granted claim, or an unknown one.
 //
-// # Why the reason is part of the answer
-//
-// It was not: every refusal was the same (nil, nil), and a caller that needed
-// to tell "a peer holds it" from "the mixed-version gate stopped me" was told
-// to ask [Backend.FleetProtocolFloor] once per claim sweep. That read looks
-// cheap and is not — a gate is a question about EVERY live presence and seat
-// lease, which a backend answers from a standing view of the fleet's lease
-// writes (the KV backend's gate view) — so a node with room to claim whose
-// every candidate was held by a peer asked it on every five-second sweep, and
-// its view took in every lease write the fleet made for as long as the node
-// stayed below its share: at ten thousand seats, about 670 messages a second
-// on each such node, for a question whose answer the claims already knew. The
-// backend knows at the moment it refuses which rule refused, at no cost, so it
-// says so.
-//
-// The zero value is "not refused": a granted claim, or an unknown one.
+// The backend knows which rule refused at no cost, while telling "a peer holds
+// it" from "the gate stopped me" through [Backend.FleetProtocolFloor] costs a
+// standing view of every live presence and seat lease write, on every sweep.
 type Refusal string
 
 const (
@@ -859,33 +637,19 @@ func (r Refusal) Valid() bool { return slices.Contains(Refusals, r) }
 
 // --- resource naming ------------------------------------------------------
 
-// ResourceSeparator joins the segments of a resource name.
-//
-// A COLON, and the choice is load-bearing rather than cosmetic: a key in the
-// lease and epoch buckets is built from a resource by [DocumentKey], one
-// segment per part, so the leading segment — the CLASS — becomes a subject
-// token of its own and a whole class is a wildcard the broker can match.
-// Every listing that wants one kind of thing is that filter; before the
-// resource was segmented there was no token boundary to filter on and each of
-// those reads walked the bucket and discarded the rest.
+// ResourceSeparator joins the segments of a resource name. [DocumentKey] makes
+// each segment a subject token, so the CLASS is a token of its own and a whole
+// class is a broker wildcard every class listing filters on.
 const ResourceSeparator = ":"
 
-// Class is the leading segment of a resource name — what kind of thing the
-// lease is for.
+// Class is the leading segment of a resource name: what kind of thing the
+// lease is for. A named type because a class that is not a single subject
+// token silently selects NOTHING, and an empty listing looks like a class with
+// no members; [Class.Valid] refuses one.
 //
-// A named type rather than a bare string because it is the one part of a
-// resource the store treats structurally, and a class that is not a single
-// subject token silently selects NOTHING: the filter built from it matches no
-// key, and a listing that returns nothing is indistinguishable from a class
-// with no members at every caller. [Class.Valid] is what refuses one.
-//
-// Classes are deliberately NOT enumerated here. This package owns the four
-// the fleet itself leases; the tracker's claims are leases under classes of
-// their own, held to the same contract as a duty, and an enumeration here
-// would either be wrong or drag every caller's vocabulary into this package.
-// What this package does say about a class is which of its own the seat lease
-// TTL holds ([Class.HeldToSeatTTL]) — and so, by elimination, which leases it
-// does not, whoever's they are.
+// Not enumerated, or every caller's vocabulary would land here: this package
+// owns the four the fleet leases, the tracker leases under classes of its own,
+// and only [Class.HeldToSeatTTL] says which classes the seat lease TTL holds.
 type Class string
 
 // The classes the fleet leases directly.
@@ -897,36 +661,15 @@ const (
 	// ClassTaker is an engine process's TAKER lease: the process still keeps
 	// the executor sessions it began taking (internal/sandbox's
 	// SessionCapture.Taker), so a capture it left begun is waited for while
-	// the lease holds, and settled from the executor log once it lapses.
+	// the lease holds and settled from the executor log once it lapses. The
+	// whole company must agree on it now (ADR-0003): any node may wait on a
+	// capture another process began.
 	//
-	// WHO HAS TO AGREE ON IT: THE WHOLE COMPANY, NOW (ADR-0003), so it lives
-	// here, on the stream's own broker (ADR-0001). Any node may wait on a
-	// capture another process began — the turn's end on its seat's holder, a
-	// relaunch on whichever node takes the seat, an `e2b` box's on whoever
-	// held the waiter duty — and each decides from the lease as it stands
-	// now: a taker read as gone while it still keeps has its capture refused
-	// under it, and one read as live after it stopped holds a turn's end for
-	// as long as a capture can take.
-	//
-	// ONE PER PROCESS, never per node, named by the process incarnation
-	// ([TakerResource]): a restarted process claims a lease of its own at
-	// once rather than waiting out its predecessor's, whose captures are
-	// then settled as that lease lapses. Its tokens come from one counter
-	// for the whole class ([CounterResource]), since a counter per resource
-	// would keep a record for every process the deployment ever started.
-	//
-	// Not the presence lease, which answers a different question: a drain
-	// gives presence up at its first step while the node's keeps still
-	// upload, and a taker lease is held until the last of them ends. Not
-	// held to the seat lease TTL by the store ([Class.HeldToSeatTTL]): the
-	// sandbox asks for that TTL as its own, and the store holds it as any
-	// caller's class — to [MaxDutyTTL], past which the sandbox asks for no
-	// more ([CheckLeaseTTL] would refuse every claim). Renewed
-	// [KeptRenewals] times a TTL, since every keep goes on only inside the
-	// window its renewals confirm. Not counted by the protocol gate
-	// ([ProtocolGateCounts]), and claimed ungated
-	// ([AcquireOptions.Ungated]): it says nothing about what holding a seat
-	// means, and an older build never reads one.
+	// One per process incarnation ([TakerResource]), so a restart never
+	// waits out its predecessor. Not presence, which a drain gives up while
+	// keeps still upload. Held to [MaxDutyTTL] like any caller's class,
+	// renewed [KeptRenewals] times a TTL, and ungated and uncounted by the
+	// gate ([ProtocolGateCounts]): it says nothing about holding a seat.
 	ClassTaker Class = "taker"
 )
 
@@ -935,26 +678,15 @@ const (
 func TakerResource(incarnation string) string { return ClassTaker.Resource(incarnation) }
 
 // CounterResource is the resource whose fencing counter mints resource's
-// tokens. Every backend asks this one function, so the twin and the store
-// cannot disagree about which counter a token comes from.
+// tokens; every backend asks this one function so the twin and the store
+// agree.
 //
-// THE RESOURCE ITSELF, for every class but one: a token is monotonic for the
-// lifetime of the resource it fences, and a resource that outlives its
-// holders — a seat, a duty, a node — keeps one counter record for as long as
-// the deployment does, which is a bound the deployment sets.
-//
-// A TAKER LEASE COUNTS ON ITS CLASS'S ONE COUNTER, keyed by the class's own
-// name. A taker resource names one process ([TakerResource]), so a counter of
-// its own would keep a record per process start — the counter's record is
-// never removed, since a removed counter restarts at 1 — and the deployment's
-// counters would grow by one at every restart for as long as it runs. One
-// counter for the class holds the same guarantee: every token it mints is
-// above every token it minted before, so a taker that lapses and claims again
-// is fenced against its own past self, and no two tenures of any taker share
-// a token. What it costs is contention between takers claiming at once, which
-// a process does at its start and after a lapse, and the counter's
-// compare-and-set absorbs. A class counter keeps no placement hint: a taker
-// lease names none.
+// The resource itself, except a taker lease, which counts on its class's one
+// counter keyed by the class name: a counter is never removed (a removed one
+// restarts at 1), so one per process start would grow forever. A class
+// counter keeps the guarantee — every token above every earlier one, so a
+// re-claiming taker is fenced against its past self — at the cost of
+// contention its compare-and-set absorbs. It keeps no placement hint.
 func CounterResource(resource string) string {
 	if ClassTaker.Holds(resource) {
 		return string(ClassTaker)
@@ -962,19 +694,11 @@ func CounterResource(resource string) string {
 	return resource
 }
 
-// Valid reports whether this class can address a key.
-//
-// SHAPE, not membership — see the type doc for why there is no enumeration.
-// A class must be non-empty and must survive the key grammar's escaping
-// UNCHANGED, because a class that escapes is a class whose filter no longer
-// spells the same token as its own keys: the filter is built from the class
-// as written and the keys are built from it escaped, so the two stop matching
-// and the listing goes quietly empty.
-//
-// That one test is also what refuses a class carrying the separator, which is
-// why there is no second check for it: the separator is not in the literal
-// set, so it always escapes, and a class containing one can never equal its
-// own encoding.
+// Valid reports whether this class can address a key: SHAPE, not membership.
+// It must be non-empty and survive the key grammar's escaping UNCHANGED, or
+// its filter (built from the class as written) stops matching its keys (built
+// escaped) and the listing goes quietly empty. That one test also refuses the
+// separator, which always escapes.
 func (c Class) Valid() bool {
 	return c != "" && DocumentKey(string(c)) == string(c)
 }
@@ -988,14 +712,9 @@ func (c Class) HeldToSeatTTL() bool {
 
 // Resource names the lease for one member of this class.
 //
-// ONE PART RATHER THAN A VARIADIC. It was variadic for exactly one caller — a
-// sprint rollover naming a project AND a number — and that caller left with
-// sprints, so every remaining one passes a single segment. Generality with no
-// caller is indistinguishable to the next reader from generality whose caller
-// they failed to find, and this particular variadic also spells `Resource()`
-// with no parts at all: the EMPTY RESOURCE, a key nothing can decode, so the
-// lease lands and no listing ever returns it — which every node reads as a
-// free seat.
+// One part, not variadic: a variadic also spells `Resource()` with no parts,
+// a key nothing can decode, whose lease no listing returns and every node
+// reads as a free seat.
 func (c Class) Resource(part string) string {
 	return string(c) + ResourceSeparator + part
 }
@@ -1021,15 +740,11 @@ func (c Class) Name(resource string) (string, bool) {
 	return strings.TrimPrefix(resource, c.Prefix()), true
 }
 
-// CheckResource refuses a resource name that cannot address a key.
-//
-// EVERY SEGMENT NAMES SOMETHING — a class, a handle, a node id, a project —
-// so an empty one is a caller that lost a value on the way here, and the key
-// it would build is one [DocumentSegments] refuses. That refusal is why this
-// exists at the surface rather than at the encoder: a lease written under a
-// key nothing can decode is a lease no listing ever returns, so the seat it
-// covers looks free to every node while the record sits in the bucket. A
-// refusal names the value to fix; the silent version hands out one seat twice.
+// CheckResource refuses a resource name that cannot address a key: an empty
+// segment is a value lost on the way here, whose key [DocumentSegments]
+// refuses. Checked at the surface, not the encoder, because a lease under an
+// undecodable key is one no listing returns, so its seat looks free to every
+// node and is handed out twice.
 func CheckResource(resource string) error {
 	if resource == "" {
 		return fmt.Errorf("coord: a resource name is required")
@@ -1061,14 +776,10 @@ func SeatResource(seat uuid.UUID) string { return ClassSeat.Resource(seat.String
 // WorkerResource names the lease for a per-company singleton duty.
 func WorkerResource(duty string) string { return ClassWorker.Resource(duty) }
 
-// NodeResource names a node's own presence lease.
-//
-// Every node holds one, renewed on the same heartbeat as its seats.
-// Counting the live ones is how a node learns the fleet size it must divide
-// the seats by. There is no membership service, and inferring the count from
-// SEAT ownership cannot work: a fleet where nobody has claimed anything yet
-// reads as zero nodes, and every node then believes it should take every
-// seat.
+// NodeResource names a node's own presence lease, renewed on its seats'
+// heartbeat. Counting the live ones is how a node learns the fleet size to
+// divide seats by: there is no membership service, and counting SEAT owners
+// reads a fresh fleet as zero nodes, so every node would take every seat.
 func NodeResource(nodeID string) string { return ClassNode.Resource(nodeID) }
 
 // IsSeatResource reports whether a resource names a seat.

@@ -2,51 +2,32 @@ package coord
 
 import "strings"
 
-// THE KEY GRAMMAR: how a coordination key is built out of segments, and why
-// every one of them is escaped.
-//
-// It is what survived the document families. Those families were a KV estate
-// with a change feed and a per-node projection in front of it, and both native
-// backends left them for ordered logs — but every key class the fleet still
-// holds is built here: a node's positions, a trim floor, a hold, a backup
-// point, a capacity operation. Each one composes an id, a stream name or a
-// node id into a key, and each of those can carry a byte a subject token
-// cannot.
-//
-// A key IS a subject token path under its bucket, which is what makes the
-// escaping load-bearing rather than tidy: a raw segment containing a dot
-// splits into two tokens and changes what a filtered watch matches, and a
-// segment containing a space, a colon or a non-ASCII letter is refused by the
-// store outright.
+// THE KEY GRAMMAR: how a coordination key is built out of escaped segments.
+// Every key class the fleet holds is built here (a node's positions, a trim
+// floor, a hold, a backup point, a capacity operation), from ids, stream names
+// and node ids that can carry a byte a subject token cannot ([DocumentKey]).
 
 // KeySeparator is what joins a key's segments.
 //
-// A dot, because a key becomes a subject token path under the bucket, and
-// that is what makes a CLASS filterable: a listing of one class — the
-// presence leases, the seat pauses — asks the broker for that class's keys
-// ([DocumentFilter]) and reads nothing else. Every other byte in a segment is
-// escaped, so a segment can never contain one of these and a key's shape is
-// exactly the number of segments it was built from.
+// A dot, because a key is a subject token path under its bucket, which makes
+// a CLASS filterable: a listing of one class asks the broker for that class's
+// keys ([DocumentFilter]) and reads nothing else. Every other byte is escaped,
+// so no segment contains one and a key has exactly the segments it was built
+// from.
 const KeySeparator = "."
 
 // DocumentKey builds a key from its segments, escaping each.
 //
-// SEGMENT BY SEGMENT, and this is load-bearing rather than tidy. A key is a
-// subject token path, so a raw segment containing a dot would split into two
-// tokens and change what a filtered watch matches; a segment containing a
-// space, a colon or a non-ASCII letter is refused by the store outright. A
-// node id may carry a dot and a Slack thread's id always does. Escaping each
-// segment and joining with the separator is what lets either be part of a key
-// at all, and what keeps `class.a.b` distinct from a single segment that
-// happened to spell it.
+// SEGMENT BY SEGMENT: a raw dot would split a segment into two tokens and
+// change what a filtered watch matches (a node id may carry one, a Slack
+// thread's id always does), and the store refuses a space, a colon or a
+// non-ASCII letter outright. Escaping also keeps `class.a.b` distinct from a
+// single segment spelling it.
 //
-// AN EMPTY SEGMENT IS NOT A KEY. Every segment names something — a class, an
-// id, a node, a thread — so an empty one is a caller that lost a value on
-// the way here, and the key it would build is one [DocumentSegments] refuses.
-// That refusal is the design: every listing skips a key it cannot decode, so
-// the record is one no listing returns, where a key that silently decoded to
-// an empty name would be returned by every listing as a record naming nothing
-// — a lease on no seat, a follow on no thread — for its reader to act on.
+// AN EMPTY SEGMENT IS NOT A KEY: it is a caller that lost a value, and
+// [DocumentSegments] refuses the key it builds, so every listing skips it
+// rather than return a record naming nothing (a lease on no seat, a follow on
+// no thread) for its reader to act on.
 func DocumentKey(segments ...string) string {
 	escaped := make([]string, len(segments))
 	for i, seg := range segments {
@@ -56,27 +37,14 @@ func DocumentKey(segments ...string) string {
 }
 
 // DocumentFilter builds the subject filter matching every key whose leading
-// segments are these — the class prefix of a shared bucket, as a wildcard the
-// BROKER can match.
+// segments are these: a class prefix as a wildcard the BROKER can match. It
+// lives beside [DocumentKey] so the two escape byte for byte alike.
 //
-// It lives beside [DocumentKey] because the two have to agree byte for byte
-// and there is nothing else that would make them: a filter written at the
-// caller escapes its segments by hand, or forgets to, and then selects
-// nothing for every class whose name grows a character this grammar escapes.
-// Written here, a change to the escaping changes both in one edit.
-//
-// The wildcard is `>` rather than `*`, so it matches a key of ANY remaining
-// depth. A class whose keys are two segments today and three tomorrow keeps
-// being selected by the same filter, where `*` would silently stop matching
-// the day a segment was added — a listing that returns nothing and an empty
-// class are the same answer at the caller.
-//
-// AN EMPTY SEGMENT IS NOT A FILTER either, and it fails differently from the
-// key side: [DocumentSegments] refuses a key with one at the first listing
-// that reads it back, but nothing reads a filter back. A caller that lost its
-// class value composes a filter matching nothing and is answered with an empty
-// listing — which is why every filter here is built from a constant, never
-// from a value that arrived from somewhere else.
+// The wildcard is `>`, matching any remaining depth, so a class whose keys
+// grow a segment stays selected; `*` would then silently match nothing, which
+// a caller cannot tell from an empty class. An empty segment fails as
+// silently, since nothing reads a filter back, so every filter is built from
+// a constant, never from a value that arrived from elsewhere.
 func DocumentFilter(segments ...string) string {
 	return DocumentKey(segments...) + KeySeparator + ">"
 }
@@ -119,9 +87,8 @@ const (
 
 // literalSegmentByte reports whether b may appear in a segment as itself.
 //
-// The separator is deliberately NOT literal: a segment that could contain one
-// would make the grammar ambiguous, which is the whole thing it exists to
-// prevent.
+// The separator is NOT literal: a segment that could contain one would make
+// the grammar ambiguous.
 func literalSegmentByte(b byte) bool {
 	switch {
 	case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z', b >= '0' && b <= '9':

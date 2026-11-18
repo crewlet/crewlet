@@ -201,9 +201,8 @@ func newFixture(t *testing.T, offer ...string) *fixture {
 	t.Helper()
 	reg := tools.NewRegistry()
 	byName := map[string]*stubTool{}
-	// REGISTERED WITH THEIR HINTS, because that is what the bridge now
-	// advertises — and with two different shapes, so a case can tell a
-	// read from a write on the wire rather than only in the registry.
+	// REGISTERED WITH THEIR HINTS, which the bridge advertises, and two
+	// different ones, so a case can tell a read from a write on the wire.
 	hints := map[string]tools.Annotations{
 		"read_page": {ReadOnly: crewletmcp.Yes, Idempotent: crewletmcp.Yes},
 		"post_message": {
@@ -253,9 +252,9 @@ func (f *fixture) open(t *testing.T) string {
 	return f.bridge.Open(t.Context(), f.session)
 }
 
-// dial connects an MCP client the way a harness's own client would —
-// re-reading the tool list when the server says it changed, as the harnesses that
-// run in a box do, so an activation's held answer is let go by the re-list.
+// dial connects an MCP client as a box's harness does, re-reading the tool list
+// when the server says it changed, so an activation's held answer is let go by
+// the re-list.
 func dial(t *testing.T, url string) *mcp.ClientSession {
 	t.Helper()
 	client := mcp.NewClient(&mcp.Implementation{Name: "coding-agent", Version: "1"}, &mcp.ClientOptions{
@@ -265,12 +264,10 @@ func dial(t *testing.T, url string) *mcp.ClientSession {
 	})
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	// HTTPClient IS NOT OPTIONAL HERE. Left unset the SDK reaches for
-	// http.DefaultClient, and every httptest.Server.Close in this binary
-	// ends by sweeping that pool — see
-	// [github.com/crewlet/crewlet/internal/httpx/httpxtest]. This helper
-	// holds a URL rather than a server, so it owns a pool instead of
-	// borrowing one.
+	// HTTPClient IS NOT OPTIONAL: unset, the SDK uses http.DefaultClient, which
+	// every httptest.Server.Close in this binary sweeps
+	// ([github.com/crewlet/crewlet/internal/httpx/httpxtest]). This helper
+	// holds a URL, not a server, so it owns a pool.
 	sess, err := client.Connect(ctx, &mcp.StreamableClientTransport{
 		Endpoint: url, HTTPClient: httpxtest.Pool(t),
 	}, nil)
@@ -325,9 +322,8 @@ func TestOnlyAMintedTokenReachesASession(t *testing.T) {
 		{"forged", "v1.run-1.99999999999.notasignature", http.StatusUnauthorized},
 		{"malformed", "garbage", http.StatusUnauthorized},
 		{"another run's shape", "v1.run-2.99999999999.x", http.StatusUnauthorized},
-		// No token at all matches no route: the pattern requires a
-		// segment. 404 rather than 401 is the honest answer — there is
-		// nothing at that address to be unauthorized for.
+		// No token matches no route (the pattern requires a segment): 404,
+		// not 401, since nothing is at that address to be unauthorized for.
 		{"absent", "", http.StatusNotFound},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -389,18 +385,15 @@ func TestClosingTwiceIsSafe(t *testing.T) {
 	}
 }
 
-// A KEYRING THAT CANNOT SIGN FOR THE FLEET BUILDS NO BRIDGE. It used to take a
-// per-process key and log that it had, which kept a single node working and
-// cost a fleet the one diagnosis the fleet's key buys: a peer a misrouted call
-// reaches could no longer tell a token its fleet signed from a forged one.
-// Every node holds a keyring now, so a caller arriving without one is a wiring
-// mistake, refused by name at both entrances — and [mcpbridge.Build] with
-// neither a base URL nor a host URL still builds nothing and refuses nothing,
-// because a node with no address a box can dial is a node that binds no
-// listener, and that is not a keyring question.
+// A KEYRING THAT CANNOT SIGN FOR THE FLEET BUILDS NO BRIDGE: with a per-process
+// key, a peer a misrouted call reaches could not tell a token its fleet signed
+// from a forged one. Every node holds a keyring, so arriving without one is a
+// wiring mistake, refused by name at both entrances. [mcpbridge.Build] with
+// neither a base nor a host URL still builds and refuses nothing: a node no box
+// can dial binds no listener, which is not a keyring question.
 //
-// Mutation: restore the per-process fallback in runtoken.New and every row
-// builds a bridge.
+// Mutation: add a per-process fallback to runtoken.New and every row builds a
+// bridge.
 func TestAKeyringThatCannotSignBuildsNoBridge(t *testing.T) {
 	t.Parallel()
 	const base = "https://engine.example.com"
@@ -424,23 +417,19 @@ func TestAKeyringThatCannotSignBuildsNoBridge(t *testing.T) {
 			}
 		})
 	}
-	// And a usable keyring builds one, so the rows above are refused for the
+	// A usable keyring builds one, so the rows above are refused for the
 	// keyring and not for something else Build dislikes.
 	if b, err := mcpbridge.Build(base, runtoken.OneKey("k1", "m"), ""); err != nil || b == nil {
 		t.Fatalf("Build with a usable keyring = %v, %v, want a bridge", b, err)
 	}
 }
 
-// A BOX ON THE NODE'S OWN HOST DIALS THE NODE'S OWN LISTENER. The `direct`
-// cell's run is a process of this host, so the listener the node bound is an
-// address it can always dial, and the quickstart's company — one `direct` cell
-// and no CREWLET_MCP_BRIDGE_URL — has to bridge on that alone. A box in any
-// other cell cannot dial the host's loopback, so it is given the variable's
-// address or nothing, never the loopback one.
-//
-// And preferred to the variable for a host box even where both are set:
-// loopback never leaves the host, while the variable may route through a load
-// balancer to any peer of the fleet.
+// A BOX ON THE NODE'S OWN HOST DIALS THE NODE'S OWN LISTENER: a `direct` run is
+// a process of this host, so the quickstart's company (one `direct` cell, no
+// CREWLET_MCP_BRIDGE_URL) bridges on that alone. A box in any other cell cannot
+// dial the host's loopback, so it gets the variable's address or nothing. A
+// host box prefers loopback even where both are set: the variable may route
+// through a load balancer to any peer.
 //
 // Mutation: drop hostURL from Build and the host-only row builds nothing; give
 // Reaches the host URL for every box and the container row dials loopback;
@@ -657,9 +646,9 @@ func TestAFailingToolComesBackWithItsReason(t *testing.T) {
 	}
 }
 
-// A CALL THAT COULD NOT RUN AT ALL IS TOLD IN WORDS OF ITS OWN: the turn the
-// run belongs to was torn down, and the bridge answered the harness in
-// the box, a model, with the Go error's text whole.
+// A CALL THAT COULD NOT RUN AT ALL IS TOLD IN WORDS OF ITS OWN (the run's turn
+// was torn down), never the Go error's text, which tells the box's model
+// nothing.
 //
 // Mutation: put the error's text back into the refused answer and this fails.
 func TestACallThatCouldNotRunIsToldInWordsNotItsError(t *testing.T) {
@@ -693,17 +682,16 @@ func (*statusTool) Parameters() map[string]any {
 }
 
 // AN EXECUTOR RUN'S CALL IS HELD TO ITS TOOL'S SCHEMA OVER THE BRIDGE
-// (ADR-0059), by the surface's one path ([tools.Invoke]) and no check of the
+// (ADR-0059), by the surface's one path ([tools.Invoke]), no check of the
 // bridge's own: the tool reads a closed set's member as its schema spells it;
-// a call answered outside its schema carries the note to the harness and onto the
-// run's durable record, which a collected run's record is read from; and a
-// value the tool would misread is refused before it runs, the refusal on the
-// record too. The record keeps the spelling the model sent, which a resume
+// an answer outside its schema carries the note to the harness and onto the
+// run's durable record; a value the tool would misread is refused before it
+// runs, and recorded. The record keeps the model's spelling, which a resume
 // reads back canonically (internal/agent/runner's seedCalls).
 //
-// Mutation: answer a bridged call with the tool's own output rather than the
-// surface's rendered one and the note reaches neither the harness nor the record;
-// call the tool directly from the surface and the misread runs.
+// Mutation: answer with the tool's own output rather than the surface's
+// rendered one and the note reaches neither harness nor record; call the tool
+// directly from the surface and the misread runs.
 func TestABridgedCallIsHeldToItsToolsSchema(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -752,10 +740,9 @@ func TestABridgedCallIsHeldToItsToolsSchema(t *testing.T) {
 
 // --- the durable ledger ----------------------------------------------------
 
-// A NATIVE TOOL LOOP KEEPS ITS CALLS IN MEMORY and the turn writes them at the
-// end. A bridged run outlives its launching turn and can outlive the process,
-// so a restart mid-run would leave the reviewer judging a turn whose whole
-// tool log is gone.
+// EVERY BRIDGED CALL IS RECORDED AS IT IS MADE, not at the turn's end as a
+// native tool loop's: a bridged run outlives its launching turn and can outlive
+// the process, and a restart mid-run would leave the reviewer no tool log.
 func TestEveryBridgedCallIsRecordedWhereAResumeCanReadIt(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -776,19 +763,15 @@ func TestEveryBridgedCallIsRecordedWhereAResumeCanReadIt(t *testing.T) {
 	}
 }
 
-// A RECORDED CALL CARRIES THE IDENTITY IT WAS ADMITTED UNDER. The run's call
-// log counts a call by the digest of its canonical arguments, and the record
-// a later segment seeds that log from keeps a call's arguments only in part
-// past its share of the run's tool log — so the record carries the digest the
-// admission counted, taken here before anything is cut: the canonical form's,
-// whatever spelling the model sent. The call is sent in a spelling the surface
-// rewrites — a null its schema does not declare, which the canonical form
-// drops — so the canonical digest and the digest of what was sent differ, and
-// a record of the one is not a record of the other.
+// A RECORDED CALL CARRIES THE IDENTITY IT WAS ADMITTED UNDER. The call log
+// counts a call by its canonical arguments' digest, and the record a later
+// segment seeds that log from may keep the arguments only in part, so the
+// record carries the admission's digest, taken before anything is cut. The call
+// here sends a null its schema does not declare, which the canonical form
+// drops, so the canonical digest and the as-sent one differ.
 //
-// Mutation: record no digest, or one of the arguments as sent, and the
-// differently spelt call is seeded as another: a repeat spelt "Draft" after
-// "draft", counted as a different call, writes twice.
+// Mutation: record no digest, or the as-sent one, and a differently spelt
+// repeat ("Draft" after "draft") is seeded as another call and writes twice.
 func TestARecordedCallCarriesTheIdentityItWasAdmittedUnder(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -830,10 +813,9 @@ func (workingTool) CallForTurn(_ context.Context, turn *turnctx.Turn, _ map[stri
 }
 
 // WHAT A CALL'S OWN WORK RECORDED RIDES ITS RECORD. A bridged `delegate` runs
-// its workers on forks of the run's call log, which takes their calls in as the
-// call returns; no call of the run's record is a worker's, so the record of the
-// `delegate` carries their identities, and a later segment seeded from it counts
-// a worker's call between two of the run's own as the run did.
+// its workers on forks of the run's call log, absorbed as it returns; no record
+// is a worker's, so the `delegate`'s carries their identities, and a later
+// segment seeded from it counts a worker's call as the run did.
 //
 // Mutation: record the call without what its work added, and a resumed run's
 // log is short of the worker's calls.
@@ -870,15 +852,14 @@ func (breakingTool) CallForTurn(_ context.Context, turn *turnctx.Turn, _ map[str
 	panic("the fan-out broke")
 }
 
-// AND IT RIDES THE RECORD OF A CALL THE BRIDGE ANSWERED IN ITS PLACE. A call
-// that panicked, and one whose tool asked to park a loop the box's harness does
-// not have, are recorded with an answer of the bridge's own; the run's log took
-// in what their own work recorded all the same, so their record carries it, or
-// a later segment's log is short of a worker's call the run's own counted.
+// AND IT RIDES THE RECORD OF A CALL THE BRIDGE ANSWERED IN ITS PLACE: one that
+// panicked, or whose tool asked to park a loop the box's harness lacks. The
+// run's log absorbed their work all the same, so their record carries it, or a
+// later segment's log is short of a worker's call the run counted.
 //
-// Mutation: answer a panicked or a parking call with a result that drops what
-// the call's work absorbed — or let the surface lose it to the panic — and the
-// record carries none of it.
+// Mutation: answer a panicked or parking call with a result that drops what its
+// work absorbed, or let the surface lose it to the panic, and the record
+// carries none of it.
 func TestWhatACallsOwnWorkRecordedRidesTheRecordTheBridgeAnswersInItsPlace(t *testing.T) {
 	t.Parallel()
 	want := toolloop.Called{Tool: "leave_channel", Digest: turnctx.ArgsDigest(map[string]any{"channel": "R"})}
@@ -949,21 +930,18 @@ func TestARunWithNoLedgerStillDispatches(t *testing.T) {
 
 // --- what the caller is offered --------------------------------------------
 
-// CLOSING A RUN ENDS THE MCP SESSIONS ITS BOX HOLDS, not only the bridge's
-// own map entry. The SDK keeps every session a box opened — transport,
-// server, and through the server's handlers the seat's live surface — until
-// the client sends a DELETE or an idle clock fires, and a box torn down
-// mid-run sends nothing. Left there, each executor run this process ever
-// served would pin its seat's surface for the life of the process.
+// CLOSING A RUN ENDS THE MCP SESSIONS ITS BOX HOLDS, not only the bridge's map
+// entry: the SDK keeps a session (and through its handlers the seat's live
+// surface) until a DELETE or an idle clock, and a box torn down mid-run sends
+// nothing, so every run served would pin its surface for the process's life.
 func TestClosingARunEndsTheBoxesOpenSessions(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	url := f.open(t)
 	sess := dial(t, url)
-	// AT LEAST one, not exactly one: the SDK client's capability probe
-	// (SEP-2575 server/discover, sent before initialize) opens a server
-	// session of its own that the SDK never retires — which is one more
-	// reason the close below has to reap everything the server holds.
+	// AT LEAST one: the SDK client's capability probe (SEP-2575
+	// server/discover, before initialize) opens a server session the SDK never
+	// retires, another reason the close must reap everything the server holds.
 	if n := f.session.Connections(); n == 0 {
 		t.Fatal("no MCP session on a run with a connected box")
 	}
@@ -979,12 +957,10 @@ func TestClosingARunEndsTheBoxesOpenSessions(t *testing.T) {
 	}
 }
 
-// A RUN OPENED AGAIN UNDER ITS OWN ID is a relaunch — a resumed executor
-// going back into a box under the turn id it already had — and the
-// coordinator deliberately does not end a run its own turn relaunched. So
-// the earlier session is closed HERE: a box still holding it must not keep a
-// working key to the surface the new run now owns, and nothing else would
-// ever release it.
+// A RUN OPENED AGAIN UNDER ITS OWN ID is a relaunch (a resumed executor back in
+// a box under its turn id), which the coordinator does not end. So the earlier
+// session is closed HERE: a box still holding it must not keep a working key to
+// the new run's surface, and nothing else would release it.
 func TestReopeningARunReplacesItsEarlierSession(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -1010,11 +986,10 @@ func TestReopeningARunReplacesItsEarlierSession(t *testing.T) {
 	}
 }
 
-// AND ITS TOKEN STOPS WORKING. Closing the transport only ends a connection
-// the box would reopen: it still holds a signed, unexpired URL, and while the
-// token's subject was the RUN id that URL resolved to whichever session the
-// run now had. The superseded box could then drive the new round's surface
-// and append to the durable call log the relaunch reset exists to clear —
+// AND ITS TOKEN STOPS WORKING. Closing the transport only ends a connection the
+// box would reopen with its signed, unexpired URL; a token naming only the RUN
+// would resolve to the run's new session, so the superseded box could drive
+// the new round's surface and append to the call log the relaunch reset clears,
 // re-delivering a message from a box nobody is collecting.
 func TestASupersededBoxsTokenNoLongerResolves(t *testing.T) {
 	t.Parallel()
@@ -1040,9 +1015,8 @@ func TestASupersededBoxsTokenNoLongerResolves(t *testing.T) {
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Errorf("a superseded box's token still reached a session: %d", res.StatusCode)
 	}
-	// The log tells the two misses apart, because only one is an operator's
-	// problem — and only the signed one may be warned about, on a route
-	// anyone can reach without a credential.
+	// The log tells the two misses apart: only the signed one is an operator's
+	// problem, and only it may be warned about on a credential-free route.
 	if _, reason := f.bridge.Miss(strings.TrimPrefix(stale, f.server.URL+mcpbridge.PathPrefix)); reason == "" {
 		t.Error("a superseded token resolved")
 	} else if !strings.Contains(reason, "relaunched") {
@@ -1050,19 +1024,16 @@ func TestASupersededBoxsTokenNoLongerResolves(t *testing.T) {
 	}
 }
 
-// A BOX'S TOKEN OUTLIVES THE PROCESS THAT MINTED IT. A detached run goes on
-// calling for as long as its harness runs, and the node it dials can restart in
-// the meantime: the new process holds no session until it takes the run's
-// seat back, and then it opens the run's JOB again — and the token the box
-// already holds, signed under the fleet's keyring, resolves to it. Nothing the
-// box was given names the process that gave it. And the run's calls go on in
-// its own order: the reopened session numbers them after the last one the
-// run's row records.
+// A BOX'S TOKEN OUTLIVES THE PROCESS THAT MINTED IT. A detached run calls for as
+// long as its harness runs, and the node may restart meanwhile: the new process
+// holds no session until it takes the run's seat back and opens the run's JOB
+// again, and the box's token, signed under the fleet keyring and naming no
+// process, resolves to it. The reopened session numbers calls after the last
+// one the run's row records.
 //
-// Mutation: name an opening by an id the opening process draws for itself, and
-// the restarted node refuses the box's every call for the rest of its run;
-// number a reopened session's calls from one, and they sort among the calls
-// made before the restart.
+// Mutation: name an opening by an id the process draws for itself and the
+// restarted node refuses the box's every call; number a reopened session's
+// calls from one and they sort among those made before the restart.
 func TestABoxsTokenOutlivesTheProcessThatMintedIt(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -1109,11 +1080,10 @@ func TestABoxsTokenOutlivesTheProcessThatMintedIt(t *testing.T) {
 	}
 }
 
-// A TOKEN THIS FLEET NEVER SIGNED IS NOT AN OPERATOR'S PROBLEM, and this
-// route is deliberately exempt from authentication — the box holds no API
-// token — so a warning per bad token is a log line anyone who can reach the
-// engine can write without limit. Only the half that takes the signing key to
-// produce may be warned about.
+// A TOKEN THIS FLEET NEVER SIGNED IS NOT AN OPERATOR'S PROBLEM, and the route is
+// exempt from authentication (the box holds no API token), so a warning per bad
+// token is a log line anyone can write without limit. Only a miss that took the
+// signing key to produce may be warned about.
 func TestOnlyASignedMissIsWorthWarningAbout(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -1156,9 +1126,8 @@ type jsonNumber string
 
 func (n jsonNumber) MarshalJSON() ([]byte, error) { return []byte(n), nil }
 
-// literal renders a decoded argument exactly, so a rounded float is visible
-// as one rather than being re-formatted back into the value it should have
-// been.
+// literal renders a decoded argument exactly, so a rounded float shows as one
+// rather than being re-formatted into the value it should have been.
 func literal(v any) string {
 	switch t := v.(type) {
 	case string:
@@ -1260,14 +1229,11 @@ func seatTurn() *turnctx.Turn {
 	}
 }
 
-// A TOKEN THIS FLEET SIGNED THAT NAMES NO SESSION HERE IS DIAGNOSABLE.
-//
-// The response deliberately cannot say why — forged, expired and "that run is
-// over" are three different facts, and naming one tells an attacker the same.
-// But the operator needs the difference in the log: a node that has joined no
-// fleet holds the only sessions it can answer for, and a signed token it holds
-// nothing for is a run that ended or one it has not taken back yet — never a
-// forgery.
+// A TOKEN THIS FLEET SIGNED THAT NAMES NO SESSION HERE IS DIAGNOSABLE in the
+// log, never the response: forged, expired and "that run is over" are three
+// facts, and naming one tells an attacker the same. A node that joined no fleet
+// holds the only sessions it can answer for, so a signed token it holds nothing
+// for is a run that ended or one not yet taken back, never a forgery.
 func TestAnUnresolvedTokenSaysWhyInTheLogNotTheResponse(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -1287,8 +1253,7 @@ func TestAnUnresolvedTokenSaysWhyInTheLogNotTheResponse(t *testing.T) {
 		t.Errorf("the reason does not say the node has no fleet to find the holder in: %q", reason)
 	}
 
-	// A FORGED token is the other reason, and it names no run — telling
-	// the two apart is the whole point.
+	// A FORGED token is the other reason, and names no run.
 	forgedID, forgedReason := peer.Miss("v1.run-1.9999999999.notasignature")
 	if forgedID != "" {
 		t.Errorf("a forged token resolved to run %q", forgedID)
@@ -1313,12 +1278,10 @@ func (f *fixture) token(t *testing.T, runID string) string {
 	return tok
 }
 
-// TestTheBridgeAdvertisesTheHintsTheRegistryHolds is the finding. Every tool
-// the bridge served carried a name, a description and a schema and nothing
-// else — so a harness's own MCP client saw `read_page` and
-// `post_message` as identically unannotated, with nothing to ask a person on
-// before an irreversible call. The registry had carried both decisions the
-// whole time; the edge that hands the catalogue out dropped them.
+// TestTheBridgeAdvertisesTheHintsTheRegistryHolds: a harness's MCP client can
+// ask a person before an irreversible call only from them, so the bridge
+// advertises the read-only and open-world decisions the registry holds, not a
+// bare name, description and schema.
 func TestTheBridgeAdvertisesTheHintsTheRegistryHolds(t *testing.T) {
 	t.Parallel()
 	sess := dial(t, newFixture(t).open(t))

@@ -26,10 +26,9 @@ import (
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
-// atlasLedger is the atlas's log as the write tools reach it, in memory: every
-// claim recorded in order, each replacing its voice's older claim on its slot
-// as the domain's applier does, an entry's version the position of its newest
-// claim, and every operation answered once.
+// atlasLedger is the atlas's log in memory: each claim replaces its voice's
+// older claim on its slot as the domain's applier does, an entry's version is
+// the position of its newest claim, and every operation is answered once.
 type atlasLedger struct {
 	mu       sync.Mutex
 	claims   []atlas.Claim
@@ -77,8 +76,8 @@ func (l *atlasLedger) Record(_ context.Context, c atlasdomain.Call, claim atlas.
 	ifMatch uint64) (statelog.Result, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	// THE OPERATION IS HELD TO THE RULE THE LOG'S WRITER HOLDS IT TO, so a
-	// step whose id outgrows it is refused here as it is there.
+	// Held to the log writer's operation-id rule, so a step whose id outgrows
+	// it is refused here as there.
 	if err := statelog.CheckCallerOpID(c.OpID); err != nil {
 		return statelog.Result{}, fmt.Errorf("%w: the operation id %w", atlasdomain.ErrInvalid, err)
 	}
@@ -313,9 +312,8 @@ func entryNamed(t *testing.T, a atlasAnswer, ref atlas.Ref) atlas.Entry {
 }
 
 // A PERSON'S WRITE IS A CLAIM IN THEIR OWN NAME THAT THE ATLAS THEN SHOWS: an
-// entry added with its name, a value set that outranks nothing yet, a relation
-// drawn, each read back through atlas_search's own read, and a value corrected
-// by the person replacing their own earlier one.
+// added entry, a value, a relation, each read back through atlas_search, and a
+// correction replacing the person's own earlier value.
 //
 // Mutation: fold no log into the atlas's read (gather's Log source) and the
 // added entry is never shown.
@@ -360,11 +358,12 @@ func TestAPersonsAtlasWriteIsTheirClaimAndTheAtlasShowsIt(t *testing.T) {
 	}
 }
 
-// A FACT THE SETTINGS DECLARE IS CHANGED THERE, NEVER IN THE ATLAS: the two share
-// the top rank, so a claim beside a declaration would decide by whichever was
-// newer. A server the settings declare is not retired, its address not called
-// wrong, and an entry the engine names is not added by hand; what the settings
-// leave unsaid is a person's to say.
+// A FACT THE SETTINGS DECLARE IS CHANGED THERE, NEVER IN THE ATLAS: the two
+// share the top rank, so a claim beside a declaration would decide by whichever
+// is newer.
+// A declared server is not retired or its address called wrong, an entry the
+// engine names is not added by hand; what the settings leave unsaid is a
+// person's to say.
 //
 // Mutation: drop the declared check from planCorrect and the address is
 // called wrong.
@@ -915,15 +914,12 @@ func unreadBy(got tools.Result) (bool, string) {
 }
 
 // A PERSON'S WRITE WAITS ONLY ON THE SOURCES THAT DESCRIBE ITS ENTRIES. With
-// Gitlet unreachable, and with the usage history and the access log not
-// answering, a person still adds a service, corrects it, sets its owner,
-// relates it, retires and restores it, merges and splits it: none of those
-// sources states a fact of a service or of a server a person keyed. Only a
-// change about a Gitlet repository waits on Gitlet, and it says so by name.
+// Gitlet, the usage history and the access log down, every write of the sweep
+// still lands: none of them states a fact of a service or of a server a person
+// keyed. Only a change about a Gitlet repository waits on Gitlet, by name.
 //
-// Mutation: refuse a write while ANY source answered in part (the rule this
-// replaces) and every call of the sweep is refused, one unreachable Gitlet
-// node closing the whole atlas to everybody.
+// Mutation: refuse a write while ANY source answered in part and every call of
+// the sweep is refused, one unreachable Gitlet node closing the whole atlas.
 func TestAnAtlasWriteWaitsOnlyOnTheSourcesThatDescribeItsEntries(t *testing.T) {
 	t.Parallel()
 	ledger := seededAtlasLedger()
@@ -933,9 +929,9 @@ func TestAnAtlasWriteWaitsOnlyOnTheSourcesThatDescribeItsEntries(t *testing.T) {
 		func(context.Context) gather.Sources {
 			return gather.Sources{Log: ledger, Usage: downUsage{}, AccessLog: downAccessLog{}}
 		})
-	// THE READ SAYS WHAT IT COULD NOT READ, so the case is the one it claims.
-	// As the administrator the writes below are made by, who uses Gitlet: to
-	// a reader who does not, Gitlet is unread because it is not theirs.
+	// The read must name what it could not read, so the case is the one it
+	// claims. Read as the writes' administrator, who uses Gitlet: to a reader
+	// who does not, Gitlet is unread because it is not theirs.
 	admin := iam.WithPrincipal(context.Background(), atlasAdmin())
 	unread := map[gather.SourceName]string{}
 	for _, c := range searchAtlas(admin, t, w[builtin.AtlasSearchTool], map[string]any{"limit": 500}).Coverage {

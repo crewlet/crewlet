@@ -25,8 +25,8 @@ func turnedOff(shared bool) string {
 }
 
 // A SERVER TURNED OFF IS NEVER STARTED AND GRANTED TO NOBODY, shared or one per
-// seat, while every block that names it stays in the document: the seats'
-// mcp_env blocks for it are declared, validated and kept, and start nothing.
+// seat, while the seats' mcp_env blocks naming it are validated, kept and start
+// nothing.
 func TestAServerTurnedOffIsNeverStartedOrGranted(t *testing.T) {
 	t.Parallel()
 	for _, shared := range []bool{true, false} {
@@ -46,8 +46,8 @@ func TestAServerTurnedOffIsNeverStartedOrGranted(t *testing.T) {
 				t.Errorf("the epoch's catalogue lists a server turned off: %v", names)
 			}
 			// NOT ON THE STATUS RECORD: nothing was started, failed or held
-			// back for it, so the node has nothing to say, and the fleet's
-			// answer reads the configuration to call it disabled.
+			// back; the fleet's answer reads the configuration to call it
+			// disabled.
 			if row, reported := statusOf(e, "tracker"); reported {
 				t.Errorf("the status record reports a server turned off: %+v", row)
 			}
@@ -68,9 +68,8 @@ func TestAServerTurnedOffIsNeverStartedOrGranted(t *testing.T) {
 }
 
 // TURNING A SERVER OFF RETIRES WHAT IT RAN, on the apply, and turning it back
-// on starts it again with the credentials its seats kept. Off is a change to
-// the revision like any other: a child holding the company's or a seat's
-// credentials must not outlive the decision to stop it.
+// on starts it again with the credentials its seats kept: a child holding the
+// company's or a seat's credentials must not outlive the decision to stop it.
 func TestTurningAServerOffRetiresItsChildrenAndOnStartsThemAgain(t *testing.T) {
 	t.Parallel()
 	for _, shared := range []bool{true, false} {
@@ -113,11 +112,8 @@ func TestTurningAServerOffRetiresItsChildrenAndOnStartsThemAgain(t *testing.T) {
 	}
 }
 
-// waitSurface waits for one seat's surface to hold the tracker's tool, or not.
-//
-// A seat's children are reconciled by its own pass, which an apply asks for
-// and does not wait on, so its surface follows the revision shortly after the
-// apply returns.
+// waitSurface waits for one seat's surface to hold the tracker's tool, or not:
+// an apply asks for the seat's own pass and does not wait on it.
 func waitSurface(t *testing.T, e *engine.Engine, handle string, want bool) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
@@ -131,10 +127,9 @@ func waitSurface(t *testing.T, e *engine.Engine, handle string, want bool) {
 		handle, !want, want, surfaceOf(t, e, handle))
 }
 
-// A SERVER'S DESCRIPTION IS LISTED BESIDE ITS NAME, which is all a seat's turn
-// is shown of a server before it asks for the server's tools. An edit to it
-// reaches the next turn without restarting the server: what a server is for
-// is nothing its process reads.
+// A SERVER'S DESCRIPTION IS LISTED BESIDE ITS NAME, all a seat's turn sees of
+// a server before asking for its tools, and an edit to it reaches the next turn
+// without restarting the server, whose process never reads it.
 func TestAServerDescriptionIsListedBesideItsName(t *testing.T) {
 	t.Parallel()
 	for _, shared := range []bool{true, false} {

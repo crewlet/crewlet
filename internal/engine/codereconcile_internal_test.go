@@ -94,26 +94,17 @@ func logLines(t *testing.T, buf *bytes.Buffer) map[string][]map[string]any {
 }
 
 // A FAILURE THE WHOLE RECONCILE SHARES IS LOGGED ONCE, AND NO DELETION FOLLOWS
-// IT.
-//
-// When the declarations' decide meets a failure every one of them shares — a
-// later activation's fence, this node's refusal by the code log, the apply's
-// context ending — EnsureRepos answers it as the call's error and as every
-// undecided declaration's answer. Logged a declaration, that was up to ten
-// thousand identical lines on every data node at every activation; and the
-// deletions after it met the same failure, each after a wait of its own. So it
-// is one line — code_repos_not_applied, or code_repos_superseded for a later
-// fence — and no DeleteRepos call. A declaration decided before the stop keeps
-// its own line, and one the deletions' own shared failure stops is said once
-// too.
-//
-// A reconcile ENDED — by a newer activation's request or the engine stopping
-// ([codeReconciler]) — meets its context's end at every decision, and is said
-// once as what ended it: superseded, or interrupted, never a failure.
+// IT: EnsureRepos answers a failure every declaration shares (a later fence,
+// the code log's refusal, the context ending) as the call's error and each
+// undecided declaration's. It is one line, code_repos_not_applied or
+// code_repos_superseded, not ten thousand on every data node, and no
+// DeleteRepos call, which would meet it again; a declaration decided before
+// keeps its own line, the deletions' own shared failure is said once, and an
+// ENDED reconcile ([codeReconciler]) is said once as superseded or interrupted.
 //
 // Mutation: log every result's error and the shared one is said a thousand
-// times; go on to the deletions after it and DeleteRepos is called; log an
-// ended reconcile's bare cancellation and it reads as a failure.
+// times; go on to the deletions and DeleteRepos is called; log an ended
+// reconcile's bare cancellation and it reads as a failure.
 func TestAFailureTheWholeReconcileSharesIsLoggedOnce(t *testing.T) {
 	t.Parallel()
 	owners, repos, lives := reconcileFixture(t, 1_000)
@@ -210,10 +201,9 @@ func TestAFailureTheWholeReconcileSharesIsLoggedOnce(t *testing.T) {
 	})
 }
 
-// WHAT A RECONCILE WROTE IS ONE LINE OF COUNTS AND A FEW NAMES: the first
-// activation of ten thousand repositories creates all of them, and a line
-// naming each is over 300 KB — past the line a log pipeline carries whole — so
-// each kind of write is its count and its first codeReposLoggedNames names.
+// WHAT A RECONCILE WROTE IS ONE LINE OF COUNTS AND A FEW NAMES: a line naming
+// ten thousand creates is over 300 KB, past what a log pipeline carries whole,
+// so each kind of write is its count and its first codeReposLoggedNames names.
 func TestWhatAReconcileWroteIsCountedAndNamedInPart(t *testing.T) {
 	t.Parallel()
 	owners, repos, _ := reconcileFixture(t, 100)
@@ -243,19 +233,14 @@ func TestWhatAReconcileWroteIsCountedAndNamedInPart(t *testing.T) {
 }
 
 // A RECONCILE ANSWERS WHAT IT LEFT UNDONE THAT RUNNING IT AGAIN CAN DO, AND
-// NOTHING ELSE — which is what its reconciler runs it again for.
-//
-// Left undone, and run again: a fence the log did not raise, a failure every
-// repository shared, a repository whose outcome the log did not answer, a
-// deletion that failed, and the deletions a failed walk of the rows skipped.
-// Not run again, because running it again changes nothing: a later
-// activation's fence or row (the later activation's reconcile owns them), the
-// engine stopping or a newer request ending it (the next boot, or the newer
-// reconcile, decides every repository), a purge to wait out (the
-// code-retention duty declares the name when it completes), a name another
-// manager holds, and a declaration the code log refuses as written — an owner
-// the chart does not resolve among them — each of which waits for a revision
-// that changes it.
+// NOTHING ELSE. Run again: a fence the log did not raise, a failure every
+// repository shared, an outcome the log did not answer, a failed deletion, and
+// the deletions a failed walk skipped. Not, since another run changes nothing:
+// a later activation's fence or row (its reconcile owns them), the stop or a
+// newer request ending it (the next boot or the newer reconcile decides every
+// repository), a purge to wait out (the code-retention duty declares the name
+// when done), a name another manager holds, and a declaration the log refuses
+// as written, an unresolved owner among them: each waits for a revision.
 //
 // Mutation: answer every failure and a superseded reconcile is run again for
 // ever; answer none and the reconciler never runs one again.

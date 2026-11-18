@@ -15,15 +15,12 @@ import (
 )
 
 // A COLLEAGUE'S ASK IS ANSWERED BY THE FRAME THAT ENDS THE TURN, WHEREVER IT
-// ENDS.
-//
-// Every agent seat's turn launches its executor and parks on the run, and the
-// segment that ends it is resumed off the seat's control topic — or closed by a
-// person's stop of the run — on a frame that never saw the ask. Answered only
-// from the dispatch frame, which answers nothing for a turn that parked, every
-// a2a_ask to an agent seat went unanswered and its channel waited for the idle
-// sweep. These cases drive the real path: the ask the a2a service publishes,
-// the dispatch that parks on the launch, and the run's collection or its stop.
+// ENDS: an agent seat's turn parks on its executor's run, the dispatch frame
+// that parked answers nothing, and the segment that ends it (a resume off the
+// seat's control topic, or a person's stop) never saw the ask; missed there,
+// the ask goes unanswered and its channel waits for the idle sweep. These cases
+// drive the real path: the ask the a2a service publishes, the dispatch that
+// parks on the launch, and the run's collection, stop or loss.
 
 // askingCompany is spendingEngine's company with an agent seat that asks swe,
 // and room under the delegation cap for the ask's own hop.

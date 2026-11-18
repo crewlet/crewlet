@@ -19,34 +19,18 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// Text somebody else wrote, as a read tool hands it to a model.
-//
-// A read that answers a page body, a work item's description or comments, or a
-// project file hands a model words a colleague, a person or an outside party
-// wrote, and a model reads every word of its context as a possible
-// instruction. So each of those reads answers through a [foreignRead]:
-//
-//   - the long text fields (a body, a comment, a file's content) go out inside
-//     a [provenance.Fence] carrying the turn's boundary, the surface and the
-//     writers, at the trust those writers earn from the reader;
-//   - EVERY OTHER STRING in the answer, titles, option labels, revision notes,
-//     history excerpts and custom-field values alike, is neutralised
-//     ([provenance.Neutralise]), so no field outside a fence can open or close
-//     one. That is done over the encoded answer rather than field by field, so
-//     a field added to a record later is covered without anybody remembering
-//     it here, and so a value that spells a bracket as a JSON escape is
-//     judged as the character it decodes to;
-//   - the answer carries a `provenance` envelope beside its fields: the least
-//     trust of its fences, every writer once, and the note that trust carries
-//     for a reader that never saw the seat prompt's standing sentence.
-//
-// The writers are resolved against the turn's chart where a record names a
-// handle without a kind, so a page revision by a person reads `human:ana` and
-// a revision by a seat the chart no longer has still reads as a colleague's.
-//
-// It fails closed. A fence registered for a field the answer does not hold is
-// a tool's own bug, and the answer is refused rather than sent with that text
-// unlabelled somewhere else.
+// Text somebody else wrote, as a read tool hands it to a model, which reads
+// every word of its context as a possible instruction (ADR-0040). A read of a
+// page body, a work item's text or a project file answers through a
+// [foreignRead]: its long text fields go inside a [provenance.Fence] naming
+// the turn's boundary, the surface and the writers; EVERY OTHER STRING is
+// neutralised ([provenance.Neutralise]) so none can open or close a fence,
+// over the encoded answer rather than field by field, so a field added later
+// is covered and a JSON-escaped bracket is judged as the character it decodes
+// to; and a `provenance` envelope carries the least trust, every writer once,
+// and that trust's note for a reader that never saw the seat prompt's standing
+// sentence. It fails closed: a fence registered for a field the answer lacks
+// is the tool's bug, and the answer is refused rather than sent unlabelled.
 
 // foreignRead is one read answer's provenance as its tool assembles it.
 type foreignRead struct {
@@ -70,17 +54,12 @@ func newForeignRead(turn *turnctx.Turn, self string) *foreignRead {
 	return r
 }
 
-// writer is a recorded writer as a fence names them.
-//
-// A record that keeps a kind beside the handle is taken at its word, with one
-// exception: an operator credential's login is never a seat, so it is not
-// printed as one. A record that keeps only the handle (a page revision, a work
-// item's body author, a file's writer) is resolved against the turn's chart;
-// a handle the chart does not hold is a seat that has left it when it is
-// shaped like a seat handle, and a credential's login otherwise. An empty
-// handle with no kind is a writer nobody recorded: on the surfaces these reads
-// are of, that is a colleague nobody named ([foreignRead.label]), never an
-// outside party.
+// writer is a recorded writer as a fence names them. A recorded kind is taken
+// at its word, except that an operator credential's login is never printed as
+// a seat. A bare handle is resolved against the turn's chart; one the chart
+// lacks is a departed seat when shaped like a seat handle, else a credential's
+// login. An empty handle with no kind is a writer nobody recorded, which on
+// these surfaces is a colleague ([foreignRead.label]), never an outside party.
 func (r *foreignRead) writer(handle string, kind iam.ActorKind) provenance.Author {
 	handle = strings.TrimSpace(handle)
 	switch kind {
@@ -107,14 +86,10 @@ func (r *foreignRead) writer(handle string, kind iam.ActorKind) provenance.Autho
 }
 
 // label is what text by writers, read from src, is fenced under for this
-// reader: partial when the record says other writers it does not name had a
-// hand in it.
-//
-// EVERY READ HERE IS OF A SURFACE THE ENGINE HOSTS — its own tracker, knowledge
-// base, chat, artifacts and project files — so the label is the one rule every
-// door to such a surface reads by ([provenance.LabelForHosted]): a writer the
-// record does not name is a colleague, never an outside party, exactly as the
-// same text reads when it wakes a seat or comes back as a search hit.
+// reader: partial when the record says writers it does not name had a hand in
+// it. Every read here is of a surface the engine hosts, so it takes the one
+// rule every door to such a surface reads by ([provenance.LabelForHosted]): an
+// unnamed writer is a colleague, never an outside party.
 func (r *foreignRead) label(src provenance.Source, writers []provenance.Author,
 	partial bool) provenance.Label {
 
@@ -143,11 +118,10 @@ func (r *foreignRead) adopt(label provenance.Label) {
 	}
 }
 
-// name adds w to the envelope's writers once. ONE SEAT IS ONE WRITER, whether
-// a record named its kind or only its handle: outside a turn there is no chart
-// to resolve a bare handle against, and an envelope listing `agent-cto` and
-// `agent:agent-cto` side by side would read as two people. The kinded entry
-// wins, because it says more.
+// name adds w to the envelope's writers once. ONE SEAT IS ONE WRITER, kinded
+// or bare: outside a turn no chart resolves a bare handle, and `agent-cto`
+// beside `agent:agent-cto` would read as two people. The kinded entry wins,
+// because it says more.
 func (r *foreignRead) name(w provenance.Author) {
 	for i, held := range r.writers {
 		switch {
@@ -176,11 +150,11 @@ func (r *foreignRead) fence(path fieldPath, src provenance.Source,
 	r.fences[path.id()] = r.label(src, writers, partial).Fence(r.boundary, text)
 }
 
-// fenceRepository registers the string at path in the answer as text read
-// out of a repository, or printed by a check of one of its commits, from src,
-// by [provenance.Repository]: naming nobody, at the least trust. Never
-// [foreignRead.fence], whose rule is a hosted surface's, which reads a text
-// nobody named as a colleague's. Empty text is not fenced.
+// fenceRepository registers the string at path as text read out of a
+// repository, or printed by a check of one of its commits, from src, by
+// [provenance.Repository]: naming nobody, at the least trust. Never
+// [foreignRead.fence], whose hosted rule reads an unnamed writer as a
+// colleague. Empty text is not fenced.
 func (r *foreignRead) fenceRepository(path fieldPath, src provenance.Source, text string) {
 	r.fenceLabelled(path, provenance.Repository(src), text)
 }
@@ -227,19 +201,13 @@ func (r *foreignRead) envelope() (provenance.Envelope, bool) {
 	return provenance.NewEnvelope(provenance.Least(r.trusts...), r.writers), true
 }
 
-// answer renders v as the tool's answer: every string neutralised, every
-// registered field fenced, and the envelope beside the top-level fields. v
-// must encode as a JSON object.
-//
-// AND v AS A PERSON READS IT, beside the model's answer
-// ([tools.Result.PersonReceipt]): the same fields as they were stored, with no
-// fence, no escape and no envelope, encoded as every other answer is
-// ([encodeAnswer]). The labels are for a model, which reads every word as a
-// possible instruction (ADR-0040); a person's surface answering the receipt
-// shows the words, and could not take the labels back off the model's answer,
-// whose escapes do not undo. Here rather than at each tool, and on a read's
-// answer as on a write's, so a receipt that comes to echo somebody's words
-// carries it without anybody remembering to add it.
+// answer renders v, which must encode as a JSON object, as the tool's answer:
+// every string neutralised, every registered field fenced, and the envelope
+// beside the top-level fields. It also sets [tools.Result.PersonReceipt] to v
+// as stored, unfenced and unescaped ([encodeAnswer]): the labels are for a
+// model, and a person's surface could not strip them back off, since the
+// escapes do not undo. Done here rather than at each tool, for reads and
+// writes alike, so no tool has to remember it.
 func (r *foreignRead) answer(ctx context.Context, tool string, v any, narrowWith string) (tools.Result, error) {
 	plain, err := encodeAnswer(v)
 	var rendered json.RawMessage
@@ -276,15 +244,10 @@ func labelFault(ctx context.Context, tool string, err error) tools.Result {
 }
 
 // render is [foreignRead.answer]'s encoding, kept apart so its refusals are
-// errors a caller can wrap.
-//
-// EVERY STRING IT WRITES IS WRITTEN AS [encodeAnswer] WRITES ONE, through
-// [plainjson]: a fenced answer is the same tool answer as any other, and the
-// encoder it is finally handed to compacts a raw value rather than decoding
-// it, so a body written here with `json.Marshal`'s `\u003c` reached the model
-// as the escape — a fenced page of markup read as escape soup, and weighed
-// against [ToolAnswerBytes] at six bytes a bracket, exactly what the plain
-// encoding exists to stop.
+// errors a caller can wrap. Every string goes through [plainjson], as
+// [encodeAnswer] writes one: the final encoder compacts a raw value rather than
+// decoding it, so `json.Marshal`'s `\u003c` would reach the model as the
+// escape and weigh six bytes a bracket against [ToolAnswerBytes].
 func (r *foreignRead) render(v any) (json.RawMessage, error) {
 	data, err := plainjson.Marshal(v, "")
 	if err != nil {

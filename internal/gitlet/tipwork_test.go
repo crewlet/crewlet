@@ -11,22 +11,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// TIP CHECKS RUN ON A PERSON'S DIRECT LANDING (ADR-0098): a person's own push
-// onto a protected branch whose gate requires a check lands with no check
-// having measured it, so it lies above the branch's green row — and the
-// home's `checks_due` listing names the repository and, on its first page,
-// the branch's tip work: no green yet, the check its gate requires, and the
-// push's landing, from main's A to ada's Y, ending its record — what the home
-// dispatches the tip's checks from. Once unit failed there and the bisect's
-// broken record names the landing, the node that landed the record announces
-// ONE code_target_broken naming ada's push and unit, and the branch owes its
-// home nothing more. The same push onto a branch whose gate requires no check
-// is green as it lands, and owes its home nothing.
+// TIP CHECKS RUN ON A PERSON'S DIRECT LANDING (ADR-0098): a person's push onto
+// a protected branch whose gate requires a check lies above its green row, and
+// the home's `checks_due` listing names the repository and, on its first page,
+// the branch's tip work: no green yet, the required check, and the push's
+// landing from A to Y, ending its record. Once unit failed there and the
+// bisect's broken record names the landing, the landing node announces ONE
+// code_target_broken naming ada's push and unit, and the branch owes nothing
+// more; nor does the same push under a gate requiring no check, green as it lands.
 //
-// Mutation: answer no tip work on a repository's first page (dueCheckWork
-// skips dueTips) — ada's landing is never checked, red; list no repository
-// for its tips alone — the backstop never reaches it, red; or announce no
-// broken landing, red.
+// Mutation: dueCheckWork skips dueTips (ada's landing never checked), list no
+// repository for its tips alone (the backstop never reaches it), or announce
+// no broken landing: red.
 func TestTipChecksRunOnAPersonsDirectLanding(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -121,20 +117,16 @@ func tipsDue(t *testing.T, n *node, repo string) ([]string, []gitlet.TipDue) {
 	return repos.DueRepos, work.DueTips
 }
 
-// A TIP WINDOW KEEPS ITS NEWEST, AND CALLS A GAP ONLY A GAP (ADR-0098): a
-// target's tip work reads at most its window's bound of landings above its
-// green — two here, where the shipped bound is MaxTipLandings — and then its
-// newest, the tip a dispatch reaches. Three of ada's pushes onto main are one
-// more than the window holds, and that one is the newest: it follows the
-// window with no landing between, so the work reads all three, oldest first,
-// with no gap, and a bisect may name the newest as it would any landing. A
-// fourth push leaves one landing unread between the window and the newest:
-// the work reads the oldest two and the newest, ending its record, and says
-// More, which is what keeps a bisect from naming a tip across that gap.
+// A TIP WINDOW KEEPS ITS NEWEST, AND CALLS A GAP ONLY A GAP (ADR-0098): tip
+// work reads at most its window's bound of landings above the green (two here,
+// MaxTipLandings shipped), then its newest, the tip a dispatch reaches. Three
+// pushes are one past the window, and that one is the newest: all three read
+// with no gap, so a bisect may name the newest. A fourth leaves one landing
+// unread between: the oldest two and the newest read, the newest ending its
+// record, and More set, which keeps a bisect from naming a tip across the gap.
 //
-// Mutation: say More whenever the window is cut — the three read with a gap,
-// red; or drop the newest past the window — the fourth push never
-// dispatched, red.
+// Mutation: say More whenever the window is cut (the three read with a gap),
+// or drop the newest past the window (the fourth push never dispatched): red.
 func TestATipWindowKeepsItsNewestAndCallsAGapOnlyAGap(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -186,17 +178,15 @@ func TestATipWindowKeepsItsNewestAndCallsAGapOnlyAGap(t *testing.T) {
 }
 
 // A GREEN MOVES IN ONE RECORD WHATEVER LIES BENEATH IT (ADR-0098): a landing
-// is green by its place — at or below its target's green row — never by a
-// mark of its own, so a green record moves the one row however many unproven
-// landings a red tip left above it. Four of ada's pushes land on main with
-// nothing proving them, the target owes its home its tip work, and once unit
-// passed on the newest a green record naming it is RECORDED — never refused
-// for the landings beneath it — moves main's green row onto that landing,
-// and leaves the target owing nothing and its repository unlisted.
+// is green by its place, never a mark of its own, so a green record moves the
+// one row however many unproven landings a red tip left. Four unproven pushes
+// land on main; once unit passed on the newest, a green record naming it is
+// RECORDED (never refused for the landings beneath), moves main's green row
+// onto it, and leaves the target owing nothing and its repository unlisted.
 //
-// Mutation: refuse a green past a cap on the landings beneath it (the
-// record_full a green once met) — red; or leave the target's row of tip work
-// where a green moves past every landing — the repository still listed, red.
+// Mutation: refuse a green past a cap on the landings beneath it (record_full),
+// or leave the target's row of tip work where a green moves past every landing
+// (the repository still listed): red.
 func TestAGreenMovesInOneRecordWhateverLiesBeneathIt(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -236,14 +226,13 @@ func TestAGreenMovesInOneRecordWhateverLiesBeneathIt(t *testing.T) {
 
 // A TIP ROUND IN FLIGHT IS READ WHEREVER IT IS (ADR-0098): the home dispatches
 // a target's newest landing only once no tip round on another of its commits
-// is still queued or running, so a target's tip work names that round's
-// commit — read by its own index, past the window as much as inside it. Three
-// of ada's pushes land on main past a window of one: the work reads B and D
-// with C in the gap. A tip attempt queued on D, the newest, is no round the
-// newest waits for; one running on C, which the window does not read, is.
+// is queued or running, so tip work names that round's commit, read by its own
+// index, past the window too. Three pushes past a window of one read B and D,
+// C in the gap: an attempt queued on D, the newest, is no round it waits for;
+// one running on C, unread by the window, is.
 //
-// Mutation: read the round without leaving out the newest's own commit — D's
-// attempt named, red; or read no round at all — C's never named, red.
+// Mutation: leave the newest's own commit in the round's read (D named), or
+// read no round at all (C never named): red.
 func TestATipRoundInFlightIsReadWhereverItIs(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -282,15 +271,14 @@ func TestATipRoundInFlightIsReadWhereverItIs(t *testing.T) {
 }
 
 // A TARGET PAST THE PAGE IS ANSWERED ON THE NEXT PAGE (ADR-0098): main and
-// release each owe their tip work, and a page holds one target's. The first
-// page answers main — the target that fills it is answered, never dropped —
-// and names it as where it ended; the next, asked after it, answers release;
-// the one after that answers no tip and names nowhere more, so the home's
-// turn ends with both answered, each once.
+// release each owe tip work, and a page holds one target's. The first page
+// answers main (the target that fills a page is answered, never dropped) and
+// ends there; the next, asked after it, answers release; the third answers no
+// tip and ends, so the home's turn answers both, each once.
 //
 // Mutation: ask whether the page is full before answering the target that
-// fills it — main never answered, red; or go on from the start whatever the
-// page before ended at — main answered again and release never, red.
+// fills it (main never answered), or restart whatever the page before ended at
+// (main answered again, release never): red.
 func TestATargetPastThePageIsAnsweredOnTheNextPage(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

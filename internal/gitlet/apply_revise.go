@@ -11,26 +11,18 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// applyRevise writes a revision's facts ([Revise]) — the row of its revision,
-// its trees, its classes and its home's matches among them, the facts of
-// another target it replaces where the change was retargeted, or of an
-// earlier tip or an earlier match, and when its home measured them — and asks
-// each reviewer the record names as a path owner's, with the globs each ask is
-// for, a participant of the change, where the change holds no ask of them: the
-// decide asked only those whose ask it did not hold, and the broker's
-// arbitration on the change's subject applies the record against the rows that
-// decide read, so a conflict is a record the ledger would have collapsed, met
-// again, and a skip. The conversation's text_bytes moves by
-// what the facts' wide columns weigh, less what the row they replace weighed,
-// so a purge weighs the change's subject's wide rows by its one narrow row.
-//
-// And it asks each reviewer the record's routing asks to look again
-// ([ChangeRouting.ReReview]) for a review once more, where their review
-// answered their ask.
-//
-// PURE IN THE RECORD, its position and the prior rows, as every apply here:
-// whom the facts ask, skip and wake rides the record, stamped by the writer
-// from its chart, and nothing is judged again.
+// applyRevise writes a revision's facts ([Revise]): its row, trees, classes and
+// its home's matches, replacing the same revision's earlier target, tip or
+// match, and when its home measured them. It asks each path owner the record
+// names, with the globs each ask is for, as a reviewer and a participant where
+// the change holds no ask of them: the decide asked only those, and the
+// subject's arbitration applies the record against the rows the decide read,
+// so a conflict here is a record met again, and a skip. text_bytes moves by the
+// wide columns less the replaced row's, so a purge weighs the subject's wide
+// rows from its one narrow row. It re-asks each reviewer [ChangeRouting.ReReview]
+// names whose review answered their ask. Pure in the record, its position and
+// the prior rows, as every apply here: whom it asks, skips and wakes rides the
+// record, stamped from the writer's chart.
 func applyRevise(ctx context.Context, tx *sql.Tx, at applyContext, r Revise) (int, conversationCounts, error) {
 	prior, held, err := factsIn(ctx, tx, r.ChangeID, r.N)
 	if err != nil {
@@ -71,8 +63,8 @@ func applyRevise(ctx context.Context, tx *sql.Tx, at applyContext, r Revise) (in
 		}
 		globs[i] = string(encoded)
 	}
-	// THE OWNERS ASKED AND THEIR PARTICIPANT ROWS, A COLLECTION EACH, as an
-	// ask for review writes its own.
+	// The owners asked and their participant rows, one collection each, as an
+	// ask for review writes them.
 	if _, err = store.InsertRows(ctx, tx, at.maxVariables, askPathOwnersSQL,
 		`(?, ?, ?, ?, ?, '', '', '', ?, ?, ?)`, `ON CONFLICT (change_id, reviewer) DO NOTHING`, len(r.Asked),
 		func(i int) []any {
@@ -87,13 +79,10 @@ func applyRevise(ctx context.Context, tx *sql.Tx, at applyContext, r Revise) (in
 		return 0, conversationCounts{}, err
 	}
 	rows += 2 * len(r.Asked)
-	// THE REVIEWERS ASKED TO LOOK AGAIN are waited on again: a reviewer whose
-	// review answered their ask, and whose standing verdict asks for changes
-	// on an earlier revision, owes the change a review of this one — the
-	// re_review its routing carries, the one copy of whom it names. A
-	// reviewer nobody asked gains no ask, and one whose ask was withdrawn
-	// keeps that word; a record with no routing concerns nobody, so it asks
-	// nobody again.
+	// Re-ask whom re_review names (its one copy): their review answered their
+	// ask with changes requested on an earlier revision. moveAsks moves only a
+	// reviewed ask, so nobody unasked gains one and a withdrawn ask stays
+	// withdrawn; no routing re-asks nobody.
 	var again []string
 	if r.Routing != nil {
 		again = r.Routing.ReReview

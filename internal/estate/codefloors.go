@@ -7,22 +7,16 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// repoFloors is how far this node's own writes reached in each repository:
-// per repository, the furthest position a write of this node to it landed at
-// — a push, a compaction, an expunge record, a change's write or a lifecycle
-// request it proposed that applied or is pending, a push it proposed found
-// landed, an engine write it asked that applied or is pending — which
-// [CodeSeam.FloorOf] answers. Nothing else raises an entry: a read's position
-// is somebody else's writes.
+// repoFloors is, per repository, the furthest position a write of THIS node
+// to it landed at (applied or pending), which [CodeSeam.FloorOf] answers. A
+// read's position never raises an entry: it is somebody else's writes.
 //
-// BOUNDED at [maxRepoFloors] repositories: past it the entry at the LOWEST
-// position goes, the write likeliest to be held by every copy already. A
-// repository with no entry floors nothing, which costs a read whose copy
-// lacks a commit this node pushed there one sync at the log's head — the Gitlet
-// node's second look for an id its copy lacks (internal/gitlet/query) — and
-// never a wrong answer. Unbounded, the map would hold every repository the
-// node ever wrote, purged ones and a seat's scratch repositories included,
-// for its whole life.
+// Bounded at [maxRepoFloors]: past it the LOWEST entry goes, the write
+// likeliest already held by every copy. A missing entry costs a read whose
+// copy lacks this node's push one sync at the log's head (the Gitlet node's
+// second look for an id its copy lacks, internal/gitlet/query), never a wrong
+// answer; unbounded, the map would keep every repository the node ever wrote,
+// purged and scratch ones included.
 //
 // The zero value holds nothing and is ready to use.
 type repoFloors struct {
@@ -30,16 +24,14 @@ type repoFloors struct {
 	at map[string]statelog.Position
 }
 
-// maxRepoFloors is how many repositories' floors a node keeps: the most
-// repositories one company document declares (config.CodeMaxRepos), so a node
-// writing to every repository its company declares keeps a floor for each —
-// an id and a position, under two hundred bytes apiece with the map's own,
-// under two megabytes at the bound.
+// maxRepoFloors is the most repositories one company declares
+// (config.CodeMaxRepos), so a node writing to all of them keeps a floor for
+// each: under two hundred bytes apiece, under two megabytes at the bound.
 const maxRepoFloors = config.CodeMaxRepos
 
-// observe raises repoID's floor to at, where at is further than what it holds.
-// A position with no stream or no sequence names nothing to wait for and is
-// ignored, as the session ignores one ([Session.Observe]).
+// observe raises repoID's floor to at where at is further. A position with no
+// stream or sequence names nothing to wait for and is ignored, as
+// [Session.Observe] ignores one.
 func (f *repoFloors) observe(repoID string, at statelog.Position) {
 	if repoID == "" || at.Stream == "" || at.Seq == 0 {
 		return
@@ -59,10 +51,9 @@ func (f *repoFloors) observe(repoID string, at statelog.Position) {
 	f.at[repoID] = at
 }
 
-// evictLowest drops the entry at the lowest position; f.mu is held. A scan,
-// since it runs only once the node has written to more repositories than one
-// company declares, and then at most once a write to a repository it holds no
-// floor of.
+// evictLowest drops the entry at the lowest position; f.mu is held. A scan
+// suffices: it runs only past the bound, at most once per write to a
+// repository holding no floor.
 func (f *repoFloors) evictLowest() {
 	var (
 		lowest string

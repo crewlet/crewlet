@@ -18,38 +18,18 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// THE DATASTORE TOOLS: read_artifact_data, query_artifact_data,
-// write_artifact_data and set_artifact_schema, each named for its authority
-// row, registered from the hooks below, which [Register] and [OperatorTools]
-// already append. Every row they return is fenced as text somebody else wrote.
+// THE DATASTORE TOOLS (read_artifact_data, query_artifact_data,
+// write_artifact_data, set_artifact_schema), each named for its authority row,
+// registered from hooks [Register] and [OperatorTools] already append. Every
+// row they return is fenced as text somebody else wrote.
 //
-// # The artifact half is the artifacts tools'
-//
-// Reading the artifact a call names, deciding a verb on it for the caller and
-// for whoever the turn is acting for, deriving the operation a write is named
-// by and stamping its authority are exactly what the artifacts tools do
-// ([ArtifactDeps]), so these tools take that half from the same deps rather
-// than a copy of it: one head read, one decision, one stamp, one presence hub.
-// [ArtifactDataDeps] adds only the datastore and the turn guardrail.
-//
-// # The requester's rows are the ceiling too
-//
-// A verb is admitted only when the agent and the person the turn is acting for
-// both may take it ([authz.DecideWithin]); a datastore read or write goes one
-// step further, to the rows. A row an agent may read is answered only when that
-// person could read it too, by the collection's own rule over their role and
-// record, and a write is stamped with the lower of the two roles, so an agent
-// that edits a sheet never writes a cell for somebody that the somebody could
-// not write. An agent's own artifact is steered by anybody who can message it,
-// as every other piece of its own work is, so on its own artifact its writes
-// are its own; what such a write hands back (a conflict's current rows) is
-// still only what the requester could read.
-//
-// # An agent in the room
-//
-// A seat's read is presence in the artifact's room (viewing), and its write is
-// editing, focused on the collection and the document the call named, so the
-// people looking at the sheet see which agent is working on which row.
+// The artifact half (head read, decision, a write's operation and stamp, the
+// presence hub) is the artifacts tools' own ([ArtifactDeps]), shared, never
+// copied. The requester's rows are a ceiling too: a row is answered only when
+// the person the turn acts for could read it, and a write is stamped with the
+// lower of the two roles, except on the agent's own work ([dataTools.admit]).
+// A read is presence in the artifact's room (viewing) and a write is editing,
+// focused on the collection and document, so viewers see who edits which row.
 
 // The datastore tools' names: each is its authority row's action.
 const (
@@ -100,11 +80,10 @@ type ArtifactDataDeps struct {
 	// Store is the datastore.
 	Store ArtifactDataStore
 
-	// Turns is this node's tally of each turn segment's datastore ops,
-	// shared by every registry the node builds: at most
-	// [artifacts.TurnDataOps] per segment. Required with Store: a write
-	// path with no guardrail would let a looping turn rewrite a sheet a
-	// thousand times over.
+	// Turns is this node's tally of each turn segment's datastore ops
+	// ([artifacts.TurnDataOps] at most), shared by every registry the node
+	// builds. Required with Store: without it a looping turn could rewrite a
+	// sheet a thousand times over.
 	Turns *DataTurns
 }
 
@@ -231,11 +210,10 @@ func (d dataTools) admit(ctx context.Context, turn *turnctx.Turn, tool string,
 	}
 	a := dataAdmission{head: h, ref: ref, c: c, dec: dec}
 	object := d.art.objectOf(h)
-	// THE ROLE ITSELF, exact: a role the chart could not settle stamped
-	// into a write would have the applier refuse what the caller may do, or
-	// admit what they may not. A verb only the admin path admitted acts at
-	// its own decision's standing (owner, recorded as elevated); the read
-	// row would stand the same administrator at the share they hold.
+	// THE ROLE ITSELF, exact: an unsettled role stamped into a write would
+	// have the applier refuse what the caller may do, or admit what they may
+	// not. A verb only the admin path admitted acts at its decision's
+	// standing (owner, recorded as elevated), not at the share the admin holds.
 	standing, err := dec.Standing, error(nil)
 	if !dec.Elevated {
 		standing, err = authz.StandingOn(ctx, c.principal, object, d.art.Chart, d.art.now())
@@ -383,12 +361,12 @@ func dataConditionOrFault(ctx context.Context, tool string, err error) tools.Res
 // ---- the turn guardrail -------------------------------------------------- //
 
 // DataTurns is this node's tally of each turn segment's datastore ops: at most
-// [artifacts.TurnDataOps] per segment, every op of every write counted once per
+// [artifacts.TurnDataOps] per segment, every op of a write counted, once per
 // operation, so a turn retrying a call it lost the answer to is not charged
-// twice. A segment is named by its run id, as the publish guardrails are: a
-// turn runs on the node that holds its seat, and every tool call it makes is a
-// call on that node. A call outside a turn (a person's assistant) is held to
-// none of this; its bound is the datastore's own rate limits.
+// twice. A segment is named by its run id, as the publish guardrails are; a
+// node-local tally suffices because a turn and all its tool calls run on its
+// seat's node. A call outside a turn (a person's assistant) is bound only by
+// the datastore's own rate limits.
 type DataTurns struct{ budget *turnBudget }
 
 // NewDataTurns is an empty tally on now; nil is the wall clock.

@@ -18,16 +18,13 @@ import (
 // ---- the seat mailbox registry ----------------------------------------- //
 
 // mailboxRecord is one registry row on the wire. The seat's ID is the KEY, so
-// a record cannot describe a seat other than the one it is filed under.
+// a record cannot describe a seat other than the one it is filed under; the
+// HANDLE, not an identity, rides the value so a reader or a retirement log
+// line knows whose mailbox it is.
 //
-// The HANDLE is in the payload, and it is the one field here that is not an
-// identity: it is what a person reading the registry, or a retirement log
-// line, needs in order to know whose mailbox this is. It rides the value
-// rather than the key, which is the seat's id, as the mailbox's own name is.
-//
-// Both stamps are POINTERS, for the reason channelRecord.ClosedAt is one: the
-// zero instant is the "not absent" and "not retiring" value, and an absent
-// field is the one encoding a decoder cannot mistake for an instant.
+// Both stamps are POINTERS, as channelRecord.ClosedAt is: the zero instant
+// means "not absent" / "not retiring", and an absent field is the one encoding
+// a decoder cannot mistake for an instant.
 type mailboxRecord struct {
 	Handle        string     `json:"handle,omitempty"`
 	AbsentSince   *time.Time `json:"absent_since,omitempty"`
@@ -66,9 +63,8 @@ func decodeMailbox(seat uuid.UUID, raw []byte, version uint64) (coord.MailboxRec
 	return rec, nil
 }
 
-// seatOfKey reads a registry key back as the seat id it was written under: a
-// canonical uuid and nothing else, which is the one spelling this backend
-// writes ([uuid.UUID.String]).
+// seatOfKey reads a registry key back as its seat id: a canonical uuid only,
+// the one spelling this backend writes ([uuid.UUID.String]).
 func seatOfKey(key string) (uuid.UUID, bool) {
 	name, ok := decodeKey(key)
 	if !ok {
@@ -102,30 +98,20 @@ func (f *FleetStore) Mailbox(ctx context.Context, seat uuid.UUID) (coord.Mailbox
 
 // Mailboxes returns every record, ordered by seat id.
 //
-// ONE CERTIFIED WALK, like every other listing in this package (walk.go),
-// and it was the one that was not. It used the client's ListKeys and then a
-// Get per handle, which is each of the three things the walk exists to
-// prevent: a read per record on top of the lister's own consumer; a listing
-// cut off half way that came back SHORT with a nil error, because the lister
-// ends on the nil a closed subscription yields; and a key lister built on the
-// same watcher, which ends where it GUESSES the initial values end — so a
-// record rewritten while it was listed could be left out. A record left out
-// is one the retention sweep does not judge that tick, and one its discovery
-// step then reads as a mailbox that escaped the registry: the inference that
-// step's ordering exists to make safe (internal/maintenance/mailboxes.go).
+// ONE CERTIFIED WALK, like every listing (package doc, "Every listing is ONE
+// CERTIFIED PASS, and never the client's ListKeys"): a record left out is one
+// the retention sweep's discovery step reads as a mailbox that escaped the
+// registry (internal/maintenance/mailboxes.go).
 func (f *FleetStore) Mailboxes(ctx context.Context) ([]coord.MailboxRecord, error) {
 	var out []coord.MailboxRecord
 	err := f.each(ctx, f.mailboxes, func(kve jetstream.KeyValueEntry) error {
 		seat, ok := seatOfKey(kve.Key())
 		if !ok {
-			// A key this backend did not write — one that does not decode,
-			// or decodes to anything but a seat id. Skipped rather than
-			// guessed at: an invented id would send a sweep to delete the
-			// mailbox of a seat nobody named.
+			// A key this backend did not write. Skipped, not guessed at: an
+			// invented id would send a sweep to delete a mailbox nobody named.
 			return nil
 		}
-		// RAISED, never skipped: a record dropped here is the record left
-		// out above, by another route.
+		// RAISED, never skipped: a dropped record is a record left out.
 		rec, err := decodeMailbox(seat, kve.Value(), kve.Revision())
 		if err != nil {
 			return err
@@ -144,13 +130,11 @@ func (f *FleetStore) Mailboxes(ctx context.Context) ([]coord.MailboxRecord, erro
 
 // CreateMailbox writes a new record, leaving an existing one alone.
 //
-// Create rather than Put, so the first writer wins and every other is told the
-// record exists: a record that exists may be mid-way through a retirement, and
-// only an update conditioned on the version its writer read may change it. A
-// key a previous retirement purged is created again through [createKey], which
-// asks the stream leader what the key holds rather than conditioning on a
-// marker a sweep may already have removed, and reports a racing creator that
-// won as the one shape, [jetstream.ErrKeyExists].
+// Create, not Put: an existing record may be mid-retirement, and only an
+// update conditioned on the version its writer read may change it. A purged
+// key is created again through [createKey], which asks the leader rather than
+// trusting a marker a sweep may have removed, and reports a racing creator
+// that won as [jetstream.ErrKeyExists].
 func (f *FleetStore) CreateMailbox(ctx context.Context, rec coord.MailboxRecord) (coord.MailboxRecord, bool, error) {
 	if rec.Seat == uuid.Nil {
 		return coord.MailboxRecord{}, false, errors.New("coord/kv: a mailbox record needs a seat id")
@@ -175,10 +159,9 @@ func (f *FleetStore) UpdateMailbox(ctx context.Context, rec coord.MailboxRecord)
 		return coord.MailboxRecord{}, false, errors.New("coord/kv: a mailbox record needs a seat id")
 	}
 	if rec.Version == 0 {
-		// NO VERSION IS A LOST RACE, never an unconditional write. The
-		// client reads an expected revision of 0 as "the key must not exist
-		// yet", so passing one through would CREATE a record for a caller
-		// that never read one, where the contract says it must lose.
+		// NO VERSION IS A LOST RACE: the client reads revision 0 as "must
+		// not exist yet", so passing it would CREATE a record for a caller
+		// that never read one.
 		return coord.MailboxRecord{}, false, nil
 	}
 	raw, err := encodeMailbox(rec)
@@ -188,8 +171,8 @@ func (f *FleetStore) UpdateMailbox(ctx context.Context, rec coord.MailboxRecord)
 	revision, err := f.mailboxes.Update(ctx, encodeKey(rec.Seat.String()), raw, rec.Version)
 	switch {
 	case errors.Is(err, jetstream.ErrKeyRevisionMismatch), errors.Is(err, jetstream.ErrKeyNotFound):
-		// A LOST RACE, not a fault. A purged record lands here too: its
-		// purge marker is a newer revision than the one the caller read.
+		// A LOST RACE, not a fault; a purged record too, its marker being
+		// newer than the revision the caller read.
 		return coord.MailboxRecord{}, false, nil
 	case err != nil:
 		return coord.MailboxRecord{}, false, unavailable("update the mailbox record", err)
@@ -199,9 +182,8 @@ func (f *FleetStore) UpdateMailbox(ctx context.Context, rec coord.MailboxRecord)
 
 // DeleteMailbox removes a record at a version.
 //
-// PURGED, the standing rule for a bucket no clock ages — see markers.go, "Every
-// removal is a purge", and [FleetStore.SweepMarkers] for what removes the
-// marker it leaves.
+// PURGED (markers.go, "Every removal is a purge"); [FleetStore.SweepMarkers]
+// removes the marker it leaves.
 func (f *FleetStore) DeleteMailbox(ctx context.Context, seat uuid.UUID, version uint64) (bool, error) {
 	if seat == uuid.Nil {
 		return false, errors.New("coord/kv: a mailbox record needs a seat id")

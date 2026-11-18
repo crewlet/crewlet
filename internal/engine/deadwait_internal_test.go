@@ -174,13 +174,13 @@ func pickupOf(t *testing.T, ev *events.Event) types.WorkPickup {
 	return *p
 }
 
-// THE INCIDENT, REPRODUCED: a seat opened a pull request for its own item and
-// answered its pickup with a wait on it, and nobody was asked to review or
-// merge it. Before ADR-0128 the item left every wake for good. Now, once the
-// wait has stood its grace, the engine records that nothing moves the pull
-// request and hands the item back to its holder once; not again for the same
-// head, however long it sits; again for a new head that nothing moves either;
-// and not at all once somebody is asked to review it.
+// A WAIT ON A PULL REQUEST NOTHING MOVES IS HANDED BACK ONCE PER HEAD
+// (ADR-0128): a seat answered its pickup with a wait on its own pull request
+// and nobody was asked to review or merge it. Once the wait has stood its
+// grace, the engine records that nothing moves it and hands the item back to
+// its holder once; not again for the same head, however long it sits; again
+// for a new head nothing moves either; and not at all once somebody is asked
+// to review it.
 func TestAWaitOnAPullRequestNothingMovesIsHandedBackOncePerHead(t *testing.T) {
 	t.Parallel()
 	e, id := deadWaitNode(t, worklet.StatusInProgress)

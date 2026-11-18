@@ -102,17 +102,15 @@ func TestPathOwnersRideEveryRecordThatCarriesTheSettings(t *testing.T) {
 	}
 }
 
-// A PATH OWNER CHANGE IS RESOLVED INSIDE THE DECIDE, glob by glob: a request
-// adds globs to an owner or removes them, and the decide applies it to the
-// owners its own snapshot holds — so two requests giving one owner two globs,
-// in either order, leave both, where a caller that sent the whole list it had
-// read would drop the other's. An owner left with no glob is no path owner;
-// a glob it holds already is no change and writes nothing. An owner the chart
-// does not hold is refused for every actor, whom a review could not be asked
-// of — and taken off by a removal however the chart changed, so a unit the
-// chart dropped never sticks. A scratch repository takes none, a seat below
-// maintain changes none, and a request both adding and removing one glob of
-// one owner is no request.
+// A PATH OWNER CHANGE IS RESOLVED INSIDE THE DECIDE, glob by glob, against the
+// owners the decide's own snapshot holds — so two requests each giving one
+// owner a glob leave both, in either order, where sending the whole list read
+// earlier would drop the other's. An owner left with no glob is gone; a glob
+// held already is no change and writes nothing. An owner the chart lacks is
+// refused for every actor (no review could be asked of it), yet a removal
+// takes it off, so a unit the chart dropped never sticks. A scratch
+// repository takes none, a seat below maintain changes none, and adding and
+// removing one glob of one owner at once is no request.
 //
 // Mutation: apply the change to an empty list rather than the rows the decide
 // read — the second owner's globs drop the first's, red.
@@ -284,12 +282,11 @@ func TestAPathOwnerGrantsNothing(t *testing.T) {
 	}
 }
 
-// everyReadAsked is each kind of read this build reads, as it is read of the
-// repository id named web — a principal's with its asker, the engine's own
-// with none, and whatever else the kind requires — so that without an ask no
-// field of it is refused: what a case holding an ask only some kinds answer
-// (the path owners, the merge gates) puts to every kind, so a kind added
-// later and missing here fails the case that walks gitlet.ReadKinds.
+// everyReadAsked is each kind of read this build reads, as asked of the
+// repository id named web (a principal's with its asker, the engine's own with
+// none, and whatever else the kind requires), so that without an ask no field
+// of it is refused. A case putting an ask only some kinds answer to every kind
+// walks gitlet.ReadKinds against it, so a kind missing here fails.
 func everyReadAsked(id string) map[gitlet.ReadKind]gitlet.ReadQuery {
 	launch := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 1}
 	return map[gitlet.ReadKind]gitlet.ReadQuery{
@@ -336,13 +333,12 @@ func everyReadAsked(id string) map[gitlet.ReadKind]gitlet.ReadQuery {
 }
 
 // THE PATH OWNERS ARE ANSWERED ONLY TO A READ THAT ASKS FOR THEM. A read of
-// one repository that does not — every resolution of a repository, a tool's
-// once a turn among them — and a refs listing's first page answer its detail
+// one repository that does not (every resolution of a repository, a tool's
+// once a turn among them) and a refs listing's first page answer the detail
 // without them, one that does answers them in their one form, and every other
-// kind refuses the ask, naming it: no other read answers them. Every kind
-// this build reads is asked (gitlet.ReadKinds), so a kind added later is named
-// here or the test fails: a duty listing with a validator of its own, which
-// lists every field it refuses, cannot leave the ask out unseen.
+// kind refuses the ask, naming it. Every kind in gitlet.ReadKinds is asked, so
+// no kind — a duty listing validating against its own field list among them —
+// leaves the ask out unseen.
 //
 // Mutations: read the path owners on every detail (Reader.repo's ask
 // dropped) — a resolution answers them, red; drop path_owners from the
@@ -398,15 +394,11 @@ func TestOnlyAReadThatAsksIsAnsweredThePathOwners(t *testing.T) {
 }
 
 // A FIELD ONE KIND READS IS REFUSED ON EVERY OTHER, the engine's own reads
-// included: a read of each kind this build reads, as everyReadAsked asks it,
-// that also names a commit, an inbox, an inbox page's cards, a history
-// page's commits, the narrowing to protected repositories, a counts read's
-// parts, a repository's facts, a listing's sort or a queue's trains (fields
-// only a `commit`, an `inbox`, a `notice_cards`, a `commit_marks`, a `repos`,
-// a `counts`, a `repos` or `repo`, a `changes` and a `queue` read read) is refused naming the field, never
-// answered with it ignored. The engine's own reads validate
-// against lists of their own, and a field added after a list was written
-// passed it unseen.
+// included: each kind, asked as everyReadAsked asks it and naming a field only
+// other kinds read (the table below names each and its kinds), is refused
+// naming the field, never answered with it ignored. The engine's own reads
+// validate against lists of their own, which a field added later passed
+// unseen.
 //
 // Mutation: check the kind-owned fields after the engine's own reads'
 // validators instead of before (ReadQuery.validate) — an imports_due read
@@ -450,6 +442,7 @@ func TestAFieldOneKindReadsIsRefusedOnEveryOther(t *testing.T) {
 		{"readiness", []gitlet.ReadKind{gitlet.ReadChanges}, func(q *gitlet.ReadQuery) {
 			q.Readiness = gitlet.BucketReady
 		}},
+		{"text", []gitlet.ReadKind{gitlet.ReadChanges}, func(q *gitlet.ReadQuery) { q.Text = "login" }},
 		{"cards", []gitlet.ReadKind{gitlet.ReadChanges}, func(q *gitlet.ReadQuery) { q.Cards = true }},
 		{"push_filter", []gitlet.ReadKind{gitlet.ReadPushes}, func(q *gitlet.ReadQuery) {
 			q.PushFilter = &gitlet.PushFilter{Since: harnessAt}
@@ -484,19 +477,14 @@ func TestAFieldOneKindReadsIsRefusedOnEveryOther(t *testing.T) {
 }
 
 // THE LARGEST SETTINGS FIT WHERE THEY TRAVEL. A create, a settings change and
-// a restore each carry a repository's settings whole, and every record this
-// build forms is held to MaxRecordBytes — an eighth of the node's appends in
-// flight on the code log, so eight are out at once and a committer serving
-// many repositories is never serialised behind one record this large. So the
-// widest settings Validate admits must fit it: every protection rule's pattern
-// at its longest and its merge gate at MaxGateBytes, the description and the
-// default branch at theirs — each byte one JSON spells longest (`&`, six
-// bytes) — and as many path owners' globs at gitref's bound, spelled the same
-// way, as Validate admits beside them. And the detail that answers them — the
-// row's rules, the path owners and every rule's gate, as a read asking for
-// both answers them — must fit the room a full page of refs beside it leaves
-// in the estate's reply, which a refs listing's first page carries both in
-// ([gitlet.MaxPageBytes]).
+// a restore each carry a repository's settings whole in a record held to
+// MaxRecordBytes, so the widest settings Validate admits must fit: every
+// protection rule's pattern at its longest with its gate at MaxGateBytes, the
+// description and default branch at theirs, each byte one JSON spells longest
+// (`&`, six bytes), and as many path globs at gitref's bound as Validate
+// admits beside them. The detail answering them (rules, path owners, every
+// rule's gate) must fit what a full page of refs leaves in the estate's reply,
+// since a refs listing's first page carries both ([gitlet.MaxPageBytes]).
 //
 // Mutation: drop the path owners' byte bound from their validation — every
 // glob at its widest is admitted, and each record is twice MaxRecordBytes, red.

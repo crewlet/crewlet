@@ -166,3 +166,50 @@ var (
 // MaxPostingScan is [maxPostingScan], for the gate that holds which postings a
 // frequent chat term keeps.
 const MaxPostingScan = maxPostingScan
+
+// The change index's statements and builders, for its plan gate.
+var (
+	ChangeStateStatement         = changeStateStatement
+	ChangeAdvanceStatement       = changeAdvanceStatement
+	ChangeSeenStatement          = changeSeenStatement
+	ChangeRestartStatement       = changeRestartStatement
+	ChangeHeldDocStatement       = changeHeldDocStatement
+	ChangeHeldInRangeStatement   = changeHeldInRangeStatement
+	ChangeDocInsertStatement     = changeDocInsertStatement
+	ChangeDocRewriteStatement    = changeDocRewriteStatement
+	ChangeDocScopeStatement      = changeDocScopeStatement
+	ChangeRemoveDocStatement     = changeRemoveDocStatement
+	ChangeClearPostingsStatement = changeClearPostingsStatement
+	ChangeNextRepoStatement      = changeNextRepoStatement
+	ChangeRepoDocsStatement      = changeRepoDocsStatement
+	ChangeTermCountStatement     = changeTermCountStatement
+	ChangeTermFloorStatement     = changeTermFloorStatement
+	ChangeScopeCountStatement    = changeScopeCountStatement
+	ChangeScopeFloorStatement    = changeScopeFloorStatement
+	ChangeHeldByTermStatement    = changeHeldByTermStatement
+	ChangeHeldByScopeStatement   = changeHeldByScopeStatement
+	ChangeScopes                 = changeScopes
+	ChangePostingsInsert         = changePostingsInsert
+	ChangeBackStatement          = changeBackStatement
+	ChangeDocKeysStatement       = changeDocKeysStatement
+	ChangeDocArenaTopStatement   = changeDocArenaTopStatement
+	NextChangeBatch              = nextChangeBatch
+)
+
+// SetChangeBatchCap bounds the description bytes x's walk batches take, and starts its budget there,
+// for the cases that cut batches with a small corpus.
+func SetChangeBatchCap(x *ChangeIndexer, n int) {
+	x.forward.n, x.forward.most, x.back.n, x.back.most = n, n, n, n
+}
+
+// SetChangeWriteTimer makes took how long x judges each of its writes to have taken.
+func SetChangeWriteTimer(x *ChangeIndexer, took func(time.Time) time.Duration) { x.since = took }
+
+// ChangeBatchBudgets is x's next forward batch, backward batch and drop step.
+func ChangeBatchBudgets(x *ChangeIndexer) (forward, back, drop int) {
+	return x.forward.n, x.back.n, x.drop.n
+}
+
+// SetChangeTextScan bounds what one search of x reads of what it drives on, for the cases that
+// reach the bound with a small corpus.
+func SetChangeTextScan(x *ChangeIndexer, n int) { x.scan = n }

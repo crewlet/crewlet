@@ -9,18 +9,10 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A SAVED VIEW'S PARAMETERS ARE THE GRAMMAR'S, AND save_work_view SAYS SO.
-//
-// The stored map is what [worklet.ParseQuery] validates and what the expansion
-// reads back, so it is the GRAMMAR's vocabulary — while list_work_items'
-// arguments are the model's. The description said the opposite, so a model
-// saving the query it had just run wrote this surface's four renamed
-// arguments into a view and had every one of them refused as not a query
-// parameter at all.
-//
-// The renames are a table now, and this is what makes it load-bearing: each
-// entry has to be an argument this tool declares, a key the grammar accepts,
-// AND the translation the tool actually performs.
+// A saved view's parameters are the grammar's ([worklet.ParseQuery] validates
+// them), not list_work_items' arguments, and save_work_view says so. Each entry
+// of the renames table must be an argument this tool declares, a key the
+// grammar accepts, and the translation the tool performs.
 func TestEveryRenamedArgumentIsTheTranslationTheToolPerforms(t *testing.T) {
 	t.Parallel()
 	sentence := builtin.AliasSentence()
@@ -60,13 +52,9 @@ func TestEveryRenamedArgumentIsTheTranslationTheToolPerforms(t *testing.T) {
 	}
 }
 
-// AND A SAVED VIEW CAN BE RUN, which is what list_work_views tells a model to
-// do.
-//
-// The grammar has expanded `view` since it was written; this tool did not
-// declare it, so the only way a seat could run somebody's saved view was to
-// paste its parameters — in the grammar's names, which this tool forwards none
-// of. The advice named no reachable gesture at all.
+// A saved view can be run by its id, as list_work_views tells a model to: the
+// tool forwards `view`, since pasting the view's parameters (in the grammar's
+// names) reaches nothing.
 func TestASavedViewCanBeRunByItsID(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -81,18 +69,10 @@ func TestASavedViewCanBeRunByItsID(t *testing.T) {
 	}
 }
 
-// A REFUSED `container` CARRIES THE VOCABULARY IT WOULD HAVE ACCEPTED.
-//
-// `container` is the one required argument of both view tools, and its grammar
-// is the TRACKER's rather than this surface's — so a caller reaching for the
-// project key it has been using all along (`ENG`) has nothing to derive
-// `project:ENG` from unless the refusal spells it out. A refusal that only
-// says no is one the next attempt repeats verbatim, which is why the four
-// spellings travel IN it rather than only in a schema description already read
-// past.
-//
-// The accepting case is here for the same reason: a parser that refused
-// everything would satisfy every assertion above it.
+// A refused `container` carries the four spellings it would accept: its
+// grammar is the tracker's, so a caller holding `ENG` cannot derive
+// `project:ENG`, and a refusal that only says no is repeated verbatim. The
+// accepting case keeps a parser that refuses everything from passing.
 func TestARefusedContainerNamesTheSpellingsItAccepts(t *testing.T) {
 	t.Parallel()
 	reg := operatorRegistry(t, newFakeTracker(), &personSpy{})
@@ -125,31 +105,15 @@ func TestARefusedContainerNamesTheSpellingsItAccepts(t *testing.T) {
 	})
 }
 
-// THE SHAPES THE TOOL OFFERS ARE THE SHAPES THE ENGINE TAKES.
-//
-// `save_work_view`'s `type` enum and [worklet.ViewType.Valid] are two lists of
-// the same set, written in two files, with nothing holding them together. They
-// had already drifted: the enum offered three where the validator accepts
-// four, so a seat could not save a `timeline` view although the write would
-// have taken one, the refusal names it as one of the four, and the tracker
-// ships a BUILTIN timeline that every reader can already see. The shape was
-// reachable by reading and unreachable by writing, and the tool's own schema
-// was the only thing claiming otherwise.
-//
-// A MODEL CANNOT DISCOVER WHAT THE ENUM OMITS. An enum is a closed set to
-// whatever is reading it, so the omission is not a hint the model can work
-// around — it is the whole of what that model believes the surface accepts.
-//
-// Checked in BOTH directions: an enum naming a shape the engine refuses would
-// be the same defect the other way round, and it fails at the write instead of
-// at the schema, which is worse.
+// The shapes save_work_view's `type` enum offers are the ones
+// [worklet.ViewType.Valid] takes. A model cannot discover what an enum omits
+// (it is a closed set to its reader), so a missing shape is unreachable.
+// Checked both ways: a shape the engine refuses fails at the write, worse.
 func TestTheViewShapesTheToolOffersAreTheOnesTheEngineTakes(t *testing.T) {
 	t.Parallel()
 
-	// THE OPERATOR SURFACE, because that is the only registry this tool is in:
-	// a saved view is furniture a person arranges, and no seat is given it.
-	// Built from the real constructor rather than a literal, so a tool that
-	// stops registering fails the guard below instead of passing silently.
+	// The operator surface, the only registry this tool is in, built from the
+	// real constructor so a tool that stops registering fails the guard below.
 	work := newFakeTracker()
 	var offered []string
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
@@ -177,11 +141,8 @@ func TestTheViewShapesTheToolOffersAreTheOnesTheEngineTakes(t *testing.T) {
 				"the write — a model is told to send something that cannot land", name)
 		}
 	}
-	// AND EVERY SHAPE THE ENGINE TAKES IS OFFERED. This is the direction the
-	// drift actually went — and this half was itself a literal naming four
-	// shapes, so it could only ever catch a shape LEAVING the enum. Read from
-	// [worklet.ViewTypes], the two halves are the same list and a rendering
-	// added to the engine is asserted the moment it exists.
+	// Every shape the engine takes is offered: read from [worklet.ViewTypes],
+	// not a literal, so a shape added to the engine is asserted at once.
 	for _, want := range worklet.ViewTypes {
 		if !slices.Contains(offered, string(want)) {
 			t.Errorf("the engine accepts the shape %q and the tool does not offer it — "+
@@ -191,14 +152,10 @@ func TestTheViewShapesTheToolOffersAreTheOnesTheEngineTakes(t *testing.T) {
 	}
 }
 
-// A BOARD'S ROW FACTS NEVER REACH A MODEL'S ROWS.
-//
-// `fields=` is a board card's opt-in — labels, "blocks 3", an open question,
-// what the task cost — and a saved view built on a board carries it. A seat
-// running that view through list_work_items reads the same rows it reads
-// without it: every byte a fact adds is a byte in the model's context on every
-// listing, and none of it was asked for. So the answer is byte-identical to
-// the one the same query gets with no view at all.
+// A board's row facts never reach a model's rows: a board view's `fields=`
+// (labels, "blocks 3", spend) is a card's opt-in, and run through
+// list_work_items it would put bytes nobody asked for in the model's context
+// on every listing. The answer is byte-identical to the query without the view.
 func TestTheBoardGetsSpendWithoutTheModelRowGrowing(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()

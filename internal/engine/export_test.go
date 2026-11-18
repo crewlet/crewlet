@@ -32,6 +32,11 @@ func MailboxTurn(ctx context.Context, e *Engine, handle string, evs []*events.Ev
 	return e.mailboxTurn(ctx, handle, evs)
 }
 
+// MemoryWindow is the most a replay pull of e's memory syncer carries across
+// the node's link ([memsync.Syncer.Window]), for a test outside the package
+// that holds the engine's wiring of it to the node's broker kind.
+func MemoryWindow(e *Engine) int { return e.memory.Window() }
+
 // ControlOutcome is what a seat's control-topic delivery leaves with the broker,
 // for a test outside the package that drives the coordinator behind it.
 func ControlOutcome(err error) queue.Result { return controlOutcome(err) }

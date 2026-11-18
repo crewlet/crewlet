@@ -12,25 +12,9 @@ import (
 	"github.com/crewlet/crewlet/internal/jira"
 )
 
-// A SEAT IDENTITY THAT FAILED TO RESOLVE IS ASKED AGAIN, WITH NO CONFIG
-// CHANGE — AND SAYS SO UNTIL IT DOES.
-//
-// A tracker webhook names people by account, and nothing in the org model says
-// which account a seat holds, so the engine asks with the seat's own
-// credential. A lookup that FAILS leaves the seat unresolved rather than
-// failing the boot, on the reasoning that the instance may be briefly down and
-// the next apply retries.
-//
-// Nothing schedules an apply. Measured: a seat's token was created and sealed,
-// the tracker checked it one second later, the account was not grantable yet
-// and answered 403 — and the surface sat at zero seat identities with every
-// card reading Connected. Two minutes later it had still not asked again.
-//
-// Both halves are the same fix. The unresolved seat is a FINDING, so the
-// surface stops reporting itself ready and the reconcile loop keeps visiting
-// it on the engine's own cadence; and the visit RE-RESOLVES before it reports,
-// so the seat that answers is registered into the live registry and starts
-// receiving work immediately.
+// A seat identity whose lookup failed is asked again on the next pass, with no
+// config change, and is reported as a finding (so the surface is not ready)
+// until it resolves; once it does, it is in the live registry at once.
 func TestASeatIdentityThatFailedIsRetriedOnTheNextPass(t *testing.T) {
 	t.Parallel()
 	var refuse atomic.Bool
@@ -44,9 +28,8 @@ func TestASeatIdentityThatFailedIsRetriedOnTheNextPass(t *testing.T) {
 		}
 		lookups.Add(1)
 		if refuse.Load() {
-			// EXACTLY THE FIELD'S SHAPE: the account exists and the
-			// credential is real, and the instance is not ready to say
-			// who it is yet.
+			// A real account and credential the instance will not
+			// answer for yet.
 			http.Error(w, "not grantable yet", http.StatusForbidden)
 			return
 		}
@@ -57,7 +40,7 @@ func TestASeatIdentityThatFailedIsRetriedOnTheNextPass(t *testing.T) {
 
 	e, company := routingEngine(t, srv.URL)
 
-	// THE APPLY, which resolves what it can and leaves this seat behind.
+	// The apply, which leaves this seat unresolved.
 	e.refreshParties(t.Context(), company)
 	if _, err := e.startJira(t.Context(), company, company.Config.Integrations.Jira); err != nil {
 		t.Fatalf("apply: %v", err)
@@ -70,8 +53,7 @@ func TestASeatIdentityThatFailedIsRetriedOnTheNextPass(t *testing.T) {
 		t.Fatal("precondition: the apply never asked the instance at all")
 	}
 
-	// A PASS, which is what the reconcile loop does on its own cadence and
-	// what nothing did before: no config changed, nobody pressed anything.
+	// A reconcile pass, with no config change.
 	found := e.resolveRouting(t.Context(), integration.KindJira, nil)
 
 	if lookups.Load() <= before {
@@ -81,15 +63,14 @@ func TestASeatIdentityThatFailedIsRetriedOnTheNextPass(t *testing.T) {
 	if len(found) != 1 || found[0].Subject != "ceo" {
 		t.Fatalf("findings = %+v, want one naming the unresolved seat", found)
 	}
-	// THE CARD STOPS SAYING READY. An empty finding list is what the loop
-	// reads as a healthy surface and holds for a full settled interval.
+	// The finding must not classify as ready, or the card reads Connected.
 	if phase, actor := found[0].Kind.Verdict(); phase == integration.PhaseReady {
 		t.Errorf("an unresolved seat classifies %s/%s, so the card reads "+
 			"Connected over an agent that receives nothing", phase, actor)
 	}
 
-	// AND WHEN THE INSTANCE COMES GOOD, the next pass wires it — into the
-	// LIVE registry, with no apply between.
+	// Once the instance answers, the next pass wires the seat into the live
+	// registry, with no apply between.
 	refuse.Store(false)
 	if found := e.resolveRouting(t.Context(), integration.KindJira, nil); len(found) != 0 {
 		t.Errorf("findings = %+v after the instance answered, want none", found)
@@ -104,11 +85,8 @@ func TestASeatIdentityThatFailedIsRetriedOnTheNextPass(t *testing.T) {
 	}
 }
 
-// A SEAT THAT HOLDS NO CREDENTIAL IS NOT A FINDING.
-//
-// It has opted out of the surface, which is a choice rather than a fault.
-// Reporting it would put every human seat in the company on the card and bury
-// the one seat that is actually broken.
+// A seat that holds no credential has opted out of the surface and is not a
+// finding; reporting it would bury the one seat that is actually broken.
 func TestASeatWithNoCredentialIsNotReportedAsUnresolved(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -117,8 +95,7 @@ func TestASeatWithNoCredentialIsNotReportedAsUnresolved(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	e, company := routingEngine(t, srv.URL)
-	// Drop the one credentialled seat's token, leaving a company whose
-	// seats simply do not use Worklet.
+	// Drop the one credentialled seat's token.
 	for role := range company.Config.EachRole() {
 		delete(role.MCPEnv, "jira")
 	}
@@ -135,12 +112,8 @@ func TestASeatWithNoCredentialIsNotReportedAsUnresolved(t *testing.T) {
 	}
 }
 
-// A SURFACE THAT READS ITS SEATS OUT OF THE DOCUMENT REPORTS NOTHING HERE.
-//
-// Only the three that ask a third-party app who a credential belongs to can
-// have a lookup fail. Slack and Mattermost learn an identity at connect,
-// Confluence and Datadog route by the handle itself, and Atlassian ingests
-// nothing at all — so a finding for any of them would be an invention.
+// Only Jira, GitLab and GitHub look an account up, so only they can report an
+// unresolved seat; any other surface reporting one would be inventing it.
 func TestOnlyTheSurfacesThatLookUpAnAccountReportRouting(t *testing.T) {
 	t.Parallel()
 	e, company := routingEngine(t, "https://jira.example.com")
@@ -163,8 +136,8 @@ func TestOnlyTheSurfacesThatLookUpAnAccountReportRouting(t *testing.T) {
 func routingEngine(t *testing.T, instance string) (*Engine, *Company) {
 	t.Helper()
 	e := sealingNode(t)
-	// AN EMPTY ENVIRONMENT, so ${JIRA_ORG_TOKEN} answers nothing whatever
-	// the runner exports.
+	// An empty environment, so ${JIRA_ORG_TOKEN} is unset whatever the
+	// runner exports.
 	e.environ = config.MapSource{}
 	cfg, err := config.ParseCompany([]byte(`
 name: Acme
@@ -192,21 +165,16 @@ roles:
 	if err != nil {
 		t.Fatalf("company: %v", err)
 	}
-	// PUBLISHED, because a pass reads the LIVE epoch rather than being
-	// handed one: it runs on a timer, long after whoever applied has gone.
+	// Published, because a pass reads the live epoch rather than being
+	// handed one.
 	e.epoch.current.Store(company)
 	return e, company
 }
 
-// THE LOOP'S OWN TICK CARRIES THEM, which is the only reason any of the above
-// is ever retried.
-//
-// A vendor pass cannot see this: a seat's account is read with that seat's own
-// credential by the ENGINE, and the pass asks the third-party app about the
-// surface. So the adapter every pass reaches the loop through appends what
-// this node could not resolve to what the pass found — and if it did not, the
-// surface would report itself ready over a seat receiving nothing, the loop
-// would hold that answer for a settled interval, and nothing would ask again.
+// The adapter every pass reaches the loop through ([passConverger]) appends
+// the engine's unresolved seats to the pass's findings. A vendor pass cannot
+// see them, and without them a converged pass reads as a healthy surface, so
+// the loop would never retry.
 func TestTheLoopTickCarriesTheEnginesOwnRoutingFindings(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -217,8 +185,7 @@ func TestTheLoopTickCarriesTheEnginesOwnRoutingFindings(t *testing.T) {
 	e, company := routingEngine(t, srv.URL)
 	e.refreshParties(t.Context(), company)
 
-	// A pass whose own world is entirely converged: every finding below
-	// belongs to the engine.
+	// A converged pass: every finding below is the engine's.
 	c := &passConverger{engine: e, pass: &convergedPass{kind: integration.KindJira}}
 	found, err := c.Reconcile(t.Context())
 	if err != nil {
@@ -232,19 +199,10 @@ func TestTheLoopTickCarriesTheEnginesOwnRoutingFindings(t *testing.T) {
 	}
 }
 
-// THE RETRY MAKES THE SAME REFUSAL THE START PATH MAKES, and asks nobody
-// anything when it does.
-//
-// A code host whose signing secret does not resolve cannot verify a single
-// delivery: its route answers 503 to everything, the vendor's own settings
-// page shows a hook whose deliveries keep failing, and no log line names the
-// variable. [Engine.startGitLab] refuses to wire it at all for that reason.
-//
-// The retry was written without that check and resolved seat identities
-// anyway, which reports agents wired behind a route that receives nothing —
-// exactly the state the refusal exists to prevent, arriving by a second door.
-// Both now go through one function; two copies of a guard is a hole rather
-// than a duplication.
+// The retry makes the refusal [Engine.startGitLab] makes, through the same
+// function, and asks nobody anything: a code host whose signing secret does
+// not resolve answers 503 to every delivery, so wiring seats behind it would
+// report agents that receive nothing.
 func TestTheRetryWillNotWireASurfaceTheStartPathRefuses(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
@@ -253,18 +211,14 @@ func TestTheRetryWillNotWireASurfaceTheStartPathRefuses(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	// BOTH THROUGH A ${VAR}, because config itself refuses an unusable
-	// LITERAL — which is why reaching the engine with one means a reference
-	// that did not resolve, or resolved to something else.
+	// Both through a ${VAR}: config itself refuses an unusable literal.
 	for _, bad := range []struct{ name, value string }{
 		{"a reference nothing answers", ""},
 		{"a value the vendor could not have produced", "not-a-whsec-value"},
 	} {
 		t.Run(bad.name, func(t *testing.T) {
 			t.Parallel()
-			// THE CASE'S OWN ENVIRONMENT: a reference nothing answers is
-			// one this environment does not hold, whatever the runner's
-			// does.
+			// The case's own environment, independent of the runner's.
 			env := config.MapSource{}
 			if bad.value != "" {
 				env["GITLAB_SIGNING_FOR_THIS_CASE"] = bad.value
@@ -311,14 +265,9 @@ roles:
 	}
 }
 
-// ONE CAUSE IS ONE FINDING, EVEN THOUGH TWO THINGS OBSERVE IT.
-//
-// The surface's own pass and this node's wiring resolve the SAME seats with
-// the SAME credentials against the SAME instance, so a seat whose lookup fails
-// produced two findings about one fact — and they disagreed about who has to
-// act. Measured on a live card: "the engine is working on it" as the headline
-// and "a person must act at Atlassian" one line below it, about one agent,
-// over a condition that cleared itself in seventy seconds.
+// One cause is one finding: a seat the surface's own pass already reported
+// gets none from the engine's wiring, whose second finding would disagree
+// with the first about who has to act.
 func TestASeatTheSurfacesOwnPassReportedIsNotReportedTwice(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -332,22 +281,16 @@ func TestASeatTheSurfacesOwnPassReportedIsNotReportedTwice(t *testing.T) {
 		map[string]bool{"ceo": true}); len(found) != 0 {
 		t.Fatalf("findings = %+v, want none: the pass already reported ceo", found)
 	}
-	// AND A SEAT IT SAID NOTHING ABOUT STILL GETS ONE. What the wiring adds
-	// is exactly the seats no pass reports on, which is both code hosts.
+	// A seat the pass said nothing about still gets one.
 	if found := e.resolveRouting(t.Context(), integration.KindJira,
 		map[string]bool{"someone-else": true}); len(found) != 1 {
 		t.Fatalf("findings = %+v, want the unresolved seat reported", found)
 	}
 }
 
-// THE RECOVERY IS LOGGED ONCE, NOT ON EVERY PASS.
-//
-// A lookup that succeeded logged nothing at all, so the last word in the log
-// stayed `jira_wired seat_identities=0` and `jira_has_no_seat_identities`
-// ("every tracker webhook will name a stranger") long after routing had
-// recovered — anyone reading the log concluded the seat was still unrouted.
-// A line per pass would be the opposite failure: three surfaces saying nothing
-// changed, several times a minute, for the life of the deployment.
+// The recovery is logged once per change of the resolved count: never would
+// leave `jira_has_no_seat_identities` as the log's last word, and every pass
+// would repeat it several times a minute.
 func TestTheSeatIdentityRecoveryIsLoggedOnTheTransition(t *testing.T) {
 	t.Parallel()
 	var r rewireLog
@@ -361,12 +304,11 @@ func TestTheSeatIdentityRecoveryIsLoggedOnTheTransition(t *testing.T) {
 	if !r.changed(integration.KindJira, 2) {
 		t.Error("a seat that newly resolved said nothing")
 	}
-	// NOTHING RESOLVED IS NOT NEWS: the surface's own finding and the
-	// has-no-seat-identities warning already say it, loudly.
+	// Zero is not news: the finding and the warning already say it.
 	if r.changed(integration.KindGitLab, 0) {
 		t.Error("a surface that resolved nothing logged a recovery")
 	}
-	// AND THE SURFACES DO NOT SHARE A COUNT.
+	// The surfaces do not share a count.
 	if !r.changed(integration.KindGitLab, 1) {
 		t.Error("gitlab was silenced by jira's count")
 	}

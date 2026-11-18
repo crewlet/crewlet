@@ -31,47 +31,17 @@ import (
 )
 
 // THE ASSISTANT'S DEEP WORK, wired (ADR-0054): internal/assistant's DeepWork
-// seam over the sandbox layer and the MCP bridge, which that package may not
-// import.
+// seam over the sandbox layer and the MCP bridge, which it may not import. A
+// run is the deep_work entry's harness run in a box, as a seat's executor is
+// (agentrun.go), with the turn's surface on the bridge, but without the sandbox
+// coordinator (a seat's lease, inbox, fence and resumable run row): the
+// assistant is no seat (ADR-0050), its turn watches the run to its end, and a
+// node dying with it ends the turn as interrupted, the box's deadline reaping it.
 //
-// # Every moving part already existed
-//
-// A run is the deep_work entry's harness's own run in a box: the same runner, box,
-// credentials and live reading a seat's executor gets (agentrun.go), with the turn's own surface on the bridge in place of a
-// seat's. What it does NOT take is the sandbox coordinator: that machinery is
-// a seat's (its lease, its inbox, its fence, a durable run row its node's
-// successor resumes), and the assistant is no seat (ADR-0050). The turn that
-// starts a run watches it to its end, and a node that dies with it ends the
-// turn as interrupted, as any turn on that node; the box's own deadline reaps
-// it.
-//
-// # Where it runs
-//
-// In the company's e2b or image-backed container cell when it configures one
-// ([config.Company.DeepWorkPlacement]), through the catalogue's own backend.
-// Otherwise on the engine host, in a box this file builds and CONFINES
-// (internal/sandbox's confinement): its job is kept from the engine's data, its
-// config, its keyring, every other box and the operator's home. A host that
-// cannot confine one runs none, and says why.
-//
-// # Where its box lives on the engine host
-//
-// Under the company's local box root ([sandbox.BoxRoot]:
-// providers.sandbox.local.state_dir, else the default), in a directory of its
-// own ([deepBoxDir]) — the root a seat's direct boxes are made under, and so
-// the volume an operator sized for boxes. It was the store's directory once,
-// which put a run's checkout, its installs and its builds on the volume holding
-// the store and the stream: one large run could fill it and stop the company.
-// The directory of its own is what keeps the two kinds of box apart: a seat's
-// backend reattaches, lists and reaps under <root>/boxes alone, so it never
-// reaches a deep-work box (unconfined), and the confined cell never a seat's.
-//
-// The root is the company's, so a revision can move it. A box a parked run
-// left under an earlier one is still reached through that root
-// ([assistantDeep.hostManagers]) for its continuation, its keep and its
-// discard, and every root this process has built the confined cell under
-// stays denied to every confined run, so a move never hands one person's kept
-// box, or a seat's box left there, to another person's run.
+// It runs in the company's e2b or container cell when one is configured
+// ([config.Company.DeepWorkPlacement]), else in a CONFINED box on the engine
+// host ([assistantDeep.confinement], [deepBoxDir]); a host that cannot confine
+// one runs none, and says why.
 
 // DeepHost is what an engine host keeps from a confined deep-work run beyond
 // what the engine knows of itself: the config files it was started from.
@@ -95,21 +65,25 @@ type assistantDeep struct {
 
 	mu sync.Mutex
 	// roots are the company box roots ([sandbox.BoxRoot], absolute) this
-	// process has built the confined host cell under, in the order first
-	// built: the one the company names now, and every one an earlier
-	// revision named. Held for the life of the process, as a seat's retired
-	// backends are, and bounded by the roots a company has ever named.
+	// process has built the confined host cell under, in first-built order.
+	// Held for the process's life, as a seat's retired backends are (bounded
+	// by the roots a company has ever named): a parked run's box under an
+	// earlier revision's root is still reached through them
+	// ([assistantDeep.hostManagers]), and all stay denied to every confined
+	// run, so a moved root never hands one person's kept box, or a seat's box
+	// left there, to another person's run.
 	roots []string
-	// cells are the confined host cells by company box root, built once the
-	// host's mechanism is known, and all rebuilt when what they are kept from
-	// changes (cellsKey).
+	// cells are the confined host cells by company box root, all rebuilt when
+	// what they are kept from changes (cellsKey).
 	cells    map[string]*sandbox.Manager
 	cellsKey string
 }
 
-// deepBoxDir is the directory of its own a deep-work run's confined box is
-// made under, beneath the company's box root: never "boxes", the directory a
-// seat's backend makes, lists and reaps its own boxes in under the same root.
+// deepBoxDir is the directory a deep-work run's confined box is made under,
+// beneath the company's box root: on the volume an operator sized for boxes,
+// never the store's, which one large run could fill. Never "boxes", where a
+// seat's unconfined backend makes, lists and reaps its own, so neither kind of
+// cell reaches the other's boxes.
 const deepBoxDir = "assistant"
 
 var _ assistant.DeepWork = (*assistantDeep)(nil)
@@ -176,13 +150,11 @@ func (d *assistantDeep) target() (deepTarget, error) {
 		return deepTarget{}, fmt.Errorf("providers.llm.%s is not a Claude Code entry this "+
 			"node can run deep work on", key)
 	}
-	// THE TWO FIXES APART, as a seat's executor launch names them: an unset
-	// base URL is one variable, and a node no box's call can reach is
-	// another ([mcpbridge.Bridge.Reachable]). THE FLEET'S ADDRESS, never
-	// this node's own listener a seat's direct box may dial instead: a
-	// deep-work run is held to the address the variable gives, on the
-	// engine host's loopback alone where that address is loopback
-	// ([mcpbridge.Bridge.LoopbackBase]).
+	// TWO FIXES, TWO ERRORS, as a seat's executor launch names them: an unset
+	// base URL, and a node no box's call can reach ([mcpbridge.Bridge.Reachable]).
+	// A run is held to the fleet's address the variable gives (loopback alone
+	// where it is loopback, [mcpbridge.Bridge.LoopbackBase]), never this
+	// node's own listener a seat's direct box may dial.
 	switch {
 	case d.e.bridge == nil || d.e.bridge.Reaches(false) == "":
 		return deepTarget{}, fmt.Errorf("deep work reaches Crewlet over the tool bridge, and "+
@@ -217,11 +189,10 @@ func (d *assistantDeep) target() (deepTarget, error) {
 	return t, nil
 }
 
-// hostManagers are the confined engine-host cell's managers: the one under the
-// box root the company names now first, which every new run is made in, then
-// one under each root an earlier revision named, where a parked run's box may
-// still be. Each is kept from the same paths: what the company names now, and
-// every root in [assistantDeep.roots].
+// hostManagers are the confined engine-host cell's managers: first the one
+// under the company's box root now, where every new run is made, then one under
+// each root an earlier revision named, where a parked run's box may still be.
+// All are kept from the same paths ([assistantDeep.confinement]).
 func (d *assistantDeep) hostManagers(c *config.Company) ([]*sandbox.Manager, error) {
 	host, err := d.probe()
 	if err != nil {
@@ -302,12 +273,10 @@ func (d *assistantDeep) boxManagers(t deepTarget, placement sandbox.Placement) (
 	return []*sandbox.Manager{t.company.catalogue}, nil
 }
 
-// confinement is what a confined run is kept from and what it may read beneath
-// it. Every path is the node's own: its store and estate, its stream store, its
-// log file, its config files, every harness login a providers.llm entry keeps,
-// every seat's box and every deep-work box (the company's box root now and
-// every one this process built the confined cell under), and the operator's
-// home; the harness's install is given back, read-only.
+// confinement is what a confined run is kept from (the node's store, estate,
+// stream store, log file and config files, every providers.llm entry's harness
+// login, every box root and the operator's home) and what it may still read
+// beneath that: the harness's install.
 //
 // Called with d.mu held, or on a value no other goroutine has.
 func (d *assistantDeep) confinement(c *config.Company) (deny, read []string) {
@@ -331,9 +300,8 @@ func (d *assistantDeep) confinement(c *config.Company) (deny, read []string) {
 	if home, err := os.UserHomeDir(); err == nil {
 		add(home)
 	}
-	// EVERY BOX ROOT: the default, the company's now, and each one this
-	// process built the confined cell under. A confined box lives beneath
-	// one of them, and is given back its own home alone.
+	// EVERY BOX ROOT, the default and every one in d.roots: a confined box
+	// lives beneath one, and is given back its own home alone.
 	add(sandbox.DefaultBoxRoot(), boxRootOf(c))
 	add(d.roots...)
 	if c != nil {
@@ -526,9 +494,6 @@ func (d *assistantDeep) watch(ctx context.Context, box sandbox.Sandbox, runner s
 
 // stopJob ends a run's job and keeps nothing running in its box: the box
 // itself is the caller's to keep or discard.
-//
-// ON A CONTEXT OF ITS OWN, keeping the caller's values: the stop is often the
-// caller's own cancellation, which a stop that inherited it would skip.
 func stopJob(ctx context.Context, box sandbox.Sandbox) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deepGrace)
 	defer cancel()
@@ -655,10 +620,9 @@ func (d *assistantDeep) Discard(ctx context.Context, b assistant.DeepBox) {
 
 // discard kills a box through every manager it may be under ([boxManagers]).
 //
-// EVERY ONE, never the first that answers: a local backend's Kill of a box
-// that is not under its root reclaims nothing and says nothing, so the first
-// answer would be the cell the box is not in whenever a revision moved the
-// company's box root after the box was made.
+// EVERY ONE, never the first that answers: a local backend's Kill of a box not
+// under its root reclaims nothing and says nothing, so after a revision moved
+// the box root the first answer would come from a cell the box is not in.
 func (d *assistantDeep) discard(ctx context.Context, t deepTarget, placement sandbox.Placement, id string) {
 	managers, err := d.boxManagers(t, placement)
 	if err == nil {
@@ -686,14 +650,11 @@ func (d *assistantDeep) discard(ctx context.Context, t deepTarget, placement san
 // calls from this host's loopback alone ([mcpbridge.Session.Loopback]).
 //
 // EVERY BOX ON THE ENGINE HOST IS HELD, a container's as much as a direct
-// one's, whenever the bridge's base is loopback. A container box is handed
-// the runtime's name for the engine host in place of that base
-// ([sandbox.EngineAddress]), and the hold is what keeps that from widening
-// anything: its calls are admitted only where they arrive on loopback, as a
-// direct box's are, so a token it leaks is worth nothing from any other
-// address, and nothing off this host reaches a session the hold covers. The
-// cost is said in docs/guides/assistant.md: a runtime that delivers the
-// box's calls from its bridge network instead (Docker Engine on Linux) is
+// one's, whenever the bridge's base is loopback: a container box is handed the
+// runtime's name for the engine host ([sandbox.EngineAddress]), and the hold
+// keeps that from widening anything, so a token it leaks is worth nothing off
+// this host's loopback. The cost (docs/guides/assistant.md): a runtime that
+// delivers the box's calls from its bridge network (Docker Engine on Linux) is
 // refused, and deep work there runs `direct` or remote.
 func deepHeldToLoopback(placement sandbox.Placement, bridge *mcpbridge.Bridge) bool {
 	return placement.OnEngineHost() && bridge.LoopbackBase()

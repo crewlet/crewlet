@@ -14,124 +14,49 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A person's own state, and the three different authorities over it.
+// A person's record has three authorities, so three verbs, each carrying only
+// what its authority covers, rather than one verb dropping fields it refuses:
 //
-// One object, one subject, and THREE rules about who may write what — which is
-// why this is three verbs rather than one. A single "write the person" verb
-// would have to take the whole document and then decide, field by field,
-// which parts of it the caller was allowed to have sent; the parts it refused
-// would be silently dropped or the whole write refused for a field the caller
-// did not mean to change. Three verbs each carry only what their authority
-// covers, so there is nothing to drop.
+//	INBOX     marks, snoozes, the seen-through position: the owner only, since
+//	          another's "read" removes it from the one place you would look.
+//	PINS      pinned views and favourites: the owner only.
+//	PRIORITY  the ordered next-work list: the owner or their lead, whose write
+//	          notifies (`prioritised`).
 //
-//	INBOX     read, unread, snoozed, the seen-through position and the
-//	          primary reasons. Written ONLY on behalf of the person whose
-//	          inbox it is. Somebody else marking your work read is the one
-//	          thing an inbox must never allow, because the item is then gone
-//	          from the only place you would have looked for it.
-//
-//	PINS      pinned views and favourites. The same rule, and for the
-//	          plainer reason: a pin is a person's own arrangement, and one
-//	          somebody else can set is one that moves under them.
-//
-//	PRIORITY  the ordered list of what to do next. Your own, OR a LEAD's for
-//	          somebody in their line — which is what a lead is for — and
-//	          that write is the one that produces a "prioritised"
-//	          notification, because being told what to do next by somebody
-//	          else is news and re-ordering your own list is not.
-//
-// # Why every verb reads the stored row first
-//
-// The three write disjoint parts of one document, so each has to carry the
-// other two through unchanged. Taking them from the caller would let an inbox
-// write clear somebody's pins by omission — the ordinary shape of a lost
-// update, and the one a whole-document object invites.
-//
-// # And why two of them take a GESTURE rather than the part they write
-//
-// The same lost update happens INSIDE a part when the caller sends the whole
-// of it. The inbox and the pins used to be written by replacing their lists
-// with the caller's, so one "mark this read" from a tab opened an hour ago
-// erased every mark and snooze made since, and the watermark with them. What
-// a person says about their own inbox or strip is one move — this notice is
-// done, put that one off, star this — so [Writer.MarkInbox] and
-// [Writer.WritePins] take the move and resolve it against the record the
-// DECIDE reads, which is the snapshot the broker arbitrates: a round that
-// loses the race re-applies the move to the record that won, and two screens
-// marking two notices both land. The priority list is the exception, because
-// an order is a statement about every entry at once — it stays whole, and
-// `ifMatch` refuses one made from a stale read instead.
+// Inbox and pins take a GESTURE resolved against the decide's snapshot, so a
+// stale tab cannot erase marks made since; priorities stay whole, under ifMatch.
 
-// PersonAuthority is what a caller may write on somebody else's record.
-//
-// A VALUE RATHER THAN A BOOL on the writer, because "may I set this person's
-// priorities" is a question about a PAIR — who is asking and about whom — and
-// the answer for one pair says nothing about another.
-//
-// # It states the DECISION, not its inputs
-//
-// Both fields used to be inputs: `Lead` from an org-chart lookup, and
-// `Person` from "the actor is not a seat" — which existed because an
-// operator's actor was an API TOKEN's name, never a handle in the chart, so
-// `Lead` answered false for every operator by construction and the one shipped
-// surface for `set_priorities` refused the founder every time.
-//
-// Both are gone because the premise is: an actor is a PRINCIPAL now, an
-// operator holds permissions, and [authz.ClassOwnOrLead] answers "the owner,
-// their lead, or the admin path" in one place for every surface. What is left
-// here is the half a chart cannot know — which VERB each answer unlocks — and one
-// invariant no caller may waive: a seat never writes a colleague's record.
+// PersonAuthority is what a caller may write on somebody else's record: a
+// value rather than a bool on the writer, because the answer is about a pair
+// (who asks, about whom). It states the decision, not its inputs:
+// [authz.ClassOwnOrLead] decides owner, lead or admin for every surface; what
+// stays here is which verb each answer unlocks, and the one invariant no
+// caller may waive: a seat never writes a colleague's record.
 type PersonAuthority struct {
 	// Authorized reports a caller the authority table admitted for this
 	// person's record: the owner, whoever leads them, or an admin.
 	Authorized bool
 
-	// Agent reports a caller acting AS A SEAT rather than as a human.
-	//
-	// THE ONE RULE THIS PACKAGE KEEPS OF ITS OWN, because it is about the
-	// gesture and not about anybody's authority: an agent re-ordering a
-	// colleague's queue is a hand-off in disguise, and it bypasses the
-	// guarded take and the reassignment budget. A seat that LEADS the
-	// person is admitted by the table and refused here, which is the
-	// intended reading — the relation is real and the gesture is still
-	// not an agent's.
+	// Agent reports a caller acting AS A SEAT rather than as a human. This
+	// package's own rule, about the gesture rather than authority: an agent
+	// re-ordering a colleague's queue is a hand-off in disguise that bypasses
+	// the guarded take and the reassignment budget, so a seat that leads the
+	// person is admitted by the table and still refused here.
 	Agent bool
 }
 
-// MarkInbox applies one inbox gesture to a person's own record.
+// MarkInbox applies one inbox gesture to a person's own record
+// ([Writer.ownRecord]; the handle as [iam.RecordOwner] names it), resolved in
+// the decide by [inbox.Apply] so a refused round re-applies it to the record
+// that won. A list left past [inbox.MaxEntries] is refused [inbox.ErrFull],
+// never trimmed; a no-op publishes nothing; [inbox.CheckGesture]'s refusals
+// are marked [ErrInvalid] with their sentence unchanged.
 //
-// ONLY ON BEHALF OF THAT PERSON, or by the admin path — see
-// [Writer.ownRecord]. The handle is whoever's record it is as
-// [iam.RecordOwner] names it: a bound person's seat, a credential's own login
-// otherwise.
-//
-// RESOLVED INSIDE THE DECIDE: every notice named is looked up there for the
-// position it sits at, and the gesture is applied ([inbox.Apply]) to the
-// marks that snapshot holds, so a round the broker refuses re-applies it to
-// the record that won. A gesture that would leave a list past
-// [inbox.MaxEntries] is refused [inbox.ErrFull] rather than trimmed, and one
-// that changes nothing publishes nothing.
-//
-// THE RULES ARE THE INBOX'S, THE REFUSALS THIS PACKAGE'S: a gesture
-// [inbox.CheckGesture] refuses on what it says is a content refusal of this
-// write, marked [ErrInvalid] like every other with its sentence unchanged, so
-// each surface that classes the tracker's refusals classes it with them.
-//
-// SEEN IS THE ASKER'S FLOOR: how far they read the tracker's log, which the
-// decide waits for ([Writer.After]) before it opens its snapshot. A mark is
-// unkeyed and decided by whichever data node the estate router reaches
-// (estate's tracker.mark_inbox), and the inbox page that showed the notice may
-// have been read from a peer ahead of it — this node's copy out of service, a
-// router walk, another ingress node. A decide below the notice's record finds
-// no history row for it and refuses the mark as naming no change this company
-// recorded, which is false the moment the node catches up. With the floor, a
-// node that cannot reach it within the write budget answers `behind`
-// ([statelog.ReasonBehind]) — a condition the same call clears — and appends
-// nothing. The floor is THIS call's alone and never the node's session floor
-// (estate.Session): a position no log will reach, raised into a floor every
-// later request on the node carries, would refuse every one of them. The zero
-// position waits for nothing; a position on another log is refused
-// [ErrInvalid].
+// SEEN, how far the asker read the tracker log, is this call's floor, awaited
+// ([Writer.After]) since the deciding node may lag the one that showed the
+// notice. Unreached in the write budget: [statelog.ReasonBehind], nothing
+// appended. Zero waits for nothing; another log's position is [ErrInvalid].
+// Never the node's session floor (estate.Session): it would refuse every request.
 func (w *Writer) MarkInbox(ctx context.Context, opID, handle string, seen statelog.Position,
 	gesture inbox.Gesture[Reason], authority PersonAuthority) (WriteResult, error) {
 
@@ -161,13 +86,10 @@ func (w *Writer) MarkInbox(ctx context.Context, opID, handle string, seen statel
 	})
 }
 
-// SetChange is a gesture over one of a person's own sets.
-//
-// TWO SPELLINGS AND NEVER BOTH, for the reason [RelationIntent] gives: Set
-// states the whole collection, Add and Remove a delta against whatever the
-// decide reads. The delta is what a screen sends — "star this", "unpin that"
-// — because a whole list it formed from an earlier read drops whatever
-// another tab added in between. Set is kept for the caller that genuinely
+// SetChange is a gesture over one of a person's own sets: Set states the whole
+// collection, Add and Remove a delta against what the decide reads, never both
+// ([RelationIntent] says why). A screen sends the delta, since a whole list
+// from an earlier read drops what another tab added; Set is for a caller that
 // means the whole arrangement, such as a drag that reorders the strip.
 type SetChange[T comparable] struct {
 	// Set replaces the collection. Non-nil and empty clears it.
@@ -231,10 +153,8 @@ func (c SetChange[T]) both() bool {
 	return c.Set != nil && (len(c.Add) != 0 || len(c.Remove) != 0)
 }
 
-// values is every value the change names, for the per-value checks.
-// asked is how many entries the change itself would put in the collection: a
-// whole set's, or an add's — what a cap on the collection can refuse before
-// the stored set is read.
+// asked is how many entries the change itself would put in the collection,
+// which a cap can refuse before the stored set is read.
 func (c SetChange[T]) asked() int {
 	if c.Set != nil {
 		return len(*c.Set)
@@ -242,6 +162,7 @@ func (c SetChange[T]) asked() int {
 	return len(c.Add)
 }
 
+// values is every value the change names, for the per-value checks.
 func (c SetChange[T]) values() []T {
 	var out []T
 	if c.Set != nil {
@@ -256,19 +177,11 @@ type PinGesture struct {
 	Favorites SetChange[Favorite]
 }
 
-// WritePins applies one pin gesture to a person's own record.
-//
-// ONLY ON BEHALF OF THAT PERSON: a pin somebody else can set is one that moves
-// under them.
-//
-// # Resolved inside the decide, and capped on the RESULT
-//
-// Both lists used to be replaced whole, so starring a project from one tab
-// dropped a view pinned from another since that tab last read — and the call
-// that only meant to star something cleared every pin it did not restate.
-// The gesture is applied to what the decide reads, and the caps are held
-// against the set it would LEAVE, because that is the set a strip renders: a
-// delta that is small on its own can still be the thirty-third pin.
+// WritePins applies one pin gesture to a person's own record
+// ([Writer.ownRecord]). The gesture is applied to what the decide reads, so a
+// star from one tab cannot drop a pin made in another, and the caps hold
+// against the set it would LEAVE, the set a strip renders: a small delta can
+// still be the thirty-third pin.
 func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 	gesture PinGesture, authority PersonAuthority) (WriteResult, error) {
 
@@ -286,10 +199,9 @@ func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 			"a whole set and a change to it at once — a caller states one or "+
 			"the other, because whichever won would discard the other", named)
 	}
-	// A GESTURE PAST THE CAP ON ITS OWN is the request's — a whole set, or
-	// an add, longer than the list may ever be, which no state of the record
-	// lets land — and one that only pushes the record past it is the
-	// record's state, decided below on the set it would leave.
+	// A gesture past the cap on its own is invalid, since no state of the
+	// record lets it land; one that only pushes the record past it is the
+	// record's state, refused below on the set it would leave.
 	switch {
 	case gesture.Views.asked() > MaxPinnedViews:
 		return WriteResult{}, invalid("this gesture names %d views for %s "+
@@ -321,12 +233,10 @@ func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 			return err
 		}
 		favorites := gesture.Favorites.apply(post.Favorites)
-		// THE RECORD'S STATE: the gesture fits, and the set it would
-		// leave does not until something is unpinned.
+		// The record's state: the gesture fits, the set it would leave does
+		// not. (A strip where everything is first has no first.)
 		switch {
 		case len(views) > MaxPinnedViews:
-			// A STRIP WHERE EVERYTHING IS FIRST HAS NO FIRST, which is
-			// what the cap is for.
 			return refusedByState("that would make %d pinned views for %s, "+
 				"and %d is the most. Unpin one first", len(views), named, MaxPinnedViews)
 		case len(favorites) > MaxFavorites:
@@ -338,17 +248,12 @@ func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 	})
 }
 
-// withoutDeletedViews is a pin list less the views somebody deleted.
-//
-// A DELETE CANNOT UNPIN, because a pin is on its person's own record and a
-// view is pinned by any number of people: one record per pinner is no part of
-// one view's write. So a pinned view that was deleted stays in the list,
-// drawn nowhere (no read lists a deleted view), until its person's pins next
-// change, and that write drops it here, in its own snapshot, before the cap is
-// counted: left in, a pin nobody can see or unpin would hold one of the
-// [MaxPinnedViews] places for good. A pin naming a view this node holds no row
-// for at all is kept, since that view may be one this copy has not caught up
-// with.
+// withoutDeletedViews is a pin list less the views somebody deleted. A view's
+// delete cannot unpin (each pin lives on its pinner's own record), so a
+// deleted view stays pinned, drawn nowhere, until its person's pins next
+// change; it is dropped here before the cap is counted, or it would hold one
+// of the [MaxPinnedViews] places for good. A view with no row here is kept:
+// this copy may not have caught up with it.
 func withoutDeletedViews(ctx context.Context, tx *sql.Tx, views []string) ([]string, error) {
 	if len(views) == 0 {
 		return views, nil
@@ -381,45 +286,18 @@ func withoutDeletedViews(ctx context.Context, tx *sql.Tx, views []string) ([]str
 	return slices.DeleteFunc(slices.Clone(views), func(id string) bool { return deleted[id] }), nil
 }
 
-// WritePriorities replaces a person's ordered list of what to do next.
+// WritePriorities replaces a person's ordered list of what to do next: their
+// own, or a lead's for somebody in their line. The caller resolves the lead
+// relation (this package has no org chart); one that did not may write only
+// its own, and a seat never a colleague's ([PersonAuthority]).
 //
-// YOUR OWN, OR A LEAD'S FOR SOMEBODY IN THEIR LINE — the one authority here
-// that reaches across people, because telling somebody what to do next is what
-// a lead is for. That write is the one that produces a notification: being
-// told what to do next by somebody else is news, and re-ordering your own list
-// is not.
+// A lead's write both stamps the record and wakes the person
+// ([Writer.prioritisedWake]): a stamp is seen only by somebody who opens a
+// screen, and a seat has none.
 //
-// # Why it is a wake AND a stamp, when it used to be only a stamp
-//
-// This verb used to argue that a notification "would not do it", because every
-// Notify the domain carried was task-shaped and one attached to a person record
-// "renders no card and reaches nobody". That was an accurate description of the
-// code and a wrong conclusion from it: the parser dropped every non-task
-// subject outright (see [ObjectKind.Routable]) and the prompt had no frame but
-// a task's, so the wake was unreachable — while recipients.go already routed
-// `prioritised` off Snapshot.Person, the reason was already in the enum and
-// already Primary, and the spec already called this write "the one that
-// produces a `prioritised` Notify".
-//
-// The stamp alone is only half an answer, and which half it is matters: a
-// stamp is seen by somebody who OPENS A SCREEN, and the recipients of this
-// gesture are seats, which have no screen. A lead re-ordering an agent's queue
-// and getting silence could not tell whether it was read.
-//
-// The caller resolves the lead relation, because this package has no org
-// chart; what it enforces is that a caller which did NOT resolve one may only
-// write its own.
-//
-// # The whole list, conditioned on the one it replaces
-//
-// An order is the one part of a person's record a gesture cannot express as a
-// delta: moving one entry up is a statement about every entry around it. So it
-// stays a whole list, and IFMATCH is what keeps that from being last-write-wins:
-// a reorder made from a screen that read version N is refused
-// [ErrStaleVersion] once the record has moved past N, and the caller re-reads
-// rather than restoring the order somebody else just replaced. Nil writes
-// unconditionally, which is an assistant's "put these three first"; zero is a
-// condition like any other — "nobody has written this person yet".
+// The list stays whole, since an order is a statement about every entry, and
+// ifMatch keeps it from being last-write-wins: a stale version is refused
+// [ErrStaleVersion]. Nil writes unconditionally; zero means "never written".
 func (w *Writer) WritePriorities(ctx context.Context, opID, handle string,
 	priorities []string, ifMatch *uint64,
 	authority PersonAuthority) (WriteResult, error) {
@@ -443,9 +321,8 @@ func (w *Writer) WritePriorities(ctx context.Context, opID, handle string,
 	}
 	return w.writePersonNotifying(ctx, opID, handle, ChangePrioritised,
 		func(tx *sql.Tx, post *Person, at time.Time) (*Notify, error) {
-			// COMPARED INSIDE THE DECIDE, against the version this
-			// snapshot read: a comparison made before it would pass a
-			// record that moved between the two reads.
+			// Compared inside the decide: a comparison before it would pass
+			// a record that moved between the two reads.
 			if ifMatch != nil && *ifMatch != post.Version {
 				return nil, fmt.Errorf("worklet: %s's priority list is at "+
 					"version %d and this reorder was made against %d — read "+
@@ -453,48 +330,29 @@ func (w *Writer) WritePriorities(ctx context.Context, opID, handle string,
 					named, post.Version, *ifMatch, ErrStaleVersion)
 			}
 			post.Priorities = priorities
-			// THE STAMP IS WHAT MAKES THIS AUTHORITY VISIBLE ON THE
-			// SCREEN. A lead silently re-ordering somebody's queue is a
-			// person who starts the day on work they did not choose and
-			// cannot tell why — so the stamp sits on the thing they are
-			// already looking at.
-			//
-			// AND THE PERSON'S OWN WRITE CLEARS IT, because taking your
-			// queue back is the gesture that says you have seen it.
+			// The stamp shows a lead's reorder on the screen the person
+			// already looks at; their own write clears it, since taking the
+			// queue back says they have seen it.
 			post.PrioritiesSetBy, post.PrioritiesSetAt = "", time.Time{}
 			if own {
-				// YOUR OWN LIST WAKES NOBODY. Re-ordering your own
-				// queue is not news to anybody, least of all to you,
-				// and this is the one tracker write that vetoes its
-				// own delivery per call.
+				// Your own list wakes nobody: the one tracker write that
+				// vetoes its own delivery per call.
 				return nil, nil
 			}
-			// THE PERSON WHO CHOSE IT, which is the actor: a person
-			// acting through their own credential writes AS the seat the
-			// identity directory binds them to ([iam.ActorFor]), so the
-			// stamp names somebody the report can find in the chart and
+			// The actor writes AS the seat the directory binds them to
+			// ([iam.ActorFor]), so the stamp names somebody in the chart,
 			// never a credential's label.
 			post.PrioritiesSetBy, post.PrioritiesSetAt = w.Actor, at
-			// AND THE WAKE, which is the other half of the same
-			// authority: the stamp is seen by somebody who opens the
-			// screen, and a SEAT has no screen. Being told what to do
-			// next by somebody above you is an instruction, and the one
-			// Addressed wake of the four — a seat takes it up or says
-			// why it cannot.
+			// And the wake, for a seat with no screen: the one Addressed
+			// wake of the four, which a seat takes up or says why it cannot.
 			return w.prioritisedWake(ctx, tx, handle, priorities)
 		})
 }
 
-// prioritisedWake is what a lead writing somebody's queue announces.
-//
-// IT NAMES THE TASK AT THE TOP, which is what makes this wake actionable
-// rather than a notice that something moved: "your list changed" sends a seat
-// to read the whole list and work out what is new, and the list does not
-// record what was new. The first entry is the answer to "what do I do next",
-// which is the only question the gesture was making.
-//
-// AN EMPTY LIST WAKES NOBODY. A lead clearing somebody's priorities is taking
-// an instruction back rather than giving one, and there is no task to name.
+// prioritisedWake is what a lead writing somebody's queue announces. It names
+// the task at the top, since the list does not record what changed and the
+// first entry answers "what do I do next". An empty list wakes nobody: it
+// takes an instruction back, and there is no task to name.
 func (w *Writer) prioritisedWake(ctx context.Context, tx *sql.Tx, handle string,
 	priorities []string) (*Notify, error) {
 
@@ -506,18 +364,14 @@ func (w *Writer) prioritisedWake(ctx context.Context, tx *sql.Tx, handle string,
 		return nil, err
 	}
 	if !held {
-		// A TASK THIS NODE HAS NOT APPLIED YET. The list is still
-		// written — the priorities are the caller's to set and a wake is
-		// not worth refusing a write for — but naming a task whose row
-		// is not here would put an empty key and an empty title on the
-		// card. Silence is the honest degradation.
+		// A task this node has not applied yet: the list is still written,
+		// but a card with an empty key and title is worse than silence.
 		return nil, nil
 	}
-	// THE EXCERPT NAMES THE TASK AS ITS READER WOULD OPEN IT, because it is
-	// the line a seat is handed as "what changed": a duplicate of a key
+	// The excerpt names the task as a reader would open it: a duplicate key
 	// named by the key alone sends the seat to the task that claimed it.
-	// The snapshot's own flag is derived again by [Writer.decide], from the
-	// same snapshot, so the two cannot disagree.
+	// [Writer.decide] derives the snapshot's flag from the same snapshot, so
+	// the two agree.
 	collision, err := keyHeldByAnother(ctx, tx, top.Key, top.ID)
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read whether key %s opens task %s: %w",
@@ -530,15 +384,13 @@ func (w *Writer) prioritisedWake(ctx context.Context, tx *sql.Tx, handle string,
 			Task:   top.ID,
 			Key:    top.Key,
 			Title:  top.Title,
-			// THE PROJECT AND STATUS TRAVEL because the card renders
-			// them and the seat would otherwise open the task to learn
-			// whether the thing it has just been told to do first is
-			// already done.
+			// The card renders project and status, so the seat need not
+			// open the task to learn whether it is already done.
 			Project:     top.Project,
 			Status:      top.Status,
 			StatusGroup: top.StatusGroup,
 			Assignee:    top.Assignee,
-			// THE PERSON, as the stamp names them — see the write above.
+			// As the stamp names them ([Writer.WritePriorities]).
 			PrioritisedBy: w.Actor,
 			Position:      1,
 		},
@@ -548,18 +400,11 @@ func (w *Writer) prioritisedWake(ctx context.Context, tx *sql.Tx, handle string,
 	}, nil
 }
 
-// ownRecord refuses a write on somebody else's half of a person record.
-//
-// THE OWNER, OR THE ADMIN PATH, AND NEVER AN AGENT. The owner arm is a
-// comparison this package can make on its own; the second is the authority
-// table's answer, and it exists because a departed person's queue has to be
-// unstickable by somebody. What it is NOT is a lead path: a lead re-orders
-// what their report works on ([WritePriorities]) and marking somebody's mail
-// read is a gesture nobody asked a lead to make, which is exactly the line
-// [authz.ClassOwnRecord] draws.
-//
-// BOTH SIDES ARE HANDLES — the writer's actor ([Writer.As]) and the record's
-// handle as each verb resolved it — and the refusal names both.
+// ownRecord refuses a write on somebody else's half of a person record: the
+// owner or the admin path (so a departed person's queue can be unstuck), never
+// an agent, and not a lead, who re-orders work ([Writer.WritePriorities]) but
+// has no call to mark somebody's mail read ([authz.ClassOwnRecord]). Both
+// sides are handles: the writer's actor ([Writer.As]) and the record's.
 func (w *Writer) ownRecord(handle, what string, authority PersonAuthority) error {
 	switch {
 	case w.Actor == handle:
@@ -577,19 +422,13 @@ func (w *Writer) ownRecord(handle, what string, authority PersonAuthority) error
 // [inboxPositions] and named for the plan test.
 const recordPositionStatement = `SELECT log_seq FROM tracker_history WHERE id = ?`
 
-// inboxPositions finds the log position of every notice a gesture names.
+// inboxPositions finds the log position of every notice a gesture names, from
+// its history row (never swept) inside the decide. The lists are pruned
+// against the seen-through position, so a caller-supplied position could lose
+// a mark silently: a read mark at zero is pruned by the write that makes it.
 //
-// FROM THE HISTORY ROW, INSIDE THE DECIDE. A mark has to carry the position
-// its notice sits at, because the lists are pruned against the seen-through
-// position — and a caller that supplied it could get it wrong in the one way
-// that loses the mark silently: a read mark at position zero is pruned on the
-// write that makes it. The history row is the record the notice points at and
-// is never swept, so the position is a fact of the rows this snapshot holds
-// rather than a claim the caller made.
-//
-// PACKED, `(generation << 40) | seq`, which is what every durable column in
-// this domain stores: a mark from before a reanchor compares below one after
-// it rather than as a small number in the same space.
+// Packed `(generation << 40) | seq`, like every durable column here, so a mark
+// from before a reanchor compares below one after it.
 func inboxPositions(ctx context.Context, tx *sql.Tx,
 	g inbox.Gesture[Reason]) (map[string]uint64, error) {
 
@@ -632,36 +471,26 @@ func nilIfEmpty[T any](in []T) []T {
 	return in
 }
 
-// writePerson applies one part of a person's record, carrying the rest.
-//
-// EVERY VERB READS THE STORED ROW AND CARRIES THE REST. The three write
-// disjoint parts of one document, and a verb that took the whole thing from
-// its caller would let an inbox write clear somebody's pins by omission.
-//
-// NO NOTIFICATION: a mark, a snooze and a pin are the person's own
-// bookkeeping and news to nobody — the one person write that wakes anybody is
-// a lead's priority write, which is [Writer.writePersonNotifying] directly.
+// writePerson applies one part of a person's record, carrying the rest read
+// from the stored row: the verbs write disjoint parts of one document, and one
+// taking it whole from its caller would let an inbox write clear somebody's
+// pins by omission. It notifies nobody; only a lead's priority write does,
+// through [Writer.writePersonNotifying] directly.
 func (w *Writer) writePerson(ctx context.Context, opID, handle string,
 	apply func(*sql.Tx, *Person, time.Time) error) (WriteResult, error) {
 
-	// EVERY OTHER PERSON WRITE IS THE PERSON'S OWN BOOKKEEPING — a pin, an
-	// inbox mark, a snooze — and it files under its own kind rather than
-	// under the operation. The row is written either way; what changes is
-	// whether a reader can name it.
+	// Bookkeeping files under its own kind rather than the operation, so a
+	// reader can name it.
 	return w.writePersonNotifying(ctx, opID, handle, ChangePersonUpdated,
 		func(tx *sql.Tx, post *Person, at time.Time) (*Notify, error) {
 			return nil, apply(tx, post, at)
 		})
 }
 
-// writePersonNotifying is the same write with a NOTIFICATION the apply decides.
-//
-// THE NOTIFY IS BUILT INSIDE THE DECIDE, which is not a convenience: the one
-// person write that announces itself is a lead writing somebody else's
-// priority list, and what it announces — the task now at the top, and its
-// position — is a property of the list AFTER the apply, read from rows in the
-// same snapshot. Built outside, it would name whichever task was first when
-// the caller last looked.
+// writePersonNotifying is the same write with a notification the apply
+// decides, built inside the decide: what a lead's priority write announces
+// (the task now at the top) is a property of the list after the apply, read
+// in the same snapshot, not whichever task was first when the caller looked.
 func (w *Writer) writePersonNotifying(ctx context.Context, opID, handle string,
 	kind ChangeKind,
 	apply func(*sql.Tx, *Person, time.Time) (*Notify, error)) (WriteResult, error) {
@@ -670,9 +499,8 @@ func (w *Writer) writePersonNotifying(ctx context.Context, opID, handle string,
 		return WriteResult{}, invalid("a person write names nobody")
 	}
 	subject := PersonSubject(handle)
-	// THE PERSON FAMILY, which is what a person subject resolves to
-	// anyway: a person is not in a project and not in the workspace
-	// container, so the family is the narrowest honest term.
+	// The person family, the narrowest honest term: a person is in no
+	// project and not in the workspace container.
 	scope := ScopeSet{Subject: true}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
@@ -692,17 +520,11 @@ func (w *Writer) writePersonNotifying(ctx context.Context, opID, handle string,
 				return statelog.Decision{}, err
 			}
 			if held && notify == nil && reflect.DeepEqual(before, post) {
-				// A GESTURE THAT MOVES NOTHING PUBLISHES NOTHING: a
-				// read-through behind the stored position, a notice
-				// marked read twice, a retry of a write that landed.
-				// Every apply builds fresh slices rather than editing
-				// the ones it was handed, which is what makes the
-				// comparison with the copy honest.
-				//
-				// ONLY ON A RECORD THAT EXISTS: the first write is what
-				// creates a person's record, and a record that exists
-				// is itself a fact a read turns on — its defaults are
-				// the stored ones from then on, not the shipped ones.
+				// A gesture that moves nothing publishes nothing. Every
+				// apply builds fresh slices, which keeps this comparison
+				// honest. Only on a record that exists: the first write
+				// creates it, and from then on its defaults are the
+				// stored ones, not the shipped ones.
 				return statelog.Decision{Version: int64(post.Version)}, nil
 			}
 			post.UpdatedAt = at

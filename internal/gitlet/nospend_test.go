@@ -10,23 +10,18 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// spendWords are the words a column that counts what a turn spent is named
-// by, in the estate's own spelling: the tracker's task row counts `spend_*`
-// (its tokens among them), the usage history counts tokens and their cost,
-// and a budget is the window those counts are held to. A column is named of
-// words joined by `_`, and one of these among them is a column of spend.
+// spendWords are the words, in the estate's own spelling, of a column counting
+// what a turn spent (the tracker's `spend_*`, the usage history's tokens and
+// cost, a budget's window): a column is spend if any of its `_`-separated
+// words is one.
 var spendWords = []string{"spend", "spent", "tokens", "cost", "usd", "cents", "price", "budget", "credits"}
 
-// A CHANGE CARRIES NO SPEND (ADR-0097): no table of the code domain — a
-// change's rows, its conversation's, every repository row beside them — has a
-// column that counts what a turn spent. A turn woken about a change is charged
-// to the work item the change implements (ADR-0022's trigger), and a sum kept
-// on the change as well would be a second total of one turn, disagreeing with
-// the item's the moment a turn touches two changes of one item.
-//
-// Read from the MIGRATED estate's own schema, every table the domain declares
-// ([gitlet.Domain.Tables]), so a migration that adds such a column fails here
-// however it names its table.
+// A CHANGE CARRIES NO SPEND (ADR-0097): no table the code domain declares
+// ([gitlet.Domain.Tables]) has a column counting what a turn spent. The turn
+// is charged to the work item the change implements (ADR-0022's trigger); a
+// sum on the change too would be a second total that disagrees once a turn
+// touches two changes of one item. Read from the MIGRATED schema, so a
+// migration adding such a column fails here whatever its table is named.
 //
 // Mutation: add `spend_tokens` to code_changes in a migration, or treat
 // `token` (code_names' claim) as a spend word, and the case fails.

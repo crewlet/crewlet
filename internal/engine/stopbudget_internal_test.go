@@ -25,13 +25,12 @@ import (
 // ITS OWN.
 //
 // The node's announcement and each released seat's last lifecycle event are
-// publishes on the event stream, which can lose its quorum while the
-// coordination store answers, and a publish it never acknowledges waits out
-// whatever deadline it is handed. As steps of the stop's allowance they spent
-// the time every lease behind them needed. Here a stream that holds each one
-// past the whole allowance: each is published on the client's own request
-// timeout, free of its caller's cancellation, and the allowance is whole when
-// both are over.
+// publishes on the event stream, which can lose quorum while the coordination
+// store answers; an unacknowledged publish waits out whatever deadline it is
+// handed, so charged to the allowance it spends what the leases need. Here the
+// stream holds each past the whole allowance: each must be published on the
+// client's own request timeout, free of its caller's cancellation, and the
+// allowance is whole afterwards.
 func TestAStopsLastEventsSpendNoneOfItsAllowance(t *testing.T) {
 	t.Parallel()
 	const allowance = 200 * time.Millisecond
@@ -124,35 +123,17 @@ func (s *heldPublishes) asked() []heldPublish {
 }
 
 // A HOLD GIVEN BACK ONCE THE TEARDOWN HAS BEGUN IS A STEP OF THE STOP'S
-// ALLOWANCE, AND ONE GIVEN BACK BEFORE IT — THE DRAIN'S WAIT INCLUDED — IS NOT.
+// ALLOWANCE; ONE GIVEN BACK BEFORE IT, THE DRAIN'S WAIT INCLUDED, IS NOT.
 //
-// The integration loop's pass holds its surface's lease and gives it back as
-// it ends, on the context the hold was TAKEN on with its cancellation removed
-// — a context made long before any stop — and the teardown waits for that
-// pass. Against a store that had gone away the give-back sat out a client's
-// whole request timeout beside the stop's allowance, five seconds past it
-// ([holdLeases]). Here a store that answers a release only after a stall of
-// four allowances, given back four times:
+// The integration loop's pass gives its hold back on the context it was taken
+// on, cancellation removed, and the teardown waits for that pass ([holdLeases]).
+// Against a store stalling each release four allowances: before any stop, and
+// during the drain (whose wait has no bound, so a charge there spends the
+// seats' time), the give-back waits the stall out; in flight as the TEARDOWN
+// begins, or begun after it, it ends with the allowance.
 //
-//   - before any stop, the give-back waits the stall out, because a pass
-//     ending on its own is no stop's step;
-//   - once the DRAIN has begun and before the teardown, the same, and the
-//     allowance is whole afterwards: the drain's wait for running turns has no
-//     bound and the integration loop runs through it, so a pass charged there
-//     spent the time the seats are given back on when the wait ends;
-//   - begun during the drain and still in flight when the TEARDOWN begins, it
-//     ends with the allowance, because the teardown is what waits for it;
-//   - begun once the teardown has, it ends with the allowance too.
-//
-// AN ENGINE LITERAL, as the cases beside it build, rather than one New wires:
-// what is measured is the stop's allowance — [Engine.workerHold], the
-// [holdLeases] it takes its holds through, [Engine.stepOnceTornDown] and
-// [Engine.stopping], none of which reads anything New builds beyond the lease
-// store and the TTL. And the TTL has to be short enough to wait four stalls
-// of four allowances out, below the floor a deployment's Tier A may set
-// ([config.MinLeaseTTL]), which New holds every bootstrap to: at the floor the
-// case would wait out forty seconds of stalls to say what it says at 1.5 s,
-// since every bound it reads is a fraction of the TTL.
+// An Engine literal with a TTL below [config.MinLeaseTTL], which New refuses:
+// every bound read is a fraction of the TTL, so at the floor it waits 40 s.
 func TestAHoldGivenBackDuringTheTeardownIsAStepOfItsAllowance(t *testing.T) {
 	t.Parallel()
 	const ttl = 1500 * time.Millisecond
@@ -249,27 +230,16 @@ func TestAHoldGivenBackDuringTheTeardownIsAStepOfItsAllowance(t *testing.T) {
 
 // A SANDBOX'S TAKER LEASE IS GIVEN BACK ON THE STOP'S ONE ALLOWANCE.
 //
-// The sandbox coordinator claims its taker lease as it is built and gives it
-// back as its stop ends, once its last keep has, on the lifetime it claimed it
-// on — a context no stop reaches. On a release bound of its own, one renewal
-// interval, a member whose coordination store had gone spent that interval
-// past the allowance its other give-backs had already spent. Through the lease
-// store the engine hands its coordinator ([holdLeases]), the give-back is a
-// step of the stop: here the allowance is spent before the sandbox stops, and
-// the release, against a store that answers nothing, is cut by the stop — its
-// call cancelled the moment it is made — rather than by its own interval's
-// deadline. TOLD BY WHAT CUT THE CALL, as the store saw it, never by how long
-// the stop took, which a loaded runner's clock would decide.
-//
-// AN ENGINE LITERAL WITH AN ALLOWANCE ALREADY SPENT, as the give-backs before
-// the sandbox's leave it on a store that has gone, and a TTL below the floor a
-// booted engine is held to ([config.MinLeaseTTL]) for the reason the hold's
-// case above gives: the interval the mutation below waits out is a fraction of
-// it.
+// The sandbox coordinator gives its taker lease back as its stop ends, on the
+// context it claimed it on, which no stop reaches; through the lease store the
+// engine hands it ([holdLeases]) the give-back is a step of the stop. Here the
+// allowance is already spent, so the release against a silent store must be
+// cancelled by the stop at once, not cut by its own renewal interval's
+// deadline. Told by what cut the call, as the store saw it, never by a clock.
+// The TTL is below [config.MinLeaseTTL] for the hold case's reason above.
 //
 // Mutation: hand the coordinator the node's lease store as it is, and the
-// release against the stalled store is cut by its own interval's deadline
-// rather than by the stop.
+// release is cut by its own interval's deadline rather than by the stop.
 func TestASandboxsTakerLeaseIsGivenBackOnTheStopsAllowance(t *testing.T) {
 	t.Parallel()
 	const ttl = 6 * time.Second
@@ -318,9 +288,9 @@ func TestASandboxsTakerLeaseIsGivenBackOnTheStopsAllowance(t *testing.T) {
 }
 
 // slowReleases is a lease store that answers a release only after stall, or
-// when the request's context ends first, saying on entered — when it is not
-// nil and has room — that a release has begun stalling, and keeping what cut
-// the last one its context ended ([slowReleases.cutBy]).
+// when the request's context ends first, signalling entered (when it has room)
+// as a release begins stalling and keeping what cut the last one
+// ([slowReleases.cutBy]).
 type slowReleases struct {
 	coord.Backend
 	stall   atomic.Int64
@@ -359,14 +329,11 @@ func (s *slowReleases) cutBy() error {
 
 // AN ADMISSION IS WITHDRAWN ON A SHARE NO GIVE-BACK BEFORE IT CAN SPEND.
 //
-// Every lease a stop gives back falls back to lapsing on its TTL, which is
-// what lets them share one allowance; an admission has no TTL, so one a stop
-// misses stays until an operator excludes the node. Here a store that stopped
-// answering while the leases were given back — spending every moment of their
-// allowance — and answers again by the time the admission is withdrawn: the
-// withdrawal lands. And the share is CARVED OUT of the stop allowance rather
-// than added beside it, so a stop against a store that never answers still
-// spends one allowance in total.
+// A lease a stop misses lapses on its TTL; an admission has none, so one missed
+// stays until an operator excludes the node. Here the store is silent while the
+// leases are given back, spending their whole allowance, and answers again for
+// the withdrawal, which lands. The share is CARVED OUT of the allowance, not
+// added beside it, so a stop against a silent store still spends one allowance.
 func TestAnAdmissionIsWithdrawnOnAShareNoGiveBackCanSpend(t *testing.T) {
 	t.Parallel()
 	const ttl = 3 * time.Second
@@ -401,11 +368,9 @@ func TestAnAdmissionIsWithdrawnOnAShareNoGiveBackCanSpend(t *testing.T) {
 		t.Fatalf("admissions = %+v after the withdrawal, want none", admissions)
 	}
 
-	// ONE ALLOWANCE IN TOTAL: what a fresh stop's give-backs get, and the
-	// admission's share beside it. Never more — a share added beside the
-	// allowance is a third over it — and less only by the moment between
-	// beginning the step and reading the clock, which a quarter of the
-	// allowance covers on any machine.
+	// ONE ALLOWANCE IN TOTAL: a fresh stop's give-back budget plus the
+	// admission's share, never more, and less only by the moment before the
+	// clock is read, which a quarter of the allowance covers.
 	fresh := &Engine{leaseTTL: ttl}
 	step, end := seat.StopStep(seat.WithStopBudget(context.Background(), fresh.stopping()))
 	defer end()

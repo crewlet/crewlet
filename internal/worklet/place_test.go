@@ -17,14 +17,11 @@ import (
 
 // ---- the arithmetic ------------------------------------------------------ //
 
-// A MOVE NEVER MINTS A KEY A CREATE COULD.
-//
-// The proof that a create and a drag can never collide is about the VALUE: a
-// create's key is a pure integer at or above the origin, and every move's key
-// carries a fraction or sits strictly below it. The cheapest key at either end
-// of a board is a pure integer in the create lattice — after the last task it
-// is exactly the key the next create mints — so a mint that took it would
-// file the next task onto the card somebody just dragged to the bottom.
+// A MOVE NEVER MINTS A KEY A CREATE COULD: a create's key is a pure integer at
+// or above the origin, and every move's key carries a fraction or sits strictly
+// below it. The cheapest key at either end of a board is such an integer (after
+// the last task, exactly the next create's), so taking it would file the next
+// task onto the card just dragged to the bottom.
 func TestAMoveNeverMintsACreatesKey(t *testing.T) {
 	t.Parallel()
 	gaps := []struct{ a, b worklet.Rank }{
@@ -84,10 +81,9 @@ func TestADropWhereTheCardAlreadySitsMovesNothing(t *testing.T) {
 
 // A GAP WHOSE KEYS HAVE GROWN LONG IS RE-SPREAD IN THE DRAG'S OWN RECORD.
 //
-// Repeated drops into one gap subdivide it and the keys grow. The drop that
-// would mint past the threshold instead re-mints a window around the gap, in
-// the order it was in, with the moved card in its place — so the board is
-// never observed half-spread and the keys are short again.
+// The drop that would mint past the threshold re-mints a window around the
+// gap instead, in order, with the moved card in its place, so the board is
+// never observed half-spread.
 func TestALongGapIsReSpreadInOrder(t *testing.T) {
 	t.Parallel()
 	nest := worklet.Rank("a1" + strings.Repeat("V", worklet.RankRenormaliseAt))
@@ -96,7 +92,7 @@ func TestALongGapIsReSpreadInOrder(t *testing.T) {
 		t.Fatalf("KeysBetween: %v", err)
 	}
 	// Ten nested rows either side of the gap, then one short key on each
-	// side that the window can escape to.
+	// side for the window to escape to.
 	var below, above []worklet.Placement
 	for i := 9; i >= 0; i-- {
 		below = append(below, worklet.Placement{Task: fmt.Sprintf("b%d", i), Rank: keys[i]})
@@ -138,9 +134,9 @@ func TestALongGapIsReSpreadInOrder(t *testing.T) {
 
 // A SHARED KEY ACROSS THE GAP IS PULLED APART, rather than refused.
 //
-// Two cards sharing a key have nothing between them, so a drop between them
-// has no key to take. The window re-mints both apart in the same record,
-// which is the duty's duplicate repair done by the drag that found it.
+// Two cards sharing a key leave a drop between them no key to take, so the
+// window re-mints both apart in the same record: the duty's duplicate repair,
+// done by the drag that found it.
 func TestADropBetweenTwoCardsSharingAKeyPullsThemApart(t *testing.T) {
 	t.Parallel()
 	got, err := worklet.PlaceInGap(worklet.Placement{Task: "m", Rank: "a9"},
@@ -164,9 +160,8 @@ func TestADropBetweenTwoCardsSharingAKeyPullsThemApart(t *testing.T) {
 // PAST THE INLINE CAP THE DRAG STILL LANDS.
 //
 // A window that cannot find short keys even at [worklet.RankRespreadInline]
-// rows falls back to the one long key: the applier flags the project for the
-// duty's paced walk, and the person's drag is never refused because a board is
-// crowded.
+// rows falls back to the one long key, which the applier flags for the duty's
+// paced walk: a drag is never refused because a board is crowded.
 func TestADragPastTheInlineCapStillLands(t *testing.T) {
 	t.Parallel()
 	nest := worklet.Rank("a1" + strings.Repeat("V", worklet.RankRenormaliseAt+8))
@@ -212,8 +207,8 @@ func fourCards(t *testing.T, r *roundTrip) {
 // A MOVE WITHIN A LANE REORDERS ONLY THAT ITEM.
 //
 // One record, one placement: the neighbours keep their keys, and the card's
-// own version does not move — the order stamps `scoped_through` — so the
-// board's next drag of the same card is not refused by this one.
+// version does not move (the order stamps `scoped_through`), so the board's
+// next drag of the same card is not refused by this one.
 func TestAMoveWithinALaneReordersOnlyThatItem(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -267,11 +262,10 @@ func TestAMoveWithinALaneReordersOnlyThatItem(t *testing.T) {
 
 // AN EDIT AFTER A DRAG KEEPS THE CARD WHERE IT WAS DRAGGED.
 //
-// The order writes a task's place into its document and its rank column alike,
-// and every task write re-upserts the row from a document merged against that
-// place — so a write carries the dragged key through rather than putting the
-// card back at the key it was filed at, and the detail read answers the same
-// place the board draws.
+// The order writes a task's place into its document and its rank column, and a
+// task write re-upserts the row from the merged document, so the write carries
+// the dragged key through and the detail read answers the place the board
+// draws.
 func TestAnEditAfterADragKeepsTheCardsPlace(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -336,9 +330,8 @@ func TestAMoveAcrossLanesChangesStatusAndRankTogether(t *testing.T) {
 
 // A STALE MOVE IS REFUSED, AND NOTHING LANDS.
 //
-// A card somebody changed after the board was drawn is not the card the
-// person dragged. Refused before either half is written — with a lane change
-// and without one — so a stale drag leaves the board exactly as it was.
+// Refused before either half is written, with a lane change and without one,
+// so a stale drag leaves the board exactly as it was.
 func TestAStaleMoveIsRefused(t *testing.T) {
 	t.Parallel()
 	for _, lane := range []bool{false, true} {
@@ -381,9 +374,8 @@ func TestAStaleMoveIsRefused(t *testing.T) {
 
 // A CARD DRAGGED TO THE BOTTOM LEAVES THE NEXT CREATE'S KEY FREE.
 //
-// The bottom of a board is where the next create lands, and its key is the
-// next integer. A drag that took that integer would be filed onto by the next
-// task anybody creates — a duplicate the applier flags and the duty repairs,
+// The bottom of a board is where the next create lands, at the next integer;
+// a drag that took it would be filed onto by the next create, a duplicate
 // manufactured by an ordinary drag.
 func TestADragToTheBottomLeavesTheNextCreatesKeyFree(t *testing.T) {
 	t.Parallel()
@@ -401,8 +393,7 @@ func TestADragToTheBottomLeavesTheNextCreatesKeyFree(t *testing.T) {
 	r.drain()
 
 	// DISTINCT KEYS, asked of the rows: a create is never probed for a
-	// duplicate — the proof says it cannot collide — so a collision here
-	// would sit on the board unflagged, ordered only by id.
+	// duplicate, so a collision here would sit on the board unflagged.
 	ranks := boardRanks(t, r)
 	for i := 1; i < len(ranks); i++ {
 		if ranks[i] == ranks[i-1] {
@@ -442,11 +433,9 @@ func TestADropThatNamesNoGapIsRefused(t *testing.T) {
 
 // AN EDIT AFTER A DRAG LEAVES THE CARD WHERE IT WAS DRAGGED.
 //
-// A drag writes the dragged key to the task's ROW and to its DOCUMENT, and a
-// later edit merges into the document and upserts the row from it — so a drag
-// that left either copy at the key the task was filed at would have the next
-// edit put the card back there, the next time anybody touched it. The edit
-// leaves both the column and the document at the dragged key.
+// A drag writes the dragged key to the task's ROW and its DOCUMENT; an edit
+// merges into the document and upserts the row from it, so a drag that left
+// either copy at the filed key would have the next edit put the card back.
 func TestAnEditAfterADragLeavesTheCardWhereItWasDragged(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -502,9 +491,8 @@ func TestAnEditAfterADragLeavesTheCardWhereItWasDragged(t *testing.T) {
 
 // A DROP BESIDE A CARD IN ANOTHER PROJECT, OR IN THE TRASH, IS REFUSED.
 //
-// The neighbour is read inside the order's own snapshot, and a neighbour that
-// is not on this board any more bounds no gap in it: a key minted beside it
-// would put the card somewhere nobody dropped it.
+// A neighbour no longer on this board bounds no gap in it: a key minted beside
+// it would put the card somewhere nobody dropped it.
 func TestADropBesideACardNotOnTheBoardIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -543,9 +531,8 @@ func TestADropBesideACardNotOnTheBoardIsRefused(t *testing.T) {
 
 // A LANE CHANGE THAT LANDS AND A PLACE THAT DOES NOT IS REPORTED, NOT FAILED.
 //
-// A move across lanes is two appends. When somebody writes the task between
-// them, the placement — conditioned on the version the lane change wrote — is
-// refused, and the lane change stands: the call answers what landed and names
+// When somebody writes the task between the two appends, the placement is
+// refused and the lane change stands: the call answers what landed and names
 // what did not, because a caller told "failed" would drag the card back.
 func TestALaneChangeWhosePlaceLostARaceStands(t *testing.T) {
 	t.Parallel()
@@ -554,9 +541,9 @@ func TestALaneChangeWhosePlaceLostARaceStands(t *testing.T) {
 	version := r.task(t, "t-4").Task.Version
 	order := strings.Join(boardOrder(t, r), ",")
 
-	// THE INTERLOPER, run from inside the placement's wait for the lane
-	// change: this node applies the lane change, then somebody edits the
-	// card before the order's decide reads it.
+	// THE INTERLOPER, run inside the placement's wait for the lane change:
+	// it edits the card after the lane change applies and before the
+	// order's decide reads it.
 	var mu sync.Mutex
 	interloped := false
 	r.waiter.mu.Lock()
@@ -610,15 +597,12 @@ func TestALaneChangeWhosePlaceLostARaceStands(t *testing.T) {
 
 // A LANE CHANGE STILL PENDING HERE STILL CONDITIONS THE PLACEMENT.
 //
-// A lane step that is durable on the log but that this node's applier has not
-// reached inside the resolve budget answers `pending`, and a pending result
-// carries a position and no version. The placement's precondition is that
-// position — it IS the version the lane change wrote — so a writer who edits
-// the card between the two appends still refuses the placement as stale, and
-// the drag answers that same version as the board's next if_match. Taken
-// from the result's version instead, both were zero: the placement landed
-// conditioned on nothing, on a card somebody else had since changed, and the
-// board's next drag sent an if_match the tool refuses.
+// A lane step durable on the log but not yet applied here answers `pending`,
+// with a position and no version. That position IS the version the lane change
+// wrote, so it conditions the placement (an edit between the appends still
+// refuses it as stale) and is the board's next if_match. The result's version
+// would be zero: a placement conditioned on nothing, and an if_match the tool
+// refuses.
 func TestAPendingLaneChangeStillConditionsThePlacement(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -627,9 +611,8 @@ func TestAPendingLaneChangeStillConditionsThePlacement(t *testing.T) {
 	order := strings.Join(boardOrder(t, r), ",")
 
 	// EVERY APPEND ANSWERS PENDING, and the applier runs only inside the
-	// placement's wait for its own lane change — which is where the
-	// interloper edits the card, after the lane change applied and before
-	// the order's decide reads it.
+	// placement's wait for its lane change, where the interloper edits the
+	// card after the lane change applies and before the order's decide.
 	r.lagBehindOwnWrites()
 	var mu sync.Mutex
 	interloped := false
@@ -692,13 +675,11 @@ func TestAPendingLaneChangeStillConditionsThePlacement(t *testing.T) {
 
 // A DRAG RETRIED AFTER ITS LANE LANDED IS PLACED, NOT REFUSED AS STALE.
 //
-// The retry is gated on the OPERATION, never on the state its first attempt
-// produced: the caller sends the lane it dropped into again, the ledger
-// answers the lane step with the change the first attempt made, and the
-// placement is conditioned on the version THAT change wrote. A caller that
-// compared the lane with the card and left it out — because the card now
-// reads as being in it — conditioned the placement on the version it read
-// before the lane change, and was refused as stale by nobody but itself.
+// The retry is gated on the OPERATION, never on the state the first attempt
+// produced: the caller sends the lane again, the ledger answers the lane step,
+// and the placement is conditioned on the version THAT change wrote. Leaving
+// the lane out because the card now reads as in it would condition on the
+// version before the change and be refused as stale by itself.
 func TestADragRetriedAfterItsLaneLandedIsPlacedNotRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -752,10 +733,9 @@ func TestADragRetriedAfterItsLaneLandedIsPlacedNotRefused(t *testing.T) {
 
 // A DROP INTO THE LANE THE CARD IS ALREADY IN WRITES NOTHING ON THE TASK.
 //
-// Which is what lets a caller always send the lane it dropped into: a status
-// commit that moved nothing would still stamp a version — refusing the
-// board's next if_match on the card — write a history row and wake the
-// task's people.
+// Which lets a caller always send the lane it dropped into: a status commit
+// that moved nothing would still stamp a version (refusing the board's next
+// if_match), write a history row and wake the task's people.
 func TestADropIntoTheLaneTheCardIsInWritesNothingOnTheTask(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

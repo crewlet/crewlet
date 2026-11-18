@@ -25,23 +25,17 @@ import (
 )
 
 // aTurnNobodyWoke is the provenance of an agent's writer in a turn nobody
-// woke: one that states its writes are for its own seat, carrying nobody
-// (types.ForTurn(nil)), as an agent's writer must state whom it writes for or
-// write nothing (ADR-0109). Every case here that writes as an agent and is
-// about something else writes so.
+// woke (types.ForTurn(nil)): an agent's writer must state whom it writes for
+// (ADR-0109), and every case writing as an agent about something else uses this.
 func aTurnNobodyWoke() worklet.Provenance {
 	return worklet.Provenance{WrittenFor: types.ForTurn(nil)}
 }
 
 // THE ROUND TRIP: a write reaches the broker, the applier consumes it, and the
-// reader answers from the rows it wrote.
-//
-// Every layer below has its own tests over fakes, and every one of them can be
-// individually right while the composition is wrong: a subject the publisher
-// builds and the applier's dispatch does not recognise, a scope the writer
-// resolves one way and the probe another, an envelope the framework fills and
-// the domain reads back empty. None of those is visible without a real broker
-// and a real store on both ends.
+// reader answers from the rows it wrote. Each layer's fakes can pass while the
+// composition is wrong (a subject the dispatch does not recognise, a scope
+// resolved two ways, an envelope read back empty); only a real broker and a
+// real store on both ends show it.
 type roundTrip struct {
 	t        *testing.T
 	broker   *js.Queue
@@ -55,49 +49,41 @@ type roundTrip struct {
 	metrics  *metrics.Recorder
 	consumed uint64
 
-	// reserve is the log's gate reserve on this node, which every
-	// publisher the harness builds over the log is admitted through — one
-	// per log per node, as the engine holds it.
+	// reserve is the log's gate reserve, one per log per node as the engine
+	// holds it, shared by every publisher the harness builds.
 	reserve *statelog.Reserve
 
-	// claims is the coordination the writer takes a walking sequence's
-	// claim from, so a case can hold one as ANOTHER node — a walk that is
-	// running somewhere else — and see what the duty makes of it. The
-	// in-memory twin unless a case moves it ([roundTrip.claimOn]).
+	// claims is where the writer takes a walking sequence's claim, so a case
+	// can hold one as ANOTHER node. The in-memory twin unless a case moves it
+	// ([roundTrip.claimOn]).
 	claims coord.Backend
 
-	// publisher is what the harness's writer appends through, kept so a
-	// writer rebuilt over other coordination writes exactly as this one did.
+	// publisher is kept so a writer rebuilt over other coordination writes
+	// exactly as this one did.
 	publisher *statelog.Publisher
 
-	// verifier opens a record's frame, because this harness replays the
-	// log exactly as the framework's own loop does and that loop verifies
-	// before any domain decodes.
+	// verifier opens a record's frame: the framework's loop verifies before
+	// any domain decodes, and this harness replays as it does.
 	verifier *recordseal.Verifier
 
-	// at is the writer's AUTHORED clock, which a case moves when it is
-	// about the order of instants somebody typed. It defaults to
-	// `wednesday` so every case that is not about time sees one instant.
+	// at is the writer's AUTHORED clock; `wednesday` unless a case is about
+	// the order of instants somebody typed.
 	at time.Time
 
-	// nodeID is which node this harness is, for the second writer a case
-	// builds over the same store ([roundTrip.lossyWriter]).
+	// nodeID is this harness's node, for a second writer over the same
+	// store ([roundTrip.lossyWriter]).
 	nodeID string
 
-	// leads is the chart seam the writer resolves a lead through
-	// ([worklet.Writer.Leads]): nil, as most cases want, unless a case is
-	// about who a write's fallback reaches ([roundTrip.ledBy]).
+	// leads is the writer's chart seam ([worklet.Writer.Leads]): nil unless
+	// a case is about whom a fallback reaches ([roundTrip.ledBy]).
 	leads worklet.Leads
 }
 
 func newRoundTrip(t *testing.T) *roundTrip {
 	t.Helper()
 	r := newRoundTripWithoutProject(t)
-	// THE PROJECT FIRST, because a create is a SEQUENCE: it takes a key
-	// from that project's counter before it writes a task, and a project
-	// this node has not applied is one whose counter it cannot mint from.
-	// Seeding it here rather than in each case is what keeps the cases
-	// about what they are named for.
+	// THE PROJECT FIRST: a create mints its key from the project's counter,
+	// which this node must have applied.
 	if _, err := r.writer.WriteDocument(t.Context(), "op-project",
 		worklet.ProjectSubject("ENG"), "", worklet.Project{
 			V: 1, Key: "ENG", Name: "Engineering",
@@ -109,15 +95,13 @@ func newRoundTrip(t *testing.T) *roundTrip {
 	return r
 }
 
-// newRoundTripWithoutProject is the same harness with NO project seeded,
-// which is the state a company is actually in the moment it boots. The chart
-// apply is what leaves it, and its own cases need to see the before.
+// newRoundTripWithoutProject is the harness with NO project seeded, a company
+// as it boots, for the chart apply's cases that need the before.
 func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 	t.Helper()
-	// THE BROKER DECLARES ITS SIZE, for brokertest's reason: left to derive
-	// its cap from the runner's free space it takes three quarters of it,
-	// and would refuse even this log's gibibyte on a runner with less than
-	// a gibibyte and a third free, whatever the case under it does.
+	// THE BROKER DECLARES ITS SIZE (brokertest.StoreMaxBytes): derived from
+	// the runner's free disk, it would refuse this log's gibibyte on a
+	// runner short of space.
 	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
@@ -129,12 +113,9 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 		}
 	})
 	spec := worklet.Domain{}.Stream()
-	// THE CEILING IS THE ONE FIELD THIS HARNESS OVERRIDES, and it is the
-	// floor Tier A holds stream.tracker_log_max_bytes to: the smallest log any
-	// node runs, which is the one the gate reserve takes the largest share
-	// of, so every write here is admitted against the tightest ordinary
-	// ceiling a production log has. Everything else is the domain's own
-	// declaration, its largest record included.
+	// ONLY THE CEILING IS OVERRIDDEN, to stream.tracker_log_max_bytes's
+	// floor: the smallest log, where the gate reserve takes the largest
+	// share, so every write meets the tightest production ceiling.
 	if err := q.EnsureDomainStream(t.Context(), js.DomainStream{
 		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: config.TrackerLogMaxBytesFloor,
 		MaxMessageBytes: spec.MaxAppendBytes(), Duplicates: spec.Duplicates,
@@ -154,10 +135,9 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 	return newRoundTripOn(t, q, log, dbNode, db, "node-a")
 }
 
-// newRoundTripOn is the harness's node over a broker, a log and a store it is
-// handed: the one [newRoundTripWithoutProject] opens, or a second node's
-// joining the same log — a node that adopted a snapshot, say — under its own
-// id.
+// newRoundTripOn is the harness's node over a broker, log and store it is
+// handed: [newRoundTripWithoutProject]'s, or a second node (one that adopted a
+// snapshot, say) joining the same log under its own id.
 func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, node *store.DB,
 	db store.ReplicatedHandle, nodeID string) *roundTrip {
 
@@ -166,38 +146,31 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, node *store.DB
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
-	// THE HARNESS EXISTS BEFORE THE WRITER, because the writer's authored
-	// clock reads a field on it that a case may move.
+	// THE HARNESS BEFORE THE WRITER: the writer's clock reads r.at.
 	r := &roundTrip{t: t, broker: q, node: node, db: db, log: log, at: wednesday,
 		claims: memory.New(), nodeID: nodeID}
 
 	fence := worklet.NewFence(db.Reader(), nodeID)
-	// The published trim floor is zero on a fleet that has never trimmed,
-	// which is the state every new company is in — and the state in which
-	// an absent anchor really does mean an empty subject. The log's own
-	// first sequence is the fence's other bound and its last the check that
-	// this node is on this log at all, both read from the stream the way
-	// the engine reads them.
+	// A never-trimmed fleet's floor is zero, where an absent anchor really
+	// means an empty subject. The log's first and last sequences are read
+	// from the stream as the engine reads them.
 	fence.Floor = func(context.Context, uint32) (uint64, error) { return 0, nil }
 	fence.Ends = func(ctx context.Context) (statelog.LogEnds, error) {
 		first, last, err := log.Bounds(ctx)
 		return statelog.LogEnds{First: first, Last: last}, err
 	}
 	waiter := &testWaiter{}
-	// THIS NODE'S CHECKPOINT IS THE WAITER'S, which is what the harness's
-	// own applier advances — the position the end is compared against.
+	// THIS NODE'S CHECKPOINT IS THE WAITER'S, which the harness's applier
+	// advances.
 	fence.Committed = waiter.Committed
-	// A REAL RECORDER, because two of this harness's invariants are only
-	// visible as instruments: the session wait is a HISTOGRAM and nothing
-	// it does reaches a result, so a case asserting that a gesture waited
-	// for its own earlier append has no other witness.
+	// A REAL RECORDER: the session wait reaches no result, so its HISTOGRAM
+	// is a case's only witness that a gesture waited for its own append.
 	recorder, err := metrics.New()
 	if err != nil {
 		t.Fatalf("build a metrics recorder: %v", err)
 	}
 	r.metrics = recorder
-	// THE LOG'S GATE RESERVE, reading its usage from the stream as the
-	// engine's does, so every write here is admitted as a production one is.
+	// THE GATE RESERVE reads usage from the stream as the engine's does.
 	reserve, err := statelog.NewReserve(worklet.Domain{}.Stream(),
 		func(ctx context.Context) (statelog.Usage, error) {
 			stats, err := log.Stats(ctx)
@@ -207,9 +180,8 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, node *store.DB
 		t.Fatalf("build the gate reserve: %v", err)
 	}
 	r.reserve = reserve
-	// THE VERIFIER BEFORE THE PUBLISHER, which reads the log's own
-	// records — the one it lost an acknowledgement for, the one a
-	// retry finds — through it, as every reader off the log does.
+	// THE VERIFIER BEFORE THE PUBLISHER, which reads the log's records (a
+	// lost acknowledgement's, a retry's) through it.
 	r.verifier = testVerifier(t, worklet.Domain{})
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: worklet.Domain{}, Spec: worklet.Domain{}.Stream(), Log: log,
@@ -225,16 +197,12 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, node *store.DB
 		t.Fatalf("build the publisher: %v", err)
 	}
 	r.publisher = publisher
-	// A REAL CLAIM BACKEND, because the WALKING sequences refuse without
-	// one and a harness that could not run them left the cross-project
-	// move — and everything it reads, including the subtree walk the trash
-	// shares — with no test at all. In-memory is the whole of what most
-	// cases need: the claim is there to exclude a SECOND node.
+	// A REAL CLAIM BACKEND: the WALKING sequences (the cross-project move,
+	// the trash's subtree walk) refuse without one. In-memory suffices; the
+	// claim only excludes a SECOND node.
 	writer := r.writerClaiming(r.claims)
-	// THE READ AUTHORITY IS LOCAL HERE, because this harness drives the
-	// applier itself rather than running a framework loop: what it is
-	// about is one record's journey from writer to row, and the barrier
-	// belongs to the cases that have a quorum to commit against.
+	// THE READ AUTHORITY IS LOCAL: this harness drives the applier itself,
+	// and the barrier belongs to cases with a quorum to commit against.
 	logReader, err := statelogtest.LocalReader(worklet.Domain{}, db,
 		statelog.Position{Stream: worklet.Domain{}.Stream().Name, Generation: 1})
 	if err != nil {
@@ -249,8 +217,7 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, node *store.DB
 	return r
 }
 
-// writerClaiming is this harness's writer — its publisher, its estate, its
-// actor and its authored clock — taking its walk claims from claims.
+// writerClaiming is this harness's writer taking its walk claims from claims.
 func (r *roundTrip) writerClaiming(claims coord.Backend) *worklet.Writer {
 	r.t.Helper()
 	writer, err := worklet.NewWriter(worklet.WriterDeps{
@@ -265,30 +232,26 @@ func (r *roundTrip) writerClaiming(claims coord.Backend) *worklet.Writer {
 	return writer
 }
 
-// claimOn moves this node's coordination to claims: the writer is rebuilt to
-// take its walk claims there, and a case holding a claim as another node
-// holds it there too. The twin is what most cases need; a case about what the
-// fleet's own store will HONOUR needs that store, because the twin keeps any
-// deadline a claim asks for.
+// claimOn moves this node's coordination, and the writer's walk claims, to
+// claims. A case about what the fleet's store will HONOUR needs that store:
+// the twin keeps any deadline a claim asks for.
 func (r *roundTrip) claimOn(claims coord.Backend) {
 	r.t.Helper()
 	r.claims = claims
 	r.writer = r.writerClaiming(claims)
 }
 
-// ledBy gives this node's writer a chart to resolve leads through, as the
-// engine's writer holds one: the writer is rebuilt over the same publisher and
-// coordination, so it writes exactly as the one it replaces did.
+// ledBy rebuilds this node's writer over the same publisher and coordination
+// with a chart to resolve leads through, as the engine's writer holds one.
 func (r *roundTrip) ledBy(leads worklet.Leads) {
 	r.t.Helper()
 	r.leads = leads
 	r.writer = r.writerClaiming(r.claims)
 }
 
-// holdTheAppliersPin takes the pinned writer this harness's replicated estate
-// declares and keeps it for the test's life, as a running node's applier
-// does. Housekeeping that needs a pin of its own cannot get one on a live
-// node, and a harness that left the pin free would pass it anyway.
+// holdTheAppliersPin holds the estate's pinned writer for the test's life, as
+// a running node's applier does, so housekeeping that wants the pin cannot
+// pass here where it would fail on a live node.
 func holdTheAppliersPin(t *testing.T, r *roundTrip) {
 	t.Helper()
 	w, err := r.db.Writer(t.Context())
@@ -299,31 +262,23 @@ func holdTheAppliersPin(t *testing.T, r *roundTrip) {
 }
 
 // applyWhileWriting makes this node's applier run from inside a write's own
-// wait, which is what it does in production and what this harness otherwise
-// cannot express.
+// wait, as in production.
 //
-// EVERY OTHER CASE DRIVES THE APPLIER BY HAND, deliberately: what most of them
-// are about is one record's journey, and a node that is behind is the state
-// half the framework's answers are about — a create's `pending` outcome is
-// only reachable while nothing has consumed it.
-//
-// But a GESTURE that writes one subject twice waits for its own earlier append
-// before it opens the next snapshot (see [worklet.Writer.After]), and in a
-// harness where nothing consumes the log during a call that wait can only
-// expire. So a case about a whole sequence turns this on, and gets the applier
-// every deployment has.
+// Other cases drive the applier BY HAND, deliberately: a create's `pending`
+// outcome is reachable only while nothing has consumed it. But a GESTURE
+// writing one subject twice waits for its own earlier append
+// ([worklet.Writer.After]), which with nothing consuming during the call can
+// only expire, so a case about a whole sequence turns this on.
 func (r *roundTrip) applyWhileWriting() {
 	r.waiter.mu.Lock()
 	defer r.waiter.mu.Unlock()
 	r.waiter.advance = r.drain
 }
 
-// lagBehindOwnWrites is a node whose applier is behind its own appends: the
-// applier runs when a write waits for its own earlier append (the session
-// wait [worklet.Writer.After] asks for), and never to resolve an outcome, so
-// every append reports `pending`. It is the one state in which a gesture's
-// later append can only see an earlier one by waiting for it, because nothing
-// in between has.
+// lagBehindOwnWrites is a node whose applier is behind its own appends: it
+// runs in the session wait [worklet.Writer.After] asks for, never to resolve
+// an outcome, so every append reports `pending` and a gesture's later append
+// sees an earlier one only by waiting for it.
 func (r *roundTrip) lagBehindOwnWrites() {
 	r.waiter.mu.Lock()
 	defer r.waiter.mu.Unlock()
@@ -331,9 +286,8 @@ func (r *roundTrip) lagBehindOwnWrites() {
 	r.waiter.lagOutcomes = true
 }
 
-// applyOnlyOnDrain undoes [roundTrip.applyWhileWriting]: from here on nothing
-// applies but an explicit drain, so a case can put a whole sequence on the log
-// and have this node read it before any of it arrives.
+// applyOnlyOnDrain undoes [roundTrip.applyWhileWriting], so a case can put a
+// whole sequence on the log and read before any of it applies.
 func (r *roundTrip) applyOnlyOnDrain() {
 	r.waiter.mu.Lock()
 	defer r.waiter.mu.Unlock()
@@ -341,9 +295,9 @@ func (r *roundTrip) applyOnlyOnDrain() {
 	r.waiter.lagOutcomes = false
 }
 
-// drain consumes every record the broker holds beyond what this node has
-// applied, exactly as the framework's own loop does — one transaction per
-// record, carrying the rows and the checkpoint together.
+// drain applies every record beyond this node's checkpoint as the
+// framework's loop does: one transaction per record, rows and checkpoint
+// together.
 func (r *roundTrip) drain() {
 	r.t.Helper()
 	last, err := r.log.End(r.t.Context())
@@ -353,9 +307,8 @@ func (r *roundTrip) drain() {
 	r.apply(r.consumed+1, last)
 }
 
-// redeliver re-applies one record the applier has already consumed, which is
-// what a redelivery, a reprocess after an upgrade and a snapshot adopter's
-// replay all look like from here.
+// redeliver re-applies one consumed record: a redelivery, a reprocess after
+// an upgrade or a snapshot adopter's replay.
 func (r *roundTrip) redeliver(seq uint64) {
 	r.t.Helper()
 	consumed := r.consumed
@@ -363,13 +316,9 @@ func (r *roundTrip) redeliver(seq uint64) {
 	r.consumed = consumed
 }
 
-// open unwraps one record's signature frame and hands back its body.
-//
-// THE FRAME COMES FIRST, exactly as the framework's own loop does it: a record
-// is signed on its way to the appender, so what a domain decodes is the BODY.
-// A replay that handed the domain's decoder the bytes the log holds would be
-// reading the signature as JSON — the mistake every reader of a signed log
-// has to get right, and the one this harness made for a commit.
+// open unwraps one record's signature frame and hands back its body: as in
+// the framework's loop, a domain decodes the BODY, never the signed bytes the
+// log holds.
 func (r *roundTrip) open(seq uint64, framed []byte) []byte {
 	r.t.Helper()
 	body, verdict := r.verifier.Open(framed)
@@ -420,19 +369,17 @@ func (r *roundTrip) apply(from, last uint64) {
 				r.t.Logf("record %d gated: %s", seq, reason)
 				return nil
 			}
-			// THE ROWS, THE OPERATION ID AND THE ANCHOR IN ONE
-			// TRANSACTION, exactly as the framework commits them:
-			// a snapshot that saw the rows without the anchor
-			// would pair an old decision with a new expectation.
+			// ROWS, OP ID AND ANCHOR IN ONE TRANSACTION, as the
+			// framework commits them: rows without the anchor would
+			// pair an old decision with a new expectation.
 			if _, err := r.applier.Apply(r.t.Context(), tx, record,
 				statelog.ApplyOptions{Now: wednesday, StoredAt: storedAt,
 					MaxVariables: r.db.Caps().MaxVariables}); err != nil {
 				return err
 			}
-			// THE WIRE SUBJECT, as the framework's own applier records
-			// it: the ledger's subject is what a write resolving an op id
-			// compares against, so a harness that wrote the bare one
-			// would have every write it resolves refused as a reuse.
+			// THE WIRE SUBJECT, as the framework records it: a write
+			// resolving an op id compares against it, and the bare one
+			// would be refused as a reuse.
 			if _, err := tx.ExecContext(r.t.Context(), `
 				INSERT INTO tracker_ops (op_id, subject, position, applied_at)
 				VALUES (?,?,?,?) ON CONFLICT (op_id) DO NOTHING`,
@@ -451,11 +398,9 @@ func (r *roundTrip) apply(from, last uint64) {
 				record.Position.Packed()); err != nil {
 				return err
 			}
-			// AND THE CHECKPOINT, in the same transaction, which is the
-			// contract this harness claims to be exercising. Without it
-			// every read answers position zero — so a case asserting how
-			// far behind an answer may be would be asserting against a
-			// number the harness never wrote.
+			// AND THE CHECKPOINT, in the same transaction: without it
+			// every read answers position zero and no lag assertion
+			// means anything.
 			_, err = tx.ExecContext(r.t.Context(), `
 				INSERT INTO statelog_cursor
 					(stream, generation, seq, stream_created_at, updated_at, applied_version)
@@ -473,11 +418,9 @@ func (r *roundTrip) apply(from, last uint64) {
 	}
 }
 
-// scopeOfLastRecord is the resolved scope of the newest record on the log.
-//
-// FROM THE WIRE, never from the writer's own value: what a deferral is filed
-// under is what the RECORD carries, and a case reading the writer's struct
-// would pass for a scope that never reached the broker.
+// scopeOfLastRecord is the resolved scope of the newest record on the log,
+// read FROM THE WIRE: a deferral is filed under what the RECORD carries, and
+// the writer's struct would pass for a scope that never reached the broker.
 func (r *roundTrip) scopeOfLastRecord() statelog.ScopeSet {
 	r.t.Helper()
 	last, err := r.log.End(r.t.Context())
@@ -495,11 +438,9 @@ func (r *roundTrip) scopeOfLastRecord() statelog.ScopeSet {
 	return env.Scope.Resolve(env.Subject)
 }
 
-// askErr is [roundTrip.ask] for a read that is expected to REFUSE.
-//
-// It parses exactly as ask does, so a case using it is testing the reader's
-// own gate rather than the grammar's — a refusal that moved into [ParseQuery]
-// would fail here with a parse error rather than quietly still passing.
+// askErr is [roundTrip.ask] for a read expected to REFUSE. A parse error is
+// fatal, so the case tests the reader's gate: a refusal that moved into
+// [ParseQuery] fails here rather than quietly passing.
 func (r *roundTrip) askErr(kv map[string]any) error {
 	r.t.Helper()
 	q, err := worklet.ParseQuery(worklet.MapParams(kv), wednesday, berlin)
@@ -519,9 +460,8 @@ func (r *roundTrip) ask(kv map[string]any) worklet.Answer {
 	if err != nil {
 		r.t.Fatalf("ParseQuery: %v", err)
 	}
-	// A HARNESS IS A SURFACE TOO, and an absent level resolves to the
-	// surface's own default rather than to a fourth state — so this one
-	// names its choice exactly as the API and the seat tools do.
+	// A HARNESS IS A SURFACE TOO: it resolves an absent level to its own
+	// default, as the API and the seat tools do.
 	if q.Level == "" {
 		q.Level = statelog.ReadStale
 	}
@@ -540,15 +480,12 @@ type testWaiter struct {
 	mu sync.Mutex
 	at statelog.Position
 
-	// advance is the applier, run from inside a wait. See
-	// [roundTrip.applyWhileWriting] for why a harness that drives the
-	// applier by hand needs one.
+	// advance is the applier, run from inside a wait
+	// ([roundTrip.applyWhileWriting]).
 	advance func()
 
 	// lagOutcomes keeps the applier out of the wait that RESOLVES an
-	// outcome, so every write reports `pending` while a write that waits
-	// for its own earlier append still gets it. See
-	// [roundTrip.lagBehindOwnWrites].
+	// outcome ([roundTrip.lagBehindOwnWrites]).
 	lagOutcomes bool
 }
 
@@ -566,12 +503,11 @@ func (w *testWaiter) Committed() statelog.Position {
 	return w.at
 }
 
-// Reached is Committed: this rig moves its position when it applies a record,
-// in one step, so it reaches nothing its commit has not.
+// Reached is Committed: this rig applies and moves its position in one step.
 func (w *testWaiter) Reached() statelog.Position { return w.Committed() }
 
 // StreamIdentity is always the live stream: this harness never rebuilds its
-// log, so every position the waiter holds is a sequence on it.
+// log.
 func (w *testWaiter) StreamIdentity() error { return nil }
 func (w *testWaiter) Truncated() error      { return nil }
 
@@ -584,30 +520,15 @@ func (w *testWaiter) WaitReached(ctx context.Context, p statelog.Position) error
 		advance := w.advance
 		w.mu.Unlock()
 		if advance == nil {
-			// NOTHING CAN EVER ADVANCE THIS, so do not spend the budget
-			// discovering it. This harness drives the applier BY HAND — see
-			// the note on [roundTrip.applyWhileWriting] — and `advance` is the
-			// only thing that moves the position while a write is blocked
-			// here. With none set, the position is frozen for the duration of
-			// this call, and the loop below is the resolve budget's worth of
-			// one-millisecond sleeps ending in exactly the answer the caller
-			// gets from returning now: the write did not resolve, so it is
-			// reported pending, and the case drains it afterwards.
+			// NOTHING CAN EVER ADVANCE THIS ([roundTrip.applyWhileWriting]),
+			// so answer now what the whole resolve budget would: the write
+			// is pending, and the case drains it afterwards. Waiting it out
+			// dominated this package's run time. DeadlineExceeded, so the
+			// publisher takes the timeout path it would after the wait.
 			//
-			// It cost more than every other thing this package does. Measured:
-			// newRoundTrip was 2.26s, of which 1.97s was the single seeded
-			// project waiting out a 2s ResolveBudget here — about 2000 sleeps
-			// achieving nothing. Across 241 callers that is most of the 869s
-			// this package took under -race, and eight representative cases
-			// went from 22.5s to 4.2s with this returning early.
-			//
-			// DeadlineExceeded rather than a sentinel of its own, so the
-			// publisher takes the identical path it took before: this is the
-			// same outcome, reached without the wait.
-			// THE CALLER'S OWN ERROR FIRST. A context already cancelled is
-			// a cancellation, not a timeout, and reporting DeadlineExceeded
-			// for one would hand the publisher the wrong reason — the
-			// pending/timeout path after an explicit cancel.
+			// THE CALLER'S OWN ERROR FIRST: a cancelled context is a
+			// cancellation, and DeadlineExceeded would hand the publisher
+			// the wrong reason.
 			if err := ctx.Err(); err != nil {
 				return err
 			}
@@ -647,9 +568,8 @@ func TestATaskWrittenIsATaskRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	// PENDING, not applied: the record is committed on the log and this
-	// node has not consumed it yet. Reporting it as applied is how a
-	// caller reads a row that is not there.
+	// PENDING, not applied: the record is on the log and not yet consumed,
+	// and "applied" would send a caller to read a row that is not there.
 	if result.Outcome != statelog.OutcomePending {
 		t.Fatalf("the create's outcome is %q before the applier ran; it is on "+
 			"the log and not yet in the rows", result.Outcome)
@@ -685,12 +605,9 @@ func TestATaskWrittenIsATaskRead(t *testing.T) {
 
 // A SNAPSHOT CARRIES THE CHECKPOINT ITS ROWS ARE AT, and nothing later.
 //
-// The expectation-zero fence compares the snapshot's checkpoint against the
-// trim floor, because the floor theorem's conclusion is about the rows the
-// decision read. So the value has to come from the snapshot's own transaction
-// — the checkpoint commits with the rows — rather than from anything that
-// keeps moving while a write runs: a record on the log this node has not
-// applied must not move it, and applying that record must.
+// The expectation-zero fence compares it against the trim floor, a claim about
+// the rows the decision read, so it comes from the snapshot's own transaction:
+// an unapplied record on the log must not move it, and applying it must.
 func TestASnapshotCarriesTheCheckpointItsRowsAreAt(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -740,16 +657,11 @@ func TestASnapshotCarriesTheCheckpointItsRowsAreAt(t *testing.T) {
 
 // A CREATE WHOSE TASK IS ALREADY FILED IS ANSWERED FROM THE GUARDING ROW.
 //
-// The task's id names the create — the builtin derives it from the create's
-// operation as the work began — so a create meeting a task already under it is
-// that create made before: a rebased re-run, whose operation the ledger does
-// not hold. It is answered with that task, under the key it holds, with no
-// number minted and nothing published. Established from THIS NODE'S OWN ROW
-// rather than from the broker, because a task below the trim floor has no
-// record left on the log to prove it existed — and the broker's own claim on
-// that subject is exactly what a trim removes. It was refused `ErrExists`
-// after a number had been spent, telling the re-run its own item could not be
-// filed.
+// The task's id derives from the create's operation, so a create meeting a
+// task under it is that create made before (a rebased re-run the ledger does
+// not hold). It answers with that task and its key, minting and publishing
+// nothing. Decided from THIS NODE'S ROW, not the broker: a trim removes both
+// the record and the broker's claim on the subject.
 func TestACreateWhoseTaskIsFiledIsAnsweredFromTheGuardingRow(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -774,8 +686,7 @@ func TestACreateWhoseTaskIsFiledIsAnsweredFromTheGuardingRow(t *testing.T) {
 }
 
 // AND WHERE THE TASK IS FILED BETWEEN THE MINT AND THE TASK'S APPEND, the task
-// step answers it the same way: the guarding row says the create was made, so
-// the number this attempt took is a gap and the answer is the task's own.
+// step answers the same way: the number this attempt took is a gap.
 func TestATaskFiledAfterItsMintIsAnsweredFromItsRow(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -791,11 +702,9 @@ func TestATaskFiledAfterItsMintIsAnsweredFromItsRow(t *testing.T) {
 	}
 }
 
-// A RANK MOVE ARBITRATES ON THE ORDER, NOT ON THE TASKS.
-//
-// Two people dragging two different cards in one project are editing the same
-// object, and arbitrating on either card would let both writes land and leave
-// the order neither of them intended.
+// A RANK MOVE ARBITRATES ON THE ORDER, NOT ON THE TASKS: two people dragging
+// two cards in one project edit the same object, and arbitrating per card would
+// land both and leave an order neither intended.
 func TestARankMoveArbitratesOnTheOrder(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -803,12 +712,9 @@ func TestARankMoveArbitratesOnTheOrder(t *testing.T) {
 		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, newTask(id), nil); err != nil {
 			t.Fatalf("CreateTask %s: %v", id, err)
 		}
-		// DRAINED BETWEEN THE TWO, because both mint from the same
-		// counter and the second cannot decide against a number this
-		// node has not applied. A create that did not drain is refused
-		// `behind` naming that counter, which is the case
-		// TestASecondWriteBehindIsRefusedRatherThanWaitingForEver
-		// covers.
+		// DRAINED BETWEEN THE TWO: both mint from one counter, and an
+		// undrained second create is refused `behind`
+		// (TestASecondWriteBehindIsRefusedRatherThanWaitingForEver).
 		r.drain()
 	}
 
@@ -819,10 +725,9 @@ func TestARankMoveArbitratesOnTheOrder(t *testing.T) {
 	}
 	r.drain()
 
-	// THE ORDER'S OWN ROW CARRIES THE VERSION and the moved task carries
-	// `scoped_through` — which is what keeps the task's own broker
-	// expectation matching its subject's last message rather than a
-	// record published on another.
+	// THE ORDER'S ROW CARRIES THE VERSION and the moved task
+	// `scoped_through`, keeping the task's broker expectation on its own
+	// subject's last message.
 	var version, scoped int64
 	if err := r.db.Read(t.Context(), func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(t.Context(),
@@ -847,13 +752,9 @@ func TestARankMoveArbitratesOnTheOrder(t *testing.T) {
 	}
 }
 
-// A RANK MOVE SURVIVES THE MOVED TASK'S NEXT EDIT.
-//
-// A task's own record is merged from its stored DOCUMENT, and the move wrote
-// the rank column alone: the document kept the rank the task was created at,
-// the next edit to the card wrote that back, and every drag was undone by
-// whatever next touched the card — a title fixed, a status moved. A detail
-// read, which decodes the document, showed the old rank all along.
+// A RANK MOVE SURVIVES THE MOVED TASK'S NEXT EDIT: a task's record merges from
+// its stored DOCUMENT, so a move writing only the rank column would be undone
+// by the next edit, and a detail read would show the old rank.
 func TestARankMoveSurvivesTheMovedTasksNextEdit(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -894,12 +795,9 @@ func TestARankMoveSurvivesTheMovedTasksNextEdit(t *testing.T) {
 	}
 }
 
-// A PLACEMENT FOR A TASK IN ANOTHER PROJECT IS NOT WRITTEN.
-//
-// A placement is a position in ONE project's order, and that project is the
-// container the record's scope names — so a task filed elsewhere has no
-// position in it, and writing one would be a write outside what the record
-// declared, which a record deferred on that task's project would not have held
+// A PLACEMENT FOR A TASK IN ANOTHER PROJECT IS NOT WRITTEN: a placement is a
+// position in the ONE project the record's scope names, and writing elsewhere
+// is outside that scope, which a deferral on the other project would not hold
 // back.
 func TestAPlacementForATaskInAnotherProjectIsNotWritten(t *testing.T) {
 	t.Parallel()
@@ -930,19 +828,11 @@ func TestAPlacementForATaskInAnotherProjectIsNotWritten(t *testing.T) {
 
 // A WRITE AGAINST A SUBJECT THIS NODE IS BEHIND ON IS REFUSED, NOT WAITED OUT.
 //
-// # The failure this exists to catch
-//
-// A rejected append means a peer wrote in this generation and this node has not
-// applied it, so re-deciding needs the subject's true last position. The wait
-// for it used to run on the caller's own context with no budget of its own —
-// and the state producing it is an applier that has not caught up, which is
-// unbounded by construction. A request with no deadline waited FOR EVER, and
-// one with a deadline got a cancellation where it needed the reason.
-//
-// Two creates back to back mint from one counter, so the second is exactly that
-// case. It must come back refused, under a budget, naming the position it was
-// waiting for — because that number is what turns "a colleague is editing this"
-// into something a caller can retry against.
+// Re-deciding after a rejected append needs the subject's true last position,
+// and a lagging applier is unbounded: on the caller's context alone a request
+// with no deadline would wait for ever. Two back-to-back creates mint from one
+// counter, so the second must be refused under the write path's budget,
+// naming the position a caller can retry against.
 func TestASecondWriteBehindIsRefusedRatherThanWaitingForEver(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -950,8 +840,7 @@ func TestASecondWriteBehindIsRefusedRatherThanWaitingForEver(t *testing.T) {
 		t.Fatalf("CreateTask: %v", err)
 	}
 
-	// NO DRAIN: this node holds the first create's counter record on the
-	// log and has not applied it.
+	// NO DRAIN: the first create's counter record is on the log, unapplied.
 	started := time.Now()
 	_, err := r.writer.CreateTask(t.Context(), "op-2", newTask("t-2"), nil)
 	if err == nil {
@@ -977,21 +866,16 @@ func TestASecondWriteBehindIsRefusedRatherThanWaitingForEver(t *testing.T) {
 			"caller for as long as this node stays behind", waited)
 	}
 
-	// AND IT SUCCEEDS ONCE THE APPLIER CATCHES UP, which is what makes the
-	// refusal a retry rather than a failure.
+	// AND IT SUCCEEDS ONCE THE APPLIER CATCHES UP: a retry, not a failure.
 	r.drain()
 	if _, err := r.writer.CreateTask(t.Context(), "op-2", newTask("t-2"), nil); err != nil {
 		t.Fatalf("the same create after the drain: %v", err)
 	}
 }
 
-// testSigner is this suite's record signer.
-//
-// EVERY RECORD ON EVERY STATE LOG IS SIGNED, so a write authority built
-// without one is refused at construction rather than producing records the
-// fleet would refuse one at a time, on every node, for ever. The key is a
-// fixture: what these cases are about is what the domain writes, and the
-// signature's own rules are certified in [statelog].
+// testSigner is this suite's record signer: a write authority without one is
+// refused at construction. The key is a fixture; the signature's rules are
+// certified in [statelog].
 func testSigner(t *testing.T, d statelog.Domain) *recordseal.Signer {
 	t.Helper()
 	signer, err := recordseal.NewSigner(d.Name(), recordseal.OneKey("k1", "test-material"))
