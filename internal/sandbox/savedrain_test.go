@@ -90,10 +90,17 @@ func TestADrainSavesEveryMovedDirectJobOnItsHostMostStaleFirst(t *testing.T) {
 			t.Fatal("the premise: the busy job's periodic save did not start")
 		}
 		<-busyPacking
-		// TWO SLOTS HELD, as two keeps under way hold them: the drain's saves
-		// take the one left in turn, so their order is the drain's own.
-		for range maxConcurrentSaves - 2 {
+		// EVERY OTHER SLOT HELD, as keeps under way hold them: the drain's
+		// saves take busy's in turn once it is given back, so their order is
+		// the drain's own, and a drain blind to busy's save would wait for a
+		// slot to save it again.
+		for range maxConcurrentSaves - 1 {
 			rig.coordinator.saves.slots <- struct{}{}
+		}
+		rig.runner.Session.Taking = func(ctx context.Context) {
+			if err := ctx.Err(); err != nil {
+				t.Errorf("a save was taken on a context already done (%v), want one the drain's end bounds", err)
+			}
 		}
 		done := make(chan []*saveRun, 1)
 		go func() { done <- rig.coordinator.saveHosted(t.Context()) }()
