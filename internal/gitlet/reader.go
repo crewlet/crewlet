@@ -344,7 +344,7 @@ func (r *Reader) Resolve(ctx context.Context, q ResolveQuery) (RepoRef, error) {
 		return RepoRef{}, err
 	}
 	if !ValidName(q.Name) {
-		return RepoRef{}, fmt.Errorf("%w: name: %q is not a repository name", ErrInvalid, q.Name)
+		return RepoRef{}, refusedf("%w: name: %q is not a repository name", ErrInvalid, q.Name)
 	}
 	var out RepoRef
 	query := q.Fresh.Resolved(resolver(q.Name), false)
@@ -405,7 +405,7 @@ func (p *page) left() int { return p.maxRows - p.rows }
 // tail: the retiring record added its objects' packs. Position is page 1's.
 func (r *Reader) Snapshot(ctx context.Context, q StateQuery) (RepoSnapshot, error) {
 	if q.RepoID == "" {
-		return RepoSnapshot{}, fmt.Errorf("%w: repo_id: a snapshot names its repository", ErrInvalid)
+		return RepoSnapshot{}, refusedf("%w: repo_id: a snapshot names its repository", ErrInvalid)
 	}
 	scope := statelog.ScopeSet{Paths: []string{RepoPath(q.RepoID)}}
 	first := q.Cursor == nil
@@ -1012,7 +1012,7 @@ func checkCursor(c *StateCursor) error {
 func (r *Reader) PushOutcome(ctx context.Context, q OutcomeQuery) (PushOutcome, error) {
 	switch {
 	case q.At.IsZero():
-		return PushOutcome{}, fmt.Errorf("%w: at: a push's outcome is read at its record's position", ErrInvalid)
+		return PushOutcome{}, refusedf("%w: at: a push's outcome is read at its record's position", ErrInvalid)
 	case q.RepoID == "" || q.PushID == "":
 		return PushOutcome{}, fmt.Errorf("%w: a push's outcome names its repository and its id", ErrInvalid)
 	}
@@ -1436,12 +1436,12 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 // field outside the kind that reads it, so no field is answered ignored.
 func (q ReadQuery) validate() error {
 	if !q.Kind.Valid() {
-		return fmt.Errorf("%w: kind: %q is not one of %s", ErrInvalid, q.Kind, words.Or(ReadKinds()))
+		return refusedf("%w: kind: %q is not one of %s", ErrInvalid, q.Kind, words.Or(ReadKinds()))
 	}
 	// A RESOLUTION ONLY WHERE A NAME IS JUDGED, before any kind's own
 	// rules, so no kind's list of what it refuses has to spell it.
 	if q.Resolve && !q.resolves() {
-		return fmt.Errorf("%w: resolve: only a change read, or a listing of one repository's changes or "+
+		return refusedf("%w: resolve: only a change read, or a listing of one repository's changes or "+
 			"checks, resolves the repository it names", ErrInvalid)
 	}
 	// A FIELD ONE PRINCIPAL'S KIND READS ALONE is refused on every other kind
@@ -1489,139 +1489,139 @@ func (q ReadQuery) validate() error {
 	// WHO ASKS IS NAMED, or nothing is read: an answer is held to the asker's
 	// grant.
 	if why := q.Asker.invalid(); why != "" {
-		return fmt.Errorf("%w: asker: %s", ErrInvalid, why)
+		return refusedf("%w: asker: %s", ErrInvalid, why)
 	}
 	if why := ceilingInvalid(q.Asker, q.CeilingSeat); why != "" {
 		return fmt.Errorf("%w: %s", ErrInvalid, why)
 	}
 	switch {
 	case q.Introduced != nil:
-		return fmt.Errorf("%w: introduced: only an introduced read names a range of pushes", ErrInvalid)
+		return refusedf("%w: introduced: only an introduced read names a range of pushes", ErrInvalid)
 	case q.RunPushes != nil:
-		return fmt.Errorf("%w: run_pushes: only a run_pushes read names an executor", ErrInvalid)
+		return refusedf("%w: run_pushes: only a run_pushes read names an executor", ErrInvalid)
 	case q.ChangesDue != nil:
-		return fmt.Errorf("%w: changes_due: only a changes_due read names the repository its home owes "+
+		return refusedf("%w: changes_due: only a changes_due read names the repository its home owes "+
 			"change work in", ErrInvalid)
 	case q.ChecksDue != nil:
-		return fmt.Errorf("%w: checks_due: only a checks_due read names the repository its home owes "+
+		return refusedf("%w: checks_due: only a checks_due read names the repository its home owes "+
 			"check work in", ErrInvalid)
 	case q.Checks != nil && q.Kind != ReadChecks && q.Kind != ReadCheck:
-		return fmt.Errorf("%w: checks: only a checks or a check read names a change's, a commit's or an "+
+		return refusedf("%w: checks: only a checks or a check read names a change's, a commit's or an "+
 			"attempt's checks", ErrInvalid)
 	case q.CheckBox != nil:
-		return fmt.Errorf("%w: check_box: only a check_box read names an attempt by its key", ErrInvalid)
+		return refusedf("%w: check_box: only a check_box read names an attempt by its key", ErrInvalid)
 	case q.ChecksRunning != nil:
-		return fmt.Errorf("%w: checks_running: only a checks_running read names the repository whose running "+
+		return refusedf("%w: checks_running: only a checks_running read names the repository whose running "+
 			"checks it reads", ErrInvalid)
 	case q.MirrorPush != nil:
-		return fmt.Errorf("%w: mirror_push: only a mirror_push read names the repository whose push mirror "+
+		return refusedf("%w: mirror_push: only a mirror_push read names the repository whose push mirror "+
 			"it reads", ErrInvalid)
 	case q.ChecksQueued != nil:
-		return fmt.Errorf("%w: checks_queued: only a checks_queued read names the cell whose queued checks it "+
+		return refusedf("%w: checks_queued: only a checks_queued read names the cell whose queued checks it "+
 			"reads", ErrInvalid)
 	case q.DefaultTips != nil:
-		return fmt.Errorf("%w: default_tips: only a default_tips read names the repository whose tip it reads",
+		return refusedf("%w: default_tips: only a default_tips read names the repository whose tip it reads",
 			ErrInvalid)
 	case q.Target != "" && q.Kind != ReadQueue && q.Kind != ReadLandings && q.Kind != ReadGreen:
-		return fmt.Errorf("%w: target: only a queue, a landings or a green read names a branch's queue",
+		return refusedf("%w: target: only a queue, a landings or a green read names a branch's queue",
 			ErrInvalid)
 	case q.ExpungeTips != nil:
-		return fmt.Errorf("%w: expunge_tips: only an expunge_tips read names a repository's ref drops", ErrInvalid)
+		return refusedf("%w: expunge_tips: only an expunge_tips read names a repository's ref drops", ErrInvalid)
 	case !q.ScannedBefore.IsZero():
-		return fmt.Errorf("%w: scanned_before: only an expunge_due read lists the repositories last judged "+
+		return refusedf("%w: scanned_before: only an expunge_due read lists the repositories last judged "+
 			"before an instant", ErrInvalid)
 	case q.BranchChanges != nil:
-		return fmt.Errorf("%w: branch_changes: only a branch_changes read names the branches whose live "+
+		return refusedf("%w: branch_changes: only a branch_changes read names the branches whose live "+
 			"changes it answers", ErrInvalid)
 	case q.MinPacks != 0:
-		return fmt.Errorf("%w: min_packs: only a compaction_due read names a floor of live packs", ErrInvalid)
+		return refusedf("%w: min_packs: only a compaction_due read names a floor of live packs", ErrInvalid)
 	case q.Prefix != "" && q.Kind != ReadRefs && q.Kind != ReadRepos:
-		return fmt.Errorf("%w: prefix: only a refs listing and a repositories listing name a prefix", ErrInvalid)
+		return refusedf("%w: prefix: only a refs listing and a repositories listing name a prefix", ErrInvalid)
 	case q.Prefix != "" && q.Kind == ReadRefs && !validRefPrefix(q.Prefix):
-		return fmt.Errorf("%w: prefix: %q is not refs/heads/ or refs/tags/ or a directory of refs under "+
+		return refusedf("%w: prefix: %q is not refs/heads/ or refs/tags/ or a directory of refs under "+
 			"either, ending in /", ErrInvalid, q.Prefix)
 	case q.Prefix != "" && q.Kind == ReadRepos && !validRepoPrefix(q.Prefix):
-		return fmt.Errorf("%w: prefix: no repository name begins %q: a name is lowercase letters, digits and "+
+		return refusedf("%w: prefix: no repository name begins %q: a name is lowercase letters, digits and "+
 			"hyphens, beginning with a letter or a digit, and a seat's own holds one dot", ErrInvalid, q.Prefix)
 	case q.Brief && q.Kind != ReadPushes && q.Kind != ReadChange:
-		return fmt.Errorf("%w: brief: only a push history and a change's first page are read in brief",
+		return refusedf("%w: brief: only a push history and a change's first page are read in brief",
 			ErrInvalid)
 	case q.Brief && q.Kind == ReadChange && (q.Part != "" || q.Cursor != ""):
-		return fmt.Errorf("%w: brief: only a change's first page of its revisions, or its row alone with "+
+		return refusedf("%w: brief: only a change's first page of its revisions, or its row alone with "+
 			"detail_only, is read in brief — named by no part or cursor", ErrInvalid)
 	case q.Push != "" && q.Kind != ReadPushes:
-		return fmt.Errorf("%w: push: only a push history is narrowed to one push", ErrInvalid)
+		return refusedf("%w: push: only a push history is narrowed to one push", ErrInvalid)
 	case q.PathOwners && q.Kind != ReadRepo:
-		return fmt.Errorf("%w: path_owners: only a read of one repository answers its path owners", ErrInvalid)
+		return refusedf("%w: path_owners: only a read of one repository answers its path owners", ErrInvalid)
 	case q.Gates && q.Kind != ReadRepo && (q.Kind != ReadRefs || q.Cursor != ""):
-		return fmt.Errorf("%w: gates: only a read answering one repository's detail — a read of one "+
+		return refusedf("%w: gates: only a read answering one repository's detail — a read of one "+
 			"repository, or a refs listing's first page — answers its rules' merge gates", ErrInvalid)
 	case q.Push != "" && !ValidPushID(q.Push):
-		return fmt.Errorf("%w: push: %q is not a push's id, a UUIDv7 in its canonical lowercase spelling",
+		return refusedf("%w: push: %q is not a push's id, a UUIDv7 in its canonical lowercase spelling",
 			ErrInvalid, q.Push)
 	case q.Push != "" && (q.Cursor != "" || q.Limit != 0 || q.Brief):
-		return fmt.Errorf("%w: push: one push is read whole, never paged, cut or read in brief", ErrInvalid)
+		return refusedf("%w: push: one push is read whole, never paged, cut or read in brief", ErrInvalid)
 	case q.Change != 0 && q.Kind != ReadChange && q.Kind != ReadChangeRouting:
-		return fmt.Errorf("%w: change: only a change read and a change's routing name a change's number",
+		return refusedf("%w: change: only a change read and a change's routing name a change's number",
 			ErrInvalid)
 	case q.State != "" && q.Kind != ReadChanges:
-		return fmt.Errorf("%w: state: only a listing of changes is narrowed to a change's state", ErrInvalid)
+		return refusedf("%w: state: only a listing of changes is narrowed to a change's state", ErrInvalid)
 	case q.Owner != "" && q.Kind != ReadChanges:
-		return fmt.Errorf("%w: owner: only a listing of changes is narrowed to a change's owner", ErrInvalid)
+		return refusedf("%w: owner: only a listing of changes is narrowed to a change's owner", ErrInvalid)
 	case q.Work != "" && q.Kind != ReadChanges:
-		return fmt.Errorf("%w: work: only a listing of changes is narrowed to a work item", ErrInvalid)
+		return refusedf("%w: work: only a listing of changes is narrowed to a work item", ErrInvalid)
 	case q.Reviewer != "" && q.Kind != ReadChanges && q.Kind != ReadReviews:
-		return fmt.Errorf("%w: reviewer: only a listing of changes or of a reviewer's reviews names a reviewer",
+		return refusedf("%w: reviewer: only a listing of changes or of a reviewer's reviews names a reviewer",
 			ErrInvalid)
 	case q.Needs != "" && q.Kind != ReadChanges:
-		return fmt.Errorf("%w: needs: only a listing of changes is narrowed to what its changes wait on",
+		return refusedf("%w: needs: only a listing of changes is narrowed to what its changes wait on",
 			ErrInvalid)
 	case q.Window != "" && q.Kind != ReadChanges:
-		return fmt.Errorf("%w: window: only a listing of changes is narrowed to the changes that moved "+
+		return refusedf("%w: window: only a listing of changes is narrowed to the changes that moved "+
 			"within a window", ErrInvalid)
 	case q.Part != "" && q.Kind != ReadChange:
-		return fmt.Errorf("%w: part: only a change read names a part of the change", ErrInvalid)
+		return refusedf("%w: part: only a change read names a part of the change", ErrInvalid)
 	case q.Part != "" && !q.Part.Valid():
-		return fmt.Errorf("%w: part: %q is not one of %s", ErrInvalid, q.Part, words.Or(ChangeParts()))
+		return refusedf("%w: part: %q is not one of %s", ErrInvalid, q.Part, words.Or(ChangeParts()))
 	case q.DetailOnly && q.Kind != ReadChange:
-		return fmt.Errorf("%w: detail_only: only a change read answers a change's detail", ErrInvalid)
+		return refusedf("%w: detail_only: only a change read answers a change's detail", ErrInvalid)
 	case q.DetailOnly && (q.Part != "" || q.Cursor != "" || q.Limit != 0):
-		return fmt.Errorf("%w: detail_only: a change's detail alone pages no part — named by no part, cursor "+
+		return refusedf("%w: detail_only: a change's detail alone pages no part — named by no part, cursor "+
 			"or limit", ErrInvalid)
 	case len(q.FindingIDs) > 0 && (q.Kind != ReadChange || q.Part != PartFindings):
-		return fmt.Errorf("%w: finding_ids: only a change read's findings part is narrowed to the findings it "+
+		return refusedf("%w: finding_ids: only a change read's findings part is narrowed to the findings it "+
 			"names", ErrInvalid)
 	case len(q.FindingIDs) > 0 && q.Limit != 0:
-		return fmt.Errorf("%w: finding_ids: the findings named are the read's rows, which no limit cuts",
+		return refusedf("%w: finding_ids: the findings named are the read's rows, which no limit cuts",
 			ErrInvalid)
 	case q.FindingPaths && (q.Part != "" || q.DetailOnly || q.Brief || len(q.FindingIDs) > 0):
-		return fmt.Errorf("%w: finding_paths: a change's findings by path are a page of their own, "+
+		return refusedf("%w: finding_paths: a change's findings by path are a page of their own, "+
 			"named by no part, detail_only, brief or finding_ids", ErrInvalid)
 	case q.Viewed && (q.Part != "" || q.DetailOnly || q.Brief || len(q.FindingIDs) > 0 || q.FindingPaths):
-		return fmt.Errorf("%w: viewed: a change's viewed files are a page of their own, named by no part, "+
+		return refusedf("%w: viewed: a change's viewed files are a page of their own, named by no part, "+
 			"detail_only, brief, finding_ids or finding_paths", ErrInvalid)
 	}
 	switch {
 	case q.Kind == ReadInbox && q.Repo != "":
-		return fmt.Errorf("%w: repo: an inbox is read across every repository the asker may read", ErrInvalid)
+		return refusedf("%w: repo: an inbox is read across every repository the asker may read", ErrInvalid)
 	case q.Kind == ReadNoticeCards && q.Repo != "":
-		return fmt.Errorf("%w: repo: an inbox page's cards are read across every repository its changes are on",
+		return refusedf("%w: repo: an inbox page's cards are read across every repository its changes are on",
 			ErrInvalid)
 	case q.Kind == ReadReviews && q.Repo != "":
-		return fmt.Errorf("%w: repo: a reviewer's reviews are listed across every repository the asker may "+
+		return refusedf("%w: repo: a reviewer's reviews are listed across every repository the asker may "+
 			"read, and a change's own reviews are a change read's part", ErrInvalid)
 	case q.Kind == ReadRepos, q.Kind == ReadChanges && q.Repo == "", q.Kind == ReadChecks && q.Repo == "",
 		q.Kind == ReadQueue && q.Repo == "", q.Kind == ReadReviews, q.Kind == ReadInbox,
 		q.Kind == ReadNoticeCards, q.Kind == ReadCounts && q.Repo == "":
 	case !ValidName(q.Repo):
-		return fmt.Errorf("%w: repo: %q is not a repository name", ErrInvalid, q.Repo)
+		return refusedf("%w: repo: %q is not a repository name", ErrInvalid, q.Repo)
 	}
 	if q.Kind != ReadRepos && len(q.Status) > 0 {
-		return fmt.Errorf("%w: status: only a listing of repositories filters by status", ErrInvalid)
+		return refusedf("%w: status: only a listing of repositories filters by status", ErrInvalid)
 	}
 	for _, s := range q.Status {
 		if !s.Valid() {
-			return fmt.Errorf("%w: status: %q is not one of %s", ErrInvalid, s, words.Or(RepoStatuses()))
+			return refusedf("%w: status: %q is not one of %s", ErrInvalid, s, words.Or(RepoStatuses()))
 		}
 	}
 	switch q.Kind {
@@ -1641,7 +1641,7 @@ func (q ReadQuery) validate() error {
 		}
 	case ReadChange, ReadChangeRouting:
 		if q.Change < 1 {
-			return fmt.Errorf("%w: change: %d is no change's number: a repository numbers its changes "+
+			return refusedf("%w: change: %d is no change's number: a repository numbers its changes "+
 				"from 1", ErrInvalid, q.Change)
 		}
 		if err := validateFindingIDs(q.FindingIDs); err != nil {
@@ -1692,11 +1692,11 @@ func (q ReadQuery) validate() error {
 	}
 	switch bound := q.PageMax(); {
 	case q.Limit < 0:
-		return fmt.Errorf("%w: limit: %d", ErrInvalid, q.Limit)
+		return refusedf("%w: limit: %d", ErrInvalid, q.Limit)
 	case q.Kind == ReadRepo && q.Limit != 0:
-		return fmt.Errorf("%w: limit: one repository is not paged", ErrInvalid)
+		return refusedf("%w: limit: one repository is not paged", ErrInvalid)
 	case q.Limit > bound:
-		return fmt.Errorf("%w: limit: %d is past the %d one page of %s carries", ErrInvalid,
+		return refusedf("%w: limit: %d is past the %d one page of %s carries", ErrInvalid,
 			q.Limit, bound, q.Kind)
 	}
 	return nil
@@ -1707,52 +1707,52 @@ func (q ReadQuery) validate() error {
 func (q ReadQuery) kindOwnedField() error {
 	switch {
 	case q.Protected && q.Kind != ReadRepos:
-		return fmt.Errorf("%w: protected: only a listing of repositories is narrowed to the ones a rule "+
+		return refusedf("%w: protected: only a listing of repositories is narrowed to the ones a rule "+
 			"protects", ErrInvalid)
 	case q.Commit != "" && q.Kind != ReadCommit:
-		return fmt.Errorf("%w: commit: only a commit read names a commit", ErrInvalid)
+		return refusedf("%w: commit: only a commit read names a commit", ErrInvalid)
 	case q.Cards && q.Kind != ReadChanges:
-		return fmt.Errorf("%w: cards: only a listing of changes carries each change's card", ErrInvalid)
+		return refusedf("%w: cards: only a listing of changes carries each change's card", ErrInvalid)
 	case q.FindingPaths && q.Kind != ReadChange:
-		return fmt.Errorf("%w: finding_paths: only a change read counts its findings by path", ErrInvalid)
+		return refusedf("%w: finding_paths: only a change read counts its findings by path", ErrInvalid)
 	case q.Viewed && q.Kind != ReadChange:
-		return fmt.Errorf("%w: viewed: only a change read answers the files its asker marked viewed", ErrInvalid)
+		return refusedf("%w: viewed: only a change read answers the files its asker marked viewed", ErrInvalid)
 	case q.Inbox != nil && q.Kind != ReadInbox:
-		return fmt.Errorf("%w: inbox: only an inbox read names whose inbox it reads", ErrInvalid)
+		return refusedf("%w: inbox: only an inbox read names whose inbox it reads", ErrInvalid)
 	case len(q.NoticeCards) > 0 && q.Kind != ReadNoticeCards:
-		return fmt.Errorf("%w: notice_cards: only a notice_cards read names the changes whose cards it reads",
+		return refusedf("%w: notice_cards: only a notice_cards read names the changes whose cards it reads",
 			ErrInvalid)
 	case q.ChangeSort != "" && q.Kind != ReadChanges:
-		return fmt.Errorf("%w: change_sort: only a listing of changes is ordered by when its changes were "+
+		return refusedf("%w: change_sort: only a listing of changes is ordered by when its changes were "+
 			"opened or last moved", ErrInvalid)
 	case q.Readiness != "" && q.Kind != ReadChanges:
-		return fmt.Errorf("%w: readiness: only a listing of changes is narrowed to where their merge stands",
+		return refusedf("%w: readiness: only a listing of changes is narrowed to where their merge stands",
 			ErrInvalid)
 	case q.Text != "" && q.Kind != ReadChanges:
-		return fmt.Errorf("%w: text: only a listing of changes is narrowed by its changes' words", ErrInvalid)
+		return refusedf("%w: text: only a listing of changes is narrowed by its changes' words", ErrInvalid)
 	case q.RefListing != nil && q.Kind != ReadRefs:
-		return fmt.Errorf("%w: ref_listing: only a refs listing is ordered, narrowed or read in detail",
+		return refusedf("%w: ref_listing: only a refs listing is ordered, narrowed or read in detail",
 			ErrInvalid)
 	case len(q.CommitMarks) > 0 && q.Kind != ReadCommitMarks:
-		return fmt.Errorf("%w: commit_marks: only a commit_marks read names the commits whose marks it reads",
+		return refusedf("%w: commit_marks: only a commit_marks read names the commits whose marks it reads",
 			ErrInvalid)
 	case q.Counts != nil && q.Kind != ReadCounts:
-		return fmt.Errorf("%w: counts: only a counts read names the parts it counts", ErrInvalid)
+		return refusedf("%w: counts: only a counts read names the parts it counts", ErrInvalid)
 	case q.PushFilter != nil && q.Kind != ReadPushes:
-		return fmt.Errorf("%w: push_filter: only a push history is narrowed to one pusher or a window", ErrInvalid)
+		return refusedf("%w: push_filter: only a push history is narrowed to one pusher or a window", ErrInvalid)
 	case len(q.DayBounds) > 0 && q.Kind != ReadRepos && q.Kind != ReadRepo && q.Kind != ReadPushes:
-		return fmt.Errorf("%w: day_bounds: only a listing of repositories, a read of one and a push history "+
+		return refusedf("%w: day_bounds: only a listing of repositories, a read of one and a push history "+
 			"count pushes by the asker's days", ErrInvalid)
 	case q.RepoFacts && q.Kind != ReadRepos && q.Kind != ReadRepo:
-		return fmt.Errorf("%w: repo_facts: only a listing of repositories and a read of one answer a "+
+		return refusedf("%w: repo_facts: only a listing of repositories and a read of one answer a "+
 			"repository's facts", ErrInvalid)
 	case q.RepoKind != "" && q.Kind != ReadRepos:
-		return fmt.Errorf("%w: repo_kind: only a listing of repositories is narrowed to one kind", ErrInvalid)
+		return refusedf("%w: repo_kind: only a listing of repositories is narrowed to one kind", ErrInvalid)
 	case q.RepoSort != "" && q.Kind != ReadRepos:
-		return fmt.Errorf("%w: repo_sort: only a listing of repositories is ordered by name or last push",
+		return refusedf("%w: repo_sort: only a listing of repositories is ordered by name or last push",
 			ErrInvalid)
 	case q.Trains && q.Kind != ReadQueue:
-		return fmt.Errorf("%w: trains: only a queue read answers its trains and ejections", ErrInvalid)
+		return refusedf("%w: trains: only a queue read answers its trains and ejections", ErrInvalid)
 	}
 	return nil
 }
@@ -1763,7 +1763,7 @@ func (q ReadQuery) kindOwnedField() error {
 // (After, Through] ascending, or below Before descending.
 func (q ReadQuery) validateIntroduced() error {
 	in := q.Introduced
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	onLog := func(p statelog.Position) bool { return p.IsZero() || p.Stream == topics.CodeLogStream }
 	switch {
 	case q.Asker != (Principal{}):
@@ -1859,7 +1859,7 @@ func (q ReadQuery) validateIntroduced() error {
 // page's limit is at most MaxSnapshotItems ([Reader.runPushes]).
 func (q ReadQuery) validateRunPushes() error {
 	in := q.RunPushes
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
 	case q.Asker != (Principal{}):
 		return refused("asker", "a run_pushes read is the engine's own, which no principal makes")
@@ -1931,7 +1931,7 @@ func (q ReadQuery) validateRunPushes() error {
 // would be held to nothing), its floor of live packs, at least one, and
 // nothing else; a page is MaxSnapshotItems repositories.
 func (q ReadQuery) validateCompactionDue() error {
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	if q.Asker != (Principal{}) {
 		return refused("asker", "a compaction_due read is the engine's own, which no principal makes")
 	}
@@ -1971,7 +1971,7 @@ func (q ReadQuery) validateCompactionDue() error {
 // the publisher's own poll: NO asker (`compaction_due`'s reason) and nothing
 // else, since its partial index holds exactly what it lists.
 func (q ReadQuery) validatePublicationDue() error {
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	if q.Asker != (Principal{}) {
 		return refused("asker", "a publication_due read is the engine's own, which no principal makes")
 	}
@@ -2018,7 +2018,7 @@ func (q ReadQuery) validateExpungeDue() error {
 // its partial index holds exactly what it lists and a page is MaxSnapshotItems.
 // lists is the sentence a refusal says what it lists in.
 func (q ReadQuery) validateBareListing(lists string) error {
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	if q.Asker != (Principal{}) {
 		return refused("asker", fmt.Sprintf("a %s read is the engine's own, which no principal makes", q.Kind))
 	}
@@ -2061,10 +2061,10 @@ func (q ReadQuery) validateDefaultTips() error {
 		return nil
 	}
 	if q.Cursor != "" {
-		return fmt.Errorf("%w: cursor: a default_tips read of one repository answers one row", ErrInvalid)
+		return refusedf("%w: cursor: a default_tips read of one repository answers one row", ErrInvalid)
 	}
 	if parsed, err := uuid.Parse(one.RepoID); err != nil || parsed.String() != one.RepoID {
-		return fmt.Errorf("%w: default_tips.repo_id: not a repository's id", ErrInvalid)
+		return refusedf("%w: default_tips.repo_id: not a repository's id", ErrInvalid)
 	}
 	return nil
 }
@@ -2085,7 +2085,7 @@ func (q ReadQuery) validateIndexed() error {
 // else; a page is MaxSnapshotItems drops.
 func (q ReadQuery) validateExpungeTips() error {
 	in := q.ExpungeTips
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
 	case q.Asker != (Principal{}):
 		return refused("asker", "an expunge_tips read is the engine's own, which no principal makes")
@@ -2130,7 +2130,7 @@ func (q ReadQuery) validateExpungeTips() error {
 // protected branch.
 func (q ReadQuery) validateMirrorPush() error {
 	in := q.MirrorPush
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
 	case q.Asker != (Principal{}):
 		return refused("asker", "a mirror_push read is the engine's own, which no principal makes")
@@ -2195,7 +2195,7 @@ func (r *Reader) mirrorPush(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 // page answers every branch, each one change at most.
 func (q ReadQuery) validateBranchChanges() error {
 	in := q.BranchChanges
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
 	case q.Asker != (Principal{}):
 		return refused("asker", "a branch_changes read is the engine's own, which no principal makes")
@@ -3762,10 +3762,10 @@ func (r *Reader) ResolveRef(ctx context.Context, q RefQuery) (RefAnswer, error) 
 		return RefAnswer{}, err
 	}
 	if !ValidName(q.Repo) {
-		return RefAnswer{}, fmt.Errorf("%w: repo: %q is not a repository name", ErrInvalid, q.Repo)
+		return RefAnswer{}, refusedf("%w: repo: %q is not a repository name", ErrInvalid, q.Repo)
 	}
 	if why := q.Asker.invalid(); why != "" {
-		return RefAnswer{}, fmt.Errorf("%w: asker: %s", ErrInvalid, why)
+		return RefAnswer{}, refusedf("%w: asker: %s", ErrInvalid, why)
 	}
 	if why := ceilingInvalid(q.Asker, q.CeilingSeat); why != "" {
 		return RefAnswer{}, fmt.Errorf("%w: %s", ErrInvalid, why)
@@ -3774,9 +3774,9 @@ func (r *Reader) ResolveRef(ctx context.Context, q RefQuery) (RefAnswer, error) 
 	// have is the asker's mistake, refused whole.
 	switch n := len(q.Refs); {
 	case n == 0:
-		return RefAnswer{}, fmt.Errorf("%w: refs: a resolve names at least one ref", ErrInvalid)
+		return RefAnswer{}, refusedf("%w: refs: a resolve names at least one ref", ErrInvalid)
 	case n > MaxRefsPerQuery:
-		return RefAnswer{}, fmt.Errorf("%w: refs: %d refs, past the %d one resolve reads", ErrInvalid, n,
+		return RefAnswer{}, refusedf("%w: refs: %d refs, past the %d one resolve reads", ErrInvalid, n,
 			MaxRefsPerQuery)
 	}
 	tried := make([][]string, len(q.Refs))
@@ -3866,7 +3866,7 @@ func firstLiveIn(ctx context.Context, tx *sql.Tx, id string, names []string) (Re
 func refNames(ref string) ([]string, error) {
 	if strings.HasPrefix(ref, "refs/") {
 		if !ValidRef(ref) {
-			return nil, fmt.Errorf("%w: ref: %q is not a ref", ErrInvalid, ref)
+			return nil, refusedf("%w: ref: %q is not a ref", ErrInvalid, ref)
 		}
 		return []string{ref}, nil
 	}
@@ -3878,7 +3878,7 @@ func refNames(ref string) ([]string, error) {
 		names = append(names, tagPrefix+ref)
 	}
 	if len(names) == 0 {
-		return nil, fmt.Errorf("%w: ref: %q is no ref, branch or tag name", ErrInvalid, ref)
+		return nil, refusedf("%w: ref: %q is no ref, branch or tag name", ErrInvalid, ref)
 	}
 	return names, nil
 }
@@ -4123,7 +4123,7 @@ func dueIn(ctx context.Context, tx *sql.Tx, out []dueRepo, purging bool, query s
 // False is definite: the record there removed nothing here.
 func (r *Reader) purgedAt(ctx context.Context, id string, at statelog.Position) (bool, error) {
 	if at.IsZero() {
-		return false, fmt.Errorf("%w: at: a purge is confirmed at its last record's position", ErrInvalid)
+		return false, refusedf("%w: at: a purge is confirmed at its last record's position", ErrInvalid)
 	}
 	var purged bool
 	query := statelog.FloorAt(statelog.ReadSession, at).Query(

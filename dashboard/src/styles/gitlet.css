@@ -61,7 +61,9 @@
   align-items: center;
 }
 
-/* THE LIST'S HEAD: the state tabs, then the pickers at the end of the line; each wraps. */
+/* THE LIST'S HEAD: the state tabs, then the pickers on the rest of their line in every filter
+   state; the pickers take the space the tabs leave (basis 0) and wrap only among themselves.
+   The Repository field shrinks to the kit's smallest input step first: no picker loses a word. */
 .code-changes-head {
   display: flex;
   flex-wrap: wrap;
@@ -69,12 +71,28 @@
   gap: var(--spacing-2);
   inline-size: 100%;
 }
+.code-changes-head__states {
+  flex: none;
+}
 .code-changes-head__pickers {
   display: flex;
+  flex: 1 1 0;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--spacing-2);
-  margin-inline-start: auto;
+  min-inline-size: 0;
+}
+.code-changes-head__repo {
+  flex: 1 1 0;
+  min-inline-size: var(--crewlet-input-width-xs);
+}
+/* WHERE ITS ROWS FOLD (below 820 px of the list, as a change row does) the pickers take a
+   line of their own under the tabs. */
+@container code-list (width < 820px) {
+  .code-changes-head__pickers {
+    flex-basis: 100%;
+  }
 }
 /* How whole a search of words was: a quiet line under the head's rows. */
 .code-changes-head__note {
@@ -607,6 +625,12 @@
   white-space: nowrap;
 }
 
+/* WHEN, KEPT WHOLE: "opened 35 minutes ago" wraps as one, never "opened" on one
+   line and its time on the next. */
+.code-change-byline__at {
+  white-space: nowrap;
+}
+
 .code-change-byline__at::before {
   content: "·";
   margin-inline-end: var(--spacing-1);
@@ -764,7 +788,8 @@
   color: var(--color-text-tertiary);
 }
 
-/* A SECTION'S ROWS: the check rows and a conflict's paths, under its words. */
+/* A SECTION'S ROWS: its controls' refusals, the check rows and a conflict's paths, under its words. */
+.code-merge-box__refusal,
 .code-merge-checks,
 .code-merge-paths,
 .code-merge-checks__pane {
@@ -851,6 +876,14 @@
   flex-wrap: wrap;
   gap: var(--spacing-2) var(--spacing-4);
   margin-inline-start: auto;
+}
+
+/* WHY A METHOD IS HELD, under the method control that holds it (its option's
+   description, `describedBy`). */
+.code-merge-box__held {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
 }
 
 .code-merge-box__sum {
@@ -1217,8 +1250,13 @@
 .code-description__actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: flex-end;
   gap: var(--spacing-2);
+}
+
+.refusal-place.code-description__refusal {
+  align-items: flex-end;
 }
 
 @container page (width < 640px) {
@@ -1294,6 +1332,23 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-2);
+}
+
+/* A COMMENT'S MENU at the end of its row; its edited mark and its tombstone. */
+.code-comment__menu {
+  display: inline-flex;
+  margin-inline-start: auto;
+}
+
+.code-comment__edited {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.code-comment__gone {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-style: italic;
 }
 
 .code-thread__foot {
@@ -1445,6 +1500,13 @@
   justify-content: space-between;
   gap: var(--spacing-2);
   min-block-size: 24px;
+}
+
+/* A HEAD'S END HOLDING TWO: a link out and an edit. */
+.code-rail__ends {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
 }
 
 .code-rail__head > a {
@@ -1624,6 +1686,18 @@
   background: var(--color-surface-elevated);
 }
 
+/* A PICK'S COMPOSER: the choice of what to leave, then its form. */
+.code-line-compose {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+}
+
+.code-line-compose > form {
+  align-self: stretch;
+}
+
 .code-finding__head {
   display: flex;
   flex-wrap: wrap;
@@ -1664,6 +1738,30 @@
 
 .code-finding__end {
   margin-inline-start: auto;
+}
+
+/* Answer's own box, there only so focus can come back to it. */
+.code-finding__press {
+  display: contents;
+}
+
+/* ANSWERING IS THE CARD'S WHOLE FOOT: the answer and its note, then why, then Send. */
+.code-finding__answer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.code-finding__answer-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-finding__answer-fields > :last-child {
+  flex: 1 1 16rem;
+  min-width: 0;
 }
 
 .code-finding__by {

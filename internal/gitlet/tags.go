@@ -1,7 +1,6 @@
 package gitlet
 
 import (
-	"fmt"
 	"slices"
 	"time"
 )
@@ -46,7 +45,7 @@ type TagsQuery struct {
 
 func (q *TagsQuery) validate() error {
 	if q.Limit < 0 || q.Limit > MaxTagsLimit {
-		return fmt.Errorf("%w: tags.limit: %d is outside 0 to %d (0 is %d)", ErrInvalid, q.Limit, MaxTagsLimit,
+		return refusedf("%w: tags.limit: %d is outside 0 to %d (0 is %d)", ErrInvalid, q.Limit, MaxTagsLimit,
 			DefaultTagsLimit)
 	}
 	return nil

@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/gitlet"
+	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -212,6 +213,7 @@ func TestEveryConversationRefusalIsInAnExistingClass(t *testing.T) {
 		gitlet.ConversationRefusalRepoArchived:    tools.RefusalConflict,
 		gitlet.ConversationRefusalFindingGone:     tools.RefusalNotFound,
 		gitlet.ConversationRefusalThreadGone:      tools.RefusalNotFound,
+		gitlet.ConversationRefusalCommentGone:     tools.RefusalNotFound,
 		gitlet.ConversationRefusalNoReviewer:      tools.RefusalInvalid,
 		gitlet.ConversationRefusalBusy:            tools.RefusalUnavailable,
 		gitlet.ConversationRefusalSuperseded:      tools.RefusalInternalError,
@@ -319,6 +321,53 @@ func TestACommentSetsItsThreadAsASecondWrite(t *testing.T) {
 		*sent[0].Comment.Anchor != (gitlet.CommentAnchor{Revision: 3, Path: "a.txt", Side: gitlet.SideNew, Line: 7,
 			BlobOID: aNew}) {
 		t.Errorf("an anchored comment sent %+v, want line 7 of a.txt's new side at revision 3", sent)
+	}
+}
+
+// A COMMENT IS EDITED AND DELETED BY NAME: `edit` sends one edit of the named comment, refused
+// beside a thread, finding, anchor or resolve, or with no words; code_delete_comment sends one
+// destructive delete. Mutations: an edit sent as a new comment, or a delete not destructive → red.
+func TestACommentIsEditedAndDeletedByName(t *testing.T) {
+	t.Parallel()
+	const comment = "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d31"
+	writer := &codeWrites{}
+	got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(reviewHost(), writer)), writerTurn(t),
+		builtin.CodeCommentOnChangeTool, map[string]any{"change": "site!7", "edit": comment, "body": "Fixed typo."})
+	_, sent := writer.changesAsked()
+	if got.Failed || len(sent) != 1 || sent[0].CommentEdit == nil || sent[0].Comment != nil ||
+		sent[0].CommentEdit.CommentID != comment || sent[0].CommentEdit.Body != "Fixed typo." {
+		t.Fatalf("an edit answered %q, sending %+v; want one edit of %s", got.Output, sent, comment)
+	}
+	for name, args := range map[string]map[string]any{
+		"no words":  {"change": "site!7", "edit": comment},
+		"a thread":  {"change": "site!7", "edit": comment, "body": "Hm.", "thread": comment},
+		"a resolve": {"change": "site!7", "edit": comment, "body": "Hm.", "resolve": true},
+		"an anchor": {"change": "site!7", "edit": comment, "body": "Hm.", "anchor": map[string]any{"path": "a.txt",
+			"line": 1}},
+	} {
+		w := &codeWrites{}
+		res := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(reviewHost(), w)), writerTurn(t),
+			builtin.CodeCommentOnChangeTool, args)
+		if _, sent := w.changesAsked(); !res.Failed || tools.RefusalOf(res) != tools.RefusalInvalid || len(sent) != 0 {
+			t.Errorf("an edit with %s answered %q and sent %+v, want it refused invalid, nothing sent", name,
+				res.Output, sent)
+		}
+	}
+
+	deleter := &codeWrites{}
+	got = callWrite(everyGrant(), t, codeRegistry(t, writeDeps(reviewHost(), deleter)), writerTurn(t),
+		builtin.CodeDeleteCommentTool, map[string]any{"change": "site!7", "comment": comment})
+	_, sent = deleter.changesAsked()
+	if got.Failed || len(sent) != 1 || sent[0].CommentDelete == nil || sent[0].CommentDelete.CommentID != comment {
+		t.Fatalf("a delete answered %q, sending %+v; want one delete of %s", got.Output, sent, comment)
+	}
+	if hints := builtin.AnnotationsFor(builtin.CodeDeleteCommentTool); hints.Destructive != crewletmcp.Yes {
+		t.Errorf("%s is annotated %+v, want destructive", builtin.CodeDeleteCommentTool, hints)
+	}
+	missing := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(reviewHost(), &codeWrites{})), writerTurn(t),
+		builtin.CodeDeleteCommentTool, map[string]any{"change": "site!7"})
+	if !missing.Failed || tools.RefusalOf(missing) != tools.RefusalInvalid {
+		t.Errorf("a delete naming no comment answered %q, want it refused invalid", missing.Output)
 	}
 }
 

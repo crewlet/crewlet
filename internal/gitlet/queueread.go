@@ -431,7 +431,7 @@ const (
 // beside the repository it is of, a branch a change may name — required for
 // landings — and nothing a queue read does not read.
 func (q ReadQuery) validateQueueRead() error {
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
 	case q.Kind != ReadQueue && q.Repo == "":
 		return refused("repo", fmt.Sprintf("a %s read names the repository it is of", q.Kind))
@@ -451,7 +451,7 @@ func (q ReadQuery) validateQueueRead() error {
 // not in its canonical spelling, or enqueues counted of the listing. It names
 // no asker, since no principal makes it.
 func (q QueueDueQuery) validate() error {
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
 	case q.RepoID != "" && !canonicalUUID(q.RepoID):
 		return refused("repo_id", fmt.Sprintf("%q is not a repository's id in its canonical lowercase spelling",

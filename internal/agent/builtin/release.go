@@ -226,7 +226,7 @@ func releaseReason(tool string, args map[string]any) (string, *tools.Result) {
 func commitArg(tool string, args map[string]any, key, says string) (string, *tools.Result) {
 	oid := strings.ToLower(strings.TrimSpace(argString(args, key)))
 	if !gitref.ValidOID(oid) {
-		r := failed(fmt.Sprintf("%s didn't ask anything: `%s` is %s, a whole commit id.", tool, key, says))
+		r := failedArg(key, fmt.Sprintf("%s didn't ask anything: `%s` is %s, a whole commit id.", tool, key, says))
 		return "", &r
 	}
 	return oid, nil

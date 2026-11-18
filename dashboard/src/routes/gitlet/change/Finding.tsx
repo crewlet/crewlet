@@ -5,7 +5,7 @@
  */
 
 import { useMemo, useState, type ComponentType, type ReactNode } from "react";
-import { Button, Tag } from "@crewlethq/ui";
+import { Button, FormField, Stack, Tag, Textarea } from "@crewlethq/ui";
 import {
   BookOpenGlyph,
   CheckGlyph,
@@ -26,8 +26,16 @@ import {
   type GlyphProps,
 } from "@crewlethq/icons/glyphs";
 import { DiffView, type DiffHunk, type DiffLine } from "~/components/DiffView.tsx";
-import { WriteButton } from "~/components/WriteButton.tsx";
-import { authoredBy, categoryWord, findingStateWord, severityWord } from "~/lib/code.ts";
+import { Modal } from "~/components/Modal.tsx";
+import { WriteButton, pressable } from "~/components/WriteButton.tsx";
+import {
+  authoredBy,
+  categoryWord,
+  findingStateWord,
+  refName,
+  severityWord,
+  shortOID,
+} from "~/lib/code.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtBytes } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
@@ -43,6 +51,7 @@ import type {
 import { changeHref } from "../paths.ts";
 import { useHunkTokens } from "../syntax.tsx";
 import { Byline } from "../ui.tsx";
+import { CommentCard } from "./CommentCard.tsx";
 import { ReplyComposer } from "./Conversation.tsx";
 import { FindingAnswer, findingStands } from "./FindingAnswer.tsx";
 import { refusedWords } from "./reads.ts";
@@ -236,6 +245,10 @@ export function FindingCard({
   const apply = useAct("code_apply_suggestions");
   const resolve = useAct("code_resolve_finding");
   const [replying, setReplying] = useState(false);
+  const [answering, setAnswering] = useState(false);
+  // THE FORM JUST CLOSED, so Answer takes the focus back.
+  const [answered, setAnswered] = useState(false);
+  const [applying, setApplying] = useState(false);
   const Category = CATEGORY_GLYPHS[finding.category];
   const State = STATE_GLYPHS[finding.state] ?? CircleDotGlyph;
   const read = typeof excerpt === "object" && "lines" in excerpt ? excerpt : null;
@@ -330,62 +343,171 @@ export function FindingCard({
         <ol className="code-thread__replies" aria-label="Replies">
           {replies.map((c) => (
             <li key={c.id} className="code-thread__reply">
-              <Byline who={c.author} at={c.at} now={now} />
-              <div className="prose md">{renderMarkdown(c.body)}</div>
+              <CommentCard
+                comment={c}
+                change={change}
+                layout="reply"
+                byline={<Byline who={c.author} at={c.at} now={now} />}
+              />
             </li>
           ))}
         </ol>
       )}
-      <div className="code-finding__foot">
-        {applicable &&
-          finding.side === "new" &&
-          finding.state === "open" &&
-          finding.suggestion !== undefined && (
-            <WriteButton
-              write={apply}
-              size="small"
-              variant="secondary"
-              leadingIcon={<CheckGlyph size="sm" />}
-              onPress={() =>
-                void apply.run(
-                  { change: change.ref, findings: [finding.id], expected_head: change.head },
-                  { done: `Applied the suggestion of “${finding.title}”` },
-                )
-              }
-            >
-              Apply suggestion
-            </WriteButton>
+      {answering ? (
+        <FindingAnswer
+          change={change}
+          finding={finding}
+          open
+          onOpenChange={(open) => {
+            setAnswering(open);
+            setAnswered(!open);
+          }}
+        />
+      ) : (
+        <div className="code-finding__foot">
+          {applicable &&
+            finding.side === "new" &&
+            finding.state === "open" &&
+            finding.suggestion !== undefined && (
+              <WriteButton
+                write={apply}
+                size="small"
+                variant="secondary"
+                leadingIcon={<CheckGlyph size="sm" />}
+                showRefusal={false}
+                onPress={() => setApplying(true)}
+              >
+                Apply suggestion
+              </WriteButton>
+            )}
+          <FindingAnswer
+            change={change}
+            finding={finding}
+            open={false}
+            focusBack={answered}
+            onOpenChange={(open) => {
+              setAnswering(open);
+              if (open) setReplying(false);
+            }}
+          />
+          <Button
+            size="small"
+            variant="ghost"
+            leadingIcon={<ReplyGlyph size="sm" />}
+            aria-expanded={replying}
+            onClick={() => setReplying((was) => !was)}
+          >
+            Reply
+          </Button>
+          {findingStands(finding.state) && (
+            <span className="code-finding__end">
+              <WriteButton
+                write={resolve}
+                size="small"
+                variant="secondary"
+                blocked={resolveHeld}
+                onPress={() =>
+                  void resolve.run(
+                    { change: change.ref, findings: [finding.id], resolution: "resolved" },
+                    { done: `Marked resolved “${finding.title}”` },
+                  )
+                }
+              >
+                Resolve
+              </WriteButton>
+            </span>
           )}
-        <FindingAnswer change={change} finding={finding} />
-        <Button
-          size="small"
-          variant="ghost"
-          leadingIcon={<ReplyGlyph size="sm" />}
-          aria-expanded={replying}
-          onClick={() => setReplying((was) => !was)}
-        >
-          Reply
-        </Button>
-        {findingStands(finding.state) && (
-          <span className="code-finding__end">
-            <WriteButton
-              write={resolve}
-              size="small"
-              variant="secondary"
-              blocked={resolveHeld}
-              onPress={() =>
-                void resolve.run(
-                  { change: change.ref, findings: [finding.id], resolution: "resolved" },
-                  { done: `Marked resolved “${finding.title}”` },
-                )
-              }
-            >
-              Resolve
-            </WriteButton>
-          </span>
-        )}
-      </div>
+        </div>
+      )}
+      {applying && (
+        <ApplySuggestionDialog
+          change={change}
+          finding={finding}
+          onClose={() => setApplying(false)}
+        />
+      )}
       {replying && <ReplyComposer change={change} target={{ finding: finding.id }} focus />}
     </article>
+  );
+}
+
+/** The commit message an applied suggestion is offered with, the finding's title in it. */
+export function suggestionMessage(finding: Pick<CodeFindingRow, "title">): string {
+  return `Apply suggestion: ${finding.title}`;
+}
+
+/** Apply suggestion: one commit at the head on screen, message editable, resolving the finding. */
+function ApplySuggestionDialog({
+  change,
+  finding,
+  onClose,
+}: {
+  change: CodeChangeDetail;
+  finding: CodeFindingRow;
+  onClose: () => void;
+}) {
+  const write = useAct("code_apply_suggestions");
+  const [message, setMessage] = useState(() => suggestionMessage(finding));
+  const source = refName(change.source_ref).name;
+  const blocked = message.trim() ? undefined : "Write the commit's message first.";
+  const submit = async () => {
+    if (!pressable(write, blocked)) return;
+    const result = await write.run(
+      {
+        change: change.ref,
+        findings: [finding.id],
+        expected_head: change.head,
+        message: message.trim(),
+      },
+      { done: `Applied the suggestion of “${finding.title}”` },
+    );
+    if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
+  };
+  return (
+    <Modal
+      open
+      size="md"
+      title="Apply the suggestion"
+      subtitle={`A commit on ${source}`}
+      onClose={onClose}
+      onSubmit={() => void submit()}
+      dismissable={!write.busy}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={write.busy}>
+            Cancel
+          </Button>
+          <WriteButton
+            write={write}
+            variant="primary"
+            blocked={blocked}
+            onPress={() => void submit()}
+          >
+            Commit suggestion
+          </WriteButton>
+        </>
+      }
+    >
+      <Stack gap={3}>
+        <p>
+          The suggested lines go in place of {linesWord(finding)} of {finding.path}, as one commit
+          on {source}, on top of {shortOID(change.head)}, the head on this page: a push made to it
+          since is refused. The finding is marked resolved with it, and the commit makes you an
+          author of the change.
+        </p>
+        <FormField label="Commit message">
+          {(field) => (
+            <Textarea
+              id={field.id}
+              aria-describedby={field.describedBy}
+              value={message}
+              rows={3}
+              autoResize
+              onChange={(event) => setMessage(event.target.value)}
+            />
+          )}
+        </FormField>
+      </Stack>
+    </Modal>
   );
 }

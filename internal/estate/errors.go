@@ -411,6 +411,11 @@ var typedKinds = []typedKind{
 	// node answers the person on this one in them. Without them (an older
 	// peer) the refusal reads in its code's own sentence, never a model's.
 	{"caveat.Said", reflect.TypeFor[*caveat.Said]()},
+
+	// The field a Gitlet refusal names, so a surface on this node says which
+	// value a data node refused (ADR-0060). An older peer drops it, and the
+	// refusal reads in its code's own sentence.
+	{"gitlet.FieldRefused", reflect.TypeFor[*gitlet.FieldRefused]()},
 }
 
 // wireError is an error as it crosses: what it says, and what it is.

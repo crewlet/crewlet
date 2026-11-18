@@ -600,3 +600,28 @@ test("a merged change's box says into what on one line at 1440 px", async () => 
     PARTS[""] = was;
   }
 });
+
+// THE HEADER'S TIME WRAPS WHOLE: "opened" and its time stay on one line at every width down
+// from 1440 px, which moves the byline's break through the sentence.
+// Mutation: drop the time's nowrap, and a width breaks "opened" from its time.
+test("the header keeps 'opened' and its time on one line at every width down from 1440 px", async () => {
+  mount(1440);
+  await drawn();
+  const at = await eventually(() => {
+    const found = host!.querySelector<HTMLElement>(".code-change-byline__at");
+    expect(found?.textContent).toMatch(/^opened /);
+    return found!;
+  });
+  const content = host!.querySelector<HTMLElement>(".crewlet-app-shell__content")!;
+  const range = document.createRange();
+  const broken: number[] = [];
+  for (let width = 1440; width >= 360; width -= 2) {
+    content.style.width = `${width}px`;
+    range.selectNodeContents(at);
+    // A LINE APART is a box a line's height below the first: the time's own
+    // box sits a pixel or two off the words' on one line.
+    const tops = [...range.getClientRects()].filter((r) => r.width > 0).map((r) => r.top);
+    if (tops.some((top) => Math.abs(top - tops[0]!) > 8)) broken.push(width);
+  }
+  expect(broken).toEqual([]);
+});
