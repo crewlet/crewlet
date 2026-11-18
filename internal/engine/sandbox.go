@@ -128,6 +128,10 @@ func sandboxRunners() map[string]sandbox.Runner {
 	}
 }
 
+// Every runner [sandboxRunners] registers is offered for a save as its job
+// works; whether its harness takes one is its own Saves.
+var _ sandbox.SessionSaver = (*executor.Runner)(nil)
+
 // fakePlayer is what a `providers.sandbox.fake` run does: called once per run
 // with the request it was started with, answering its result. See
 // [sandbox.FakeRunner.Player].
@@ -3236,6 +3240,13 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		opts.Incarnation, opts.TakerTTL = e.incarnation, e.leaseTTL
 		opts.Takers = holdLeases{Backend: e.backends.Coord, engine: e}
 	}
+	// AND THE FLEET'S LEDGER OF EACH SEAT'S SAVES, which a save of a running
+	// job is charged against before its stamp: the whole company agrees on a
+	// seat's allowance, so the coordination store keeps it
+	// ([sandbox.CoordinatorOptions.Saves]). With none, no save is taken.
+	if e.backends.Fleet != nil {
+		opts.Saves = e.backends.Fleet
+	}
 	return opts
 }
 
@@ -3400,6 +3411,10 @@ func (e *Engine) sandboxWaiterOptions(
 		// job's sealed set beside its row, which every capture of the job's
 		// session is scrubbed by (issued.go, "Recorded before it is written").
 		Record: rt.coordinator.RecordHanded,
+		// AND EVERY BOX IT FINDS RUNNING IS OFFERED FOR A SAVE of its job's
+		// session as it works: decided from the coordinator's memory and taken
+		// on its lifetime, never the poll's ([sandbox.WaiterOptions.Save]).
+		Save: rt.coordinator.SaveRunning,
 	}
 }
 

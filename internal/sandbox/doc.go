@@ -706,6 +706,96 @@
 // its run went on past. It over-tells; it never holds a call the session did
 // not see.
 //
+// # A save taken as its job works
+//
+// Kept by save.go and saveledger.go. A save task runs its steps CHEAPEST FIRST,
+// so a save the store would refuse costs its box nothing: the box attached
+// (never woken), its job's event stream read for whether it moved since this
+// node's last landed save, then ONE READ OF THE RUN'S ROW, settled where a
+// save of the turn was left begun by a gone taker or unanswered, and held to
+// the license's pre-check; the fleet's policy, the seat's allowance, what the
+// box was handed and the taker lease; and only then the pack. The place, the
+// save point and the cursor all come from that one read, made before the
+// pack, for "The place order is the content order".
+//
+// THE BOX PHASE IS THE DUTY'S, nothing after it: the attach, the stream's read
+// and the pack end with the stint of duty the offer came under (an E2B duty
+// handed to a peer, the coordinator stopping, a drain's end), and a save cut
+// there stamps nothing and is released from its box. Past the pack the save is
+// the coordinator's, as every take is: its take context starts after the pack,
+// so the scrub has its whole budget, and the scrub's values are read after the
+// pack too, so a token the poll recorded while the pack ran is in them.
+//
+// THE SEAT'S ALLOWANCE IS CHARGED BEFORE THE STAMP'S INSTANT, never after: the
+// whole company agrees on it (one value per seat in the coordination store's
+// uploads bucket, which ages a value out with the hold it needs), written by
+// compare-and-swap, sized from the packed archive and a margin for what the
+// scrub changes, keyed by an entry id so an append asked again counts once. A
+// crash, a lost answer or a cut keep can then only over-count, which is the
+// safe direction for a bound every artifact's bucket shares, and nothing waits
+// between the stamp's instant and its reservation. A spool that seals past what
+// was counted is refused before its keep, so a landed save is never
+// under-counted. An entry is held for [saveLedgerHold]: a save's object is
+// stored within the take's life after its entry, the collector deletes a
+// superseded one within its grace and two of its passes, and the entry's end is
+// read on another node's clock, so twice the engine's assumed skew.
+//
+// A SAVE CONTINUES NOTHING ([savePlaces.continued] nil): a run's row records no
+// capture its launch continued, the saver is often not the launching process,
+// and the launch's request names what it ASKED for, which a failed restore
+// replaced with a fresh session. So a save is placed at its launch's newest
+// landed save's point, or zero, which tells more, never less.
+//
+// # A save is offered by the poll, from memory
+//
+// Kept by save.go and the waiter's hook. THE POLL IS THE ONE TRIGGER: it
+// reaches every running box each interval already, under the duty that
+// authorises touching it, so each box a poll finds running within its turn's
+// cap is offered ([WaiterOptions.Save]); a bridge call, a clock in the box's
+// script or a signal would each be a second way into the box, under no duty.
+// THE OFFER DECIDES FROM MEMORY AND NEVER BLOCKS, since the poll is the box's
+// keepalive: saves on, the runner saving, the stint live and no task of the
+// turn under way on this node, the save due, and one of [maxConcurrentSaves]
+// slots free, taken without waiting (the next poll offers again). The task
+// runs on the coordinator's own lifetime, counted for its stop, and gives its
+// slot back only once its keep has ended, so the slots bound the uploads too.
+//
+// THE STINT is the waiter's duty, made by the pass that claimed it and ended
+// by its stand-down. A task carries the stint it began under, so a poll that
+// returns after a stand-down offers nothing under a duty this node lost.
+//
+// DUE-NESS IS COUNTED ON THIS NODE'S CLOCK ALONE: the interval
+// ([SessionKeep.SaveInterval], this node's revision) after the last attempt,
+// doubled for each failure in a row up to the larger of the interval and an
+// hour, and never before the seat's allowance paces it. What was not there
+// (the box, the license, the taker, the place) moves the clock without
+// doubling; a landing resets it and remembers how far the job's stream had
+// run, so a job that has not moved since is not saved again. AT FIRST SIGHT
+// (a node that restarted, or took an E2B duty over) the last save is taken
+// to be the later of the launch's start and this launch's newest capture,
+// instants other machines stamped, clamped to within one interval of now: as
+// in "A capture's life is counted on one clock", an age read across machines
+// decides only a wait one interval bounds, so the first save comes within an
+// interval of first sight whatever any clock says, and a paced seat takes no
+// unpaced save then. A memory no offer came for in an hour is forgotten.
+//
+// # A save as its node drains
+//
+// Kept by [Coordinator.SaveHosted]. A DRAINING NODE SAVES EACH DIRECT JOB IT
+// LAUNCHED whose session moved since its last save here, since that job's box
+// is on the node's host. Not a container's, which survives an engine's restart
+// and dies only with its host, nor an E2B one, which outlives the engine and
+// whose duty a peer takes up, saving it within an interval of first sight.
+// It LISTS the runs rather than reading the waiter's offers, so a box whose
+// poll is stuck at its bound is not missed, and saves THE MOST STALE FIRST
+// under the same slots, waiting for one for at most [drainSaveWait]. A save
+// of the turn under way counts; a drain save is never paced, only charged;
+// and from the drain's first instant no offer starts a save. The drain's end
+// bounds each save's box phase, and its take once the take's own context is
+// made, never that context's parent, whose deadline would end the take before
+// it began. A take cut before its place stamps nothing, one cut after it is
+// stamped refused, and the run keeps its newest periodic save.
+//
 // # A turn's session is continued in whichever box its next launch gets
 //
 // A TURN'S SESSION, CONTINUED IN WHICHEVER BOX ITS NEXT LAUNCH GETS — AND A
