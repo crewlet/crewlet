@@ -363,8 +363,8 @@ func (f TranscriptFilter) keepsKind(kind EntryKind) bool {
 // copy, about 100 MiB, so about 200 MiB for two. Nothing else bounds this: a
 // node serves every tab open on it, and REST bounds none. One slot would queue
 // every reader behind the longest archive. A seat's read for words holds about
-// a third more, and a relaunch's [Runner.ReadHoldings] no more than that (102
-// MiB measured, BenchmarkAReadingAtItsBounds), both in the seats' one slot
+// a third more, and a relaunch's [Runner.ReadHoldings] far less (37 MiB at most
+// measured, BenchmarkAReadingAtItsBounds), both in the seats' one slot
 // ([SeatTranscriptReadsAtOnce]). A read past them waits holding no decoder and
 // no opened object, and a slot frees within one bounded read.
 const TranscriptReadsAtOnce = 2
@@ -382,9 +382,10 @@ var transcriptReads = make(chan struct{}, TranscriptReadsAtOnce)
 // what reads hold at their worst: one slot is always a person's while a seat
 // reads. A relaunch's [Runner.ReadHoldings] takes it too, inside its own wait;
 // one that waits past it tells its session every call after its save point,
-// which is never wrong. Measured on two cores (BenchmarkAReadingAtItsBounds):
-// an ordinary 1.6 MiB archive reads in about 70 ms, 32 relaunches about 2.2 s,
-// 255 MiB of ordinary lines 2.7 s, the slowest lines measured about 11 s.
+// which is never wrong. Measured on two cores of a loaded host
+// (BenchmarkAReadingAtItsBounds): an ordinary 1.6 MiB archive reads in about
+// 55 ms, so 32 relaunches in about 1.8 s, 255 MiB of 64 MiB prompts in
+// 1.05 to 1.8 s, and 8 MiB of the slowest lines measured in 0.56 to 0.59 s.
 const SeatTranscriptReadsAtOnce = 1
 
 // seatTranscriptReads holds a slot for each transcript a seat is reading, at

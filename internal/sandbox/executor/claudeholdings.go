@@ -126,18 +126,18 @@ import (
 // SendMessage's `to` that does not decode costs only the fact it could have
 // been, the safe direction, condition 4 the backstop of the last.
 
-// THE BOUNDS: the plaintext and what read members hand out at
-// [threadPlainMax], read in one reader's buffers, a line's facts at
-// [threadLineMax], the model at [threadChainMaxRecords] and
+// THE BOUNDS: the plaintext and what read members hand out at [threadPlainMax],
+// read in one reader's fixed buffers whatever a line's length, a line's facts
+// at [threadLineMax], the model at [threadChainMaxRecords] and
 // [threadChainMaxCalls], a metadata at [holdingsMetaMaxBytes], the ask at
 // [sandbox.MaxBridgeCalls], subagents at [holdingsMaxAgents], legs at
 // [holdingsMaxLegs]; every id kept is one the call-id rule holds
 // ([holdingsWalk.leg], [subagentMetaOf]), since an id is the box's word, as
 // long as [threadValueMax]. MEASURED (BenchmarkAReadingAtItsBounds, whose doc
-// says how): the worst, a line of the smallest results at its bound after a
-// main thread at both of the model's bounds, holds 102 MiB live and peaks at
-// 181 MiB in 1.7 s, within the about 133 MiB a seat's read for words holds at
-// its worst ([SeatTranscriptReadsAtOnce]); an ordinary session reads in 68 ms.
+// says how; a loaded host): the worst, a line of the smallest results at its
+// facts' bound after a main thread at both of the model's bounds, holds 37 MiB
+// live and peaks at 62 MiB in 1.6 to 3.3 s; a whole PDF's Read, 53 MiB of
+// plaintext, reads in 42 to 76 ms; an ordinary session in 55 ms.
 
 // holdingsWriterFloor is the oldest Claude Code release whose sessions a
 // reading reads ([ClaudeCode.holdingsFloor]).

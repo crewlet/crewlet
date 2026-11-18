@@ -260,12 +260,12 @@ func (h SessionHoldings) heldByID(c LoggedCall) (bool, string) {
 // FIFTEEN SECONDS, the frame's patience for one session-sized operation, as the
 // keep's is ([relaunchCaptureWait]): the relaunch's frame holds the seat and an
 // admission slot, so a kept session costs it thirty seconds, plus the one
-// bounded step a reader may overrun by ([HoldingsReader]) and the keep's settle
-// writes ([Coordinator.ContinuedCapture]). A reading past it is no reading.
-// BenchmarkAReadingAtItsBounds, two cores: an ordinary 1.6 MiB archive reads in
-// ~70 ms (a burst of 32 sharing the seats' one transcript slot, ~2.2 s), 255 MiB
-// of ordinary lines (the plaintext's bound) in 2.7 s, and the slowest lines
-// measured, extrapolated to that bound, ~11 s: inside the wait still.
+// bounded step, a 64 KiB fill, a reader may overrun by ([HoldingsReader]) and
+// the keep's settle writes ([Coordinator.ContinuedCapture]). A reading past it
+// is no reading. BenchmarkAReadingAtItsBounds, two cores of a loaded host: an
+// ordinary 1.6 MiB archive reads in ~55 ms (a burst of 32 in the seats' one
+// transcript slot, ~1.8 s), 255 MiB of 64 MiB prompts (the plaintext's bound)
+// in 1.05 to 1.8 s, and 8 MiB of the slowest lines measured in 0.56 to 0.59 s.
 const holdingsReadWait = 15 * time.Second
 
 // HoldingsOf is what the session a relaunch of turnID continues holds of the

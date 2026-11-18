@@ -230,10 +230,27 @@
 // coincident worst is the resume's model of the thread at its bounds
 // ([threadChain]) beside one line's facts at the bound and the reader's fixed
 // buffers. A larger bound would serve only lines no release writes: what this
-// one refuses is a
-// line of tiny calls by the tens of thousands, a value read whole past
-// [threadValueMax] (an id, a uuid, a usage), or a type that turns after a
-// frame passed over for it, each failing toward no reading or cannot tell.
+// one refuses is a line of tiny calls by the tens of thousands, a value read
+// whole past [threadValueMax] (an id, a uuid, a usage), or a type that turns
+// after a frame passed over for it, each failing toward no reading or cannot
+// tell.
+//
+// MEASURED on two cores, one case a process, on a host under a load of 5 to 27,
+// so every time is an upper bound; held is the largest live heap under
+// GODEBUG=gctrace=1 at GOGC=10, a peak the largest heap at the default. A
+// reader's fixed buffers (bufio's 64 KiB, the scanner's 67,072 bytes, two text
+// buffers of 4 KiB, the automata) hold about 146 KiB, and what no reader reads
+// of a line costs nothing more, whatever its length
+// (BenchmarkAReaderAtALineOfAnyLength): a whole PDF's Read, 55,924,056 bytes on
+// one line, reads in 26 ms holding 146.5 KiB, and a 64 MiB prompt in
+// 245 to 275 ms holding 145.8 KiB. A line of the smallest results, which no
+// release writes, holds 16,384 of them within the bound, the reader and its
+// facts 2,450 KiB, and one more is refused, a line of about 656 KiB, since a
+// list is charged at every size it doubles through. A line at the bound read
+// beside the resume's model at both its bounds held 37 MiB at most, its heap
+// peaking at 63 MiB, and the whole-PDF line beside it 36 MiB
+// (BenchmarkAThreadChainAtItsBounds): within the about 133 MiB a seat's read
+// for words holds in the same slot ([SeatTranscriptReadsAtOnce]).
 //
 // # A run's harness session, carried between boxes
 //

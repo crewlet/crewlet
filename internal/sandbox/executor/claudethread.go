@@ -35,7 +35,7 @@ import (
 // passed over unheld whatever its length, and a value read whole is held to
 // [threadValueMax] besides. EIGHT MEBIBYTES, a constant of its own, never the
 // scrub's piece: the package doc, "THE FACTS ARE HELD TO [threadLineMax] IN
-// SUM", says why.
+// SUM", says why, and what a line at it and one of any length measured.
 const threadLineMax = 8 << 20
 
 // threadPlainMax is the most of one member a reader reads: the plaintext one
