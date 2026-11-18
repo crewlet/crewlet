@@ -2682,11 +2682,12 @@ type PendingStore interface {
 	// write, at that take's own place among the reads ([NoteRead.Order]). So
 	// is a note the brief tells again whose read the row marks unanswered
 	// ([PendingRun.RetoldNotes]): read by the job, told again
-	// ([NoteRead.Retold]), at the marked take's own place. And
-	// the notes the turn's box still held
-	// ([PendingRun.HandedNotes]) are filed WAITING in the same write, after
-	// them: from the write that creates the record, nothing a person files on
-	// it can land ahead of a note the box took first.
+	// ([NoteRead.Retold]), at the marked take's own place. And the notes the
+	// turn's box still held ([PendingRun.HandedNotes]) are filed WAITING in
+	// the same write, after them, so nothing a person files can land ahead of
+	// a note the box took first. Every item of the job before is removed, and
+	// the job opened is handed every call its log's opening walked
+	// ([RunNote.LateCall]), in a write after it that never fails the launch.
 	//
 	// THE TURN'S READ OF ITS CONVERSATION ([PendingRun.Base]) IS WRITTEN BY
 	// THE CREATE ALONE and kept by every reset, whatever the reset's run
@@ -3203,21 +3204,21 @@ type PendingStore interface {
 	// handed: one past the rule is kept as none, never cut.
 	//
 	// AND WITH WHAT A RECORD CARRIES, in the same write: the calls the run's
-	// call log took in from the call's own work ([BridgeAppend.Absorbed]).
+	// call log took in from the call's own work ([BridgeAppend.Absorbed]). A
+	// record the log lists late, or as given up on by its own job's harness,
+	// is then handed to the job the log is open to ([RunNote.LateCall]),
+	// which never fails the step.
 	//
 	// ONCE, HOWEVER OFTEN IT IS ASKED: a begin whose entry the log holds
 	// already, or whose call it lists, writes nothing and is answered taken; a
 	// record of a call the log already lists, as its job's own or late — its
 	// place, the instant the bridge took it, its name and its identity, all
-	// four — is not listed again, and what it absorbed is not counted again,
-	// since both landed in the write that listed it. So a session that asks a
-	// step again after its answer was lost never records the call, or what it
-	// carried, twice. A call the count bound has dropped from the middle since
-	// it landed is no longer listed, so a record asked again lists it again
-	// and counts what it absorbed again: an over-count of a resumed call log,
-	// the safe direction, and one that takes some hundred of the job's calls
-	// landing between the two asks ([appendBounded] drops the oldest of the
-	// tail first).
+	// four — is not listed again, nor what it absorbed counted again. A call
+	// the count bound has dropped from the middle since it landed is no longer
+	// listed, so a record asked again lists it again and counts what it
+	// absorbed again: an over-count of a resumed call log, the safe direction,
+	// and one that takes some hundred of the job's calls landing between the
+	// two asks ([appendBounded] drops the oldest of the tail first).
 	//
 	// Reports whether the step is taken: false where the log is open neither
 	// for the job nor for its round. FALSE IS NOT AN ERROR: it is a run whose
@@ -3708,7 +3709,8 @@ type PendingStore interface {
 	// past [NoteFiling.MaxWaiting], or [NoteClosed], none of them an error. The
 	// bounds count a person's notes alone, and a note a hook's live serve
 	// handed over ([RunNote.LiveServe]) no longer waits. A filing that names a
-	// job ([RunNote.For]) is refused with [ErrNoteKind]. No fence: a note is an
+	// job or a call ([RunNote.For], [RunNote.LateCall]) is refused with
+	// [ErrNoteKind]. No fence: a note is an
 	// append, never an ownership decision. The seal must be within
 	// [MaxNoteSealedBytes] ([ErrNoteTooLarge]). See the package doc, "Filing
 	// and serving notes".

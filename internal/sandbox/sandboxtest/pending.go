@@ -222,6 +222,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	cases = append(cases, refusalCases...)
 	cases = append(cases, standbyCases...)
 	cases = append(cases, lateCases...)
+	cases = append(cases, lateItemCases...)
 	cases = append(cases, briefReadCases...)
 	cases = append(cases, inFlightCases...)
 	for _, tc := range cases {
@@ -250,7 +251,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 			tc.fn(t, store, runs)
 		})
 	}
-	for _, tc := range slices.Concat(stagedLogCases, lateStagedCases) {
+	for _, tc := range slices.Concat(stagedLogCases, lateStagedCases, lateItemStagedCases) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			_, runs := newStore(t)

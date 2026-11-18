@@ -125,14 +125,26 @@ type RunNote struct {
 
 	// For is the one job the item is for, where the store made it that job's
 	// alone. Filed by the store alone, never by a filer
-	// ([PendingStore.FileNote] refuses one with [ErrNoteKind]); this build's
-	// store files none. Wherever one is, it is counted apart ([MaxJobItems]),
-	// handed over only inside that job ([RunNote.IsFor]), passed over by every
-	// reader of a person's notes (the ending, the carry, the review, a launch's
-	// brief, the capture's cursor), and removed by the launch that opens the
-	// next job ([openNotes]). Empty for a person's note, an item of the whole
-	// turn.
+	// ([PendingStore.FileNote] refuses one with [ErrNoteKind]): a late-call
+	// item ([RunNote.LateCall]), the one kind this build files. Wherever one
+	// is, it is counted apart ([MaxJobItems]), handed over only inside that
+	// job ([RunNote.IsFor]), passed over by every reader of a person's notes
+	// (the ending, the carry, the review, a launch's brief, the capture's
+	// cursor), and removed by the launch that opens the next job
+	// ([openNotes]). Empty for a person's note, an item of the whole turn.
 	For string `json:"for,omitempty"`
+
+	// LateCall is the call a LATE-CALL ITEM hands its job, always beside For:
+	// a call of the round whose outcome the job's session lacks, one an
+	// earlier job made that the log took late ([BridgeCall.Late]) or one of
+	// the job's own its harness stopped waiting for ([BridgeCall.Abandoned]).
+	// FILED BY THE STORE ALONE, in the writes that decide the call is late or
+	// nobody waited for it ([CoordStore.fileLateItems]). UNSEALED: it is the
+	// log's account, which the log holds in the clear and no seal proves
+	// anything of, and it claims no person's authority, so it is never handed
+	// as anybody's note. Nil on every person's note. See the package doc, "A
+	// late call is handed to the job working as it lands".
+	LateCall *LateCall `json:"late_call,omitempty"`
 
 	// LostTake is TRANSIENT, and set on a note a launch's brief carries
 	// ([PendingRun.BriefNotes]) alone: the take that recorded the note read
@@ -150,6 +162,29 @@ type RunNote struct {
 	// Extra is every key of the note this build does not know — see
 	// [RunSteer.Extra].
 	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// LateCall is a late-call item's call ([RunNote.LateCall]).
+//
+// A SECTION WITH AN EXTRA OF ITS OWN (wirekeys.go), as a serve is.
+type LateCall struct {
+	// Round is the round whose log listed the call ([BridgeLog.Round]),
+	// which numbers it ([BridgeCall.Appended]).
+	Round string `json:"round"`
+
+	// Call is the call as the item keeps it ([itemCall]).
+	Call BridgeCall `json:"call"`
+
+	// Extra is every key of the section this build does not know: see
+	// [RunSteer.Extra].
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// lateItemID is the id of the late-call item of the call the round's log took
+// appended'th, for job: one per job and call, whichever write files it, never
+// a person's request id (a UUID).
+func lateItemID(job string, appended int) string {
+	return "call:" + job + ":" + strconv.Itoa(appended)
 }
 
 // Waiting reports whether nothing has read the note yet.
@@ -723,8 +758,8 @@ func viewOf(update coord.SandboxRunUpdate) (NotesView, error) {
 var errNoteBounds = errors.New("sandbox: a note is filed with the turn's bounds, and none were given")
 
 // ErrNoteKind is a filing of a note that is not a person's: one naming the job
-// it is for ([RunNote.For]), refused by [PendingStore.FileNote] before anything
-// is written. An item for one job is the store's to file, in its own writes of
+// it is for ([RunNote.For]) or a call it hands one ([RunNote.LateCall]),
+// refused by [PendingStore.FileNote] before anything is written. An item for one job is the store's to file, in its own writes of
 // the record, never a filer's: the engine files a person's note, which reaches
 // a job only as that person's words, and a filer that could name a job could
 // hand it words on the store's account instead.
@@ -743,10 +778,10 @@ func (s *CoordStore) FileNote(ctx context.Context, turnID string, filing NoteFil
 	switch {
 	case filing.MaxWaiting <= 0 || filing.MaxNotes <= 0:
 		return "", PendingRun{}, errNoteBounds
-	case note.For != "":
+	case note.For != "" || note.LateCall != nil:
 		// REFUSED, AND NO ANSWER OF A STATUS: whatever the record holds,
 		// nothing a filer hands in is filed as an item.
-		return "", PendingRun{}, fmt.Errorf("sandbox: note %s to run %s names job %s: %w",
+		return "", PendingRun{}, fmt.Errorf("sandbox: note %s to run %s names job %q or a call: %w",
 			note.ID, turnID, note.For, ErrNoteKind)
 	case note.ID == "" || len(note.Sealed) == 0:
 		return "", PendingRun{}, fmt.Errorf("sandbox: a note to run %s needs its id and its seal", turnID)
@@ -827,6 +862,94 @@ func personsNotes(notes []RunNote, job string) (mine, waiting int) {
 		waiting++
 	}
 	return mine, waiting
+}
+
+// LateCallStatuses are the statuses a late-call item is filed in: those a run's
+// own harness takes notes in, from the launch that opens its job to the claim
+// of its completion (internal/engine's steerTakeStatuses, held equal by a
+// test). A job parked, claimed or collected is handed nothing more, so the
+// call is left to the next continuation, which tells it.
+var LateCallStatuses = []string{StatusLaunching, StatusRunning}
+
+// fileLateItems files a late-call item for job, of the round round, for each of
+// calls the record does not hold one of yet ([RunNote.LateCall]): in ONE live
+// write of the record, pinned to the job, [LateCallStatuses] and an undecided
+// ending, in the calls' order and up to [MaxJobItems] items for the job. A call
+// an older build appended unnumbered, one a person approved and one no save
+// point leaves unheld are none. See the package doc, "A late call is handed
+// to the job working as it lands".
+//
+// NEVER AN ERROR TO ITS CALLER, whose own write landed: what became of a call
+// it did not file is said here, and the call's mark stands, which every
+// continuation of the round tells.
+func (s *CoordStore) fileLateItems(ctx context.Context, turnID, job, round string, calls []BridgeCall) {
+	calls = slices.DeleteFunc(slices.Clone(calls), func(c BridgeCall) bool {
+		return c.Appended == 0 || c.Approved || !c.unheld()
+	})
+	if job == "" || len(calls) == 0 {
+		return
+	}
+	var filed, spent int
+	moved := false
+	_, _, _, err := s.writeFound(ctx, turnID, true, Fence{}, func(run *PendingRun) bool {
+		filed, spent, moved = 0, 0, run.LaunchID != job || !slices.Contains(LateCallStatuses, run.Status)
+		if moved {
+			return false
+		}
+		notes := slices.Clone(run.Steer.Notes)
+		held := 0
+		for _, n := range notes {
+			if n.For == job {
+				held++
+			}
+		}
+		at := s.clock()
+		for _, c := range calls {
+			id := lateItemID(job, c.Appended)
+			if slices.ContainsFunc(notes, func(n RunNote) bool { return n.ID == id }) {
+				continue
+			}
+			if held >= MaxJobItems {
+				spent++
+				continue
+			}
+			run.Steer.Seq++
+			notes = append(notes, RunNote{ID: id, Seq: run.Steer.Seq, At: at, For: job,
+				LateCall: &LateCall{Round: round, Call: itemCall(c)}})
+			held, filed = held+1, filed+1
+		}
+		run.Steer.Notes = notes
+		return filed > 0
+	})
+	switch {
+	case errors.Is(err, ErrRunEnding):
+		moved = true
+	case err != nil:
+		log.WarnContext(ctx, "sandbox_late_call_unhanded", "turn_id", turnID, "launch_id", job,
+			"calls", placesOf(calls), "error", err.Error(),
+			"detail", "the job is handed none of these calls as they land; the next continuation tells them")
+		return
+	}
+	if moved {
+		log.DebugContext(ctx, "sandbox_late_call_not_handed", "turn_id", turnID, "launch_id", job,
+			"calls", placesOf(calls), "detail", "the record no longer names a job working that takes notes, "+
+				"so the next continuation tells these calls")
+	}
+	if spent > 0 {
+		log.InfoContext(ctx, "sandbox_late_calls_spent", "turn_id", turnID, "launch_id", job, "calls", spent,
+			"detail", fmt.Sprintf("the job holds the %d late calls it may be handed; the next continuation "+
+				"tells the rest", MaxJobItems))
+	}
+}
+
+// placesOf is each of calls as a log line names it: its tool and its number in
+// its round's log.
+func placesOf(calls []BridgeCall) []string {
+	out := make([]string, 0, len(calls))
+	for _, c := range calls {
+		out = append(out, c.Name+"#"+strconv.Itoa(c.Appended))
+	}
+	return out
 }
 
 // TakeNotes records notes read and answers the ones this take recorded. See the

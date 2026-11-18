@@ -2,8 +2,11 @@ package executor_test
 
 import (
 	"bytes"
+	"encoding/json"
+	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
@@ -137,4 +140,86 @@ func TestAHeadingMidLineIsNoEntry(t *testing.T) {
 			`},"timestamp":"2026-10-30T12:00:04.000Z"}`,
 	})
 	sameEntries(t, got, []shown{{kind: executor.EntryLateCall, text: item}})
+}
+
+// A HOOK'S ANSWER NAMES WHAT REACHED THE RUN, BY KIND. Its transcript line
+// names a person's notes by their senders, then the late calls by how many,
+// in the words the session's reader reads them by: so the line the answer
+// writes is read back, live and from a captured session, as a note where it
+// names one and as a late call where it names calls alone.
+//
+// Mutation: write every message's line as a person's (hook-line-names-persons),
+// and an answer of late calls alone names a person who sent nothing.
+func TestAHookAnswerNamesWhatReachedTheRun(t *testing.T) {
+	t.Parallel()
+	call := executor.HookNote{Message: lateCall("success", "delegate()"), Call: true}
+	note := executor.HookNote{By: "ada", Message: "## A note from ada, sent while this turn was running\nuse staging"}
+	for _, tc := range []struct {
+		name  string
+		notes []executor.HookNote
+		said  string
+		kind  executor.EntryKind
+	}{
+		{"one late call", []executor.HookNote{call},
+			"a call that finished after its run stopped waiting for it reached the run", executor.EntryLateCall},
+		{"three late calls", []executor.HookNote{call, call, call},
+			"3 calls that finished after their run stopped waiting for them reached the run", executor.EntryLateCall},
+		{"a note and a late call", []executor.HookNote{note, call},
+			"a note from ada and a call that finished after its run stopped waiting for it reached the run",
+			executor.EntryNote},
+		{"a note alone", []executor.HookNote{note}, "a note from ada reached the run", executor.EntryNote},
+	} {
+		answer := executor.ClaudeHookAnswer("PostToolBatch", hookTake, tc.notes)
+		var out struct {
+			SystemMessage string `json:"systemMessage"`
+		}
+		if err := json.Unmarshal([]byte(answer), &out); err != nil {
+			t.Fatalf("%s: the answer is not JSON: %v\n%s", tc.name, err, answer)
+		}
+		if want := "crewlet: " + tc.said + " " + hookToken; out.SystemMessage != want {
+			t.Errorf("%s: the line is %q, want %q", tc.name, out.SystemMessage, want)
+		}
+		line := `{"type":"system","subtype":"informational","content":` +
+			jsonText(t, "PostToolBatch says: "+out.SystemMessage) + `,"timestamp":"2026-10-30T12:00:03.100Z"}`
+		if got := decodeClaude(line); got != "[steer] "+tc.said {
+			t.Errorf("%s: the live line reads %q, want %q", tc.name, got, "[steer] "+tc.said)
+		}
+		sameEntries(t, readClaudeRecords(t, []string{line}), []shown{{kind: tc.kind, text: tc.said}})
+	}
+}
+
+// THE STANDING INSTRUCTION QUOTES THE HEADING A LATE CALL OPENS WITH, in both
+// harnesses', as it quotes a note's: a model told what the engine's own
+// account of a late call looks like can tell it from a person's note and from
+// a tool's text imitating either. The heading is the agent layer's to render
+// (prompts.LateCallArrived), which this package cannot import.
+//
+// Mutation: reword the heading on either side, and this goes red.
+func TestTheStandingInstructionQuotesTheHeadingALateCallOpensWith(t *testing.T) {
+	t.Parallel()
+	heading, _, _ := strings.Cut(prompts.LateCallArrived("success", "x()", false), "\n")
+	if heading != prompts.LateCallHead {
+		t.Fatalf("the account opens with %q, not its heading %q", heading, prompts.LateCallHead)
+	}
+	for _, instruction := range []string{executor.ClaudeCodeSteerInstruction, executor.OpenCodeSteerInstruction} {
+		if !strings.Contains(instruction, `"`+heading+`"`) {
+			t.Errorf("the instruction does not quote the heading a late call opens with (%q):\n%s", heading,
+				instruction)
+		}
+	}
+}
+
+// THE TRANSCRIPT READS THE HEADING A LATE CALL OPENS WITH: the account the
+// engine renders, handed in a hook's context, is one late call entry, from the
+// heading the agent layer renders it under.
+//
+// Mutation: reword the heading on either side, and the account reads as no
+// entry.
+func TestTheTranscriptReadsTheHeadingALateCallOpensWith(t *testing.T) {
+	t.Parallel()
+	account := prompts.LateCallArrived("error: denied", "post_message({})", false)
+	entries := readClaudeRecords(t, []string{hookContext(t, account)})
+	if len(entries) != 1 || entries[0].Kind != executor.EntryLateCall {
+		t.Errorf("the rendered account reads as %+v, want one late call entry", entries)
+	}
 }

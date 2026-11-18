@@ -540,6 +540,41 @@ const lateSubmission = "A `" + toolname.SubmitWork + "` among them does NOT stan
 	" the run that made it had stopped waiting for it before it returned. When your work is done, call `" +
 	toolname.SubmitWork + "` yourself."
 
+// LateCallHead is the heading [LateCallArrived] opens with, a line of its own:
+// the session reader tells such an account from a person's note and from a
+// brief by it (internal/sandbox/executor's lateCallHead, held equal by a test).
+const LateCallHead = "## A call the run that made it stopped waiting for"
+
+// LateCallArrived is one call of the work its run stopped waiting for, which
+// finished since, as the engine hands it to the run working on the work
+// (internal/engine's lateItemMessage): call its line's `name(args)` and outcome
+// `success` or `error: …`, each one line, the outcome first. submission says it
+// is a successful `submit_work`.
+//
+// EVERY FACT IS [lateCallsHeader]'s OR [lateSubmission]'s, as STATEMENTS, for
+// the reason [SteerMessage] states its own: a command in context a run did not
+// ask for reads as steering. The outcome-unknown clause is left out, since an
+// account is of a finished call; added are that it reached the run while the
+// work was under way and is no new request, and what a run told it as it
+// finishes answers next.
+func LateCallArrived(outcome, call string, submission bool) string {
+	text := LateCallHead +
+		"\nA run of this work made this call through your tools and stopped waiting for it before it" +
+		" finished (it gave up on it, or it was cut off or replaced), and it has finished since. This reached" +
+		" you while the work was under way, and it is not a new request. The session above may show the call" +
+		" with no outcome, as still running, as interrupted or as failed, and an earlier message may have told" +
+		" it. It is one call, made once, and the outcome told here stands: a call that succeeded has already" +
+		" run, so making it again would make it twice; a call that failed did not take effect. If this" +
+		" reached you as you were finishing, the answer you give next is this run's report, in place of the" +
+		" one before it." +
+		"\n\nOutcome: " + outcome + "\nCall: " + call
+	if submission {
+		text += "\n\nIt is not this work's submission: the run that made it had stopped waiting for it before it" +
+			" returned, and this work's submission is the one this run makes when its work is done."
+	}
+	return text
+}
+
 // earlierSubmission tells a run that a successful `submit_work` among the calls
 // listed before it, under [calledAfterHeader], [calledSinceHeader] or
 // [calledBeforeHeader], is no submission of the work it carries on. Every call

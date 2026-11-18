@@ -101,11 +101,11 @@ func rowVersion(t *testing.T, runs coord.SandboxRuns, turnID string) uint64 {
 	return record.Version
 }
 
-// jobItem is an item for one job: a note naming the job it is for.
+// jobItem is an item for one job as the store files one: a late-call item,
+// unsealed, naming the job it is for and the call it hands it.
 func jobItem(id, job string) sandbox.RunNote {
-	n := sealedNote(id)
-	n.For = job
-	return n
+	return sandbox.RunNote{ID: id, At: base, For: job,
+		LateCall: &sandbox.LateCall{Round: "r-" + job, Call: madeAt("delegate", 1, 1)}}
 }
 
 // placeItem puts an item for job on turnID's record, waiting and served to
@@ -911,29 +911,36 @@ func testAFilingCountsNoHookServedNoteAsWaiting(t *testing.T, s sandbox.PendingS
 }
 
 // A PERSON CANNOT FILE AN ITEM. A filing is a person's note: one that names a
-// job ([sandbox.RunNote.For]) is refused with [sandbox.ErrNoteKind] before
-// anything is written, whichever job it names, the record's own included, and
-// on a turn with no record at all, where the refusal is no answer of a status:
-// an item for one job is the store's to file, in its own writes of the record,
-// never a filer's. The record is left as it was, and the person's note filed
-// after it is the turn's first.
+// job ([sandbox.RunNote.For]) or hands one a call ([sandbox.RunNote.LateCall])
+// is refused with [sandbox.ErrNoteKind] before anything is written, whichever
+// job it names, the record's own included, and on a turn with no record at
+// all, where the refusal is no answer of a status: an item for one job is the
+// store's to file, in its own writes of the record, never a filer's. The
+// record is left as it was, and the person's note filed after it is the
+// turn's first.
 //
-// Mutation: file a note that names a job, as an item or as a person's note,
-// and it lands on the record or is answered as a status.
+// Mutation: file a note that names a job or a call, as an item or as a
+// person's note, and it lands on the record or is answered as a status.
 func testAPersonCannotFileAnItem(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	const turn = "t-item-filed"
 	previous := mustLaunched(t, s, run(turn))
 	mustClaim(t, s, turn)
 	current := mustBeginLaunch(t, s, run(turn))
+	// A PERSON'S SEALED NOTE THAT CLAIMS A CALL, naming no job: no filer may
+	// hand a job the log's account either.
+	claiming := sealedNote("i-4")
+	claiming.LateCall = jobItem("i-4", current).LateCall
 	for _, tc := range []struct {
-		name, turn, id, job string
+		name, turn string
+		note       sandbox.RunNote
 	}{
-		{"for the record's own job", turn, "i-1", current},
-		{"for the job before it", turn, "i-2", previous},
-		{"to a turn with no record", "t-item-no-record", "i-3", current},
+		{"for the record's own job", turn, jobItem("i-1", current)},
+		{"for the job before it", turn, jobItem("i-2", previous)},
+		{"to a turn with no record", "t-item-no-record", jobItem("i-3", current)},
+		{"as a person's note handing a call", turn, claiming},
 	} {
-		filed, _, err := s.FileNote(ctx, tc.turn, sandbox.NoteFiling{Note: jobItem(tc.id, tc.job),
+		filed, _, err := s.FileNote(ctx, tc.turn, sandbox.NoteFiling{Note: tc.note,
 			MaxWaiting: maxWaiting, MaxNotes: maxNotes})
 		if !errors.Is(err, sandbox.ErrNoteKind) || filed != "" {
 			t.Errorf("an item filed %s = %q, %v, want it refused with ErrNoteKind", tc.name, filed, err)
