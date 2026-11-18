@@ -8,6 +8,7 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-libra
 import { afterEach, expect, test, vi } from "vitest";
 
 import { CODE_POSITION, jsonAnswer, mountCode, stubCodeEngine } from "~/test/codeScreens.tsx";
+import { settled } from "~/test/settle.ts";
 import { Search } from "./Search.tsx";
 
 afterEach(() => {
@@ -331,4 +332,205 @@ test("a hit with no matches answered draws unmarked, and a line around a hit is 
   expect(marksOf("a.go", 2)).toEqual([]);
   expect(marksOf("a.go", 3)).toEqual(["Flush(", "Flush("]);
   expect(marksOf("a.go", 4)).toEqual([]);
+});
+
+const MORE_HITS = [
+  ...STORY_HITS.filter((h) => h.path === MW).map(({ file_matches: _, ...h }) => h),
+  hit("web", MW, 140, "\t\tf.Flush()", {
+    before: ["\terr := w.gz.Close()", "\tif f, ok := w.(http.Flusher); ok {"],
+  }),
+  hit("web", "internal/server/middleware_test.go", 12, "\tw.Flush()"),
+];
+/** The story, and Show N more's search of one file answered by `more`. */
+function stubMore(
+  more: (url: URL) => Response,
+  extra: Record<string, (url: URL) => Response> = {},
+) {
+  return stubCodeEngine({
+    "/query/code_search": (url) =>
+      url.searchParams.get("path")?.startsWith("/") ? more(url) : jsonAnswer(STORY),
+    "/query/code_repos": () => jsonAnswer({ repos: [], position: CODE_POSITION, level: "stale" }),
+    ...extra,
+  });
+}
+const refusal = (detail: string) => jsonAnswer({ error: "bad_params", detail }, 400);
+
+// Mutation: keep every hit of the second answer, the other file's too.
+test("Show N more asks that one file and merges its other lines in place", async () => {
+  const asked = stubMore(() => jsonAnswer({ hits: MORE_HITS, tips: { web: WEB }, coverage }));
+  mountCode("#/gitlet/search?q=Flush(&ref=main", <Search />);
+  const file = await screen.findByRole("article", { name: MW });
+  fireEvent.click(within(file).getByRole("button", { name: "Show 1 more matching line" }));
+
+  const line = await within(file).findByRole("link", { name: "140" });
+  const more = asked.filter((u) => u.searchParams.get("path") === `/${MW}`);
+  expect(more).toHaveLength(1);
+  expect(Object.fromEntries(more[0]!.searchParams)).toMatchObject({
+    q: "Flush(",
+    repo: "web",
+    ref: "main",
+    context: "3",
+  });
+  expect(more[0]!.searchParams.has("per_file")).toBe(false);
+  expect(blocksOf(MW).at(-1)).toEqual([138, 139, 140]);
+  // The other file's line, which a widened search may bring, is not this card's.
+  expect(blocksOf(MW)[0]![0]).toBe(62);
+  expect(screen.queryByRole("article", { name: "internal/server/middleware_test.go" })).toBeNull();
+  expect(within(file).queryByRole("button", { name: /more matching line/ })).toBeNull();
+  expect(document.activeElement).toBe(line);
+});
+
+// Mutation: merge the second answer whatever commit it was read at.
+test("Show N more says so when the repository moved since the search, and merges nothing", async () => {
+  const moved = "1a2b3c4".padEnd(40, "9");
+  const asked = stubMore(() => jsonAnswer({ hits: MORE_HITS, tips: { web: moved }, coverage }));
+  mountCode("#/gitlet/search?q=Flush(", <Search />);
+  const file = await screen.findByRole("article", { name: MW });
+  fireEvent.click(within(file).getByRole("button", { name: "Show 1 more matching line" }));
+
+  expect(
+    await within(file).findByText(
+      "web moved since this search (now at 1a2b3c4): search again to see this file’s other lines.",
+    ),
+  ).toBeTruthy();
+  expect(within(file).queryByRole("link", { name: "140" })).toBeNull();
+  const pages = () => asked.filter((u) => u.searchParams.get("per_file") === "3").length;
+  expect(pages()).toBe(1);
+  fireEvent.click(within(file).getByRole("button", { name: "Search again" }));
+  await settled(() => asked.length);
+  expect(pages()).toBe(2);
+});
+
+// Mutation: read a missing tip as moved.
+test("Show N more unanswered for the repository says why, beside its Retry", async () => {
+  const why = { node: "g2", why: "busy", repos: { count: 1, names: ["web"] } };
+  stubMore(() =>
+    jsonAnswer({ hits: [], coverage: { ...coverage, grep_not_named: none, not_answering: [why] } }),
+  );
+  mountCode("#/gitlet/search?q=Flush(", <Search />);
+  const file = await screen.findByRole("article", { name: MW });
+  fireEvent.click(within(file).getByRole("button", { name: "Show 1 more matching line" }));
+  expect(
+    await within(file).findByText(
+      "These lines could not be read: Not searched: 1 repository (web), Gitlet node g2 did not answer (busy).",
+    ),
+  ).toBeTruthy();
+  expect(within(file).getByRole("button", { name: "Retry" })).toBeTruthy();
+  expect(within(file).queryByText(/moved since this search/)).toBeNull();
+});
+
+// Mutation: drop the sentence for the lines a second search did not hold.
+test("Show N more whose answer was cut too links the file for the rest", async () => {
+  const cut = MORE_HITS.filter((h) => h.path === MW && h.line !== 140);
+  stubMore(() =>
+    jsonAnswer({ hits: cut, tips: { web: WEB }, coverage: { ...coverage, truncated: true } }),
+  );
+  mountCode("#/gitlet/search?q=Flush(", <Search />);
+  const file = await screen.findByRole("article", { name: MW });
+  fireEvent.click(within(file).getByRole("button", { name: "Show 1 more matching line" }));
+  const rest = await within(file).findByText(/did not fit one search/);
+  expect(rest.textContent).toBe(
+    "Its other 1 matching line did not fit one search: open the file to read them.",
+  );
+  const open = within(rest).getByRole("link", { name: "open the file to read them" });
+  expect(Object.fromEntries(new URLSearchParams(open.getAttribute("href")!.split("?")[1]))).toEqual(
+    { ref: WEB, path: MW },
+  );
+});
+
+// Mutation: offer Show N more on a file whose total the engine did not answer.
+test("a file with no total answered offers no Show N more, its count at least", async () => {
+  stub({ hits: MORE_HITS.filter((h) => h.path === MW), tips: { web: WEB }, coverage });
+  mountCode("#/gitlet/search?q=Flush(", <Search />);
+  const file = await screen.findByRole("article", { name: MW });
+  expect(within(file).getByText("at least 4 matching lines")).toBeTruthy();
+  expect(within(file).queryByRole("button", { name: /more matching line/ })).toBeNull();
+});
+
+test("Show N more refused says why, beside its Retry", async () => {
+  stubMore(() => refusal("context is not a key this node reads"));
+  mountCode("#/gitlet/search?q=Flush(", <Search />);
+  const file = await screen.findByRole("article", { name: MW });
+  fireEvent.click(within(file).getByRole("button", { name: "Show 1 more matching line" }));
+  expect(
+    await within(file).findByText(
+      "These lines could not be read: context is not a key this node reads.",
+    ),
+  ).toBeTruthy();
+  expect(within(file).getByRole("button", { name: "Retry" })).toBeTruthy();
+});
+
+/** `code_blob` by whole id, answering the lines a range asks as `line N`. */
+function blobLines(url: URL) {
+  const from = Number(url.searchParams.get("start_line"));
+  const to = Number(url.searchParams.get("end_line"));
+  const text = Array.from({ length: to - from + 1 }, (_, i) => `line ${from + i}\n`).join("");
+  return jsonAnswer({
+    kind: "blob",
+    blob: {
+      oid: url.searchParams.get("ref"),
+      size: 4096,
+      lines: 150,
+      start_line: from,
+      end_line: to,
+      text,
+    },
+  });
+}
+
+// Mutation: read the gap's lines by path at the tip, or read the whole gap at once.
+test("a gap reveals its hidden lines from the file's blob by its id, twenty a press", async () => {
+  const asked = stubMore(() => jsonAnswer({}), { "/query/code_blob": blobLines });
+  mountCode("#/gitlet/search?q=Flush(", <Search />);
+  const file = await screen.findByRole("article", { name: MW });
+  fireEvent.click(
+    within(file).getByRole("button", { name: "Expand 20 of 22 hidden lines after 69" }),
+  );
+
+  await within(file).findByRole("button", { name: "Expand 2 hidden lines between 89 and 92" });
+  const read = asked.find((u) => u.pathname === "/query/code_blob")!;
+  expect(Object.fromEntries(read.searchParams)).toMatchObject({
+    name: "web",
+    ref: "web:internal/server/middleware.go".padEnd(40, "0"),
+    start_line: "70",
+    end_line: "89",
+  });
+  expect(read.searchParams.has("path")).toBe(false);
+  expect(blocksOf(MW)[0]).toEqual(Array.from({ length: 28 }, (_, i) => 62 + i));
+  expect(codeOf(MW, 70).textContent).toBe("line 70");
+  expect(document.activeElement).toBe(codeOf(MW, 70).closest("li"));
+});
+
+// Mutation: focus the first line revealed when the press closes the gap.
+test("a gap closed moves focus to the next block's first link", async () => {
+  stubMore(() => jsonAnswer({}), { "/query/code_blob": blobLines });
+  const page = "internal/render/page.go";
+  mountCode("#/gitlet/search?q=Flush(", <Search />);
+  const file = await screen.findByRole("article", { name: page });
+  fireEvent.click(
+    within(file).getByRole("button", { name: "Expand 20 of 33 hidden lines after 96" }),
+  );
+  const last = await within(file).findByRole("button", {
+    name: "Expand 13 hidden lines between 116 and 130",
+  });
+  fireEvent.click(last);
+  await within(file).findByText("129", { selector: ".code-search-line__number" });
+  expect(blocksOf(page)).toEqual([Array.from({ length: 35 }, (_, i) => 96 + i)]);
+  expect(document.activeElement).toBe(within(file).getByRole("link", { name: "130" }));
+});
+
+test("a gap's lines refused say so in its place", async () => {
+  stubMore(() => jsonAnswer({}), {
+    "/query/code_blob": () => refusal("end_line: past the end of the file"),
+  });
+  mountCode("#/gitlet/search?q=Flush(", <Search />);
+  const file = await screen.findByRole("article", { name: MW });
+  fireEvent.click(
+    within(file).getByRole("button", { name: "Expand 20 of 22 hidden lines after 69" }),
+  );
+  expect(
+    await within(file).findByText(
+      "These lines are unavailable: end_line: past the end of the file.",
+    ),
+  ).toBeTruthy();
 });

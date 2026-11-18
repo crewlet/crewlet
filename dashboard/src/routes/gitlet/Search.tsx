@@ -75,6 +75,8 @@ export function Search() {
     { enabled: asked, refetchOnReconnect: "unreached" },
   );
   const groups = useMemo(() => (answer.data ? groupHits(answer.data) : []), [answer.data]);
+  const again = answer.refetch;
+  const search = useMemo(() => ({ q, mode, ref, again }), [q, mode, ref, again]);
 
   return (
     <>
@@ -174,7 +176,7 @@ export function Search() {
                     description="In what was searched: the note above says what that was."
                   />
                 ) : (
-                  <Results groups={groups} />
+                  <Results groups={groups} asked={search} />
                 )}
               </>
             )}
