@@ -2605,7 +2605,9 @@ func Catalogue() []Instrument {
 				"page decided again on every request; `subresource`, a file " +
 				"a page loads; `runtime` and `kit`, the embedded public " +
 				"files; `brand`, the company's adopted brand's files) and by " +
-				"status class (`status`: `2xx` to `5xx`). A " +
+				"status class (`status`: `2xx` to `5xx`, or `abandoned`: the " +
+				"client went away before it was answered, a frame torn down " +
+				"or a browser gone, which is no fault of the node's). A " +
 				"rise in `document` `5xx` is viewers whose frames this node " +
 				"would not serve: a copy of the artifacts or identity log it " +
 				"could not vouch for, or an object store that did not answer. " +
@@ -2806,7 +2808,8 @@ func Catalogue() []Instrument {
 			Shows: "Every service objective's events, by `objective` (the closed set " +
 				"in docs/reference/service-objectives.md) and `outcome` (`good`: " +
 				"answered without fault on the engine's side within the objective's " +
-				"bound; `bad`: anything else). `bad` over all, per objective, against " +
+				"bound; `bad`: anything else, but an event whose caller went away " +
+				"inside the bound is not counted). `bad` over all, per objective, against " +
 				"one minus its target is the error budget's burn rate, which the " +
 				"`objective_burn` alarm judges per node over an hour and five minutes " +
 				"and over six hours and thirty minutes; summed across the fleet it is " +

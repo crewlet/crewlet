@@ -354,7 +354,7 @@ func (h *Handler) decideRows(ctx context.Context, c artifacts.TicketClaims) (
 	switch how {
 	case iam.Resolved:
 	case iam.Unknown:
-		log.WarnContext(ctx, "artifacts_serve_identity_unavailable", "artifact", c.Artifact.String())
+		unanswered(ctx, "artifacts_serve_identity_unavailable", "artifact", c.Artifact.String())
 		return verdict{}, artifactsdomain.Version{}, unavailable(nil)
 	default:
 		return verdict{}, artifactsdomain.Version{}, refused()
@@ -369,7 +369,7 @@ func (h *Handler) decideRows(ctx context.Context, c artifacts.TicketClaims) (
 	case errors.Is(err, artifactsdomain.ErrNotFound), errors.Is(err, artifactsdomain.ErrPurged):
 		return verdict{}, artifactsdomain.Version{}, refused()
 	case err != nil:
-		log.WarnContext(ctx, "artifacts_serve_rows_unavailable", "artifact", c.Artifact.String(),
+		unanswered(ctx, "artifacts_serve_rows_unavailable", "artifact", c.Artifact.String(),
 			"error", err)
 		return verdict{}, artifactsdomain.Version{}, unavailable(err)
 	case head.Status != artifactsdomain.StatusLive || !head.Kind.Framed():
@@ -388,7 +388,7 @@ func (h *Handler) decideRows(ctx context.Context, c artifacts.TicketClaims) (
 	}, h.chart, h.now())
 	switch {
 	case d.Unknown():
-		log.WarnContext(ctx, "artifacts_serve_undecided", "artifact", c.Artifact.String(),
+		unanswered(ctx, "artifacts_serve_undecided", "artifact", c.Artifact.String(),
 			"error", d.Err)
 		return verdict{}, artifactsdomain.Version{}, &refusal{status: 503, reason: reasonStale,
 			retry: time.Duration(authz.RetryUndecidedSeconds) * time.Second}
@@ -400,7 +400,7 @@ func (h *Handler) decideRows(ctx context.Context, c artifacts.TicketClaims) (
 	case errors.Is(err, artifactsdomain.ErrNotFound), errors.Is(err, artifactsdomain.ErrPurged):
 		return verdict{}, artifactsdomain.Version{}, refused()
 	case err != nil:
-		log.WarnContext(ctx, "artifacts_serve_rows_unavailable", "artifact", c.Artifact.String(),
+		unanswered(ctx, "artifacts_serve_rows_unavailable", "artifact", c.Artifact.String(),
 			"version", c.Version, "error", err)
 		return verdict{}, artifactsdomain.Version{}, unavailable(err)
 	}
