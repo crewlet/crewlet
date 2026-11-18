@@ -14,15 +14,12 @@ import (
 //
 // Across a link (a dial to an external cluster here, a leaf's alike) the
 // object store's transfers and the memory sync's replay pulls take from the
-// ONE window the link's queue owns (ADR-0161). natsobj's and memsync's cases
-// hand their stores a window; this holds the engine to handing both the
-// queue's. A member crosses no link: its puts share a window of their own, and
-// a replay pulls the connection's whole bound. (A leaf's wiring is held by
-// TestANodesHydrationReadsItsLinksMeter.)
+// ONE window the link's queue owns (ADR-0161); a leaf's wiring is held by
+// TestANodesHydrationReadsItsLinksMeter. A member crosses no link: its puts
+// share a window of their own, and a replay pulls the connection's whole bound.
 //
 // Mutation: hand the object store or the memory sync a window of its own, or
-// none, or hand both one the queue does not own, and the client's half goes
-// red.
+// none, or both one the queue does not own, and the client's half goes red.
 func TestANodesTransfersShareOneWindowAcrossItsLink(t *testing.T) {
 	t.Parallel()
 	t.Run("a member", func(t *testing.T) {

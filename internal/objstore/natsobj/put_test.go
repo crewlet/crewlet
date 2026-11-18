@@ -394,14 +394,11 @@ func TestAPutLeavesNoSubscriptionBehind(t *testing.T) {
 }
 
 // PUTS ON ONE CONNECTION SHARE ONE WINDOW: with the broker's answers stopped,
-// three puts at once publish the connection's window of pieces BETWEEN them,
-// and no more until the first of them has stalled and given its places back,
-// counted where the broker takes them, up to the first purge. The window
-// protects the link the bucket is opened across, which every lease renewal of
-// the node rides, so a frozen link holds one window of the node's uploads
-// however many are under way. Across a link it is the link's window: one whole
-// piece, and as many small ones as its bytes hold. On a member's own client it
-// is [natsobj.MemberWindow] messages whatever their size.
+// puts at once publish the connection's window of pieces BETWEEN them, counted
+// where the broker takes them up to the first purge, so a frozen link holds one
+// window of the node's uploads however many are under way. Across a link it is
+// the link's window: one whole piece, or as many small ones as its bytes hold;
+// on a member's own client, [natsobj.MemberWindow] messages whatever their size.
 //
 // Mutation: give each put a window of its own, and three windows of pieces
 // are out before the first purge; take a whole piece for a small one across a

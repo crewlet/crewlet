@@ -18,10 +18,8 @@ import (
 // every pull itself ([jsapi.Pulls]), its bytes taken from the window first and
 // given back once the pull has ended: a download's pull is one piece
 // ([pieceBound]), a walk's the window, and a message larger than either is
-// pulled again alone at the transport's bound. Every pull ends at its
-// consumer's end ([jsapi.Pulls.AskToEnd]): one held to its expiry there held
-// the window past every walk's end. A slow reader holds nothing of the window:
-// what it has not handed over has already crossed.
+// pulled again alone at the transport's bound. A slow reader holds nothing of
+// the window: what it has not handed over has already crossed.
 //
 // THE SILENCE IS THE LINK'S ([reading.judge]), as a put's is ([Backend.held]):
 // the consumer is made again when its heartbeats stop on a still link, or once
@@ -80,7 +78,9 @@ func pieceBound(want int) int { return want + deliveryOverhead }
 // walk inside the window, or one message at the transport's bound alone where
 // the last pull ended past its bytes with none. The take waits its turn under
 // ctx alone, before the pull's silence is counted: a read waiting its turn has
-// asked the broker nothing.
+// asked the broker nothing. The pull ends at its consumer's end
+// ([jsapi.Pulls.AskToEnd]): held there to its expiry, a walk held the window
+// that long past its end.
 func (r *reading) fill(ctx context.Context) error {
 	n, bound := r.batch, r.b.window.Size()
 	switch {
