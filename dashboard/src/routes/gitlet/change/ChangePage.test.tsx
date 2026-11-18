@@ -24,6 +24,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 import { blobAnswer, inkedLine } from "~/test/codeScreens.tsx";
+import { NearBy } from "~/test/nearBy.ts";
 import { engineJson } from "~/test/engineAnswer.ts";
 import { withDerived } from "~/test/org.ts";
 import { settled } from "~/test/settle.ts";
@@ -31,7 +32,7 @@ import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { ChangePage } from "./ChangePage.tsx";
 import { EDIT_MOVED } from "./Description.tsx";
-import { FOLD_FROM_LINES } from "./FileStack.tsx";
+import { FOLD_FROM_LINES } from "../FileStack.tsx";
 import { NOT_AUTHOR_RESOLVE } from "./Finding.tsx";
 import { CHANGE_POLL_MS } from "./reads.ts";
 
@@ -2599,36 +2600,6 @@ function diffAsked() {
       .map((u) => u.searchParams.get("cursor") ?? ""),
     alone: diffs.filter((u) => u.searchParams.has("file")).map((u) => u.searchParams.get("file")),
   };
-}
-
-/** A stand-in IntersectionObserver whose sections come near only when a case says so. */
-class NearBy {
-  static made: NearBy[] = [];
-  targets: Element[] = [];
-  constructor(private readonly said: IntersectionObserverCallback) {
-    NearBy.made.push(this);
-  }
-  observe(el: Element) {
-    this.targets.push(el);
-  }
-  unobserve() {}
-  disconnect() {
-    this.targets = [];
-  }
-  takeRecords() {
-    return [];
-  }
-  /** Say the sections of `paths` came within one view. */
-  static near(...paths: string[]) {
-    for (const o of NearBy.made) {
-      const entries = o.targets
-        .filter((t) => paths.includes((t as HTMLElement).dataset.path ?? ""))
-        .map(
-          (target) => ({ target, isIntersecting: true }) as unknown as IntersectionObserverEntry,
-        );
-      if (entries.length > 0) act(() => o.said(entries, o as unknown as IntersectionObserver));
-    }
-  }
 }
 
 /** Sections come near only when a case says so. */

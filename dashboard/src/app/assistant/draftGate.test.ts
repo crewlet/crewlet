@@ -184,7 +184,7 @@ const PART_OF: Readonly<Record<string, { screen: readonly string[]; why: string 
     screen: ["routes/gitlet/change/ChangePage.tsx"],
     why: "a change's title and description being edited, fields of the change page's one draft",
   },
-  "routes/gitlet/change/FileStack.tsx": {
+  "routes/gitlet/change/StackNotes.tsx": {
     screen: ["routes/gitlet/change/ChangePage.tsx"],
     why: "a finding written on picked lines and each finding's reply box, fields of the change page's one draft",
   },

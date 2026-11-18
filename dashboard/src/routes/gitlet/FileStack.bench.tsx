@@ -1,5 +1,6 @@
-/** What a change's stack costs to draw: the real `FileStack` over five Go and TSX files, its walk
- *  and blobs answered at once, plain and coloured. jsdom lays nothing out: render work. */
+/** What a stack costs to draw: the real `FileStack` over five Go and TSX files, its walk and
+ *  blobs answered at once, plain and coloured, on a change and on a commit's diff. jsdom lays
+ *  nothing out: render work. */
 import { cleanup } from "@testing-library/react";
 import { expect, test } from "vitest";
 import { WINDOW_FROM_ROWS } from "@crewlethq/ui";
@@ -7,7 +8,8 @@ import type { CodeChangeDetail, CodeDiffFile } from "~/protocol/index.ts";
 import { CODE_POSITION, jsonAnswer, mountCode, stubCodeEngine } from "~/test/codeScreens.tsx";
 import { afterMicrotasks } from "~/test/settle.ts";
 import { SAMPLES } from "~/test/syntax.ts";
-import { FOLD_FROM_LINES, FileStack, type StackNotes } from "./FileStack.tsx";
+import { FOLD_FROM_LINES, FileStack, type StackSource } from "./FileStack.tsx";
+import { ChangeLines, StackNotesContext, type StackNotesOf } from "./change/StackNotes.tsx";
 
 const RUNS = 20;
 const WARMUP = 3;
@@ -25,7 +27,19 @@ const CHANGE = {
   state: "open",
 } as unknown as CodeChangeDetail;
 
-const NOTES: StackNotes = { findings: [], placed: {}, comments: [], drafts: null, thread: "" };
+const NOTES: StackNotesOf = {
+  change: CHANGE,
+  rev: 2,
+  since: null,
+  notes: { findings: [], placed: {}, comments: [], drafts: null, thread: "" },
+};
+const BY_CHANGE: StackSource = { kind: "change", change: CHANGE, rev: 2, since: null };
+const BY_DIFF: StackSource = {
+  kind: "diff",
+  repo: "web",
+  base: `b${"0".repeat(39)}`,
+  head: CHANGE.head,
+};
 
 /** A file of `rows` lines of its language's sample, every fourth one edited, in one hunk. */
 function fileOf(path: string, rows: number, at: number) {
@@ -66,27 +80,29 @@ function answer(files: ReturnType<typeof stackOf>) {
   const blobs = new Map<string, (typeof files)[number]>(
     files.flatMap((f, i) => [[`o${i}`, f] as const, [`n${i}`, f] as const]),
   );
+  const walk = () =>
+    jsonAnswer({
+      position: CODE_POSITION,
+      level: "session",
+      revision: 2,
+      diff: {
+        base: CHANGE.head,
+        head: CHANGE.head,
+        files: [],
+        total: files.length,
+        added: 0,
+        deleted: 0,
+        patches: files.map((f, file) => ({
+          file,
+          path: f.entry.path,
+          status: "M",
+          patch: f.patch,
+        })),
+      },
+    });
   stubCodeEngine({
-    "/query/code_change": () =>
-      jsonAnswer({
-        position: CODE_POSITION,
-        level: "session",
-        revision: 2,
-        diff: {
-          base: CHANGE.head,
-          head: CHANGE.head,
-          files: [],
-          total: files.length,
-          added: 0,
-          deleted: 0,
-          patches: files.map((f, file) => ({
-            file,
-            path: f.entry.path,
-            status: "M",
-            patch: f.patch,
-          })),
-        },
-      }),
+    "/query/code_change": walk,
+    "/query/code_diff": walk,
     "/query/code_blob": (url) => {
       const ref = url.searchParams.get("ref") ?? "";
       const f = blobs.get(ref)!;
@@ -107,24 +123,29 @@ function answer(files: ReturnType<typeof stackOf>) {
 }
 
 /** Mount the stack and wait, a task at a time, until its five sections draw their diffs. */
-async function draw(files: ReturnType<typeof stackOf>, coloured: boolean) {
+async function draw(files: ReturnType<typeof stackOf>, coloured: boolean, source = BY_CHANGE) {
   answer(files);
   const entries = files.map((f) => f.entry);
+  const change = source.kind === "change";
   mountCode(
-    "#/gitlet/repos/web/changes/42?tab=files",
-    <FileStack
-      change={CHANGE}
-      head={CHANGE.head}
-      rev={2}
-      since={null}
-      moved="5"
-      files={entries}
-      indexOf={(f) => entries.indexOf(f)}
-      layout="unified"
-      notes={NOTES}
-      jump={null}
-      onCurrent={() => {}}
-    />,
+    change
+      ? "#/gitlet/repos/web/changes/42?tab=files"
+      : `#/gitlet/repos/web/commits/${CHANGE.head}`,
+    <StackNotesContext.Provider value={NOTES}>
+      <FileStack
+        source={source}
+        repo="web"
+        head={CHANGE.head}
+        moved={change ? "5" : ""}
+        files={entries}
+        indexOf={(f) => entries.indexOf(f)}
+        layout="unified"
+        linkOf={(f) => `#/gitlet/repos/web?file=${f.path}`}
+        lines={change ? ChangeLines : undefined}
+        jump={null}
+        onCurrent={() => {}}
+      />
+    </StackNotesContext.Provider>,
   );
   const done = () =>
     document.querySelectorAll(".code-file .code-file__diff").length === 5 &&
@@ -158,6 +179,14 @@ test("the real stack of five files, plain and coloured, and with one file at the
   }).run(bounded);
   await bench("coloured, one file at the threshold", async () => {
     await draw(large, true);
+    cleanup();
+  }).run(bounded);
+});
+
+test("the same stack on a commit's diff, with no notes on its lines", async ({ bench }) => {
+  const small = stackOf(64);
+  await bench("coloured, a commit's diff", async () => {
+    await draw(small, true, BY_DIFF);
     cleanup();
   }).run(bounded);
 });

@@ -1,7 +1,7 @@
 /**
  * A change's Files changed tab: every file a revision changes on one page, a
- * stack of sticky-headed diffs (`FileStack.tsx`) beside the files' tree in its
- * own scroller, with what lies on each line drawn under it.
+ * stack of sticky-headed diffs (`../FileStack.tsx`) beside the files' tree in
+ * its own scroller, with what lies on each line drawn under it (`StackNotes.tsx`).
  *
  * # Read by object id, placed by the engine
  *
@@ -26,7 +26,7 @@
  * review sends every draft of the head in ONE `code_review_change`.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   Button,
   Checkbox,
@@ -68,9 +68,12 @@ import type {
   CodeRevisionRow,
 } from "~/protocol/index.ts";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
-import { FileTree, type FileBadges } from "../FileTree.tsx";
+import { type FileBadges } from "../FileTree.tsx";
 import { FIND_LIMIT, Matched } from "../repo/GoToFile.tsx";
-import { FileStack, fileKey, matchPath, type StackJump } from "./FileStack.tsx";
+import { FileStack, fileKey, matchPath, type StackJump, type StackSource } from "../FileStack.tsx";
+import { FilesPane, useFileArrival } from "../FilesPane.tsx";
+import { changeHref } from "../paths.ts";
+import { ChangeLines, StackNotesContext } from "./StackNotes.tsx";
 import { findingStands } from "./FindingAnswer.tsx";
 import { FinishReview } from "./ReviewDialog.tsx";
 import {
@@ -189,15 +192,34 @@ export function Files({
   // WHAT LIES ON THE LINES, one object until it moves: each section is drawn
   // again only when what it shows does.
   const { drafts: drafted, add, remove, update, clear } = drafts;
-  const notes = useMemo(
+  const notesOf = useMemo(
     () => ({
-      findings: findings.items,
-      placed,
-      comments: comments.items,
-      drafts: drafting ? { drafts: drafted, add, remove, update, clear } : null,
-      thread,
+      change,
+      rev,
+      since,
+      notes: {
+        findings: findings.items,
+        placed,
+        comments: comments.items,
+        drafts: drafting ? { drafts: drafted, add, remove, update, clear } : null,
+        thread,
+      },
     }),
-    [findings.items, placed, comments.items, drafting, drafted, add, remove, update, clear, thread],
+    [
+      change,
+      rev,
+      since,
+      findings.items,
+      placed,
+      comments.items,
+      drafting,
+      drafted,
+      add,
+      remove,
+      update,
+      clear,
+      thread,
+    ],
   );
   const listed = pagedFiles.items;
   // WHAT THE FILTERS KEEP: the words a path holds, the extensions shown, and
@@ -263,40 +285,34 @@ export function Files({
     [setFile, visible, setQ, setExt, setOnly, toast],
   );
   // THE FILE THE ADDRESS NAMES, once it is listed: the stack opens at it.
-  const arrived = useRef(false);
-  const { more, paging, pageError, next } = pagedFiles;
-  const listsIt = listed.some((one) => one.path === file);
-  // A FILE THE PAGES LISTED LACK is asked alone first, so a path the diff does
-  // not change pages nothing; one it changes is listed by the pages after.
-  const namedParams = useMemo(
-    () =>
-      changePartParams({ repo: change.repo, number: change.number }, "diff", {
-        revision: rev,
-        file,
-        ...(since !== null ? { since_revision: since } : {}),
-      }),
-    [change.repo, change.number, rev, since, file],
+  const source = useMemo<StackSource>(
+    () => ({ kind: "change", change: { repo: change.repo, number: change.number }, rev, since }),
+    [change.repo, change.number, rev, since],
   );
-  const named = useCodeQuery("code_change", namedParams, {
-    enabled: file !== "" && !listsIt && more && !arrived.current,
-  });
-  const namedEntry = named.data?.diff?.files?.find((one) => one.path === file);
-  const unchanged =
-    file !== "" &&
-    !listsIt &&
-    !arrived.current &&
-    ((named.data !== undefined && !namedEntry) || (files.data !== undefined && !more));
-  useEffect(() => {
-    if (arrived.current || !file) return;
-    const f = listed.find((one) => one.path === file);
-    if (!f) {
-      if (namedEntry && more && !paging && !pageError) next();
-      return;
-    }
-    arrived.current = true;
+  const onArrive = useCallback((f: CodeDiffFile) => {
     setCurrent(f.path);
     setJump({ key: fileKey(f), seq: 1 });
-  }, [file, listed, namedEntry, more, paging, pageError, next]);
+  }, []);
+  const { unchanged } = useFileArrival({
+    source,
+    file,
+    listed,
+    loaded: files.data !== undefined,
+    more: pagedFiles.more,
+    paging: pagedFiles.paging,
+    pageError: pagedFiles.pageError,
+    next: pagedFiles.next,
+    onArrive,
+  });
+  const linkOf = useCallback(
+    (f: CodeDiffFile) =>
+      changeHref(change.repo, change.number, {
+        tab: "files",
+        ...(rev !== change.revision ? { rev } : {}),
+        file: f.path,
+      }),
+    [change.repo, change.number, change.revision, rev],
+  );
   const draftsOn = new Map<string, number>();
   if (drafting)
     for (const d of drafts.drafts) draftsOn.set(d.path, (draftsOn.get(d.path) ?? 0) + 1);
@@ -525,80 +541,38 @@ export function Files({
                 {pagedFiles.pageError && <PageFailed error={pagedFiles.pageError} />}
               </FilesPane>
             )}
-            <FileStack
-              change={change}
-              head={head}
-              rev={rev}
-              since={since}
-              moved={diffMoved}
-              files={visible}
-              lead={
-                <>
-                  {unchanged && (
-                    <p className="muted" role="status">
-                      {since !== null
-                        ? `${file} is not among the files changed since revision ${since}.`
-                        : `${file} is not among the files revision ${rev} changes.`}
-                    </p>
-                  )}
-                  {showing}
-                </>
-              }
-              indexOf={indexOf}
-              layout={layout === "split" ? "split" : "unified"}
-              notes={notes}
-              jump={jump}
-              onCurrent={setCurrent}
-              foot={loadMoreFiles && <span>{loadMoreFiles}</span>}
-            />
+            <StackNotesContext.Provider value={notesOf}>
+              <FileStack
+                source={source}
+                repo={change.repo}
+                head={head}
+                moved={diffMoved}
+                files={visible}
+                lead={
+                  <>
+                    {unchanged && (
+                      <p className="muted" role="status">
+                        {since !== null
+                          ? `${file} is not among the files changed since revision ${since}.`
+                          : `${file} is not among the files revision ${rev} changes.`}
+                      </p>
+                    )}
+                    {showing}
+                  </>
+                }
+                indexOf={indexOf}
+                layout={layout === "split" ? "split" : "unified"}
+                linkOf={linkOf}
+                lines={ChangeLines}
+                jump={jump}
+                onCurrent={setCurrent}
+                foot={loadMoreFiles && <span>{loadMoreFiles}</span>}
+              />
+            </StackNotesContext.Provider>
           </div>
         </QueryState>
       </Stack>
     </div>
-  );
-}
-
-/** The files' tree in its own scroller beside the stack, its current row kept in the list's view. */
-function FilesPane({
-  files,
-  current,
-  onOpen,
-  badges,
-  label,
-  head,
-  foot,
-  children,
-}: {
-  files: readonly CodeDiffFile[];
-  current: string;
-  onOpen: (f: CodeDiffFile) => void;
-  badges: (f: CodeDiffFile) => FileBadges | null;
-  label: string;
-  head?: ReactNode;
-  foot: ReactNode;
-  children?: ReactNode;
-}) {
-  const scroller = useRef<HTMLDivElement>(null);
-  // THE CURRENT ROW INTO THE LIST'S VIEW by the list's own scroll, never the page's.
-  useEffect(() => {
-    const box = scroller.current;
-    const row = box?.querySelector<HTMLElement>('[aria-current="true"]');
-    if (!box || !row) return;
-    const at = row.getBoundingClientRect();
-    const view = box.getBoundingClientRect();
-    if (at.top < view.top || at.bottom > view.bottom) {
-      box.scrollTop += at.top - view.top - (view.height - at.height) / 2;
-    }
-  }, [current]);
-  return (
-    <aside className="code-tree code-files__pane" aria-label={label}>
-      {head && <div className="code-tree__head">{head}</div>}
-      <div ref={scroller} className="code-tree__scroll">
-        <FileTree files={files} current={current} onOpen={onOpen} badges={badges} />
-        {children}
-      </div>
-      <div className="code-tree__foot">{foot}</div>
-    </aside>
   );
 }
 
