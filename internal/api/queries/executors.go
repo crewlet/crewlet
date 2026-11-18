@@ -435,6 +435,7 @@ var runKeys = map[string]runShown{
 	"bridge_calls":        runBody,
 	"bridge_calls_elided": runStatus, // a count of what was cut, never a call
 	"bridge_elided_calls": runBody,   // what was cut, by tool and argument digest: the seat's trail
+	"bridge_calls_told":   runStatus, // places in the log and job ids, never a call
 	"session_id":          runStatus,
 	"command_id":          runStatus,
 	"delegation_chain":    runStatus,
@@ -656,6 +657,10 @@ func runRow(run sandbox.PendingRun, calls sandbox.BridgeLog, opened runOpened) m
 		// READ AS THE LOG ACCOUNTS FOR THEM ([sandbox.BridgeLog.Unlisted]):
 		// calls a build without identities cut are one entry naming no tool.
 		"bridge_elided_calls": nonNil(calls.Unlisted()),
+		// AND WHICH LATE CALLS THE JOB WORKING AS EACH LANDED TOOK INTO ITS
+		// OWN SESSION ([toldCalls]): no continuation of that session is told
+		// them again. Always an array, empty where the run's sessions took none.
+		"bridge_calls_told": toldCalls(calls, run.Steer.Tellings),
 		// THE THREE IDENTIFIERS a person needs to find this run in
 		// somebody else's system: the harness's own session, the
 		// command the engine launched, and the chain of asks that led
@@ -674,6 +679,26 @@ func runRow(run sandbox.PendingRun, calls sandbox.BridgeLog, opened runOpened) m
 		"may_answer": false,
 		"needs_you":  false,
 	}))
+}
+
+// toldCall is one late call of a run's log a job's own session is known to
+// hold ([sandbox.RunSteer.Tellings]): the call's place in the log
+// ([sandbox.BridgeCall.Appended]) and the job whose session took it, never a
+// word of the call.
+type toldCall struct {
+	Appended int    `json:"appended"`
+	Launch   string `json:"launch"`
+}
+
+// toldCalls is the tellings of calls' round among tellings
+// ([sandbox.BridgeLog.Told]): a telling names a place in its own round's log
+// alone, so one of another round would tag a call it never named.
+func toldCalls(calls sandbox.BridgeLog, tellings []sandbox.CallTelling) []toldCall {
+	out := []toldCall{}
+	for _, t := range calls.Told(tellings) {
+		out = append(out, toldCall{Appended: t.Appended, Launch: t.Launch})
+	}
+	return out
 }
 
 // withDecision adds the choice a run's question offers to its row, and leaves

@@ -322,6 +322,7 @@ var filed = []struct {
 	{CodeRequestReviewTool, GroupCode, GateGitlet, reachesNoVendor},
 	{CodeReviewChangeTool, GroupCode, GateGitlet, reachesNoVendor},
 	{CodeCommentOnChangeTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeDeleteCommentTool, GroupCode, GateGitlet, reachesNoVendor},
 	{CodeResolveFindingTool, GroupCode, GateGitlet, reachesNoVendor},
 	{CodeApplySuggestionsTool, GroupCode, GateGitlet, reachesNoVendor},
 	{CodeRebaseChangeTool, GroupCode, GateGitlet, reachesNoVendor},

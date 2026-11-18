@@ -12,6 +12,7 @@ import { AppAnnouncer } from "~/app/announcer.tsx";
 import { PeekHost, PeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { Router } from "~/app/router.tsx";
 import { focusSearchTarget } from "~/app/searchTarget.ts";
+import { EVERY_STATE } from "~/lib/code.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
@@ -945,6 +946,19 @@ test("the foot says how many it shows of the scope's total, and only of it", asy
     "Showing 2 open changes that match the filters",
   );
   expect(footWords({ ...none, state: "merged" }, 55, 54, false)).toBe("Showing 55 merged changes");
+  // A PAGE WITH MORE AFTER IT shows the first of them, never all that match.
+  expect(footWords({ ...none, needs: "me" }, 1, undefined, true)).toBe(
+    "Showing the first open change that matches the filters",
+  );
+  expect(footWords({ ...none, owner: "dev" }, 25, 4, true)).toBe(
+    "Showing the first 25 open changes that match the filters",
+  );
+  expect(footWords({ ...none, state: EVERY_STATE, needs: "me" }, 3, undefined, true)).toBe(
+    "Showing the first 3 changes that match the filters",
+  );
+  expect(footWords({ ...none, state: EVERY_STATE }, 50, undefined, true)).toBe(
+    "Showing the first 50 changes",
+  );
   expect(footWords(none, 0, 4, false)).toBeUndefined();
   stubFetch(engine([WEB_42]));
   mount(<Changes />);

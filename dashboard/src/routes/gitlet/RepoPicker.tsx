@@ -47,6 +47,7 @@ export function RepoPicker({
   size = "md",
   inline,
   leading,
+  className,
 }: {
   /** The chosen repository's name, or "" for none. */
   repo: string;
@@ -64,6 +65,8 @@ export function RepoPicker({
   inline?: number;
   /** Words or a glyph inside the field before the name, as a labelled filter's. */
   leading?: ReactNode;
+  /** The field's own class, where a row lays it out (the kit's `containerClassName`). */
+  className?: string;
 }) {
   // NULL UNTIL SOMEBODY TYPES, and again once they leave the field: the field
   // shows the chosen name, and the list is the listing from its first name.
@@ -136,6 +139,7 @@ export function RepoPicker({
     placeholder: every ?? placeholder,
     inputSize: size,
     width: "sm",
+    containerClassName: className,
     leading,
     value: typed ?? repo,
     onFocus: (event: FocusEvent<HTMLInputElement>) => event.currentTarget.select(),

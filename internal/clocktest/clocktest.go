@@ -21,6 +21,12 @@
 // what it meant to, failing with the assumption it rests on named if a Go
 // release lays time.Time out differently. A test that cannot forge its clock
 // fails rather than passes, because a pass would prove nothing.
+//
+// # Scope
+//
+// [AfterSleep] is the common case, a host that slept; [Parted] is the general
+// one. The package imports the standard library only and takes a testing.TB,
+// so only tests import it.
 package clocktest
 
 import (

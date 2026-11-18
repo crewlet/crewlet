@@ -103,6 +103,21 @@ func TestATipCheckIsDefinedAtItsLandingsBase(t *testing.T) {
 		t.Fatalf("a base defining no unit queued %+v, want unit errored on the tip for want of a definition",
 			queued)
 	}
+
+	// A BRANCH ITS FIRST LANDING CREATED has no base file: unit is errored on the
+	// tip in a person's words, naming the branch and what happened to it, never
+	// the landing rows' "first landing above its green".
+	created := gitlet.TipDue{TargetRef: "refs/heads/main", Required: []string{"unit"},
+		Landings: []gitlet.TipLanding{landedAt(10, gitlet.ZeroOID, tip)}}
+	e.tips = []gitlet.TipDue{created}
+	writes, _, _ = tipTurn(t, e)
+	queued = queuedOf(writes)
+	if unit := queued["unit"]; len(writes) != 1 || unit.Def != nil ||
+		!strings.HasPrefix(unit.Invalid, "main has had no commit whose required checks passed since a push or a "+
+			"merge created it") || strings.Contains(unit.Invalid, "landing above") {
+		t.Fatalf("a branch its first landing created queued %+v, want unit errored saying a push or a merge "+
+			"created main", queued)
+	}
 }
 
 // A RED TIP IS BISECTED OVER LANDING ROWS: four landings, each its own record, lie

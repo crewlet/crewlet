@@ -114,14 +114,14 @@ func (w MarkWrite) Validate() error {
 		return fmt.Errorf("%w: op_id: %w", ErrInvalid, err)
 	}
 	if why := w.Asker.invalid(); why != "" {
-		return fmt.Errorf("%w: asker: %s", ErrInvalid, why)
+		return refusedf("%w: asker: %s", ErrInvalid, why)
 	}
 	if !org.ValidHandle(w.Handle) {
-		return fmt.Errorf("%w: handle: %q is not a seat's handle — a person's code inbox is kept on the "+
+		return refusedf("%w: handle: %q is not a seat's handle — a person's code inbox is kept on the "+
 			"human seat they hold", ErrInvalid, w.Handle)
 	}
 	if !w.Seen.IsZero() && w.Seen.Stream != topics.CodeLogStream {
-		return fmt.Errorf("%w: seen: %s is a position on another log than %s", ErrInvalid, w.Seen,
+		return refusedf("%w: seen: %s is a position on another log than %s", ErrInvalid, w.Seen,
 			topics.CodeLogStream)
 	}
 	if w.Files == nil {
@@ -129,10 +129,10 @@ func (w MarkWrite) Validate() error {
 	}
 	switch {
 	case w.Gesture.names():
-		return fmt.Errorf("%w: files: a mark is one gesture, over the person's code notices or over a change's "+
+		return refusedf("%w: files: a mark is one gesture, over the person's code notices or over a change's "+
 			"files, never both", ErrInvalid)
 	case w.Seen.IsZero():
-		return fmt.Errorf("%w: seen: a mark of a change's files names the code-log position its change was "+
+		return refusedf("%w: seen: a mark of a change's files names the code-log position its change was "+
 			"read at", ErrInvalid)
 	}
 	return w.Files.validate()
