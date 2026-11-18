@@ -99,6 +99,10 @@ func TestADecisionIsValidatedField(t *testing.T) {
 		{"a relative url", func(d *decision.Decision) {
 			d.Evidence = []decision.Evidence{{Kind: decision.EvidenceURL, Ref: "/doclet/pages/1"}}
 		}, "https://"},
+		{"an artifact by its address", func(d *decision.Decision) {
+			d.Evidence = []decision.Evidence{{Kind: decision.EvidenceArtifact,
+				Ref: "https://crewlet.example.com/dashboard#/artifacts/0f2a6c3e-6b1d-4e0a-9d6f-2b4c8a1e7f30"}}
+		}, "a lowercase uuid"},
 		{"no role", func(d *decision.Decision) { d.Role = "" }, "decision.role"},
 		{"an unknown role", func(d *decision.Decision) { d.Role = "owner" }, "decision.role"},
 		{"an unknown surface", func(d *decision.Decision) {
