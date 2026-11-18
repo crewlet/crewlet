@@ -1250,7 +1250,8 @@ it:
     plugin's cursor moves past every note it is answered — and they wait for the
     next poll.
     A read names the notes
-    (one to ten) the harness put in front of its model, and is recorded read at the
+    (one to twenty: a turn's ten notes and up to ten more meant for the job alone)
+    the harness put in front of its model, and is recorded read at the
     run's next step. A read the session's end overtakes on its way to the notes is
     turned away to ask again too, never answered done with nothing recorded: the
     plugin would never confirm those notes again, and the turn's ending would

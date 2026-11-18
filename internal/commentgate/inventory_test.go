@@ -271,7 +271,7 @@ var rowInventory = map[string]int{
 	"api/iamapi":                            11874,
 	"api/llmapi":                            2538,
 	"api/mcpapi":                            4909,
-	"api/mcpbridge":                         16645,
+	"api/mcpbridge":                         16632,
 	"api/operator":                          8614,
 	"api/opkey":                             1499,
 	"api/paced":                             2547,
