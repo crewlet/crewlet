@@ -11,15 +11,13 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A SEAT'S MEMORY IS PUBLISHED ONLY WHILE THIS NODE HOLDS IT (#511).
-//
-// The memory syncer carries a seat only under its holding on this node: the
-// cycle while it is live, from the moment the seat's hydration here completed,
-// and the release's flush once the release has turned it to releasing. A call
-// the holding does not let carry the seat answers memsync.ErrNotHeld. The
-// cases below hold the engine's half: what a cycle and a flush say of such a
-// seat, and the order a release turns, flushes and forgets it in. The
-// syncer's half, what each call carries, is memsync's (holding_test.go).
+// A SEAT'S MEMORY IS PUBLISHED ONLY WHILE THIS NODE HOLDS IT: the memory
+// syncer carries a seat only under its holding here (the cycle once its
+// hydration completed, the flush once its release turned it to releasing), and
+// a call the holding does not allow answers memsync.ErrNotHeld. These cases
+// hold the engine's half: what a cycle and a flush say of such a seat, and the
+// order a release turns, flushes and forgets it in. memsync's holding_test.go
+// holds the syncer's.
 
 // passScript plays one call of a seat's, handed the bound and runOut, which
 // spends it.
@@ -64,15 +62,11 @@ func scriptedBy(own, backlog passScripts) *scriptedMemory {
 	}}
 }
 
-// A CYCLE SAYS NOTHING OF A SEAT THAT IS NOT ITS TO CARRY.
-//
-// A seat whose acquisition is still hydrating it is held by the host, so the
-// cycle reaches it, and its syncer carries none of it: published, every row
-// this node held for the seat went to the changelog as its own over the newer
-// ones the hydration had yet to read (#511). A seat whose release began while
-// the cycle was partway through it stops at its next row. Neither is a
-// failure of the cycle's: the cycle says nothing of them, goes on to the next
-// seat, and leaves where the next cycle starts alone.
+// A CYCLE SAYS NOTHING OF A SEAT THAT IS NOT ITS TO CARRY: one still
+// hydrating, whose syncer carries none of it (published, this node's stale
+// rows would land over the changelog's newer ones), or one whose release began
+// partway through. Neither is the cycle's failure: it goes on to the next seat
+// and leaves where the next cycle starts alone.
 //
 // Mutation: read memsync.ErrNotHeld as a failure, in a seat's own pass or in
 // the backlogs' turn, and this goes red.
@@ -121,15 +115,11 @@ func TestACycleSaysNothingOfASeatThatIsNotItsToCarry(t *testing.T) {
 	}
 }
 
-// A SEAT NOT THE CYCLE'S TO CARRY IS NO CUT WHEN THE BOUND RUNS OUT IN IT.
-//
-// A seat whose release begins as the cycle's bound runs out returns from its
-// call with the bound spent, answering memsync.ErrNotHeld. The bound ran out,
-// so the cycle stops; but not in a call of a seat it carries, so it ran out
-// between two calls: it names no seat, and the next cycle, or the next
-// backlogs' turn, starts at the first call it did not make. Read as a cut of
-// that seat's, the next cycle would start at a seat that is no longer held
-// here, and the cycle would say the seat's memory was not carried.
+// A SEAT NOT THE CYCLE'S TO CARRY IS NO CUT WHEN THE BOUND RUNS OUT IN IT: a
+// call answering memsync.ErrNotHeld with the bound spent stops the cycle
+// between two calls, so it names no seat and the next cycle (or backlogs'
+// turn) starts at the first call it did not make. Read as a cut, the next
+// cycle would start at a seat no longer held here.
 //
 // Mutation: read memsync.ErrNotHeld as a cut, in a seat's own pass or in the
 // backlogs' turn, and this goes red.
@@ -175,15 +165,11 @@ func TestASeatNotTheCyclesToCarryIsNoCutWhenTheBoundRunsOutInIt(t *testing.T) {
 	}
 }
 
-// THE RELEASE OF A SEAT WITH NO HOLDING TO TURN FLUSHES NOTHING.
-//
-// A seat whose acquisition failed is given straight back, and released. When
-// its hydration was the step that failed, or never ran, its syncer has no
-// holding of it to turn (memsync.Syncer.Releasing answers false), and its
-// store can hold copies of the seat's profiles, skills and onboarding marker
-// older than the changelog's: flushed, they went over the changelog's (#511's
-// second comment). The release flushes nothing, and forgets the seat all the
-// same.
+// THE RELEASE OF A SEAT WITH NO HOLDING TO TURN FLUSHES NOTHING, and forgets
+// it all the same: a seat whose acquisition failed at or before its hydration
+// has no holding to turn (memsync.Syncer.Releasing answers false), and its
+// store can hold profiles, skills and an onboarding marker older than the
+// changelog's, which a flush would land over the changelog's.
 //
 // Mutation: flush whatever Releasing answers, or forget the seat only when it
 // flushes, and this goes red.
@@ -197,15 +183,10 @@ func TestTheReleaseOfASeatWithNoHoldingToTurnFlushesNothing(t *testing.T) {
 	}
 }
 
-// A FLUSH WHOSE HOLDING ENDS UNDER IT WARNS.
-//
-// A release flushes only a holding it turned to releasing, so a flush that
-// meets memsync.ErrNotHeld met that holding ended under it, which nothing
-// should do: what the flush did not carry is lost to the next holder, as a
-// refusal's is, and it warns as one does. Silent on it, as a cycle is, a
-// release that flushed under a holding it had not turned would lose every
-// seat's last writes without a line. An own pass that met it calls no backlog
-// after it, which would answer the same.
+// A FLUSH WHOSE HOLDING ENDS UNDER IT WARNS: a release flushes only a holding
+// it turned to releasing, so memsync.ErrNotHeld there means what the flush did
+// not carry is lost to the next holder, as a refusal's is. An own pass that met
+// it calls no backlog after it, which would answer the same.
 //
 // Mutation: say nothing of memsync.ErrNotHeld in a flush, in its own pass or
 // in its backlog, or call the backlog after an own pass that met it, and this
@@ -244,16 +225,9 @@ func TestAFlushWhoseHoldingEndsUnderItWarns(t *testing.T) {
 }
 
 // A RELEASE TURNS THE SEAT TO RELEASING BEFORE ITS FLUSH, AND FORGETS IT
-// AFTER.
-//
-// From the moment a seat's release begins its memory is the flush's to carry,
-// and the cycle's no more: a cycle partway through the seat stops at its next
-// row, and one that reaches it later carries nothing of it. So the release
-// turns the seat's holding to releasing before the flush's first call, which
-// carries only under that holding, and forgets the seat once the flush has
-// returned. Flushed first, the flush would carry nothing, and a cycle would go
-// on publishing the seat beside it, its older copies of the seat's whole
-// tables landing after the flush's (#511's first comment).
+// AFTER: from then its memory is the flush's to carry, not the cycle's, and the
+// flush carries only under that holding. Flushed first, it would carry nothing,
+// and a cycle would go on publishing older copies of the seat's tables after it.
 //
 // Mutation: flush before turning the holding, skip the turn, or forget the
 // seat before the flush, and this goes red.

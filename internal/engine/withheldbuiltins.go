@@ -13,29 +13,18 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// WithheldBuiltins is the builtins of snapshot that seat, an agent seat of the
-// chart o, is offered on no surface of its turns, sorted: those the authority
-// table refuses it before any object is named (builtin.Withheld) — a verb whose
-// row names a role grant its role does not carry — decided over o as the seat
-// (turnctx.SeatPrincipal), so what a seat is offered and what each of its calls
-// is decided as are one principal; and the code writes no grant at the seat's
-// code tier admits (builtin.CodeWritesWithheld) — a refusal every repository's
-// grant makes, which the table, admitting everybody to a code write so each
-// repository's grant decides it, cannot make ahead of the calls. The tier is
-// read off seat, as Gitlet's roster reads it (codeRoster). Nil for a nil seat.
-//
-// THE ONE ANSWER TO WHAT A SEAT IS NOT OFFERED, for both its readers: a turn's
-// surfaces, cut by it over the epoch the turn is pinned to
-// ([Company.withheldFrom]), and the count Settings › MCP & tools reads of the
-// built-ins each agent is offered (`mcp_servers_status`' `builtin_tools`,
-// through internal/api's runtime), decided over the chart that answer lists the
-// agent in. Two readings of one question part the first time one of them gains
-// a layer the other lacks, and the page would count an agent tools its turns
-// are never offered; TestAnAgentIsCountedTheBuiltinsItsTurnIsShown holds them
-// to each other.
-//
-// A SNAPSHOT, not a registry, so a caller that listed rows off one is answered
-// in the same names.
+// WithheldBuiltins is the builtins of snapshot that seat, an agent seat of
+// chart o, is offered on no surface of its turns, sorted; nil for a nil seat.
+// It is what the authority table refuses before any object is named
+// (builtin.Withheld), decided as the seat (turnctx.SeatPrincipal) so offer and
+// call share one principal, plus the code writes no grant at the seat's code
+// tier admits (builtin.CodeWritesWithheld; tier read as codeRoster reads it),
+// which the table, leaving each to its repository's grant, cannot refuse
+// ahead of the call. The one answer for both readers, a turn's surfaces
+// ([Company.withheldFrom]) and the per-agent `builtin_tools` count on
+// Settings › MCP & tools, so the page never counts a tool a turn is not
+// offered (TestAnAgentIsCountedTheBuiltinsItsTurnIsShown). A snapshot, not a
+// registry, so a caller is answered in the names it listed.
 func WithheldBuiltins(ctx context.Context, o *org.Organization, seat *org.Role,
 	snapshot tools.Snapshot,
 ) []string {

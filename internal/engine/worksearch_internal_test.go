@@ -11,14 +11,10 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE INDEX FOLLOWS BOTH BACKENDS, not the wiki's alone.
-//
-// The lexical index covers pages AND work items, and it used to be built
-// inside the block gated on `knowledge.backend: doclet`. A company running
-// Worklet with Confluence for its knowledge therefore indexed
-// none of its own work items and served no ranked item search — while the
-// embedding duty, armed on EITHER backend, went on paying for a vector on
-// every one of them. A paid index nobody could query.
+// THE INDEX FOLLOWS BOTH BACKENDS, not the wiki's alone: a company running
+// Worklet with Confluence for its knowledge must index its work items, or it
+// serves no ranked item search while the embedding duty, armed on EITHER
+// backend, pays for a vector on every item: a paid index nobody can query.
 func TestTheIndexFollowsEitherNativeBackend(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -42,11 +38,9 @@ func TestTheIndexFollowsEitherNativeBackend(t *testing.T) {
 	}
 }
 
-// AND THE SOURCES THE INDEXER IS ACTUALLY BUILT OVER ARE THOSE ONES.
-//
-// Without this, [indexedCorpora] would be a list nothing reads — a test that
-// asserts a function against itself while the startup goes on doing whatever
-// it did before, which is the exact shape of defect this whole file is about.
+// AND THE SOURCES THE INDEXER IS ACTUALLY BUILT OVER ARE THOSE ONES, or
+// [indexedCorpora] would be a list nothing reads, a test asserting a function
+// against itself while the startup does whatever it does.
 func TestTheIndexerIsBuiltOverTheCorporaTheBackendsName(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ tracker, wiki bool }{
@@ -65,13 +59,11 @@ func TestTheIndexerIsBuiltOverTheCorporaTheBackendsName(t *testing.T) {
 }
 
 // THE RANKED WORK SEARCH FOLLOWS THE TRACKER, not the index alone. The index is
-// built under EITHER backend, so a data node of a company on Jira with
-// Doclet for its knowledge holds an item searcher over an index with no task in
-// it — and handing that searcher out answered the dashboard's `work_search`
-// with a ranking of nothing on a company whose work lives in Jira, where every
-// other Worklet question answers unknown, the operator's catalogue and
-// the seats' tools offer no such search, and a node without `data` hands out
-// none. "Nothing matched" is the one answer a person acts on by filing the
+// built under EITHER backend, so a data node of a company on Jira with Doclet
+// for its knowledge holds an item searcher over an index with no task; handed
+// out, it answers the dashboard's `work_search` with a ranking of nothing where
+// every other Worklet question answers unknown and a node without `data` hands
+// out none. "Nothing matched" is the one answer a person acts on by filing the
 // duplicate.
 func TestTheRankedWorkSearchFollowsTheTracker(t *testing.T) {
 	t.Parallel()

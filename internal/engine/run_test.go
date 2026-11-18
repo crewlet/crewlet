@@ -27,10 +27,8 @@ import (
 )
 
 // newEngine stands up a real engine on an embedded stream in a temp directory.
-//
-// Real, not a fake: what this file is about is the WIRING — which concrete
-// thing ends up behind which seam — and a fake node with a fake queue would
-// assert that the test's own wiring is what the test wrote.
+// Real, not a fake: this file is about which concrete thing ends up behind
+// which seam, and a fake would only assert the test's own wiring.
 func newEngine(t *testing.T, opts engine.Options) *engine.Engine {
 	t.Helper()
 	if opts.Bootstrap == nil {
@@ -56,11 +54,10 @@ func unconfiguredEngine(t *testing.T) *engine.Engine {
 	return unconfiguredEngineWith(t, engine.Options{})
 }
 
-// unconfiguredEngineWith is [unconfiguredEngine] over options of the case's own
-// — its Bootstrap, or the ordinary one where it names none — for a case whose
-// first company must arrive by an apply: on a data node that is the only apply
-// that starts the native runtime, since a node booted on any company runs one
-// from boot.
+// unconfiguredEngineWith is [unconfiguredEngine] over the case's own options
+// (the ordinary Bootstrap where it names none), for a case whose first company
+// must arrive by an apply: on a data node that is the only apply that starts
+// the native runtime, since a node booted on a company runs one from boot.
 func unconfiguredEngineWith(t *testing.T, opts engine.Options) *engine.Engine {
 	t.Helper()
 	if opts.Company != nil {
@@ -83,9 +80,8 @@ func unconfiguredEngineWith(t *testing.T, opts engine.Options) *engine.Engine {
 // disk.
 //
 // Every case here boots through these two, so a fixture that dropped the size
-// would pass on any roomy runner and fail every boot on a small one — the
-// regression nothing else in a passing run would show (#343). Read off the
-// running broker, as the boot's own sizing reads it.
+// would pass on a roomy runner and fail every boot on a small one, which no
+// other passing case shows. Read off the running broker, as the boot reads it.
 //
 // Mutation: drop brokertest.StoreIn from either fixture for a bare store_dir
 // and its row reads three quarters of this machine's free disk.
@@ -144,14 +140,10 @@ func TestABadConfigFailsBeforeAnythingIsClaimed(t *testing.T) {
 // A NODE WITH NO KEYRING IS REFUSED BEFORE ANYTHING OPENS — THE UNCONFIGURED
 // ONE INCLUDED.
 //
-// The unconfigured node is the case, because it is the one nothing else
-// caught: it used to start no state log until it had a company, so it met no
-// signer and booted keyless, and its first applied revision was read in
-// whatever shape the coordination store held. It runs the core runtime from
-// boot now, and the refusal is still the keyring's own rather than a signer's
-// that happens to come first. And "before anything opens" is the other
-// half: the keyring is built from Tier A alone, so a refusal that came after
-// the store was open would leave the file behind for nothing.
+// The unconfigured node is the case, the one that once booted keyless; it runs
+// the core runtime from boot now, and the refusal must be the keyring's own
+// rather than a signer's that happens to come first. The keyring is built from Tier A alone, so a refusal after the
+// store opened would leave the file behind for nothing.
 //
 // Mutation: let openCipher answer nil for an empty keyring and this engine
 // builds; move it back below OpenBackends and the store file exists.
@@ -189,14 +181,11 @@ func TestNoBootstrapIsRefusedByNew(t *testing.T) {
 // — not only by the loader, which is the one caller that validates and the one
 // path a bootstrap built in code, or edited after loading, never takes.
 //
-// The first shape is the one the e2e fleet harness actually ran on, with
-// nothing to say so: a clustered stream on local coordination, where every
-// member keeps its leases in its own process and claims every seat and every
-// duty for itself. The second is the one it moved to next, and Tier A refuses
-// it too: two embedded members, which have no coordination quorum without each
-// other. Each refusal names the field an operator changes, and leaves no store
-// file behind — a node that opened its store first would have migrated a
-// database for a config it was always going to refuse.
+// A clustered stream on local coordination has every member claim every seat
+// and duty for itself; two embedded members have no coordination quorum
+// without each other. Each refusal names the field an operator changes and
+// leaves no store file: opening first would migrate a database for a config
+// that was always going to be refused.
 func TestAnInvalidBootstrapIsRefusedBeforeAnythingIsOpened(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -226,8 +215,7 @@ func TestAnInvalidBootstrapIsRefusedBeforeAnythingIsOpened(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			// UNSEEDED: that nothing is at the store's path afterwards
-			// is the assertion.
+			// UNSEEDED: an empty store path afterwards is the assertion.
 			boot, _ := unseededBootstrap(t, func(b *config.Bootstrap) {
 				brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 				tc.mutate(b)
@@ -255,10 +243,9 @@ func TestAnInvalidBootstrapIsRefusedBeforeAnythingIsOpened(t *testing.T) {
 
 func TestTheDispatcherIsWiredFromTheEngine(t *testing.T) {
 	t.Parallel()
-	// Every seam the dispatcher documents as required must be filled, and
-	// filled with the real thing. A nil Ledgered makes every work key
-	// derive from an empty id list, so the completion ledger records
-	// nothing and drops nothing — present, and inert.
+	// Every required seam is filled with the real thing. A nil Ledgered
+	// derives every work key from an empty id list, so the completion
+	// ledger is present and inert.
 	d := &engine.Dispatcher{}
 	newEngine(t, engine.Options{Dispatch: d})
 
@@ -290,10 +277,9 @@ func TestTheDispatcherIsWiredFromTheEngine(t *testing.T) {
 
 func TestASuppliedSeamIsKeptNotOverwritten(t *testing.T) {
 	t.Parallel()
-	// The regression this exists for: the wiring used to be reapplied on
-	// every delivery, which both raced across seats and silently replaced
-	// whatever a caller had supplied. A caller that wants to pin ownership
-	// answers must still get the real completion ledger.
+	// Wiring reapplied per delivery would race across seats and replace what
+	// a caller supplied. A caller that pins ownership answers still gets the
+	// real completion ledger.
 	pinned := func(string) inbox.Conditions {
 		return inbox.Conditions{Owned: false}
 	}
@@ -310,10 +296,9 @@ func TestASuppliedSeamIsKeptNotOverwritten(t *testing.T) {
 
 func TestTheWiringSurvivesConcurrentDeliveries(t *testing.T) {
 	t.Parallel()
-	// The node runs one consume loop per seat, so every attached seat can
-	// be inside Dispatch at once. Under -race, a dispatcher whose fields
-	// are assigned on the way in fails here; without -race it still fails
-	// as a torn read on a loaded box, which is worse because it is rare.
+	// One consume loop per seat puts every attached seat inside Dispatch at
+	// once, so a dispatcher whose fields are assigned on the way in fails
+	// here under -race.
 	var ran atomic.Int64
 	d := &engine.Dispatcher{
 		Conditions: func(string) inbox.Conditions {
@@ -350,9 +335,8 @@ func TestTheWiringSurvivesConcurrentDeliveries(t *testing.T) {
 
 func TestASeatThisNodeDoesNotOwnIsDeferred(t *testing.T) {
 	t.Parallel()
-	// Conditions reads the seat host's freshness answer, not a constant. A
-	// node that has claimed nothing owns nothing, so every delivery defers
-	// — and asks the host to resume the consumer when it does claim.
+	// Conditions reads the seat host's freshness answer, not a constant: a
+	// node that has claimed nothing owns nothing, so every delivery defers.
 	e := newEngine(t, engine.Options{})
 	got := engine.MailboxTurn(context.Background(), e, "ceo", []*events.Event{ev("external_notification")})
 	if got.Outcome != queue.OutcomeDefer {
@@ -362,16 +346,13 @@ func TestASeatThisNodeDoesNotOwnIsDeferred(t *testing.T) {
 
 func TestASeatHeldBySandboxDefersRatherThanRunning(t *testing.T) {
 	t.Parallel()
-	// A detached executor holds its seat for as long as it runs, so the
-	// seat starts no turn: the coordinator holds its inbox, and a delivery
-	// that reaches it anyway is deferred under that hold. Nil answers no — a
-	// build with no sandbox provider has no seat waiting on one — so this is
-	// the half that says the hook is read at all.
+	// A detached executor holds its seat while it runs, so a delivery that
+	// reaches the seat is deferred under that hold. A nil hook answers no,
+	// so this is the half that proves the hook is read at all.
 	var parked [][]*events.Event
 	var held []string
 	d := &engine.Dispatcher{
-		// Ownership is the guard above this one; pin it so what is under
-		// test is the sandbox branch and not the lease table.
+		// Ownership is pinned below, so the sandbox branch is under test.
 		Conditions: nil,
 		Park: func(_ context.Context, _ string, evs []*events.Event) error {
 			parked = append(parked, evs)
@@ -383,8 +364,8 @@ func TestASeatHeldBySandboxDefersRatherThanRunning(t *testing.T) {
 		Dispatch:    d,
 		SandboxRuns: func(handle string) (bool, bool) { return handle == "ceo", false },
 	})
-	// The seat host has claimed nothing, so ownership would defer first.
-	// Override just that answer, keeping the engine's own sandbox wiring.
+	// The host has claimed nothing, so ownership would defer first: override
+	// that answer alone, keeping the engine's sandbox wiring.
 	inner := d.Conditions
 	d.Conditions = func(h string) inbox.Conditions {
 		c := inner(h)
@@ -411,10 +392,9 @@ func TestASeatHeldBySandboxDefersRatherThanRunning(t *testing.T) {
 
 func TestBorrowedBackendsOutliveTheEngine(t *testing.T) {
 	t.Parallel()
-	// A caller that opened the backends keeps their lifetime: it needs the
+	// A caller that opened the backends keeps their lifetime: it reads the
 	// estate after the engine stops (a failed boot's leftovers, a peer's
-	// record read back). An engine that closed what it was lent would take
-	// the caller's broker with it.
+	// record).
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
@@ -443,12 +423,10 @@ func TestBorrowedBackendsOutliveTheEngine(t *testing.T) {
 
 // A STOPPED ENGINE APPLIES NOTHING.
 //
-// The reconcile loop can be mid-tick when the process is told to stop, and an
-// apply that ran on after the teardown started again what the teardown had
-// ended: the scheduler it had stopped, the background passes, and on a node's
-// first company the inbound edge, on a node that was leaving. Lent backends
-// outlive the engine's stop, which is the case where such an apply otherwise
-// goes through to the end.
+// The reconcile loop can be mid-tick at stop, and an apply after the teardown
+// would restart what it ended: the scheduler, the background passes and, on a
+// first company, the inbound edge of a node that is leaving. Lent backends
+// outlive the stop, the case where such an apply would otherwise complete.
 func TestAStoppedEngineAppliesNothing(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
@@ -479,12 +457,10 @@ func TestAStoppedEngineAppliesNothing(t *testing.T) {
 	}
 }
 
-// A SECOND STOP DOES NOTHING. It ran the whole teardown again, against what
-// the first one had closed: the admission withdrawal among it, which warned an
-// operator to exclude a node whose admission the first Stop had already
-// removed. A failed start's cleanup is the ordinary way to reach a second Stop.
-// Lent backends keep the coordination store open across both calls, so a
-// second teardown would reach it and be counted here.
+// A SECOND STOP DOES NOTHING: a repeated teardown would withdraw an admission
+// already removed and warn an operator to exclude the node. A failed start's
+// cleanup is the ordinary way to reach a second Stop. Lent backends keep the
+// coordination store open across both, so a second teardown is counted here.
 func TestASecondStopTearsNothingDownAgain(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
@@ -531,10 +507,9 @@ func (c *countingWithdrawals) ForgetAdmission(ctx context.Context, nodeID, incar
 	return c.fleet.ForgetAdmission(ctx, nodeID, incarnation)
 }
 
-// A PARTIAL SET IS REFUSED, NAMING WHAT IS MISSING. It used to be run: the
-// engine skipped whatever needed the absent piece, so an engine lent a queue
-// and no store served a company with no memory and no Worklet, and nothing
-// said so. Every node `crewlet run` builds holds all four.
+// A PARTIAL SET IS REFUSED, NAMING WHAT IS MISSING, rather than run silently
+// short (a queue and no store would serve a company with no memory and no
+// Worklet). Every node `crewlet run` builds holds all four.
 func TestBackendsSuppliedWithoutEveryEstateAreRefused(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
@@ -570,9 +545,8 @@ func TestBackendsSuppliedWithoutEveryEstateAreRefused(t *testing.T) {
 
 func TestOwnedBackendsCloseWithTheEngine(t *testing.T) {
 	t.Parallel()
-	// The counterfactual. "Does not close what it was lent" is satisfied
-	// just as well by "never closes anything", which leaks a broker and a
-	// database file per engine.
+	// The counterfactual: "never closes anything" also passes "does not
+	// close what it was lent", and leaks a broker and a database per engine.
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
@@ -601,8 +575,7 @@ func TestStartAndStopAreSurvivable(t *testing.T) {
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	// The seat host claims what it can; with local coordination and no
-	// peers that is every seat.
+	// With local coordination and no peers the host claims every seat.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if len(e.Node().Host().Held()) == 2 {
@@ -621,15 +594,10 @@ func TestStartAndStopAreSurvivable(t *testing.T) {
 
 func TestStopLetsAnInFlightTurnFinish(t *testing.T) {
 	t.Parallel()
-	// The drain is the difference between a restart that resumes cleanly
-	// and one that abandons work: it quiesces every held seat so no NEW
-	// work is taken, then waits — bounded only by the caller's context —
-	// for the turns already running.
-	//
-	// Without it the only wait left is the queue's own stop grace, a
-	// quarter of a second sized for a consume loop to notice its
-	// cancellation, not for a turn to finish. A turn parked mid-LLM-round
-	// is making progress no timer can see.
+	// The drain quiesces every held seat so no NEW work is taken, then
+	// waits, bounded only by the caller's context, for running turns.
+	// Without it the only wait is the queue's stop grace (a quarter second,
+	// sized for a consume loop to notice cancellation, not a turn to finish).
 	entered := make(chan struct{})
 	var once sync.Once
 	var finished, finishedBeforeStopReturned atomic.Bool
@@ -680,11 +648,10 @@ func TestStopLetsAnInFlightTurnFinish(t *testing.T) {
 // THE DRAIN IS ITS OWN HALF, and the HTTP surface lives in the gap after it.
 //
 // A process serves /health and /ready through the drain and closes its
-// listener between Drain and Stop, which only works if the drain says so from
-// its first moment, leaves every backend the probes read open when it
-// returns, and happens once however many callers ask. Each of those is
-// checked against a turn held in flight, because a drain with nothing to wait
-// for finishes before anything could observe it.
+// listener between Drain and Stop, so the drain must say so from its first
+// moment, leave every backend the probes read open, and happen once. Each is
+// checked against a turn held in flight: a drain with nothing to wait for
+// finishes before anything could observe it.
 func TestADrainSaysSoAtOnceAndLeavesTheBackendsOpen(t *testing.T) {
 	t.Parallel()
 	entered, release := make(chan struct{}), make(chan struct{})
@@ -705,8 +672,8 @@ func TestADrainSaysSoAtOnceAndLeavesTheBackendsOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}
-	// Released on every path, so a failed assertion below cannot leave the
-	// cleanup's Stop waiting on a turn nobody will let go.
+	// Released on every path, so a failed assertion cannot leave the
+	// cleanup's Stop waiting on the turn.
 	var released sync.Once
 	letGo := func() { released.Do(func() { close(release) }) }
 	t.Cleanup(func() { letGo(); e.Stop(context.Background()) })
@@ -741,9 +708,8 @@ func TestADrainSaysSoAtOnceAndLeavesTheBackendsOpen(t *testing.T) {
 		defer close(drained)
 		e.Drain(context.Background())
 	}()
-	// FROM THE FIRST MOMENT, while the turn it waits for is still running:
-	// this is the flag the HTTP surface refuses new work on, and a flag set
-	// once the drain was over would refuse nothing.
+	// FROM THE FIRST MOMENT, while the turn still runs: the HTTP surface
+	// refuses new work on this flag, so one set after the drain refuses nothing.
 	waitFor(t, "the engine to say it is shutting down", e.ShuttingDown)
 	select {
 	case <-drained:
@@ -757,8 +723,7 @@ func TestADrainSaysSoAtOnceAndLeavesTheBackendsOpen(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("the drain did not return once the turn finished")
 	}
-	// DRAINED, NOT STOPPED: the probes a process serves in this gap read
-	// the broker, and a drain that closed it would leave them nothing.
+	// DRAINED, NOT STOPPED: the probes served in this gap read the broker.
 	if err := e.Backends().Queue.Publish(context.Background(), "t.after",
 		ev("external_notification")); err != nil {
 		t.Errorf("the broker was closed by the drain rather than by Stop: %v", err)
@@ -780,14 +745,12 @@ func TestADrainSaysSoAtOnceAndLeavesTheBackendsOpen(t *testing.T) {
 // A DRAIN REFUSES THE NEXT APPLY, and it is the drain rather than the teardown
 // that refuses it.
 //
-// The gate is one lock and a flag, so what a test can pin is WHERE it sits: an
-// apply attempted after Drain has returned, with every backend still open and
-// Stop not yet called, must already be refused. The reconcile tick is
-// synchronous and can be mid-apply when a signal lands, and an apply admitted
-// during a drain re-arms the scheduler, the background passes and a first
-// company's inbound edge on a node that is handing its seats back. It is also
-// the only gate that sees an apply arriving over the STREAM from a peer, which
-// the API's own drain gate never does.
+// The gate is one lock and a flag, so the test pins WHERE it sits: an apply
+// after Drain returns, backends open and Stop not yet called, is refused. An
+// apply admitted during a drain re-arms the scheduler, the background passes
+// and a first company's inbound edge on a node handing its seats back. It is
+// the only gate that sees an apply arriving over the STREAM from a peer; the
+// API's drain gate never does.
 func TestADrainRefusesAnApplyBeforeTheTeardownDoes(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
@@ -804,8 +767,7 @@ func TestADrainRefusesAnApplyBeforeTheTeardownDoes(t *testing.T) {
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	// SERVING FIRST, so the refusal below is the drain's and not a node
-	// that was never able to apply.
+	// SERVING FIRST, so the refusal below is the drain's.
 	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc), time.Now()); err != nil {
 		t.Fatalf("an apply on a serving node was refused: %v", err)
 	}
@@ -826,11 +788,8 @@ func TestADrainRefusesAnApplyBeforeTheTeardownDoes(t *testing.T) {
 	}
 }
 
-// turnLength is how long the in-flight turn above takes.
-//
-// Comfortably longer than the queue's own stop grace, which is a quarter of a
-// second: the point is that the drain waits for the TURN, not that it happens
-// to outlast a wait sized for something else.
+// turnLength is how long the in-flight turn above takes: well past the queue's
+// quarter-second stop grace, so passing proves the drain waits for the TURN.
 const turnLength = 2 * time.Second
 
 // waitFor polls until cond holds, failing the test if it never does.
@@ -847,55 +806,26 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 }
 
 // startedLeaseTTL is the lease TTL a case here STARTS an engine at when it
-// shortens the lease: the shortest a deployment may set ([config.MinLeaseTTL]),
-// because [engine.New] holds every bootstrap to it.
+// shortens the lease: [config.MinLeaseTTL], the floor [engine.New] holds every
+// bootstrap to.
 //
-// THE TTL IS ALSO THE WATCHDOG'S THRESHOLD. [engine.New] arms the seat
-// watchdog at the host's own TTL ([seat.Watchdog] says why the two are one
-// number) and [engine.Engine.Start] starts it; once the host goes longer than
-// that without a beat it ends the PROCESS with status 75 — here the test
-// binary, and every case running in it. So a TTL shortened to make a lapse or
-// an allowance quick inside one case is also how close the whole binary sits
-// to that exit on a loaded runner, and the floor's margin, measured on this
-// package's own engines under load, is the doc of [config.MinLeaseTTL]: it
-// used to be stated here, as the shortest TTL a case started an engine at,
-// before the floor existed and two cases here started theirs at three seconds.
-//
-// So no case waits out what it needs a short TTL for: it reads the renew or
-// the deadline it is about off the host or its store. A case whose subject is
-// a fraction of a shorter TTL builds an Engine literal rather than booting one
+// THE TTL IS ALSO THE WATCHDOG'S THRESHOLD ([seat.Watchdog]): a host that goes
+// longer without a beat ends the whole test binary with status 75, so a short
+// TTL is how close every case sits to that exit on a loaded runner; the
+// floor's measured margin is in [config.MinLeaseTTL]'s doc. No case waits out
+// a short TTL: it reads the renew or deadline off the host or its store. A case
+// about a fraction of a shorter TTL builds an Engine literal instead
 // (TestAHoldGivenBackDuringTheTeardownIsAStepOfItsAllowance runs at 1.5 s).
 const startedLeaseTTL = config.MinLeaseTTL
 
-// CANCELLING THE START CONTEXT DOES NOT STOP THE ENGINE.
+// CANCELLING THE START CONTEXT DOES NOT STOP THE ENGINE: the seat host's loops
+// derive from it, so a signal context would stop renewing at SIGTERM and every
+// lease would lapse while the drain waits on turns this node still runs.
 //
-// Stop is what ends an engine. The seat host derives its heartbeat and sweep
-// loops from whatever Start is given, so an engine started on a signal context
-// would stop renewing its leases the instant SIGTERM arrived — before the drain
-// began. The drain then waits for in-flight turns while every lease lapses at
-// the TTL and peers claim seats this node is still running turns on.
-//
-// A RENEW BEGUN AFTER THE CANCEL IS THE EVIDENCE, read where the host judges
-// one: [seat.Host.MayStart] admits a seat only while its last renew is within
-// one heartbeat, measured from a stamp read before the store call it records.
-// So a yes more than a heartbeat past the cancel is a renew begun after it. A
-// host whose loops died with the context began its last renew no later than
-// the cancel and refuses every seat from one heartbeat past it, for good; a
-// live one renews every heartbeat and admits again within the next. The case
-// polls each seat from one heartbeat past the cancel for one heartbeat more.
-//
-// IT WAITS FOR NO LEASE TO LAPSE. It slept two TTLs and then read the host,
-// which kept it at a TTL of three seconds — and the TTL is also the threshold
-// at which the engine's watchdog ends the whole test binary ([startedLeaseTTL]
-// has the measurement). So against the regression it names it never failed:
-// measured, the watchdog ended the binary with status 75, its host 3.3 s
-// without a beat, three seconds before the case would have read anything, and
-// took every case running beside it down too. Read off the renews, the window
-// closes two heartbeats past the cancel, and a host whose loops died beat last
-// no earlier than one beat before it, so its watchdog fires no sooner than a
-// TTL less a beat past the cancel — later, which the case checks rather than
-// assumes. The regression is reported here, and the cleanup's Stop disarms the
-// watchdog before it can end the binary.
+// [seat.Host.MayStart] admits a seat only within a heartbeat of its last
+// renew, so a yes polled one to two heartbeats past the cancel is a renew begun
+// after it. No lease is waited out: the TTL is the watchdog's threshold
+// ([startedLeaseTTL]), and the window closes before it could end the binary.
 //
 // Mutation: start the node on the caller's context in [engine.Engine.Start],
 // and this fails naming both seats while the binary lives on.
@@ -912,9 +842,8 @@ func TestCancellingTheStartContextDoesNotStopTheEngine(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	host := e.Node().Host()
-	// THE PREMISE: both seats held AND admitted, so a refusal after the
-	// cancel can only be a renew that never came, never a seat still
-	// establishing.
+	// THE PREMISE: both seats held AND admitted, so a later refusal is a
+	// renew that never came, never a seat still establishing.
 	waitFor(t, "both seats to be claimed and admitted", func() bool {
 		held := host.Held()
 		return len(held) == 2 && !slices.ContainsFunc(held, func(handle string) bool {
@@ -924,9 +853,9 @@ func TestCancellingTheStartContextDoesNotStopTheEngine(t *testing.T) {
 	})
 	seats := host.Held()
 	heartbeat := host.HeartbeatInterval()
-	// THE PREMISE, checked rather than commented: the window closes before
-	// the watchdog could end the binary over a host whose loops died, whose
-	// last beat is at most one beat older than the cancel.
+	// THE PREMISE, checked: the window closes before the watchdog could end
+	// the binary over a host whose last beat is at most one beat before the
+	// cancel.
 	if reach := host.TTL() - seat.WatchdogBeatInterval; 2*heartbeat >= reach {
 		t.Fatalf("the premise: the window closes %v past the cancel, past the %v "+
 			"at which the watchdog may end the binary over a dead heartbeat",
@@ -961,11 +890,9 @@ func TestCancellingTheStartContextDoesNotStopTheEngine(t *testing.T) {
 
 // THE POSTURE GATE REACHES A SEAT'S OWN INBOX.
 //
-// The regression this exists for: conditionsFor asserted AdmitsTriggers as a
-// hardcoded true, so a seat's own mailbox was the one trigger path a shed
-// could never reach — the screening's "config posture refuses new work" branch
-// existed and was unreachable. Both halves are checked, because a gate that is
-// always closed is as broken as one that is always open.
+// conditionsFor must read AdmitsTriggers from the posture, not assert true, or
+// a shed never reaches a seat's own mailbox. Both halves are checked: a gate
+// always closed is as broken as one always open.
 func TestThePostureGateReachesTriggerAdmission(t *testing.T) {
 	t.Parallel()
 	d := &engine.Dispatcher{}
@@ -988,25 +915,17 @@ func TestThePostureGateReachesTriggerAdmission(t *testing.T) {
 
 // AN ENGINE RUNS WITH NO COMPANY AT ALL.
 //
-// The store is authoritative at runtime and a fleet's first revision may
-// arrive over the API, so a node has to be able to start with nothing: serving
-// its HTTP surface, holding no seats, and waiting for the control plane to
-// hand it an epoch. This was refused — engine.New required a company — which
-// made the whole documented "unconfigured" state unreachable from the binary:
-// /health never said it, /ready never went 503 for it, and the flag that
-// reported it was set to true unconditionally with no caller ever setting it
-// back.
-//
-// Start as well as New, because the two failed at different places: New built
-// the epoch, and Start read the company's name to log that it had started.
+// A fleet's first revision may arrive over the API, so a node must start with
+// nothing: serving its HTTP surface, holding no seats, waiting for an epoch.
+// Start as well as New, since each could need the company: New to build the
+// epoch, Start to log its name.
 func TestAnEngineRunsUnconfigured(t *testing.T) {
 	t.Parallel()
 	e := unconfiguredEngine(t)
 	if e.Company() != nil {
 		t.Error("an unconfigured engine reports an epoch")
 	}
-	// The placement sweep asks on every tick, and an unconfigured node has
-	// an empty seat set rather than an unanswerable question.
+	// The placement sweep asks every tick, so the answer is an empty seat set.
 	if got := len(e.Company().Seats()); got != 0 {
 		t.Errorf("seats = %d, want none", got)
 	}
@@ -1015,9 +934,8 @@ func TestAnEngineRunsUnconfigured(t *testing.T) {
 	}
 }
 
-// AND ITS FIRST APPLY BRINGS IT UP. The unconfigured state is only useful if
-// the node leaves it without a restart, which is the whole point of being able
-// to bootstrap a fleet through PUT /config.
+// AND ITS FIRST APPLY BRINGS IT UP, without a restart, so a fleet can be
+// bootstrapped through PUT /config.
 func TestAnUnconfiguredEngineTakesItsFirstEpoch(t *testing.T) {
 	t.Parallel()
 	e := unconfiguredEngine(t)
@@ -1034,28 +952,16 @@ func TestAnUnconfiguredEngineTakesItsFirstEpoch(t *testing.T) {
 }
 
 // A NODE ON AN IN-MEMORY STREAM IS REFUSED AT BOOT, COMPANY OR NONE, BEFORE
-// ANYTHING OPENS.
+// ANYTHING OPENS: its first restart recreates every log empty, and a node whose
+// rows are ahead of its logs stops serving for good.
 //
-// An in-memory stream is not "queued events do not survive a restart": the
-// first restart recreates every log empty, and a node whose rows are ahead of
-// it stops serving for good. Measured on a company with no Worklet
-// whose pages were the engine's own: it booted, logged an error, and after one
-// restart its pages applier stopped on the recreated stream and the node never
-// admitted a seat again.
-//
-// # The node with no company is the case
-//
-// The rule was a cross-tier one, asked of the company a node booted with or
-// was handed — so a node started with NONE passed it, and it runs the core
-// runtime from boot: the identity estate its first person is invited into, on
-// a log its first restart emptied. The vendor pairing is the second row
-// because it is the case the rule before that one missed: a company on Jira
-// and Confluence writes nothing to Worklet or Doclet — though every data node
-// applies their logs all the same — and still keeps its people.
+// A node with NO company still runs the identity estate from boot, so the rule
+// cannot be asked of the company alone; a company on vendors for both tracker
+// and knowledge base writes nothing to Worklet or Doclet and still keeps its
+// people.
 //
 // Mutation: ask the stream only when there is a company, and the first row
-// builds an engine; move the question below OpenBackends, and the store file
-// exists.
+// builds an engine; move the question below OpenBackends, and the store exists.
 func TestANodeOnAnInMemoryStreamIsRefusedAtBoot(t *testing.T) {
 	t.Parallel()
 	vendors := parsedCompany(t, companyDoc)

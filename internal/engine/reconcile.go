@@ -22,19 +22,14 @@ import (
 
 // Reconciler converges this node on the activation pointer.
 //
-// A POLLED RECONCILER, not a subscription, and that is the whole design.
-// Config used to arrive over a competing-consumer subscription: with N
-// processes exactly ONE applied a revision and the rest ran the previous
-// company indefinitely, while the dashboard reported success because the one
-// node that applied it said so. A pointer every node re-reads has no such
-// failure — a node that was down for an activation catches up on its next
-// tick, because it reads the current state rather than replaying an event it
-// missed.
+// POLLED, not subscribed: every node re-reads the pointer, so a node that was
+// down for an activation catches up on its next tick by reading current state
+// rather than replaying an event it missed. A competing-consumer subscription
+// would have exactly one node apply each revision.
 //
-// It also RECORDS. Reading the pointer says where the fleet should be; the
-// per-node apply status says where each node actually is, and only the two
-// together can tell "behind because propagation takes a moment" from "behind
-// because I cannot apply this" — which need opposite responses.
+// It also RECORDS per-node apply status: only the pointer and that status
+// together tell "behind because propagation takes a moment" from "behind
+// because I cannot apply this", which need opposite responses.
 type Reconciler struct {
 	engine  *Engine
 	configs *store.Configs
@@ -42,125 +37,83 @@ type Reconciler struct {
 	queue   Nudger
 	nodeID  string
 
-	// cipher is the ENGINE's keyring, never one handed in: it opens a
-	// sealed revision and AUTHENTICATES one, because a peer's revision
-	// arrives through the coordination store and anything that reaches
-	// the broker can write a body there. See [Engine.NewReconciler].
+	// cipher is the ENGINE's keyring, never one handed in: it opens and
+	// AUTHENTICATES a peer's revision, whose body anything reaching the
+	// broker can write. See [Engine.NewReconciler].
 	cipher secrets.Cipher
 
 	// progress is this node's convergence state, published as ONE value.
 	//
-	// Written only by the tick — Run's loop, or the one-shot harness path,
-	// never both at once, which [Engine.following] enforces — and read by
-	// every surface that reports on this node: the seat heartbeat through
-	// SetPosture, the readiness probe, and each runtime-state HTTP
-	// handler, all on their own goroutines.
+	// Written only by the tick (Run's loop or the one-shot harness path,
+	// never both, which [Engine.following] enforces) and read concurrently
+	// by the seat heartbeat, the readiness probe and the runtime-state
+	// handlers.
 	//
-	// ONE POINTER rather than separate fields, because they are read
-	// TOGETHER and have to agree. `applied` alone was atomic, with a
-	// comment naming this exact hazard; `attempts` and `target` were left
-	// bare beside it and were a plain data race — invisible to -race only
-	// because no test drove Posture concurrently with Run. Three separate
-	// atomics would fix the race and leave the torn read: DecidePosture
-	// comparing an applied epoch from one moment against an attempt count
-	// from another can conclude "converged but still retrying", which is
-	// not a state this node was ever in.
+	// ONE POINTER, not separate atomics: its fields are read together and
+	// must agree. DecidePosture comparing an applied epoch from one moment
+	// with an attempt count from another can conclude "converged but still
+	// retrying", a state this node was never in.
 	progress atomic.Pointer[applyProgress]
 
 	// served is the revision this node's engine RUNS, at the instant of the
-	// activation it was applied from: what [ReconcilerOptions.Booted] says
-	// the engine started on, until an apply succeeds, and then what that
-	// apply installed. Nil while the engine runs no company.
+	// activation it was applied from: [ReconcilerOptions.Booted] until an
+	// apply succeeds, then what that apply installed. Nil while the engine
+	// runs no company.
 	//
-	// It is the only thing the boot row is ever moved to online
-	// ([Reconciler.serve]), so a node never boots on a revision it refused.
-	// NOT the pointer's revision at the applied epoch: an epoch is a number
-	// a recreated pointer can reuse for another revision, and the boot row
-	// moved to "the target at the applied epoch" would name a revision this
-	// engine never applied. Written by the tick, read by the fleet view's
-	// row on the same tick and by [Reconciler.Serving] from anywhere.
+	// It is the only thing [Reconciler.serve] moves the boot row to, so a
+	// node never boots on a revision it refused. NOT the pointer's revision
+	// at the applied epoch: a recreated pointer can reuse an epoch for
+	// another revision. Written by the tick; [Reconciler.Serving] reads it
+	// from anywhere.
 	served atomic.Pointer[store.Revision]
 
-	// booting is the boot row's revision as this reconciler last READ it or
-	// WROTE it: empty where the row holds nothing.
+	// booting is the boot row's revision as this reconciler last READ or
+	// WROTE it, empty where the row holds none. A SECOND FACT, not a reading
+	// of served, since the boot-row write can fail: the apply record carries
+	// it ([coord.NodeApply.Boots]) so the operator keeps the sealed
+	// credentials of the revision a node would boot on, not the one it runs.
 	//
-	// A SECOND FACT RATHER THAN A READING OF served, because the two part
-	// company exactly where it matters: the boot row moves only after an
-	// apply has succeeded, and that write can fail, so a node goes on
-	// running a revision it would NOT come back on until a later tick
-	// repairs the row. The apply record carries it ([coord.NodeApply.Boots])
-	// so that a reader keeping what this node needs in order to start — the
-	// Kubernetes operator keeps a revision's sealed credentials while a node
-	// still names it — keeps the revision the node would actually boot on
-	// rather than the one it happens to be running.
-	//
-	// NEVER UNKNOWN. It is read once as the reconciler is built, and a build
-	// that cannot read it fails ([Engine.NewReconciler]); after that it moves
-	// only on a read of the row that succeeded or a write to it that did
-	// ([Reconciler.serve]), so a read that fails leaves the last answer in
-	// place. An unread state would otherwise reach the fleet's row as an
-	// empty name — "boots on nothing" — and a reader keeping what this node
-	// needs would drop the revision the row in fact holds: "could not read"
-	// and "holds none" are two facts, and only the second is ever published.
-	// The last answer is still the row's, because while the engine runs this
-	// reconciler is the row's only writer: the offline commands that write
-	// it are refused while the node holds its store, and the boot publish
-	// that confirms an offer ran before this reconciler was built.
-	//
-	// Written by the tick, like served beside it, and read from anywhere
-	// through [Reconciler.Boots].
+	// NEVER UNKNOWN: read as the reconciler is built ([Engine.NewReconciler]
+	// fails otherwise), then moved only by a read or write of the row that
+	// succeeded ([Reconciler.serve]), so "could not read" is never published
+	// as "holds none". The last answer stays true: while the engine runs this
+	// is the row's only writer (offline commands are refused, and the boot
+	// publish ran before it was built). Read through [Reconciler.Boots].
 	booting atomic.Pointer[string]
 
-	// scratch is this node's own database being DISCARDED at every start, as
-	// the store handle reports it ([store.DB.Scratch]): what the tick writes
-	// to the boot row is gone before the next start reads it, so such a node
-	// boots on nothing however many revisions it applies, and
-	// [Reconciler.Boots] says so.
-	//
-	// THE HANDLE'S ANSWER, never an option a caller sets: the handle is the
-	// one reading of the fact that cannot disagree with what the open did,
-	// and an option left at its zero value published a boot revision for a
-	// node whose store is discarded at every start.
+	// scratch is whether this node's database is DISCARDED at every start
+	// ([store.DB.Scratch]): such a node boots on nothing however many
+	// revisions it applies, and [Reconciler.Boots] says so. The handle's
+	// answer, never a caller's option, so it cannot disagree with the open.
 	scratch bool
 
-	// recorded is the last apply outcome this node wrote to the fleet view,
-	// which every tick after it writes again — see [Reconciler.refresh].
-	// Written and read by the tick alone; atomic because the tick is not
-	// pinned to one goroutine (Run's loop, or the one-shot harness path).
+	// recorded is the last apply outcome written to the fleet view, which
+	// every later tick restates ([Reconciler.refresh]). Tick-only, but atomic
+	// because the tick is not pinned to one goroutine.
 	recorded atomic.Pointer[coord.NodeApply]
 
-	// decided is the last posture this reconciler computed, for the one
-	// reader that cannot afford to compute its own.
+	// decided is the last posture computed, for [Reconciler.Admits]. The
+	// heartbeat and readiness probe call [Reconciler.Posture] and can pay its
+	// two coordination reads; admission is consulted per inbound delivery
+	// and per scheduler tick, where a read would put a round trip in front of
+	// every webhook.
 	//
-	// The heartbeat and the readiness probe call [Reconciler.Posture]
-	// directly: they run on their own cadence and can pay its two
-	// coordination reads. ADMISSION cannot — it is consulted once per
-	// inbound delivery and once per scheduler tick, and a control-plane
-	// read there would put a network round trip in front of every
-	// webhook. So the value the loop already computes is cached here and
-	// [Reconciler.Admits] reads that, which is also the model the design
-	// describes: the refusal runs on the delivery path while the posture
-	// moves on the reconcile loop.
-	//
-	// Zero means "nothing decided yet", which ADMITS. A node that has not
+	// Nil means nothing decided yet, which ADMITS: a node that has not
 	// completed one pass is not evidence that it is behind.
 	decided atomic.Pointer[configplane.Posture]
 
 	// nudged carries an activation from the broadcast subscription to the
-	// loop. Buffered at ONE and written non-blocking: a storm of
-	// activations must collapse into a single early wake, not into a queue
-	// of them — the loop re-reads the pointer when it runs, so N nudges and
-	// one nudge lead to the same place.
+	// loop. Buffered at ONE and written non-blocking, so an activation storm
+	// collapses into one early wake: the loop re-reads the pointer, so N
+	// nudges and one lead to the same place.
 	nudged chan struct{}
 
-	// onApply is called after every apply with the outcome, for an
-	// observer that wants each one as it happens: the command logs them.
-	// Whether the node is configured is not learned from here; the API
-	// reads the engine's live epoch on every call.
+	// onApply observes every apply's outcome (the command logs them). The
+	// API does not learn whether the node is configured here; it reads the
+	// engine's live epoch.
 	onApply func(epoch int64, status configplane.ApplyStatus)
 
-	// log is where this loop reports. Every line the reconciler writes goes
-	// through it, so a caller that injects one sees all of them.
+	// log receives every line the reconciler writes.
 	log *slog.Logger
 
 	now func() time.Time
@@ -168,10 +121,9 @@ type Reconciler struct {
 
 // ReconcilerOptions configure a reconciler.
 type ReconcilerOptions struct {
-	// Store is where the revision PAYLOADS live, and the node's own boot row
-	// with them. Required. Whether what is written there outlives this start
-	// is the handle's own answer ([store.DB.Scratch]), so there is no option
-	// to say it again.
+	// Store holds the revision payloads and the node's boot row. Required.
+	// Whether its writes outlive this start is the handle's answer
+	// ([store.DB.Scratch]), not an option.
 	Store *store.DB
 
 	// Fleet is where the activation pointer and the per-node apply status
@@ -179,37 +131,29 @@ type ReconcilerOptions struct {
 	// reading its own database would converge on itself.
 	Fleet coord.Plane
 
-	// Queue carries this node's apply outcome out as a durable event and
+	// Queue publishes this node's apply outcome as a durable event and
 	// brings activations in as a nudge. Required: the coordination record
-	// the outcome accompanies ages out in a minute by design, so a
-	// reconciler without a publisher leaves a bad rollout with no
-	// post-mortem trail at all — and that absence is invisible, which is
-	// how the event type came to exist with nothing publishing it.
+	// ages out in a minute, so without a publisher a bad rollout leaves no
+	// post-mortem trail, and silently.
 	Queue Nudger
 
-	// Booted is the revision engine.New started on, at the instant it was
-	// activated at — zero for an engine that started unconfigured, or on a
-	// company no revision names. It is what this node serves until its
-	// first apply succeeds, and so what its row in the fleet view says it
-	// runs while it refuses the fleet's revision.
+	// Booted is the revision engine.New started on, at its activation
+	// instant; zero for an engine that started unconfigured or on a company
+	// no revision names. This node serves it, and its fleet-view row says
+	// so, until its first apply succeeds.
 	Booted store.Revision
 
 	// NodeID identifies this node's row in the apply status. Required: the
-	// table upserts on it, so an empty one makes every node that forgot it
-	// share a row, and the fleet view shows one anonymous entry where a
-	// dozen nodes should be.
+	// table upserts on it, so an empty one makes such nodes share one row.
 	NodeID string
 
 	// OnApply observes every outcome.
 	OnApply func(epoch int64, status configplane.ApplyStatus)
 
-	// Log is where the reconciler reports, including the warnings it logs
-	// about an applied revision that does not meet this build's admission
-	// rules. Nil is the engine's own component logger. A FIELD rather than
-	// the package logger alone, because what a node warns about while it
-	// applies is part of the apply's contract, and a test asserting it
-	// through the process-wide logger would be racing every parallel test
-	// that logs.
+	// Log receives the reconciler's lines, including the admission warnings
+	// for an applied revision. Nil is the engine's component logger. A
+	// field, not the package logger alone, so a test can assert those
+	// warnings without racing every parallel test that logs.
 	Log *slog.Logger
 
 	// Now is the reconciler's clock: the lag it measures on this node and,
@@ -220,14 +164,13 @@ type ReconcilerOptions struct {
 }
 
 // Nudger is the queue surface this loop uses: it publishes what it did, and
-// listens for an activation so an operator's change lands in milliseconds
-// rather than at the next poll.
+// listens for an activation so a change lands in milliseconds rather than at
+// the next poll.
 //
-// The subscription is an EPHEMERAL BROADCAST, never a consumer group. Every
-// node has to hear every activation — a competing group would hand each one to
-// exactly one node, which is the delivery shape that made config a fleet of
-// one before the pointer existed. Losing a nudge costs one poll interval and
-// never a revision, because the poll asks rather than replays.
+// The subscription is an EPHEMERAL BROADCAST, never a consumer group: every
+// node must hear every activation, and a group hands each to one node. Losing
+// a nudge costs one poll interval, never a revision, because the poll asks
+// rather than replays.
 type Nudger interface {
 	queue.Publisher
 	SubscribeStream(ctx context.Context, topicPattern string, h queue.StreamHandler) (queue.Unsubscribe, error)
@@ -237,13 +180,11 @@ type Nudger interface {
 var ErrNoStore = errors.New("engine: reconciler needs a store")
 
 // ErrNoPlane reports a reconciler built without a coordination plane. Its own
-// sentinel because the two are different deployments to fix: one is a missing
-// database, the other a node with no coordination store to converge through.
+// sentinel because the fix is a coordination store, not a database.
 var ErrNoPlane = errors.New("engine: reconciler needs a coordination plane")
 
 // ErrNoPublisher reports a reconciler built with nowhere to publish its apply
-// outcome. Its own sentinel for the same reason as ErrNoPlane: the fix is a
-// queue, not a database or a coordination store.
+// outcome; the fix is a queue.
 var ErrNoPublisher = errors.New("engine: reconciler needs a publisher")
 
 // ErrNoKeyring reports a reconciler on an engine that holds no keyring, which
@@ -255,20 +196,15 @@ var ErrNoKeyring = errors.New("engine: reconciler needs the engine's keyring " +
 
 // NewReconciler builds the loop.
 //
-// THE KEYRING IS THE ENGINE'S, and there is no option to hand in another or
-// none. It used to be one: a nil read every payload as plaintext, which is
-// exactly the forged document the seal exists to refuse, and a caller that
-// forgot the field got that reconciler without a word — the e2e harness was
-// built that way until it was noticed by hand. The engine already holds the
-// one keyring Tier A names, and it is the one every revision this fleet
-// writes is sealed under.
+// THE KEYRING IS THE ENGINE'S, with no option to hand in another or none: a
+// missing keyring would read every payload as plaintext, the forged document
+// the seal exists to refuse. The engine holds the one keyring Tier A names,
+// which every revision this fleet writes is sealed under.
 //
-// IT READS WHAT THIS NODE BOOTS ON before it returns, and fails when it cannot,
-// as the boot fails on a store it cannot read. Every record this reconciler
-// writes for the fleet names that revision ([coord.NodeApply.Boots]), and the
-// first is written by the first tick: a reconciler that learned the row only
-// there published a node whose read failed as one that boots on nothing, which
-// is what a reader keeping a revision's credentials for this node acts on.
+// IT READS WHAT THIS NODE BOOTS ON before it returns, and fails when it
+// cannot, as the boot fails on an unreadable store: every record it writes
+// names that revision ([coord.NodeApply.Boots]), and learning it only on the
+// first tick would publish a failed read as "boots on nothing".
 func (e *Engine) NewReconciler(ctx context.Context, opts ReconcilerOptions) (*Reconciler, error) {
 	if e.cipher == nil {
 		return nil, ErrNoKeyring
@@ -288,9 +224,8 @@ func (e *Engine) NewReconciler(ctx context.Context, opts ReconcilerOptions) (*Re
 	now := opts.Now
 	if now == nil {
 		// time.Now itself, NOT its UTC: UTC strips the monotonic reading,
-		// and the lag this loop measures is an elapsed time on this node
-		// alone, which an NTP step or a resumed VM must not move. What is
-		// written for other nodes to read goes through [Reconciler.stamp].
+		// and the lag measured here must not move on an NTP step or a
+		// resumed VM. What peers read goes through [Reconciler.stamp].
 		now = time.Now
 	}
 	logger := opts.Log
@@ -314,35 +249,27 @@ func (e *Engine) NewReconciler(ctx context.Context, opts ReconcilerOptions) (*Re
 		booted := opts.Booted
 		r.served.Store(&booted)
 	}
-	// THE ROW ITSELF, never [ReconcilerOptions.Booted]: that is what the
-	// engine STARTED on, and the two differ on a node that started on
-	// nothing while its row names a revision — an `-import-company` boot
-	// reads no store, and its row holds what the node ran before.
+	// THE ROW ITSELF, never [ReconcilerOptions.Booted] (what the engine
+	// STARTED on): an `-import-company` boot starts on nothing while its row
+	// names what the node ran before.
 	boot, _, err := r.configs.Boot(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("engine: reconciler: read the revision this node "+
 			"boots on from its own database: %w", err)
 	}
 	r.boots(boot.ID)
-	// RECORDED ON THE ENGINE once it can answer, because what answers for
-	// the activated epoch rather than the applied one reads its progress:
-	// [Engine.CodeUnserved] and [Engine.servedFleetRevision].
+	// Recorded on the engine once it can answer: [Engine.CodeUnserved] and
+	// [Engine.servedFleetRevision] read its progress.
 	e.reconciler.Store(r)
 	return r, nil
 }
 
-// applyProgress is what the tick has achieved against what it is aiming at.
+// applyProgress is what the tick has achieved against what it is aiming at,
+// stored and replaced whole so every reader sees one instant's progress.
 //
-// A value type, stored and replaced whole, so every reader sees a progress
-// that was true at one instant.
-//
-// IT HOLDS NO OUTCOME BEFORE IT IS KNOWN. The tick runs on one goroutine and
-// every surface that reports on this node reads this from others, in the
-// middle of an apply as often as not — so a count raised before an attempt
-// and meaning "this attempt" is read by them as that attempt's failure. That
-// is how every successful apply used to spend its whole duration reported as
-// one. What is written before an attempt is only WHEN things began, which is
-// true the moment it is written.
+// IT HOLDS NO OUTCOME BEFORE IT IS KNOWN: readers on other goroutines read it
+// mid-apply, so a count raised before an attempt reads as that attempt's
+// failure. Before an attempt only WHEN things began is written.
 type applyProgress struct {
 	// applied is the epoch this node is serving, 0 before its first
 	// successful apply.
@@ -352,49 +279,37 @@ type applyProgress struct {
 	target int64
 
 	// attempts counts the attempts at target that CONCLUDED IN FAILURE,
-	// reset when target moves and when one succeeds. Per epoch, not per
-	// node lifetime: re-activating a fixed revision resets the budget, so
-	// the runbook's fix actually works. Counted when an attempt ends,
-	// never when it starts — see [configplane.FleetView.Attempts].
+	// reset when target moves and when one succeeds. Per epoch, so
+	// re-activating a fixed revision resets the budget (the runbook's fix).
+	// Counted when an attempt ends: see [configplane.FleetView.Attempts].
 	attempts int
 
-	// behindSince is when this node first saw TARGET while serving an
-	// older epoch, zero while it is not behind. It is what lets a lag be
-	// confirmed by TIME while an apply is still running, which a counter
-	// of ticks never could: a hung apply holds the tick that started it.
-	// See [configplane.LagGrace].
-	//
-	// PER EPOCH, restarted whenever target moves, like the attempt budget
-	// beside it. Carried across a new target, the lag a node had already
-	// waited out on a revision that failed everywhere was counted against
-	// the corrected one the operator activated next — so every node still
-	// applying the fix read as confirmed lag, and shed, from the moment
-	// the fastest peer recorded it.
+	// behindSince is when this node first saw target while serving an older
+	// epoch, zero while it is not behind: it confirms lag by TIME while an
+	// apply still runs, which a tick counter cannot, since a hung apply holds
+	// its tick ([configplane.LagGrace]). PER EPOCH, restarted when target
+	// moves: carried over, lag waited out on a failed revision would count
+	// against the corrected one, and every node applying the fix would shed.
 	behindSince time.Time
 
-	// attemptStarted is when the attempt now running began, zero between
-	// attempts. It is what an epoch the tick has NOT YET SEEN is late by:
-	// a node whose tick is held in an attempt at an older epoch cannot
-	// begin on the new one until that attempt ends, so a hung attempt
-	// stays confirmed lag across every activation made while it hangs,
-	// and a quick one is ordinary propagation.
+	// attemptStarted is when the running attempt began, zero between
+	// attempts. An epoch the tick has NOT YET SEEN is late by this: a tick
+	// held in an attempt at an older epoch cannot begin the new one, so a
+	// hung attempt stays confirmed lag while a quick one is propagation.
 	attemptStarted time.Time
 
 	// targetRead is whether this node has read target's revision, and
-	// targetCode whether that revision sets code.backend: gitlet: what tells a node
-	// that does not serve Gitlet because the company does not host code from
-	// one that does not serve Gitlet yet, which the fleet just turned on
-	// ([Engine.CodeUnserved]). Reset with target, set once an attempt at it
-	// has decoded the revision — before the apply that may fail.
+	// targetCode whether it sets code.backend: gitlet: what tells a node that
+	// does not serve Gitlet because the company hosts no code from one not
+	// serving it YET ([Engine.CodeUnserved]). Reset with target; set once an
+	// attempt has decoded the revision, before the apply that may fail.
 	targetRead, targetCode bool
 }
 
-// behindFor is how long the progress has been behind on the target epoch,
-// as of now: since the tick first saw that epoch when it has, and since the
-// attempt holding the tick began when it has not.
-//
-// Read on the reconciler's own clock, which carries the monotonic reading,
-// so a wall-clock step does not move it — see [Engine.NewReconciler].
+// behindFor is how long the progress has been behind on target as of now:
+// since the tick first saw that epoch, or, when it has not, since the attempt
+// holding the tick began. now carries the monotonic reading, so a wall-clock
+// step does not move it ([Engine.NewReconciler]).
 func (p applyProgress) behindFor(target int64, now time.Time) time.Duration {
 	since := p.behindSince
 	if target != p.target {
@@ -406,13 +321,10 @@ func (p applyProgress) behindFor(target int64, now time.Time) time.Duration {
 	return max(now.Sub(since), 0)
 }
 
-// failedAttempts is how many attempts at the target epoch have concluded in
-// failure.
-//
-// None at an epoch the tick has not yet seen, whatever the count says: that
-// count is the PREVIOUS target's, and paired with the new one it read a node
-// that exhausted its retries on a bad revision as stuck on the corrected one
-// the moment a peer applied it — before this node had made any attempt at it.
+// failedAttempts is how many attempts at target have concluded in failure:
+// none at an epoch the tick has not yet seen, whose count is the PREVIOUS
+// target's and would read a node that exhausted its retries on a bad revision
+// as stuck on the corrected one before it tried it.
 func (p applyProgress) failedAttempts(target int64) int {
 	if target != p.target {
 		return 0
@@ -437,10 +349,9 @@ func (r *Reconciler) snapshot() applyProgress {
 // plain load-modify-store needs no compare-and-swap.
 func (r *Reconciler) publish(p applyProgress) { r.progress.Store(&p) }
 
-// noteTargetCode records whether the revision of epoch — the target the tick
-// is applying — sets code.backend: gitlet. The tick alone calls it, like every
-// writer of the progress; an epoch the progress has moved past is not
-// recorded.
+// noteTargetCode records whether the revision of epoch sets code.backend:
+// gitlet. Tick-only, like every progress writer; an epoch the progress has
+// moved past is not recorded.
 func (r *Reconciler) noteTargetCode(epoch int64, hosts bool) {
 	p := r.snapshot()
 	if p.target != epoch {
@@ -453,12 +364,10 @@ func (r *Reconciler) noteTargetCode(epoch int64, hosts bool) {
 // Applied is the epoch this node is serving, or 0 before its first apply.
 func (r *Reconciler) Applied() int64 { return r.snapshot().applied }
 
-// Attempt is this node's last concluded apply attempt — the epoch, the
-// revision it tried and how that went — and false before this process has
-// concluded one. It is the record its peers read ([Reconciler.record]), told
-// to this node's own readers: an attempt that failed leaves [Reconciler.Applied]
-// where it was, and the applied epoch alone cannot tell a node still applying a
-// revision from one that refused it.
+// Attempt is this node's last concluded apply attempt (epoch, revision,
+// outcome), false before this process has concluded one: the record its peers
+// read ([Reconciler.record]). A failed attempt leaves [Reconciler.Applied]
+// where it was, so the applied epoch alone cannot tell applying from refused.
 func (r *Reconciler) Attempt() (coord.NodeApply, bool) {
 	if row := r.recorded.Load(); row != nil {
 		return *row, true
@@ -476,12 +385,11 @@ func (r *Reconciler) Serving() string {
 }
 
 // Boots is the id of the revision this node would START ON if it restarted
-// now, or empty while it would start on none. See [Reconciler.booting].
+// now, or empty for none. See [Reconciler.booting].
 //
 // EMPTY ON A SCRATCH NODE whatever its boot row holds: that database is
-// deleted as the next start opens it, so the row the tick wrote is read by
-// nobody, and naming its revision here would have a reader keep what this node
-// has no use for while telling it nothing about what this node will run.
+// deleted at the next start, and naming the revision would have a reader keep
+// what this node has no use for.
 func (r *Reconciler) Boots() string {
 	if r.scratch {
 		return ""
@@ -502,13 +410,9 @@ func (r *Reconciler) boots(revisionID string) { r.booting.Store(&revisionID) }
 // Posture is what this node should do about the gap between what it has
 // applied and what the pointer names.
 //
-// Read from the store on every call rather than cached, because it is asked by
-// the readiness probe and a cached posture is a node that reports healthy
-// through the whole window in which it stopped being so.
-//
-// It FAILS OPEN: a control plane it cannot read answers serve — see
-// [Reconciler.ReadPosture] for the reason, and for the one reader that must
-// not be handed that answer.
+// Read on every call rather than cached: the readiness probe asks it, and a
+// cached posture reports healthy through the window it stopped being so. It
+// FAILS OPEN to serve on an unreadable plane; see [Reconciler.ReadPosture].
 func (r *Reconciler) Posture(ctx context.Context) configplane.Posture {
 	posture, err := r.ReadPosture(ctx)
 	if err != nil {
@@ -521,41 +425,25 @@ func (r *Reconciler) Posture(ctx context.Context) configplane.Posture {
 // posture this node concluded, or the error that kept it from reading the
 // control plane.
 //
-// FOR THE PEERS. The readiness probe and the admission gate want the
-// fail-open answer, because the alternative takes every node out of rotation
-// on a database blip. The presence heartbeat must not have it: broadcast, the
-// fail-open serve is a confident healthy posture on exactly the node an
-// operator is looking for. The engine used to catch that only when the read
-// overran the beat's budget, by the budget's clock — so a plane that refused
-// at once had its fail-open serve published as this node's answer.
-//
-// The gate is decided exactly as [Reconciler.Posture] decides it: a plane it
-// cannot read records serve here too, so which of the two a caller asks
-// through never changes what [Reconciler.Admits] answers.
+// FOR THE PEERS. The readiness probe and admission want fail-open, or a
+// database blip takes every node out of rotation; the presence heartbeat must
+// not broadcast that serve as a confident healthy posture on exactly the node
+// an operator is looking for. The gate records serve here too, so which of the
+// two a caller uses never changes what [Reconciler.Admits] answers.
 func (r *Reconciler) ReadPosture(ctx context.Context) (configplane.Posture, error) {
-	// BOUNDED, because this is on the liveness and readiness path. The view
-	// below is two coordination round trips, one of which iterates the
-	// fleet's keys — which the NATS client's default per-API timeout does
-	// not cover — so a wedged broker turned a probe into a hang. An
-	// orchestrator reading a hung /ready as "not answering" is the same
-	// outcome as reading it as "not ready", except it takes the whole probe
-	// timeout to get there and the operator learns nothing.
-	//
-	// ProbeReadBudget is an eighth of the reconcile cadence and inside a
-	// typical 5s liveness timeout, so a slow plane degrades to the error
-	// below — which [Reconciler.Posture] answers with the fail-open
-	// PostureServe it promises for a plane it cannot read, and the gate
-	// records the same.
+	// BOUNDED by [ProbeReadBudget]: this is on the liveness and readiness
+	// path, and the view's iteration of the fleet's keys is outside the NATS
+	// client's per-API timeout, so a wedged broker would hang the probe. A
+	// slow plane degrades to the error below, which Posture answers with
+	// fail-open serve.
 	ctx, cancel := context.WithTimeout(ctx, ProbeReadBudget)
 	defer cancel()
 
 	view, err := r.view(ctx)
 	if err != nil {
-		// FAILS TO SERVE, not to stuck. A store this node cannot read is
-		// a node that cannot know whether it is behind — and the safe
-		// answer to "am I behind?" is the one that keeps a working
-		// company working, because the alternative takes every node out
-		// of rotation on a database blip.
+		// FAILS TO SERVE, not to stuck: a node that cannot read the store
+		// cannot know whether it is behind, and serve keeps a working
+		// company working.
 		r.log.WarnContext(ctx, "posture_unknown", "error", err,
 			"detail", "cannot read the control plane; assuming this node is current")
 		r.decide(configplane.PostureServe)
@@ -565,30 +453,22 @@ func (r *Reconciler) ReadPosture(ctx context.Context) (configplane.Posture, erro
 }
 
 // ProbeReadBudget bounds one coordination read made for a health probe: the
-// posture read here, and the envelope's presence count, which the API bounds
-// with this same value and runs BESIDE the posture read rather than after it.
+// posture read, and the envelope's presence count, which the API runs BESIDE
+// it under this same value.
 //
-// ONE VALUE FOR BOTH because they are one probe's reads, and a second budget
-// would be a second answer to "how long may a coordination read hold up
-// /health". An EIGHTH of the reconcile cadence, so a probe can never outlive
-// the tick that would have corrected what it is reporting, and comfortably
-// inside the 5-second liveness timeout an orchestrator defaults to. What it
-// buys is that a broker which has stopped answering makes /health and /ready
-// slow by two seconds rather than by their caller's entire patience.
-//
-// Failing either read is SAFE by construction: an unreadable plane is
-// PostureServe, on the reasoning that the safe answer to "am I behind?" is the
-// one that keeps a working company working, and an unread presence count is an
-// absent `nodes`, which is what "cannot say" already means on the envelope.
+// ONE VALUE because they are one probe's reads. An EIGHTH of the reconcile
+// cadence, so a probe never outlives the tick that would correct it, and well
+// inside an orchestrator's default 5-second liveness timeout. Failing either
+// read is SAFE: an unreadable plane is PostureServe, and an unread presence
+// count is an absent `nodes`, which already means "cannot say".
 const ProbeReadBudget = configplane.ReconcileInterval / 8
 
 // decide records a posture for the admission gate and returns it.
 //
-// Every path out of [Reconciler.Posture] goes through here, the fail-open one
-// included: a node that cannot read the plane reports serve, and serve is the
-// answer admission must see too. Recording only the successful reads would
-// leave a node that shed once and then lost the plane refusing work for as
-// long as the outage lasted, on evidence it could no longer check.
+// Every path out of [Reconciler.Posture] goes through here, fail-open
+// included: recording only successful reads would leave a node that shed once
+// and then lost the plane refusing work for the whole outage, on evidence it
+// can no longer check.
 func (r *Reconciler) decide(p configplane.Posture) configplane.Posture {
 	r.decided.Store(&p)
 	return p
@@ -596,11 +476,9 @@ func (r *Reconciler) decide(p configplane.Posture) configplane.Posture {
 
 // Admits reports whether this node should take new inbound work.
 //
-// It reads the posture the reconcile loop last decided rather than computing
-// a fresh one — see [Reconciler.decided] — and fails OPEN in both uncertain
-// directions: no decision yet admits, and Posture already reports serve when
-// it cannot read the plane. Only a posture that positively concluded shed or
-// stuck refuses, which is exactly the set /ready fails on.
+// It reads the posture last decided ([Reconciler.decided]) and fails OPEN: no
+// decision yet admits, and an unreadable plane decides serve. Only a posture
+// that concluded shed or stuck refuses, the set /ready fails on.
 func (r *Reconciler) Admits() bool {
 	p := r.decided.Load()
 	return p == nil || p.ServesTraffic()
@@ -612,19 +490,14 @@ func (r *Reconciler) view(ctx context.Context) (configplane.FleetView, error) {
 	if err != nil {
 		return configplane.FleetView{}, err
 	}
-	// ONE SNAPSHOT for the whole view, so the applied epoch, the attempt
-	// count and the status derived from it all describe the same moment.
-	//
-	// The target is read FRESH and the progress describes the target the
-	// tick last saw, so the two differ between an activation and the tick
-	// that meets it — and everything taken from the progress is read
-	// against the fresh target, never against its own.
+	// ONE SNAPSHOT, so the applied epoch, attempt count and status describe
+	// one moment. The target is read FRESH and may be newer than the
+	// progress's, so everything from the progress is read against it.
 	progress := r.snapshot()
 	applied := progress.applied
 	if !found {
-		// No activation at all. A node with nothing to converge on is
-		// current by definition — an unconfigured deployment is not a
-		// diverged one.
+		// No activation: a node with nothing to converge on is current,
+		// and an unconfigured deployment is not a diverged one.
 		return configplane.FleetView{TargetEpoch: applied, AppliedEpoch: applied,
 			SelfStatus: configplane.StatusOK}, nil
 	}
@@ -637,42 +510,33 @@ func (r *Reconciler) view(ctx context.Context) (configplane.FleetView, error) {
 	return view, nil
 }
 
-// selfView is this node's half of the fleet view against the epoch target, as
-// of now: the epoch it has applied, its own outcome, how long it has been
-// behind and how many attempts at target concluded in failure — every field
-// read from this one progress, so they describe one moment. The peers are the
-// other half, which only the posture reads ([Reconciler.view]).
+// selfView is this node's half of the fleet view against target as of now,
+// every field read from this one progress; the peers are the other half
+// ([Reconciler.view]).
 //
 // ONE CONSTRUCTION for the posture and for the engine's irreversible
-// judgements ([Engine.servedFleetRevision]), which tell a node merely applying
-// the pointer's epoch from one that failed it by the same rule
-// ([configplane.FleetView.LagConfirmed]) — so the two can never disagree about
-// which of those this node is.
+// judgements ([Engine.servedFleetRevision]), which tell applying from failed
+// by the same rule ([configplane.FleetView.LagConfirmed]), so the two never
+// disagree.
 func (p applyProgress) selfView(target int64, now time.Time) configplane.FleetView {
 	attempts := p.failedAttempts(target)
 	return configplane.FleetView{
 		TargetEpoch:  target,
 		AppliedEpoch: p.applied,
 		SelfStatus:   selfStatus(attempts),
-		// MEASURED, because the tick is synchronous and the readers are
-		// not. A posture is asked for by the probes and the heartbeat
-		// WHILE an apply runs, when this node has neither reached the
-		// epoch nor failed it — which is propagation, and reads wait,
-		// until it has lasted longer than propagation could explain.
+		// MEASURED: probes and the heartbeat ask WHILE an apply runs,
+		// which reads as propagation (wait) until it lasts longer than
+		// propagation explains.
 		BehindFor: p.behindFor(target, now),
 		Attempts:  attempts,
 	}
 }
 
-// selfStatus is this node's own outcome for the current target.
-//
-// Derived rather than stored: the store row is what PEERS read, and a second
-// copy of the same fact in memory is one restart away from disagreeing with
-// it. A node with no failed attempt at the target reports ok — it has either
-// applied it or not concluded an attempt yet, and neither is a failure; one
-// with a failed attempt reports error, which is the honest reading of "still
-// serving the prior epoch" and stays its outcome while a retry runs, until the
-// retry concludes otherwise.
+// selfStatus is this node's own outcome for the current target: ok with no
+// failed attempt (applied, or no attempt concluded yet), error once one has
+// failed, which stays its outcome while a retry runs. Derived rather than
+// stored: the store row is what peers read, and an in-memory copy is one
+// restart from disagreeing with it.
 func selfStatus(failedAttempts int) configplane.ApplyStatus {
 	if failedAttempts == 0 {
 		return configplane.StatusOK
@@ -681,11 +545,8 @@ func selfStatus(failedAttempts int) configplane.ApplyStatus {
 }
 
 // Tick is one poll: read the pointer, and apply the revision it names when
-// this node is not already on it.
-//
-// It RE-READS rather than replaying, which is what makes a node that was down
-// for an activation catch up on its next tick instead of waiting for an event
-// that has already been delivered to somebody else.
+// this node is not already on it. It RE-READS rather than replaying, so a node
+// down for an activation catches up on its next tick.
 //
 // ONE TICK AT A TIME PER ENGINE, from the pointer read to the record of what
 // the node serves ([Engine.following]): the boot row follows the engine's
@@ -698,18 +559,15 @@ func (r *Reconciler) Tick(ctx context.Context) error {
 		return fmt.Errorf("engine: reconcile: %w", err)
 	}
 	if !found {
-		// Nothing has been activated. Not an error and not a state to
-		// report: a fresh deployment sits here until the first import.
+		// Nothing activated: not an error, and not a state to report.
 		return nil
 	}
 	progress := r.snapshot()
 	if target.Epoch != progress.target {
-		// A new target resets the attempt budget, which is what makes
-		// "re-activate the fixed revision" the documented recovery —
-		// and restarts the lag clock for the same reason: this node is
-		// judged on the new epoch alone. A hung attempt is unaffected,
-		// because it holds the tick that would get here; what it is late
-		// by meanwhile is [applyProgress.attemptStarted].
+		// A new target resets the attempt budget (re-activating the fixed
+		// revision is the documented recovery) and restarts the lag clock:
+		// this node is judged on the new epoch alone. A hung attempt holds
+		// the tick; it is late by [applyProgress.attemptStarted].
 		progress.target, progress.attempts, progress.behindSince = target.Epoch, 0, time.Time{}
 		progress.targetRead, progress.targetCode = false, false
 		if progress.applied != target.Epoch {
@@ -718,53 +576,34 @@ func (r *Reconciler) Tick(ctx context.Context) error {
 		r.publish(progress)
 	}
 	if progress.applied == target.Epoch {
-		// CONVERGED, and each tick repairs what the apply's own writes
-		// could not make: the fleet's row and the boot row are best
-		// effort there, and a node whose boot row failed to move would
-		// come back on what it served before.
-		//
-		// THE BOOT ROW FIRST, so that the fleet's row this tick restates
-		// says the repair on the tick that made it rather than on the
-		// next one. Only that: the row never names a boot revision ahead
-		// of the store in either order, because what it names moves only
-		// on a read of the boot row or a write to it that succeeded
-		// ([Reconciler.booting]).
+		// CONVERGED: each tick repairs the apply's best-effort writes, so
+		// a failed boot-row write does not bring the node back on what it
+		// served before. The boot row FIRST, so the fleet row restated
+		// this tick reports the repair now ([Reconciler.booting]).
 		r.serve(ctx)
 		r.refresh(ctx, target)
 		r.note(ctx, target)
 		return nil
 	}
 	if progress.attempts >= configplane.MaxApplyAttempts {
-		// Out of retries on this epoch. The posture already reads this
-		// node as having tried and failed, so it moves toward stuck or
-		// isolated without another counter to keep — and the failure it
-		// recorded stays where its peers read it. The fleet's row still
-		// follows the pointer: a refused revision is still the company.
-		//
-		// AND THE BOOT ROW IS STILL REPAIRED, which is the whole reason
-		// this is not the converged branch's business alone: a node that
-		// refuses the fleet's revision never converges again, so a
-		// boot-row write that failed while it applied the PREVIOUS
-		// revision would stay unmade for as long as the refusal lasts —
-		// and that node is exactly the one somebody is about to restart.
-		// First, as on a converged tick: the restated row says the repair
-		// on the tick that made it.
+		// Out of retries on this epoch: the posture already reads this
+		// node as failed, and the fleet's row still follows the pointer (a
+		// refused revision is still the company). The boot row is STILL
+		// REPAIRED, first as above: a node refusing the fleet's revision
+		// never converges again, so a boot-row write failed on the PREVIOUS
+		// revision would stay unmade on the node about to be restarted.
 		r.serve(ctx)
 		r.refresh(ctx, target)
 		r.note(ctx, target)
 		return nil
 	}
-	// A BOOT-ROW WRITE THAT FAILED IS REPAIRED BEFORE THE ATTEMPT TOO, and
-	// before the apply can move what this node serves: a retry that
-	// succeeds moves the row to the new revision anyway, and one that fails
-	// again leaves the row holding what the node is running meanwhile. It is
-	// this node's own database, so the read it costs is local.
+	// A FAILED BOOT-ROW WRITE IS REPAIRED BEFORE THE ATTEMPT TOO, before the
+	// apply moves what this node serves, so a failed retry leaves the row on
+	// what the node runs meanwhile. The read is of this node's own database.
 	r.serve(ctx)
-	// NO OUTCOME IS PUBLISHED BEFORE THE ATTEMPT, only that it began. The
-	// count used to be raised here, ahead of the apply, and every reader
-	// of the progress took the attempt in flight for a failed one: a lone
-	// node reported isolated, and a node beside current peers shed, for
-	// the whole of an apply that then succeeded.
+	// NO OUTCOME IS PUBLISHED BEFORE THE ATTEMPT, only that it began: a
+	// count raised here reads as a failure for the whole of an apply that
+	// then succeeds ([applyProgress]).
 	progress.attemptStarted = r.now()
 	r.publish(progress)
 	return r.apply(ctx, target)
@@ -773,23 +612,15 @@ func (r *Reconciler) Tick(ctx context.Context) error {
 // apply loads, opens, parses and publishes one revision, then records what
 // happened for the rest of the fleet to read.
 //
-// THE OUTCOME REACHES THIS NODE'S OWN PROGRESS FIRST, before the record that
-// tells its peers: that record is two network writes, and a node already
-// serving the epoch has no reason to report itself behind on it while they
-// are made. What it serves goes with it, so the record names the revision the
-// engine now runs.
+// THE OUTCOME REACHES THIS NODE'S PROGRESS FIRST, with what it serves, before
+// the record for its peers (two network writes): a node already serving the
+// epoch must not report itself behind meanwhile.
 //
-// THE BOOT ROW MOVES BEFORE THAT RECORD, so that the record of a clean apply
-// names the revision the node now boots on as well as the one it runs, on the
-// tick that applied it; in the other order it named the previous boot
-// revision until the next tick restated it ([Reconciler.refresh]). That is the
-// whole of what the order decides. What keeps the record from naming a boot
-// revision the store does not hold is not the order but where that name comes
-// from: it moves only on a read of the row or a write to it that succeeded
-// ([Reconciler.booting]), so a record written before the write, or after one
-// that failed, names what the row still holds — the safe side for a reader
-// keeping what this node needs in order to start, which keeps more rather than
-// less.
+// THE BOOT ROW MOVES BEFORE THAT RECORD, so a clean apply's record names the
+// new boot revision on the same tick rather than at the next
+// [Reconciler.refresh]. The order decides only that: the record never names a
+// boot revision the store lacks, because [Reconciler.booting] moves only on a
+// read or write of the row that succeeded.
 func (r *Reconciler) apply(ctx context.Context, target coord.Activation) error {
 	status, revision, applied, err := r.applyRevision(ctx, target)
 	progress := r.snapshot()
@@ -858,35 +689,17 @@ func (r *Reconciler) keep(ctx context.Context, revision store.Revision) {
 	}
 }
 
-// serve makes what the engine runs what this node boots on.
+// serve makes what the engine runs what this node boots on: THE ONLY ONLINE
+// WRITER OF THE BOOT ROW, writing only [Reconciler.served], so a node never
+// boots on a revision it refused or out of pointer order ([Engine.following]).
+// Called after each successful apply and on EVERY tick, so a failed write is
+// repaired next tick, even on a node refusing the fleet's revision. The same revision at another instant is served again: re-activation
+// rotates credentials, and [store.Revision.ServedAt] stamps the chart at boot.
+// An offline OFFER the boot did not publish is replaced here, and logged.
 //
-// THE ONLY ONLINE WRITER OF THE BOOT ROW, and it writes only [Reconciler.served]
-// — the revision the engine applied — so a node never boots on a revision it
-// refused, and never on one out of pointer order ([Engine.following]). Called
-// after each successful apply and on EVERY tick that follows, converged or
-// not, so a failed write is repaired on the next tick rather than discovered
-// at the next boot: a node that refuses the fleet's next revision never takes
-// a converged tick again, and leaving the repair to those alone left it
-// running a revision it would not restart on for as long as the refusal
-// lasted.
-//
-// THE SAME REVISION AT ANOTHER INSTANT IS SERVED AGAIN: re-activating an
-// unchanged revision is the credential-rotation gesture, and the instant the
-// boot row was applied at ([store.Revision.ServedAt]) is what the engine stamps
-// the chart with when it next boots.
-//
-// An offline OFFER the boot did not publish — built on a revision the fleet
-// had moved past — is replaced here, and said: the node now runs the fleet's
-// revision, and what the offline command chose stays as history.
-//
-// IT IS ALSO WHERE THIS NODE LEARNS WHAT IT BOOTS ON, which is why the row is
-// read on every tick and before the early return for a node serving nothing:
-// the fleet view carries that revision per node ([Reconciler.Boots]), and
-// anything that inferred it from what the node serves would name a revision
-// the store has not been told about for as long as a failed write takes to be
-// repaired. A READ THAT FAILS TEACHES NOTHING: what this node last read or
-// wrote there stands, and the row is neither written nor reported as empty on
-// the strength of a read that did not happen.
+// It also READS the row every tick, before the early return, to learn
+// [Reconciler.Boots] rather than infer it from what the node serves. A read
+// that fails teaches nothing: the last answer stands, and nothing is written.
 func (r *Reconciler) serve(ctx context.Context) {
 	served := r.served.Load()
 	boot, found, err := r.configs.Boot(ctx)
@@ -899,13 +712,10 @@ func (r *Reconciler) serve(ctx context.Context) {
 		return
 	}
 	r.boots(boot.ID)
-	// AND ONLY A REVISION THIS ENGINE APPLIED IS EVER WRITTEN HERE, which is
-	// why the guard is the APPLIED EPOCH rather than what the node serves:
-	// until the first apply succeeds, what it serves is what it BOOTED on,
-	// the row names that already, and an offline offer in the row is a change
-	// a later start still publishes ([store.Offer]) until an apply replaces
-	// it. A repair tick that wrote it anyway would clear that offer with
-	// nothing having taken its place.
+	// Only a revision this engine APPLIED is written, so the guard is the
+	// applied epoch: before the first apply the node serves what it booted
+	// on, which the row names already, and an offline offer there is still
+	// published by a later start ([store.Offer]); writing would clear it.
 	if served == nil || r.snapshot().applied == 0 {
 		return
 	}
@@ -940,14 +750,11 @@ func (r *Reconciler) serve(ctx context.Context) {
 
 // applyRevision is the part that can fail, separated so every exit records.
 // It answers the revision it applied, at the pointer's instant, for the boot
-// row to follow once it is applied.
+// row to follow.
 //
-// The subsystem list is empty on every exit before [Engine.Apply] is reached:
-// nothing on this node has been mutated yet when the revision cannot be read,
-// opened or parsed, and an empty list says exactly that. It is empty on ONE
-// exit from Apply as well — a node that is stopping refuses before the first
-// stage — so an empty list means "nothing changed here", and the error's own
-// prefix says which of the two it was.
+// The subsystem list is empty on every exit before [Engine.Apply] and on its
+// stopping-node refusal: empty means "nothing changed here", and the error's
+// prefix says which.
 func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation) (
 	configplane.ApplyStatus, store.Revision, []string, error,
 ) {
@@ -960,45 +767,29 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 		return configplane.StatusError, store.Revision{}, nil,
 			openRefusal(target.RevisionID, local, err)
 	}
-	// KEPT AS THE FLEET'S BEFORE IT IS VALIDATED: what this records is what
-	// the fleet is on, which is true whether or not this build can run it.
-	// A node that refuses it still knows the company is this revision, and
-	// that is what it restores when the pointer is gone. What it boots on is
-	// moved only once the engine has applied it ([Reconciler.serve]).
+	// KEPT AS THE FLEET'S BEFORE IT IS VALIDATED: it is what the fleet is on
+	// whether or not this build can run it, and what a refusing node
+	// restores when the pointer is gone. The boot row moves only once
+	// applied ([Reconciler.serve]).
 	r.keep(ctx, revision)
-	// The STORED-form reader, not the authored one. A revision carries
-	// providers.llm_order — the declaration order of a Go map, which exists
-	// only while the YAML document does — and the YAML parser rejects it as
-	// an unknown setting. It is also lenient about fields this build does
-	// not know, so a revision activated by a newer peer boots here instead
-	// of taking the older half of a fleet down.
+	// The STORED-form reader, not the authored one: the YAML parser rejects
+	// providers.llm_order, and this one is lenient about unknown fields, so
+	// a newer peer's revision boots here. ${VAR} references stay verbatim,
+	// resolved where a provider is constructed, so re-activating an
+	// unchanged revision picks up a rotated credential.
 	//
-	// ${VAR} references stay verbatim through all of it: they are resolved
-	// where a provider is CONSTRUCTED, which is what makes re-activating an
-	// unchanged revision pick up a rotated credential rather than rebuild
-	// the same values.
-	//
-	// The decode holds the revision to no rule, so it is validated HERE,
-	// before [Engine.Apply] is reached. Apply refreshes the secret snapshot
-	// before it builds anything, so a revision refused inside it has already
-	// mutated this node; refused here, it has written only this node's
-	// record of the fleet's revision, and the node is serving its previous
-	// epoch exactly as it was.
-	//
-	// The RUNNABLE rules only. A revision activated by a peer whose
-	// admission rules differ from this build's — a newer peer mid-upgrade —
-	// runs on that peer, and refusing it here would take this half of the
-	// fleet off the epoch. It is applied, and its admission violations are
-	// warned about below.
+	// Validated HERE, against the RUNNABLE rules only, before [Engine.Apply]:
+	// Apply refreshes the secret snapshot first, so a refusal inside it has
+	// already mutated this node. A newer peer's admission rules may differ
+	// mid-upgrade, so admission violations are warned about, not refused.
 	cfg, err := config.DecodeCompany(document)
 	if err != nil {
 		return configplane.StatusError, store.Revision{}, nil,
 			fmt.Errorf("engine: parse revision %s: %w", target.RevisionID, err)
 	}
-	// WHAT THE TARGET SAYS OF GITLET, noted before anything below can
-	// refuse it: a node whose apply of a revision that turns Gitlet on
-	// fails serves no part of Gitlet, and must say so rather than tell
-	// a person the company hosts no code ([Engine.CodeUnserved]).
+	// Noted before anything below can refuse it: a node failing to apply a
+	// revision that turns Gitlet on must say it serves none, not that the
+	// company hosts no code ([Engine.CodeUnserved]).
 	r.noteTargetCode(target.Epoch, cfg.CodeBackendFor() == config.CodeGitlet)
 	if invalid := cfg.ValidateRunnable(); invalid != nil {
 		return configplane.StatusError, store.Revision{}, nil,
@@ -1007,11 +798,8 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 	}
 	status, applied, err := r.engine.Apply(ctx, cfg, target.At)
 	if status == configplane.StatusOK {
-		// ON THE SUCCESS BRANCH ONLY, which is what makes every one of these
-		// once per node per applied epoch: Tick never re-applies an epoch
-		// this node has reached, while a refused apply is retried and would
-		// repeat the same lines on every attempt for a revision this node is
-		// not even serving.
+		// SUCCESS ONLY, so these log once per node per applied epoch: Tick
+		// never re-applies a reached epoch, while a refused one is retried.
 		r.warnAdmission(ctx, target, cfg)
 		reportDanglingRefs(ctx, r.log, target, cfg)
 		reportCompanyAdvisories(ctx, r.log, target, cfg)
@@ -1024,27 +812,13 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 }
 
 // warnAdmission logs each admission rule an APPLIED revision breaks, once per
-// node per applied epoch.
+// node per applied epoch with no record of what was said, since Tick never
+// re-applies a reached epoch; a refused revision is reported by its refusal.
 //
-// Once, without a record of what was already said: a tick returns before
-// applying an epoch this node has applied, so this runs once for each epoch
-// a node applies, and again only when a new epoch (a reload, a revert, the
-// next write) or a restart makes the node apply one. After a successful
-// apply, because a refused revision is reported by its refusal and a warning
-// beside it would be noise.
-//
-// One line per violation, and each carries what to do: the violation stays
-// in place while the revision is active, and the next write that keeps it is
-// refused, so an operator reading the log learns that before the write does.
-//
-// THE VIOLATIONS ARE THE CONFIG PACKAGE'S OWN, flattened and located by
-// [config.Company.AdmissionWarnings], the same list a reload's or a revert's
-// answer carries. This used to walk the joined error itself, a second copy of
-// the flattening that disagreed with the config package on an error built
-// with several %w verbs, which renders as one line and is one violation.
-// That list holds one warning per entity a violation is about, so a duplicate
-// name held by two units would log twice; the lines are grouped back into
-// one per violation, carrying the path of every entity it names.
+// One line per violation, saying what to do: the next write keeping it is
+// refused. The violations are [config.Company.AdmissionWarnings], the list a
+// reload's or revert's answer carries, which holds one warning per entity;
+// the lines group them back into one per violation with every path it names.
 func (r *Reconciler) warnAdmission(ctx context.Context, target coord.Activation, cfg *config.Company) {
 	for _, violation := range violations(cfg.AdmissionWarnings()) {
 		r.log.WarnContext(ctx, "org_admission_warning",
@@ -1085,24 +859,14 @@ func violations(warnings []config.Warning) []violation {
 // keeps it ([configplane.RevisionOf]), and whether its body came from this
 // node's own copy.
 //
-// FROM THIS NODE'S HISTORY WHERE IT HOLDS IT, and otherwise off the
-// coordination store, where Activate writes the body inside the pointer's own
-// record. The second is THE ORDINARY CASE ON A PEER, not an anomaly: a write
-// stores its body on whichever node served it, and every other node meets the
-// revision for the first time here. Fetching it is what makes a live config
-// change reach a fleet at all; before, a peer read nothing and reported "no
-// such revision" once per tick for the life of the deployment.
+// From this node's history where it holds it, else off the coordination store,
+// where Activate writes the body in the pointer's record: THE ORDINARY CASE ON
+// A PEER, since a write stores its body only on the node that served it.
 //
-// It writes nothing. The body is whatever the coordination bucket holds, and
-// anything the broker admits can write it — its admission vouches for a
-// connection, never a value (ADR-0094); the seal under the fleet's keyring is
-// what says a node of this fleet wrote it, so the caller opens it before any of
-// it is kept ([Reconciler.keep]) — a body that does not open is refused before
-// it becomes a revision this node's operator surface would show and offer to
-// revert to.
-//
-// THE POINTER'S RECORD of the revision either way: its origin and its instant
-// are what every node keeps, so a revision reads the same on all of them.
+// It writes nothing: anything the broker admits can write that bucket
+// (ADR-0094), so the caller opens the seal before any of it is kept
+// ([Reconciler.keep]). The pointer's record supplies origin and instant
+// either way, so a revision reads the same on every node.
 func (r *Reconciler) fleetRevision(ctx context.Context, target coord.Activation) (
 	store.Revision, bool, error,
 ) {
@@ -1120,10 +884,9 @@ func (r *Reconciler) fleetRevision(ctx context.Context, target coord.Activation)
 			target.RevisionID, err)
 	}
 	if !found {
-		// The pointer names a revision whose body is nowhere. An error
-		// rather than a silent skip: this node cannot reach the epoch,
-		// and a fleet where every node quietly ignores an unreadable
-		// pointer converges on nothing while reporting convergence.
+		// An error, not a silent skip: a fleet where every node ignores an
+		// unreadable pointer converges on nothing while reporting
+		// convergence.
 		return store.Revision{}, false, fmt.Errorf("engine: %w: %s",
 			store.ErrNoRevision, target.RevisionID)
 	}
@@ -1131,17 +894,11 @@ func (r *Reconciler) fleetRevision(ctx context.Context, target coord.Activation)
 }
 
 // openRefusal is why a revision the fleet is on did not open here, and what
-// fixes it.
-//
-// A body stored or published UNSEALED is refused whatever its origin: the seal
-// is what says a node of this fleet wrote it, so a plaintext one could have
-// been authored by anything that reaches the store or the broker, and what
-// replaces it is an admin's whole document, which reads nothing from it
-// (internal/api/configapi). A body sealed under a key this keyring does not
-// hold is a keyring that is missing a key the fleet seals under. And a body
-// SEALED IN A FORM THIS BUILD DOES NOT READ is neither of those: most likely a
-// newer build sealed it, so it is not unsealed, no write replaces it, and the
-// fix is that build.
+// fixes it. UNSEALED is refused whatever its origin: anything reaching the
+// store or broker could have authored it, and an admin's whole document
+// replaces it (internal/api/configapi). A key this keyring lacks is a missing
+// fleet key. A seal form this build does not read most likely came from a
+// newer build, and the fix is that build.
 func openRefusal(revisionID string, local bool, err error) error {
 	switch {
 	case errors.Is(err, secrets.ErrUnknownEnvelope) && local:
@@ -1172,27 +929,16 @@ func openRefusal(revisionID string, local bool, err error) error {
 	}
 }
 
-// record writes this node's outcome twice, to two surfaces with two
-// lifetimes, and both are needed.
+// record writes this node's outcome to two surfaces with two lifetimes.
 //
-// The COORDINATION record is the live fleet view: one key per node, re-put
-// every tick, and its bucket's own age is what makes a node that stops
-// reporting VANISH rather than linger as a healthy row nobody is writing. That
-// age is a minute — so sixty seconds after a bad rollout, the epoch, status and
-// error text of the node that crashed or was scaled in are gone, which is
-// precisely the node somebody reviewing the incident is looking for.
+// The COORDINATION record is the live fleet view: re-put every tick, its
+// bucket's minute-long age makes a node that stops reporting VANISH rather
+// than linger as healthy, so a minute after a bad rollout the crashed node's
+// outcome is gone from it. The EVENT, in the audit event log keyed by the
+// envelope's Source with the subsystems applied, is the durable post-mortem.
 //
-// The EVENT is the durable trail that answers them. It goes to the audit event
-// log like every other event, keyed by the node in the envelope's Source and
-// carrying the subsystems the apply got through, and it outlives both the
-// node and the bucket. ConfigRevisionApplied has been a registered event type
-// with its own topic since the control plane shipped and NOTHING EVER
-// PUBLISHED IT, so the post-mortem the fleet view was never meant to serve had
-// no other home either.
-//
-// Both are best effort by necessity: the apply has already happened, and
-// failing the tick because a note could not be written would retry an apply
-// that succeeded.
+// Both are best effort: the apply has happened, and failing the tick would
+// retry an apply that succeeded.
 func (r *Reconciler) record(ctx context.Context, target coord.Activation,
 	status configplane.ApplyStatus, applied []string, cause error,
 ) {
@@ -1213,33 +959,17 @@ func (r *Reconciler) record(ctx context.Context, target coord.Activation,
 	r.publishApplied(ctx, target, status, applied, message)
 }
 
-// refresh writes this node's last outcome for the current target again, with
-// the time of this tick.
+// refresh rewrites this node's last outcome for the current target with this
+// tick's time.
 //
-// THE ROW AGES OUT BY DESIGN — the status bucket's TTL is
-// [coord.StatusFreshness], four reconcile intervals, so a node that STOPS
-// reporting vanishes from the fleet view instead of lingering as a healthy
-// row nobody writes — and that design needs every live node to keep writing
-// it. It was written on an APPLY alone, so a node that converged stopped
-// reporting a minute later: the fleet view drew it as having applied nothing
-// ("behind on config", epoch unknown) while its own /health said it served
-// the current epoch, and [Reconciler.peerHealth] on every other node dropped
-// it as stale evidence — so a laggard whose only healthy peer had been
-// current for a minute read the fleet as ISOLATED rather than SHED.
+// THE ROW AGES OUT BY DESIGN ([coord.StatusFreshness]), so every live node
+// keeps writing it, or a converged node drops out of the fleet view and every
+// peer's [Reconciler.peerHealth]. Only an outcome this process recorded for
+// this epoch, and no durable event: a refresh is not an apply.
 //
-// Only an outcome this process recorded, and only for the epoch it is about:
-// a node that has not applied since it started has nothing of its own to
-// restate, and one that moved to a new target writes that target's outcome
-// through [Reconciler.record] first. No durable event: the event is the
-// record of an APPLY, and a refresh is not one.
-//
-// WHAT THE NODE HAS APPLIED, SERVES AND BOOTS ON ARE RESTATED AS OF THIS TICK,
-// not carried from the recorded outcome: the boot row moves outside an apply —
-// repaired, or read again, by the [Reconciler.serve] that precedes this on the
-// same tick — so a node whose write failed and was then repaired tells the
-// fleet so on the tick that repaired it, with no new apply to report. The other two cannot move without
-// an apply, which writes its own record; they are restated with it so that
-// the row is one moment's account of the node, not three.
+// Applied, Serving and Boots are restated AS OF THIS TICK, so a boot row the
+// preceding [Reconciler.serve] repaired shows now, and the row is one moment's
+// account of the node.
 func (r *Reconciler) refresh(ctx context.Context, target coord.Activation) {
 	last := r.recorded.Load()
 	if last == nil || last.Epoch != target.Epoch {
@@ -1256,17 +986,11 @@ func (r *Reconciler) refresh(ctx context.Context, target coord.Activation) {
 
 // publishApplied puts one node's outcome into the audit event log.
 //
-// TWO DIFFERENT BOUNDS, and the difference is the point. The coordination
-// record is cut to [coord.MaxApplyErrorLength] (2000 bytes) because every peer
-// re-reads it on every reconcile tick, so its size is paid continuously. This
-// event is written once and kept for the event store's retention horizon — it
-// is the durable copy an operator reads days later — so it carries up to
-// [events.MaxDiagnosticBytes] (64 KiB), thirty times more, marked when it cuts.
-//
-// It is bounded at all only so that it can be PUBLISHED: an event over the
-// queue's payload ceiling is refused, and the publisher below logs and moves
-// on, so an unbounded failure text would cost the operator the whole record
-// rather than its tail.
+// The coordination record is cut to [coord.MaxApplyErrorLength] because every
+// peer re-reads it every tick; this event is written once and read days later,
+// so it carries up to [events.MaxDiagnosticBytes], marked when cut. Bounded at
+// all only so it can be PUBLISHED: an event over the queue's payload ceiling
+// is refused, losing the whole record rather than its tail.
 func (r *Reconciler) publishApplied(ctx context.Context, target coord.Activation,
 	status configplane.ApplyStatus, applied []string, message string,
 ) {
@@ -1280,9 +1004,8 @@ func (r *Reconciler) publishApplied(ctx context.Context, target coord.Activation
 		Error:             events.ClipDiagnostic(message),
 	}, tracing.TraceOf(ctx))
 	ev.Timestamp = r.stamp()
-	// The NODE, not a seat. Every other field of the payload describes the
-	// revision; which node is reporting lives in the envelope, and the
-	// payload deliberately does not repeat it (see the type's own doc).
+	// The NODE, not a seat: the payload deliberately leaves the reporter to
+	// the envelope (see the type's doc).
 	ev.Source = r.nodeID
 	if err := r.queue.Publish(ctx, topics.ConfigRevisionApplied, ev); err != nil {
 		r.log.WarnContext(ctx, "apply_event_publish_failed", "epoch", target.Epoch,
@@ -1292,12 +1015,8 @@ func (r *Reconciler) publishApplied(ctx context.Context, target coord.Activation
 }
 
 // applyStatus maps the control plane's posture onto the event vocabulary.
-//
-// Two closed sets that happen to share their spellings, kept apart on purpose:
-// configplane's is what a node reports to its peers and the event's is what
-// goes on the wire and can never change. An unknown posture becomes error
-// rather than passing through, because the payload's own doc says an unset
-// status reads as not-ok and a value nothing recognises is worse than that.
+// Two closed sets kept apart on purpose: the event's goes on the wire and can
+// never change. An unknown posture becomes error rather than passing through.
 func applyStatus(status configplane.ApplyStatus) types.ApplyStatus {
 	switch status {
 	case configplane.StatusOK:
@@ -1311,12 +1030,10 @@ func applyStatus(status configplane.ApplyStatus) types.ApplyStatus {
 
 // Run polls until the context ends.
 //
-// The interval is JITTERED, and only the interval: a rolling deploy boots every
-// pod within the same second, and without jitter they would poll — and then
-// apply, and then restart their children — in unison forever. Jittering the
-// APPLY was considered and rejected, because it delays convergence, and under
-// the shed rule delaying convergence means delaying the moment a node stops
-// being the anomaly.
+// The interval is JITTERED, and only the interval: pods a rolling deploy boots
+// together would otherwise poll and apply in unison forever. Jittering the
+// APPLY would delay convergence, and so the moment a node stops being the
+// anomaly the shed rule acts on.
 func (r *Reconciler) Run(ctx context.Context) {
 	stop := r.listen(ctx)
 	defer stop()
@@ -1329,39 +1046,27 @@ func (r *Reconciler) Run(ctx context.Context) {
 			return
 		case <-timer.C:
 		case <-r.nudged:
-			// An activation arrived. The tick below re-reads the
-			// POINTER — it does not act on the event — so a nudge for
-			// a revision this node already serves costs one wasted
-			// read, and a lost nudge costs nothing but latency.
-			//
-			// Stopped but NOT drained. Since Go 1.23 a timer's channel
-			// is unbuffered and Stop/Reset are synchronised with the
-			// runtime, so no stale fire can be sitting in it — the
-			// `if !Stop() { select { case <-C: default: } }` dance this
-			// replaced was for the pre-1.23 buffered channel, where it
-			// was also subtly wrong: the default branch made it a race
-			// rather than a drain.
+			// The tick re-reads the POINTER rather than acting on the
+			// event, so a redundant nudge costs one read and a lost one
+			// only latency. Stopped but NOT drained: since Go 1.23 a
+			// timer's channel is unbuffered and Stop is synchronised, so
+			// no stale fire can be pending.
 			timer.Stop()
 		}
 		if err := r.Tick(ctx); err != nil {
 			r.log.WarnContext(ctx, "reconcile_tick_failed", "error", err)
 		}
 		// RE-DECIDE AFTER EVERY TICK, so the admission gate moves on this
-		// loop rather than on whichever other caller happens to ask. The
-		// heartbeat also refreshes it, but only on a node that holds a
-		// lease — and an ingress-only node that never claims one is
-		// precisely the node whose admission this gates.
-		//
-		// Then converge the ingress consumer on the answer: a seat's
-		// mailbox is resumed by its own lease admission, and the inbound
-		// topic has no lease to do it. See [Engine.resumeInbound].
+		// loop: the heartbeat refreshes it only on a lease holder, and an
+		// ingress-only node is the one this gates. Then converge the
+		// ingress consumer on it: the inbound topic has no lease to resume
+		// it ([Engine.resumeInbound]).
 		if r.Posture(ctx).ServesTraffic() {
 			r.engine.resumeInbound(ctx)
 		}
-		// AND A RETRIED RESUME THE POSTURE REFUSED is re-checked on the
-		// tick that finds it admitting, which is the only place the
-		// posture moves. Only those: an answer waiting on anything else is
-		// not woken by a tick, so the tick is not a poll of it.
+		// A resume the posture refused is retried on the tick that finds
+		// it admitting, the only place the posture moves. Only those: the
+		// tick is not a poll of anything else.
 		if r.engine.admits() {
 			r.engine.readmitResumes(waitPosture)
 		}
@@ -1371,14 +1076,10 @@ func (r *Reconciler) Run(ctx context.Context) {
 	}
 }
 
-// listen attaches the activation nudge, returning a stop that is safe to call
-// however the attach went.
-//
-// A FAILED ATTACH IS NOT FATAL, and saying so is the whole design: the pointer
-// is the authoritative path and the poll is what reads it, so a node that
-// cannot hear nudges converges one interval later than its peers rather than
-// not at all. That is the property that let this event be a nudge in the first
-// place.
+// listen attaches the activation nudge, returning a stop safe to call however
+// the attach went. A FAILED ATTACH IS NOT FATAL: the poll reads the
+// authoritative pointer, so a node that cannot hear nudges converges one
+// interval later rather than not at all.
 func (r *Reconciler) listen(ctx context.Context) func() {
 	if r.queue == nil {
 		return func() {}
@@ -1389,9 +1090,8 @@ func (r *Reconciler) listen(ctx context.Context) func() {
 			select {
 			case r.nudged <- struct{}{}:
 			default:
-				// Already pending. Collapsing is correct: the
-				// loop re-reads the pointer, so the second
-				// nudge would send it to the same place.
+				// Already pending: collapse, since the loop
+				// re-reads the pointer.
 			}
 		})
 	if err != nil {
@@ -1400,9 +1100,8 @@ func (r *Reconciler) listen(ctx context.Context) func() {
 		return func() {}
 	}
 	return func() {
-		// WithoutCancel: the loop's context is what ended, and a
-		// teardown that inherited it would leave the subscription behind
-		// on the broker.
+		// WithoutCancel: the loop's context has ended, and inheriting it
+		// would leave the subscription on the broker.
 		if err := unsubscribe(context.WithoutCancel(ctx)); err != nil {
 			r.log.WarnContext(ctx, "activation_nudge_unsubscribe_failed", "error", err)
 		}
@@ -1421,17 +1120,11 @@ func nudgeRevision(ev *events.Event) string {
 }
 
 // peerHealth counts the PEERS that reported success at an epoch, and how many
-// reported at all.
+// reported at all. Derived here from the fleet view, beside the posture that
+// reads its freshness bound, rather than added to the coordination contract.
 //
-// Derived from the fleet view rather than asked of the coordination store,
-// because it is a QUESTION about the data rather than a thing a store can do
-// better: the contract stays four methods, and the freshness bound stays here
-// beside the posture that reads it.
-//
-// The ASKER IS EXCLUDED, which is the part that matters. A node counting its
-// own row would read a fleet of one as unanimous and shed nothing however far
-// behind its peers were — and a node is never evidence about itself, because
-// its own status is already SelfStatus.
+// The ASKER IS EXCLUDED: counting its own row, a fleet of one reads as
+// unanimous and never sheds; its own status is already SelfStatus.
 func (r *Reconciler) peerHealth(ctx context.Context, epoch int64) (ok, reported int, err error) {
 	rows, err := r.plane.Fleet(ctx)
 	if err != nil {
@@ -1441,10 +1134,8 @@ func (r *Reconciler) peerHealth(ctx context.Context, epoch int64) (ok, reported 
 	for _, row := range rows {
 		switch {
 		case row.NodeID == r.nodeID, row.Epoch != epoch, row.UpdatedAt.Before(floor):
-			// A stale row is NO EVIDENCE rather than a failure: a
-			// node that stopped reporting may be gone, may be slow,
-			// and treating either as a vote would let one dead node
-			// decide the fleet's posture.
+			// A stale row is NO EVIDENCE rather than a failure, so
+			// one dead node cannot decide the fleet's posture.
 			continue
 		}
 		reported++

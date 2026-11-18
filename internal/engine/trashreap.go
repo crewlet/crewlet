@@ -15,81 +15,50 @@ import (
 	"github.com/crewlet/crewlet/internal/trashreap"
 )
 
-// The trash reaper, wired (internal/trashreap).
+// The trash reaper, wired (internal/trashreap): it purges what sat past its
+// term in every trash that has one (the knowledge base's pages, the
+// artifacts), or a trashed item stays in every data node's copy and backup for
+// ever. The work tracker hands it no source by design: a removed work item is
+// restorable at any age (the Worklet guide), and only a purge somebody asks
+// for destroys one.
 //
-// # What it is for
-//
-// A domain whose trash has a TERM — the knowledge base's pages and the
-// artifacts — promises that what is in it can be taken back for that term and
-// is gone after it. Nothing used to keep the second half: a trashed page stayed
-// in every data node's copy, and in every backup, for ever. The reaper is the
-// one fleet duty that keeps it, for every domain that hands it a
-// [trashreap.Source] here.
-//
-// The work tracker hands it none, and that is the tracker's own promise rather
-// than a gap: a removed work item is restorable AT ANY AGE (the Worklet
-// guide), because a removal is how a board is tidied, and the one step that
-// destroys an item is a purge somebody asks for. Reaping removed items after a
-// term would delete what that promise says is still there.
-//
-// # Where it runs
-//
-// On a data node that publishes, beside the native half's other duty
-// ([Engine.startNativeDuties]): each source lists the trash from this node's
-// own copy of the replicated estate and purges through the domain's publisher,
-// and a node in a maintenance mode publishes nothing. Which node of those runs
-// it is the `worker:trash-reaper` lease, claimed per turn.
-//
-// # Adding a source
-//
-// A domain with a trash appends its adapter to [Engine.trashSources] and
-// nothing else: the reaper reads no domain's rows, and the term, the schedule,
-// the operation ids and the report are the same for every source.
+// It runs on a data node that publishes, beside the native half's other duty
+// ([Engine.startNativeDuties]), listing from this node's copy of the estate and
+// purging through each domain's publisher; the `worker:trash-reaper` lease,
+// claimed per turn, picks the node. A new trash appends its adapter to
+// [Engine.trashSources] and nothing else: term, schedule and op ids are shared.
 
-// trashReaperPoll is how often the reaper's duty is asked for.
-//
-// A MINUTE, the object collector's figure: the passes are hourly, so the poll
-// only decides how soon a node notices it has been handed the duty, and how
-// soon a pass that failed or stopped at its cap runs again.
+// trashReaperPoll is how often the reaper's duty is asked for: a minute, the
+// object collector's figure. The passes are hourly, so it only decides how soon
+// a node notices it holds the duty and how soon a failed or capped pass reruns.
 const trashReaperPoll = time.Minute
 
 // trashReaperDutyTTL is how long the duty outlives a holder that stopped
-// renewing it.
-//
-// TEN MINUTES, ten polls rather than three, for the collector's reason: the
-// lease is renewed between passes and never during one, and a pass at its cap
-// publishes [trashreap.MaxPerPass] purge records a source, each waited for
-// until it is applied, which on a log under load is minutes rather than
-// seconds. A lease that lapsed mid-pass would hand the duty to a peer that
-// purges the same items alongside. That is safe (each purge is decided again
-// in its own snapshot, under an operation id both derive alike) and only
-// wasteful; ten minutes keeps it from happening on an ordinary pass, and a
-// dead holder delays an hourly duty by no more than that.
+// renewing it: ten polls, for the object collector's reason. The lease is
+// renewed only between passes, and a capped pass waits on
+// [trashreap.MaxPerPass] applied purges a source, minutes on a loaded log. A
+// lapse mid-pass lets a peer purge the same items alongside: safe (each purge
+// is decided in its own snapshot under an operation id both derive alike) but
+// wasteful. A dead holder delays an hourly duty by at most this.
 const trashReaperDutyTTL = 10 * trashReaperPoll
 
-// trashReaper is this node's part in the reaper's duty.
-//
-// A LOCK AND NOT AN ATOMIC FLAG, for the object collector's reason: the
-// native half that starts the duty may be brought up by an apply on its own
-// goroutine as late as the teardown, and the check and the start have to be
-// one step, or a start that lost the processor to a stop would leave a loop
+// trashReaper is this node's part in the reaper's duty. A lock, not an atomic
+// flag: an apply's goroutine may start it as late as the teardown, and the
+// check and the start must be one step, or a start racing a stop leaves a loop
 // nothing ends.
 type trashReaper struct {
 	mu sync.Mutex
-	// loop is the duty's loop, nil until it starts; stopped is set once
-	// [Engine.stopTrashReaper] has run, and the loop never starts after it.
+	// loop is nil until the duty starts; once stopped is set
+	// ([Engine.stopTrashReaper]) it never starts.
 	loop    *loop
 	stopped bool
 }
 
 // startTrashReaper arms the reaper's duty over every trash this node can
-// empty. A no-op on a node with none, on a node that runs it already, and once
-// it has been stopped.
-//
-// THE TERM IS artifacts.TrashRetention for every source, the thirty days the
-// knowledge base already promised (doclet.StatusTrashed): one term, so a
-// person deleting a page and an artifact on the same day can take both back
-// until the same day.
+// empty; a no-op on a node with none, on one that runs it already, and once
+// stopped. Every source's term is artifacts.TrashRetention, the thirty days
+// the knowledge base promised (doclet.StatusTrashed), so a page and an
+// artifact deleted the same day come back until the same day.
 func (e *Engine) startTrashReaper(ctx context.Context) {
 	if e.backends == nil || e.backends.Fleet == nil {
 		return
@@ -120,13 +89,10 @@ func (e *Engine) startTrashReaper(ctx context.Context) {
 	})
 }
 
-// stopTrashReaper ends the reaper's duty for good, waiting out a pass in
-// flight. Safe on a node that never started it.
-//
-// BEFORE [Engine.releaseDuties], with every other loop that claims a duty: a
-// loop still running past the release takes the duty straight back. AND
-// BEFORE the native half comes down, whose knowledge store the pass purges
-// through.
+// stopTrashReaper ends the duty for good, waiting out a pass in flight; safe on
+// a node that never started it. It must run before [Engine.releaseDuties] (a
+// loop still running past the release takes the duty back) and before the
+// native half, whose knowledge store a pass purges through, comes down.
 func (e *Engine) stopTrashReaper() {
 	r := &e.trashReaper
 	r.mu.Lock()
@@ -139,47 +105,42 @@ func (e *Engine) stopTrashReaper() {
 	}
 }
 
-// reaperActor is the author of every record the trash reaper publishes: a
-// retention delete, a purge of what sat in a trash, an erasure and a forgetting.
-// The reaper's own name, so an operator who finds one in a log finds the duty
-// that made it.
+// reaperActor authors every record the trash reaper publishes (a retention
+// delete, a trash purge, an erasure, a forgetting), under the reaper's own name
+// so a log line leads to the duty that made it.
 var reaperActor = iam.Actor{Name: trashreap.Name, Kind: iam.ActorSystem}
 
 // trashSources is every trash this node can empty, in the order a pass visits
-// them: the knowledge base's where this node writes it, then the artifacts'. A
-// domain with a trash appends its source here.
-//
-// FROM [Engine.writeSide], the one gate every surface that publishes the
-// company's records through this node is handed its writer from, so a node in
-// a maintenance mode is handed no source and arms no duty.
+// them. The knowledge base's comes from [Engine.writeSide], the one gate that
+// hands every publishing surface its writer, so a node in a maintenance mode
+// gets no source and arms no duty.
 func (e *Engine) trashSources() []trashreap.Source {
 	var out []trashreap.Source
 	if kb := e.writeSide().pages; kb != nil {
 		out = append(out, pagesTrash{store: kb})
 	}
-	// THE ARTIFACTS', which every data node runs whatever its company keeps:
-	// gated on the node's mode alone, the gate [Engine.writeSide] applies to
-	// the native half's writers.
+	// The artifacts', which every data node runs: gated on the node's mode
+	// alone, as [Engine.writeSide] gates the native half's writers.
 	if c := e.core.Load(); c != nil && e.mode.Publishes() &&
 		c.artifactsReader != nil && c.artifactsWriter != nil {
 		out = append(out, artifactsTrash{reader: c.artifactsReader, writer: c.artifactsWriter})
 	}
-	// AND THE ASSISTANT'S CONVERSATIONS, on their own retention, with the
-	// erasure of anybody the identity estate removed.
+	// The assistant's conversations, on their own retention, erasing anybody
+	// the identity estate removed.
 	if src, ok := e.assistantSource(); ok {
 		out = append(out, src)
 	}
-	// AND THE SEATS' EXECUTOR SESSIONS, on the company's conversation
-	// retention, never a turn whose run is still live.
+	// The seats' executor sessions, on the conversation retention, never a
+	// turn whose run is still live.
 	if src, ok := e.executorSource(); ok {
 		out = append(out, src)
 	}
-	// AND THE ACCESS LOG, on the company's access history retention, with a
-	// removed seat's told records forgotten.
+	// The access log, on its retention, forgetting a removed seat's told
+	// records.
 	if src, ok := e.accessSource(); ok {
 		out = append(out, src)
 	}
-	// AND THE ATLAS'S HISTORY, on the company's atlas retention.
+	// The atlas's history, on its retention.
 	if src, ok := e.atlasSource(); ok {
 		out = append(out, src)
 	}
@@ -257,18 +218,15 @@ func (p pagesTrash) PurgeTrashed(ctx context.Context, id string, cutoff time.Tim
 	return reapAnswer(written.Outcome, err, doclet.ErrNotInTrash, doclet.ErrNotFound)
 }
 
-// reapAnswer turns a domain's answer to one purge into the one a
-// [trashreap.Source] gives: nil for a purge that is durable (applied here or
-// pending), [trashreap.ErrNotEligible] for a refusal that names one of
-// notEligible (the item is no longer in the trash past its term, or is gone
-// already), and an error for everything else, the unknown outcome included.
+// reapAnswer turns a domain's answer to one purge into a [trashreap.Source]'s:
+// nil for a durable purge (applied or pending), [trashreap.ErrNotEligible] for
+// a refusal naming one of notEligible (no longer in the trash past its term, or
+// gone), and an error otherwise, the unknown outcome included.
 //
-// ONE FUNCTION FOR EVERY SOURCE, because the unknown outcome is the trap: the
-// state log answers it with a nil error ([statelog.OutcomeUnknown]), and a
-// source that read the nil as a purge would report an item purged that may
-// still be in the trash, and the next pass would find it there with nothing
-// having said why. Counted as a failure instead, it is retried under the same
-// operation id, which is the only safe retry the outcome allows.
+// One function for every source because of that outcome: the state log answers
+// it with a nil error ([statelog.OutcomeUnknown]), and read as a purge it
+// reports purged an item that may still be in the trash. As a failure it is
+// retried under the same operation id, the only safe retry.
 func reapAnswer(result statelog.Result, err error, notEligible ...error) error {
 	if err != nil {
 		for _, sentinel := range notEligible {

@@ -15,50 +15,34 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// A MODEL CHECK RUNS ON THE NODE'S OWN TIME. `POST /llm/providers/{key}/check`
-// asks a node to diagnose a model entry ([Engine.CheckModel]): with its smoke
-// calls that is up to four harness runs, each measured at 3 to 20 s, inside a
-// budget of three minutes, past the two minutes of silence the deployment
-// guide tells a proxy in front of the API to allow. So the check is the
-// node's, never the request's: the node that takes the request runs it and
-// records it in the coordination store ([coord.ModelCheck]), the request is
-// answered with the check running, and the person's page reads how it ended
-// from whichever node its poll reaches ([Engine.ModelCheck]).
-//
-// # One check of an entry at a time
-//
-// The record is filed under the entry, and a start creates it only where no
-// check runs. A second ask of the entry as it runs, with the same smoke, is
-// handed the running check, which is the check it would make; any other ask —
-// a draft, or the other smoke setting — is refused naming the running one
-// ([ModelCheckInProgressError]), since that check's answer is not the one it
-// asked for. A record whose check has ended, lapsed or been lost is replaced
-// at the version read.
-//
-// # A check outlives nothing it should not
-//
-// It runs under the node's lifetime and its own budget. A node that stops ends
-// its checks with the failure that says so, and one that dies leaves a record
-// every reader reads as lost past its deadline ([coord.ModelCheck.Lost]). The
-// record of an entry the company removed goes with the apply that removes it
+// A model check ([Engine.CheckModel]) runs on the node's time, not the
+// request's: with smoke calls it is up to four 3-20 s harness runs in a
+// three-minute budget, past the two minutes of silence the deployment guide
+// has a proxy allow. The node records it in the coordination store
+// ([coord.ModelCheck]) and answers it running; any node answers the poll
+// ([Engine.ModelCheck]). One check per entry: an identical ask is handed the
+// running one, any other refused ([ModelCheckInProgressError]), as that answer
+// is not the one asked for; an ended, lapsed or lost record is replaced at the
+// version read. A stopping node ends
+// its checks saying so, a dead one's read as lost past the deadline
+// ([coord.ModelCheck.Lost]), and a removed entry's goes with its apply
 // ([Engine.clearRemovedModelChecks]).
 
-// modelCheckHold is how long a start waits for its check to end before it
-// answers with the check running: TWO SECONDS. A check that makes no real call
-// reads the harness's version and the node's own files, which takes well under
-// that, so it is answered where it was asked; one that makes calls takes three
-// seconds at the least, so the hold is never most of what the person waits on.
+// modelCheckHold is how long a start waits for its check before answering it
+// running. A check with no real call (harness version, local files) ends well
+// within it; one with calls takes at least 3 s, so the hold is never most of
+// the person's wait.
 const modelCheckHold = 2 * time.Second
 
-// modelCheckWriteBudget bounds the write that records how a check ended, made
-// after its own context may be gone: TEN SECONDS, a few store round trips, the
-// device sign-in's final write's. It is part of the deadline a record carries,
-// so no reader reads as lost a check whose end is still being written.
+// modelCheckWriteBudget bounds the write recording how a check ended, made
+// after its context may be gone: a few store round trips, as the device
+// sign-in's final write. It is part of a record's deadline, so no reader reads
+// as lost a check whose end is still being written.
 const modelCheckWriteBudget = 10 * time.Second
 
-// maxModelCheckClaims bounds a start's compare-and-set against the record
-// another ask, or a lost check, left: EIGHT, the handful of people who may ask
-// for one entry's check at once, as a model retry's write is bounded.
+// maxModelCheckClaims bounds a start's compare-and-set against a record
+// another ask or a lost check left: the handful of people who may ask for one
+// entry's check at once, as a model retry's write is bounded.
 const maxModelCheckClaims = 8
 
 var (
@@ -109,10 +93,9 @@ type modelChecks struct {
 	cancel  context.CancelCauseFunc
 	running sync.WaitGroup
 
-	// stopping refuses new checks once the node has begun ending them: set
-	// under mu before [Engine.stopModelChecks] waits on running, and read
-	// under mu where a start adds to it, so no check is added to a wait that
-	// has begun.
+	// stopping refuses new checks: set under mu before [Engine.stopModelChecks]
+	// waits on running and read under mu where a start adds to it, so no check
+	// joins a wait that has begun.
 	stopping bool
 
 	// hold and writeBudget are [modelCheckHold] and [modelCheckWriteBudget]
@@ -143,16 +126,14 @@ func (e *Engine) stopModelChecks() {
 	c.running.Wait()
 }
 
-// StartModelCheck runs a check of ask's entry on this node, run being the
-// check itself, and answers its record: ended, where it ended within
-// [modelCheckHold]; running otherwise, or where the caller's context ended
-// first, the check going on regardless. run is handed the check's own context
-// — the node's lifetime under ask's budget — and answers what the check found,
-// as the API renders it, within [coord.MaxModelCheckAnswerBytes].
+// StartModelCheck runs run as a check of ask's entry on this node and answers
+// its record: ended if it ended within [modelCheckHold], otherwise running
+// (also when the caller's context ends first; the check goes on). run gets the
+// node's lifetime under ask's budget and answers what it found, as the API
+// renders it, within [coord.MaxModelCheckAnswerBytes].
 //
 // Refused with a [ModelCheckInProgressError] naming a running check of the
-// entry this ask would not make, and [ErrModelChecksStopped] on a node that is
-// stopping.
+// entry this ask would not make, and [ErrModelChecksStopped] on a stopping node.
 //
 //nolint:contextcheck // the check runs on the node's lifetime (modelChecks.base), never the request's: it outlasts what a proxy lets the request wait
 func (e *Engine) StartModelCheck(ctx context.Context, ask ModelCheckAsk,
@@ -245,11 +226,10 @@ func (e *Engine) claimModelCheck(ctx context.Context, record coord.ModelCheck,
 		"changed under each of %d tries; check again", record.Entry, maxModelCheckClaims)
 }
 
-// endModelCheck records how the check stored ended, ctx being the check's own:
-// what run answered, or why it answered nothing. A check the node's stop cut
-// off records the stop, whatever its harness runs made of the cancellation,
-// which would read as the vendor failing to answer. The write gets a budget of
-// its own, detached from ctx, which may be gone.
+// endModelCheck records how stored ended, ctx being the check's own: what run
+// answered, or why nothing. A check the node's stop cut off records the stop,
+// not what its harness made of the cancellation (which reads as the vendor not
+// answering). The write gets its own budget, detached from ctx.
 func (e *Engine) endModelCheck(ctx context.Context, stored coord.ModelCheck, answer json.RawMessage,
 	runErr error) coord.ModelCheck {
 
@@ -304,9 +284,8 @@ func (e *Engine) ModelCheck(ctx context.Context, key string) (coord.ModelCheck, 
 }
 
 // clearRemovedModelChecks deletes the check record of every model entry the
-// next revision removed: a check goes with what it checked, as an MCP server's
-// latest test does ([Engine.clearRemovedMCPChecks]). A record of an entry
-// still declared stays until its own lifetime ends it.
+// next revision removed, as [Engine.clearRemovedMCPChecks] does for MCP tests.
+// A still-declared entry's record stays until its own lifetime ends it.
 func (e *Engine) clearRemovedModelChecks(ctx context.Context, next *Company) {
 	if next == nil || next.Config == nil || e.backends == nil || e.backends.Fleet == nil {
 		return

@@ -37,29 +37,22 @@ import (
 
 var clock = time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
 
-// ev builds one inbox trigger, THE WAY ITS PRODUCER BUILDS IT.
+// ev builds one inbox trigger the way its producer builds it.
 //
-// "notification" is this file's shorthand for a real inbound message, and it
-// resolves to events.New over the registered payload rather than to an event
-// literal. The distinction is load-bearing rather than tidy: a literal carries
-// no typed body, so a partition of them does not DECODE, so the dispatcher
-// declines to merge it and degrades to per-event dispatch — and every
-// coalescing assertion in this file would pass on the degrade branch while the
-// merge itself ran for nobody.
-//
-// Any other kind is a bare envelope on purpose: that is what an event of a
-// type this build does not know decodes to.
+// "notification" resolves to events.New over the registered payload, never an
+// event literal: a literal has no typed body, so its partition does not decode,
+// the dispatcher degrades to per-event dispatch, and every coalescing assertion
+// here would pass on the degrade branch with the merge never run. Any other
+// kind is a bare envelope, which is what an unknown event type decodes to.
 func ev(kind string) *events.Event {
 	if kind == "notification" {
 		e := events.New(types.ExternalNotification{
 			NotificationSource: "slack", SourceEventType: "message",
 			Sender: "ana", Subject: "a message", Body: "hello",
 		}, events.TraceContext{})
-		// AS internal/notify STAMPS IT: the envelope names the PRODUCER
-		// of the wake, not the third-party app: "notify.slack", never "slack".
-		// A test that wrote the bare third-party app name here asserted against a
-		// shape nothing publishes, and passed for a coalescing record that
-		// filed every merge under a source no dashboard filter matches.
+		// As internal/notify stamps it: the envelope names the wake's
+		// producer, "notify.slack", never the bare app name, which would
+		// assert against a shape nothing publishes.
 		e.Source = "notify.slack"
 		e.Timestamp = clock
 		return e
@@ -85,9 +78,9 @@ func said(sender, body string, at time.Time) *events.Event {
 	return e
 }
 
-// notifyStamp writes both keys the way internal/notify does — THROUGH THE
-// CONSTANTS, never the literals they hold, so a renamed field fails here
-// rather than leaving a test that writes a field production no longer reads.
+// notifyStamp writes both keys as internal/notify does, through the
+// constants, so a renamed field fails here rather than leaving a test writing
+// a field production no longer reads.
 func notifyStamp(e *events.Event, partition, conversation string) {
 	if e.Payload == nil {
 		e.Payload = map[string]any{}
@@ -104,11 +97,9 @@ func inThread(kind, conversation string) *events.Event {
 	return e
 }
 
-// headroom states what a backend says about a delivery: each message's own
-// remaining deliveries, from which the contract folds the partition's.
-//
-// Written out per event rather than as one number, because the gate under
-// test reads each message's own — see [Dispatcher.mayOfferAnswer].
+// headroom states each message's own remaining deliveries, per event rather
+// than one partition number, because the gate under test reads each message's
+// own (see [Dispatcher.mayOfferAnswer]).
 func headroom(ctx context.Context, perMessage map[*events.Event]int) context.Context {
 	hs := make([]queue.Headroom, 0, len(perMessage))
 	for ev, left := range perMessage {
@@ -146,7 +137,7 @@ type recorder struct {
 	holds     []inbox.Hold
 	deferred  []string
 	// sandboxHolds is every seat the dispatcher asked the sandbox
-	// coordinator to hold, for a delivery that reached it held.
+	// coordinator to hold.
 	sandboxHolds []string
 }
 
@@ -183,7 +174,7 @@ func dispatcher(t *testing.T, r *recorder) *engine.Dispatcher {
 
 func TestAHealthyPartitionReachesTheTurnEngine(t *testing.T) {
 	t.Parallel()
-	// The control. Without it every guard assertion below passes for a
+	// The control: without it every guard assertion below passes for a
 	// dispatcher that refuses everything.
 	r := &recorder{result: turn.Result{Decision: phase.Done, Artifact: "posted"}}
 	d := dispatcher(t, r)
@@ -201,10 +192,9 @@ func TestAHealthyPartitionReachesTheTurnEngine(t *testing.T) {
 	if r.reqs[0].WorkKey == "" {
 		t.Error("the dispatch carried no work key")
 	}
-	// AND A RUN ID OF ITS OWN. A redelivered trigger re-derives the same
-	// work key by design, so a dispatch that reused it as the run's
-	// identity wrote the retry's phases on top of the previous attempt's.
-	// See ADR-0017.
+	// AND A RUN ID OF ITS OWN: a redelivery re-derives the same work key,
+	// so a run keyed on it writes the retry's phases over the previous
+	// attempt's (ADR-0017).
 	if r.reqs[0].RunID == "" {
 		t.Error("the dispatch minted no run id")
 	}
@@ -225,8 +215,8 @@ func TestAGuardStopsTheTurnBeforeItStarts(t *testing.T) {
 		"not owned": {inbox.Conditions{}, queue.OutcomeDefer, false, false, true},
 		"no engine": {
 			inbox.Conditions{Owned: true}, queue.OutcomeAck, true, true, false},
-		// HELD AND DEFERRED, never parked: a park republished onto the
-		// inbox the consumer was still reading, for the length of the run.
+		// HELD AND DEFERRED, never parked: a park republishes onto the
+		// inbox the consumer is still reading, for the length of the run.
 		"sandbox": {
 			inbox.Conditions{Owned: true, TurnEngineReady: true, SeatHeldBySandbox: true},
 			queue.OutcomeDefer, false, false, true},
@@ -277,17 +267,16 @@ func TestAParkIsNeverAckedUntilItsRequeueLands(t *testing.T) {
 
 func TestAFailedPauseDoesNotPark(t *testing.T) {
 	t.Parallel()
-	// The pause is what stops the requeued copies looping back at whatever
-	// rate the broker will serve. Parking without it is worse than doing
-	// nothing.
+	// The pause stops the requeued copies looping back at whatever rate the
+	// broker serves; parking without it is worse than doing nothing.
 	r := &recorder{}
 	d := dispatcher(t, r)
 	d.Conditions = func(string) inbox.Conditions { return inbox.Conditions{Owned: true} }
 	d.Pause = func(context.Context, string, inbox.Hold, string) error { return errors.New("no") }
 	got := d.Dispatch(context.Background(), "ceo", []*events.Event{ev("notification")})
-	// DEFERRED, not NAKed: a hold the queue refused is the node's condition,
-	// and a Nak would return the delivery behind its conversation's newer
-	// mail — queue.OutcomeNak — where the deferral keeps its place.
+	// DEFERRED, not NAKed: a refused hold is the node's condition, and a
+	// Nak returns the delivery behind its conversation's newer mail
+	// (queue.OutcomeNak) where a deferral keeps its place.
 	if got.Outcome != queue.OutcomeDefer {
 		t.Errorf("outcome = %v, want a deferral", got.Outcome)
 	}
@@ -342,13 +331,9 @@ func TestAlreadyWorkedTriggersDropOutBeforeCoalescing(t *testing.T) {
 
 func TestTheLedgerReadSeesTheDEDUPEDPartition(t *testing.T) {
 	t.Parallel()
-	// The guards run first, and the first of them is the same-id dedupe.
-	// Reading the ledger against the RAW partition instead returns a
-	// filtered copy of the raw list — so the duplicates survive to the turn
-	// and the seat answers the same message twice in one dispatch.
-	//
-	// Found by mutation: with no duplicate in any ledger-path test, reading
-	// the wrong list changed nothing.
+	// The same-id dedupe is the first guard. A ledger read against the RAW
+	// partition returns a filtered copy of the raw list, so the duplicate
+	// survives to the turn and the seat answers one message twice.
 	completions := ledgerstore.NewMemoryCompletions()
 	a, b := ev("notification"), ev("notification")
 	dupA := *a
@@ -389,10 +374,9 @@ func TestAFullyWorkedPartitionAcksWithoutRunning(t *testing.T) {
 
 func TestEachConstituentIsRecordedUnderItsOwnKey(t *testing.T) {
 	t.Parallel()
-	// The partition's own key covers the set that ran TOGETHER. A later
-	// redelivery of a subset keys differently and would match nothing, so
-	// the subset would run again — which is the partial-overlap bug, one
-	// step later.
+	// The partition's own key covers the set that ran TOGETHER; a later
+	// redelivery of a subset keys differently, matches nothing and runs
+	// again: the partial-overlap bug, one step later.
 	completions := ledgerstore.NewMemoryCompletions()
 	a, b := ev("notification"), ev("notification")
 	r := &recorder{result: turn.Result{Decision: phase.Done}}
@@ -440,22 +424,17 @@ func TestAFailedTurnIsStillRecordedAsWorked(t *testing.T) {
 
 // THE TRANSIENT CASE KEEPS ITS RETRY, and this is the test a wrong fix breaks.
 //
-// A broken phase whose record shows no act is the case the dispatcher's old
-// comment described for EVERY failure: nothing was recorded, so a redelivery
-// genuinely does run it cleanly. A provider that never answered and a runner
-// that could not be built land here — neither shows a write, and both are
-// worth trying again. A seat handed to another node mid-turn is worth trying
-// again too, and gets the cheaper verb: see the deferral test below. So does
-// a failure a redelivery would meet again until something changes, whose
-// seat is parked or paused until it does: a refused budget, a chain every
-// model of which is at its usage limit, and a failure a retry cannot cure,
-// the second time in a row.
+// A broken phase whose record shows no act (a provider that never answered, a
+// runner that could not be built) wrote nothing, so a redelivery runs it
+// cleanly. Other failures take other verbs: a seat moved mid-turn is deferred
+// (below); a refused budget, a chain wholly at its usage limit, or an
+// incurable failure seen twice parks or pauses the seat.
 func TestABrokenPhaseWhoseRecordShowsNoActStillNAKsAndRecordsNothing(t *testing.T) {
 	t.Parallel()
 	completions := ledgerstore.NewMemoryCompletions()
 	a := ev("notification")
 	// Acted is false: the zero Result is a turn whose record shows no act,
-	// which is the safe answer and the one every pre-effect failure produces.
+	// the safe answer and the one every pre-effect failure produces.
 	r := &recorder{err: errors.New("provider unreachable")}
 	d := dispatcher(t, r)
 	d.Completions = completions
@@ -472,13 +451,11 @@ func TestABrokenPhaseWhoseRecordShowsNoActStillNAKsAndRecordsNothing(t *testing.
 
 // A SEAT THAT MOVED MID-TURN DEFERS RATHER THAN NAKS.
 //
-// It is the same condition [inbox.Screen] refuses before the turn starts —
-// "seat is not owned here" — caught a phase later, because the window is open
-// for the whole length of a turn and only one end of it was ever checked. One
-// condition, so one disposition: a deferral hands the delivery to the seat's
-// new owner AT ONCE and quiesces this attachment, where a NAK returns it on
-// the failure path's doubling spacing and leaves this node consuming a mailbox
-// it has no further claim to. It costs the same delivery either way.
+// It is [inbox.Screen]'s "seat is not owned here" caught a phase later (the
+// window spans the whole turn), so it gets the same disposition: a deferral
+// hands the delivery to the new owner AT ONCE and quiesces this attachment,
+// where a NAK returns it on the failure path's doubling spacing and leaves
+// this node consuming a mailbox it no longer owns.
 func TestASeatThatMovedMidTurnIsDeferredToItsNewOwner(t *testing.T) {
 	t.Parallel()
 	completions := ledgerstore.NewMemoryCompletions()
@@ -497,8 +474,8 @@ func TestASeatThatMovedMidTurnIsDeferredToItsNewOwner(t *testing.T) {
 		t.Error("a seat that moved recorded the trigger as worked, so its new " +
 			"owner will never run it")
 	}
-	// The host has to hear about it, or the consumer stays attached to a
-	// seat this node no longer serves.
+	// The host must hear of it, or the consumer stays attached to a seat
+	// this node no longer serves.
 	if len(r.deferred) != 1 || r.deferred[0] != "ceo" {
 		t.Errorf("deferred = %v, want the seat host told once", r.deferred)
 	}
@@ -533,11 +510,10 @@ func TestASeatThatMovedAfterActingIsStillRecordedRatherThanDeferred(t *testing.T
 
 // A TURN THAT ALREADY WROTE OUTSIDE THE ENGINE IS NOT REDELIVERED.
 //
-// The NAK above used to be unconditional, on a premise that held only for the
-// two writes internal/workkey guards: every MCP write, chat post, colleague
-// ask and executor launch is keyed on nothing, so a deterministic mid-turn
-// failure replayed round one's external effects across the broker's whole
-// delivery budget — 25 attempts a second apart.
+// internal/workkey guards only two writes: every MCP write, chat post,
+// colleague ask and executor launch is keyed on nothing, so redelivering a
+// deterministic mid-turn failure replays round one's external effects across
+// the broker's whole delivery budget.
 func TestATurnThatBrokeAfterActingIsRecordedRatherThanRedelivered(t *testing.T) {
 	t.Parallel()
 	completions := ledgerstore.NewMemoryCompletions()
@@ -561,8 +537,8 @@ func TestATurnThatBrokeAfterActingIsRecordedRatherThanRedelivered(t *testing.T) 
 		t.Error("the trigger was not recorded, so a park requeue or a peer's " +
 			"redelivery would run it again")
 	}
-	// AND IT SAYS SO. Giving up on a trigger silently is the one thing
-	// worse than the storm.
+	// AND IT SAYS SO: giving up on a trigger silently is worse than the
+	// storm.
 	if len(seen) != 1 {
 		t.Fatalf("observed %d events, want the abandoned trigger on the record", len(seen))
 	}
@@ -580,19 +556,15 @@ func TestATurnThatBrokeAfterActingIsRecordedRatherThanRedelivered(t *testing.T) 
 
 // A PANICKED TURN IS RECORDED, even though its record shows no write.
 //
-// The rule above keeps a retry for a turn whose record shows no act, because
-// such a turn may succeed next time. A panic will not: the redelivery runs the
-// same code on the same input. Before the loop recovered panics this reached
-// the queue backend's own guard, which NAKs, and the trigger came back up to
-// the whole delivery budget.
+// A no-act turn keeps its retry because it may succeed next time; a panic will
+// not, since the redelivery runs the same code on the same input.
 func TestAPanickedTurnIsRecordedRatherThanRedelivered(t *testing.T) {
 	t.Parallel()
 	completions := ledgerstore.NewMemoryCompletions()
 	a := ev("notification")
 	r := &recorder{
-		// What turn.Run hands back for a panicking phase: a record
-		// showing no write, the unhandled-exception guard, and the
-		// panic as the error.
+		// What turn.Run returns for a panicking phase: a record showing
+		// no write, the unhandled-exception guard, the panic as the error.
 		result: turn.Result{Decision: phase.Failed, Breach: &turn.Breach{
 			Kind: types.GuardUnhandledException, Detail: "panic: nil map",
 		}},
@@ -613,9 +585,9 @@ func TestAPanickedTurnIsRecordedRatherThanRedelivered(t *testing.T) {
 	if !completions.Worked(ctx, "ceo", []string{key})[key] {
 		t.Error("the panicked trigger was not recorded, so a peer's redelivery runs it again")
 	}
-	// ONE record from the dispatcher, the skipped trigger. The breach is the
-	// TURN's to publish (its telemetry already did, from the result above),
-	// and a second one here would count one panic twice.
+	// ONE record from the dispatcher, the skipped trigger: the breach is the
+	// TURN's to publish (its telemetry did, from the result above), and a
+	// second one here would count one panic twice.
 	if len(seen) != 1 {
 		t.Fatalf("observed %d events (%v), want only the skipped trigger", len(seen), typesSeen(seen))
 	}
@@ -631,19 +603,14 @@ func TestAPanickedTurnIsRecordedRatherThanRedelivered(t *testing.T) {
 // A PANIC THE LOOP NEVER SAW IS RECOVERED AT THE DISPATCHER.
 //
 // The loop recovers a panicking phase; everything between the broker and the
-// loop is this frame's: the screening stages, and the turn's own set-up and
-// tear-down around the loop. Each case panics somewhere different, and each
-// must settle the delivery, record the trigger and put the failure on the seat,
-// because
-// no turn telemetry ran to do it.
+// loop (the screening stages, the turn's set-up and tear-down) is this frame's.
+// Each case must settle the delivery, record the trigger and put the failure on
+// the seat, because no turn telemetry ran to do it.
 //
-// AND THE BREACH NAMES THE RUN THE PANIC ENDED, when there was one. A turn
-// announces itself under its run id before its prefetch, so a panic in its own
-// frames is a panic in a turn already on the record — and the breach is the one
-// row that says why it stopped. It used to carry the WORK KEY in `turn_id`, a
-// value no turn event is filed under since ADR-0017, so the start and the
-// breach of one dead turn were joined by nothing. A panic in a screening stage
-// happens before any run is minted, and names none.
+// AND THE BREACH NAMES THE RUN THE PANIC ENDED in `turn_id`, never the work
+// key: a turn announces itself under its run id before its prefetch, and every
+// turn event is filed under it (ADR-0017), so the breach joins the turn's
+// start. A screening-stage panic precedes any run and names none.
 func TestAPanicOutsideTheLoopIsRecoveredAtTheDispatcher(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -754,12 +721,10 @@ func TestAPanicForAnUnknownSeatIsStillSettled(t *testing.T) {
 
 // A PANIC WHILE REQUEUING CLAIMS NOTHING IT HAS ALREADY HANDED BACK.
 //
-// A park requeues the whole delivery and acks, one publish per event, so a
-// panic part-way through leaves some copies on the queue and the rest
-// unpublished. The unpublished ones are lost to the ack whatever this frame
-// does; the published ones are lost only if it records them, because a
-// completion record is what stops a copy ever running. So the park narrows
-// what it holds to nothing BEFORE it publishes, rather than after.
+// A park publishes one copy per event and acks, so a panic part-way leaves
+// some copies on the queue. Those are lost only if this frame records them (a
+// completion record stops a copy ever running), so the park narrows what it
+// holds to nothing BEFORE it publishes.
 func TestAPanicWhileRequeuingLeavesThePublishedCopiesToRun(t *testing.T) {
 	t.Parallel()
 	completions := ledgerstore.NewMemoryCompletions()
@@ -801,15 +766,12 @@ func TestAPanicWhileRequeuingLeavesThePublishedCopiesToRun(t *testing.T) {
 	}
 }
 
-// AND THE SAME HOLDS WHEN THE REQUEUE ITSELF PANICS PART-WAY.
+// AND THE SAME HOLDS WHEN A DEGRADED TAIL'S REQUEUE PANICS PART-WAY.
 //
-// The degraded path requeues the tail one event at a time, so a panic inside
-// that loop leaves some of the tail's copies on the queue. Only the head is
-// ever this delivery's to settle, and it stops being answerable for the tail
-// the moment the first copy is published — so the narrowing happens BEFORE the
-// requeue, not after. Narrowed after, this frame records a tail whose copies
-// are already waiting to run, and a completion record is what stops a copy
-// ever running.
+// Only the head is ever this delivery's to settle, and it stops answering for
+// the tail once the first copy is published, so the narrowing happens BEFORE
+// the requeue: narrowed after, this frame records a tail whose copies are
+// already waiting to run, and that record drops them unrun.
 func TestAPanicWhileRequeuingADegradedTailKeepsNoClaimOnIt(t *testing.T) {
 	t.Parallel()
 	completions := ledgerstore.NewMemoryCompletions()
@@ -822,8 +784,8 @@ func TestAPanicWhileRequeuingADegradedTailKeepsNoClaimOnIt(t *testing.T) {
 	head := said("ana", "first", clock)
 	opaque := &events.Event{ID: uuid.New(), Type: notificationType, Timestamp: clock.Add(time.Minute)}
 	notifyStamp(opaque, "slack:C1", "slack:C1")
-	// Publishes the first copy, then dies — the shape [Engine.park]'s own
-	// loop has, one Publish per event.
+	// Publishes the first copy, then dies: [Engine.park]'s shape, one
+	// Publish per event.
 	d.Park = func(_ context.Context, _ string, evs []*events.Event) error {
 		r.parked = append(r.parked, evs)
 		panic("the broker client died mid-requeue")
@@ -845,9 +807,9 @@ func TestAPanicWhileRequeuingADegradedTailKeepsNoClaimOnIt(t *testing.T) {
 // A PANIC SETTLES WHAT THE DELIVERY STILL HOLDS, NOT WHAT IT ARRIVED WITH.
 //
 // A partition that will not merge requeues its tail before its head runs, so
-// when the head's turn panics the tail's copies are already back on the queue.
-// Recording the tail as worked would drop every one of them unrun when it came
-// back, the loss inbox.Degraded keys the head apart to prevent.
+// when the head's turn panics the tail's copies are already back on the queue;
+// recording the tail would drop them unrun, the loss inbox.Degraded keys the
+// head apart to prevent.
 func TestAPanicInADegradedHeadLeavesTheRequeuedTailToRun(t *testing.T) {
 	t.Parallel()
 	completions := ledgerstore.NewMemoryCompletions()
@@ -886,9 +848,8 @@ func TestAPanicInADegradedHeadLeavesTheRequeuedTailToRun(t *testing.T) {
 					"to the queue", data.TriggerID)
 			}
 		case *types.TurnGuardBreach:
-			// THE HEAD'S OWN KEY beside the run it was running under —
-			// the tail was never this delivery's to answer for, so a key
-			// derived over both would name a unit nobody worked.
+			// THE HEAD'S OWN KEY: the tail was never this delivery's to
+			// answer for, so a key over both names a unit nobody worked.
 			if data.WorkKey != headKey {
 				t.Errorf("breach work key = %q, want the head's own key %q", data.WorkKey, headKey)
 			}
@@ -946,8 +907,8 @@ func typesSeen(evs []*events.Event) []string {
 
 func TestOnlyLedgeredTypesAreRecorded(t *testing.T) {
 	t.Parallel()
-	// A type the ledger never writes cannot be looked up by it, so
-	// recording one produces a row nothing will ever match.
+	// A type the ledger never writes is never looked up, so recording one
+	// produces a row nothing will match.
 	completions := ledgerstore.NewMemoryCompletions()
 	internal := ev("internal")
 	r := &recorder{result: turn.Result{Decision: phase.Done}}
@@ -967,9 +928,8 @@ func TestOnlyLedgeredTypesAreRecorded(t *testing.T) {
 		[]string{workkey.Derive([]string{internal.ID.String()})}); len(got) != 0 {
 		t.Error("a non-ledgered event was recorded")
 	}
-	// And with no ledgerable trigger the work key is empty, which is the
-	// documented "nothing to collapse" — while the RUN is still identified,
-	// because an execution always has one.
+	// With no ledgerable trigger the work key is empty ("nothing to
+	// collapse"), but the RUN is still identified: an execution always is.
 	if r.keys[0] != "" {
 		t.Errorf("work key = %q, want empty", r.keys[0])
 	}
@@ -980,10 +940,9 @@ func TestOnlyLedgeredTypesAreRecorded(t *testing.T) {
 
 func TestTheConversationKeyComesFromTheFirstEventThatNamesOne(t *testing.T) {
 	t.Parallel()
-	// A partition is one conversation by construction — the broker's key
-	// function guarantees the partition key and a source's partition key
-	// refines its identity — so taking the first keeps the answer stable
-	// rather than depending on which event sorts last.
+	// A partition is one conversation by construction (the broker keys on the
+	// partition key, which refines the conversation identity), so taking the
+	// first keeps the answer stable rather than depending on which sorts last.
 	r := &recorder{result: turn.Result{Decision: phase.Done}}
 	d := dispatcher(t, r)
 	d.Dispatch(context.Background(), "ceo", []*events.Event{
@@ -1005,8 +964,8 @@ func TestTheConversationKeyComesFromTheFirstEventThatNamesOne(t *testing.T) {
 func TestNothingWiredIsTheEmbeddedSingleNodeCase(t *testing.T) {
 	t.Parallel()
 	// With no peer to race, the seat lease is the whole mutual exclusion
-	// and there is nothing for a completion ledger to add. A dispatcher
-	// with no conditions must therefore SERVE, not refuse.
+	// and a completion ledger adds nothing, so a dispatcher with no
+	// conditions must SERVE, not refuse.
 	r := &recorder{result: turn.Result{Decision: phase.Done}}
 	d := &engine.Dispatcher{Turn: r.run, Now: func() time.Time { return clock }}
 	if got := d.Dispatch(context.Background(), "ceo", []*events.Event{ev("notification")}); got.Outcome != queue.OutcomeAck {
@@ -1025,11 +984,10 @@ func eventIDs(evs []*events.Event) []string {
 	return out
 }
 
-// A MERGE HAS TO BE RECORDED HERE, because here is where the constituent
-// list exists: a coalesced digest is minted fresh and carries no memory of
-// what it absorbed, so by the time a turn is running there is nothing left
-// to count. Nothing else emits it, which is why Company › Integrations could
-// report how many deliveries ARRIVED and not how many turns they became.
+// A MERGE HAS TO BE RECORDED HERE, the one place the constituent list
+// exists: a coalesced digest is minted fresh and remembers nothing it absorbed.
+// Nothing else emits the record, and without it Company › Integrations counts
+// the deliveries that arrived but not the turns they became.
 func TestAMergedPartitionIsRecordedWithItsConstituents(t *testing.T) {
 	t.Parallel()
 	r := &recorder{result: turn.Result{Decision: phase.Done}}
@@ -1061,17 +1019,14 @@ func TestAMergedPartitionIsRecordedWithItsConstituents(t *testing.T) {
 	if rec.PartitionKey != "slack:C1/T1" {
 		t.Errorf("partition = %q", rec.PartitionKey)
 	}
-	// THE VENDOR, not the producer of the wake. internal/notify stamps the
-	// envelope "notify.slack"; every other notification event carries the
-	// bare third-party app name, and a record that disagrees is filed under a source
-	// no dashboard filter matches — so Company › Integrations reported zero
-	// coalesced merges for every integration.
+	// THE VENDOR, not the wake's producer ("notify.slack"): every other
+	// notification event carries the bare app name, and a record that
+	// disagrees matches no dashboard filter.
 	if rec.NotificationSource != "slack" {
 		t.Errorf("source = %q, want the bare third-party app name", rec.NotificationSource)
 	}
-	// The SPAN they arrived in, which is what an operator reads to see how
-	// hard batching kicked in — the count alone cannot say whether it was
-	// a burst or a slow thread.
+	// The SPAN they arrived in: the count alone cannot tell an operator a
+	// burst from a slow thread.
 	if rec.FirstAt != clock.UTC().Format(time.RFC3339) ||
 		rec.LastAt != clock.Add(2*time.Minute).UTC().Format(time.RFC3339) {
 		t.Errorf("span = %s..%s", rec.FirstAt, rec.LastAt)
@@ -1097,12 +1052,10 @@ func TestASingleEventIsNotRecordedAsAMerge(t *testing.T) {
 
 // THE TRIGGER'S DELEGATION REACHES THE TURN THAT RUNS FOR IT.
 //
-// The regression this exists for: the Request literal in Dispatch set neither
-// Depth nor DelegationChain, so every turn on the inbox path ran at depth 0.
-// turn.CheckDepth compared a constant zero against the limit and could never
-// fire, and turn_engine.delegation_depth_limit — the one guard against two
-// agents asking each other the same question until a budget runs out — bounded
-// nothing at all.
+// Without Depth and DelegationChain on the Request every inbox turn runs at
+// depth 0, turn.CheckDepth never fires, and turn_engine.delegation_depth_limit
+// (the one guard against two agents asking each other the same question until
+// a budget runs out) bounds nothing.
 func TestTheTriggersDelegationReachesTheTurn(t *testing.T) {
 	t.Parallel()
 	var got engine.Request
@@ -1135,17 +1088,13 @@ func TestTheTriggersDelegationReachesTheTurn(t *testing.T) {
 
 // A SEAT ITS EXECUTOR HOLDS DEFERS UNDER THE SANDBOX HOLD, AND OFFERS NOTHING.
 //
-// It used to PARK every delivery — requeue it onto the inbox it came from and
-// ack it — offering it to the seat's parked runs first. Nothing stopped the
-// consumer, so the copy was the next thing it fetched, and each message waiting
-// on a busy seat went round fetch, offer (a store read), publish, ack for the
-// whole run. The coordinator now holds the inbox while a run holds the seat, so
-// a delivery reaches here only by racing that hold or finding it refused: the
-// hold is asked for again, the delivery is deferred at the head, and the seat
-// host is told the consumer stopped so its renew lifts the quiesce and leaves
-// the hold as the only thing stopping it. An answer to ANOTHER of the seat's
-// runs waits under the hold with the rest of the mail and is offered when the
-// run stops holding the seat — so nothing is offered here.
+// The coordinator holds the inbox while a run holds the seat, so a delivery
+// reaches here only by racing that hold or finding it refused. A park would
+// requeue it as the next thing the consumer fetches, round and round for the
+// whole run. Instead the hold is asked for again, the delivery is deferred at
+// the head, and the seat host is told the consumer stopped, so its renew lifts
+// the quiesce and leaves the hold as the only stop. An answer to ANOTHER of the
+// seat's runs waits under the hold and is offered when the run lets go.
 func TestAHeldSeatDefersUnderTheSandboxHoldAndOffersNothing(t *testing.T) {
 	t.Parallel()
 	r := &recorder{}
@@ -1186,21 +1135,17 @@ func TestAHeldSeatDefersUnderTheSandboxHoldAndOffersNothing(t *testing.T) {
 // THE ANSWER ARRIVES AT A SEAT THAT LOOKS IDLE, and has to be claimed before
 // an ordinary turn eats it.
 //
-// The park above is the case where a SECOND run holds the seat. The ordinary
-// one is this: a run parked on a question gives its seat back — the reply
-// arrives on that seat's own inbox and a person can take days — so the answer
-// reaches the dispatcher through the plain proceed path, carrying nothing that
-// says what it answers. Offered only from the park, the match could run only
-// while the seat was HELD, which is the one state a parked run is never in: no
-// clarification answer ever reached the run that asked it, and every box
-// waited out its pause TTL with the reply sitting in the inbox.
+// A run parked on a question gives its seat back (a person can take days), so
+// the reply reaches the dispatcher on the plain proceed path, carrying nothing
+// that says what it answers. Offered only while the seat is HELD, the one state
+// a parked run is never in, no answer would reach the run that asked, and every
+// box would wait out its pause TTL.
 func TestAnAnswerIsClaimedBeforeItBecomesAnOrdinaryTurn(t *testing.T) {
 	t.Parallel()
 	r := &recorder{result: turn.Result{Decision: phase.Done}}
 	d := dispatcher(t, r)
 	d.Conditions = func(string) inbox.Conditions {
-		// FREE, with a question open on it — which is what a parked run
-		// actually leaves behind.
+		// FREE, with a question open on it: what a parked run leaves.
 		return inbox.Conditions{Owned: true, TurnEngineReady: true,
 			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
 	}
@@ -1231,31 +1176,18 @@ func TestAnAnswerIsClaimedBeforeItBecomesAnOrdinaryTurn(t *testing.T) {
 	}
 }
 
-// AND AN ANSWER THE RUN IS STILL OWED IS REQUEUED RATHER THAN RUN.
+// AND AN ANSWER THE RUN IS STILL OWED IS HANDED BACK RATHER THAN RUN.
 //
-// THE DEFECT THIS WHOLE PATH EXISTS FOR. The coordinator matched a parked run
-// and could not resume it — this node has no resumer, the suspended
-// conversation was written by a build it cannot read, the seat is not in its
-// company — so it gave the claim back and the run is awaiting THIS message
-// again. Read as "not the answer", which is what an error used to mean here,
-// the delivery went on to the ordinary route and was consumed as an unrelated
-// turn: the person answered, a turn ran on their reply, and the executor
-// that asked waited out its pause TTL for a further message that may never
-// come. It is requeued instead, so this node or the seat's next owner is
-// offered it again.
-//
-// HANDED BACK WITH A DEFERRAL rather than a Nak or a requeue, and each of
-// those three is a different thing. A REQUEUE is a republish: a new message at
-// the TAIL of the inbox, behind the person's next message. A NAK is no better
-// on the broker this engine ships: it withholds a failure for its backoff and
-// serves never-delivered mail meanwhile (queue.OutcomeNak), so the person's
-// next message reached the still-waiting run first and was taken as its
-// answer, and this one came round afterwards to answer whatever the run asked
-// next. A DEFERRAL returns the delivery at the HEAD (queue.OutcomeDefer), so it
-// is still the first reply the question is offered — and the seat's inbox stops
-// until the seat host's next renew, which is right for what reaches here: the
-// coordinator could not RECORD the answer, a store failure, under which no
-// turn could run either.
+// The coordinator matched a parked run but could not resume it (no resumer
+// here, a conversation from a build it cannot read, a seat not in its company)
+// and gave the claim back, so the run awaits THIS message again; worked as a
+// turn, it is consumed and the executor waits out its pause TTL. It is
+// DEFERRED: a requeue republishes at the inbox's TAIL, and a NAK is withheld
+// for a backoff while newer mail is served (queue.OutcomeNak), so either lets
+// the person's next message be taken as the answer. A deferral returns it at
+// the HEAD (queue.OutcomeDefer); the inbox stopping until the seat host's next
+// renew is right, since what reaches here is a failure to RECORD the answer, a
+// store failure under which no turn could run either.
 func TestAnAnswerAParkedRunIsStillOwedIsHandedBackRatherThanRun(t *testing.T) {
 	t.Parallel()
 	r := &recorder{result: turn.Result{Decision: phase.Done}}
@@ -1291,18 +1223,13 @@ func TestAnAnswerAParkedRunIsStillOwedIsHandedBackRatherThanRun(t *testing.T) {
 
 // THE HEADROOM IS WHAT THE MESSAGE CARRIES, not what this process remembers.
 //
-// An answer that could not be recorded goes back with a deferral and every
-// return spends one of the message's deliveries, so a route that kept offering until the last one
-// would hand the final delivery back and the broker would dead-letter a
-// person's reply. The coordinator's own ceiling cannot prevent that: it is
-// per node and per process, and it resets on exactly the events — a seat
-// handoff, a restart — that do NOT reset the count the broker enforces.
-//
-// The boundary is the assertion. One delivery either side of the reserve
-// decides whether a parked run is offered this message at all, and an
-// UNSTATED count leaves the route exactly as it was before this clause
-// existed: a node whose transport said nothing must not stop answering
-// parked executors.
+// Every hand-back spends one of the message's deliveries, so offering until the
+// last would hand the final one back and the broker would dead-letter a
+// person's reply. The coordinator's own ceiling cannot prevent that: it is per
+// node and per process, and resets on a seat handoff or a restart, which do NOT
+// reset the broker's count. The boundary is the assertion: one delivery either
+// side of the reserve decides whether a parked run is offered at all, and a
+// node whose transport stated no count must not stop answering parked runs.
 func TestADeliveryInsideTheReserveIsNotOfferedToAParkedRun(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -1322,8 +1249,8 @@ func TestADeliveryInsideTheReserveIsNotOfferedToAParkedRun(t *testing.T) {
 			r := &recorder{result: turn.Result{Decision: phase.Done}}
 			d := dispatcher(t, r)
 			d.Conditions = func(string) inbox.Conditions {
-				// FREE, with a question open on it: the shape a parked
-				// run leaves.
+				// FREE, with a question open on it: what a parked run
+				// leaves.
 				return inbox.Conditions{Owned: true, TurnEngineReady: true,
 					AdmitsTriggers: true, SandboxAwaitsAnswer: true}
 			}
@@ -1374,15 +1301,11 @@ func TestADeliveryInsideTheReserveIsNotOfferedToAParkedRun(t *testing.T) {
 
 // AND NO NUMBER OF HANDOFFS SPENDS A REPLY'S LAST DELIVERIES.
 //
-// THE PROPERTY THE RESERVE EXISTS FOR, driven rather than reasoned: walk one
-// message down from a full budget, one hand-back per delivery, with a
-// coordinator that defers every time — which is what a resume failing the
-// same way on every node looks like, since each handoff gives it a fresh
-// per-process count. Measured before the reserve existed, three such nodes
-// handed ONE reply back 27 times and the broker dead-lettered it at 25.
-//
-// The loop must end at the reserve, with the ordinary route holding exactly
-// the deliveries it was promised.
+// The property the reserve exists for, driven: walk one message down from a
+// full budget, one hand-back per delivery, with a coordinator that defers
+// every time (a resume failing alike on every node, each handoff starting a
+// fresh per-process count). The loop must end at the reserve, leaving the
+// ordinary route exactly the deliveries it was promised.
 func TestNoNumberOfHandoffsSpendsAReplysLastDeliveries(t *testing.T) {
 	t.Parallel()
 	r := &recorder{result: turn.Result{Decision: phase.Done}}
@@ -1392,8 +1315,8 @@ func TestNoNumberOfHandoffsSpendsAReplysLastDeliveries(t *testing.T) {
 			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
 	}
 	d.Answer = func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error) {
-		// EVERY node fails the same way, and every one of them starts
-		// its own attempt count.
+		// EVERY node fails the same way, each with its own attempt
+		// count.
 		return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
 	}
 
@@ -1424,13 +1347,11 @@ func TestNoNumberOfHandoffsSpendsAReplysLastDeliveries(t *testing.T) {
 
 // AND THE PER-PROCESS CLAUSE STILL BOUNDS ONE PROCESS.
 //
-// The message-carried count is the clause that makes the headroom claim true
-// across handoffs; it is not a replacement for the ceiling inside a node. A
-// delivery with a whole budget in hand would otherwise circle one seat's inbox
-// for as long as the resume kept failing, which is what
-// [sandbox.MaxAnswerAttempts] is for — so here the coordinator spends its own
-// budget with headroom to spare, and the dispatcher lets the message go at the
-// point IT says so rather than at the point the broker would.
+// The message-carried count holds across handoffs; [sandbox.MaxAnswerAttempts]
+// still bounds one node, or a delivery with a whole budget would circle one
+// seat's inbox for as long as the resume kept failing. So the coordinator
+// spends its own budget with headroom to spare, and the dispatcher lets the
+// message go when IT says so, not when the broker would.
 func TestThePerProcessAttemptBudgetStillEndsTheHandBack(t *testing.T) {
 	t.Parallel()
 	r := &recorder{result: turn.Result{Decision: phase.Done}}
@@ -1451,8 +1372,8 @@ func TestThePerProcessAttemptBudgetStillEndsTheHandBack(t *testing.T) {
 	}
 
 	answer := inThread("notification", "chat:C1")
-	// A full budget throughout, so nothing but the per-process clause can
-	// end this: the reserve is never approached.
+	// A full budget throughout, so only the per-process clause can end
+	// this: the reserve is never approached.
 	ctx := headroom(context.Background(), map[*events.Event]int{answer: 24})
 	var got queue.Result
 	for range sandbox.MaxAnswerAttempts {
@@ -1476,17 +1397,12 @@ func TestThePerProcessAttemptBudgetStillEndsTheHandBack(t *testing.T) {
 
 // AND A SPENT SIBLING DOES NOT SPEAK FOR A FRESH REPLY.
 //
-// THE PARTITION'S HEADROOM IS THE SMALLEST OF ITS MESSAGES', and this gate
-// must not read it. A conversation whose earlier message has been handed back
-// until it is inside the reserve keeps collecting replies, and each of those
-// arrives on its FIRST delivery with a whole budget: gated on the partition's
-// number, every one of them is refused the answer route outright, for as long
-// as the spent message stays in the partition. That is the defect this whole
-// route exists to end, arrived at from the other side — the reply consumed by
-// an ordinary turn while a run is still parked on the question it answers.
-//
-// The fresh reply is what must be offered, and one message with the
-// deliveries to spare is enough: see [sandbox.MayOfferAnswer] for why the
+// The partition's headroom is the smallest of its messages', and this gate
+// must not read it: a conversation whose earlier message was handed back into
+// the reserve keeps collecting replies, each on its FIRST delivery, and gated
+// on the partition's number every one is refused the answer route and consumed
+// by an ordinary turn while a run is still parked on the question. One message
+// with deliveries to spare is enough: see [sandbox.MayOfferAnswer] for why the
 // co-partitioned message is not saved by a refusal.
 func TestAFreshReplyIsOfferedBesideASpentSibling(t *testing.T) {
 	t.Parallel()
@@ -1502,9 +1418,8 @@ func TestAFreshReplyIsOfferedBesideASpentSibling(t *testing.T) {
 		return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
 	}
 
-	// One conversation, two messages at very different counts: the older
-	// one has been handed back until it is inside the reserve, the reply
-	// is on its first delivery of a 25-delivery budget.
+	// One conversation, two messages: the older handed back into the
+	// reserve, the reply on its first delivery of a 25-delivery budget.
 	spent := notifyStampedIn("chat:C1", "chat:C1")
 	reply := notifyStampedIn("chat:C1", "chat:C1")
 	ctx := headroom(context.Background(), map[*events.Event]int{
@@ -1530,9 +1445,8 @@ func TestAFreshReplyIsOfferedBesideASpentSibling(t *testing.T) {
 // AND WHEN EVERY MESSAGE IS SPENT THE ROUTE STILL LETS GO.
 //
 // The fold is "any", not "always": a partition whose messages are ALL inside
-// the reserve has nothing left to offer with, and what is left belongs to the
-// ordinary route. Without this, reading each message's own count instead of
-// the partition's would simply have removed the bound.
+// the reserve has nothing to offer with and belongs to the ordinary route.
+// Without this, reading each message's own count would remove the bound.
 func TestAPartitionWhoseMessagesAreAllSpentIsNotOffered(t *testing.T) {
 	t.Parallel()
 	r := &recorder{result: turn.Result{Decision: phase.Done}}
@@ -1571,15 +1485,11 @@ func TestAPartitionWhoseMessagesAreAllSpentIsNotOffered(t *testing.T) {
 
 // AND WHAT IS OFFERED IS WHAT SURVIVED THE LEDGER.
 //
-// The offer on this path sits after the completion read, so the partition it
-// is handed is already shorter than the one that arrived: a trigger this seat
-// has already worked must never be spliced into somebody's executor as its
-// answer as well.
-//
-// THE NAK STILL RETURNS THE WHOLE DELIVERY, because that is what a nak is, and
-// nothing is lost by it: the redelivery runs this same screening again, reads
-// the same ledger, and drops the worked trigger before the second offer is
-// made. It is the OFFER that has to be narrowed, not the hand-back.
+// The offer sits after the completion read, so a trigger this seat already
+// worked is never spliced into an executor as its answer too. The hand-back
+// still returns the whole delivery and loses nothing: the redelivery reads the
+// same ledger and drops the worked trigger before offering again. It is the
+// OFFER that is narrowed, not the hand-back.
 func TestAnAnswerIsOfferedOnlyWhatTheLedgerLeft(t *testing.T) {
 	t.Parallel()
 	completions := ledgerstore.NewMemoryCompletions()
@@ -1618,19 +1528,15 @@ func TestAnAnswerIsOfferedOnlyWhatTheLedgerLeft(t *testing.T) {
 
 // AND A RUN THAT IS TERMINALLY GONE LETS ITS ANSWER BE A TURN.
 //
-// The other end of the same classification: the coordinator matched a run and
-// then settled it — there was no suspended conversation to resume into, or the
-// claim could not be given back and the run was ended in its place. Nothing is
-// coming back for this delivery, so requeueing it would circle a run that no
-// longer exists, and acking it would swallow the person's message on behalf of
-// a turn that is over. It runs as the ordinary message it looks like.
+// The coordinator matched a run and settled it (nothing to resume into, or a
+// claim it could not give back, so it ended the run). Nothing comes back for
+// this delivery: a requeue circles a run that no longer exists, and an ack
+// swallows the person's message. It runs as the ordinary message it looks like.
 //
-// A DISPOSITION THIS BUILD CANNOT READ TAKES THE SAME PATH, which is the one
-// place that fallback is visible: nothing in this build produces one, so it
-// means a seam that answered nothing, and the honest reading of that is a node
-// with no coordinator — a state the engine supports and which cannot loop. A
-// requeue would circle with nothing to bound it, because the bound lives with
-// the run the coordinator matched and an unreadable answer names no run.
+// A DISPOSITION THIS BUILD CANNOT READ TAKES THE SAME PATH: nothing here makes
+// one, so it means a seam that answered nothing, read as a node with no
+// coordinator, which cannot loop. A requeue would circle unbounded, since the
+// bound lives with the matched run and an unreadable answer names none.
 func TestAnAnswerForARunThatIsGoneRunsItsOrdinaryTurn(t *testing.T) {
 	t.Parallel()
 	for name, disposition := range map[string]sandbox.AnswerDisposition{
@@ -1696,11 +1602,10 @@ func TestAMessageThatAnswersNothingStillRunsItsTurn(t *testing.T) {
 
 // A TRIGGER THE LEDGER HAS ALREADY WORKED IS NOT OFFERED EITHER.
 //
-// The offer on this path sits AFTER the completion read, and that is the
-// ordering under test: a redelivery of a trigger that already produced a turn
-// must not be spliced into somebody's executor as the answer to its
-// question, which is a second use of one message and the run's whole
-// disambiguation is "the next thing to arrive here".
+// The ordering under test: the offer sits AFTER the completion read, so a
+// redelivered trigger that already produced a turn is not used a second time
+// as an executor's answer, whose only disambiguation is "the next thing to
+// arrive here".
 func TestAnAlreadyWorkedTriggerIsNotOfferedAsAnAnswer(t *testing.T) {
 	t.Parallel()
 	completions := ledgerstore.NewMemoryCompletions()
@@ -1737,12 +1642,9 @@ func TestAnAlreadyWorkedTriggerIsNotOfferedAsAnAnswer(t *testing.T) {
 
 // FAIL-OPEN, in every direction. A delivery that is NOT the answer, a
 // coordinator that errored, a disposition this build cannot read and a node
-// with no coordinator at all each become the ordinary turn they look like:
-// acking a message nothing handled loses it, and a free seat's ordinary mail
-// is what it is there for.
-//
-// A delivery a run is still OWED is the one exception, and it is not run: see
-// TestAnAnswerAParkedRunIsStillOwedIsHandedBackRatherThanRun.
+// with no coordinator each become the ordinary turn they look like: acking a
+// message nothing handled loses it. The one exception, a delivery a run is
+// still OWED, is TestAnAnswerAParkedRunIsStillOwedIsHandedBackRatherThanRun.
 func TestADeliveryThatIsNotTheAnswerBecomesATurn(t *testing.T) {
 	t.Parallel()
 	type answerer func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error)
@@ -1780,12 +1682,10 @@ func TestADeliveryThatIsNotTheAnswerBecomesATurn(t *testing.T) {
 
 // AND A DISPATCH THAT COULD NOT BE MADE NAMES BOTH KEYS IT WAS CARRYING.
 //
-// The offer carries both because only the store knows which age of row it is
-// matching, so a line naming the identity alone cannot say what was compared
-// against what — and this is the shape where they differ, a top-level reply
-// on a DM line whose question was parked from a thread on it. Not parallel:
-// it swaps the process-wide logger, which this package otherwise leaves at
-// its boot default.
+// Only the store knows which age of row the offer matches, so a line naming the
+// identity alone cannot say what was compared with what (the keys differ for a
+// top-level DM reply to a question parked from a thread). Not parallel: it
+// swaps the process-wide logger.
 func TestAFailedAnswerDispatchNamesBothKeys(t *testing.T) {
 	logs := &logBuffer{}
 	logging.Configure(slog.LevelWarn, logging.FormatJSON, logs)
@@ -1869,15 +1769,12 @@ func TestAParkNeverOffersItsDeliveryAsAnAnswer(t *testing.T) {
 	}
 }
 
-// ONE CONVERSATION, ONE NOTIFICATION — the whole point of coalescing, and the
-// half that shipped without a caller.
+// ONE CONVERSATION, ONE NOTIFICATION: the whole point of coalescing.
 //
-// Batching landed on its own: a partition of five already became one turn.
-// What that turn was HANDED was the five enriched bodies concatenated, because
-// notify.Coalesce was called by nothing, so the seat read the third-party app's triage
-// scaffolding five times, each copy pointing at staler state, and five separate
-// asks, which a model answers separately. The assertion that catches it is the
-// scaffolding count: a merged digest renders it ONCE.
+// A partition's one turn is handed one notify.Coalesce digest, not the enriched
+// bodies concatenated: those repeat the app's triage scaffolding, each copy
+// pointing at staler state, and make separate asks a model answers separately.
+// The scaffolding count catches it: a merged digest renders it ONCE.
 func TestACoalescedConversationReachesTheTurnAsOneDigest(t *testing.T) {
 	t.Parallel()
 	r := &recorder{result: turn.Result{Decision: phase.Done}}
@@ -1901,8 +1798,8 @@ func TestACoalescedConversationReachesTheTurnAsOneDigest(t *testing.T) {
 	}
 	ask := engine.DescribeTrigger(r.reqs[0].Ask(), "")
 
-	// EVERY constituent survives the merge: a digest that kept only the
-	// latest hands the seat a follow-up with no idea what it follows.
+	// EVERY constituent survives: a digest of only the latest hands the
+	// seat a follow-up with no idea what it follows.
 	for _, want := range []string{
 		"Can you take the deploy today?",
 		"Blocked on the migration — see PROJ-4.",
@@ -1912,20 +1809,19 @@ func TestACoalescedConversationReachesTheTurnAsOneDigest(t *testing.T) {
 			t.Errorf("the digest lost %q\ngot:\n%s", want, ask)
 		}
 	}
-	// AND THE SCAFFOLDING RENDERS ONCE. This is the assertion that fails
-	// without the merge: three concatenated bodies carry three copies.
+	// AND THE SCAFFOLDING RENDERS ONCE: three concatenated bodies carry
+	// three copies.
 	if n := strings.Count(ask, "TRIAGE SCAFFOLDING"); n != 1 {
 		t.Errorf("the third-party app scaffolding rendered %d times, want once\ngot:\n%s", n, ask)
 	}
-	// The digest says it IS one, so the seat answers once rather than
-	// three times.
+	// The digest says it IS one, so the seat answers once.
 	if !strings.Contains(ask, "Coalesced updates") {
 		t.Errorf("the merged ask does not tell the seat it is one piece of work:\n%s", ask)
 	}
 
-	// THE BOOKKEEPING STILL READS THE CONSTITUENTS. The merged digest is
-	// minted fresh, so a ledger keyed on it would match nothing and re-run
-	// the turn on every redelivery.
+	// THE BOOKKEEPING STILL READS THE CONSTITUENTS: the digest is minted
+	// fresh, so a ledger keyed on it matches nothing and re-runs the turn on
+	// every redelivery.
 	if n := len(r.reqs[0].Events); n != 3 {
 		t.Errorf("the dispatch carries %d constituents, want all three", n)
 	}
@@ -1936,11 +1832,10 @@ func TestACoalescedConversationReachesTheTurnAsOneDigest(t *testing.T) {
 
 // A MERGE MUST NOT LAUNDER WHAT BOUNDS THE TURN.
 //
-// The merged event replaces three envelopes with one, so every fact that
-// bounded the partition has to be carried onto it deliberately: the deepest
-// delegation (or an ask arriving beside a shallow mention resets the cap the
-// ping-pong guard is measured against), the delivery obligation (or one direct
-// ask inside a burst of broadcasts becomes traffic the seat may ignore), and
+// The merged event replaces the envelopes, so each fact that bounded the
+// partition is carried onto it: the deepest delegation (or an ask beside a
+// shallow mention resets the ping-pong guard's cap), the delivery obligation
+// (or one direct ask in a burst of broadcasts becomes ignorable traffic), and
 // the recon flag (or a bare pointer merged with a substantive message stops
 // telling the prefetch to go and look).
 func TestAMergeCarriesWhatBoundsTheTurn(t *testing.T) {
@@ -1987,9 +1882,8 @@ func TestAMergeCarriesWhatBoundsTheTurn(t *testing.T) {
 		t.Errorf("the merged ask carries %d constituents, want both — the learning "+
 			"workers observe each distinct sender", len(note.Messages))
 	}
-	// BOTH KEYS ride the merged envelope, because from here on this one
-	// event IS the partition and a reader handed it must be able to ask
-	// either question.
+	// BOTH KEYS ride the merged envelope: from here on it IS the partition,
+	// and a reader handed it must be able to ask either question.
 	if got, _ := merged.Payload[notify.PartitionField].(string); got != "slack:C1" {
 		t.Errorf("the merged ask carries partition key %q", got)
 	}
@@ -1997,8 +1891,8 @@ func TestAMergeCarriesWhatBoundsTheTurn(t *testing.T) {
 		t.Errorf("the merged ask carries conversation identity %q", got)
 	}
 	// And the obligation the turn engine enforces is derived from the
-	// constituents either way — including WHERE it is owed, which a merge
-	// must not launder any more than it may launder the ask itself.
+	// constituents, including WHERE it is owed, which a merge must not
+	// launder either.
 	if got := engine.ReplyFor(r.reqs[0].Events); got != turn.ToolReply("slack") {
 		t.Errorf("the turn owes %+v, want a tool delivery on slack", got)
 	}
@@ -2014,8 +1908,8 @@ func TestAnUnmergeablePartitionDegradesToPerEventDispatch(t *testing.T) {
 	r := &recorder{result: turn.Result{Decision: phase.Done}}
 	d := dispatcher(t, r)
 
-	// A constituent with no typed body — what an event whose payload this
-	// build cannot decode looks like.
+	// A constituent with no typed body: an event whose payload this build
+	// cannot decode.
 	head := said("ana", "first", clock)
 	opaque := &events.Event{ID: uuid.New(), Type: notificationType, Timestamp: clock.Add(time.Minute)}
 	notifyStamp(opaque, "slack:C1", "slack:C1")
@@ -2067,18 +1961,13 @@ func TestADegradeWhoseRequeueFailsRunsNothing(t *testing.T) {
 	}
 }
 
-// A SKIPPED TRIGGER IS ON THE RECORD.
+// A SKIPPED TRIGGER IS ON THE RECORD, as a types.TurnTriggerSkipped.
 //
-// The narrow window this covers: a turn finished, its outbound effects
-// shipped, and the delivery came back — from a node that died before acking,
-// or from a drain whose partitions together outlasted the ack window. Without
-// a record the feed shows the arrivals and one turn, and nothing distinguishes
-// "the agent never answered" from "the agent already answered, on a node that
-// has since died" — the same observation and opposite problems.
-//
-// types.TurnTriggerSkipped was registered, categorised and documented as
-// shipped with no producer anywhere, so the case stayed exactly as invisible
-// as it was before the type existed.
+// A turn finished and shipped its effects, and the delivery came back (from a
+// node that died before acking, or a drain that outlasted the ack window).
+// Without a record the feed shows the arrivals and one turn, and cannot tell
+// "the agent never answered" from "it already answered, on a node since dead":
+// the same observation and opposite problems.
 func TestATriggerTheLedgerAlreadyWorkedIsRecordedAsSkipped(t *testing.T) {
 	t.Parallel()
 	completions := ledgerstore.NewMemoryCompletions()
@@ -2129,11 +2018,10 @@ func TestATriggerTheLedgerAlreadyWorkedIsRecordedAsSkipped(t *testing.T) {
 
 // THE MERGED DIGEST IS WHAT THE TURN'S CONTEXT IS BUILT FROM.
 //
-// Its constituent list is the one place a conversation's senders, their
-// per-message bodies and their recon flags are combined, so the prefetch and
-// the learning workers read it rather than re-deriving the same facts from the
-// partition. Two answers to one question are free to disagree; one of them was
-// also unreachable, which is how a populated field ends up read by nothing.
+// Its constituent list is the one place a conversation's senders, per-message
+// bodies and recon flags are combined, so the prefetch and the learning
+// workers read it rather than re-deriving them from the partition: two answers
+// to one question are free to disagree.
 func TestTheMergedAskCarriesEverySpeakerInTheOrderTheySpoke(t *testing.T) {
 	t.Parallel()
 	r := &recorder{result: turn.Result{Decision: phase.Done}}
@@ -2157,9 +2045,9 @@ func TestTheMergedAskCarriesEverySpeakerInTheOrderTheySpoke(t *testing.T) {
 	for _, m := range note.Messages {
 		spoke = append(spoke, m.Sender)
 	}
-	// IN THE ORDER THEY SPOKE. The flat Sender field mirrors the LATEST
-	// constituent, so a reader that took it as well as the list put the
-	// last speaker at the head of a list whose whole contract is the order.
+	// IN THE ORDER THEY SPOKE. The flat Sender mirrors the LATEST
+	// constituent, so a reader that also took it puts the last speaker at
+	// the head of a list whose whole contract is the order.
 	if !slices.Equal(spoke, []string{"ana", "bo", "cy"}) {
 		t.Errorf("the merged ask's speakers are %v", spoke)
 	}
@@ -2170,13 +2058,10 @@ func TestTheMergedAskCarriesEverySpeakerInTheOrderTheySpoke(t *testing.T) {
 
 // THE SAME TRIGGER, TWICE, IS TWO RUNS OF ONE UNIT OF WORK.
 //
-// A turn that fails without reaching outside the engine is NAK'd, and the
-// broker redelivers the very same event — so the work key, which is derived
-// from the trigger's ids, is reproduced by construction. That is what it is
-// for. What must NOT be reproduced is the run: everything a turn publishes is
-// keyed on it, so a second attempt under the first one's id writes its phases,
-// its live row and its detached executor's row on top of the attempt it is
-// repeating. See ADR-0017.
+// A NAK redelivers the very same event, so the work key (derived from the
+// trigger's ids) is reproduced by design. The run must not be: everything a
+// turn publishes is keyed on it, so a retry under the first attempt's id writes
+// its phases, live row and executor row over that attempt's (ADR-0017).
 func TestARedeliveredTriggerRunsUnderItsOwnIdentity(t *testing.T) {
 	t.Parallel()
 	r := &recorder{result: turn.Result{Decision: phase.Done, Artifact: "posted"}}
@@ -2201,12 +2086,11 @@ func TestARedeliveredTriggerRunsUnderItsOwnIdentity(t *testing.T) {
 	}
 }
 
-// AND THE INSTANT THE WORK BEGAN IS REPRODUCED WITH THE KEY, because it is half
-// of the same identity: every operation id a turn derives from the key carries
-// it as its mint instant, and the state log refuses to decide again an
-// operation minted before its node adopted a donated snapshot. A redelivery
-// that derived it from anything the dispatch itself does — its own clock, its
-// run — would read a re-run after an adoption as a brand new operation.
+// AND THE INSTANT THE WORK BEGAN IS REPRODUCED WITH THE KEY, half of the same
+// identity: every operation id a turn derives from the key carries it as its
+// mint instant, and the state log refuses to decide again an operation minted
+// before its node adopted a donated snapshot. Taken from the dispatch's own
+// clock or run, a re-run after an adoption would read as a new operation.
 func TestARedeliveredTriggerReproducesWhenItsWorkBegan(t *testing.T) {
 	t.Parallel()
 	r := &recorder{result: turn.Result{Decision: phase.Done, Artifact: "posted"}}
@@ -2226,8 +2110,8 @@ func TestARedeliveredTriggerReproducesWhenItsWorkBegan(t *testing.T) {
 				"the instant a write derived from the key carries has to be one "+
 				"every redelivery reproduces", i+1, req.WorkSince, trigger.Timestamp)
 		}
-		// AND A RUN'S OWN ID CARRIES WHEN IT STARTED, which is the instant
-		// a write seeded from the run rather than a key carries.
+		// AND A RUN'S OWN ID CARRIES WHEN IT STARTED: the instant a write
+		// seeded from the run rather than a key carries.
 		if _, ok := statelog.OpMintedAt(req.RunID); !ok {
 			t.Errorf("run id %q carries no instant — a write seeded from it "+
 				"would read as older than every adoption", req.RunID)
@@ -2235,17 +2119,14 @@ func TestARedeliveredTriggerReproducesWhenItsWorkBegan(t *testing.T) {
 	}
 }
 
-// A DIRECT MESSAGE'S TWO TURNS SERVE ONE CONVERSATION, which is the defect
-// this split exists to fix and the only test that states it end to end inside
-// the dispatcher.
+// A DIRECT MESSAGE'S TWO TURNS SERVE ONE CONVERSATION, stated end to end
+// inside the dispatcher.
 //
-// Turn one is a burst of top-level DMs: one partition on the bare channel,
-// serving the channel's conversation. Turn two is the person's reply in the
-// thread the agent opened: a DIFFERENT partition — it must not merge with
-// unrelated top-level pings — and the SAME conversation, so its dispatch reads
-// turn one as the conversation's head, continues its session and is told how
-// it ended. While one value answered both questions turn two looked its
-// conversation up under "chat:D1:root" and found a first turn, every time.
+// Turn one is a burst of top-level DMs, one partition on the bare channel.
+// Turn two is the person's reply in the thread the agent opened: a DIFFERENT
+// partition (it must not merge with unrelated top-level pings) and the SAME
+// conversation, so it reads turn one as the conversation's head, continues its
+// session and is told how it ended.
 //
 // Mutation: have conversationIdentityOf answer partitionKeyOf's value and the
 // reply serves "chat:D1:root-1", which turns this red.
@@ -2287,24 +2168,14 @@ func TestADirectMessagesThreadReplyServesTheBurstsConversation(t *testing.T) {
 	}
 }
 
-// A RUN PARKED FROM A TOP-LEVEL DM IS ANSWERED BY THE PERSON'S THREADED REPLY,
-// and the dispatcher's half of that is which conversation it offers the
-// coordinator for such a reply: the WHOLE DM LINE, because that is the value
-// the row was parked under.
-//
-// The engine's own prompt is what makes the two differ. A top-level direct
-// message partitions on the bare channel, so a run launched from that turn
-// parks under the channel — and [notify.ChatPrompt] then tells the seat to
-// reply AS A THREAD, so the person's answer arrives partitioned on the thread
-// it opened. While this offered the partition, the coordinator compared two
-// strings that could never be equal: the clarification was silently never
-// delivered and the box waited out its pause TTL.
-//
-// THE PARTITION STILL TRAVELS, because it is what tells two runs parked on one
-// DM line apart — see [sandbox.ConversationRef.Best]. The turn's read of its
-// conversation's head and its rows on the executor log take the identity as
-// they already did, which is the second half asserted here: one trigger, and
-// every reader of its conversation answering the same thing.
+// A RUN PARKED FROM A TOP-LEVEL DM IS ANSWERED BY THE PERSON'S THREADED REPLY:
+// the dispatcher offers the coordinator the WHOLE DM LINE, the value the row
+// was parked under. A top-level DM partitions on the bare channel, so its run
+// parks under the channel, and [notify.ChatPrompt] tells the seat to reply AS A
+// THREAD, so the answer arrives partitioned on that thread: offered the
+// partition, the coordinator could never match it. The partition still
+// travels, to tell two runs parked on one DM line apart
+// ([sandbox.ConversationRef.Best]), and the ordinary turn serves the identity.
 //
 // Mutation: offer the coordinator the partition as the identity and the first
 // half goes red; serve the partition and the second does.
@@ -2341,7 +2212,7 @@ func TestADMThreadReplyAnswersAndServesTheWholeDMLine(t *testing.T) {
 	}
 
 	// THE SAME TRIGGER through an ordinary dispatch: the turn serves the DM
-	// line rather than the thread the reply happened to land in.
+	// line rather than the thread the reply landed in.
 	r := &recorder{result: turn.Result{
 		Decision: phase.Done, Delivered: true, Artifact: "done",
 	}}
@@ -2358,22 +2229,14 @@ func TestADMThreadReplyAnswersAndServesTheWholeDMLine(t *testing.T) {
 
 // AN ANSWER THE STORE COULD NOT PLACE IS HANDED BACK, NOT SPENT.
 //
-// The one failure the classification stopped short on. A lookup that cannot be
-// made is precisely the state the offer's asymmetry is about — the coordinator
-// could not establish that nothing is owed the delivery — and it was answered
-// "not mine" anyway, so the person's reply was spent on an ordinary turn on
-// the one class of failure where a retry seconds later would have matched the
-// run that asked.
+// A failed lookup means the coordinator could not establish that nothing is
+// owed the delivery, and a retry seconds later may match the run that asked.
+// AND THE FAIL-OPEN IS STILL RIGHT on a seat with no parked run, where an
+// unreadable store must not swallow every ordinary message. The two resolve on
+// the seat's own awaiting count, held in this node's memory with no store read.
 //
-// AND THE FAIL-OPEN IS STILL RIGHT, which is why this is not simply inverted:
-// on a seat with no parked run at all, an unreadable store must not swallow a
-// message that has nothing to do with any executor — which there is every
-// message the seat receives. The two resolve on the seat's own awaiting count,
-// which this node holds in memory and needs no store to read.
-//
-// Driven through the dispatcher with the REAL coordinator behind it, because
-// the fact under test is the pair: what the coordinator concludes from an
-// unreadable lookup, and what the dispatcher then does with the delivery.
+// Driven with the REAL coordinator, because the fact under test is the pair:
+// what it concludes from an unreadable lookup, and what the dispatcher does.
 func TestAnAnswerTheStoreCouldNotPlaceIsHandedBackRatherThanRun(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -2381,14 +2244,13 @@ func TestAnAnswerTheStoreCouldNotPlaceIsHandedBackRatherThanRun(t *testing.T) {
 		outcome  queue.Outcome
 		turns    int
 	}{
-		// Something on this seat IS waiting for somebody's reply and only
-		// WHICH row could not be read: the delivery comes back.
+		// Something on this seat IS waiting for a reply and only WHICH row
+		// could not be read: the delivery comes back.
 		"a run is awaiting an answer on this seat": {
 			awaiting: true, outcome: queue.OutcomeDefer, turns: 0,
 		},
-		// Nothing is owed the delivery, so there is nothing for a
-		// hand-back to come back to: it is the ordinary message it looks
-		// like.
+		// Nothing is owed the delivery, so a hand-back has nothing to
+		// come back to: it is the ordinary message it looks like.
 		"no run is awaiting anything here": {
 			awaiting: false, outcome: queue.OutcomeAck, turns: 1,
 		},
@@ -2398,9 +2260,9 @@ func TestAnAnswerTheStoreCouldNotPlaceIsHandedBackRatherThanRun(t *testing.T) {
 			r := &recorder{result: turn.Result{Decision: phase.Done}}
 			d := dispatcher(t, r)
 			d.Conditions = func(string) inbox.Conditions {
-				// FREE, with a question open on it: the shape a parked
-				// run leaves, and the shape this seat is screened in
-				// whether or not the store can still say which run.
+				// FREE, with a question open on it: what a parked run
+				// leaves, and how this seat is screened whether or not the
+				// store can still say which run.
 				return inbox.Conditions{Owned: true, TurnEngineReady: true,
 					AdmitsTriggers: true, SandboxAwaitsAnswer: true}
 			}
@@ -2440,10 +2302,9 @@ func unreadableAnswerLookup(t *testing.T, awaiting bool) *sandbox.Coordinator {
 		Answers:  fleetAnswers(),
 		Audience: noAudience{},
 		Queue:    discardPublisher{}, Pending: blindLookupStore{PendingStore: store, blind: blind}, Manager: manager,
-		// A RESUMER THAT PANICS, because these cases never reach one:
-		// the lookup is what fails, and a resume from here would be the
-		// answer being run after the store said it could not say which
-		// run is owed it.
+		// A resumer that fails the test: the lookup fails first, and a
+		// resume here would run the answer after the store said it could
+		// not tell which run is owed it.
 		Resume: unreachedResumer{t},
 	})
 	if err != nil {
@@ -2465,10 +2326,9 @@ func unreadableAnswerLookup(t *testing.T, awaiting bool) *sandbox.Coordinator {
 	if err := store.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
-	// The seat's counts come from the store ONCE, here, exactly as a node
-	// claiming the seat seeds them — which is the point: from now on they
-	// are this process's own memory, and that is what still answers when
-	// the lookup cannot.
+	// The seat's counts come from the store ONCE, here, as a node claiming
+	// the seat seeds them: from now on they are this process's memory,
+	// which still answers when the lookup cannot.
 	if err := coordinator.OnStarted(ctx, types.ExecutorLaunched{
 		Agent: "a-1", AgentHandle: "swe", TurnID: "t1",
 	}); err != nil {
@@ -2550,8 +2410,8 @@ var fleetAnswers = sync.OnceValue(func() *sandbox.AnswerSeal {
 	return seal
 })
 
-// unpackReply is a [sandbox.Reply] as the three values the answer seam used to
-// be handed: the conversation, the text, and the delivery's leading event.
+// unpackReply splits a [sandbox.Reply] into the conversation, the text and the
+// delivery's leading event.
 func unpackReply(reply sandbox.Reply) (sandbox.ConversationRef, string, *events.Event) {
 	var trigger *events.Event
 	if len(reply.Events) > 0 {

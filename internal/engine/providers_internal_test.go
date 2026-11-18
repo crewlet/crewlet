@@ -7,10 +7,9 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 )
 
-// storeSource stands in for the secret store: it answers by NAME, and nothing
-// it holds is exported into the process environment. That is what makes these
-// tests prove the resolver was consulted rather than os.Getenv — a backend
-// falling back to the process environment answers "unset" for every one.
+// storeSource stands in for the secret store: it answers by NAME and exports
+// nothing to the process environment, so these tests prove the resolver was
+// consulted rather than os.Getenv.
 type storeSource map[string]string
 
 func (s storeSource) Lookup(name string) (string, bool) {
@@ -23,10 +22,8 @@ func tierB(values map[string]string) *config.Resolver {
 	return config.NewResolver(storeSource(values), config.EnvSource{})
 }
 
-// TestBuildHarnessAgentResolvesModel pins the scalar a Tier B document most often
-// writes a reference into. The model becomes the harness's --model argv, so an
-// unresolved one is not an error an operator can read: it is the harness refusing
-// a model literally named "${HARNESS_MODEL}".
+// TestBuildHarnessAgentResolvesModel pins the model's ${VAR} resolution:
+// unresolved, the harness refuses a model literally named "${HARNESS_MODEL}".
 func TestBuildHarnessAgentResolvesModel(t *testing.T) {
 	t.Parallel()
 	r := tierB(map[string]string{"HARNESS_MODEL": "sonnet"})
@@ -43,18 +40,11 @@ func TestBuildHarnessAgentResolvesModel(t *testing.T) {
 	}
 }
 
-// A CREDENTIAL THE ENTRY NAMES NO VARIABLE FOR IS READ THROUGH THE STORE.
-//
-// Both of an entry's credentials fall back to the harness's own conventional
-// variable — the headless token's under auth.mode subscription, the API key's
-// under api-key — and the fallback has to go through the resolver, which reads
-// the secret store before the environment. `crewlet llm login -capture-token`
-// and `crewlet secrets set ANTHROPIC_API_KEY` both write into the store, so a
-// fallback that read os.Getenv could not see the very value Crewlet itself
-// just wrote, and every operator would wire up a ${VAR} for it by hand.
-//
-// Observed where it is used: the sign-in a coding box is handed, which is
-// what the entry's own calls run under.
+// A CREDENTIAL THE ENTRY NAMES NO VARIABLE FOR IS READ THROUGH THE STORE: the
+// conventional fallback (the token under subscription, the API key under
+// api-key) must see what `crewlet llm login -capture-token` and
+// `crewlet secrets set` wrote there, which os.Getenv cannot. Observed on the
+// sign-in a coding box is handed.
 func TestAnEntrysConventionalCredentialIsReadThroughTheStore(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -95,9 +85,9 @@ func TestAnEntrysConventionalCredentialIsReadThroughTheStore(t *testing.T) {
 				t.Errorf("%s = %q, want %q — the conventional fallback did not "+
 					"consult the secret store", tc.varName, got, tc.want)
 			}
-			// The mode decides which of the two signs in, and the other
-			// stays out: a subscription entry carrying a metered key would
-			// bill it while the operator believed they were on the plan.
+			// The mode picks one; a subscription entry carrying a metered
+			// key would bill it while the operator believes they are on
+			// the plan.
 			if got, ok := env[tc.absent]; ok {
 				t.Errorf("%s = %q reached a %s entry", tc.absent, got, tc.name)
 			}
@@ -105,21 +95,10 @@ func TestAnEntrysConventionalCredentialIsReadThroughTheStore(t *testing.T) {
 	}
 }
 
-// AN UNRESOLVED ${VAR} IS NOT A MISSING FIELD, and the two need different
-// sentences.
-//
-// A provider entry that plainly reads `model: "${LLM_MODEL}"` and is refused
-// with "Model is required" sends an operator to look at a field they can see
-// is filled in — and one that silently ran on the harness's own default model
-// would bill and answer as a model nobody chose. Naming the variable sends
-// them to the one thing they have to change, which is the rule every error in
-// this tree is held to.
-//
-// "Resolved to nothing" is every way a reference gives the harness no model, not
-// only a variable nobody set: one set to "" (compose passing an unset host
-// variable through, an empty stored secret, which is authoritative) built an
-// entry with no model at all, and a composite reference with one part unset
-// handed the harness the rest of it ("/sonnet") as a model.
+// AN UNRESOLVED ${VAR} IS NOT A MISSING FIELD: the refusal names the variable,
+// not "Model is required", and never runs the harness's default model.
+// "Resolved to nothing" covers unset, set to "" or white space, and a
+// composite with one part unset, which would hand the harness "/sonnet".
 func TestAnUnresolvedModelNamesTheVariable(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -165,10 +144,8 @@ func TestAnUnresolvedModelNamesTheVariable(t *testing.T) {
 	}
 }
 
-// A MODEL IS HANDED TO THE HARNESS TRIMMED. White space around a resolved value —
-// a stored secret pasted with its newline — is no part of any model's name,
-// and a padded --model argument is one the harness refuses as a model it has
-// never heard of.
+// A MODEL IS HANDED TO THE HARNESS TRIMMED: a stored secret pasted with its
+// newline is otherwise a --model the harness refuses.
 func TestAResolvedModelIsTrimmed(t *testing.T) {
 	t.Parallel()
 	p, err := BuildHarness("default", config.LLMProvider{
@@ -183,10 +160,9 @@ func TestAResolvedModelIsTrimmed(t *testing.T) {
 	}
 }
 
-// AND A MISSING CREDENTIAL STILL BUILDS. The asymmetry is deliberate: every
-// call then fails with the harness's own sign-in error, which names the harness and
-// is exactly what `crewlet llm doctor` explains — far easier to diagnose than
-// a boot that died over one key, where a missing model has no such tell.
+// AND A MISSING CREDENTIAL STILL BUILDS, deliberately unlike a model: every
+// call then fails with the harness's own sign-in error, which
+// `crewlet llm doctor` explains, rather than the boot dying over one key.
 func TestAMissingCredentialStillBuilds(t *testing.T) {
 	t.Parallel()
 	if _, err := BuildHarness("default", config.LLMProvider{
@@ -201,10 +177,8 @@ func TestAMissingCredentialStillBuilds(t *testing.T) {
 	}
 }
 
-// THE TIMEOUT THAT RUNS IS THE CONFIG'S. The harness backend keeps no default of
-// its own — the engine hands it the entry's resolved cap — so the config's
-// default is the one every call runs under, and it is the one the docs and the
-// schema state.
+// THE TIMEOUT THAT RUNS IS THE CONFIG'S: the harness backend keeps no default
+// of its own, so the config's is the one the docs and the schema state.
 func TestTheHarnessTimeoutDefaultIsTheDocumentedOne(t *testing.T) {
 	t.Parallel()
 	if got := (&config.LLMProvider{}).Timeout(); got != 600 {

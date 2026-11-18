@@ -20,12 +20,10 @@ import (
 )
 
 // A REPLY'S WORDS ARE ITS WRITERS', EACH UNDER THEIR OWN NAME WHERE THERE ARE
-// SEVERAL. One writer's message is recorded exactly as it was typed, never the
-// seat's prompt around it; a delivery holding two people's messages puts each
-// under the name its writer posted as, since the answer is recorded as the
-// newest writer's and must not carry the other's words under that name; and a
-// coalesced burst, whose salient text already names each sender, is not named
-// twice.
+// SEVERAL. One writer's message is recorded as typed, never the seat's prompt
+// around it; two writers' messages each go under the writer's posted name, since
+// the answer is recorded as the newest writer's; and a coalesced burst, whose
+// salient text already names each sender, is not named twice.
 //
 // Mutation: drop the writer's name and the two-writer case is red; name every
 // line and the one-writer case is.
@@ -78,9 +76,8 @@ func TestAReplysWordsAreItsWritersEachUnderTheirOwnName(t *testing.T) {
 }
 
 // A REPLY IS LABELLED AS ITS TRIGGER LABELS THE MESSAGE, for the seat it was
-// delivered to: read in a chat thread, every writer named once, at the least
-// trust any of them earns, so a stranger's message in a burst of a
-// colleague's makes the whole reply data.
+// delivered to: every writer named once, at the least trust any earns, so a
+// stranger's message beside a colleague's makes the whole reply data.
 //
 // Mutation: take the newest message's trust alone and the stranger's case is
 // red; name the writers by the newest message alone and it is too.
@@ -131,9 +128,9 @@ func TestAReplyIsLabelledAsItsTriggerLabelsTheMessage(t *testing.T) {
 }
 
 // ONLY WORDS ADDRESSED TO THE CONVERSATION ANSWER A PARKED QUESTION: a chat
-// message, a work item or page comment does; a field or status change, a page
-// save, an alarm and a work pickup on the same conversation never do, whoever
-// wrote them. A notification no prompt classifies is answered as before.
+// message, a work item or page comment does; a status change, a page save, an
+// alarm or a work pickup never does, whoever wrote it. A notification no prompt
+// classifies does.
 func TestOnlyWordsAddressedToTheConversationAnswerAParkedQuestion(t *testing.T) {
 	t.Parallel()
 	prompts := notify.NewPrompts(slack.Prompt(), worklet.Prompt{}, doclet.Prompt{}, alarmwake.Prompt{})
@@ -167,13 +164,10 @@ func TestOnlyWordsAddressedToTheConversationAnswerAParkedQuestion(t *testing.T) 
 }
 
 // A REPLY CARRIES WHOM ITS AGENT WROTE IT FOR (ADR-0109), read off the newest
-// event by the rule a wake is read by: an agent's carrier, and the engine's on
-// its record about an agent's earlier act made for somebody (the merge queue's
-// ejection, a close it could not make), which answers no parked question, its
-// writer holding no seat; nil for a person's or a credential's writer even
-// with a carrier forged on, and for a vendor's notice, which states no writer.
-// It is read whether or not there is a party registry: it is stated on the
-// write, never looked up.
+// event by the wake's rule: an agent's carrier, and the engine's on its record
+// of an agent's earlier act (a merge queue ejection); nil for a person's or a
+// credential's writer even with a carrier forged on, and for a vendor's notice.
+// No party registry is needed: it is stated on the write.
 //
 // Mutation: read the carrier off any writer kind, off no engine's, or off the
 // oldest event, and a row goes red.

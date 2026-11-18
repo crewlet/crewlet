@@ -10,83 +10,40 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// Where every turn's derived operation ids are minted.
-//
-// A turn's tracker and knowledge-base writes derive their operation ids from
-// its identity — the unit of work, or the run where there is none — minted at
-// the instant that identity BEGAN ([builtin.Actor.OperationSince]), so a
-// re-run derives the ids its first attempt derived and the ledger collapses
-// each repeated write onto the first copy. That instant can be further back
-// than any node's operation ledger remembers, and then every new write under
-// it is answered `unknown` on every node for good — see statelog's mint.go.
-// Two paths reach that point:
-//
-//   - a DISPATCH whose trigger is that old: a seat's mailbox retains what is
-//     published while nothing consumes it, so a seat nobody placed for a
-//     month, or a fleet that was down, is handed a backlog whose work began
-//     before the ledger's horizon;
-//   - a RESUME that comes that long after the work began: a turn parked on its
-//     executor, or on a person's answer, for a month.
-//
-// Both are decided by ONE function, [rebaseFor], called from the one frame
-// each path builds the turn its tools read from ([Engine.describeTurn],
-// [Engine.describeResume]) — so neither path can hand its tools an instant
-// the rule did not choose.
-//
-// EVERY ATTEMPT IS JUDGED AGAINST ITS OWN CLOCK. An attempt's writes are
-// decided while the attempt runs, so an instant chosen by an earlier attempt
-// and inherited by a retry days later has to be judged again: a failed resume
-// retried by a person's next answer weeks on, or a completion re-fired for as
-// long as a provider is down, is exactly as far past the ledger as if nobody
-// had judged it before. The rule inherits while it can (statelog.MintAt) and
-// rebases onto the attempt's own instant once it cannot.
-//
-// A REBASE IS RECORDED BEFORE THE ATTEMPT WRITES ANYTHING, in the fleet's
-// [coord.Rebases] under the ids' seed, and every later attempt at the same
-// work reads it back — the crash re-run of a dispatch, a retried resume, the
-// next half of a turn parked on its executor, on whichever node takes it — so
-// it derives the ids the attempt before it derived, and a repeated write lands
-// once. The read is made only where the work's own start is past the horizon,
-// which is the only place a rebase can have been recorded: the ordinary turn
-// pays nothing for it.
-//
-// WHAT IT COSTS, stated rather than hidden. An attempt judged just short of
-// the horizon and a retry judged just past it mint under two instants, so a
-// write the first made and the second repeats is written twice — the cheaper
-// failure by far, against every write the retry makes being lost.
+// Where every turn's derived operation ids are minted. A turn's tracker and
+// knowledge-base writes derive their ids from the instant its identity began
+// ([builtin.Actor.OperationSince]), so a re-run collapses onto the first
+// attempt's writes. An old dispatch trigger, or a resume long after the work
+// began, puts that instant past the ledger's horizon, where every new write is
+// answered `unknown` for good (statelog's mint.go). Both paths decide through
+// [rebaseFor] alone ([Engine.describeTurn], [Engine.describeResume]), judging
+// each attempt by its own clock, since an inherited instant may since have
+// passed the horizon. A rebase is recorded in [coord.Rebases] before the
+// attempt writes, so later attempts on any node derive the same ids; it is read
+// only past the horizon. Cost: attempts judged either side of the horizon mint
+// under two instants, a duplicate write rather than lost ones.
 
-// rebaseStore is what [rebaseFor] needs of the coordination store — see
-// [coord.Rebases], which the fleet store implements.
+// rebaseStore is what [rebaseFor] needs of [coord.Rebases].
 type rebaseStore interface {
 	Rebase(ctx context.Context, seed string) (time.Time, uint64, error)
 	RecordRebase(ctx context.Context, seed string, at time.Time, version uint64) (bool, error)
 }
 
-// rebaseRounds bounds [rebaseFor]'s read-decide-write loop.
-//
-// One round is the ordinary case, and a lost race costs one more: the loser
-// reads the winner's instant, which is within the horizon of its own clock, so
-// it inherits and writes nothing. A third round needs a third attempt at the
-// same work recording between this one's read and its write, twice in a row,
-// which nothing does. Four is that with room, and running out is an error —
-// the attempt does not run — never a guess at the instant.
+// rebaseRounds bounds [rebaseFor]'s read-decide-write loop. A lost race costs
+// one more round (the loser inherits the winner's instant); a third needs
+// another attempt recording between read and write twice running. Four leaves
+// room; running out is an error, never a guess at the instant.
 const rebaseRounds = 4
 
-// rebaseFor is the instant the attempt at `at` of the turn with this identity
-// mints its derived operation ids at, where that is not the start of the
-// identity they are seeded from — and the zero instant where it is, which is
-// every turn whose work began inside [statelog.MintHorizon].
+// rebaseFor is the instant the attempt at `at` mints identity's derived
+// operation ids at, or zero where that is the identity's own start (work begun
+// inside [statelog.MintHorizon]). identity carries no rebase of its own: its
+// [builtin.Actor.OperationSeed] keys the record and its
+// [builtin.Actor.OperationSince] is the start judged against.
 //
-// identity is the turn's seed and start, with no rebase of its own: its
-// [builtin.Actor.OperationSeed] keys the record, and its
-// [builtin.Actor.OperationSince] is the start the rule is judged against.
-//
-// THREE-VALUED, as every read of the coordination store is: an instant, the
-// start (zero), or an error — and the error keeps the attempt from running at
-// all, because an attempt that could not learn whether an earlier one rebased
-// would have to choose an instant, and either choice is wrong for one of the
-// two: the start loses every write past the horizon, and a new instant writes
-// again whatever the earlier attempt wrote.
+// An error keeps the attempt from running: not knowing whether an earlier
+// attempt rebased, either choice is wrong — the start loses every write past
+// the horizon, and a new instant repeats the earlier attempt's writes.
 func rebaseFor(ctx context.Context, store rebaseStore, identity builtin.Actor,
 	at time.Time) (_ time.Time, err error) {
 	defer origin.Stamp(&err)
@@ -97,9 +54,8 @@ func rebaseFor(ctx context.Context, store rebaseStore, identity builtin.Actor,
 	}
 	seed := identity.OperationSeed()
 	if seed == "" {
-		// NOTHING IS DERIVED from an empty seed: every id such a turn
-		// writes under is minted fresh at its call (see builtin's opIDFor),
-		// so there is no start to be past.
+		// Nothing is derived from an empty seed: builtin's opIDFor mints
+		// each id fresh at its call.
 		return time.Time{}, nil
 	}
 	if store == nil {
@@ -123,9 +79,8 @@ func rebaseFor(ctx context.Context, store rebaseStore, identity builtin.Actor,
 		}
 		mint, rebases := statelog.MintAt(carried, at)
 		if !rebases {
-			// INHERITED: an earlier attempt rebased, recently enough that
-			// its writes are still in every ledger, and this one derives
-			// the same ids.
+			// Inherited: an earlier rebase is still within every ledger, so
+			// this attempt derives the same ids.
 			log.DebugContext(ctx, "turn_rebase_inherited", "seed", seed,
 				"began", start, "rebased_to", mint)
 			return mint, nil
@@ -145,19 +100,17 @@ func rebaseFor(ctx context.Context, store rebaseStore, identity builtin.Actor,
 					"is a second write")
 			return mint, nil
 		}
-		// LOST THE RACE: another attempt at the same work recorded first,
-		// or moved the record since the read. Read what it wrote and
-		// decide again — its instant is one this attempt inherits.
+		// Lost the race: another attempt recorded since the read; re-read
+		// and inherit its instant.
 	}
 	return time.Time{}, fmt.Errorf("engine: lost the race to record where the "+
 		"writes of work %q are minted %d times running, so this attempt does not "+
 		"run rather than guess", seed, rebaseRounds)
 }
 
-// rebases is the store every turn's rebase is recorded in: the fleet's, where
-// every node reads it. Nil on an engine built without its backends — a test
-// driving one frame — which [rebaseFor] refuses by name only where a rebase is
-// actually needed.
+// rebases is the fleet store rebases are recorded in, read by every node. Nil
+// on an engine built without backends (a one-frame test), which [rebaseFor]
+// refuses only where a rebase is needed.
 func (e *Engine) rebases() rebaseStore {
 	if e == nil || e.backends == nil || e.backends.Fleet == nil {
 		return nil

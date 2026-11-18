@@ -10,14 +10,11 @@ import (
 
 // A TICK'S BOUND CUTS OFF A TICK THAT STOPPED ADVANCING, AND ONLY THAT.
 //
-// The embedding tick is bounded to cut off one that wedged, and a wedge is the
-// absence of progress, not a long life: on one core the semantic index's
-// training outlasts any budget a wedge should be given, reading and computing
-// every moment of it. So the clock starts again from nothing each time the
-// tick shows progress — a stretch of rows read, the end of an exempt step —
-// stops while an exempt step runs, and cuts the tick off only once it has run
-// the whole budget without either. Each case runs on a bubble's clock, so a
-// minute is exact.
+// A wedge is the absence of progress, not a long life: on one core a semantic
+// index's training outlasts any budget, working every moment. The clock
+// restarts at each progress (rows read, an exempt step's end), stops during
+// an exempt step, and cuts the tick off only after a whole budget of neither.
+// Each case runs on a bubble's clock, so a minute is exact.
 func TestATicksBoundCutsOffOnlyATickThatStoppedAdvancing(t *testing.T) {
 	t.Parallel()
 	const budget = time.Minute
@@ -81,8 +78,7 @@ func TestATicksBoundCutsOffOnlyATickThatStoppedAdvancing(t *testing.T) {
 			defer release()
 			time.Sleep(50 * time.Second)
 			resume := bound.Exempt()
-			// Ten times the budget, exempt: the arithmetic of a
-			// training on one core.
+			// Ten budgets exempt: a training's arithmetic on one core.
 			time.Sleep(10 * budget)
 			if overran(t, tick) {
 				t.Fatal("the tick was cut off while the clock was stopped")
@@ -131,9 +127,8 @@ func TestATicksBoundCutsOffOnlyATickThatStoppedAdvancing(t *testing.T) {
 		})
 	})
 
-	// CANCELLATION STILL HOLDS: progress and exemptions touch this clock and
-	// nothing else, so a stopping engine or a lost lease ends an exempt step
-	// at once.
+	// CANCELLATION STILL HOLDS: exemptions touch only this clock, so a
+	// stopping engine or a lost lease ends an exempt step at once.
 	t.Run("an exemption does not hold off a cancellation", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			parent, stop := context.WithCancel(t.Context())

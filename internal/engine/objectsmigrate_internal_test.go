@@ -95,11 +95,9 @@ func migrationNode(t *testing.T, mode statelog.MaintenanceMode) (*Engine, *coord
 	return e, fleet, src, objects, srv
 }
 
-// A FINAL PASS IS REFUSED WHILE A NEWER BUILD'S ROWS MAY NAME A FILE: it
-// copies only what this build's tables name, and the store it leaves behind
-// is the operator's to delete, so a data node the fleet counts running a log
-// this build does not know is a refusal naming that log — before anything is
-// copied or sealed.
+// A FINAL PASS IS REFUSED WHILE A NEWER BUILD'S ROWS MAY NAME A FILE: a data
+// node the fleet counts running a log this build does not know is a refusal
+// naming that log, before anything is copied or sealed.
 //
 // Mutation: drop the question from the final pass's fence, and the fleet moves
 // with the newer log's objects left in the old store.
@@ -152,8 +150,8 @@ func TestTheFinalPassMovesTheFleetOnlyOnceEveryObjectIsCopied(t *testing.T) {
 		t.Fatalf("a final pass beside an admitted node answered %v, want a refusal naming it", err)
 	} else if strings.Contains(err.Error(), "exclude") {
 		// NO EXCLUSION IS OFFERED: it is a gesture on an open capacity
-		// window, which a final pass is not, so the command it named
-		// answered that there was none. Mutation: name it again.
+		// window, which a final pass is not, so the command would find
+		// none. Mutation: name it again.
 		t.Fatalf("a final pass beside an admitted node offered an exclusion: %v", err)
 	}
 	if err := fleet.ForgetAdmission(t.Context(), "data-b", "x"); err != nil {

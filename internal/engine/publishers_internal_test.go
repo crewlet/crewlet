@@ -17,22 +17,13 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
-// EVERY REGISTERED EVENT TYPE HAS A PUBLISHER.
+// EVERY REGISTERED EVENT TYPE HAS A PUBLISHER: a type nothing publishes is
+// INVISIBLE, since a consumer waiting for it cannot tell it from an event that
+// has not happened yet.
 //
-// A type registered and never published is a decode path, a summary renderer,
-// a category row and a documented wire name for a fact nothing produces — and
-// it is INVISIBLE, because a consumer waiting for it is indistinguishable from
-// one whose event has not happened yet. Sixteen of the sixty-one were in that
-// state, and three of them had live consumers that therefore rendered nothing:
-// the dashboard's token header, its seat `terminated` state, and the audit
-// log's line for a node coming up.
-//
-// # Why it reads the SOURCE
-//
-// Because calling every publisher needs a broker, a store, a company and a
-// fleet — which is exactly why this went unnoticed. What a publisher looks
-// like is a composite literal of the payload type outside its own package, so
-// that is what this walks for.
+// It reads the SOURCE for a composite literal of the payload type outside its
+// own package (payloadLiterals), because calling every publisher needs a
+// broker, a store, a company and a fleet.
 func TestEveryRegisteredEventTypeIsPublishedSomewhere(t *testing.T) {
 	t.Parallel()
 	producers := payloadLiterals(t)
@@ -43,9 +34,8 @@ func TestEveryRegisteredEventTypeIsPublishedSomewhere(t *testing.T) {
 			continue
 		}
 		of := reflect.TypeOf(payload).Elem()
-		// ONLY THE SHIPPED VOCABULARY. A test in this module may
-		// register a payload of its own to exercise the registry, and
-		// that one has no publisher by construction.
+		// Only the shipped vocabulary: a test's own registered payload has
+		// no publisher by construction.
 		if !strings.HasSuffix(of.PkgPath(), "/internal/events/types") {
 			continue
 		}
@@ -58,18 +48,11 @@ func TestEveryRegisteredEventTypeIsPublishedSomewhere(t *testing.T) {
 	}
 }
 
-// EVERY DECLARED GUARD KIND HAS A PRODUCER.
-//
-// The same gap as the one above, one level down: a registered event type can
-// carry a value nothing ever writes into it. `unhandled_exception` was
-// declared, documented and given a failure sentence by the dashboard, and no code
-// path set it, because nothing recovered a panic at all. The registry test
-// cannot see that, since the event type itself had producers for its other
-// kinds.
+// EVERY DECLARED GUARD KIND HAS A PRODUCER: the registry gate above, one level
+// down, since a published type can still carry a kind nothing writes.
 //
 // A producer is a breach built with the kind, `Kind: types.GuardX`, in a
-// non-test file: comparing against a kind is reading it, and only a writer
-// makes the value reachable.
+// non-test file: a comparison only reads it.
 func TestEveryDeclaredGuardKindIsProducedSomewhere(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
@@ -84,14 +67,10 @@ func TestEveryDeclaredGuardKindIsProducedSomewhere(t *testing.T) {
 	}
 }
 
-// EVERY WAY A PAGE CAN REACH A SEAT HAS A PRODUCER.
-//
-// The guard-kind gap once more, for `knowledge_read`: the type has several
-// producers, so the registry test above passes as long as ONE of them runs,
-// and a `via` nothing writes is a column value every "read by" screen offers
-// as a filter and no row can ever carry. A producer is a read built with the
-// value, `Via: types.ReadViaX` or a call handing `types.ReadViaX` to the
-// helper that builds one, in a non-test file.
+// EVERY WAY A PAGE CAN REACH A SEAT HAS A PRODUCER: a `knowledge_read` `via`
+// nothing writes is a "read by" filter no row can match. A producer is
+// `Via: types.ReadViaX`, or `types.ReadViaX` handed to knowledgeRead, in a
+// non-test file.
 func TestEveryKnowledgeReadViaIsProducedSomewhere(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
@@ -107,17 +86,14 @@ func TestEveryKnowledgeReadViaIsProducedSomewhere(t *testing.T) {
 	}
 }
 
-// guardKinds is every constant the payload package declares as a GuardKind,
-// read from its source so a kind added there is covered without being listed
-// here.
+// guardKinds is every constant the payload package declares as a GuardKind.
 func guardKinds(t *testing.T, dir string) []string {
 	t.Helper()
 	return constsOf(t, dir, "GuardKind")
 }
 
 // constsOf is every constant the payload package declares with the named
-// type, read from its source so a value added there is covered without being
-// listed here.
+// type, read from its source so a new value is covered without a list here.
 func constsOf(t *testing.T, dir, typeName string) []string {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -159,13 +135,9 @@ func constsOf(t *testing.T, dir, typeName string) []string {
 	return kinds
 }
 
-// THE WALK'S START IS NEVER ONE OF ITS OWN SKIPS. A dot-directory below the
-// module root is one the go command does not build, but the root is wherever
-// somebody cloned it, and judged by that rule a checkout at `~/.crewlet` was
-// skipped whole — so every gate above reported every value as unpublished.
-// The rule judges only the directories below the root (see publishes), and
-// this pins that for the rule the root's own name would hit — through the
-// read, the prefilter and the line split the gates above use.
+// THE WALK'S START IS NEVER ONE OF ITS OWN SKIPS: a checkout at `~/.crewlet`
+// must not be skipped whole as a dot-directory (publishes), checked through
+// the read, the prefilter and the line split the gates above use.
 func TestAModuleUnderADotNamedDirectoryIsStillRead(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join(t.TempDir(), ".crewlet")
@@ -190,13 +162,11 @@ func TestAModuleUnderADotNamedDirectoryIsStillRead(t *testing.T) {
 // sourceMatches is every first submatch of pattern in the module's non-test Go
 // files outside the payloads' own package.
 //
-// Each pattern opens with `\b` or an alternation, which leaves the regexp
-// package no literal prefix to jump to, so over the whole module each ran at
-// the race detector's megabyte a second — sixteen to twenty-eight seconds a
-// gate. A file reaches the pattern only if it holds what a match needs
-// (regexlit.Required), and where no match can cross a line
-// (regexlit.LineLocal), only its lines that do; both are exact, so the
-// submatches are the ones a scan of every byte finds.
+// The patterns have no literal prefix for the regexp package to jump to, so a
+// whole-module scan under -race took seconds a gate; a file reaches one only
+// if it holds what a match needs (regexlit.Required),
+// and only its matching lines where no match crosses a line
+// (regexlit.LineLocal); both are exact, so the result equals a full scan.
 func sourceMatches(t *testing.T, root string, pattern *regexp.Regexp) map[string]bool {
 	t.Helper()
 	need, perLine := regexlit.Required(pattern), regexlit.LineLocal(pattern)
@@ -222,12 +192,10 @@ func sourceMatches(t *testing.T, root string, pattern *regexp.Regexp) map[string
 }
 
 // publishes reports whether a file below the module root is one a publisher
-// can live in. The payloads' OWN package is not: a literal there is a test
-// fixture or a summary's receiver, not a publisher. Nor is testdata, nor a
-// dot-directory, which the go command does not build. Every directory BELOW
-// the root is judged and the root itself never is — its name is wherever
-// somebody cloned it, and judged by that rule a checkout at `~/.crewlet`
-// was skipped whole.
+// can live in: not the payloads' OWN package (a literal there is a fixture or
+// a summary's receiver), testdata, or a dot-directory the go command does not
+// build. Only directories BELOW the root are judged, since the root's name is
+// wherever somebody cloned it.
 func publishes(rel string) bool {
 	dirs := strings.Split(rel, "/")
 	for _, dir := range dirs[:len(dirs)-1] {
@@ -241,10 +209,7 @@ func publishes(rel string) bool {
 // payloadLiterals is every `types.X{` a non-test file in this module writes.
 //
 // A composite literal outside the payload's own package is what a PUBLISHER
-// looks like: the payload types have no constructors, so an event is built by
-// naming the struct. Scanning the source rather than calling anything is the
-// point: the reason this gap survived is that reaching the publishers needs a
-// broker, a store, a company and a fleet.
+// looks like: the payload types have no constructors.
 func payloadLiterals(t *testing.T) map[string]bool {
 	t.Helper()
 	found := sourceMatches(t, sourcetree.Root(t),

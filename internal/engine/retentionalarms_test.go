@@ -20,18 +20,13 @@ import (
 
 // THE ALARMS A NODE'S HEALTH CARRIES ARE THE RETENTION REPORT'S ALARMS.
 //
-// [Engine.Alarms] is what every health probe and push tick reads, and it is the
-// evaluation the gauge and the alarm log lines were fed — never a second one.
-// So after an evaluation it names exactly the alarms the report that
-// evaluation was taken from holds (`work_retention`'s `alarms`), ONE PER KIND,
-// because a kind on two logs is one alarm listing both, and before one it says
-// it cannot say: a node that has not looked at its table is not a node with
-// nothing wrong.
+// [Engine.Alarms] reads the same evaluation the gauge and alarm log lines were
+// fed: after one it names exactly the report's alarms, one per kind; before
+// one it says it cannot say, since a node that has not looked is not healthy.
 //
 // Mutation: answer (nil, true) before the first evaluation, or read a list the
-// tracker was not handed, and this fails; counting a kind once per log is
-// [TestTheHealthAlarmsCountAKindOnTwoLogsOnce]'s, since this node runs no log
-// and every alarm it raises is node-wide.
+// tracker was not handed, and this fails. One kind on two logs is
+// [TestTheHealthAlarmsCountAKindOnTwoLogsOnce]'s: this node runs no log.
 func TestTheHealthAlarmsAreTheRetentionAlarms(t *testing.T) {
 	t.Parallel()
 	r := &retention{
@@ -40,9 +35,8 @@ func TestTheHealthAlarmsAreTheRetentionAlarms(t *testing.T) {
 		nodeID: "node-a",
 		alarms: statelog.NewTracker(nil, nil),
 		pooled: map[string]poolCounters{},
-		// A SEARCH OVER ITS TARGET, so the table has something to raise:
-		// this node runs no log, and every alarm a log could raise is
-		// evaluated per log.
+		// A slow search gives the table something to raise: this node runs
+		// no log, and a log's alarms are evaluated per log.
 		index: func(_ context.Context, out *statelog.Reading) {
 			out.SearchP95 = 2 * statelog.InteractiveSearchTarget
 		},
@@ -79,11 +73,9 @@ func TestTheHealthAlarmsAreTheRetentionAlarms(t *testing.T) {
 }
 
 // THE HEARTBEAT CARRIES WHAT THE NODE'S OWN TABLE HAS FIRING, as a peer reads
-// it off the presence lease: the alarms the health envelope names, in its
-// order, each dated by the instant the tracker raised it — and nothing at all
-// where no evaluation has run, on a node with no table or one whose table has
-// not been evaluated yet, so a peer never reads a node that cannot say as a
-// quiet one.
+// it off the presence lease: the health envelope's alarms, in its order, each
+// dated by its raise — and nothing before an evaluation, so a peer never reads
+// a node that cannot say as a quiet one.
 //
 // Mutation: leave the alarms off the status, publish them as evaluated before
 // the first evaluation, or date them by the beat rather than the raise, and
@@ -97,8 +89,7 @@ func TestTheHeartbeatCarriesTheAlarmsFiringOnTheNode(t *testing.T) {
 		nodeID: "node-a",
 		alarms: statelog.NewTracker(nil, func() time.Time { return raised }),
 		pooled: map[string]poolCounters{},
-		// A SEARCH OVER ITS TARGET, as the case above has: this node runs
-		// no log, and every alarm a log could raise is evaluated per log.
+		// A slow search, as the case above has.
 		index: func(_ context.Context, out *statelog.Reading) {
 			out.SearchP95 = 2 * statelog.InteractiveSearchTarget
 		},
@@ -148,9 +139,8 @@ func TestTheHeartbeatCarriesTheAlarmsFiringOnTheNode(t *testing.T) {
 }
 
 // ONE ENTRY PER KIND ON A RUNNING NODE, however many logs the kind stands on:
-// two logs whose floor this node cannot use raise ONE `floor_unknown` listing
-// both, and the health envelope counts it once — the count a person reads
-// beside the alarm list is the list's length, never its logs'.
+// two logs with an unusable floor raise ONE `floor_unknown` listing both, and
+// the health envelope counts it once.
 //
 // Mutation: have [statelog.Tracker.Standing] answer one entry per firing
 // instance (a kind once per log), and this fails.
@@ -186,8 +176,7 @@ func TestTheHealthAlarmsCountAKindOnTwoLogsOnce(t *testing.T) {
 	if !evaluated {
 		t.Fatal("an evaluated table answered as not evaluated")
 	}
-	// SORTED, NEVER DEDUPLICATED, so a kind named twice stays visible to the
-	// comparison.
+	// Sorted, never deduplicated, so a kind named twice stays visible.
 	slices.Sort(got)
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
@@ -197,14 +186,10 @@ func TestTheHealthAlarmsCountAKindOnTwoLogsOnce(t *testing.T) {
 
 // THE HEARTBEAT LEAVES THE HARDWARE MEASUREMENT TO THE TRIM'S TICK.
 //
-// The pool-wait delta is ONE observation per interval, so the `pool_starved`
-// alarm's day-long p95 is a percentile over intervals of the trim's length;
-// taken on every [statelog.AlarmInterval] beat it would be a percentile over
-// [statelog.TrimInterval]/[statelog.AlarmInterval] (ninety) times as many,
-// shorter intervals — a different alarm nobody decided on. The backup-gauge
-// walk reads the coordination register and every announced manifest and logs
-// an unreadable directory at WARN each time, so on the beat it repeats that
-// line every [statelog.AlarmInterval] for as long as the fault lasts.
+// On every [statelog.AlarmInterval] beat the pool-wait delta would make
+// `pool_starved`'s p95 a percentile over ninety times as many, shorter
+// intervals, and the backup-gauge walk would repeat its WARN for an unreadable
+// directory on every beat.
 //
 // Mutation: have [retention.beat] call [retention.capacity], and the first half
 // fails; drop it from [retention.evaluate], and the control fails.
@@ -224,9 +209,8 @@ func TestTheHeartbeatLeavesTheHardwareMeasurementToTheTrimTick(t *testing.T) {
 		nodeID:  "node-a",
 		metrics: recorder,
 		alarms:  statelog.NewTracker(recorder, nil),
-		// A BASELINE BELOW THE DRIVER'S COUNTERS, so the next pool-wait
-		// measurement has a non-empty delta to record — an idle pool
-		// records nothing at all, and absence would prove nothing here.
+		// A baseline below the driver's counters gives the next measurement a
+		// delta to record: an idle pool records nothing, which proves nothing.
 		pooled: map[string]poolCounters{
 			"index.db": {count: -4, waited: -2 * time.Second},
 		},
@@ -254,8 +238,8 @@ func TestTheHeartbeatLeavesTheHardwareMeasurementToTheTrimTick(t *testing.T) {
 			"than trim ticks", waits, holds)
 	}
 
-	// THE CONTROL: the trim's tick does measure, or the assertion above
-	// passes on a node that never measures anything.
+	// The control: the trim's tick does measure, or the assertion above
+	// passes on a node that never measures.
 	r.tick(t.Context())
 	if waits, holds := measured(); waits != 1 || !holds {
 		t.Errorf("a trim tick recorded %d pool-wait observation(s) and "+
@@ -265,11 +249,10 @@ func TestTheHeartbeatLeavesTheHardwareMeasurementToTheTrimTick(t *testing.T) {
 
 // A FAILED COVERAGE SCAN IS READ BACK AS UNKNOWN, AND NOT RE-RUN BY A READ.
 //
-// The scan is of the whole corpus and runs on the trim's tick alone; every
-// report — each heartbeat's, each operator request's — reads the tick's figure
-// back. A failure that a read re-ran would repeat the scan and its WARN line on
-// every beat for as long as the fault lasted, and one that left the previous
-// figure behind would report a corpus nobody could read as covered.
+// The whole-corpus scan runs on the trim's tick alone and every report reads
+// its figure back: a read re-running a failure would repeat the scan and its
+// WARN on every beat, and keeping the last figure would call an unreadable
+// corpus covered.
 //
 // Mutation: scan inside [retention.semanticCoverage], or keep the last figure
 // on the error path, and this fails.
@@ -300,11 +283,9 @@ func TestAFailedCoverageScanIsUnknownUntilTheNextTick(t *testing.T) {
 	}
 }
 
-// THE HISTORY ALARM NAMES THE BUDGET THE FAN-OUT WAITS ON, and that number is
-// the fan-out's own. statelog cannot import the layer that defines it, so the
-// reading is where it crosses: a reading without it would word the alarm
-// around no figure at all, and a copy of it anywhere else would drift the day
-// the fan-out was re-tuned.
+// THE HISTORY ALARM NAMES THE BUDGET THE FAN-OUT WAITS ON, the fan-out's own
+// number. statelog cannot import its layer, so the reading carries it; a copy
+// anywhere else would drift when the fan-out is re-tuned.
 //
 // Mutation: drop the assignment from [retention.observed], and this fails.
 func TestTheRetentionReadingCarriesTheFleetReadBudget(t *testing.T) {

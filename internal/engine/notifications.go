@@ -30,14 +30,11 @@ import (
 
 // The inbound edge, wired.
 //
-// # Why the registry is rebuilt per epoch and the transports are not
-//
-// A party registry is DERIVED from one org and answers for it permanently —
-// so an apply builds a new one, and everything reading parties reads it
-// through a function rather than holding it. A transport is the opposite: it
-// holds live sockets and resolved third-party app identities, and rebuilding it on
-// every apply would drop every connection whenever an unrelated field
-// changed. So the registry is swapped and the transports are reconciled.
+// The party registry is derived from one org, so an apply builds a new one
+// and every reader reaches it through a function rather than holding it. The
+// transports hold live sockets and resolved third-party identities, so they
+// are reconciled rather than rebuilt: rebuilding would drop every connection
+// whenever an unrelated field changed.
 
 // notifications is this node's inbound machinery.
 type notifications struct {
@@ -46,71 +43,40 @@ type notifications struct {
 
 	// registryFor is the company [notifications.registry] was built from.
 	//
-	// IT IS THE RACE'S ONLY WITNESS. A seat's third-party identity is
-	// resolved from one revision's credentials and then WRITTEN into the
-	// live registry — by [Engine.refreshParties] on the apply, and by the
-	// reconcile loop's identity retry (see routing.go) on its own tick,
-	// which reads whatever company was current when it started. Nothing
-	// orders those two: a retry that began before an apply can finish
-	// after it, and it then registers the PREVIOUS revision's account
-	// over the one the apply just installed. A rotated credential then
-	// routes to nobody until the next tick happens to run cleanly, which
-	// is a delivery gap with no error anywhere.
-	//
-	// Comparing the pointer is exact rather than a heuristic: an apply
-	// publishes a new *Company and a new *Registry together under this
-	// mutex, so "the registry I am about to write was built from the
-	// company I resolved against" is a single identity test.
-	//
-	// [Engine.installEpoch] runs that same test in the other direction:
-	// it publishes no epoch whose company the registry does not index,
-	// which is what keeps [Engine.Registry] non-nil for every reader that
+	// IT IS THE RACE'S ONLY WITNESS: a seat identity resolved from one revision
+	// is written into the live registry both by [Engine.refreshParties] and by
+	// the reconcile loop's identity retry (routing.go), and nothing orders the
+	// two. A retry begun before an apply would register the previous revision's
+	// account over the new one, routing a rotated credential to nobody with no
+	// error. An apply publishes the *Company and *Registry together under mu, so
+	// comparing the pointer is exact. [Engine.installEpoch] runs the same test
+	// the other way, which keeps [Engine.Registry] non-nil for every reader that
 	// found a company through [Engine.Company].
 	registryFor *Company
 
-	// rebuilding serialises every WHOLE rebuild of the registry, and every
-	// write into a live one, against each other. See directory.go.
-	//
-	// ITS OWN MUTEX rather than mu, because a rebuild reads the identity
-	// directory — a store read — and mu is taken on the inbound hot path
-	// by every reader of [Engine.Registry]; holding mu across the read
-	// would park every delivery behind it. Always taken BEFORE mu, never
-	// while holding it.
-	//
-	// It exists because the registry has TWO rebuild triggers — a
-	// published company, and a moved directory: the identity applier's
-	// committed batch on a data node, the periodic net's re-read on a node
-	// without `data` — and the second rebuilds for the SAME company the
-	// first built for, which is exactly the case registryFor's identity
-	// test cannot tell apart.
-	// Two rebuilds interleaved that way publish whichever finished last,
-	// and that can be the one that read the directory first.
+	// rebuilding serialises every whole rebuild of the registry, and every write
+	// into a live one, against each other (directory.go). The registry has two
+	// rebuild triggers, a published company and a moved directory, and the
+	// second rebuilds for the same company, which registryFor cannot tell apart:
+	// interleaved, the last to finish wins, possibly the one that read the
+	// directory first. Its own mutex because a rebuild reads the store and mu is
+	// on the inbound hot path. Always taken BEFORE mu, never while holding it.
 	rebuilding sync.Mutex
 
-	// directory is the identity directory as the registry reads it:
-	//
-	//   - on a data node, this node's own rows, handed over by the core
-	//     runtime as it opens the domain at boot ([Engine.startCore]);
-	//   - on a node without `data`, a data node's rows through the
-	//     estate's router ([routedIdentity]), handed over by
-	//     [Engine.startRoutedDirectory] — the chart and this node's own
-	//     Tier A tokens applied to the answer here, on the asking side;
-	//   - nil only on an engine that calls neither — `crewlet validate`
-	//     and a test — which keeps the chart-only behaviour no running
-	//     node builds from.
-	//
-	// Set once, at boot, under mu.
+	// directory is the identity directory the registry reads: on a data node
+	// this node's own rows ([Engine.startCore]); on a node without `data` a data
+	// node's rows through the estate router ([routedIdentity],
+	// [Engine.startRoutedDirectory]), with the chart and this node's Tier A
+	// tokens applied on the asking side; nil only under `crewlet validate` and
+	// in tests. Set once, at boot, under mu.
 	directory notify.Directory
 
-	// directoryAt is the identity applier's committed position, and
-	// readAt what it was when the last reading was taken — so the
-	// periodic safety net can tell "nothing was applied since" from "rows
-	// moved with no committed hook", which is what an adoption does.
-	// NIL ON A NODE WITHOUT `data`, which runs no applier whose position
-	// could say the rows moved, so the net reads the directory on every
-	// tick there. directoryFailed marks a last reading that could not be
-	// taken, so the net retries it however still the position is. All
-	// three are read and written under [notifications.rebuilding].
+	// directoryAt is the identity applier's committed position and readAt its
+	// value at the last reading, so the periodic net can tell "nothing applied
+	// since" from "rows moved with no committed hook" (an adoption). NIL ON A
+	// NODE WITHOUT `data`, which runs no applier, so the net reads every tick
+	// there. directoryFailed makes the net retry a failed reading whatever the
+	// position. All three are guarded by [notifications.rebuilding].
 	directoryAt     func() statelog.Position
 	readAt          statelog.Position
 	directoryFailed bool
@@ -125,89 +91,60 @@ type notifications struct {
 	// drop every seat's websocket: see [Engine.reconcileMattermost].
 	chatPrint string
 
-	// slack is the hosted chat surface. A company may run BOTH — they are
-	// different workspaces with different people in them, and an org
-	// migrating from one to the other runs both for a while — so this is
-	// a second field rather than a choice between two.
+	// slack is the hosted chat surface, a second field rather than a choice: a
+	// company may run both (different workspaces, or mid-migration).
 	slack *slack.Transport
 
-	// chatletStatus is the engine's own chat's working-indicator driver,
-	// over the live hub the process attached ([Engine.SetChatLive]);
-	// chatletStatusMode is the `chat.chatlet.typing_status` it was built for
-	// and chatletStatusOn the attachment it was built over. Nil where the
-	// company does not run Chatlet or no hub is attached. See
-	// [Engine.applyChatStatus].
-	//
-	// NAMED FOR THE SURFACE AND THE HALF, never `chatlet`: that is the
-	// package, and the two vendor fields above are transports holding both
-	// halves, so a field called `chatlet` beside them read as a third
-	// transport — exactly the wrong-backend mix-up [Engine.Status] and
-	// [Engine.ChatThreads] exist to prevent.
+	// chatletStatus is the engine's own chat's working-indicator driver over the
+	// attached live hub ([Engine.SetChatLive]); chatletStatusMode is the
+	// `chat.chatlet.typing_status` it was built for and chatletStatusOn the
+	// attachment. Nil where the company does not run Chatlet or no hub is
+	// attached. See [Engine.applyChatStatus]. Never named `chatlet`: beside two
+	// vendor transports that reads as a third transport, the wrong-backend
+	// mix-up [Engine.Status] and [Engine.ChatThreads] exist to prevent.
 	chatletStatus     *notify.StatusDriver
 	chatletStatusMode notify.StatusMode
 	chatletStatusOn   *ChatLive
 
-	// confluence is the knowledge base's contribution: a parser, a
-	// searcher and the skills-space reader. No lifecycle, for the same
-	// reason the tracker has none — it is inbound-only, so there is no
-	// connection to lose and an unreachable instance degrades the reads
-	// that enrich a turn without taking a surface down.
+	// confluence is the knowledge base's parser, searcher and skills-space
+	// reader. No lifecycle: it is inbound-only, so an unreachable instance
+	// degrades a turn's enrichment without taking a surface down.
 	confluence confluenceParts
 
-	// jira remembers which account each seat credential authenticates as.
-	// Outside the mutex above for the same reason the code host's is: it
-	// OUTLIVES an epoch, because identity is a function of the credential
-	// and a revision that changed something else must not re-spend a
-	// request per seat to re-learn what it already knows.
+	// jira remembers which account each seat credential authenticates as,
+	// outside mu and outliving an epoch, as gitlab's does below.
 	jira jiraIdentities
 
-	// gitlab remembers which account each seat credential authenticates
-	// as. Outside the mutex above because it has its own, and because it
-	// OUTLIVES an epoch: identity is a function of the credential, so a
-	// revision that changed something else must not re-spend a request
-	// per seat to re-learn what it already knows.
+	// gitlab remembers which account each seat credential authenticates as.
+	// Outside mu (it has its own lock), and it OUTLIVES an epoch: identity is a
+	// function of the credential, so an unrelated revision must not re-spend a
+	// request per seat to re-learn it.
 	gitlab gitlabIdentities
 
-	// github is the hosted code host's, on identical terms. A company may
-	// run BOTH — an org whose own work is on one host and whose
-	// open-source contributions are on the other, or one mid-migration —
-	// so this is a second field rather than a choice between two.
+	// github is the hosted code host's, on identical terms; a company may run
+	// both code hosts.
 	github githubIdentities
 }
 
 // Registry is the live party registry.
 //
-// NEVER NIL WHILE AN EPOCH IS CURRENT, and structurally so rather than by a
-// guard here: [Engine.installEpoch], the one function that makes a company
-// current, indexes it first unless the caller already has. A reader that found
-// a company through [Engine.Company] therefore always finds a registry, and a
-// check on the read would suggest a window that does not exist.
-//
-// The window did exist while the boot path indexed its company in
-// startNotifications, the last step of construction. Every fleet duty is armed
-// before that step, and the integration reconcile loop runs a pass the moment
-// it starts: a pass that re-resolved a code host's or a tracker's seat
-// identities read this as nil and panicked, taking the whole process down on a
-// node that happened to win the duty during boot.
+// NEVER NIL WHILE AN EPOCH IS CURRENT, structurally: [Engine.installEpoch],
+// the one function that makes a company current, indexes it first. A reader
+// that found a company through [Engine.Company] always finds a registry, so a
+// check here would suggest a window that does not exist.
 func (e *Engine) Registry() *notify.Registry {
 	e.notify.mu.Lock()
 	defer e.notify.mu.Unlock()
 	return e.notify.registry
 }
 
-// registryOf is the live registry, but only if it was built from c.
+// registryOf is the live registry, but only if it was built from c
+// ([notifications.registryFor]). A caller that resolved against a company an
+// apply has since replaced gets nil and writes nothing.
 //
-// WHAT IT IS FOR is stated on [notifications.registryFor]: an identity
-// resolved from one revision may only be written into the registry built for
-// that same revision. A caller that resolved against a company an apply has
-// since replaced gets nil and writes nothing — its work is stale, and the
-// apply that replaced it has already registered the identities its own
-// revision declares.
-//
-// NIL IS NOT A FAILURE, which is why this answers one value rather than the
-// three-valued shape a lookup would take. The caller's work was simply
-// superseded; the surface's own next pass re-resolves against the current
-// revision, and the apply it lost to has already done the registration.
+// NIL IS NOT A FAILURE, hence one value rather than a three-valued shape: the
+// work was superseded, and the apply that replaced it has already registered
+// its own revision's identities.
 func (e *Engine) registryOf(c *Company) *notify.Registry {
 	e.notify.mu.Lock()
 	defer e.notify.mu.Unlock()
@@ -220,18 +157,13 @@ func (e *Engine) registryOf(c *Company) *notify.Registry {
 // RoutedSources lists the integrations whose deliveries can actually wake a
 // seat on this node, sorted.
 //
-// NOT the integrations that are CONFIGURED, which is the distinction the
-// whole method exists for. A third-party app's webhook route verifies and stores its
-// deliveries as soon as its block is present; whether one then reaches an
-// agent depends on a parser existing, and four third-party apps have the first half
-// and not the second. On every operator surface those look identical —
-// configured, secret present, deliveries arriving — so an integration that
-// ingests and routes nothing renders exactly like one that works.
+// NOT the configured ones: a webhook route verifies and stores deliveries as
+// soon as its block is present, but reaching an agent needs a parser, and
+// several apps have the first without the second. Without this they render
+// on every operator surface exactly like one that works.
 //
-// Nil when notifications have not started, which is the honest answer for
-// "cannot say" and is why this is a separate return rather than an empty
-// slice: an empty one means "nothing routes", and a company mid-boot has
-// not established that.
+// Nil when notifications have not started ("cannot say"), distinct from an
+// empty slice ("nothing routes").
 func (e *Engine) RoutedSources() []string {
 	e.notify.mu.Lock()
 	svc := e.notify.service
@@ -244,18 +176,13 @@ func (e *Engine) RoutedSources() []string {
 
 // Status is the working-indicator driver set for chat-triggered turns.
 //
-// A SET rather than one driver, because a company can run both chat
-// surfaces and a turn is triggered by exactly one of them. Handing out "the"
-// driver would raise the indicator on the wrong backend or, far more likely,
-// on none — a driver refuses a trigger whose transport is not its own, so
-// the second surface would go silently unindicated for ever.
+// A SET because a company can run several chat surfaces and a turn is
+// triggered by one: a driver refuses a trigger whose transport is not its
+// own, so a single driver would leave the others silently unindicated.
 //
-// NEVER NIL, like the registry and for the same reason: a company with no
-// chat backend gets an empty set, whose Begin reports no session and whose
-// nil session's methods are no-ops. The turn engine then says what phase it
-// is in without first asking whether indicators exist anywhere — which is a
-// question about this node's wiring that a turn has no business knowing the
-// answer to.
+// NEVER NIL: with no chat backend it is an empty set whose Begin reports no
+// session and whose nil session's methods are no-ops, so a turn never asks
+// about this node's wiring.
 func (e *Engine) Status() *notify.Statuses {
 	e.notify.mu.Lock()
 	defer e.notify.mu.Unlock()
@@ -273,45 +200,19 @@ func (e *Engine) Status() *notify.Statuses {
 }
 
 // applyChatStatus brings the engine's own chat's working indicator in line
-// with c: a driver over the attached live hub, in the mode
-// `chat.chatlet.typing_status` names, wherever the company runs Chatlet.
-//
-// # The bug this fixes
-//
-// THE INDICATOR WAS NEVER DRIVEN. The hub implemented [notify.StatusPoster]
-// completely and its tests passed, and the config field had a validator, a
-// default, a schema entry and a documented meaning — but nothing built a
-// [notify.StatusDriver] over the hub, so [Engine.Status] fanned a Chatlet
-// turn's raise across the vendor drivers alone, each refused a trigger whose
-// transport was not its own, and no Chatlet seat ever showed it was working.
-// `chat.chatlet.typing_status` had no reader at all.
-//
-// # Every node a seat runs on, not only a data node
-//
-// Built from the company's chat axis rather than from this node's own copy:
-// the raise is made by the turn's node, and a node that holds no data runs
-// seats on a Chatlet company exactly as a data node does (see remote.go). The
-// hub on that node is what records the indicator; its presence answer is what
-// peers read it through — and that answerer runs on every node, serving an
-// API or not, because the process attaches its hub to every engine it builds
-// and stops it after the drain.
-//
-// # Rebuilt only when what it reads changes
+// with c: a driver over the attached hub, in the `chat.chatlet.typing_status`
+// mode, wherever the company runs Chatlet — on every node, not only data
+// nodes, since a node holding no data runs Chatlet seats too (remote.go).
 //
 // Called at boot from [Engine.startNotifications], on every apply, and when a
-// hub is attached — the last because [New] runs [Engine.startNotifications]
-// before the process can attach one, so the boot company would otherwise have
-// no driver until its first apply. A driver owns the live sessions of turns
-// that are running, so replacing one takes its indicators down — which is
-// right when the mode changed, the company left Chatlet or the hub was
-// replaced, and pointless otherwise, so a call that changes none of the three
-// keeps the driver it has. Same rule [Engine.reconcileMattermost] applies to a
-// transport, for the same reason.
+// hub is attached ([New] starts notifications before one can be). Replacing
+// a driver takes its running turns' indicators down, so it is rebuilt only
+// when the mode, the company's use of Chatlet or the hub changed: the rule
+// [Engine.reconcileMattermost] applies to a transport.
 func (e *Engine) applyChatStatus(ctx context.Context, c *Company) {
 	e.notify.mu.Lock()
-	// THE ATTACHMENT IS READ UNDER THE LOCK, so of an apply and an
-	// attachment racing the last to take it is the one that decides — and
-	// it sees the latest hub, whichever of the two it is.
+	// Read under the lock, so of an apply and an attachment racing, the last
+	// to take it decides and sees the latest hub.
 	on := e.chatLive.Load()
 	want := notify.StatusOff
 	if on != nil && *on != nil && c != nil && c.Config != nil &&
@@ -333,9 +234,8 @@ func (e *Engine) applyChatStatus(ctx context.Context, c *Company) {
 	e.notify.chatletStatus, e.notify.chatletStatusMode = next, want
 	e.notify.chatletStatusOn = on
 	e.notify.mu.Unlock()
-	// OUTSIDE THE LOCK: a stop clears every live indicator, which is a
-	// request per session, and [Engine.Status] takes this same lock on
-	// every turn's raise.
+	// Outside the lock: a stop is a request per live session, and
+	// [Engine.Status] takes this lock on every turn's raise.
 	if old != nil {
 		old.Stop(ctx)
 	}
@@ -343,26 +243,14 @@ func (e *Engine) applyChatStatus(ctx context.Context, c *Company) {
 
 // ChatThreads is the read half of every chat surface this node runs, as one.
 //
-// A SET, on exactly the argument [Engine.Status] makes for the write half: a
-// company can run both chat surfaces and a turn is woken by one of them, so
-// handing out "the" reader would read the wrong backend's thread or, far more
-// likely, none at all.
+// A set and never nil, on [Engine.Status]'s argument: a turn is woken by one
+// of possibly several surfaces, and with none (a maintenance-mode node, or an
+// instance unreachable at boot) the empty set reports "nothing could be read".
 //
-// NEVER NIL, for the same reason as well. A company with no chat backend gets
-// an empty set, which reports "nothing could be read" for every thread — and
-// that is the honest answer rather than a wiring question the prefetch has to
-// ask, because a maintenance-mode node runs no transport at all and a node
-// whose instance was unreachable at boot runs none either.
-//
-// # And the engine's own chat
-//
-// Which has no transport to hold a reader, and had none at all: every Chatlet
-// thread reply was told its thread "could not be read from this node" and
-// sent to fetch it with its tools. Its reader reads through the estate's
-// router — this node's own copy where it serves, a data node's otherwise — as
-// the woken seat, so a node that holds no data hands its seats their thread
-// exactly as a data node does. It is the only thread context a Chatlet wake
-// gets: the record carries none ([chatlet.ThreadReader]).
+// The engine's own chat has no transport, so its reader reads through the
+// estate's router as the woken seat ([Engine.chatletThreads]), giving a node
+// that holds no data the same thread as a data node. It is the only thread
+// context a Chatlet wake gets: the record carries none ([chatlet.ThreadReader]).
 func (e *Engine) ChatThreads() *notify.ThreadReaders {
 	chatletReader := e.chatletThreads()
 	e.notify.mu.Lock()
@@ -381,16 +269,14 @@ func (e *Engine) ChatThreads() *notify.ThreadReaders {
 }
 
 // chatletThreads is the engine's own chat's thread reader, or nil where this
-// company's chat is not the engine's own here — [OperatorChat]'s rule, since
-// it is the same read the operator surfaces make: a READ, so a data node in a
-// maintenance mode, which hands its seats no chat writer, is no reason to
-// withhold one.
+// company's chat is not the engine's own here — [OperatorChat]'s rule: it is
+// a read, so a maintenance-mode data node, which hands its seats no chat
+// writer, still gets one.
 //
-// OVER THE ENGINE'S OWN TURN-START READ ([estate.TurnThreads]), never the
-// [estate.Chat] facade every reader's surface holds: the turn's read is the one
-// that hands over whom each message was written for, which a turn works its
-// waiting messages through by, and which no reader of a room may see. This is
-// the one place the engine builds that facade.
+// OVER THE TURN-START READ ([estate.TurnThreads]), never the [estate.Chat]
+// facade: only the turn's read hands over whom each message was written for,
+// which a turn works its waiting messages by and no reader of a room may see.
+// This is the one place the engine builds that facade.
 func (e *Engine) chatletThreads() notify.ThreadReader {
 	if _, ok := OperatorChat(e); !ok {
 		return nil
@@ -410,43 +296,32 @@ func (e *Engine) liveParties() notify.Parties {
 
 // refreshParties rebuilds the registry for a newly applied epoch.
 //
-// Called on EVERY apply, because an epoch is published rather than mutated:
-// a node that indexed only its first company would resolve every party
-// against an org that is no longer running, and a seat added by an apply
-// would be permanently unreachable with nothing failing.
+// On EVERY apply, because an epoch is published rather than mutated: indexing
+// only the first company would leave a seat added later unreachable with
+// nothing failing. Third-party identities a transport resolved against a live
+// server are re-registered, since they are facts about the server, not the
+// config.
 //
-// The third-party app identities a transport resolved against a live server are
-// re-registered into the new registry, because they are facts about the
-// SERVER rather than about the config — losing them on an apply would make
-// every agent's own message annotate as a stranger until something
-// reconnected.
-//
-// # And it reads the identity directory, every time
-//
-// Which human seats' contact identities are registered depends on the org AND
-// on whether each seat's holder may still be reached, so every rebuild takes a
-// fresh reading of the directory — see directory.go, which is also where the
-// OTHER trigger lives: a suspension moves nothing in the org, so this
-// function alone would never withdraw anybody.
+// Every rebuild also takes a fresh reading of the identity directory, since
+// whether a human seat's contacts register depends on whether its holder may
+// still be reached; the other trigger, a suspension, lives in directory.go.
 func (e *Engine) refreshParties(ctx context.Context, c *Company) {
 	e.notify.rebuilding.Lock()
 	defer e.notify.rebuilding.Unlock()
 	e.rebuildPartiesLocked(c, e.readStandingLocked(ctx))
 }
 
-// firstPartySources are the notification sources this engine hosts itself:
-// its tracker, its knowledge base, its chat, Gitlet and its artifacts, whose senders
-// ARE seat handles, declared to every party registry the engine builds
-// ([partyRegistry]) as the namespaces whose ids are handles.
+// firstPartySources are the notification sources this engine hosts itself
+// (tracker, knowledge base, chat, Gitlet, artifacts), whose senders ARE seat
+// handles, declared to every party registry ([partyRegistry]).
 //
-// EVERY ONE, whether or not the company runs it natively: a source the
-// company keeps on a vendor publishes no wake under this name, so declaring
-// it costs nothing, and a list that followed the company's backends would
-// be a second reading of a revision that can disagree with the parsers
-// [Engine.nativeParsers] registered from it. A native source missing here
-// fails nothing — its every sender reads as an outside party, so a person's
-// comment wakes a seat that will not act for them — which is why a test
-// holds every native parser's source to this list.
+// EVERY ONE, whether or not the company runs it natively: a source kept on a
+// vendor publishes no wake under this name, so declaring it costs nothing,
+// and following the company's backends would be a second reading of the
+// revision that can disagree with [Engine.nativeParsers]. A native source
+// missing here reads every sender as an outside party, so a person's comment
+// wakes a seat that will not act for them; a test holds every native
+// parser's source to this list.
 var firstPartySources = []string{worklet.Source, doclet.Source, chatlet.Source, gitlet.Source,
 	artifactsdomain.Source}
 
@@ -460,33 +335,27 @@ func partyRegistry(o *org.Organization, lookup org.EnvLookup) *notify.Registry {
 // rebuildPartiesLocked builds a WHOLE registry for c under one directory
 // reading and swaps it in. The caller holds [notifications.rebuilding].
 //
-// WHOLE, never a diff against the live one: the vendor identities, the chat
-// identities and the human contacts are each re-registered from their own
-// sources, because a patch applied to a fresh registry drops every identity it
-// did not touch, and a patch applied to the live one mutates a value a
-// running turn may be reading.
+// Never a diff: a patch to a fresh registry drops every identity it did not
+// touch, and a patch to the live one mutates a value a running turn may be
+// reading.
 func (e *Engine) rebuildPartiesLocked(c *Company, standing notify.Standing) {
-	// ONE SNAPSHOT for both halves, because a seat's address and its contact
-	// ids may both be `${VAR}` references, and two reads of
-	// the resolver could straddle a refresh and index the seat's address and
-	// its identities against two different stores.
+	// ONE SNAPSHOT for both halves: a seat's address and its contact ids may
+	// both be `${VAR}` references, and two reads could straddle a refresh.
 	lookup := e.resolver().LookupOK
 	reg := partyRegistry(c.Org, lookup)
 	rec := reg.ReconcileHumanContacts(c.Org, lookup, standing)
 
-	// The CODE HOST's seat identities are config-derived, so they are
-	// rebuilt from the new company here rather than carried across. Doing
-	// it before the registry is published means no window where a GitLab
-	// webhook resolves to nobody.
+	// The code hosts' seat identities are config-derived, so they are rebuilt
+	// here, before the publish, leaving no window where a webhook resolves to
+	// nobody.
 	if gl := c.Config.Integrations.GitLab; gl != nil && gl.Enabled {
 		e.notify.gitlab.register(reg, c, e.resolver())
 	}
 	if gh := c.Config.Integrations.GitHub; gh != nil && gh.Enabled {
 		e.notify.github.register(reg, c, e.resolver())
 	}
-	// THE TRACKER'S ARE TOO, and for the same reason: a Jira account id is
-	// what a webhook names a seat by, and the mapping is derived from the
-	// seat's own credential rather than declared anywhere in the org.
+	// The tracker's too: a Jira account id is what a webhook names a seat by,
+	// derived from the seat's own credential.
 	if j := c.Config.Integrations.Jira; j != nil {
 		e.notify.jira.register(reg, c, e.resolver())
 	}
@@ -494,35 +363,20 @@ func (e *Engine) rebuildPartiesLocked(c *Company, standing notify.Standing) {
 	e.notify.mu.Lock()
 	selfHosted := e.notify.mattermost
 	hosted := e.notify.slack
-	// AN APPLY STATES THE COMPANY AGAIN; a directory rebuild does not. The
-	// one is a registry for a company the live one was not built from, the
-	// other for the same company under another reading (directory.go), and
-	// only the first is the operator's answer to a person's name reported
-	// as moved.
+	// An apply restates the company; a directory rebuild (directory.go) does
+	// not, and only the first answers a person's name reported as moved.
 	restated := e.notify.registryFor != c
 	e.notify.mu.Unlock()
 
-	// THE CHAT IDENTITIES ARE CARRIED ACROSS, not rebuilt: they are facts
-	// about a live server that the transports resolved once at connect,
-	// where a tracker's or a code host's are config-derived and rebuilt
-	// above. Losing them on an apply would make every agent's own message
-	// annotate as a stranger until something reconnected.
-	//
-	// BEFORE THE SWAP, and it used to be after it: published first, the
-	// new registry answered every agent's own bot as a stranger for the
-	// moment between the two, and with the directory's trigger a registry
-	// is rebuilt on every suspension rather than only on an apply. A
-	// transport repointed at a registry nobody reads yet loses nothing —
-	// a seat it connects meanwhile registers into the one about to be
-	// published.
+	// The chat identities are CARRIED ACROSS, not rebuilt: they are facts about
+	// a live server the transports resolved at connect, and losing them would
+	// annotate every agent's own message as a stranger's. BEFORE THE SWAP, so the
+	// published registry never answers an agent's bot as a stranger; a seat
+	// connecting meanwhile registers into the registry about to be published.
 	if selfHosted != nil {
-		// WITH THE ORG'S PEOPLE, which the transport resolves to the
-		// account ids their posts carry: a person is declared by name
-		// there, and only the transport can ask the server what it names.
-		// Which of them it may register is reg's own reading of the
-		// directory, judged by the transport against the registry it
-		// writes into rather than filtered here. Their names resolve
-		// through the one snapshot above, as every other contact id does.
+		// With the org's people, which only the transport can resolve to the
+		// account ids their posts carry. Which it may register is judged against
+		// reg's own directory reading, not filtered here.
 		selfHosted.Reregister(reg, mattermost.PeopleFrom(c.Org, lookup), restated)
 	}
 	if hosted != nil {
@@ -542,22 +396,13 @@ func (e *Engine) rebuildPartiesLocked(c *Company, standing notify.Standing) {
 // group on [topics.NotificationsInbound], before anything on this node
 // publishes onto it.
 //
-// THE NOTIFICATIONS STREAM KEEPS ONLY WHAT A CONSUMER COVERS, like a seat's
-// inbox: a delivery published before the group's durable exists is discarded
-// by the broker and reported to its publisher as sent. The router's own
-// attachment creates that durable ([notify.Service.Start]), and it is the last
-// thing on the edge to start: the change feeds start ahead of it so that no
-// record committed in between goes unheard, and the Mattermost transport
-// starts ahead of it inside [Engine.startNotifications]. On a broker that has
-// never held the group, whatever either published in that window reached
-// nobody. So each path that starts one of them makes the mailbox first: boot
-// before anything that publishes, [Engine.startNativeFor] before an apply's
-// feeds, and [Engine.startNotifications] before its transports. A mailbox the
-// broker already holds costs a lookup.
-//
-// An error is the caller's to refuse on, for the reason a failed router
-// subscribe is: a node that cannot hold its inbound mail routes nothing while
-// looking healthy.
+// The stream keeps only what a consumer covers: a delivery published before
+// the group's durable exists is discarded yet reported as sent. The router's
+// attachment ([notify.Service.Start]) starts last on the edge, after the
+// change feeds and the Mattermost transport, so each path that starts a
+// publisher makes the mailbox first: boot, [Engine.startNativeFor] and
+// [Engine.startNotifications]. An error is the caller's to refuse on: a node
+// that cannot hold its inbound mail routes nothing while looking healthy.
 func (e *Engine) ensureInboundMailbox(ctx context.Context) error {
 	if _, err := e.backends.Queue.EnsureSubscription(ctx,
 		topics.NotificationsInbound, notify.InboundGroup); err != nil {
@@ -566,17 +411,14 @@ func (e *Engine) ensureInboundMailbox(ctx context.Context) error {
 	return nil
 }
 
-// startNotifications brings up the inbound edge for the applied company.
+// startNotifications brings up the inbound edge for the applied company. It
+// runs after the node: the service subscribes to a fleet-wide group and a
+// transport publishes onto this node's queue. The party registry was built
+// when the company was published ([Engine.Registry]).
 //
-// It runs after the node, because the service subscribes to a fleet-wide
-// group and a transport publishes onto this node's queue. The party registry
-// it registers identities into was built when the company was published (see
-// [Engine.Registry]), not here.
-//
-// A node that boots with no company starts nothing here, and must not: the
-// group is fleet-wide, so a service with no parsers would take deliveries
-// meant for peers that can route them and acknowledge each one as unparsed.
-// Its first company starts the edge instead, through [Engine.startInbound].
+// A node with no company starts nothing: the group is fleet-wide, so a
+// service with no parsers would take peers' deliveries and acknowledge each
+// as unparsed. Its first company starts it through [Engine.startInbound].
 func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	if c == nil {
 		return nil
@@ -594,12 +436,9 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	if mm := c.Config.Integrations.Mattermost; mm != nil && mm.Enabled {
 		transport, err := e.startMattermost(ctx, c, mm)
 		if err != nil {
-			// The company runs WITHOUT that surface rather than not
-			// at all. A chat instance being unreachable at boot is
-			// an ordinary state — it restarts, it moves, its
-			// certificate lapses — and refusing to start the
-			// company over it takes down every seat's scheduled and
-			// tracker work too.
+			// The company runs WITHOUT that surface rather than not at all: an
+			// unreachable chat instance is an ordinary state, and refusing would
+			// take every seat's scheduled and tracker work down too.
 			log.ErrorContext(ctx, "mattermost_unavailable", "error", err.Error(),
 				"detail", "the company is running without its chat surface")
 		}
@@ -611,12 +450,8 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	if sl := c.Config.Integrations.Slack; sl != nil {
 		transport, err := e.startSlack(ctx, c, sl)
 		if err != nil {
-			// Same posture as the self-hosted chat surface: the company
-			// runs WITHOUT it rather than not at all. A workspace that
-			// refuses a seat's token is an ordinary state — a token gets
-			// revoked, an app gets uninstalled — and refusing to start
-			// the company over it would take every seat's tracker and
-			// scheduled work down with it.
+			// Same posture as Mattermost: a revoked token or an uninstalled app is
+			// an ordinary state.
 			log.ErrorContext(ctx, "slack_unavailable", "error", err.Error(),
 				"detail", "the company is running without its hosted chat surface")
 		}
@@ -628,8 +463,7 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	if gl := c.Config.Integrations.GitLab; gl != nil && gl.Enabled {
 		parser, err := e.startGitLab(ctx, c, gl)
 		if err != nil {
-			// Same posture as the other two surfaces: the company runs
-			// without its code host rather than not at all.
+			// Same posture: the company runs without its code host.
 			log.ErrorContext(ctx, "gitlab_unavailable", "error", err.Error(),
 				"detail", "the company is running without its code host")
 		}
@@ -641,8 +475,7 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	if gh := c.Config.Integrations.GitHub; gh != nil && gh.Enabled {
 		parser, err := e.startGitHub(ctx, c, gh)
 		if err != nil {
-			// Same posture as every other surface: the company runs
-			// without its hosted code host rather than not at all.
+			// Same posture: the company runs without its hosted code host.
 			log.ErrorContext(ctx, "github_unavailable", "error", err.Error(),
 				"detail", "the company is running without its hosted code host")
 		}
@@ -652,12 +485,8 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 		}
 	}
 	if dd := c.Config.Integrations.Datadog; dd != nil && dd.Enabled {
-		// NO error path, and it is the only surface here without one.
-		// Every other parser needs something built first: a tracker reads
-		// an issue's watchers, a code host fans out to a thread's
-		// participants, a chat backend opens a socket. A monitor alert
-		// carries everything its routing needs on the payload itself, so
-		// there is nothing to construct and nothing that can fail to.
+		// No error path: an alert carries everything its routing needs on the
+		// payload, so there is nothing to construct that could fail.
 		parsers = append(parsers, datadog.NewParser(datadog.ParserOptions{
 			HandleTag: dd.HandleTagOrDefault(),
 			Fallback:  dd.RouteTo,
@@ -667,8 +496,7 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	if j := c.Config.Integrations.Jira; j != nil {
 		parser, err := e.startJira(ctx, c, j)
 		if err != nil {
-			// Same posture as the other surfaces: the company runs
-			// WITHOUT its Atlassian tracker rather than not at all.
+			// Same posture: the company runs without its Atlassian tracker.
 			log.ErrorContext(ctx, "jira_unavailable", "error", err.Error(),
 				"detail", "the company is running without its Atlassian tracker")
 		}
@@ -680,8 +508,7 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	if cf := c.Config.Integrations.Confluence; cf != nil {
 		parts, err := e.startConfluence(c, cf)
 		if err != nil {
-			// Same posture as every other surface: the company runs
-			// WITHOUT its knowledge base rather than not at all.
+			// Same posture: the company runs without its knowledge base.
 			log.ErrorContext(ctx, "confluence_unavailable", "error", err.Error(),
 				"detail", "the company is running without its knowledge base, "+
 					"so every turn gets an empty knowledge block")
@@ -695,16 +522,13 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 		}
 	}
 
-	// AND THE ENGINE'S OWN CHAT'S WORKING INDICATOR, which no transport
-	// carries: it is raised on the process's hub. See
-	// [Engine.applyChatStatus].
+	// And the engine's own chat's working indicator, which no transport
+	// carries ([Engine.applyChatStatus]).
 	e.applyChatStatus(ctx, c)
 
-	// THE NATIVE BACKENDS' OWN EDGE, last so a company running both a
-	// vendor tracker and Doclet keeps the vendor's parser first. The
-	// parsers are tried in order and the two answer different sources,
-	// so the order is cosmetic, but a stable one is what makes two boots
-	// of one config log the same thing.
+	// The native backends' edge last, so a vendor parser stays first. The order
+	// is cosmetic (each answers its own source) but stable, so two boots of one
+	// config log the same thing.
 	nativeParsers, nativePrompts := e.nativeParsers(c)
 	parsers = append(parsers, nativeParsers...)
 	prompts = append(prompts, nativePrompts...)
@@ -733,50 +557,40 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 func (e *Engine) inboundService(c *Company, parsers []notify.Parser,
 	prompts []notify.Prompt) (*notify.Service, error) {
 
-	// THE REPLAY'S DROPS THROUGH THE LEDGER THE ALARM'S READING SHARES, so a
-	// copy the replay delivered is accounted for as delivered and never
-	// counted as a wake the retention lost (feeddeadletters.go). Nil where
-	// none is wired, and the service then uses its queue's own verbs.
+	// The replay's drops go through the ledger the alarm reads, so a copy the
+	// replay delivered is never counted as a lost wake (feeddeadletters.go).
+	// Nil leaves the service on its queue's own verbs.
 	var letters notify.DeadLetters
 	if e.deadLetterLedger != nil {
 		letters = e.deadLetterLedger
 	}
 	return notify.New(notify.Options{
-		// THE NODE'S WAKE QUEUE, so a delivery routed to a seat whose
-		// mailbox is not complete yet is NAKed and redelivered rather than
-		// published onto a subject the stream discards. See [Engine.wakes].
+		// The node's wake queue, so a delivery to a seat whose mailbox is not
+		// complete is NAKed and redelivered, not discarded ([Engine.wakes]).
 		Queue:     e.wakes(),
 		Registry:  e.Registry,
 		Prompts:   notify.NewPrompts(prompts...),
 		Parsers:   parsers,
 		Valve:     e.notifyValve(),
 		RateLimit: e.notificationRateLimit(c),
-		// The config posture, supplied by whoever holds the control
-		// plane. A shedding node PARKS inbound deliveries rather than
-		// routing them against a company it is not sure of — and nil
-		// admits everything, which is the single-node case and the case
-		// before a control plane exists.
+		// The config posture: a shedding node PARKS inbound deliveries rather
+		// than routing against a company it is unsure of. Nil admits everything
+		// (a single node, or no control plane yet).
 		Admits: e.admits,
 		// AND A LINKED CHANGE'S SETTLE, which no wake carries (ADR-0121).
 		Observe: e.observeInbound,
-		// EVERY SOURCE THIS BUILD'S OWN PRODUCERS WRITE, whether or not
-		// this company runs it, so a first-party delivery from any other —
-		// a newer build's — is passed to a peer that parses it.
+		// Every source this build's producers write, run here or not, so a
+		// first-party delivery from any other (a newer build's) passes to a peer.
 		FirstParty:  declaredInboundSources(),
 		DeadLetters: letters,
 	})
 }
 
 // notificationRateLimit is the per-seat notification cap the inbound edge
-// started for c enforces.
-//
-// Read live off the epoch rather than captured: an apply that changes the cap
-// must take effect on the next notification, not on the next restart. And c,
-// the company the edge was started for, answers until an epoch is current,
-// because a node's first company starts the edge BEFORE publishing the epoch
-// that carries it (see [Engine.startInbound]), and a delivery a peer accepted
-// can reach this node's consumer in between. Read off the epoch alone, that
-// delivery dereferenced a company that did not exist yet.
+// started for c enforces, read live off the epoch so an apply takes effect on
+// the next notification. c answers until an epoch is current: a node's first
+// company starts the edge before publishing its epoch ([Engine.startInbound]),
+// and a peer's delivery can arrive in between.
 func (e *Engine) notificationRateLimit(c *Company) func() int {
 	return func() int {
 		if live := e.Company(); live != nil {
@@ -794,28 +608,16 @@ func (e *Engine) inboundStarted() bool {
 }
 
 // startInbound starts the inbound edge for the first company a node that
-// booted with none is handed.
+// booted with none is handed, through the function boot runs, so the edge
+// does not depend on whether the node met the company at boot or at its first
+// apply (the reconcilers only rebuild a surface on a running service).
 //
-// THROUGH THE FUNCTION BOOT RUNS, so the edge a company gets does not depend
-// on whether the node met it at boot or at its first apply. Every reconciler
-// only rebuilds a surface on a running service, and a node that booted
-// unconfigured has none, so before this a company created on a fresh node
-// verified and stored every webhook, chat message and alert and routed none of
-// them to a seat until the process restarted.
+// Called at the integrations stage, before the epoch is published, so a
+// failed start can refuse the apply; what it brought up is taken down, since
+// a leftover chat transport would hold every seat's socket beside the retry's.
 //
-// Called at the integrations stage, BEFORE the epoch is published, so a start
-// that fails can refuse the apply with nothing served. What a failed start
-// brought up is taken down again: a chat transport left running would hold
-// every seat's socket beside the one the retry opens.
-//
-// NOTHING ON A NODE IN A MAINTENANCE MODE, which has no edge for the same
-// reason a node with no company has none — its constructor returns before the
-// edge, behind the gate that keeps every publisher off it — but which an
-// apply reaches on every activation. The edge is a fleet-wide consumer that
-// routes each delivery onto a seat's mailbox, so starting it here put the
-// notification spine on every node of a capacity window the moment somebody
-// activated a revision. Deliveries are left for a node that publishes, as
-// they are while such a node boots.
+// Nothing on a node in a maintenance mode: the edge is a fleet-wide consumer
+// routing onto seats' mailboxes, and such a node publishes nothing.
 func (e *Engine) startInbound(ctx context.Context, c *Company) error {
 	if !e.mode.Publishes() {
 		return nil
@@ -829,12 +631,10 @@ func (e *Engine) startInbound(ctx context.Context, c *Company) error {
 	return nil
 }
 
-// RouteInbound adds a third-party app to this node's inbound edge after boot.
-//
-// The seam a CUSTOM TRANSPORT joins through — an integration that is not one
-// of the shipped ones, or one that came up late. Refused rather than queued
-// when the service is not running: a caller told its transport was routed
-// when nothing will ever reach it is worse off than one told it failed.
+// RouteInbound adds a third-party app to this node's inbound edge after boot:
+// the seam a custom or late transport joins through. Refused rather than
+// queued when the service is not running, since a caller told it was routed
+// when nothing will reach it is worse off than one told it failed.
 func (e *Engine) RouteInbound(_ context.Context, parsers []notify.Parser, prompts []notify.Prompt) error {
 	e.notify.mu.Lock()
 	svc := e.notify.service
@@ -861,31 +661,16 @@ func (e *Engine) RouteInbound(_ context.Context, parsers []notify.Parser, prompt
 }
 
 // WebhookSecrets is the verification material the inbound edge checks a
-// delivery against, resolved through this node's own chain.
+// delivery against, resolved through this node's own chain. Resolving it
+// here, not at the call site, keeps the security property in the engine:
+// passing the config through unresolved verifies against the literal
+// "${GITLAB_SIGNING_SECRET}".
 //
-// It lives here rather than at the call site because both halves are the
-// engine's: the applied company and the resolver. The harness assembling it
-// meant one line deciding a security property, and the mistake it invites —
-// passing the config through unresolved — leaves six routes verifying
-// against the literal "${GITLAB_SIGNING_SECRET}".
-// BUILT ONCE PER PUBLISHED COMPANY, not once per delivery.
-//
-// Assembling it walks every seat in the org and resolves each `${VAR}` it
-// finds through the secret store — and this is on the path of EVERY inbound
-// webhook, which for a busy code host is the engine's highest-rate request.
-// Per request that is a full roster walk plus one store lookup per credential,
-// for an answer that cannot have changed: the material is a function of the
-// company and of the resolver snapshot, and both move only when a company is
-// published. A rotation is no exception — it is the re-activation gesture,
-// which publishes one.
-//
-// So the cache is keyed on the company's IDENTITY, the same comparison
-// [Engine.indexes] makes and for the same reason: a company equal in every
-// field is still a different publish with its own derived state.
-//
-// LAZY rather than built in the convergence, so a node serving no webhooks
-// never assembles it at all, and the map it returns is shared with every
-// other caller — readers only.
+// Built once per published company, keyed on its identity as [Engine.indexes]
+// is: it walks every seat and resolves each `${VAR}`, on every webhook's path,
+// and depends only on the company and the resolver snapshot, which move only
+// on a publish (a rotation re-activates). Lazy, so a node serving no webhooks
+// never builds it; the returned map is shared, for readers only.
 func (e *Engine) WebhookSecrets() webhooks.Secrets {
 	company := e.Company()
 	if company == nil {
@@ -902,25 +687,17 @@ func (e *Engine) WebhookSecrets() webhooks.Secrets {
 }
 
 // VerifiableSources lists the integrations whose RESOLVED material can
-// actually verify an inbound delivery on this node, sorted.
-//
-// The companion to [Engine.RoutedSources], and the other half of "is this
-// integration really working". Routed answers whether a verified delivery
-// would reach a seat; this answers whether one would be verified at all.
-// Both are facts only the engine holds, because both depend on what this
-// process resolved rather than on what the document says.
-//
-// Nil when there is no company yet: "cannot say", which is not the same claim
-// as an empty slice.
+// actually verify an inbound delivery on this node, sorted: the companion to
+// [Engine.RoutedSources], which answers whether a verified delivery would
+// reach a seat. Nil when there is no company yet ("cannot say").
 func (e *Engine) VerifiableSources() []string {
 	if e.Company() == nil {
 		return nil
 	}
 	sources := e.WebhookSecrets().Verifiable()
 	if sources == nil {
-		// A REAL EMPTY ANSWER, not "cannot say": this node has a company
-		// and nothing in it can verify a delivery. Collapsing the two here
-		// would report the most alarming state as unknown.
+		// A real empty answer: collapsing it into nil would report the most
+		// alarming state as unknown.
 		return []string{}
 	}
 	return sources
@@ -937,39 +714,28 @@ func (e *Engine) Mattermost() *mattermost.Transport {
 
 // startMattermost brings up the chat surface.
 func (e *Engine) startMattermost(ctx context.Context, c *Company, cfg *config.Mattermost) (*mattermost.Transport, error) {
-	// RESOLVED HERE, at construction, exactly as the tracker and the code
-	// host resolve theirs: a ${VAR} stays verbatim in the stored config,
-	// which is what makes re-activating an unchanged revision pick up a
-	// rotated value. Passing cfg.URL through raw handed every seat the
-	// literal "${MATTERMOST_URL}" and failed all seven at the URL parse,
-	// with the company running "without its chat surface" — measured
-	// against a real instance whose address was exported correctly.
+	// Resolved here, at construction, as the tracker and the code host do: a
+	// ${VAR} stays verbatim in the stored config, which is what makes
+	// re-activating an unchanged revision pick up a rotated value.
 	env := e.resolver()
 	url, team := env.Value(cfg.URL), env.Value(cfg.Team)
 	if url == "" {
-		// FOR THE MESSAGE, not for the outcome: NewClient refuses an
-		// empty address on its own, so removing this changes nothing
-		// about what gets built. What it changes is what an operator
-		// reads — "no instance url" sends them to the config, which is
-		// fine, while naming the reference sends them to the variable
-		// that answered nothing, which is where the fix is. The
-		// validator already refused an enabled Mattermost with no url,
-		// so empty here can only be an unresolved ${VAR}.
+		// For the message only (NewClient refuses an empty address too): the
+		// validator already refused an enabled Mattermost with no url, so empty
+		// here is an unresolved ${VAR}, and naming the reference sends the
+		// operator to the variable.
 		return nil, fmt.Errorf("engine: mattermost: url resolved empty (%q)", cfg.URL)
 	}
 
-	// EVERY SEAT, ON EVERY NODE — not the seats this node holds. A node that
-	// restarts, drains or loses a lease leaves its seats heard by every other
-	// node meanwhile, so a seat's socket has no handover and no gap for a
-	// backfill to cover. What that costs is N sockets and N backfills per bot
-	// on an N-node fleet, and what makes it correct is the fleet-wide claim
-	// each post takes before it is published (Claims, below): one node
-	// delivers it, and every other node drops it.
+	// EVERY SEAT, ON EVERY NODE, not only this node's: a node that restarts,
+	// drains or loses a lease leaves its seats heard by the others, so a socket
+	// has no handover gap. The cost is N sockets and backfills per bot on N
+	// nodes; the fleet-wide claim each post takes (Claims, below) makes exactly
+	// one node deliver it.
 	seats := mattermost.SeatsFrom(c.Org, e.resolver().LookupOK)
 	if len(seats) == 0 {
-		// Enabled with no seat holding a bot token is a company mid-setup,
-		// not a failure: no agent has been turned on in the Mattermost
-		// integration's Agents tab yet, or the sync has not sealed a token.
+		// No seat holding a bot token is a company mid-setup (no agent turned on
+		// in the integration's Agents tab, or no token sealed yet), not a failure.
 		log.InfoContext(ctx, "mattermost_enabled_with_no_seats", "url", url)
 		return nil, nil
 	}
@@ -980,17 +746,12 @@ func (e *Engine) startMattermost(ctx context.Context, c *Company, cfg *config.Ma
 			Seats:  seats,
 			People: mattermost.PeopleFrom(c.Org, env.LookupOK),
 		},
-		// A PERSON NAMED BY AN ACCOUNT NOBODY HOLDS is a finding of the
-		// integration's status, which the reconcile loop otherwise reads
-		// again only on its own cadence — an hour, for a fix owed by the
-		// operator. Brought forward on the node whose loop holds the duty;
-		// on any other node it marks the surface for a pass that node is
-		// not running.
+		// A person named by an account nobody holds is a finding of the
+		// integration's status, which the reconcile loop otherwise re-reads only
+		// hourly; this brings it forward on the node holding the duty.
 		OnPeople:  func() { e.Integrations().Refresh(integration.KindMattermost) },
 		Publisher: e.backends.Queue,
-		// THE FLEET'S, as the change feed's and the webhook edge's are:
-		// a claim only this process could see would leave a post woken
-		// once per node.
+		// The fleet's: a process-local claim would wake a post once per node.
 		Claims:   e.backends.Fleet,
 		Follows:  e.followStore(),
 		Registry: e.Registry,
@@ -1006,20 +767,12 @@ func (e *Engine) startMattermost(ctx context.Context, c *Company, cfg *config.Ma
 		return transport, err
 	}
 
-	// RECORDED WHERE IT IS BUILT, so the boot path and the apply path agree
-	// about what the running transport was made from. Set only by the
-	// reconciler, the first apply after a boot would find no fingerprint,
-	// read that as a change, and drop every seat's websocket for nothing.
-	//
-	// AND ONLY ONCE THE TRANSPORT IS PROVEN TO RUN. The fingerprint is what
-	// the next reconcile compares against to decide there is nothing to do,
-	// so recording it for a wiring that never started is a wedge rather than
-	// a stale value: [Transport.Start] returns an error when every seat
-	// failed, and such a transport holds no websocket and has no reconnect
-	// loop of its own. The reconcile that follows would find its own freshly
-	// computed fingerprint equal to this one, return early, and never try
-	// again — the surface dead until the process restarts, with the last log
-	// line saying the previous wiring is still current.
+	// Recorded where it is built, so boot and apply agree on what the running
+	// transport came from (else the first apply drops every socket for nothing),
+	// and only once it is proven to run: [Transport.Start] errs when every seat
+	// failed, leaving no socket and no reconnect loop, and a fingerprint recorded
+	// for it would make every later reconcile return early, the surface dead
+	// until a restart.
 	e.notify.mu.Lock()
 	e.notify.chatPrint = chatFingerprint(url, team, string(cfg.Status()), seats)
 	e.notify.mu.Unlock()
@@ -1029,17 +782,10 @@ func (e *Engine) startMattermost(ctx context.Context, c *Company, cfg *config.Ma
 // followStore is the durable thread-follow state, or nil with no
 // coordination store.
 //
-// THE FLEET'S, not this node's. An inbound chat message is claimed and parsed
-// by ONE node — the notification group is a competing consumer — and the next
-// reply in the same thread by whichever node wins that time. A follow held in
-// this node's own database is therefore a follow the next reply's node cannot
-// see, so a thread reply that is not a mention reached its seat by chance, and
-// less often the more nodes a company ran. See ADR-0003.
-//
-// Nil turns thread routing OFF rather than holding follows in memory: a
-// process-local follow set dies with the process, so every restart would
-// make every seat deaf to every thread it was following — and it would do so
-// silently, which is worse than not having the feature.
+// THE FLEET'S, not this node's: the notification group is a competing
+// consumer, so the next reply in a thread may land on any node, which must
+// see the follow (ADR-0003). Nil turns thread routing OFF rather than holding
+// follows in memory, which a restart would silently lose.
 func (e *Engine) followStore() notify.FollowStore {
 	if e.backends.Fleet == nil {
 		return nil
@@ -1050,14 +796,10 @@ func (e *Engine) followStore() notify.FollowStore {
 // notifyValve is the shared per-seat notification cap, or nil with no
 // coordination store.
 //
-// Nil leaves the valve off, which is right: the counter has to be FLEET-WIDE
-// to work at all — the loop it exists to catch bounces between nodes, so no
-// single process sees enough of it to trip — and a per-process substitute
-// would report a limit it is not enforcing.
-//
-// It was on the node's own database, which made it exactly that per-process
-// substitute: a company on four nodes ran four valves, and a seat configured
-// for five notifications a second could emit twenty.
+// The counter must be FLEET-WIDE: the loop it catches bounces between nodes,
+// so no one process sees enough to trip, and a per-process valve lets N nodes
+// emit N times the configured cap. Nil leaves the valve off rather than
+// report a limit nobody enforces.
 func (e *Engine) notifyValve() notify.Valve {
 	if e.backends.Fleet == nil {
 		return nil
@@ -1090,21 +832,14 @@ func (e *Engine) admits() bool {
 // resumeInbound restarts the inbound consumer once the posture admits work
 // again.
 //
-// A deferral has two halves — the delivery goes back to the broker AND the
-// attachment quiesces — and the second half needs somebody to undo it. A
-// SEAT's mailbox has one: its own lease admission, which resumes the consumer
-// on the next successful renew (see seat.Host.noteAdmission). The ingress
-// topic has no lease and no seat, so without this a node that shed one webhook
-// would accept deliveries and read none of them for the life of the process,
-// while reporting a perfectly healthy config.
-//
-// A CONVERGENCE RATHER THAN AN EDGE, deliberately. The refusal runs on the
-// delivery path while the posture moves on the reconcile loop, so a recovery
-// edge can fire just before the shed's last in-flight delivery quiesces a
-// consumer nothing would then restart. Converging on "if I admit work, I am
-// consuming" cannot lose that race, and Unquiesce on an attachment that is
-// not quiesced reports false and does nothing — so the tick that changes
-// nothing costs one local call.
+// A deferral returns the delivery to the broker AND quiesces the attachment.
+// A seat's mailbox is resumed by its own lease admission
+// (seat.Host.noteAdmission); the ingress topic has no lease, so without this
+// a node that shed one webhook would read nothing for the life of the process.
+// A CONVERGENCE, not an edge: the refusal runs on the delivery path and the
+// posture on the reconcile loop, so an edge could fire before the last
+// in-flight delivery quiesces. Unquiesce on an unquiesced attachment reports
+// false and does nothing, so an idle tick costs one local call.
 func (e *Engine) resumeInbound(ctx context.Context) {
 	if e.backends == nil || e.backends.Queue == nil {
 		return
@@ -1113,9 +848,7 @@ func (e *Engine) resumeInbound(ctx context.Context) {
 		topics.NotificationsInbound, notify.InboundGroup)
 	switch {
 	case err != nil && !errors.Is(err, queue.ErrNotLive):
-		// Not fatal and not retried here: the next tick asks again, and
-		// a queue that cannot be resumed is not delivering anything for
-		// this to race with.
+		// Not retried here: the next tick asks again.
 		log.WarnContext(ctx, "inbound_resume_failed", "error", err)
 	case resumed:
 		log.InfoContext(ctx, "inbound_resumed",
@@ -1126,17 +859,10 @@ func (e *Engine) resumeInbound(ctx context.Context) {
 // reconcileMattermost brings the self-hosted chat surface in line with the
 // applied revision.
 //
-// GUARDED, and this is the one reconciler here that has to be. Every other
-// surface rebuilds a parser, which costs nothing; this one holds a WEBSOCKET
-// PER SEAT, so rebuilding on each apply would drop and reconnect every
-// agent's connection whenever an unrelated field changed. A reconnect is not
-// free either: a seat is deaf across it, and the backfill that closes the gap
-// re-reads each of its channels.
-//
-// So it rebuilds only when something this surface reads has changed, and the
-// fingerprint is over exactly what the transport is BUILT from. A field it
-// does not read cannot make it reconnect, and one it does read cannot be
-// changed without it noticing.
+// GUARDED, unlike the other reconcilers, because it holds a websocket per
+// seat: a seat is deaf across a reconnect and the backfill re-reads its
+// channels. So it rebuilds only when [chatFingerprint], over exactly what the
+// transport is built from, has changed.
 func (e *Engine) reconcileMattermost(ctx context.Context, c *Company) {
 	cfg := c.Config.Integrations.Mattermost
 	e.notify.mu.Lock()
@@ -1159,9 +885,8 @@ func (e *Engine) reconcileMattermost(ctx context.Context, c *Company) {
 		}
 		return
 	}
-	// THE SAME INPUTS startMattermost READS, resolved the same way, which
-	// is what makes an unchanged answer mean "nothing to do" rather than
-	// "nothing obvious to do".
+	// The same inputs startMattermost reads, resolved the same way, so an
+	// unchanged fingerprint means "nothing to do".
 	env := e.resolver()
 	print := chatFingerprint(env.Value(cfg.URL), env.Value(cfg.Team),
 		string(cfg.Status()), mattermost.SeatsFrom(c.Org, env.LookupOK))
@@ -1170,9 +895,8 @@ func (e *Engine) reconcileMattermost(ctx context.Context, c *Company) {
 	}
 	transport, err := e.startMattermost(ctx, c, cfg)
 	if err != nil || transport == nil {
-		// The previous connections keep running, for the reason the
-		// hosted surface's do: a stale credential still routes, and a
-		// dropped one routes nothing.
+		// The previous connections keep running: a stale credential still
+		// routes, and a dropped one routes nothing.
 		e.notify.mu.Lock()
 		e.notify.mattermost = previous
 		e.notify.mu.Unlock()
@@ -1194,17 +918,9 @@ func (e *Engine) reconcileMattermost(ctx context.Context, c *Company) {
 }
 
 // chatFingerprint is what a chat transport was built from, as one comparable
-// value.
-//
-// HASHED, because a seat's configuration carries its bot token: the inputs
-// have to be compared, and a comparison does not need to keep them. What is
-// stored on the engine is 32 bytes that reveal nothing and that no log line
-// ever carries.
-//
-// LENGTH-PREFIXED, so two different input sets cannot render as one string.
-// Joined with a separator, a seat named "a" holding token "b:c" and one named
-// "a:b" holding "c" are the same bytes, and the second would be read as no
-// change at all.
+// value. HASHED, because a seat's configuration carries its bot token, and
+// LENGTH-PREFIXED, because joined with a separator a seat "a" holding token
+// "b:c" and a seat "a:b" holding "c" are the same bytes.
 func chatFingerprint(url, team, status string, seats []mattermost.SeatConfig) string {
 	h := sha256.New()
 	write := func(parts ...string) {
@@ -1229,11 +945,9 @@ func (e *Engine) stopNotifications(ctx context.Context) {
 	e.notify.mattermost, e.notify.slack, e.notify.chatletStatus = nil, nil, nil
 	e.notify.mu.Unlock()
 	if service != nil {
-		// THE REPLAY OF THE INBOUND GROUP'S UNHANDLED DELIVERIES, which
-		// runs on a goroutine of the service's own ([notify.Service.Start])
-		// and reads the queue this teardown is about to close: ended and
-		// waited for first, so it never calls a closed queue. What it did
-		// not reach stays kept for the next start.
+		// The service's replay goroutine reads the queue this teardown is about
+		// to close, so it is ended and waited for first; what it did not reach is
+		// kept for the next start.
 		if err := service.Stop(ctx); err != nil {
 			log.WarnContext(ctx, "inbound_replay_stop_unfinished", "error", err.Error(),
 				"detail", "the replay of the inbound group's unhandled deliveries was "+
@@ -1241,29 +955,23 @@ func (e *Engine) stopNotifications(ctx context.Context) {
 		}
 	}
 	if chatletStatus != nil {
-		// THE SAME REASON AS THE HOSTED SURFACE BELOW: the room's presence
-		// would go on showing a seat working on a turn this process is
-		// about to stop running.
+		// Else the room's presence would show a seat working on a turn this
+		// process is about to stop running.
 		chatletStatus.Stop(ctx)
 	}
 	if selfHosted != nil {
 		selfHosted.Stop(ctx)
 	}
 	if hosted != nil {
-		// Nothing to disconnect — the inbound half is the API edge — but
-		// a raised working indicator outlives the process visibly, so a
-		// seat that vanished mid-turn would look like it was still
-		// thinking until Slack expired it.
+		// Nothing to disconnect, but a raised working indicator would outlive
+		// the process until Slack expired it.
 		hosted.Stop(ctx)
 	}
 }
 
-// errorText renders a third-party app reconcile failure for a log line, including the
-// "it built but produced nothing" case that carries no error of its own.
-//
-// SHARED by every integration reconciler, because each of them has the same two
-// ways to fail and a per-integration copy would drift the first time one of them
-// learned a third.
+// errorText renders a third-party app reconcile failure for a log line,
+// including "it built but produced nothing", which carries no error. Shared
+// by every integration reconciler so the wording cannot drift.
 func errorText(err error) string {
 	if err == nil {
 		return "the wiring produced no parser"
@@ -1271,23 +979,11 @@ func errorText(err error) string {
 	return err.Error()
 }
 
-// reconcileDatadog brings the alert parser in line with the applied revision.
-//
-// IT HAD NONE, and it is the surface that needed one most cheaply. The parser
-// set is assembled once in [Engine.startNotifications], so a company that
-// connected Datadog after boot had its route verify and store every alert
-// while nothing turned one into work for a seat, until the process was
-// restarted. Disconnecting and reconnecting is the same sequence.
-//
-// It also carries the two ROUTING settings, which no other parser here does:
-// the monitor tag key and the fallback seat. Both are ordinary config a
-// person changes, and without this a company that moved its fallback from one
-// seat to another went on waking the old one until a restart.
-//
-// Nothing here can fail, which is why this is the shortest reconciler in the
-// package: a monitor alert carries everything its routing needs on the
-// payload, so there is nothing to construct and nothing to keep running when
-// a build fails.
+// reconcileDatadog brings the alert parser in line with the applied revision,
+// since [Engine.startNotifications] assembles the parser set once: without it
+// Datadog connected after boot routes nothing, and a changed monitor tag key
+// or fallback seat goes unread until a restart. Nothing here can fail: an
+// alert carries everything its routing needs.
 func (e *Engine) reconcileDatadog(ctx context.Context, c *Company) {
 	cfg := c.Config.Integrations.Datadog
 	e.notify.mu.Lock()
@@ -1296,10 +992,9 @@ func (e *Engine) reconcileDatadog(ctx context.Context, c *Company) {
 	if svc == nil {
 		return
 	}
-	// RETIRED when the revision no longer enables it, which is the gesture
-	// an operator makes after a leaked webhook token: the route then
-	// refuses every delivery, and a parser left behind would go on waking
-	// seats from whatever had already been accepted.
+	// RETIRED when the revision disables it, the gesture after a leaked webhook
+	// token: a parser left behind would go on waking seats from deliveries
+	// already accepted.
 	if cfg == nil || !cfg.Enabled {
 		if svc.Unregister(datadog.Backend) {
 			log.InfoContext(ctx, "datadog_retired",

@@ -17,24 +17,17 @@ import (
 
 // A REAL MCP server, run as a REAL child process, for the ENGINE's wiring.
 //
-// internal/mcp already certifies the protocol and the subprocess supervision
-// against its own helper. What is untested there — and was untested anywhere,
-// because nothing joined the packages — is the engine's half: which servers
-// get spawned, which seat's credentials go into which child, and whose tool
-// surface the result lands in. That half cannot be checked with a fake bridge:
-// the property under test is that TWO CHILDREN OF ONE TEMPLATE hold two
-// different seats' identities, and a fake would assert that the fake was
-// called with them.
-//
-// So the test binary re-executes itself as a minimal MCP server. It publishes
-// one tool whose name comes from the environment, and — the load-bearing part
-// — writes the value of a named environment variable into that tool's
-// DESCRIPTION, so a test can read back what credential the child actually
-// received rather than what the engine intended to send.
+// internal/mcp certifies the protocol and the supervision; the engine's half
+// (which servers spawn, which seat's credentials go into which child, whose
+// surface the result lands in) cannot be checked with a fake bridge: the
+// property is that TWO CHILDREN OF ONE TEMPLATE hold two different seats'
+// identities, and a fake would only assert it was called with them. So the
+// test binary re-executes itself as a minimal MCP server whose tool
+// DESCRIPTION echoes named environment variables: a test reads back the
+// credential the child actually received, not what the engine meant to send.
 
-// The server's environment. Each value is declared inside the package
-// (export_test.go), because a case there launches this same server and a test
-// file inside a package can never read one outside it.
+// The server's environment, declared inside the package (export_test.go),
+// because a case there launches this same server and cannot read this file.
 const (
 	toolServerModeEnv = engine.ToolServerModeEnv
 	// toolServerToolEnv names the tools this server publishes,
@@ -46,9 +39,8 @@ const (
 	toolServerEchoEnv = engine.ToolServerEchoEnv
 
 	// toolServerRequireEnv names an environment variable the server
-	// REFUSES TO START without: empty, it says so on stderr and exits
-	// non-zero before speaking MCP, which is what a vendor's server does
-	// when the token it authenticates with is empty.
+	// REFUSES TO START without: empty, it exits non-zero before speaking
+	// MCP, as a vendor's server does when its token is empty.
 	toolServerRequireEnv = engine.ToolServerRequireEnv
 
 	// toolServerHoldEnv is a path. A server about to refuse for want of its
@@ -68,16 +60,14 @@ const (
 	toolServerLaunchesEnv = engine.ToolServerLaunchesEnv
 
 	// toolServerFailLaunchesEnv lists launch numbers, comma-separated, on
-	// which the server exits 1 before speaking MCP: a vendor that was down
-	// for those launches. Numbered by toolServerLaunchesEnv's directory,
-	// which a case using it must name.
+	// which the server exits 1 before speaking MCP: a vendor down for them.
+	// Numbered by toolServerLaunchesEnv's directory, which the case must name.
 	toolServerFailLaunchesEnv = engine.ToolServerFailLaunchesEnv
 
 	// toolServerCrashLaunchesEnv lists launch numbers, comma-separated,
 	// whose process exits with toolServerCrashCode once it has answered its
-	// first tools/call: a child that dies after a successful start. Only
-	// those launches, so the child that replaces it stays up for the case
-	// to read.
+	// first tools/call: a child that dies after a successful start, while
+	// its replacement stays up for the case to read.
 	toolServerCrashLaunchesEnv = engine.ToolServerCrashLaunchesEnv
 
 	// toolServerCrashCode is the status a server that dies on purpose exits
@@ -92,9 +82,8 @@ const (
 var thisLaunch int
 
 func TestMain(m *testing.M) {
-	// GITLET'S HOOK FIRST: an engine test that pushes for real names
-	// this binary as its proc-receive hook (gitlettest.HookCommand), and git
-	// starts it inside the push.
+	// GITLET'S HOOK FIRST: an engine test that pushes for real names this
+	// binary as its proc-receive hook (gitlettest.HookCommand).
 	if status, ok := gitlettest.RunHookIfAsked(); ok {
 		os.Exit(status)
 	}
@@ -202,14 +191,13 @@ func answerRPC(line string) bool {
 		Params json.RawMessage `json:"params"`
 	}
 	if err := json.Unmarshal([]byte(line), &req); err != nil || len(req.ID) == 0 {
-		// Unparseable, or a notification: either way there is nothing to
-		// answer. A reply to a notification is a protocol violation.
+		// Unparseable, or a notification, which a reply would violate.
 		return false
 	}
 	switch req.Method {
 	case "server/discover":
-		// Refused, so the client falls back to the legacy handshake — what
-		// most servers in the wild still do.
+		// Refused, so the client falls back to the legacy handshake, as with
+		// most servers in the wild.
 		reply(req.ID, "", `{"code":-32601,"message":"unsupported"}`)
 	case "initialize":
 		var p struct {
@@ -227,9 +215,8 @@ func answerRPC(line string) bool {
 		if name == "" {
 			name = "probe"
 		}
-		// THE ECHO. The description carries what this child's environment
-		// actually holds, which is the only way a test can tell one seat's
-		// child from another's from the outside.
+		// THE ECHO: what this child's environment actually holds, the only
+		// way a test tells one seat's child from another's from outside.
 		desc := "a test tool"
 		if keys := os.Getenv(toolServerEchoEnv); keys != "" {
 			echoed := []string{}
@@ -238,10 +225,9 @@ func answerRPC(line string) bool {
 			}
 			desc = strings.Join(echoed, ",")
 		}
-		// A DEFINITION THAT CHANGES UNDER A RUNNING SERVER: the
-		// description is read at each listing from the file named, so a
-		// case changes the tool by writing it; only the tool
-		// ToolServerDescribedEnv names, where it names one.
+		// A DEFINITION THAT CHANGES UNDER A RUNNING SERVER: the description
+		// is read from the named file at each listing, for the tool
+		// ToolServerDescribedEnv names, else every tool.
 		described := desc
 		if path := os.Getenv(engine.ToolServerDescribeEnv); path != "" {
 			if raw, err := os.ReadFile(path); err == nil {
