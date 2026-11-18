@@ -826,7 +826,9 @@ commit of yours on a **new branch** — `seats/<handle>/revert-<n>` for a seat,
 gated, reviewed and merged like any other; pass `merge` and it is merged as
 the call's second write, as far as its target's gate allows — a merge it
 could not make yet is said beside the opened change, and the revert stays
-open for you to merge.
+open for you to merge. The merged change's page then links its revert in
+place of **Revert** while the revert is open or merged, and offers Revert again
+once the revert is closed.
 
 - **Every way it was merged reverts the same way.** A merge commit is
   reverted against its first parent (git's `revert -m 1`), a squash against

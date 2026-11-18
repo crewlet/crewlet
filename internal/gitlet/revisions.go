@@ -666,7 +666,7 @@ func (b *changeBook) open(e PushEntry) (string, string) {
 		bodyBytes: int64(len(e.Change.Body)), state: state, source: source.Ref, target: e.Change.Target,
 		head: source.New, revision: 1, owner: owner, ownerKind: kind, operator: operator,
 		turn: e.Principal.Run.TurnID, run: e.Principal.Run.RunID, openedAt: b.at, opened: b.packed, version: 1,
-		position: b.packed, updatedAt: b.at}
+		position: b.packed, updatedAt: b.at, reverts: e.Change.Reverts}
 	if run := e.Principal.Run; run.WorkID != "" {
 		row.work = types.WorkItem{Backend: types.WorkBackend(run.WorkBackend), ID: run.WorkID, Key: run.WorkKey,
 			Project: run.WorkProject}
@@ -713,7 +713,7 @@ const (
 		c.work_id, c.work_key, c.work_project, c.created_turn, c.created_run, c.opened_at, c.opened_position,
 		c.closed_at, c.close_reason, c.closed_by, c.closed_by_kind, c.merged_at, c.merged_via, c.merge_oid,
 		c.merged_by, c.merged_by_kind, c.merged_operator_id, c.override_reason, c.version, c.position,
-		c.updated_at`
+		c.updated_at, c.reverts`
 	liveBySourceSQL = `SELECT ` + qualifiedChangeColumns + ` FROM json_each(?2) AS j
 		CROSS JOIN code_changes AS c INDEXED BY code_changes_open_idx
 		WHERE c.repo_id = ?1 AND c.source_ref = CAST(j.value AS TEXT) AND ` + liveChanges

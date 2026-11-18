@@ -590,6 +590,28 @@ func listedReposAmong(ctx context.Context, tx *sql.Tx, ids []string, asker Princ
 	return listed, rows.Err()
 }
 
+// revertedByIn is the latest change opened to revert row, nil for none and for
+// a change not merged, which nothing reverts.
+func revertedByIn(ctx context.Context, tx *sql.Tx, repoName string, row changeRow) (*ChangeName, error) {
+	if row.state != ChangeStateMerged {
+		return nil, nil
+	}
+	var (
+		number int64
+		by     ChangeName
+		state  string
+	)
+	err := tx.QueryRowContext(ctx, revertedBySQL, row.repoID, row.number).Scan(&number, &by.Title, &state)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("gitlet: read what reverts %s: %w", ChangeRef(repoName, row.number), err)
+	}
+	by.Repo, by.Ref, by.State = repoName, ChangeRef(repoName, number), ChangeState(state)
+	return &by, nil
+}
+
 // change serves one change by its number (the file's doc): a page of its
 // revisions, its detail beside the first; its detail alone
 // ([ReadQuery.DetailOnly]); its row alone in place of the detail
@@ -682,8 +704,13 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		if readinessErr != nil {
 			return readinessErr
 		}
+		revertedBy, revertedErr := revertedByIn(ctx, tx, repo.ref.Name, row)
+		if revertedErr != nil {
+			return revertedErr
+		}
 		out.Change = &ChangeDetail{ChangeSummary: repo.summary(row), Body: body, Authors: authors,
-			Conversation: conversation, Mergeability: merge, TargetTip: tip.OID, Participants: participants}
+			Conversation: conversation, Mergeability: merge, TargetTip: tip.OID, Participants: participants,
+			RevertedBy: revertedBy}
 		out.Change.Readiness = readiness[row.id]
 		if q.DetailOnly {
 			// No revision is read, encoded or shipped ([ReadQuery.DetailOnly]).
@@ -985,6 +1012,10 @@ const (
 		ORDER BY opened_position DESC, id DESC LIMIT ?`
 	changeByNumberSQL = `SELECT ` + changeColumns + ` FROM code_changes INDEXED BY ` + changesNumberKey + `
 		WHERE repo_id = ? AND number = ?`
+	// revertedBySQL is the latest change opened to revert a change, one seek of
+	// code_changes_reverts_idx, its predicate spelled as the index declares it.
+	revertedBySQL = `SELECT number, title, state FROM code_changes INDEXED BY ` + changesRevertsKey + `
+		WHERE repo_id = ? AND reverts = ? AND reverts > 0 ORDER BY number DESC LIMIT 1`
 	changeAuthorsSQL = `SELECT author, author_kind, first_revision, position FROM code_change_authors
 		WHERE change_id = ? ORDER BY author`
 	// Revisions with their facts, joined by key (a revision of none reads

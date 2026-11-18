@@ -9070,7 +9070,11 @@ on — the seat's own `seats/<handle>/revert-<n>`, or `revert-<n>` for a person
    landing](#how-a-write-is-built), whose record opens the change "Revert
    <repo>!<n>" from it into the same target — the push's own change, as a
    person's `-o change` opens one ([A change a push
-   opens](#a-change-a-push-opens)) — and the write's answer names it.
+   opens](#a-change-a-push-opens)) — and the write's answer names it. The
+   push's record names the change it reverts (`code_changes.reverts`, record
+   version 8), so the reverted change's read answers its latest revert as
+   `reverted_by`, and a second revert, refused `exists` on the branch, names
+   that change.
 
 A revert never moves its target: it is a change, held to the target's gate
 like any other. Asked to, the tool merges it as a second write of the same

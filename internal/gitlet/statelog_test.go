@@ -162,6 +162,12 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 			EntryID: "0190f3c4-0000-7000-8000-0000000000e1", Reason: gitlet.EjectCheckFailed, Checks: []string{"e2e"},
 			TestedIn: &gitlet.EjectionTrain{CandidateID: "0190f3c4-0000-7000-8000-0000000000d1",
 				BaseOID: oidOf("A"), CommitOID: oidOf("M")}}}}
+	case "ChangeOption.Reverts":
+		// A REVERT'S PUSH: its new branch opens the change that reverts change 1.
+		entry.Commands = []gitlet.Command{{Ref: "refs/heads/revert-1", Old: gitlet.ZeroOID, New: oidOf("B"),
+			Result: gitlet.ResultOK}}
+		entry.Change = &gitlet.ChangeOption{Target: mainRef, Title: "Revert web!1", Reverts: 1}
+		op, payload = gitlet.OpPush, gitlet.PushBatch{RepoID: repo, Pushes: []gitlet.PushEntry{entry}}
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}

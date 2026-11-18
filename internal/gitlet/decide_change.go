@@ -1253,6 +1253,9 @@ type changeRow struct {
 	// updatedAt its broker instant (store.EncodeTime): when the change last
 	// moved on its repository's subject (replicated 0147).
 	position, updatedAt int64
+	// reverts is the number of the change this one reverts, 0 for none: a
+	// revert_change's push names it ([ChangeOption.Reverts]).
+	reverts int64
 	// moved and openFindings are what a READ of changes adds from the
 	// change's conversation ([withConversations] on a listing's page, the
 	// detail's own conversation row on a change read): when it last moved on
@@ -1269,7 +1272,7 @@ func scanChange(scan func(...any) error) (changeRow, error) {
 		&r.revision, &r.owner, &ownerKind, &r.operator, &backend, &r.work.ID, &r.work.Key, &r.work.Project,
 		&r.turn, &r.run, &r.openedAt, &r.opened, &r.closedAt, &r.closeReason, &r.closedBy, &closedByKind,
 		&r.mergedAt, &via, &r.mergeOID, &r.mergedBy, &mergedByKind, &r.mergedOperator, &r.overrideReason,
-		&r.version, &r.position, &r.updatedAt)
+		&r.version, &r.position, &r.updatedAt, &r.reverts)
 	r.state, r.ownerKind, r.work.Backend, r.mergedVia = ChangeState(state), PartyKind(ownerKind),
 		types.WorkBackend(backend), MergedVia(via)
 	r.mergedByKind, r.closedByKind = PartyKind(mergedByKind), PartyKind(closedByKind)
@@ -1359,7 +1362,7 @@ const (
 		owner, owner_kind, owner_operator_id, work_backend, work_id, work_key, work_project, created_turn,
 		created_run, opened_at, opened_position, closed_at, close_reason, closed_by, closed_by_kind, merged_at,
 		merged_via, merge_oid, merged_by, merged_by_kind, merged_operator_id, override_reason, version, position,
-		updated_at`
+		updated_at, reverts`
 	changeRowSQL = `SELECT ` + changeColumns + ` FROM code_changes WHERE id = ?`
 	// changesNamedSQL is the changes a list names, each by its key, driven
 	// from the list ([changeRowsIn]).

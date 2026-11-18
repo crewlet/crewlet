@@ -805,6 +805,10 @@ Its version 7, the train a failed check's ejection names, rides only those
 ejections, so an older data node holds back such an eject and every later
 record of its repository until it is upgraded; a roll that upgrades the data
 nodes first holds back none.
+Its version 8, the change a revert's push opens naming the change it reverts,
+rides only those pushes, so an older data node holds back such a push and every
+later record of its repository until it is upgraded; a roll that upgrades the
+data nodes first holds back none.
 A release that adds a field to a record gives it the next
 version of its domain's table, and from then on an older node holds back the
 records carrying it and every later record whose scope meets one — except a

@@ -1253,8 +1253,13 @@
 .code-description__actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: flex-end;
   gap: var(--spacing-2);
+}
+
+.refusal-place.code-description__refusal {
+  align-items: flex-end;
 }
 
 @container page (width < 640px) {
@@ -1483,6 +1488,13 @@
   min-block-size: 24px;
 }
 
+/* A HEAD'S END HOLDING TWO: a link out and an edit. */
+.code-rail__ends {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
 .code-rail__head > a {
   display: inline-flex;
   flex: none;
@@ -1660,6 +1672,18 @@
   background: var(--color-surface-elevated);
 }
 
+/* A PICK'S COMPOSER: the choice of what to leave, then its form. */
+.code-line-compose {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+}
+
+.code-line-compose > form {
+  align-self: stretch;
+}
+
 .code-finding__head {
   display: flex;
   flex-wrap: wrap;
@@ -1700,6 +1724,30 @@
 
 .code-finding__end {
   margin-inline-start: auto;
+}
+
+/* Answer's own box, there only so focus can come back to it. */
+.code-finding__press {
+  display: contents;
+}
+
+/* ANSWERING IS THE CARD'S WHOLE FOOT: the answer and its note, then why, then Send. */
+.code-finding__answer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.code-finding__answer-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-finding__answer-fields > :last-child {
+  flex: 1 1 16rem;
+  min-width: 0;
 }
 
 .code-finding__by {

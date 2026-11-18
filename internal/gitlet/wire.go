@@ -2567,6 +2567,9 @@ type ChangeDetail struct {
 	// Participants is who takes part in its conversation (code_participants),
 	// by handle, at most MaxDetailParticipants; nil where not answered.
 	Participants *ParticipantList `json:"participants,omitempty"`
+	// RevertedBy is the latest change opened to revert this merged one
+	// (code_changes.reverts), nil for none. An answer field: no versionedFields row.
+	RevertedBy *ChangeName `json:"reverted_by,omitempty"`
 }
 
 // ConversationRow is a change's conversation's counters (code_conversations):

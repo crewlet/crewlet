@@ -8961,6 +8961,8 @@ export interface CodeChangeDetail extends CodeChangeSummary {
   target_tip?: string;
   /** Who takes part in its conversation, by handle (`gitlet.ParticipantList`); absent where not answered. */
   participants?: CodeParticipantList;
+  /** The latest change opened to revert this one (`code_revert_change`); absent where none was. */
+  reverted_by?: CodeChangeName;
 }
 
 /** A revision's facts, as its home Gitlet node recorded them (`gitlet.RevisionFactsRow`). */

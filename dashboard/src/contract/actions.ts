@@ -802,9 +802,10 @@ export const ACTIONS = {
     scope: "person",
   },
   code_update_change: {
-    // READY FOR REVIEW on a draft (`draft: false`), or a new title and
-    // description, against the version on screen.
-    args: ["repo", "change", "expected_version", "draft", "title", "body"],
+    // ONE EDIT A CALL, against the version on screen: Ready for review and
+    // Convert to draft (`draft`), the title and description, the work item,
+    // or the branch it merges into (`target`).
+    args: ["repo", "change", "expected_version", "draft", "title", "body", "work_item", "target"],
     domain: "code",
     apps: ["gitlet"],
     refreshes: [],

@@ -31,6 +31,7 @@ func TestAClosedCodeRecordVersionGainsNoField(t *testing.T) {
 		gitlet.TestedInVersion:    {"Ejection.TestedIn"},
 		gitlet.GateChecksVersion: {"CheckFinished.Required", "CheckStarted.Required",
 			"Ejection.Reason checks_undefined"},
+		gitlet.RevertsVersion: {"ChangeOption.Reverts"},
 	}
 	got := map[int][]string{}
 	for _, field := range gitlet.VersionedFields() {

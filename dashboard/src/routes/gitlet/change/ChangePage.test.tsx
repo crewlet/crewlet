@@ -2166,6 +2166,7 @@ test("a finding drafted on a line is the tab's until a review, and an outdated o
 
   expect(await screen.findByText("1 outdated on this file")).toBeTruthy();
   fireEvent.click(await screen.findByRole("button", { name: "Line 2: pick it" }));
+  fireEvent.click(await screen.findByRole("radio", { name: "Finding for the review" }));
   const form = await screen.findByRole("form", { name: "A finding on line 2" });
   fireEvent.change(within(form).getByRole("textbox", { name: "Title" }), {
     target: { value: "Name it" },
@@ -4992,6 +4993,9 @@ test.each([
     "Rebase",
     "Request",
     "Ask CTO to review again",
+    "Convert to draft",
+    "Change the branch web!42 merges into",
+    "Change the work item of web!42",
   ]);
   cleanup();
   const direct = await mountStory(() => story(ready()), true, viewer);
@@ -5000,4 +5004,334 @@ test.each([
   const queued = await mountStory(() => story(QUEUED), true, viewer);
   await pressAll(["Take web!42 out of the queue"]);
   expect([...story1.acted, ...direct.acted, ...queued.acted]).toEqual([]);
+});
+
+// ---- a live change's edits beside what it says ------------------------------ //
+
+/** The reader, served the edits a merged change's rail offers too. */
+const BRANCHER = { ...STEWARD, acts: [...STEWARD.acts, "code_create_branch"] };
+
+// BACK TO A DRAFT, A TARGET AND A WORK ITEM, each one update against the version
+// on screen, as the engine takes one edit a call. Mutation: drop the rail's
+// controls, send `draft: false`, or send an empty work item instead of `none`.
+test("the rail converts an open change to a draft, retargets it and sets its work item", async () => {
+  const acted = stubEngine(detail(), () => json({ outcome: "applied" }));
+  mount();
+  const reviewers = await screen.findByRole("region", { name: "Reviewers" });
+  const toDraft = within(reviewers).getByRole("button", { name: "Convert to draft" });
+  await waitFor(() => expect(toDraft.getAttribute("title")).toBeNull());
+  fireEvent.click(toDraft);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_update_change",
+    args: { change: "web!42", expected_version: 5, draft: true },
+  });
+
+  fireEvent.click(screen.getByRole("button", { name: "Change the branch web!42 merges into" }));
+  let dialog = await screen.findByRole("dialog", { name: "Merge web!42 into another branch" });
+  const field = within(dialog).getByRole("textbox", { name: "Target branch" });
+  const save = within(dialog).getByRole("button", { name: "Save" });
+  expect(save.getAttribute("title")).toBe("It merges into main already.");
+  fireEvent.change(field, { target: { value: "retry" } });
+  expect(save.getAttribute("title")).toBe(
+    "retry is what the change proposes: it merges into another branch.",
+  );
+  fireEvent.change(field, { target: { value: "release" } });
+  fireEvent.click(save);
+  await waitFor(() => expect(acted).toHaveLength(2));
+  expect(acted[1]).toEqual({
+    tool: "code_update_change",
+    args: { change: "web!42", expected_version: 5, target: "release" },
+  });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+  fireEvent.click(screen.getByRole("button", { name: "Change the work item of web!42" }));
+  dialog = await screen.findByRole("dialog", { name: "The work item of web!42" });
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Work item" }), {
+    target: { value: "ENG-42" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(acted).toHaveLength(3));
+  expect(acted[2]!.args).toEqual({ change: "web!42", expected_version: 5, work_item: "ENG-42" });
+  cleanup();
+
+  // A WORK ITEM EMPTIED IS TAKEN OFF: the engine's `none`.
+  const off = stubEngine(
+    detail({ work_item: { backend: "worklet", id: "w-1", key: "ENG-42", project: "ENG" } }),
+    () => json({ outcome: "applied" }),
+  );
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Change the work item of web!42" }));
+  dialog = await screen.findByRole("dialog", { name: "The work item of web!42" });
+  const item = within(dialog).getByRole("textbox", { name: "Work item" }) as HTMLInputElement;
+  expect(item.value).toBe("ENG-42");
+  fireEvent.change(item, { target: { value: "" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(off).toHaveLength(1));
+  expect(off[0]!.args).toEqual({ change: "web!42", expected_version: 5, work_item: "none" });
+});
+
+// ONLY AN OPEN CHANGE GOES BACK TO A DRAFT, and a finished one takes no edit.
+// Mutation: draw Convert to draft on a draft, or the edits on a merged change.
+test("a draft offers no Convert to draft, and a merged change no edit", async () => {
+  stubEngine(detail({ state: "draft" }), () => json({ outcome: "applied" }));
+  mount();
+  await screen.findByRole("button", { name: "Ready for review" });
+  expect(screen.queryByRole("button", { name: "Convert to draft" })).toBeNull();
+  cleanup();
+  stubEngine(detail({ state: "merged", readiness: undefined }), () => json({}));
+  mount();
+  await screen.findByRole("region", { name: "Branches" });
+  expect(screen.queryByRole("button", { name: "Change the branch web!42 merges into" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Change the work item of web!42" })).toBeNull();
+});
+
+// A FINISHED CHANGE WHOSE BRANCH IS GONE OFFERS IT BACK at its head, and one
+// whose branch stands offers nothing. Mutation: restore at the target's head,
+// or offer it while the branch is listed.
+test("a merged change whose source branch is gone restores it at its head", async () => {
+  const acted = stubEngine(detail({ state: "merged", readiness: undefined }), () =>
+    json({ outcome: "applied" }),
+  );
+  mount("#/gitlet/repos/web/changes/42", BRANCHER);
+  const rail = await screen.findByRole("region", { name: "Branches" });
+  const restore = await within(rail).findByRole("button", { name: "Restore branch" });
+  await waitFor(() => expect(restore.getAttribute("title")).toBeNull());
+  fireEvent.click(restore);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_create_branch",
+    args: { repo: "web", branch: "retry", at: HEAD },
+  });
+  expect(refsAsked.some((u) => u.searchParams.get("contains") === "retry")).toBe(true);
+  cleanup();
+
+  refs = () =>
+    json({
+      refs_detail: [MAIN_REF, { ...MAIN_REF, ref: "refs/heads/retry", protection: undefined }],
+      position: POSITION,
+      level: "session",
+    });
+  stubEngine(detail({ state: "merged", readiness: undefined }), () => json({}));
+  mount("#/gitlet/repos/web/changes/42", BRANCHER);
+  await waitFor(() =>
+    expect(refsAsked.some((u) => u.searchParams.get("contains") === "retry")).toBe(true),
+  );
+  await settled(() => refsAsked.length);
+  expect(screen.queryByRole("button", { name: "Restore branch" })).toBeNull();
+  cleanup();
+
+  // A LIVE CHANGE'S SOURCE IS NOT LOOKED FOR.
+  refsAsked.length = 0;
+  stubEngine(detail(), () => json({}));
+  mount();
+  await screen.findByRole("region", { name: "Branches" });
+  await settled(() => refsAsked.length);
+  expect(refsAsked.some((u) => u.searchParams.get("contains") === "retry")).toBe(false);
+});
+
+// A PLAIN COMMENT ON A LINE is one code_comment_on_change anchored at the
+// pick's last line on the head, sent at once; a finding stays a draft for the
+// review. Mutation: send no anchor, or open on Finding with no draft.
+test("a line picked takes a comment at once, anchored on the head, or a finding for the review", async () => {
+  const acted = stubEngine(detail(), () => json({ outcome: "applied" }));
+  mount("#/gitlet/repos/web/changes/42?tab=files&file=app.go");
+  fireEvent.click(await screen.findByRole("button", { name: "Line 2: pick it" }));
+  const kind = await screen.findByRole("radiogroup", { name: "What to leave on line 2" });
+  expect(within(kind).getByRole("radio", { name: "Comment" }).getAttribute("aria-checked")).toBe(
+    "true",
+  );
+  const form = await screen.findByRole("form", { name: "A comment on line 2" });
+  const send = within(form).getByRole("button", { name: "Comment" });
+  expect(send.getAttribute("title")).toBe("Write the comment first.");
+  fireEvent.change(within(form).getByRole("textbox", { name: "Comment" }), {
+    target: { value: "Why `new`?" },
+  });
+  fireEvent.click(send);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_comment_on_change",
+    args: {
+      change: "web!42",
+      body: "Why `new`?",
+      anchor: { path: "app.go", line: 2, side: "new", revision: 2 },
+    },
+  });
+  await waitFor(() =>
+    expect(screen.queryByRole("form", { name: "A comment on line 2" })).toBeNull(),
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Line 2: pick it" }));
+  fireEvent.click(await screen.findByRole("radio", { name: "Finding for the review" }));
+  expect(await screen.findByRole("form", { name: "A finding on line 2" })).toBeTruthy();
+});
+
+// APPLY SUGGESTION IS CONFIRMED, naming the branch and the head, with its
+// commit message prefilled and sent. Mutation: apply on the press, or send
+// no message.
+test("Apply suggestion opens a dialog naming the branch, its message prefilled and sent", async () => {
+  const acted = stubFindings([F1], page({ excerpts: EXCERPTS }), { revision: 1 });
+  mount("#/gitlet/repos/web/changes/42", STEWARD);
+  const card = await screen.findByRole("article", { name: `Finding: ${F1.title}` });
+  const apply = await within(card).findByRole("button", { name: "Apply suggestion" });
+  await waitFor(() => expect(apply.getAttribute("title")).toBeNull());
+  fireEvent.click(apply);
+  const dialog = await screen.findByRole("dialog", { name: "Apply the suggestion" });
+  expect(acted).toHaveLength(0);
+  expect(dialog.textContent).toMatch(/one commit on retry, on top of 0123456/);
+  const message = within(dialog).getByRole("textbox", { name: "Commit message" });
+  expect((message as HTMLTextAreaElement).value).toBe(`Apply suggestion: ${F1.title}`);
+  fireEvent.change(message, { target: { value: "Set the nonce before the shell flushes" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Commit suggestion" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_apply_suggestions",
+    args: {
+      change: "web!42",
+      findings: ["f-1"],
+      expected_head: HEAD,
+      message: "Set the nonce before the shell flushes",
+    },
+  });
+});
+
+// ANSWERING IS THE CARD'S WHOLE FOOT: Reply and Resolve go while the form is
+// open and come back on Cancel, the focus on Answer. Mutation: keep the foot
+// drawn beside the form.
+test("while a finding is answered its card shows the answer form alone", async () => {
+  stubEngine(detail(), () => json({ outcome: "applied" }));
+  mount("#/gitlet/repos/web/changes/42?tab=files&file=app.go", STEWARD);
+  fireEvent.click(await screen.findByText("1 outdated on this file"));
+  const card = await screen.findByRole("article", { name: `Finding: ${MINE.title}` });
+  const open = within(card).getByRole("button", { name: /Answer the finding/ });
+  await waitFor(() => expect(open.getAttribute("title")).toBeNull());
+  expect(within(card).getByRole("button", { name: "Reply" })).toBeTruthy();
+  fireEvent.click(open);
+  const form = await within(card).findByRole("form", { name: /Answer the finding/ });
+  for (const name of ["Reply", "Resolve"]) {
+    expect(within(card).queryByRole("button", { name }), name).toBeNull();
+  }
+  fireEvent.click(within(form).getByRole("button", { name: "Cancel" }));
+  const back = await within(card).findByRole("button", { name: /Answer the finding/ });
+  expect(within(card).getByRole("button", { name: "Reply" })).toBeTruthy();
+  await waitFor(() => expect(document.activeElement).toBe(back));
+});
+
+// A REVIEW THAT SAYS NOTHING IS HELD: changes asked for, or a comment, with no
+// summary and no finding. An approval may be bare. Mutation: hold only on the
+// standing read, and the empty request goes.
+test("Request changes is held until it says what to change", async () => {
+  const acted = stubEngine(detail(), () => json({ outcome: "applied" }), {
+    standing: () => json({ position: POSITION, level: "session", findings: [] }),
+  });
+  mount();
+  await review("Request changes");
+  const dialog = await screen.findByRole("dialog");
+  const send = within(dialog).getByRole("button", { name: "Request changes" });
+  await waitFor(() =>
+    expect(send.getAttribute("title")).toBe(
+      "Say what to change: write a summary, or draft a finding on its lines.",
+    ),
+  );
+  fireEvent.click(send);
+  expect(acted).toHaveLength(0);
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Summary" }), {
+    target: { value: "Retry with a backoff." },
+  });
+  await waitFor(() => expect(send.getAttribute("title")).toBeNull());
+  fireEvent.click(send);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]!.args).toMatchObject({
+    verdict: "request_changes",
+    summary: "Retry with a backoff.",
+  });
+});
+
+// THE CLOSE REASON HAS A LABEL, as every Gitlet dialog's field does.
+// Mutation: name the field by its placeholder alone.
+test("the close dialog's reason is a labelled field", async () => {
+  stubEngine(detail(), () => json({ outcome: "applied" }));
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Close change" }));
+  const dialog = await screen.findByRole("dialog", { name: "Close web!42" });
+  const label = [...dialog.querySelectorAll("label")].find((l) =>
+    /Reason/.test(l.textContent ?? ""),
+  );
+  expect(label).toBeTruthy();
+  expect(within(dialog).getByRole("textbox", { name: /Reason/ }).id).toBe(label!.htmlFor);
+});
+
+// THE DESCRIPTION IS EDITED IN THE COMPOSER'S EDITOR, previewed, and a refused
+// save says why on a line of its own, under the row. Mutation: draw a bare
+// textarea, or draw the refusal inside the row.
+test("the description is edited in the markdown editor, and a refused save is said under its row", async () => {
+  const acted = stubEngine(described(), () =>
+    json({ error: "stale_version", detail: "It changed since you loaded it." }, 409),
+  );
+  mount();
+  const form = await edit();
+  fireEvent.change(within(form).getByRole("textbox", { name: "Description" }), {
+    target: { value: "Three **tries**." },
+  });
+  fireEvent.click(within(form).getByRole("tab", { name: "Preview" }));
+  await waitFor(() => expect(form.querySelector(".prose strong")?.textContent).toBe("tries"));
+  fireEvent.click(within(form).getByRole("tab", { name: "Write" }));
+  fireEvent.click(within(form).getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  const said = await within(form).findByText(/changed since you loaded it/i);
+  const row = form.querySelector(".code-description__actions")!;
+  expect(row.contains(said)).toBe(false);
+  expect(said.closest(".code-description__refusal")).not.toBeNull();
+});
+
+// A REVERT OPENED IS LINKED IN REVERT'S PLACE while it stands, from the
+// change's read; a closed one gives Revert back. Mutation: draw Revert beside
+// an open revert, or drop the link.
+test("a merged change links the change that reverts it in place of Revert", async () => {
+  stubEngine(
+    detail({
+      state: "merged",
+      readiness: undefined,
+      reverted_by: { repo: "web", ref: "web!57", title: "Revert web!42", state: "open" },
+    }),
+    () => json({}),
+  );
+  mount("#/gitlet/repos/web/changes/42", STEWARD);
+  const box = await screen.findByRole("region", { name: "Revert" });
+  const link = await within(box).findByRole("link", { name: "web!57" });
+  expect(link.getAttribute("href")).toBe("#/gitlet/repos/web/changes/57");
+  expect(box.textContent).toMatch(/Reverted by web!57, still open\./);
+  expect(within(box).queryByRole("button", { name: "Revert" })).toBeNull();
+  cleanup();
+
+  stubEngine(
+    detail({
+      state: "merged",
+      readiness: undefined,
+      reverted_by: { repo: "web", ref: "web!57", title: "Revert web!42", state: "closed" },
+    }),
+    () => json({}),
+  );
+  mount("#/gitlet/repos/web/changes/42", STEWARD);
+  const again = await screen.findByRole("region", { name: "Revert" });
+  expect(await within(again).findByRole("button", { name: "Revert" })).toBeTruthy();
+  expect(again.textContent).toMatch(/Its revert web!57 was closed\./);
+});
+
+// THE REVERT'S OWN ANSWER NAMES ITS CHANGE, linked at once, before the
+// change's read does. Mutation: ignore the receipt's `opened`.
+test("a revert just opened is linked from its answer", async () => {
+  const acted = stubEngine(detail({ state: "merged", readiness: undefined }), () =>
+    json({ outcome: "applied", receipt: { reverts: "web!42", opened: "web!57" } }),
+  );
+  mount("#/gitlet/repos/web/changes/42", STEWARD);
+  const revert = await screen.findByRole("button", { name: "Revert" });
+  await waitFor(() => expect(revert.getAttribute("title")).toBeNull());
+  fireEvent.click(revert);
+  const dialog = await screen.findByRole("dialog", { name: "Revert web!42?" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Open the revert" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  const box = await screen.findByRole("region", { name: "Revert" });
+  expect(await within(box).findByRole("link", { name: "web!57" })).toBeTruthy();
+  expect(within(box).queryByRole("button", { name: "Revert" })).toBeNull();
 });

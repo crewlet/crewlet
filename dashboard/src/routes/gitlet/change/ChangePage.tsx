@@ -46,6 +46,7 @@ import { useId, useMemo, useState, type ReactNode } from "react";
 import {
   Button,
   EmptyState,
+  FormField,
   Menu,
   Skeleton,
   Stack,
@@ -589,13 +590,17 @@ function CloseDialog({
       {reopen ? (
         <p>Its source branch must still be live, and no other change open on it.</p>
       ) : (
-        <Textarea
-          aria-label="Reason"
-          placeholder="Why it is closed (optional)"
-          value={reason}
-          rows={3}
-          onChange={(event) => setReason(event.target.value)}
-        />
+        <FormField label="Reason" optional helper="Kept with the close, and shown on the change.">
+          {(field) => (
+            <Textarea
+              id={field.id}
+              aria-describedby={field.describedBy}
+              value={reason}
+              rows={3}
+              onChange={(event) => setReason(event.target.value)}
+            />
+          )}
+        </FormField>
       )}
     </Modal>
   );

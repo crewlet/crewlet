@@ -10333,7 +10333,9 @@ older data node refuses it and another answers. The detail carries
 `participants` (`rows` of `handle`, `kind`, `verdict` and `verdict_revision`,
 at most 32, and `omitted`), each reviewer row `at`, when the record that last
 moved it landed (absent past the notices' horizon), and each finding
-`raised_at`, when the review that raised it landed.
+`raised_at`, when the review that raised it landed. A merged change's detail
+carries `reverted_by` (`repo`, `ref`, `title` and `state`), the latest change
+`code_revert_change` opened to revert it, absent where none was.
 
 `?part=viewed` on `GET /gitlet/repos/{name}/changes/{n}` answers `viewed`: the
 files the asker marked viewed with `code_mark_viewed`, in `path_digest` order,
