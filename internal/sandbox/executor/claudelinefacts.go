@@ -10,9 +10,9 @@ import (
 // reader that asks twice pays for one reading. A fact is a small value as
 // written (its accessor holds it to its type), a value's kind ([valueKind]), a
 // frame's answers (what each reader's rule reads of a container or a text, the
-// asked takes a hook's words name among them, with the error it meets), or a
-// list's entries up to the first that fails, with that failure, so its
-// accessor hands what a walk handed before the failure and nothing after.
+// asked takes a hook's words name among them, with the error it meets, worded
+// as its accessor words it), or a list's entries up to the first that fails and
+// that failure, handed as a walk hands them, nothing after.
 //
 // A frame its record's type does not read ([factsOf] names which) is empty,
 // its accessor answering as on a record without the key. A line's facts are
@@ -103,10 +103,10 @@ type attachmentFacts struct {
 	// `hookEvent`, as written.
 	typ, toolUseID, by, event json.RawMessage
 	// contentTokens and stdoutTokens are which asked take tokens
-	// ([threadReader.Asking]) its `content`, and a hook_success's `stdout`,
-	// name where each is a string ([textTakes]): bit i for token i. A uint64,
-	// since a reading asks at most (steer.MaxTurnNotes 10 +
-	// sandbox.MaxJobItems 10) x sandbox.MaxNoteServes 3 = 60 ([maxAskedTakes]).
+	// ([threadReader.Asking]) a hook record's `content` ([hookRecordPrefix]),
+	// and a hook_success's `stdout`, name where each is a string
+	// ([textTakes]): bit i for token i. A uint64, the width an ask is held to
+	// ([maxAskedTakes]), which the row's own bounds stay under.
 	contentTokens, stdoutTokens uint64
 	// content is its `content`'s kind; contentStrings and contentObjects
 	// whether that is a list whose every element is a string, or an object.

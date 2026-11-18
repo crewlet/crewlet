@@ -735,9 +735,10 @@ answered. The turn's own record says what became of it (`agent_turn_steered`:
 `delivered` where it was read — the round, or the kind of step inside the launch —
 and where a later launch's brief told it again after a step that took it never
 handed it over; `expired` when the turn ended first; `missed` where a step took
-it for a reader that never had it and no later launch whose job started told
-it; or `unconfirmed`
-where the executor was handed it and never confirmed reading it). See [Turn
+it for a reader that never had it, or every serve of it to a Claude Code
+hook was lost, and no later launch whose job started told it; or
+`unconfirmed` where the executor was handed it and never confirmed reading
+it, a hook's note confirmed only by the job's own session). See [Turn
 Engine § Steering a running turn](turn-engine.md#steering-a-running-turn).
 
 ### Graceful shutdown

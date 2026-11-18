@@ -311,6 +311,11 @@ func modelRecord() coord.NodeStatusRecord {
 				{Seat: uuid.MustParse("6f1c2a3b-4d5e-5f60-8172-839405a6b7c8"), Since: at.Add(time.Second)},
 			},
 			ParkedCount: 1, ParkedSince: at.Add(time.Second),
+			Limits: []coord.ModelLimit{
+				{Window: "session", Hours: 5, State: "reached", Used: ptr(1.02), ResetsAt: at.Add(3 * time.Hour), Seen: at},
+				{Window: "weekly", Hours: 168, State: "ok", Used: ptr(0.0), Seen: at},
+				{Window: "model", Hours: 168, Model: "opus", State: "warning", Seen: at.Add(-time.Minute)},
+			},
 		}, {
 			Key: "codex-review", SignIn: "credentials",
 			LastFailure: &coord.ModelFailure{Kind: "auth", At: at, Said: "Not logged in. Run codex login."},
@@ -436,6 +441,37 @@ func TestAModelRowsParkedSeatsAreBounded(t *testing.T) {
 			row.ParkedSince, row.Parked[0].Since, want)
 	}
 }
+
+// A MODEL ROW'S LIMIT WINDOWS ARE BOUNDED on the wire, and one naming no window
+// or state is dropped, since no reader can draw it.
+func TestAModelRowsLimitWindowsAreBounded(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 18, 7, 0, 0, 0, time.UTC)
+	var limits []coord.ModelLimit
+	for i := range 3 * coord.MaxModelLimits {
+		limits = append(limits, coord.ModelLimit{Window: "model", Model: strings.Repeat("x", i+40), State: "ok", Seen: at})
+	}
+	got := recorded(t, coord.NodeStatusRecord{Node: "n1", Epoch: 1,
+		Models: []coord.ModelStatus{{Key: "default", SignIn: "token", Limits: limits}}})
+	row := got.Models[0]
+	if len(row.Limits) != coord.MaxModelLimits {
+		t.Fatalf("the row carried %d window(s), want %d", len(row.Limits), coord.MaxModelLimits)
+	}
+	if len(row.Limits[0].Model) > coord.MaxModelLimitModelBytes {
+		t.Errorf("a window's model is %d bytes on the wire, want at most %d", len(row.Limits[0].Model),
+			coord.MaxModelLimitModelBytes)
+	}
+	wire := map[string]any{"node": "n1", "epoch": 1, "at": at.Format(time.RFC3339Nano),
+		"models": []any{map[string]any{"key": "default", "limits": []any{
+			map[string]any{"state": "ok"}, map[string]any{"window": "weekly"}, "nonsense",
+			map[string]any{"window": "weekly", "state": "ok", "used": 0.4},
+		}}}}
+	if read := decoded(t, wire).Models[0].Limits; len(read) != 1 || *read[0].Used != 0.4 {
+		t.Errorf("a peer's limits read %+v, want the one window naming its kind and state", read)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
 
 // AN MCP ROW'S OUTAGE, WAIT, CLASS AND RESTARTS CROSS THE STORE whole, through
 // the bytes a store keeps a status record as, and a healthy row carries none of

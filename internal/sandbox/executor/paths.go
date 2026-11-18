@@ -91,14 +91,27 @@
 //
 // A pass over a session's main thread ([walkThread]) — a collection's read of
 // its job's copy ([ClaudeCode]'s readMainThread) and a take, its scrub and
-// its meter one pass — holds no token while it stays within its BASE, and
-// takes ONE slot of a pool of its own ([CollectionLargeReadsAtOnce],
-// [passBudget]) before it holds more, keeping it to the pass's end. Its
-// triggers: a line past [collectionBaseLineBytes] ([lineRun], beneath the
-// line reader, so read-ahead escalates early and never late), and a reading
-// keeping more than [collectionBaseRecords] records ([recordKeeper], the
-// chain). The take's scrub holds its pieces to the same base: a line, a JSON
-// token, and a stretch of short lines a redaction holds ([scrubBounds]).
+// its meter one pass — holds no token while what it holds stays within its
+// BASE, and holds ONE slot of a pool of its own ([CollectionLargeReadsAtOnce],
+// [passBudget]) while it holds more. Its triggers: a line past
+// [collectionBaseLineBytes] ([lineRun], beneath the line reader, so read-ahead
+// holds early and never late), and a reading keeping more than
+// [collectionBaseRecords] records ([recordKeeper], the chain). The take's
+// scrub holds its pieces to the same base: a line, a JSON document holding a
+// token past it (its decoder keeps that token's buffer to the document's end),
+// and a stretch of short lines a redaction holds ([scrubBounds]).
+//
+// HELD PER PIECE, KEPT ONLY WHERE A READING KEEPS RECORDS: a pass whose
+// readings keep records (the collection's chain, which may keep a long line's
+// facts) keeps the slot from its first hold to its end; every other reader,
+// the take's scrub and meter and a collection's count alone, holds it for its
+// piece past the base and drops it once done with it, the slot going back with
+// the pass's last hold. Kept to a take's end, the process's only slot would be
+// held for its whole scrub and spool, minutes, while its box's stream and every
+// take behind it waited. The scrub and the meter share one budget: with two,
+// the scrub's write would wait on the meter and the meter on the slot the
+// scrub holds. A wait its reader's context ends is [errLargeWait], a failure
+// of the read, never a reading of it. A take's Close ends both readers' waits.
 //
 // THE TWO COEFFICIENTS are the layer's own worst measurements over their own
 // bounds ([threadChain], THE BOUNDS and THE COLLECTION'S PASS): the chain at
@@ -122,19 +135,28 @@
 // holding 4 MiB at most at GOGC=10 and its heap peaking at 9 MiB at the
 // default, within the arithmetic, and taking no slot.
 //
-// THE LARGE TIER, ONE SLOT IN A POOL APART: one pass past its base holds the
-// measured 109 MiB at most. Shared with [TranscriptReadsAtOnce]'s two, a
-// collection's large pass waits behind two transcript reads of up to about
-// 11 s each and spends internal/sandbox's MainThreadReadWait (15 s), so a
-// person paging a transcript would decide how a turn's relaunch is told;
-// apart, it never does. One slot, not two: the process's thread readers then
-// hold at worst 2 x 133 + 109 = 375 MiB beside the base tier, and one waiter
-// behind one holder at its worst (2.85 s, 5.7 s loaded) is through in 11.4 s,
-// within the 15 s. A later waiter, or one behind a take whose scrub holds the
-// slot while its archive streams out, may not be: its read ends with its
-// context's error and reads as no reading (count unread), the safe side, as a
-// read past MainThreadReadWait already is. The wait is spent inside that wait,
-// never added to it.
+// THE BASE TIER'S COUNT: no token holds it, so it is every read in flight at
+// once, each about 5.1 MiB at its worst: one per seat collecting on this node,
+// one per take (its scrub's piece and its meter's line, each within the base),
+// and up to the box host's boxReadsHeld (64) reads for its peers, 326 MiB.
+//
+// THE LARGE TIER, ONE SLOT IN A POOL APART: a collection's pass past its base
+// holds the measured 109 MiB at most; a take's piece at the scrub's bound, its
+// meter beside it under the same slot, 89 MiB (BenchmarkATakeAtItsLargeTier: a
+// main-thread line and a `.json` string each at [scrubPieceMaxBytes] of bytes
+// the decode triples, both readings and the meter, read as above, 1.5 to 1.7 s
+// on two cores, its heap peaking at 137 MiB at the default GOGC against the
+// pass's 176 to 191). Shared with [TranscriptReadsAtOnce]'s two, a collection's
+// large pass waits behind two transcript reads of up to about 11 s each and
+// spends internal/sandbox's MainThreadReadWait (15 s), so a person paging a
+// transcript would decide how a turn's relaunch is told; apart, it never does.
+// One slot, not two: the process's thread readers then hold at worst
+// 2 x 133 + 109 = 375 MiB beside the base tier, and one waiter behind one
+// pass at its worst (2.85 s, 5.7 s loaded) is through in 11.4 s, within the
+// 15 s. A later waiter, or one behind a take's piece streaming from a slow box,
+// may not be: its read ends with [errLargeWait] and reads as no reading (count
+// unread), the safe side, as a read past MainThreadReadWait already is. The
+// wait is spent inside that wait, never added to it.
 //
 // WHAT RE-DERIVES IT: a layer that charges a line by its facts rather than
 // holding it whole moves the line's trigger to that charge and replaces the
@@ -155,11 +177,12 @@
 // `hook_additional_context` of the same firing at E after it. A firing is
 // keyed by the digest of its `toolUseID` and E, never the string, so what the
 // reading keeps is fixed in size whatever the thread wrote: per asked take
-// (at most 64) the firing's digest, its event as one of two constants, the two
-// records' handles, the system message's line, and the firing of the first
-// success whose stdout names the take. A context before its system message
-// pairs nothing. The success's stdout is the hook's whole answer, so it is
-// never a confirmation.
+// (at most 64; an ask of more, which a row a peer with wider bounds wrote may
+// make, decides none) the firing's digest, its event as one of two constants,
+// the two records' handles, the system message's line, and the firing of the
+// first success whose stdout names the take. A context before its system
+// message pairs nothing. The success's stdout is the hook's whole answer, so
+// it is never a confirmation.
 //
 // HELD where the pair's two records are handed ([threadChain.Handed]) on a
 // thread every size path of the resume reads alike ([threadChain.AnySize]:
@@ -173,6 +196,19 @@
 // a turn of its own. A pair the resume does not hand (a withdrawn record, a
 // parent naming no record) is neither, and is evidence its take arrived.
 //
+// SO A THREAD THAT COMPACTED DECIDES NO TAKE, wherever its pairs lie: a
+// compaction's boundary, or a record the dispatch from the last record does
+// not reach (a later root's thread), binds it to the small path, so it is no
+// thread every size path reads alike, and every take on it is undecided and
+// its note told again; Restarted is never reached through a compaction or a
+// later root. Holding the pairs after the last boundary needs what every size
+// path hands of the records after it, which the readers' ports have not
+// measured.
+//
+// No walk is made for takes on a release whose resume was not read, where
+// none can be held and so none absent, nor for more than 64, which a hook
+// record's masks cannot name ([unreadTakes]): each is undecided.
+//
 // ABSENT only where the thread proves it: its harness ended its own run, it
 // was read to its end with no refused line and no torn last piece, it never
 // restarts, another asked take at the same event is held (each event writes
@@ -181,9 +217,11 @@
 // take is named outside its own pair (a success's stdout of another firing,
 // or a system message whose firing never gets its context or names a take of
 // another event), every hook record's type, firing and event read, and the
-// chain places the thread. A take whose pair was found is never absent, and a
-// `hook_cancelled` line names no take, so it denies nothing. Anything else is
-// undecided: the safe side, a note told again.
+// chain places the thread (implied by the held take: a thread the chain
+// cannot place hands no record, so holds no take). A take whose pair was
+// found is never absent, and a `hook_cancelled` line names no take, so it
+// denies nothing. Anything else is undecided: the safe side, a note told
+// again.
 //
 // # A thread line is read in one scanner pass, never held
 //

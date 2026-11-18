@@ -108,6 +108,10 @@ const (
 	codingArgvEnv = "FAKE_AGENT_ARGV"
 	// codingReleaseEnv names a file a [codingModeHeld] run waits for.
 	codingReleaseEnv = "FAKE_AGENT_RELEASE"
+	// codingCancelEnv, set, has a released [codingModeHeld] run give its
+	// batch's hook call up as Claude Code does past the hook's timeout
+	// ([codingCancelTake]), so the note comes back at its finish.
+	codingCancelEnv = "FAKE_AGENT_CANCEL_TAKE"
 	// codingVersionEnv is the release the stand-in answers `claude
 	// --version` with, [codingVersion] when unset.
 	codingVersionEnv = "FAKE_AGENT_VERSION"
@@ -1265,12 +1269,54 @@ func codingHeldSubmit(ctx context.Context, args codingArgs, hooks codingHooks, t
 	if failed {
 		return fmt.Errorf("submitting over the bridge after the release: %s", out)
 	}
-	if _, err := hooks.play(ctx, session, codingEventToolBatch, thread, stream); err != nil {
+	if os.Getenv(codingCancelEnv) != "" {
+		if err := codingCancelTake(ctx, bridge, session); err != nil {
+			return err
+		}
+	} else if _, err := hooks.play(ctx, session, codingEventToolBatch, thread, stream); err != nil {
 		return err
 	}
 	stream.text(codingHeldReport)
 	_, err = hooks.play(ctx, session, codingEventFinish, thread, stream)
 	return err
+}
+
+// codingCancelTake is the batch's hook call given up as Claude Code gives one up
+// past its hook timeout: a steer_take on the run's session under an id of its
+// own, its answer discarded unread and nothing filed in the session, then a
+// `notifications/cancelled` naming it. Raw, because the SDK's client names
+// its calls itself and cancels only a call still waiting.
+func codingCancelTake(ctx context.Context, bridge string, session *mcp.ClientSession) error {
+	version := session.InitializeResult().ProtocolVersion
+	post := func(body string) error {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, bridge, strings.NewReader(body))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set("Mcp-Session-Id", session.ID())
+		req.Header.Set("Mcp-Protocol-Version", version)
+		res, err := httpx.Client(0).Do(req)
+		if err != nil {
+			return err
+		}
+		_, _ = io.Copy(io.Discard, res.Body)
+		_ = res.Body.Close()
+		if res.StatusCode >= http.StatusBadRequest {
+			return fmt.Errorf("the bridge answered %d", res.StatusCode)
+		}
+		return nil
+	}
+	if err := post(`{"jsonrpc":"2.0","id":"cancelled-hook-1","method":"tools/call","params":{"name":"` +
+		mcpbridge.SteerTool + `","arguments":{"event":"` + codingEventToolBatch + `","agent":""}}}`); err != nil {
+		return fmt.Errorf("the batch's hook call: %w", err)
+	}
+	if err := post(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":` +
+		`"cancelled-hook-1","reason":"hook timed out"}}`); err != nil {
+		return fmt.Errorf("giving the batch's hook call up: %w", err)
+	}
+	return nil
 }
 
 // bridgeURL is the seat's tool bridge, read off the MCP config the runner

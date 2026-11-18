@@ -1950,8 +1950,10 @@ type PendingRun struct {
 	BoxAnswered bool `json:"-"`
 
 	// BoxHarnessEnd is TRANSIENT as well: how the job's harness ended as THIS
-	// claim's read of its box found it, where a step after the read handed the
-	// claim back before the read's own record of it ([Release.HarnessEnd]).
+	// claim's read of its box found it, set with BoxAnswered, so every hand-back
+	// after the read records it in its own write ([Release.HarnessEnd]). A lost
+	// job's leaves it empty: its row's loss record already says the job is over
+	// ([PendingRun.Lost]), and no release clears it.
 	BoxHarnessEnd HarnessEnd `json:"-"`
 
 	// Deadline is when the turn that launched this run stops being worked
@@ -2866,15 +2868,16 @@ type PendingStore interface {
 
 	// ReleaseClaim hands a claimed run back to the status it was claimed from,
 	// reporting whether this call did; only while the claim still stands (see
-	// [Release]). The claim's charge is recorded in the same write, and never
-	// cleared by one ([PendingRun.Charged]). A recorded answer the claim's turn
+	// [Release]). The claim's charge, never cleared by one
+	// ([PendingRun.Charged]), and the harness's end ([Release.HarnessEnd]), a
+	// cut-off the record holds standing as [PendingStore.MarkHarnessEnd] keeps
+	// it, are recorded in the same write. A recorded answer the claim's turn
 	// took is the run's again ([RecordedAnswer.TakenAt] cleared); a claim whose
 	// answer an ending let go is not released to [StatusAnswered]. A release
 	// that holds the resume ([Release.Hold]) records the completion as owed in
 	// the same write ([LaunchRecord.RefusalOwed]). False is not an error; a
-	// release to a status outside [Claimable], or a hold whose condition is
-	// past [MaxOwedConditionBytes], is. See the package doc, "Releasing a
-	// claim".
+	// release to a status outside [Claimable], or a hold whose condition is past
+	// [MaxOwedConditionBytes], is. See the package doc, "Releasing a claim".
 	ReleaseClaim(ctx context.Context, turnID string, release Release) (bool, error)
 
 	// LiftHold clears the hold a release put on a run's resume

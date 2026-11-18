@@ -81,13 +81,30 @@ type hookReading struct {
 	lastRestart, lastCleared int
 	stray, malformed, broken bool
 	torn                     bool
-	err                      error
+	err, askErr              error
 }
 
 var _ takeAsker = (*hookReading)(nil)
 
-// newHookReading reads takes, at most [maxAskedTakes], off the handles chain
-// files.
+// unreadTakes is why no walk is made for ask's takes, "" where one is: none
+// can be held off a release whose resume was not read, and so none absent;
+// past [maxAskedTakes], a hook record's masks cannot name them, so a later
+// build's longer list is refused before the thread is opened.
+func unreadTakes(ask sandbox.MainThreadAsk) string {
+	switch {
+	case len(ask.Takes) == 0:
+		return ""
+	case !claudeResumeRead(ask.Release):
+		return fmt.Sprintf("the release that ran the job, %q, is none whose resume was read", ask.Release)
+	case len(ask.Takes) > maxAskedTakes:
+		return fmt.Sprintf("%v: %d asked, %d held", errAskedPastMasks, len(ask.Takes), maxAskedTakes)
+	}
+	return ""
+}
+
+// newHookReading reads takes off the handles chain files; past
+// [maxAskedTakes] of them, which [unreadTakes] refuses first, it decides none
+// ([threadReader.Asking]).
 func newHookReading(chain *chainReading, takes []sandbox.AskedTake) *hookReading {
 	r := &hookReading{chain: chain, tokens: make([]string, len(takes)), takes: make([]hookTake, len(takes))}
 	for i, take := range takes {
@@ -96,8 +113,8 @@ func newHookReading(chain *chainReading, takes []sandbox.AskedTake) *hookReading
 	return r
 }
 
-// asked is the take tokens the layer reads hook records for.
-func (r *hookReading) asked() []string { return r.tokens }
+// ask asks reader for the takes' tokens; a refusal decides none of them.
+func (r *hookReading) ask(reader *threadReader) { r.askErr = reader.Asking(r.tokens) }
 
 func (r *hookReading) line(l threadLine) {
 	if r.restarts.See(l.Head) {
@@ -203,8 +220,12 @@ func (r *hookReading) end(torn bool, err error) { r.torn, r.err = torn, err }
 
 // receipts decides each take ask asked once the walk has ended, Ending the
 // chain under ctx: Held, Restarted, Absent, or none of these with Why (the
-// package doc's "A hook's note, confirmed off its job's main thread").
+// package doc's "A hook's note, confirmed off its job's main thread"). Its
+// caller walks for no take [unreadTakes] refuses.
 func (r *hookReading) receipts(ctx context.Context, ask sandbox.MainThreadAsk) sandbox.HookReceipts {
+	if r.askErr != nil {
+		return sandbox.HookReceipts{Why: fmt.Sprintf("the takes were not asked of the thread: %v", r.askErr)}
+	}
 	if r.err != nil {
 		return sandbox.HookReceipts{Why: fmt.Sprintf("the thread was not read to its end: %v", r.err)}
 	}
@@ -219,7 +240,7 @@ func (r *hookReading) receipts(ctx context.Context, ask sandbox.MainThreadAsk) s
 		}
 	}
 	unplaced, unknown := chain.Unknown()
-	release, anySize := claudeResumeRead(ask.Release), chain.AnySize()
+	anySize := chain.AnySize()
 	stray := r.stray
 	held := make([]bool, len(ask.Takes))
 	var heldAt [hookEventStop + 1]bool
@@ -235,8 +256,6 @@ func (r *hookReading) receipts(ctx context.Context, ask sandbox.MainThreadAsk) s
 			continue
 		}
 		switch {
-		case !release:
-			why(take.Take, fmt.Sprintf("the release that ran the job, %q, is none whose resume was read", ask.Release))
 		case !anySize:
 			why(take.Take, "the thread is not one every size path of the resume reads alike")
 		case chain.Handed(t.system) != handedYes || chain.Handed(t.context) != handedYes:

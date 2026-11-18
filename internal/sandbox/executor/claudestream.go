@@ -273,6 +273,10 @@ type claudeEvents struct {
 	// reported holding any model to ([claudeEvents.reportedWindow]), 0 where
 	// none reported one.
 	window int64
+
+	// limits is the stream's last `rate_limit_event` line, verbatim
+	// ([claudeEvents.limitReport]).
+	limits string
 }
 
 // measure reads one assistant line for the session's newest request
@@ -396,6 +400,8 @@ func (d *claudeEvents) Line(line []byte) {
 		return
 	}
 	switch looseString(ev.Type) {
+	case claudeLimitEvent:
+		d.limits = string(line)
 	case "system":
 		if line, ok := claudeSteerLine(looseString(ev.Subtype), ev.Content); ok {
 			d.transcript.add(line)
@@ -460,6 +466,13 @@ func (d *claudeEvents) Line(line []byte) {
 		}
 	}
 }
+
+// claudeLimitEvent is the event Claude Code writes the plan's limit windows in,
+// read by the engine's profile ([sandbox.Result.Limits]).
+const claudeLimitEvent = "rate_limit_event"
+
+// limitReport is the stream's last limit report line, "" where it wrote none.
+func (d *claudeEvents) limitReport() string { return d.limits }
 
 // reportedWindow is the least context window any result's per-run figures
 // reported for a model, subagents' included, 0 where none did

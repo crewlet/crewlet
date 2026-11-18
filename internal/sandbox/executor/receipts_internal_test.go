@@ -84,8 +84,11 @@ func rhPair(event, firing string, takes ...string) []rhRecord {
 
 // rhChained is records chained in order, each the next's parent, the first
 // rooting the thread under a prompt.
-func rhChained(records ...[]rhRecord) []string {
-	lines := []string{rcPrompt(0, 1, 0)}
+func rhChained(records ...[]rhRecord) []string { return rhOn([]string{rcPrompt(0, 1, 0)}, records...) }
+
+// rhOn is lines, then records chained in order after its last.
+func rhOn(lines []string, records ...[]rhRecord) []string {
+	lines = slices.Clone(lines)
 	for _, group := range records {
 		for _, record := range group {
 			n := len(lines) + 1
@@ -105,21 +108,28 @@ func rhBase() []string {
 		rhPair(rhStop, rhStopFire, rhStopTake))
 }
 
-// rhProbe is the lines of a probe's kept main thread before its /compact, whose
-// boundary would leave no pair before it held: a batch's and a Stop's pairs as
-// the release wrote them.
+// rhProbe is the lines of a probe's kept main thread before its /compact: a
+// batch's and a Stop's pairs as the release wrote them, on a thread every size
+// path reads alike, which the whole thread is not ([rhProbeWhole]).
 func rhProbe(t *testing.T, thread string) []string {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("testdata", "claude", thread))
-	if err != nil {
-		t.Fatal(err)
-	}
-	lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+	lines := rhProbeWhole(t, thread)
 	cut := slices.IndexFunc(lines, func(l string) bool { return strings.Contains(l, `"subtype":"compact_boundary"`) })
 	if cut < 0 {
 		t.Fatalf("%s holds no compaction to cut before", thread)
 	}
 	return lines[:cut]
+}
+
+// rhProbeWhole is the lines of a probe's whole kept main thread, its /compact
+// included.
+func rhProbeWhole(t *testing.T, thread string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "claude", thread))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
 }
 
 // rhRead is what readMainThread answers of lines, the box's main thread, asked
@@ -226,11 +236,13 @@ func TestABatchPairBeforeAClearedReplyIsRestartedAndAStopPairIsNot(t *testing.T)
 }
 
 // A PAIR THE RESUME DOES NOT HAND IS NOT HELD (D21), and is evidence its take
-// arrived, so never absent: a pair a retraction withdrew, and one off the
-// chain the leaf walks, under a parent naming no record.
+// arrived, so never absent: a pair a retraction withdrew either record of, and
+// one off the chain the leaf walks, under a parent naming no record.
 //
-// Mutation: hold a pair without asking the chain whether it is handed, or
-// read a take whose pair is not handed as absent, and a case goes red.
+// Mutation: hold a pair without asking the chain whether it is handed, read a
+// take whose pair is not handed as absent, or feed the reading a line before
+// the chain (each record read by the line before's handle), and a case goes
+// red.
 func TestAPairTheResumeDoesNotHandIsNotHeld(t *testing.T) {
 	t.Parallel()
 	later := sandbox.AskedTake{Take: rhLaterTake, Event: rhBatch}
@@ -243,6 +255,11 @@ func TestAPairTheResumeDoesNotHandIsNotHeld(t *testing.T) {
 		}})
 	rhWant(t, "a withdrawn system message", rhRead(t, "2.1.322", true, withdrawn, rhAskBatch, later, rhAskStop),
 		[]string{rhLaterTake, rhStopTake}, nil, nil)
+	// Its context, record 6, taken back instead: its system message, handed,
+	// holds nothing alone.
+	withdrawn[len(withdrawn)-1] = rcFallback(15, 16, 1600, rcQuoted(6))
+	rhWant(t, "a withdrawn additional context", rhRead(t, "2.1.322", true, withdrawn, rhAskBatch, later,
+		rhAskStop), []string{rhLaterTake, rhStopTake}, nil, nil)
 	// Records 4 to 6 hang under a parent naming no record, and the reply after
 	// them names the batch's result, record 3, as its parent: a thread no size
 	// path reads alike either, so nothing in it is held.
@@ -255,26 +272,89 @@ func TestAPairTheResumeDoesNotHandIsNotHeld(t *testing.T) {
 
 // A PAIR IS HELD ONLY ON A THREAD EVERY SIZE PATH READS ALIKE (D27): a thread
 // a large-file reader of the resume may read otherwise holds no pair, since
-// the copy resumed may differ in size from the one read.
+// the copy resumed may differ in size from the one read. A compaction's
+// boundary or a later root makes every thread such a one, wherever its pairs
+// lie and whatever its size, so a thread that compacted decides no take (the
+// package doc's "A hook's note").
 //
 // Mutation: hold a pair without asking AnySize, and this goes red.
 func TestAPairIsHeldOnlyOnAThreadEverySizePathReadsAlike(t *testing.T) {
 	t.Parallel()
-	lines := rhBase()
-	lines[0] = ctReplace(t, lines[0], `{"parentUuid":null,"isSidechain":false,`, `{"isSidechain":false,"parentUuid":null,`)
-	rhWant(t, "a record keyed otherwise", rhRead(t, "2.1.322", true, lines, rhAskBatch, rhAskStop), nil, nil, nil)
+	keyed := rhBase()
+	keyed[0] = ctReplace(t, keyed[0], `{"parentUuid":null,"isSidechain":false,`, `{"isSidechain":false,"parentUuid":null,`)
+	compaction := []rhRecord{func(_, n, ms int) string { return rcBoundary(n, ms, `{"trigger":"manual"}`) },
+		func(parent, n, ms int) string { return rcSummary(parent, n, ms) }, rhReply(rcSaid("after"))}
+	root := []rhRecord{func(_, n, ms int) string { return rcPrompt(0, n, ms) }, rhReply(rcSaid("after"))}
+	compacted := []string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_kept", 100, rcSaid("kept")),
+		rcBoundary(3, 300, `{"trigger":"manual"}`), rcSummary(3, 4, 400)}
+	threads := map[string][]string{
+		"a record keyed otherwise":      keyed,
+		"a compaction after both pairs": rhOn(rhBase(), compaction),
+		"both pairs after a compaction": rhOn(compacted, rhCall("x1"), rhPair(rhBatch, rhBatchFire, rhBatchTake),
+			[]rhRecord{rhReply(rcSaid("done"))}, rhPair(rhStop, rhStopFire, rhStopTake)),
+		"a later root after both pairs": rhOn(rhBase(), root),
+	}
+	for name, lines := range threads {
+		got := rhRead(t, "2.1.322", true, lines, rhAskBatch, rhAskStop)
+		rhWant(t, name, got, nil, nil, nil)
+		if !strings.Contains(got.Why, "every size path") {
+			t.Errorf("%s: why %q; want the size paths named", name, got.Why)
+		}
+	}
+	for _, thread := range ctProbeThreads {
+		got := rhRead(t, strings.Split(thread, "/")[0], true, rhProbeWhole(t, thread),
+			sandbox.AskedTake{Take: ctProbeBatchTake, Event: rhBatch}, sandbox.AskedTake{Take: ctProbeStopTake,
+				Event: rhStop})
+		rhWant(t, thread+" whole", got, nil, nil, nil)
+		if !strings.Contains(got.Why, "every size path") {
+			t.Errorf("%s whole: why %q; want the size paths named", thread, got.Why)
+		}
+	}
 }
 
 // NO TAKE IS HELD FOR A RELEASE THE RESUME WAS NOT READ IN (D28): the chain
 // models 2.1.310's and 2.1.322's resume alone, so a job another release ran
-// confirms nothing, and so denies nothing.
+// confirms nothing, and so denies nothing, and a read of its takes alone
+// opens no thread for them.
 //
-// Mutation: drop the release gate, and both releases' takes read as held.
+// Mutation: drop the release gate, or walk for takes it refuses, and a case
+// goes red.
 func TestNoTakeIsHeldForAReleaseTheResumeWasNotReadIn(t *testing.T) {
 	t.Parallel()
 	for _, release := range []string{"2.1.300", "2.1.323", ""} {
-		rhWant(t, "release "+release, rhRead(t, release, true, rhBase(), rhAskBatch, rhAskStop, rhAskUntaken), nil,
-			nil, nil)
+		fake, paths := cntBox(cntThread(rhBase()...), nil)
+		box := &rhOpens{FakeSandbox: fake}
+		got := ClaudeCode{}.readMainThread(t.Context(), box, paths, sandbox.MainThreadAsk{Session: ctSession,
+			Release: release, Takes: []sandbox.AskedTake{rhAskBatch, rhAskStop, rhAskUntaken}, Ended: true})
+		rhWant(t, "release "+release, got.Receipts, nil, nil, nil)
+		if box.opens != 0 || got.Receipts.Why == "" {
+			t.Errorf("release %q: %d opens, why %q; want none, and why", release, box.opens, got.Receipts.Why)
+		}
+	}
+}
+
+// A READ ASKED MORE TAKES THAN A HOOK RECORD NAMES ANSWERS, AND COUNTS: past
+// the 64 a record's masks hold, every take is undecided with why, and the
+// count is read as the count alone reads it, never a panic that answers
+// nothing on every retry.
+//
+// Mutation: hand the walk every take asked, and this goes red.
+func TestAReadAskedMoreTakesThanAHookRecordNamesAnswers(t *testing.T) {
+	t.Parallel()
+	raw := cntThread(rhBase()...)
+	var alone resumedReading
+	walkThread(t.Context(), strings.NewReader(raw), threadPlainMax, testPass(t), &alone)
+	takes := []sandbox.AskedTake{rhAskBatch, rhAskStop}
+	for i := len(takes); i <= maxAskedTakes; i++ {
+		takes = append(takes, sandbox.AskedTake{Take: rcUUID(500 + i), Event: rhBatch})
+	}
+	box, paths := cntBox(raw, nil)
+	got := ClaudeCode{}.readMainThread(t.Context(), box, paths, sandbox.MainThreadAsk{Session: ctSession,
+		Release: "2.1.322", Count: true, Takes: takes, Ended: true})
+	rhWant(t, fmt.Sprintf("%d takes", len(takes)), got.Receipts, nil, nil, nil)
+	if got.Receipts.Why == "" || !reflect.DeepEqual(got.Count, alone.count(0)) {
+		t.Errorf("%d takes: why %q, count %+v; want why, and the count %+v", len(takes), got.Receipts.Why,
+			got.Count, alone.count(0))
 	}
 }
 
@@ -283,8 +363,10 @@ func TestNoTakeIsHeldForAReleaseTheResumeWasNotReadIn(t *testing.T) {
 // same event held, no stray name, every hook record read, and a thread the
 // chain places. A held take's own stdout is no stray name.
 //
-// Mutation: drop any condition, read a held take at the other event, or read
-// a held take's own stdout as stray, and a case goes red.
+// Mutation: drop any condition, read a held take at the other event, read a
+// held take's own stdout as stray, or tell the chain no refused line, and a
+// case goes red. Dropping the chain's placing is equivalent: a thread it
+// cannot place holds no take, so the held take's condition refuses first.
 func TestAbsenceIsProvenOnlyByAThreadThatMeetsEveryCondition(t *testing.T) {
 	t.Parallel()
 	takes := []sandbox.AskedTake{rhAskBatch, rhAskStop, rhAskUntaken}
@@ -298,8 +380,10 @@ func TestAbsenceIsProvenOnlyByAThreadThatMeetsEveryCondition(t *testing.T) {
 		lines func(t *testing.T) []string
 		held  []string
 	}{
-		"a line that is no record": {lines: func(*testing.T) []string { return append(rhBase(), "[1,2]") },
-			held: held},
+		"a line that is no record, between the pairs": {lines: func(*testing.T) []string {
+			lines := rhBase()
+			return slices.Insert(lines, 7, "[1,2]")
+		}, held: held},
 		"a restart before both pairs": {lines: func(*testing.T) []string {
 			return rhChained([]rhRecord{func(parent, n, ms int) string {
 				return rcSystem(parent, n, ms, "microcompact_boundary", "")
@@ -330,6 +414,31 @@ func TestAbsenceIsProvenOnlyByAThreadThatMeetsEveryCondition(t *testing.T) {
 	got := ClaudeCode{}.readMainThread(t.Context(), box, paths, sandbox.MainThreadAsk{Session: ctSession,
 		Release: "2.1.322", Takes: takes, Ended: true}).Receipts
 	rhWant(t, "a torn last piece", got, held, nil, nil)
+}
+
+// AN ASK PAST THE MASKS DECIDES NO TAKE: a row a peer with wider bounds wrote
+// may ask more takes than a hook record's masks hold, and the read answers
+// none of them, saying why, rather than any it could still tell apart.
+//
+// Mutation: ask the first 64 of an over-wide ask, and the two pairs read as
+// held; ignore the refusal, and the why names no refused ask.
+func TestAnAskPastTheMasksDecidesNoTake(t *testing.T) {
+	t.Parallel()
+	takes := []sandbox.AskedTake{rhAskBatch, rhAskStop}
+	for i := len(takes); i <= maxAskedTakes; i++ {
+		takes = append(takes, sandbox.AskedTake{Take: rcUUID(300 + i), Event: rhStop})
+	}
+	got := rhRead(t, "2.1.322", true, rhBase(), takes...)
+	rhWant(t, fmt.Sprintf("%d asked", len(takes)), got, nil, nil, nil)
+	if !strings.Contains(got.Why, errAskedPastMasks.Error()) {
+		t.Errorf("%d asked: why %q; want it to name the refused ask", len(takes), got.Why)
+	}
+	var absent []string
+	for _, take := range takes[2:maxAskedTakes] {
+		absent = append(absent, take.Take)
+	}
+	rhWant(t, fmt.Sprintf("%d asked", maxAskedTakes), rhRead(t, "2.1.322", true, rhBase(), takes[:maxAskedTakes]...),
+		[]string{rhBatchTake, rhStopTake}, nil, absent)
 }
 
 // A HOOK-CANCELLED LINE DENIES NOTHING: a firing past its hook's timeout names

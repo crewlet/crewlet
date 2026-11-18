@@ -755,12 +755,14 @@ func TestAReadingEndsAtTheLineItsContextEnded(t *testing.T) {
 // before its end could say whether it is torn.
 //
 // Mutation: keep any of what a reading leaves across Reset (how it ended, how
-// many lines it read, its torn piece, what of its bound it took), and the
-// member after it reads otherwise.
+// many lines it read, its torn piece, what of its bound it took, the takes it
+// asked), and the member after it reads otherwise.
 func TestAResetReaderReadsAsAFreshOne(t *testing.T) {
 	t.Parallel()
 	brief := ctBrief(ctUUID(1))
-	next := ctThread(ctBrief(ctUUID(2)), "[1]", ctBrief(ctUUID(3)))
+	token := claudeTakeToken(ctProbeStopTake)
+	said := ctAttachment(ctUUID(3), ctUUID(4), ctReplace(t, ctBatchSystem, `the run"`, `the run `+token+`"`), "")
+	next := ctThread(ctBrief(ctUUID(2)), "[1]", ctBrief(ctUUID(3)), said)
 	within := int64(len(next)) + 1
 	ended, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -784,6 +786,9 @@ func TestAResetReaderReadsAsAFreshOne(t *testing.T) {
 	} {
 		for _, bound := range []int64{within, within - 2} {
 			r := newThreadReader(tc.before(), tc.maxBytes)
+			if err := r.Asking([]string{token}); err != nil {
+				t.Fatal(err)
+			}
 			ctTrace(tc.ctx, r)
 			r.Reset(strings.NewReader(next), bound)
 			got := ctTrace(t.Context(), r)
@@ -5316,13 +5321,15 @@ var ctProbeThreads = []string{
 // A HOOK RECORD NAMES ONLY THE TAKES ITS READER ASKED, each in the words that
 // carry it: over the probes' kept threads, asked the batch's take, the Stop's
 // and one no firing took, each firing's system message names its take in its
-// content alone and its success in its stdout alone, its additional context
-// names none, and no other record names any; asked nothing, nothing is named.
-// A token a cut splits is met all the same.
+// content alone and its success in its stdout alone, and no other record
+// names any; asked nothing, nothing is named. A token is met as decoded (an
+// escape) and where a cut splits it; one in a context's list, another hook
+// record's stdout or another attachment's content names nothing.
 //
 // Mutation: match a token by its prefix alone, and the take no firing took is
-// named; read a success's stdout into its content's takes, and the success
-// names its take in its content.
+// named; read a success's stdout into its content's takes, or read a
+// context's list, any record's stdout, the raw bytes or a skill listing, and
+// a record names takes it should not, or misses one.
 func TestAHookRecordNamesOnlyTheTakesItWasAsked(t *testing.T) {
 	t.Parallel()
 	asked := []string{claudeTakeToken(ctProbeBatchTake), claudeTakeToken(ctProbeStopTake),
@@ -5338,7 +5345,9 @@ func TestAHookRecordNamesOnlyTheTakesItWasAsked(t *testing.T) {
 		}
 		for _, ask := range [][]string{asked, nil} {
 			r := newThreadReader(bytes.NewReader(raw), threadPlainMax)
-			r.Asking(ask)
+			if err := r.Asking(ask); err != nil {
+				t.Fatal(err)
+			}
 			named := 0
 			for {
 				line, err := r.Next(t.Context())
@@ -5372,6 +5381,25 @@ func TestAHookRecordNamesOnlyTheTakesItWasAsked(t *testing.T) {
 				t.Errorf("%s, asked %d takes: %d records name one; want %d, each firing's system message and "+
 					"success", thread, len(ask), named, want)
 			}
+		}
+	}
+	escaped := `\u005bcrewlet take ` + ctProbeStopTake + `]`
+	for name, tc := range map[string]struct {
+		attachment      string
+		content, stdout uint64
+	}{
+		"a system message whose token is escaped": {ctReplace(t, ctStopSystem, `finishing"`,
+			`finishing `+escaped+`"`), 1 << 1, 0},
+		"a system message carrying a stdout": {ctReplace(t, ctStopSystem, `"hookName"`,
+			`"stdout":"`+asked[1]+`","hookName"`), 0, 0},
+		"an additional context listing a token": {ctReplace(t, ctStopContext, `["## A note"]`,
+			`["## A note `+asked[1]+`"]`), 0, 0},
+		"a skill listing naming a token": {`{"type":"skill_listing","content":"- ` + asked[1] + `"}`, 0, 0},
+	} {
+		line := ctAsked(t, ctAttachment(ctUUID(1), ctUUID(2), tc.attachment, ""), asked)
+		if content, stdout := line.HookTakes(); content != tc.content || stdout != tc.stdout {
+			t.Errorf("%s names the takes %b in its content and %b in its stdout; want %b and %b", name, content,
+				stdout, tc.content, tc.stdout)
 		}
 	}
 	text := "crewlet: a note reached the run as it was finishing " + asked[1]
@@ -5432,7 +5460,9 @@ func TestAHooksEventIsHeldToItsType(t *testing.T) {
 func ctAsked(t *testing.T, record string, tokens []string) threadLine {
 	t.Helper()
 	r := newThreadReader(strings.NewReader(ctThread(record)), threadPlainMax)
-	r.Asking(tokens)
+	if err := r.Asking(tokens); err != nil {
+		t.Fatal(err)
+	}
 	line, err := r.Next(t.Context())
 	if err != nil {
 		t.Fatalf("%.120s reads as no record: %v", record, err)

@@ -267,7 +267,9 @@ func checkScanReadsAsDecode(t testing.TB, text []byte, chunk int) {
 			end = fmt.Sprintf("ended by EOF, then EOF, torn %t\n", len(rest) > 0)
 		}
 		r.Reset(bytes.NewReader(member), int64(len(member)))
-		r.Asking(scanAsked)
+		if err := r.Asking(scanAsked); err != nil {
+			t.Fatal(err)
+		}
 		got := scanReading(t.Context(), r)
 		if len(got) != len(wants)+1 || got[len(wants)] != end {
 			t.Fatalf("lines %d to %d, the last %.300q, read in pieces of %d bytes at most, read as %d answers "+

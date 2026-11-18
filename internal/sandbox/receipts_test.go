@@ -73,14 +73,16 @@ func watchConfirmed(coordinator *Coordinator) *confirmedSpy {
 }
 
 // verdictStore is a run store whose verdicts on a job's hooks' serves
-// ([PendingStore.SettleHook]) go unanswered while silent, land with their
-// answer lost while losing, and answer only after slow; RowCrossing is
-// crossing where set. Every other call is the store beneath it.
+// ([PendingStore.SettleHook]) go unanswered while silent and for the first
+// refusals, land with their answer lost while losing, and answer only after
+// slow; RowCrossing is crossing where set. Every other call is the store
+// beneath it.
 type verdictStore struct {
 	PendingStore
 	mu       sync.Mutex
 	silent   bool
 	losing   bool
+	refusals int
 	slow     time.Duration
 	crossing time.Duration
 }
@@ -88,6 +90,10 @@ type verdictStore struct {
 func (s *verdictStore) SettleHook(ctx context.Context, turnID string, settle HookSettle) ([]RunNote, error) {
 	s.mu.Lock()
 	silent, losing, slow := s.silent, s.losing, s.slow
+	if s.refusals > 0 {
+		s.refusals--
+		silent = true
+	}
 	s.mu.Unlock()
 	if slow > 0 {
 		wait := time.NewTimer(slow) //fixedwait:simulated a store slow to answer the verdict, on the case's bubble clock
@@ -245,11 +251,12 @@ func TestACollectionReadsReceiptsOnlyWhereItsJobHasServedNotes(t *testing.T) {
 
 // EVERY READ M1 RUNS IN PUBLISHES WHAT ITS JOB'S HOOKS READ: a collection's, a
 // stop's and a loss's read each hand the engine the notes the job's session
-// confirmed; and a verdict that landed with its answer lost hands the read
-// back, and the read made again, asking nothing, publishes the note once.
+// confirmed, never an item of the store's; and a verdict that landed with its
+// answer lost hands the read back, and the read made again, asking nothing,
+// publishes the note once.
 //
-// Mutation: publish at a collection alone, or only off the verdict's answer,
-// and a case goes red.
+// Mutation: publish at a collection alone, only off the verdict's answer, or
+// items too, and a case goes red.
 func TestEveryReadM1RunsInPublishesWhatItsJobsHooksRead(t *testing.T) {
 	t.Parallel()
 	for name, read := range map[string]func(*coordRig) error{
@@ -282,6 +289,27 @@ func TestEveryReadM1RunsInPublishesWhatItsJobsHooksRead(t *testing.T) {
 			}
 		})
 	}
+	t.Run("an item read off a serve", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		spy := watchConfirmed(rig.coordinator)
+		run := rig.launch("t1")
+		run.Harness = ClaudeCodeHarness
+		served := func(id string) RunNote {
+			return RunNote{ID: id, Read: &NoteRead{Launch: run.LaunchID, Take: "take-" + id},
+				Serves: []HookServed{{Take: "take-" + id, Launch: run.LaunchID,
+					Boundary: string(types.SteerBoundaryToolBatch)}}}
+		}
+		item := served("item")
+		item.For = run.LaunchID
+		run.Steer.Notes = []RunNote{served("n1"), item}
+		if err := rig.coordinator.settleHookReceipts(t.Context(), run, HookReceipts{}, BoxReadCollect); err != nil {
+			t.Fatalf("the publish: %v", err)
+		}
+		if got := spy.ids(); !slices.Equal(got, []string{"n1"}) {
+			t.Errorf("published %v, want the person's note alone, never the store's item", got)
+		}
+	})
 	t.Run("a verdict landed with its answer lost", func(t *testing.T) {
 		t.Parallel()
 		rig := newCoordRig(t)
@@ -312,10 +340,11 @@ func TestEveryReadM1RunsInPublishesWhatItsJobsHooksRead(t *testing.T) {
 
 // A STOP AND A LOSS CONFIRM, AND DENY NOTHING: their read ends the job, so the
 // thread is asked as one its harness did not end, which proves no take absent,
+// under the release that ran the job, which D28's gate needs to confirm any;
 // and the note its session shows taken is read.
 //
-// Mutation: skip the thread at a stop or a loss, or ask it as one its harness
-// ended, and a case goes red.
+// Mutation: skip the thread at a stop or a loss, ask it as one its harness
+// ended, or skip the loss's collection of the release, and a case goes red.
 func TestAStopAndALossConfirmAndDenyNothing(t *testing.T) {
 	t.Parallel()
 	for name, read := range map[string]func(*coordRig) error{
@@ -335,12 +364,14 @@ func TestAStopAndALossConfirmAndDenyNothing(t *testing.T) {
 			serveNote(t, rig.pending, launched.LaunchID, "n1", types.SteerBoundaryFinish)
 			thread := sessionShows("take-n1")
 			rig.runner.MainThread = thread.read
+			rig.runner.EndsAs(Result{HarnessVersion: "2.1.0"})
 			if err := read(rig); err != nil {
 				t.Fatalf("the read: %v", err)
 			}
-			if asked := thread.asks(); len(asked) != 1 || asked[0].Ended || asked[0].Count {
-				t.Errorf("%s asked %+v, want one ask of a thread its harness did not end, with no count", name,
-					asked)
+			if asked := thread.asks(); len(asked) != 1 || asked[0].Ended || asked[0].Count ||
+				asked[0].Release != "2.1.0" {
+				t.Errorf("%s asked %+v, want one ask of a thread its harness did not end, under its job's "+
+					"release, with no count", name, asked)
 			}
 			if read := readOf(t, rig, "n1"); read == nil || read.Take != "take-n1" {
 				t.Errorf("%s left the note %+v, want it read off its serve", name, read)
@@ -652,4 +683,108 @@ func TestTheVerdictIsGivenItsRowsCrossing(t *testing.T) {
 			t.Fatal("the verdict answered inside its row's crossing did not land")
 		}
 	})
+}
+
+// A LOCAL VERDICT SILENCE IS NEVER GIVEN UP, AT A STOP OR A LOSS: where this node
+// hosts the box, a verdict the store did not answer is this node's own store's
+// silence, whatever its read of the row answered, so the ending is kept, and
+// its box, however old the stop or the loss, never ended with nothing read.
+//
+// Mutation: drop the hosts check from readStopped's or keepLostSession's
+// give-up, and a day-old ending is given up with its note unconfirmed.
+func TestALocalVerdictSilenceIsNeverGivenUpAtAStopOrALoss(t *testing.T) {
+	t.Parallel()
+	for name, end := range map[string]func(*testing.T, *coordRig) PendingRun{
+		"a stop": func(t *testing.T, rig *coordRig) PendingRun {
+			launched := rig.launch("t1")
+			rig.coordinator.countRun("swe", StatusRunning)
+			serveNote(t, rig.pending, launched.LaunchID, "n1", types.SteerBoundaryToolBatch)
+			rig.runner.MainThread = sessionShows("take-n1").read
+			rig.stop(t)
+			return launched
+		},
+		"a loss": lostWithServe,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			silentVerdicts(rig.coordinator)
+			launched := end(t, rig)
+			rig.fireRetries()
+			rig.now = rig.now.Add(24 * time.Hour)
+			rig.fireRetries()
+			rig.fireRetries()
+			if _, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || !found {
+				t.Errorf("%s whose verdict this node's own store did not answer was ended a day on (found %v, "+
+					"%v), want it kept", name, found, err)
+			}
+			if slices.Contains(rig.provider.KilledIDs(), launched.SandboxID) {
+				t.Errorf("%s reclaimed the box its verdict is still to be read from", name)
+			}
+		})
+	}
+}
+
+// A REMOTE LOSS'S VERDICT SILENCE KEEPS ITS ENDING UNTIL ITS HOST IS GIVEN UP: a
+// host whose store did not answer the verdict says so, and the loss's ending is
+// kept with its box; where this node's own read of the row answered, the
+// silence is the host's alone, given up as a stop's is, and the loss then
+// ends; where it did not, the silence is this node's too, and is kept whatever
+// the bound.
+//
+// Mutation: drop ReadHostedBox's return of the loss read's error, and the box
+// is reclaimed at once; drop keepLostSession's give-up, and it is kept for ever.
+func TestARemoteLossesVerdictSilenceKeepsItsEndingUntilItsHostIsGivenUp(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	remoteVerdicts(t, rig)
+	launched := rig.launchedBy("t1", "node-a")
+	serveNote(t, rig.pending, launched.LaunchID, "n1", types.SteerBoundaryToolBatch)
+	rig.runner.MainThread = sessionShows("take-n1").read
+	rig.coordinator.finish(t.Context(), rig.get("t1"), ending{fence: fenceOf(launched),
+		note: &failureNote{reason: "engine_restarted", detail: "the engine that ran the job restarted"}})
+	rig.fireRetries()
+	rig.fireRetries()
+	if _, found, _ := rig.pending.Get(t.Context(), "t1"); !found {
+		t.Fatal("the loss's ending finished with its host's verdict unanswered")
+	}
+	if slices.Contains(rig.provider.KilledIDs(), launched.SandboxID) {
+		t.Fatal("the loss reclaimed the box its host's verdict is still to be read from")
+	}
+
+	rig.now = rig.now.Add(24 * time.Hour)
+	if err := rig.coordinator.keepLostSession(t.Context(), rig.get("t1"), false); !errors.Is(err,
+		ErrStoreSilent) {
+		t.Fatalf("a day-old loss whose row this node's store did not answer = %v, want it kept", err)
+	}
+	rig.fireRetries()
+	rig.fireRetries()
+	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+		t.Error("the loss is still kept a day on, its host's store alone silent, want its host given up")
+	}
+	if !slices.Contains(rig.provider.KilledIDs(), launched.SandboxID) {
+		t.Error("the loss given up did not reach its reclaim")
+	}
+}
+
+// A VERDICT THE STORE REFUSES ONCE IS ASKED AGAIN WITHIN ITS ROOM: a refusal is
+// no silence while the room lasts, so the second attempt lands the verdict and
+// the read goes on, never handed back.
+//
+// Mutation: make one attempt, and the read is handed back.
+func TestAVerdictTheStoreRefusesOnceIsAskedAgainWithinItsRoom(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	launched := rig.launch("t1")
+	serveNote(t, rig.pending, launched.LaunchID, "n1", types.SteerBoundaryToolBatch)
+	rig.runner.MainThread = sessionShows("take-n1").read
+	rig.runner.Finish(wholeAccount())
+	rig.coordinator.pending = &verdictStore{PendingStore: rig.pending, refusals: 1}
+	rig.coordinator.verdictWait, rig.coordinator.verdictRetry = time.Minute, 5*time.Millisecond
+	if _, _, err := rig.coordinator.readBox(t.Context(), rig.get("t1"), BoxReadCollect); err != nil {
+		t.Fatalf("a verdict refused once = %v, want it asked again and landed", err)
+	}
+	if read := readOf(t, rig, "n1"); read == nil {
+		t.Fatal("the verdict asked again did not land")
+	}
 }

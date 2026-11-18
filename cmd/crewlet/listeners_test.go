@@ -29,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -814,7 +815,9 @@ type quietInbox struct {
 	reached chan struct{}
 }
 
-func (*quietInbox) Take(context.Context, string) string { return "" }
+func (*quietInbox) Take(context.Context, string, *sandbox.NoteCall) string { return "" }
+
+func (*quietInbox) Cancelled(context.Context, sandbox.NoteCall) {}
 
 func (i *quietInbox) Wait(context.Context, int) ([]mcpbridge.SteerNote, <-chan struct{}) {
 	i.once.Do(func() { close(i.reached) })

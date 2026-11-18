@@ -511,7 +511,7 @@ func TestARunIsSteerableAfterItsLaunchingNodeRestarts(t *testing.T) {
 	c.file(t, "run-1", "req-before", "use the staging database")
 	before := c.e.runSteers.inbox(identityOfRun(row), 1)
 	before.Bind(t.Context(), row.LaunchID)
-	got := before.Take(t.Context(), mcpbridge.SteerEventFinish)
+	got := before.Take(t.Context(), mcpbridge.SteerEventFinish, hookCall())
 	if !strings.Contains(got, "staging") {
 		t.Fatalf("the run was not served its first note before the restart: %q", got)
 	}
@@ -604,7 +604,7 @@ func TestAStoreFailureAnswersEmptyNeverAnError(t *testing.T) {
 	broken, _ := steersOver(t, steerRing, failingStore{PendingStore: store, reads: true})
 	inbox := boundInbox(t, broken, store, "run-1", launch)
 	for _, event := range []string{mcpbridge.SteerEventToolBatch, mcpbridge.SteerEventFinish} {
-		if got := inbox.Take(t.Context(), event); got != "" {
+		if got := inbox.Take(t.Context(), event, hookCall()); got != "" {
 			t.Errorf("a take the record could not serve at %s answered %q", event, got)
 		}
 	}
@@ -1959,7 +1959,9 @@ type heldInbox struct {
 	free    sync.Once
 }
 
-func (h *heldInbox) Take(context.Context, string) string { return "" }
+func (h *heldInbox) Take(context.Context, string, *sandbox.NoteCall) string { return "" }
+
+func (h *heldInbox) Cancelled(context.Context, sandbox.NoteCall) {}
 
 func (h *heldInbox) Wait(context.Context, int) ([]mcpbridge.SteerNote, <-chan struct{}) {
 	return nil, h.release
@@ -2007,10 +2009,10 @@ func TestStopReadsTheStoreEvenWhenTheViewIsStale(t *testing.T) {
 	launch := workingRun(t, store, runs, "run-1")
 	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
 	inbox := boundInbox(t, runs, store, "run-1", launch)
-	if got := inbox.Take(t.Context(), mcpbridge.SteerEventToolBatch); got != "" {
+	if got := inbox.Take(t.Context(), mcpbridge.SteerEventToolBatch, hookCall()); got != "" {
 		t.Fatalf("a batch answered %q from a view that never heard the record", got)
 	}
-	got := inbox.Take(t.Context(), mcpbridge.SteerEventFinish)
+	got := inbox.Take(t.Context(), mcpbridge.SteerEventFinish, hookCall())
 	if !strings.Contains(got, "use staging") {
 		t.Fatalf("the finish answered %q, want the note the record holds", got)
 	}
@@ -2044,7 +2046,7 @@ func TestAParkedRunHoldsItsNotesForWhatResumesIt(t *testing.T) {
 	if err != nil || filed.Status != steer.StatusAccepted || filed.Reads != steer.ReadsAfterAnswer {
 		t.Fatalf("a note to the parked run = %+v, %v, want accepted and read after the answer", filed, err)
 	}
-	if got := inbox.Take(ctx, mcpbridge.SteerEventFinish); got != "" {
+	if got := inbox.Take(ctx, mcpbridge.SteerEventFinish, hookCall()); got != "" {
 		t.Errorf("the parked run's harness took %q", got)
 	}
 
@@ -3251,7 +3253,7 @@ func TestAnItemForAJobNeverLeavesIt(t *testing.T) {
 		placeItemFor(t, runs, fleet, "run-1", "i-held", launch)
 		fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
 		inbox := boundInbox(t, runs, store, "run-1", launch)
-		answer := inbox.Take(ctx, mcpbridge.SteerEventFinish)
+		answer := inbox.Take(ctx, mcpbridge.SteerEventFinish, hookCall())
 		if !strings.Contains(answer, "item for the job i-held") || !strings.Contains(answer, "use staging") {
 			t.Fatalf("the job's hook was answered %q, want its own item and the person's note", answer)
 		}

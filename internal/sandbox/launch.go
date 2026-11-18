@@ -638,6 +638,9 @@ func (r LaunchRequest) toldBounded() error {
 		if s.Exact != nil {
 			sets = append(sets, told{"session.exact.told", s.Exact.Told})
 		}
+		if s.Unheld != nil {
+			sets = append(sets, told{"session.unheld.told", s.Unheld.Told})
+		}
 	}
 	for _, t := range sets {
 		if n := len(t.set.Omitted); n > MaxBridgeCalls {

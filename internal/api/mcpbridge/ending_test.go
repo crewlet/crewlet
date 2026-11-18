@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/toolsession"
@@ -689,10 +690,10 @@ func newHeldTake(answer string) *heldTake {
 	return h
 }
 
-func (h *heldTake) Take(ctx context.Context, event string) string {
+func (h *heldTake) Take(ctx context.Context, event string, call *sandbox.NoteCall) string {
 	h.said.Do(func() { close(h.taking) })
 	<-h.letGo
-	return h.fakeInbox.Take(ctx, event)
+	return h.fakeInbox.Take(ctx, event, call)
 }
 
 // A HOOK'S ANSWER LEAVES BEFORE ITS OPENING CLOSES THE SESSIONS (package doc,
@@ -876,6 +877,51 @@ func TestAHookAnswerLeavesBeforeItsOpeningClosesTheSessions(t *testing.T) {
 			}
 			if n := b.session.Connections(); n != 0 {
 				t.Errorf("%d of the box's sessions are open after the end", n)
+			}
+		})
+	})
+
+	// A CANCEL WHOSE POST REACHED THE OPENING AS ITS END BEGAN is still heard:
+	// the front, reading its body as the end closes the opening's inbox,
+	// hands it to that inbox, which acts on the job it was bound to.
+	//
+	// Mutation: find no inbox once the opening has ended
+	// (binding.cancelInbox), or hand the inbox no cancel at the front, and the
+	// cancel is lost.
+	t.Run("a cancel whose POST reached the opening as its end began", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			inbox := newFakeInbox()
+			l := &ledger{}
+			b := openBubbledWith(t, l, l, func(s *mcpbridge.Session) { s.Steer = inbox })
+			mux := http.NewServeMux()
+			mux.Handle(mcpbridge.PathPrefix+"{token}", b.bridge.Handler())
+			body, feed := io.Pipe()
+			t.Cleanup(func() { _ = feed.Close() })
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, b.url, body)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "application/json, text/event-stream")
+			req.Header.Set("Mcp-Session-Id", "box-session-1")
+			served := make(chan struct{})
+			go func() {
+				defer close(served)
+				mux.ServeHTTP(httptest.NewRecorder(), req)
+			}()
+			const cancel = `{"jsonrpc":"2.0","method":"notifications/cancelled",` +
+				`"params":{"requestId":5,"reason":"hook timed out"}}`
+			// THE FRONT IS READING THE BODY once its first byte is taken: the
+			// request is past its routing, on the opening, as the end comes.
+			if _, err := io.WriteString(feed, cancel[:1]); err != nil {
+				t.Fatalf("the cancel's first byte: %v", err)
+			}
+			b.bridge.Close("run-1")
+			if _, err := io.WriteString(feed, cancel[1:]); err != nil {
+				t.Fatalf("the rest of the cancel: %v", err)
+			}
+			_ = feed.Close()
+			<-served
+			if got := inbox.cancelled(); len(got) != 1 || got[0].Session != "box-session-1" || got[0].ID != "5" {
+				t.Errorf("the ended opening's inbox heard %+v, want the cancel of call 5 on box-session-1", got)
 			}
 		})
 	})

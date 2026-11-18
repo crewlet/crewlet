@@ -360,7 +360,9 @@ type RunEnding struct {
 	Text  string
 	Error string
 	// Event is the harness's own terminal event — see [Result.Event].
-	Event   string
+	Event string
+	// Limits is the run's last limit report — see [Result.Limits].
+	Limits  string
 	Success bool
 	// Refused says the run's provider refused the request its harness made
 	// as built ([requestRefused]): the resume carries its round on once in a
@@ -2010,7 +2012,7 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 		CacheReadTokens: result.CacheReadTokens, CacheWriteTokens: result.CacheWriteTokens,
 		Engine: run.Launch.Bridged.Plus(EngineSpend{Aux: result.Condensed}),
 		Ended: RunEnding{Text: result.Text, Error: result.Error, Event: result.Event,
-			Success: result.Success, At: run.Launch.CollectedAt, Refused: requestRefused(run, result)},
+			Limits: result.Limits, Success: result.Success, At: run.Launch.CollectedAt, Refused: requestRefused(run, result)},
 	}, seen)
 	return err
 }
@@ -2350,13 +2352,14 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (PendingRun, 
 	// THE BOX ANSWERED, which ends the run of failed collections behind this
 	// one whatever a later step does: a step after the read that the store
 	// does not answer, or that this node cuts short, hands the claim back
-	// uncounted with that run ended ([Release.BoxAnswered]). Marked here, at
-	// the box's answer, and not once this read returns: what the run pushed is
-	// read after it, and a read this node cut short there is one of those
-	// steps. And the delivery the attempt is made for knows it, so it reads
-	// no row for what the host's store says (renew.go): that host read the
-	// row through its store to license this read.
-	run.BoxAnswered = true
+	// uncounted with that run ended ([Release.BoxAnswered]), its harness's end
+	// in that write ([Release.HarnessEnd]). Marked here, at the box's answer,
+	// and not once this read returns: what the run pushed is read after it,
+	// and a read this node cut short there is one of those steps. And the
+	// delivery the attempt is made for knows it, so it reads no row for what
+	// the host's store says (renew.go): that host read the row through its
+	// store to license this read.
+	run.BoxAnswered, run.BoxHarnessEnd = true, result.HarnessEnd
 	readTheBox(ctx)
 	if ended {
 		result = endedAtDeadline(result, run.Deadline, run.Question)

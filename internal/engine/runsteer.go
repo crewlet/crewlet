@@ -643,11 +643,17 @@ func (s *runSteers) settleRun(base context.Context, turnID string, run *runSettl
 			sayUnanswered(base, turnID, marked)
 		}
 		for _, settle := range hooks {
-			if _, err := s.settleHookOnce(base, turnID, settle); err != nil {
+			lost, err := s.settleHookOnce(base, turnID, settle)
+			if err != nil {
 				unanswered = err
 				continue
 			}
 			settled = append(settled, settle)
+			if len(settle.Cancelled) > 0 && len(lost) > 0 {
+				log.InfoContext(base, "steer_serve_lost", "turn_id", turnID, "launch_id", settle.Launch,
+					"why", "cancelled", "notes", len(lost), "detail", "the run's harness gave up a hook's "+
+						"call whose answer served notes: they wait to be served again at the job's next step")
+			}
 		}
 		s.settleMu.Lock()
 		run.answered(answered, settled)
@@ -748,6 +754,12 @@ func (h *hookSettle) merge(settle sandbox.HookSettle) {
 			h.tried = false
 		}
 	}
+	for _, call := range settle.Cancelled {
+		if !slices.ContainsFunc(h.settle.Cancelled, sameCall(call)) {
+			h.settle.Cancelled = kept(append(h.settle.Cancelled, call))
+			h.tried = false
+		}
+	}
 }
 
 // drop removes from the pending settle what the answered copy asked.
@@ -755,14 +767,20 @@ func (h *hookSettle) drop(asked sandbox.HookSettle) {
 	h.settle.Unanswered = slices.DeleteFunc(h.settle.Unanswered, func(t string) bool {
 		return slices.Contains(asked.Unanswered, t)
 	})
+	h.settle.Cancelled = slices.DeleteFunc(h.settle.Cancelled, func(c sandbox.NoteCall) bool {
+		return slices.ContainsFunc(asked.Cancelled, sameCall(c))
+	})
 }
 
-func (h *hookSettle) empty() bool { return len(h.settle.Unanswered) == 0 }
+func (h *hookSettle) empty() bool {
+	return len(h.settle.Unanswered) == 0 && len(h.settle.Cancelled) == 0
+}
 
 // copied is the pending settle as a round asks it, its lists its own.
 func (h *hookSettle) copied() sandbox.HookSettle {
 	out := h.settle
 	out.Unanswered = slices.Clone(h.settle.Unanswered)
+	out.Cancelled = slices.Clone(h.settle.Cancelled)
 	return out
 }
 
@@ -1579,29 +1597,86 @@ var _ mcpbridge.SteerInbox = (*runInbox)(nil)
 const steerLossesKept = 32
 
 // hookMemory is what a run inbox knows of its hooks' serves that the record
-// cannot say yet: its takes answered nothing whose serve may have landed,
-// which its next serve removes in its own write ([sandbox.HookServe]), and the
-// notes it said at their bound. Every method holds the lock for its whole
-// body, so no caller splits a check from what it does.
+// cannot say yet: the calls whose take runs now, the calls it ran a take for,
+// the calls it heard cancelled, its takes answered nothing whose serve may
+// have landed (each of which its next serve settles in its own write,
+// [sandbox.HookServe]), and the notes it said at their bound. Every method
+// holds the lock for its whole body, so no caller splits a check from what it
+// does: a cancel either finds its call running, and the take sees it, or finds
+// it gone, and asks the store itself.
 type hookMemory struct {
-	mu         sync.Mutex
-	unanswered []string
-	bounded    []string
+	mu                        sync.Mutex
+	running, taken, cancelled []sandbox.NoteCall
+	unanswered                []string
+	bounded                   []string
 }
 
-// lose keeps take as answered nothing, the newest [steerLossesKept] kept.
-func (m *hookMemory) lose(take string) {
+// begin registers call's take as running and taken, false where the call was
+// cancelled before it arrived: the hook gave it up, and is answered nothing.
+func (m *hookMemory) begin(call sandbox.NoteCall) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.unanswered = kept(append(m.unanswered, take))
+	if slices.ContainsFunc(m.cancelled, sameCall(call)) {
+		return false
+	}
+	m.running = append(m.running, call)
+	if !slices.ContainsFunc(m.taken, sameCall(call)) {
+		m.taken = kept(append(m.taken, call))
+	}
+	return true
 }
 
-// answeredNothing is a copy of the takes the inbox's hooks were answered
-// nothing for.
-func (m *hookMemory) answeredNothing() []string {
+// end ends call's take (nil: a take of no registered call) and reports whether
+// its answer is lost: where lost says so, or call was heard cancelled while
+// it ran. A lost take keeps take as answered nothing, the newest
+// [steerLossesKept] kept.
+func (m *hookMemory) end(call *sandbox.NoteCall, take string, lost bool) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return slices.Clone(m.unanswered)
+	if call != nil {
+		if k := slices.IndexFunc(m.running, sameCall(*call)); k >= 0 {
+			m.running = slices.Delete(m.running, k, k+1)
+		}
+		lost = lost || slices.ContainsFunc(m.cancelled, sameCall(*call))
+	}
+	if lost && take != "" {
+		m.unanswered = kept(append(m.unanswered, take))
+	}
+	return lost
+}
+
+// cancel keeps call as cancelled and reports whether the store must be asked
+// to lose its serve: not where its take still runs (that take settles itself),
+// not on an inbox bound to no job (its first take reads the ring), and not
+// where the inbox took calls and this is none of them (a model's call given
+// up, or another session's, which no serve of this job names).
+func (m *hookMemory) cancel(call sandbox.NoteCall, bound bool) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !slices.ContainsFunc(m.cancelled, sameCall(call)) {
+		m.cancelled = kept(append(m.cancelled, call))
+	}
+	switch {
+	case !bound, slices.ContainsFunc(m.running, sameCall(call)):
+		return false
+	case len(m.taken) > 0 && !slices.ContainsFunc(m.taken, sameCall(call)):
+		return false
+	}
+	return true
+}
+
+// losses is a copy of the calls heard cancelled and the takes answered
+// nothing, for a serve's write to settle.
+func (m *hookMemory) losses() ([]sandbox.NoteCall, []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.cancelled), slices.Clone(m.unanswered)
+}
+
+// sameCall matches a call by its session AND its id, since a harness numbers
+// its calls per session.
+func sameCall(call sandbox.NoteCall) func(sandbox.NoteCall) bool {
+	return func(c sandbox.NoteCall) bool { return c.Session == call.Session && c.ID == call.ID }
 }
 
 // atBound reports whether note's being at its bound is news to the inbox,
@@ -1689,16 +1764,20 @@ func liveFor(view sandbox.NotesView, launch string) bool {
 // before its next request, at every batch. AT THE FINISH, OFF THE STORE: it is
 // the run's last boundary, and a note filed a moment before must not be missed
 // for a view one write behind.
-func (i *runInbox) Take(ctx context.Context, event string) string {
+func (i *runInbox) Take(ctx context.Context, event string, call *sandbox.NoteCall) string {
 	launch, watch := i.bound()
 	if launch == "" {
 		return ""
 	}
+	if call != nil && !i.hooks.begin(*call) {
+		return ""
+	}
 	i.markPulled(ctx, launch)
 	boundary, notes, candidates := i.candidates(ctx, event, launch, watch)
-	unanswered := i.hooks.answeredNothing()
-	candidates = i.servable(ctx, launch, candidates, unanswered)
+	cancelled, unanswered := i.hooks.losses()
+	candidates = i.servable(ctx, launch, candidates, cancelled, unanswered)
 	if len(candidates) == 0 {
+		i.hooks.end(call, "", false)
 		return ""
 	}
 	messages := make([]string, 0, len(candidates))
@@ -1714,14 +1793,25 @@ func (i *runInbox) Take(ctx context.Context, event string) string {
 	take := takeName()
 	served, err := i.steers.store.ServeHook(ctx, i.ident.turn.TurnID, sandbox.HookServe{
 		IDs: ids, Launch: launch, Statuses: steerTakeStatuses,
-		Serve:      sandbox.HookServed{Take: take, Boundary: string(boundary), Iteration: i.round},
-		Unanswered: unanswered,
+		Serve:     sandbox.HookServed{Take: take, Boundary: string(boundary), Iteration: i.round, Call: call},
+		Cancelled: cancelled, Unanswered: unanswered,
 	})
 	if err != nil {
+		i.hooks.end(call, take, true)
 		log.WarnContext(ctx, "steer_serve_failed", "turn_id", i.ident.turn.TurnID,
 			"error", err.Error(), "detail", "the run's harness is handed nothing at this step: the notes "+
 				"wait for its next one, served again there, or for its review")
 		i.answeredNothing(ctx, launch, take)
+		return ""
+	}
+	// A HOOK GIVEN UP WHILE ITS TAKE RAN takes nothing from it: its call
+	// heard cancelled, or its request cancelled, by the SDK's canceller or the
+	// harness aborting it. The take's own budget ends it DeadlineExceeded,
+	// which is no cancel: the hook still waits for its answer.
+	if i.hooks.end(call, take, errors.Is(ctx.Err(), context.Canceled)) {
+		if len(served) > 0 {
+			i.answeredNothing(ctx, launch, take)
+		}
 		return ""
 	}
 	hook := make([]executor.HookNote, 0, len(served))
@@ -1763,14 +1853,16 @@ func (i *runInbox) candidates(ctx context.Context, event, launch string, watch *
 }
 
 // servable is the candidates a hook of launch may still be served: none
-// whose live serve to launch its harness may hold (one answered nothing,
-// named in unanswered, is removed by the serve's own write), and none at
+// whose live serve to launch its harness may hold (one whose call is named in
+// cancelled, or whose take is named in unanswered, is settled by the serve's
+// own write), and none at
 // [sandbox.MaxNoteServes] serves to launch, which waits for the review or the
 // next launch's brief, said once a note (steer_serve_bound).
 func (i *runInbox) servable(ctx context.Context, launch string, candidates []openedNote,
-	unanswered []string) []openedNote {
+	cancelled []sandbox.NoteCall, unanswered []string) []openedNote {
 	return slices.DeleteFunc(slices.Clone(candidates), func(c openedNote) bool {
-		if live, ok := c.held.LiveServe(); ok && live.Launch == launch && !slices.Contains(unanswered, live.Take) {
+		if live, ok := c.held.LiveServe(); ok && live.Launch == launch && !slices.Contains(unanswered, live.Take) &&
+			(live.Call == nil || !slices.ContainsFunc(cancelled, sameCall(*live.Call))) {
 			return true
 		}
 		serves := 0
@@ -1814,14 +1906,30 @@ func handedTo(n sandbox.RunNote, job string) bool {
 	return slices.ContainsFunc(n.Serves, func(h sandbox.HookServed) bool { return h.Launch == job && h.MayHold() })
 }
 
-// answeredNothing keeps take, whose hook launch's inbox answered nothing, so
-// the job's next serve removes its serve in its own write, and hands the run's
-// settle loop the same ([runSteers.settleHook]), for a job with no next take:
-// the note waits again, and its write, were it still in flight, can no longer
-// land after.
+// answeredNothing hands the run's settle loop take, whose hook launch's inbox
+// answered nothing and kept so ([hookMemory.end]), for a job with no next
+// take to remove its serve in its own write ([runSteers.settleHook]): the note
+// waits again, and its write, were it still in flight, can no longer land.
 func (i *runInbox) answeredNothing(ctx context.Context, launch, take string) {
-	i.hooks.lose(take)
 	i.steers.settleHook(ctx, i.ident.turn.TurnID, sandbox.HookSettle{Launch: launch, Unanswered: []string{take}})
+}
+
+// Cancelled hears the box's harness give a hook's call up — see
+// [mcpbridge.SteerInbox]: kept in the inbox's ring for its next take, and,
+// where no take of it runs now and the inbox may have served it, handed the
+// run's settle loop for the job the inbox was bound to, closed or not, since
+// the job is a fact and the write acts on its serves alone. Never blocks.
+func (i *runInbox) Cancelled(ctx context.Context, call sandbox.NoteCall) {
+	if i == nil {
+		return
+	}
+	i.mu.Lock()
+	launch := i.launch
+	i.mu.Unlock()
+	if i.hooks.cancel(call, launch != "") {
+		i.steers.settleHook(ctx, i.ident.turn.TurnID, sandbox.HookSettle{Launch: launch,
+			Cancelled: []sandbox.NoteCall{call}})
+	}
 }
 
 // delivered publishes the notes a read recorded as delivered there, off the

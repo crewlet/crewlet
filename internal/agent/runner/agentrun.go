@@ -238,7 +238,7 @@ type Continuation struct {
 	// calls it holds does not stand, the reads its job's brief counted
 	// without listing them ([Resume.Owed]) and the calls the round's log took
 	// late, which no copy is known to hold ([Runner.inPlaceAfter]), and the
-	// notes from a read the record marks unanswered on; and the notes
+	// notes from a read no session of its job holds on; and the notes
 	// [AgentRunRequest.Notes] carries, which no copy has read — a served one
 	// told as a note it may already show ([Runner.inPlaceNotes]). The floor of a
 	// launch that continues the copy counts all of it: beside the copy's
@@ -311,9 +311,11 @@ type SessionDecision struct {
 	// of what the kept session holds ([SessionContinuation.Exact]): its
 	// box's harness answered the release the reading was read for, so the
 	// run reads that telling's brief and holds what that telling held.
-	// False where the launch handed the brief told by the save point, or
-	// continues no kept session.
-	Exact bool
+	// Unheld says it is the one for a box whose release the resume was not
+	// read in ([SessionContinuation.Unheld]), whose telling the run reads
+	// in turn. Both false where the launch handed the brief told by the
+	// save point, or continues no kept session.
+	Exact, Unheld bool
 }
 
 // SessionContinuation is how a launch continues a session in whatever box it
@@ -352,6 +354,12 @@ type SessionContinuation struct {
 	// in, beside Brief and Replaced; nil where they would tell the same
 	// ([UnheldTelling]). The launch hands one of them only to such a box.
 	Unheld *UnheldTelling
+
+	// UnheldDropped says the seat's budget could not carry Unheld's briefs,
+	// which internal/engine's continuedFloor dropped alone on its copy: the
+	// launch continues the session only in a box whose release the resume
+	// was read in. The runner never sets it.
+	UnheldDropped bool
 }
 
 // UnheldTelling is a relaunch's briefs for a box whose harness answers a
@@ -361,9 +369,13 @@ type SessionContinuation struct {
 // box holds none of them. Told as [SessionContinuation]'s briefs are, but the
 // notes from the first read at a hook's step on, as notes the session may
 // already show ([Runner.firstUnheld]). Built only where the capture's cursor
-// counts such a read; the calls they tell are Brief's, so Told is its.
+// counts such a read.
 type UnheldTelling struct {
 	Brief, Replaced string
+
+	// Told is what Brief and Replaced told of the round, as
+	// [SessionContinuation.Told] is theirs.
+	Told sandbox.BriefTold
 }
 
 // ExactTelling is a relaunch's briefs told by a reading of what the kept
@@ -698,8 +710,8 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		// AND JUDGED ON THAT LEAD, known before the budget is asked: where
 		// its harness may hand the session to its model as a summary, the
 		// telling of a session that may be one is handed ([firstRequest]).
-		briefs.kept, briefs.keptHolds, briefs.exact = r.keptTellings(ctx, basis, collected, round, nil, history,
-			built, fresh, "").led(ctx, r, r.sendBackLead(notes).Text, reviewLead(history))
+		briefs.kept, briefs.keptHolds, briefs.exact, briefs.unheldHolds = r.keptTellings(ctx, basis, collected,
+			round, nil, history, built, fresh, "").led(ctx, r, r.sendBackLead(notes).Text, reviewLead(history))
 		// THE COLLECTED JOB'S STATE AS ITS SESSION HOLDS IT ([Resume.parked]):
 		// the session this continues is that job's, and holds the skills its
 		// launch armed only where its box said it took them up.
@@ -896,7 +908,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// not known to have ended its own run, after every note the turn has
 	// read, which such a copy may lack ([Runner.inPlaceNotes]): a copy whose
 	// harness ended its own run holds every note it read, and its brief's,
-	// but a read its record marks unanswered.
+	// but a read its record marks unanswered or restarted.
 	fresh := r.steerBrief(ctx)
 	system, user := r.executorPrompt(ctx, "", history, built, fresh)
 	// ITS TOOL SKILLS HANDED AGAIN, as every launch hands them: the box's
@@ -1037,7 +1049,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	if carry.keeps() {
 		switch {
 		case basis.Continues():
-			briefs.kept, briefs.keptHolds, briefs.exact = kept.led(ctx, r, lead, own)
+			briefs.kept, briefs.keptHolds, briefs.exact, briefs.unheldHolds = kept.led(ctx, r, lead, own)
 		case basis.ContinuesBase():
 			// A TURN THAT HAS KEPT NO SESSION OF ITS OWN — its job lost with
 			// its box before anything of it was kept — continues the one its
@@ -1616,8 +1628,8 @@ func argsUnknown(call ledger.Call) toolloop.ArgsUnknown {
 //
 // NEVER A READ MARKED UNANSWERED (steer.Reading.Unanswered): its take's write
 // landed and its answer never reached the job's harness, so the job did not read
-// it, whatever the record's read says — the turn's later phases carry it, and
-// the record of the step that never handed it over does not list it.
+// it — the turn's later phases carry it. A restarted read is listed: the job's
+// harness took the note at that step, and only a later restart dropped it.
 func runReads(reads []steer.Read, iteration int) []types.PhaseSteer {
 	var out []types.PhaseSteer
 	for _, read := range reads {

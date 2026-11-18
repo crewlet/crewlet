@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // A run's note inbox, as its bridge serves it: the steer_take tool a harness's hook
@@ -37,6 +38,8 @@ type fakeInbox struct {
 	changed chan struct{}
 	closed  bool
 	takes   []string
+	calls   []*sandbox.NoteCall
+	cancels []sandbox.NoteCall
 	reads   [][]string
 	answer  string
 	readErr error
@@ -44,11 +47,18 @@ type fakeInbox struct {
 
 func newFakeInbox() *fakeInbox { return &fakeInbox{changed: make(chan struct{})} }
 
-func (i *fakeInbox) Take(_ context.Context, event string) string {
+func (i *fakeInbox) Take(_ context.Context, event string, call *sandbox.NoteCall) string {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.takes = append(i.takes, event)
+	i.calls = append(i.calls, call)
 	return i.answer
+}
+
+func (i *fakeInbox) Cancelled(_ context.Context, call sandbox.NoteCall) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.cancels = append(i.cancels, call)
 }
 
 func (i *fakeInbox) Wait(_ context.Context, after int) ([]mcpbridge.SteerNote, <-chan struct{}) {

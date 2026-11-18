@@ -688,13 +688,13 @@ const floorUnusedOutcome = "the launch offers the session told without the readi
 // given: where that floor is past the most room a window can leave the launch,
 // it is held at the static floor, or at the room where that is below it.
 //
-// AND THE BRIEFS TOLD BY A READING OF A KEPT CAPTURE ARE DROPPED ALONE
-// ([runner.SessionContinuation.Exact]): counted in that session's floor
-// ([keptFloor]), since its box may be handed them, and where they are what
-// makes that floor one the launch cannot carry, the session is still offered,
-// told by its save point, held to the floor of its own briefs, and the line
-// (`executor_session_holdings_unused`) says why; where its own briefs cannot be
-// carried either, the session is dropped whole, as above.
+// AND THE BRIEFS TOLD BY A READING, AND THE UNHELD ONES, ARE EACH DROPPED ALONE
+// ([agentLauncher.droppedAlone]) where theirs is what makes the kept floor
+// ([keptFloor]) one the launch cannot carry: the session is still offered,
+// held to its own briefs' floor, told by its save point to every box but one
+// whose release the resume was not read in, which starts fresh where the unheld
+// briefs were dropped ([runner.SessionContinuation.UnheldDropped]). Where its
+// own briefs cannot be carried either, the session is dropped whole, as above.
 //
 // AND A LAUNCH WHOSE EARLIER TRY WAS REFUSED BELOW ITS FLOOR waits for that
 // floor one turnover at most ([agentLauncher.refusedIn], [meter.turnedOver]):
@@ -767,25 +767,19 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 	if s := req.Session; s != nil {
 		kept := keptFloor(static, s)
 		keptWhy = carried(kept)
-		// THE BRIEFS TOLD BY A READING DROPPED ALONE where theirs is the floor
-		// that cannot be carried and the session's own briefs' can: the
-		// session is still continued, told by its save point, which tells
-		// more and never less. On a copy of the session, never the caller's,
-		// whose continuation the runner still holds.
-		//
-		// AND WHERE THEIRS FAILS TOO, the session is dropped by its own
-		// briefs' floor, which its line names: the floor with the briefs told
-		// by a reading is one the session alone never needed.
-		if keptWhy != "" && s.Exact != nil {
-			without := *s
-			without.Exact = nil
-			told := keptFloor(static, &without)
-			if whyTold := carried(told); whyTold != "" {
-				keptWhy = whyTold
+		// THE BRIEFS TOLD BY A READING, AND THE UNHELD ONES, EACH DROPPED
+		// ALONE where theirs beside the session's own is a floor that cannot
+		// be carried and the session's own briefs' can; on a copy, never the
+		// caller's, which the runner still holds. Where the session's own
+		// floor fails too, it is dropped by that floor, which its line names.
+		if keptWhy != "" && (s.Exact != nil || s.Unheld != nil) {
+			own := *s
+			own.Exact, own.Unheld = nil, nil
+			if whyOwn := carried(keptFloor(static, &own)); whyOwn != "" {
+				keptWhy = whyOwn
 			} else {
-				log.InfoContext(ctx, "executor_session_holdings_unused", "seat", l.seat.Handle(),
-					"turn_id", l.turn.RunID, "detail", keptWhy, "outcome", floorUnusedOutcome)
-				req.Session, kept, keptWhy = &without, told, ""
+				without := l.droppedAlone(ctx, s, own, static, carried)
+				req.Session, kept, keptWhy = &without, keptFloor(static, &without), ""
 			}
 		}
 		if keptWhy == "" {
@@ -848,6 +842,33 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 			"outcome", heldOutcome)
 	}
 	return req, floor
+}
+
+// droppedAlone is s less each telling beside its own briefs whose floor, beside
+// own's, carried cannot carry ([agentLauncher.continuedFloor]): the briefs told
+// by a reading, logged, and the unheld briefs, marked dropped, so the launch
+// continues the session only in a box whose release the resume was read in.
+func (l *agentLauncher) droppedAlone(ctx context.Context, s *runner.SessionContinuation,
+	own runner.SessionContinuation, static launchFloor, carried func(launchFloor) string) runner.SessionContinuation {
+
+	without := *s
+	if s.Exact != nil {
+		with := own
+		with.Exact = s.Exact
+		if why := carried(keptFloor(static, &with)); why != "" {
+			log.InfoContext(ctx, "executor_session_holdings_unused", "seat", l.seat.Handle(),
+				"turn_id", l.turn.RunID, "detail", why, "outcome", floorUnusedOutcome)
+			without.Exact = nil
+		}
+	}
+	if s.Unheld != nil {
+		with := own
+		with.Unheld = s.Unheld
+		if carried(keptFloor(static, &with)) != "" {
+			without.Unheld, without.UnheldDropped = nil, true
+		}
+	}
+	return without
 }
 
 // refusedIn is every window an earlier try of this launcher's work was refused

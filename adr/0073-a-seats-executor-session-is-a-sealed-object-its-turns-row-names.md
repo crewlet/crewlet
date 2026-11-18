@@ -307,13 +307,13 @@ a loss's add `JobEndBudget` (the wait and the kill, 145 seconds) to a
 collection's at the host's three-quarter share, about 193.3 seconds more, so a
 host's take after an end at its bound is still given its whole
 `SessionTakeBudget`. As `BoxReadBudget` (`internal/sandbox/boxhost.go`) computes
-it, a collection of a turn with no cap waits about 4,660.1 seconds (a Claude
+it, a collection of a turn with no cap waits about 4,700.1 seconds (a Claude
 Code one 20 more, for its main thread's read, `MainThreadReadWait`, below) and
-a stop's or a loss's about 4,853.5: the poll's 60-second bound, and at the
-share the take's 240 seconds, its reservation's 30, two 30-second graces and
+a stop's or a loss's about 4,893.5: the poll's 60-second bound, and at the
+share the take's 240 seconds, its reservation's 30, three 30-second graces and
 the four changes of the run's row its host makes, each at the slowest node's
 crossing (`coord.MaxValueCrossing`, about 780.03 seconds), so
-60 + 3,450.1 / 0.75. The figures first given here, 460 and 653 seconds, were
+60 + 3,480.1 / 0.75. The figures first given here, 460 and 653 seconds, were
 from before those changes were counted at their crossings.
 `internal/sandbox.TestABoxReadGivesEachChangeOfTheRowItsHostMakesItsCrossing`
 holds the collection's terms and
@@ -690,8 +690,8 @@ read do, with the record that the cap ended a job it saw working on top, at
 its grace and the slowest node's crossing (`recordsTheCap`), whether or not
 the cap has passed on the asker's clock, since the host decides on its own as
 it reads; a collection of a turn with none waits as it did. As the code
-computes them, that is about 5,933.5 seconds for a collection of a turn with a
-cap, 4,660.1 + (145 + 30 + 780.03) / 0.75, and about 4,660.1 for one with none
+computes them, that is about 5,973.5 seconds for a collection of a turn with a
+cap, 4,700.1 + (145 + 30 + 780.03) / 0.75, and about 4,700.1 for one with none
 (the derivation is in the amendment above), and a Claude Code collection waits
 20 seconds more for its main thread's read (`MainThreadReadWait`,
 `internal/sandbox.TestTheBoxReadBudgetHoldsTheMainThreadRead`). A Claude Code

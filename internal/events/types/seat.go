@@ -176,9 +176,9 @@ const (
 	// on its executor's question holds its notes for whatever resumes it.
 	SteerExpired SteerOutcome = "expired"
 
-	// SteerMissed is a note a step took for its reader, which never had it.
-	// The take's write landed and its answer was lost, so the run's record
-	// marks the read unanswered; or a Claude Code hook served it and its
+	// SteerMissed is a note a step took for its reader, which never had it:
+	// the take's answer was lost, so the record marks the read unanswered; or
+	// a Claude Code hook served it and its harness gave the call up or its
 	// job's session lacks it. And no later step read it: a later launch whose
 	// job started records it read by its brief, delivered there. Named at the
 	// step that took it or the last serve, reported by the turn's ending.

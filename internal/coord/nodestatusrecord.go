@@ -391,7 +391,29 @@ type ModelStatus struct {
 	// HostLogin is the entry's harness login on this node's disk, only for an
 	// entry that signs in with credential files: nil for every other.
 	HostLogin *HostLogin
+
+	// Limits are the windows of the entry's sign-in as this node's calls last
+	// heard the vendor report them, at most [MaxModelLimits].
+	Limits []ModelLimit
 }
+
+// ModelLimit is one of a sign-in's limit windows on the wire, in harness's
+// words (llm.LimitReading), with when a call last heard it.
+type ModelLimit struct {
+	Window         string
+	Hours          int
+	Model          string
+	State          string
+	Used           *float64
+	ResetsAt, Seen time.Time
+}
+
+// MaxModelLimits bounds the windows a model row carries: a plan has a handful
+// (Claude Code names four), and a profile's map is what names them.
+const MaxModelLimits = 8
+
+// MaxModelLimitModelBytes bounds a window's model family ("opus") on the wire.
+const MaxModelLimitModelBytes = 32
 
 // ModelSitOut is a sit-out window on the wire.
 type ModelSitOut struct {
@@ -821,7 +843,32 @@ func (m ModelStatus) meta() map[string]any {
 		}
 		row["host_login"] = login
 	}
+	if len(m.Limits) > 0 {
+		limits := make([]map[string]any, 0, min(len(m.Limits), MaxModelLimits))
+		for _, l := range m.Limits[:min(len(m.Limits), MaxModelLimits)] {
+			limits = append(limits, l.meta())
+		}
+		row["limits"] = limits
+	}
 	return row
+}
+
+// meta is one limit window on the wire, its unsaid parts omitted.
+func (l ModelLimit) meta() map[string]any {
+	out := map[string]any{"window": l.Window, "state": l.State, "seen": stamp(l.Seen)}
+	if l.Hours > 0 {
+		out["hours"] = l.Hours
+	}
+	if l.Model != "" {
+		out["model"] = textcut.Bytes(l.Model, MaxModelLimitModelBytes)
+	}
+	if l.Used != nil {
+		out["used"] = *l.Used
+	}
+	if !l.ResetsAt.IsZero() {
+		out["resets_at"] = stamp(l.ResetsAt)
+	}
+	return out
 }
 
 // meta is one runner cell on the wire.
@@ -949,7 +996,31 @@ func modelFromMeta(row map[string]any) (ModelStatus, bool) {
 			CheckedAt: instant(h["checked_at"]),
 		}
 	}
+	for _, v := range listFromMeta(row["limits"]) {
+		if l, ok := limitFromMeta(v); ok && len(m.Limits) < MaxModelLimits {
+			m.Limits = append(m.Limits, l)
+		}
+	}
 	return m, true
+}
+
+// limitFromMeta reads one limit window, false for one naming no window or
+// state, which a reader could not draw.
+func limitFromMeta(v any) (ModelLimit, bool) {
+	row, ok := v.(map[string]any)
+	if !ok {
+		return ModelLimit{}, false
+	}
+	l := ModelLimit{Window: stringFromMeta(row["window"]), Hours: intFromMeta(row["hours"]),
+		Model: stringFromMeta(row["model"]), State: stringFromMeta(row["state"]),
+		ResetsAt: instant(row["resets_at"]), Seen: instant(row["seen"])}
+	if l.Window == "" || l.State == "" {
+		return ModelLimit{}, false
+	}
+	if used, ok := row["used"].(float64); ok {
+		l.Used = &used
+	}
+	return l, true
 }
 
 // cellFromMeta reads one runner cell; a cell the peer did not send reads with

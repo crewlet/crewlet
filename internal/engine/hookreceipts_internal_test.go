@@ -152,3 +152,77 @@ func TestTheResumedSegmentCarriesWhatItsCollectionConfirmed(t *testing.T) {
 		deliveredAtTheBatch(t, recs, "req-1", first.LaunchID)
 	})
 }
+
+// A READ ITS SESSION HELD ONLY BEFORE A RESTART REACHES THE RELAUNCH SO. A
+// collection's verdict settles a hook's serve Restarted where the job's session
+// shows it taken before its last restart; the turn carries that read with the
+// word, which is the runner's only sign that a continued session lacks the note
+// (its firstUnheld). A serve settled Held is carried without it.
+//
+// Mutation: drop Restarted from readingOf, and the restarted case goes red.
+func TestARestartedReadReachesTheRelaunchAsRestarted(t *testing.T) {
+	t.Parallel()
+	for name, restarted := range map[string]bool{"held": false, "restarted": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c := newSteerCase(t, nil)
+			parkOnARun(t, c.e, c.rig, "run-1")
+			c.file(t, "run-1", "req-1", "use the staging database")
+			run := c.rig.row(t, "run-1")
+			pending := c.e.sandbox.Load().pending
+			servedByAHook(t, pending, run, "req-1")
+			settle := sandbox.HookSettle{Launch: run.LaunchID, Held: []string{"take-1"}}
+			if restarted {
+				settle = sandbox.HookSettle{Launch: run.LaunchID, Restarted: []string{"take-1"}}
+			}
+			if _, err := pending.SettleHook(t.Context(), "run-1", settle); err != nil {
+				t.Fatalf("SettleHook: %v", err)
+			}
+			carried := c.e.runSteers.carried(c.rig.row(t, "run-1"))
+			if len(carried) != 1 || carried[0].ID != "req-1" || carried[0].Launch != run.LaunchID ||
+				carried[0].Boundary != types.SteerBoundaryToolBatch || carried[0].Restarted != restarted {
+				t.Fatalf("the turn carries %+v, want the note read by job %s at its batch, restarted: %v",
+					carried, run.LaunchID, restarted)
+			}
+		})
+	}
+}
+
+// A RESUMED SEGMENT TAKES THE RECORD'S NOTES ONLY UNDER ITS OWN CLAIM. The
+// resume reads the run's row again for what its collection confirmed after
+// the claim was read; a row that names another job, another owner or a later
+// epoch is no longer that claim's, and the segment keeps the notes its claim
+// read.
+//
+// Mutation: take the row's notes wherever it is found, and a later claim's
+// case goes red.
+func TestAResumedSegmentTakesTheRecordsNotesOnlyUnderItsOwnClaim(t *testing.T) {
+	t.Parallel()
+	c := newSteerCase(t, nil)
+	parkOnARun(t, c.e, c.rig, "run-1")
+	c.file(t, "run-1", "req-1", "use the staging database")
+	row := c.rig.row(t, "run-1")
+	if len(row.Steer.Notes) != 1 {
+		t.Fatalf("the premise: the row holds %d notes, want the one filed", len(row.Steer.Notes))
+	}
+	for name, tc := range map[string]struct {
+		claim func(*sandbox.PendingRun)
+		takes bool
+	}{
+		"its own claim":    {claim: func(*sandbox.PendingRun) {}, takes: true},
+		"another job":      {claim: func(r *sandbox.PendingRun) { r.LaunchID = "an-earlier-job" }},
+		"another owner":    {claim: func(r *sandbox.PendingRun) { r.Owner = "another-node" }},
+		"an earlier epoch": {claim: func(r *sandbox.PendingRun) { r.OwnerEpoch-- }},
+	} {
+		claim := row
+		claim.Steer = sandbox.RunSteer{}
+		tc.claim(&claim)
+		got, err := c.e.runSteers.claimedNotes(t.Context(), claim)
+		if err != nil {
+			t.Fatalf("%s: claimedNotes: %v", name, err)
+		}
+		if took := len(got.Steer.Notes) == 1; took != tc.takes {
+			t.Errorf("%s: the segment took the record's notes: %v, want %v", name, took, tc.takes)
+		}
+	}
+}

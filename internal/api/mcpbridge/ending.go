@@ -356,7 +356,7 @@ func (o *binding) endKeeping(keep SteerInbox, how ending) {
 		cut++
 	}
 	inbox := o.steer
-	o.steer = nil
+	o.steer, o.endedSteer = nil, inbox
 	o.mu.Unlock()
 	if inbox != nil && inbox != keep {
 		inbox.Close()
@@ -473,4 +473,17 @@ func (o *binding) holdHook(over <-chan struct{}) SteerInbox {
 		return nil
 	}
 	return o.steer
+}
+
+// cancelInbox is the inbox a hook's cancel reaches ([SteerInbox.Cancelled]):
+// the opening's while it serves, and the one its end took off it after, so a
+// cancel whose POST reached the opening as it ended is still heard. The inbox
+// acts on the job it was bound to, closed or not.
+func (o *binding) cancelInbox() SteerInbox {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.steer != nil {
+		return o.steer
+	}
+	return o.endedSteer
 }

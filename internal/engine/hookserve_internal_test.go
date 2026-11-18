@@ -4,8 +4,10 @@ import (
 	"context"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/steer"
@@ -14,6 +16,15 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
+
+// hookCalls numbers the hook calls the cases make.
+var hookCalls atomic.Int64
+
+// hookCall is a hook's call as its box names it: one MCP session, each call an
+// id of its own.
+func hookCall() *sandbox.NoteCall {
+	return &sandbox.NoteCall{Session: "mcp-session-1", ID: strconv.FormatInt(hookCalls.Add(1), 10)}
+}
 
 // takeToken is the take a hook's answer names.
 var takeToken = regexp.MustCompile(`\[crewlet take ([0-9a-f-]{36})\]`)
@@ -127,7 +138,7 @@ func TestAHooksTakeServesAndPublishesNothing(t *testing.T) {
 	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
 	inbox := boundInbox(t, runs, store, "run-1", launch)
 	viewHolds(t, inbox, 1)
-	answer := inbox.Take(t.Context(), mcpbridge.SteerEventToolBatch)
+	answer := inbox.Take(t.Context(), mcpbridge.SteerEventToolBatch, hookCall())
 	if !strings.Contains(answer, "use staging") {
 		t.Fatalf("the hook was answered %q, want the note", answer)
 	}
@@ -137,7 +148,7 @@ func TestAHooksTakeServesAndPublishesNothing(t *testing.T) {
 		live.Iteration != 1 {
 		t.Errorf("the serve is %+v, want it at a tool batch of the job's first iteration", live)
 	}
-	if again := inbox.Take(t.Context(), mcpbridge.SteerEventFinish); again != "" {
+	if again := inbox.Take(t.Context(), mcpbridge.SteerEventFinish, hookCall()); again != "" {
 		t.Errorf("the run's finish was handed the live-served note again: %q", again)
 	}
 	// THE RECORD'S END IS THE SIGNAL: an ending reports the note unconfirmed at
@@ -173,11 +184,11 @@ func TestALiveServedNoteTakesNoRoomInTheNextAnswer(t *testing.T) {
 	inbox := boundInbox(t, runs, store, "run-1", launch)
 	text := strings.Repeat("\U0001F680", steer.MaxNoteRunes)
 	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: text, By: "founder"})
-	takeOf(t, inbox.Take(ctx, mcpbridge.SteerEventFinish))
+	takeOf(t, inbox.Take(ctx, mcpbridge.SteerEventFinish, hookCall()))
 	for _, id := range []string{"n-2", "n-3"} {
 		fileSealed(t, runs, "run-1", steer.Note{ID: id, Text: text, By: "founder"})
 	}
-	take := takeOf(t, inbox.Take(ctx, mcpbridge.SteerEventFinish))
+	take := takeOf(t, inbox.Take(ctx, mcpbridge.SteerEventFinish, hookCall()))
 	for _, id := range []string{"n-2", "n-3"} {
 		servedNotRead(t, store, "run-1", id, launch, take)
 	}
@@ -204,7 +215,7 @@ func TestAServeWhoseWriteFailedIsRemovedOffThePath(t *testing.T) {
 	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
 	inbox := boundInbox(t, runs, store, "run-1", launch)
 	viewHolds(t, inbox, 1)
-	if got := inbox.Take(ctx, mcpbridge.SteerEventToolBatch); got != "" {
+	if got := inbox.Take(ctx, mcpbridge.SteerEventToolBatch, hookCall()); got != "" {
 		t.Fatalf("a serve whose write answered an error answered the hook %q, want nothing", got)
 	}
 	served := noteOn(t, store, "run-1", "n-1").Serves
@@ -250,11 +261,11 @@ func TestAnUnansweredServeIsServedAgainAtTheNextBoundary(t *testing.T) {
 	launch := workingRun(t, store, runs, "run-1")
 	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
 	inbox := boundInbox(t, runs, store, "run-1", launch)
-	if got := inbox.Take(ctx, mcpbridge.SteerEventFinish); got != "" {
+	if got := inbox.Take(ctx, mcpbridge.SteerEventFinish, hookCall()); got != "" {
 		t.Fatalf("a serve whose write answered an error answered the hook %q, want nothing", got)
 	}
 	first := noteOn(t, store, "run-1", "n-1").Serves
-	answer := inbox.Take(ctx, mcpbridge.SteerEventFinish)
+	answer := inbox.Take(ctx, mcpbridge.SteerEventFinish, hookCall())
 	if !strings.Contains(answer, "use staging") {
 		t.Fatalf("the next boundary was answered %q, want the note served again", answer)
 	}
@@ -293,7 +304,7 @@ func TestALostStopAnswerWaitsForTheReview(t *testing.T) {
 			runs.stopped = ctx.Done()
 			launch := workingRun(t, store, runs, "run-1")
 			fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
-			if got := boundInbox(t, runs, store, "run-1", launch).Take(ctx, mcpbridge.SteerEventFinish); got != "" {
+			if got := boundInbox(t, runs, store, "run-1", launch).Take(ctx, mcpbridge.SteerEventFinish, hookCall()); got != "" {
 				t.Fatalf("a lost Stop answer answered the hook %q", got)
 			}
 			if !held {
@@ -329,7 +340,7 @@ func TestANoteIsServedToAJobAtMostThreeTimes(t *testing.T) {
 	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
 	inbox := boundInbox(t, runs, store, "run-1", launch)
 	for k := range sandbox.MaxNoteServes {
-		answer := inbox.Take(ctx, mcpbridge.SteerEventFinish)
+		answer := inbox.Take(ctx, mcpbridge.SteerEventFinish, hookCall())
 		if !strings.Contains(answer, "use staging") {
 			t.Fatalf("serve %d answered %q, want the note", k+1, answer)
 		}
@@ -339,7 +350,7 @@ func TestANoteIsServedToAJobAtMostThreeTimes(t *testing.T) {
 		}
 	}
 	for range 2 {
-		if got := inbox.Take(ctx, mcpbridge.SteerEventFinish); got != "" {
+		if got := inbox.Take(ctx, mcpbridge.SteerEventFinish, hookCall()); got != "" {
 			t.Errorf("a note at its bound was served again: %q", got)
 		}
 	}
@@ -372,12 +383,12 @@ func TestANoteServedAfterALaterOneSaysItWasSentBefore(t *testing.T) {
 	launch := workingRun(t, store, runs, "run-1")
 	inbox := boundInbox(t, runs, store, "run-1", launch)
 	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
-	first := inbox.Take(ctx, mcpbridge.SteerEventFinish)
+	first := inbox.Take(ctx, mcpbridge.SteerEventFinish, hookCall())
 	if strings.Contains(first, "before a later note") {
 		t.Errorf("a note served first says it was sent before another: %q", first)
 	}
 	fileSealed(t, runs, "run-1", steer.Note{ID: "n-2", Text: "no, use production", By: "founder"})
-	second := inbox.Take(ctx, mcpbridge.SteerEventFinish)
+	second := inbox.Take(ctx, mcpbridge.SteerEventFinish, hookCall())
 	if !strings.Contains(second, "use production") || strings.Contains(second, "before a later note") {
 		t.Fatalf("the correction was answered %q, want it plainly", second)
 	}
@@ -385,7 +396,7 @@ func TestANoteServedAfterALaterOneSaysItWasSentBefore(t *testing.T) {
 		Absent: []string{takeOf(t, first)}, Held: []string{takeOf(t, second)}}); err != nil {
 		t.Fatal(err)
 	}
-	again := inbox.Take(ctx, mcpbridge.SteerEventFinish)
+	again := inbox.Take(ctx, mcpbridge.SteerEventFinish, hookCall())
 	if !strings.Contains(again, "use staging") || !strings.Contains(again, "before a later note already handed") {
 		t.Errorf("the older note served after the correction was answered %q, want it said sent before", again)
 	}
@@ -417,7 +428,7 @@ func TestACollectionDeniesOnlyOnAThreadThatProvesAbsence(t *testing.T) {
 	launch := workingRun(t, store, runs, "run-1")
 	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
 	inbox := boundInbox(t, runs, store, "run-1", launch)
-	take := takeOf(t, inbox.Take(ctx, mcpbridge.SteerEventFinish))
+	take := takeOf(t, inbox.Take(ctx, mcpbridge.SteerEventFinish, hookCall()))
 	if _, err := store.SettleHook(ctx, "run-1", sandbox.HookSettle{Launch: launch,
 		Absent: []string{take}}); err != nil {
 		t.Fatal(err)
@@ -434,7 +445,7 @@ func TestACollectionDeniesOnlyOnAThreadThatProvesAbsence(t *testing.T) {
 		got[0].Boundary != types.SteerBoundaryFinish || got[0].LaunchID != launch {
 		t.Errorf("the ending recorded %+v, want the note missed at the serve its session lacks", got)
 	}
-	if again := inbox.Take(ctx, mcpbridge.SteerEventFinish); !strings.Contains(again, "use staging") {
+	if again := inbox.Take(ctx, mcpbridge.SteerEventFinish, hookCall()); !strings.Contains(again, "use staging") {
 		t.Errorf("the job's next boundary was answered %q, want the note served again", again)
 	}
 }
@@ -456,8 +467,8 @@ func TestAnUnreadSessionLeavesItsServesUnconfirmed(t *testing.T) {
 	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
 	inbox := boundInbox(t, runs, store, "run-1", launch)
 	viewHolds(t, inbox, 1)
-	take := takeOf(t, inbox.Take(ctx, mcpbridge.SteerEventToolBatch))
-	if got := inbox.Take(ctx, mcpbridge.SteerEventFinish); got != "" {
+	take := takeOf(t, inbox.Take(ctx, mcpbridge.SteerEventToolBatch, hookCall()))
+	if got := inbox.Take(ctx, mcpbridge.SteerEventFinish, hookCall()); got != "" {
 		t.Errorf("the job was served the note again while its serve stands: %q", got)
 	}
 	servedNotRead(t, store, "run-1", "n-1", launch, take)

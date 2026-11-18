@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -164,7 +165,7 @@ func toolResultOf(raw json.RawMessage) toolResultFacts {
 // attachmentOf reads an attachment record's `attachment`, raw, once, answering
 // every attachment type's shape rule at once, so the accessor picks by the
 // attachment's type ([threadLine.AttachmentWellFormed]), and which of the
-// asked take tokens its words name ([takesOf]).
+// asked take tokens a hook record's words name ([takesOf]).
 func attachmentOf(raw json.RawMessage, asked []string) attachmentFacts {
 	a := attachmentFacts{kind: kindOfValue(raw)}
 	if a.kind != '{' {
@@ -186,9 +187,11 @@ func attachmentOf(raw json.RawMessage, asked []string) attachmentFacts {
 	}
 	a.typ, a.toolUseID, a.by, a.event = wire.Type, wire.ToolUseID, wire.By, wire.HookEvent
 	if len(asked) > 0 {
-		a.contentTokens = takesOf(wire.Content, asked)
-		if typ, err := wireRequiredString("type", wire.Type); err == nil && typ == hookSuccess {
-			a.stdoutTokens = takesOf(wire.Stdout, asked)
+		if typ, err := wireRequiredString("type", wire.Type); err == nil && strings.HasPrefix(typ, hookRecordPrefix) {
+			a.contentTokens = takesOf(wire.Content, asked)
+			if typ == hookSuccess {
+				a.stdoutTokens = takesOf(wire.Stdout, asked)
+			}
 		}
 	}
 	a.content = kindOfValue(wire.Content)

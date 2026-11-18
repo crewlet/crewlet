@@ -189,12 +189,13 @@
 // asks the job's main thread, in its one walk (mainthread.go), which of the
 // serves its copy holds ([askedTakes]) the session took, and settles them by
 // that verdict ([Coordinator.settleHookReceipts], [PendingStore.SettleHook])
-// BEFORE the take, so the capture's cursor counts what it confirmed. A stop's
-// and a loss's thread is one its harness did not end, so it confirms and
-// proves nothing absent. Every such read hands the engine the notes a serve of
-// the job handed over ([CoordinatorOptions.SteersConfirmed]), asked or not: a
-// verdict that landed with its answer lost is published by the read made
-// again, under the same ids.
+// BEFORE the take, so the capture's cursor counts what it confirmed. A thread
+// whose harness the read cut off (a stop's or a loss's of a job still working)
+// only confirms; one whose harness ended its own run, at a stop as at a
+// collection, proves a take it does not show absent. Every such read hands the
+// engine the notes a serve of the job handed over
+// ([CoordinatorOptions.SteersConfirmed]), asked or not: a verdict that landed
+// with its answer lost is published by the read made again, under the same ids.
 //
 // THE VERDICT IS A WHOLE-ROW WRITE, so it is given [hookVerdictWait] and the
 // row's crossing, retried within that room ([Coordinator.rowContext]), and
