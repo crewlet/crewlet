@@ -73,6 +73,7 @@ import { PushesRail } from "./PushesRail.tsx";
 import { usePushActivity } from "./railParts.tsx";
 import { REFUSED_CODES, refusalSentence } from "./repo/marks.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
+import { useGitletSectionCounts } from "./sectionCounts.ts";
 import { BranchChip, Face, GITLET, useWhoName } from "./ui.tsx";
 import { WHEN, dayBoundsFor, sinceOf } from "./when.ts";
 import "~/styles/gitlet.css";
@@ -97,6 +98,7 @@ const VIA_WORDS: Readonly<Record<string, string>> = {
 };
 
 export function Pushes() {
+  useGitletSectionCounts();
   const [repo, setRepo] = useParam(REPO_PARAM, "", "filter");
   const picker = <RepoPicker size="sm" repo={repo} onChoose={setRepo} />;
   if (repo !== "" && isRepoName(repo)) {

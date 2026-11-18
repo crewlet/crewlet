@@ -156,6 +156,12 @@ export const CHANGE_WINDOWS = ["24h", "7d", "30d"] as const;
 export const CHANGE_SORTS = ["opened", "updated"] as const;
 
 /**
+ * Where an open change's merge stands, as a listing narrows to it (`readiness=`, `gitlet.ReadinessBuckets`);
+ * held both ways by `internal/gitlet.TestTheDashboardKnowsEveryReadinessBucket`.
+ */
+export const READINESS_BUCKETS = ["ready", "approval", "checks", "blockers"] as const;
+
+/**
  * Every precondition a live change's readiness judges, ONE A KIND, in the
  * order a change moves through them (`gitlet.PreconditionKinds`): it is opened
  * for review, its head is measured, approved by each kind of approval its

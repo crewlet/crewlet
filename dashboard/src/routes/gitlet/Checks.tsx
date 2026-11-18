@@ -32,6 +32,7 @@ import { parseRunKey, runKey, standingWords, type RunKey } from "./checks/standi
 import { CodeList, useListSort } from "./CodeList.tsx";
 import { REPO_PARAM } from "./paths.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
+import { useGitletSectionCounts } from "./sectionCounts.ts";
 import { BranchChip } from "./ui.tsx";
 import "~/styles/gitlet.css";
 
@@ -117,6 +118,7 @@ function laterAttempt(rows: readonly CodeCheckRow[], open: CodeCheckRow): number
 }
 
 export function Checks() {
+  useGitletSectionCounts();
   // THE CLOCK BY THE HOUR, the window's alignment: a tick re-renders nothing here.
   const hour = useClock((now) => now - (now % HOUR_MS));
   const range = useTimeRange(hour, CHECKS_OFFER);
