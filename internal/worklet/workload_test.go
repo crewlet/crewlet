@@ -37,10 +37,8 @@ func loadOf(t *testing.T, a worklet.WorkloadAnswer, handle string) worklet.Workl
 	return worklet.WorkloadRow{}
 }
 
-// pointedTask files one sized, assigned task. The project defaults to ENG —
-// the workload's own questions are about a person rather than a container, so
-// naming one at every call site would be noise on every line but the two that
-// are about the unit narrowing.
+// pointedTask files one sized, assigned task. The project defaults to ENG:
+// only the unit-narrowing tests care which.
 func pointedTask(t *testing.T, r *roundTrip, id string, points float64,
 	assignee string, project ...string) {
 
@@ -59,8 +57,7 @@ func pointedTask(t *testing.T, r *roundTrip, id string, points float64,
 	r.drain()
 }
 
-// estimatedTask is its other half: sized in MINUTES rather than points, which
-// is what a company using the other measure files.
+// estimatedTask is its other half: sized in MINUTES rather than points.
 func estimatedTask(t *testing.T, r *roundTrip, id string, minutes int,
 	project, assignee string) {
 
@@ -76,10 +73,7 @@ func estimatedTask(t *testing.T, r *roundTrip, id string, minutes int,
 	r.drain()
 }
 
-// WHO IS CARRYING HOW MUCH, IN ONE READ.
-//
-// A caller asking it per project paid one round trip each and rewrote the
-// arithmetic per surface. This is one read, over the same rows.
+// WHO IS CARRYING HOW MUCH, IN ONE READ across every project.
 func TestTheWorkloadAnswersEverybodyAtOnce(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -87,10 +81,8 @@ func TestTheWorkloadAnswersEverybodyAtOnce(t *testing.T) {
 	pointedTask(t, r, "a1", 8, "ada")
 	pointedTask(t, r, "a2", 3, "ada")
 	pointedTask(t, r, "b1", 2, "bo")
-	// AND ONE THAT IS FINISHED. This answers what somebody is holding NOW,
-	// not what they have ever held: counting a person's delivered work as
-	// load would put every productive person at the top by the end of a
-	// quarter, and nothing about it is load.
+	// AND ONE THAT IS FINISHED, which is not load: counting delivered work
+	// would put every productive person at the top by a quarter's end.
 	pointedTask(t, r, "a3", 21, "ada")
 	done := worklet.StatusDone
 	if _, err := r.writer.UpdateTask(t.Context(), "op-done", "a3", "ENG",
@@ -119,10 +111,9 @@ func TestTheWorkloadAnswersEverybodyAtOnce(t *testing.T) {
 
 // BOTH MEASURES TRAVEL, never one chosen.
 //
-// Which of points and minutes a team sizes in is that team's own habit, so an
-// answer that picked one would be wrong for everybody sizing in the other —
-// and a person working across two teams sizing differently has BOTH numbers
-// rather than a sum of them, because points are not minutes.
+// A team sizes in points or minutes, so picking one is wrong for the other;
+// a person across two such teams has BOTH numbers, never a sum, because
+// points are not minutes.
 func TestTheWorkloadCarriesBothMeasures(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

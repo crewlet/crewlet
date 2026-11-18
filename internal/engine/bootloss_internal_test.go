@@ -18,19 +18,13 @@ import (
 
 // A BOOT THAT FAILS ON A BROKER CONNECTION NATS CLOSED FOR GOOD SAYS WHY.
 //
-// The connection is closed under a boot the way an operator closes it under a
-// running node — the server restarted with its credentials rotated, refusing
-// the node's on the reconnect and again on the attempt after it — and the boot
-// then reaches its first step that needs the broker. That step fails in its own
-// words, which say the connection is closed and nothing an operator can act
-// on; the sentence that names the cause and the setting to change was recorded
-// on the queue, and a failed boot returned without it. It must carry both: the
-// classified sentence, because it is what to fix, and the step's own error,
-// because it is where the boot stopped.
-//
-// Borrowed backends, so the boot is the engine's own and nothing else in it
-// differs from `crewlet run`'s: the engine opened them in every other respect
-// exactly as OpenBackends does.
+// The server restarts with its credentials rotated, refusing the node's on
+// the reconnect and the attempt after, and the boot then reaches its first
+// step needing the broker, whose own error says only that the connection is
+// closed. The failed boot must carry both the classified sentence recorded on
+// the queue (the cause, and the setting to change) and the step's error (where
+// the boot stopped). Borrowed backends, opened exactly as OpenBackends does,
+// so the boot is `crewlet run`'s.
 //
 // Mutation: drop lostDuring from New's failure path and the classified half
 // goes red.
@@ -56,8 +50,8 @@ func TestABootThatLosesItsBrokerConnectionSaysWhy(t *testing.T) {
 		t.Fatalf("the stream is %T, which has no connection to lose", back.Queue)
 	}
 
-	// THE OPERATOR'S GESTURE, and a wait for the loss it causes: the case is
-	// about a boot that meets a recorded loss, so it starts once there is one.
+	// THE OPERATOR'S GESTURE, then a wait for the loss it records: the boot
+	// must meet a recorded loss.
 	srv.RestartAs(func(o *server.Options) { o.Authorization = "rotated" })
 	select {
 	case <-lost.Lost():

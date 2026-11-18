@@ -12,22 +12,15 @@ import (
 // history questions from its own event store, and asks every live data node
 // when it is asked one (ADR-0021).
 //
-// # Every data node serves, in every mode
-//
-// A data node's events are in its own store and nowhere else — its own, and
-// the custody batches of nodes without `data` it keeps, whose stores are
-// scratch — so a data node that stopped answering would be a gap in every
-// history screen of the company. That includes a node in maintenance: it
-// publishes nothing, but its store still holds everything it published and
-// every batch it keeps, and the window an operator is investigating is exactly
-// the one it must not go dark for. Answering is not publishing — the scatter
-// rides the broker's ephemeral request and reply, which write no stream and no
-// record — so the maintenance gate, which stops every publisher, has nothing
-// here to stop.
+// Every data node answers, in maintenance too: its store alone holds its events
+// and the custody batches it keeps for nodes without `data`, so a silent one is
+// a gap in every history screen, and maintenance is the window an operator is
+// investigating. Answering is not publishing — the scatter rides the broker's
+// ephemeral request and reply, writing no stream or record — so the
+// maintenance gate has nothing here to stop.
 
-// historyPartial and historyComplete are the two values of the history
-// counter's `coverage` attribute — a closed set, spelled once for the writer
-// and the alarm's reader.
+// historyPartial and historyComplete are the history counter's `coverage`
+// values, spelled once for the writer and the alarm's reader.
 const (
 	historyComplete = "complete"
 	historyPartial  = "partial"
@@ -35,14 +28,13 @@ const (
 
 // armHistory builds this node's fleet reader and makes the node an answerer.
 //
-// ONLY ON A NODE THAT HOLDS DATA. A node without the `data` role holds no
-// history to answer from — its store is scratch, and custody puts every event
-// it publishes in exactly one data node's event log (internal/observe) — and
-// it has nothing to ask with either: the reader's only callers are the API's
-// history answers and the live projection's boot seed, and serving the API
-// takes `data` (config refuses `ingress` without it). So it gets no reader at
-// all rather than one that would name its own scratch store, which holds
-// nothing, as a node every answer was assembled from.
+// Only on a node that holds data. A node without `data` has no history to
+// answer from (its store is scratch; custody puts each event it publishes in one
+// data node's log, internal/observe), and nothing asks there: the reader's
+// callers are the API's history answers and the live projection's boot seed, and
+// serving the API takes `data` (config refuses `ingress` without it). A reader
+// there would name its empty scratch store as a node every answer was assembled
+// from.
 func (e *Engine) armHistory(ctx context.Context) error {
 	if e.backends == nil || e.backends.Store == nil || e.local == nil {
 		return nil
@@ -88,10 +80,9 @@ func (e *Engine) History() *eventfan.Fleet { return e.history }
 
 // reportHistory counts what one history answer covered.
 //
-// THE ONLY THING THAT LETS `history_partial` FIRE. The alarm is a fraction of
-// the answers this node gave, and an alarm whose input nobody records is
-// permanently silent — which looks exactly like a fleet whose every node
-// always answers.
+// THE ONLY THING THAT LETS `history_partial` FIRE: the alarm is a fraction of
+// the answers this node gave, and one whose input nobody records stays silent,
+// looking exactly like a fleet whose every node always answers.
 func (e *Engine) reportHistory(q eventfan.Question, c eventfan.Coverage, _ time.Duration) {
 	if e.metrics == nil {
 		return

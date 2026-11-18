@@ -14,7 +14,7 @@ import { SessionReading } from "~/lib/frameSession.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
-import { settled } from "~/test/settle.ts";
+import { afterMicrotasks, settled } from "~/test/settle.ts";
 import { withDerived } from "~/test/org.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { ChangeStateTag, checksSentence, preconditionTone } from "./ChangeRow.tsx";
@@ -785,6 +785,7 @@ test("j, k and Enter walk the rows, the page's list on landing", async () => {
   release();
   const list = await theList();
   await within(list).findByRole("link", { name: "Change 7 of api" });
+  await afterMicrotasks();
   // NO PRESS YET: the page's list drives the keys, never the box above it.
   fireEvent.keyDown(window, { key: "j" });
   expect(document.activeElement).toBe(

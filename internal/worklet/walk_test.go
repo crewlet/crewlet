@@ -8,15 +8,8 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A RE-SPREAD PRESERVES THE ORDER AT EVERY BATCH BOUNDARY.
-//
-// # Why that is stronger than "the walk finishes correctly"
-//
-// A walk is many records over minutes and WILL be interrupted — a node
-// restarts, a lease flaps, a process is killed. So it is not enough that the
-// order is right when the walk completes: it has to be right after every
-// batch, because any batch may be the last one that runs. An operator watching
-// a board through a re-spread must see nothing at all.
+// A RE-SPREAD PRESERVES THE ORDER AT EVERY BATCH BOUNDARY, not only at the
+// end: a walk will be interrupted, so any batch may be the last that runs.
 func TestARespreadPreservesTheOrderAtEveryBatch(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -46,10 +39,9 @@ func TestARespreadPreservesTheOrderAtEveryBatch(t *testing.T) {
 		t.Fatalf("the plan moves %d of %d tasks, so this case is not "+
 			"exercising a whole walk", len(plan.Placements), total)
 	}
-	// SLICED SMALLER THAN THE SHIPPED BATCH, deliberately: the property
-	// under test is that ANY prefix of the plan leaves a correct board,
-	// and a fixture small enough to be one shipped batch could not show
-	// it. TestARespreadPlanBatchesConsecutively covers the real slicing.
+	// SLICED SMALLER THAN THE SHIPPED BATCH, deliberately: ANY prefix must
+	// leave a correct board, which a one-batch fixture could not show.
+	// TestARespreadPlanBatchesConsecutively covers the real slicing.
 	const step = 4
 	for from := 0; from < total; from += step {
 		batch := plan.Placements[from:min(from+step, total)]
@@ -77,15 +69,9 @@ func TestARespreadPreservesTheOrderAtEveryBatch(t *testing.T) {
 	}
 }
 
-// SUCCESSIVE WALKS TAKE FRESH POSITIONS RATHER THAN SUBDIVIDING ONE.
-//
-// # The failure this exists to catch
-//
-// Run upward, a walk's ceiling is fixed by the frozen maximum's own integer
-// part — so two walks with no create between them halve the SAME gap twice and
-// the keys grow instead of shrinking, which is the exact condition the walk
-// exists to remove. Downward, the floor moves with the project's minimum and
-// every walk takes an integer of its own.
+// SUCCESSIVE WALKS TAKE FRESH POSITIONS RATHER THAN SUBDIVIDING ONE: a walk
+// run upward would halve the same gap each time and grow the keys
+// ([worklet.RespreadPlan] says why it runs downward).
 func TestSuccessiveRespreadsDoNotSubdivideOnePosition(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -123,8 +109,8 @@ func TestSuccessiveRespreadsDoNotSubdivideOnePosition(t *testing.T) {
 func crowd(t *testing.T, r *roundTrip, total int) {
 	t.Helper()
 	placements := make([]worklet.Placement, 0, total)
-	// Keys that sort in the same order as the ids and are past the
-	// threshold, which is the state a repeatedly-dragged board reaches.
+	// Past the threshold and in id order, as a repeatedly-dragged board
+	// reaches.
 	for i := range total {
 		placements = append(placements, worklet.Placement{
 			Task: fmt.Sprintf("t-%02d", i),
@@ -163,11 +149,9 @@ func boardRanks(t *testing.T, r *roundTrip) []worklet.Rank {
 	return ranks
 }
 
-// A PLAN'S BATCHES ARE CONSECUTIVE SLICES THAT COVER IT EXACTLY.
-//
-// A gap loses a task's placement — it keeps its long key and the walk reports
-// success — and an overlap publishes one placement twice, which is a second
-// record on the order's own subject that the first has already made stale.
+// A PLAN'S BATCHES ARE CONSECUTIVE SLICES THAT COVER IT EXACTLY: a gap leaves
+// a task its long key while the walk reports success, and an overlap publishes
+// a placement twice, the second already stale on the order's subject.
 func TestARespreadPlanBatchesConsecutively(t *testing.T) {
 	t.Parallel()
 	for _, size := range []int{0, 1, worklet.WalkBatch - 1, worklet.WalkBatch,

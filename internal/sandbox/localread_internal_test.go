@@ -14,11 +14,10 @@ import (
 // run as included (permissions would not: root reads past them).
 func TestALocalFileThatCannotBeOpenedIsAnError(t *testing.T) {
 	t.Parallel()
-	// NOT UNDER t.TempDir, whose directory is named for this test: a socket's
-	// path is bounded (104 bytes on macOS, 108 on Linux), and the test's name
-	// under macOS's per-user temporary directory already runs past it, so
-	// the listen failed there before the case was reached. A short directory
-	// of its own and a one-letter name stay inside the bound on both.
+	// NOT UNDER t.TempDir, which is named for this test: a socket's path is
+	// bounded (104 bytes on macOS, 108 on Linux), and macOS's per-user temporary
+	// directory plus the test's name runs past it. A short directory of its own
+	// and a one-letter name fit both.
 	dir, err := os.MkdirTemp("", "sock") //nolint:usetesting // t.TempDir is named for the test, past a socket path's bound
 	if err != nil {
 		t.Fatalf("mkdir: %v", err)

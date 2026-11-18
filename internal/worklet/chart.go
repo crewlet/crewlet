@@ -12,79 +12,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// ApplyChart makes the projects a company's org chart names EXIST, and keeps
-// their chart-owned fields in step with it.
-//
-// # Why a project is not created on demand
-//
-// A create is a SEQUENCE: it takes the next number from its project's own
-// counter and then writes the task, and the counter is arbitrated on the
-// project's subject. So a project has to be an object before anything can be
-// filed in it — and "create it if it is missing, inside the create" is exactly
-// the shape that produces two projects, two counters and two ENG-1s when two
-// nodes file at once.
-//
-// Deriving it from the CHART instead settles that, and settles more than that:
-// a project's name, purpose and owning unit are facts a founder wrote in the
-// config, so a tool that could write them would let a model rename the
-// company's projects. The record marks those three CHART-OWNED for that
-// reason, and this is the only writer of them.
-//
-// # What it does not touch
-//
-// Everything a project accumulates in use: its field catalogue, its default
-// assignee, its tags, its archived flag. Those
-// are the operator's and the tools', and a reconcile that rewrote them would
-// undo a person's work every time somebody edited the config.
-//
-// Nor does it REMOVE a project the chart no longer names. A project holds the
-// company's tasks, and a unit renamed in a config edit would otherwise take
-// every task filed under it out of reach — a data loss with a typo as its
-// trigger. What the chart stops naming simply stops being reconciled.
-//
-// # The epoch is the ACTIVATION's instant
-//
-// activatedAt is when the configuration this chart came from was activated —
-// the instant on the fleet's activation pointer, which every node reads and a
-// node keeps as its boot row's `served_at` once it has applied it — and it is
-// the project's epoch ([configplane.ActivationStamp]). Never the apply's own
-// clock: every
-// node applies one activation separately, at its reconcile tick and again at
-// every boot, so an instant read there differs on every one of them and both
-// things the epoch is for stop working. A node that boots on a stale revision
-// would stamp NOW and walk the fleet's newer names back to its own old ones,
-// and no second apply would ever carry the epoch the first stamped, so every
-// apply on every node would be a record per project for a value nobody
-// changed. The zero instant is refused ([ErrNoChartActivation]): there is no
-// honest default, and a caller holding no activation has no chart to apply.
-//
-// # Idempotence, and why it is per project
-//
-// Each project is its own append on its own subject, so N nodes running this
-// at once contend per project and exactly one wins each; the losers re-decide
-// on the rows the winner wrote, see the value they wanted already there and
-// write nothing. A project already stamped ABOVE the epoch is left alone, and
-// one stamped AT it with the same three values is too — which is what makes a
-// reconcile on every apply and every boot cost nothing after the first node
-// has done it.
-//
-// THE STAMP IS COMPARED BEFORE THE FIELDS. A row whose three fields already
-// match but whose stamp is OLDER is re-stamped: left at the older activation,
-// it is open to any activation between the two that no node applied before it
-// was superseded and that a slow node applies late. One record per project per
-// activation is what that costs, never one per apply.
-//
-// It returns the projects it actually wrote, so a caller can log the change
-// rather than the attempt; a write whose outcome is `unknown` is an error,
-// because the next apply is what retries it and the caller is the one that
-// says so.
-//
-// EVERY PROJECT IS ATTEMPTED, and the error names every one that failed. One
-// project's broker refusal must not leave the rest of a company unable to file
-// anything, and the caller is a reconcile that runs again. The loop used to
-// say so and return at the first failure, so a chart whose first project hit a
-// full stream or an unknown outcome reconciled none of the projects after it —
-// on every apply, for as long as that one kept failing.
+// ApplyChart makes the projects a company's org chart names EXIST and keeps
+// their CHART-OWNED name, purpose and unit in step with it, as their only
+// writer: a founder wrote them, so no tool may let a model rename them, and a
+// project made on demand inside a create would let two nodes filing at once
+// make two counters and two ENG-1s. What a project gathers in use (fields,
+// default assignee, tags, archived flag) it never touches, and a project the
+// chart stops naming is left, not removed: a renamed unit would otherwise take
+// its tasks out of reach. activatedAt, the configuration's activation instant,
+// is the epoch ([configplane.ActivationStamp]); zero is [ErrNoChartActivation].
+// It attempts EVERY project, joining the failures, so one broker refusal
+// cannot stall the rest, and returns those it wrote; an `unknown` outcome is
+// an error, which the next apply retries.
 func (w *Writer) ApplyChart(ctx context.Context, activatedAt time.Time,
 	chart []ChartProject) ([]string, error) {
 
@@ -127,17 +66,27 @@ type ChartProject struct {
 var ErrNoChartActivation = errors.New("worklet: a chart apply must name the " +
 	"instant its configuration was activated")
 
-// applyChartProject writes one, or decides there is nothing to write.
+// applyChartProject writes one project, or decides there is nothing to write.
+//
+// The epoch is the activation's, never the apply's clock: every node applies
+// one activation separately, at each reconcile tick and boot, so a clock stamp
+// would let a node booting a stale revision walk newer names back, and make
+// every apply a record. Each project is its own subject, so racing nodes
+// contend per project and the losers re-decide on the winner's rows. A row
+// stamped ABOVE the epoch is left alone, and one AT it with the same values
+// too. The stamp is compared BEFORE the fields: a matching row with an OLDER
+// stamp is re-stamped, or a slow node applying an activation between the two
+// late would walk it back. One record per project per activation, never per
+// apply.
 func (w *Writer) applyChartProject(ctx context.Context, epoch int64,
 	p ChartProject) (bool, error) {
 
 	subject := ProjectSubject(p.Key)
 	scope := ScopeSet{Subject: true}
 	now := w.Now()
-	// THE WALL CLOCK for the mint and not the writer's own, which is the
-	// clock AUTHORED instants are stamped from and a test pins: the mint
-	// is compared with the ledger's watermark, which a sweep and a join
-	// set off the wall.
+	// THE WALL CLOCK for the mint, not w.Now (authored instants, pinned by
+	// tests): the mint is compared with the ledger's watermark, which a
+	// sweep and a join set off the wall.
 	op := chartOpID(time.Now(), p.Key)
 	var changed bool
 
@@ -147,10 +96,9 @@ func (w *Writer) applyChartProject(ctx context.Context, epoch int64,
 		OpID:    op,
 		Pattern: statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			// RESET ON EVERY ROUND. A round that decided to write and
-			// lost the broker's arbitration is followed by one that
-			// finds the winner's value already there, and only the
-			// last round says what this call did.
+			// RESET ON EVERY ROUND: a round that lost the broker's
+			// arbitration is followed by one finding the winner's value,
+			// and only the last says what this call did.
 			changed = false
 			current, held, err := readProject(ctx, tx, p.Key)
 			if err != nil {
@@ -162,10 +110,8 @@ func (w *Writer) applyChartProject(ctx context.Context, epoch int64,
 					V: DocumentVersion, Key: p.Key, CreatedAt: now,
 				}
 			}
-			// A LATER CHART ALREADY WON. Two nodes applying two
-			// revisions is ordinary during a rollout, and the newer
-			// one must not be walked back by the older node's own
-			// reconcile arriving second.
+			// A LATER CHART ALREADY WON: during a rollout an older
+			// node's reconcile arriving second must not walk it back.
 			if held && current.ChartEpoch > epoch {
 				return statelog.Decision{}, nil
 			}
@@ -173,10 +119,8 @@ func (w *Writer) applyChartProject(ctx context.Context, epoch int64,
 				next.Name == p.Name && next.Purpose == p.Purpose &&
 				next.Unit == p.Unit {
 
-				// NOTHING TO SAY. An empty decision is a legitimate
-				// outcome rather than an error — see
-				// [statelog.Decision.Payload] — and it is what makes
-				// a reconcile on every apply free after the first.
+				// NOTHING TO SAY: an empty decision is an outcome, not an
+				// error ([statelog.Decision.Payload]).
 				return statelog.Decision{}, nil
 			}
 			next.Name, next.Purpose, next.Unit = p.Name, p.Purpose, p.Unit
@@ -209,16 +153,12 @@ func (w *Writer) applyChartProject(ctx context.Context, epoch int64,
 
 // ApplyRoster reconciles the org chart's seat order ([Roster]) from every
 // seat's name by handle, stamped with the activation the chart came from, and
-// reports whether it wrote.
-//
-// [Writer.ApplyChart]'s rules for a project, for the same reasons: the epoch
-// is the activation's instant, a roster stamped above it is left alone, and
-// one stamped at it in the same order writes nothing, so a reconcile on every
-// apply and every boot costs one local read after the first node's write.
+// reports whether it wrote. A project's epoch rules hold, for the reasons on
+// [Writer.applyChartProject].
 //
 // ONE RECORD FOR THE WHOLE CHART, because a place is relative: a seat added or
-// renamed moves every place after it, which per-seat records would write one
-// at a time with the order half moved in between.
+// renamed moves every place after it, which per-seat records would write with
+// the order half moved in between.
 func (w *Writer) ApplyRoster(ctx context.Context, activatedAt time.Time,
 	names map[string]string) (bool, error) {
 
@@ -271,26 +211,16 @@ func (w *Writer) ApplyRoster(ctx context.Context, activatedAt time.Time,
 	return changed, nil
 }
 
-// chartOpID is the operation id one project's chart apply writes under.
+// chartOpID is the operation id one chart apply writes under: FRESH PER APPLY
+// ([statelog.NewOpID]), because a reconcile decides from the rows what is left
+// to write, so a repeat on any node finds its value and writes nothing, and
+// racing nodes are settled by arbitration. None of that needs the ledger.
 //
-// FRESH PER APPLY, minted at the apply's own instant through the state log's
-// grammar ([statelog.NewOpID]), because a chart apply is a RECONCILE rather
-// than an operation a retry has to be matched to: it decides from the
-// project's rows what, if anything, is left to write, so a second apply of one
-// activation — on another node, at the next boot, after a lost acknowledgement
-// — finds its value there and writes nothing, and N nodes racing one
-// activation are settled by the broker's arbitration with the losers
-// re-deciding on the winner's rows. None of that needs the ledger.
-//
-// An id DERIVED FROM THE ACTIVATION would put the ledger in charge instead,
-// and its instant would be the activation's. Once that is older than the
-// ledger's retention — a company whose configuration has not changed for a
-// month, which is most of them — the ledger can no longer vouch for it, and
-// every boot of every node would have every project's apply answered
-// `unknown` without being decided. And the ledger would answer a SECOND apply
-// of one activation from the first's row rather than re-reading the project,
-// so a project an older chart walked back at an equal epoch could never be set
-// right by the activation that is actually current.
+// An id DERIVED FROM THE ACTIVATION would put the ledger in charge: once the
+// activation outlives the ledger's retention (a config unchanged for a month,
+// as most are), every boot's apply would be answered `unknown` undecided, and
+// a second apply would be answered from the first's row, so a project an older
+// chart walked back at an equal epoch could never be set right.
 func chartOpID(at time.Time, key string) string {
 	return statelog.NewOpID(at, "chart-"+key)
 }

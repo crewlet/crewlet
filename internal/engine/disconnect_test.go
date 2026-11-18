@@ -15,19 +15,10 @@ import (
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
-// EVERY SURFACE CAN BE DISCONNECTED, including the ones with no pass.
-//
-// A third-party app with no provisioning pass still has a BLOCK in the company
-// document, and a disconnect has to drop it. Without a disconnector the intent
-// sat on the fleet row for ever, with the screen reporting Disconnecting and
-// no node ever finishing it, which is exactly what happened to Datadog — which
-// registers and withdraws its own webhook now and is no longer in this
-// sentence.
-//
-// Slack is the one kind with no pass, and that never meant it had nothing to
-// remove: its apps are made from the command line, but the sealed bot token
-// and signing secret each seat holds are in this engine's own document. See
-// [slackTeardown].
+// EVERY SURFACE CAN BE DISCONNECTED, including the ones with no pass: each
+// still has a BLOCK to drop, and without a disconnector the intent sits on the
+// fleet row for ever, Disconnecting. Slack, the one kind with no pass, still
+// holds each seat's sealed credentials in the document ([slackTeardown]).
 func TestEverySurfaceHasADisconnector(t *testing.T) {
 	t.Parallel()
 	got := (&Engine{}).disconnectors()
@@ -41,10 +32,8 @@ func TestEverySurfaceHasADisconnector(t *testing.T) {
 	}
 }
 
-// noopWriter is a config surface that accepts every write. It exists so a
-// test can put the engine in the one state that matters below — a wired
-// config surface and NO active revision — which [Engine.dropBlock] otherwise
-// short-circuits before the vendor step is ever reached.
+// noopWriter is a config surface that accepts every write, so the config
+// surface is never what a case's disconnect stops on.
 type noopWriter struct{}
 
 func (noopWriter) Apply(context.Context, []byte, string, iam.Actor) error { return nil }
@@ -59,21 +48,12 @@ func (noopWriter) Reload(context.Context, string, iam.Actor) error { return nil 
 
 // A NODE WITH NO ACTIVE REVISION DOES NOT DIE ON A DISCONNECT IT CANNOT DO.
 //
-// [Engine.Company] is nil on a node that booted with no company config, which
-// is a state the engine supports: it still runs the reconcile loop, and the
-// loop still reads the fleet's own status rows. Those rows are on the
-// COORDINATION store, so a teardown intent written by a node that has the
-// document is found by one that does not, and every pass's Teardown reads the
-// credential it authenticates with straight off `Company().Config`.
-//
-// Unguarded, that is a nil dereference inside the loop's detached goroutine —
-// which is not an error the loop reports but a panic that takes the process
-// with it, on a node whose seats were otherwise running perfectly.
-//
-// The answer is the one [Engine.dropBlock] already gives when the config
-// surface is not wired yet: NOT YET, not failed. Nothing is written, no
-// attempt is counted, and the node that does hold the document finishes the
-// disconnect.
+// A company-less node still runs the reconcile loop over the COORDINATION
+// store's rows, so it finds intents written elsewhere, and every Teardown
+// reads its credential off `Company().Config`: unguarded, a nil dereference
+// in the loop's detached goroutine takes the process down. The answer is NOT
+// YET ([integration.ErrDisconnectUnavailable]), as for an unwired config
+// surface, so the node holding the document finishes it.
 func TestADisconnectOnANodeWithNoCompanyIsDeferredRatherThanFatal(t *testing.T) {
 	t.Parallel()
 	for _, kind := range integration.Kinds {
@@ -97,17 +77,10 @@ func TestADisconnectOnANodeWithNoCompanyIsDeferredRatherThanFatal(t *testing.T) 
 
 // A DISCONNECT THAT IS ASKED TO REMOVE ACCOUNTS IT CANNOT REACH REFUSES.
 //
-// [Engine.dropBlock] runs the vendor step and then removes the block, which
-// for Atlassian carries the `${VAR}` pointing at the organization key. So a
-// teardown that answered nil when that key did not resolve had the block
-// removed out from under it: every service account this engine created was
-// orphaned at Atlassian, nothing in the document could authenticate a second
-// attempt, and the operator was told remove_seats succeeded.
-//
-// The accounts are the ledger's now, and removed by the disconnect's access
-// sync, so the refusal is there: the ledger records an account and the
-// vendor cannot be opened. Without remove_seats nothing is removed, so a
-// disconnect needs no key.
+// The block dropped after the vendor step carries the organization key's
+// `${VAR}`, so answering nil when the key does not resolve orphans every
+// account the ledger records with nothing left to authenticate a retry. The
+// refusal is the access sync's; without remove_seats no key is needed.
 func TestATeardownThatCannotReachTheAccountsItMustRemoveRefuses(t *testing.T) {
 	t.Parallel()
 	e, _ := sealingEngine(t, "https://jira.example.com")
@@ -183,18 +156,9 @@ func TestARemovalStillWaitingHoldsTheDisconnect(t *testing.T) {
 	}
 }
 
-// THE CREDENTIALS AN ACCOUNT HELD GO WITH THE ACCOUNT.
-//
-// No teardown or decommission path anywhere deleted a secret: a vendor
-// package's only write seam is [provision.TokenSink], and until Forget existed
-// it had no verb for removing a value this run did not write. So disconnecting
-// Atlassian with "remove accounts" deleted every agent's service account and
-// left every agent's credential sealed and resolving.
-//
-// The consequence was measured on the reconnect: the tracker mapped the seat to
-// the account that no longer existed — its identity cache is keyed on the
-// CREDENTIAL, and the credential had not changed — and reported a 401 as the
-// operator's problem, at a third-party app, for about thirty-five seconds.
+// THE CREDENTIALS AN ACCOUNT HELD GO WITH THE ACCOUNT: a credential left
+// sealed and resolving keeps the tracker's identity cache, keyed on the
+// CREDENTIAL, mapping the seat to an account that no longer exists.
 func TestTheCredentialsOfARemovedAccountAreDeleted(t *testing.T) {
 	t.Parallel()
 	e, _ := sealingEngine(t, "https://jira.example.com")
@@ -230,9 +194,8 @@ func TestTheCredentialsOfARemovedAccountAreDeleted(t *testing.T) {
 			t.Errorf("%s still resolves to %q after its account was removed", gone, got)
 		}
 	}
-	// AND ONLY THE SEAT'S OWN. A company-level credential survives a
-	// disconnect by design — it may be shared with another deployment — and
-	// is reported to the operator instead.
+	// AND ONLY THE SEAT'S OWN: a company-level credential may be shared
+	// with another deployment, so it survives and is reported instead.
 	if got := e.Resolve("${SHARED_ADMIN}"); got == "" {
 		t.Error("a credential no removed account held was deleted too")
 	}
@@ -265,14 +228,10 @@ func TestATeardownThatRemovedNothingDeletesNothing(t *testing.T) {
 	}
 }
 
-// A TEARDOWN WITH NOWHERE TO FORGET INTO FAILS, AND THE BLOCK STAYS.
-//
-// It used to log the names and let the block drop, on the argument that a
-// node with no keyring could never open a sealed row and would otherwise hold
-// the surface disconnecting for ever. There is no such node now — every node
-// holds the keyring the rows were sealed under — so a sink that cannot be
-// built is an engine wired without its secret store, and dropping the block
-// over it would leave the dead values sealed with nothing left to retry.
+// A TEARDOWN WITH NOWHERE TO FORGET INTO FAILS, AND THE BLOCK STAYS: every
+// node holds the keyring, so a sink that cannot be built is an engine wired
+// without its secret store, and dropping the block over it would leave the
+// dead values sealed with nothing left to retry.
 func TestATeardownWithNoSecretStoreFailsRatherThanDroppingTheBlock(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
@@ -305,14 +264,9 @@ func (p *removingPass) Teardown(context.Context, setup.TeardownInput) (provision
 	return p.removed, p.err
 }
 
-// A DISCONNECT DELETES THE CREDENTIALS ITS TEARDOWN STRANDED, END TO END.
-//
-// The pieces each work and the question is whether they are joined: the vendor
-// step reports what it removed, and the engine deletes those values BEFORE the
-// block is dropped, inside the same closure. Asserted through the real
-// [vendorDisconnect] rather than through the deletion alone, because "the
-// teardown reports it" and "the engine acts on it" are two facts and only the
-// second one ends the defect.
+// A DISCONNECT DELETES THE CREDENTIALS ITS TEARDOWN STRANDED, END TO END:
+// through the real [vendorDisconnect], because "the teardown reports it" and
+// "the engine deletes it before the block drops" are two facts.
 func TestADisconnectDeletesWhatItsTeardownStranded(t *testing.T) {
 	t.Parallel()
 	e, company := sealingEngine(t, "https://jira.example.com")
@@ -353,13 +307,10 @@ func TestADisconnectDeletesWhatItsTeardownStranded(t *testing.T) {
 	}
 }
 
-// A DISCONNECT IS RECORDED AS WHOEVER ASKED FOR IT.
-//
-// The loop carries a disconnect out minutes after the request, on whichever
-// node holds its duty, and the revision that drops the block — kept for ever —
-// was recorded as the loop's own, while a FORCED disconnect, which drops it
-// inside the request, recorded the person. The row carries who asked
-// ([integration.State.RequestedBy]) and the teardown writes as them.
+// A DISCONNECT IS RECORDED AS WHOEVER ASKED FOR IT, though the loop carries
+// it out later on whichever node holds its duty: the row carries who asked
+// ([integration.State.RequestedBy]) and the teardown writes as them, as a
+// FORCED disconnect inside the request does.
 // Mutation: drop the block as the loop and the case goes red.
 func TestADisconnectIsRecordedAsWhoeverAskedForIt(t *testing.T) {
 	for name, tc := range map[string]struct{ by, want iam.Actor }{
@@ -396,15 +347,12 @@ func (w refusingWriter) Disconnect(context.Context, integration.Kind, string, ia
 	return nil, w.err
 }
 
-// A REVISION THE SETTINGS REFUSED IS NOT THE VENDOR'S FAILURE, and the
-// disconnect says which it was: the vendor's half finished, and the error is
-// [integration.ErrBlockNotRemoved] over the settings' own refusal, so the
-// status row records that the settings hold it and a screen never tells a
-// person the third-party app is in the way.
+// A REVISION THE SETTINGS REFUSED IS NOT THE VENDOR'S FAILURE: the error is
+// [integration.ErrBlockNotRemoved] over the settings' refusal, so the status
+// row says the settings hold it, never the vendor that already let go.
 //
 // Mutation: wrap the refused revision as any other teardown failure and the
-// row reads "vendor", which is what sent people to look at a vendor that had
-// already let go.
+// row reads "vendor".
 func TestADisconnectTheSettingsRefuseSaysTheSettingsHoldIt(t *testing.T) {
 	e, company := sealingEngine(t, "https://jira.example.com")
 	e.epoch.current.Store(company)

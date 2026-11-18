@@ -11,18 +11,16 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// rowCrossing is the crossing the cases below give their store's connection
+// rowCrossing is the cases' store's crossing
 // ([sandbox.PendingStore.RowCrossing]): an hour, far past either write's own
-// five seconds, so a budget that leaves it out is told apart from one that
-// counts it by any margin a reader can see.
+// five seconds, so a budget that leaves it out is unmistakable.
 const rowCrossing = time.Hour
 
 // crossingMarks is a pending store whose connection takes rowCrossing to carry
-// a run's row at its bound, and which records, for each write the engine makes
-// on a run's row off the path that asked for it, the instant it was handed the
-// write and its context's deadline, on the case's bubble clock. It answers
-// every write as taken. Any other call reaches the nil store underneath and
-// panics, which is the case's mistake: these two writes call nothing else.
+// a run's row at its bound, recording when each write was handed over and its
+// context's deadline, on the bubble clock. It answers every write as taken;
+// any other call panics on the nil store underneath, since these two writes
+// call nothing else.
 type crossingMarks struct {
 	sandbox.PendingStore
 
@@ -57,27 +55,15 @@ func (s *crossingMarks) MarkPulled(ctx context.Context, _, _ string) (bool, erro
 	return true, nil
 }
 
-// THE ENGINE'S WRITES OF A RUN'S ROW ARE GIVEN THE ROW'S CROSSING.
+// The session-start and pull-mark writes of a run's row are given their five
+// seconds AND the time the store's connection takes to carry a row at its
+// bound, read and written (sandbox.RowBudget): a non-`data` node reaches the
+// store across its leaf link, and a row of up to six megabytes
+// (sandbox.RowBytes) cannot cross a slow link in five seconds alone.
 //
-// A node without the `data` role reaches the coordination store across its
-// leaf link, and a run's row weighs up to what one key holds (sandbox.RowBytes,
-// six megabytes), read whole and written whole by every change of it. The
-// engine wrote two facts onto it under five seconds of their own — which
-// session a job's box started, and that a job's harness has asked for notes —
-// which a row of megabytes cannot cross on a link slower than about 1.2 MiB a
-// second: cut while its bytes were still crossing, each read as a store that
-// did not answer (crewlet/crewlet#1076). Each is now given its five seconds
-// AND the time the store's connection takes to carry a row at its bound, read
-// and written (sandbox.RowBudget): the deadline each write is handed is
-// exactly the two, on the case's clock.
-//
-// How long a row takes to cross is the store's to say, and the store's own
-// suite holds it to a real link: internal/sandbox's
-// TestARunsRowAtItsBoundWrittenAcrossALeafsLinkLands writes a row at its bound
-// across a leaf's link held to 160 KiB a second, its read's reply included
-// (crewlet/crewlet#1149). This case held these two writes to that same link,
-// which spent three minutes of CI per run carrying bytes the store's suite
-// already carries; the engine's part is the budget, and that is what it reads.
+// The crossing time itself is the store's to say, held to a real link by
+// internal/sandbox's TestARunsRowAtItsBoundWrittenAcrossALeafsLinkLands; this
+// case reads only the engine's budget.
 //
 // Mutation: hold either write to its five seconds again, without the crossing
 // (sandbox.RowBudget), and its row goes red.

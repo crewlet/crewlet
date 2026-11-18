@@ -15,12 +15,8 @@ import (
 )
 
 // A SUBMISSION A BYTE PAST WHAT THE LOG KEEPS IS REFUSED NAMING A SIZE PAST THE
-// BOUND. The refusal states what the submission weighs as the run's record
-// holds it beside the bound, in kept.Size's units, which round whole KiB down:
-// a submission a byte past 32 KiB stated in the same units read "this
-// submission is 32 KiB ..., and the record keeps a submission whole up to
-// 32 KiB", which tells the run nothing was wrong with it. Rounded up
-// (kept.SizeUp), it reads past.
+// BOUND: kept.Size rounds whole KiB down, so a byte past 32 KiB would read as
+// 32 KiB, the bound itself; kept.SizeUp reads past.
 //
 // Mutation: state the submission's size in kept.Size, and it reads as the
 // bound itself.
@@ -32,8 +28,7 @@ func TestASubmissionAByteTooLargeIsRefusedNamingASizePastItsBound(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ReopenAgentRun: %v", err)
 	}
-	// AS THE TOOL WEIGHS IT: its arguments as decoded off the wire, as the
-	// engine records them, as a JSON string.
+	// AS THE TOOL WEIGHS IT: decoded off the wire, recorded, as a JSON string.
 	argsOf := func(submission map[string]any) (map[string]any, int) {
 		t.Helper()
 		raw, err := json.Marshal(submission)

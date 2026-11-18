@@ -44,16 +44,13 @@ func (r *stopRecorder) seen() ([]string, bool) {
 // A SHUTDOWN WAITS FOR THE START IT OVERLAPS, and only then stops the server
 // and removes its scratch store.
 //
-// nats-server's Start checks for no shutdown: run after one, it lets the
-// server start goroutines again and enables JetStream, so a server shut down
-// mid-start comes up behind its own WaitForShutdown — store open, and a
-// scratch directory just removed made again. Only the two failure paths of a
-// boot can overlap a Start, and nothing else would notice.
+// nats-server's Start checks for no shutdown, so a server shut down mid-start
+// comes up behind its own WaitForShutdown: JetStream on, store open, and the
+// removed scratch directory made again. Only a boot's two failure paths can
+// overlap a Start, and nothing else would notice.
 //
-// In a synctest bubble, so "the teardown did what it would do while Start was
-// still running" is [synctest.Wait] rather than a sleep: shutdownAndClean is
-// either blocked on the Start or has already called Shutdown, and the case
-// sees which on every run.
+// In a synctest bubble, so [synctest.Wait], not a sleep, shows whether
+// shutdownAndClean is blocked on the Start or has already called Shutdown.
 func TestAShutdownWaitsForTheStartItOverlaps(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -92,21 +89,16 @@ func TestAShutdownWaitsForTheStartItOverlaps(t *testing.T) {
 	})
 }
 
-// A CANCELLED START LEAVES NO STORE BEHIND.
+// A CANCELLED START LEAVES NO STORE BEHIND: the real server, cancelled before
+// ready, as by a Ctrl-C during a boot. TMPDIR is the case's own directory, so
+// anything a start left there — its scratch directory, or one a Start that
+// outlived the shutdown made again — is found by name.
 //
-// The real server, cancelled before it could become ready: the path a Ctrl-C
-// during a boot takes. Its scratch store lives under TMPDIR, which this case
-// points at a directory of its own, so anything a start left there — the
-// scratch directory itself, or one made again by a Start that outlived the
-// shutdown — is found by name.
-//
-// THE CANCEL MAY LOSE, and that is not a failure: a fresh scratch store is
-// ready in milliseconds, so on a loaded machine the readiness answer can
-// arrive before the start reaches its select, and the select picks between
-// two ready cases. The server it returns then is up and the caller's to stop,
-// and stopping it must leave nothing either. Which path ran is the one thing
-// this does not pin; [TestAShutdownWaitsForTheStartItOverlaps] pins the order
-// the cancel path depends on.
+// THE CANCEL MAY LOSE, and that is no failure: a fresh scratch store is ready
+// in milliseconds, so the start's select may pick readiness; the server it
+// returns is the caller's to stop, and stopping it must leave nothing either.
+// [TestAShutdownWaitsForTheStartItOverlaps] pins the order the cancel path
+// depends on.
 func TestACancelledStartLeavesNoStoreBehind(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)

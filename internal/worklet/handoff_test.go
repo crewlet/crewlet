@@ -12,22 +12,18 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// inProgress moves a task's status to one more step of work, within the
-// active group, so a case about another move never also crosses the finished
-// edge.
+// inProgress moves a task one step of work within the active group, so a
+// case about another move never also crosses the finished edge.
 func inProgress(task *worklet.Task) {
 	task.Status, task.StatusGroup = worklet.StatusInProgress, worklet.GroupActive
 }
 
-// A HAND-OFF IS TOLD WHATEVER KIND ITS RECORD ENDS WITH (#953). A record
-// carries one kind, and `update_work_item` files "assign it to bo and set it
-// in progress" as a status change: decided by that kind, ana, who held the
-// task, and pm, who filed it, heard nothing, and bo was woken as a status move
-// he could absorb rather than as work he was handed. The first case is that
-// record. The tags and watch cases are records no writer files a hand-off
-// under today, which pin the rule for any that does: whatever kind carries
-// it, a hand-off reaches everybody it concerns as the hand-off written alone,
-// the last case, does.
+// A HAND-OFF IS TOLD WHATEVER KIND ITS RECORD ENDS WITH: a record carries one
+// kind, and `update_work_item` files "assign it to bo and set it in progress"
+// as a status record (the first case). Whatever kind carries it, a hand-off
+// reaches the old holder, the reporter and the new holder (asked, not just
+// told) as the hand-off written alone (the last case) does. No writer files
+// one under tags or a watch today; those cases pin the rule for one that does.
 //
 // Mutation: tell the old holder only on kind `assignee` — ana hears nothing of
 // the first three; tell the reporter of a reassignment only on that kind — pm
@@ -72,15 +68,12 @@ func TestAHandOffIsToldWhateverKindItsRecordEndsWith(t *testing.T) {
 	}
 }
 
-// A REASSERTION WRITTEN WITH ANOTHER CHANGE HANDS NOTHING OVER (#918, #953):
-// "assign it to ana", of a task ana already holds, written beside a status
-// move or a watch, moves no assignee. So it tells nobody the task went
-// anywhere, its reporter is not told of a reassignment, and ana hears the
-// change the write did make, without being asked to answer for it.
-//
-// A reassertion written beside a checklist item handed to somebody moves no
-// delta at all, and still reaches the item's holders: nothing else is
-// everything the record says the write did.
+// A REASSERTION WRITTEN WITH ANOTHER CHANGE HANDS NOTHING OVER: "assign it to
+// ana", of a task ana holds, beside a status move or a watch, tells nobody the
+// task went anywhere, tells its reporter of no reassignment, and tells ana the
+// change the write did make without asking her to answer for it. Beside a
+// checklist item handed to somebody it moves no delta at all, and still
+// reaches the item's holders.
 //
 // Mutation: decide the hand-off by the record's kind as well as its delta — the
 // reassertion written with a watch tells pm and asks ana; read the reassertion
@@ -123,13 +116,11 @@ func TestAReassertionWrittenWithAnotherChangeHandsNothingOver(t *testing.T) {
 	}
 }
 
-// A WRITE'S TRANSITIONS ARE TOLD WHATEVER KIND ITS RECORD ENDS WITH (#953):
-// `update_work_item` files a hand-off written beside a re-route or a checklist
-// gesture as an `assignee` record, and a hand-off that also drops a watcher,
-// routes the task to another team and ticks a checklist item still reaches
-// whom each transition concerns, as a record of that transition's own kind
-// does: the dropped watcher's inbox, the new team's lead and the item's
-// holder. The parent's assignee is the write's own to resolve
+// A WRITE'S TRANSITIONS ARE TOLD WHATEVER KIND ITS RECORD ENDS WITH: a
+// hand-off filed as an `assignee` record that also drops a watcher, re-routes
+// the task and ticks a checklist item still reaches the dropped watcher, the
+// new team's lead and the item's holder, as a record of each transition's own
+// kind would. The parent's assignee is the write's own to resolve
 // (TestAnUpdatesWakeIsWhatItsWriteMoved).
 //
 // Mutation: fill or read any one of the three on its own kind alone — that
@@ -161,10 +152,9 @@ func TestAWritesTransitionsAreToldWhateverKindItsRecordEndsWith(t *testing.T) {
 }
 
 // A CREATION CARRIES NO TRANSITION: its before is nothing ([worklet.Wake]), so
-// a task filed into a team, closed already, with a checklist item somebody
-// holds, names no new team's lead and no item holder as moved, its reporter
-// hears of no hand-off from nobody and no edge it never crossed, and its own
-// arms route it.
+// a task filed into a team, already closed, with a held checklist item, names
+// no new team's lead or item holder as moved, tells its reporter of no
+// hand-off and no finished edge, and is routed by its own arms.
 //
 // Mutation: fill the checklist's holders on a creation — dee is told of a task
 // filed with her item; read a creation's deltas as moves, or the finished edge
@@ -189,14 +179,12 @@ func TestACreationCarriesNoTransition(t *testing.T) {
 	}
 }
 
-// A WATCH WRITTEN WITH ANOTHER CHANGE IS THAT CHANGE (#953): `update_work_item`
-// files a watch written beside a priority or a checklist gesture under
-// `watchers` wherever nothing else named a kind, and the seat that answers for
-// the task is woken by it as by the change written alone. A watch alone asks
-// it nothing. The checklist item handed to somebody moves no list's done
-// count, so no delta says it moved: the holders it touched do. A custom value
-// written with a watch is the decide's to name
-// (TestAnUpdatesWakeIsWhatItsWriteMoved).
+// A WATCH WRITTEN WITH ANOTHER CHANGE IS THAT CHANGE: `update_work_item` files
+// it under `watchers` when nothing else named a kind, and the task's owner is
+// woken as by the change written alone; a watch alone asks it nothing. A
+// checklist item handed to somebody moves no done count, so no delta shows it:
+// the holders it touched do. A custom value written with a watch is the
+// decide's to name (TestAnUpdatesWakeIsWhatItsWriteMoved).
 //
 // Mutation: decide a watch by its kind (`ownerAsked`'s `!= ChangeWatchers`) —
 // ana sleeps through the priority and the item; let watchOnly read the deltas
@@ -234,13 +222,12 @@ func TestAWatchWrittenWithAnotherChangeWakesTheOwners(t *testing.T) {
 	}
 }
 
-// A TURN THAT WATCHED A TASK BESIDE ANOTHER CHANGE MOVED WORK (#953), on both
-// sides a turn's outcome is read from: the change its writer reports the
-// record committed, and the history rows a schedule's fires are read by
-// ([worklet.Reader.TurnsMoved]). A turn that only watched moved nothing on
-// either. All are `watchers` records. The link is a gesture the caller's wake
-// cannot apply, which the decide resolves and its restated wake records, so
-// the two sides agree on it too.
+// A TURN THAT WATCHED A TASK BESIDE ANOTHER CHANGE MOVED WORK, on both sides a
+// turn's outcome is read from: the change its writer reports committed, and the
+// history rows a schedule's fires are read by ([worklet.Reader.TurnsMoved]). A
+// turn that only watched moved nothing on either. All are `watchers` records;
+// the link, a gesture only the decide resolves, is on its restated wake, so the
+// two sides agree on it too.
 //
 // Mutation: read a `watchers` record by its kind in committedChange — the
 // priority's and the link's turns committed nothing; in TurnsMoved — they are
@@ -299,8 +286,8 @@ func TestATurnThatWatchedBesideAnotherChangeMovedWork(t *testing.T) {
 }
 
 // A HAND-OFF WRITTEN WITH A STATUS TELLS ITS NEW HOLDER THE TASK WAS ASSIGNED TO
-// THEM (#953), and its change line names both moves, through the parser as the
-// router decides: a `status` record whose wake names the assignee it moved. A
+// THEM, and its change line names both moves, through the parser as the router
+// decides: a `status` record whose wake names the assignee it moved. A
 // reassertion written with a status hands nothing over, and its line says only
 // what moved.
 //
@@ -362,14 +349,13 @@ func TestACommentThatTookAWatchSaysOnlyThatItWasAdded(t *testing.T) {
 	}
 }
 
-// AN UPDATE'S WAKE IS WHAT ITS WRITE MOVED (#953): its decide restates the
-// card its caller built outside the write, from the row it stores and the row
-// it leaves, because the router decides who hears the change by that card.
-// A subtask closed the way a merged change closes its item, its status alone,
-// with no parent named and its old group kept, still tells the parent's
-// assignee and the reporter. A custom value written with a watch is named by
-// its slug, which the caller cannot do without the catalogue, and wakes the
-// owner. And a link written with a watch, an edge only the decide's gesture
+// AN UPDATE'S WAKE IS WHAT ITS WRITE MOVED: its decide restates the caller's
+// card from the row it stores and the row it leaves, because the router
+// decides who hears the change by that card. A subtask closed by its status
+// alone, as a merged change closes its item (no parent named, its old group
+// kept), still tells the parent's assignee and the reporter; a custom value
+// written with a watch is named by its slug (the caller holds no catalogue)
+// and wakes the owner; a link written with a watch, an edge only the decide
 // resolves, wakes the owner too.
 //
 // Mutation: restate no update's wake in its decide — eve and pm are never
@@ -483,11 +469,10 @@ func TestAReassertionWithAnEditSaysTheFieldsWereEdited(t *testing.T) {
 
 // A RESTATED ASSIGNMENT WITH ITS STATUS STILL REACHES ITS HOLDER, until #978:
 // "assign it to ana and set it to todo", of a task ana holds at todo, moves
-// nothing, yet as a `status` record it is not the reassertion the router
-// drops, which stays on kind `assignee`. On every kind that rule would also
-// drop an unassigned checklist item's rename written beside a restated status,
-// which records no delta at all (#978). Pinned so the rule is widened with
-// #978's fix, and never by accident.
+// nothing, yet as a `status` record it is not the reassertion the router drops
+// (that stays on kind `assignee`): on every kind the rule would also drop an
+// unassigned checklist item's rename beside a restated status, which records
+// no delta. Pinned so the rule widens with #978's fix, and never by accident.
 //
 // Mutation: decide the reassertion on any kind — ana is told nothing.
 func TestARestatedAssignmentWithItsStatusStillReachesItsHolder(t *testing.T) {
@@ -501,13 +486,11 @@ func TestARestatedAssignmentWithItsStatusStillReachesItsHolder(t *testing.T) {
 	}
 }
 
-// A LEAD IS OFFERED UNOWNED WORK BY WHAT ITS WRITE MOVED (#953). lena leads
-// platform and re-routes a stray she filed and alone watches, writing labels
-// with it, so `update_work_item` files a `tags` record: the new team's lead is
-// lena, the actor, whom the route drops, and the project's lead must hear of
-// the unowned work instead. A status written as it already was beside a
-// priority is a `status` record that moved the priority alone, and pages
-// nobody.
+// A LEAD IS OFFERED UNOWNED WORK BY WHAT ITS WRITE MOVED. lena leads platform
+// and re-routes, with labels, a stray she filed and alone watches: a `tags`
+// record whose new team's lead is lena, the actor, whom the route drops, so
+// the project's lead must hear of the unowned work. A status restated beside a
+// priority is a `status` record that moved only the priority, and pages nobody.
 //
 // Mutation: offer the fallback by the record's kind — the re-route reaches
 // nobody, and the priority pages the project's lead.

@@ -8,82 +8,47 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A RUN ENDS ON REQUEST, and packs its session as its own end does.
-//
-// A stopped or lost job's session is taken out of its box before the box goes,
-// and so is that of a job its turn's cap passed while it still worked; taken
-// from a job still working it is packed as it stands: a step in flight half
-// recorded, a harness that may append to the very file being packed, and an
-// OpenCode run's export made beside the run's own live server. So the read
-// that takes it first asks the job to END
-// (internal/sandbox's endjob.go): SIGUSR1 to the run's script, ONE process,
-// by the pid the script recorded in its box ([Paths.JobScript]). The script
-// ends its harness — SIGTERM, then SIGKILL after the grace — packs the session
-// by the very code path its own exit takes, records that it was ended and how
-// ([Paths.JobEnded]), and exits with its harness's own status; the wrapper then
-// writes the done marker, as on every exit, and the job is over.
+// A RUN ENDS ON REQUEST (package doc, "A run ends on request"), because a
+// session packed from a job still working holds a half-recorded step, in files
+// its harness may still append to.
 //
 // SIGUSR1, NOT SIGTERM. SIGTERM is a teardown's: it reaches every process of
-// the job at once, and an OpenCode run's script answers it by exporting its
-// login beside a server that is going away ([OpenCode.Command]). An end needs
-// the server alive to export the session through, so it is a signal of its own
-// that only the engine sends and only to the script, which the harness never
-// receives: a trap is reset by exec, so nothing the script starts inherits it.
-//
-// THE PID IS PUBLISHED ONLY ONCE THE TRAP IS SET ([endPrologue]), so a request
-// sent through the file always meets the script's handler and never kills it by
-// the signal's default. A script of an older build records no pid, and is
-// never asked: the read kills its job instead.
-//
-// THE HARNESS RUNS IN THE BACKGROUND, waited for ([launchHarness]). A shell
-// defers a trap until the foreground command it runs returns, and that command
-// is the harness the trap has to stop; `wait` returns at once, above 128, when a
-// trapped signal arrives, and a second `wait` then answers the harness's real
-// status (measured under dash and bash --posix, end-job-scratch/exp/waits.sh).
-//
-// AN END UNDER WAY IGNORES A SECOND REQUEST: the handler's first act is to
-// ignore SIGUSR1, so a second can interrupt neither the wait for the harness
-// nor the pack — which moves its archive into place whole from a staging
-// directory, so a pack killed part way leaves none where it is read.
+// the job at once, and an OpenCode script answers it by exporting its login
+// beside a server going away ([OpenCode.Command]). An end needs that server
+// alive, so its signal goes only to the script (internal/sandbox's endjob.go),
+// and exec resets the trap, so the harness never inherits it. A script of an
+// older build records no pid and is never asked: the read kills its job.
 
 // jobScriptProtocol is the version of the end protocol a run's script records
 // beside its pid ([Paths.JobScript]): a reader that does not know the version
 // asks nothing of the script.
 const jobScriptProtocol = 1
 
-// endFunction defines the script's `end PID [again]`: SIGTERM to PID, up to
-// stop for it to go, then SIGKILL — answering 1 where it had to kill, and 0
-// where PID went in time or was no process. Every process a run's script stops
-// goes through it: its harness, as the end of a run asks ([launchHarness]); and
-// an OpenCode run's server and login exporter ([openCodeStops]).
+// endFunction defines the script's `end PID [again]`: SIGTERM, up to stop for
+// PID to go, then SIGKILL; 1 where it had to kill, 0 where PID went or was none.
+// Every stop goes through it ([launchHarness], [openCodeStops]).
 //
-// NO PROCESS IS NOTHING TO STOP, and it is TESTED rather than left to `kill`
-// refusing an empty operand: dash and bash refuse it, but busybox ash — the sh
-// of an Alpine image, which OpenCode 2's musl builds are for — answers both
-// `kill ""` and `kill -0 ""` with success and signals nothing, so an end with no
-// process waited out the whole bound.
+// An empty PID is tested, not left to `kill`: busybox ash, Alpine's sh, answers
+// `kill ""` and `kill -0 ""` with success, so an end with no process would wait
+// out the whole bound.
 //
-// A PROCESS TOLD AGAIN until it goes, where the second operand asks for it,
-// because the first SIGTERM can be lost on a process forked while its parent
-// trapped SIGTERM: see [openCodeStops]' exporter. A repeat goes only to a pid
-// `kill -0` still finds, as every probe here does, so it shares the one
-// residual: a pid the script reaped during the tenth of a second before the
-// probe, which the system could hand out again only by wrapping its whole pid
-// space within that tenth.
+// `again` re-sends SIGTERM each probe while `kill -0` still finds PID, since the
+// first can be lost on a process forked while its parent trapped SIGTERM
+// ([openCodeStops]' exporter); a pid reaped and reused within one 0.1 s probe
+// is the one residual.
 func endFunction(stop time.Duration) string {
 	return fmt.Sprintf(`end() { [ -n "$1" ] || return 0; kill "$1" 2> /dev/null || return 0; i=0; while kill -0 "$1" 2> /dev/null && [ "$i" -lt %d ]; do sleep 0.1; i=$((i+1)); [ -z "$2" ] || { kill -0 "$1" 2> /dev/null && kill "$1" 2> /dev/null; }; done; if kill -0 "$1" 2> /dev/null; then kill -9 "$1" 2> /dev/null; return 1; fi; return 0; }
 `, int(stop/(100*time.Millisecond)))
 }
 
-// endPrologue opens every run's script, before it does anything else: the
-// variables the end protocol keeps — endasked (a request came), endhalted (the
-// end of the harness is under way), harness (the harness's pid while it runs)
-// and endedas (how the job was ended, for [Paths.JobEnded]) — the `end` it
-// stops processes with ([endFunction]), and the handler the request runs,
-// which records the request and, while the harness runs, ends it (the harness's
-// own `endharness`, each script's); then the handler set; and only then the
-// script's pid published in the box ([Paths.JobScript]), as `1 <pid>`, written
-// beside and moved into place whole, so a reader finds the record or none.
+// endPrologue opens every run's script: the protocol's variables — endasked (a
+// request came), endhalted (the harness's end is under way), harness (its pid
+// while it runs), endedas (how the job ended, for [Paths.JobEnded]) — then
+// [endFunction], the handler endask (records the request and, while the
+// harness runs, calls the script's `endharness`), the trap, and only then the
+// pid published as `1 <pid>` ([Paths.JobScript]), written beside and moved into
+// place whole. Published after the trap, a request sent through the file always
+// meets the handler, never SIGUSR1's default, which kills.
 //
 // Every name is the protocol's own, apart from the one-letter variables the
 // scripts already keep (s, k, w, h, d, a, b, c, i, z, v).
@@ -98,8 +63,8 @@ trap endask USR1
 
 // endHarness is the `endharness` a script's handler runs to end its harness
 // while it runs: SIGUSR1 ignored from here on, so a second request interrupts
-// nothing of the end; the end recorded as asked; first, where a script has one
-// (OpenCode's interrupt of its session through its own server), the step that
+// neither the wait nor the pack; the end recorded as asked; first, where a
+// script has one (OpenCode's interrupt through its own server), the step that
 // settles what the harness is doing; then the harness ended within the grace,
 // and recorded as killed where it had to be.
 func endHarness(first string) string {
@@ -110,27 +75,17 @@ func endHarness(first string) string {
 `
 }
 
-// launchHarness runs harness — the harness's command line — under the end
-// protocol, and leaves its exit status in code ([endPrologue]):
-//
-//   - a request that came before it starts starts nothing: code is 143, as a
-//     harness SIGTERM ended reports, and the job is recorded as ended before
-//     its harness started;
-//   - otherwise the harness runs in the background, its stdin the script's
-//     own — the brief the wrapper, or the script's choice of a fresh brief,
-//     points it at — handed it as fd 3, since an asynchronous command's stdin
-//     is /dev/null unless it is redirected explicitly, and fd 0 by then is that
-//     /dev/null;
-//   - a request that came while it started ends it at once;
-//   - its status is waited for, and — where a request ended it, which
-//     interrupts the wait — waited for again, which answers its real status:
-//     dash answers a job it already reported again, bash 127 for one it
-//     already collected, and the first answer stands then. (Under bash a
-//     harness whose real status is 127, an exec failure, and whose wait a
-//     request interrupted in the same instant is reported 138.)
-//
-// AND THE END IS RECORDED AS SOON AS THE HARNESS IS OVER ([Paths.JobEnded]),
-// before the pack, so it stands even where the pack is killed.
+// launchHarness runs harness (its command line) under the end protocol, leaving
+// its exit status in code. A request before the launch starts nothing: code
+// 143, as SIGTERM leaves, recorded as `before`. Otherwise the harness runs in
+// the BACKGROUND, since a shell defers a trap until its foreground command
+// returns, and is ended at once if a request came while it started. Its stdin,
+// the script's own, is handed over as fd 3: an asynchronous command's is
+// /dev/null unless redirected. A trapped signal makes `wait` return at once,
+// above 128, so after an end it waits again for the real status (dash repeats
+// it; bash answers 127 and the first stands, so bash reports 138 for a real 127
+// interrupted in the same instant). The end is recorded ([recordEnded]) once
+// the harness is over, before the pack, so it stands even if the pack is killed.
 func launchHarness(harness string, paths Paths) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }

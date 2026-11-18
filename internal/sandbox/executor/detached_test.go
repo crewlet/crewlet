@@ -167,12 +167,11 @@ func TestTheReportInstructionForThisBoxIsAStandingInstruction(t *testing.T) {
 	}
 }
 
-// A reused box carries the prior run's marker; without clearing it the poll
-// fires immediately and collect reads the old result. And the last job's END
-// RECORDS go too: the pid its script published, which a request read before
-// this run's script publishes its own would go to a process that is not this
-// run's, and the record of how that job was ended, which this run's collection
-// would otherwise read as its own — each with the file it was written beside.
+// A reused box carries the prior run's marker; uncleared, the poll fires at
+// once and collect reads the old result. The last job's END RECORDS go too,
+// each with the file it was written beside: a request read off its pid before
+// this script publishes its own would reach another process, and its end
+// record would be collected as this run's.
 //
 // Mutation: leave either record, or the file beside it, out of the clear, and
 // its row goes red. Join the removal of every save's files, or of every pack's
@@ -223,14 +222,11 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 			t.Fatalf("%q was not cleared: %s", want, cleared)
 		}
 	}
-	// OpenCode's values and its notes plugin are DIRECTORIES, removed whole —
-	// a run with fewer values than the last would keep the last one's beside
-	// its own, and a run wired to no notes a plugin nothing names. So is the
-	// commit attribution: a run that credits nothing leaves no hook behind,
-	// and one naming another run never credits the last one. And so are a
-	// run's own skills, on either harness, with what reports their loads: a
-	// run handed fewer skills than the last would list the last one's too,
-	// and report their loads to an endpoint that is over.
+	// OpenCode's values and notes plugin, the commit attribution, and each
+	// harness's run skills with their load reporter are DIRECTORIES, removed
+	// whole: a run with fewer than the last would keep the last one's beside
+	// its own (a plugin nothing names, a hook crediting the last run, loads
+	// reported to an endpoint that is over).
 	_, removed, _ := strings.Cut(cleared, "; rm -rf ")
 	for _, dir := range []string{p.OpenCodeValues(), p.OpenCodeSteerPlugin(), p.CommitAttribution(),
 		p.SessionStaging(), p.ClaudeSkillsPlugin(), p.OpenCodeSkills(), p.OpenCodeSkillsPlugin()} {
@@ -238,21 +234,19 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 			t.Fatalf("the directory %q was not removed whole: %s", dir, cleared)
 		}
 	}
-	// AND EVERY SAVE'S FILES AND EVERY PACK ON DEMAND'S, each by its pattern,
-	// in a statement of its own — joined to the one before by `&&`, a file or
-	// a directory that would not go would keep them all — under the work
-	// directory as quoted, so a home whose path holds a space is never split
-	// into words.
+	// AND EVERY SAVE'S FILES AND EVERY PACK ON DEMAND'S, each by its pattern
+	// in a statement of its own (joined by `&&`, one removal that failed would
+	// keep them all), under the work directory quoted, so a home path holding a
+	// space is never split into words.
 	saves := "; rm -rf " + sandbox.ShellQuote(p.WorkDir()) + "/session-save*"
 	packs := "; rm -rf " + sandbox.ShellQuote(p.WorkDir()) + "/session-pack-staging.*"
 	if !strings.HasSuffix(cleared, saves+packs) {
 		t.Fatalf("the clear does not end with %q, every save's files and every pack's removed: %s", saves+packs,
 			cleared)
 	}
-	// The CHECKOUT is left alone — that disk state is the whole reason to
-	// reuse a box — and so is the harness's own session store, which is the
-	// session a run in this box continues, and the digests of the archives
-	// that store's copy holds, without which an archive the box packed
+	// The CHECKOUT is left alone (that disk state is why a box is reused), and
+	// so are the harness's own session store, which a run here continues, and
+	// the digests of what it holds, without which an archive the box packed
 	// itself would be restored over the copy that ran on past it.
 	if strings.Contains(cleared, "/"+sandbox.WorkspaceSubdir) {
 		t.Fatalf("the clear reached into the checkout: %s", cleared)
@@ -482,11 +476,9 @@ func TestARunThatProducedNothingReportsWhyRatherThanStallingSilently(t *testing.
 	}
 }
 
-// THE ERROR STREAM IS THE TRANSCRIPT ONLY WHERE THE STREAM SAYS NOTHING — a
-// harness that never got as far as streaming, which says why on stderr. (It used
-// to be the whole of Claude Code's transcript, on a fabricated premise: under
-// `--output-format json` in print mode that harness writes nothing to stderr, so
-// the case certified a narration no real run produced.)
+// THE ERROR STREAM IS THE TRANSCRIPT ONLY WHERE THE STREAM SAYS NOTHING: a
+// harness that never got as far as streaming, which says why on stderr. Claude
+// Code in print mode under `--output-format json` writes nothing to stderr.
 func TestTheTranscriptFallsBackToStderrWhereTheStreamSaysNothing(t *testing.T) {
 	t.Parallel()
 	runner := executor.NewClaudeCode()
@@ -591,9 +583,9 @@ func TestACrashDetailIsCarriedWholeBehindItsStatus(t *testing.T) {
 	}
 }
 
-// THE HARNESS'S OWN ERROR SURVIVES A STDERR. It used to be replaced by the stderr
-// whenever the stderr held anything, so a run that hit its turn cap and
-// printed one deprecation warning reported the warning as why it failed.
+// THE HARNESS'S OWN ERROR SURVIVES A STDERR, ahead of it: a run that hit its
+// turn cap and printed one deprecation warning fails for the cap, not the
+// warning.
 func TestTheHarnessErrorIsNotReplacedByItsStderr(t *testing.T) {
 	t.Parallel()
 	runner := executor.NewClaudeCode()
@@ -688,12 +680,10 @@ type containerLike struct {
 
 func (containerLike) EngineHost() string { return "host.docker.internal" }
 
-// THE HARNESS DIALS ITS SERVERS FROM INSIDE THE BOX, so the config it is handed
-// names the engine host as the box reaches it. Every run gets its config
-// through Start, a seat's executor run and the assistant's deep work alike,
-// so the translation is here and only here: a
-// bridge at `127.0.0.1` was written into a container's config as it stood,
-// and every call the harness made reached the container's own loopback.
+// THE HARNESS DIALS ITS SERVERS FROM INSIDE THE BOX, so its config names the
+// engine host as the box reaches it: a container's 127.0.0.1 is its own
+// loopback. Every run's config comes through Start (a seat's executor run and
+// the assistant's deep work alike), so the translation is there and only there.
 func TestTheBoxsConfigNamesTheEngineHostAsTheBoxReachesIt(t *testing.T) {
 	t.Parallel()
 	runner := executor.NewClaudeCode()
@@ -720,11 +710,10 @@ func TestTheBoxsConfigNamesTheEngineHostAsTheBoxReachesIt(t *testing.T) {
 	}
 }
 
-// THE NOTES ROUTE IS DIALLED FROM INSIDE THE BOX TOO. OpenCode's plugin polls
-// the run's notes route by its URL rather than through the MCP server Claude
-// Code's hooks name, so that URL is translated in Start like the servers'
-// own: written as the engine host's loopback, a plugin in a container box
-// polled the container itself and its run read no note.
+// THE NOTES ROUTE IS DIALLED FROM INSIDE THE BOX TOO: OpenCode's plugin polls
+// it by URL rather than through the MCP server Claude Code's hooks name, so
+// Start translates it like the servers' own; left as the host's loopback, a
+// container box's plugin would poll the container and its run read no note.
 //
 // Mutation: drop the notes route's translation from Start, and the plugin's
 // route names 127.0.0.1.

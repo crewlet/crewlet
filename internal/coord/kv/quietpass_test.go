@@ -13,11 +13,10 @@ import (
 // quietKV is a bucket whose pass hands over the entries it was given and then
 // GOES QUIET: no further entry, no end-of-initial-values marker and no close.
 //
-// That is the watcher the client hands back when every message its consumer
-// had pending is REMOVED before the pass reaches it — an age, a purge, a
-// marker swept by another node. The client sends its end marker on a delivery,
-// so with nothing left to deliver it never sends one. The index read, the
-// certifying reads and the stream are the broker's own.
+// The client hands back such a watcher when every pending message is REMOVED
+// before the pass reaches it (an age, a purge, a swept marker): it sends its
+// end marker on a delivery, so with nothing left it never sends one. The index
+// read, the certifying reads and the stream are the broker's own.
 type quietKV struct {
 	jetstream.KeyValue
 	pass []jetstream.KeyValueEntry
@@ -34,13 +33,9 @@ func (k quietKV) Watch(context.Context, string, ...jetstream.WatchOpt) (jetstrea
 // A LISTING WHOSE PASS GOES QUIET ENDS, AND THE INDEX SUPPLIES WHAT THE PASS
 // DID NOT DELIVER.
 //
-// The pass used to end on the client's marker and nothing else, so a pass
-// that would never receive one held its listing until the caller's context
-// ended: measured as an idle budget bucket's listing blocked for nine minutes
-// and forty-two seconds, which only the test binary's timeout ended. Ended
-// after [passIdle] instead, the listing is still complete, because the keys
-// the pass did not deliver are exactly what the certification reads from the
-// leader — one read each, and no more.
+// Ended after [passIdle] rather than waiting on the client's marker, the
+// listing is still complete: the keys the pass did not deliver are exactly
+// what the certification reads from the leader, one read each and no more.
 //
 // THE CALLER'S CONTEXT IS BOUNDED, at four quiet intervals, so a regression
 // fails here as this case rather than as the package's timeout.
@@ -81,10 +76,9 @@ func TestAListingWhosePassGoesQuietEndsWithEveryLiveKey(t *testing.T) {
 
 // AND A SWEEP WHOSE PASS GOES QUIET ENDS, removing the markers it was handed.
 //
-// Nothing certifies a sweep — a marker it misses is swept on the next tick —
-// so its quiet counts from the start rather than from an index it never
-// reads. Waiting on the client's marker instead, it held the maintenance duty
-// on the one bucket for as long as the duty's context lived.
+// Nothing certifies a sweep (a missed marker is swept next tick), so its quiet
+// counts from the start. Waiting on the client's marker would hold the
+// maintenance duty on the bucket for the duty's whole context.
 func TestASweepWhosePassGoesQuietEndsWithWhatItWasHanded(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)

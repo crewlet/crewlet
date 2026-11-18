@@ -16,40 +16,27 @@ import (
 )
 
 // fleetWriters is the head count every fleet key is bounded for: the most
-// nodes one fleet runs, each one contender on a key once its writes there
-// are coalesced.
+// nodes one fleet runs, each one contender on a key once its writes there are
+// coalesced.
 //
-// A HUNDRED AND TWENTY-EIGHT: the largest fleet this engine has been measured
-// at is a hundred nodes — the hundred leaf nodes whose claims found the
-// replica read (kv.go's "Every single-key read is the leader's"), and the
-// hundred nodes claiming ten thousand seats that sized the lease gate's view
-// (gate.go) — rounded up to the power of two the backoff's ceiling doubles
-// to ([casBackoffLevels]). It is a design limit stated where it binds, not a
-// refusal, and it is MEASURED AT ITS OWN SIZE: BenchmarkAnOrgCounterChargedThroughLeaves,
-// every node a leaf of its own on one member with sixty-four charges in a
-// closed loop on each, the org's counter their one key, fifty thousand
-// charges a run, two runs a size, on a four-CPU machine shared with other work
-// (load 3.5 to 7). The most attempts any batch took were 4 and 7 at three
-// nodes, 6 and 10 at eight, 8 at sixteen, 9 and 10 at thirty-two, 10 at
-// sixty-four and 9 and 10 at a hundred and twenty-eight — flat past thirty-two,
-// and a twenty-fifth of [fleetCASAttempts] at this head count — and no charge
-// failed. What grows with the fleet is the WAIT: the slowest charges' 99th
-// percentile was 0.17 and 0.24 s at three nodes, 1.6 and 1.9 s at sixteen,
-// 7.7 and 8.0 s at sixty-four and 7.1 and 11.4 s at a hundred and
-// twenty-eight, the key taking 2,700 to 4,800 charges a second there — every
-// node holding its line busy without a pause, which a fleet's rounds, each
-// charged once its model call has answered, do not.
+// 128: the largest fleet measured, a hundred nodes, rounded up to the power of
+// two the backoff's ceiling doubles to ([casBackoffLevels]). A design limit,
+// not a refusal, measured at its own size by
+// BenchmarkAnOrgCounterChargedThroughLeaves: no charge failed, and the most
+// attempts a batch took levelled off near ten past thirty-two nodes, a
+// twenty-fifth of [fleetCASAttempts]. What grows is the WAIT: up to 11 s at
+// the 99th percentile at 128 nodes with every line kept busy, which a fleet's
+// rounds, each waiting on its model call, are not.
 const fleetWriters = 128
 
 // fleetCASAttempts bounds the compare-and-swap attempts one write is carried
-// in: twice [fleetWriters], the margin [casAttempts] gives its own head count —
-// unless the write states an exact bound of its own ([writeLines.writeWithin]),
-// as the rate valve does, whose every lost attempt is another node's increment.
+// in: twice [fleetWriters], the margin [casAttempts] gives its own head count,
+// unless the write states a larger exact bound ([writeLines.writeWithin]).
 //
-// The cost of setting it too high is nil — a retry follows only a write that
-// landed, so it runs only while the store is answering and someone is
-// winning — and the cost of too low is a healthy contended write failed
-// closed as an outage. Exhausting it is [contended], never a refusal.
+// Too high costs nothing (a retry follows only another writer's landed write,
+// so it runs only while the store answers and someone wins); too low fails a
+// healthy contended write closed as an outage. Exhausting it is [contended],
+// never a refusal.
 const fleetCASAttempts = 2 * fleetWriters
 
 // casBackoffLevels is how many times the wait between a lost attempt and the
@@ -80,54 +67,37 @@ func casWindow(level int, rtt time.Duration) time.Duration {
 const casRTTGain = 8
 
 // casRTTCeiling is the most one attempt's round trip counts for: this many
-// times the estimate it moves, so no one attempt moves the estimate by more
-// than an eighth of itself ((casRTTCeiling-1)/[casRTTGain]).
+// times the estimate, so no one attempt moves it by more than an eighth
+// ((casRTTCeiling-1)/[casRTTGain]).
 //
-// A window MULTIPLIES the estimate — by up to 256 — so an estimate one
-// attempt can drag would turn one stalled attempt (a starved scheduler, a
-// pause on the broker) into minutes of waiting for every write behind it,
-// where what separates a key's writers is how long a write USUALLY holds the
-// key. A latency that really moved is still followed — by up to an eighth of
-// the estimate an attempt, so a tenfold rise is nine-tenths in after
-// twenty-six attempts, and every attempt this node makes on the bucket is one.
-//
-// A GUARD BY CONSTRUCTION MORE THAN A MEASURED WIN. Against a window counted
-// in the last attempt's round trip whole, in the benchmark [fleetWriters]
-// names, the slowest charges' 99th percentile was 1.7 and 3.7 s here against
-// 3.2 and 5.6 s on the last sample at thirty-two nodes, and 7.1 and 11.4 s
-// against 5.6 and 10.5 s at a hundred and twenty-eight — within the noise —
-// while the most attempts a batch took at a hundred and twenty-eight were 9
-// and 10 here against 11 and 11. What the benchmark cannot show is the one
-// stalled attempt, which a closed loop dilutes and a burst does not.
+// A window MULTIPLIES the estimate, by up to 256, so an estimate one stalled
+// attempt (a starved scheduler, a broker pause) could drag would cost every
+// write behind it minutes. A real shift is still followed: a tenfold rise is
+// nine-tenths in after twenty-six attempts. A guard by construction: the
+// closed-loop benchmark ([fleetWriters]) dilutes the one stalled attempt a
+// burst does not, and showed no difference past its noise.
 const casRTTCeiling = 2
 
 // roundTrip is how long an attempt on one bucket takes this node: from its
 // read to its write's answer, landed or lost.
 //
-// NODE-WIDE, PER BUCKET, AND FED BY EVERY ATTEMPT. A round trip is a fact
-// about this node's path to the bucket's stream, never about one key or one
-// contention episode, so it lives as long as the store and every attempt the
-// node makes on the bucket refines it — a landed one holds the key exactly as
-// long as a lost one. Kept per episode it restarted from one sample whenever a
-// line went idle, and charges arrive in bursts, so lines idle constantly: the
-// first loss of every burst set the window by itself.
+// NODE-WIDE, PER BUCKET, FED BY EVERY ATTEMPT: it is a fact about this node's
+// path to the bucket's stream, not about one key or one contention episode.
+// Kept per episode, it would restart from one sample whenever a line went
+// idle, and bursty charges idle lines constantly.
 //
-// SEEDED BY THE SMALLER OF ITS FIRST TWO SAMPLES, and nothing is counted in it
-// until it has two. The first attempts a process makes on a bucket are the
-// ones most likely to be slow — a connection, a stream's first lookup — and an
-// estimate seeded by one of them alone would set every window after it, since
-// no later sample may move it by more than an eighth ([casRTTCeiling]). Until
-// then a lost attempt is asked again at once, as every loop here once was.
+// SEEDED BY THE SMALLER OF ITS FIRST TWO SAMPLES, and counts for nothing until
+// it has two: a process's first attempts (a connection, a stream's first
+// lookup) are its slowest, and no later sample moves the estimate by more than
+// an eighth ([casRTTCeiling]). Until then a lost attempt is asked again at once.
 type roundTrip struct {
 	mu      sync.Mutex
 	samples int
 	srtt    time.Duration
 
-	// after, when set, stands in for the timer a wait between two of
-	// [casRetry]'s attempts is made with, as [writeLines.after] does for a
-	// line: a test's seam, unset in production, so a case whose subject is
-	// what a loop that loses every attempt answers is not also the minute
-	// of real windows the loop sits out on its way there.
+	// after, when set, stands in for the timer between two of [casRetry]'s
+	// attempts, as [writeLines.after] does for a line: a test's seam, unset in
+	// production.
 	after func(time.Duration) <-chan time.Time
 }
 
@@ -175,13 +145,10 @@ func (r *roundTrip) estimate() time.Duration {
 // level down for every window at that level the key was left quiet, and what
 // is left over of the window it is in.
 //
-// A LEVEL OUTLIVES ITS LINE'S IDLENESS, because it is this node's knowledge of
-// how contended the key is, and that does not vanish when the node's queue
-// empties for a moment — while the node is busy the level comes down one per
-// write that lands, about one a window, and idle it comes down at the same
-// pace. Forgotten at once, a node whose charges arrive in bursts would come
-// back at every burst as though nobody else wrote the key, ahead of the nodes
-// still waiting out the windows it once shared with them.
+// A LEVEL OUTLIVES ITS LINE'S IDLENESS: it is this node's knowledge of the
+// key's contention, and comes down idle at the pace it does busy, about one a
+// window. Forgotten at once, a node whose charges arrive in bursts would come
+// back at each burst ahead of the nodes still waiting out the shared windows.
 func decayLevel(level int, idle, rtt time.Duration) (int, time.Duration) {
 	if rtt <= 0 {
 		return 0, 0
@@ -198,17 +165,16 @@ func decayLevel(level int, idle, rtt time.Duration) (int, time.Duration) {
 }
 
 // casRetry runs attempt until it settles, at most [fleetCASAttempts] times,
-// waiting between a lost attempt and the next a window ([casWindow]) of the
-// round trips trips holds, and feeding every attempt it makes into trips.
-// attempt answers settled once it has its answer, or an error, which ends the
-// loop as it is; false with no error is a lost race. It answers whether the
-// loop settled, and a context that ends during a wait as what is named
-// failing.
+// waiting a window ([casWindow]) of trips' round trips between a lost attempt
+// and the next, and feeding every attempt into trips. attempt answers settled
+// once it has its answer; an error ends the loop as it is; false with no error
+// is a lost race. It answers whether the loop settled, and a context that ends
+// during a wait as what is named failing.
 //
-// For a loop whose contention is not coalesced because it is not a
-// read-modify-write — the creates answered by the record that won, and the
-// unfollow — so each call is its own loop, on its caller's context, and its
-// level its own; a line keeps its level on the line ([writeLines]).
+// For a loop that is no read-modify-write and so is not coalesced (the creates
+// answered by the record that won, the unfollow): each call is its own loop on
+// its caller's context, with its own level; a line keeps its level on the line
+// ([writeLines]).
 func casRetry(ctx context.Context, trips *roundTrip, what string,
 	attempt func() (settled bool, err error)) (bool, error) {
 
@@ -253,50 +219,15 @@ type codec[T any] struct {
 }
 
 // writeLines coalesces this node's read-modify-writes of one bucket's keys:
-// per key, ONE compare-and-swap decides every write in flight on it.
+// per key, ONE compare-and-swap decides every write in flight on it, a group
+// commit shaped like internal/gitlet's Committer: one attempt in flight, no
+// linger (package doc, "A fleet record's writes are coalesced per key"). A
+// lost attempt wrote nothing, so its batch goes back to the head of the line.
 //
-// A GROUP COMMIT PER KEY, the code committer's shape (internal/gitlet's
-// Committer): one attempt in flight at a time, no linger, and every write
-// that queued while it was in flight in the next. An attempt reads the record
-// ONCE and decides each write IN ARRIVAL ORDER against what the ones before
-// it left, each answered exactly as it would have been alone at that point of
-// a serial order — so a charge is admitted or refused on its own and a
-// refusal is never a batch's. A write is answered only from the attempt that
-// landed, or from the read when nothing in the batch writes; a lost attempt
-// wrote nothing, so the batch goes back to the head of the line, everything
-// that queued meanwhile behind it, and the next attempt decides them all
-// again.
-//
-// TAKEN OR WITHDRAWN, NEVER BOTH. A write is TAKEN only while an attempt
-// carrying it is in flight, and that attempt may land, so a caller who hangs
-// up then is told what the attempt did, never that nothing happened — for the
-// company's half of a charge, a withdrawal after the write landed would leave
-// the round on the company with the seat never counted and nobody told. At
-// every other moment nothing it asked for can have landed: before its first
-// attempt, and between a lost attempt and the next. Then a write whose
-// caller's context ends is WITHDRAWN, answered with its context's error and
-// counted nowhere — at once if its goroutine is watching, and otherwise as the
-// next attempt is formed, under the lock that forms it. So every wait a line
-// makes is made holding no taken write ([writeLines.waitTurn]), and arrivals
-// during a wait join the attempt that follows it.
-//
-// NO GOROUTINE OF ITS OWN. A line is run by the goroutine of the write at its
-// head, which waits for its own answer anyway, and handed to the goroutine of
-// the next write once that one is answered — so every goroutine here is a
-// caller's, each returns once its own write is answered, and nothing outlives
-// the calls that started it. An attempt runs on a context with no caller's
-// cancellation in it ([context.WithoutCancel]): the client bounds each request
-// by its own API timeout, and [fleetCASAttempts] the writes it carries.
-//
-// A CALLER'S PANIC IS ITS OWN. Every write's change runs on the goroutine
-// leading its batch, so a change that panics is recovered there, the write
-// answered with its panic — raised again on its own caller's goroutine — and
-// the batch decided again without it ([lineWrite.decide]). A panic in the
-// line's own work fails the writes of the attempt in flight with an error
-// naming the line, never a write, and the stack it panicked on ([linePanic]),
-// hands the line on, and is raised again on the goroutine that led it
-// ([writeLines.lead]): left to unwind, it left the line led by nobody and
-// every later write on the key on this node waiting for ever.
+// A write is TAKEN while an attempt carrying it is in flight, and its caller
+// is then told what that attempt did; at any other moment it is WITHDRAWN when
+// its context ends ([writeLines.withdraw]). A line has no goroutine of its own
+// and contains every panic ([writeLines.lead]).
 //
 // The zero value needs its codec set; the lines map is made on first use.
 type writeLines[T any] struct {
@@ -316,12 +247,10 @@ type writeLines[T any] struct {
 	// within twice the lines with something to remember.
 	swept int
 
-	// observe, when set, is told each settled batch's key, how many writes
-	// it answered and the attempts the line made for it; after, when set,
-	// stands in for the timer a wait is made with; and now for the clock
-	// a wait and an idle line are scheduled by. A test's seams, unset in
-	// production — an attempt's round trip is measured on the real clock
-	// whatever now says.
+	// observe, when set, is told each settled batch's key, the writes it
+	// answered and the attempts made; after stands in for a wait's timer; now
+	// for the clock waits and idleness are scheduled by. Test seams, unset in
+	// production: an attempt's round trip is always measured on the real clock.
 	observe func(key string, batch, attempts int)
 	after   func(time.Duration) <-chan time.Time
 	now     func() time.Time
@@ -344,19 +273,14 @@ type writeLine[T any] struct {
 	// the queue it was handed. Nil exactly when the line is idle.
 	leader *lineWrite[T]
 
-	// level is how many times the line's window has doubled ([casWindow]):
-	// one up for every attempt that lost, one down for every one that
-	// landed — multiplicative increase, linear decrease — and down by the
-	// time the line sat idle ([decayLevel]).
+	// level is how many times the line's window has doubled ([casWindow]): up
+	// one per lost attempt, down one per landed one (multiplicative increase,
+	// linear decrease), and down by the time it sat idle ([decayLevel]).
 	//
-	// IT OUTLIVES THE BATCH THAT RAISED IT. A node that went straight back
-	// to an immediate attempt after every win would take the key at once
-	// each time — its own next batch was formed while it waited — while
-	// every node that lost waited out a doubled window, so the node that
-	// won last would keep winning and the others would spend their attempts
-	// behind it: the capture that makes a fixed attempt count a coin toss.
-	// Kept, the level makes a node that has just won wait about as long as
-	// the nodes it beat, so each key's writers take it in turns.
+	// IT OUTLIVES THE BATCH THAT RAISED IT. A node that tried again at once after
+	// every win would keep winning while the nodes it beat waited out doubled
+	// windows: the capture that makes a fixed attempt count a coin toss. Kept, it
+	// makes a winner wait about as long as the losers, so writers take turns.
 	level int
 
 	// lost is how many attempts the line has lost since a batch last
@@ -484,6 +408,13 @@ func (l *writeLines[T]) sweepLocked(now time.Time, rtt time.Duration) {
 
 // withdraw takes w out of its line if no attempt is carrying it, answering it
 // with its context's error, and passes the line on if w was leading it.
+//
+// TAKEN OR WITHDRAWN, NEVER BOTH: a write carried by an attempt in flight may
+// land, and a charge withdrawn then that landed would leave the round on the
+// company with the seat never counted and nobody told. Outside an attempt
+// nothing it asked for can have landed, so it is withdrawn and counted
+// nowhere, which is why every wait a line makes holds no taken write
+// ([writeLines.waitTurn]).
 func (l *writeLines[T]) withdraw(key string, ln *writeLine[T], w *lineWrite[T]) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -520,12 +451,17 @@ func (l *writeLines[T]) handOn(key string, ln *writeLine[T]) {
 	ln.idle, ln.until = l.clock(), time.Time{}
 }
 
-// lead runs the line from w's goroutine — wait, form a batch from the queue,
-// one attempt, and again after a loss — and hands it on once w is answered.
+// lead runs the line from w's goroutine (wait, form a batch from the queue,
+// one attempt, and again after a loss) and hands it on once w is answered.
 //
-// W'S OWN CONTEXT IS JUDGED UNDER THE SAME LOCK THAT FORMS EVERY BATCH, so a
-// leader whose caller hung up is withdrawn rather than taken, and the line
-// goes to the next write without an attempt made on its behalf.
+// NO GOROUTINE OF THE LINE'S OWN: each one here is a caller's and returns once
+// its write is answered. Attempts run on [context.WithoutCancel]: the client's
+// API timeout bounds each request, [fleetCASAttempts] the writes. W's own
+// context is judged under the lock that forms every batch, so a leader whose
+// caller hung up is withdrawn rather than taken. A panic in the line's own
+// work answers the attempt's writes with [linePanic], hands the line on and is
+// raised again: left to unwind, it left the line led by nobody and every later
+// write on the key on this node waiting for ever.
 func (l *writeLines[T]) lead(ctx context.Context, kv jetstream.KeyValue, js jetstream.JetStream,
 	key string, ln *writeLine[T], w *lineWrite[T]) {
 
@@ -581,12 +517,9 @@ func (l *writeLines[T]) lead(ctx context.Context, kv jetstream.KeyValue, js jets
 		if outcome == attemptLost {
 			var spent []*lineWrite[T]
 			kept := make([]*lineWrite[T], 0, len(batch))
-			// JUDGED UNDER THE LOCK EVERY WITHDRAWAL TAKES. A caller who hung
-			// up while the attempt was in flight found nothing to withdraw and
-			// is waiting for its answer; judged outside the lock, a hang-up
-			// between the judgement and the requeue would put back a write
-			// nobody watches any more, and a line handed on to it would wait
-			// for ever with every later write on the key behind it.
+			// JUDGED UNDER THE LOCK EVERY WITHDRAWAL TAKES: a hang-up between
+			// an unlocked judgement and the requeue would put back a write
+			// nobody watches, and a line handed on to it would wait for ever.
 			l.mu.Lock()
 			for _, x := range batch {
 				switch x.attempts++; {
@@ -604,11 +537,9 @@ func (l *writeLines[T]) lead(ctx context.Context, kv jetstream.KeyValue, js jets
 			ln.lost++
 			lost := ln.lost
 			ln.until = l.clock().Add(casWindow(ln.level, rtt))
-			// BACK AT THE HEAD OF THE LINE, ahead of whatever queued while
-			// the attempt was in flight: nothing it asked for landed, so a
-			// caller who hangs up from here on is withdrawn — and a panic
-			// from here on answers only the spent writes, the rest being
-			// the queue's again.
+			// BACK AT THE HEAD OF THE LINE, ahead of what queued meanwhile: nothing
+			// landed, so from here a hang-up withdraws, and a panic answers only the
+			// spent writes.
 			ln.queue = append(kept, ln.queue...)
 			carried = spent
 			l.mu.Unlock()
@@ -823,19 +754,15 @@ func (p *changePanic) Unwrap() error {
 	return err
 }
 
-// linePanic is a panic in the line's OWN work — its read, its codec, its
-// write, its queue's bookkeeping, its seams — recovered on the goroutine leading the batch and answered
-// to every write the batch carried, with the stack it happened on.
+// linePanic is a panic in the line's OWN work (its read, codec, write, queue
+// bookkeeping or seams), recovered on the goroutine leading the batch and
+// answered to every write the batch carried, with the stack it happened on.
 //
-// NEVER A WRITE'S CHANGE: a change that panics is recovered inside the
-// decision ([lineWrite.decide]) and answered to its own caller alone, before
-// the line's recover could see it. So this error says the line panicked and
-// nothing else did: one blaming another write coalesced with this one would
-// send its reader looking for a change closure that never panicked.
-//
-// The outcome is UNKNOWN ([coord.ErrUnavailable] wraps it): the panic may have
-// come before the record was read, inside the store client's write, or after
-// the write landed, and only the stack says which.
+// NEVER A WRITE'S CHANGE, which [lineWrite.decide] recovers first and answers
+// to its own caller alone: blaming a coalesced write would send its reader
+// after a change that never panicked. The outcome is UNKNOWN
+// ([coord.ErrUnavailable] wraps it): only the stack says whether the panic came
+// before the read, inside the store client's write, or after it landed.
 type linePanic struct {
 	value any
 	stack []byte

@@ -16,42 +16,32 @@ import (
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
-// WHO READ A REPOSITORY A UNIT KEEPS TO ITSELF: Gitlet's fetch audit, as
-// the operator tool `code_repo_readers` and the query registry's question of
-// the same name — on the REST route `GET /gitlet/repos/{name}/readers`, the
-// generic form and the socket — both answer it: ONE answer ([ReadersOf]), so a
-// person's script and their assistant are told the same thing in the same pages.
-//
-// Every read of a `visibility: unit` repository's contents is recorded where it
-// was served — a git fetch whose answer carried a pack, a code tool's answer
-// (types.CodeFetched) — and the usage domain keeps each node's day of them as
-// one record per repository naming every reader (internal/usage, kind
-// repo_read). The answer sums them across every node and day of a range: each
-// reader — a credential and the seat it acted as, or a seat — with how often it
-// read and how many bytes it was sent. A `visibility: company` repository's
-// readers are every seat of the company by declaration, and are not recorded;
-// its answer says so, and how to have them recorded.
-//
-// A PERSON'S QUESTION AND AN ADMIN'S (authz.ActionCodeRepoReaders): its answer
-// names people and their credentials, so a seat is never given the tool — and a
-// person who is no admin is refused it at the gate, before anything is read.
+// code_repo_readers: who read a `visibility: unit` repository, from Gitlet's
+// fetch audit. The operator tool and the query registry's question of the same
+// name (REST `GET /gitlet/repos/{name}/readers`, the generic form, the socket)
+// share ONE answer ([ReadersOf]), so a script and an assistant are told alike.
+// Each read of a unit repository's contents (a fetch that carried a pack, a code
+// tool's answer: types.CodeFetched) is recorded where served, one usage row per
+// repository per node-day (internal/usage, kind repo_read), summed over the
+// range. A company repository's readers are every seat by declaration and are
+// not recorded. A person's question and an admin's (authz.ActionCodeRepoReaders):
+// the answer names people and their credentials, so no seat is given the tool
+// and a non-admin is refused at the gate, before anything is read.
 
 // CodeRepoReadersTool is the operator tool's name — its authority row's action.
 const CodeRepoReadersTool = string(authz.ActionCodeRepoReaders)
 
 // RepoReadersDefaultDays is how many company days a readers question covers
-// when it names no range: THIRTY, ending today — the month a person auditing a
-// unit's code asks about first, as a page's readers are asked over
-// (queries.PageReadsMaxDays). A range a question names may reach back as far as
-// the rows keep ([usage.RepoReadsMaxDays]).
+// when it names no range, ending today: the month an audit asks about first, as
+// for a page's readers (queries.PageReadsMaxDays). A named range may reach back
+// as far as rows are kept ([usage.RepoReadsMaxDays]).
 const RepoReadersDefaultDays = 30
 
-// RepoReadersPageBytes is the most one page of readers carries, measured as its
-// rows encode ([usage.Fill]): HALF A TOOL ANSWER ([ToolAnswerBytes]), the other
-// half the answer's envelope and what defusing its strings can add — and the
-// same page on the REST route, so the two surfaces page alike. A page can run
-// past it by one reader, whose row is under 2 KiB (usage.ReadersPerRepoDay's
-// measure).
+// RepoReadersPageBytes is the most one page of readers carries as its rows
+// encode ([usage.Fill]): half a tool answer ([ToolAnswerBytes]), the rest left
+// for the envelope and defusing, and the same on the REST route so both page
+// alike. A page may overrun by one reader, under 2 KiB
+// (usage.ReadersPerRepoDay's measure).
 const RepoReadersPageBytes = ToolAnswerBytes / 2
 
 // RepoRowReader is the one code read a readers question makes — the
@@ -182,9 +172,8 @@ func readersRange(from, to string, today period.Window) (string, string, error) 
 // peer's — in the words the usage domain wrote for the caller past its
 // sentinel. Anything else is a code read's failure.
 //
-// EXPORTED for the registry's question (internal/api/queries), which answers
-// the same refusals of the same read on the REST route and the socket: one
-// reading, so a person's script and their assistant quote the same words.
+// Exported for the registry's question (internal/api/queries), so the REST
+// route, the socket and the tool quote the same words.
 func ReadersRefusal(err error) (string, bool) {
 	for _, sentinel := range []error{usage.ErrBadRange, usage.ErrBadCursor} {
 		if !errors.Is(err, sentinel) {

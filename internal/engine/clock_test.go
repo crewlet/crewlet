@@ -10,12 +10,9 @@ import (
 
 // THE COMPANY'S CLOCK IS THE CURRENT EPOCH'S, AND AN APPLY MOVES IT (ADR-0018).
 //
-// [engine.Engine.Zone] is what the surfaces that outlive an epoch read — the
-// scheduler's loop, built once, and the operator's surface, which is not
-// rebuilt for a new clock. Before it they held a zone captured when they were
-// built (the scheduler) or none at all (the operator surface, which resolved
-// every relative date on UTC), so a founder correcting `timezone` changed
-// nothing either of them did until a restart.
+// [engine.Engine.Zone] is what the surfaces that outlive an epoch read (the
+// scheduler's loop, built once, and the operator's surface), so a founder
+// correcting `timezone` changes what they do without a restart.
 func TestTheCompanysClockFollowsAnApply(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{})

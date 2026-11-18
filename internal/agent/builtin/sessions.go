@@ -23,74 +23,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE SESSION TOOLS: a seat's executor finding and reading its seat's other
+// THE SESSION TOOLS: a seat's executor lists and reads its own seat's other
 // executor sessions (ADR-0073, "A seat reads its own sessions").
 //
-// # Its own, by construction
-//
-// Neither tool takes a seat. Both read the seat of the turn the call is bound
-// to ([turnctx.Turn.Handle]) — over the tool bridge the run's own seat, which
-// the node holding it also sets as the call's principal whatever the request
-// carried — so another seat's session cannot even be named: a turn id of
-// another seat's reads the calling seat's row of that turn, which does not
-// exist, and is answered in the words a turn id nobody has gets. What a
-// session holds is what the seat's runs read and did, for whoever their turns
-// acted for, and it is read back by the seat whoever the reading turn acts
-// for, as its diary and its past turns are.
-//
-// # What a call reads, and what it costs
-//
-// `list_sessions` pages the seat's rows newest begun first, or, given
-// `query`, searches their words — what each turn was asked, its conversation
-// and how it ended — on the node holding the rows
-// (executordomain.Reader.Search). `read_session` reads a page of one
-// session's transcript through the one reader every surface reads a kept
-// session by (internal/executorread): held to a seat's bounds
-// (executor.SeatTranscriptBounds) and to the seats' one slot of the node's
-// transcript reads, narrowed to some kinds of entry or to the entries holding
-// every word of `match`, within [SessionReadWithin], and trimmed by its
-// encoded size to one tool answer. Each call is one read of the executor log
-// at the seat's level, `linearizable`, which the log's read model counts
-// (executordomain.LinearizableReadsPerSeatDay).
-//
-// A row says what a person's read of it says of the session it keeps, in the
-// domain's one sentence of each: that the session of a turn that has not ended
-// is in progress, its run maybe gone on past it (`in_progress`,
-// `in_progress_note`: executordomain.Session.InProgressNote, the engine's
-// words alone and never fenced as somebody's) — so a seat reading its own
-// earlier launch's session never takes it for an ended turn's — or that an
-// ended turn went on past the session it kept (`kept_note`:
-// executordomain.Session.WentOnNote, which quotes what refused a capture, and
-// is fenced as the row's other words are).
-//
-// # Every word fenced as a harness's
-//
-// A session is a vendor harness's record of a past run — its briefs, the
-// notes people sent it, its model's text, what its tools returned — and its
-// row's words quote what a person asked and what a box or a tool said, so
-// every one of them reaches the model fenced by the one rule for them
-// ([provenance.ExecutorSession]): `external`, an entry naming the seat whose
-// run kept it, the row's words naming nobody, never `own`.
-//
-// # The company's switch, asked at every call
-//
-// `turn_engine.conversation_session.enabled: false` withholds both tools from
-// every model: the engine offers them to no launch of a revision that keeps no
-// session, and each call asks the revision its node runs now
-// ([SessionDeps.Keeps]), so a launch already running when its node applies
-// the revision that turns the switch off is refused at its next call — an
-// operator turns it off over a leak expecting every model's reads to stop,
-// not only the next launch's.
-//
-// # A read holds nothing
-//
-// Reading a session writes nothing, neither a record nor a hold, so it keeps
-// no session past what the seat's budget and the retention give it: a hold
-// taken on a model's read would be a write a model's surface originates, and
-// it would keep the budget from releasing for the reader's own next capture.
-// A session released while it is listed or read is said as released, from
-// what its row says then, and what was read of it before stands
-// (internal/executorread).
+// Neither takes a seat: both read the bound turn's ([turnctx.Turn.Handle]),
+// which the tool bridge sets whatever the request carried, so another seat's
+// turn id reads a row that does not exist and is answered as one nobody has.
+// The seat reads them whoever the reading turn acts for, as it does its diary.
+// Each call is one linearizable read of the executor log at the seat's level,
+// which executordomain.LinearizableReadsPerSeatDay counts. A read writes no
+// record and no hold: a hold would be a write a model originates, and would keep
+// the seat's budget from releasing for its own next capture. A session released
+// while read is said as released (internal/executorread).
 
 // The tool wire names.
 const (
@@ -99,14 +43,11 @@ const (
 )
 
 // SessionDeps are the session tools' dependencies. Both tools are omitted
-// unless all three are present: a seat offered a listing of sessions it could
-// never open, or a read with no rows to find a session by, would reach for a
-// tool that fails at every call, and a tool that could not ask the company's
-// switch would answer after an operator turned it off.
+// unless all three are present: without one a tool fails at every call, or,
+// without Keeps, answers after an operator turned the switch off.
 type SessionDeps struct {
-	// Rows reads the seat's rows on the executor log: the estate router's
-	// reads (estate.ExecutorReads), so a node without `data` reads them
-	// through one that holds them.
+	// Rows reads the seat's rows on the executor log through the estate
+	// router (estate.ExecutorReads), so a node without `data` can serve.
 	Rows SessionRows
 
 	// Objects opens a session's sealed object (executordomain.SessionStore),
@@ -114,31 +55,26 @@ type SessionDeps struct {
 	Objects executorread.Objects
 
 	// Keeps reports whether the revision this node runs NOW keeps executor
-	// sessions (`turn_engine.conversation_session.enabled`): asked at every
-	// call, because the tools a launch is offered are the revision's it
-	// pinned, and the switch is to stop every model's reads at once — a
-	// call it answers false is refused, reading nothing.
+	// sessions (`turn_engine.conversation_session.enabled`). Asked at every
+	// call, not only at launch: an operator turning it off over a leak expects
+	// a launch already running to stop reading too. False refuses the call.
 	Keeps func() bool
 }
 
 // serves reports whether d serves the session tools.
 func (d SessionDeps) serves() bool { return d.Rows != nil && d.Objects != nil && d.Keeps != nil }
 
-// switchedOff is a session tool's call the company's switch refuses, now that
-// the revision its node runs keeps no executor session ([SessionDeps.Keeps]):
-// forbidden, since no permission or retry lifts it, and in words that say the
-// turn works from what it was told.
+// switchedOff refuses a call while the company keeps no executor session
+// ([SessionDeps.Keeps]): forbidden, since no permission or retry lifts it.
 func switchedOff(tool string) tools.Result {
 	return refused(tools.RefusalForbidden, tool+": reading your sessions is turned off — the company "+
 		"keeps no executor session now (turn_engine.conversation_session.enabled is false), and no "+
 		"model reads the ones kept before. Work from what this turn was told.")
 }
 
-// SessionRows is the executor log's reads the session tools make: a page of a
-// seat's rows, a search of their words, and one turn's row, each at the level
-// asked (estate.ExecutorReads).
-//
-// Consumer-defined, over the domain's own types: the row stays one shape.
+// SessionRows is the executor log's reads the session tools make, each at the
+// level asked (estate.ExecutorReads). Over the domain's own types, so the row
+// stays one shape.
 type SessionRows interface {
 	Sessions(ctx context.Context, handle, cursor string, limit int,
 		fresh statelog.Freshness) (executordomain.Page, error)
@@ -149,65 +85,47 @@ type SessionRows interface {
 }
 
 // SessionReadWithin bounds one `read_session` call: the wait for a slot of the
-// node's transcript reads, the session object's fetch, and its decode up to
-// the page.
+// node's transcript reads, the object's fetch and its decode up to the page.
 //
-// TWO MINUTES. The object store gives a read a minute, and thirty seconds for
-// every mebibyte of the object on top, at the slowest pace it accepts
-// (objstore.ReadBase and MiBPace), so an ordinary session of a mebibyte or two
-// arrives within two minutes even then, and decodes in well under a second; a
-// session at its 32 MiB bound at that pace would take about seventeen, which
-// no tool call should wait out — and two minutes is far inside the ten a
-// harness waits on one call. Past it the call is answered unavailable, naming
-// the session's size, and never as a session that holds nothing.
+// TWO MINUTES: at the object store's slowest accepted pace (objstore.ReadBase
+// and MiBPace: a minute plus thirty seconds a MiB) a session of a MiB or two
+// arrives within it; one at its 32 MiB bound would take about seventeen, which
+// no call should wait out, and two is far inside the ten a harness waits on a
+// call. Past it the call is answered unavailable, naming the session's size,
+// never as a session that holds nothing.
 const SessionReadWithin = 2 * time.Minute
 
 // The listing's page.
 const (
-	// listedSessionsDefault is how many sessions a page holds where the call
-	// names no limit: TEN, a few days of a seat's work once the ended turns
-	// of a conversation absorb each other, which is where a session worth
-	// reading again usually is.
+	// listedSessionsDefault is a page where the call names no limit: TEN, a
+	// few days of a seat's work, where a session worth rereading usually is.
 	listedSessionsDefault = 10
 
-	// listedSessionsMax is the most a page holds: TEN, the most rows whose
-	// worst case fits one tool answer ([ToolAnswerBytes]) with the page's
-	// note and envelope — every field at the bound its record is held to, in
-	// plain letters: a turn's id and the one it was handed at theirs, a
-	// conversation's key at its own, its harness, its ask, its ending's five
-	// accounts and its note on a session its turn went on past at
-	// [listedProseBytes] with their fence lines (about 115 bytes a fence),
-	// the ending's engine words and who stopped it at theirs, its unkept
-	// capture and its last word at the largest places, the sessions it ran
-	// out of context in at their count and length, and a search's every field
-	// and snippet: 5,994 bytes a row when the bound was set, so ten fit one
-	// 64 KiB answer and an eleventh does not. A test measures it
-	// (TestAPageOfSessionsAtItsWorstFitsOneAnswer), and fails both on a page
-	// of ten refused and on room left for an eleventh. A limit past it is
-	// clamped to it, as it always was.
-	// It was fifteen, then thirteen, while a row's worst case was summed
-	// without its ending's short words and the sessions it ran out of context
-	// in, which any row a page holds can carry. A page that escapes past it
-	// all the same — words JSON escapes several bytes a character — is
-	// refused naming `limit`, the tripwire's designed use: a page of rows
-	// cannot be cut short silently, since its cursor is its last row.
+	// listedSessionsMax is the most a page holds, and a larger limit is
+	// clamped to it: TEN, the most rows whose worst case (every field any row
+	// can carry at its record's bound, prose at [listedProseBytes] with its
+	// fence lines; 5,994 bytes a row when set) fits one 64 KiB tool answer
+	// ([ToolAnswerBytes]) with the note and envelope.
+	// TestAPageOfSessionsAtItsWorstFitsOneAnswer fails on a page of ten
+	// refused and on room for an eleventh. A page JSON escaping pushes past
+	// it anyway is refused naming `limit`, never cut short silently: its
+	// cursor is its last row.
 	listedSessionsMax = 10
 
-	// listedProseBytes is the most of each of a listed row's words — what
-	// its turn was asked, each of its ending's accounts and its note on a
-	// session its turn went on past — a page shows, cut on a rune boundary
-	// and marked: THREE HUNDRED BYTES, about three lines, which tell one
-	// session from another. The first page of a session's read shows its row
-	// whole. A session in progress's sentence is the engine's, of a length
-	// it bounds itself, and is shown whole wherever it is.
+	// listedProseBytes cuts each of a listed row's words (its ask, its
+	// ending's accounts, its went-on note), on a rune boundary and marked:
+	// THREE HUNDRED BYTES, about three lines, enough to tell sessions apart.
+	// A read's first page shows the row whole, and the in-progress sentence,
+	// the engine's and bounded by it, is always whole.
 	listedProseBytes = 300
 )
 
-// sessionLabel is what a seat's kept session holds, labelled as the seat
-// reads it back, naming seat as the run whose record it is — or nobody, for
-// the words of its row, whose writers the row does not keep: the one rule for
-// those words ([provenance.ExecutorSession]), and the one door the session
-// tools decide a trust through.
+// sessionLabel labels what a seat's kept session holds as the seat reads it
+// back: naming seat as the run that kept it, or nobody ("") for the row's
+// words, whose writers the row does not keep ([provenance.ExecutorSession]).
+// Never `own`: a session is a vendor harness's record, quoting briefs, people's
+// notes and tools' output. It is the one door the session tools decide a trust
+// through.
 func sessionLabel(seat string) provenance.Label { return provenance.ExecutorSession(seat) }
 
 // fenceSession registers the string at path in read's answer as text label
@@ -221,9 +139,8 @@ type sessionRow struct {
 	Turn         string `json:"turn_id"`
 	Conversation string `json:"conversation,omitempty"`
 
-	// ThisTurn marks the reading turn's own session — its earlier launches'
-	// — and ThisConversation a session of the conversation the reading turn
-	// serves.
+	// ThisTurn marks the reading turn's own session (its earlier launches'),
+	// ThisConversation one of the conversation the reading turn serves.
 	ThisTurn         bool `json:"this_turn,omitempty"`
 	ThisConversation bool `json:"this_conversation,omitempty"`
 
@@ -231,35 +148,29 @@ type sessionRow struct {
 	CapturedAt *time.Time `json:"captured_at,omitempty"`
 	EndedAt    *time.Time `json:"ended_at,omitempty"`
 
-	// Kept says the row still names a session's object, and KeptBytes is
-	// that object's size, compressed and sealed: a row naming none is still
-	// the turn's account of how it ended.
+	// Kept says the row still names a session's object, KeptBytes its size
+	// compressed and sealed; a row naming none still says how its turn ended.
 	Kept      bool  `json:"kept"`
 	KeptBytes int64 `json:"kept_bytes,omitempty"`
 
 	// InProgress marks the session of a turn that has not ended, which its
-	// run may have gone on past, and InProgressNote says so in the domain's
-	// one sentence of it for every surface
-	// (executordomain.Session.InProgressNote): the engine's words alone,
-	// which no fence labels as somebody else's.
+	// run may have gone on past, so a seat never takes it for an ended turn's.
+	// InProgressNote is executordomain.Session.InProgressNote: the engine's
+	// words alone, never fenced.
 	InProgress     bool   `json:"in_progress,omitempty"`
 	InProgressNote string `json:"in_progress_note,omitempty"`
 
-	// KeptNote is what the seat is told of a turn that went on past the
-	// session it kept, or was lost, in the domain's one sentence of it
-	// (executordomain.Session.WentOnNote): that, and why its newer capture
-	// was not kept — which quotes what refused it: somebody's words,
-	// declared on the field.
+	// KeptNote is executordomain.Session.WentOnNote, on a turn that went on
+	// past the session it kept, or lost it: it quotes what refused the newer
+	// capture, so it is somebody's words.
 	KeptNote string `json:"kept_note,omitempty" untrusted:"fence"`
 
 	// BaseTurn is the session the turn's first launch was handed to
 	// continue, where it was handed one.
 	BaseTurn string `json:"base_turn,omitempty"`
 
-	// Asked is what the turn was asked, and Ending how it ended — the
-	// engine's words and the accounts of its reviewer, its executor, whoever
-	// stopped it and the engine — null while the turn runs: somebody else's
-	// words, declared on the types.
+	// Asked is what the turn was asked, and Ending how it ended (null while
+	// it runs): somebody else's words, declared on the types.
 	Asked  string               `json:"asked,omitempty" untrusted:"fence"`
 	Ending *executorkeep.Ending `json:"ending"`
 
@@ -269,14 +180,11 @@ type sessionRow struct {
 	Snippet string                       `json:"snippet,omitempty" untrusted:"fence"`
 }
 
-// shownRow is s as the session tools show it in turn: through the row's one
-// redaction ([executordomain.Session.Redacted]), its words each cut to cut
-// bytes where cut is not zero, and marked where it is the reading turn's own
-// session or of the conversation the reading turn serves — and, of the
-// session it keeps, whether it is in progress and what the domain tells every
-// reader of it, asked of that shown form, so a seat is told of its session
-// what a person's read of the same row is told: the in-progress sentence
-// whole, as the engine's, and a went-on note cut as the row's other words.
+// shownRow is s as shown to turn: redacted ([executordomain.Session.Redacted]),
+// its words cut to cut bytes unless cut is 0, and marked when it is turn's own
+// session or conversation. In-progress and went-on are asked of the redacted
+// form, so a seat is told what a person's read of the row is told: the
+// in-progress sentence whole, the went-on note cut like the row's other words.
 func shownRow(s executordomain.Session, turn *turnctx.Turn, cut int) sessionRow {
 	s = s.Redacted()
 	shorten := func(text string) string {
@@ -300,8 +208,7 @@ func shownRow(s executordomain.Session, turn *turnctx.Turn, cut int) sessionRow 
 		row.ThisConversation = turn.ConversationKey != "" && s.ConversationKey == turn.ConversationKey
 	}
 	if s.Ending != nil {
-		// THE REDACTION'S OWN COPY of the ending, so cutting its prose
-		// leaves the row it was read from as it was.
+		// A COPY, so cutting its prose leaves the row read untouched.
 		ending := *s.Ending
 		ending.CompletedWork, ending.BlockedOn = shorten(ending.CompletedWork), shorten(ending.BlockedOn)
 		ending.StopReason, ending.Failure = shorten(ending.StopReason), shorten(ending.Failure)
@@ -324,13 +231,10 @@ func sessionInstant(at time.Time) *time.Time {
 	return &at
 }
 
-// fenceRow registers the words of row, at path in read's answer: what its
-// turn was asked, its ending's accounts, its note on a session its turn went on
-// past and a search's snippet, each a kept session's naming nobody — the row
-// keeps no writer of its ask, and its ending's accounts and its note quote
-// what a box, a tool or a person wrote — and the name of whoever stopped it,
-// defused in place, on the envelope. Never the sentence of a session in
-// progress, which is the engine's own and quotes nobody.
+// fenceRow fences row's words at path in read's answer as a kept session's
+// naming nobody (the row keeps no writer, and its ending and note quote a box,
+// a tool or a person), and whoever stopped it as a name defused in place, on
+// the envelope. Never the in-progress sentence, which is the engine's own.
 func fenceRow(read *foreignRead, path fieldPath, row sessionRow) {
 	nobody := sessionLabel("")
 	fenceSession(read, path.key("asked"), nobody, row.Asked)
@@ -418,22 +322,20 @@ type sessionsAnswer struct {
 	// Next is the cursor the next page is read from, absent on the last.
 	Next string `json:"next_cursor,omitempty"`
 
-	// Searched is how far a search went, and Note says it in words: a
+	// Searched is how far a search went, and Note says it in words, so a
 	// search that stopped short is never read as one that found nothing. A
-	// listing's Note is there only where it is Incomplete, which it says.
+	// listing has a Note only when Incomplete.
 	Searched *sessionsSearched `json:"searched,omitempty"`
 	Note     string            `json:"note,omitempty"`
 
-	// Incomplete says a record the answering copy could not decode may
-	// hold rows missing from the page, which Note then says in words.
+	// Incomplete says the answering copy could not decode a record that may
+	// hold rows missing from the page.
 	Incomplete bool `json:"incomplete,omitempty"`
 }
 
-// What a page the answering copy could not account for whole says, listed
-// and searched: IN WORDS, beside the flag, because what a model is to do about
-// it is a behaviour — not conclude a session is gone, or that none holds the
-// words — which a boolean beside a list of rows reads as metadata rather than
-// as a caveat on the rows.
+// What an incomplete page says, IN WORDS beside the flag: what a model is to do
+// (not conclude a session is gone, or that none holds the words) is a
+// behaviour, and a bare boolean beside rows reads as metadata, not a caveat.
 const (
 	incompleteSessions = "The node that answered holds records of your sessions it could not read, " +
 		"so sessions may be missing from this page: do not conclude a session is not kept."
@@ -501,8 +403,8 @@ func (t *listSessions) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return t.render(ctx, turn, answer)
 }
 
-// render answers a page of rows, every row's words fenced, compact, as a page
-// whose size its bound was set by is sent.
+// render answers a page with every row's words fenced, compact: the encoding
+// listedSessionsMax was sized by.
 func (t *listSessions) render(ctx context.Context, turn *turnctx.Turn, answer sessionsAnswer) (tools.Result, error) {
 	read := newForeignRead(turn, turn.Handle())
 	for i, row := range answer.Sessions {
@@ -511,13 +413,10 @@ func (t *listSessions) render(ctx context.Context, turn *turnctx.Turn, answer se
 	return read.page(ctx, ListSessionsTool, answer, "Ask for fewer sessions with `limit`.")
 }
 
-// searchedNote is what a search's page says of how far it searched — how many
-// of the seat's sessions it examined, from where, and what is left — which is
-// never that nothing matches past the sessions it examined. Nor among them,
-// where the answering copy could not read every record of them (found is not
-// Complete): that page says how far it went and what it found, and that
-// sessions holding the words may be missing from it. after says the page was
-// read after a cursor rather than from the newest.
+// searchedNote says how far a search's page went (how many sessions it
+// examined, from where, what is left), never that nothing matches past them,
+// nor among them when found is not Complete. after says the page was read
+// after a cursor rather than from the newest.
 func searchedNote(found executordomain.SearchPage, after bool) string {
 	hits, since := len(found.Hits), "most recently begun"
 	if after {
@@ -550,8 +449,8 @@ func searchedNote(found executordomain.SearchPage, after bool) string {
 		return fmt.Sprintf("Searched the %d of your sessions begun before the cursor, to your oldest.",
 			found.Scanned)
 	case found.Scanned < executordomain.SearchScanRows:
-		// THE PAGE FILLED before its bound: the sessions past its last hit
-		// are unexamined, not empty.
+		// THE PAGE FILLED before its bound: sessions past its last hit are
+		// unexamined, not empty.
 		return fmt.Sprintf("Found %d holding every word among your %d %s sessions; older ones were not "+
 			"searched yet: call again with next_cursor to go on.", hits, found.Scanned, since)
 	case hits == 0:
@@ -562,12 +461,10 @@ func searchedNote(found executordomain.SearchPage, after bool) string {
 		"not searched: call again with next_cursor to search them.", found.Scanned, since, hits)
 }
 
-// sessionsFailure is a failed read of the seat's rows in the session tools'
-// words: a request the log refused — a cursor no page handed out, a query of
-// no word — the caller's to change, in the log's own sentence; a search no
-// data node answered, with what to do meanwhile, since a data node of a build
-// before the search cannot run it; and anything else as this node's condition
-// or fault, which never says the seat has no session.
+// sessionsFailure words a failed read of the seat's rows: a request the log
+// refused, the caller's to change, in the log's sentence; a search no data
+// node served, with what to do meanwhile, since an older build's data node
+// cannot run one; anything else as this node's fault, never "no session".
 func sessionsFailure(ctx context.Context, err error, searching bool) tools.Result {
 	if errors.Is(err, executordomain.ErrInvalid) {
 		return refusedBy(tools.RefusalInvalid, err, ListSessionsTool+": "+
@@ -588,7 +485,10 @@ func sessionsFailure(ctx context.Context, err error, searching bool) tools.Resul
 
 // --- read_session ---------------------------------------------------------- //
 
-// readSession reads a page of one of the calling seat's own sessions.
+// readSession reads a page of one of the calling seat's own sessions through
+// internal/executorread, the one reader of a kept session for every surface:
+// held to executor.SeatTranscriptBounds and the seats' one slot of the node's
+// transcript reads.
 type readSession struct {
 	deps SessionDeps
 
@@ -666,10 +566,9 @@ type sessionPage struct {
 	Note string `json:"note,omitempty"`
 }
 
-// sessionEntry is one entry of a session's transcript as the tool hands it
-// out: its place among every entry the transcript holds, whatever a filter
-// kept, and for a match, where its window begins in the entry's whole text
-// and a cursor that reads the transcript on from it, unfiltered.
+// sessionEntry is one transcript entry as handed out: its ordinal among every
+// entry, whatever a filter kept, and for a match where its window begins in
+// the entry's text and a cursor reading on from it, unfiltered.
 type sessionEntry struct {
 	Ordinal int `json:"ordinal"`
 	executor.TranscriptEntry
@@ -716,9 +615,8 @@ func (t *readSession) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return t.render(ctx, turn, turnID, cursor == "", filter, page)
 }
 
-// sessionFilter is the entries a call asks for: the kinds it names, each one
-// of [executor.EntryKinds], and the terms of its `match` — or the refusal of
-// a kind that is none, or a match of no word.
+// sessionFilter is the entries a call asks for (its `kinds`, each one of
+// [executor.EntryKinds], and its `match` terms), or the refusal of either.
 func sessionFilter(args map[string]any) (executor.TranscriptFilter, *tools.Result) {
 	var filter executor.TranscriptFilter
 	for _, raw := range argStrings(args, "kinds") {
@@ -742,14 +640,11 @@ func sessionFilter(args map[string]any) (executor.TranscriptFilter, *tools.Resul
 	return filter, nil
 }
 
-// failure is a read that came to no page, in the tool's words: a turn the seat
-// keeps no session of, in the shared reader's sentence and where to look; a
-// cursor or a turn id that is the caller's to change; a read this call's own
-// bound ended (bounded), naming the session's size where its row was read; a
-// session whose object failed and whose row the executor log did not read
-// again, and a store that did not answer, each naming which did not; and
-// anything else as this node's condition or fault — never a session that
-// holds nothing.
+// failure words a read that came to no page: no session (and where to look); a
+// cursor or turn id the caller must change; this call's own bound (bounded),
+// naming the session's size where its row was read; an object that failed with
+// the log not re-asked, or a store that did not answer; anything else as this
+// node's fault. Never a session that holds nothing.
 func (t *readSession) failure(ctx context.Context, turnID string, page executorread.Page,
 	err error, bounded bool) tools.Result {
 
@@ -775,8 +670,8 @@ func (t *readSession) failure(ctx context.Context, turnID string, page executorr
 			"slow. Ask again shortly; this does not mean the session holds nothing.", clip(turnID), size,
 			spokenDuration(t.within)))
 	case errors.Is(err, executorread.ErrKeptUnknown):
-		// THE STORE MAY HAVE ANSWERED, that the object is gone: what is
-		// unknown is whether the session was released, which the log says.
+		// THE STORE MAY HAVE SAID the object is gone: unknown is whether the
+		// session was released, which only the log says.
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("Could not read the session of turn "+
 			"%s just now: its object did not read, and the executor log could not be asked whether the "+
 			"session is still kept. Ask again shortly; this does not mean the session holds nothing.",
@@ -801,16 +696,12 @@ func spokenDuration(d time.Duration) string {
 	return d.String()
 }
 
-// render answers page: its entries, each with its place, every word fenced —
-// an entry's under the seat whose run kept it, the row's and a `none` page's
-// reason naming nobody — trimmed by its encoded size to one tool answer from
-// its end, its cursor naming the first entry left out.
-//
-// THE FIRST PAGE CARRIES THE ROW WHOLE, and a row whose words fill the answer
-// on their own carries no entry: its cursor names the first, which the next
-// page, carrying no row, holds. A row past the answer even alone — prose a
-// JSON encoding escapes six bytes a character — is shown as a listing shows
-// it, its words cut.
+// render answers page: its entries with their places, every word fenced (an
+// entry's under the seat whose run kept it, the row's and a `none` page's
+// reason naming nobody), trimmed from its end to one tool answer, its cursor
+// naming the first entry left out. The first page carries the row whole, and a
+// row filling the answer alone carries no entry; a row past it even alone (JSON
+// escapes a character to up to six bytes) is cut as a listing cuts it.
 func (t *readSession) render(ctx context.Context, turn *turnctx.Turn, turnID string, first bool,
 	filter executor.TranscriptFilter, page executorread.Page) (tools.Result, error) {
 
@@ -827,8 +718,8 @@ func (t *readSession) render(ctx context.Context, turn *turnctx.Turn, turnID str
 				fenceRow(read, fieldPath{}.key("session"), row)
 			}
 			if page.State == executorread.TranscriptNone {
-				// THE DOMAIN'S REASON QUOTES WHAT REFUSED A CAPTURE, an
-				// error a box or a store wrote (executordomain's NotKept).
+				// THE REASON QUOTES what refused a capture, a box's or a
+				// store's error (executordomain's NotKept).
 				fenceSession(read, fieldPath{}.key("why"), sessionLabel(""), answer.Why)
 			}
 			kept := sessionLabel(page.Read.Session.Handle)
@@ -852,9 +743,7 @@ func (t *readSession) render(ctx context.Context, turn *turnctx.Turn, turnID str
 		"with `kinds` or `match`.")
 }
 
-// sessionEntries is page's entries as the tool hands them out: each with its
-// ordinal among every entry the transcript holds, and for a match where its
-// window begins and a cursor reading the transcript on from it.
+// sessionEntries is page's entries as handed out (sessionEntry).
 func sessionEntries(page executorread.Page, filter executor.TranscriptFilter) []sessionEntry {
 	t := page.Transcript
 	out := make([]sessionEntry, 0, len(t.Entries))
@@ -871,14 +760,12 @@ func sessionEntries(page executorread.Page, filter executor.TranscriptFilter) []
 	return out
 }
 
-// pageEnd is the cursor the page after one holding the first kept of entries
-// is read from, and what the page says of where it ends: a page cut to fit one
-// answer goes on from the first entry it left out; a read the archive's budget
-// stopped says where, and that nothing past it is read; and a filtered read
-// says whether it reached the transcript's end, so a page of no entry is never
-// read as a session that holds nothing — and, where it handed out parts of the
-// record the read could not read, that it could not search those, so they are
-// never read as entries that do not hold the words.
+// pageEnd is the next page's cursor, given the page keeps the first kept of
+// entries, and its note: a page cut to fit goes on from the first entry left
+// out; a read the archive's budget stopped says where, and that nothing past it
+// is read; a filtered read says whether it reached the end, so an empty page is
+// never read as an empty session, and that `unread` parts could not be
+// searched, so they are never read as not holding the words.
 func pageEnd(page executorread.Page, filter executor.TranscriptFilter, entries []sessionEntry,
 	kept int) (string, string) {
 
@@ -901,8 +788,8 @@ func pageEnd(page executorread.Page, filter executor.TranscriptFilter, entries [
 	case !filtered:
 		return page.Next, ""
 	case t.More():
-		// A FULL PAGE STOPS AT AN ENTRY THE FILTER KEEPS, one it had no
-		// room for, which the next page opens with.
+		// A FULL PAGE STOPS at a kept entry it had no room for, which the
+		// next page opens with.
 		return page.Next, fmt.Sprintf("This page is full: call again with next_cursor, and the same `kinds` "+
 			"and `match`, to go on from entry %d.", t.Next)
 	}

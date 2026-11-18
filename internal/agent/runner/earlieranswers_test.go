@@ -17,12 +17,10 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// THE TURN'S ANSWERS, TOLD TO A RUN THAT HOLDS NONE OF THEM. A run that starts a
-// session of its own holds none of the briefs before it, and its brief told it
-// of the answers a person gave the work only the one carrying its round on now:
-// an answer that carried an earlier job on, in this round or one a review sent
-// back, was lost to it. So its brief tells every answer the run keeps beside
-// its record, each naming its round, before what carries its round on now.
+// THE TURN'S ANSWERS, TOLD TO A RUN THAT HOLDS NONE OF THEM. A run starting a
+// session of its own holds none of the briefs before it, so its brief tells
+// every answer the run keeps beside its record, each naming its round, before
+// what carries its round on now.
 
 // answersHeading opens the turn's answers a brief tells.
 const answersHeading = "## Earlier answers that carried this work on"
@@ -31,19 +29,17 @@ const answersHeading = "## Earlier answers that carried this work on"
 // the run before it.
 const lostReseedHeading = "## A run before you on this task was cut off"
 
-// answerOf is an answer lead: the job at place seq among the turn's launches
-// opened with it, in round, its run having asked which branch and the founder
-// answered words.
+// answerOf is the answer lead job opened with, at launch seq of the turn, in
+// round: its run asked which branch and the founder answered words.
 func answerOf(job string, seq int64, round int, words string) sandbox.Lead {
 	lead := earlierAnswer(job, words)
 	lead.Seq, lead.Round = seq, round
 	return lead
 }
 
-// roundHeldCalls is a closed round's record of a call to `vendor_post` that
-// waited for a person: the call its run held for their approval, which ended its
-// job, then, where made, the one they let be made, each with its arguments
-// sealed on every record, as the round's prior-work block lists them.
+// roundHeldCalls is a closed round's record of a `vendor_post` call held for a
+// person's approval, which ended its job, then, where made, the one they
+// allowed; arguments sealed, as the round's prior-work block lists them.
 func roundHeldCalls(made bool) []ledger.Call {
 	calls := []ledger.Call{{Name: "vendor_post", Result: "held for a person's approval", Failed: true,
 		Withheld: true}}
@@ -53,12 +49,11 @@ func roundHeldCalls(made bool) []ledger.Call {
 	return calls
 }
 
-// keptLead is lead as the run keeps it beside its record, its job's brief not
-// having told it.
+// keptLead is lead kept beside the run's record, untold by its job's brief.
 func keptLead(lead sandbox.Lead) runner.ResumeLead { return runner.ResumeLead{Lead: lead} }
 
-// answersOf is the section of brief that tells the turn's answers, up to the
-// next section the brief opens at its own level, "" where it tells none.
+// answersOf is brief's answers section, up to the next one at its level; ""
+// where it tells none.
 func answersOf(brief string) string {
 	at := strings.Index(brief, answersHeading)
 	if at < 0 {
@@ -71,10 +66,9 @@ func answersOf(brief string) string {
 	return section
 }
 
-// freshRelaunchOver is the request a relaunch carrying round len(history)+1 on
-// with resume makes, its run launched over the closed rounds history, where its
-// launcher continues no session: the round is carried on in a session of its
-// own, on the fresh brief.
+// freshRelaunchOver is the request a relaunch of round len(history)+1 with
+// resume makes over the closed rounds history, its launcher continuing no
+// session: the round goes on in a session of its own, on the fresh brief.
 func freshRelaunchOver(t *testing.T, history []ledger.Iteration, resume runner.Resume) runner.AgentRunRequest {
 	t.Helper()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
@@ -100,12 +94,10 @@ func freshRelaunchOver(t *testing.T, history []ledger.Iteration, resume runner.R
 	return again
 }
 
-// sentBackAfresh is the request a reviewer's send-back of round 1 with review
-// makes where its launcher continues no session: round 1's run launched and
-// collected from resume as the segment that reviewed it collects it, by a
-// runner built with opts, then round 2 launched over it, on its fresh brief.
-// earlier is the calls round 1's earlier jobs made, which the round's record
-// lists before its last run's.
+// sentBackAfresh is the request a send-back of round 1 with review makes, its
+// launcher continuing no session: round 1's run is collected from resume by a
+// runner built with opts, then round 2 launched over it on its fresh brief.
+// earlier is round 1's earlier jobs' calls, listed before its last run's.
 func sentBackAfresh(t *testing.T, resume runner.Resume, review string, opts buildOpts,
 	earlier ...ledger.Call) runner.AgentRunRequest {
 
@@ -133,13 +125,11 @@ func sentBackAfresh(t *testing.T, resume runner.Resume, review string, opts buil
 	return again
 }
 
-// A FRESH RUN IS TOLD THE ANSWERS THAT CARRIED ITS TURN ON. A person answered
-// the asking run's question and the job that carried the round on with that
-// answer was lost with its box, so the round is carried on in a session of its
-// own, which holds none of the briefs before it: its brief tells the answer, in
-// a section of its own after the turn's own brief and before what became of the
-// run before it, naming the round it came in, and saying the session does not
-// hold it.
+// A FRESH RUN IS TOLD THE ANSWERS THAT CARRIED ITS TURN ON. The job a person's
+// answer carried on was lost with its box, so the round goes on in a session of
+// its own: its brief tells the answer in a section of its own, after the turn's
+// brief and before what became of the run before it, naming its round and
+// saying the session does not hold it.
 //
 // Mutation: leave the section out, or tell it after what became of the run
 // before it, and this goes red.
@@ -166,15 +156,14 @@ func TestAFreshRunIsToldTheAnswersThatCarriedItsTurnOn(t *testing.T) {
 	}
 }
 
-// A FRESH RUN CARRYING A REFUSED ROUND ON IS TOLD THE TURN'S ANSWERS. A person
-// answered the asking run's question, and the session the job that answer
-// carried on continued was refused by its provider before its model read a
-// word, so the round is carried on in a session of its own, which holds none of
-// the briefs before it: its brief tells the answer, after the turn's own brief
-// and before why the run before it could not start its work.
+// A FRESH RUN CARRYING A REFUSED ROUND ON IS TOLD THE TURN'S ANSWERS. The
+// session a person's answer carried on was refused by its provider before its
+// model read a word, so the round goes on in a session of its own: its brief
+// tells the answer after the turn's brief and before why the run before it
+// could not start its work.
 //
-// Mutation: leave the turn's answers out of a refused round's fresh brief alone,
-// and this goes red.
+// Mutation: leave the answers out of a refused round's fresh brief alone, and
+// this goes red.
 func TestAFreshRunCarryingARefusedRoundIsToldTheTurnsAnswers(t *testing.T) {
 	t.Parallel()
 	again := freshRelaunch(t, runner.Resume{Refused: &runner.Refused{Said: providerRefusal},
@@ -188,12 +177,10 @@ func TestAFreshRunCarryingARefusedRoundIsToldTheTurnsAnswers(t *testing.T) {
 	}
 }
 
-// A FRESH RUN IS TOLD EVERY ANSWER OF ITS TURN, NAMING ITS ROUND. An answer is
-// an instruction to the turn, not to the round it came in: a run carrying round
-// 2 on afresh is told the answer that carried round 1 on, before a review sent
-// that round back, as well as the one of its own round, oldest first, each
-// naming the round it came in, so the one a later answer or a review overtook
-// reads as earlier than what overtook it.
+// A FRESH RUN IS TOLD EVERY ANSWER OF ITS TURN, NAMING ITS ROUND. An answer
+// instructs the turn, not its round: a fresh run of round 2 is told round 1's
+// answer, from before a review sent it back, and its own round's, oldest first,
+// each naming its round, so an overtaken answer reads as the earlier one.
 //
 // Mutation: tell only the answers of the round carried on, name no round, or
 // tell them newest first, and a check goes red.
@@ -218,14 +205,11 @@ func TestAFreshRunIsToldEveryAnswerOfItsTurnNamingItsRound(t *testing.T) {
 	}
 }
 
-// A SENT-BACK FRESH RUN IS TOLD THE TURN'S ANSWERS. A reviewer sent round 1 back
-// and the round after it starts a session of its own: its brief tells the turn's
-// task, the closed round's calls and its review, and every note, and the
-// prior-work ledger carries none of a person's replies, so the answer that
-// carried round 1 on, an instruction to the turn, is told too, after the turn's
-// own brief, naming the round a review sent back. And a send-back that continues
-// the session its conversation's last turn left, handed that brief whole, is
-// handed the answer with it.
+// A SENT-BACK FRESH RUN IS TOLD THE TURN'S ANSWERS. The prior-work ledger
+// carries no person's replies, so the fresh session after round 1 is sent back
+// is told the answer that carried round 1 on, after the turn's brief, naming
+// the round a review sent back; a send-back continuing the session the
+// conversation's last turn left, handed that brief whole, gets it too.
 //
 // Mutation: tell a send-back's fresh run no answer, or tell it to the fresh run
 // alone, and a check goes red.
@@ -249,13 +233,11 @@ func TestASentBackFreshRunIsToldTheTurnsAnswers(t *testing.T) {
 	}
 }
 
-// A BASE CONTINUATION CARRIES THE TURN'S ANSWERS. A turn that has kept no
-// session of its own carries a round on in the session its conversation's last
-// turn left, handed the reseed whole after where the turn began: the answers
-// the reseed tells are in it, after the turn's task and before what became of
-// the run before it. They ride the task its brief opens with (told again with
-// the task, in that order), never marked on its job's record as leads it told
-// again apart, which the run's leads would order before the task.
+// A BASE CONTINUATION CARRIES THE TURN'S ANSWERS. A turn with no session of its
+// own carries a round on in the one its conversation's last turn left, handed
+// the reseed whole: its answers sit after the task and before what became of
+// the run before it. They ride the task its brief opens with, never marked on
+// its job's record as leads told apart, which would order them before the task.
 //
 // Mutation: hand the base's continuation the reseed without the answers, or
 // mark them told by the base's brief apart, and a check goes red.
@@ -282,27 +264,17 @@ func TestABaseContinuationCarriesTheTurnsAnswers(t *testing.T) {
 }
 
 // A TASK TOLD AGAIN CARRIES THE ANSWERS ITS BRIEF TOLD. A base continuation's
-// brief told the turn's task and then the turn's answers, and the run keeps the
-// task it opened with, then the answer that carried it on: its copy, cut
-// off before its harness wrote that brief, is told the task again with those
-// answers after it, nested under it, then the answer that carried it on, in
-// that brief's order; never the base's own answer inside the task too, nor an
-// earlier answer apart from it. They are told in words true of any session of
-// the work, never as to a session that holds none of them: the copy may hold
-// the brief that told them. And the call a person approved that an answer in it
-// tells is in no list of the round's calls, as a lead's own is not.
+// copy, cut off, is told its task again with the answers that brief told nested
+// under it, then the answer that carried it on; never the base's own answer
+// inside the task, nor an earlier one apart from it; in words true of any
+// session, since the copy may hold that brief; and a call one of them approved
+// is in no list of the round's calls. A copy that may be a summary (Claude Code,
+// its collection counting nothing) is told every kept lead, yet each answer and
+// that call's outcome are still told once, inside the task.
 //
-// EACH ONCE, WHERE THE COPY MAY BE A SUMMARY TOO: a Claude Code copy whose
-// collection counted nothing is told every lead the run keeps, the earlier
-// answers among them, and the task carries them still, so each answer, and the
-// outcome of the call one of them approved, is told once, inside the task, and
-// never on its own as well.
-//
-// Mutation: tell the task again without its answers, take the base's own answer
-// among them, leave them at their own level, tell them as to a session that
-// holds none of them, list the call one of them approved, or tell an answer the
-// task carries on its own too where every kept lead is told, and a check goes
-// red.
+// Mutation: drop the task's answers, take the base's own among them, unnest
+// them, word them as to a session holding none, list their approved call, or
+// tell a carried answer on its own too, and a check goes red.
 func TestATaskToldAgainCarriesTheAnswersItsBriefTold(t *testing.T) {
 	t.Parallel()
 	task := sandbox.Lead{Kind: sandbox.LeadKindTask, Job: "job-3", Seq: 3, Round: 1, Task: &sandbox.LeadTask{}}
@@ -314,8 +286,7 @@ func TestATaskToldAgainCarriesTheAnswersItsBriefTold(t *testing.T) {
 		brief := relaunchedInBox(t, inBoxCarryNamed(t, "a replaced sign-in"), sandbox.HarnessEndCutOff, nil,
 			func(r *runner.Resume) {
 				if summary {
-					// Its collection counted nothing: it may be a summary, so
-					// every lead the run keeps is told.
+					// Counting nothing, it may be a summary: every kept lead is told.
 					r.Run.Harness = sandbox.ClaudeCodeHarness
 				}
 				r.Bridged = []runner.BridgedCall{approved,
@@ -347,8 +318,8 @@ func TestATaskToldAgainCarriesTheAnswersItsBriefTold(t *testing.T) {
 				t.Errorf("%s: %q is told %d times, want once:\n%s", name, once, n, brief)
 			}
 		}
-		// The nested answers alone, up to the lead told after the task at its
-		// own level: the order above found them.
+		// The nested answers alone, up to the next lead at the task's level; the
+		// order check above found them, so the index is never -1.
 		nested := section[strings.Index(section, "### Earlier answers that carried this work on"):]
 		if end := strings.Index(nested, "\n### "); end >= 0 {
 			nested = nested[:end]
@@ -366,12 +337,11 @@ func TestATaskToldAgainCarriesTheAnswersItsBriefTold(t *testing.T) {
 }
 
 // EVERY ANSWER IS TOLD ONCE, UNDER THE OLDEST TASK THAT CARRIES IT. A copy that
-// may be a summary is told every lead the run keeps, and a turn can keep two
-// tasks: the base continuation its first launch made, and another a later
-// launch made of the same session where no capture of the turn had landed.
-// Each task's brief told every answer before it, so an answer before both is
-// told under the older alone, an answer after the older under the newer, and
-// the newer's own carry after it, each once and in the order they came.
+// may be a summary is told every kept lead, and a turn can keep two tasks: its
+// first launch's base continuation, and a later launch of the same session
+// where no capture had landed. Each task's brief told every answer before it,
+// so an answer before both goes under the older alone, one after the older
+// under the newer, and the newer's own carry after it, each once, in order.
 //
 // Mutation: let every task carry every answer before it, and the oldest answer
 // is told twice.
@@ -421,14 +391,12 @@ func TestEveryAnswerIsToldOnceUnderTheOldestTaskThatCarriesIt(t *testing.T) {
 	}
 }
 
-// A TASK TOLD AGAIN POINTS ONLY TO THE ROUNDS ITS LEDGER LISTS. The answers a
-// task told again carries are told as its brief told them: a held call one of
-// them answered, made in a round the task's own prior-work ledger lists, is
-// pointed to among that round's calls there, never told twice. A round closed
-// after that brief was built is in no ledger the task renders, nor in any list
-// of the brief that tells it again, which says only the round's review: a call
-// made in it is told with what it returned, since pointed to a list the brief
-// does not hold, what became of it would be told nowhere.
+// A TASK TOLD AGAIN POINTS ONLY TO THE ROUNDS ITS LEDGER LISTS. A held call one
+// of its answers answered, made in a round the task's own prior-work ledger
+// lists, is pointed to among that round's calls, never told twice. A round
+// closed after that brief was built is listed nowhere the brief renders (only
+// its review is), so a call made in it is told with what it returned, or what
+// became of it would be told nowhere.
 //
 // Mutation: point the answers of a task told again to every closed round of
 // the turn, or to none, and a case goes red.
@@ -437,9 +405,8 @@ func TestATaskToldAgainPointsOnlyToTheRoundsItsLedgerLists(t *testing.T) {
 	const pointer = "The call was made once: it is among round 1's calls, under Iteration 1"
 	cutOff := keptBasis
 	cutOff.Interrupted = true
-	// leadsOf is the resume of the leads a base continuation of round round
-	// left beside the run's record, its brief rendering rounds closed rounds:
-	// round 1's held call made for job-2 before it, then its own task.
+	// leadsOf is the resume a base continuation of round left, its brief
+	// rendering rounds closed rounds: round 1's held call for job-2, then its task.
 	leadsOf := func(round, rounds int) runner.Resume {
 		held := heldAnswer()
 		held.Job, held.Seq = "job-2", 2
@@ -452,9 +419,9 @@ func TestATaskToldAgainPointsOnlyToTheRoundsItsLedgerLists(t *testing.T) {
 		again       func(t *testing.T) runner.AgentRunRequest
 		says, never []string
 	}{
-		// The base continuation was the send-back of round 1, its task's
-		// ledger rendering round 1, which its held call was made in; an
-		// answer then carried round 2 on in that capture, cut off.
+		// The base continuation was round 1's send-back, its ledger rendering
+		// round 1, where the held call was made; an answer then carried round 2
+		// on in that capture, cut off.
 		"a round its ledger lists": {
 			again: func(t *testing.T) runner.AgentRunRequest {
 				resume := leadsOf(2, 1)
@@ -464,9 +431,9 @@ func TestATaskToldAgainPointsOnlyToTheRoundsItsLedgerLists(t *testing.T) {
 			},
 			says:  []string{"### Iteration 1", pointer},
 			never: []string{"returned", "posted to #eng"}},
-		// The base continuation carried round 1 on after the job that made
-		// the held call was lost, its task's ledger rendering no round; a
-		// review then sent round 1 back, into that capture, cut off.
+		// The base continuation carried round 1 on after the held call's job
+		// was lost, its ledger rendering no round; a review then sent round 1
+		// back into that capture, cut off.
 		"a round closed after its brief": {
 			again: func(t *testing.T) runner.AgentRunRequest {
 				return sentBackOf(t, leadsOf(1, 0), &probingLauncher{basis: cutOff}, "the post needs a link")
@@ -497,10 +464,9 @@ func TestATaskToldAgainPointsOnlyToTheRoundsItsLedgerLists(t *testing.T) {
 }
 
 // AN EARLIER ANSWER'S APPROVED CALL IS LISTED NOWHERE ELSE. A person approved a
-// held call for an earlier job of the round, and its answer tells what the call
-// returned: the fresh run carrying the round on is told the answer, and the
-// round's calls without that call, as no list tells the call a lead tells, or
-// one call is told twice.
+// held call for an earlier job of the round: the fresh run is told the answer,
+// with what the call returned, and the round's calls without it, or the call is
+// told twice.
 //
 // Mutation: list every call but the one the reseed's own lead tells, and the
 // approved call is told twice.
@@ -523,20 +489,16 @@ func TestAFreshRunsEarlierHeldAnswerListsItsCallNowhereElse(t *testing.T) {
 	}
 }
 
-// AN EARLIER ROUND'S HELD CALL IS TOLD ONCE IN A FRESH BRIEF. A person answered a
-// held call in round 1, a review sent the round back, and round 2 starts a
-// session of its own, carried on afresh or as the send-back's own fresh run: its
-// brief lists round 1's calls as work already done, which a list keeps no held
-// call's id to leave out by. So the answer of a call that was made, whether or
-// not what it returned opens here, says the person's choice and points to that
-// list, which says how the call ended, rather than tell its outcome a second
-// time, as a call of its own. The answer of a call that was never made, or whose
-// outcome nobody knows, tells what became of it, as no line of that list does,
-// and never that it was made.
+// AN EARLIER ROUND'S HELD CALL IS TOLD ONCE IN A FRESH BRIEF. A person answered
+// a held call in round 1, a review sent it back, and round 2 starts afresh,
+// carried on or as the send-back's run: its brief lists round 1's calls, a list
+// keeping no held call's id to leave one out by. So a made call's answer, its
+// result opened here or not, says the choice and points to that list rather
+// than tell the outcome twice; a call never made, or of unknown outcome, tells
+// what became of it, as no line of the list does, and never that it was made.
 //
-// Mutation: tell a made call's outcome in its answer, on either path, its result
-// opened here or not, or point to the list for a call that was not made, and a
-// case goes red.
+// Mutation: tell a made call's outcome in its answer on either path, opened
+// here or not, or point to the list for a call not made, and a case goes red.
 func TestAnEarlierRoundsHeldCallIsToldOnceInAFreshBrief(t *testing.T) {
 	t.Parallel()
 	const review = "the post needs a link"
@@ -621,14 +583,12 @@ func TestAnEarlierRoundsHeldCallIsToldOnceInAFreshBrief(t *testing.T) {
 }
 
 // A FRESH RUN'S EARLIER ANSWERS ARE FENCED UNDER ITS TOKEN. A chat reply that
-// carried an earlier job on is somebody's words, so the fresh run reads it as
-// the answer carrying its round on now is read: inside a fence of the
-// relaunching segment's token, the one token every fence of its brief is
-// under, labelled with who wrote it, and nothing in it opens or closes one, a
-// send-back's fresh run as much as one carrying a round on; an answer by turn
-// is its answerer's instruction, defused and never fenced (ADR-0040,
-// ADR-0068). Each case's turn carries a token of its own, so a fence under any
-// other token, however valid, is told apart from the turn's.
+// carried an earlier job on is somebody's words: it is fenced under the
+// relaunching segment's token, the one every fence of its brief uses, labelled
+// with its writer, nothing in it opening or closing a fence, on a send-back
+// too; an answer by turn is its answerer's instruction, defused and never
+// fenced (ADR-0040, ADR-0068). Each case has a token of its own, so a fence
+// under any other, however valid, is told apart.
 //
 // Mutation: tell a chat reply with no label, or under any token but the turn's,
 // on either path, and a case goes red.
@@ -643,9 +603,8 @@ func TestAFreshRunsEarlierAnswersAreFencedUnderItsToken(t *testing.T) {
 		reply.Answer.Label, reply.Answer.By = &label, ""
 		return toldLead(reply)
 	}
-	// fenced reports why section does not tell each of words, in order, in a
-	// fence of its own under token, the relaunching turn's, labelled as it was,
-	// with none of their words outside them; "" where it does.
+	// fenced reports why section does not tell each of words, in order, in its
+	// own labelled fence under the turn's token, none of them outside; "" if it does.
 	fenced := func(section string, token provenance.Boundary, words ...string) string {
 		fences := provenance.Fences(section, token)
 		if first := fenceToken(section); first != token || len(fences) != len(words) {
@@ -699,13 +658,11 @@ func TestAFreshRunsEarlierAnswersAreFencedUnderItsToken(t *testing.T) {
 }
 
 // WHAT A FRESH RUN CANNOT BE TOLD OF THE TURN'S ANSWERS IS SAID. An answer whose
-// lead does not open on the node building the brief is said in its place, as
-// one that cannot be read here; and the earlier messages that cannot be told,
-// past the bound or because the store could not give them back, are counted as
-// not kept to tell, any answer among them told as not told, even where no
-// answer is left: never as messages the engine no longer keeps, which a read
-// that failed does not make true, and never left unsaid, which would leave the
-// run to take the answers it is told for every one.
+// lead does not open on the node building the brief is said as one that cannot
+// be read here; earlier messages past the bound or a failed store read are
+// counted as not kept to tell, even where no answer is left: never as no longer
+// kept, which a failed read does not make true, and never left unsaid, which
+// would leave the run taking the answers it is told for every one.
 //
 // Mutation: skip an answer that did not open, leave the cut unsaid, or say it
 // as no longer kept, and a case goes red.

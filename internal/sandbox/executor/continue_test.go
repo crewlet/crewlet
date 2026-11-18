@@ -18,10 +18,9 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// The run that continues a turn's session, on a real box and under the run's
-// own script: which brief its harness reads, what is restored over what, the
-// transcript cut back to its last whole record, and the environment a
-// continued session runs in.
+// Continuing a turn's session, on a real box under the run's own script: the
+// brief its harness reads, what is restored over what, torn transcripts cut
+// back, and the environment a continued session runs in.
 
 // briefHarness is [sessionHarness] that also records the brief it was handed
 // on its stdin, in the box's home.
@@ -38,13 +37,12 @@ func briefBox(t *testing.T, release string) (*executor.Runner, sandbox.Sandbox) 
 	return runner, box
 }
 
-// A RUN THAT CANNOT CONTINUE ITS SESSION IS HANDED THE FRESH BRIEF. Whether a
-// session is taken up is decided in the box, by its script — the session may be
-// neither held there nor restorable — so a run asked to continue one carries
-// the brief a session of its own needs beside the one that continues: its
-// harness reads the continuation where it takes the session up, and the fresh
-// brief where its script started a new session in the session's place, so a
-// new session never answers a brief written for a model that remembers.
+// A RUN THAT CANNOT CONTINUE ITS SESSION IS HANDED THE FRESH BRIEF. The box's
+// script decides whether the session is taken up (it may be neither held nor
+// restorable), so a continuing run carries both briefs: its harness reads the
+// continuation where the session is taken up and the fresh brief where the
+// script started a new one, so a new session never answers a brief written for
+// a model that remembers.
 //
 // Mutation: hand the harness the continuation whatever its restore came to, or
 // the fresh brief where it continued, and a row goes red.
@@ -73,9 +71,8 @@ func TestARunThatCannotContinueItsSessionIsHandedTheFreshBrief(t *testing.T) {
 }
 
 // AN OPENCODE RUN THAT CANNOT CONTINUE ITS SESSION READS THE FRESH BRIEF, under
-// every sh a box may run its script with: `opencode run` reads the brief the
-// script points its stdin at, the continuation where the box holds the session
-// and the fresh brief where the script starts the session minted in its place.
+// every sh: `opencode run` reads the brief the script points its stdin at, the
+// continuation where the box holds the session and the fresh brief otherwise.
 //
 // Mutation: leave the script's stdin on the continuation after it starts anew,
 // and the fallback row goes red.
@@ -105,9 +102,9 @@ func TestAnOpenCodeRunThatCannotContinueItsSessionReadsTheFreshBrief(t *testing.
 	})
 }
 
-// wiredHarness is [sessionHarness] that also records, as it starts, the MCP
-// configuration it was pointed at, and whether the configuration of the other
-// session was still beside it in the box: what the run's model could read.
+// wiredHarness is [sessionHarness] that also records the MCP configuration it
+// started on, and whether the other session's was still beside it: what the
+// run's model could read.
 func wiredHarness(release string) string {
 	return strings.Replace(sessionHarness(release), "for a; do printf",
 		`prev=; for a; do if [ "$prev" = --mcp-config ]; then cp "$a" "$HOME/mcp-seen"; `+
@@ -122,22 +119,16 @@ func bridgeAt(token string) map[string]sandbox.MCPServer {
 }
 
 // A RUN IS WIRED TO THE SESSION ITS BOX STARTED, AND ITS BOX HOLDS NO OTHER
-// TOKEN. A run that continues a session is handed the seat's tools under two
-// bridge tokens: that session's, and one for a session of its own. Where its
-// box takes the session up, its harness starts on the first; where the session
-// is neither held nor restorable, on the second — so the token it dials is its
-// box's word to the bridge on which session it started. Either way the other is
-// gone from the box before the harness starts, so nothing the run's model reads
-// hands it the token of a session it is not in. AND THE RUN'S START NAMES BOTH
-// SESSIONS AS ITS HARNESS RUNS THEM: the one it continues, which a box that took
-// it up ran, and the one its script starts of its own, which a box that fell
-// back ran — what a relaunch carrying the job's round on in its box reads which
-// session that box holds from ([sandbox.PendingRun.SessionRan]).
+// TOKEN. A continuing run gets two bridge tokens, the continued session's and
+// a fresh one's; its harness starts on the one for the session its box started
+// (the box's word to the bridge on which that is), and the other is gone from
+// the box first, so the model never reads a token of a session it is not in.
+// AND THE RUN'S START NAMES BOTH SESSIONS, which a relaunch in the same box
+// reads to learn which one it holds ([sandbox.PendingRun.SessionRan]).
 //
 // Mutation: start the harness on the continued session's token whatever its
-// restore came to, leave the other configuration in the box, or name in the
-// run's handle a session of its own other than the one its script starts, and a
-// row goes red.
+// restore came to, leave the other configuration in the box, or name a fresh
+// session other than the one the script starts, and a row goes red.
 func TestARunIsWiredToTheSessionItsBoxStarted(t *testing.T) {
 	t.Parallel()
 	runner, box := realBox(t)
@@ -189,13 +180,12 @@ func (b strippedBox) StartBackground(ctx context.Context, cmd string, opts sandb
 	return b.Sandbox.StartBackground(ctx, cmd, opts)
 }
 
-// A CLAUDE CODE RUN WHOSE FRESH WIRING IS MISSING DOES NOT START. Every run that
-// continues a session is written both wirings of the seat's tools, so a run
-// whose box falls back to a session of its own and finds only the continued
-// session's is one whose start did not finish writing the other: it ends before
-// its harness starts, saying so — never started on the continued session's
-// token, which would tell the bridge it took that session up and arm the guard
-// with skills the new session never read.
+// A CLAUDE CODE RUN WHOSE FRESH WIRING IS MISSING DOES NOT START. A continuing
+// run is always written both wirings, so a fall back that finds only the
+// continued one means its start did not finish: it ends before its harness
+// starts, saying so. Started on the continued token, it would tell the bridge
+// it took that session up and arm the guard with skills the new session never
+// read.
 //
 // Mutation: carry on past a move that failed, and the harness starts on the
 // continued session's wiring.
@@ -220,11 +210,9 @@ func TestAClaudeCodeRunWhoseFreshWiringIsMissingDoesNotStart(t *testing.T) {
 }
 
 // AN OPENCODE RUN IS WIRED TO THE SESSION ITS BOX STARTED, AND ITS BOX HOLDS NO
-// OTHER TOKEN, under every sh a box may run its script with: the run's server
-// starts on the configuration's values under the continued session's token
-// where the box holds the session, and on those under a session of its own's
-// where it starts one — the other set gone from the box before the server
-// starts, which is what reads them.
+// OTHER TOKEN, under every sh: its server starts on the values under the
+// continued session's token where the box holds the session and on the fresh
+// set where it starts one, the other set gone before the server reads them.
 //
 // Mutation: start the server on the continued session's values whatever the
 // gate came to, or leave the other set in the box, and a row goes red.
@@ -259,8 +247,8 @@ func TestAnOpenCodeRunIsWiredToTheSessionItsBoxStarted(t *testing.T) {
 }
 
 // AN OPENCODE RUN WHOSE CONFIGURATION NAMES NO VALUE STARTS ON IT AS IT IS,
-// whichever session its box started: with neither set of values written, a fall
-// back has nothing to swap, and finding nothing is no reason to end the run.
+// whichever session its box started: with no values written a fall back has
+// nothing to swap, which is no reason to end the run.
 //
 // Mutation: move the other set over the first whether or not there is one, and
 // the fall back ends the run before its server starts.
@@ -276,13 +264,11 @@ func TestAnOpenCodeRunWithNoValuesStartsOnItsConfigurationAsItIs(t *testing.T) {
 	}
 }
 
-// AN OPENCODE RUN WHOSE OTHER VALUES ARE MISSING DOES NOT START. Every run whose
-// configuration names a value is written both sets, file for file, so a run
-// whose box falls back to a session of its own and finds only the continued
-// session's values is one whose start did not finish writing the other: it
-// ends before its server starts, saying so — never started on the continued
-// session's values, nor with them deleted and none in their place, a server
-// reaching none of the seat's tools.
+// AN OPENCODE RUN WHOSE OTHER VALUES ARE MISSING DOES NOT START. A run whose
+// configuration names a value is written both sets, so a fall back finding only
+// the continued session's means its start did not finish: it ends before its
+// server starts, saying so, rather than start on the continued values or on
+// none (a server reaching none of the seat's tools).
 //
 // Mutation: swap the sets without asking whether the other is there, and the
 // server starts on no values at all.
@@ -301,12 +287,11 @@ func TestAnOpenCodeRunWhoseOtherValuesAreMissingDoesNotStart(t *testing.T) {
 }
 
 // AN OPENCODE RUN THAT CONTINUES A SESSION IS CONFIGURED FOR EITHER SESSION ITS
-// BOX STARTS. Its configuration names every value by a reference into its values
-// directory, and the same values under the job's other bridge token are written
-// beside them under the same names, so the one configuration reads either set,
-// which the run's script moves into place for the session it starts. Two
-// wirings that would not be one configuration — another server, or the notes
-// route on one alone — are refused rather than started on the wrong values.
+// BOX STARTS. Its configuration names every value by reference into its values
+// directory, and the other bridge token's values are written beside them under
+// the same names, so one configuration reads whichever set the script moves
+// into place. Two wirings that are not one configuration (another server, or
+// the notes route on one alone) are refused rather than started wrong.
 //
 // Mutation: write the other set over the first, write it nowhere, or let two
 // wirings that are not one configuration through, and a case goes red.
@@ -346,10 +331,9 @@ func TestAnOpenCodeRunThatContinuesASessionIsConfiguredForEither(t *testing.T) {
 	}
 }
 
-// A SECOND WIRING IS A CONTINUING RUN'S ALONE. A run that starts a session of
-// its own has one session, and a second token written into its box would be one
-// its model could read and dial as a session it is not in: the runner refuses
-// to start it.
+// A SECOND WIRING IS A CONTINUING RUN'S ALONE. A run starting its own session
+// has one session; a second token in its box is one its model could dial as a
+// session it is not in, so the runner refuses to start it.
 //
 // Mutation: start a run that continues nothing with a second wiring, and its box
 // holds another token of the job.
@@ -364,11 +348,10 @@ func TestASecondWiringIsAContinuingRunsAlone(t *testing.T) {
 }
 
 // A SESSION ITS HARNESS WAS CUT OFF IN IS RESTORED OVER THE BOX'S OWN COPY. The
-// capture of a job that did not exit cleanly was packed by the engine, and the
-// box's copy may hold what its harness never finished — or what it went on to
-// do after the capture, which the continuation lists instead — so the archive
-// replaces the copy even where the box holds the archive's digest; a capture
-// taken at a clean exit keeps a copy that holds it.
+// copy may hold what the harness never finished, or work after the capture
+// (which the continuation lists instead), so the archive replaces it even where
+// the box holds the archive's digest; a capture taken at a clean exit keeps a
+// copy that holds it.
 //
 // Mutation: keep a copy that holds the archive whatever was asked, and the
 // box's own line survives.
@@ -404,9 +387,8 @@ func TestACutOffSessionIsRestoredOverTheBoxsOwnCopy(t *testing.T) {
 }
 
 // AN OPENCODE SESSION ITS RUN WAS CUT OFF IN IS IMPORTED OVER THE BOX'S COPY,
-// under every sh: the copy is deleted and the export imported though the box
-// keeps the export's digest — an export holds only settled messages, and the
-// copy may hold a step that never settled.
+// under every sh, even where the box keeps the export's digest: an export holds
+// only settled messages, and the copy may hold a step that never settled.
 //
 // Mutation: keep a copy that holds the export whatever was asked, and the
 // import never happens.
@@ -432,10 +414,8 @@ func TestACutOffOpenCodeSessionIsImportedOverTheBoxsCopy(t *testing.T) {
 }
 
 // A TRANSCRIPT CUT OFF MID-LINE IS CUT BACK TO ITS LAST WHOLE RECORD BEFORE IT
-// IS RESUMED. A harness killed while it appended leaves a line with no newline,
-// which no reader of a JSON-lines transcript can use; resumed as it is, the
-// next record would be written onto its end. The script cuts it, and a
-// transcript that ends whole is left as it is.
+// IS RESUMED: resumed as it is, the next record would be written onto the torn
+// line's end. A transcript that ends whole is left as it is.
 //
 // Mutation: resume the transcript as the box left it, and the torn line is
 // welded to the next run's first record.
@@ -488,34 +468,24 @@ func tornThreadsHarness(release string) string {
 }
 
 // threadsSeenHarness is [sessionHarness] that first copies the session's
-// sidecar directory, as its box handed it over, to `seen` in the box's home —
-// what a resumed harness reads of its subagents' threads before it writes a
-// line of its own.
+// sidecar directory to `seen` in the box's home: what a resumed harness reads
+// of its subagents' threads before it writes.
 func threadsSeenHarness(release string) string {
 	return strings.Replace(sessionHarness(release), `mkdir -p "$p/$s/subagents"`,
 		`cp -R "$p/$s" "$HOME/seen" 2> /dev/null; mkdir -p "$p/$s/subagents"`, 1)
 }
 
 // A RESTORE CUTS A TORN LAST LINE OF EVERY SUBAGENT THREAD, not only of the
-// session's transcript. A harness cut off while its subagents appended to their
-// threads — or a session packed while they did — ends those threads mid-line,
-// and resumed as they are, the record the harness next writes to such a thread
-// runs into its torn line and is lost with it (measured on Claude Code 2.1.310,
-// whose resume takes a thread cut back to its last whole line). So every
-// resume — of a session carried into a fresh box, and of the copy the box's own
-// last run left — has every `.jsonl` under the session's sidecar directory, at
-// any depth, cut back to its last whole line before its harness resumes it. A
-// thread that ends whole, a thread with no whole line at all — which 2.1.310
-// continues from nothing a restore could make of it (measured: a fragment, an
-// emptied file and a removed one alike are no transcript of the agent to it),
-// so no record is ever written onto its fragment — and a file that is no
-// thread are left as they are, the last line of a spilled result with no
-// newline among them.
+// session's transcript: a record written onto a torn thread is lost with it.
+// Every resume, of a carried session and of the box's own copy, cuts every
+// `.jsonl` under the sidecar directory, at any depth, to its last whole line.
+// A thread that ends whole, one with no whole line (2.1.310 continues it from
+// nothing whatever a restore makes of it), and a file that is no thread are
+// left as they are.
 //
-// Mutation: cut the session's own transcript alone, as the restore did, only
-// the threads one level down, or only a session restored from an archive, and
-// a torn thread is resumed as it was; empty a thread with no whole line, or
-// remove it, and its row goes red; cut every file rather than every thread,
+// Mutation: cut only the session's transcript, only threads one level down,
+// or only a carried session, and a torn thread is resumed as it was; empty or
+// remove a thread with no whole line, and its row goes red; cut every file,
 // and the spilled result loses its last line.
 func TestARestoreCutsATornLastLineOfEverySubagentThread(t *testing.T) {
 	t.Parallel()
@@ -580,18 +550,14 @@ func boxHas(t *testing.T, box sandbox.Sandbox, path string) bool {
 	return res.ExitCode == 0
 }
 
-// A CONTINUED CLAUDE CODE SESSION RUNS UNDER THE ENGINE'S WINDOW. Every run
-// compacts at the window of its model (sandbox.ClaudeCodeWindow), less the
-// harness's own headroom, whatever the seat's environment set: a window of its
-// own, compaction switched off altogether (DISABLE_AUTO_COMPACT,
-// DISABLE_COMPACT), or the point it compacts at moved
-// (CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE). So no
-// request of it, or of a run that continues it, carries more, nor is compacted
-// at a point the engine does not reckon with. The settings file its harness is
-// handed pins the same window and blanks the two overrides too, which a
-// repository's own settings would otherwise set again once the harness has
-// started; its `env` block is the whole pin, the switches a resume is started
-// without blank beside them (TestAResumeUnsetsWhatMovesWhatItHandsItsModel).
+// A CONTINUED CLAUDE CODE SESSION RUNS UNDER THE ENGINE'S WINDOW: it compacts
+// at sandbox.ClaudeCodeWindow less the harness's headroom whatever the seat
+// set (its own window, DISABLE_AUTO_COMPACT, DISABLE_COMPACT,
+// CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE), so no
+// request carries more or compacts where the engine does not reckon. Its
+// settings' `env` block, the whole pin, holds the same window with both
+// overrides and a resume's switches blank, against a repository's own
+// settings (TestAResumeUnsetsWhatMovesWhatItHandsItsModel).
 //
 // Mutation: drop the window from the pins or a variable from the unsets, or
 // hand 2.1.310 the settings without the pin, and the harness's environment or
@@ -639,29 +605,18 @@ func TestAContinuedClaudeSessionRunsUnderTheEnginesWindow(t *testing.T) {
 	}
 }
 
-// A RESUME UNSETS WHAT MOVES WHAT IT HANDS ITS MODEL, on every release, and
-// the settings a release that takes the pin is handed blank the same, under
-// every sh a box may run the script with. Its harness starts without
-// CLAUDE_CODE_RESUME_INTERRUPTED_TURN, which would have the resume run the turn
-// its last process was cut off in again before it reads this run's brief,
-// repeating a call that may have run already; without
-// CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP, which would have the resume of a
-// transcript past 5 MiB read it by another rule, one that can hand the model
-// other records; and without CLAUDE_CODE_REMOTE, which no run starts with:
-// whatever the seat's environment set. And since a repository's own settings
-// could switch either of the first two on again before the session is
-// resumed, the settings 2.1.310 is handed, the pinned copy, name both, blank.
-// 2.1.309, older than the pin's floor, is handed the settings with no `env`
-// block, and still resumes the session its box holds, which no release floor
-// gates: the script's unset is all that keeps the seat's switches from that
-// resume. Played on a real box whose seat's environment sets all three, the
-// harness a stand-in of each release that records its argv and its
-// environment.
+// A RESUME UNSETS WHAT MOVES WHAT IT HANDS ITS MODEL, on every release and sh,
+// whatever the seat set: CLAUDE_CODE_RESUME_INTERRUPTED_TURN (reruns the
+// cut-off turn before the brief, repeating a call that may have run),
+// CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP (past 5 MiB reads the transcript by a
+// rule that can hand the model other records) and CLAUDE_CODE_REMOTE. A
+// repository's settings could set the first two again, so 2.1.310's pinned
+// settings name both, blank; 2.1.309, below the pin's floor, gets no `env`
+// block and still resumes, held only by the script's unset.
 //
-// Mutation: drop either switch from the resume's unsets, unset them on a
-// fresh start alone, or unset them only on a release that takes the pin, and a
-// resumed harness starts with it; leave either out of the pin, and the
-// settings 2.1.310 is handed leave it to the repository.
+// Mutation: drop either switch from the unsets, or unset them only on a fresh
+// start or only where the pin applies, and a resumed harness starts with it;
+// leave either out of the pin, and 2.1.310's settings leave it to the repo.
 func TestAResumeUnsetsWhatMovesWhatItHandsItsModel(t *testing.T) {
 	t.Parallel()
 	seat := map[string]string{"CLAUDE_CODE_RESUME_INTERRUPTED_TURN": "1", "CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP": "1",
@@ -745,11 +700,10 @@ func TestAResumeUnsetsWhatMovesWhatItHandsItsModel(t *testing.T) {
 	})
 }
 
-// usageHarness is a stand-in `claude` that files a session whose transcript
-// records two requests' usage on its main thread, each record saying it is no
-// sidechain as Claude Code's own do, then one on a subagent's sidechain and a
-// later assistant message that recorded none, each after the main thread's
-// last, and a person's message quoting the words "usage" and "assistant".
+// usageHarness is a stand-in `claude` whose transcript records two main-thread
+// requests' usage (isSidechain false, as Claude Code's own records say), then
+// a sidechain's and a later assistant message with none, and a person's
+// message quoting "usage" and "assistant".
 func usageHarness() string {
 	return `#!/bin/sh
 if [ "$1" = --version ]; then echo '2.1.310 (Claude Code)'; exit 0; fi
@@ -768,9 +722,9 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"done","s
 `
 }
 
-// openCodeTaken is the context the take of an OpenCode session whose export
-// holds messages (a JSON list) reads off the archive it streams out of its box:
-// the run's own take, through the stand-in opencode's export.
+// openCodeTaken is the context the run's own take of an OpenCode session reads
+// off the archive it streams out of its box, the stand-in's export holding
+// messages (a JSON list).
 func openCodeTaken(t *testing.T, messages string) int64 {
 	t.Helper()
 	runner, b := openCodeBox(t, t.TempDir())
@@ -802,19 +756,14 @@ func openCodeTaken(t *testing.T, messages string) int64 {
 	return taken.Context()
 }
 
-// WHAT A SESSION'S LAST REQUEST CARRIED IS READ OFF ITS ARCHIVE AS IT IS KEPT —
-// the context a launch that continues it sends again, which that launch's
-// floor is made of. Claude Code's: the whole input of the last assistant
-// message on the main thread that recorded its usage, cache reads and writes
-// included — never a subagent's, never a later message that recorded none.
-// OpenCode's: the last settled assistant message that measured a prompt,
-// never one that failed and never a compaction's own request — in the export
-// each release this build drives printed for a real session
-// (testdata/opencode) as much as in one written here: there the last step that
-// measured one is the answer to "Carry on.", 1015 tokens its cache did not
-// serve and 200 it read, and every step after it failed — one its provider
-// refused, which measured nothing, and two the session was interrupted in, the
-// first of which measured 1217.
+// WHAT A SESSION'S LAST REQUEST CARRIED IS READ OFF ITS ARCHIVE AS IT IS KEPT:
+// the context a continuing launch sends again, its floor. Claude Code's is the
+// whole input, cache included, of the last main-thread assistant message that
+// recorded usage, never a subagent's or a later one that recorded none.
+// OpenCode's is the last settled assistant message that measured a prompt,
+// never a failed one or a compaction's request, in a written export as in each
+// release's real one (testdata/opencode: the answer to "Carry on.", 1015 tokens
+// uncached and 200 read; every later step failed, one measuring 1217).
 //
 // Mutation: read the first usage rather than the last, count a sidechain, a
 // failed message or a compaction, or leave the cache out, and a figure goes
@@ -842,9 +791,9 @@ func TestTheContextASessionCarriesIsReadOffItsArchive(t *testing.T) {
 	})
 	t.Run("opencode", func(t *testing.T) {
 		t.Parallel()
-		// A COMPACTION CARRIES TOKENS TOO, as each of the real exports' does:
-		// its own request's, which measured the conversation it summarised
-		// and not the context the session carries on with.
+		// A COMPACTION CARRIES TOKENS TOO, as each real export's does: its own
+		// request's, measuring the conversation it summarised, not the context
+		// the session carries on with.
 		messages := `[{"id":"msg_1","type":"user","text":"x"},` +
 			`{"id":"msg_2","type":"assistant","time":{"created":1,"completed":2},` +
 			`"tokens":{"input":10,"output":5,"reasoning":0,"cache":{"read":1000,"write":50}}},` +
@@ -877,8 +826,8 @@ func TestTheContextASessionCarriesIsReadOffItsArchive(t *testing.T) {
 
 // A RUNNER RESTORES ONLY WHAT IT COULD CONTINUE, decided without a box: a
 // session its own harness wrote, in the one format it packs, by a release whose
-// sessions another box continues — the answer every reader of whether a session
-// continues takes beside the launch, before the box's own release is asked.
+// sessions another box continues: what every reader of whether a session
+// continues asks before the box's own release is asked.
 //
 // Mutation: drop the writer's floor, or answer for another harness's session,
 // and a row goes red.
@@ -912,14 +861,12 @@ func TestARunnerRestoresOnlyWhatItCouldContinue(t *testing.T) {
 }
 
 // A CONTINUED OPENCODE RUN IS CONFIGURED WITH ITS OWN INSTRUCTIONS, as a fresh
-// one is. OpenCode keeps, per session, the instructions it last told the model,
-// and an import writes none of that state (session/transfer.ts at 2.0.32 and
-// 2.2.5), so the first request of a session carried into a box reads the run's
-// instruction file as the session's first: its system prompt is this run's
-// standing instructions, and no earlier launch's ride the conversation as
-// updates. What holds that on the engine's side is that a run continuing a
-// session is configured exactly as one starting one: its instruction file
-// named, and written afresh with its own instructions.
+// one is. An import writes none of OpenCode's per-session instruction state
+// (session/transfer.ts at 2.0.32 and 2.2.5), so a carried session's first
+// request reads the run's instruction file as its first: this run's
+// instructions are its system prompt, and no earlier launch's ride along as
+// updates. So a continuing run is configured exactly as a fresh one, its
+// instruction file named and written afresh.
 //
 // Mutation: configure a run that continues a session without its instruction
 // file, or leave an earlier run's in place, and this goes red.
@@ -950,12 +897,10 @@ func TestAContinuedOpenCodeRunIsConfiguredWithItsOwnInstructions(t *testing.T) {
 }
 
 // A HARNESS KILLED AFTER IT WROTE ITS SESSION IS SAID TO HAVE BEEN CUT OFF. The
-// run's script packs the session after its harness exits whatever the exit, so
-// a harness killed while its wrapper lived on — the signal a memory limit
-// sends — leaves an archive all the same, whose transcript ends wherever the
-// kill found it: the result says the harness did not exit cleanly, beside the
-// archive, for the capture to be kept as one cut off; and one that exited
-// cleanly says nothing of the kind.
+// script packs the session whatever the exit, so a harness killed under a
+// living wrapper (as a memory limit kills it) leaves an archive whose
+// transcript ends wherever the kill found it: the result says so beside the
+// archive, for the capture to be kept as cut off; a clean exit says nothing.
 //
 // Mutation: read the archive as whole whatever the harness's exit status, and
 // the killed row goes red.

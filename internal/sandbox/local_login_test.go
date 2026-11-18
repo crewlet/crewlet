@@ -13,10 +13,10 @@ import (
 	"github.com/crewlet/crewlet/internal/hostbox"
 )
 
-// The cases here hold a box to the SHARED LOGIN BEING ONE LOGIN: a harness that
-// keeps its login in two files — kimi-code's token beside its config.toml,
-// gemini-cli's token beside the account it names — is seeded with both from
-// one sign-in and writes both back in one step, or neither.
+// These cases hold a two-file login (kimi-code's token beside its
+// config.toml, gemini-cli's token beside its account) to being ONE login: a box
+// is seeded with both from one sign-in and writes both back in one step, or
+// neither.
 
 // twoFileBox is a login of two files in a shared directory of the case's own,
 // mapped where a box keeps them: the map a harness entry hands a local box.
@@ -77,10 +77,8 @@ func boxHolds(t *testing.T, box Sandbox) map[string]string {
 	return out
 }
 
-// A BOX IS SEEDED WITH THE LOGIN A WRITE COMMITTED, never the half it left. A
-// writer killed between its two files left the new token beside the old
-// config.toml and its journal beside both, and the box seeded a file at a time
-// took the two from two sign-ins.
+// A BOX IS SEEDED WITH THE LOGIN A WRITE COMMITTED, never the half a writer
+// killed between its two files left beside its journal.
 //
 // Mutation: seed the box from the files as they lie, and it is handed half of
 // each login.
@@ -88,8 +86,8 @@ func TestABoxIsSeededWithTheLoginAWriteCommitted(t *testing.T) {
 	t.Parallel()
 	dir, files := twoFileBox(t)
 	putLogin(t, dir, signedIn("before"))
-	// What a writer killed between its two files leaves, made by the
-	// primitive itself in a directory of its own and moved into place.
+	// A writer killed between its two files, made by the primitive itself
+	// elsewhere and moved into place.
 	scratch := filepath.Join(t.TempDir(), "credentials")
 	writeFile(t, filepath.Join(scratch, "config.toml", "in-the-way"), "x")
 	after := map[string][]byte{}
@@ -115,10 +113,9 @@ func TestABoxIsSeededWithTheLoginAWriteCommitted(t *testing.T) {
 	}
 }
 
-// A BOX IS SEEDED WITH A WHOLE LOGIN OR NONE. One of its files cannot be placed
-// in the box — its path climbs out of the home — so the box is given neither:
-// handed the other alone, the harness starts on half a login and fails inside the
-// run in a way nothing outside it explains.
+// A BOX IS SEEDED WITH A WHOLE LOGIN OR NONE. One file's path climbs out of
+// the home, so the box is given neither: on half a login the harness fails
+// inside the run in a way nothing outside it explains.
 //
 // Mutation: seed the files that can be placed and skip the one that cannot,
 // and the box holds half a login.
@@ -156,10 +153,9 @@ func TestABoxWritesBackEveryFileItRefreshed(t *testing.T) {
 }
 
 // A BOX'S REFRESH IS WRITTEN ONLY OVER THE WHOLE LOGIN IT WAS SEEDED WITH. The
-// run refreshed the token while the host rewrote the config.toml beside it:
-// judged a file at a time, the token's file still held its seed and was
-// written back, and the shared login became the box's token beside the host's
-// config.toml — a login no harness wrote. The host's newer login is kept whole.
+// run refreshed the token while the host rewrote config.toml: judged a file at
+// a time, the token would land beside the host's config.toml, a login no
+// harness wrote. The host's newer login is kept whole.
 //
 // Mutation: compare each file the run changed with its own seed alone, and
 // the box's token lands beside the host's config.toml.
@@ -183,9 +179,8 @@ func TestABoxRefreshIsNeverWrittenBesideAnotherWritersFile(t *testing.T) {
 }
 
 // A FILE THE LOGIN GAINED WHILE THE BOX RAN IS A NEWER LOGIN TOO. The box was
-// seeded with the token alone; the host's login gained a config.toml
-// meanwhile, the token's file untouched. The box's refresh of the token is no
-// refresh of that login, and written beside it would make one no harness wrote.
+// seeded with the token alone and the host's login gained a config.toml; the
+// box's token written beside it would make a login no harness wrote.
 //
 // Mutation: record only the files a box was given, and the box's token is
 // written beside the host's new config.toml.
@@ -208,10 +203,8 @@ func TestABoxRefreshIsNeverWrittenOverALoginThatGainedAFile(t *testing.T) {
 	}
 }
 
-// A BOX OF A LOGIN NOBODY MADE IS GIVEN NOTHING. Every file of the login is
-// offered whether or not it is held, and the box is seeded with what the login
-// holds then — none of it here, so the harness inside answers its own plain "not
-// authenticated" rather than failing on a file that is not there.
+// A BOX OF A LOGIN NOBODY MADE IS GIVEN NOTHING, so the harness inside answers
+// its own plain "not authenticated" rather than failing on a missing file.
 func TestABoxOfALoginNobodyMadeIsGivenNothing(t *testing.T) {
 	t.Parallel()
 	_, files := twoFileBox(t)
@@ -227,10 +220,9 @@ func twoFileLogin(dir string, files map[string]string) boxLogin {
 	return boxLogin{dir: dir, files: files}
 }
 
-// A BOX SEED THAT STOPS PART WAY TAKES BACK WHAT IT PUT IN THE BOX. The second
-// file cannot be put where the box keeps it — something is in the way — after
-// the first was: handed the first alone, the harness starts on half a login and
-// fails inside the run in a way nothing outside it explains.
+// A BOX SEED THAT STOPS PART WAY TAKES BACK WHAT IT PUT IN THE BOX: the second
+// file is blocked after the first was written, and half a login fails inside
+// the run in a way nothing outside it explains.
 //
 // Mutation: drop seedLogin's removal of the files it had already written, and
 // the box holds the first file.
@@ -239,8 +231,8 @@ func TestABoxSeedThatStopsPartWayLeavesTheBoxNoFile(t *testing.T) {
 	dir, files := twoFileBox(t)
 	putLogin(t, dir, signedIn("whole"))
 	layout := boxLayout{id: "seed", root: t.TempDir()}
-	// The second file's place in the box is a directory, so writing it fails
-	// once the first file — sorted ahead of it — is in.
+	// A directory in the second file's place fails it after the first
+	// (sorted ahead) is in.
 	writeFile(t, filepath.Join(layout.home(), ".fake", "config.toml", "in-the-way"), "x")
 	if _, err := seedLogin(t.Context(), layout, twoFileLogin(dir, files)); err == nil {
 		t.Fatal("a seed whose second file could not be written reported success")
@@ -251,10 +243,8 @@ func TestABoxSeedThatStopsPartWayLeavesTheBoxNoFile(t *testing.T) {
 }
 
 // A BOX REFRESH WHOSE WRITE COMMITTED IS WRITTEN, even where the disk refused
-// one of its files: its journal landed, so it is the login of record and the
-// next reader of the shared directory puts it in place. Reported as a failed
-// write-back, the teardown said the refresh went nowhere while every seat was
-// about to be seeded with it.
+// one of its files: its journal landed, so it is the login of record, which
+// the next reader puts in place. A failed write-back would misreport it.
 //
 // NOT PARALLEL: it reads the process's log.
 //
@@ -273,8 +263,8 @@ func TestABoxRefreshThatCommittedIsWrittenThoughAFileWasRefused(t *testing.T) {
 		writeFile(t, filepath.Join(layout.home(), ".fake", name), body)
 	}
 	obstacle := filepath.Join(dir, "config.toml")
-	// The disk refusing config.toml once the write has committed: the
-	// obstacle goes down between the write-back's read and its write.
+	// The obstacle goes down between the write-back's read and its write, so
+	// config.toml is refused after the write commits.
 	refuseSecond := func(d string, names []string, login map[string][]byte) error {
 		if err := os.Remove(obstacle); err != nil {
 			return err

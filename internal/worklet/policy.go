@@ -10,15 +10,11 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// The company's ONE status set, and why nothing declares another.
-//
-// A status is a Go enum, so a task's status column means the same thing on
-// every node for the life of the deployment and two nodes at one checkpoint
-// cannot disagree about it. Nothing declares a set, nothing overrides one,
-// nothing remaps one and nothing retires a slug — which is what removes the
-// remap table, the lazy rewrite and the per-container set that a declarable
-// set drags behind it. What a company gains from custom statuses it can have
-// from a dropdown field; what it would lose is that sentence.
+// The company's ONE status set is a Go enum, so a status column means the same
+// thing on every node for the life of the deployment. Nothing declares,
+// overrides or remaps a set or retires a slug, which spares the remap table,
+// lazy rewrite and per-container set a declarable one needs; what custom
+// statuses would give, a dropdown field gives.
 
 // Status is one of the six.
 type Status string
@@ -32,20 +28,16 @@ const (
 	StatusInReview Status = "in_review"
 	// StatusDone is delivered.
 	StatusDone Status = "done"
-	// StatusCancelled is finished WITHOUT being delivered — abandoned, a
-	// duplicate, or closed without being delivered.
+	// StatusCancelled is finished WITHOUT being delivered: abandoned, a
+	// duplicate, or closed undelivered.
 	StatusCancelled Status = "cancelled"
 	// StatusClosed is totally completed and out of the way.
 	StatusClosed Status = "closed"
 )
 
-// DefaultType is the type a task takes when nothing names one.
-//
-// A PLAIN STRING and not an enum, because the type catalogue is the
-// WORKSPACE's: a company that files "incident" and "spike" is filing tasks
-// this build has never heard of, and a closed set here would refuse them. What
-// the constant is for is the one case that has no answer to fall back on — a
-// caller that named no type at all.
+// DefaultType is the type a task takes when nothing names one. A plain string,
+// not an enum: the type catalogue is the WORKSPACE's, and a closed set would
+// refuse a company's "incident" or "spike".
 const DefaultType = "task"
 
 // Statuses are the six, in the order a board renders them.
@@ -90,19 +82,11 @@ func (g StatusGroup) Finished() bool {
 }
 
 // openGroupsSQL is [StatusGroup.Open] as the `IN (…)` list an SQL predicate
-// takes, RENDERED FROM the closed set rather than typed again.
-//
-// The same sentence is asked in SQL five times — the open condition the
-// `due=overdue` alias carries, the two arms `show_closed` resolves to, the
-// workload's overdue count, and the first arm of the `due:bucket` grouping —
-// and once in Go, where [TaskRow.Overdue] is derived. Written out beside each
-// one, that is six copies of a predicate which has to mean exactly one thing:
-// a fifth status group added to [StatusGroups] would reach the Go copy and
-// none of the others, and every SQL one would then answer the old question
-// without saying so.
-//
-// It composes this package's own constants and nothing a caller typed, so it
-// is a literal by the time it reaches a statement.
+// takes, RENDERED FROM the closed set rather than typed again: the `due=overdue`
+// alias, the two `show_closed` arms, the workload's overdue count and the
+// `due:bucket` grouping all ask it, beside [TaskRow.Overdue] in Go, and a group
+// added to [StatusGroups] must reach every copy. It holds only this package's
+// constants, so it is safe to splice into a statement as a literal.
 var openGroupsSQL = openGroupList()
 
 // openGroupList renders the open half of [StatusGroups] as quoted values.
@@ -123,11 +107,9 @@ type statusRow struct {
 	description string
 }
 
-// statusTable is THE table, and the description is rendered to agents.
-//
-// A DESCRIPTION PER STATUS, because a status is chosen by meaning: a model
-// picking between "in_review" and "done" from the slugs alone picks by
-// spelling, and the difference between the two is a whole colleague's work.
+// statusTable is THE table. Its descriptions are rendered to agents, because a
+// model choosing between "in_review" and "done" from the slugs alone picks by
+// spelling.
 var statusTable = map[Status]statusRow{
 	StatusTodo: {"To do", GroupNotStarted,
 		"not started; nobody is working on it yet"},
@@ -146,41 +128,33 @@ var statusTable = map[Status]statusRow{
 // Label is the status as a person reads it.
 func (s Status) Label() string { return statusTable[s].label }
 
-// Group is the status's group, and it is COPIED onto every record that names
-// a status so the record is self-describing without a catalogue read.
+// Group is the status's group, COPIED onto every record that names a status so
+// the record is self-describing without a catalogue read.
 func (s Status) Group() StatusGroup { return statusTable[s].group }
 
 // Description is what an agent chooses by.
 func (s Status) Description() string { return statusTable[s].description }
 
-// Delivered is THE measurement predicate, and there is exactly one.
-//
-// Read by children_done, cycle and lead time and created-vs-resolved. NO BIT
-// IS STAMPED ANYWHERE: the status IS the verdict, so two nodes cannot disagree
-// about it
-// and no policy edit can re-decide it for work already finished. Every
-// "abandoned" path in this design simply writes cancelled, which is what
-// makes those tasks invisible to a delivery count without a second field.
+// Delivered is THE one measurement predicate, read by children_done, cycle and
+// lead time and created-vs-resolved. No bit is stamped: the status IS the
+// verdict, so nodes cannot disagree and no policy edit re-decides finished
+// work. Every abandoning path writes cancelled, which keeps it out of a
+// delivery count without a second field.
 func Delivered(s Status) bool {
 	return s.Group().Finished() && s != StatusCancelled
 }
 
-// Priority is ClickUp's fixed scale, always on.
-//
-// A company that wants P0..P4 declares a dropdown field. Making the scale
-// declarable would put a second ordering in the model with nothing to
-// reconcile it against the board's own.
+// Priority is ClickUp's fixed scale, always on. A company that wants P0..P4
+// declares a dropdown field: a declarable scale would be a second ordering
+// with nothing to reconcile it against the board's.
 type Priority string
 
 // The five, lowest first. THE DECLARATION ORDER IS THE SCALE: [Priority.Rank]
-// is an index into [Priorities], so every sort and every comparison reads the
-// ordering from that one list rather than from a second table that could drift
-// from it.
+// is an index into [Priorities], so no second table can drift from it.
 const (
-	// PriorityNone is the default and is a real value rather than an
-	// absent one: "nobody has said" and "explicitly not urgent" are the
-	// same fact here, and a nullable priority would make every filter
-	// carry a null case for no gain.
+	// PriorityNone is the default, a real value rather than an absent
+	// one: "nobody has said" and "not urgent" are the same fact here, and
+	// a nullable priority would give every filter a null case.
 	PriorityNone   Priority = "none"
 	PriorityLow    Priority = "low"
 	PriorityNormal Priority = "normal"
@@ -199,14 +173,10 @@ func (p Priority) Valid() bool { return slices.Contains(Priorities, p) }
 // Rank orders the scale for sorting, none lowest.
 func (p Priority) Rank() int { return slices.Index(Priorities, p) }
 
-// The two slug grammars.
-//
-// TWO RATHER THAN ONE, and the difference is the separator: a status, a type
-// and a field are IDENTIFIERS a tool argument names, so they take underscores
-// and read as one word; a tag is a LABEL people write in prose and copy from
-// each other, so it takes hyphens and digits at the front. Merging them would
-// mean either accepting "in-progress" as a status or refusing "v2-api" as a
-// tag, and both have been asked for.
+// The two slug grammars: a status, type or field is an IDENTIFIER a tool
+// argument names, so it takes underscores; a tag is a LABEL people write in
+// prose, so it takes hyphens and a leading digit. One grammar would either
+// accept "in-progress" as a status or refuse "v2-api" as a tag.
 var (
 	// Compiled at first use, not at init: Gitlet's push hook is this
 	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
@@ -226,28 +196,23 @@ func ValidSlug(s string) bool { return slugPattern().MatchString(s) }
 // ValidTagSlug reports a well-formed tag slug.
 func ValidTagSlug(s string) bool { return tagPattern().MatchString(s) }
 
-// A SLUG IS IMMUTABLE. A rename changes the label and never the slug, because
-// a slug is what a stored value, a saved view's parameters and a year of
-// history all point at — and a rename that moved it would silently re-point
-// every one of them at nothing.
+// A SLUG IS IMMUTABLE: a rename changes the label only, because stored values,
+// saved views and history point at the slug, and moving it would re-point them
+// all at nothing.
 
-// Named is anything a caller may address by slug or by label.
-//
-// AN INTERFACE THE CALLER SATISFIES rather than four near-identical resolvers,
-// because the resolution ORDER is the part that has to be identical: a tag, a
-// type, a field and an option are all "the thing the model typed", and four
-// copies of a three-tier fallback is four chances to put case-insensitivity
-// before an exact match.
+// Named is anything a caller may address by slug or by label. One interface
+// for tags, types, fields and options, rather than four resolvers, because the
+// resolution ORDER must be identical, and each copy is a chance to put
+// case-insensitivity before an exact match.
 type Named interface {
 	// Ident is the stable slug or id, and Label is what a person reads.
 	Ident() string
 	Label() string
 }
 
-// ErrAmbiguous reports a query that matched two candidates at one tier.
-//
-// IT NAMES BOTH, because the caller is usually a model with one round left:
-// "ambiguous" sends it guessing, and "api or apis" is something it can act on.
+// ErrAmbiguous reports a query that matched two candidates at one tier. It
+// names both, because the caller is usually a model: "ambiguous" sends it
+// guessing, and "api or apis" is something it can act on.
 type ErrAmbiguous struct {
 	Query   string
 	Matches []string
@@ -258,16 +223,11 @@ func (e *ErrAmbiguous) Error() string {
 		e.Query, words.And(e.Matches))
 }
 
-// Resolve finds the one candidate a query names.
-//
-// THREE TIERS, EARLIER ONES SHORT-CIRCUITING LATER: an exact slug, then an
-// exact label, then a case-insensitive label. The order is the whole content
-// of the rule — a query that IS somebody's slug must never be fuzzy-matched
-// against everybody else's label, which is how "api" resolves to "apis" on a
-// company that has both.
-//
-// Two matches at ONE tier is ambiguous and is refused naming both; a match at
-// an earlier tier settles it whatever the later tiers hold.
+// Resolve finds the one candidate a query names, in three tiers, an earlier
+// one settling it whatever later ones hold: an exact slug, an exact label, a
+// case-insensitive label. A query that IS somebody's slug must never be
+// fuzzy-matched against another's label. Two matches at one tier are refused
+// as [ErrAmbiguous].
 func Resolve[T Named](query string, candidates []T) (T, error) {
 	var zero T
 	q := strings.TrimSpace(query)

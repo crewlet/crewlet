@@ -12,20 +12,13 @@ import (
 
 // A NODE IN A MAINTENANCE MODE IS PRESENT AND RUNS NOTHING THAT WRITES.
 //
-// It keeps its presence lease, because the process IS running and three things
-// read that during a window: the capacity operation's participant set, the
-// estate's routing of a stateless node's reads, and the fleet views. The lease
-// says what its broker is, which is the only record a broker member holding no
-// data leaves for the participant set to find it by.
+// It keeps its presence lease, whose broker field is the only record a broker
+// member holding no data leaves for the capacity participant set. It claims no
+// seat however many sweeps run, no surface is handed its writers, and its
+// reads are still served.
 //
-// It claims no seat however many sweeps run, and no surface is handed its
-// writers — a seat's turns, the operator's MCP, the purge route and the chart's
-// apply would each be a publish into a log whose usage a resize is being
-// decided against. Its reads are still served.
-//
-// The normal-mode node beside it is built identically and does all of it,
-// which is what makes each absence evidence rather than a fixture that could
-// never have produced one.
+// The normal-mode node beside it is built identically and does all of it, so
+// each absence is evidence rather than a fixture that could never produce one.
 func TestAMaintenanceModeNodeIsPresentAndRunsNothingThatWrites(t *testing.T) {
 	t.Parallel()
 	for _, mode := range statelog.MaintenanceModes {
@@ -70,9 +63,8 @@ func TestAMaintenanceModeNodeIsPresentAndRunsNothingThatWrites(t *testing.T) {
 				}
 				return
 			}
-			// EVERY SWEEP A WINDOW COULD RUN, driven here rather than
-			// waited for: the first ran inside Start, and a gate that
-			// opened on a later one would claim there.
+			// Later sweeps driven rather than waited for (the first ran
+			// in Start): a gate that opened on one would claim there.
 			for range 3 {
 				host.Sweep(t.Context())
 			}

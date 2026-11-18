@@ -30,12 +30,8 @@ func handles(cands []routing.Candidate[worklet.Reason]) []string {
 	return out
 }
 
-// A QUIET COMMIT CONCERNS NOBODY, ON BOTH SURFACES.
-//
-// The translator acks a quiet commit so the feed never routes one, and the
-// applier calls this same function — so a quiet walk must leave no
-// notification row either. Without that one rule the two surfaces disagree and
-// an inbox fills with changes the company deliberately did not announce.
+// A QUIET COMMIT CONCERNS NOBODY, ON BOTH SURFACES: the feed never routes
+// one, and the applier, calling this same function, writes no row for it.
 func TestAQuietCommitConcernsNobody(t *testing.T) {
 	t.Parallel()
 	if got := worklet.Candidates(nil); got != nil {
@@ -43,10 +39,8 @@ func TestAQuietCommitConcernsNobody(t *testing.T) {
 	}
 }
 
-// THE FIRST REASON PER HANDLE WINS.
-//
-// A person who is mentioned AND watching is told they were mentioned, which is
-// the stronger fact and the one they will act on.
+// THE FIRST REASON PER HANDLE WINS: mentioned AND watching is told
+// "mentioned", the stronger fact.
 func TestTheFirstReasonPerHandleWins(t *testing.T) {
 	t.Parallel()
 	cands := worklet.Candidates(&worklet.Notify{
@@ -75,9 +69,8 @@ func TestTheFirstReasonPerHandleWins(t *testing.T) {
 	}
 }
 
-// A MENTION AND A NEW ASSIGNEE ARE ADDRESSED: each is somebody the change
-// asks something of, and an addressed wake is one a turn is required to
-// answer.
+// A MENTION AND A NEW ASSIGNEE ARE ADDRESSED: the change asks each of them
+// something, so the turn must answer.
 func TestAMentionAndANewAssigneeAreAddressed(t *testing.T) {
 	t.Parallel()
 	n := &worklet.Notify{
@@ -100,12 +93,8 @@ func TestAMentionAndANewAssigneeAreAddressed(t *testing.T) {
 	}
 }
 
-// THE FALLBACK IS A LIST, AND THE CASE THAT MAKES IT ONE.
-//
-// A lead files an unassigned stray into their own team. With a single
-// fallback candidate, Route's actor drop removes it and the task reaches
-// NOBODY. With the ordered list, the unit lead is dropped as the actor and the
-// project lead gets the copy.
+// THE FALLBACK IS A LIST: a lead filing an unassigned stray into their own
+// team is dropped as the actor, and the project lead still gets the copy.
 func TestALeadFilingAStrayStillReachesSomebody(t *testing.T) {
 	t.Parallel()
 	n := &worklet.Notify{
@@ -131,10 +120,8 @@ func TestALeadFilingAStrayStillReachesSomebody(t *testing.T) {
 			handles(routed))
 	}
 
-	// AND WHEN BOTH SURVIVE, EXACTLY ONE IS WOKEN — the lowest-ranked. The
-	// list is a fallback CHAIN, not a distribution list: waking both the
-	// unit lead and the VP for every unassigned task is how a fallback
-	// becomes something people filter out.
+	// When both survive, exactly one is woken, the lowest-ranked: a CHAIN,
+	// not a distribution list.
 	both := worklet.Route(cands, everyone, "somebody-else")
 	if len(both) != 1 || both[0].Handle != "backend-lead" {
 		t.Fatalf("with both leads present the change routed to %v; the fallback "+
@@ -161,10 +148,8 @@ func TestAFallbackYieldsToAnyOrdinaryCandidate(t *testing.T) {
 			"did", got)
 	}
 
-	// AND A WATCHER WHO IS NOT WOKEN STILL COUNTS AS AN AUDIENCE. The
-	// fallback asks whether the change reached anybody, and another agent's
-	// comment on a watched task did: it is in the watcher's inbox. Deciding
-	// the fallback after dropping the watcher would page the lead instead.
+	// A watcher who is not woken still counts as an audience: the comment is
+	// in its inbox, so the lead is not paged.
 	quiet := worklet.Route(worklet.Candidates(&worklet.Notify{
 		Kind: worklet.ChangeComment,
 		Snapshot: worklet.Snapshot{
@@ -179,11 +164,8 @@ func TestAFallbackYieldsToAnyOrdinaryCandidate(t *testing.T) {
 	}
 }
 
-// ROUTED_TO IS ORDINARY, AND THAT IS THE WHOLE REASON IT EXISTS.
-//
-// As a fallback it would be kept only when no ordinary candidate survived — so
-// on any task that still has an assignee, a collaborator or a watcher, the new
-// unit's lead would have been dropped in silence.
+// ROUTED_TO IS ORDINARY: as a fallback, the new unit's lead would be dropped
+// silently on any task with an assignee, a collaborator or a watcher.
 func TestTheNewUnitsLeadHearsEvenOnAWatchedTask(t *testing.T) {
 	t.Parallel()
 	routed := worklet.Route(worklet.Candidates(&worklet.Notify{
@@ -200,16 +182,9 @@ func TestTheNewUnitsLeadHearsEvenOnAWatchedTask(t *testing.T) {
 	}
 }
 
-// THE ACTOR IS DROPPED, WITH EXACTLY ONE EXCEPTION — on the record the
-// unblocked repair actually writes.
-//
-// Telling somebody what they just did is a round a model spends on nothing,
-// so a person's own change reaches nobody under any other reason. `unblocked`
-// is the exception: that a task of yours became workable is news whoever
-// wrote the record saying so. That record is [worklet.Writer.TellUnblocked]'s
-// — a relations commit on the DEPENDENT naming its assignee and nobody else —
-// and this case takes it off the log as the repair publishes it, rather than
-// building a notification shape no writer produces.
+// THE ACTOR IS DROPPED, EXCEPT UNDER `unblocked` ([worklet.Reason.WakesActor]),
+// on the record [worklet.Writer.TellUnblocked] actually publishes, taken off
+// the log rather than built in a shape no writer produces.
 func TestOnlyAnUnblockedNoticeReachesTheActor(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -217,9 +192,8 @@ func TestOnlyAnUnblockedNoticeReachesTheActor(t *testing.T) {
 	dependent.Relations = []worklet.Relation{{
 		Kind: worklet.RelationWaitingOn, Other: "t-1",
 	}}
-	// THE HARNESS WRITES AS ANA, and the dependent is hers: the one record on
-	// which the exception decides anything. The engine's own repair writes
-	// as its node, so its notice never meets its author.
+	// The harness writes as ana, whose dependent it is: the one record on
+	// which the exception decides anything.
 	dependent.Assignee = "ana"
 	for _, task := range []worklet.Task{blocker, dependent} {
 		if _, err := r.writer.CreateTask(t.Context(), "op-"+task.ID, task, nil); err != nil {
@@ -242,9 +216,7 @@ func TestOnlyAnUnblockedNoticeReachesTheActor(t *testing.T) {
 		t.Fatalf("TellUnblocked: %v", err)
 	}
 
-	// THE REPAIR'S RECORD CONCERNS ITS ASSIGNEE ALONE, under `unblocked` and
-	// UNADDRESSED: a turn that cannot start yet would otherwise be forced to
-	// post something on every unblock.
+	// It concerns its assignee alone, under `unblocked`, UNADDRESSED.
 	want := []routing.Candidate[worklet.Reason]{{Handle: "ana", Reason: worklet.ReasonUnblocked, Wakes: true}}
 	cands := worklet.Candidates(r.lastWake())
 	if !slices.Equal(cands, want) {
@@ -269,11 +241,8 @@ func TestOnlyAnUnblockedNoticeReachesTheActor(t *testing.T) {
 	}
 }
 
-// AN UNWATCH IS A RECORD, NOT A WAKE.
-//
-// A human learns that a lead removed her watch; an agent is not woken about a
-// decision that was not its own. So the candidate exists — the applier writes
-// the row — and Route never returns it.
+// AN UNWATCH IS A RECORD, NOT A WAKE: the candidate exists (the applier
+// writes the row) and Route never returns it.
 func TestAnUnwatchIsRecordedAndNotRouted(t *testing.T) {
 	t.Parallel()
 	cands := worklet.Candidates(&worklet.Notify{
@@ -289,11 +258,8 @@ func TestAnUnwatchIsRecordedAndNotRouted(t *testing.T) {
 }
 
 // A HANDLE THE COMPANY NO LONGER EMPLOYS IS DROPPED AT ROUTE, NOT AT
-// CANDIDATES.
-//
-// The row is a complete record of everyone the change concerned; the wake goes
-// only to the people still there. Dropping a departed handle earlier would
-// lose the record, and later would publish into a mailbox nothing consumes.
+// CANDIDATES: the row records everyone concerned, the wake reaches only
+// those still there.
 func TestADepartedHandleKeepsItsRowAndLosesItsWake(t *testing.T) {
 	t.Parallel()
 	cands := worklet.Candidates(&worklet.Notify{
@@ -340,11 +306,8 @@ func TestOnlyAHumanCommentAddressesTheAssignee(t *testing.T) {
 	}
 }
 
-// THE ANSWER REACHES WHOEVER ASKED, NOT WHOEVER ANSWERED.
-//
-// Routing off the comment's author would wake the seat that just answered and
-// leave the person who asked unwoken, which is why the asker is a snapshot
-// field rather than a lookup.
+// THE ANSWER REACHES WHOEVER ASKED, NOT WHOEVER ANSWERED: the asker is a
+// snapshot field, not the comment's author.
 func TestAnAnswerWakesTheAsker(t *testing.T) {
 	t.Parallel()
 	routed := worklet.Route(worklet.Candidates(&worklet.Notify{
@@ -356,13 +319,9 @@ func TestAnAnswerWakesTheAsker(t *testing.T) {
 	}
 }
 
-// THE EIGHTEEN REASONS, AND THE EIGHT THAT OBLIGE AN ANSWER.
-//
-// AND THE OTHER EIGHT ARE A DIFFERENT EIGHT. [worklet.DefaultPrimaryReasons]
-// is which reasons lead a PERSON's inbox, and it is not this list — the two
-// agree on four and differ on four, deliberately. They were both called
-// "primary" and both eight long, which is how a reader comes to use one where
-// the other belongs, and nothing failed when they did.
+// THE EIGHTEEN REASONS, AND THE EIGHT THAT OBLIGE AN ANSWER, which are not
+// [worklet.DefaultPrimaryReasons] (what leads a PERSON's inbox): the two agree
+// on four and differ on four, deliberately.
 func TestTheReasonsAreAClosedSetAndTheTwoEightsAreNotTheSame(t *testing.T) {
 	t.Parallel()
 	if len(worklet.Reasons) != 18 {
@@ -384,8 +343,8 @@ func TestTheReasonsAreAClosedSetAndTheTwoEightsAreNotTheSame(t *testing.T) {
 		t.Error("a reason nothing writes is valid")
 	}
 
-	// THE TWO LISTS ARE THE SAME LENGTH AND NOT THE SAME LIST. Without
-	// this, folding one into the other passes every test in the tree.
+	// Same length, not the same list: without this, folding one into the
+	// other passes every test in the tree.
 	if len(worklet.DefaultPrimaryReasons) != 8 {
 		t.Fatalf("%d reasons lead an inbox by default; there are eight",
 			len(worklet.DefaultPrimaryReasons))

@@ -13,11 +13,9 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx"
 )
 
-// TestEnvdClientKeepsTheCallersTransport pins both halves of what
-// newEnvdClient derives: the caller's transport survives, and its deadline
-// does not. A client that inherited the control plane's timeout would kill
-// every command that outran it, which is the whole reason envd gets its own
-// client rather than the one it was handed.
+// TestEnvdClientKeepsTheCallersTransport pins what newEnvdClient derives: the
+// caller's transport survives and its deadline does not, since the control
+// plane's timeout would kill every command that outran it.
 func TestEnvdClientKeepsTheCallersTransport(t *testing.T) {
 	t.Parallel()
 	marker := http.RoundTripper(&http.Transport{})
@@ -32,10 +30,9 @@ func TestEnvdClientKeepsTheCallersTransport(t *testing.T) {
 	}
 }
 
-// TestEnvdClientFallsBackToTheSharedTransport covers the branch no caller
-// takes today. A nil Transport is http.DefaultTransport and its two idle
-// connections per host, so the fallback has to name the shared one — see
-// internal/httpx's package doc.
+// TestEnvdClientFallsBackToTheSharedTransport holds the fallback to httpx's
+// shared transport: a nil Transport is http.DefaultTransport, with two idle
+// connections per host (internal/httpx's package doc).
 func TestEnvdClientFallsBackToTheSharedTransport(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -51,12 +48,11 @@ func TestEnvdClientFallsBackToTheSharedTransport(t *testing.T) {
 	}
 }
 
-// A FILE TRANSFER IS BOUNDED BY SILENCE. An envd that takes the connection and
-// never answers held a /files read for as long as the caller's context lived,
-// and the completion poll's context lives as long as the process — so one
-// wedged box stalled the poll of every other box behind it. The transfer is
-// abandoned once no byte has moved for the bound, and says that is why, rather
-// than reporting a "context canceled" the caller did not cause.
+// A FILE TRANSFER IS BOUNDED BY SILENCE: the completion poll's context lives
+// as long as the process, so an envd that takes the connection and never
+// answers would stall the poll of every other box. The transfer is abandoned
+// once no byte has moved for the bound, and says so rather than reporting a
+// "context canceled" the caller did not cause.
 func TestASilentFileTransferIsAbandonedAndSaysWhy(t *testing.T) {
 	t.Parallel()
 	release := make(chan struct{})
@@ -97,13 +93,11 @@ func TestASilentFileTransferIsAbandonedAndSaysWhy(t *testing.T) {
 	}
 }
 
-// A FILE WRITE CAN BE SENT TWICE, and says how long it is — each request of
-// it: the upload of the content and the move that puts it in place. The idle
-// bound's progress wrapper hides the buffer a request would otherwise take
-// both from: without the length a body goes out chunked, and without GetBody
-// the transport cannot retry a request on a fresh connection when the server
-// closed the first before reading it (an HTTP/2 GOAWAY) — which the plain
-// buffer the write used to send could.
+// A FILE WRITE CAN BE SENT TWICE, and states its length, in each of its
+// requests (the upload and the move). The idle bound's progress wrapper hides
+// the buffer the transport would take both from: without the length a body
+// goes out chunked, and without GetBody the transport cannot retry on a fresh
+// connection when the server closed the first unread (an HTTP/2 GOAWAY).
 func TestAFileWriteCarriesItsLengthAndCanBeSentAgain(t *testing.T) {
 	t.Parallel()
 	type request struct {

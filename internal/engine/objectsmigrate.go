@@ -16,27 +16,17 @@ import (
 )
 
 // MOVING THE FLEET'S FILES TO AN S3 BUCKET: `crewlet objects migrate --to s3`.
+// A COPY PASS, on a live fleet as often as wanted, copies (verified) every named
+// object the target lacks, resuming a stopped pass ([migrate.Run]); it moves nothing.
 //
-// # Two passes, and why the second needs the fleet held still
-//
-// A COPY PASS runs on a live fleet, as often as an operator likes: it copies
-// every object the estate names that the target does not hold, verified, and
-// a pass that stopped resumes where it did ([migrate.Run]). It moves nothing:
-// the fleet keeps writing to its own store throughout.
-//
-// The FINAL pass is what moves the fleet, and a move is safe only where no
-// object can be named that the pass did not copy. So it runs on a fleet
-// restarted into maintenance mode, where no node publishes a record: a file
-// uploaded while it runs could never be named, because no data node writes
-// one. It refuses unless this node is in that mode, no node is admitted to
-// publish (coord.MaintenanceRegister's admissions, which every publishing
-// data node holds), and this node's copy of the estate is current and
-// complete. It then copies what is left, SEALS the broker's own bucket so a
-// node not yet restarted onto the bucket has its uploads refused rather than
-// stored where nobody will look, and moves the fleet's recorded object
-// backend by a compare-and-set ([coord.ObjectStores]). Every node then boots
-// with the target's store.objects block, and a node still naming the old
-// store refuses to start.
+// The FINAL pass moves the fleet, safe only where no object can be named that it
+// did not copy ([Engine.fenced]): it refuses unless this node runs in maintenance
+// mode, where no data node publishes a record, no node holds a publishing admission
+// ([coord.MaintenanceRegister]) and this node's estate is current and complete. It
+// copies the rest, SEALS the broker's bucket so a node not yet restarted has its
+// uploads refused rather than stored where nobody looks, and moves the fleet's
+// recorded backend by a compare-and-set ([coord.ObjectStores]); a node still naming
+// the old store then refuses to start.
 
 // ErrMigrationRefused is a migration this node will not run as asked. It
 // wraps a sentence saying why and what to change.
@@ -189,12 +179,10 @@ func (e *Engine) migrateTo(ctx context.Context, final bool, objects config.Store
 	return report, nil
 }
 
-// migrationReferences is every declared table this node's estate holds, as a
-// migration walks them: only a data node running the native runtime holds
-// the rows that name objects, the tracker's files and the artifacts' versions
-// and assets alike ([objectEstatesFor]), so a migration reads every table the
-// collector reads, and copies from them what a store move owes the target —
-// every object a Required or a Derived row names ([objstore.PassMove]).
+// migrationReferences is every declared table this node's estate holds, the
+// ones the collector reads ([objectEstatesFor]: only a native data node holds
+// them); the pass copies every object a Required or a Derived row names
+// ([objstore.PassMove]).
 func (e *Engine) migrationReferences() (collect.References, error) {
 	n := e.native.Load()
 	if n == nil {
@@ -242,10 +230,9 @@ func (e *Engine) fenced(ctx context.Context) error {
 			"their logs, so the pass could miss an object; wait for it to catch up and " +
 			"run this again")
 	}
-	// WHAT THIS BUILD CANNOT SEE, as the collector asks it ([Engine.unseen]):
-	// a final pass copies every object this build's declarations name, and
-	// the store it leaves behind is the operator's to delete, so a newer
-	// build's objects it never copied would go with it.
+	// WHAT THIS BUILD CANNOT SEE ([Engine.unseen]): the pass copies only what
+	// this build's declarations name, and the operator deletes the old store,
+	// so a newer build's objects would go with it.
 	why, err := e.unseen(ctx)
 	if err != nil {
 		return fmt.Errorf("engine: read what this node cannot see that may name an object: %w", err)

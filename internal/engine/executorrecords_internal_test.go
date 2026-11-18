@@ -49,12 +49,11 @@ func (l *recordingLog) End(_ context.Context, c executordomain.Call, n executord
 }
 
 // THE SANDBOX'S RECORDS ARE THE LOG'S, UNDER THE OPERATION THEIR PLACE DERIVES:
-// the sandbox states a capture and an end in its own words, because it links no
-// state log, so the author, the operation and the record are stated here — and
-// a capture's operation is its turn's, its launch's and its ordinal's at the
-// instant the turn's operations are minted at, an end's its turn's, exactly as
-// the log derives them, so every attempt at one record is one operation and
-// every field the sandbox stamped reaches the log.
+// the sandbox links no state log, so the author, operation and record are
+// stated here, a capture's operation from its turn, launch and ordinal at the
+// turn's mint instant and an end's from its turn, exactly as the log derives
+// them, so every attempt at one record is one operation and every field the
+// sandbox stamped reaches the log.
 //
 // Mutation: derive the capture's operation without its launch or its ordinal,
 // the end's at the stamp's own clock, or drop a field of the stamp from the
@@ -105,19 +104,13 @@ func TestTheSandboxsRecordsAreTheLogsUnderTheOperationTheirPlaceDerives(t *testi
 }
 
 // THE LOG'S ANSWER IS READ AS WHAT THE SANDBOX DOES NEXT: a capture its row
-// names is landed, one the log applied and the row does not name is passed
-// over, a definite refusal is refused with its error, and everything else —
-// pending, unknown, a node that did not answer, no data node of a build that
-// reads the record whole — is unsettled, to be asked again under the same
-// operation. An end refused as already made is landed: the paths that end one
-// turn derive one operation, and the first was taken.
-//
-// AN END NO DATA NODE CAN READ WHOLE STAYS OWED, mid-upgrade: a seats-only node
-// of a newer build writes a field of the ending its older data nodes do not
-// declare, they refuse it rather than record it short, and refused-and-dropped
-// here the turn's end would never reach the log at all — so it is unsettled,
-// as an estate nobody serves is, and the run's row keeps owing it until a data
-// node of the writer's build records it.
+// names is landed, one applied that the row does not name is passed over, a
+// definite refusal is refused with its error, and everything else (pending,
+// unknown, no answer, no data node whose build reads the record whole) is
+// unsettled, to be asked again under the same operation. An end refused as
+// already made is landed: every path ending one turn derives one operation.
+// Mid-upgrade, older data nodes refuse a newer build's end rather than record
+// it short, so it stays owed until a data node of the writer's build does.
 //
 // Mutation: read a pending capture as landed, a turn already ended as an end
 // still owed, a node that did not answer as a refusal, or a record no data

@@ -12,15 +12,13 @@ import (
 	"github.com/crewlet/crewlet/internal/hostbox/hostboxtest"
 )
 
-// A BOX'S TEARDOWN KILLED AT ANY STEP LEAVES ONE WHOLE LOGIN. A process running
-// local boxes one after another — each seeded with the shared login, each run
-// rewriting both of its files to the other login, each teardown writing them
-// back — is killed at every step of the write-backs after its first box, one
-// process per step, on the kill matrix ([hostboxtest]): what the shared
-// directory holds is judged exactly, then read as the next box's seed reads
-// it, and every time it is the whole login the interrupted teardown committed.
-// Written back a file at a time, a teardown killed between its two files left
-// one sign-in's token beside the other's config.toml.
+// A BOX'S TEARDOWN KILLED AT ANY STEP LEAVES ONE WHOLE LOGIN. A process runs
+// local boxes in turn, each seeded with the shared login, its run rewriting
+// both files to the other login and its teardown writing them back, and is
+// killed at every step of the write-backs after its first box ([hostboxtest]'s
+// kill matrix). The shared directory, judged exactly and read as the next seed
+// reads it, always holds the whole login the interrupted teardown committed,
+// never one sign-in's token beside the other's config.toml.
 //
 // Mutation: write the box's refreshed files back one at a time, and the run
 // makes four writes for two logins; drop the observer from the box's layout,

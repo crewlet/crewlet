@@ -37,22 +37,14 @@ const gib = int64(1) << 30
 // THE GATE RESERVE AT EVERY LOG'S FLOOR ABSORBS A FLEET'S APPENDS IN FLIGHT,
 // AND LEAVES THE LOG MOST OF ITSELF.
 //
-// The overshoot the reserve absorbs is a property of the LOG — every peer of
-// the admitting node may hold one of its largest appends in flight that the
-// admitting node's reading cannot see — so the reserve has to hold that much
-// and a gate room beside it at every ceiling the log can reach, down to the
-// floor Tier A holds its field to. It was a sixteenth of the ceiling, argued
-// at a gibibyte called every log's floor, and asserted here against a hand
-// list of the floors that were a gibibyte: the identity estate's is 64 MiB,
-// where a sixteenth was less than one append at the transport's size. So the walk is over the REGISTER, each log at its own
-// field's floor as Tier A's own validation finds it, and a log added to the
-// register is held to the rule without this test learning its name.
-//
-// And the other side, which is what makes the first a finding rather than a
-// tautology: the reserve is kept FROM ordinary writes, so a log whose largest
-// record is sized as though it were somebody else's keeps most of itself for
-// gate records at its floor. Ordinary writes keep at least half — the identity
-// estate's declared at the transport's eight mebibytes would keep a ninth.
+// The overshoot is a property of the LOG: every peer of the admitting node may
+// hold one of its largest appends in flight unseen, so the reserve must hold
+// that plus a gate room at every ceiling the log can reach, down to the floor
+// Tier A holds its field to. The walk is over the REGISTER, each log at its
+// field's floor as Tier A's validation finds it, so a new log is held to the
+// rule unnamed. The other side keeps this from a tautology: the reserve is
+// kept FROM ordinary writes, which must keep at least half the log at its
+// floor, so a log whose largest record is oversized fails.
 func TestTheGateReserveAtEveryFloorAbsorbsItsFleet(t *testing.T) {
 	t.Parallel()
 	keys := streamKeys(t)
@@ -102,15 +94,12 @@ func TestTheGateReserveAtEveryFloorAbsorbsItsFleet(t *testing.T) {
 
 // THE RETENTION GUIDE STATES EVERY LOG'S GATE RESERVE AS THE LOG KEEPS IT.
 //
-// docs/guides/retention.md's table of the reserve at each log's floor is what
-// an operator sizes a small log by, and it named three of the six logs that
-// keep one once Gitlet's and the artifacts logs were registered beside
-// the tracker, the knowledge base and the identity estate. So each row is read
-// off the guide and held to [statelog.ReservationOf] at the floor Tier A's own
-// validation holds the log's field to — its largest record, the floor, the
-// reserve there and what ordinary writes keep — and every log that keeps a
-// reserve must have exactly one row and nothing else may, so a log registered
-// later fails here until the guide names it.
+// docs/guides/retention.md's table is what an operator sizes a small log by.
+// Each row is held to [statelog.ReservationOf] at the floor Tier A's
+// validation holds the log's field to (largest record, floor, reserve, what
+// ordinary writes keep), and every log that keeps a reserve has exactly one
+// row and nothing else has one, so a log registered later fails here until
+// the guide names it.
 func TestTheRetentionGuideStatesEveryLogsGateReserve(t *testing.T) {
 	t.Parallel()
 	guide, err := os.ReadFile(filepath.Join(sourcetree.Root(t), "docs", "guides", "retention.md"))
@@ -242,12 +231,10 @@ func sizeText(b int64) string {
 
 // A LOG'S DECLARED CEILING IS TIER A'S DEFAULT WHERE THE DEFAULT IS FIXED.
 //
-// A domain's declared ceiling is what the framework's own suites provision
-// its stream with, so they certify the log a node runs only if the two are
-// the same number. A log that declared a gibibyte while an unset Tier A field
-// created it at 512 MiB would have every suite exercise its gate reserve at
-// twice the size any node had. A ceiling that follows the volume has
-// no one number to agree with, and is left to its own derivation.
+// The framework's own suites provision a domain's stream at its declared
+// ceiling, so they certify the log a node runs only if the two agree. A
+// ceiling that follows the volume has no one number to agree with, and is
+// left to its own derivation.
 func TestADomainsDeclaredCeilingIsItsFixedTierADefault(t *testing.T) {
 	t.Parallel()
 	fixed := 0
@@ -274,13 +261,10 @@ func TestADomainsDeclaredCeilingIsItsFixedTierADefault(t *testing.T) {
 // EVERY REGISTERED DOMAIN IS SIZED FROM TIER A, and the field a refusal names
 // is the field that actually sets the value.
 //
-// The pages log was registered with no Tier A ceiling at all and reserved a
-// fixed default outside the budget the other two logs were scaled into. So the
-// assertion is over the register rather than over a list: a domain added to
-// it without a Tier A field fails here rather than on somebody's small disk.
-// And each field is SET, through its own YAML key, and read back as the value,
-// because a refusal naming the wrong key sends an operator to edit a number
-// that changes nothing.
+// Asserted over the register rather than a list, so a domain added without a
+// Tier A field fails here rather than on somebody's small disk. Each field is
+// SET through its own YAML key and read back, because a refusal naming the
+// wrong key sends an operator to edit a number that changes nothing.
 func TestEveryRegisteredDomainIsSizedFromTierA(t *testing.T) {
 	t.Parallel()
 	keys := streamKeys(t)
@@ -295,19 +279,11 @@ func TestEveryRegisteredDomainIsSizedFromTierA(t *testing.T) {
 				t.Errorf("unset = %+v, want a DERIVED ceiling", derived)
 			}
 			// A NODE NEVER DERIVES A CEILING ITS OWN VALIDATION WOULD
-			// REFUSE TO BE TOLD, which is the invariant rather than a
-			// number: each field's floor is Tier A's to state, and they
-			// are not all the same. The identity estate's and the usage
-			// log's are far below the corpus-sized logs' gibibyte,
-			// because a ceiling is granted in full at create time and
-			// neither grows with a corpus — a domain at the corpus floor
-			// raises the disk a node needs to boot by a gibibyte for a
-			// log a small company will never fill.
-			//
-			// Asserted by round-tripping the derived value THROUGH Tier
-			// A's own validation rather than against a constant here,
-			// so a new domain inherits the rule without this test
-			// learning its field's bounds.
+			// REFUSE TO BE TOLD. Each field's floor is Tier A's to state
+			// and they differ (the identity estate's and the usage log's
+			// sit far below the corpus logs' gibibyte), so the derived
+			// value round-trips THROUGH Tier A's validation rather than a
+			// constant here, and a new domain inherits the rule.
 			boot := testBootstrap(t)
 			boot.Stream.StoreDir = t.TempDir()
 			reflect.ValueOf(&boot.Stream).Elem().
@@ -354,32 +330,18 @@ func streamKeys(t *testing.T) map[string][]int {
 	return out
 }
 
-// THE ARITHMETIC FITS THE POOL, and every way an earlier version overshot it
-// is a row here.
+// THE ARITHMETIC FITS THE POOL, and every way it has overshot is a row here.
 //
-// The first version scaled every derived ceiling by pool over a total that
-// COUNTED the explicit ones (so the derived logs were handed bytes an explicit
-// ceiling had already spent) and raised a floored log to the floor AFTER
-// dividing (so the floor was bytes the others were also given). The next
-// divided the pool by what every log ASKED, the ones that already exist
-// included, so a log being created was sized as though an existing one held
-// its ask — and one holding more than that was bytes the missing logs were
-// also given. Measured at twice the share: the "a log holding twice the
-// share" row is that boot's arithmetic.
+// Each row is held to three INVARIANTS as well as its numbers ("inside the
+// pool" is not one: logs already holding more than the pool hold it anyway):
 //
-// So every row is held to the INVARIANTS as well as to its numbers, and there
-// are three, because "inside the pool" is not one of them: logs that already
-// hold more than the pool hold it whatever this arithmetic says.
-//
-//   - What the logs reserve between them — what the existing ones hold plus
-//     what the missing ones are created with — exceeds the larger of the pool
-//     and what the existing ones hold only by the missing logs created at
-//     their floor or at a ceiling somebody set.
-//   - A derived log created above its floor is proof there was room to spare,
+//   - What the logs reserve (existing holdings plus the missing logs' creates)
+//     exceeds the larger of the pool and the existing holdings only by missing
+//     logs created at their floor or at a ceiling somebody set.
+//   - A derived log created above its floor proves there was room to spare,
 //     so it is never found beside a total past the pool.
-//   - A missing log is never created above its fit on an empty broker, which
-//     is the value every later boot reports its stream against: above it, the
-//     log is a capacity difference nobody made on every boot that follows.
+//   - A missing log is never created above its fit on an empty broker, the
+//     value every later boot reports its stream against as a difference.
 func TestTheCeilingsFitThePool(t *testing.T) {
 	t.Parallel()
 	derived := func(bytes int64) domainCeiling { return domainCeiling{Bytes: bytes} }
@@ -450,9 +412,8 @@ func TestTheCeilingsFitThePool(t *testing.T) {
 			want:  map[string]int64{"a": 1024 * gib, "b": 32 * gib, "c": 8 * gib},
 		},
 		// An existing log is reported at its fit on an empty broker (a's
-		// 4), and the missing ones divide the 6 its 10 leave rather than
-		// the 12 its fit would: sized from its ask they took 12 and the
-		// logs reserved 22 of a 16 pool.
+		// 4), and the missing ones divide the 6 its 10 leave, not the 12
+		// its fit would.
 		"a log that exists counts at what it holds, not at what it asks": {
 			asked: map[string]domainCeiling{
 				"a": derived(8 * gib), "b": derived(16 * gib), "c": derived(8 * gib),
@@ -462,12 +423,10 @@ func TestTheCeilingsFitThePool(t *testing.T) {
 			want:  map[string]int64{"a": 4 * gib, "b": 4 * gib, "c": 2 * gib},
 			short: map[string]int64{"b": 8 * gib, "c": 4 * gib},
 		},
-		// The measured boot: a tracker log created at an explicit 16 GiB
-		// that was later unset, the broker with 398676992 bytes left, and
-		// so a pool of 8789273088, here on a 16 GiB volume. The vector
-		// changelog was sized at 3857765632 in bytes the tracker already
-		// held; it is the floor, and a broker that cannot grant even that
-		// refuses it by name.
+		// A measured boot: a tracker log created at an explicit 16 GiB
+		// and later unset, with 398676992 bytes left on the broker. The
+		// missing logs get their floors, and the vector changelog is
+		// reported short of its fit.
 		"a log holding twice the share leaves the missing ones their floors": {
 			asked: map[string]domainCeiling{
 				"tracker": derived(4 * gib), "vectors": derived(4 * gib), "pages": derived(gib),
@@ -489,11 +448,9 @@ func TestTheCeilingsFitThePool(t *testing.T) {
 			want:  map[string]int64{"a": 2 * gib, "b": 2 * gib},
 			short: map[string]int64{"b": 10 * gib},
 		},
-		// And the other direction: a log holding less than its fit (a
-		// capacity operation gave some back) leaves room the missing log
-		// is NOT given. The 6 a's 2 leave would create b above its fit of
-		// 4, which is what every later boot reports b's stream against —
-		// a capacity difference on every boot for the life of the stream.
+		// A log holding less than its fit leaves room the missing log is
+		// NOT given: the 6 a's 2 leave would create b above its fit of 4,
+		// a capacity difference on every later boot.
 		"a log holding less than its fit leaves a missing one at its fit": {
 			asked: map[string]domainCeiling{"a": derived(8 * gib), "b": derived(8 * gib)},
 			held:  map[string]int64{"a": 2 * gib},
@@ -501,11 +458,9 @@ func TestTheCeilingsFitThePool(t *testing.T) {
 			want:  map[string]int64{"a": 4 * gib, "b": 4 * gib},
 		},
 		// A first boot that stopped after creating the tracker's stream at
-		// its fit, measured: the logs the restart creates divide the
-		// 8947848534 the tracker leaves, and the vector changelog's share
-		// of that floors to 7158278827 — one byte over the 7158278826 the
-		// empty-broker division gives it. Created there, it was reported
-		// as a capacity difference on every boot after.
+		// its fit: the vector changelog's share of the 8947848534 the
+		// tracker leaves floors to one byte over its empty-broker fit of
+		// 7158278826, so it must be created at the fit.
 		"a boot that stopped between two creates sizes the rest at their fit": {
 			asked: map[string]domainCeiling{
 				"tracker": derived(16 * gib), "vectors": derived(16 * gib), "pages": derived(4 * gib),
@@ -584,12 +539,10 @@ func TestTheCeilingsFitThePool(t *testing.T) {
 	}
 }
 
-// sizingHost is a broker that answers the two questions sizing asks — what it
-// can grant, and what each log's stream holds — and nothing else.
-//
-// The rest of [domainHost] is the NIL interface it embeds, so a sizing that
-// began provisioning, or opened a log or a consumer, panics rather than
-// succeeding against a broker nobody modelled.
+// sizingHost is a broker that answers only the two questions sizing asks: what
+// it can grant, and what each log's stream holds. The rest of [domainHost] is
+// the NIL interface it embeds, so a sizing that provisions or opens a log or
+// a consumer panics rather than succeeding against a broker nobody modelled.
 type sizingHost struct {
 	domainHost
 	budget jetstream.StorageBudget
@@ -607,47 +560,18 @@ func (h sizingHost) DomainStreamCeiling(_ context.Context, stream string) (int64
 	return holds, exists, nil
 }
 
-// THE VECTOR CHANGELOG A FIRST BOOT CREATES HOLDS A MODEL CHANGE, from the
-// smallest volume the shared budget can still give it that room on.
+// THE VECTOR CHANGELOG A FIRST BOOT CREATES HOLDS A MODEL CHANGE WITHOUT
+// ALARMING, from the smallest volume the shared budget gives it that room on.
 //
-// Its peak is the whole corpus — a model change republishes every source, and
-// for a week all of them are in the window — which is 8.46 GB for the reference
-// company in its fifth year (vectorYearFivePeak). Under a broker that states its limit at three
-// quarters of the free space, that is what the created ceiling must hold,
-// whatever the mutation log is set to: the rule that took half the mutation
-// log's ceiling asked for 8 GiB on a 64 GiB volume and the share scaled it to
-// 6.9 GiB, under the peak — and beside an operator's 4 GiB mutation log it
-// asked for 2 GiB.
-//
-// AND HOLD IT WITHOUT ALARMING, because a model change is an excursion the
-// headroom alarm is designed not to fire on: the peak has to leave
-// [statelog.HeadroomAlarmFraction] of the created ceiling free. On a 64 GiB
-// volume no division does that any more — the artifacts log's and the
-// datastore's quarter-ratio asks, and the Dashboard Assistant's and the
-// executor log's 512 MiB scaled beside them, already took the changelog to
-// 8.0 GiB there, 1.5 % headroom with no chat log at all — so the case is held
-// at 76 GiB, measured as the smallest volume where the derived changelog
-// cleared the alarm with the chat log's quarter-share cap
-// ([config.DerivedChatLogDivisor]): asked for at a third of the share, chat
-// left the changelog clear only from 78 GiB, and asked for in full from 79.
-// (It was 75 GiB until the executor log joined the register, which the
-// changelog's share paid for.)
-//
-// AND ON THE DEFAULT DOCUMENT'S OWN FIRST BOOT, where the object store's nats
-// bucket reserves a quarter of the broker's limit before any log is sized
-// ([derivedObjectsReservation]): the logs share less, and the smallest volume
-// where the changelog cleared the alarm was 100 GiB with the quarter-share
-// cap, against 102 at a third or with the whole ask (and 93 with no chat log).
-// A broker that states its limit with no bucket beside the logs was the only
-// boot this held, and it is not the boot most deployments make. Mutation: set
-// the divisor to 3, or drop the cap, and the derived case fails on both.
-//
-// Those volumes were measured at a half share without the code log. The code
-// log asks two thirds of the mutation log's ceiling, and at half it took the
-// changelog under the peak itself (6.6 GiB on a 64 GiB volume with nothing
-// else reserved), which is why the share is five eighths
-// ([StreamBudgetShare]); the case holds both volumes under that share with
-// every log registered, the code log's and the executor log's included.
+// A model change republishes every source, so the peak is the whole corpus
+// (vectorYearFivePeak) whatever the mutation log is set to, and it must leave
+// [statelog.HeadroomAlarmFraction] of the ceiling free. The volumes are the
+// smallest measured to clear the alarm with every log registered at
+// [StreamBudgetShare]: 76 GiB under a broker that states its limit, 100 GiB on
+// the default document's boot, whose nats bucket reserves a quarter first
+// ([derivedObjectsReservation]). Both need the chat log's quarter-share cap
+// ([config.DerivedChatLogDivisor]): set the divisor to 3, or drop the cap,
+// and the derived case fails at both.
 func TestTheVectorChangelogIsCreatedToHoldAModelChange(t *testing.T) {
 	t.Parallel()
 	for _, boot := range []struct {
@@ -691,14 +615,12 @@ func TestTheVectorChangelogIsCreatedToHoldAModelChange(t *testing.T) {
 	}
 }
 
-// THE LOGS' SHARE LEAVES THE ESTATE AT LEAST WHAT THE BUCKET RESERVES — the
-// other bound on [StreamBudgetShare]. The mailboxes, the coordination buckets
-// and the snapshot a joining node reads reserve nothing and grow in what the
-// logs and the `nats` object bucket leave, so the logs may not take so much of
-// what the bucket leaves that the remainder is smaller than the bucket itself:
-// sized as the boot sizes them — the bucket's reservation spent first, the
-// logs' pool a share of what is left ([logsGrantable]) — on every broker large
-// enough to hold the bucket's quarter, from 8 GiB to a petabyte.
+// THE LOGS' SHARE LEAVES THE ESTATE AT LEAST WHAT THE BUCKET RESERVES, the
+// other bound on [StreamBudgetShare]. The mailboxes, coordination buckets and
+// a joining node's snapshot reserve nothing and grow in what the logs and the
+// `nats` object bucket leave, so that remainder may not be smaller than the
+// bucket: sized as the boot sizes them ([logsGrantable]), on every broker
+// from 8 GiB to a petabyte.
 func TestTheLogsShareLeavesTheEstateTheBucketsRoom(t *testing.T) {
 	t.Parallel()
 	for limit := 8 * gib; limit <= 1<<50; limit *= 2 {
@@ -716,36 +638,21 @@ func TestTheLogsShareLeavesTheEstateTheBucketsRoom(t *testing.T) {
 }
 
 // A LOG CREATED BESIDE ONES THAT EXIST FITS THE SHARE, on every reading of the
-// broker's budget.
-//
-// Two ways past it, one per reading. Where the broker states its limit, the
-// missing logs were sized as though the existing one held its ask. Where the
-// pool falls back to a figure taken from the volume's free space, the existing
-// ceilings were ADDED to it as well, although free space never paid for a
-// reservation — so even sized from what the others hold, the missing logs were
-// given half of what they hold again.
+// broker's budget: the missing logs are sized from what the existing ones
+// hold, not their ask, and where the pool is taken from free space the
+// existing ceilings are not added to it, since free space never paid for a
+// reservation.
 func TestALogCreatedBesideOnesThatExistFitsTheShare(t *testing.T) {
 	t.Parallel()
-	// The tracker and the vector changelog each ask for a quarter of the free
-	// space, and the knowledge base's log, the artifacts log, the datastore's
-	// log and the chat log a sixteenth each, the code log two thirds of the
-	// tracker's: at 44 GiB free 11 GiB, 2.75 and 7.33, at 60 GiB 15, 3.75 and
-	// 10. The tracker's stream already holds 16, more than its ask at either,
-	// so what the others asked for does not fit what it leaves of any share
-	// below, and a sizing that counted the tracker at its ask, or added what
-	// it holds to the figure free space gives, would hand them all of it. (At
-	// a volume where the tracker's ask equals what it holds, counting it at
-	// either reads the same, and neither mistake shows: at 15 the rows that
-	// read no limit would measure nothing.) And what it leaves of the share
-	// has to hold every other log at its floor — 7.625 GiB, the code log's
-	// and the chat log's gibibytes and the assistant's and the executor log's
-	// 64 MiB each among them — or no sizing could keep to the share and the
-	// case would fail every correct one: what is measured is the counting and
-	// not the floors, which the division may exceed by design. Five eighths of
-	// 44 GiB is 27.5, which leaves 11.5 beside the tracker; that is why the
-	// rows that read no limit measure 60 GiB, whose stand-in limit (three
-	// quarters, [unstatedLimit]) grants 45 and leaves 12.125, where 44 GiB's
-	// would grant 33 and leave 4.6, less than the floors take.
+	// The tracker asks a quarter of the free space (11 GiB at 44, 15 at 60)
+	// and its stream holds 16, more than its ask (where the two are equal
+	// neither mistake shows), so counting it at its ask, or adding what it
+	// holds to the free-space figure, hands the others more than the share
+	// leaves. What it leaves must still hold every other log at its
+	// floor (7.625 GiB), or no sizing could keep to the share: the case
+	// measures the counting, not the floors. Hence 60 GiB for the rows that
+	// read no limit: its stand-in ([unstatedLimit]) grants 45 and leaves
+	// 12.125, where 44 GiB's would leave 4.6.
 	const trackerHolds = 16 * gib
 	for name, tc := range map[string]struct {
 		budget jetstream.StorageBudget
@@ -799,14 +706,10 @@ func TestALogCreatedBesideOnesThatExistFitsTheShare(t *testing.T) {
 
 // A RESTART SIZING FROM FREE SPACE SIZES THE LOGS AS THE FIRST BOOT DID.
 //
-// [TestARestartSizesTheLogsAsTheFirstBootDid] holds this against a broker that
-// states its limit, where the logs' reservations spend the figure and have to
-// be added back. Free space is the figure a node falls back to where the
-// broker states none or cannot be read, and no reservation spends it, so
-// adding them back grew the pool on every restart by half of what the logs
-// hold: at 16 GiB free the first boot scaled 9 GiB of asks into an 8 GiB share,
-// and a restart divided 12 and reported every stream as a difference nobody
-// had made.
+// Free space is the figure a node falls back to where the broker states no
+// limit or cannot be read, and no reservation spends it, so unlike under a
+// stated limit ([TestARestartSizesTheLogsAsTheFirstBootDid]) the logs'
+// reservations are not added back: that grows the pool on every restart.
 func TestARestartSizingFromFreeSpaceSizesTheLogsAsTheFirstBootDid(t *testing.T) {
 	t.Parallel()
 	const free = 16 * gib
@@ -851,35 +754,16 @@ func TestARestartSizingFromFreeSpaceSizesTheLogsAsTheFirstBootDid(t *testing.T) 
 
 // AN OPERATOR'S SERVER THAT STATES NO LIMIT HOLDS THE BUCKET AND EVERY LOG.
 //
-// Such a server's own cap is three quarters of its volume's free space, which
-// this node cannot read, so it stands the same share of its own free space in
-// for the limit ([unstatedLimit]). The object bucket is reserved first, a
-// quarter of that figure, and the logs were once sized as half of the whole of
-// it: three quarters between them, the server's entire cap, so the last log
-// created (the artifact datastore's) was refused on a CI runner with 86 GB
-// free. Sized from what the bucket leaves, as under a stated limit, they still
-// overran the cap while the WHOLE free space stood in for it: at 16 GiB the
-// bucket took 4 GiB of a 12 GiB cap, so the logs' floors and the coordination
-// remainder had 8 GiB between them, which one more log at its floor would
-// have overrun; and once the share was five eighths, the bucket a quarter of
-// the free space and the logs fifteen thirty-seconds came within a
-// thirty-second of the cap, leaving the mailboxes and coordination less than
-// the gibibyte the bucket's derivation promises them on every volume under
-// 32 GiB. Against the cap itself, the bucket, every log and the remainder fit
-// on every volume large enough to hold the floors with the remainder beside
-// them.
+// Such a server caps itself at three quarters of its volume's free space,
+// which this node cannot read, so it stands that share of its own free space
+// in for the limit ([unstatedLimit]). Against that cap the bucket, every log
+// and the coordination remainder fit on every volume that holds the floors
+// with the remainder beside them.
 //
-// THE SMALLEST ROW IS THAT VOLUME, computed from the register rather than
-// written down. It was 16 GiB while the logs' floors came to 8120172544
-// bytes; Gitlet's log joined at its gibibyte, and on 16 GiB the bucket's
-// quarter and the floors leave 448 MiB of the cap. That volume still BOOTS a
-// fresh node (BrokerFloor counts no remainder: the least that boots is not the
-// least that runs, as the deployment guide says), so it is not a row this
-// claim is about; the least free space whose cap holds the floors, the bucket
-// and the remainder is, and it moves with the register as the floor does.
-//
-// Mutation: stand the whole free space in for the limit again and the
-// smallest case fails.
+// THE SMALLEST ROW IS THAT VOLUME, computed from the register so it moves with
+// the floors. It is not BrokerFloor's figure, which counts no remainder: the
+// least that boots is not the least that runs (the deployment guide).
+// Mutation: stand the whole free space in for the limit and it fails.
 func TestAnUnstatedServerHoldsTheBucketAndEveryLog(t *testing.T) {
 	t.Parallel()
 	boot := config.DefaultBootstrap()
@@ -922,21 +806,16 @@ func TestAnUnstatedServerHoldsTheBucketAndEveryLog(t *testing.T) {
 // A FIRST BOOT THAT STOPPED BETWEEN TWO CREATES LEAVES LOGS A RESTART REPORTS
 // AS THEY WERE MADE.
 //
-// A boot provisions the logs one after another, and a kill, a timeout or a
-// refused create between two of them leaves some streams existing and the rest
-// missing. The restart sizes the missing ones from what the existing ones
-// leave of the share — and on this budget the vector changelog's part of that
-// remainder floors to one byte past the fit every later boot holds its stream
-// against, so from then on every boot of every node logged a capacity
-// difference nobody had made. So the three sizings are run as the broker sees
-// them: the first boot, a restart where only the tracker's stream was created
-// (its reservation spent from the broker's figure), and a restart with all
-// three, where every stream must be reported at exactly what it holds.
+// A kill, timeout or refused create between two creates leaves some streams
+// existing, and the restart sizes the missing ones from what the existing ones
+// leave of the share; on this budget the vector changelog's part floors to
+// one byte past its fit. So three sizings run as the broker sees them: the
+// first boot, a restart after only the tracker's create, and a restart with
+// every stream, each of which must be reported at exactly what it holds.
 func TestAnInterruptedFirstBootLeavesLogsARestartReportsAsMade(t *testing.T) {
 	t.Parallel()
 	// 64 GiB free under a 30 GiB limit: the tracker and the vector
-	// changelog each ask for 16 GiB and the knowledge base's log for 4,
-	// into a 15 GiB share.
+	// changelog each ask for 16 GiB.
 	const free = 64 * gib
 	host := sizingHost{budget: jetstream.StorageBudget{
 		Limit: 30 * gib, Source: jetstream.BudgetServerStore,
@@ -985,18 +864,12 @@ func TestAnInterruptedFirstBootLeavesLogsARestartReportsAsMade(t *testing.T) {
 // brokerWithHeadroom is an embedded file-store broker with exactly headroom
 // bytes left to reserve.
 //
-// ITS CAP IS DECLARED, at [brokertest.StoreMaxBytes], never left to the broker:
-// an undeclared one is three quarters of this machine's free disk, which made
-// every scenario here a fact about the runner and skipped it on a disk too
-// small to hold it. A declared cap is accounting, which nats-server never
-// checks against the disk, so the same arithmetic runs on every machine.
-//
-// AND THE REST OF IT RESERVED, rather than the cap declared at the headroom
-// itself: a cap with nothing reserved beside the logs is the same number as
-// what is left of it, and a sizing that divided the cap instead of what is
-// left would pass every case here. A scenario that asks for more headroom
-// than the fixed cap leaves room to spend around is a fault in the case, so
-// it fails naming both figures rather than reserving a negative remainder.
+// ITS CAP IS DECLARED ([brokertest.StoreMaxBytes]), not three quarters of the
+// runner's free disk: nats-server never checks a declared cap against the
+// disk, so the arithmetic is the same on every machine. AND THE REST OF IT RESERVED, rather than the cap set to the
+// headroom, or a sizing that divided the cap instead of what is left would
+// pass every case. A scenario needing more than the cap leaves fails naming
+// both figures.
 func brokerWithHeadroom(t *testing.T, headroom int64) *jetstream.Queue {
 	t.Helper()
 	q, err := jetstream.Open(t.Context(), jetstream.Config{
@@ -1041,23 +914,12 @@ func sizeAndProvision(t *testing.T, q *jetstream.Queue, stream config.Stream, fr
 	return err
 }
 
-// THE STATE LOGS BOOT ON THE HOST THAT REFUSED THEM.
+// THE STATE LOGS FIT THE BROKER THEY BOOT ON: every log is sized inside one
+// budget, the fixed defaults beside the ones scaled to their floors.
 //
-// Measured: a node on a volume with 7.6 GiB free refused to boot with the
-// broker's `insufficient storage resources available`, and booted with 16 GiB.
-// The broker's cap there is three quarters of the volume, 5.7 GiB. The tracker
-// and vector logs were scaled into half of the free space, 1.9 GiB each, and
-// the pages log then reserved its fixed 4 GiB on top: 7.8 GiB against 5.7.
-// Every log is sized inside one budget now, and all of them fit, the identity
-// estate's and the usage log at their fixed defaults beside the ones scaled to
-// their floors.
-//
-// THE HOST IS THE SMALLEST THE LOGS' FLOORS FIT, which is the figure the
-// deployment guide states: thirteen logs hold 8.75 GiB at their smallest, so the
-// 7.6 GiB host that was measured no longer boots by its logs alone (it is
-// refused naming the log it could not reserve), and 11.67 GiB, whose broker
-// grants three quarters of it, is where the same single budget has to fit
-// them. A log added later moves this figure, and the guide's, with it.
+// THE HOST IS THE SMALLEST THE LOGS' FLOORS FIT, the figure the deployment
+// guide states: 11.67 GiB, whose broker grants three quarters of it. A log
+// added later moves this figure, and the guide's, with it.
 func TestTheStateLogsFitTheBrokerTheyBootOn(t *testing.T) {
 	t.Parallel()
 	// 11.67 GiB, in hundredths so the arithmetic stays in integers: the
@@ -1081,12 +943,9 @@ func TestTheStateLogsFitTheBrokerTheyBootOn(t *testing.T) {
 	}
 }
 
-// A RESTART SIZES THE LOGS AS THE BOOT THAT CREATED THEM DID.
-//
-// The logs' own reservations count against the broker once they exist, so a
-// budget read without adding them back shrinks on every restart: the derived
-// ceilings a second boot computed were floors, reported against the running
-// streams as differences nobody had made.
+// A RESTART SIZES THE LOGS AS THE BOOT THAT CREATED THEM DID. Once they exist
+// their reservations count against the broker, so a budget read without
+// adding them back shrinks every restart and reports differences nobody made.
 func TestARestartSizesTheLogsAsTheFirstBootDid(t *testing.T) {
 	t.Parallel()
 	const free = 64 * gib
@@ -1109,21 +968,15 @@ func TestARestartSizesTheLogsAsTheFirstBootDid(t *testing.T) {
 }
 
 // A BOOT THAT STILL CANNOT RESERVE ITS LOGS SAYS WHAT IT NEEDED, WHAT IT HAD
-// AND WHAT TO CHANGE.
+// AND WHAT TO CHANGE, none of which the broker's refusal names.
 //
-// The broker's refusal names none of the three, and the operator who got it
-// went looking at a disk that had room for two of the three logs.
-//
-// And WHAT TO CHANGE is only what this node can reach. Shrinking a log that
-// already exists is `crewlet retention set-capacity`, which needs a node whose
-// state logs are up, and every mode starts them: the refusal once offered it,
-// sending the operator to a verb that fails the same way.
-//
-// And WHERE THE CEILING CAME FROM is one of three facts. The identity log's
-// unset ceiling is its own fixed default, below the gibibyte scaling stops at: read as derived, a refused 512 MiB identity log
-// was said to go no lower than a gibibyte and was never offered the smaller
-// ceiling its field accepts. The identity log is provisioned last, so on a
-// tight broker it is the likeliest refusal of all.
+// WHAT TO CHANGE is only what this node can reach: `crewlet retention
+// set-capacity` needs a node whose state logs are up, so it is never offered.
+// WHERE THE CEILING CAME FROM is one of three facts: derived, set, or the
+// log's own fixed default (the identity log's, below the gibibyte scaling
+// stops at), which is offered the smaller ceiling its field accepts. The
+// identity log is provisioned last, so on a tight broker it is the likeliest
+// refusal.
 func TestARefusedReservationNamesWhatItNeededAndHad(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -1134,10 +987,9 @@ func TestARefusedReservationNamesWhatItNeededAndHad(t *testing.T) {
 		says     []string
 		never    []string
 	}{
-		// Every derived ceiling is at its floor and three floors do not
-		// fit: the tracker and vector logs take two gibibytes, and the
-		// pages log's one is refused with half a gibibyte left. A ceiling
-		// at the floor goes no lower, so room is the only remedy.
+		// Three derived ceilings at their floors do not fit: the pages
+		// log's gibibyte is refused with half a gibibyte left. A ceiling
+		// at its floor goes no lower, so room is the only remedy.
 		"a derived ceiling at its floor": {
 			headroom: 5 * gib / 2,
 			log:      "CREWLET_PAGES_LOG",
@@ -1169,9 +1021,9 @@ func TestARefusedReservationNamesWhatItNeededAndHad(t *testing.T) {
 					"to a smaller ceiling, no lower than its 1073741824-byte floor;",
 			},
 		},
-		// THE IDENTITY LOG'S FIXED 512 MiB, refused with the three derived
-		// logs at their gibibyte floors already reserved. Its field takes 64 MiB, so a smaller ceiling is on
-		// offer — and nothing about a derivation or a gibibyte is said.
+		// THE IDENTITY LOG'S FIXED DEFAULT, refused with the derived logs
+		// at their floors reserved. Its field takes 64 MiB, so a smaller
+		// ceiling is offered, and nothing about a derivation is said.
 		"the identity log's fixed default": {
 			headroom: 3*gib + gib/4,
 			log:      "CREWLET_IAM_LOG",
@@ -1224,16 +1076,14 @@ func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
 // EVERY BUDGET SOURCE SAYS WHO SETS THE LIMIT, IN THE TERMS THAT CHANGE IT.
 //
-// The sentence is what an operator acts on after a refused boot, and the source
-// is the only thing that decides it. A source this build does not know falls
-// through to a sentence naming the value itself, which is honest and useless —
-// so the assertion is over the CLOSED SET rather than over the cases somebody
-// remembered, and a source added to the queue package fails here rather than
-// on a node whose boot just failed.
+// The sentence is what an operator acts on after a refused boot. An unknown
+// source falls through to a sentence naming the value itself, honest and
+// useless, so the walk is over the CLOSED SET [jetstream.BudgetSources] and a
+// source added to the queue package fails here.
 func TestEveryBudgetSourceNamesTheLeverThatChangesIt(t *testing.T) {
 	t.Parallel()
-	// The lever each source's sentence has to reach, and the volume for
-	// the one whose answer depends on it.
+	// The lever each source's sentence has to reach, and the volume the
+	// server-store one names.
 	const volume = "/var/lib/crewlet/stream"
 	levers := map[jetstream.BudgetSource]string{
 		jetstream.BudgetServerStore:        "stream.store_max_bytes",
@@ -1241,9 +1091,8 @@ func TestEveryBudgetSourceNamesTheLeverThatChangesIt(t *testing.T) {
 		jetstream.BudgetAccount:            "whoever operates the broker",
 		jetstream.BudgetAccountNoTier:      "stream.replicas",
 		jetstream.BudgetAccountTierNoLimit: "declare storage on that tier",
-		// UNSTATED HAS NO SETTING TO NAME — the account declares no
-		// limit and a client cannot read the server's — so what it owes
-		// a reader is who to ask.
+		// UNSTATED HAS NO SETTING TO NAME (the account declares no limit
+		// and a client cannot read the server's), so it names who to ask.
 		jetstream.BudgetUnstated: "whoever operates that cluster",
 	}
 	for _, source := range jetstream.BudgetSources {
@@ -1266,30 +1115,24 @@ func TestEveryBudgetSourceNamesTheLeverThatChangesIt(t *testing.T) {
 			}
 		})
 	}
-	// AND THE NO-TIER SENTENCE IS NOT A CAPACITY ONE. Its limit is zero,
-	// which is also what an exhausted account reports, and the two send an
-	// operator to opposite places: one waits for room, the other edits a
-	// field. A reader told to free space on an account that grants this
-	// node's class nothing waits for something that will never happen.
+	// AND THE NO-TIER SENTENCE IS NOT A CAPACITY ONE: its zero limit is also
+	// what an exhausted account reports, but one sends an operator to wait
+	// for room and the other to edit a field.
 	noTier := limitSource(jetstream.BudgetAccountNoTier, volume)
 	if !strings.Contains(noTier, "no JetStream default or applicable tiered limit present") {
 		t.Errorf("the no-tier sentence does not quote what the broker will "+
 			"actually say, so nobody can match the two: %s", noTier)
 	}
-	// AND IT DOES NOT OFFER THE BYTE COMPARISON'S WORDS, which a missing
-	// tier never reaches: the class is not resolved at all, so nothing is
-	// ever compared. Naming both would send an operator to look at how
-	// full an account is when the account has no entry for them.
+	// AND IT DOES NOT QUOTE THE BYTE COMPARISON'S REFUSAL: a missing tier
+	// is refused before anything is compared.
 	if strings.Contains(noTier, "insufficient storage resources available") {
 		t.Errorf("the no-tier sentence offers a refusal a missing tier cannot "+
 			"reach: %s", noTier)
 	}
-	// THE LIMITLESS TIER NAMES BOTH, because its report covers two
-	// realities the account cannot be asked to tell apart: a class with no
-	// entry in the limit table, and a class declared with no disk. The
-	// first is refused before a byte is compared and the second by the
-	// comparison, and an operator sent to only one of them is hunting
-	// either a declaration that is there or a fullness that is not.
+	// THE LIMITLESS TIER QUOTES BOTH: its report covers a class with no
+	// entry in the limit table (refused before any comparison) and a class
+	// declared with no disk (refused by it), which the account cannot tell
+	// apart.
 	tierNoLimit := limitSource(jetstream.BudgetAccountTierNoLimit, volume)
 	for _, want := range []string{
 		"no JetStream default or applicable tiered limit present",
@@ -1310,13 +1153,9 @@ func TestEveryBudgetSourceNamesTheLeverThatChangesIt(t *testing.T) {
 // THE ROOM CLAUSE IS THE SAME FOUR NUMBERS WHEREVER IT APPEARS, and its three
 // cases are three different facts.
 //
-// It is the one sentence a refused create and a refused raise share, and they
-// were written separately once — which is the shape internal/textcut,
-// internal/whsec and internal/jsprovision each record drifting while two doc
-// comments asserted the two matched. What a test can hold is that neither of
-// the two unreadable cases is ever spelled as a number: a limit that could not
-// be read reported as zero, or a broker that states none reported as a broker
-// with none, is an operator told there is no room when nobody said so.
+// A refused create and a refused raise share it. Neither unknown case is ever
+// spelled as a number: a limit that could not be read reported as zero, or an
+// unstated one as none, tells an operator there is no room when nobody said so.
 func TestTheRoomClauseNeverSpellsAnUnknownAsANumber(t *testing.T) {
 	t.Parallel()
 	const volume = "/var/lib/crewlet/stream"
@@ -1335,9 +1174,7 @@ func TestTheRoomClauseNeverSpellsAnUnknownAsANumber(t *testing.T) {
 		}
 	}
 
-	// UNREAD IS NOT ZERO. The read failed, so there is no number — and a
-	// clause carrying one would be an invention on the one line an
-	// operator reads after a refused boot.
+	// UNREAD IS NOT ZERO: the read failed, so there is no number to give.
 	unread := roomLeft(jetstream.StorageBudget{}, errors.New("no responders"), volume)
 	if !strings.Contains(unread, "could not be read") {
 		t.Errorf("an unreadable budget does not say so: %s", unread)
@@ -1359,13 +1196,10 @@ func TestTheRoomClauseNeverSpellsAnUnknownAsANumber(t *testing.T) {
 }
 
 // A NODE THAT CANNOT MEASURE ITS VOLUME NAMES THE FIELDS THAT VOLUME DECIDES,
-// and only those.
-//
-// The warning is the operator's one chance to choose the ceilings a missing
-// measurement shrinks, so it has to name exactly the unset ones that follow
-// the free space: not the identity log's or the usage log's, whose flat asks
-// the volume has no say in, and not a field the operator already set. It was a
-// list of three written beside the warning, which went on naming a set field.
+// and only those: the warning is the operator's one chance to set the ceilings
+// a missing measurement shrinks, so it names exactly the unset ones that
+// follow free space, never the identity or usage log's flat asks or a field
+// the operator already set.
 func TestAnUnmeasuredVolumeNamesTheCeilingsItDecides(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -1377,15 +1211,12 @@ func TestAnUnmeasuredVolumeNamesTheCeilingsItDecides(t *testing.T) {
 			"stream.tracker_vectors_max_bytes", "stream.pages_log_max_bytes",
 			"stream.artifacts_log_max_bytes", "stream.artifact_data_log_max_bytes",
 			"stream.chat_log_max_bytes", "stream.code_log_max_bytes"}},
-		// THE KNOWLEDGE BASE'S LOG, THE ARTIFACTS LOG, THE DATASTORE LOG AND
-		// THE CODE LOG FOLLOW THE MUTATION LOG'S CEILING, set or derived
-		// ([config.Stream.PagesMaxBytes], [config.Stream.ArtifactsMaxBytes],
-		// [config.Stream.CodeMaxBytes],
-		// [config.Stream.ArtifactDataMaxBytes]), so once the mutation log is
-		// set the volume decides them no more than it does the mutation
-		// log's own. The CHAT LOG does not follow it: its cap is a share of
-		// the volume whatever the mutation log is set to ([chatMaxBytes]), so
-		// the volume still decides it.
+		// The knowledge base's, artifacts, datastore and code logs follow
+		// the mutation log's ceiling ([config.Stream.PagesMaxBytes],
+		// [config.Stream.ArtifactsMaxBytes], [config.Stream.CodeMaxBytes],
+		// [config.Stream.ArtifactDataMaxBytes]), so once it is set the
+		// volume no longer decides them. The CHAT LOG's cap is a share of
+		// the volume whatever the mutation log is ([chatMaxBytes]).
 		{"the mutation log set", config.Stream{TrackerLogMaxBytes: 8 << 30},
 			[]string{"stream.tracker_vectors_max_bytes", "stream.chat_log_max_bytes"}},
 		{"every volume-derived log set", config.Stream{TrackerLogMaxBytes: 8 << 30,
@@ -1432,13 +1263,10 @@ func (*recordingHost) DomainLog(context.Context, string) (*jetstream.DomainLog, 
 	return nil, nil
 }
 
-// A LOG NOBODY SIZED IS NOT CREATED AT THE DOMAIN'S DEFAULT.
-//
-// A domain's declared ceiling is what its stream would be created at if this
-// node took it as given, and that is a reservation no Tier A budget counted —
-// the reservation that refuses a boot on a broker sized for the logs it was
-// told about. So a domain the sizing left out, or sized at nothing, refuses by
-// name before the broker is asked to create its stream at all.
+// A LOG NOBODY SIZED IS NOT CREATED AT THE DOMAIN'S DEFAULT: that would be a
+// reservation no Tier A budget counted, refusing a boot on a broker sized for
+// the logs it was told about. A domain the sizing left out, or sized at zero,
+// refuses by name before its stream is asked for.
 func TestALogNobodySizedIsRefusedBeforeItsStreamIsCreated(t *testing.T) {
 	t.Parallel()
 	unsized := doclet.Domain{}
@@ -1482,18 +1310,14 @@ func TestALogNobodySizedIsRefusedBeforeItsStreamIsCreated(t *testing.T) {
 // AN UNSET CHAT CEILING IS THE DOMAIN'S BUDGET, CAPPED BY THE VOLUME AND
 // NEVER BELOW ITS FIELD'S FLOOR.
 //
-// The chat log asks for the excursion budget its domain declares
-// ([chatlet.ChatLogMaxBytes]) rather than a ratio to the mutation log's, but on a
-// small volume no more than a quarter of the share the mutation log derives —
-// the cap that keeps the vector changelog's room for a model change clear of
-// the headroom alarm ([config.DerivedChatLogDivisor]). And whatever the volume
-// says it never asks for less than `stream.chat_log_max_bytes` accepts, so a
-// node never derives a ceiling its own validation would refuse to be told —
-// a property of the constants together, which this holds them to. A value an
-// operator wrote is theirs, the cap and the floor's reasons both being about
-// a number nobody chose. Mutation: drop the cap, the divisor or the domain's
-// budget, or let the derivation follow the mutation log's field, and a row
-// below names the volume it went wrong on.
+// The chat log asks for its domain's excursion budget
+// ([chatlet.ChatLogMaxBytes]), on a small volume no more than a quarter of the
+// mutation log's derived share, which keeps the vector changelog's room for a
+// model change clear of the headroom alarm ([config.DerivedChatLogDivisor]),
+// and never less than `stream.chat_log_max_bytes` accepts. A value an operator
+// wrote is theirs. Mutation: drop the cap, the divisor or the budget, or let
+// the derivation follow the mutation log's field, and a row names the volume
+// it went wrong on.
 func TestAnUnsetChatCeilingIsTheDomainsBudgetCappedByTheVolume(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {

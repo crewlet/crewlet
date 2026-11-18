@@ -7,44 +7,18 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// ContainerReachWarnings is the advisory a node gets when a container box on
-// this host could not reach the engine at all: the company reaches the
-// `container` cell, the listener a box dials binds loopback alone, and the
-// host is Linux (goos, which callers pass as runtime.GOOS).
-//
-// THE TWO TIERS TOGETHER, which neither tier's own warnings can say: the bind
-// is Tier A's and the cell is the company's. A container box dials the engine
-// host by its runtime's name for it ([sandbox.EngineAddress]), and what that
-// name reaches depends on the host. Docker Desktop and Podman's machine on
-// macOS and Windows deliver it over the host's loopback, so a 127.0.0.1 bind
-// answers. Docker Engine and Podman on Linux deliver it from the container's
-// bridge network, which a 127.0.0.1 bind never hears: every bridged tool call,
-// telemetry export and loopback MCP server would fail, each as a connection
-// the box could not make, and nothing on the engine side would say why.
-//
-// A WARNING, not a refusal: a bind the operator fronts with their own proxy on
-// the bridge address, or a host whose runtime forwards loopback after all
-// (Docker Desktop for Linux), is a working configuration this cannot see.
-//
-// AT THE LISTENER A BOX DIALS: the public one when `api.public.port` is set,
-// since the bridge and the receiver are served there alone, and `api` else. A
-// node that binds no listener for them is told so by the launch that needs
-// one, not here.
-//
-// ONLY ON A NODE WITH BOTH THE INGRESS AND THE SEATS ROLE, the one pair whose
-// own bind a container box on this host dials. Ingress serves those routes to
-// a box off the host at all: a node without it serves them on `api.port` to
-// this host's loopback alone, for its own `direct` boxes (internal/api's
-// Probes), and a container box launched on its host reaches the tool bridge
-// through an ingress node's address (`CREWLET_MCP_BRIDGE_URL`), which this
-// bind says nothing about. Seats is the role that launches a seat's box: a
-// node without it starts none on this host, so every box dialling its routes
-// comes from another machine, over the LAN or a proxy, and never through this
-// host's runtime. Deep work is no reason to warn such a node either: on Linux
-// a container deep-work run on a loopback bridge is held to loopback, and
-// refused whatever the bind. A `direct` box is no concern of this either way:
-// it shares the host's loopback, and dials the node's own listener there
-// (cmd/crewlet's boxHostURL).
+// ContainerReachWarnings is the advisory for a Linux host (goos, as
+// runtime.GOOS) whose container boxes cannot reach the engine: the company
+// reaches the `container` cell and the listener a box dials binds loopback.
+// Neither tier can say it alone (the bind is Tier A's, the cell the company's).
+// On Linux a box reaches [sandbox.EngineAddress] from the bridge network, which
+// a 127.0.0.1 bind never hears. A warning, not a refusal: a proxy on the bridge,
+// or a runtime forwarding loopback (Docker Desktop for Linux), works unseen.
+// It judges the public listener when `api.public.port` is set, else `api`
+// (no listener at all is the launch's to report), and only on an
+// ingress-and-seats node: elsewhere no box on this host dials it. A `direct`
+// box shares the host's loopback (cmd/crewlet's boxHostURL), and container
+// deep work on a loopback bridge is refused whatever the bind.
 func ContainerReachWarnings(boot *config.Bootstrap, c *config.Company, goos string) []config.Warning {
 	if boot == nil || c == nil || goos != "linux" {
 		return nil

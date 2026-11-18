@@ -10,11 +10,10 @@ import (
 )
 
 // AN ASK CARRIES THE ITEM THE ASKING TURN IS ON, off the turn and never off an
-// argument: the answering turn is charged to it, and a model that could name
-// the item could charge a colleague's work to anything. The tool declares no
-// such argument, so one sent anyway is refused by name before the tool runs
-// (the undeclared-argument gate) — what this holds is the half that remains:
-// the item that rides the ask is the turn's.
+// argument: the answering turn is charged to it, and a model naming the item
+// could charge a colleague's work to anything. An argument naming one is
+// refused by the undeclared-argument gate; this holds the rest: the item that
+// rides the ask is the turn's.
 func TestAnAskCarriesTheTurnsItem(t *testing.T) {
 	t.Parallel()
 	svc := &asker{}

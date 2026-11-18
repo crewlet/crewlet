@@ -251,12 +251,9 @@ func endsAudited(q *queuememory.Queue) []types.ModelActed {
 }
 
 // HOW A DEVICE SIGN-IN ENDED IS IN THE AUDIT TRAIL, as the person's who
-// started it.
-//
-// The route that started it answered with a pending code; whether a login was
-// stored is decided minutes later on the node running the harness, and no route
-// call marks it. The node that ran the session publishes its end, and a
-// session whose node died is published by the sweep that fails it.
+// started it: the route answered only a pending code and the outcome is decided
+// later on the node running the harness, so that node publishes the end, and
+// the sweep that fails a dead node's session publishes that one.
 //
 // Mutation: publish nothing from endDeviceSignIn, or from the sweep, and
 // this fails.

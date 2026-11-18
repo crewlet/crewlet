@@ -11,35 +11,18 @@ import (
 	"strings"
 )
 
-// HOST CONFINEMENT: a direct box whose job may not read the engine.
-//
-// [Direct] isolates a run's STATE and nothing else: its job runs as the engine
-// user, so a shell it starts reads whatever that user can, the engine's data
-// directory, its keyring and the operator's own files included. That is the
-// documented contract for a seat's code work on a workstation, and it is not
-// one a person's Dashboard Assistant may run under: a deep-work run is steered
-// by whatever the person asked and whatever pages it read (ADR-0054).
-//
-// A CONFINED direct box runs every command its job starts inside the
-// strongest boundary this host can enforce, chosen once by [ProbeConfinement]:
-//
-//   - macOS: sandbox-exec with a profile rendered per box ([sandboxProfile]),
-//     which denies reads and writes under every [Confinement.Deny] path, every
-//     write outside the box's home, every other process's information and the
-//     login keychain's service.
-//   - Linux, with unprivileged user namespaces: bubblewrap ([bwrapArgv]), the
-//     host's root read-only, every denied path hidden under an empty tmpfs or
-//     /dev/null, a fresh /proc in a new pid namespace, and the box's home the
-//     one writable directory.
-//   - Linux, otherwise: Landlock, applied by the engine's own binary re-executed
-//     as `crewlet sandbox-confine` ([ConfineMain]): an allowlist of the host's
-//     tree carved around every denied path ([carve]), the box's home the one
-//     writable directory. Landlock also confines ptrace, so another process's
-//     /proc environ is unreadable.
-//
-// A HOST THAT CAN ENFORCE NONE OF THESE RUNS NOTHING CONFINED. The caller is
-// told why ([ConfinementUnavailableError]) and refuses the run; it never falls
-// back to an unconfined job.
+// HOST CONFINEMENT: [Direct] isolates a run's state only, and its job reads
+// whatever the engine user can. A person's Dashboard Assistant run, steered by
+// what it was asked and read, may not (ADR-0054), so a CONFINED direct box runs
+// every command inside the strongest boundary the host enforces, chosen once by
+// [ProbeConfinement]: macOS's sandbox-exec ([sandboxProfile]); Linux's
+// bubblewrap ([bwrapArgv]) where unprivileged user namespaces work; otherwise
+// Landlock, applied by the engine's binary re-executed as `crewlet
+// sandbox-confine` ([ConfineMain], [carve]), which also confines ptrace so
+// another process's /proc environ is unreadable. The box's home is the one
+// writable tree. A host that enforces none runs nothing confined: the caller
+// is told why ([ConfinementUnavailableError]) and refuses the run, never
+// falling back to an unconfined job.
 
 // Confinement is what a confined direct box's job may not touch.
 //
@@ -213,18 +196,14 @@ var keychainServices = []string{
 
 // sandboxProfile is the sandbox-exec profile for one box.
 //
-// THE LAST MATCHING RULE WINS in a sandbox profile, which is what the order
-// relies on: everything is allowed, the denied trees and every write are then
-// taken away, and the box's home and the harness's install are given back last.
-// Network stays open: web access is the run's (ADR-0054).
+// THE LAST MATCHING RULE WINS, so the order is: allow everything, take away
+// the denied trees and every write, then give back the harness's install and
+// the box's home. Network stays open: web access is the run's (ADR-0054).
 //
-// THE HOME'S ANCESTORS MAY BE STAT'ED, each by its literal path and for its
-// metadata alone: never listed, never read, never written. A denied tree
-// usually holds the home (the boxes directory, beside the other boxes and
-// the records), and macOS's `mkdir -p` makes every component of an absolute
-// path in turn, reading an EPERM as failure unless a stat shows the
-// directory is there. Without this a run could not `mkdir -p "$HOME/out"`,
-// the first line of most scripts a deep-work run writes.
+// THE HOME'S ANCESTORS MAY BE STAT'ED, each by literal path, metadata only: a
+// denied tree usually holds the home, and macOS's `mkdir -p` reads an EPERM on
+// a component as failure unless a stat shows it is there, so without this a
+// run could not `mkdir -p "$HOME/out"`.
 func sandboxProfile(r confineRules) string {
 	var b strings.Builder
 	b.WriteString("(version 1)\n(allow default)\n")
@@ -264,11 +243,11 @@ func sandboxProfile(r confineRules) string {
 
 // bwrapArgv is the bubblewrap command line for one box, before the job's argv.
 //
-// The host's root is bound READ-ONLY, then every denied path is masked: a
-// directory under an empty tmpfs, a file under /dev/null. The harness's install is
-// bound back read-only and the box's home read-write, last, so they win over
-// a mask of a tree that holds them. A new pid namespace with its own /proc
-// keeps every other process's environment out of reach.
+// The root is bound READ-ONLY, then each denied path masked (a directory by an
+// empty tmpfs, a file by /dev/null); the install (read-only) and the home
+// (read-write) are bound last, so they win over a mask that holds them. A new
+// pid namespace with its own /proc keeps every other process's environment out
+// of reach.
 func bwrapArgv(bwrap string, r confineRules) []string {
 	argv := []string{bwrap,
 		"--die-with-parent", "--new-session",
@@ -282,9 +261,8 @@ func bwrapArgv(bwrap string, r confineRules) []string {
 		info, err := os.Stat(d)
 		switch {
 		case err != nil:
-			// Nothing there to mask. A path that appears later is not
-			// in this namespace's view of the host either way: the root
-			// is bound at start, and the parent mask hides siblings.
+			// Nothing to mask, and one made later stays out of view: the
+			// root is bound at start, and a parent's mask hides it.
 			continue
 		case info.IsDir():
 			argv = append(argv, "--tmpfs", d)
@@ -321,8 +299,8 @@ func landlockSpecOf(r confineRules) landlockSpec {
 // Landlock only ADDS access, so a tree with a hole in it is written as its
 // siblings: a root holding a denied path is split into its children, each
 // child that holds none is kept whole, and the one that holds the path is
-// split again, down to the path itself, which is left out. readDir is the
-// directory listing, injected so the walk is testable on any host.
+// split again, down to the path itself, which is left out. readDir is
+// injected so the walk is testable on any host.
 func carve(root string, deny []string, readDir func(string) ([]os.DirEntry, error)) []string {
 	holds := false
 	for _, d := range deny {

@@ -145,8 +145,9 @@ func (e *Engine) openChangesPending(ctx context.Context) (bool, error) {
 // pollChanges asks the host about up to changePollBatch open changes under
 // the company's owners, after the last pass's, through the agents' apps'
 // cached tokens, and settles each that merged or closed more than
-// changePollGrace ago. Of each still open it records on the tasks waiting on it
-// whether anything moves it (ADR-0128). A rate limit ends the pass where it stood.
+// changePollGrace ago; of each still open it records on the tasks waiting on it
+// whether anything moves it (ADR-0128). A rate limit ends the pass where it
+// stood.
 func (e *Engine) pollChanges(ctx context.Context, now, _ time.Time) (int64, error) {
 	n := e.native.Load()
 	if lookup, _ := e.githubPulls.current(); n == nil || n.trackerReader == nil || lookup == nil {

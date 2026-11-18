@@ -52,8 +52,7 @@ func TestAServersRefusedAndShadowedToolsTravelBoundedAndCounted(t *testing.T) {
 	}
 }
 
-// A ROW WITH NOTHING REFUSED OR SHADOWED CARRIES NEITHER KEY: the record of a
-// company whose names are in order is what it was before either existed.
+// A ROW WITH NOTHING REFUSED OR SHADOWED CARRIES NEITHER KEY, nor a count.
 func TestARowWithEveryToolOfferedCarriesNoNotes(t *testing.T) {
 	t.Parallel()
 	wire := wireOf(t, coord.NodeStatusRecord{Node: "n1", Epoch: 1,

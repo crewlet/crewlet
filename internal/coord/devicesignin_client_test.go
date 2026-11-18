@@ -9,12 +9,10 @@ import (
 )
 
 // THE MODELS SCREEN NAMES EVERY DEVICE SIGN-IN STATUS, AND KNOWS WHICH END A
-// SESSION. Settings › Models' device sign-in dialog keys its status line and
-// its tone on the status `llm_device_sign_in` answers, and stops polling and
-// offers to start again on the ones that end a session. A status the engine
-// adds that the dashboard lacks is a session drawn with no words; one it
-// treats as still moving after the engine ended it is a dialog polling for
-// ever, and the reverse a live code abandoned.
+// SESSION. Settings › Models' dialog keys its status line on the status
+// `llm_device_sign_in` answers and stops polling on the ones that end a
+// session: a status it lacks draws no words, and a disagreement about which
+// end a session leaves a dialog polling for ever or abandons a live code.
 func TestTheModelsScreenNamesEveryDeviceSignInStatus(t *testing.T) {
 	t.Parallel()
 	tree := clientsource.Tree(t)

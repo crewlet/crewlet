@@ -9,80 +9,30 @@ import (
 	"github.com/crewlet/crewlet/internal/signedask"
 )
 
-// EVERY ENVELOPE ON THE ESTATE'S SUBJECTS IS SIGNED, the request and the reply
-// alike, under the fleet keyring — and an envelope that does not verify runs
-// nothing and decides nothing.
-//
-// # Why the estate needs it at all
-//
-// A data node runs a tracker write AS THE ACTOR THE REQUEST NAMES: the history
-// row, the wake and the authority a write is decided on are that actor's. Every
-// record the write lands on a log is signed (ADR-0031), but a record signed by
-// the data node that wrote it proves only that a fleet member wrote it — and
-// the member wrote whatever the request asked. Unsigned, a request on
-// `crewlet.estate.<node>` was therefore exactly the instruction ADR-0031 exists
-// to refuse, one hop earlier: anyone who could reach the broker could file a
-// task, edit a remark or purge one as any seat in the company, and the log
-// would carry it signed. And it answers a chat read FOR THE VIEWER THE REQUEST
-// NAMES: which private rooms and direct conversations the answer covers is that
-// seat's membership, so a read here is not a question a node answers about
-// itself — unsigned, it was any private room read as anybody. The reply is the
-// other half: an asker that believed any bytes arriving on its reply inbox
-// could be told a write landed that never ran, or handed somebody else's
-// answer.
-//
-// # One rule, internal/signedask's
-//
-// The frame, the domains, the binding and the verdicts are not the estate's
-// own: they are the rule every channel a node carries out a request on keeps,
-// stated once in internal/signedask, which the fleet broker's membership and a
-// note to a running turn take too. A second copy here would be ADR-0008's
-// failure — two implementations of a rule nothing compares — on the one rule
-// whose silent drift is a write as anybody. What the estate states for itself
-// is what each disposition MEANS on its subject:
-//
-//   - ADMITTED: dispatched, as the actor — or for the viewer — inside the
-//     verified body.
-//   - TAMPERED: answered [unservedUnauthenticated], bound to no request,
-//     logged at error, never dispatched.
-//   - KEY UNKNOWN: answered [unservedUnauthenticated], bound to the id the
-//     asker sent, so the router asks a data node that holds the key.
-//   - UNDECODABLE: answered as an error — the fleet's, so the sender is a
-//     build that disagrees with this one rather than somebody who is not the
-//     fleet.
-//   - STALE: answered [unservedStale], bound to the request it repeats.
-//
-// A request is bound by its [request.ID] and [request.Deadline], a reply by
-// [reply.Request]; a data node keeps the ids it has taken in a
-// [signedask.Guard] of its own. The domains are `estate.request` and
-// `estate.reply` ([channelName]), so no state-log record and no other
-// channel's envelope verifies as an estate one.
-//
-// # What it does not cover
-//
-// The custody batches a node holding no data hands its audit events to a data
-// node through are EVENT envelopes on the queue's durable verbs, not estate
-// envelopes, and are not signed here: they carry what a node observed rather
-// than an instruction a data node runs as somebody, and bringing them under a
-// signature is a decision about the event spine, not about this service.
+// Every request and reply on the estate's subjects is signed under the fleet
+// keyring by internal/signedask's rule, never a copy of it (ADR-0008); why:
+// package doc, "Every envelope is signed, and bound to its question". ADMITTED
+// is dispatched as the actor (or for the viewer) in the verified body; TAMPERED
+// is [unservedUnauthenticated], bound to no request, logged at error; KEY
+// UNKNOWN the same but bound to the asker's id, so the router asks a node with
+// the key; UNDECODABLE is an error (a build that disagrees, not an outsider);
+// STALE is [unservedStale], bound to the request it repeats. Each node keeps
+// the ids it took in its own [signedask.Guard]. The domains `estate.request` and
+// `estate.reply` ([channelName]) keep other channels' envelopes and state-log
+// records from verifying here. Custody batches are event envelopes, unsigned:
+// observations, not an instruction run as somebody (the event spine's call).
 
 // channelName is the estate's channel, and so the stem of its two key domains.
 const channelName = "estate"
 
 // Envelopes signs and verifies the estate's envelopes for one node: the
 // requests its router sends and the replies its server answers, and the
-// opposite halves of both.
-//
-// ONE VALUE FOR BOTH HALVES, built once from the node's keyring and handed to
-// the router and the server alike, because a node is both: a data node answers
-// its peers and asks them, and a node that could sign a request it could not
-// verify the answer to would believe nothing it was told.
-//
-// AND THE VERIFIER KEYS, the one other thing the estate's wire derives from
-// the keyring: a machine token's answer carries a MAC in place of its verifier
-// ([TokenFacts]), formed by the half that answers and checked by the half that
-// asks. Both need the same keys, and both are handed exactly this value — a
-// second value beside it, wired apart, could be wired from another ring.
+// opposite halves of both. One value serves both halves, since a node both asks
+// and answers, and one that could sign a request but not verify its answer
+// would believe nothing. It also holds the verifier keys a machine token's
+// answer is MACed under ([TokenFacts]), formed by the answering half and
+// checked by the asking one, so both derive from this ring and no separately
+// wired value can come from another.
 type Envelopes struct {
 	channel   *signedask.Channel[request, reply]
 	verifiers verifierKeys
@@ -98,8 +48,8 @@ func NewEnvelopes(ring recordseal.Keyring) (*Envelopes, error) {
 	if err != nil {
 		return nil, fmt.Errorf("estate: %w", err)
 	}
-	// THE RING HAS JUST BEEN HELD TO A SIGNING SHAPE — an id on every
-	// entry, the active one among them — so every key derives.
+	// signedask.New has held the ring to a signing shape (an id on every
+	// entry, the active one among them), so every key derives.
 	return &Envelopes{channel: channel, verifiers: newVerifierKeys(ring)}, nil
 }
 
@@ -129,8 +79,7 @@ func (e *Envelopes) sealReply(r reply) []byte {
 	if err == nil {
 		return sealed
 	}
-	// THE FALLBACK IS THREE PLAIN STRINGS, which always encode, so its own
-	// error is not a case: what goes out is the reply that says why.
+	// The fallback is three plain strings, which always encode.
 	sealed, _ = e.channel.SealReply(reply{Node: r.Node, Request: r.Request, Err: &wireError{
 		Message: fmt.Sprintf("estate: %s could not encode its reply: %v", r.Node, err),
 	}})

@@ -48,16 +48,11 @@ func declarationStopped(unvouched bool) error {
 }
 
 // A WRITE STOPPED AT ITS OWN LABEL DECLARATION IS ANSWERED UNDER ITS OWN TOOL,
-// as the write it did not make, with the repeat that finishes both.
-//
-// The declaration runs BEFORE the task's append, because the create refuses a
-// label its project has not declared. An unknown declaration was answered
-// under write_project — "write_project stopped part of the way through … call
-// write_project again with exactly the same arguments" — which is a tool the
-// caller never called: that call answered "changes nothing", or declared the
-// tag and answered without error, which the text named as the point the work
-// could be reported done. The item had never been filed. An operator was
-// handed the create's op_id for a tool that takes none.
+// as the write it did not make, with the repeat that finishes both. The
+// declaration runs BEFORE the task's append (the create refuses an undeclared
+// label), so an answer under write_project would name a tool the caller never
+// called, a repeat that never files the item, and an op_id for a tool that
+// takes none.
 func TestAWriteStoppedAtItsLabelDeclarationIsAnsweredUnderItsOwnTool(t *testing.T) {
 	t.Parallel()
 	calls := map[string]struct {
@@ -134,14 +129,11 @@ func TestAWriteStoppedAtItsLabelDeclarationIsAnsweredUnderItsOwnTool(t *testing.
 					}
 					if unvouched {
 						// THE REPEAT HERE STOPS AT THE SAME STEP, so the
-						// step that moves it is named: a declaration made
-						// again, which is harmless.
-						//
-						// AND WHAT THAT REPEAT THEN DOES WITH ITS OWN
-						// WRITE: every step of one call dates from the
-						// same instant, so it is unvouched too — answered
-						// from what this node holds of it, or unknown
-						// again, which means looking.
+						// step that moves it is named: a harmless repeat
+						// declaration. Every step of one call dates from
+						// the same instant, so the repeat's own write is
+						// unvouched too: answered from what this node
+						// holds, or unknown again, which means looking.
 						wants := []string{
 							"stops at this step",
 							`write_project on ENG with tags_add: [{"slug": "regression"}]`,
@@ -215,9 +207,8 @@ func checkStoppedAtLabels(t *testing.T, name string, got tools.Result, notMade s
 
 // A DECLARATION REFUSED OVER A TAG IS ANSWERED UNDER THE CALLING TOOL, with
 // the ways past it that fit a write of one item: this project's own tag in
-// `labels`, or a declaration of one's own. It opened "write_project was
-// refused" about a create, and named a remedy — "call write_project again" —
-// for a call nobody had made.
+// `labels`, or a declaration of one's own, never write_project's refusal or a
+// "call write_project again" for a call nobody made.
 func TestALabelDeclarationRefusedOverATagIsAnsweredUnderTheCallingTool(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {

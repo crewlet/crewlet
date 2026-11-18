@@ -19,8 +19,8 @@ import (
 )
 
 // THE WAKE FEED'S DEFERRAL BACKS OFF NO FURTHER THAN THIS CONSUMER'S ACK
-// WINDOW: a record handed back for a peer (changefeed.DeferDelay, #838) waits
-// at most changefeed.DeferCap, which is domainConsumerAckWait, so it is never
+// WINDOW: a record handed back for a peer (changefeed.DeferDelay) waits at most
+// changefeed.DeferCap, which is domainConsumerAckWait, so it is never
 // redelivered more slowly than a record nobody answered at all.
 //
 // Mutation: raise either constant alone, red.
@@ -34,13 +34,11 @@ func TestTheFeedsDeferralCapIsTheDomainAckWait(t *testing.T) {
 // A WAKE FEED'S DEAD LETTER IS KEPT IN CREWLET_DLQ FOR AS LONG AS THE EVENT
 // STREAM KEEPS ANYTHING, and says when it goes.
 //
-// The entry carries the record's sealed frame, so it needs its log for
-// nothing; what bounds it is the dead-letter stream's own age, which is the
-// event stream's `stream.event_retention_hours` — a safety field every node of
-// a fleet holds equal, so no node keeps an entry longer than another reads it
-// as kept. The stream keeps by age and never by interest, so the entry is
-// there whether or not anybody reads the subject; and the instant a listing
-// says it expires is the one that bound gives, which the alarm counts down to.
+// The entry carries the record's sealed frame and needs its log for nothing;
+// it is bound by the dead-letter stream's age, `stream.event_retention_hours`,
+// a safety field every node holds equal, so no node keeps an entry longer than
+// another reads it as kept. The stream keeps by age, never by interest, and a
+// listing's expiry is that bound, which the alarm counts down to.
 //
 // Mutation: route the feed's subject to another stream, or give the dead
 // letters an age of their own, and the stream or its bound is wrong; compute
@@ -93,14 +91,11 @@ func TestAFeedsDeadLetterIsKeptInTheDeadLetterStreamForTheEventRetention(t *test
 // A SECOND KEEP OF ONE IDENTITY IS STORED AS NOTHING FOR AS LONG AS A KEEP CAN
 // TAKE.
 //
-// A keep carries its identity as its message id, and the dead-letter stream
-// collapses a repeated one within its duplicate window — the contract's
-// window, which has to outlast the slowest keep this backend makes: one at the
-// transport's ceiling across a link at the floor, the request term and a
-// crossing for each of its sends. Left to the broker's default of two minutes,
-// a peer's copy of a record whose first keep was still crossing four minutes
-// later was a second entry. So the stream is provisioned with the window, and
-// the window holds the slowest keep.
+// A keep's identity is its message id, collapsed within the stream's duplicate
+// window, the contract's queue.DeadLetterWindow, which must outlast the slowest
+// keep: one at the transport's ceiling across a link at the floor, the request
+// term and a crossing per send. Under the broker's two-minute default, a peer's
+// copy of a record whose first keep was still crossing is a second entry.
 //
 // Mutation: provision the dead letters without the window, or shorten the
 // window below the slowest keep, and it goes red.
@@ -131,15 +126,12 @@ func TestTheDeadLettersCollapseASecondKeepForAsLongAsAKeepCanTake(t *testing.T) 
 
 // A LISTING MOVES NO FRAME, AND LEAVES NO CONSUMER BEHIND.
 //
-// The alarm's reading lists the feeds' subjects whenever their marks move, on
-// every data node, and an entry's frame is a record as large as the transport
-// carries: so a listing asks the broker for headers only, and the node that
-// lists — a node of its own here, its connection carrying nothing but what
-// the listing receives — takes in less than one of the frames for every entry
-// together, while every entry is listed with its header. And the consumer the
-// listing read through is deleted once it has answered, where one left for
-// the broker to reap would be a consumer on the dead-letter stream for every
-// listing of the last half minute.
+// The alarm's reading lists the feeds' subjects on every data node whenever
+// their marks move, and an entry's frame is as large as the transport carries,
+// so a listing asks for headers only: the lister (a node of its own here)
+// takes in less than one frame for every entry together. The listing's
+// consumer is deleted once it answers; left for the broker to reap, the stream
+// would hold one per listing of the last half minute.
 //
 // Mutation: drop HeadersOnly and the frames cross the connection; drop the
 // delete, and the listing's consumer is still on the stream.
@@ -202,13 +194,11 @@ func TestAListingMovesNoFrameAndLeavesNoConsumer(t *testing.T) {
 	}
 }
 
-// THE FRAMING A KEEP IS HELD TO COVERS EVERY BYTE THIS BACKEND ADDS.
-//
-// A keep is refused once its header and body come within queue.LetterFraming
-// of the transport's ceiling, on the twin as here; so the header block this
-// backend wraps them in — `NATS/1.0`, the expected stream, the dead-letter
-// header's name and the line endings — must fit inside that framing, or an
-// entry the contract admits is one the transport refuses.
+// THE FRAMING A KEEP IS HELD TO COVERS EVERY BYTE THIS BACKEND ADDS: a keep is
+// refused once its header and body come within queue.LetterFraming of the
+// transport's ceiling, so the header block wrapping them (`NATS/1.0`, the
+// expected stream, the dead-letter header's name, the line endings) must fit
+// in it, or the contract admits an entry the transport refuses.
 //
 // Mutation: lower queue.LetterFraming under the header block, or add a header
 // to the keep's message, and the block outgrows it.
@@ -224,16 +214,11 @@ func TestTheFramingAKeepIsHeldToCoversItsHeaderBlock(t *testing.T) {
 	}
 }
 
-// A WAKE FEED'S LARGEST ENTRY IS KEPT.
-//
-// A record at its log's ceiling is a frame of the transport's ceiling less
-// what a stored record carries beside its payload (statelog's appendOverhead),
-// sealed under the longest key id a keyring may name; its entry is that frame
-// beside a header at its worst — every number at its largest, a long subject,
-// and a detail of control characters, each escaped as six bytes. Kept through
-// this backend over the wire, it is accepted: a feed's entry that the
-// transport refused would be a record that circles at the head of its consumer
-// for ever.
+// A WAKE FEED'S LARGEST ENTRY IS KEPT: a frame of the transport's ceiling less
+// statelog's appendOverhead, sealed under the longest key id a keyring may
+// name, beside a header at its worst (every number at its largest, a long
+// subject, a detail of control characters escaped as six bytes each). A feed's
+// entry the transport refused would circle at the head of its consumer forever.
 //
 // Mutation: put the frame back in the header, or let the detail grow past its
 // quarter kibibyte, and the keep is refused as too large.

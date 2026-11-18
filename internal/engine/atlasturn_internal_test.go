@@ -13,14 +13,11 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// A TURN'S PROMPT NAMES THE ATLAS ONLY WHERE WHOEVER WOKE IT MAY READ IT
-// (ADR-0109, ADR-0127): an agent seat holds the atlas, so a turn nobody woke
-// is shown the systems its work names; a turn a person woke is shown them only
-// if that person holds the atlas, and a turn a stranger woke never. A
-// directory this node cannot read is unknown, which shows nothing.
-//
-// Mutation: decide as the seat alone, without the turn's ceiling, and the
-// person without the atlas reads it through the agent they woke.
+// A turn's prompt names the atlas only where whoever woke it may read it
+// (ADR-0109, ADR-0127): a turn nobody woke, yes; one a person woke, only if
+// they hold the atlas; one a stranger woke, never; an unreadable directory
+// shows nothing. Mutation: decide without the turn's ceiling, and the person
+// without the atlas reads it through the agent they woke.
 func TestATurnsPromptNamesTheAtlasOnlyWhereWhoeverWokeItMayReadIt(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Acme", Roles: []*org.Role{

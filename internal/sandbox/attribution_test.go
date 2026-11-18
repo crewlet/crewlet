@@ -8,16 +8,13 @@ import (
 )
 
 // A LAUNCH CREDITS THE RUN'S COMMITS AS ITS CATALOGUE SAYS, NAMING THE TURN,
-// THE SEAT AND ITS WORK ITEM. Under a catalogue that credits commits
-// (providers.sandbox.commit_attribution, on unless turned off) the job is
-// started asking its runner to credit Crewlet, to name the run by its turn,
-// which is what the run's page is addressed by, and to name the seat and the
-// item the turn is charged to; under one that turned the credit off the job is
-// started asking for nothing, so its git is exactly the box's.
+// THE SEAT AND ITS WORK ITEM. Under providers.sandbox.commit_attribution (on
+// unless turned off) the job asks its runner to credit Crewlet, naming the run
+// by its turn (what the run's page is addressed by), the seat and the item the
+// turn is charged to; turned off, it asks for nothing, so its git is the box's.
 //
-// Mutation: hand the runner no attribution, name the run by its launch rather
-// than its turn, drop the seat or the item, or ask whatever the catalogue
-// says, and this goes red.
+// Mutation: hand the runner no attribution, name the run by its launch, drop
+// the seat or the item, or ignore the catalogue, and this goes red.
 func TestALaunchCreditsTheRunsCommitsAsItsCatalogueSays(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {

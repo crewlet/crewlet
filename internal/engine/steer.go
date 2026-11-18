@@ -16,79 +16,29 @@ import (
 	"github.com/crewlet/crewlet/internal/signedask"
 )
 
-// A person's note to a running turn, carried out on the node running it.
+// A person's note to a running turn, carried on the node running it
+// (ADR-0067).
 //
-// # One box per first segment, and only its node answers
+// Until the turn launches its executor, its notes wait in its first segment's
+// [steer.Box], filed here under the run id. Every node serves
+// [topics.SeatSteer], and only the node whose desk holds the turn answers; the
+// rest stay silent, which the asker reads as a node the turn is not on. That is
+// the whole routing: nothing looks up where a turn runs.
 //
-// A turn that has not launched its executor yet holds its notes in a
-// [steer.Box], filed here under the turn's run id for as long as its first
-// segment runs. Every node serves [topics.SeatSteer]; a note scattered there
-// names a turn, and the one node whose desk holds that turn answers — every
-// other node answers nothing, which the asker reads as a node the turn is not
-// on. That is the whole routing: nothing looks up where a turn runs, because
-// the turn's own node is the only one that can say.
-//
-// # From the launch on, the run's record holds the turn's notes
-//
-// Once the turn has launched its executor, its notes wait on the run's record
-// in the coordination store, which every node reads (runsteer.go): the asking
-// node files a note there itself, and asks nobody. The launch HANDS THE BOX
-// OVER IN THE WRITE THAT CREATES THE RECORD ([steerDesk.handOver]): the box's
-// intake ends before that write, and every note it took and nobody read rides
-// it ([sandbox.LaunchRequest.HandedNotes]), filed waiting after the brief's —
-// so no note a person files on the record can land ahead of one the box took
-// first, nor use up the bounds a note the box accepted was already counted
-// against: every reader takes in the record's order, and a note is the later
-// word. While that write is in flight the turn is HANDING, and an offer that
-// reaches the desk waits for it; then the turn's entry here is kept as HANDED
-// — so a note that read "no record" a moment before the launch wrote one, and
-// was scattered here, is filed on the record by this node and answered as the
-// record answers it, and a probe is answered with the turn's seat. A launch
-// that fails before the write hands the box its notes back
-// ([steer.Box.Reopen]), and the turn is the box's again. An offer is never
-// answered `closed` for a turn that is running: one that met the box as its
-// intake ended looks again and finds the turn handing, handed or the box's.
-//
-// # A turn that ended is still answered for a while
-//
-// A person steers a turn they saw running, and the turn may end in the second
-// between their click and the note's arrival. Answered by nobody, that note
-// reads as `unknown` — the broker lost it, try again — when the true answer is
-// that the turn is over. So an ended turn's id is REMEMBERED, for the last
-// [steerClosedMemory] turns this node ran — a first segment that closed its
-// box, and a segment resuming the turn from its run that ended it
-// ([steerDesk.remember]) — and a note for one is answered `closed`. Past that
-// the node forgets it, and the asker says `unknown`, which is honest about what
-// nobody could confirm.
-//
-// # Only a note the fleet signed is offered
-//
-// The note is offered to the turn as the person it names, on the asking
-// node's decision that they may steer it — so the desk takes only what the
-// fleet signed, bound to an id it has not taken and a deadline still ahead
-// (internal/signedask, the [steer.Channel] wire). Anything else is answered by
-// nobody, which the asker hears as it hears a node the turn is not on — except
-// a request signed under a key this node does not hold for a turn it runs,
-// which is answered [steer.Reply.Unverified], so the person is told the fleet's
-// keyring disagrees rather than that nobody knows.
-//
-// # What becomes of a note is on the turn's record
-//
-// The node that took the request answers `pending` and can see nothing more.
-// A note the turn reads is recorded `delivered` where it was read; one a first
-// segment's box held when the segment ended without launching a run is recorded
-// `expired` here, as the box is closed; and one that waits on a run's record
-// when the turn ends is recorded expired by the run's ending (runsteer.go).
+// From the launch on, its notes wait on the run's record, which any node files
+// on (runsteer.go); the box is handed over in the write that creates that
+// record ([steerDesk.handOver]).
 
-// steerClosedMemory is how many ended turns a node remembers, to answer a note
-// that arrived just after its turn did `closed` rather than not at all — and how
-// many turns whose box it handed to a run's record it files a late offer for.
+// steerClosedMemory is how many ended or handed turns a node remembers
+// ([steerDesk.close], [steerDesk.remember]). A note can arrive seconds after its
+// turn ended, and answered by nobody it reads as `unknown` (lost, try again)
+// when the truth is that the turn is over, so a remembered turn is answered
+// `closed`. Past it the asker says `unknown`, honest about what nobody could
+// confirm.
 //
-// 256: a note races a turn's end by seconds, and a node running its seats at
-// full tilt ends a turn every few seconds at most — so 256 is several minutes
-// of even a busy node's turns, far past any race a click can lose, for a few
-// kilobytes of ids. Count-bounded rather than timed, because a node's memory
-// is what has to stay bounded and a count bounds it directly.
+// 256: even a busy node ends a turn every few seconds at most, so this is
+// minutes of turns, far past any race a click can lose, for a few kilobytes of
+// ids. Counted rather than timed: memory is what has to stay bounded.
 const steerClosedMemory = 256
 
 // errNotThisNode is a note for a turn this node is not running and does not
@@ -104,15 +54,15 @@ type steerDesk struct {
 	order  []string
 	gen    uint64
 
-	// wire signs and verifies the steer channel, both halves — this node's
-	// operator surface asks with it ([Engine.SteerWire]) and the desk
-	// answers with it — and taken is the ids the desk has taken.
+	// wire signs and verifies the steer channel both ways: this node's
+	// operator surface asks with it ([Engine.SteerWire]), the desk answers
+	// with it. taken is the ids the desk has taken.
 	wire  *steerWire
 	taken *signedask.Guard
 	now   func() time.Time
 
 	// runs files a handed turn's notes on its run's record. Nil on a desk
-	// built without one — a case driving the scatter alone — which hands
+	// built without one (a case driving the scatter alone), which hands
 	// nothing over.
 	runs *runSteers
 
@@ -151,7 +101,9 @@ type steerTurn struct {
 }
 
 // endedTurn is a turn the desk remembers: its seat, and whether its box was
-// handed to its run's record rather than closed with the turn.
+// handed to its run's record rather than closed with the turn. A handed turn's
+// late note (one that read "no record" just before the launch wrote it) is
+// filed on the record by this node and answered as the record answers it.
 type endedTurn struct {
 	steerSeat
 	handed bool
@@ -205,8 +157,8 @@ func (d *steerDesk) rememberLocked(runID string, t endedTurn) {
 
 // close ends a first segment's box and remembers the turn, returning the notes
 // it took and never read. A turn whose box was handed to its run's record stays
-// remembered as handed: its notes are the record's, and its ending reports
-// what no job ran with.
+// remembered as handed: its notes are the record's, whose ending reports what
+// no job ran with.
 func (d *steerDesk) close(runID string) []steer.Note {
 	d.mu.Lock()
 	t, ok := d.open[runID]
@@ -218,14 +170,14 @@ func (d *steerDesk) close(runID string) []steer.Note {
 	d.rememberLocked(runID, endedTurn{steerSeat: t.steerSeat})
 	d.mu.Unlock()
 	// Closed OUTSIDE the desk's lock: an offer racing the close holds the
-	// box's own lock, and the box's answer is what the race settles on.
+	// box's lock, and the box's answer settles the race.
 	return t.box.Close()
 }
 
-// remember answers notes to a turn a segment resuming it from its run has just
-// ended `closed`, for a while: the run's record is deleted with the run, and a
-// note that arrives after that reaches the scatter, which only a node that
-// remembers the turn answers.
+// remember keeps a turn a segment resuming it from its run has just ended, so
+// a note to it is answered `closed` for a while: the run's record is deleted
+// with the run, and a later note reaches the scatter, which only a node
+// remembering the turn answers.
 func (d *steerDesk) remember(runID string, seat steerSeat) {
 	if d == nil {
 		return
@@ -249,19 +201,16 @@ type handOver struct {
 }
 
 // handOver begins handing a first segment's box to the record its launch is
-// about to write: the turn is marked HANDING, the box's intake ended
-// ([steer.Box.HandOver]), and the notes it took and nobody read are answered,
-// for the launch to file in the write that creates the record
-// ([sandbox.LaunchRequest.HandedNotes]). The launch then says whether that
-// write landed — [handOver.recorded] or [handOver.unrecorded], exactly one, on
-// every path — and until it does an offer to the turn waits. Nil, which hands
-// nothing and settles nothing, for a turn this desk holds no box for: a segment
-// that resumed the turn files none.
+// about to write: the box's unread notes ride the write that creates it
+// ([sandbox.LaunchRequest.HandedNotes]), so no note filed on the record lands
+// ahead of one the box took first, or spends bounds those were counted against.
+// The launch then calls exactly one of [handOver.recorded] or
+// [handOver.unrecorded] on every path, and an offer to the turn waits until it
+// does. Nil, settling nothing, for a turn with no box here: a resumed segment.
 //
-// HANDING BEFORE THE BOX'S INTAKE ENDS, under the desk's lock: an offer that
-// found the box open and was answered `closed` by it looks again and finds the
-// turn handing ([steerDesk.offer]), so no offer racing the launch is told the
-// turn has ended — nor filed on a record ahead of the notes the box held.
+// The turn is marked HANDING under the desk's lock BEFORE the box's intake ends
+// ([steer.Box.HandOver]), so an offer the closing box answered `closed` looks
+// again ([steerDesk.offer]) and is never told a running turn has ended.
 func (d *steerDesk) handOver(runID string) *handOver {
 	if d == nil || d.runs == nil {
 		return nil
@@ -288,8 +237,8 @@ func (h *handOver) held() []steer.Note {
 }
 
 // recorded settles the hand-over as LANDED: the record holds the box's notes,
-// and the turn is remembered as handed — every later note is filed on the
-// record. The box is closed: it holds nothing, and nothing will read it again.
+// the turn is remembered as handed so every later note is filed there, and the
+// empty box is closed.
 func (h *handOver) recorded() {
 	if h == nil {
 		return
@@ -308,10 +257,9 @@ func (h *handOver) recorded() {
 }
 
 // unrecorded settles the hand-over as NEVER WRITTEN: the launch failed before
-// the write that would have created the record, so the box's notes are the
-// box's again, at its front ([steer.Box.Reopen]), and the turn is the box's —
-// read by whatever reads it next, or reported expired when the segment closes
-// it. A box closed meanwhile reports them expired here.
+// the record's write, so the notes go back to the front of the box
+// ([steer.Box.Reopen]) and the turn is the box's again. A box closed meanwhile
+// reports them expired here.
 func (h *handOver) unrecorded(ctx context.Context) {
 	if h == nil {
 		return
@@ -354,8 +302,8 @@ func (d *steerDesk) find(turnID string) deskEntry {
 }
 
 // offer hands a note to the turn it names, if this node runs or remembers it:
-// into its box, or onto its run's record where its box was handed there — and,
-// while a launch is handing the box over, once the launch has said which.
+// into its box, or onto its run's record where the box was handed there; while
+// a launch is handing the box over, once the launch has said which.
 func (d *steerDesk) offer(ctx context.Context, turnID string, n steer.Note) (steer.Status, steer.Reads, steerSeat, error) {
 	for {
 		entry := d.find(turnID)
@@ -363,9 +311,8 @@ func (d *steerDesk) offer(ctx context.Context, turnID string, n steer.Note) (ste
 		case !entry.present:
 			return "", "", steerSeat{}, errNotThisNode
 		case entry.open != nil && entry.open.handing != nil:
-			// THE BOX IS BEING HANDED to the record its launch is writing:
-			// filed now, the note could land ahead of the ones the box held,
-			// which that write carries. It waits for the write.
+			// Filed now, the note could land on the record ahead of the box's
+			// notes, which the launch's write carries: it waits for the write.
 			select {
 			case <-entry.open.handing:
 				continue
@@ -376,8 +323,8 @@ func (d *steerDesk) offer(ctx context.Context, turnID string, n steer.Note) (ste
 		case entry.open != nil:
 			status := entry.open.box.Offer(n)
 			if status == steer.StatusClosed && d.changed(turnID, entry.open.gen) {
-				// THE BOX CLOSED UNDER THE OFFER: its turn is being handed
-				// to the run's record, or ended. The desk says which.
+				// The box closed under the offer, handed over or ended: the
+				// desk says which.
 				continue
 			}
 			return status, steer.ReadsNextStep, entry.open.steerSeat, nil
@@ -404,10 +351,9 @@ func (d *steerDesk) changed(turnID string, gen uint64) bool {
 }
 
 // probe answers what an offer to the turn would be answered, and whose turn it
-// is, taking nothing — see [steer.Request.Probe]. A turn being handed to its
-// run's record, or handed there, is answered accepted: a person's note to it is
-// decided on the record from here, and the probe's asker reads it there next
-// time.
+// is, taking nothing ([steer.Request.Probe]). A turn being handed to its run's
+// record, or handed, is answered accepted: a note to it is decided on the
+// record from here, where the asker reads it next time.
 func (d *steerDesk) probe(turnID string) (steer.Status, steerSeat, error) {
 	entry := d.find(turnID)
 	switch {
@@ -425,14 +371,17 @@ func (d *steerDesk) probe(turnID string) (steer.Status, steerSeat, error) {
 }
 
 // answer is the serve handler: one scattered note, answered only by the node
-// that runs or remembers its turn — and only where the fleet signed it.
+// that runs or remembers its turn. The note is offered as the person it names,
+// on the asking node's decision that they may steer the turn, so only what the
+// fleet signed is taken, under an id not yet taken and a deadline ahead (the
+// [steer.Channel] wire). Anything else is answered by nobody, like a turn not
+// on this node, except a key this node does not hold ([steerDesk.unverified]).
 func (d *steerDesk) answer(ctx context.Context, raw []byte) ([]byte, error) {
 	admitted := d.wire.Admit(raw, d.taken, d.now())
 	switch admitted.Disposition {
 	case signedask.Tampered:
-		// NOT THE FLEET'S: answered by nobody, and at ERROR — no node will
-		// ever take it, so whoever sent it reached the broker and is not
-		// the fleet.
+		// Logged at ERROR: no node will ever take it, so its sender reached
+		// the broker without being the fleet.
 		log.ErrorContext(ctx, "steer_request_refused", "disposition", string(admitted.Disposition),
 			"detail", admitted.Why+"; nothing was offered")
 		return nil, errors.New("engine: a steer request the fleet did not sign")
@@ -460,9 +409,9 @@ func (d *steerDesk) answer(ctx context.Context, raw []byte) ([]byte, error) {
 		// A PROBE OFFERS NOTHING, so there is no note to bound.
 		status, seat, err = d.probe(turnID)
 	} else {
-		// THE SAME RULE THE TOOL ENFORCED, held again where the note
-		// lands: a peer on another build may bound a note differently,
-		// and the turn is what the bound protects.
+		// The tool's rule, held again where the note lands: a peer on
+		// another build may bound a note differently, and the bound
+		// protects the turn.
 		if err = steer.Validate(req.Note); err != nil {
 			return nil, fmt.Errorf("engine: a steer request for %s: %w", turnID, err)
 		}
@@ -480,11 +429,11 @@ func (d *steerDesk) answer(ctx context.Context, raw []byte) ([]byte, error) {
 	})
 }
 
-// unverified answers a request signed under a key this node does not hold —
-// but only for a turn this node runs or remembers, read off the UNTRUSTED body
-// for that alone: every other node stays silent, as it does for any note not
-// its own, and the one the turn is on says why it took nothing, bound to the
-// id the asker sent, rather than leave the person reading `unknown`.
+// unverified answers a request signed under a key this node does not hold, for
+// a turn this node runs or remembers (read off the UNTRUSTED body for that
+// alone): it says why nothing was taken, bound to the asker's id, so the person
+// is told the keyring disagrees rather than read `unknown`. Every other node
+// stays silent, as for any note not its own.
 func (d *steerDesk) unverified(ctx context.Context, admitted signedask.Admission[steer.Request]) ([]byte, error) {
 	turnID := strings.TrimSpace(admitted.Request.TurnID)
 	if turnID == "" || admitted.ID == "" {
@@ -493,8 +442,7 @@ func (d *steerDesk) unverified(ctx context.Context, admitted signedask.Admission
 	if !d.find(turnID).present {
 		return nil, errNotThisNode
 	}
-	// THE REMEDY IS THE OPERATOR'S, so it is said here, in this node's log,
-	// where whoever administers the keyring reads what this node holds; the
+	// The remedy is the operator's, so it is said in this node's log; the
 	// person steering is told only that the note was not taken.
 	log.WarnContext(ctx, "steer_request_refused", "disposition", string(admitted.Disposition),
 		"turn_id", turnID, "held_keys", d.wire.HeldKeys(),
@@ -509,9 +457,8 @@ func (d *steerDesk) unverified(ctx context.Context, admitted signedask.Admission
 // armSteer makes this node an answerer for notes to the turns it runs.
 func (e *Engine) armSteer(ctx context.Context) error {
 	if e.backends == nil || e.backends.Queue == nil {
-		// A node with no broker has no peer to be asked by: a note to its
-		// turns can only come from its own operator surface, which asks
-		// the same queue and so cannot exist either.
+		// No broker, no asker: even this node's own operator surface asks
+		// over the queue.
 		return nil
 	}
 	stop, err := e.backends.Queue.Serve(ctx, topics.SeatSteer, queue.ConcurrentAnswers, e.steers.answer)
@@ -534,7 +481,9 @@ func (e *Engine) stopSteer(ctx context.Context) {
 }
 
 // openSteer files a first segment's box, and returns what the turn calls on
-// every path out: close the box and record every note it took and never read.
+// every path out: close the box and record expired every note it took and
+// nobody read. (A read note is recorded `delivered` where it was read; one
+// waiting on a run's record is expired by the run's ending, runsteer.go.)
 //
 // Filed only once the runner exists, so a turn whose runner could not be built
 // never answers a note it could not have read. A segment that resumes a turn
@@ -543,18 +492,17 @@ func (e *Engine) openSteer(runID, handle string, box *steer.Box,
 	r *runner.Runner,
 ) func(context.Context) {
 	if e.steers == nil {
-		// An engine assembled without a desk (a test driving a turn
-		// directly) answers no note, and still closes what it opened.
+		// No desk (a test driving a turn directly): answer no note, but
+		// still close what was opened.
 		return func(ctx context.Context) {
 			if expired := box.Close(); len(expired) > 0 {
 				r.SteerExpired(context.WithoutCancel(ctx), expired)
 			}
 		}
 	}
-	// THE SEAT BY ITS ID beside its handle: who may steer the turn is
-	// decided on the seat. A handle the running company resolves to no
-	// agent seat files an empty id, which a decision reads as a seat it
-	// cannot name.
+	// Who may steer the turn is decided on the seat's id. A handle that
+	// resolves to no agent seat files an empty id, which a decision reads
+	// as a seat it cannot name.
 	seat := steerSeat{handle: handle}
 	if id, err := e.seatID(handle); err == nil {
 		seat.agent = id.String()

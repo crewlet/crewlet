@@ -17,32 +17,21 @@ import (
 
 // A PHASE CARRIES ITS OWN WALL CLOCK, on the record that reports it.
 //
-// It used to be derivable only by pairing `agent_phase_completed` with the
-// `agent_phase_started` that shares its (turn, phase, iteration) key, and
-// every consumer did exactly that. The pairing needs BOTH events in one
-// reader's hands, and three readers never have both:
-//
-//   - a dashboard deep-linked into a turn WHILE IT RUNS asked its query before
-//     the phase started, and afterwards buffers only completed envelopes — so
-//     on the one screen the reconstruction exists for, it contributed nothing
-//     and every phase reported no duration at all;
-//   - a NESTED phase — a delegate's worker, the round-cap judge — publishes no
-//     start by design, so no worker of a fan-out of eight had a duration
-//     anywhere and "which one was slow" had no answer on any screen;
-//   - a phase started on one node and completed on another subtracts two
-//     clocks nothing reconciles.
-//
-// The engine measures where the clock is and publishes the answer. These cases
-// are over the PUBLISHED events rather than any return value, because the wire
-// is the only place the defect lived.
+// Pairing `agent_phase_completed` with its `agent_phase_started` needs both
+// events in one reader's hands, and three never have both: a dashboard opened
+// on a running turn queried before the phase started and then buffers only
+// completed envelopes, a NESTED phase (a
+// delegate's worker, the round-cap judge) publishes no start, and a phase
+// started on one node and completed on another subtracts two unreconciled
+// clocks. The engine measures where the clock is, and these cases read the
+// PUBLISHED events, since the wire is what consumers see.
 
 // slowProvider is a model that takes a fixed delay over every response, so the
 // elapsed time a phase reports is bounded below by something the test chose.
 //
 // A SLEEP rather than an injected clock: `time.Since` is monotonic, so a
-// sleep can only overshoot and the assertion is a floor. A fake clock would
-// need a seam through runPhase, the judge and the subagent package to test one
-// arithmetic step each of them does not own.
+// sleep can only overshoot and the assertion is a floor; a fake clock would
+// need a seam through runPhase, the judge and the subagent package.
 type slowProvider struct {
 	delay time.Duration
 	next  []llmtest.Response
@@ -71,8 +60,8 @@ func (p *slowProvider) Complete(ctx context.Context, req llm.Request) (*llm.Comp
 	})
 }
 
-// The delay each scripted round waits. Comfortably above the millisecond the
-// wire field is quantised to, so a rounding-down to zero cannot pass.
+// roundDelay is each scripted round's wait: well above the millisecond the
+// wire field is quantised to, so rounding down to zero cannot pass.
 const roundDelay = 8 * time.Millisecond
 
 func TestACompletedPhaseReportsHowLongItTook(t *testing.T) {
@@ -95,9 +84,8 @@ func TestACompletedPhaseReportsHowLongItTook(t *testing.T) {
 	}
 }
 
-// AND SO DOES ONE THAT DIED. On a timeout it is the number that says so: a
-// phase whose provider hung for four minutes and one refused in fifty
-// milliseconds are otherwise the same record.
+// AND SO DOES ONE THAT DIED: otherwise a provider that hung four minutes and
+// one that refused in fifty milliseconds leave the same record.
 func TestAFailedPhaseStillReportsHowLongItTook(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
@@ -119,9 +107,8 @@ func TestAFailedPhaseStillReportsHowLongItTook(t *testing.T) {
 }
 
 // AN EXTENDED PHASE IS ONE PHASE THAT RAN LONGER, so its duration covers every
-// invocation of the loop rather than the last one. Measured per invocation, the
-// long phases an operator opens the page to investigate are exactly the ones
-// that would under-report.
+// invocation of the loop; measured per invocation, exactly the long phases an
+// operator investigates would under-report.
 func TestAnExtendedPhaseReportsTheWholeStretch(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
@@ -140,18 +127,17 @@ func TestAnExtendedPhaseReportsTheWholeStretch(t *testing.T) {
 	if done.RoundsUsed != 3 {
 		t.Fatalf("the record claims %d rounds for a phase that ran 3", done.RoundsUsed)
 	}
-	// Three rounds at the scripted delay. Two would pass an assertion written
-	// against the last invocation alone, which is the shape being refused.
+	// Three rounds' delay: two would pass a measurement of the last
+	// invocation alone.
 	if want := 3 * int(roundDelay/time.Millisecond); done.DurationMS < want {
 		t.Errorf("duration_ms = %d over three rounds of %s; the measurement "+
 			"covers only the invocation after the extension", done.DurationMS, roundDelay)
 	}
 }
 
-// THE JUDGE'S OWN CALL IS MEASURED TOO, and it is the one number that
-// separates a judge stalling a phase from a judge that simply said no. A
-// nested phase publishes no start, so the pairing this replaces could never
-// have produced one.
+// THE JUDGE'S OWN CALL IS MEASURED TOO: the one number that separates a judge
+// stalling a phase from one that simply said no, and as a nested phase it
+// publishes no start to pair with.
 func TestTheRoundCapJudgeReportsWhatItsJudgementCost(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
@@ -181,16 +167,15 @@ func (j slowJudge) Decide(ctx context.Context, _ extension.Request) (extension.D
 		return extension.Decision{}, ctx.Err()
 	case <-time.After(j.delay):
 	}
-	// Asked and Model are what tell the caller a model was CALLED, which is
-	// what gates the record this test reads.
+	// Asked and Model tell the caller a model was CALLED, which gates the
+	// record this test reads.
 	return extension.Decision{
 		Extend: true, Reason: "still making progress", Asked: true, Model: "slow-judge",
 	}, nil
 }
 
-// refusingProvider fails every call, after taking its time — the failure path
-// that used to publish a record with no measurement on it. A harness that never
-// reached its tools: it fails before it connects.
+// refusingProvider fails every call after taking its time, before it connects,
+// like a harness that never reached its tools.
 type refusingProvider struct{ delay time.Duration }
 
 func (p *refusingProvider) Model() string { return "refusing" }

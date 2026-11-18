@@ -69,19 +69,11 @@ func (r *roundTrip) routedOfLast(parties *notify.Registry) ([]notify.Routed, uin
 
 // A WAKE ABOUT THE DUPLICATE OF A KEY SENDS THE SEAT TO ITS ID.
 //
-// A counter restored beside newer work mints numbers tasks already hold, and
-// every read resolves such a key to the task that claimed it first. A seat
-// woken about the duplicate was told its KEY — in the subject, under
-// **Task:**, and in the "read this first" block — so it read the claimant,
-// answered on the claimant, and reassigned the claimant. The flag that tells
-// the prompt to say otherwise is derived by the WRITER, in the decide's own
-// snapshot, for every record that carries a wake; and the create's own
-// receipt says it too, because a create after a restore is what makes the
-// duplicate in the first place.
-//
-// THROUGH A REAL WRITER, THE LOG, THE TRANSLATOR AND THE PARSER, because the
-// flag is what has to travel: a case asserting the writer's struct would pass
-// for a field that never reached the wire.
+// A restored counter mints keys tasks already hold, which every read resolves
+// to the claimant, so a seat told the key works on the claimant. The writer
+// derives the duplicate flag the prompt reads, in the decide's snapshot for
+// every record carrying a wake, and the create's receipt says it too. Through
+// a real writer, log, translator and parser, so the flag reaches the wire.
 //
 // Mutation: derive nothing in [worklet.Writer]'s decide and the duplicate's
 // comment wake names ENG-1; drop the create's own reading and its receipt
@@ -171,10 +163,9 @@ func TestAWakeAboutAKeysDuplicateNamesItByItsID(t *testing.T) {
 
 // A PRIORITY LIST TOPPED BY A DUPLICATE, AND A PURGE OF ONE, NAME IT BY ITS ID.
 //
-// Both wakes carry an EXCERPT naming the task — the line a seat is handed as
-// "what changed", and the line a lead reads on the card — and both named the
-// key: a seat told to take up ENG-1 took up the claimant, and a lead told
-// "ENG-1 was purged" opened ENG-1 and found it still there.
+// Both wakes carry an EXCERPT naming the task, which a seat reads as "what
+// changed" and a lead on the card: named by key, a seat takes up the claimant
+// and a lead told "ENG-1 was purged" finds ENG-1 still there.
 //
 // Mutation: name the task by its key in either excerpt, or render the
 // priorities prompt's pointer from the key, and this fails.
@@ -314,13 +305,10 @@ func TestAStoppedMoveNamesTheTaskItWaitsForByItsAddress(t *testing.T) {
 // A DUPLICATE OF A KEY CAN BE MOVED TO ANOTHER PROJECT, which is how it gets a
 // key of its own.
 //
-// A cross-project move claims the key it leaves as an alias, so a key pasted
-// into chat keeps opening the task after the move. The claim refused when the
-// directory named another task for that key — and for a duplicate it always
-// does: the key was never the duplicate's address, it opened the claimant. So
-// the move refused every duplicate, the one task that most needs a new key,
-// with "key ENG-1 belongs to task m-root". There is nothing for such a move to
-// keep resolving: the key goes on opening the claimant, as it always did.
+// A cross-project move claims the key it leaves as an alias, so a pasted key
+// keeps opening the moved task. A duplicate's key was never its address (it
+// opens the claimant), so the move has nothing to keep resolving and must not
+// refuse over it: the duplicate is the task that most needs a new key.
 //
 // Mutation: refuse the alias over a key another task holds and the move fails.
 func TestADuplicateOfAKeyCanBeMovedToAnotherProject(t *testing.T) {

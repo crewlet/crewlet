@@ -29,8 +29,8 @@ func TestTheTurnsAskIsWhatWasAskedNotTheWrapping(t *testing.T) {
 	}{
 		{
 			// A chat subject names the SURFACE, the same on every
-			// message: leading the ask with it handed every relevance
-			// judgement on the surface the same words.
+			// message: leading the ask with it would hand every relevance
+			// judgement there the same words.
 			name: "a chat message is what was said, without the surface's name",
 			event: events.New(types.ExternalNotification{
 				NotificationSource: "slack", Sender: "U0FOUNDER",
@@ -141,9 +141,8 @@ func TestATurnsSendersAreWhoSpokeInOrderOnce(t *testing.T) {
 }
 
 // WHAT A TURN WAS ASKED REACHES ITS COMPLETED-TURN RECORD where nothing else
-// carries it. A colleague's question woke a turn with no interactions, so the
-// record — and the episode the reflection worker writes from it — knew the
-// turn only as "lead asked a colleague on a2a-1".
+// carries it: a colleague's question brings no interactions, so without it the
+// record, and the episode reflection writes from it, would know only who asked.
 func TestAColleaguesQuestionIsCarriedOnTheTurnsRecord(t *testing.T) {
 	t.Parallel()
 	_, _, done := turnRecords(t, events.New(types.A2ARequest{

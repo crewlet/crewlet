@@ -1,6 +1,7 @@
 package scaleway_test
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -189,6 +190,29 @@ func TestTheScalewayPageStatesTheLevelTable(t *testing.T) {
 	for _, level := range scaleway.Levels() {
 		if !strings.Contains(page, "`"+level+"`") {
 			t.Errorf("the page never names the level %s", level)
+		}
+	}
+}
+
+// THE PAGE STATES WHAT IS NEVER GRANTED AND WHAT IS GRANTED FOR ONE CHANGE, with
+// its bound, since a person approving a bucket grant reads its limits there.
+// Mutation: raise the bound in oneChange and the page's hours are wrong.
+func TestTheScalewayPageStatesWhatIsNeverGranted(t *testing.T) {
+	t.Parallel()
+	page := scalewayPage(t)
+	never := between(t, page, "- **Never granted:**", "\n")
+	for _, set := range scaleway.NeverGranted() {
+		if strings.HasPrefix(set, "ObjectStorage") && !strings.Contains(never, set) {
+			t.Errorf("the page's never-granted line does not name %s", set)
+		}
+	}
+	once := between(t, page, "#### Changing a bucket's ACL and visibility", "#### An agent asks for one itself")
+	for _, set := range scaleway.OneChangeSets() {
+		if strings.Contains(never, set) || !strings.Contains(once, "**"+set+"**") {
+			t.Errorf("the page does not name %s as granted for one change alone", set)
+		}
+		if bound := fmt.Sprintf("**At most %d hours, never permanently.**", scaleway.OneChangeHours(set)); !strings.Contains(once, bound) {
+			t.Errorf("the page does not state %s's bound as %q", set, bound)
 		}
 	}
 }

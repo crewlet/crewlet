@@ -410,6 +410,54 @@
 // on one node (ADR-0091), and a maintainer two nodes both believe in is one the
 // committer takes once, as a home's work is.
 //
+// # What a git attempt sums
+//
+// [GitReadAttempt] and [GitWriteAttempt] are each the sum of a Gitlet node's
+// waits at their WHOLE budgets, never of p99s, like every attempt here. The
+// node is served until its answer is due (above) and every wait it makes
+// takes that deadline, so a node that cannot fit one answers `behind` while
+// its asker still listens: a shorter attempt only hears a slow node give up
+// sooner, and a longer one waits out a gone node longer.
+//
+// A READ, 17 s: gitlet.GitShareWait 2 s (a free unit of the node's git-work
+// share), statelog.ReadBudget 2 s (the cache synced to the asker's floor),
+// statelog.ReadBudget 2 s again (one linearizable re-sync of an id the copy
+// lacks), gitproc.ReadDeadline 10 s (the read's own git, the run time every
+// process of its kind shares) and gitlet.ReplyMargin 1 s. LEFT OUT on purpose:
+// the read lane's queue before each process (up to gitproc.SlotWait each, FIFO
+// behind a person's push scans) and the short processes that find what a read
+// names (rev-parse --disambiguate, cat-file --batch-check). At their whole
+// bounds they would make the attempt minutes long; left out, a read they hold
+// past its due instant is answered unready (`share`) and the walk asks the
+// next node — never late, and never refused as too large, which only a read
+// whose own git ran its whole budget is (internal/gitlet/query).
+// BenchmarkCodeRead puts every warm kind's p99 far inside gitproc.ReadDeadline
+// with its sync, and BenchmarkBlame and BenchmarkLogPath bound the history
+// reads' own git: over 455 680 commits a blame takes 0.065 s and a page of a
+// path's log 0.103 s with commit-graph filters, 0.99 s and 2.40 s without.
+//
+// AN ENGINE WRITE, 82 s: gitlet.GitShareWait 2 s; three statelog.ReadBudgets,
+// 6 s, for three different waits made at most once each (the copy's sync to
+// the caller's floor, the read of whether a head that moved is the write's own
+// push, and the one sync at the log's head every refusal is judged again at);
+// gitlet.WriteBuildDeadline 10 s (the build's git); gitlet.WriteUploadAllowance
+// 30 s (a mebibyte's upload at objstore.MiBPace); [minWriteAttempt] 33 s (the
+// proposal's own attempt, which the committer answers busy with any less:
+// gitlet.MinProposeAttempt); and gitlet.ReplyMargin 1 s. The node uploads a
+// bundle only while the upload's allowance and the proposal's attempt are both
+// still left (internal/gitlet/host's deadline rule), so a large bundle on a
+// bucket at the floor is refused before its upload rather than landed after
+// its asker gave up. A healthy node always answers inside the attempt; only a
+// WEDGED one costs it whole, a GONE one none (nothing serves its subject), and
+// the walk then asks the runner-up the same write ([opCodeGitWrite], above).
+// BenchmarkEngineWrite and BenchmarkEngineCommit (internal/gitlet/host) put
+// every term's p99 inside its budget: the share's wait 0.57 s at eight writes
+// at once and its whole 2 s at sixty-four, the sync 0.56 s, the build 0.24 s
+// for a hundred files at depth six and 1.2 s for a put into a directory of
+// 100 000 entries, the upload 265 ms, the proposal 0.35 s, every answer at most
+// 3.2 s. The benchmarks confirm the terms and never set a sum: a term one
+// misses is re-derived, and the sum follows.
+//
 // # Which data nodes to ask is answered from memory
 //
 // Every request asks the [Placement] who holds the estate, so the placement
@@ -459,6 +507,41 @@
 // data node took it — and a search that missed them would answer "nobody said that" about a room the seat is in. Its index
 // carries none, as the others' do not, and says on its answer when it has not
 // caught up ([ChatSearchAnswer.Building]).
+//
+// # The router's timing
+//
+// Every wait a serving node makes before it answers ends a reply's margin
+// short of the attempt (above), so a node that runs out of time says so —
+// `behind`, `no_quorum`, `broker_stalled` on a log one member stores, or
+// `pending` — while its asker still listens. A shorter attempt therefore only
+// makes a node behind by more than it leaves say so sooner; it never reads an
+// honest node as a wedged one. Sizing the attempt to outlast those waits is no
+// option: at their whole budgets they are two [statelog.ReadBudget]s and two
+// [statelog.DefaultBarrierBudget]s (a barrier may first wait out one already in
+// flight), fourteen seconds, past production's read attempt and a figure no
+// test could scale. What a shorter [Timing] buys is the cost of a WEDGED node,
+// one that takes a request and never answers it, and of an admission question
+// no data node answers; a GONE node costs no attempt at any timing, since
+// nothing serves its subject and the broker's ask ends at once.
+//
+// [NewRouter] refuses, naming the field and the arithmetic, an attempt too
+// short to do its job: a read or git read attempt no longer than the reply's
+// margin ([minReadAttempt]), which leaves the serving node no time to wait or
+// read; a write attempt no longer than [minWriteAttempt], under which a push
+// whose committer first waited out its floor is answered busy, undecided, and
+// under the committer's two terms alone every push asked of another node's
+// committer is (a suite that needs a wedged committer to cost less shortens
+// the committer's budget with it, which is the committer's to expose, not the
+// router's to assume); and a git write attempt no longer than
+// [minGitWriteAttempt], under which every engine write is answered busy before
+// its upload. The admission budget bounds a floorless question ([opPing]), so
+// it need only be positive. A field left ZERO is refused by name, never read
+// as a default: a zero attempt is no bound of the router's own
+// ([attemptContext] takes the caller's deadline unchanged), so a caller with
+// none would wait on a wedged data node for ever; and a zero admission budget
+// is a deadline already past, so every placement sweep would withhold every
+// seat's claim — a wiring mistake that reads as a fleet with no data node in
+// it. A negative field is a deadline already past for any of them.
 //
 // # Every envelope is signed, and bound to its question
 //

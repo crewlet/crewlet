@@ -54,8 +54,7 @@ roles:
 `
 
 // noEmbeddingsDoc is the same company with the block removed rather than
-// blanked, since an absent provider and a misconfigured one are exactly what
-// these two cases separate.
+// blanked: an absent provider and a misconfigured one differ.
 const noEmbeddingsDoc = `
 name: Nimbus
 providers:
@@ -69,10 +68,8 @@ roles:
     llm: scripted
 `
 
-// A COMPANY WITH NO EMBEDDINGS gets nil, which every consumer reads as "no
-// similarity search" rather than as a fault — and no default is invented,
-// because the store's columns are sized from the config and an embedder
-// nobody asked for would write rows at whatever width its model produces.
+// A COMPANY WITH NO EMBEDDINGS gets nil, read as "no similarity search", and
+// no default is invented, since the store's columns are sized from the config.
 func TestNoEmbeddingsConfiguredMeansNoEmbedder(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
@@ -100,23 +97,19 @@ func TestAConfiguredEmbedderIsBuiltAtItsDeclaredWidth(t *testing.T) {
 	}
 }
 
-// engineOverStore is an engine holding a store opened at width, which is the
-// only part of Backends any of this reads.
+// engineOverStore is an engine holding a store opened at width, the only part
+// of Backends any of this reads.
 func engineOverStore(t *testing.T, width int) *Engine {
 	t.Helper()
-	// WITH A DATA NODE'S REPLICATED ESTATE, which it opens at boot and
-	// every domain-level reader here reads through.
+	// A data node's replicated estate, which every domain reader here reads.
 	db, _ := storetest.OpenEstate(t, t.TempDir()+"/index.db",
 		store.Options{EmbeddingDim: width}, estateLogs())
 	t.Cleanup(func() { db.Close() })
 	return &Engine{backends: &Backends{Store: db}}
 }
 
-// A WIDTH THAT MOVED IS REFUSED AT THE APPLY, not discovered at the first
-// recall weeks later. The store's vector columns are sized when it opens, so
-// a revision that changes the width would have the writer producing vectors
-// the reader cannot match — silently, since neither side errors on a
-// dimension it never compares.
+// A WIDTH THAT MOVED IS REFUSED AT THE APPLY: the store's vector columns are
+// sized at open, and vectors the reader cannot match fail silently.
 func TestARevisionCannotResizeTheStoreItIsRunningOver(t *testing.T) {
 	t.Parallel()
 	e := engineOverStore(t, 1536)
@@ -132,8 +125,8 @@ func TestARevisionCannotResizeTheStoreItIsRunningOver(t *testing.T) {
 	}
 }
 
-// The same width is not a change, and an apply that merely re-activates the
-// revision — the documented rotation gesture — must not be refused by it.
+// The same width is not a change, so re-activating the revision to rotate a
+// key is not refused.
 func TestTheDeclaredWidthMatchingTheStoreIsNotAChange(t *testing.T) {
 	t.Parallel()
 	e := engineOverStore(t, 768)
@@ -146,9 +139,8 @@ func TestTheDeclaredWidthMatchingTheStoreIsNotAChange(t *testing.T) {
 	}
 }
 
-// A STORE WITH NO WIDTH does not veto anything: it is a node whose company
-// had no embeddings at open, and the check exists to protect written rows,
-// of which there are none.
+// A STORE WITH NO WIDTH vetoes nothing: the check protects written rows, and
+// it has none.
 func TestAStoreOpenedWithoutVectorsVetoesNothing(t *testing.T) {
 	t.Parallel()
 	e := engineOverStore(t, 0)
@@ -161,10 +153,8 @@ func TestAStoreOpenedWithoutVectorsVetoesNothing(t *testing.T) {
 	}
 }
 
-// NO EMBEDDER IS AN ANSWER, not a panic: the seam is a method value that
-// reads the engine's current embedder on every call, so an engine that never
-// stored one — or stored a nil — answers learning.ErrNoEmbeddings, which every
-// consumer reads as "no similarity search" rather than as a fault.
+// NO EMBEDDER IS AN ANSWER, not a panic: an engine that never stored one, or
+// stored a nil, answers learning.ErrNoEmbeddings.
 func TestNoEmbedderAnswersThatNoneIsConfigured(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
@@ -178,11 +168,9 @@ func TestNoEmbedderAnswersThatNoneIsConfigured(t *testing.T) {
 	}
 }
 
-// A STORED EMBEDDER IS USED AS ITS WHOLE-TEXT FORM: what the prefetch and the
-// episodist embed — a turn's ask, a completed turn — has an end that matters
-// as much as its beginning, and the provider refuses an input past the model's
-// bound before sending it. So a short text is exactly Embed's vector and a
-// long one is the pool of all of it, never "no similarity search".
+// A STORED EMBEDDER IS USED AS ITS WHOLE-TEXT FORM: a short text is exactly
+// Embed's vector, and one past the model's bound is the pool of all of it,
+// never "no similarity search".
 func TestAStoredEmbedderEmbedsTheWholeOfWhatItIsHanded(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
@@ -221,11 +209,9 @@ func TestAStoredEmbedderEmbedsTheWholeOfWhatItIsHanded(t *testing.T) {
 	}
 }
 
-// THE TWIN STARTS WHERE THE DEFAULT PROVIDER IS: the limits a fake embedder
-// enforces out of the box are the ones the configuration resolves for
-// OpenAI's models, so a test certified against the fake was certified against
-// what production refuses — and a change to either side that the other did
-// not follow fails here rather than in a company's corpus.
+// THE TWIN STARTS WHERE THE DEFAULT PROVIDER IS: the fake's default limits are
+// those the configuration resolves for OpenAI's models, so a test certified
+// against the fake is certified against what production refuses.
 func TestTheFakeStartsAtTheDefaultModelsLimits(t *testing.T) {
 	t.Parallel()
 	got, err := (&Engine{}).buildEmbedder(companyWith(t, fmt.Sprintf(embeddingDoc, 1536)))
@@ -238,8 +224,8 @@ func TestTheFakeStartsAtTheDefaultModelsLimits(t *testing.T) {
 }
 
 // THE PROVIDER IS BUILT AT THE LIMITS THE CONFIGURATION RESOLVES, a stated one
-// included — a gateway that accepts less than the model is what the field is
-// for, and a provider built at the model's own would send what it refuses.
+// included: a gateway that accepts less than the model is what the field is
+// for.
 func TestAConfiguredEmbedderIsBuiltAtTheStatedLimits(t *testing.T) {
 	t.Parallel()
 	doc := strings.Replace(fmt.Sprintf(embeddingDoc, 1536),
@@ -258,13 +244,10 @@ func TestAConfiguredEmbedderIsBuiltAtTheStatedLimits(t *testing.T) {
 	}
 }
 
-// THE PROVIDER ASKS FOR ITS WIDTH ON THE CONFIGURATION'S RULE. A model whose
-// endpoint documents `dimensions` as unsupported — embed-v4.0 through Cohere's
-// Compatibility API — is built not to send it, and every other model is built
-// to; the rule and its citations live in config, and this is where the engine
-// hands the answer to the provider, so a wiring that dropped it is a company
-// whose every embedding request carries a parameter its endpoint says it does
-// not take.
+// THE PROVIDER ASKS FOR ITS WIDTH ON THE CONFIGURATION'S RULE: a model whose
+// endpoint documents `dimensions` as unsupported (embed-v4.0 through Cohere's
+// Compatibility API) is built not to send it. The rule lives in config; this
+// holds the engine's hand-off of it to the provider.
 func TestTheEmbedderAsksForItsWidthOnTheConfigurationsRule(t *testing.T) {
 	t.Parallel()
 	for model, wantAsked := range map[string]bool{
@@ -327,14 +310,8 @@ roles:
 	}
 }
 
-// `knowledge.vectors: false` IS READ, and by every consumer of the corpus's
-// embedding space at once.
-//
-// The switch was declared, validated and documented — "an explicit false keeps
-// the search purely lexical" — and nothing read it: the duty went on embedding
-// every document, billed, and the coverage gauge went on measuring it. It is
-// now the one function the duty, the gauge and a search's query vector all
-// read, so turning it off stops the three together.
+// `knowledge.vectors: false` IS READ, by the duty, the coverage gauge and a
+// search's query vector at once: the one function all three read.
 func TestTurningVectorsOffStopsTheDutyTheGaugeAndTheQueryVector(t *testing.T) {
 	t.Parallel()
 	var fake embeddings.Embedder = embeddings.NewFake(8)
@@ -370,12 +347,9 @@ func TestTurningVectorsOffStopsTheDutyTheGaugeAndTheQueryVector(t *testing.T) {
 }
 
 // A QUERY VECTOR THE PROVIDER COULD NOT COMPUTE IS A DEGRADED SEARCH, and a
-// company with no provider is not one.
-//
-// `search_degraded` is a fraction of the answers. The half a search ASKED for
-// and did not get counts toward it, whichever node lost it; the half nobody
-// asked for — a keyword search, a company with no embeddings — must not, or
-// the alarm is red for the life of such a deployment.
+// company with no provider is not one: the half nobody asked for (a keyword
+// search, no embeddings) must not count toward `search_degraded`, or the
+// alarm is red for the life of such a deployment.
 func TestAFailedQueryVectorCountsAsDegradedAndNoProviderDoesNot(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -390,9 +364,8 @@ func TestAFailedQueryVectorCountsAsDegradedAndNoProviderDoesNot(t *testing.T) {
 		{search.Answer{Degraded: knowledge.DegradedNoEmbeddings}, "off"},
 		{search.Answer{Served: knowledge.ModeKeyword,
 			Degraded: knowledge.DegradedEmbeddingFailed}, "skipped"},
-		// A SEMANTIC SEARCH THAT RAN NOTHING: the half it asked for is
-		// the only half, and losing it to the provider is the alarm;
-		// having no provider is not.
+		// A semantic search that ran nothing: losing its only half to the
+		// provider is the alarm; having no provider is not.
 		{search.Answer{Degraded: knowledge.DegradedEmbeddingFailed}, "skipped"},
 		{search.Answer{Served: knowledge.ModeHybrid, SemanticSkipped: true,
 			Degraded: knowledge.DegradedSemanticPartial}, "skipped"},

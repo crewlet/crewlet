@@ -2560,7 +2560,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// HOW IT REACHES THE CHANGELOG ([memoryConfig]).
 	e.memory, err = memsync.New(backends.Store, backends.CoordinationJetStream(),
 		func(handle string) string { return memoryAgentID(e.Company(), handle) },
-		memoryConfig(opts.Bootstrap, backends, n.Host().HeartbeatInterval()))
+		memoryConfig(opts.Bootstrap, backends))
 	if err != nil {
 		return nil, fmt.Errorf("engine: memory sync: %w", err)
 	}

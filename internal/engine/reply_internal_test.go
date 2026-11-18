@@ -12,16 +12,12 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// wake builds one inbox trigger of the given type, THE WAY ITS PRODUCER
-// BUILDS IT: events.New over the registered payload.
-//
-// Never a hand-written Payload bag. The envelope's bag and the typed body are
-// different places — the body marshals flat beside the envelope and Payload
-// carries only what a producer explicitly stamps there (today, the
-// conversation key) — so an event literal carrying "addressed" in the bag is a
-// shape nothing publishes. Asserting against it is how ReplyFor's read of
-// Payload["addressed"] stayed green for a whole release while answering false
-// for every real notification the company ever received.
+// wake builds one inbox trigger of the given type THE WAY ITS PRODUCER BUILDS
+// IT: events.New over the registered payload, never a hand-written Payload bag.
+// The typed body marshals flat beside the envelope and Payload carries only
+// what a producer stamps there (the conversation key), so "addressed" in the
+// bag is a shape nothing publishes, and a test against it passes for a
+// ReplyFor that answers false for every real notification.
 func wake(t *testing.T, kind string) *events.Event {
 	t.Helper()
 	switch kind {
@@ -44,9 +40,8 @@ func wake(t *testing.T, kind string) *events.Event {
 	case types.ExternalNotification{}.EventType():
 		return inbound(false)
 	}
-	// A ledgered type this file has no producer shape for. Left as a bare
-	// envelope on purpose: the coverage assertion below is what reports it,
-	// and failing here instead would hide which type is missing.
+	// A ledgered type with no producer shape here: a bare envelope, so the
+	// coverage assertion below reports which type is missing.
 	return &events.Event{Type: kind}
 }
 
@@ -60,10 +55,9 @@ func inbound(addressed bool) *events.Event {
 	}, events.TraceContext{})
 }
 
-// EVERY LEDGERED TYPE IS COVERED, and the assertion is over inbox's own set
-// rather than a copy of it: a trigger type added there and forgotten here
-// would land on the safe default silently, and the only symptom would be a
-// seat that stopped answering the one thing it was asked.
+// EVERY LEDGERED TYPE IS COVERED, asserted over inbox's own set rather than a
+// copy: a trigger type forgotten here would silently take the unaddressed
+// default, and its seat would stop answering what it was asked.
 func TestReplyIsDerivedForEveryLedgeredTriggerType(t *testing.T) {
 	t.Parallel()
 	want := map[string]turn.ReplyKind{
@@ -88,19 +82,16 @@ func TestReplyIsDerivedForEveryLedgeredTriggerType(t *testing.T) {
 }
 
 // THE VENDOR'S OWN READING OF ITS ROUTING. A notification is unaddressed
-// unless the source said somebody is waiting — see notify.Prompt.Addressed —
-// and the flag rides the event so the engine never has to know a third-party app's
-// event vocabulary.
+// unless the source said somebody is waiting (notify.Prompt.Addressed); the
+// flag rides the event so the engine never learns a vendor's vocabulary.
 func TestAnAddressedNotificationOwesAnAnswer(t *testing.T) {
 	t.Parallel()
 	addressed := inbound(true)
 	if got := ReplyFor([]*events.Event{addressed}); got.Kind != turn.ReplyTool {
 		t.Errorf("an addressed notification = %s, want tool", got)
 	}
-	// AND ACROSS THE WIRE. The dispatch that reads this flag routinely runs
-	// on a node that did not publish the event, so the obligation has to
-	// survive a marshal/unmarshal round trip — which is precisely what the
-	// envelope-bag read did not.
+	// AND ACROSS THE WIRE: the dispatch often runs on a node that did not
+	// publish the event, so the obligation survives a marshal round trip.
 	raw, err := json.Marshal(addressed)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -112,18 +103,17 @@ func TestAnAddressedNotificationOwesAnAnswer(t *testing.T) {
 	if got := ReplyFor([]*events.Event{&back}); got.Kind != turn.ReplyTool {
 		t.Errorf("an addressed notification off the wire = %s, want tool", got)
 	}
-	// ABSENT DECODES AS UNADDRESSED, which is how an unaddressed
-	// notification is written: an omission is a freedom to stay silent
-	// rather than an obligation nobody recorded.
+	// ABSENT DECODES AS UNADDRESSED: an omission is a freedom to stay
+	// silent, never an obligation nobody recorded.
 	unflagged := &events.Event{Type: types.ExternalNotification{}.EventType()}
 	if got := ReplyFor([]*events.Event{unflagged}); got.Kind != turn.ReplyNone {
 		t.Errorf("an event with no flag = %s, want none", got)
 	}
 }
 
-// STRONGEST WINS, and a merge must not be able to launder an obligation: if
-// any part of a coalesced partition asked this seat something, the turn owes
-// an answer — WHICHEVER ORDER the broker delivered the events in.
+// STRONGEST WINS, so a merge cannot launder an obligation: if any part of a
+// coalesced partition asked this seat something, the turn owes an answer, in
+// WHICHEVER ORDER the broker delivered the events.
 func TestTheStrongestObligationInAPartitionWins(t *testing.T) {
 	t.Parallel()
 	passing := inbound(false)
@@ -133,13 +123,10 @@ func TestTheStrongestObligationInAPartitionWins(t *testing.T) {
 	if got := ReplyFor([]*events.Event{passing, asked}); got.Kind != turn.ReplyTool {
 		t.Errorf("a burst carrying one ask = %s, want tool", got)
 	}
-	// A TOOL OBLIGATION OUTRANKS THE ENGINE'S. The tool one is what the
-	// engine enforces — a round is sent back until a tool delivered — while
-	// an A2A ask is answered from the turn's artifact whatever this says.
-	// So where both are owed, tool loses the asker nothing and keeps the
-	// check; engine would let the turn end in text the tool-side requester
-	// never sees. And the answer cannot depend on which event came first,
-	// or it would depend on the broker.
+	// A TOOL OBLIGATION OUTRANKS THE ENGINE'S: only the tool one is enforced
+	// (a round is sent back until a tool delivered), and an A2A ask is
+	// answered from the turn's artifact either way, so engine would let the
+	// turn end in text the tool-side requester never sees.
 	for _, order := range [][]*events.Event{{asked, ask}, {ask, asked}, {ask, passing, asked}} {
 		if got := ReplyFor(order); got.Kind != turn.ReplyTool {
 			t.Errorf("a partition carrying an A2A ask and an addressed notification = %s, want tool", got)
@@ -150,8 +137,7 @@ func TestTheStrongestObligationInAPartitionWins(t *testing.T) {
 			t.Errorf("a partition carrying an A2A ask and a passing mention = %s, want engine", got)
 		}
 	}
-	// And the counterfactual, or every assertion here passes for a
-	// function that hardcodes an obligation.
+	// The counterfactual, or a hardcoded obligation passes.
 	if got := ReplyFor([]*events.Event{passing, passing}); got.Kind != turn.ReplyNone {
 		t.Errorf("a burst nobody addressed = %s, want none", got)
 	}
@@ -169,17 +155,13 @@ func TestReplyForSkipsNilEvents(t *testing.T) {
 	}
 }
 
-// AN INFORMED ANSWER OWES THE CHAT SURFACE, NOT THE TRACKER IT CAME FROM.
-//
-// The answer to a decision whose asker said it would report the outcome in a
-// channel wakes the asker from the TRACKER. On its source alone a comment on
-// the item would close the turn, and the person who answered — told the
-// outcome would be posted — would never see it. The notification's Owes names
-// the chat surface, and the obligation is raised there: [turn.Check] sends the
-// turn back until a tool on that surface has run. An owed wake is awaited
-// whether or not its source read it as addressed, the obligation survives the
-// wire (the dispatch runs on whichever node wins the delivery), and a wake
-// owing nothing keeps the source it arrived on.
+// AN INFORMED ANSWER OWES THE CHAT SURFACE, NOT THE TRACKER IT CAME FROM. The
+// answer to a decision whose asker promised to report in a channel wakes it
+// from the tracker, where a comment would close the turn unseen by the person
+// who answered. Owes names the chat surface, and [turn.Check] sends the turn
+// back until a tool there has run. An owed wake is awaited whether or not its
+// source read it as addressed, Owes survives the wire, and a wake owing
+// nothing keeps its source.
 func TestAnInformedAnswerOwesTheChatSurface(t *testing.T) {
 	t.Parallel()
 	answered := func(addressed bool, owes string) *events.Event {

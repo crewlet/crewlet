@@ -157,6 +157,56 @@ func TestAGrantIsCheckedAgainstTheLiveCatalogue(t *testing.T) {
 	}
 }
 
+// A GRANT FOR ONE CHANGE IS NEVER PERMANENT NOR PAST ITS BOUND, saved or stored,
+// and only an agent's request gives a grant its target. Mutation: drop the
+// one-change case from CheckGrant and a permanent grant of it saves.
+func TestAGrantForOneChangeIsNeverPermanentNorPastItsBound(t *testing.T) {
+	t.Parallel()
+	opts := grantsOffer()
+	opts.Grants = append(opts.Grants, seataccess.GrantEntry{ID: "Bucket Write", Name: "Bucket Settings: Edit",
+		ScopeKind: "zone", Write: true, MaxHours: 4})
+	before := seataccess.Desired{Enabled: true, Level: "operate"}
+	asked := func(expires time.Time, request, target string) seataccess.Desired {
+		d := before
+		d.Grants = []seataccess.Grant{{Permission: "Bucket Write", ExpiresAt: expires, Request: request,
+			Target: target, Reason: "make it private"}}
+		return d
+	}
+	for name, c := range map[string]struct {
+		after seataccess.Desired
+		saves bool
+	}{
+		"an hour":        {asked(grantAt.Add(time.Hour), "aaaaaaaaaa", "user-uploads"), true},
+		"its bound":      {asked(grantAt.Add(4*time.Hour), "aaaaaaaaaa", "user-uploads"), true},
+		"past its bound": {asked(grantAt.Add(5*time.Hour), "aaaaaaaaaa", "user-uploads"), false},
+		"permanently":    {asked(time.Time{}, "aaaaaaaaaa", "user-uploads"), false},
+		"a person's":     {asked(grantAt.Add(time.Hour), "", ""), true},
+		"a typed target": {asked(grantAt.Add(time.Hour), "", "user-uploads"), false},
+	} {
+		if err := seataccess.CheckGrants(opts, before, c.after, grantAt); (err == nil) != c.saves {
+			t.Errorf("%s: %v, want saved %v", name, err, c.saves)
+		}
+	}
+	if err := seataccess.CheckGrant(opts, "", grant("g0000000001", "Bucket Write", grantAt.Add(3*time.Hour))); err != nil {
+		t.Errorf("a stored grant inside its bound was refused: %v", err)
+	}
+	if err := seataccess.CheckGrant(opts, "", grant("g0000000001", "Bucket Write", grantAt.Add(4*time.Hour))); err == nil {
+		t.Error("a stored grant lasting past its bound from when it was granted was applied")
+	}
+	req := seataccess.GrantRequest{ID: "aaaaaaaaaa", Kind: "cloudflare", Lane: seataccess.LaneCloudflare,
+		Handle: "sre", Permission: "Bucket Write", Hours: 1, Target: "user-uploads"}
+	if err := req.Validate(); err != nil {
+		t.Fatalf("a request naming its target was refused: %v", err)
+	}
+	if g := req.Grant(false, grantAt); g.Target != "user-uploads" || !g.ExpiresAt.Equal(grantAt.Add(time.Hour)) {
+		t.Errorf("the request's grant is %+v, want its target for its hour", g)
+	}
+	req.Target = "the uploads bucket"
+	if err := req.Validate(); err == nil {
+		t.Error("a request whose target is a sentence was accepted")
+	}
+}
+
 // A REQUEST'S OPTIONS CARRY ITS ID AND NOTHING ELSE: both read back as the
 // request and its choice, inside a decision's option id, and no key of the
 // access catalogue reads as one. Mutation: widen the option pattern and

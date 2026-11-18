@@ -20,8 +20,8 @@ import (
 // That run remembers nothing the round did, so the brief its box starts it on
 // tells, after how the run before it was cut off, every call of the round.
 //
-// Mutation: build the reseed without the round's calls, as before, and the
-// second job's brief names none of them.
+// Mutation: build the reseed without the round's calls, and the second job's
+// brief names none of them.
 func TestARunLostWithItsHostCarriesItsRoundOnInAFreshRunToldItsCalls(t *testing.T) {
 	t.Parallel()
 	e, _ := spendingEngine(t)
@@ -75,16 +75,13 @@ func TestARunLostWithItsHostCarriesItsRoundOnInAFreshRunToldItsCalls(t *testing.
 	}
 }
 
-// A FRESH JOB'S LEFT-OUT READS REACH ITS COPY'S NEXT BRIEF, end to end: a job
-// whose launch handed its run a fresh brief that counted two of the round's
-// reads without listing them, its read cap spent, says so on its own record
-// (sandbox.LaunchRecord.BriefOmitted), which the resume an answer drives reads
-// into the runner's terms ([runnerResume]); the relaunch carrying the round on
-// in the job's own box, its harness having ended its own run, tells that copy
-// those two reads, which it holds only as a count, and no other call it holds:
-// its record carries the count its collection writes of a copy far below its
-// threshold, so the copy is judged to hold every other call
-// ([collectedFarBelow]).
+// A FRESH JOB'S LEFT-OUT READS REACH ITS COPY'S NEXT BRIEF, end to end: a fresh
+// brief that counted two of the round's reads without listing them (its read
+// cap spent) is recorded on the job (sandbox.LaunchRecord.BriefOmitted), which
+// the resume reads into the runner's terms ([runnerResume]). The relaunch in
+// the job's own box tells that copy those two reads, which it holds only as a
+// count, and no other call: its record's count is far below its threshold, so
+// the copy is judged to hold every other call ([collectedFarBelow]).
 //
 // Mutation: leave the record's set out of the resume (runnerResume not reading
 // it), and the copy is told none of them.
@@ -159,16 +156,13 @@ func TestALaunchCarriesWhatEachBriefLeftOutToTheJobsRecord(t *testing.T) {
 	}
 }
 
-// WHAT EVERY BRIEF LEFT OUT REACHES THE SANDBOX LAYER. The runner hands its launch
-// the reads each brief it may hand its run counted without listing them: the
-// copy's in its job's box and the fresh brief's beside it (runner.Continuation),
-// and the kept capture's, or the base's where the turn continues the session its
-// conversation's last turn left (runner.SessionContinuation). The engine carries
-// every one of them into the sandbox layer's terms ([sandboxContinuation],
-// [sandboxSession]), whose launch records the set of the brief it hands: a set
-// dropped here leaves its job's record naming none of the reads that brief
-// counted past the cap, so the next brief to its session counts them held and
-// tells them to nobody.
+// WHAT EVERY BRIEF LEFT OUT REACHES THE SANDBOX LAYER. The runner hands its
+// launch the reads each brief it may hand its run counted without listing: the
+// copy's and the fresh brief's (runner.Continuation), and the kept capture's or
+// the base's (runner.SessionContinuation). The engine carries every one into
+// the sandbox layer's terms ([sandboxContinuation], [sandboxSession]); a set
+// dropped here leaves its job's record naming none of them, so the next brief
+// to its session counts them held and tells them to nobody.
 //
 // Mutation: leave out the copy's set, the fresh brief's, the kept capture's or
 // the base's, and a case goes red.

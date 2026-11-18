@@ -8,12 +8,11 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A WITHDRAWN QUESTION SAYS WHY AND WHAT COVERS IT: the resolve that withdraws
-// it records the asker's reply in its thread and the item or link that now
-// covers it, the person's Inbox and their answered list read both, and a later
-// resolve that names none keeps them. A reason that is not the asker's reply,
-// a replacement that is the question's own item, a link that is not one, and
-// an item that does not exist are refused before anything is written.
+// A WITHDRAWN QUESTION SAYS WHY AND WHAT COVERS IT: the withdrawing resolve
+// records the asker's reply and the covering item or link, the Inbox and the
+// answered list read both, and a later bare resolve keeps them. A reason not
+// the asker's reply, the question's own item, a non-link and a missing item
+// are refused before anything is written.
 //
 // Mutation: drop the withdrawal from the applier and the person reads no
 // reason; drop the reply check and anybody's words stand as the asker's.

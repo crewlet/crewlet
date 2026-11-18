@@ -16,9 +16,8 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A note a take recorded read and never handed over, as the briefs of every
-// later launch tell it again, and as the launch names it for the write that
-// records the telling.
+// A note a take recorded read but never handed over, as every later launch's
+// brief tells it again and the launch names it for the write recording that.
 
 // steerRead is a note the turn has read, as the run's record carries it.
 func steerRead(id, text string, iteration, order int, boundary types.SteerBoundary, launch string,
@@ -28,16 +27,13 @@ func steerRead(id, text string, iteration, order int, boundary types.SteerBounda
 			Launch: launch, Order: order, Unanswered: unanswered}}
 }
 
-// A LAUNCH NAMES EVERY MARKED NOTE ITS BRIEFS TELL AGAIN. A read the run's record
-// marks unanswered is a note its take's harness never had, and the brief of
-// every launch after it tells the note again, whichever session the launch
-// takes up: the fresh brief tells every note the turn has read, and a continued
-// session, kept or the job's own copy in its box, every note from the first
-// such read on. So the launch names every read the turn carries marked as the
-// brief was built (runner.AgentRunRequest.Retold), for its write to record the
-// telling, a mark the brief's own read of the record found included; a send-back
-// and a person's answer alike. None of them is among the notes the brief is the
-// first to read, and a turn carrying no mark names none.
+// A LAUNCH NAMES EVERY MARKED NOTE ITS BRIEFS TELL AGAIN. A read marked
+// unanswered never reached its take's harness, so every later brief tells it
+// again: a fresh brief every note read, a continued session (kept, or the
+// box's copy) every note from the first marked read on. The launch names every
+// read marked as the brief was built (runner.AgentRunRequest.Retold), for its
+// write to record, on a send-back and an answer alike; none is a note the brief
+// reads first, and a turn with no mark names none.
 //
 // Mutation: name no read, only the reads the segment resumed with marked, or
 // every read; or tell a marked note in no continued session, and a case goes
@@ -165,15 +161,12 @@ func TestALaunchNamesEveryMarkedNoteItsBriefsTellAgain(t *testing.T) {
 }
 
 // A CONTINUATION OF A JOB CUT OFF AFTER TELLING A MARKED NOTE AGAIN IS STILL
-// TOLD IT. Job 1's take of a note was marked unanswered; job 2's brief told it
-// again, and its launch's write recorded it read by job 2's brief, unmarked, at
-// the take's own place among the reads. Then job 2 was cut off: its session is
-// not known to hold its brief, so the launch that carries its round on tells
-// every note the turn has read, as notes it may already show, in its kept
-// session and in its own copy in its box, and the fresh brief tells every
-// note as it always does: the note is told once in each, at its place, ahead
-// of the note job 2's take read after it. Nothing is marked any more, so the
-// launch names no note told again.
+// TOLD IT. Job 1's take was marked unanswered; job 2's brief told the note
+// again, recorded unmarked at the take's place. Job 2 was cut off, so its
+// session may not hold its brief: the carrying launch tells every note read
+// (as ones it may already show) in the kept session and the box's copy, as the
+// fresh brief does, the note once each, at its place. Nothing is marked any
+// more, so the launch names no note told again.
 //
 // Mutation: tell a cut-off session only the notes past its cursor, or the copy
 // in its box only the notes from a read marked unanswered, or place the note

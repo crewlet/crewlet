@@ -17,14 +17,9 @@ import (
 
 // EVERY RECIPIENT IS TOLD WHY, AND THE REASONS DO NOT LEAK INTO EACH OTHER.
 //
-// # The failure this exists to catch
-//
-// One record produces one copy per recipient, each with its own reason — and
-// the copies share a metadata map unless somebody makes one. Written in place,
-// every recipient of a change gets whichever reason happened to be rendered
-// last: the person who was mentioned is told they are watching, and the
-// watcher is told they were mentioned. The prompt renders those as an ask and
-// as news, so it is not a cosmetic difference.
+// The copies of one record share a metadata map unless one is made, so writing
+// in place gives every recipient the last reason rendered: the mentioned person
+// is told they are watching. The prompt renders those as an ask and as news.
 func TestEveryRecipientCarriesItsOwnReason(t *testing.T) {
 	t.Parallel()
 	record := parseRecord(&worklet.Notify{
@@ -78,13 +73,11 @@ func TestEveryRecipientCarriesItsOwnReason(t *testing.T) {
 
 // A NOTICE SAYS WHO WROTE THE CHANGE, BY THE RECORD'S OWN KIND.
 //
-// The record's actor is a seat's handle, a credential's login or a node's
-// name, spelled alike, and a turn the notice wakes decides from it whose
-// errand it is: a colleague's comment is the colleague's, the engine's own
-// repair is nobody's. A wake that named only the actor left every one of them
-// to be read as a vendor id nobody holds, which is a stranger. An agent's
-// write made in a turn somebody woke names them too, and the turn it wakes
-// works for them (ADR-0109).
+// The actor is a seat's handle, a credential's login or a node's name, spelled
+// alike, and the woken turn decides from the kind whose errand it is: a
+// colleague's comment is the colleague's, the engine's repair nobody's. Named by
+// the actor alone, each reads as a stranger. An agent's write made in a turn
+// somebody woke names them too, and the woken turn works for them (ADR-0109).
 //
 // Mutation: leave the record's carrier off the writer the parser builds, and
 // the agent's write made for ada wakes its seat for the agent.
@@ -170,11 +163,9 @@ func TestAHandleThatIsNoLongerASeatIsDropped(t *testing.T) {
 
 // THE WAKE ID IS DERIVED FROM THE RECORD AND THE RECIPIENT.
 //
-// The feed's own claim is the first dedupe layer and it FAILS OPEN — a
-// coordination store that cannot be reached must not silently stop
-// notifications — so this is what catches the redelivery that slips through.
-// With a random id neither the inbox nor the completion ledger can see the
-// pair, and the seat is woken twice about one change.
+// The feed's claim fails open, so this catches the redelivery that slips
+// through: with a random id neither the inbox nor the completion ledger sees
+// the pair, and the seat is woken twice about one change.
 func TestTheWakeIdIsDerivedAndStable(t *testing.T) {
 	t.Parallel()
 	record := parseRecord(&worklet.Notify{
@@ -242,12 +233,10 @@ func TestAWakeIsStampedWithItsRecordsInstant(t *testing.T) {
 // A RELAYED RECORD A NEWER BUILD WROTE IS DEFERRED TO A PEER THAT READS IT, on
 // the parser's side of the relay as on the feed's.
 //
-// The feed on a newer node relays the record's wake, and whichever node wins
-// the delivery parses it, so an older node meets the record here too. Refused
-// as a payload nobody can read, the notify service acked it on the one group
-// every node takes inbound mail from, and the assignee's wake was gone for the
-// fleet (crewlet#993); answered with the spine's deferral, the service passes
-// it to a peer on the newer build.
+// Whichever node wins the delivery parses the wake a newer node's feed relayed.
+// Refused, the notify service acks it on the one group every node takes
+// inbound mail from and the wake is lost to the fleet; deferred, it goes to a
+// peer on the newer build.
 //
 // Mutation: return the decode's error as it is, and no deferral reaches the
 // service.
@@ -304,12 +293,9 @@ func registry(t *testing.T, handles ...string) *notify.Registry {
 	return notify.NewRegistry(o, nil)
 }
 
-// A WOKEN SEAT READS THE WHOLE COMMENT, NOT THE CARD'S EXCERPT. The card is a
-// preview cut at MaxExcerpt for a list of notices; the wake prompt is what a
-// seat acts on, and a review cut there is a review whose "but" never arrived.
-// The record carries the comment whole, so the wake is given that — and a
-// stated excerpt (a hand-off's reason) that was never derived from the payload
-// is shown as itself.
+// A WOKEN SEAT READS THE WHOLE COMMENT, NOT THE CARD'S EXCERPT: a review cut at
+// MaxExcerpt is one whose "but" never arrived. A stated excerpt (a hand-off's
+// reason), never derived from the payload, is shown as itself.
 func TestAWokenSeatReadsTheWholeComment(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("Looks good overall. ", 60) + "BUT the migration is missing."

@@ -12,13 +12,11 @@ import (
 
 // WHO NOT TO WAKE IS THE AUTHOR, AND A BOUND PERSON'S AUTHOR IS THEIR SEAT.
 //
-// A wake is dropped for the person who made the change — telling somebody what
-// they just did is noise a model spends a round on. A person bound to a seat
-// writes AS that seat, kind `human`, with the credential they acted through
-// beside it (iam.ActorFor), so the handle their own gestures land on — the
-// watch a create leaves, the watch a comment leaves — is the record's author
-// and one comparison drops it. A record authored by the credential instead
-// woke a founder for every item their own assistant filed.
+// A person bound to a seat writes AS that seat, kind `human`, with the
+// credential beside it (iam.ActorFor), so the watches their own create or
+// comment leaves are on the record's author and one comparison drops them.
+// Authored by the credential, every item their own assistant filed would wake
+// them.
 
 // personRecord is a record written through a person's own credential by
 // somebody the identity directory binds to a human seat: the author is the
@@ -72,10 +70,9 @@ func TestABoundOperatorIsNotWokenByTheirOwnWrite(t *testing.T) {
 					"that list under the seat they write as, and being told "+
 					"what you just did is a turn spent on nothing", name, woken)
 			}
-			// AND EVERYBODY ELSE STILL HEARS IT. An exclusion that
-			// widened until it reached the other watchers would be a
-			// change nobody is told about, which is the worse failure
-			// and the one this half is here to catch.
+			// AND EVERYBODY ELSE STILL HEARS IT: an exclusion that widened to the
+			// other watchers would be a change nobody is told about, the worse
+			// failure.
 			if !slices.Contains(woken, "cy") {
 				t.Errorf("%s woke %v and the assignee is not among them", name, woken)
 			}
@@ -85,12 +82,10 @@ func TestABoundOperatorIsNotWokenByTheirOwnWrite(t *testing.T) {
 
 // AND THE ONE REASON THAT REACHES THE ACTOR STILL REACHES THEIR SEAT.
 //
-// That a task of yours became workable is news whoever wrote the record that
-// says so — [Reason.WakesActor] is that exception — and an exclusion that
-// dropped the author without honouring it would silence the notice for the
-// one person it is for whenever they are its writer. The record is the
-// repair's own shape ([worklet.Writer.TellUnblocked]): a late relations commit
-// on the dependent, naming its assignee alone, here written through that
+// That a task of yours became workable is news whoever wrote the record
+// ([Reason.WakesActor] is that exception), and dropping the author must honour
+// it. The record is the repair's shape ([worklet.Writer.TellUnblocked]): a late
+// relations commit on the dependent naming its assignee alone, written through that
 // person's own credential.
 func TestAnUnblockedNoticeStillReachesTheActorsOwnSeat(t *testing.T) {
 	t.Parallel()

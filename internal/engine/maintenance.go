@@ -26,24 +26,16 @@ import (
 // maintenanceDutyName is the fleet singleton the retention sweep claims.
 const maintenanceDutyName = "maintenance"
 
-// maintenanceDutyTTL is how long the duty survives without a re-claim.
-//
-// Three ticks, matching the sandbox waiter's ratio: one missed tick must not
-// hand the duty to a peer, because a sweep is a burst of range deletes and
-// two nodes doing it at once is exactly what the singleton avoids. Three
-// ticks is long enough to ride out a slow claim and short enough that a dead
-// node's duty is picked up within the hour.
+// maintenanceDutyTTL is how long the duty survives without a re-claim: three
+// ticks, the sandbox waiter's ratio. One missed tick must not hand a burst of
+// range deletes to a peer while this node may still run it, and a dead node's
+// duty is still picked up within the hour.
 const maintenanceDutyTTL = 3 * maintenance.Interval
 
-// startMaintenance arms the retention sweep.
-//
-// EVERY short-horizon table in this process's stores, in one worker. They
-// were all designed to be swept — each migration says so and each ships the
-// index for it — and a `purge` that exists on every store with nothing calling
-// it sweeps none of them. Wiring them here,
-// rather than each subsystem arming its own loop, is what makes that
-// impossible to repeat quietly: a store with a Purge and no entry in this
-// function is visible in one place.
+// startMaintenance arms the retention sweep: every short-horizon table in this
+// process's stores, in one worker, so a store with a Purge and no entry in
+// [Engine.maintenanceJobs] is visible in one place rather than hidden in a
+// loop each subsystem arms, or forgets to, for itself.
 //
 // Started LAST, like the sandbox waiter, because the duty is claimed under
 // the node's own incarnation.
@@ -54,23 +46,16 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 			e.workerDuty(maintenanceDutyName, maintenanceDutyTTL)),
 	})
 	if err != nil {
-		// A JOB THIS WIRING GOT WRONG IS A WIRING BUG, not a runtime
-		// condition, and it is the same for every node of the fleet — so
-		// it cannot be recovered from here and must not be swallowed.
-		// Every table these jobs cover grows for the life of the
-		// deployment if its sweep never runs, and that has no other
-		// symptom until a volume fills. Logged at ERROR with the whole
-		// list rather than returned, because startMaintenance is the last
-		// thing a boot does and refusing to serve a company over a
-		// housekeeping misconfiguration is the worse of the two failures.
+		// A WIRING BUG, the same on every node, and unswept tables grow with
+		// no symptom until a volume fills: so logged at ERROR, never
+		// swallowed. Not returned, because this is the last thing a boot does
+		// and refusing to serve a company over housekeeping is worse.
 		log.ErrorContext(ctx, "maintenance_worker_not_started", "error", err.Error())
 		return
 	}
 	e.maintenance.Store(w)
-	// Detached, for the same reason the node's loops are: a sweep loop
-	// bound to a signal context stops at SIGTERM, which is harmless here
-	// but would make the worker's lifetime differ from every other loop's
-	// for no reason a reader could find.
+	// Detached like the node's other loops, so its lifetime matches theirs
+	// rather than ending at SIGTERM.
 	w.Start(context.WithoutCancel(ctx))
 }
 
@@ -78,15 +63,10 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 func (e *Engine) maintenanceJobs() []maintenance.Job {
 	var jobs []maintenance.Job
 	if db := e.backends.Store; db != nil {
-		// Every one of these tables lives in this one store, which is
-		// what makes a single list of them honest rather than a
-		// coincidence: a node's short-horizon state IS its local index.
 		jobs = append(jobs, maintenance.StoreJobs(db)...)
-		// THE CONTROL PLANE'S OWN TABLE, named separately rather than
-		// folded into the store sweep: company_config is the one table
-		// here whose rows are configuration, and an operator reading
-		// the job list wants to see that it is swept at all — it was
-		// not, for the life of every deployment before this.
+		// THE CONTROL PLANE'S OWN TABLE, named apart from the store sweep
+		// so an operator reading the job list sees that company_config,
+		// the one table of configuration rows, is swept.
 		jobs = append(jobs, maintenance.ConfigJobs(db)...)
 		jobs = append(jobs, maintenance.LearningJobs(learning.NewDiary(db))...)
 		jobs = append(jobs, maintenance.CounterpartyJobs(learning.NewCounterparties(db))...)
@@ -96,36 +76,22 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 	// died or restarted left behind, and the schemas nothing names any more.
 	jobs = append(jobs, e.mcpListingJobs()...)
 	if fleet := e.backends.Fleet; fleet != nil {
-		// The one shared surface swept here, and the exception the
-		// coordination store's own retention rule makes room for: its
-		// buckets expire on age, and a bucket's age cannot tell an OPEN
-		// channel from a closed one. Closing an idle ask and deleting a
-		// closed one are decisions, so they are taken under the same
-		// singleton duty as every other sweep rather than by a clock.
-		//
-		// [a2a.NewSweeper] rather than the store, because closing an
-		// idle channel publishes a2a_channel_closed and what that means
-		// on the wire belongs to internal/a2a — and rather than the
-		// whole [a2a.Service], which needs a directory this caller
-		// deliberately has none of. A directory is built from the
-		// RUNNING COMPANY, so demanding one here would tie the retention
-		// of a fleet-wide record to whether this node has applied a
-		// configuration. Asking for the two verbs the sweep actually
-		// uses is also what stops the service's own requirements
-		// silently disarming it: built as a Service with an empty
-		// Options, this construction began failing the day the directory
-		// became mandatory, and both jobs vanished behind a warning.
-		//
-		// AND WITH THE ENGINE'S ANSWER TO WHETHER A QUIET CHANNEL IS STILL
-		// OWED, so the ask an executor is working on — or one waiting in a
-		// seat's held inbox — is not closed under it: see [colleagueOwed].
+		// The coordination store expires buckets on age, which cannot tell
+		// an OPEN channel from a closed one, so closing an idle ask and
+		// deleting a closed one are decisions, taken under the singleton
+		// duty. [a2a.NewSweeper], not the store, because what
+		// a2a_channel_closed means on the wire is internal/a2a's; and not an
+		// [a2a.Service], whose directory is built from the RUNNING COMPANY
+		// and would tie a fleet-wide record's retention to this node having
+		// applied one, or disarm the sweep when a Service requirement grows.
+		// [colleagueOwed] keeps an ask an executor is working on, or one
+		// waiting in a seat's held inbox, from being closed under it.
 		if queue := e.backends.Queue; queue != nil {
 			sweeper, err := a2a.NewSweeper(a2a.NewCoordStore(fleet), queue,
 				colleagueOwed{engine: e, runs: sandbox.NewCoordStore(fleet)}, nil)
 			if err != nil {
-				// Logged rather than fatal, matching a2aService: a
-				// company whose channels are not swept is degraded,
-				// not down.
+				// Logged rather than fatal, as a2aService is: unswept
+				// channels degrade a company, not down it.
 				log.Warn("a2a_sweep_unavailable", "error", err,
 					"hint", "idle agent-to-agent channels will stay open")
 			} else {
@@ -133,114 +99,81 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 			}
 		}
 		// AND THE COORDINATION STORE'S OWN REMOVAL MARKERS, for the
-		// channels' reason one level down: the buckets that keep them
-		// are the ones no clock may age, so a marker there stays for the
-		// life of the deployment unless a decision removes it — and
-		// every listing that meets one pays a leader read for it. See
-		// [maintenance.MarkerJobs].
+		// channels' reason: their buckets have no age, so a marker stays
+		// unless a decision removes it, and every listing that meets one
+		// pays a leader read. See [maintenance.MarkerJobs].
 		jobs = append(jobs, maintenance.MarkerJobs(fleet)...)
-		// AND EACH HUMAN SEAT'S CHAT READ STATE, for the mailboxes'
-		// reason: its bucket has no age, so the record of a seat the
-		// company no longer has is forgotten only by a decision taken
-		// against the revision the fleet is pointed at — a grace after a
-		// sweep first saw the seat gone. Registered whatever chat backend
-		// the company runs, because the records outlive a move off Chatlet
-		// and the job costs one listing of an empty bucket where
-		// there are none. See [maintenance.ChatReadJobs].
+		// AND EACH HUMAN SEAT'S CHAT READ STATE, for the mailboxes' reason:
+		// its bucket has no age, so a removed seat's record is forgotten
+		// only by a decision against the fleet's revision. Registered
+		// whatever the chat backend, because the records outlive a move off
+		// Chatlet. See [maintenance.ChatReadJobs].
 		jobs = append(jobs, maintenance.ChatReadJobs(fleet, e.humanSeatHandles)...)
-		// The NATIVE backends' own records, on the same edge and for a
-		// related reason: their family holds several classes under one
-		// grammar, and only some of them age out — so no bucket age can
-		// express the retention and it is taken as a decision here.
-		//
-		// Contributed only where THIS node runs the backend, which is
-		// what makes it correct to sweep a fleet-wide record from a
-		// per-node job list: the duty is a singleton, so exactly one
-		// node's list runs per tick, and a node with no backend
-		// contributes nothing rather than an empty sweep.
+		// The NATIVE backends' records: only some of their classes age out,
+		// so no bucket age expresses the retention. Contributed only where
+		// THIS node runs the backend; the duty is a singleton, so one node's
+		// list runs per tick, and a node without the backend adds nothing.
 		core := e.core.Load()
 		if n := e.native.Load(); n != nil && n.writer != nil && core != nil {
-			// THE REPLICATED ESTATE WITH ITS WRITE SIDE, which is what
-			// the tracker's two exceptions to the applier-only rule need
-			// — the duty's probe clear and the inbox sweep, each argued
-			// where internal/store's applier gate allows it — and nothing
-			// else on this list takes. A node holding no estate runs no
-			// core and reaches the tracker through the router, so it
-			// contributes neither.
+			// THE REPLICATED ESTATE WITH ITS WRITE SIDE, for the tracker's
+			// two exceptions to the applier-only rule (the duty's probe
+			// clear and the inbox sweep, argued at internal/store's applier
+			// gate). A node holding no estate runs no core and adds neither.
 			trackerEstate := e.backends.Store.Replicated()
-			// THE TRACKER'S OWN JOBS, and they are a different kind of
-			// thing from a sweep: its records are a log and nothing
-			// deletes them here. They finish work a crash left half-done
-			// — a re-spread walk, an abandoned merge or cross-project
-			// move, a one-sided dependency — and tell the tasks a close
-			// unblocked. Every one is GATED, so a tick with nothing to do
-			// costs one indexed read.
+			// THE TRACKER'S OWN JOBS are repairs, not sweeps: they delete
+			// nothing, but finish work a crash left half-done (a re-spread
+			// walk, an abandoned merge or cross-project move, a one-sided
+			// dependency) and tell the tasks a close unblocked. Each is
+			// GATED, so an idle tick costs one indexed read.
 			jobs = append(jobs, worklet.Jobs(worklet.DutyDeps{
 				DB: trackerEstate, Writer: n.writer,
 				NodeID: core.nodeID,
 				// AND THE LEAD MAP, for the one repair whose commit
-				// carries a wake. Read per call against the epoch
-				// current when the job runs, for the reason every other
-				// live seam here is: the duty outlives a revision, and a
-				// captured map would route by an org chart that has
-				// since moved.
+				// carries a wake: read per call, because the duty
+				// outlives a revision and a captured map would route by
+				// a stale org chart.
 				Leads: liveLeads{engine: e},
 			})...)
 			// AND THE POLL OF THE CHANGES TASKS WAIT ON, for what no
 			// webhook delivered (ADR-0121).
 			jobs = append(jobs, maintenance.Job{Name: "tracker_linked_changes", Scope: maintenance.Fleet,
 				Gate: e.openChangesPending, Run: e.pollChanges})
-			// AND THE INBOX'S OWN SWEEP, which is a range delete rather
-			// than a repair and is therefore PER NODE —
-			// `tracker_notifications` is Divergent, so each data node
-			// holds its own rows and a singleton would tidy one and let
-			// the rest grow for ever. Contributed here rather than in
-			// worklet.Jobs because that list runs under the duty and
-			// this one must not. Its horizon is the one the PUBLISHED
-			// company states, asked at every sweep — the one the
-			// applier reads per batch (see [worklet.InboxJobs]).
+			// AND THE INBOX'S OWN SWEEP, a range delete outside
+			// worklet.Jobs' duty and so PER NODE: `tracker_notifications`
+			// is Divergent, and a singleton would tidy one node's rows and
+			// let the rest grow. Its horizon is the published company's,
+			// asked at every sweep (see [worklet.InboxJobs]).
 			jobs = append(jobs, worklet.InboxJobs(trackerEstate, e.inboxRetention)...)
 		}
 		if core != nil {
-			// AND THE STATE LOG'S OWN OPERATION LEDGERS, one per
-			// registered domain that keeps one — the CORE's, so they are
-			// swept from boot on every data node, a node with no company
-			// included: its identity log is written from the first
-			// invitation. Every `<domain>_ops` migration says the table
-			// is swept and ships the index a range delete needs, and
-			// nothing swept them: a row per applied record, kept for
-			// ever, on every node. PER NODE rather than under the
-			// singleton, because each node owns its own copy — see
+			// AND THE STATE LOG'S OPERATION LEDGERS, one per registered
+			// domain that keeps one: the CORE's, so swept from boot on
+			// every data node, one with no company included (its identity
+			// log is written from the first invitation). PER NODE, not
+			// under the singleton, because each node owns its copy; see
 			// [maintenance.StatelogJobs].
 			jobs = append(jobs, maintenance.StatelogJobs(core.log.opsLedgers())...)
 			// AND THE CODE LOG'S NOTICES, the core's too: every data node
-			// applies the code log whatever the company runs, and its
-			// applier writes a notice per recipient of every routed record
-			// into a DIVERGENT table — each node's own rows, so each node
-			// sweeps them, a person's at the company's inbox horizon asked
-			// at every sweep as the tracker's is, a seat's at the
-			// turn-detail horizon (gitlet.NoticeJobs).
+			// applies the code log, and its applier writes a notice per
+			// recipient into a DIVERGENT table, so each node sweeps its
+			// own: a person's at the company's inbox horizon, a seat's at
+			// the turn-detail horizon (gitlet.NoticeJobs).
 			jobs = append(jobs, gitlet.NoticeJobs(e.backends.Store.Replicated(), e.inboxRetention)...)
 			// AND THE ARTIFACTS LOG'S, for the same reason: its applier writes
 			// a person's notice per comment record into a DIVERGENT table,
 			// swept per node at the company's inbox horizon.
 			jobs = append(jobs, artifactsdomain.NoticeJobs(e.backends.Store.Replicated(), e.inboxRetention)...)
-			// THE KNOWLEDGE BASE HAS NO SWEEP ANY MORE, and its absence
-			// is a consequence rather than an omission. Its three passes
-			// were a change retention, a revision prune and an orphan
-			// collector; the prune now RIDES EACH COMMIT as the record's
-			// own list of retired versions, the orphans cannot occur
-			// because a create is one transaction, and the history is a
-			// Replicated table an applier owns — so deleting a row here
-			// on one node's own authority is exactly what the identity
-			// claim forbids.
+			// THE KNOWLEDGE BASE HAS NO SWEEP, by design: each commit
+			// carries its retired versions, a create is one transaction so
+			// no orphan occurs, and its history is a Replicated table an
+			// applier owns, which no node may delete from on its own
+			// authority.
 		}
 	}
 	if e.mailboxes != nil {
-		// The second shared record swept here, and for the channels'
-		// reason: a mailbox record has no age that could tell a seat in
-		// the company from one that left, so retiring a removed seat's
-		// mailbox is a decision taken against the active revision.
+		// For the channels' reason: a mailbox has no age that tells a seat
+		// in the company from one that left, so retiring a removed seat's
+		// mailbox is a decision against the active revision.
 		jobs = append(jobs, e.mailboxes.Jobs()...)
 	}
 	return jobs
@@ -249,18 +182,14 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 // rebuildMaintenance replaces the sweep with one built against what the node
 // runs now.
 //
-// FOR A NODE'S FIRST NATIVE RUNTIME, and nothing else: [Engine.startMaintenance]
-// reads its job list once, and on a node that booted without a company "once"
-// was before there were native halves to contribute the tracker's repairs and
-// the inbox sweep. The operation ledgers are the core's, and were in the list
-// from boot. A company's HORIZONS are no reason to rebuild — every job asks its
-// horizon at every sweep ([maintenance.Horizon]), so a revision that moves one
-// is honoured by the next sweep of the worker already running. The old worker
-// stops — its in-flight tick waited out — before the new one is built, so two
-// sweeps never run at once.
-//
-// A node that does not publish never started a sweep, and does not start one
-// here either.
+// FOR A NODE'S FIRST NATIVE RUNTIME only: [Engine.startMaintenance] reads its
+// job list once, which on a node booted without a company came before the
+// native halves (the tracker's repairs and the inbox sweep); the ledgers are the
+// core's, listed from boot. A company's
+// horizons need no rebuild, since every job asks its horizon at every sweep
+// ([maintenance.Horizon]). The old worker stops, its in-flight tick waited
+// out, before the new one is built, so two sweeps never run at once. A node
+// that does not publish never started a sweep and starts none here.
 func (e *Engine) rebuildMaintenance(ctx context.Context) {
 	if !e.mode.Publishes() {
 		return
@@ -273,20 +202,16 @@ func (e *Engine) rebuildMaintenance(ctx context.Context) {
 	}
 }
 
-// buildMailboxes builds the seat mailbox registry and its sweep.
+// buildMailboxes builds the seat mailbox registry and its sweep: nil, with no
+// error, on backends without a fleet store, a queue or a lease store, which
+// have nothing to keep or retire through, so no seat fails over it.
 //
-// Nil, with no error, on backends without a fleet store, a queue or a lease
-// store: there is no shared record to keep and nothing to retire through, and
-// a node built that way registers nothing rather than failing every seat.
-//
-// A retirement claims the seat's lease under an incarnation of its OWN, never
-// the node's: a claim by an owner that already holds a lease doubles as a
-// renew, so sharing the seat host's owner would let a retirement take the
-// lease of a seat this node is running. That makes it the ONE lease owner in
-// this process that is not [Engine.incarnation], and deliberately: every other
-// lease is this process speaking for itself, while a retirement is a separate
-// party that has to lose to this node's own host. The TTL is the one the lease
-// store was opened with, which [Engine.leaseTTL] must already hold.
+// A retirement claims the seat's lease under an incarnation of its OWN, the
+// one lease owner in this process that is not [Engine.incarnation]: a claim by
+// an owner already holding a lease doubles as a renew, so the seat host's owner
+// would let a retirement take the lease of a seat this node runs, and a
+// retirement must lose to this node's own host. The TTL is the lease store's,
+// which [Engine.leaseTTL] must already hold.
 func (e *Engine) buildMailboxes(b *Backends, nodeID string) (*maintenance.Mailboxes, error) {
 	if b == nil || b.Fleet == nil || b.Queue == nil || b.Coord == nil {
 		return nil, nil
@@ -302,27 +227,17 @@ func (e *Engine) buildMailboxes(b *Backends, nodeID string) (*maintenance.Mailbo
 }
 
 // retireSeatRuns ends a retired seat's detached executors, for the mailbox
-// retirement that holds the seat's lease under owner and epoch.
+// retirement holding the seat's lease under owner and epoch, BY THE SEAT'S ID
+// ([sandbox.PendingStore.ListActiveForSeatID]): handle is only a label, empty
+// for a mailbox the broker's listing alone found; errors name the id, which
+// the calling retirement wraps in its label.
 //
-// BY THE SEAT'S ID, which is what the retiring mailbox is filed and named
-// under; handle is the record's label, empty for a mailbox the broker's listing
-// alone found, and selects nothing. See
-// [sandbox.PendingStore.ListActiveForSeatID]. The errors here name the seat by
-// its id alone, because the retirement that called this wraps them in the label
-// it holds.
-//
-// Through the sandbox coordinator, which reclaims each run's box, announces the
-// loss and finishes its record. A node without one (no company it has served
-// reached a sandbox cell) cannot reach a box, so it ends nothing, and it must
-// not let the retirement delete the subscriptions of a seat whose runs are still
-// recorded: it reads the fleet's run records itself, and refuses while the seat
-// has any. The duty's next holder, or this node once it runs a coordinator,
-// retires the seat instead.
-//
-// A run the coordinator left WAITING on a tool call still running
-// ([sandbox.SeatRunsWaiting]) is handed on as the retirement's own word for
-// it, beside the error and never inside it: the retirement keeps the mailbox
-// for it without failing its tick.
+// The sandbox coordinator reclaims each run's box, announces the loss and
+// finishes its record. A node without one cannot reach a box, so it refuses
+// while the fleet records any run for the seat, leaving it to a node that runs
+// one. A run left WAITING on a tool call ([sandbox.SeatRunsWaiting]) is handed
+// back beside the error, never inside it, so the retirement keeps the mailbox
+// without failing its tick.
 func (e *Engine) retireSeatRuns(ctx context.Context, seat uuid.UUID, handle, owner string, epoch int64,
 ) (maintenance.SeatRunsWaiting, error) {
 	if rt := e.sandbox.Load(); rt != nil {
@@ -348,11 +263,9 @@ func (e *Engine) retireSeatRuns(ctx context.Context, seat uuid.UUID, handle, own
 	return maintenance.SeatRunsWaiting{}, nil
 }
 
-// mailboxRegistry is the node's view of [Engine.mailboxes].
-//
-// A function rather than a plain assignment because the field is a pointer and
-// the node's is an interface: a nil *Mailboxes stored in the interface is a
-// non-nil registry whose every call panics, and the node checks for nil.
+// mailboxRegistry is the node's view of [Engine.mailboxes]: a nil *Mailboxes
+// stored in the node's interface would be a non-nil registry whose every call
+// panics, so nil is returned as an untyped nil.
 func (e *Engine) mailboxRegistry() node.MailboxRegistry {
 	if e.mailboxes == nil {
 		return nil
@@ -363,22 +276,13 @@ func (e *Engine) mailboxRegistry() node.MailboxRegistry {
 // activeSeats is the mailbox sweep's roster: the agent seats of the revision
 // the fleet is pointed at, or an error saying why that is unknown.
 //
-// # Only when this node serves that revision
-//
-// The sweep judges a seat absent from the roster, and a retirement deletes mail
-// that cannot be recovered, so the roster must be the FLEET's current revision
-// rather than whatever this node happens to be running. A node that has not yet
-// applied the pointer's activation (propagation, a refused apply, a node stuck on an
-// older revision) answers unknown, and the tick stamps and retires nothing. The
-// next holder of the duty, or this node once it catches up, judges instead.
-//
-// That is the rule every irreversible judgement against the active revision
-// follows, read through its one helper ([Engine.servedFleetRevision]), whose
-// three answers the roster keeps: the seats, nothing activated, or unknown —
-// and an unknown that is only this node still applying the revision, or still
-// starting, is [maintenance.ErrRevisionPropagating], which the sweep judges
-// nothing on without a warning, since every activation and every boot puts
-// every node there for the seconds its apply takes.
+// A retirement deletes mail that cannot be recovered, so the roster is the
+// FLEET's current revision, never merely what this node runs: a node that has
+// not applied the pointer's activation answers unknown and the tick retires
+// nothing ([Engine.servedFleetRevision] holds that rule for every irreversible
+// judgement). An unknown that is only this node still applying or starting is
+// [maintenance.ErrRevisionPropagating], which the sweep passes without a
+// warning, since every activation and boot puts every node there briefly.
 func (e *Engine) activeSeats(ctx context.Context) ([]placement.Seat, error) {
 	company, err := e.servedFleetRevision(ctx)
 	var behind *errBehindFleet
@@ -395,14 +299,10 @@ func (e *Engine) activeSeats(ctx context.Context) ([]placement.Seat, error) {
 // of the revision the fleet is pointed at, or an error saying why that is
 // unknown ([Engine.servedFleetRevision]).
 //
-// HUMAN SEATS, because a read state is kept under the seat a person acts as
-// and only a human seat is ever acted as by a person or a bound machine: a
-// record under any other handle is one nobody can reach, which this roster
-// lets the reconcile forget a grace after it is first seen rather than keep
-// for as long as an agent seat of that name exists. And the SEAT rather than
-// its holder, because the record is the seat's: a person removed or moved
-// from a seat the company still has leaves it to the seat's next holder, as
-// the seat's inbox stays.
+// Only a human seat is ever acted as by a person or a bound machine, so a read
+// state under any other handle is unreachable and forgotten a grace after it
+// is first seen. The SEAT, not its holder, because the record is the seat's
+// and passes to its next holder, as the seat's inbox does.
 func (e *Engine) humanSeatHandles(ctx context.Context) ([]string, error) {
 	company, err := e.servedFleetRevision(ctx)
 	if err != nil {
@@ -418,11 +318,8 @@ func (e *Engine) humanSeatHandles(ctx context.Context) ([]string, error) {
 	return handles, nil
 }
 
-// Maintenance exposes the retention sweep.
-//
-// Exported because "is housekeeping running, and over what?" is a question
-// an operator has to be able to ask: the failure this whole package fixes
-// was invisible precisely because nothing anywhere could answer it.
+// Maintenance exposes the retention sweep, so an operator can ask whether
+// housekeeping is running and over what.
 func (e *Engine) Maintenance() *maintenance.Worker { return e.maintenance.Load() }
 
 // stopMaintenance ends the sweep, waiting for an in-flight tick.
@@ -433,14 +330,10 @@ func (e *Engine) stopMaintenance() {
 }
 
 // inboxRetention is how long this company's inbox rows live, read off the
-// PUBLISHED company each time it is asked — the sweep asks it at every sweep
-// ([maintenance.Horizon]), so a revision that moves it is honoured on the next
-// one rather than held to the revision the node booted on.
-//
-// A NODE WITH NO COMPANY STATES NO HORIZON of its own: a literal zero duration
-// read as "retain nothing" would delete the inbox, so the shipped default is
-// what an unconfigured node sweeps on. Validation refuses a configured value
-// outside its own bounds and fills the default when it is unset.
+// PUBLISHED company at every sweep ([maintenance.Horizon]), so a revision that
+// moves it is honoured by the next one. A node with no company sweeps on the
+// shipped default, because a zero read as "retain nothing" would delete the
+// inbox; validation fills the default for a company that leaves it unset.
 func (e *Engine) inboxRetention() time.Duration {
 	c := e.Company()
 	if c == nil {

@@ -16,21 +16,15 @@ import (
 // A CLAIM THAT DIED BEFORE ITS TURN TOOK THE ANSWER IS REVIVED — OR, PAST ITS
 // BOUNDS, HANDS THE REPLY BACK — ONCE.
 //
-// A person's reply is recorded on the run and its delivery spent; a resume then
-// claims the row — and the process stops before the resumed turn takes the
-// answer. The seat's next holder finds a claim nobody will ever finish. It used
-// to reap it as an abandoned tail and read the reply as spent with it, so the
-// person's answer was silently lost; then to reap it and hand the reply to the
-// seat as an ordinary message, so the answer reached the seat but never the run
-// it answered. The row says whether a turn took the answer
-// ([RecordedAnswer.TakenAt]): one nobody took is given back to the run
-// ([PendingStore.ReviveAnswer]) and the run resumed with it, unless the run can
-// no longer be resumed with it ([Coordinator.revivable]) — then it goes back to
-// the seat as the ordinary message it is, through the same outbox a decline
-// uses — and one a turn took is spent. Each case below stops a node at one step
-// of claim → resume → revival or hand-back, by leaving the row where that node
-// left it or by refusing the step, and hands the seat to a successor over the
-// same store. The revival's own series is in revive_test.go.
+// A resume claims a recorded answer's row and its node stops before the turn
+// takes it, leaving the seat's next holder a claim nobody will finish. Read as
+// spent, the answer is lost; handed to the seat, it misses the run it answered.
+// So one no turn took ([RecordedAnswer.TakenAt]) is revived to the run
+// ([PendingStore.ReviveAnswer]), unless it can no longer be
+// ([Coordinator.revivable]): then it goes to the seat as an ordinary message,
+// through a decline's outbox. One a turn took is spent. Each case stops a node
+// at one step (leaving the row there or refusing it) and hands the seat to a
+// successor over the same store; revive_test.go has the revival's own series.
 
 // answeredAndClaimed records R1 on t1 — its inline resume failing, so the
 // answer is owed — and then claims the row for the retry's resume, as the node
@@ -172,9 +166,8 @@ func reapLogged(t *testing.T, logs *syncBuffer, handedBack bool) {
 
 // STOPPED BETWEEN THE CLAIM AND THE TURN: the next holder gives the answer back
 // to the run — fenced to its lease, the lost claim counted — holds the seat's
-// mail behind it and resumes the run with it, once. Nothing goes back to the
-// seat and nothing is announced lost: the run the person answered is resumed
-// with their answer, which is what the dead claim was doing.
+// mail behind it and resumes the run with it, once, handing nothing back and
+// announcing no loss.
 func TestAClaimThatDiedBeforeItsTurnIsRevivedWithItsAnswer(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -271,8 +264,8 @@ func TestAClaimWhoseTurnTookTheAnswerHandsNothingBack(t *testing.T) {
 	}
 	rig.finished("t1")
 	abandonedOnce(t, rig, false)
-	// HELD, TAKEN AND NOT HANDED BACK: the two fields the line carried
-	// before could not tell this apart from a reply that went back.
+	// HELD, TAKEN AND NOT HANDED BACK, which the line tells apart from a reply
+	// that went back.
 	reapLogged(t, logs, false)
 	if spent := next.spentDeliveries(); len(spent) != 1 || spent[0].id != r1.ID.String() {
 		t.Fatalf("spent %+v, want R1's delivery recorded as worked by the reap", spent)
@@ -441,12 +434,10 @@ func TestAReapThatCannotFenceTheClaimStillRevivesOrHandsBack(t *testing.T) {
 }
 
 // A NODE THAT LOST THE SEAT CANNOT TAKE THE ANSWER ITS SUCCESSOR REVIVED. The
-// old holder's retry has claimed the row and stalls on the way to its turn; the
-// next holder fences the row and gives the answer back to the run. When the old
-// holder's turn finally tries to begin, the take is refused — there is no claim
-// left to take it under, and the row is the successor's — so its turn never
-// runs, and the person is answered once: by the successor's resume of the run
-// they answered.
+// old holder's retry claimed the row and stalls before its turn; the next holder
+// fences the row and revives the answer. The old turn's take is then refused —
+// no claim is left to take it under — so the person is answered once, by the
+// successor's resume of the run they answered.
 func TestANodeThatLostTheSeatCannotTakeTheAnswerItsSuccessorRevived(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -481,10 +472,9 @@ func TestANodeThatLostTheSeatCannotTakeTheAnswerItsSuccessorRevived(t *testing.T
 }
 
 // AND ONE THE NEXT HOLDER IS RETURNING. Past the answer's revivals the next
-// holder fences the row and decides to hand the reply back; the old holder's
-// take is refused as it was above, so the person gets the reply once, as the
-// ordinary message, and not also as the answer of a turn on a node that no
-// longer holds the seat.
+// holder fences the row to hand the reply back; the old holder's take is refused
+// as above, so the person gets the reply once, as the ordinary message, not also
+// as the answer of a turn on a node that no longer holds the seat.
 func TestANodeThatLostTheSeatCannotTakeTheAnswerItsSuccessorReturns(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -639,13 +629,12 @@ func TestAResumeAbandonedBeforeItsTurnHandsTheAnswerOn(t *testing.T) {
 			t.Fatalf("announced %+v, want one answer that reached a run that is gone", got)
 		}
 	})
-	// A RUN WHOSE ENDING IS DECIDED IS GONE to an answer, though its record
-	// is not deleted yet: on a coordinator that records every turn's end, the
-	// ending's last steps — the end's write, and the delete after it — are its
-	// retry's, so the copy it handed back at its second step reaches the seat
-	// while the record still waits. Read as a live run "not waiting", the copy
-	// was announced `not_awaiting`, and the person was never told their answer
-	// reached a run that had ended without it.
+	// A RUN WHOSE ENDING IS DECIDED IS GONE to an answer, though its record is
+	// not deleted yet: on a coordinator that records every turn's end, the
+	// ending's end write and delete are its retry's, so the copy it handed back
+	// at its second step reaches the seat while the record still waits. Read as
+	// a live run "not waiting", the copy would be announced `not_awaiting` and
+	// the person never told their answer reached a run that ended without it.
 	//
 	// Mutation: drop AnswerByTurn's check of a decided ending, and the copy is
 	// announced not_awaiting.
@@ -786,15 +775,13 @@ func count(ids []string, id string) int {
 }
 
 // A REAP WHOSE FENCE DID NOT LAND, RACED BY THE OLD HOLDER'S RELEASE, HANDS THE
-// REPLY BACK ONCE. The old holder gives its claim back at the very instant the
-// reap tries to fence the row, and the fence then fails: the reap goes on with
-// the row as it listed it — a claim — while the store holds an answered run with
-// the person's reply on it. The ending used to ask for the reply to be let go
-// of from a claim, read the refusal as "nothing to let go of", and delete the
-// answered run with the reply on it. Now the store will not delete a row still
-// holding a reply no turn took, and the ending lets it go from whatever status
-// it finds: one copy, the run ended, the loss announced once — past the
-// answer's revivals, that is; within them the run is resumed, as below.
+// REPLY BACK ONCE. The old holder gives its claim back as the reap fences the
+// row, so the fence fails and the reap goes on with the row as it listed it — a
+// claim — while the store holds an answered run with the reply on it. The store
+// will not delete a row holding a reply no turn took, and the ending lets it go
+// from whatever status it finds: one copy, the run ended, the loss announced
+// once. That is past the answer's revivals; within them the run is resumed, as
+// below.
 func TestAnUnfencedReapThatRacesTheOldHoldersReleaseHandsTheReplyBackOnce(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -951,14 +938,13 @@ func (s *takeBeforeReap) ClaimOwnership(ctx context.Context, turnID, owner strin
 }
 
 // A STALLED NODE THAT HELD NO LEASE CANNOT TAKE THE ANSWER ITS SUCCESSOR FENCED.
-// The run sits at the zero epoch, and the node claimed it for the answer's
-// resume under no lease and stalled. The successor fences the row and is about
-// to decide what becomes of the claim — and the stalled node wakes and tries to
-// take the answer for its turn. A zero fence constrains nothing for any other
-// write, and here it used to land: the stalled turn ran with the reply AND the
-// successor handed it back. A take must now hold the row's lease or a newer one,
-// so it is refused, and the person is answered once — by the run's resume on
-// the successor, or, past the answer's revivals, by the copy.
+// The run sits at the zero epoch; the node claimed it under no lease and
+// stalled. The successor fences the row, and as it decides what becomes of the
+// claim the stalled node wakes and tries to take the answer. A zero fence
+// constrains no other write, but a take must hold the row's lease or a newer one
+// — else the stalled turn runs with the reply AND the successor hands it back —
+// so it is refused, and the person is answered once: by the run's resume on the
+// successor, or, past the answer's revivals, by the copy.
 func TestAStalledTakeUnderNoLeaseLosesToTheReapThatFencedTheRow(t *testing.T) {
 	t.Parallel()
 	for _, past := range []bool{false, true} {
@@ -1012,12 +998,10 @@ func TestAStalledTakeUnderNoLeaseLosesToTheReapThatFencedTheRow(t *testing.T) {
 // ONCE — by the turn. Nothing outranks the stalled node's lease, so its take
 // lands just before the reap decides what becomes of the claim; the revival, or
 // past the answer's revivals the ending, sees the answer taken, so the reap ends
-// the run as spent, with nothing handed back, nothing resumed again and an
-// announcement that does not say the reply went back. A take that came a moment
-// later would be refused instead: by the revived run, which has no claim to take
-// it under, or by the decided ending. It used to hand the copy back as well,
-// and call the duplicate the cost of a case that was genuinely unclear; the
-// store's own writes decide it.
+// the run as spent: nothing handed back, nothing resumed again, and an
+// announcement that does not say the reply went back. A later take is refused
+// instead, by the revived run (no claim to take it under) or the decided ending.
+// The store's own writes decide it, so no duplicate copy is handed back.
 func TestAReapWhoseFenceFailedLosesToATakeThatLanded(t *testing.T) {
 	t.Parallel()
 	for _, past := range []bool{false, true} {
@@ -1056,13 +1040,12 @@ func TestAReapWhoseFenceFailedLosesToATakeThatLanded(t *testing.T) {
 // A REPLY A TURN TOOK INLINE IS SPENT AT THE TAKE, BEFORE THE TURN RUNS.
 //
 // The inline attempt holds the reply's delivery unacknowledged through the whole
-// resumed turn, and the dispatcher records it only once the attempt returns. The
-// turn can answer the person and then its node can stop: the seat's next holder
-// reaps the claim — the turn took the answer, so nothing is handed back — and
-// the unacknowledged delivery comes round to it, where nothing on the run
-// recognises it any more. It used to run as a second turn, answering the person
-// twice. It is recorded as worked the moment the turn takes it, and the reap
-// records it again for a node that stopped between the two writes.
+// resumed turn, and the dispatcher records it only once the attempt returns. If
+// the turn answers the person and its node stops, the next holder reaps the
+// claim — taken, so nothing is handed back — and the delivery comes round to it
+// with nothing on the run to recognise it: run again, it would answer the person
+// twice. So it is recorded as worked at the take, and the reap records it again
+// for a node that stopped between the two writes.
 func TestATurnThatTookTheAnswerInlineSpendsItsDeliveryBeforeItRuns(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -1135,13 +1118,12 @@ func TestAReplyATurnTookIsSpentBeforeItsRelaunchClearsTheRow(t *testing.T) {
 	}
 }
 
-// A SEAT'S NEW HOLDER FENCES ITS PARKED RUNS TOO. Nothing is done to a run
-// waiting on a question but counting it — its answer is what moves it — and
-// that left the run at the old holder's lease, or at the zero epoch a run
-// parked under no lease carries, across every seat move. The old holder, having
-// lost the seat and not noticed, could then still claim the answer that
-// arrives for it. Recovery stamps the new holder's lease on it, and the old
-// holder's claim is refused.
+// A SEAT'S NEW HOLDER FENCES ITS PARKED RUNS TOO. A run waiting on a question
+// is otherwise only counted — its answer is what moves it — and would keep the
+// old holder's lease, or the zero epoch of a run parked under no lease, across
+// every seat move, so an old holder that lost the seat unawares could still
+// claim the answer that arrives for it. Recovery stamps the new holder's lease
+// on it, and the old holder's claim is refused.
 func TestRecoveryFencesAParkedRunToTheSeatsNewHolder(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)

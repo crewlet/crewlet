@@ -13,11 +13,11 @@ import (
 )
 
 // A TURN LOST WITH ITS RUN IS HANDED TO THE ENGINE, as a step of the run's
-// ending: after its announcement, before its delete, once per attempt — and only
-// for a loss. A loss is the one terminal of a parked turn no frame of that turn
-// ends, so the engine's answer to the colleague whose ask woke the turn has to
-// come from here ([CoordinatorOptions.TurnLost]); a run whose turn came back,
-// or was stopped, is answered by the frame that ended it.
+// ending: after its announcement, before its delete, once per attempt, and only
+// for a loss. No frame of a parked turn ends a loss, so the engine's answer to
+// the colleague whose ask woke the turn comes from here
+// ([CoordinatorOptions.TurnLost]); a turn that came back, or was stopped, is
+// answered by the frame that ended it.
 
 // lostSpy records what an ending hands [CoordinatorOptions.TurnLost], and what
 // stood when it did.
@@ -160,12 +160,11 @@ func TestALostRunIsHandedOverOnlyOnceItsLossIsAnnounced(t *testing.T) {
 	rig.finished("t1")
 }
 
-// ONLY A LOSS IS HANDED OVER. A run whose turn came back was answered by the
-// turn's own resume, a stopped one by the stop's close, and an abandoned resume
-// whose turn ran by that turn; handed over too, the asker would be told a turn
-// that answered it was lost. A resume that broke before its turn began, and a
-// suspension the engine could not record, are losses: no frame of the turn
-// answers either.
+// ONLY A LOSS IS HANDED OVER, or the asker is told a turn that answered it was
+// lost: a resumed turn, a stopped one and an abandoned resume whose turn ran
+// were each answered by their own frame. A resume that broke before its turn
+// began, and a suspension the engine could not record, are losses: no frame
+// of the turn answers either.
 //
 // Mutation: hand over every ending that announces anything, or every ending,
 // and the cases that are not losses go red; hand over none, and the losses do.
@@ -244,12 +243,11 @@ func TestOnlyALossHandsItsTurnToTheEngine(t *testing.T) {
 	}
 }
 
-// AN ENDING HANDS THE ENGINE THE TURN'S CALLS, as the store read them for it
-// ([Coordinator.runCalls]): a loss to [CoordinatorOptions.TurnLost], a person's
-// stop to [CoordinatorOptions.CloseStopped], each with the calls the turn made
-// — so the engine's account says the reply went out where it did — and, where
-// the store could not answer, with why ([RunCalls.Unread]), so the account says
-// the delivery is not known rather than that there was none.
+// AN ENDING HANDS THE ENGINE THE TURN'S CALLS as the store read them
+// ([Coordinator.runCalls]), a loss to [CoordinatorOptions.TurnLost] and a stop
+// to [CoordinatorOptions.CloseStopped], so the engine's account says where the
+// reply went out; where the store could not answer, it hands why
+// ([RunCalls.Unread]), so the account says the delivery is unknown, not absent.
 //
 // Mutation: hand either callback an empty RunCalls in endingOfRun, or let
 // runCalls drop the read's error, and this goes red.

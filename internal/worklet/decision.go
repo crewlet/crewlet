@@ -14,47 +14,21 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A DECISION IS A STRUCTURED ASK: ADR-0023.
+// A decision is a structured ask (package doc, "A decision is a structured
+// ask, and nothing more"). Its shape is [decision.Decision], shared with the
+// ask an executor parks on (ADR-0068); this file adds only what the tracker can
+// check: cited tasks and pages exist ([ValidateDecision]), an agent's decision
+// recommends an option and says why (ADR-0100), a decision rides only an asking
+// comment and an `inform` only an agent seat's ([checkCommentShape]), and a
+// choice names an option of the ask it answers (the writer's decide).
 //
-// A question that needs somebody to choose (ship or hold, which region, which
-// of three designs) used to travel as prose on an `ask` comment, and every
-// part a person needs to answer it well was optional and unplaced: the
-// options were somewhere in the body, the recommendation was a sentence among
-// others, the evidence was a list of links a reader had to go and find, and
-// the answer was prose the asker then had to interpret back into one of the
-// options it had in mind. So the ask carries a [decision.Decision] (the
-// question, two to four options, what the asker recommends and why, what it
-// looked at, and the role the person is asked in) and the answer carries a
-// [Comment.Choice] naming one of those options by id.
-//
-// # The shape is internal/decision's, the record is this package's
-//
-// The value and its structural contract are [decision.Decision], shared with
-// the ask an executor parks on (ADR-0068), so an agent asks a person in one
-// shape wherever it asks from. What this file adds is what only the tracker
-// can check: that a cited task and page exist ([ValidateDecision]), that an
-// agent's decision recommends one of its options and says why (ADR-0100), that
-// a decision rides only the comment that asks and an `inform` only an agent
-// seat's ([checkCommentShape]), and that an answer's choice names an option
-// OF THE ASK IT ANSWERS (the writer's decide, against the ask's own row).
-// Nothing else. There is no approval chain, no quorum, no state machine and
-// no escalation timer: a decision is still ONE ask to ONE person, answered
-// once, and what the asker does with the choice is the asker's turn.
-//
-// # Immutable once asked
-//
-// A decision is set only on the comment that ASKS, and never changes after:
-// the answer names an option by id, so an ask whose options could be edited
-// under it would turn an answer given to one set of options into an answer
-// to another. No write can change it, so none is refused for trying: a post
-// naming a remark already on the thread is answered from its row
-// ([postedComment]), and the one door to an edit is [Writer.EditComment],
-// which forms it from the stored row and so carries the decision whole.
+// Immutable once asked, as answers name options by id, and no write is refused
+// for trying: a post naming an existing remark is answered from its row
+// ([postedComment]); [Writer.EditComment] edits from the stored row, decision
+// whole.
 
-// checkText is [decision.CheckText] for an optional value, as this package's
-// refusal, marked [ErrInvalid] with the sentence unchanged: what an answered
-// decision carries is bounded by the caps its ask was written under, and may
-// be empty.
+// checkText is [decision.CheckText] for an optional value, marked [ErrInvalid]
+// with the sentence unchanged: an answered decision keeps its ask's caps.
 func checkText(field, value string, limit int) error {
 	if err := decision.CheckText(field, value, limit, false); err != nil {
 		return invalid("%w", err)
@@ -62,10 +36,9 @@ func checkText(field, value string, limit int) error {
 	return nil
 }
 
-// validDecision is the contract a decision its author composed is held to,
-// each fault named under prefix, as this package's refusal: an agent's names
-// the option it recommends and why (ADR-0100), and a person's is held to the
-// shape alone, since a person asking may have no view.
+// validDecision is the contract an authored decision is held to, faults named
+// under prefix: an agent's must recommend an option and say why (ADR-0100); a
+// person's only the shape, since a person asking may have no view.
 func validDecision(d decision.Decision, author AuthorKind, prefix string) error {
 	validate := d.ValidateAt
 	if author == AuthorAgent {
@@ -78,17 +51,14 @@ func validDecision(d decision.Decision, author AuthorKind, prefix string) error 
 }
 
 // EvidenceLookup is the world a decision's evidence is checked against,
-// declared here — by the one caller that needs it — and implemented by the
-// surface that writes the decision, which holds both readers.
+// implemented by the surface that writes the decision, which holds both readers.
 type EvidenceLookup interface {
 	// Task resolves a key or an id to the task's id and every key it has
 	// been known by, or [ErrNoTask].
 	Task(ctx context.Context, ref string) (CitedTask, error)
 
-	// PageID resolves a page reference — an id, or the
-	// "CONTAINER/Title" address a person and a model name a page by — to
-	// the id of a LIVE page, reporting false for none. An error is the
-	// lookup failing, never "no".
+	// PageID resolves a page id or "CONTAINER/Title" address to the id of a
+	// LIVE page, false for none. An error is the lookup failing, never "no".
 	PageID(ctx context.Context, ref string) (id string, found bool, err error)
 }
 
@@ -101,23 +71,18 @@ type CitedTask struct {
 }
 
 // labelAfterKey is a task evidence's label without a leading copy of one of
-// the task's keys, and the separator after it.
-//
-// A TASK'S LINK IS DRAWN AS ITS CURRENT KEY, THEN ITS LABEL, so a label that
-// starts with the key reads it twice ("GP-20 GP-20 sitemap fix"). An asker
-// writes a label as a link would say it, and a link to a task says its key,
-// so the label is stored as what follows the key. A former key is stripped
-// too: the label was written while the task carried it, and drawn after the
-// current key it names the task under a key that is not its own.
+// the task's keys, and the separator after it: the link is drawn as the
+// current key then the label, which would otherwise read "GP-20 GP-20 sitemap
+// fix". A former key is stripped too, or the link would name the task under a
+// key no longer its own.
 func labelAfterKey(label string, keys []string) string {
 	for _, key := range keys {
 		rest, ok := strings.CutPrefix(label, key)
 		if !ok || key == "" {
 			continue
 		}
-		// A WHOLE KEY ONLY: GP-2 is not the start of GP-20, nor GP-20 of
-		// GP-20-b. The boundary is the one a key is recognised at everywhere
-		// else (`dashboard/src/lib/inlineTokens.ts`, rule 5).
+		// A whole key only: GP-2 is not the start of GP-20, nor GP-20 of
+		// GP-20-b (the boundary of `dashboard/src/lib/inlineTokens.ts`, rule 5).
 		if r, _ := utf8.DecodeRuneInString(rest); rest != "" &&
 			(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-') {
 			continue
@@ -133,9 +98,9 @@ func keySeparator(r rune) bool {
 	return unicode.IsSpace(r) || strings.ContainsRune(":,.-\u2013\u2014\u00b7|", r)
 }
 
-// joinInvalid is several refusals of one value as one, every sentence in
-// order: nil for none, the refusal itself for one. Every error here is an
-// [ErrInvalid] refusal; one that is not is answered alone, as itself.
+// joinInvalid is several [ErrInvalid] refusals of one value as one, every
+// sentence in order: nil for none, the refusal itself for one. An error that is
+// not [ErrInvalid] is returned alone, as itself.
 func joinInvalid(found []error) error {
 	switch len(found) {
 	case 0:
@@ -160,26 +125,17 @@ func ValidateDecision(ctx context.Context, d decision.Decision, author AuthorKin
 	return ValidateDecisionAt(ctx, d, author, lookup, decision.FieldPrefix)
 }
 
-// ValidateDecisionAt is the contract author's decision is held to
-// ([validDecision]) plus the checks that need the world, in ONE PASS
-// (ADR-0059): every fault of the shape and every reference that resolves to
-// nothing come back in one refusal, each named under prefix as the caller's
-// arguments carry the decision. It returns the decision as it is to be
-// stored.
+// ValidateDecisionAt is [validDecision] plus the checks that need the world, in
+// ONE PASS (ADR-0059): every fault comes back in one refusal, each named under
+// prefix. It returns the decision as it is to be stored.
 //
-// A TASK IS RESOLVED TO ITS ID, because a key is retired by a move and the
-// record is kept for ever, and its label loses a leading copy of its key,
-// which the link already says ([labelAfterKey]); a PAGE MUST EXIST, because a
-// decision citing a page that is not there sends the person deciding to a dead
-// link at the moment they are weighing it, and it is stored by ITS id too, for
-// the task's reason: a page's address is its title, and a rename retires the
-// title. Turns, runs and URLs are not looked up: a turn or a run is named by
-// the asker's own tooling, and a URL is outside the company. A reference the
-// shape already refused (no kind, no ref) is not looked up, so it is named
-// once.
-//
-// A lookup that FAILS is returned unmarked: the node could not check, which
-// is not something the caller can fix by changing the decision.
+// A task and a page are stored by id, since a move retires a key and a rename
+// a page's title-address, and a page must exist, or the person deciding follows
+// a dead link; a task's label loses its leading key ([labelAfterKey]). Turns,
+// runs and URLs are not looked up: the asker's tooling names the first two, and
+// a URL is outside the company. A reference the shape already refused is not
+// looked up, so it is named once. A lookup that FAILS is returned unmarked: the
+// caller cannot fix it by changing the decision.
 func ValidateDecisionAt(ctx context.Context, d decision.Decision, author AuthorKind,
 	lookup EvidenceLookup, prefix string) (decision.Decision, error) {
 
@@ -209,7 +165,7 @@ func ValidateDecisionAt(ctx context.Context, d decision.Decision, author AuthorK
 					"item %q, which does not exist", field, evidence.Ref))
 				continue
 			case errors.Is(err, ErrInvalid):
-				// NOTHING TO CHECK IT AGAINST (a company on another
+				// Nothing to check it against (a company on another
 				// tracker), which the caller changes: a fault like any.
 				found = append(found, invalid("%s.ref: %s", field, lookupSentence(err)))
 				continue
@@ -245,9 +201,8 @@ func ValidateDecisionAt(ctx context.Context, d decision.Decision, author AuthorK
 	return out, nil
 }
 
-// lookupSentence is a lookup's refusal as the sentence a caller reads, without
-// the class's own words in front ("worklet: invalid: "), which say where the
-// error came from rather than what to change.
+// lookupSentence is a lookup's refusal without the "worklet: invalid: " prefix,
+// which says where the error came from rather than what to change.
 func lookupSentence(err error) string {
 	return strings.TrimPrefix(Sentence(err), ErrInvalid.Error()+": ")
 }
@@ -265,12 +220,9 @@ func checkCommentShape(task string, c *Comment) error {
 		if err := validDecision(*c.Decision, c.AuthorKind, decision.FieldPrefix); err != nil {
 			return err
 		}
-		// AN INFORM IS A PROMISE A TURN KEEPS, so only an asker that HAS
-		// turns may make one: the engine enforces it by holding the
-		// asker's answered turn open until a tool on the named surface has
-		// run ([Owes]). A person — at the dashboard, through an assistant,
-		// or as a human seat — has no turn to hold, so an inform they
-		// asked for is a line on a card that nothing would ever keep.
+		// An inform is a promise a turn keeps: the engine holds the asker's
+		// answered turn open until a tool on the named surface has run
+		// ([Owes]). A person has no turn to hold, so nothing would keep it.
 		if c.Decision.Inform != nil && c.AuthorKind != AuthorAgent {
 			return invalid("comment %s on task %s asks the engine to "+
 				"report the outcome in %s, and only an agent seat's ask may — "+
@@ -300,9 +252,8 @@ func checkCommentShape(task string, c *Comment) error {
 	return nil
 }
 
-// checkChoice is the check that an answer's choice names an option of the
-// decision it answers. No choice is always an answer: a person may answer a
-// decision in prose — "none of these" is an answer too.
+// checkChoice checks that an answer's choice names an option of the decision
+// it answers. No choice is always valid: "none of these", in prose, is an answer.
 func checkChoice(task, ask string, d *decision.Decision, choice string) error {
 	if choice == "" {
 		return nil

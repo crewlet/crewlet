@@ -16,8 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// viewedTool is code_mark_viewed over a host holding site!7 and writes, as the operator catalogue
-// serves it.
+// viewedTool is code_mark_viewed, as the operator catalogue serves it, over a host holding site!7.
 func viewedTool(t *testing.T, f *changeFixture, writes *codeWrites) (tools.Callable, *gitletHost) {
 	t.Helper()
 	host := newChangeHost(f)
@@ -30,9 +29,9 @@ func viewedTool(t *testing.T, f *changeFixture, writes *codeWrites) (tools.Calla
 	return tool, host
 }
 
-// A VIEWED MARK IS A PERSON'S ALONE: the operator catalogue serves code_mark_viewed beside Gitlet's
-// writes and not without them, no seat's registry holds it, a seat or a credential bound to no seat is
-// refused forbidden before anything is read, and its description names its bounds as numbers.
+// A VIEWED MARK IS A PERSON'S ALONE: the operator catalogue serves code_mark_viewed only beside
+// Gitlet's writes, no seat's registry holds it, a seat or a credential bound to no seat is refused
+// forbidden before anything is read, and its description names its bounds as numbers.
 //
 // Mutations: add code_mark_viewed to CodeTools, and a seat's registry holds it; offer it over the
 // code reads alone, and a surface that changes no code marks files; admit a seat in the authority
@@ -69,11 +68,10 @@ func TestCodeMarkViewedIsAPersonsAlone(t *testing.T) {
 	}
 }
 
-// A VIEWED MARK IS SENT AT ITS READ: the write names the repository id and the change id the call's
-// one read answered, the files as given (a deleted file with neither id nor mode), and that read's
-// position as Seen; the read is at or past the caller's `seen`; the answer names the handle, the
-// repository, the change, the outcome and the position, and no digest or key. An `unviewed` path is
-// sent exactly, untrimmed and unsplit on its comma.
+// A VIEWED MARK IS SENT AT ITS READ: the write names the ids the call's one read answered, the files
+// as given (a deleted file with neither id nor mode), and that read's position as Seen; the read is at
+// or past the caller's `seen`; the answer names the handle, repository, change, outcome and position,
+// and no digest or key. An `unviewed` path is sent exactly, untrimmed and unsplit on its comma.
 //
 // Mutations: send the caller's `seen` as Seen rather than the read's position, red; read `unviewed`
 // through argStrings, red.
@@ -110,8 +108,8 @@ func TestCodeMarkViewedSendsTheGestureAtItsRead(t *testing.T) {
 	host.mu.Lock()
 	reads := slices.Clone(host.reads)
 	host.mu.Unlock()
-	// A CALL'S FIRST READ RESOLVES THE REPOSITORY, linearizable, which reaches past any floor; a read on a
-	// repository the turn already resolved is floored at `seen` (changeRead.read).
+	// A call's first read resolves the repository linearizably, past any floor; one on a repository the
+	// turn already resolved is floored at `seen` (changeRead.read).
 	if len(reads) != 1 || !reads[0].Brief || !reads[0].DetailOnly ||
 		(reads[0].Fresh.Level != statelog.ReadLinearizable && reads[0].Fresh.Floor(floor.Stream) != floor) {
 		t.Errorf("the change was read %+v, want its row alone once, at or past %s", reads, floor)

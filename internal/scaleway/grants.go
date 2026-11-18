@@ -20,6 +20,24 @@ import (
 // offered, and the policy is rewritten whole, so a lapsed grant leaves it on
 // the next pass with the key unchanged.
 
+// oneChange is each set no level holds that a seat is granted only for one
+// change at a time (ADR-0158): what it allows beyond its name, and the hours
+// it lasts at most.
+//
+//nolint:gochecknoglobals // an immutable table, not state
+var oneChange = map[string]struct {
+	note     string
+	maxHours int
+}{
+	// The narrowest set with s3:PutBucketAcl; Scaleway grants the rest of
+	// a bucket's settings with it.
+	"ObjectStorageBucketsWrite": {maxHours: 4, note: "It changes a bucket's ACL and visibility, and " +
+		"also creates buckets and changes their CORS, website, versioning, tags and lifecycle rules, " +
+		"which can expire and delete objects. An ACL of public-read-write lets anyone, the agent " +
+		"included, write objects into the bucket. It reaches every bucket in the projects it is " +
+		"granted on, reads no object and writes no bucket policy."},
+}
+
 // projectKind is a grant's scope entries on a project set: project IDs.
 const projectKind seataccess.GrantScopeKind = "project"
 
@@ -68,9 +86,11 @@ func grantEntries(catalogue []PermissionSet) []seataccess.GrantEntry {
 		if len(s.Categories) > 0 {
 			group = s.Categories[0]
 		}
+		once := oneChange[s.Name]
 		out = append(out, seataccess.GrantEntry{
 			ID: s.Name, Name: s.Name, Group: group, ScopeKind: kind,
 			Write: grantWrite(s.Name), InLevel: lowestLevelOf(s.Name),
+			Note: once.note, MaxHours: once.maxHours,
 		})
 	}
 	slices.SortFunc(out, func(a, b seataccess.GrantEntry) int {
@@ -337,8 +357,8 @@ func grantReach(g seataccess.Grant, opts seataccess.Options) string {
 //
 //nolint:gochecknoglobals // immutable words, not state
 var grantTerms = seataccess.GrantTerms{
-	Refusal:    "403 `permissions_denied`",
-	Permission: "a permission set, such as `KubernetesFullAccess`",
+	Refusal:    "403 `permissions_denied`, or `AccessDenied` from Object Storage",
+	Permission: "a permission set, such as `KubernetesFullAccess`, or `ObjectStorageBucketsWrite` for a bucket's ACL",
 	Scope:      "project IDs; none is your own projects, and an Organization set takes none",
 	Whole:      "the agent's own projects",
 	Account:    "the Organization",

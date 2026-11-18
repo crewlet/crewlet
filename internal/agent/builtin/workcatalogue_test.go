@@ -12,23 +12,13 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// What a model declares is what the tracker judges values against.
+// What a model declares is what the tracker judges values against: every
+// setting the coercion table reads off a [worklet.FieldDef] must reach the
+// declaration, or the remedy a refusal names is unreachable.
 //
-// The coercion table reads seven settings off a [worklet.FieldDef]: the
-// precision it refuses extra decimals against, the bounds, the time flag, the
-// multi cap, the unit and the progress mode — and NOTHING could put any of
-// them there: the tool read `options` and dropped the rest on the floor. So
-// every number field this engine could declare was integer-precision, every
-// date field was date-only, and the remedy a refusal named ("set a value at
-// that precision, or widen the field's own") was unreachable from every
-// surface the engine offers.
-//
-// These cases are the mapping, which is the half that lives in THIS package:
-// what a declaration does once it is made is the tracker's own suite
-// (internal/worklet/coerce_test.go pins each rule against the same Config),
-// and a second copy of that table here would certify nothing but itself. Each
-// case therefore names the value the declaration buys, so the pair reads as
-// one sentence across the two packages.
+// These cases are only the mapping: what a declaration does once made is the
+// tracker's suite (internal/worklet/coerce_test.go), and a copy here would
+// certify nothing but itself. Each case names the value the declaration buys.
 func TestEveryFieldSettingReachesTheDeclaration(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -37,10 +27,8 @@ func TestEveryFieldSettingReachesTheDeclaration(t *testing.T) {
 		want   func(*testing.T, worklet.FieldConfig)
 	}{
 		{
-			// worklet: `3.14` lands at precision 2 and `3.14159` is
-			// refused naming the rule. At precision 1, `0.6` lands
-			// and `0.65` is refused — and it could only ever be 0,
-			// so `0.6` was refused on every field this tool made.
+			// worklet: at precision 1, `0.6` lands and `0.65` is
+			// refused naming the rule.
 			name:   "precision",
 			config: map[string]any{"precision": json.Number("1")},
 			want: func(t *testing.T, got worklet.FieldConfig) {
@@ -66,9 +54,8 @@ func TestEveryFieldSettingReachesTheDeclaration(t *testing.T) {
 				}
 			},
 		}, {
-			// A FLOOR OF ZERO IS A FLOOR, and the reason the bounds
-			// are pointers: read by value, "no minimum" and "not
-			// below zero" would be one declaration.
+			// A FLOOR OF ZERO IS A FLOOR: the bounds are pointers so
+			// "no minimum" and "not below zero" stay two declarations.
 			name:   "a floor of zero",
 			config: map[string]any{"min": json.Number("0")},
 			want: func(t *testing.T, got worklet.FieldConfig) {
@@ -93,8 +80,7 @@ func TestEveryFieldSettingReachesTheDeclaration(t *testing.T) {
 				}
 			},
 		}, {
-			// worklet: Multi is the DECLARATION's own flag, and what
-			// lets a dropdown hold more than one option.
+			// worklet: Multi lets a dropdown hold more than one option.
 			name:   "the multi flag",
 			config: map[string]any{"multi": true},
 			want: func(t *testing.T, got worklet.FieldConfig) {
@@ -119,8 +105,8 @@ func TestEveryFieldSettingReachesTheDeclaration(t *testing.T) {
 				}
 			},
 		}, {
-			// THE OPTIONS MOVED UNDER `config`, where the read has
-			// always carried them — see the round-trip case below.
+			// The options sit under `config`, where the read carries
+			// them (TestADeclarationRoundTripsFromTheRead).
 			name: "the options",
 			config: map[string]any{"options": []any{
 				map[string]any{"slug": "high", "name": "High"},
@@ -157,9 +143,8 @@ func TestEveryFieldSettingReachesTheDeclaration(t *testing.T) {
 	}
 }
 
-// `applies_to` SCOPES A FIELD TO ITS TYPES, and it had no reader either — so
-// every declared field applied to every type, a `severity` was required of a
-// chore, and the one thing a task-type catalogue is for could not be used.
+// `applies_to` SCOPES A FIELD TO ITS TYPES: dropped, every field applies to
+// every type and a `severity` is required of a chore.
 func TestAppliesToReachesTheDeclaration(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -180,13 +165,10 @@ func TestAppliesToReachesTheDeclaration(t *testing.T) {
 	}
 }
 
-// THE READ IS THE EDIT, and this is what the nesting is FOR: a declaration
-// handed back by `get_work_catalogue` has to be a declaration this tool
-// accepts unchanged. It was not — the answer carries the settings under
-// `config` and the tool read `options` at the top level — so an operator who
-// echoed the read to rename ONE field silently dropped the options from every
-// choice field in the list, which is accepted (a choice field may declare
-// none) and leaves every stored value keyed by an option id resolving to
+// THE READ IS THE EDIT: a declaration handed back by `get_work_catalogue` is
+// one this tool accepts unchanged. Otherwise echoing the read to rename one
+// field silently drops every choice field's options (a choice field may
+// declare none), and every stored value keyed by an option id resolves to
 // nothing.
 func TestADeclarationRoundTripsFromTheRead(t *testing.T) {
 	t.Parallel()
@@ -234,11 +216,9 @@ func TestADeclarationRoundTripsFromTheRead(t *testing.T) {
 	}
 }
 
-// A DECLARATION IS WHOLE, exactly as the list around it is. `fields` REPLACES
-// the declared set and every other attribute already reads that way — an
-// omitted `required` is false — so a `config` left out CLEARS the field's
-// settings rather than keeping them. Documented on the tool, because the
-// alternative reading would make clearing a setting impossible.
+// A DECLARATION IS WHOLE, as the list around it is: an omitted `config`
+// CLEARS the field's settings, as an omitted `required` is false; keeping
+// them would make clearing a setting impossible. The tool's description says so.
 func TestAnOmittedConfigClearsTheFieldsSettings(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -257,8 +237,7 @@ func TestAnOmittedConfigClearsTheFieldsSettings(t *testing.T) {
 		t.Fatalf("config = %+v, want the empty one — a declaration that kept "+
 			"what it left out could never clear a setting", got)
 	}
-	// AND THE TOOL SAYS SO, because a rule a model cannot read is a rule
-	// it breaks on its first edit.
+	// AND THE TOOL SAYS SO: a rule a model cannot read it breaks.
 	if described := catalogueTool(t, trk).Description(); !strings.Contains(
 		described, "cleared") {
 
@@ -267,16 +246,10 @@ func TestAnOmittedConfigClearsTheFieldsSettings(t *testing.T) {
 	}
 }
 
-// A SETTING ITS TYPE CANNOT READ IS REFUSED AT THE WRITE, naming the setting
-// and the types that use it — and the refusal is the TRACKER's, reached
-// because the tool forwards the key rather than dropping it. A second gate
-// here would be the third opinion the coercion table's own comment records
-// going out of step with the other two.
-//
-// What this case asserts is the forwarding: the tracker's own suite
-// (internal/worklet/config_test.go) owns the refusal's wording, and if this
-// tool swallowed the key again that suite would stay green while no caller
-// could ever trip it.
+// A SETTING ITS TYPE CANNOT READ IS REFUSED BY THE TRACKER, reached only
+// because the tool forwards the key; a second gate here would drift from it.
+// This asserts the forwarding: internal/worklet/config_test.go owns the
+// refusal, and stays green even if this tool swallowed the key.
 func TestASettingReachesTheGateThatRefusesIt(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -348,10 +321,8 @@ func TestTheDeclarationRefusalReachesTheCaller(t *testing.T) {
 	}
 }
 
-// A MALFORMED SETTING IS REFUSED BY NAME, never read as its zero: a
-// `precision` nobody could read became 0 under [argInt], which is a valid
-// precision — so the field was declared exact to whole numbers and the caller
-// was told it had been declared.
+// A MALFORMED SETTING IS REFUSED BY NAME, never read as its zero: an
+// unreadable `precision` read as 0 is a valid precision, declared silently.
 func TestAnUnreadableSettingIsRefusedByName(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -396,10 +367,8 @@ func TestAnUnreadableSettingIsRefusedByName(t *testing.T) {
 	}
 }
 
-// ONE GRAMMAR, TWO TOOLS. A project's own declarations go through the same
-// reader, so the settings have to arrive the same way — and the two schemas
-// had already drifted on the half that was mapped, `write_project` describing
-// an option as a bare object.
+// ONE GRAMMAR, TWO TOOLS: `write_project`'s declarations go through the same
+// reader, so its settings arrive the same way.
 func TestAProjectDeclaresFieldsInTheSameGrammar(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -436,9 +405,8 @@ func TestAProjectDeclaresFieldsInTheSameGrammar(t *testing.T) {
 	}
 }
 
-// THE SCHEMA A MODEL READS NAMES EVERY SETTING IT MAY SEND, and the same one
-// on both tools: a key the engine accepts and the schema omits is a key no
-// model will ever send, which is the same gap as one the reader drops.
+// THE SCHEMA NAMES EVERY SETTING A MODEL MAY SEND, the same on both tools: a
+// key the schema omits is one no model sends.
 func TestTheDeclarationSchemaNamesEverySetting(t *testing.T) {
 	t.Parallel()
 	catalogue := fieldItems(t, catalogueTool(t, newFakeTracker()).Parameters(),
@@ -460,9 +428,8 @@ func TestTheDeclarationSchemaNamesEverySetting(t *testing.T) {
 	if !held {
 		t.Fatal("`config` is not an object in the schema")
 	}
-	// EVERY KEY A SERVED DECLARATION CAN CARRY. `tracking` and `rollup`
-	// are deliberately not here: the tracker refuses both outright, so a
-	// read can never hand one back and the vocabularies stay equal.
+	// Every key a served declaration can carry; not `tracking` or `rollup`,
+	// which the tracker refuses outright, so no read hands one back.
 	for _, key := range []string{
 		"options", "unit", "precision", "min", "max", "time", "progress", "multi",
 	} {
@@ -480,30 +447,25 @@ func TestTheDeclarationSchemaNamesEverySetting(t *testing.T) {
 
 // ---- helpers ------------------------------------------------------------ //
 
-// errTrackerRefusedTheField is the tracker's own refusal, quoted from
-// internal/worklet/config.go's `unusable`, so this package asserts that the
-// message REACHES a model rather than re-deciding what it says.
+// errTrackerRefusedTheField quotes internal/worklet/config.go's `unusable`:
+// this package asserts the message reaches a model, not what it says.
 var errTrackerRefusedTheField = &refusal{
 	"worklet: field owner is a text and carries a precision, which only a " +
 		"number, progress and rollup field uses — a setting its type cannot " +
 		"read is one stored, replicated and applied by nothing",
 }
 
-// refusal is a refusal the tracker wrote, as it writes one: its own sentence,
-// MARKED [worklet.ErrInvalid]; an unmarked error is the node's failure, which
-// is never told in the domain's words.
+// refusal is a tracker refusal as the tracker writes one: its sentence,
+// marked [worklet.ErrInvalid]. Unmarked, it would be the node's failure.
 type refusal struct{ text string }
 
 func (r *refusal) Error() string { return r.text }
 
 func (r *refusal) Unwrap() error { return worklet.ErrInvalid }
 
-// catalogueTool is `write_work_catalogue` as an OPERATOR holds it, which is
-// the only registry it is in: a declaration is the company's vocabulary, and a
-// seat adding to it is a seat editing the rules it is judged by.
-//
-// BUILT FROM THE REAL CONSTRUCTOR rather than a literal, so a tool that stops
-// registering fails here instead of passing silently.
+// catalogueTool is `write_work_catalogue` as an operator holds it, its only
+// registry: a seat declaring fields would edit the rules it is judged by.
+// Built from the real constructor, so a tool that stops registering fails here.
 func catalogueTool(t *testing.T, trk *fakeTracker) tools.Callable {
 	t.Helper()
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{

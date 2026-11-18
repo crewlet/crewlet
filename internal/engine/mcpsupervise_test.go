@@ -19,11 +19,10 @@ import (
 )
 
 // The engine's half of keeping an MCP server alive, against real children
-// that die: the bridge restarts them (internal/mcp has those cases), and
-// what is the engine's is that a seat's turns reach the server again, that a
-// shared server whose start failed reaches every seat once the bridge brings
-// it up — with no config apply in between — and that the status record says what
-// the server is doing now rather than what its start concluded.
+// that die (the bridge's restarts are internal/mcp's cases): a seat's turns
+// reach the server again, a shared server whose start failed reaches every
+// seat once it is up with no config apply in between, and the status record
+// says what the server is doing now, not what its start concluded.
 
 // withServerEnv adds variables to every `env:` block of an mcpCompany
 // document, which is the environment the engine launches the server with.
@@ -52,9 +51,9 @@ func statusOf(e *engine.Engine, server string) (coord.MCPServerStatus, bool) {
 	return coord.MCPServerStatus{}, false
 }
 
-// within polls cond until it holds or the deadline passes. Long, because a
-// restart is a real spawn and handshake under the race detector; a case that
-// is fast when it works pays nothing for it.
+// within polls cond until it holds or 30s pass: long, because a restart is a
+// real spawn and handshake under the race detector, and a passing case pays
+// nothing for it.
 func within(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
@@ -82,11 +81,10 @@ func call(t *testing.T, e *engine.Engine, handle, tool string) tools.Result {
 }
 
 // A SHARED SERVER THAT DIES IS BROUGHT BACK, with nobody editing the config.
-// While it is down, every seat that calls it is refused in the engine's own
-// words, classed unavailable — never a broken pipe — and the status record says
-// it failed, with the child's exit status; once it is back the seats' calls
-// work again through the very tool objects their registries already hold, and
-// the status record says it started.
+// While it is down a seat's call is refused in the engine's words, classed
+// unavailable (never a broken pipe), and the status record says it failed with
+// the child's exit status; once back, the tool objects the registries already
+// hold work again and the record says it started.
 func TestASharedServerThatDiesIsBroughtBackAndReportedWhileDown(t *testing.T) {
 	t.Parallel()
 	starts := t.TempDir()
@@ -139,19 +137,15 @@ func TestASharedServerThatDiesIsBroughtBackAndReportedWhileDown(t *testing.T) {
 	}
 }
 
-// A SHARED SERVER WHOSE START FAILED REACHES EVERY SEAT WHEN IT COMES UP —
-// without an apply. Before, the next config apply was the only thing that ever
-// asked again, so a vendor that was down at boot cost the company that
-// server's tools until somebody edited the config. A seat that holds a
-// surface of its own (it has a per-role server) gets the shared tool refiled
-// into it too, because that surface was cloned from the epoch's before the
-// shared server was up.
+// A SHARED SERVER WHOSE START FAILED REACHES EVERY SEAT WHEN IT COMES UP,
+// without an apply. A seat with a surface of its own (a per-role server) gets
+// the shared tool refiled into it too: that surface was cloned from the
+// epoch's before the shared server was up.
 //
-// THE CASE DECIDES WHEN THE VENDOR COMES UP, not a timer: the shared server
-// refuses every start until its ready file exists, which the case writes only
-// once both seats are claimed and the CEO's surface is known to lack the
-// shared tool. A retry schedule long enough to outlast the claims would be a
-// race against the engine's boot, which a loaded runner loses.
+// THE CASE DECIDES WHEN THE VENDOR COMES UP, not a timer: the server refuses
+// every start until its ready file exists, written only once both seats are
+// claimed and the CEO's surface lacks the shared tool. A retry schedule long
+// enough to outlast the claims would race the engine's boot.
 func TestASharedServerWhoseStartFailedReachesEverySeatWhenItComesUp(t *testing.T) {
 	t.Parallel()
 	starts := t.TempDir()
@@ -192,8 +186,8 @@ roles:
     llm: zulu
 `, os.Args[0], toolServerModeEnv, toolServerLaunchesEnv, starts, toolServerReadyEnv, ready,
 		procgrouptest.GORACE, procgrouptest.StandInRaceOptions())
-	// Short: every retry before the file appears is refused, so the schedule
-	// only bounds how soon after it the server comes up.
+	// Short: every retry before the file appears is refused, so this only
+	// bounds how soon after it the server comes up.
 	e := newEngine(t, engine.WithMCPRetryBase(
 		engine.Options{Company: parsedCompany(t, doc)}, 100*time.Millisecond))
 
@@ -232,23 +226,18 @@ roles:
 }
 
 // AN APPLY WHILE A SHARED SERVER IS DOWN KEEPS ITS TOOLS LISTED, IN THE ORDER
-// AN APPLY WHILE IT IS UP WOULD. The apply builds a fresh registry and the
-// server it reconciles is down; the reconcile says so, and hands back the tools
-// the server still lists, which the apply files beside the error in spec order.
-// They refuse honestly until the server is back, and when it is, nothing
-// refiles them, because a restart that lists the same tools is no change. Left
-// out, the new epoch would never offer them again; appended once the epoch is
-// published, the same revision would render its catalogue in another order
-// whenever a server happened to be down at the apply — and a registry's order
-// is the order a prompt lists its tools in.
+// AN APPLY WHILE IT IS UP WOULD. The reconcile reports the server down and
+// hands back the tools it still lists, which the apply files beside the error
+// in spec order; they refuse until it is back, and nothing refiles them then
+// (same tools, no change). Left out, the new epoch would never offer them
+// again; appended after publishing, the same revision would list its tools in
+// another order, and a registry's order is the order a prompt lists them in.
 func TestAnApplyWhileASharedServerIsDownKeepsItsToolsListed(t *testing.T) {
 	t.Parallel()
-	// Two shared servers, the first in spec order the one that goes down,
-	// so a tool filed late would land after the second's. The one that goes
-	// down fronts a vendor the case takes away before the call it crashes
-	// on and gives back only once the apply is done, so the server is down
-	// through the whole apply however long it takes: every restart, the one
-	// the apply asks for included, is refused until then.
+	// The one that goes down is first in spec order, so a tool filed late
+	// would land after the second's. Its vendor is taken away before the
+	// call it crashes on and given back only after the apply, so every
+	// restart, the apply's included, is refused throughout.
 	ready := filepath.Join(t.TempDir(), "vendor-is-up")
 	if err := os.WriteFile(ready, nil, 0o600); err != nil {
 		t.Fatalf("bring the vendor up for the boot: %v", err)
@@ -362,10 +351,9 @@ func TestASeatsOwnChildThatDiesIsBroughtBackForThatSeat(t *testing.T) {
 }
 
 // THE RESTART SCHEDULE KEEPS THE SEAT CADENCE it is anchored to: its first
-// wait is one seat heartbeat — when a node's proof that it holds a seat can
-// next change, which is what a held-back per-role restart is waiting for —
-// and its ceiling the interval a seat's persistent failure is repeated at. A
-// change to either side without the other breaks the argument both rest on.
+// wait is one seat heartbeat (when a node's proof that it holds a seat can next
+// change, which a held-back per-role restart waits for), its ceiling the
+// interval a seat's persistent failure is repeated at. Change both or neither.
 func TestTheMCPRestartScheduleKeepsTheSeatCadence(t *testing.T) {
 	t.Parallel()
 	if mcp.RestartBase != seat.HeartbeatInterval {

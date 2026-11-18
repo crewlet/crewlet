@@ -127,7 +127,7 @@ func readyPull() builtin.PullFacts {
 		Paths: []string{"web/src/upload.ts"}, PathsComplete: true}
 }
 
-// mergedPull is change n merged into main as merge.
+// mergedPull is a change merged into main as commit merge.
 func mergedPull(merge string) builtin.PullFacts {
 	return builtin.PullFacts{Title: "A change", Author: "dev", Merged: true, MergeCommit: merge, Base: "main",
 		Paths: []string{"web/src/upload.ts"}, PathsComplete: true}
@@ -181,12 +181,11 @@ func pullMergeArgs(head string) map[string]any {
 }
 
 // A delegate's allow of a pull request's merge stands only where GitHub shows,
-// when the verdict is given, every condition the engine holds a merge to: the
-// head asked about, open and no draft, every required check passed on it,
-// mergeable and not held back by its branch's rules, approved by somebody
-// other than its author and the requester, no sensitive label, and no path no
-// delegate allows. Anything else, a fact it cannot read included, goes to
-// people with the condition named.
+// at the verdict, every condition of a merge: the head asked about, open and no
+// draft, every required check passed on it, mergeable and not held back by its
+// branch's rules, approved by somebody other than its author and the
+// requester, no sensitive label, and no path no delegate allows. Anything
+// else, an unreadable fact included, goes to people with the condition named.
 //
 // Mutation: drop any one condition, read an unread check as passed, or let an
 // unreadable pull request through, and a merge nobody should have allowed is

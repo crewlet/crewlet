@@ -8,9 +8,9 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
-// A job whose provider refused the request its session makes is recorded as
-// that, with the provider's message, and its session is retired and not kept:
-// every later launch of it would be refused the same way.
+// A job whose provider refused its session's request is recorded as that, with
+// the provider's message, and its session is retired, not kept: every later
+// launch of it would be refused the same way.
 //
 // Mutation: drop requestRefused from sessionSpent, at.refused or the record's
 // kind, and it goes red.

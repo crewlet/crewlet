@@ -7,31 +7,14 @@ import (
 )
 
 // Inflight counts running handlers and lets a drain wait for them to finish.
-//
-// # Why this is not a sync.WaitGroup
-//
-// Two of the three backends used one, and it was wrong in a way that only
-// shows up under load. A WaitGroup's contract is explicit: "calls with a
-// positive delta that start when the counter is zero must happen before a
-// Wait". A dispatch loop calls Add the moment a message arrives — which is
-// any moment at all, including one where a drain is already waiting on an
-// empty queue. There is no way for a consumer to honour that ordering
-// without the coordination the WaitGroup was supposed to provide.
-//
-// It is not only a rule on paper. Wait may return on a momentary zero while
-// a handler is starting, so a drain reports clean and the process shuts down
-// through a running handler — the exact failure WaitForHandlers exists to
-// prevent. The race detector reports it as a data race on the WaitGroup
-// itself, and that is how it was found: a JetStream dispatch against a
-// concurrent drain, in a suite that starts and stops nodes in parallel.
-//
-// The memory twin never had it — it kept a count under a mutex with a
-// channel closed on the transition to zero, which is what this is. That the
-// twin was right and both real backends were wrong is the case for one
-// implementation rather than three: the certified suite exercised the
-// CONTRACT identically for all of them and could not see the difference.
-//
 // The zero value is ready to use.
+//
+// Not a sync.WaitGroup: its Add at zero must happen before Wait, but a
+// dispatch loop adds whenever a message arrives, including while a drain
+// waits, so Wait could return on a momentary zero and shut down through a
+// starting handler (the race detector flags it). A count under a mutex with a
+// channel closed at zero has no such ordering. One implementation serves every
+// backend: the conformance suite could not tell a wrong copy from a right one.
 type Inflight struct {
 	mu   sync.Mutex
 	n    int
@@ -39,7 +22,7 @@ type Inflight struct {
 }
 
 // Begin records a handler starting. Safe at any time, including while a
-// drain is waiting, which is the whole point.
+// drain is waiting.
 func (f *Inflight) Begin() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -54,9 +37,8 @@ func (f *Inflight) End() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.n == 0 {
-		// A stray End cannot take the count negative: the count is also
-		// what an operator sees, and a negative one reads as a bug in the
-		// queue rather than in whoever double-finished a handler.
+		// A stray End cannot go negative: an operator sees the count, and
+		// a negative one would blame the queue for a double finish.
 		return
 	}
 	f.n--
@@ -74,11 +56,9 @@ func (f *Inflight) Count() int {
 }
 
 // Wait blocks until no handler is running, the timeout expires, or ctx ends,
-// and reports how many were still running when it stopped waiting.
-//
-// Zero is a clean drain. A non-zero count is not an error — the caller owns
-// any "this took too long" policy — and a non-positive timeout waits until
-// the handlers finish or ctx ends.
+// and reports how many were still running when it stopped waiting. Zero is a
+// clean drain; non-zero is no error (the caller owns that policy). A
+// non-positive timeout waits until the handlers finish or ctx ends.
 func (f *Inflight) Wait(ctx context.Context, timeout time.Duration) (int, error) {
 	f.mu.Lock()
 	if f.n == 0 {

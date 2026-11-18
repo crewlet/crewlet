@@ -33,22 +33,14 @@ func brokerServerName(t *testing.T, back *engine.Backends) string {
 }
 
 // TestTheBrokerTakesTheRESOLVEDNodeID pins the identity the embedded broker is
-// started under, for the config shape a container orchestrator actually uses.
+// started under, for the config shape a container orchestrator uses.
 //
-// A node's name has three sources in precedence order — `node.id` in the file,
-// then CREWLET_NODE_ID, then the default — and only the first is a struct
-// field. The fleet guide tells an operator to inject the variable and leave
-// the key out, which is exactly the shape that leaves that field EMPTY.
-//
-// That mattered because JetStream places replicas BY SERVER NAME, so this
-// value is the member's identity in the cluster. Passing the raw field meant a
-// clustered member was started with no name and refused outright at boot —
-// the documented fleet shape failing to start — while a solo member silently
-// fell back to the broker's own literal default, detaching its identity from
-// the node's for as long as nobody looked.
-//
-// Asserted through the SOLO path because it is the one that failed QUIETLY:
-// the clustered path errors, and an error is a symptom somebody chases.
+// A node's name comes from `node.id`, then CREWLET_NODE_ID, then the default,
+// and only the first is a struct field; the fleet guide injects the variable
+// and leaves the key out, so the field is EMPTY. JetStream places replicas BY
+// SERVER NAME, so the broker takes the resolved id: the raw field fails a
+// clustered member at boot and silently gives a solo member the broker's own
+// default. Asserted through the solo path, the one that fails QUIETLY.
 func TestTheBrokerTakesTheRESOLVEDNodeID(t *testing.T) {
 	// Not parallel: it sets the environment variable whose precedence is
 	// the subject.
@@ -79,9 +71,8 @@ func TestTheBrokerTakesTheRESOLVEDNodeID(t *testing.T) {
 	}
 }
 
-// TestAClusteredMemberStartsOnAnEnvironmentSuppliedID is the failure the fix
-// was actually for: with no name, a clustered embedded member is refused at
-// boot rather than starting anonymously.
+// TestAClusteredMemberStartsOnAnEnvironmentSuppliedID: a clustered embedded
+// member with no name is refused at boot, so it must take the resolved id.
 func TestAClusteredMemberStartsOnAnEnvironmentSuppliedID(t *testing.T) {
 	t.Setenv(config.NodeIDEnvVar, "node-a")
 
@@ -110,18 +101,16 @@ func TestAClusteredMemberStartsOnAnEnvironmentSuppliedID(t *testing.T) {
 }
 
 // TestWhatANodePublishesNamesThatNode pins the other half of a node's name:
-// every event it publishes leaves carrying it as the envelope's `node`, and the
-// row an event store writes for it carries the same — in the payload, and in
-// the row's own `node` column (node/0054).
+// every event it publishes carries it as the envelope's `node`, and the event
+// store's row carries the same, in the payload and in its `node` column
+// (node/0054).
 //
-// The field is the only thing that says where an event HAPPENED. The store a
-// row is read from no longer does: a node without `data` keeps no event log,
-// and the one data node that keeps its events in custody holds rows it never
-// published — so the turn answer's `nodes`, and an operator reading one row or
-// one live frame, ask the row. Asserted on the stored row rather than on a
-// listener of this test's own, because the row is what a reader later holds,
-// and through the environment-supplied id, because that is the shape an
-// orchestrator uses and the one the raw config field reads empty for.
+// The field is the only thing that says where an event HAPPENED, not the store
+// a row is read from: a node without `data` keeps no event log, and a data node
+// keeping events in custody holds rows it never published; the turn answer's
+// `nodes` and an operator reading a row or frame ask it. Asserted on the
+// stored row, what a reader later holds, and through the environment-supplied
+// id, the orchestrator's shape, for which the raw config field reads empty.
 func TestWhatANodePublishesNamesThatNode(t *testing.T) {
 	// Not parallel: it sets the environment variable whose precedence is
 	// the subject.

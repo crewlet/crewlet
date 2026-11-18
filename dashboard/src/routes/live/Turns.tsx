@@ -640,7 +640,7 @@ function TurnState({
           failed turn: "failure" here beside "failed" there read as two
           states. */}
       {t.failed && (
-        <Tag variant="danger" title="at least one event of this turn was a failure">
+        <Tag variant="danger" title="at least one of this turn's own records was a failure">
           failed
         </Tag>
       )}

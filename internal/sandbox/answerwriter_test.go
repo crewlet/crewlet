@@ -10,13 +10,11 @@ import (
 )
 
 // ONLY WHO A QUESTION WAS PUT TO ANSWERS IT IN THE CONVERSATION (ADR-0077).
-// One turn works for one writer (ADR-0109), and the answer is what the run
-// carries on with. So a reply in the run's thread answers its question only
-// where its writer is a seat of the question's audience (resolved once at the
-// park) or the run's requester, who owns an executor's question on the
-// dashboard's route too. A stranger, a credential and a seat outside the
-// audience are not the answer, and a row naming nobody admits nobody: never
-// anybody.
+// One turn works for one writer (ADR-0109), so a reply in the run's thread
+// answers only where its writer is a seat of the question's audience
+// (resolved at the park) or the run's requester. A stranger, a credential and
+// a seat outside the audience are not the answer, and a row naming nobody
+// admits nobody.
 //
 // Mutation: drop putTo from Reply.Best, and Sam's reply in Ada's thread
 // answers Ada's question.
@@ -96,12 +94,11 @@ func TestAReplyBySomebodyTheQuestionWasNotPutToLeavesTheRunParked(t *testing.T) 
 	}
 }
 
-// THE HOLDER IS READ WHEN THE ANSWER ARRIVES, never at the park: a question put
-// to a seat whose person was suspended since (a vendor still delivers their
-// chat), or which nobody holds, is answered by nothing they say, and their
-// reply runs as its own turn. A directory that cannot say keeps the reply's
-// place: never spent on the run, and never on an ordinary turn the run was
-// owed.
+// THE HOLDER IS READ WHEN THE ANSWER ARRIVES, never at the park: a seat whose
+// person was suspended since (a vendor still delivers their chat), or which
+// nobody holds, answers nothing, and the reply runs as its own turn. A
+// directory that cannot say defers the reply, spent neither on the run nor
+// on an ordinary turn.
 //
 // Mutation: drop the MayAnswer check from the coordinator, and the suspended
 // lead's reply answers the question.

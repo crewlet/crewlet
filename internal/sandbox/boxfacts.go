@@ -12,10 +12,9 @@ import (
 
 // A FRESH BOX IS READ ONCE, after its setup and before its job: the memory the
 // kernel holds it to, whether its image has a browser, and whether a container
-// runtime answers in it. Its seat is told what was found on every turn after
-// (ADR-0104), since a seat left to infer its box from one failed command keeps
-// the wrong conclusion as a note. The answer is read into closed values only:
-// nothing the box prints reaches a prompt as text.
+// runtime answers in it. Its seat is told the result every turn after
+// (ADR-0104), so it never infers its box from one failed command. The answer is
+// read into closed values only: nothing the box prints reaches a prompt as text.
 
 // BoxFacts is what a box was found to have.
 type BoxFacts struct {
@@ -27,8 +26,8 @@ type BoxFacts struct {
 	ContainerRuntime string
 }
 
-// boxFactsTimeout bounds the whole read: each runtime's `info` is held to five
-// seconds where the box has `timeout`, and the rest is a handful of reads.
+// boxFactsTimeout bounds the whole read, in seconds: each runtime's `info` is
+// held to five where the box has `timeout`, and the rest is a handful of reads.
 const boxFactsTimeout = 20
 
 // boxFactsScript prints one `key=value` line per fact it finds and always exits

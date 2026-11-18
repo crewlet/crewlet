@@ -13,16 +13,12 @@ import (
 )
 
 // THE EPOCH EVERY APPLIER READS IS THE PUBLISHED COMPANY'S, AS IT STANDS NOW.
-//
-// The state log is the engine's core and is built once, at boot — with no
-// company at all on a node started unconfigured — and every domain's runner
-// asks this source per batch ([statelog.RunnerDeps.Epoch]). It was handed the
-// boot company's epoch as a value, so a node that booted with none applied
-// every record under none for the life of the process, and a revision that
-// moved the company's inbox retention reached no applier until a restart.
-// statelog certifies that a runner asks per batch; this certifies that what it
-// asks is the company this node has published, through two activations and no
-// restart.
+// The state log is built once, at boot (with no company on a node started
+// unconfigured), and each runner asks its epoch source per batch
+// ([statelog.RunnerDeps.Epoch]); a source capturing the boot epoch would apply
+// a revision's inbox retention only after a restart. statelog certifies the
+// per-batch ask; this certifies the answer is the published company, through
+// two activations and no restart.
 //
 // Mutation: hand the log `company.Epoch()` captured at boot, and the first
 // activation's value is never read.

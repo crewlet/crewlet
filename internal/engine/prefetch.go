@@ -25,23 +25,16 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// What a turn is given before it starts.
-//
-// The prefetch is assembled here rather than inside the runner, and that
-// placement IS the freeze: a runner handed strings has nowhere to re-fetch
-// from, so a self_iterate loop cannot move the system prompt underneath the
-// executor or cost a provider's prompt cache on every pass. A turn that wants
-// something the freeze did not surface asks for it with a tool call —
-// search_knowledge — which is an ordinary entry in its own log.
+// What a turn is given before it starts. Assembled here rather than in the
+// runner, and that placement IS the freeze: a runner handed strings cannot
+// re-fetch, so a self_iterate loop cannot move the system prompt under the
+// executor or cost a provider's prompt cache each pass. A turn wanting more
+// calls search_knowledge, an ordinary entry in its own log.
 
-// prefetcher builds the fetcher for the current node.
-//
-// Per CALL rather than held, because most of its sources move: the knowledge
-// searcher is rebuilt whenever the tracker is reconciled, the party registry
-// is rebuilt on every apply, the chat readers follow whichever transports are
-// running, and a node with no store has none of the rest. Building it is
-// assembling a handful of interface values — cheaper than the mutex a cached
-// one would need.
+// prefetcher builds the fetcher for the current node, per call rather than
+// held: its sources move (the knowledge searcher with each tracker reconcile,
+// the party registry with each apply, the chat readers with the running
+// transports), and building it is cheaper than the mutex a cached one needs.
 func (e *Engine) prefetcher(company *Company) *prefetch.Fetcher {
 	return prefetch.New(e.prefetchSources(company))
 }
@@ -50,26 +43,20 @@ func (e *Engine) prefetcher(company *Company) *prefetch.Fetcher {
 func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 	src := prefetch.Sources{
 		Knowledge: e.Knowledge(),
-		// THROUGH THE AUXILIARY SEAM, like every other completion made on
-		// a seat's behalf. The memory filter, the knowledge query and the
-		// episode summary each send a full prompt on EVERY turn, and
-		// resolved off the bare registry that spend reached no counter and
-		// no record: a seat at its ceiling kept paying for its turn-start
-		// context and every figure an operator reads understated it. See
-		// auxiliary.go.
+		// THROUGH THE AUXILIARY SEAM (auxiliary.go), like every completion
+		// made on a seat's behalf: the memory filter, knowledge query and
+		// episode summary each prompt on EVERY turn, and that spend must
+		// reach the seat's counter, ceiling and record.
 		Models: e.auxiliaryFor(company),
 		// The same seam, as a compactor: the middle of a long chat thread
 		// is condensed rather than dropped, on the seat's own aux chain.
 		Compact: e.compactorFor(company),
-		// The chat surfaces' READ half, which is how a seat woken in a
-		// thread is handed the thread. Empty on a node running no chat
-		// transport, which renders the unreadable hint rather than
-		// silently nothing — see prefetch.UnreadableThreadHint.
+		// The chat surfaces' READ half, how a seat woken in a thread is
+		// handed it. Empty on a node with no chat transport, which renders
+		// prefetch.UnreadableThreadHint rather than silently nothing.
 		Threads: e.ChatThreads(),
-		// SummarizeEpisodes gates ONLY the episode summary. Wiring this
-		// switch by passing a nil provider pool silently disables the
-		// memory and knowledge filters too — an operator turning off a
-		// summary gets a company with no memory.
+		// Gates ONLY the episode summary: a nil provider pool would disable
+		// the memory and knowledge filters too.
 		SummarizeEpisodes: company.Config.Learning.Reflect.SummarizeEpisodes.Or(true),
 	}
 	if db := e.backends.Store; db != nil {
@@ -83,19 +70,15 @@ func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 	if e.router != nil && company.Config.TrackerBackendFor() == config.TrackerWorklet {
 		src.Asks = ownAsks{work: e.router.Work()}
 	}
-	// A nil *Registry would satisfy the interface and then be dereferenced,
-	// so the seam is left unset rather than filled with one — which renders
-	// every sender as the raw platform id, legible but not recognisable.
+	// Left unset rather than a nil *Registry, which would satisfy the
+	// interface and then be dereferenced; unset renders raw platform ids.
 	if reg := e.Registry(); reg != nil {
 		src.Parties = reg
 	}
-	// THE CURRENT EMBEDDER, read at each call rather than now: this
-	// fetcher is also the pull tools' (see [Engine.equip]), which is built
-	// before the epoch it equips stores its embedder. A company with none
-	// configured answers learning.ErrNoEmbeddings, which degrades the
-	// similarity half of the memory pool to recency alone and episode
-	// recall to an empty block — both first-class states in the prefetch
-	// rather than failures.
+	// THE CURRENT EMBEDDER, read at each call: this fetcher is also the pull
+	// tools' ([Engine.equip]), built before its epoch stores the embedder.
+	// None configured answers learning.ErrNoEmbeddings, degrading memory
+	// similarity to recency and episode recall to empty: states, not failures.
 	src.Embed = e.embedText
 	// THE ATLAS, for the entries a turn's ask names, as its seat reads it.
 	src.Systems = atlasSystems{engine: e}
@@ -155,11 +138,9 @@ func linkedEntriesOf(ctx context.Context, work taskReads, seat string, item *typ
 	return out
 }
 
-// prefetchFor renders one turn's context blocks.
-//
-// The SEAT and the AGENT ID are read off the pinned epoch, like everything
-// else a turn is built from: a prefetch resolved against a revision the turn
-// is not running would surface another company's memory.
+// prefetchFor renders one turn's context blocks. The seat and agent ID come
+// off the pinned epoch: a prefetch resolved against a revision the turn is not
+// running would surface another company's memory.
 func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 	task string, ask prefetch.Ask, aux auxspend.Use, boundary provenance.Boundary,
 	told *toldTurn, workingFor *types.WorkingFor, readsAtlas bool, item *types.WorkItem,
@@ -175,52 +156,38 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 	agentID, _ := company.Org.AgentIDFor(seat)
 	r := prefetch.Request{
 		Seat: seat, AgentID: agentID.String(), Org: company.Org,
-		// THE TURN'S ATTRIBUTION, which names the RUN, not the unit of
-		// work: every phase record of this turn is filed under the run,
-		// so an auxiliary record carrying only the work key would sit
-		// under an id no phase shares — invisible to the turn view and to
-		// `GET /events?turn_id=`. See ADR-0017.
+		// Attributed to the RUN, not the work key: every phase record is
+		// filed under the run, so an aux record under the work key would be
+		// invisible to the turn view and `GET /events?turn_id=` (ADR-0017).
 		Task: task, Aux: aux,
-		// WHAT IT WAS ASKED, which every relevance judgement is made
-		// against while the executor is handed the task — see
-		// [prefetch.Request.Ask] and [turnAskFor] — with somebody else's words
-		// labelled as the trigger labelled them, for the auxiliary models
-		// that read it. The TELEMETRY'S OWN, read once when the turn was
-		// described, so the judgements and the turn's record of what it was
-		// asked carry one answer about who wrote it.
+		// WHAT IT WAS ASKED, which every relevance judgement is made against
+		// ([prefetch.Request.Ask], [turnAskFor]), others' words labelled as
+		// the trigger labelled them. The telemetry's own, read once, so the
+		// judgements and the turn's record agree on who wrote it.
 		Ask: ask,
 		// THE ACCESS CHANGES THE SEAT WAS TOLD, which mark its notes written
 		// before them, and when it was last told its access, which holds a
 		// capability note written before it back (capability.go).
 		Told: told.memory, AccessChangedAt: told.accessAt,
-		// OFF THE ASK, which for a coalesced conversation is the merged
-		// digest and for everything else is the partition itself. One
-		// shape rather than two: the merge is where a conversation's
-		// senders and its recon flag are combined, and re-deriving them
-		// from the constituents here would be a second answer to a
-		// question already answered — free to disagree, and with the
-		// merged event's own constituent list then read by nothing.
+		// OFF THE ASK, for a coalesced conversation the merged digest: the
+		// merge decides its senders and recon flag, and re-deriving them
+		// from the constituents would be a second answer free to disagree.
 		Senders: sendersOf(e.Registry(), req.Ask()),
-		// A POINTER TRIGGER gates the three searches that judge relevance
-		// against the trigger text. Read off the events rather than
-		// recomputed, because the parser that produced them is the only
-		// thing that knows whether its third-party app's body is the context or a
-		// reference to it.
+		// A POINTER TRIGGER gates the three searches judged against the
+		// trigger text. Read off the events: only their parser knows whether
+		// a body is the context or a reference to it.
 		RequiresRecon: requiresRecon(req.Ask()),
-		// THE TRIGGER'S OWN THREAD, resolved by the notification layer
-		// that stamped it rather than re-derived here: the working
-		// indicator, the reply target and this block must never disagree
-		// about which thread a turn is in.
+		// THE TRIGGER'S OWN THREAD, as the notification layer stamped it:
+		// the working indicator, the reply target and this block must never
+		// disagree about which thread a turn is in.
 		Thread: threadOf(req.Ask()),
-		// AND WHICH MESSAGE IN IT WOKE THE TURN, so the block can say
-		// which of the messages it shows were waiting for this turn —
-		// see [prefetch.Blocks.ThreadContextAnswered] and
-		// workedthrough.go.
+		// AND WHICH MESSAGE IN IT WOKE THE TURN, so the block can say which
+		// shown messages were waiting for it
+		// ([prefetch.Blocks.ThreadContextAnswered], workedthrough.go).
 		Message: triggerMessageOf(req.Ask()),
-		// WHOM THIS TURN WORKS FOR, the turn's own carrier, from which its
-		// ceiling is composed: never derived again from the notification,
-		// whose trigger message's document keeps its post's carrier across
-		// an edit made for somebody else.
+		// WHOM THIS TURN WORKS FOR, its own carrier, from which its ceiling
+		// is composed: never re-derived from the notification, whose message
+		// keeps its post's carrier across an edit made for somebody else.
 		WorkingFor: workingFor,
 		// WHETHER IT MAY READ THE ATLAS, decided with the turn's own ceiling
 		// (turnReadsAtlas), for the entries its ask names.
@@ -232,9 +199,8 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 		// thread is somebody else's words, handed over in the prompt.
 		Boundary: boundary,
 	}
-	// TIMED where it runs: the context assembly is the stretch between a
-	// turn announcing itself and its first phase opening, and nothing else
-	// on the record can say how long it was.
+	// TIMED here: the stretch between a turn announcing itself and its first
+	// phase opening, which nothing else on the record measures.
 	began := time.Now()
 	blocks := e.prefetcher(company).Fetch(ctx, r)
 	took := time.Since(began)
@@ -247,16 +213,11 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 // publishPrefetchRead records the pages the turn-start knowledge block put in
 // front of the seat, as a `knowledge_read` with `via: prefetch`.
 //
-// A SECOND EVENT rather than a list on prefetch_summary, because the two answer
-// different questions for different readers: the summary is one row per turn
-// about the PIPELINE (did each block fire, how large was it), and this is one
-// row per read about the PAGES, which is what every other way a seat reads the
-// knowledge base records too — so "which pages does this company's staff read"
-// is one event type to count however the page arrived.
-//
-// NAMES NO PHASE: the prefetch runs before the first one opens. Nothing is
-// published when the block surfaced no page, a hint included — a read of
-// nothing is not a read. Best effort, like the summary beside it.
+// A second event rather than a list on prefetch_summary: the summary is one row
+// per turn about the PIPELINE, this one row per read about the PAGES, as every
+// other way a seat reads the knowledge base records, so page reads are one
+// event type to count. Names no phase (the prefetch runs before the first);
+// publishes nothing when no page surfaced, a hint included; best effort.
 func (e *Engine) publishPrefetchRead(ctx context.Context, seat *org.Role,
 	agentID, runID, workKey string, b prefetch.Blocks,
 ) {
@@ -281,19 +242,13 @@ func (e *Engine) publishPrefetchRead(ctx context.Context, seat *org.Role,
 	e.publishEvent(ctx, ev, seat.Name)
 }
 
-// publishPrefetchSummary reports what each block actually surfaced.
+// publishPrefetchSummary reports what each block actually surfaced: the only
+// signal this pipeline has. Every block but knowledge and chat-thread degrades
+// silently (internal/agent/prefetch), so an unreachable diary, a misconfigured
+// auxiliary model and a seat that never stored a memory all start turns with
+// none; per-block hit and size, once per turn, tell them apart.
 //
-// THE ONLY SIGNAL THIS PIPELINE HAS. Every block but the knowledge and
-// chat-thread ones — which say in words when their source could not be read —
-// degrades silently rather than failing (see internal/agent/prefetch), so a
-// seat whose diary is unreachable and one whose auxiliary model is
-// misconfigured both start their turns with no memory, exactly like a seat
-// that has never stored one — and nothing else distinguishes them. Per-block
-// hit and rendered size, once per turn, is what lets an operator see the
-// difference.
-//
-// Best effort, and deliberately so: this is measurement, and a turn must not
-// fail because its telemetry could not be published.
+// Best effort: a turn must not fail because its telemetry could not publish.
 func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
 	agentID, runID, workKey string, r prefetch.Request, b prefetch.Blocks,
 	startedAt time.Time, took time.Duration,
@@ -329,11 +284,10 @@ func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
 		ThreadContextHit:                b.ThreadContext != "",
 		ThreadContextBytes:              len(b.ThreadContext),
 		ThreadContextPosts:              b.ThreadContextPosts,
-		// THE TWO FACTS THE PROSE CANNOT CARRY. Both of the block's
-		// zero-message paths render a non-empty hint, so hit, bytes and
-		// the count together still cannot say whether a backend answered
-		// — and a thread read to a bound stops short of the message that
-		// woke the turn while reporting the same count as a whole one.
+		// THE TWO FACTS THE PROSE CANNOT CARRY: both zero-message paths
+		// render a non-empty hint, so hit, bytes and count cannot say whether
+		// a backend answered, and a thread read to a bound stops short of the
+		// waking message with the same count as a whole one.
 		ThreadContextRead:         b.ThreadContextRead,
 		ThreadContextStoppedShort: b.ThreadContextStoppedShort,
 		TriggerRequiresRecon:      r.RequiresRecon,
@@ -348,37 +302,18 @@ func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
 	e.publishEvent(ctx, ev, seat.Name)
 }
 
-// turnAsk is what a turn was ASKED — [prefetch.Request.Ask] — read off its
-// trigger events, in order, one paragraph each.
+// turnAsk is what a turn was ASKED ([prefetch.Request.Ask]), the text alone of
+// [turnAskFor]: DescribeTrigger without the wrapping (a notification's brief is
+// the integration's prompt, identical every turn). Per event, in order:
+//   - a notification: its subject unless it only names the surface
+//     ([types.ExternalNotification.SubjectIsLabel], as chat's does, pulling
+//     every chat turn's judgements together), then its salient body, a burst's
+//     per sender without re-sent copies (notify's mergedSalient);
+//   - anything else stating an ask (a schedule's task, a colleague's question
+//     or answer): its brief, the ask itself, naming the colleague who asked.
 //
-// DescribeTrigger's job, without the wrapping. That function renders each
-// event's [events.Briefer], which for a notification is the integration's
-// prompt: the message behind triage guidance, reply instructions and the ids
-// to act on, identical on every turn of the surface. This renders, per event:
-//
-//   - a notification: its SUBJECT, where the source says the subject is
-//     content, and its SALIENT body — the raw message, or a coalesced burst's
-//     messages attributed to their senders with the copies a source re-sent
-//     left out (notify's mergedSalient). On most sources the subject is part
-//     of what was sent: an issue's key and title, a page's title, a monitor's
-//     alert — and on a tracker comment the only place the topic is named at
-//     all. A chat backend's is not: it names the SURFACE ("Slack message"),
-//     identical on every message, so it is left out
-//     ([types.ExternalNotification.SubjectIsLabel]) and a chat turn's ask is
-//     what was said. Led by it, every chat turn's memory filter, knowledge
-//     query and episode summary were handed the same words, and every chat
-//     turn's vector was pulled towards every other's;
-//   - anything else that states an ask (a schedule's task, a colleague's
-//     question, their answer): its brief, which is already the ask itself —
-//     and for a colleague names who asked, the one sender a turn woken by a
-//     colleague has.
-//
-// An event with none of those contributes nothing — not its type name, which
-// DescribeTrigger hands the executor so it is never given a blank ask, and
-// which here would be a word every such turn is judged against.
-//
-// THE TEXT ALONE. What the turn records and parks is [turnAskFor] — the same
-// text part by part with who wrote each, whose [prefetch.Ask.Text] this is.
+// Any other event adds nothing, not even the type name DescribeTrigger falls
+// back to, which would be a word every such turn is judged against.
 func turnAsk(evs []*events.Event) string {
 	return turnAskFor(notify.Prompts{}, nil, "", evs).Text()
 }
@@ -464,13 +399,9 @@ type quotedBriefer interface {
 	Quoted() (lead, words string, label provenance.Label)
 }
 
-// requiresRecon reports that ANY constituent of the trigger is a bare
-// pointer.
-//
-// Any, not all, and conservatively so: a coalesced trigger carrying one
-// webhook that only names a thing-that-changed is still a trigger the seat
-// has to go and look behind, and searching on the merged text would return
-// noise for the half that has no content.
+// requiresRecon reports that ANY constituent of the trigger is a bare pointer:
+// a coalesced trigger holding one webhook that only names what changed still
+// needs looking behind, and searching the merged text returns noise for it.
 func requiresRecon(evs []*events.Event) bool {
 	for _, n := range notificationsIn(evs) {
 		if n.ContextRequiresRecon {
@@ -482,17 +413,12 @@ func requiresRecon(evs []*events.Event) bool {
 
 // threadOf resolves the chat thread a turn was woken in, or the zero value.
 //
-// FIRST WINS, over the FLAT metadata of each notification rather than over
-// the constituents. A coalesced event's flat fields mirror its latest
-// constituent, and a chat partition is thread-grained wherever a thread
-// exists — a direct conversation partitions on the bare channel, but only for
-// messages with no thread at all — so a coalesced burst can never straddle
-// two threads and the flat copy is the whole answer. Reading the constituents
-// would offer a choice between several identical values, which is a choice
-// somebody eventually makes differently.
-//
-// A trigger that is not a chat message contributes nothing: [notify.ThreadOf]
-// keys on the `transport` stamp only a chat parser writes.
+// First wins, over each notification's FLAT metadata (its latest
+// constituent's): a chat partition is thread-grained wherever a thread exists
+// (a direct conversation partitions on the bare channel only for unthreaded
+// messages), so a burst never straddles two threads, and the constituents
+// would only offer a choice between identical values. A non-chat trigger adds
+// nothing: [notify.ThreadOf] keys on the `transport` only a chat parser stamps.
 func threadOf(evs []*events.Event) notify.Thread {
 	for _, n := range notificationsIn(evs) {
 		if t, ok := notify.ThreadOf(n.Metadata); ok {
@@ -503,11 +429,9 @@ func threadOf(evs []*events.Event) notify.Thread {
 }
 
 // notificationsIn reads the notifications out of a turn's trigger envelopes.
-//
-// A turn is woken by EVENTS, and only some of them are notifications: a
-// scheduled fire, a sandbox completion and an agent-to-agent ask all reach a
-// seat the same way and none of them has a sender or a recon flag. Those
-// simply contribute nothing here rather than being an error.
+// Any other waking event (a scheduled fire, a sandbox completion, an
+// agent-to-agent ask) has no sender or recon flag and adds nothing, not an
+// error.
 func notificationsIn(evs []*events.Event) []*types.ExternalNotification {
 	out := make([]*types.ExternalNotification, 0, len(evs))
 	for _, ev := range evs {
@@ -521,14 +445,10 @@ func notificationsIn(evs []*events.Event) []*types.ExternalNotification {
 	return out
 }
 
-// sendersOf resolves the parties who triggered the turn, in the order they
-// spoke.
-//
-// EVERY DISTINCT SENDER, because a coalesced trigger is several people
-// speaking and a turn woken by four of them is not a turn about the last.
-// Resolution goes through the party registry, so a sender who IS a seat here
-// is profiled under their handle rather than under a platform id nobody
-// else uses.
+// sendersOf resolves every distinct party who triggered the turn, in the order
+// they spoke: a turn woken by four people is not about the last. Through the
+// party registry, so a sender who IS a seat here is profiled under their
+// handle, not a platform id nobody else uses.
 func sendersOf(registry *notify.Registry, evs []*events.Event) []learning.Subject {
 	var (
 		out  []learning.Subject
@@ -549,17 +469,10 @@ func sendersOf(registry *notify.Registry, evs []*events.Event) []learning.Subjec
 	return out
 }
 
-// subjectsOf reads the senders off one notification.
-//
-// A COALESCED event carries every constituent, and the flat Sender field
-// mirrors only the latest — so reading the flat field alone would profile
-// the last speaker and forget the other three.
-//
-// EITHER the constituents OR the flat fields, never both, which is the rule
-// [Engine.interactionsOf] already states: the flat fields ARE the latest
-// constituent, so taking them as well put the last speaker at the head of a
-// list whose whole contract is "in the order they spoke". Latent while nothing
-// populated Messages, and wrong the moment something did.
+// subjectsOf reads the senders off one notification: a coalesced event's
+// constituents (the flat Sender is only the latest), else its flat fields,
+// never both: the flat fields ARE the latest constituent, so taking both would
+// put the last speaker first in a list ordered by who spoke.
 func subjectsOf(registry *notify.Registry, ev *types.ExternalNotification) []learning.Subject {
 	if len(ev.Messages) > 0 {
 		out := make([]learning.Subject, 0, len(ev.Messages))
@@ -594,10 +507,8 @@ func subjectOf(registry *notify.Registry, source, sender string, metadata map[st
 	}
 	if registry != nil && external != "" {
 		if party, ok := registry.ByExternalID(source, external); ok {
-			// A COLLEAGUE IS KEYED ON THEIR HANDLE, so what one seat
-			// learned about them on chat and what it learned on the
-			// tracker are one profile rather than two half-profiles
-			// under two platform ids.
+			// A COLLEAGUE IS KEYED ON THEIR HANDLE, so chat and the
+			// tracker build one profile, not two under two platform ids.
 			subject.Handle = party.Handle
 			if party.Name != "" {
 				subject.Name = party.Name
@@ -608,21 +519,17 @@ func subjectOf(registry *notify.Registry, source, sender string, metadata map[st
 }
 
 // writerSubject is who a FIRST-PARTY notice's writer is to the seat it woke
-// ([types.NotificationWriter]), read by the kind its record names: such a
-// source has no namespace of its own to look an id up in, and its actor is
-// spelled as a seat's handle, a credential's login or a node's name alike.
+// ([types.NotificationWriter]), by the kind its record names: such a source has
+// no namespace to look an id up in, and its actor may be a seat's handle, a
+// credential's login or a node's name alike.
 //
-// A SEAT'S WRITE — an agent's, or a person's as the seat they hold — is that
-// seat, by its handle, while the chart holds it: the colleague whose comment
-// woke a turn is the requester its reads are decided for again
-// (builtin.ceilingOf), and what a seat learns of them on its own tracker
-// joins what it learned of them on chat. THE ENGINE'S OWN WRITE names nobody:
-// a repair telling a seat it was unblocked is no one's errand, as a
-// schedule's fire is not, and a profile of a node's name is a profile of
-// nobody. ANY OTHER WRITER — a credential acting as no seat, a seat the chart
-// no longer holds, a kind this build cannot read — keeps the platform
-// identity a vendor's unknown sender keeps, which is the closed end: a turn
-// it woke reads as a stranger's, and is let read nothing for them.
+// A SEAT'S WRITE (an agent's, or a person's as their seat) is that seat by
+// handle while the chart holds it, so the turn's reads are decided for it
+// (builtin.ceilingOf) and its profile joins the chat one. THE ENGINE'S OWN
+// names nobody: a repair is no one's errand, like a schedule's fire. ANY OTHER
+// (a credential acting as no seat, a seat the chart dropped, an unknown kind)
+// keeps its platform identity: the closed end, a stranger's turn that may
+// read nothing for them.
 func writerSubject(registry *notify.Registry, source, sender, external string,
 	w types.NotificationWriter) learning.Subject {
 
@@ -645,23 +552,14 @@ func writerSubject(registry *notify.Registry, source, sender, external string,
 }
 
 // interactionsOf renders a turn's trigger as the interactions a learning
-// worker reads.
+// worker reads, carried on the event because the reflect dispatcher is a queue
+// consumer whose node may never have seen the trigger.
 //
-// ON THE EVENT rather than looked up later, because the reflect dispatcher
-// is a queue consumer: the node running it may never have seen the trigger,
-// and an interaction it cannot read off the payload is one it cannot reason
-// about at all.
-//
-// EVERY constituent of a coalesced trigger, in the order they spoke — the
-// same rule sendersOf states, and for the same reason. A turn woken by four
-// people is not a turn about the last of them.
-//
-// EACH BODY CARRIES ITS LABEL — who wrote it, at the trust its writers earn
-// from the seat self, by the source's own prompt ([notify.SalientLabels]) —
-// because the worker that reads it runs after the turn, wherever the seat is
-// held, and has no notification to ask: the label is decided here, where the
-// delivery is in hand, exactly as the trigger and the turn-start judgements
-// read it, and every worker fences the body under it.
+// Every constituent of a coalesced trigger, in the order they spoke, as in
+// sendersOf. Each body carries its label (who wrote it, at the trust its
+// writers earn from self, by [notify.SalientLabels]), decided here where the
+// delivery is in hand as the trigger and turn-start judgements read it: the
+// worker runs after the turn with no notification to ask, and fences under it.
 func (e *Engine) interactionsOf(evs []*events.Event, self string) []types.InboundInteraction {
 	return interactionsFor(e.Registry(), e.notifyPrompts(), self, evs)
 }
@@ -686,9 +584,8 @@ func interactionsFor(registry *notify.Registry, prompts notify.Prompts, self str
 				n.ContextRequiresRecon, n.Writer, labels[0]))
 			continue
 		}
-		// A COALESCED EVENT'S FLAT FIELDS MIRROR THE LATEST constituent,
-		// so taking them as well would double-count that one message and
-		// weight it against the others in every worker that joins bodies.
+		// A COALESCED EVENT'S FLAT FIELDS MIRROR THE LATEST constituent:
+		// taking them too would double-count that message in every worker.
 		for i, m := range n.Messages {
 			out = append(out, interaction(registry, n.NotificationSource,
 				m.SourceEventType, m.Sender, m.Body, m.Metadata,
@@ -733,12 +630,10 @@ func credentialLogin(w *types.NotificationWriter) string {
 	return strings.TrimSpace(w.Login)
 }
 
-// salientBody is the raw inbound message, never the enriched prompt.
-//
-// A NIL SalientBody falls back to Body and an EMPTY one does not: nil means
-// this producer emits no distinct raw message, while empty means it set one
-// and it was genuinely empty. Falling back on empty would hand every worker
-// the same triage boilerplate and call it what the person said.
+// salientBody is the raw inbound message, never the enriched prompt. A NIL
+// SalientBody (the producer emits no distinct raw message) falls back to Body;
+// an EMPTY one was genuinely empty, and falling back would hand every worker
+// triage boilerplate as what the person said.
 func salientBody(n *types.ExternalNotification) string {
 	if n.SalientBody != nil {
 		return *n.SalientBody
@@ -746,11 +641,9 @@ func salientBody(n *types.ExternalNotification) string {
 	return n.Body
 }
 
-// channelKind reads the canonical surface shape a parser stamped.
-//
-// A value this build does not recognise reads as unknown rather than being
-// passed through: the field is a closed set, and a consumer switching on it
-// must never meet a member that arrived from a newer producer.
+// channelKind reads the canonical surface shape a parser stamped. A value this
+// build does not recognise reads as unknown: the field is a closed set, and a
+// consumer switching on it must never meet a newer producer's member.
 func channelKind(metadata map[string]string) types.ChannelKind {
 	switch kind := types.ChannelKind(metadata[notify.ChannelKindField]); kind {
 	case types.ChannelDM, types.ChannelGroup, types.ChannelPublic, types.ChannelInternal:

@@ -9,46 +9,31 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// AN EVICTED NODE'S POSITION IS NOT THE FLEET'S.
-//
-// The positions register keeps a row for every node that ever ran — an eviction
-// deliberately does not forget it, because a readmission is judged by it — and
-// the trim floors a node published stay where it left them. Read as the fleet's
-// own, a node that re-anchored a log and was decommissioned before any peer
-// adopted from it held every other node in two traps for ever: each saw a
-// generation ahead of its own, stopped, and asked for a donor at that
-// generation that no longer existed; and each one's reanchor refused, force or
-// no force, on a peer that had already re-anchored. The operator's gesture for
-// a machine that is not coming back is the eviction, so an evicted node's row,
-// and a floor it published, counts toward neither the generation the fleet is
-// on nor the reanchor guards — and a reanchor opens the generation after the
-// one it held, whose records are abandoned ([statelog.ReanchorInputs.Abandoned]).
-//
-// # Asked of the log, because the node asking may be stranded
-//
-// Whether a node is evicted is each domain's own fact, applied into its own
-// table on every node — but the nodes that most need the answer are the ones
-// the evicted peer stranded, whose appliers stopped before they could apply
-// the eviction. So the log is asked first ([statelog.EvictedOnLog]): the last
-// record on the node's eviction subject is its standing, whether or not this
-// node's applier has reached it. The rows answer only where the log holds
-// nothing, because the trim removed it — and then what it removed is exactly
-// what the rows keep.
+// AN EVICTED NODE'S POSITION IS NOT THE FLEET'S. The positions register keeps
+// every node that ever ran (a readmission is judged by its row), and a node's
+// published trim floors stay. Read as the fleet's, a node that re-anchored and
+// was decommissioned before any peer adopted from it strands every peer: each
+// sees a generation ahead, asks for a donor that no longer exists, and has even
+// a forced reanchor refused. Eviction retires such a machine, so an evicted
+// node's row and floor count toward neither the fleet's generation nor the
+// reanchor guards, and a reanchor opens the generation after the one it held,
+// abandoning its records ([statelog.ReanchorInputs.Abandoned]). Eviction is
+// asked of the log first ([statelog.EvictedOnLog]), as the peers it stranded
+// stopped applying before it; the rows answer only where the trim removed the
+// record, and what it removed the rows keep.
 
 // evictedOn reports which of nodes are evicted from one domain's log.
 //
-// A READ THAT FAILS IS AN ERROR, never "nobody is evicted" and never "every one
-// is": the first strands a fleet on a dead peer's generation and the second
-// lets a live peer's generation be abandoned, so the caller decides nothing on
-// an answer it could not get.
+// A READ THAT FAILS IS AN ERROR, never "nobody is evicted" (which strands a
+// fleet on a dead peer's generation) nor "every one is" (which lets a live
+// peer's generation be abandoned).
 func (s *stateLog) evictedOn(ctx context.Context, domain statelog.Domain,
 	spec statelog.StreamSpec, log statelog.StandingLog, nodes []string) (map[string]bool, error) {
 
 	out := make(map[string]bool, len(nodes))
 	if len(nodes) == 0 || !domain.ClaimsIdentity() {
-		// ONLY AN IDENTITY-CLAIMING DOMAIN CARRIES EVICTIONS, and it is
-		// the only kind whose fleet generation and reanchor guards count
-		// anybody.
+		// ONLY AN IDENTITY-CLAIMING DOMAIN CARRIES EVICTIONS, and only its
+		// fleet generation and reanchor guards count anybody.
 		return out, nil
 	}
 	var rows []statelog.EvictionRow
@@ -77,40 +62,18 @@ func (s *stateLog) evictedOn(ctx context.Context, domain statelog.Domain,
 	return out, nil
 }
 
-// fleetGenerations is the number space the FLEET is on for each domain — for a
-// node whose own rows cannot say, and for one whose rows the fleet may have
-// left behind.
-//
-// TWO SOURCES BECAUSE EITHER MAY BE THE ONLY ONE. Every live data node
-// publishes its own generation per domain in the position register, and the
-// trim publishes the one it concluded at; a fleet whose peers are all
-// restarting has the floor and no positions, and one that has never trimmed has
-// positions and no floor. The MAXIMUM is taken because a re-anchor moves the
-// fleet one node at a time: the highest anybody reports is the space the
-// company is moving into, and an artefact from below it is one this node would
-// have to adopt again.
-//
-// MINUS EVERY EVICTED NODE — its row and any floor it published — for the
-// reason this file gives. Only a node ABOVE the caller's own generation for
-// the domain (above) is asked about: nothing at or below it can put the fleet
-// ahead of the caller, so a fleet on one generation asks the log nothing at
-// all.
-//
-// Zero is a real answer — a company that has never re-anchored — and it is
-// what makes a genuinely new node in a genuinely new fleet replay from the
-// beginning rather than ask for a snapshot nobody has. A domain nobody has
-// published anything for is absent from the map, which reads as that zero.
-//
-// rows is the positions register and floors the published floors, each as
-// the caller read it — once, for every question its caller asks of them
-// ([stateLog.publishPositions] asks two, and the join asks each domain's floor
-// beside its generation).
-//
-// EACH DOMAIN ON ITS OWN, and so is its failure: a domain whose floor could
-// not be read, or whose peers ahead of this node could not be judged evicted,
-// is answered in the second map rather than the first, while every other
-// domain is answered — the heartbeat judges the domains it can, and only the
-// join, which needs every domain at once, refuses when any is missing.
+// fleetGenerations is the generation the FLEET is on for each domain, for a
+// node whose own rows cannot say or may have been left behind: the MAXIMUM of
+// every live node's published position and the trim's published floor. Either
+// may be the only source (every peer restarting; never trimmed), and a
+// re-anchor moves the fleet one node at a time, so the highest is where the
+// company is going and anything below it would be adopted again. Evicted
+// nodes' rows and floors are left out (this file's top comment); only nodes
+// ABOVE the caller's own generation (above) can put the fleet ahead, so only
+// they are asked about. An absent domain reads as zero, a company that never
+// re-anchored, so a new fleet replays from the start. rows and floors are read
+// once by the caller. A domain that cannot be judged is answered in the second
+// map, the rest in the first: only the join, which needs every domain, refuses.
 func (s *stateLog) fleetGenerations(ctx context.Context, rows []coord.NodePositions,
 	floors publishedFloors, logs map[string]*jetstream.DomainLog,
 	above map[string]uint32) (map[string]uint32, map[string]error) {
@@ -145,9 +108,8 @@ func (s *stateLog) fleetGenerations(ctx context.Context, rows []coord.NodePositi
 				continue
 			}
 			// THROUGH THE DOMAIN'S VERIFIER, since the standing is decoded
-			// from a record's body — and derived here from the keyring
-			// rather than from a running log, because the join asks this
-			// before any log has started.
+			// from a record's body; derived from the keyring, not a running
+			// log, because the join asks this before any log has started.
 			verifier, verr := s.verifierFor(domain)
 			if verr != nil {
 				unread[name] = verr

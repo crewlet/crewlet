@@ -9,15 +9,13 @@ import (
 
 // THE COMMENT TOOL SAYS WHOM A COMMENT WAKES.
 //
-// Another agent's comment starts a colleague's turn only when it names them:
-// an @-mention, an `ask`, or a reply in a thread they wrote in. One that does
-// none of these reaches the item's assignee and reporter as a row in their
-// inbox and starts no turn (worklet's routing). An agent that still read the
-// description it used to be given ("everyone following the item is told")
-// would leave a hand-off as an unaddressed note, and wait for an answer that
-// no turn was started to give.
+// A comment starts a colleague's turn only when it names them (an @-mention,
+// an `ask`, or a reply in their thread); otherwise it is an inbox row for the
+// assignee and reporter and starts no turn (worklet's routing). An agent told
+// "everyone following the item is told" would leave a hand-off unaddressed and
+// wait for an answer no turn was started to give.
 //
-// Mutation: restore the old description, and every assertion below fails.
+// Mutation: say followers are told, and every assertion below fails.
 func TestTheCommentToolSaysACommentWakesOnlyWhomItNames(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()

@@ -11,13 +11,11 @@ import (
 	"testing"
 )
 
-// A SPARSE MEMBER, BUILT BY HAND: no pack makes one (a box's tar archives the
-// files a harness wrote, and sparsely only when asked to), and archive/tar's
-// writer drops the records that make one. It is what a box's own agent could
-// leave in place of what its run packed: a few blocks of archive that hand
-// their reader the holes they declare, which the archive does not hold. A
-// person's transcript and a relaunch's reading each meter what a member hands
-// out apart from what the archive inflates to, against exactly this.
+// A SPARSE MEMBER, BUILT BY HAND: no pack makes one, and archive/tar's writer
+// drops the records that make one. A box's own agent could leave one in place
+// of its run's pack: a few blocks declaring holes the archive does not hold.
+// A person's transcript and a relaunch's reading meter what a member hands out
+// apart from what the archive inflates to, against exactly this.
 
 // tarBlock is one header block of a ustar archive naming name, of typeflag,
 // with size bytes of data after it.
@@ -72,9 +70,8 @@ type sparseSegment struct {
 // (PAX format 1.0) declaring size bytes: each of segments, in order, holding
 // its data, and every byte between them a hole, read as a NUL.
 //
-// THE MEMBER'S DATA IS ITS SPARSE MAP, then the segments' data: the map says
-// how many segments there are and, for each, its offset and its length, and is
-// filled out to a block.
+// THE MEMBER'S DATA IS ITS SPARSE MAP (the segment count, then each one's
+// offset and length, filled out to a block), then the segments' data.
 func sparseMember(name string, size int64, segments ...sparseSegment) []byte {
 	pax := paxRecord("GNU.sparse.major", "1") + paxRecord("GNU.sparse.minor", "0") +
 		paxRecord("GNU.sparse.name", name) + paxRecord("GNU.sparse.realsize", strconv.FormatInt(size, 10))
@@ -111,9 +108,8 @@ func sparseTar(t *testing.T, members ...[]byte) []byte {
 	return gzipOf(t, raw.String())
 }
 
-// sparseBomb is a gzipped tar whose one member is named as a session's
-// transcript and is a sparse file declaring size bytes, every one of them a
-// hole.
+// sparseBomb is a gzipped tar whose one member, named as a session's
+// transcript, is a sparse file of size bytes, all hole.
 func sparseBomb(t *testing.T, size int64) []byte {
 	t.Helper()
 	return sparseTar(t, sparseMember("projects/"+claudeProjectDir+"/s.jsonl", size))

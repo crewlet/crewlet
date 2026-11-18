@@ -7,9 +7,9 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// THE ATLAS NAMES ONLY THE REVISION ITS SETTINGS CAME FROM, never one the fleet
-// activated that this node has not applied yet. Mutation: answer the pointer's
-// revision whatever it names, and the second case goes red.
+// The atlas names only the revision its settings came from, never one the
+// fleet activated that this node has not applied. Mutation: answer the
+// pointer's revision whatever it names, and the second case goes red.
 func TestTheAtlasNamesOnlyTheRevisionThisNodeRuns(t *testing.T) {
 	t.Parallel()
 	applied := time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)

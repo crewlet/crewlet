@@ -12,20 +12,17 @@ import (
 )
 
 // chatRegistrations is the company's own chat in the register ([register]):
-// the NINTH domain and the SEVENTH strict, identity-claiming one, whose log
-// carries two disciplines — a room's state arbitrated on its own subject, its
-// messages sequenced beside it and decided by the applier (ADR-0046). Its declaration, applier,
-// write seams, barrier, read model, generation record, node gate, wake feed
-// and Tier A ceiling (`stream.chat_log_max_bytes`, read through
-// [chatMaxBytes]).
+// the NINTH domain and the SEVENTH strict, identity-claiming one. Its log
+// carries a room's state arbitrated on its own subject and its messages
+// sequenced beside it, decided by the applier (ADR-0046). Its Tier A ceiling is
+// `stream.chat_log_max_bytes`, read through [chatMaxBytes].
 func chatRegistrations() []registration {
 	return []registration{{
 		Domain: chatlet.Domain{},
 		NewApplier: func(s *stateLog) (statelog.Applier, error) {
-			// THE ENGINE'S HOOK AS ITS LIVE OBSERVER, whatever is
-			// attached: what it hears goes to the chat hub the
-			// process attached ([Engine.SetChatLive]) and to this
-			// node's relay followers (liverelay.go).
+			// The engine's hook is the live observer, whatever is
+			// attached: it feeds the chat hub ([Engine.SetChatLive]) and
+			// this node's relay followers (liverelay.go).
 			return chatlet.NewApplier(s.nodeID, chatObserver(s.chatApplied)), nil
 		},
 		NewSeams: func(s *stateLog, spec statelog.StreamSpec, appendTo *jetstream.DomainLog,
@@ -45,18 +42,16 @@ func chatRegistrations() []registration {
 		},
 		Barrier: chatlet.EncodeBarrier,
 		Trimmed: chatlet.EncodeTrimmed,
-		// ITS OWN READ MODEL, counted from what a chat turn reads at
-		// `linearizable` — see [chatlet.LinearizableReadsPerSeatDay],
-		// which is also the barrier term in the log's ceiling
-		// ([chatlet.ChatLogMaxBytes]).
+		// Its own read model, counted from a chat turn's `linearizable`
+		// reads ([chatlet.LinearizableReadsPerSeatDay], also the barrier
+		// term of [chatlet.ChatLogMaxBytes]).
 		Reads:      &statelog.ReadModel{PerSeatDay: chatlet.LinearizableReadsPerSeatDay},
 		Generation: chatlet.GenerationRecord{},
 		NewGate: func(s *stateLog, _ *runningLog,
 			publisher *statelog.Publisher) (gateWrite, error) {
 
-			// A WRITER THAT NEEDS NO ROSTER: an eviction is said
-			// about a machine rather than in a room, and wakes
-			// nobody — see [chatlet.GateWriter].
+			// No roster: an eviction is about a machine, not in a room,
+			// and wakes nobody ([chatlet.GateWriter]).
 			w, err := chatlet.NewGateWriter(chatlet.GateOptions{Publisher: publisher})
 			if err != nil {
 				return nil, err
@@ -64,12 +59,10 @@ func chatRegistrations() []registration {
 			return func(ctx context.Context, by iam.Principal, opID, node string,
 				readmit bool) (statelog.Result, error) {
 
-				// THE PRINCIPAL AS EVERY LOG RECORDS IT ([iam.ActorFor]):
-				// chat's four author kinds are the identity
-				// directory's own words, so the tracker's, the wiki's
-				// and this log's records of one eviction name one
-				// party — a credential acting as itself included,
-				// since an eviction needs no seat.
+				// The principal as every log records it ([iam.ActorFor]):
+				// chat's author kinds are the identity directory's, so
+				// every log names one party for one eviction, a
+				// credential acting as itself included.
 				a := iam.ActorFor(by)
 				actor := chatlet.Actor{Handle: a.Name, Kind: chatlet.AuthorKind(a.Kind),
 					OperatorID: a.OperatorID}
@@ -79,18 +72,12 @@ func chatRegistrations() []registration {
 				return w.EvictNode(ctx, actor, opID, node)
 			}, nil
 		},
-		// THE WAKE A COMMITTED MESSAGE SENDS, derived from the log on
-		// the domain's own fleet-wide group ([chatlet.FeedGroup]) rather
-		// than published by the writer's goroutine — and from what this
-		// node's applier decided about it, so a post the applier refused
-		// wakes nobody ([chatlet.Decisions]).
-		//
-		// ALWAYS THIS NODE'S DECISIONS, never a translator that asks
-		// nothing: built where no core runs (the register's own check
-		// of each entry's declaration) they are the zero estate, which
-		// refuses on use and is logged on every record the feed then
-		// derives from the record alone — loud, where a nil would be a
-		// feed that silently woke about refused posts.
+		// The wake a committed message sends is derived from the log on
+		// the domain's fleet-wide group ([chatlet.FeedGroup]) and from
+		// this node's applier's decisions, so a refused post wakes nobody
+		// ([chatlet.Decisions]). Always this node's decisions: where no
+		// core runs they are the zero estate, which refuses on use and is
+		// logged, where a nil would silently wake about refused posts.
 		Feed: func(_ *Engine, records domainFeed) (changefeed.Translator, changefeed.Opener) {
 			decisions := chatlet.NodeDecisions{Estate: records.estate}
 			if records.applied != nil {
@@ -98,24 +85,16 @@ func chatRegistrations() []registration {
 			}
 			return chatlet.NewTranslator(decisions), chatlet.FeedSource{Log: records}
 		},
-		// THE FRAMEWORK'S ONE HORIZON: ADR-0029 judges a retry
-		// against it, and a seat re-asks a chat operation on the
-		// rhythm it re-asks every other.
+		// The framework's one horizon (ADR-0029): a seat re-asks a chat
+		// operation on the rhythm it re-asks every other.
 		OpsRetention: statelog.OpsRetention,
-		// AN EXCURSION BUDGET THE DOMAIN DECLARES, capped by the
-		// volume — see [chatMaxBytes].
-		//
-		// AND NO ScalesTo, unlike the assistant's entry: scaling stops at
-		// the gibibyte every corpus-sized log takes, so a fresh node
-		// reserves the whole of it ([BrokerFloor]). The assistant gives
-		// way on a short broker because a company may never turn it on;
-		// chat is the company's own unless a vendor's is declared. Nor
-		// could giving way have kept a fresh node inside the 9 GiB limit
-		// it fitted before chat joined and left a chat that works: beside
-		// the other logs at their floors and the nats bucket that limit
-		// leaves it 192 MiB, less than the one min_age window of messages
-		// a healthily trimming chat log keeps, about 225 MB at the
-		// declared census.
+		// An excursion budget the domain declares, capped by the volume
+		// ([chatMaxBytes]). No ScalesTo, unlike the assistant (which a
+		// company may never turn on): chat is the company's own unless a
+		// vendor's is declared, so a fresh node reserves the whole
+		// corpus-sized gibibyte ([BrokerFloor]). Giving way could not have
+		// kept a fresh node in its old 9 GiB either: that leaves chat
+		// 192 MiB, under the ~225 MB min_age window a healthy log keeps.
 		Ceiling: func(stream config.Stream, free int64) domainCeiling {
 			bytes, derived := chatMaxBytes(stream, free)
 			return domainCeiling{Bytes: bytes,

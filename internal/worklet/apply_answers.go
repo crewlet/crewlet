@@ -7,34 +7,21 @@ import (
 	"slices"
 )
 
-// A question's `answered_by` is the fifth derived column: the remark that
-// answered it, stamped onto the question's row by the ANSWERING remark's
-// apply ([writeComment]) — the first answer the log carries after the
-// question was posted, since the stamp is guarded `answered_by IS NULL` and
-// lands only from a post that actually wrote its row.
+// A question's `answered_by` is a derived column: the first answer the log
+// carries after the question, stamped by the answering remark's apply
+// ([writeComment]), guarded `answered_by IS NULL` and only from a post that
+// wrote its row. No record states it, so the rule is this build's and
+// [rederiveAnswers] re-derives it ([statelog.Deriver]).
 //
-// It is derived rather than carried because no record about the question
-// states it: the question's own records never move it, and an answer's record
-// names the question it answers, not whether that question was still open. So
-// the RULE — which answer holds a question — is this build's, and a rule is
-// what [statelog.Deriver] versions: a node holding rows another rule set
-// wrote, a reanchored cursor's or an adopted artefact's, has them brought to
-// this one by [rederiveAnswers] before it maintains them further.
-//
-// THE ORDER THE RULE READS IS THE LOG'S, and the rows keep it: each comment's
-// `record_id` is the id of the history row its posting record wrote
-// ([historyID]), and that row's `log_seq` is where the record sits in the log.
-// A comment row holds no position of its own, and its history row names the
-// comment only when its record woke somebody, so the posting record's id is
-// the one join that reaches every remark's place in the log.
+// THE ORDER IS THE LOG'S: a comment's `record_id` is the history row its
+// posting record wrote ([historyID]), whose `log_seq` places it. A comment row
+// holds no position, and its history row names it only when it woke
+// somebody, so that id is the one join reaching every remark's place.
 
-// answersStatement is [rederiveAnswers]' read: every answering remark beside
-// the remark it names on the same task, each at the log position its post
-// landed at, kept only where the answer was posted after the question — named
-// for the plan test.
-//
-// AN ANSWER POSTED BEFORE ITS QUESTION closes nothing in the apply, which met
-// no row to stamp, so it is left out here as well.
+// answersStatement is [rederiveAnswers]' read, named for the plan test: every
+// answer beside the remark it names on the same task, at its post's log
+// position. AN ANSWER POSTED BEFORE ITS QUESTION is left out, as the apply met
+// no row to stamp.
 const answersStatement = `
 		SELECT q.id, a.id, ha.log_seq
 		FROM tracker_comments a
@@ -54,10 +41,9 @@ const (
 // rederiveAnswers brings every question's `answered_by` to the rule the apply
 // maintains: the first answer, in log order, posted after it.
 //
-// IT WRITES ONLY WHAT DIFFERS, so it reports the rows a different rule set had
-// left wrong and nothing for rows this build maintained. The rows are read
-// whole before anything is written, because a statement cannot be issued on a
-// transaction while a query on it is still being read.
+// IT WRITES ONLY WHAT DIFFERS, so rows this build maintained report nothing.
+// The reads finish before any write: a statement cannot be issued on a
+// transaction while a query on it is open.
 func rederiveAnswers(ctx context.Context, tx *sql.Tx) (int, error) {
 	type answer struct {
 		id  string

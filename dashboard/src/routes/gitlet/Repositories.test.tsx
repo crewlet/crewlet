@@ -811,6 +811,8 @@ test("j and k walk the repositories and Enter opens one", async () => {
   stubEngine();
   mount(<Repositories />);
   await rowOf("web");
+  // THE KEYS ARE LIVE once the list's effects have run, a task after its rows are drawn.
+  await afterMicrotasks();
   const opened: (string | null)[] = [];
   const watch = (e: MouseEvent) => {
     opened.push((e.target as Element).closest("a")?.getAttribute("href") ?? null);

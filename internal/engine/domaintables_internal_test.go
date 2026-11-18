@@ -10,26 +10,17 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// EVERY DOMAIN'S TABLES ARE IN THE REPLICATED SCHEMA, AND NOTHING ELSE IS.
+// EVERY DOMAIN'S TABLES ARE IN THE REPLICATED SCHEMA, AND NOTHING ELSE IS: the
+// `replicated/` migrations create the framework's `statelog_` tables and
+// exactly the tables the registered domains declare. A declared table they do
+// not create fails its applier on the first record on every data node; a
+// created table no domain declares holds rows no snapshot claims.
 //
-// The replicated estate's file is built from one migration sequence —
-// `replicated/` — and every registered domain's log is applied into it. A
-// domain that declares a table that sequence does not create has an applier
-// that fails on its first record, on every data node at once — and a table the
-// sequence creates that no domain declares carries rows no snapshot claims, no
-// identity covers and no applier writes, which is the phantom the estate's
-// derived-table gates already refuse one level down. So it is EQUALITY: the
-// sequence creates the framework's own `statelog_` tables and exactly the
-// tables the registered domains declare, nothing else.
+// HERE rather than in internal/store, because the domains are the engine's
+// register, and a store test naming them would be a second list.
 //
-// HERE rather than in internal/store, because the domains are the ENGINE's
-// register, never a copy: a domain registered there is the case this exists
-// for, and a store test naming the domains would be a second list of them.
-//
-// FROM THE DATABASE, NOT FROM THE DDL'S TEXT: sqlite_master is what the
-// migrations actually built, after every drop and every rebuild — a pattern
-// over the migrations once read a comment's "a CREATE TABLE plus an applier"
-// as a table called `plus`.
+// FROM THE DATABASE, NOT THE DDL'S TEXT: sqlite_master is what the migrations
+// built after every drop and rebuild; a pattern over the text misreads it.
 func TestEveryDomainTableIsInTheReplicatedSchema(t *testing.T) {
 	t.Parallel()
 	db, err := store.OpenEstate(t.Context(), store.EstateReplicated,
@@ -51,10 +42,9 @@ func TestEveryDomainTableIsInTheReplicatedSchema(t *testing.T) {
 				return err
 			}
 			name = strings.ToLower(name)
-			// schema_migrations is the migrator's, in both estates, and
-			// the database engine's own bookkeeping is nobody's: SQLite's
-			// `sqlite_` tables and the sequence table Turso keeps behind an
-			// AUTOINCREMENT column, which no statement of ours names.
+			// The migrator's table, and the database engine's own
+			// bookkeeping: SQLite's `sqlite_` tables and Turso's
+			// AUTOINCREMENT sequence table.
 			if name == "schema_migrations" || strings.HasPrefix(name, "sqlite_") ||
 				strings.HasPrefix(name, "__turso_internal_") {
 				continue
@@ -111,7 +101,6 @@ func TestEveryDomainTableIsInTheReplicatedSchema(t *testing.T) {
 }
 
 // frameworkTablePrefix is the namespace of the state-log framework's own
-// tables — the cursor, the arbitration anchor and the record of operation
-// ledgers lost — which the replicated file carries beside every domain's, and
-// which no domain declares.
+// tables (the cursor, the arbitration anchor, the lost-ledger record), which
+// no domain declares.
 const frameworkTablePrefix = "statelog_"

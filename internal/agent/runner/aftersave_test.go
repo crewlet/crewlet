@@ -19,13 +19,12 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// WHAT A CONTINUED SESSION IS TOLD OF THE CALLS AFTER ITS SAVE, read against
-// its save point: how many of the round's calls the run's log had taken at the
-// read the capture was placed by, its own or, where its harness may not have
-// written every call it made, an earlier capture's
-// ([runner.SessionBasis.Through]), every call the log took after it
-// ([runner.BridgedCall.Appended] past it) being one the session may not have
-// been answered.
+// WHAT A CONTINUED SESSION IS TOLD OF THE CALLS AFTER ITS SAVE is read against
+// its save point ([runner.SessionBasis.Through]): how many of the round's calls
+// the log had taken at the read the capture was placed by (its own, or an
+// earlier capture's where its harness may not have written every call). Every
+// call the log took after it ([runner.BridgedCall.Appended] past it) may be one
+// the session was not answered.
 
 // afterSaveBrief is the brief a lost job's round is carried on with,
 // continuing the job's kept session saved at through, where the round's log
@@ -105,14 +104,11 @@ func numbered(name string, args map[string]any, seq, appended int) runner.Bridge
 }
 
 // A CALL IN FLIGHT AT THE READ IS TOLD, WHATEVER THE DROPPED MIDDLE. The run
-// made a slow call fifth and three hundred more while it ran, so by the time
-// the capture read the log the bound had dropped the hundred-odd calls between
-// the log's first and last hundred, and the call answered only after the read.
-// Read by place, the dropped places are the highest the log leaves unlisted —
-// sixty-four of them filled every slot an older build's stamp names below its
-// highest call — and the slow call, below them all, read as answered. Read by
-// the order the log took it, it came after the save, and the continuation is
-// told it, and nothing it holds.
+// made a slow call fifth and three hundred more while it ran; the capture read
+// the log after its bound dropped the middle and before the slow call was
+// answered. Read by place, the slow call sits below every dropped place and
+// reads as answered; read by the order the log took it, it came after the
+// save, and the continuation is told it and nothing it holds.
 //
 // Mutation: read the save point against the place a call was made at (Seq)
 // rather than the place the log took it at (Appended), and the call in flight
@@ -153,24 +149,18 @@ func TestACallInFlightAtTheReadIsToldWhateverTheDroppedMiddle(t *testing.T) {
 	}
 }
 
-// A CONTINUATION COUNTS THE DROPPED CALLS MADE AFTER ITS SAVE. A round of three
-// hundred calls whose log dropped the hundred between its first and last
-// hundred tells a session saved part way through every call the log lists
-// after the save, and then how many of the calls after it the log dropped,
-// exactly — the round's calls past the save point less those it lists — and
-// the round's tally of every call it dropped, the line every other reader of a
-// long round is given, verbatim. A session saved after the dropped middle is
-// told neither, since nothing it lacks was dropped, and one saved past every
-// call the round's log took is told nothing at all. A call an older build
-// appended after the save, in a fleet mid-upgrade, has no number: it is told,
-// and counted among the dropped calls too, its place unknown — told twice,
-// never left out. And the sentence's bound is the log's.
+// A CONTINUATION COUNTS THE DROPPED CALLS MADE AFTER ITS SAVE. A session saved
+// before or inside a round's dropped middle is told the listed calls after its
+// save, then exactly how many dropped calls followed it (the calls past the
+// save point less those listed), then the round's tally verbatim. One saved
+// after the middle is told neither, one saved past every call nothing. A call
+// an older build appended after the save has no number: told, and counted as
+// dropped too, never left out. The sentence's "two hundred" is the log's bound.
 //
-// Mutation: count every dropped call, or none, in place of those after the
-// save; render the tally where nothing after the save was dropped; drop the
-// tally beside a count; take a call with no number off the count; or raise
-// sandbox.MaxBridgeCalls under the sentence's "two hundred", and a case goes
-// red.
+// Mutation: count every dropped call, or none, for those after the save;
+// render the tally with nothing dropped after the save, or drop it beside a
+// count; take a call with no number off the count; or raise
+// sandbox.MaxBridgeCalls past "two hundred": a case goes red.
 func TestAContinuationCountsTheDroppedCallsMadeAfterItsSave(t *testing.T) {
 	t.Parallel()
 	if sandbox.MaxBridgeCalls != 200 {
@@ -250,13 +240,12 @@ func TestAContinuationCountsTheDroppedCallsMadeAfterItsSave(t *testing.T) {
 	}
 }
 
-// THE CALLS AFTER A SAVE ARE HELD TO THE LEDGER'S BUDGETS. A session saved early
-// in a long round has a hundred calls after it, each kept up to 16 KiB, so the
-// continuation lists them as the prior-work ledger lists a round: an
-// argument value or a failed call's error past its budget rewritten by the
-// seat's auxiliary model, or, where none can be had, omitted by its size and
-// digest, never cut and never whole; and the reads past the ledger's cap
-// counted rather than listed. Every write is listed.
+// THE CALLS AFTER A SAVE ARE HELD TO THE LEDGER'S BUDGETS. Each is kept up to
+// 16 KiB, so the continuation lists them as the prior-work ledger lists a
+// round: an argument value or a failed call's error past its budget rewritten
+// by the seat's auxiliary model or, with none, omitted by size and digest,
+// never cut and never whole; reads past the ledger's cap counted, not listed;
+// every write listed.
 //
 // Mutation: render the list verbatim, with no budget, and every read and both
 // payloads are told whole.
@@ -289,21 +278,16 @@ func TestTheCallsAfterASaveAreHeldToTheLedgersBudgets(t *testing.T) {
 }
 
 // A CONTINUATION'S TOLD CALLS SHARE ONE READ CAP, SPENT ON THE LATE CALLS
-// FIRST. The calls after a session's save and its late calls are one round's,
-// told in one brief under two headings, so the ledger's cap counts the reads of
-// both together: nine late reads and nine after the save are twelve read lines
-// in all, every late read and the first three after the save, whose heading
-// counts the six it leaves out. Only what the brief shows is rewritten: a read
-// after the save past the cap costs no rewrite of its long argument, and a late
-// write's long body costs one. On a compactor that remembers its rewrites for
-// the turn, as the engine's does, so the fresh brief beside the continuation,
-// which tells the same calls from the round's start, rewrites none of them
-// again.
+// FIRST. The calls after the save and the late calls are one round's, told in
+// one brief under two headings: nine late reads and nine after the save are
+// twelve read lines, every late read and the first three after, whose heading
+// counts the six left out. Only what is shown is rewritten (a read past the cap
+// costs none, a late write's long body one), and on a compactor that remembers
+// the turn's rewrites, as the engine's does, the fresh brief rewrites none again.
 //
-// Mutation: render the two lists with a cap each, and eighteen reads are told;
-// spend the cap on the calls after the save first, and three late reads are;
-// name the payloads list by list, and the read the brief never shows is
-// rewritten all the same.
+// Mutation: a cap per list tells eighteen reads; spending the cap after the
+// save first tells three late reads; naming the payloads list by list rewrites
+// the read the brief never shows.
 func TestAContinuationsToldCallsShareOneReadCap(t *testing.T) {
 	t.Parallel()
 	read := func(n int, channel string) runner.BridgedCall {
@@ -379,20 +363,16 @@ func TestAContinuationsToldCallsShareOneReadCap(t *testing.T) {
 }
 
 // THE CALLS LISTED AGAIN TAKE THE READ CAP LAST, AND ARE NEVER OWED. A cut-off
-// capture holds its round's first four reads, and the brief tells reads after
-// its save as calls it may already show, the first four alike the held ones.
-// The four held reads are listed again, under the same one cap as every list:
-// spent after the calls the session may lack, so where those leave the cap two
-// reads the listing lists two and counts two, and where they take the whole
-// cap the listing lists none and is not rendered at all, since a section that
-// heads a count of reads alone names no call a told one could be taken for.
-// And they are no reads the brief owes the session: it holds them, so the
-// launch records nothing left out.
+// capture holds its round's first four reads, and the brief tells the reads
+// after its save (the first four alike the held ones) as calls it may already
+// show. The held reads are listed again under the one cap, spent last: where
+// the others leave two reads of it, two are listed and two counted; where they
+// take it all, the section is not rendered, since a heading over a bare count
+// names no call. The session holds them, so the launch records none left out.
 //
 // Mutation: spend the cap on the calls listed again first, and calls after the
-// save are counted rather than listed; record the reads the listing left out
-// as owed, and the launch records them; render the listing where it lists no
-// call, and the second case carries a section of a count alone.
+// save are counted; record the reads left out as owed, and the launch records
+// them; render the listing with no call, and the second case carries a count.
 func TestTheCallsListedAgainTakeTheReadCapLastAndAreNeverOwed(t *testing.T) {
 	t.Parallel()
 	read := func(channel string, seq int) runner.BridgedCall {
@@ -446,19 +426,16 @@ func TestTheCallsListedAgainTakeTheReadCapLastAndAreNeverOwed(t *testing.T) {
 }
 
 // A CARRIED-ON RELAUNCH LAUNCHES NOTHING WHEN THE CALLS AFTER ITS SAVE FILL THE
-// WINDOW. Telling a continued session the calls after its save rewrites a
-// payload past its budget with the seat's auxiliary model, charged to the
-// turn's counters, and that rewrite can take the window past its ceiling. The
-// relaunch that carries a lost job's round on asks the meter once every
-// rewrite its briefs make is spent — before anything is launched, and before
-// the call a person approved would be made — so a run the rewrite left no room
-// for is never launched and paid for whole past the ceiling. The read after the
-// save is one the fresh brief beside the continuation counts past its read cap
-// rather than lists, so its rewrite is the continuation's alone.
+// WINDOW. The continuation's rewrites are charged to the turn's counters and
+// can take the window past its ceiling, so the relaunch asks the meter once
+// every brief's rewrite is spent, before anything is launched or an approved
+// call made: a run with no room left is never launched and paid for whole.
+// The read after the save is one the fresh brief counts past its cap rather
+// than lists, so its rewrite is the continuation's alone.
 //
 // Mutation: build the continued session's brief after the relaunch asks the
-// meter, as it was built beside its lead, and the run is launched; rewrite a
-// read the fresh brief counts without listing, and it is charged twice.
+// meter, and the run is launched; rewrite a read the fresh brief counts
+// without listing, and it is charged twice.
 func TestACarriedOnRelaunchLaunchesNothingWhenTheCallsAfterItsSaveFillTheWindow(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
@@ -496,14 +473,13 @@ func TestACarriedOnRelaunchLaunchesNothingWhenTheCallsAfterItsSaveFillTheWindow(
 	}
 }
 
-// A GUARD ARMS ONLY THE LOADS THROUGH ITS SAVE POINT. A relaunch that continues
-// a kept session arms its guard with the loads its job made that the session
-// holds: those the log took before the read the save point is, whatever their
-// place among the calls the job made — a load made before a call still in
-// flight is the session's, and one made early and answered only after the
-// read is not — by the same test the continuation is told the calls after the
-// save by. A load an older build took, with no number, is after every save
-// point, so its skill is refused until loaded again: the safe direction.
+// A GUARD ARMS ONLY THE LOADS THROUGH ITS SAVE POINT: those the log took
+// before the read the save point is, whatever their place among the job's
+// calls, by the same test that tells the continuation the calls after its
+// save. A load made before a call still in flight is the session's; one made
+// early and answered after the read is not. A load an older build took, with
+// no number, is after every save point, so its skill is refused until loaded
+// again: the safe direction.
 //
 // Mutation: read a load's place (Seq) against the save point rather than the
 // order the log took it, or read a load with no number as before it, and a
@@ -546,29 +522,18 @@ func TestAGuardArmsOnlyTheLoadsThroughItsSavePoint(t *testing.T) {
 	}
 }
 
-// A KEPT SESSION IS TOLD AN EARLIER SUBMIT_WORK DOES NOT STAND. A continuation
-// of a kept capture tells the calls the log took after its save point, and
-// every one was made before the relaunch it opens, so a successful
-// `submit_work` among them is no submission of the work that relaunch carries
-// on: a lost round whose calls since its last answer hold one is collected on
-// it rather than carried on, so the one a loss's continuation tells was made
-// before an earlier answer, by the job that then asked; and a send-back's
-// continuation can tell the submission its review sent back, as it does where
-// the capture was saved before it. Each is told, right after the calls and
-// once, that the submission does not stand and that the run makes its own.
+// A KEPT SESSION IS TOLD AN EARLIER SUBMIT_WORK DOES NOT STAND. Every call a
+// continuation tells after its save was made before the relaunch, so a
+// successful `submit_work` among them is not this work's: a loss's is the
+// asking job's, from before an earlier answer (a round holding one since its
+// last answer is collected, not carried on); a send-back's is the one its
+// review sent back. Each is told once, after the calls, that it does not stand
+// and the run makes its own. One the session holds is told once, before the
+// calls after the save, in words of the session, never as one among them,
+// which would send the run looking for a call that list lacks.
 //
-// AND OF ONE THE SESSION HOLDS, FIRST, IN WORDS OF THE SESSION RATHER THAN OF A
-// LIST: a capture saved once the asking job's submission was answered holds it,
-// and so does a capture of the collected job saved past its submission, which
-// a send-back continues. Neither lists it, and it stands no more than a listed
-// one, so each is told, once and before the calls after its save, that the
-// submission the session shows does not stand; and no line says one among
-// those calls does not stand, which hold none. Said under them, it would tell
-// the run a call it reads nowhere in that list is there.
-//
-// Mutation: never say a successful submission among the calls does not stand,
-// and the first two cases go red; never say one the session holds does not
-// stand, or say it of the calls after the save, and the last two do.
+// Mutation: drop the line after the calls, and the first two cases go red;
+// drop the held one, or say it of the calls after the save, and the last two do.
 func TestAKeptSessionIsToldAnEarlierSubmitWorkDoesNotStand(t *testing.T) {
 	t.Parallel()
 	const (
@@ -688,14 +653,11 @@ func TestAKeptSessionIsToldAnEarlierSubmitWorkDoesNotStand(t *testing.T) {
 }
 
 // A SESSION HOLDING AN EARLIER TURN'S SUBMIT_WORK IS TOLD NOTHING OF IT. A
-// turn's job may continue the session its conversation's last turn left, which
-// holds that turn's `submit_work`, and then the copy in the job's box holds it
-// too, and so does a capture of the job. It is no call of this round, and only
-// the round's own calls say that a submission the session shows does not
-// stand, so a session whose round holds no submission is told nothing of one:
-// the lead that began this turn said where the earlier turn ended, and a run
-// told that a submission it shows does not stand would look for one of this
-// round's that was never made.
+// job may continue the session its conversation's last turn left, holding
+// that turn's `submit_work`, as do the in-box copy and any capture of the job.
+// Only the round's own calls say a submission the session shows does not
+// stand: the lead already said where the earlier turn ended, and a run told
+// otherwise would look for one of this round's that was never made.
 //
 // Mutation: say it wherever the copy in the box holds every call of the round,
 // or of any successful call the session holds, and a case goes red.

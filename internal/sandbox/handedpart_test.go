@@ -12,23 +12,18 @@ import (
 	"github.com/crewlet/crewlet/internal/coord/memory"
 )
 
-// WHAT A JOB'S BOX WAS HANDED IS KEPT BESIDE THE RUN'S ROW, FOR THAT JOB
-// ALONE. The sealed set is up to 64 KiB before sealing, and the row is read
-// whole by every git request of a coding box and every listing, so the set is
-// a part of its own beside it, named for the job its attach wrote it for:
+// WHAT A JOB'S BOX WAS HANDED IS KEPT BESIDE THE RUN'S ROW, FOR THAT JOB ALONE.
+// The set is up to 64 KiB before sealing and the row is read whole by every git
+// request of a coding box and every listing, so the set is a part of its own,
+// named for the job whose attach wrote it. The next launch's opening hands it on
+// as the box's ([PriorBox.Handed]) and the new job has none until its own attach
+// writes it: the previous job's set read as the new one's would scrub the new
+// session of the wrong values. An earlier job's late write never replaces a
+// later job's set.
 //
-//   - the attach that starts a job writes it, and the row carries none of it;
-//   - the next launch's opening hands it on as the box's ([PriorBox.Handed]),
-//     and from then it is none for the new job, whose own attach writes its
-//     own — never the previous job's set read as the new job's, which would
-//     scrub a capture of the new job's session of values its box was not
-//     handed and leave in the ones it was;
-//   - a write of an earlier job that lands after a later job's never replaces
-//     the later job's set.
-//
-// Mutation: write the set onto the row, skip the job check in
-// [handedSet.of], read the set after the reset rather than before, or drop
-// the ordinal check in [CoordStore.writeHanded], and a check below goes red.
+// Mutation: write the set onto the row, skip the job check in [handedSet.of],
+// read the set after the reset rather than before, or drop the ordinal check in
+// [CoordStore.writeHanded], and a check below goes red.
 func TestWhatABoxWasHandedIsKeptBesideItsRowForItsJobAlone(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -86,23 +81,18 @@ func TestWhatABoxWasHandedIsKeptBesideItsRowForItsJobAlone(t *testing.T) {
 	}
 }
 
-// A TOKEN IS RECORDED ONLY IN THE SET OF THE JOB ITS ROW HOLDS RUNNING, before
-// it is written into the job's box. The row is read first: a job its row holds
-// launching, read back by a collection, lost or ending — or a poll's copy of a
-// job a relaunch has replaced, launching or already running before its own set
-// is written — takes nothing, add unasked, since an opening or a capture may
-// have read its set for the last time. The part decides the rest
-// by its own compare-and-swap: an answer that leaves the set as it was writes
-// nothing; one that cannot hold the token marks the set, which reads as
-// refusing every capture of the job, is asked nothing again and is never
-// replaced by the job's own write landing late; a later job's set takes
-// nothing; and a job with no set at all is marked so, add unasked, for that
-// same late write.
+// A TOKEN IS RECORDED ONLY IN THE SET OF THE JOB ITS ROW HOLDS RUNNING, before it
+// is written into the box. The row is read first: a job it holds launching,
+// collected, lost or ending, or a poll's copy of a replaced job, takes nothing,
+// add unasked, since an opening or a capture may have read its set for the last
+// time. The part's compare-and-swap decides the rest: an unchanged answer writes
+// nothing; one that cannot hold the token marks the set, which refuses every
+// capture, is never asked again nor replaced by the job's late write; a later
+// job's set takes nothing; a job with no set is marked so, add unasked.
 //
-// Mutation: skip the row's read, or read only whether its job runs and not
-// which job that is, grow whatever set is beside the row, write a set add left
-// as it was, leave a job with no set unmarked, ask a marked set again, or let
-// the job's own write replace its mark, and a check below goes red.
+// Mutation: skip the row's read or which job it holds, grow any set beside the
+// row, write an unchanged set, leave a job with no set unmarked, ask a marked
+// set again, or let the job's late write replace a mark, and a check goes red.
 func TestATokenIsRecordedOnlyInTheSetOfTheJobItsRowHoldsRunning(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

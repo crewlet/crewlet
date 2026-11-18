@@ -23,76 +23,18 @@ import (
 	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
-// THE CODE WRITE TOOLS: a seat's and a person's assistant's changes to the
-// company's own repositories, made through a tool rather than a clone — five
-// that change a branch (code_commit_files, code_revert, code_cherry_pick,
-// code_create_branch, code_delete_branch), each an ENGINE WRITE Gitlet
-// builds on the repository's Gitlet node and lands as one push (ADR-0092), and
-// five that change a repository (code_create_repo, code_update_repo,
-// code_delete_repo, code_restore_repo, code_protect_branch), each one
-// LIFECYCLE request a data node decides — and a repository's CHANGES' writes,
-// each decided where the change is (codechangewrite.go). Every one is in
-// [CodeTools], beside the reads, so a seat's registry and the operator
-// catalogue take one list.
+// THE CODE WRITE TOOLS: five branch writes, each an engine write the
+// repository's Gitlet node builds and lands as one push (ADR-0092); five
+// repository lifecycle requests a data node decides; and a change's writes
+// (codechangewrite.go), all in [CodeTools] beside the reads.
 //
-// # Who may is the repository's to say
-//
-// The gate admits every principal (`authz.ClassEverybody`), as it admits a
-// push at the git transport: whether a caller may move a branch or change a
-// repository is its GRANT on that repository (ADR-0088), which the node that
-// decides judges from its own chart — the Gitlet node and the repository's
-// committer for an engine write, the data node for a lifecycle request — and
-// which no row keyed on the verb can answer before the repository is read. A
-// person writes as the human seat they hold, through their own credential; a
-// credential bound to nobody writes nothing, and is told so before anything
-// is routed ([gitlet.UnboundDetail]).
-//
-// # And whoever woke the turn's
-//
-// Inside a seat's turn somebody woke, every write is decided again for them
-// (the REQUESTER CEILING, [CodeDeps.writeCaller]): it carries whom the turn
-// works for ([gitlet.WriteCeiling]) to the node that decides it, which holds
-// the seat's grant to theirs and spares only the seat's own work.
-//
-// # One operation, so a retry is the same write
-//
-// Every call names its operation by the one rule every family of write tools
-// takes ([operations], [opIDFor]): a seat's turn derives it, a request
-// carrying its own key derives it from the key, and the operator's assistant
-// over MCP is minted one or brings back the one it was answered. An engine
-// write's push and commit are pure functions of that operation
-// (gitlet.WritePushID), so the same call made again — after an `unknown`, by a
-// re-run turn — is the same push, which the repository's committer collapses.
-// THE OPERATION'S OBJECT IS BOUNDED: the repository's id for every tool that
-// names a repository and the fixed word `new` for a create, never a ref or a
-// name, which could carry an id past the 128 bytes of visible ASCII
-// (statelog.MaxCallerOpIDBytes) every party to a write holds it to; what the
-// call names beyond the repository is in the arguments a turn's id digests
-// and an `op_id` is bound to.
-//
-// # What a seat's write says of itself
-//
-// A seat's write names the run behind it on its push (gitlet.RunProvenance):
-// the turn, the work item it is charged to and the model the call was made on
-// ([toolloop.CallModel]) — an engine-driven round's, or the model the seat's
-// executor's launch pointed its harness at, so one run's pushes name one model
-// whichever path made them.
-//
-// # A scratch repository a turn names is held first
-//
-// Every write reaches its repository through [CodeDeps.repo], the reads' one
-// resolution, which takes the turn's hold on a scratch repository before
-// anything else about it is sent ([HoldRepo]); a create holds the id its
-// decide will derive before the create is sent.
-//
-// # Every answer is the read's kind of answer
-//
-// Rendered through a [foreignRead], so no string a repository holds — a path,
-// a branch, a conflicted file's text — can open or close a fence; a
-// conflicted file's lines, its committers' words, go out fenced at trust
-// `external`. Every refusal is one of the classes every surface already
-// renders (mcp.Refusals), so a person's act transport answers each with the
-// status and the sentence it gives every other write.
+// The gate admits everybody (`authz.ClassEverybody`): who may write is the
+// caller's grant on the repository (ADR-0088), judged by the deciding node
+// from its own chart and, in a woken turn, again for the requester
+// ([CodeDeps.writeCaller]). An engine write's push is a pure function of its
+// operation (package doc, "How a write is made once"; gitlet.WritePushID), so
+// a retried call is the same push. Answers render through a [foreignRead], so
+// no string a repository holds can break a fence; refusals take [pushClass]'s.
 
 // The code write tools' names: each is its authority row's action.
 const (
@@ -108,11 +50,9 @@ const (
 	CodeProtectBranchTool = string(authz.ActionCodeProtectBranch)
 )
 
-// CodeWrites are the write tools, in the order a catalogue lists them: the
-// branch's five, then the repository's five, then a repository's changes'
-// ([ChangeWrites], codechangewrite.go), its checks' ([CheckWrites]), and M6's
-// purge and import ([PurgeWrites], [ImportWrites]). Read by [Register]'s delivery switch,
-// [codeAnnotations] and every test that holds the writes apart from the reads.
+// CodeWrites are the write tools in catalogue order: the five branch writes,
+// the five lifecycle tools, then [ChangeWrites], [CheckWrites], [PurgeWrites]
+// and [ImportWrites]. [Register]'s delivery switch and [codeAnnotations] read it.
 func CodeWrites() []string {
 	return append([]string{CodeCommitFilesTool, CodeRevertTool, CodeCherryPickTool, CodeCreateBranchTool,
 		CodeDeleteBranchTool, CodeCreateRepoTool, CodeUpdateRepoTool, CodeDeleteRepoTool, CodeRestoreRepoTool,
@@ -120,46 +60,18 @@ func CodeWrites() []string {
 		ImportWrites()...)...)
 }
 
-// CodeWritesWithheld is the code writes a seat whose role.code.access reads
-// tier is never offered: none at full_access, and, at every tier that caps the
-// seat below write ([gitlet.Tier.Cap]) — read_only, which is also an unset tier,
-// review, and a value no build writes, which caps at nothing — every one but
-// the change's conversation writes its cap reaches ([belowWriteNeeds]): a
-// read_only seat comments on a change, and a review seat also asks for
-// reviews, reviews and dismisses the findings it raised.
-//
-// NO REPOSITORY'S GRANT COULD ADMIT ONE IT WITHHOLDS, whatever the chart
-// relates the seat to it by. A seat holds the least of its tier and its
-// relation ([gitlet.GrantOf]), so below write it moves no ref anywhere — a push
-// needs write, or the full_access tier for the seat's own namespace
-// ([gitlet.Grant.MayPush]) — every lifecycle request a tool sends needs
-// maintain, a scratch repository's create full_access itself, and a change's
-// lifecycle is steered by its owner, who opened it with a push, or by a
-// principal that maintains the repository. Offered, each is a tool such a
-// seat reaches for and is refused `not_permitted` on every repository, round
-// after round; and each is paid for on every round besides, its definition
-// in a catalogue nothing caches ([codeCatalogueBudget] in the tests) and the
-// executor's guidance on changing code gated on holding them — by most of a
-// company's seats, read_only being the default.
-//
-// AND NONE IT OFFERS IS REFUSED BY THE TIER: the conversation of a change is
-// judged by access and by what its principal wrote of the change (rule D21),
-// and the access each of them needs of a principal that wrote none of it is
-// the one [belowWriteNeeds] names — the use ADR-0088 left the review tier
-// for. A seat whose tier was lowered keeps its authorship of what it pushed
-// before, which would let it ask for reviews of that change or answer its
-// findings at read too; those two stay withheld at read_only anyway, since
-// every read_only seat would pay for them on every round for what only a
-// lowered one could do.
-//
-// THE TIER, NOT THE CHART, because only the tier caps a seat on every
-// repository at once: a relation is one repository's, and a seat that writes
-// one repository and reads the rest is offered the writes for the one. Asked
-// per turn beside the authority table's refusals, over the epoch the turn is
-// pinned to (internal/engine's Company.withheldFrom), so a seat raised to
-// full_access is offered them from its next turn — and NOT on the authority
-// table: a role grant there is one only an administrator sets
-// (authz.SeatGrant), while a unit's lead sets its seats' tier.
+// CodeWritesWithheld is the code writes never offered a seat whose
+// role.code.access tier caps it below write ([gitlet.Tier.Cap]: read_only or
+// unset, review, or a value no build writes): all but the change conversation
+// writes its cap reaches ([belowWriteNeeds]). No grant could admit one, since
+// a seat holds the least of tier and relation ([gitlet.GrantOf]); offered,
+// each is refused `not_permitted` every round and paid for in a catalogue
+// nothing caches ([codeCatalogueBudget] in the tests). Authorship (rule D21)
+// could admit a review ask or a finding's answer to a lowered seat; both stay
+// withheld at read_only, or every read_only seat would pay for them. The tier,
+// not the chart, since only it caps every repository at once; asked per turn
+// (internal/engine's Company.withheldFrom), not on the authority table: a
+// unit's lead sets the tier, an administrator alone a role grant.
 func CodeWritesWithheld(tier gitlet.Tier) []string {
 	limit := tier.Cap()
 	if limit >= gitlet.AccessWrite {
@@ -176,22 +88,17 @@ func CodeWritesWithheld(tier gitlet.Tier) []string {
 }
 
 // belowWriteNeeds is the least access at which a change's decide admits each
-// of the writes a seat below write may make, from a principal that wrote none
-// of the change — neither its owner nor an author, which only a push makes
-// (rule D21): a comment needs read; an ask for review, review — an author
-// asks whatever its access, and a seat below write authors nothing; a
-// review, review; and an answer to findings, review — an author resolves
-// them, and a seat below write may only dismiss the findings it raised,
-// which only a review raises. Every other code write needs write or more,
-// which no tier below it reaches ([CodeWritesWithheld]).
+// write a seat below write may make, for a principal that wrote none of the
+// change (rule D21): a comment needs read; a review ask, a review and an
+// answer to findings need review (a seat below write authors nothing, and may
+// dismiss only the findings its own review raised). Every other code write
+// needs write or more ([CodeWritesWithheld]).
 //
-// Each is at or above the change tool's row in [changeToolNeeds], which is
-// the access a deciding node holds a COLLEAGUE to — the relation beyond it
-// the seat's own — so the two part where an author's relation admits a
-// write below the access alone: an ask for review and an answer to findings.
-// TestEveryChangeToolNamesTheAccessItNeeds holds the two tables to each
-// other, and TestTheCodeWritesAreWithheldExactlyWhereNoGrantAdmitsOne this one
-// to rule D21 and gitlet.GrantOf.
+// Each is at or above its row in [changeToolNeeds], the access a deciding node
+// holds a COLLEAGUE to; they part where an author's relation admits a write
+// below the access alone. TestEveryChangeToolNamesTheAccessItNeeds holds the
+// two tables together, TestTheCodeWritesAreWithheldExactlyWhereNoGrantAdmitsOne
+// this one to rule D21 and gitlet.GrantOf.
 var belowWriteNeeds = map[string]gitlet.Access{
 	CodeCommentOnChangeTool: gitlet.AccessRead,
 	CodeRequestReviewTool:   gitlet.AccessReview,
@@ -199,14 +106,11 @@ var belowWriteNeeds = map[string]gitlet.Access{
 	CodeResolveFindingTool:  gitlet.AccessReview,
 }
 
-// CodeWriter is Gitlet's writes as these tools ask them —
-// estate.CodeSeam, declared here by its consumer: an engine write asked of
-// the repository's home Gitlet node, a lifecycle request asked of a data node,
-// and a write of a change — its lifecycle asked of the repository's
-// committer, its conversation of the change writer beside it — and a person's
-// marks over their own code notices, asked of any data node — and a write of
-// a repository's checks, a rerun or a report, asked of its checks writer
-// beside the committer. Mark carries a person's viewed files of a change too.
+// CodeWriter is Gitlet's writes as these tools ask them (estate.CodeSeam,
+// declared by its consumer): an engine write goes to the repository's home
+// Gitlet node; a lifecycle request and a person's marks (a change's viewed
+// files among them) to any data node; a change's lifecycle to the committer,
+// and its conversation and the repository's checks to the writers beside it.
 type CodeWriter interface {
 	GitWrite(ctx context.Context, w gitlet.EngineWrite) (gitlet.EngineWriteResult, error)
 	Lifecycle(ctx context.Context, r gitlet.LifecycleRequest) (gitlet.LifecycleResult, error)
@@ -241,48 +145,18 @@ func codeWriteTools(deps CodeDeps) []tools.Callable {
 
 // ---- who writes ------------------------------------------------------------ //
 
-// writeCaller is who this call writes as, or the refusal it is answered with:
-// [CodeDeps.asker]'s caller, held to the one rule every write is — a token
-// bound to nobody writes nothing, refused before anything is read or routed.
-//
-// AND, INSIDE A SEAT'S TURN SOMEBODY WOKE, WHOEVER THAT IS ([ceilingOf]) —
-// the requester ceiling (M3-decisions U40 (a)), the reads' ([CodeDeps.caller])
-// carried onto the writes: a seat's write is decided again for its requester,
-// so a colleague outside a unit, or a stranger on a chat surface, cannot have
-// a seat change a repository they could not change themselves. The tool's own
-// authority row is decided for the requester first ([authz.DecideWithin],
-// over no object, since the repository is not read yet): a requester this
-// node cannot compose or decide is answered unavailable, never as a turn
-// nobody woke; one the row refuses is refused — though the gate every
-// builtin passes has refused them already, since every code verb names the
-// gitlet app, which a stranger, a person who may not act in the company now
-// and a person not given it do not use (ADR-0109, ADR-0110), and the app
-// holds before the seat's own work is steered; a colleague SEAT rides on the
-// write as its ceiling, and on every read the call makes too
-// ([codeCaller.ceiling]), so nothing a write tool reads is shown for a
-// colleague who could not read it; a CREDENTIAL acting as no seat that holds
-// the app rides as a ceiling of NOBODY, since it pushes to no repository
-// itself, so only the seat's own work is steered for it; and a PERSON holding
-// the app bounds nothing, since a person maintains every repository
-// (ADR-0085).
-//
-// JUDGED WHERE THE WRITE IS DECIDED, never here: the ceiling travels on the
-// request ([gitlet.EngineWrite.Ceiling], [gitlet.LifecycleRequest.Ceiling], and a
-// change's [gitlet.ChangeProposal.Ceiling] and [gitlet.ConversationWrite.Ceiling])
-// to the Gitlet node and the data node that judge the seat's own grant, from the
-// same chart and row (gitlet.WriteCeiling), so an activation that takes a
-// colleague out of the owning unit stops the next write made for it. A
-// change's write holds a colleague at the access [changeToolNeeds] names for
-// its tool, and the relation beyond it is the seat's alone.
-//
-// AND WHOM THE WRITE IS MADE FOR rides beside the ceiling, on every request a
-// code write forms ([gitlet.EngineWrite.WrittenFor] and its siblings,
-// ADR-0109): the caller's actor's carrier, composed from the same bound
-// ceiling where the caller was resolved ([actorFor], [writtenForTurn]) — a
-// colleague seat, a person's seat, a credential with the apps this node holds
-// it to, or nobody — and stamped beside the ceiling by every sender
-// ([written], [CodeDeps.proposeChange], conversing.decided), so the node that
-// decides the write holds the two to each other.
+// writeCaller is who this call writes as, or its refusal: [CodeDeps.asker]'s
+// caller, where a credential bound to nobody writes nothing. In a woken turn
+// the write is decided again for the requester ([ceilingOf]): the tool's row
+// first ([authz.DecideWithin] over no object; undecidable is unavailable,
+// never a turn nobody woke), then the REQUESTER CEILING (U40 a) rides the
+// request to the deciding node (gitlet.WriteCeiling), so a colleague moved
+// out of the owning unit stops the next write. A colleague seat bounds it and
+// every read the call makes ([codeCaller.ceiling]); a credential acting as no
+// seat bounds it to the seat's own work; a person bounds nothing (ADR-0085).
+// Whom it is written for (ADR-0109) is composed where the caller was resolved
+// ([actorFor], [writtenForTurn]) and stamped beside the ceiling by every
+// sender ([written], [CodeDeps.proposeChange]), which the decider holds together.
 func (d CodeDeps) writeCaller(ctx context.Context, turn *turnctx.Turn, tool string) (codeCaller, *tools.Result) {
 	actor, asker, refusal := d.asker(ctx, turn, tool)
 	if refusal != nil {
@@ -323,21 +197,18 @@ func (d CodeDeps) writeCaller(ctx context.Context, turn *turnctx.Turn, tool stri
 		c.ceiling = ceiling.Principal.Seat
 		c.write = &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingSeat, Seat: ceiling.Principal.Seat}
 	case ceiling.Kind == authz.CeilingRequester && ceiling.Principal.Kind == iam.KindMachine:
-		// A CREDENTIAL ACTING AS NO SEAT changes nothing of the company's
-		// code itself — it holds no seat a write is judged as, and its grant
-		// is read (gitlet.GrantOf) — so a write made for it is held to the
-		// seat's own work, as a stranger's is (ADR-0109). Its reads are
-		// bounded by nothing: it reads every repository itself.
+		// A CREDENTIAL ACTING AS NO SEAT may only read (gitlet.GrantOf), so a
+		// write made for it is held to the seat's own work, as a stranger's
+		// is (ADR-0109); its reads are unbounded, since it reads everything.
 		c.write = &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingNobody}
 	}
 	return c, nil
 }
 
-// writer is the principal a write is made by: the caller as a repository's
-// grant judges them and, for a seat, the run behind the call — its turn, the
-// work item it is charged to and the model the call was made on — each label
-// copied from outside the code domain fitted rather than refused
-// ([gitlet.FitProvenance]), so a vendor's long key never refuses a seat's write.
+// writer is the principal a write is made by: the caller and, for a seat, the
+// run behind the call (turn, work item, model, [toolloop.CallModel]), each
+// label fitted rather than refused ([gitlet.FitProvenance]), so a vendor's
+// long key never refuses a seat's write.
 func writer(ctx context.Context, turn *turnctx.Turn, c codeCaller) gitlet.Principal {
 	p := c.asker
 	if p.Kind != gitlet.PrincipalAgent || turn == nil {
@@ -351,32 +222,23 @@ func writer(ctx context.Context, turn *turnctx.Turn, c codeCaller) gitlet.Princi
 	return p
 }
 
-// written is engine write w as c makes it: its principal ([writer]), the
-// ceiling whoever the turn works for bounds it by ([CodeDeps.writeCaller]) and
-// whom it is made for — c's actor's carrier, composed from the call's own bound
-// ceiling where the caller was resolved ([actorFor], [writtenForTurn]), never
-// from a tool's arguments — STAMPED TOGETHER, so no engine write sets one
-// without the others and the Gitlet node holds the carrier to the ceiling it
-// was composed beside (gitlet.EngineWrite.WrittenFor). Every engine write a
-// code tool asks goes through it.
+// written is engine write w as c makes it: principal ([writer]), ceiling
+// ([CodeDeps.writeCaller]) and written-for carrier, never from a tool's
+// arguments, STAMPED TOGETHER so the Gitlet node can hold the carrier to the
+// ceiling it was composed beside (gitlet.EngineWrite.WrittenFor). Every code
+// tool's engine write goes through it.
 func written(ctx context.Context, turn *turnctx.Turn, c codeCaller, w gitlet.EngineWrite) gitlet.EngineWrite {
 	w.Principal, w.Ceiling, w.WrittenFor = writer(ctx, turn, c), c.write, c.actor.WrittenFor
 	return w
 }
 
-// writeFresh is the floor an engine write of repo is built at: a seat's
-// session at the furthest of this node's own writes to the repository, the
-// turn's own read of it (the resolution's position), and where every ref the
-// turn has resolved on it last moved ([refsRead]) — this call's own revisions
-// among them, resolved before the floor is read, as [CodeDeps.gitFresh] floors
-// a read at them — so the Gitlet node's copy holds what the turn has seen: the
-// head it writes onto, read by code_resolve after the head moved, and every
-// commit it names by a ref. Floored short of them, the Gitlet node answers a
-// session sync from a copy that lacks them, finds the head stale or the commit
-// absent, and pays the write's re-judgement at the log's head — a barrier and
-// a second sync, and before it, for a stale head, a data node's read of the
-// write's own outcome — where one sync would have done. A person's is the
-// log's head.
+// writeFresh is the floor an engine write of repo is built at. A seat's is the
+// furthest of this node's own writes to it, the turn's read of it and where
+// every ref the turn resolved on it last moved ([refsRead]), this call's own
+// revisions included, so the Gitlet node's copy holds the head and commits the
+// turn saw. Floored short, the node syncs a copy that lacks them, finds the
+// head stale or the commit absent, and re-judges at the log's head: a barrier
+// and a second sync where one would do. A person's is the log's head.
 func (d CodeDeps) writeFresh(turn *turnctx.Turn, c codeCaller, repo gitlet.RepoRef) statelog.Freshness {
 	if c.asker.Kind != gitlet.PrincipalAgent {
 		return statelog.Freshness{Level: statelog.ReadLinearizable}
@@ -398,9 +260,10 @@ const codeWriteVerb = "code-write"
 // lifecycleVerb is the verb a lifecycle request's operation is named by.
 func lifecycleVerb(kind gitlet.LifecycleKind) string { return "code-" + string(kind) }
 
-// newRepoObject is the object a create's operation is named for: the fixed
-// word, never the name it asks for, which a turn's id digests with the rest of
-// the arguments ([createObjectKey]'s rule).
+// newRepoObject is the object a create's operation is named for. An
+// operation's object is the repository's id or this word, never a ref or a
+// name, which could carry the id past statelog.MaxCallerOpIDBytes; the name is
+// in the arguments a turn's id digests ([createObjectKey]'s rule).
 const newRepoObject = "new"
 
 // ---- the engine writes ------------------------------------------------------ //
@@ -446,11 +309,10 @@ func (t *codeBranchWrite) Description() string {
 	return "Delete a branch at the head you read; its commits stay in the history."
 }
 
-// THE SCHEMAS ARE TERSE ON PURPOSE: a seat of a company hosting code carries
-// every one of them on every round of every turn, uncached, so each argument
-// says only what its name and type do not ([codeCatalogueBudget] in the
-// tests holds the bytes), and a revision is described once, in code_resolve's
-// description ([codeRevArg]).
+// THE SCHEMAS ARE TERSE ON PURPOSE: a seat carries every one on every round,
+// uncached, so an argument says only what its name and type do not
+// ([codeCatalogueBudget] in the tests), and a revision is described once, in
+// code_resolve's description ([codeRevArg]).
 func (t *codeBranchWrite) Parameters() map[string]any {
 	props := map[string]any{
 		"repo":   codeRepoArg(),
@@ -622,9 +484,8 @@ func fileOpsArg(tool string, args map[string]any) ([]gitlet.FileOp, *tools.Resul
 		op := gitlet.FileOp{Op: gitlet.FileOpKind(argString(m, "op")), Path: argString(m, "path"),
 			BlobOID: argString(m, "blob_oid"), Old: argString(m, "old"), New: argString(m, "new"),
 			To: argString(m, "to"), Mode: argString(m, "mode")}
-		// A NULL `content` IS NO CONTENT, as argval.Object reads every member
-		// that is null, and an op that needs one is refused by the write's
-		// rule for it; a list or an object is no text.
+		// A NULL `content` IS NO CONTENT (argval.Object drops nulls), left to
+		// the write's own rule; a list or an object is no text.
 		if content, present := m["content"]; present {
 			text, ok := argval.String(content)
 			if !ok {
@@ -641,10 +502,9 @@ func fileOpsArg(tool string, args map[string]any) ([]gitlet.FileOp, *tools.Resul
 
 // resolve fills the write's commits from its revision arguments: a whole id
 // as given; a branch, a tag, a ref or HEAD through the call's one ref read
-// ([CodeDeps.resolveRevs]); and an abbreviated id refused by the rule every
-// party holds a write to, which names whole ids only. A ref it resolves is
-// one the turn has read, and the write is floored where it moved
-// ([CodeDeps.writeFresh]).
+// ([CodeDeps.resolveRevs]); an abbreviated id refused, since a write names
+// whole ids only. A ref it resolves counts as read by the turn, so the write
+// is floored where it moved ([CodeDeps.writeFresh]).
 func (t *codeBranchWrite) resolve(ctx context.Context, turn *turnctx.Turn, c codeCaller, repo gitlet.RepoRef,
 	w *gitlet.EngineWrite, revs revArgs) *tools.Result {
 
@@ -877,11 +737,9 @@ func (t *codeRepoWrite) Parameters() map[string]any {
 }
 
 // gateParams puts a branch rule's merge gate fields in a protect call's
-// schema, each by the name Gitlet's change spells it
-// ([gitlet.GateChangeFields]), so a call takes exactly the fields a change
-// names, and each says nothing beyond its type and values: what a field does
-// is Gitlet's to document, and every code tool's schema rides every
-// round of a seat's turn ([codeCatalogueBudget] in the tests).
+// schema by Gitlet's own names ([gitlet.GateChangeFields]), each saying only
+// its type and values: what a field does is Gitlet's to document, and the
+// schema rides every round ([codeCatalogueBudget] in the tests).
 func gateParams(props map[string]any) {
 	enum := func(values []string) map[string]any { return map[string]any{"type": "string", "enum": values} }
 	list := func(item map[string]any) map[string]any { return map[string]any{"type": "array", "items": item} }
@@ -956,9 +814,8 @@ func (t *codeRepoWrite) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			return faulted(ctx, t.tool, fmt.Errorf("builtin: operation %s carries no instant", req.OpID),
 				fmt.Sprintf("%s could not name the repository it would create: %s.", t.tool, faultSaid)), nil
 		}
-		// THE HOLD BEFORE THE CREATE, on the id its decide will derive: a
-		// scratch repository a turn creates is held from before it exists.
-		// A new repository is not idle, so nothing is recorded.
+		// THE HOLD BEFORE THE CREATE, on the id its decide will derive, so a
+		// scratch repository is held from before it exists.
 		repo = gitlet.RepoRef{ID: id, Name: req.Name, Kind: gitlet.KindOf(req.Name)}
 		if err := HoldRepo(ctx, turn, t.deps.Holder, actor, repo, t.deps.Now); err != nil {
 			return holdFailure(ctx, t.tool, repo, err), nil
@@ -1001,13 +858,11 @@ func (t *codeRepoWrite) request(args map[string]any) (gitlet.LifecycleRequest, *
 			tool, clip(pattern)))
 		return gitlet.LifecycleRequest{}, &r
 	}
-	// EACH PUSH CONTROL THE CALL NAMES, and only those: the deciding data
-	// node keeps every control left out as the pattern's rule holds it in the
-	// snapshot it decides in — or its least, persons and off, on a pattern no
-	// rule holds yet ([gitlet.ProtectChange]) — so a call that requires a check
-	// leaves a frozen branch frozen. Decoded by Gitlet's own spelling,
-	// sent beside a removal too, so the request's own validation refuses the
-	// two together rather than this tool dropping what its caller said.
+	// ONLY THE PUSH CONTROLS THE CALL NAMES: the deciding data node keeps the
+	// rest as the rule holds them in its snapshot (or their least on a new
+	// pattern, [gitlet.ProtectChange]), so requiring a check leaves a frozen
+	// branch frozen. Sent beside a removal too, so the request's validation
+	// refuses the pair rather than this tool dropping what its caller said.
 	controls := map[string]any{}
 	for _, field := range gitlet.ProtectControlFields() {
 		if v, ok := args[field]; ok {
@@ -1028,15 +883,12 @@ func (t *codeRepoWrite) request(args map[string]any) (gitlet.LifecycleRequest, *
 	return gitlet.LifecycleRequest{Kind: gitlet.LifecycleProtect, Protect: &change}, nil
 }
 
-// gateChangeArg is the change to a rule's merge gate a protect call's
-// arguments name — nil where they name no gate field and do not remove the
-// gate — or the refusal of a field no change could take. Every field it
-// names is decoded by Gitlet's own spelling of a change
-// ([gitlet.GateChange], [gitlet.GateChangeFields]), so the call takes exactly the
-// fields a change has, each to REPLACE that field alone: the deciding data
-// node keeps every other field as the rule's gate holds it, since only it
-// reads the gate in the snapshot it decides in — a whole gate this tool formed
-// from a read made elsewhere would undo whatever changed the gate meanwhile.
+// gateChangeArg is the change to a rule's merge gate a protect call names
+// (nil where it names no gate field and keeps the gate), or the refusal of a
+// field no change could take. Each field REPLACES that field alone
+// ([gitlet.GateChange]): only the deciding data node reads the gate in the
+// snapshot it decides in, and a whole gate formed here from an older read
+// would undo whatever changed it meanwhile.
 func gateChangeArg(tool string, args map[string]any) (*gitlet.GateChange, *tools.Result) {
 	named := map[string]any{}
 	for _, field := range gitlet.GateChangeFields() {
@@ -1067,9 +919,8 @@ func createRequest(tool string, args map[string]any) (gitlet.LifecycleRequest, *
 			"or `<your handle>.<name>` for a scratch repository; %q is neither.", tool, clip(name)))
 		return gitlet.LifecycleRequest{}, &r
 	}
-	// A TOOL'S REPOSITORY IS SEARCHED WITH GREP until somebody who maintains
-	// it asks for an index (code_update_repo's `search`): the code domain's
-	// default for what a tool makes, a scratch repository's for good.
+	// A TOOL'S REPOSITORY IS SEARCHED WITH GREP until a maintainer asks for
+	// an index (code_update_repo's `search`); a scratch repository for good.
 	settings := gitlet.RepoSettings{ManagedBy: gitlet.ManagedTools, Kind: gitlet.KindOf(name),
 		Description:   strings.TrimSpace(argString(args, "description")),
 		DefaultBranch: cmp.Or(strings.TrimSpace(argString(args, "default_branch")), "main"),
@@ -1101,9 +952,8 @@ func createRequest(tool string, args map[string]any) (gitlet.LifecycleRequest, *
 // archive or unarchive, or a rename, since each is a record of its own.
 func updateRequest(tool string, args map[string]any) (gitlet.LifecycleRequest, *tools.Result) {
 	var change gitlet.RepoChange
-	// PRESENCE IS THE ASK, each read by the check's own text reader: a null
-	// never reaches a tool (the entry leaves it out, toolargs.Of), and an
-	// empty description is one cleared.
+	// PRESENCE IS THE ASK: a null never reaches a tool (toolargs.Of drops
+	// it), and an empty description is one cleared.
 	if _, held := args["description"]; held {
 		description := argString(args, "description")
 		change.Description = &description
@@ -1136,12 +986,9 @@ func updateRequest(tool string, args map[string]any) (gitlet.LifecycleRequest, *
 		}
 		change.PathOwners = &owners
 	}
-	// THE MIRRORS, EACH SET WHOLE OR REMOVED ({} — no url), as the domain's
-	// change takes them ([gitlet.RepoChange.MirrorFrom]): a person's alone (U49
-	// a), which the deciding data node holds every asker to, so an agent's
-	// call is refused there as not_permitted, never filtered here — the tool
-	// forms the request a person's dashboard or assistant makes, and the
-	// domain judges who made it.
+	// THE MIRRORS, each set whole or removed by {} ([gitlet.RepoChange.MirrorFrom]),
+	// are a person's alone (U49 a): the deciding data node refuses an agent's
+	// call as not_permitted, so this tool never filters it.
 	if raw, ok := args["mirror_from"]; ok {
 		var from gitlet.MirrorSource
 		if err := decodeArg(raw, &from); err != nil {
@@ -1216,12 +1063,11 @@ func decodeArg(raw any, v any) error {
 	return dec.Decode(v)
 }
 
-// codeRepoState is a repository as a lifecycle answer says it stands — never
-// its protection rules, which no lifecycle answer carries whole: sixty-four
-// rules, each with a merge gate of up to gitlet.MaxGateBytes, are past one tool
-// answer, and an answer refused for its size AFTER its write landed would
-// read as a write that failed. A protect request's answer carries the one
-// rule it set ([codeRepoWriteAnswer.Rule]), and code_get_repo reads them all.
+// codeRepoState is a repository as a lifecycle answer says it stands, never
+// its protection rules: sixty-four rules with gates of up to
+// gitlet.MaxGateBytes overrun one tool answer, and an answer refused for size
+// AFTER its write landed would read as a failed write. A protect answer
+// carries its one rule ([codeRepoWriteAnswer.Rule]); code_get_repo reads all.
 type codeRepoState struct {
 	Name          string            `json:"name"`
 	Kind          gitlet.RepoKind   `json:"kind"`
@@ -1240,21 +1086,17 @@ type codeRepoWriteAnswer struct {
 	RedirectUntil time.Time        `json:"redirect_until,omitzero"`
 	Outcome       statelog.Outcome `json:"outcome"`
 	Repository    *codeRepoState   `json:"repository,omitempty"`
-	// Rule is a protect request's pattern's rule as it applied — its merge
-	// gate as the deciding node RESOLVED it, every field the call left out
-	// as the rule's gate held it — and absent where the rule was removed, or
-	// where the request is pending: the row a pending answer carries is the
-	// one its decide read, before the change.
+	// Rule is a protect request's rule as applied, its gate as the deciding
+	// node RESOLVED it; absent where the rule was removed or the request is
+	// pending, since a pending answer's row is the one read before the change.
 	Rule     *gitlet.Protection `json:"rule,omitempty"`
 	Position string             `json:"position,omitempty"`
 	OpID     string             `json:"op_id,omitempty"`
 }
 
-// answer is what a lifecycle request came to, as this tool says it.
-//
-// A REQUEST THAT APPLIED ENDS THE TURN'S RESOLUTION of the repository's name:
-// its row moved — a new name, a status, an owner — and the resolution the
-// turn keeps would serve the row as it was.
+// answer is what a lifecycle request came to, as this tool says it. One that
+// applied ENDS THE TURN'S RESOLUTION of the repository's name: its row moved,
+// and the kept resolution would serve the row as it was.
 func (t *codeRepoWrite) answer(ctx context.Context, turn *turnctx.Turn, c codeCaller, repo gitlet.RepoRef,
 	req gitlet.LifecycleRequest, res gitlet.LifecycleResult) (tools.Result, error) {
 
@@ -1285,9 +1127,8 @@ func (t *codeRepoWrite) answer(ctx context.Context, turn *turnctx.Turn, c codeCa
 			Description: r.Description}
 	}
 	if req.Kind == gitlet.LifecycleProtect && res.Outcome == statelog.OutcomeApplied {
-		// THE RULE WHOLE, its gate as the deciding node resolved it: Gitlet
-		// answers it beside the row, which carries each rule as a push
-		// is held to it and never a gate (gitlet.LifecycleResult.Rule).
+		// THE RULE WHOLE, from beside the row, whose rules carry no gate
+		// (gitlet.LifecycleResult.Rule).
 		out.Rule = res.Rule
 	}
 	read := newForeignRead(turn, c.asker.Seat)
@@ -1301,18 +1142,13 @@ func (t *codeRepoWrite) answer(ctx context.Context, turn *turnctx.Turn, c codeCa
 
 // ---- refusals, in the classes every surface renders ------------------------ //
 
-// HostRefusal is a refusal Gitlet answered, as the cause beneath a
-// tool's class: the host's own word for it and its sentence.
+// HostRefusal is a refusal Gitlet answered, as the cause beneath a tool's
+// class: the host's own word for it and its sentence.
 //
-// THE WORD TRAVELS AS A VALUE, never only inside the sentence. A class says
-// what a caller does next — read again, wait, ask somebody else — and several
-// of the host's refusals share one: a change whose head moved and a train
-// whose base moved are both stale_version, a target still moving and a full
-// queue both conflict. A person's surface that answers each in its own words
-// (the change page's merge controls: "somebody pushed to it since you loaded
-// it", "its target is still moving") reads the word through the act route's
-// `refusal` field (operator.Fail), rather than parsing a sentence written for
-// a model.
+// THE WORD TRAVELS AS A VALUE because several host refusals share a class (a
+// moved change head and a moved train base are both stale_version), and a
+// person's surface that words each its own way reads it from the act route's
+// `refusal` field (operator.Fail) rather than parsing a sentence for a model.
 type HostRefusal struct {
 	// Refusal is the host's word: a gitlet.MergeRefusal, a gitlet.WriteRefusal,
 	// a gitlet.ChangeRefusal and their like.
@@ -1329,41 +1165,18 @@ func writeRefusalError(refusal, detail string) error {
 	return &HostRefusal{Refusal: refusal, Detail: detail}
 }
 
-// pushClass is the class a refused push's code is answered in, by internal/mcp's
-// one rule for every domain ([tools.Refusal]'s doc): what the refusal is about,
-// and what would make the same request land.
-//
-//   - the caller refused by a rule — its grant, a protection, the seat's daily
-//     quota of pushes — is FORBIDDEN, the sentence naming the rule and, for
-//     the quota, when the day turns; never budget_exhausted, which is the
-//     company's token budget;
-//   - the REPOSITORY in a state that refuses the push until somebody changes
-//     it — archived and so read-only, or a pull mirror its syncs alone move —
-//     is CONFLICT, the same push landing once a person unarchives it or turns
-//     its mirror off; and so is a deletion of its default branch
-//     (default_branch), which lands once another branch is the default;
-//   - the repository at a limit on what it keeps — its bytes past
-//     code.limits.repo_max_bytes, its live refs at MaxRefsPerRepo — is
-//     QUOTA_EXCEEDED, which no permission lifts and no retry clears;
-//   - the PUSH ITSELF — a branch the engine's names refuse, a blob or a pack
-//     past what one push may carry — is INVALID: the fix is another push;
-//   - a ref whose path another live ref holds (feature beside feature/x) is
-//     EXISTS, the same name landing once that ref is gone;
-//   - a head that moved is STALE_VERSION, a repository gone NOT_FOUND, a store
-//     with no room STORE_FULL;
-//   - what waiting clears — a busy or compacting repository, one being
-//     imported, an expunge that began, an upload of the engine's own it makes
-//     afresh, a log or a store that refused, a push applied nowhere — is
-//     UNAVAILABLE, the same call again being the same write;
-//   - and what no engine write can be answered — an --atomic push, a tag moved,
-//     a push of more changes than a record holds, a commit claiming the
-//     engine's committer (forged_committer, which only a coding box's pack is
-//     read for: an engine write's commits are the engine's by right) — is the
-//     engine's own fault.
-//
-// The change, conversation, merge and lifecycle refusals are classed by the
-// same rule ([changeClass], [conversationClass], [mergeRefusalClass],
-// [lifecycleRefused]), so one state is one class on every code tool.
+// pushClass is the class a refused push is answered in, by [tools.Refusal]'s
+// rule: what would make the same request land. A rule (grant, protection, the
+// daily push quota) is FORBIDDEN, never budget_exhausted, the token budget's;
+// a repository state somebody must change (archived, pull-mirrored, deleting
+// the default branch) CONFLICT; a keep limit (code.limits.repo_max_bytes,
+// MaxRefsPerRepo) QUOTA_EXCEEDED, which no retry clears; a ref path another
+// ref holds (feature beside feature/x) EXISTS; the push itself INVALID; what
+// waiting clears UNAVAILABLE, the same call being the same write. What no
+// engine write can draw (an --atomic push, a moved tag, forged_committer: an
+// engine write's commits are the engine's by right) is the engine's fault.
+// [changeClass], [conversationClass], [mergeRefusalClass] and
+// [lifecycleRefused] follow the same rule, so a state is one class everywhere.
 func pushClass(r gitlet.Refusal) (tools.Refusal, bool) {
 	switch r {
 	case gitlet.RefusalNotPermitted, gitlet.RefusalProtectedForce, gitlet.RefusalProtectedDelete,
@@ -1425,22 +1238,18 @@ func pushRefused(ctx context.Context, tool, repo, branch string, cmd gitlet.Comm
 		said += " The same call is refused again; change what it names."
 	}
 	if cmd.Reason == gitlet.RefusalDefaultBranch {
-		// THE DEFAULT BRANCH IS KEPT, which a person meets as Delete on a
-		// listing read before the default moved: told in their words what
-		// lets it go, never the conflict class's "collided with another
-		// change".
+		// THE DEFAULT BRANCH IS KEPT, which a person meets deleting from a
+		// stale listing: told what lets it go, never the conflict class's
+		// "collided with another change".
 		return toPerson(refusedBy(class, cause, said), caveat.DefaultBranchKept())
 	}
 	return refusedBy(class, cause, said)
 }
 
-// lifecycleRefused is a lifecycle request the data node refused, in its class,
-// by [pushClass]'s rule: a rule of the repository or the company FORBIDDEN —
-// the caller's grant, a repository the company document declares; a name
-// taken EXISTS; the seat's scratch repositories, or the company's, at their
-// limit QUOTA_EXCEEDED, which no permission lifts and no retry clears; a
-// repository gone NOT_FOUND; and a repository that moved between the decide
-// and its apply STALE_VERSION.
+// lifecycleRefused is a lifecycle request the data node refused, in its class
+// by [pushClass]'s rule; a rule of the repository or the company (the
+// caller's grant, a repository the company document declares) is FORBIDDEN,
+// and a repository that moved between decide and apply STALE_VERSION.
 func lifecycleRefused(tool, repo string, res gitlet.LifecycleResult) tools.Result {
 	cause := writeRefusalError(string(res.Refusal), res.Detail)
 	said := fmt.Sprintf("%s changed nothing about %s: %s (%s).", tool, repo, res.Detail, res.Refusal)
@@ -1462,11 +1271,10 @@ func lifecycleRefused(tool, repo string, res gitlet.LifecycleResult) tools.Resul
 		"the same call is refused again.")
 }
 
-// failedWrite explains a write Gitlet could not answer: one whose
-// outcome nobody can tell — a node that went silent, which may have landed it
-// — is an unknown the same call made again finds out; a repository gone ends
-// the turn's resolution of its name ([CodeDeps.failed]); every other answer is
-// [codeWriteFailure]'s.
+// failedWrite explains a write Gitlet could not answer: a silent node may have
+// landed it, so it is an unknown the same call made again finds out; a
+// repository gone ends the turn's resolution of its name ([CodeDeps.failed]);
+// the rest is [codeWriteFailure]'s.
 func (d CodeDeps) failedWrite(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	repo gitlet.RepoRef, opID string, err error) tools.Result {
 
@@ -1483,10 +1291,7 @@ func (d CodeDeps) failedWrite(ctx context.Context, turn *turnctx.Turn, tool stri
 }
 
 // codeWriteFailure explains a write refused or unanswered before it was
-// decided, each sentinel in its class: a request no node would take INVALID,
-// the caller's grant FORBIDDEN, a repository gone NOT_FOUND, and a node or a
-// fleet that could not serve it UNAVAILABLE — nothing was written, and the
-// same call again is the same write — with anything else this node's fault.
+// decided, each sentinel in its class; anything unclassed is this node's fault.
 func codeWriteFailure(ctx context.Context, tool string, actor Actor, repo string, err error) tools.Result {
 	var (
 		unready     *gitlet.ErrGitUnready
@@ -1500,10 +1305,8 @@ func codeWriteFailure(ctx context.Context, tool string, actor Actor, repo string
 	switch {
 	case errors.Is(err, gitlet.ErrInvalid), errors.Is(err, gitlet.ErrObjectNotFound),
 		errors.Is(err, gitlet.ErrInvalidProposal):
-		// A PROPOSAL NO NODE WOULD DECIDE is a change write's own: held to
-		// the rule its deciding node holds it to before it is routed, it is
-		// the call's arguments that are wrong — a title past its bound, a
-		// branch no change may name.
+		// A PROPOSAL NO NODE WOULD DECIDE (a change write's, checked before
+		// routing) means the call's arguments are wrong.
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused what it was asked: %s. Change the "+
 			"arguments — the same ones are refused again.", tool, writeWords(err)))
 	case errors.Is(err, gitlet.ErrNotPermitted), errors.Is(err, gitlet.ErrConfigManaged):
@@ -1512,11 +1315,9 @@ func codeWriteFailure(ctx context.Context, tool string, actor Actor, repo string
 	case errors.Is(err, gitlet.ErrRepoNotFound):
 		return codeFailure(ctx, tool, repo, err)
 	case errors.As(err, &unknownKeys):
-		// THE FLEET RUNS TWO BUILDS, which no retry clears: in the
-		// condition's own words, AHEAD of the walk nobody served that it
-		// wraps — read there, the model was told to make the same call
-		// again, which is refused the same way for as long as the fleet
-		// stays mixed.
+		// THE FLEET RUNS TWO BUILDS, which no retry clears: matched AHEAD of
+		// the unserved walk it wraps, which would tell the model to retry a
+		// call refused the same way while the fleet stays mixed.
 		why, _ := Condition(err)
 		ran := "; nothing was written"
 		if unknownKeys.Answer {

@@ -27,12 +27,9 @@ func scriptedRuntime(t *testing.T, name, script string) string {
 // cut off at the probe's budget rather than holding the probe. Each refusal
 // names the one thing to do.
 //
-// THE HUNG DAEMON SLEEPS TEN MINUTES, so a probe it holds never answers inside
-// the minute the case waits: the probe answers it at all only by ending its
-// read at its own budget, which its detail names, since nothing else ends it.
-// A bound on how long the probe took on the machine's clock failed a runner
-// that lost three seconds after the cut, and the daemon slept thirty, so a
-// probe that waited it out answered inside a span a case waits.
+// THE HUNG DAEMON SLEEPS TEN MINUTES, far past the minute the case waits, so
+// the probe answers only by ending its read at its budget, which its detail
+// names; no bound on the machine's clock decides it.
 //
 // Mutation: report ready on a resolved binary alone, or wait on a hung daemon
 // rather than end its read at the budget, and this fails.

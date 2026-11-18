@@ -201,6 +201,10 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "Close and Reopen — and the dialogs each opens",
     suite: "routes/gitlet/change/ChangePage.test.tsx",
   },
+  "routes/gitlet/change/ReviewDialog.tsx": {
+    why: "the review sent with its drafts (code_review_change), from the page bar and Finish review",
+    suite: "routes/gitlet/change/ChangePage.test.tsx",
+  },
   "routes/gitlet/change/Conversation.tsx": {
     why: "a change's comment, a reply to a thread or a finding, and a thread's Resolve",
     suite: "routes/gitlet/change/ChangePage.test.tsx",

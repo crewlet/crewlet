@@ -110,6 +110,13 @@ func newFakeScaleway() *fakeScaleway {
 	for _, name := range scaleway.AtlasSets() {
 		f.sets[name] = "projects"
 	}
+	// Object Storage's sets as Scaleway lists them, so the catalogue's
+	// choice among them is the engine's.
+	for _, name := range []string{"ObjectStorageFullAccess", "ObjectStorageReadOnly", "ObjectStorageObjectsRead",
+		"ObjectStorageObjectsWrite", "ObjectStorageObjectsDelete", "ObjectStorageBucketsWrite",
+		"ObjectStorageBucketsDelete", "ObjectStorageBucketPolicyFullAccess"} {
+		f.sets[name] = "projects"
+	}
 	for _, name := range append(scaleway.OrgSets(), "IAMApplicationManager", "IAMPolicyManager",
 		"IAMManager", "OrganizationManager", "BillingManager") {
 		f.sets[name] = "organization"

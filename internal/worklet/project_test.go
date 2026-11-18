@@ -26,9 +26,8 @@ func TestProjectPolicyIsTheLeads(t *testing.T) {
 	case err == nil:
 		t.Fatal("a seat that does not lead ENG set its default assignee")
 	case !errors.Is(err, worklet.ErrForbidden):
-		// THE CLASS A CALLER BRANCHES ON: without it this refusal read
-		// as whatever the caller's default was, and a person's surface
-		// offered a retry of something no retry changes.
+		// THE CLASS A CALLER BRANCHES ON: without it a surface offers a
+		// retry that no retry changes.
 		t.Fatalf("the refusal is %v, want an ErrForbidden", err)
 	}
 	if _, err := r.writer.WriteProject(t.Context(), "op-lead", "ENG", edit,
@@ -42,9 +41,8 @@ func TestProjectPolicyIsTheLeads(t *testing.T) {
 	}
 }
 
-// TestArchivingAProjectTakesAPerson is the second gate, and it is named
-// separately because a lead who hits it DOES have authority over the other
-// three facets — "no" would send them looking in the wrong place.
+// TestArchivingAProjectTakesAPerson is the second gate, named separately
+// because a lead who hits it DOES have authority over the other facets.
 func TestArchivingAProjectTakesAPerson(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -56,9 +54,8 @@ func TestArchivingAProjectTakesAPerson(t *testing.T) {
 	if err == nil {
 		t.Fatal("a lead the table refused the archive archived a project")
 	}
-	// WHAT IS MISSING is the person: the archive takes the policy's own
-	// relation AND a principal that is not an agent, so the lead refused
-	// here is a lead acting as an agent.
+	// WHAT IS MISSING is the person: the archive takes the policy's
+	// relation AND a principal that is not an agent.
 	if !strings.Contains(err.Error(), "as a person rather than as an agent") {
 		t.Fatalf("the refusal does not say what is missing: %v", err)
 	}
@@ -78,9 +75,8 @@ func TestArchivingAProjectTakesAPerson(t *testing.T) {
 }
 
 // TestPolicyVersionMovesOnlyForWhatATaskIsValidatedAgainst protects the stamp
-// a task carries: it records which declarations the task was checked against,
-// so a default assignee — which nothing is checked against — must not move it,
-// and a field declaration must.
+// recording which declarations a task was checked against: a field declaration
+// moves it, a default assignee does not.
 func TestPolicyVersionMovesOnlyForWhatATaskIsValidatedAgainst(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -113,13 +109,11 @@ func TestPolicyVersionMovesOnlyForWhatATaskIsValidatedAgainst(t *testing.T) {
 	}
 }
 
-// TestAProjectsOwnFieldsReachItsReaders is what the declaration is FOR: a
-// seat asks its project what it may file, and the answer is the workspace's
-// vocabulary with the project's own declarations laid over it. A project
-// declaration of an id the workspace also declares SHADOWS it and is named as
-// shadowed, because that is what a field halfway through a move between the
-// two scopes looks like and a reader that silently picked one would report
-// whichever it read second.
+// TestAProjectsOwnFieldsReachItsReaders: a seat asking what it may file gets
+// the workspace's vocabulary with the project's declarations laid over it. A
+// project declaration of an id the workspace also declares SHADOWS it and is
+// named as shadowed (a field mid-move between scopes), rather than whichever
+// the reader read second.
 func TestAProjectsOwnFieldsReachItsReaders(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -164,9 +158,8 @@ func TestAProjectsOwnFieldsReachItsReaders(t *testing.T) {
 		t.Fatalf("the project's field carries options %v", options)
 	}
 
-	// AND THE PROJECT'S CLEAR LEAVES THE WORKSPACE'S ALONE, which is what
-	// makes the two scopes independent: a project's edit that cleared the
-	// workspace's declarations would retire the company's whole vocabulary.
+	// AND THE PROJECT'S CLEAR LEAVES THE WORKSPACE'S ALONE: the scopes are
+	// independent, or one project would retire the company's vocabulary.
 	shorter := []worklet.FieldDef{}
 	if _, err := r.writer.WriteProject(t.Context(), "op-clear", "ENG",
 		worklet.ProjectEdit{Fields: &shorter},
@@ -240,9 +233,9 @@ func (r *roundTrip) strings(query string, args ...any) []string {
 	return out
 }
 
-// TestAProjectFieldArchiveIsOneWay is the workspace catalogue's own rule, one
-// level down: a field that came back with its old id would silently re-admit
-// values validated against a definition nobody has seen for a year.
+// TestAProjectFieldArchiveIsOneWay is the workspace catalogue's rule one level
+// down: a field back under its old id would re-admit values validated against
+// a long-retired definition.
 func TestAProjectFieldArchiveIsOneWay(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -297,7 +290,7 @@ func TestARepeatedProjectEditWritesNothing(t *testing.T) {
 }
 
 // TestProjectEditRefusesAnEmptyGesture, and names where the chart-owned fields
-// actually come from — which is the thing a caller reaching for them needs.
+// come from, which a caller reaching for them needs.
 func TestProjectEditRefusesAnEmptyGesture(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -310,16 +303,16 @@ func TestProjectEditRefusesAnEmptyGesture(t *testing.T) {
 		t.Fatalf("the refusal does not say where the name and unit come "+
 			"from: %v", err)
 	}
-	// AND A TAG BY THE ARGUMENT THAT ADDS ONE: it named `tags.add`, which
-	// nothing reads. Mutation: put it back and this fails.
+	// AND A TAG BY THE TOOL THAT ADDS ONE, `tags_add`, never `tags.add`,
+	// which nothing reads.
 	if !strings.Contains(err.Error(), "`tags_add`") || strings.Contains(err.Error(), "tags.add") {
 		t.Fatalf("the refusal does not name the argument that adds a tag: %v", err)
 	}
 }
 
 // TestProjectEditNamesAnUnknownProject rather than creating one: a project is
-// derived from the chart, and creating it on demand is exactly the shape that
-// produces two counters and two ENG-1s.
+// derived from the chart, and creating one on demand yields two counters and
+// two ENG-1s.
 func TestProjectEditNamesAnUnknownProject(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -335,27 +328,16 @@ func TestProjectEditNamesAnUnknownProject(t *testing.T) {
 	}
 }
 
-// THE TWO FACETS ARE TWO ANSWERS, and the split is what makes the second one
-// mean anything.
-//
-// Both fields used to be INPUTS to one policy — `Lead` from a chart lookup and
-// `Operator` from "the actor is not a seat" — joined here as `!Lead &&
-// !Operator`. Under that reading a person's own credential was authority over
-// every project's policy in the company, whether or not they led it and
-// whether or not they held any grant: the archive gate below wanted an
-// operator, and the policy gate accepted the same fact as a substitute for the
-// relation. Now each facet carries the answer [authz.Decide] gave for ITS own
-// verb, and holding one says nothing about the other.
+// THE TWO FACETS ARE TWO ANSWERS: each carries what [authz.Decide] gave for
+// ITS own verb, and holding one says nothing about the other.
 func TestEachProjectFacetTakesItsOwnAnswer(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	who := "alice"
 	edit := worklet.ProjectEdit{DefaultAssignee: &who}
 
-	// THE ARCHIVE ANSWER DOES NOT UNLOCK THE POLICY, which is the hole
-	// the old join had: a person who may take a project out of
-	// circulation is not thereby the person who says how its work is
-	// filed.
+	// THE ARCHIVE ANSWER DOES NOT UNLOCK THE POLICY: who may take a
+	// project out of circulation does not thereby say how its work is filed.
 	if _, err := r.writer.WriteProject(t.Context(), "op-archive-only", "ENG",
 		edit, worklet.ProjectAuthority{Archive: true}); err == nil {
 
@@ -372,10 +354,9 @@ func TestEachProjectFacetTakesItsOwnAnswer(t *testing.T) {
 		t.Fatalf("default assignee = %q, want %q", got.DefaultAssignee, who)
 	}
 
-	// AND THE POLICY ANSWER DOES NOT UNLOCK THE ARCHIVE, which is the
-	// other direction: a project nobody can file into again is a company
-	// decision and never an agent's, so the table asks a second verb with
-	// a human-only bar on it.
+	// AND THE POLICY ANSWER DOES NOT UNLOCK THE ARCHIVE: archiving is a
+	// company decision, never an agent's, so it is a second verb with a
+	// human-only bar.
 	archived := true
 	if _, err := r.writer.WriteProject(t.Context(), "op-policy-archive", "ENG",
 		worklet.ProjectEdit{Archived: &archived},
@@ -384,11 +365,9 @@ func TestEachProjectFacetTakesItsOwnAnswer(t *testing.T) {
 		t.Fatal("a policy answer archived the project")
 	}
 
-	// AND THE REFUSAL STILL NAMES BOTH WAYS IN, for the caller that is
-	// neither: "ask the lead" is the useful answer, and so is the permission
-	// that overrides the relation — admin, the table's admin path. It named
-	// "a person's own" credential once, which is a way in this build does
-	// not have: being a person is no authority over a project here.
+	// AND THE REFUSAL STILL NAMES BOTH WAYS IN for a caller that is
+	// neither: the lead, and admin, the permission that overrides the
+	// relation. Being a person is no authority over a project.
 	_, err := r.writer.WriteProject(t.Context(), "op-seat", "ENG", edit,
 		worklet.ProjectAuthority{})
 	if err == nil {
@@ -437,18 +416,13 @@ func (c roster) ResolveSeat(ref string) (string, bool) {
 	return handle, held
 }
 
-// TestUnassignedWorkLandsOnTheProjectsDefaultAssignee is the setting doing what
-// it says. `default_assignee` is "who unassigned work lands on": the lead sets
-// it, the project read serves it and the New task sheet names it under an
-// empty Assignee field — and nothing applied it, so every task filed without
-// an assignee went to triage whatever the lead had chosen.
-//
-// FOUR CASES, each a way the rule could be half right: a create naming nobody
-// is filed to the default, and its WAKE names them too (or the recipient rule
-// routes it as triage, to the lead, while it sits on somebody else's queue);
-// a named assignee is left alone; and a default that no longer names a seat
-// on the chart — including one the colleague match would turn into somebody
-// ELSE — is not applied, and says so.
+// TestUnassignedWorkLandsOnTheProjectsDefaultAssignee: `default_assignee` is
+// who unassigned work lands on. A create naming nobody is filed to the
+// default, and its WAKE names them too (or routing treats it as triage, to the
+// lead, while it sits on somebody else's queue); a named assignee is left
+// alone; and a default that no longer names a seat on the chart — including
+// one the colleague match would turn into somebody ELSE — is not applied, and
+// says so.
 func TestUnassignedWorkLandsOnTheProjectsDefaultAssignee(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

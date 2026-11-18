@@ -12,16 +12,10 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A HANDLE NOBODY HAS IS REFUSED, AT EVERY ARGUMENT THAT TAKES ONE.
-//
-// An unknown handle fails silently and permanently: it is stored, it rides the
-// routing snapshot, it becomes a candidate — and Route drops it against the
-// live roster with no error, no per-candidate log and no metric. The write
-// answers `outcome: applied` and the person it named never hears anything, so
-// a misspelling is indistinguishable from a colleague who is simply quiet.
-//
-// The table is every live site rather than the one the finding named, because
-// the hole was systemic, and the assignee is the one that matters most.
+// A HANDLE NOBODY HAS IS REFUSED, AT EVERY ARGUMENT THAT TAKES ONE: Route
+// drops an unknown handle against the live roster with no error, log or
+// metric, so the write would answer `applied` and the person named never hear
+// of it — a misspelling indistinguishable from a quiet colleague.
 func TestAHandleNobodyHasIsRefused(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -47,8 +41,8 @@ func TestAHandleNobodyHasIsRefused(t *testing.T) {
 			if !got.Failed {
 				t.Fatalf("%s accepted a handle nobody has: %q", tc.tool, got.Output)
 			}
-			// THE REFUSAL NAMES THE WAY OUT, because the caller is
-			// usually a model with one round left.
+			// The refusal names the way out: the caller is usually a model
+			// with one round left.
 			if !strings.Contains(got.Output, builtin.LookupColleagueTool) &&
 				!strings.Contains(got.Output, "alice") {
 
@@ -95,9 +89,8 @@ func TestAHandleIsResolvedToItsCanonicalForm(t *testing.T) {
 	}
 }
 
-// A SURFACE WITH NO ROSTER ADMITS EVERYTHING, which is the honest degradation:
-// a build with no chart loaded cannot tell a typo from a colleague, and
-// refusing every handle there would be worse than the hole this closes.
+// A SURFACE WITH NO ROSTER ADMITS EVERYTHING: a build with no chart loaded
+// cannot tell a typo from a colleague, and refusing every handle is worse.
 func TestNoRosterAdmitsEveryHandle(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()

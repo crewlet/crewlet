@@ -11,171 +11,79 @@ import (
 	"time"
 )
 
-// A person's chat read state: how far they have read in each room they have
-// opened, which rooms they have muted, and whether they are in do-not-disturb.
+// A person's chat read state: how far they have read in each room, which
+// rooms they muted, and their do-not-disturb.
 //
-// # Whose record it is: the SEAT's
+// The record is keyed by [iam.RecordOwner] of the principal flushing it, for
+// everybody chat admits a HUMAN SEAT's handle, and it passes with the seat
+// (package doc, "A person's own record here is their SEAT's"). Keying by the
+// person would be a second rule for "a principal's own record", a human seat
+// has no agent id, and a reset when the holder changes would be an
+// identity-applier write on every data node, so none is made.
+
+// # Why a bucket of its own
 //
-// The record is kept under [iam.RecordOwner] of the principal flushing it —
-// the one name every principal's own record is kept under, an inbox, a pin and
-// a personal view among them — and for everybody chat admits that is a HUMAN
-// SEAT's handle: chat speaks and reads as the seat a person, or a machine bound
-// to one, acts as, and a principal acting as no human seat is refused before
-// it reaches this store. So `handle` below is that seat's handle, and nothing
-// here knows about logins or person ids.
+// The state is no fact about the company: nobody replays a cursor and no
+// member derives anything from its history, and at tens of thousands of
+// flushes a day (twenty people, a flush every fifteen seconds at most) the
+// state log would carry them into its trim, every snapshot, every
+// rejoin and the identity claim. Nor is it a class of the ageless positions
+// register ([PositionKey]): a bucket is ONE raft group with ONE leader, and
+// the busiest record the fleet writes would share them with the trim's inputs,
+// the write fence and the capacity window.
+
+// # Why the bucket has no age, and who forgets a record
 //
-// THE SEAT'S NEXT HOLDER INHERITS IT. A person holds one human seat from the
-// day they are added to the day they are removed (ADR-0032), and freeing a
-// seat leaves what accumulated under its handle for whoever holds it next —
-// the person once reinstated, or a successor once they are moved or removed.
-// Their cursors, their mutes and their do-not-disturb pass with the seat
-// exactly as its tracker inbox, its pins and its personal views already do,
-// and so do the rooms and conversations chat derives from the same handle.
-// Keying by the person instead would be a second rule for "a principal's own
-// record" beside [iam.RecordOwner], and keying by an agent id is not open at
-// all: a human seat has none. A reset when the holder changes would be a
-// write on every data node driven by the identity applier for one record of
-// one seat, and is deliberately not made.
+// An aged-out cursor would mark a room unread, the opposite of the fact it
+// stores, so removal is a decision and its marker is swept by
+// [Markers.SweepMarkers]. The maintenance duty's reconcile against the
+// company's HUMAN SEATS decides it in two steps, because absence is observed,
+// not inferred: a sweep missing the seat stamps the record
+// ([ChatReads.SetChatReadAbsence]), one finding it back clears the stamp, and
+// [ChatReads.ForgetChatRead] removes only a record stamped longer than the
+// grace ago. The stamp lives IN the record, so a duty handoff does not restart
+// every grace.
+
+// # Why advancing is a merge, and a mute is a room
 //
-// # Why it is here and not on the chat log
-//
-// It is the one piece of chat state that is NOT a fact about the company. A
-// cursor is a fact about one person's attention, nobody replays it, and no
-// other member of the fleet derives anything from its history — which is the
-// whole of what the state log is for.
-//
-// The volume decides it. At twenty people reading through a working day and a
-// flush no oftener than every fifteen seconds, cursors alone are tens of
-// thousands of writes a day: comparable to the entire message census, on a
-// strictly ordered identity-claiming log, entering the trim's terms, every
-// snapshot, every rejoining node's transfer and the identity claim itself —
-// for a number nobody will ever read back. Coordination is where "everything
-// else a fleet has to agree on" lives, it already has compare-and-set, and a
-// cursor written here costs one key.
-//
-// # Why the bucket has NO age
-//
-// A read cursor has no expiry that means anything. A person who has not
-// opened a room in four months has still read it up to where they read it,
-// and an aged-out cursor would silently mark a whole channel unread — the
-// exact opposite of the fact it stores. So the bucket joins the ageless slots
-// beside the activation pointer, the channel records, the sandbox runs, the
-// sealed secrets, the mailbox registry and the positions register, and
-// removal is a DECISION rather than a clock. A removal leaves a marker, as
-// every removal in an ageless family does, and [Markers.SweepMarkers] takes it
-// under the maintenance duty — so the bucket does not keep a trace of
-// everybody who ever left.
-//
-// # Why a bucket of its own, and not a class in the positions register
-//
-// The positions register is the other bucket with no age, and its eight
-// classes share it for exactly that retention ([PositionKey]). This record
-// does not join them, for what writes it and what reads it. Every tab of every
-// person flushes it — tens of thousands of writes a day — and every chat
-// screen reads it from the stream leader, while the register is written one
-// node's heartbeat or one person's gesture at a time and is read by the trim,
-// the state log's write fence and the capacity window, on decisions about what
-// every other node may delete or publish. A bucket is a stream, and on a fleet
-// a stream is ONE raft group with ONE leader: as a class of the register, the
-// read state's flushes would be ordered through the same group, and its reads
-// answered by the same leader, as the trim's inputs and the capacity window's
-// exclusion. A bucket of its own keeps the busiest record the fleet writes off
-// the path of its most consequential ones, and its forgetter — a reconcile
-// against the company's seats, which nothing in the register has — reads a
-// listing of this record alone.
-//
-// # Who forgets a record, and when
-//
-// The maintenance duty's reconcile (internal/maintenance), against the HUMAN
-// SEATS of the company the fleet is pointed at — the seat is whose record it
-// is, so the seat leaving is what ends it, never its holder leaving — and in
-// two steps for the mailbox registry's reason: ABSENCE IS OBSERVED, NOT
-// INFERRED. The first sweep that finds a reader's seat missing stamps the
-// record ([ChatReads.SetChatReadAbsence]); a sweep that finds it back clears
-// the stamp; and a record is forgotten only once its stamp is older than the
-// reconcile's grace ([ChatReads.ForgetChatRead] takes that bound and refuses a
-// record stamped later, or not at all). So a seat deleted from the chart by
-// accident and restored within the grace keeps every cursor, and one that
-// stays gone is forgotten a grace later rather than never.
-//
-// The stamp lives IN the record because nothing else outlives the duty
-// moving: a reconcile that remembered absences in memory would restart every
-// grace at every handoff, and on a fleet that restarts more often than the
-// grace, forget nobody.
-//
-// # Why advancing is a merge rather than a write
-//
-// The caller never writes against a revision. Two tabs belonging to one
-// person read two different rooms at once, and a last-writer-wins PUT would
-// lose whichever flush landed first — not a conflict worth reporting to
-// anybody, just a channel that quietly re-unreads itself. So the operation is
-// a MERGE: cursors only ever move forward, a room a flush does not mute or
-// unmute keeps the state it had, and the store resolves the race itself by
-// retrying its own read-modify-write. That is safe precisely BECAUSE the
-// merge is idempotent — re-applying it is a no-op, so a retry cannot lose
-// anything.
-//
-// # Why a mute is a room rather than a list
-//
-// A flush MUTES or UNMUTES named rooms; it never sends the list. The list is a
-// set one person edits a room at a time, and a write that replaced it would
-// have to know the whole of it first — which a screen opened a moment ago does
-// not, and which two tabs each holding their own copy would each write over
-// the other's toggle with. Per room, the gesture needs nothing but the room,
-// and two tabs muting two rooms at once both land, exactly as two cursors do.
+// The caller never writes against a revision: a last-writer-wins PUT would
+// lose one of two tabs' flushes. Cursors only move forward, a flush mutes or
+// unmutes NAMED rooms (never the list, which a screen opened a moment ago does
+// not know), and everything unnamed keeps its state, so the merge is idempotent
+// and the store's own compare-and-set retry cannot lose a flush.
 
 // MaxReadCursors bounds how many channels one person's record remembers.
 //
-// 256, matching the bound the tracker puts on a person's own lists, and the
-// number is the easy half. The hard half is what happens AT the cap, and it is
-// genuinely different here: the tracker's cap is safe because entries below
-// the seen-through position are PRUNED on every write, so the list bounds
-// itself and the cap is a backstop nobody reaches. A read cursor is never
-// prunable — every one of them is still true.
-//
-// So this IS the discarding cap, and the discard is stated rather than
-// discovered: past 256 the LEAST RECENTLY ADVANCED cursor is dropped, and that
-// channel reads as unread from its tail the next time the person opens it. The
-// cost is a stale badge on the room somebody has ignored longest, which is the
-// least wrong thing to lose; the alternative — refusing the write — would
-// freeze every other cursor in the record to protect the one nobody looks at.
+// 256, the bound the tracker puts on a person's own lists. The tracker prunes
+// its lists, so its cap is a backstop; a read cursor is never prunable, so
+// this cap discards: past it the LEAST RECENTLY ADVANCED cursor is dropped
+// ([evictStaleCursors]) and that room reads unread from its tail. A stale
+// badge on the room ignored longest is the least wrong loss; refusing the
+// write would freeze every other cursor to protect it.
 const MaxReadCursors = 256
 
-// ErrInvalidReadState marks a flush the merge REFUSED for what it carries — a
-// cursor or a mute naming no room, a room both muted and unmuted, a mute that
-// would take the list past [MaxReadCursors] — as opposed to a store that could
-// not take it.
+// ErrInvalidReadState marks a flush the merge REFUSED for what it carries (a
+// cursor or a mute naming no room, a room both muted and unmuted, a mute past
+// [MaxReadCursors]), as opposed to a store that could not take it.
 //
-// A SENTINEL because the two ask opposite things of the caller, and a caller
-// holding only the error cannot tell them apart otherwise: a store that was
-// unreachable or kept losing its compare-and-set is worth asking again, while
-// a refused flush is refused the same way every time it is sent, so "try
-// again" over it is an instruction nobody can carry out. Both backends merge
-// through [MergeChatRead] and return its error as it is, so this survives to
-// whoever made the call.
+// A sentinel because the two ask opposite things: an unreachable or contended
+// store is worth asking again, a refused flush is refused the same way every
+// time. Both backends return [MergeChatRead]'s error as it is.
 var ErrInvalidReadState = errors.New("coord: a chat read flush was refused")
 
-// ReadStateSentence is a flush the merge refused, as the caller that sent it
-// reads it: what was wrong with it and what to do — without the "coord: a chat
-// read flush was refused:" a Go error opens with, which names the package it
-// came from and says "refused" a second time inside a refusal. Any other
-// error, or a refusal a caller wrapped in context of its own, is its whole
-// message, because context is never dropped to tidy a prefix away — the rule
-// internal/chatlet's Sentence keeps for the chat store's refusals.
+// ReadStateSentence is a flush the merge refused, as its sender reads it: what
+// was wrong and what to do, without the sentinel's "coord: a chat read flush
+// was refused:" prefix. Any other error, or a refusal a caller wrapped, is its
+// whole message: context is never dropped to tidy a prefix away (the rule
+// internal/chatlet's Sentence keeps).
 //
-// A MODEL READS IT: the read state is written through the operator
-// catalogue, whose tool answers a refused flush in this sentence to the model
-// that made the call, a person's assistant acting for the one who muted those
-// rooms. A person flushing from the dashboard is answered the refusal's class
-// in its code's own words instead, never a tool's sentence (ADR-0060). It
-// lives here, beside the sentinel, because this package writes the sentences:
-// a caller stripping the prefix itself would be relying on how they are
-// spelled.
+// A model reads it: the operator catalogue's tool answers a refused flush in
+// this sentence, while the dashboard answers the refusal's class (ADR-0060).
+// It lives beside the sentinel because this package spells the sentences.
 func ReadStateSentence(err error) string {
 	if errors.Is(err, ErrInvalidReadState) {
-		// THE PREFIX IS THE SENTINEL'S OWN TEXT, which is exactly what a
-		// refusal built as "%w: <sentence>" opens with — and exactly what
-		// it does not open with once a caller wrapped it.
+		// The sentinel's own text: what a "%w: <sentence>" refusal opens
+		// with, and a wrapped one does not.
 		if rest, ok := strings.CutPrefix(err.Error(), ErrInvalidReadState.Error()+": "); ok {
 			return rest
 		}
@@ -185,25 +93,20 @@ func ReadStateSentence(err error) string {
 
 // ChatReadState is one person's whole chat read state.
 type ChatReadState struct {
-	// Cursors maps a channel id to the PACKED log position that person
-	// has read through. Packed rather than a triple because it is only
-	// ever compared, never decomposed: a cursor that cannot be compared
-	// with a message's own version is not a cursor.
+	// Cursors maps a channel id to the PACKED log position read through:
+	// packed, not a triple, because it is only compared with a message's
+	// own version, never decomposed.
 	Cursors map[string]int64 `json:"cursors,omitempty"`
 
-	// ThreadCursors maps a thread's root message id to the PACKED log
-	// position that person has read through IN THAT THREAD, which the
-	// thread pane flushes. A reply is new to them when it is above both
-	// this and the room's own cursor: reading the room's transcript does
-	// not open a thread, so the room's cursor alone would call a reply
-	// read that nobody saw. The same forward rule and the same discarding
-	// cap as [ChatReadState.Cursors].
+	// ThreadCursors maps a thread's root message id to the PACKED position
+	// read through IN THAT THREAD, which the thread pane flushes. A reply
+	// is new when above both this and the room's cursor: reading the room
+	// does not open a thread. The forward rule and discarding cap of
+	// [ChatReadState.Cursors].
 	ThreadCursors map[string]int64 `json:"thread_cursors,omitempty"`
 
-	// Muted are the channels that raise no badge and no push. A mute
-	// suppresses NOTICE, never delivery: the messages are still there and
-	// still searchable, and a seat's wake is not affected by anybody's
-	// mute at all.
+	// Muted are the channels that raise no badge and no push: a mute
+	// suppresses notice, never delivery, and no seat's wake reads it.
 	Muted []string `json:"muted,omitempty"`
 
 	// Every are the channels whose every message reaches this reader
@@ -212,9 +115,8 @@ type ChatReadState struct {
 	// ([NotifyMentions]).
 	Every []string `json:"every,omitempty"`
 
-	// Starred are the channels this reader starred, sorted. A star is the
-	// reader's own: it changes where the room sits on their screens and
-	// nothing for anybody else.
+	// Starred are the channels this reader starred, sorted: where the room
+	// sits on their own screens, and nothing for anybody else.
 	Starred []string `json:"starred,omitempty"`
 
 	// Saved are the messages this reader saved for later, the newest save
@@ -225,65 +127,43 @@ type ChatReadState struct {
 	// the newest mark first ([ThreadMark]).
 	Threads []ThreadMark `json:"threads,omitempty"`
 
-	// DNDUntil is when do-not-disturb ends. The ZERO INSTANT means not in
-	// do-not-disturb, and an instant in the past means it is already over
-	// — which is why it is an instant rather than a bool: a bool would
-	// need a second gesture to clear it and would strand a person silenced
-	// by a toggle they forgot.
+	// DNDUntil is when do-not-disturb ends; the zero instant means off. An
+	// instant, not a bool, so it ends by itself rather than stranding a
+	// person silenced by a toggle they forgot.
 	DNDUntil time.Time `json:"dnd_until,omitzero"`
 
-	// UpdatedAt is diagnostic. Nothing branches on it — the bucket has no
-	// age — but a record with no stamp makes "since when" unanswerable
-	// without reading the broker's own metadata.
+	// UpdatedAt is diagnostic: nothing branches on it, but it answers
+	// "since when" without the broker's metadata.
 	UpdatedAt time.Time `json:"updated_at,omitzero"`
 
-	// Revision is the store's own revision of the record this state was
-	// read at or written at; zero for a person with no record.
+	// Revision is the store's revision of the record this state was read or
+	// written at; zero for a person with no record.
 	//
-	// IT ORDERS TWO STATES OF ONE PERSON, which nothing else here can. The
-	// store serialises a person's flushes, but what each answers — and what
-	// the live channel pushes from it — travels on its own, so a screen can
-	// be handed an older state after a newer one and must keep the newer.
-	// [ChatReadState.UpdatedAt] cannot order them: it is each flush's own
-	// instant, stamped by whichever node took it, not the order the store
-	// took them in. This is that order: strictly increasing across every
-	// write to the record, and for the life of the store, so a record
-	// forgotten and written again still moves past every state the old one
-	// ever reported.
-	//
-	// NEVER STORED, because a record cannot know the revision it will be
-	// written at: a backend stamps it on every state it answers and keeps it
-	// out of what it persists.
+	// It orders two states of one person: answers and live pushes travel
+	// separately, so a screen can get an older state after a newer one and
+	// must keep the newer, and UpdatedAt is each node's own instant, not the
+	// store's order. Strictly increasing for the life of the store, so a
+	// record forgotten and written again moves past every state the old one
+	// reported. Never stored: a record cannot know the revision it will be
+	// written at, so a backend stamps it on every state it answers.
 	Revision uint64 `json:"revision,omitempty"`
 
 	// AbsentSince is when the reconcile first found this record's seat
-	// missing from the company the fleet is pointed at. ZERO while the
-	// company has it.
-	//
-	// MACHINERY, written only by [ChatReads.SetChatReadAbsence]: a flush
-	// neither sets nor clears it, because a flush is evidence about one
-	// node's revision rather than the fleet's, and the reconcile reads the
-	// fleet's.
+	// missing from the company; zero while the company has it. Written only
+	// by [ChatReads.SetChatReadAbsence]: a flush is evidence about one
+	// node's revision, the reconcile reads the fleet's.
 	AbsentSince time.Time `json:"absent_since,omitzero"`
 }
 
-// PersonChatRead is one person's read state NAMED BY ITS SEAT — the form a
-// client is sent one in: the live channel's `chat_cursor_moved` push and the
-// rail's own `read`.
+// PersonChatRead is one person's read state NAMED BY ITS SEAT, as a client is
+// sent it: the live channel's `chat_cursor_moved` push and the rail's `read`.
 //
-// THE NAME IS WHAT MAKES THE REVISION USABLE. [ChatReadState.Revision] orders
-// two states of ONE record and nothing else — on the coordination KV it is the
-// bucket's own sequence, shared by every seat's record — so a client holding
-// one seat's state must be able to tell that the next is another seat's, which
-// it meets whenever the seat it reads as is not the one it read as before — a
-// tab handed to another reader, a socket reconnecting for a person moved to
-// another seat — and REPLACE it rather than compare two records' revisions and
-// drop the newcomer's as older. A state that does not say whose it is leaves
-// the client nothing to tell that by.
-//
-// NEVER STORED, for [ChatReadState.Revision]'s reason: the record is keyed by
-// the seat, so the name is a fact about the key rather than the value, and a
-// surface that hands a state out stamps the seat it read it for.
+// The name makes the revision usable: [ChatReadState.Revision] orders states
+// of ONE record (on the coordination KV it is the bucket's sequence, shared by
+// every seat), so a client whose seat changed (a tab handed to another reader,
+// a reconnect after a seat move) must REPLACE the state rather than drop the
+// newcomer's as older. Never stored: the seat is the record's key, so a
+// surface handing a state out stamps the seat it read it for.
 type PersonChatRead struct {
 	// Handle is the seat whose record this is.
 	Handle string `json:"handle"`
@@ -291,13 +171,10 @@ type PersonChatRead struct {
 }
 
 // WithAbsence is the state with its absence stamp set to since, reporting
-// whether that changed anything.
-//
-// THE ONE RULE FOR THE STAMP, shared by both backends for [MergeChatRead]'s
-// reason. A non-zero since stamps a record that has none and KEEPS an earlier
-// stamp, because the grace is measured from the FIRST sweep that saw the seat
-// missing — a later sweep restamping would restart it every tick and forget
-// nobody. The zero instant clears it: the company has the seat again.
+// whether that changed anything: the one rule for the stamp, shared by both
+// backends. A non-zero since KEEPS an earlier stamp, because the grace runs
+// from the FIRST sweep that saw the seat missing (restamping would restart it
+// every tick and forget nobody); the zero instant clears it.
 func (s ChatReadState) WithAbsence(since time.Time) (ChatReadState, bool) {
 	switch {
 	case since.IsZero() && s.AbsentSince.IsZero():
@@ -328,26 +205,17 @@ type ChatReader struct {
 	AbsentSince time.Time
 }
 
-// ChatReadDelta is what one flush changes.
-//
-// EVERY FIELD IS OPTIONAL AND ABSENT MEANS UNCHANGED, which is what lets two
-// tabs flush different facts about one person without either erasing the
-// other's. A room a flush does not name — a cursor, a mute or an unmute — is
-// left exactly as it was.
+// ChatReadDelta is what one flush changes. Every field is optional and absent
+// means unchanged, so two tabs flushing different facts erase neither's.
 type ChatReadDelta struct {
 	// Cursors are advanced, never set: a value at or below what is stored
-	// is ignored. A cursor that could move backwards would make "unread"
-	// flicker as two tabs disagree about which is further along.
+	// is ignored ([advanceCursors]).
 	Cursors map[string]int64
 
-	// Mute adds rooms to the muted set and Unmute takes them out of it;
-	// every room neither names keeps the state it had. A ROOM AT A TIME,
-	// never the list — see "Why a mute is a room rather than a list".
-	//
-	// Muting a muted room and unmuting one that is not are no-ops, so a
-	// repeated toggle is safe; naming one room in both is refused
-	// ([ErrInvalidReadState]), because the flush would be stating two
-	// opposite facts about it and no order between them is the caller's.
+	// Mute adds rooms to the muted set and Unmute takes them out, a room at
+	// a time (see "Why advancing is a merge, and a mute is a room"). A
+	// repeat is a no-op; one room in both is refused ([ErrInvalidReadState]):
+	// two opposite facts with no order between them.
 	Mute   []string
 	Unmute []string
 
@@ -355,11 +223,9 @@ type ChatReadDelta struct {
 	// keyed by a thread's root message id.
 	ThreadCursors map[string]int64
 
-	// Rewind SETS a room's cursor to exactly the position named, the one
-	// way a cursor moves back: "mark unread", a deliberate gesture about
-	// one room rather than a flush racing another tab's. Zero forgets the
-	// room's cursor, so the whole room reads as unread. A room named both
-	// here and in Cursors is refused, as two facts about one place.
+	// Rewind SETS a room's cursor to exactly the position named: "mark
+	// unread", the one way a cursor moves back. Zero forgets it, so the
+	// whole room reads unread. A room also in Cursors is refused.
 	Rewind map[string]int64
 
 	// Notify sets how each named room reaches the reader ([NotifyLevel]),
@@ -384,103 +250,64 @@ type ChatReadDelta struct {
 	// which is how do-not-disturb is cleared.
 	DNDUntil *time.Time
 
-	// At stamps the record. Passed in rather than read from a clock here,
-	// because every other write in this package takes its instant from the
-	// caller and a package that reads the clock in one place is a package
-	// whose tests are serial.
+	// At stamps the record, passed in because every write in this package
+	// takes its instant from the caller: one clock read here would make its
+	// tests serial.
 	At time.Time
 }
 
 // ChatReads is the company's per-person chat read state, one record per human
-// seat — see "Whose record it is" above for why the seat.
+// seat (the comments atop chatread.go). Its bucket has no age: an aged-out
+// cursor would mark a room unread.
 type ChatReads interface {
-	// ChatRead reports one person's read state.
-	//
-	// A person who has read nothing is a ZERO STATE and no error: the
-	// absence of a record is the ordinary condition of somebody who has
-	// not opened chat yet, and making the caller distinguish it from a
-	// failure would push a three-valued answer onto a question that has
-	// two honest ones.
+	// ChatRead reports one person's read state. No record is the ZERO
+	// STATE and no error: never having opened chat is the ordinary case,
+	// not a failure.
 	ChatRead(ctx context.Context, handle string) (ChatReadState, error)
 
 	// AdvanceChatRead merges a flush into one person's record and reports
-	// the state that resulted.
+	// the resulting state. The merge is idempotent ([MergeChatRead]), so two
+	// tabs racing produce one record and the store's retry loses no flush.
+	// Past [MaxReadCursors] the stalest cursor is dropped.
 	//
-	// FORWARD-ONLY on the cursors and PER ROOM on the mutes, so it is
-	// idempotent, and two tabs racing over different rooms produce the
-	// same record whichever lands first: the store's own retry cannot lose
-	// a flush. Past [MaxReadCursors] the least recently advanced cursor is
-	// dropped — see the constant.
-	//
-	// THREE KINDS OF FAILURE, told apart by sentinel: [ErrInvalidReadState]
-	// is a flush the merge refused, the same way every time it is sent;
-	// [ErrWriteUnknown] is a write that was sent and never answered, which
-	// may have landed; and every other error — a read that failed before
-	// any write, every compare-and-set lost to another writer — changed
-	// nothing. Sending the same flush again is safe after either of the
-	// last two, because the merge is idempotent: a flush that did land is
-	// merged a second time into the same record.
+	// Three failures, by sentinel: [ErrInvalidReadState], refused the same
+	// way every time; [ErrWriteUnknown], sent and never answered, which may
+	// have landed; any other error (a failed read, every compare-and-set
+	// lost) changed nothing. Resending is safe after the last two.
 	AdvanceChatRead(ctx context.Context, handle string, delta ChatReadDelta) (ChatReadState, error)
 
 	// SetChatReadAbsence stamps when a record's seat was first found missing
-	// from the company the fleet is pointed at — since, unless an earlier
-	// stamp stands — or, with the zero instant, clears the stamp because the
-	// company has the seat again. See [ChatReadState.WithAbsence] for the
-	// rule. Reports whether the seat has a record at all: one without is left
-	// without, because an absence is a fact about a record and stamping it
-	// onto nothing would create one for a seat nobody ever read a room as.
-	//
-	// A compare-and-set like every write here, so a person's own flush
-	// landing beside it loses neither the flush nor the stamp. Its errors
-	// are [ChatReads.AdvanceChatRead]'s: [ErrWriteUnknown] marks the one
-	// that may have landed.
+	// from the company or, with the zero instant, clears the stamp
+	// ([ChatReadState.WithAbsence]). Reports whether the seat has a record:
+	// one without is left without, never created for a seat nobody read as.
+	// A compare-and-set, so a flush beside it loses neither; its errors are
+	// [ChatReads.AdvanceChatRead]'s.
 	SetChatReadAbsence(ctx context.Context, handle string, since time.Time) (bool, error)
 
-	// ForgetChatRead removes a person's record, but only one stamped absent
-	// at or before absentBy ([ChatReadState.AbsentBy]), reporting whether it
-	// did.
-	//
-	// The bucket has no age, so this is the ONLY way a record leaves it, and
-	// the condition is checked against the record as the write finds it
-	// rather than as the caller last listed it: a seat a peer's sweep has
-	// just found back in the company — its stamp cleared — is kept, and so is
-	// one whose stamp is younger than the grace the caller is applying.
-	// False with no error is that answer, or no record at all. An error
-	// marked [ErrWriteUnknown] is a removal sent and never answered, which
-	// may have happened.
+	// ForgetChatRead removes a person's record only if stamped absent at or
+	// before absentBy ([ChatReadState.AbsentBy]), reporting whether it did:
+	// the ONLY way a record leaves the ageless bucket. The condition is read
+	// from the record the write finds, not the caller's listing, so a stamp
+	// a peer just cleared keeps it. False with no error is that answer or no
+	// record; [ErrWriteUnknown] marks a removal that may have happened.
 	ForgetChatRead(ctx context.Context, handle string, absentBy time.Time) (bool, error)
 
-	// ChatReaders lists every seat holding read state, by handle, each with
-	// its absence stamp.
-	//
-	// What makes the reconcile possible at all: without it, finding the
-	// records of seats that left would mean knowing which seats used to be
-	// here, which is the question the org chart no longer answers. RAISES rather
-	// than answering short, on an unreachable store and on a record it
-	// cannot decode: a reader left out of the list is one the reconcile
-	// never judges, and so never forgets.
+	// ChatReaders lists every seat holding read state, each with its absence
+	// stamp: how the reconcile finds records of seats the chart no longer
+	// names. It RAISES rather than answer short, on an unreachable store or
+	// an undecodable record: a reader left out is never forgotten.
 	ChatReaders(ctx context.Context) ([]ChatReader, error)
 
 	// WatchChatReads streams every record that exists, then the
-	// [ChatReadUpdate.Current] marker, then every change after it: a
-	// flush, an absence stamp, a forget.
+	// [ChatReadUpdate.Current] marker, then every change: a flush, an
+	// absence stamp, a forget.
 	//
-	// WHAT THE LIVE CHANNEL IS DERIVED FROM. A person's tabs are attached
-	// to whichever nodes their sockets reached, and a flush is taken by
-	// whichever node served it — so every node serving sockets watches,
-	// and each pushes a changed record to that seat's own sockets on that
-	// node. The push comes from the durable record rather than from the
-	// node that took the write telling its peers, so there is no message
-	// a node carries out on another's word, a flush through any surface
-	// reaches every tab, and a node that was not listening loses nothing
-	// the record does not still hold.
-	//
-	// The channel is closed when ctx ends or the watch fails. A CLOSED
-	// CHANNEL IS NOT A FORGET: the watcher has stopped hearing, and a
-	// consumer watches again — the records that exist then are delivered
-	// again before the next marker, so a change it missed while it was
-	// not listening is in that answer, at its revision, and one it already
-	// pushed is recognised as no newer than what it holds.
+	// The live channel derives from it: every node serving sockets watches
+	// and pushes a changed record to that seat's sockets on it, so a push
+	// comes from the durable record, never on a peer's word. The channel
+	// closes when ctx ends or the watch fails, and a CLOSED CHANNEL IS NOT A
+	// FORGET: watch again, and every record is redelivered at its revision
+	// before the next marker.
 	WatchChatReads(ctx context.Context) (<-chan ChatReadUpdate, error)
 }
 
@@ -494,26 +321,19 @@ type ChatReadUpdate struct {
 	State *ChatReadState
 
 	// Current marks the end of the records that existed when the watch
-	// started: every update before it is one of those, and every update
-	// after it is a change. A consumer that re-syncs after watching again
-	// does it from what precedes the marker, the only point at which the
-	// watch can say a record it has not delivered does not exist.
+	// started; every update after it is a change. A consumer re-syncs from
+	// what precedes it, the only point at which the watch can say a record
+	// it has not delivered does not exist.
 	Current bool
 }
 
 // MergeChatRead applies a flush to a stored state and reports the result.
 //
-// THE ONE IMPLEMENTATION OF THE MERGE RULE, shared by both backends, because a
-// merge written twice is two answers to "did this cursor move" and the two
-// would differ first on exactly the case nobody tests: a delta that arrives
-// out of order.
-//
-// It is PURE and IDEMPOTENT. Pure, so both backends and the suite exercise the
-// same arithmetic without a store. Idempotent, so re-applying it is a no-op —
-// which is what makes a lost compare-and-set safe to retry, and is the whole
-// reason the caller never writes against a revision. The result carries none:
-// the store stamps [ChatReadState.Revision] once it knows where the write
-// landed.
+// The one implementation, shared by both backends: written twice, the two
+// would first differ on a delta arriving out of order. Pure, so the suite
+// exercises it without a store; idempotent, so a lost compare-and-set is safe
+// to retry. The result carries no [ChatReadState.Revision]: the store stamps
+// it once the write lands.
 func MergeChatRead(state ChatReadState, delta ChatReadDelta) (ChatReadState, error) {
 	out := ChatReadState{
 		DNDUntil:    state.DNDUntil,
@@ -525,9 +345,8 @@ func MergeChatRead(state ChatReadState, delta ChatReadDelta) (ChatReadState, err
 	if err != nil {
 		return ChatReadState{}, err
 	}
-	// A REWIND SETS, after every advance: it is the one deliberate move
-	// back, and an advance of the same room in the same flush would be a
-	// second fact about one place, so that is refused rather than ordered.
+	// A rewind SETS, after every advance; an advance of the same room in
+	// the flush is a second fact about one place, refused rather than ordered.
 	for _, channel := range slices.Sorted(maps.Keys(delta.Rewind)) {
 		at := delta.Rewind[channel]
 		_, advanced := delta.Cursors[channel]
@@ -585,10 +404,9 @@ func MergeChatRead(state ChatReadState, delta ChatReadDelta) (ChatReadState, err
 	return out, nil
 }
 
-// nonEmptyCursors is a cursor map in its one shape for "none": an empty map
-// and a nil one encode differently, and the record is compared by the suite,
-// so a person who has muted a room and read nothing round-trips identically on
-// both backends.
+// nonEmptyCursors is a cursor map in its one shape for "none": the suite
+// compares records across both backends, and an empty map and a nil one
+// encode differently.
 func nonEmptyCursors(cursors map[string]int64) map[string]int64 {
 	if len(cursors) == 0 {
 		return nil
@@ -596,13 +414,9 @@ func nonEmptyCursors(cursors map[string]int64) map[string]int64 {
 	return cursors
 }
 
-// evictStaleCursors bounds the map at [MaxReadCursors].
-//
-// THE STALEST CURSOR GOES, and "stalest" is the LOWEST POSITION rather than a
-// timestamp nobody stores: a position is a place on a totally ordered log, so
-// the cursor furthest back in it is by construction the room this person has
-// read least recently. That is the fact a second `updated_at` per channel
-// would have carried, derived from the value already there.
+// evictStaleCursors bounds the map at [MaxReadCursors] by dropping the LOWEST
+// positions: the log is totally ordered, so the cursor furthest back is the
+// room read least recently, with no per-channel timestamp to store.
 func evictStaleCursors(cursors map[string]int64) {
 	if len(cursors) <= MaxReadCursors {
 		return
@@ -615,10 +429,8 @@ func evictStaleCursors(cursors map[string]int64) {
 	for channel, at := range cursors {
 		all = append(all, entry{channel, at})
 	}
-	// Ordered by position and then by channel id, so two nodes evicting
-	// the same over-full record drop the same cursor: the tie-break is
-	// what stops "identical inputs, identical output" from depending on
-	// Go's map iteration order.
+	// Position, then channel id: two nodes evicting the same record drop
+	// the same cursor, whatever Go's map iteration order.
 	slices.SortFunc(all, func(a, b entry) int {
 		if a.at != b.at {
 			return cmp.Compare(a.at, b.at)

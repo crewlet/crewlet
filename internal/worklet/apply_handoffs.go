@@ -10,37 +10,22 @@ import (
 	"slices"
 )
 
-// The hand-off count a task history row carries: `tracker_history.reassignments`,
-// the task's counter as that commit left it (migration 0028).
+// `tracker_history.reassignments` is the task's hand-off count as that commit
+// left it. THE RULE: a record whose payload carries `reassignments` (decided
+// by [Writer.chargeHandOff], a reset to zero included) states it; one that
+// does not keeps the previous row's, from zero. So a row's value is a function of the task's history in
+// log order alone.
 //
-// # The rule, stated once
-//
-// A record STATES the counter when its payload carries `reassignments` — the
-// value [Writer.chargeHandOff] decided inside the writer's snapshot, which a
-// create carries as part of the whole task and a patch carries whenever it
-// moves the counter, a person's reset to zero included. A record that states
-// nothing leaves it where the row before it left it, and a task with no row
-// before starts at zero. So a row's value is a function of the task's history
-// IN LOG ORDER and of nothing else, which is what makes it identical on every
-// node however it got there.
-//
-// # Why from the history rather than the task row
-//
-// The task row holds the counter NOW, and it is written on a different
-// condition: a record reprocessed below an applied successor writes its
-// history row and skips the object row, so copying the object's value there
-// would stamp the successor's count onto the earlier commit. The history rows
-// are the one record of the sequence both halves see, so the incremental rule
-// and [rederiveHandOffs] read the same rows through the same function,
-// [handOffsCarried], and "backfill equals replay" holds by construction.
+// FROM THE HISTORY, NOT THE TASK ROW: a record reprocessed below an applied
+// successor skips the object row, whose count would be the successor's. The
+// incremental rule and [rederiveHandOffs] both read history rows through
+// [handOffsCarried], so backfill equals replay by construction.
 
 // statedHandOffs is the counter a history row's record states, and false when
 // it states none.
 //
-// A DOCUMENT THAT DOES NOT DECODE STATES NOTHING rather than failing the
-// apply: the row's own record has already been applied by the time this runs,
-// so its payload decoded once, and the column is a rendering fact that must
-// never be the reason a log stops.
+// A DOCUMENT THAT DOES NOT DECODE STATES NOTHING: its record already applied,
+// and a rendering column must never be why a log stops.
 func statedHandOffs(document []byte) (int, bool) {
 	if len(document) == 0 {
 		return 0, false
@@ -93,10 +78,9 @@ const (
 
 // deriveHandOffs brings the rows of one task at and after `from` to the rule.
 //
-// FROM THE WRITTEN ROW FORWARD rather than for that row alone, because an
-// ordinary apply appends at the head — one row, one seek — while a record
-// reprocessed below an applied successor lands BEHIND rows that were derived
-// without it, and every one of them carries forward from it.
+// FROM THE WRITTEN ROW FORWARD: an ordinary apply appends at the head (one
+// seek), but a record reprocessed below an applied successor lands behind rows
+// derived without it, and each carries forward from it.
 func deriveHandOffs(ctx context.Context, tx *sql.Tx, taskID string, from int64) (int, error) {
 	carried := 0
 	var before sql.NullInt64
@@ -121,14 +105,10 @@ func deriveHandOffs(ctx context.Context, tx *sql.Tx, taskID string, from int64) 
 // rederiveHandOffsStatement is [rederiveHandOffs]' walk of the whole task
 // history, named for the plan test.
 //
-// IN THE SUBJECT INDEX'S OWN ORDER, read backwards. The walk needs each task's
-// rows together and in log order, and nothing about the order of the tasks
-// themselves, so `subject_id DESC, log_seq` is exactly the reverse of
-// `tracker_history_subject_idx (subject_id, log_seq DESC)` and the planner
-// walks it. Ordered `subject_id, log_seq`, which no index holds, the plan was
-// a scan of the table into a SORTER: every task history row of the company,
-// each with its whole record document, held before the first was returned,
-// inside the one transaction a re-derivation runs in.
+// `subject_id DESC, log_seq` is `tracker_history_subject_idx (subject_id,
+// log_seq DESC)` read backwards: each task's rows together in log order, the
+// tasks in any order. `subject_id, log_seq`, which no index holds, would sort
+// every task history row with its document before returning the first.
 const rederiveHandOffsStatement = `
 		SELECT subject_id, id, document, reassignments FROM tracker_history
 		WHERE subject_kind = ?
@@ -137,9 +117,8 @@ const rederiveHandOffsStatement = `
 // rederiveHandOffs is every task history row's hand-off count recomputed from
 // the whole history, for [Applier.Rederive].
 //
-// Task by task in log order, each starting from zero — a task's first row is
-// its create, which states the whole task. The reads finish before any write,
-// for the reason [rederiveReopens] gives.
+// Task by task in log order, each from zero (its first row is its create). The
+// reads finish before any write, for [rederiveReopens]' reason.
 func rederiveHandOffs(ctx context.Context, tx *sql.Tx) (int, error) {
 	rows, err := tx.QueryContext(ctx, rederiveHandOffsStatement, string(KindTask))
 	if err != nil {
@@ -167,8 +146,7 @@ func rederiveHandOffs(ctx context.Context, tx *sql.Tx) (int, error) {
 			flush()
 			task = subject
 		}
-		// ONLY WHAT THE WALK NEEDS is kept: a row whose record states
-		// nothing contributes its id and stored value, never its bytes.
+		// A row stating nothing keeps its id and stored value, not its bytes.
 		if _, ok := statedHandOffs(row.document); !ok {
 			row.document = nil
 		}

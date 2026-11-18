@@ -239,12 +239,10 @@ func callIn(t *testing.T, reg *tools.Registry, turn *turnctx.Turn, name string,
 // open or close a fence; and the answer carries the envelope that labels it
 // whole.
 //
-// WHICH READS those are is not this test's to say: the sweep derives the set
-// from what every registered tool's answer carries
+// WHICH READS those are, the sweep derives from every registered tool's answer
 // (TestEveryToolThatHandsOverSomebodysWordsIsFenced, over [handsOverWords]),
-// and holds every case here to a tool in it. Each case is named after its tool
-// and states the labels the sweep cannot know — whose each fence is, and what
-// it earns.
+// and holds every case here to a tool in it. Each case is named after its tool and states the labels the sweep cannot
+// know: whose each fence is, and what it earns.
 func TestEveryUntrustedReadIsFenced(t *testing.T) {
 	t.Parallel()
 
@@ -279,13 +277,12 @@ func TestEveryUntrustedReadIsFenced(t *testing.T) {
 		assertEnvelope(t, answer, provenance.TrustColleague, 3)
 	})
 
-	// A SEAT'S KEPT SESSIONS, read back by the seat: every word a session
-	// holds is a harness's record of a past run, fenced by the one rule for
-	// it at the least trust whoever kept it — an entry naming the seat whose
-	// run kept it, the row's words naming nobody, since the row keeps no
-	// writer of its ask and its ending's accounts and its note on the session
-	// it keeps quote what a box, a tool or a person wrote — and never the
-	// reader's own, though the reader is the seat that kept it.
+	// A SEAT'S KEPT SESSIONS, read back by the seat: every word is a
+	// harness's record of a past run, fenced by the one rule for it at the
+	// least trust — an entry naming the seat whose run kept it, the row's
+	// words naming nobody (the row keeps no writer of its ask, and its
+	// ending's accounts and note quote a box, a tool or a person) — and never
+	// the reader's own, though the reader kept it.
 	t.Run("list_sessions", func(t *testing.T) {
 		t.Parallel()
 		turn, b := readerTurn(t)
@@ -867,15 +864,13 @@ func TestEveryUntrustedReadIsFenced(t *testing.T) {
 	})
 
 	// A CHANGE'S TEXT NAMES ITS WRITER, unlike a repository's: its
-	// description is its owner's — at the trust its owner earns while the
-	// change is as it was opened, and never the reader's own once a later
-	// record may have rewritten it by somebody its row does not name — a
-	// review's summary and a finding's body and suggestion their reviewer's and
-	// raiser's (`change_review`), a comment its author's (`change_comment`); a
-	// patch stays a repository's text (`repo_patch`, external). A title, a path
-	// and a note that spell the turn's closer, outside every fence, are
-	// defused. Mutation: any of them answered unfenced, or a description
-	// rewritten since its open labelled `own` → red.
+	// description is its owner's (never the reader's own once a later record
+	// may have rewritten it), a review's summary and a finding's body and
+	// suggestion their reviewer's and raiser's (`change_review`), a comment
+	// its author's (`change_comment`); a patch stays a repository's text
+	// (`repo_patch`, external). A title, a path and a note that spell the
+	// turn's closer, outside every fence, are defused. Mutation: any of them
+	// answered unfenced, or a rewritten description labelled `own` → red.
 	t.Run("code_get_change", func(t *testing.T) {
 		t.Parallel()
 		turn, b := readerTurn(t)
@@ -1047,10 +1042,8 @@ func TestEveryUntrustedReadIsFenced(t *testing.T) {
 	// way, nothing having been stored. Mutation: answering the marked text
 	// unfenced → red.
 	//
-	// EACH CASE NAMED BY ITS TOOL'S NAME SPELLED OUT, as every case here is:
-	// the handover sweep finds the case that holds a tool's labels by that
-	// literal (handsOverWords), and a name computed at run time is one it
-	// cannot read.
+	// EACH CASE NAMED BY ITS TOOL'S NAME AS A LITERAL: the handover sweep
+	// (handsOverWords) finds a tool's case by it and cannot read a computed one.
 	conflict := func(tool string) func(t *testing.T) {
 		return func(t *testing.T) {
 			t.Parallel()
@@ -1296,9 +1289,7 @@ func TestAPageWithWritersItCannotNameIsNeverOwn(t *testing.T) {
 // engine hosts, so a comment, a description or a message whose record names no
 // writer — no handle and no kind — is a colleague's nobody named, by the one
 // rule every door to such a surface takes ([provenance.TrustForHosted]), and
-// never an outside party's: nothing outside the company writes there. It read
-// `external` before, while the same text through a search hit or a wake read
-// as a colleague's.
+// never an outside party's: nothing outside the company writes there.
 //
 // Mutation: fence with [provenance.TrustFor] in [foreignRead] and every case
 // reads `trust=external authors=external`.

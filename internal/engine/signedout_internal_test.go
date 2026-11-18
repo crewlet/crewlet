@@ -16,16 +16,9 @@ import (
 )
 
 // A SEAT WHOSE MODELS REFUSE THEIR SIGN-IN STOPS RETRYING THE REVIEW OF ITS
-// FINISHED JOB, AND SAYS WHY.
-//
-// What a running engine did: with the company's one model signed out, each
-// seat's executor finished its job and the turn's review, the resume's first
-// model call, was refused ("Not logged in"). The resume was handed back, its
-// completion NAKed and redelivered about a second apart for the half hour of
-// the resume give-up, every attempt a turn that started and failed: 2,762
-// failed resumes in an hour, the seat drawn as working throughout, and every
-// attempt's completion published as the turn's end, so the Turns screen
-// counted hundreds of failed turns over a list of two.
+// FINISHED JOB, AND SAYS WHY, rather than NAK the resume into a redelivery
+// about every second until the resume give-up, each attempt a failed turn
+// published as the turn's end.
 
 // signedOut is a model whose harness refuses its sign-in while the case holds
 // it out. calls counts what reached it.
@@ -44,19 +37,16 @@ func (m *signedOut) Complete(context.Context, llm.Request) (*llm.Completion, err
 	return &llm.Completion{Content: "done", Model: "opus"}, nil
 }
 
-// THE SECOND REFUSED REVIEW PAUSES THE SEAT AS THE ENGINE, and from then the
+// THE SECOND REFUSED REVIEW PAUSES THE SEAT AS THE ENGINE; from then the
 // job's announcements are refused on the pause before their claim, so the
-// model is asked nothing more. No attempt is published as the turn's end. A
-// person who signs the model in and resumes the seat gets the kept job
-// reviewed on the lift, once.
+// model is asked nothing more, and no attempt is published as the turn's end.
+// Signing the model in and resuming the seat reviews the kept job once.
 //
-// Mutation: drop the failure hold from resumeTurn's failure, and the seat is
-// never paused while the review is retried; hand the paused attempt back as
-// the failure it met rather than as a wait on the pause, and it counts as a
-// second failed resume; drop failurePauseRefusal from
-// seatCannotRun, and the waiter's announcements run the review again into the
-// refusal; publish a reverted segment as it came back (res, not published),
-// and the failed attempts read as ended turns.
+// Mutation: drop the failure hold from resumeTurn's failure (never paused);
+// hand the paused attempt back as its failure, not a wait on the pause (a
+// second failed resume); drop failurePauseRefusal from seatCannotRun (the
+// review runs again into the refusal); publish a reverted segment as it came
+// back, res not published (the failed attempts read as ended turns).
 func TestAResumeWhoseModelsRefuseTheirSignInPausesTheSeatAndWaits(t *testing.T) {
 	t.Parallel()
 	r := newDrainRig(t)
@@ -109,17 +99,16 @@ func TestAResumeWhoseModelsRefuseTheirSignInPausesTheSeatAndWaits(t *testing.T) 
 	eventually(t, "the refused resume to give its claim back", func() bool {
 		return r.run(t, e, "t1").Status == sandbox.StatusRunning
 	})
-	// THE ATTEMPT THAT PAUSED THE SEAT IS A WAIT, NOT A FAILED RESUME: only
-	// the first refusal counts toward the resume give-up, and the second
-	// was handed back on the pause rather than NAKed into a redelivery.
+	// THE ATTEMPT THAT PAUSED THE SEAT IS A WAIT, NOT A FAILED RESUME: only the
+	// first refusal counts toward the give-up; the second was handed back on
+	// the pause, not NAKed.
 	if got := r.run(t, e, "t1").Launch.ResumeFailures; got != 1 {
 		t.Errorf("the run counts %d failed resumes, want the first refusal alone", got)
 	}
 
-	// HELD WHILE THE PAUSE STANDS: the waiter polls every 50 ms and
-	// re-announces the job on its own schedule, and the gate refuses each
-	// announcement on the pause before its claim, so none reaches the model
-	// or starts a turn.
+	// HELD WHILE THE PAUSE STANDS: the waiter re-announces the job (polling
+	// every 50 ms) and the gate refuses each on the pause before its claim,
+	// so none reaches the model or starts a turn.
 	calls, settled := model.calls.Load(), admitted.Load()
 	if calls != 2 {
 		t.Errorf("the model was asked %d times before the pause, want the failure and its one repeat", calls)
@@ -141,9 +130,8 @@ func TestAResumeWhoseModelsRefuseTheirSignInPausesTheSeatAndWaits(t *testing.T) 
 	}
 
 	// THE PERSON SIGNS THE MODEL IN AND RESUMES THE SEAT: the kept completion
-	// resumes on the pause's lift, and its review reaches the model, once.
-	// The waiters are stopped first, so the lift is the only thing that can
-	// bring the job back.
+	// resumes on the lift and its review reaches the model once. The waiters
+	// are stopped first, so only the lift can bring the job back.
 	stopWaiters(e)
 	model.out.Store(false)
 	settled = admitted.Load()

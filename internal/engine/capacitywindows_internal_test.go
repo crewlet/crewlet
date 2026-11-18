@@ -42,15 +42,10 @@ func maintenanceDetail(alarms []statelog.Alarm) (string, bool) {
 	return "", false
 }
 
-// A WINDOW THIS NODE CAN'T READ IS NEVER READ AS NO WINDOW.
-//
-// The report and the alarm skipped a log whose window they couldn't read, so a
-// coordination blip cleared a `maintenance_open` that was firing, and a node
-// that couldn't read the register said no window was open while its own boot
-// refused to start because one might be. The read names the log as unread, and
-// the alarm keeps what this node last read there: a window it last read open
-// stays up, as old as it was then and saying when that was, and a log it never
-// read a window on raises nothing.
+// A WINDOW THIS NODE CAN'T READ IS NEVER READ AS NO WINDOW. The read names the
+// log unread, and the alarm keeps what this node last read there: a window last
+// read open stays up, as old as it was then and saying when that was, and a log
+// never read open raises nothing.
 //
 // Mutation: drop the unread logs in [windowWatch.observe] and the blip clears
 // the alarm; judge an unread log as open whatever was last read and the
@@ -129,10 +124,9 @@ func TestAnUnreadableWindowIsNeverReadAsNone(t *testing.T) {
 	}
 }
 
-// A BLIP NEVER RAISES THE ALARM. A window this node last read open is held at
-// the age it had when that read answered, so one read open at 59 minutes stays
-// under the hour however long the blip lasts, and one read past the hour keeps
-// the alarm that read raised.
+// A BLIP NEVER RAISES THE ALARM. A held window keeps the age it had when last
+// read, so one read at 59 minutes stays under the hour however long the blip
+// lasts, and one read past the hour keeps its alarm.
 //
 // Mutation: age a held window on the observing clock in [oldestWindow] and the
 // 59-minute window raises the alarm during the blip.
@@ -177,10 +171,9 @@ func TestABlipNeverRaisesTheMaintenanceAlarm(t *testing.T) {
 	}
 }
 
-// THE NEWEST READ WINS, WHATEVER ORDER READS REACH THE WATCH IN. Every report
-// feeds the watch, and the alarm heartbeat's and an API caller's are assembled
-// at once, so a read taken before a window closed can reach the watch after one
-// that found it closed.
+// THE NEWEST READ WINS, WHATEVER ORDER READS REACH THE WATCH IN: concurrent
+// reports can deliver a read taken before a window closed after one that found
+// it closed.
 //
 // Mutation: apply reads in the order they are observed, and the older read puts
 // the closed window back, so the next blip raises the alarm about it.
@@ -256,10 +249,8 @@ func TestAStoppedReadChangesNothing(t *testing.T) {
 }
 
 // WHY A WINDOW COULDN'T BE READ IS LOGGED, once when the reads start failing
-// and once when they stop. The report and the alarm say they couldn't read it
-// and the log is where the reason is, but only a gesture wrote it, so a node
-// whose banner said "couldn't read" had nothing in its log saying why. Once per
-// change, because the alarm heartbeat assembles a report every ten seconds.
+// and once when they stop: the report only says it couldn't read, and the
+// alarm heartbeat assembles a report every ten seconds.
 //
 // NOT PARALLEL: it swaps the process-wide logger.
 //
@@ -304,9 +295,8 @@ func TestAnUnreadableWindowIsLoggedOnceWithItsReason(t *testing.T) {
 // method.
 type liveFleet = coord.Fleet
 
-// windowsBlindTo is a fleet whose capacity windows are read from a register of
-// the test's own, and fail on the logs it names; everything else is the
-// running node's own coordination store.
+// windowsBlindTo reads capacity windows from the test's own register, failing
+// on the logs it names; everything else is the running node's store.
 type windowsBlindTo struct {
 	liveFleet
 	windows *coordmem.Fleet
@@ -323,13 +313,9 @@ func (f *windowsBlindTo) Maintenance(ctx context.Context, stream string) (
 }
 
 // THE REPORT SAYS WHICH LOGS' WINDOWS IT COULDN'T READ, and its alarm and its
-// banner are one read.
-//
-// `crewlet retention status` and the dashboard's banner render the report's
-// `maintenance` alone, so a log left out of it read as a log with no window
-// open. The report names every log it couldn't read in `maintenance_unread`,
-// and the alarm it evaluates holds what this node last read rather than
-// clearing.
+// banner are one read: `maintenance_unread` names them, since a log merely left
+// out of `maintenance` reads as one with no window, and the alarm holds what
+// this node last read rather than clearing.
 //
 // Mutation: leave `maintenance_unread` unset, or evaluate the alarm from the
 // read alone, and this fails.
@@ -386,10 +372,9 @@ func TestTheReportSaysWhichLogsWindowsItCouldNotRead(t *testing.T) {
 }
 
 // WHAT HOLDS A WINDOW THE REPORT COULDN'T READ IS SAID AS THAT, never as a
-// list. The acknowledgements and the admissions are read beside each open
-// window, and a failed read of either was taken as an empty register: every
-// participant named as owing a restart, or nobody's admission holding the
-// window, both printed by the harness and the dashboard as facts.
+// list: a failed read of the acknowledgements or the admissions taken as an
+// empty register names every participant as owing a restart, or nobody's
+// admission as holding the window.
 //
 // Mutation: answer the whole participant set, or nobody, for an unreadable
 // register, or leave either flag unset.

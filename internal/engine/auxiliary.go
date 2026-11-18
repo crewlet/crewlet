@@ -19,57 +19,18 @@ import (
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
-// THE AUXILIARY SEAM, and the two things it does.
-//
-// Every completion this engine makes for a seat — or for a person — that is not
-// a phase of a turn runs on the seat's AUXILIARY chain (`llm_auxiliary`): the
-// turn-start memory filter, knowledge query and episode summary, every rewrite
-// a compaction makes, the reflection workers after a turn, the background
-// learning passes, and a person's question answered on the operator surface.
-// Every one of them resolves its model through ONE seam,
-// [auxiliarySeam.Auxiliary], and the seam does what none of them should do for
-// itself:
-//
-//   - it CHARGES each completion to the fleet's token counters after the call,
-//     whatever its caller makes of the answer — an agent seat's spend to the
-//     seat and the company, anything else (a person's question, a pass on a
-//     unit a person leads) to the company alone;
-//   - it RECORDS each completion in this node's auxiliary-spend ledger
-//     (internal/auxspend) under the attribution its caller states, so every
-//     spend figure read from events — the usage history, the live rollup, the
-//     turn list, a turn's page, a task's spend — holds what the counters hold.
-//
-// ONE SEAM rather than a charge call and a record call at each site, because a
-// call per site is the shape that let this spend go uncounted: the turn loop
-// and the sandbox charged, and every other completion resolved a model and
-// called Provider.Complete directly. Wrapping the seam is what makes a caller
-// added later charge and record without anyone remembering to — and the
-// attribution in its signature is what makes it impossible to call without
-// saying whose cost the call is. What is charged elsewhere: the turn loop's
-// own rounds through meterFor's meter, the round-cap extension judge and a
-// delegated worker's rounds through that same meter, and an executor's launch
-// when its spend is collected — each of which reaches its event as a phase
-// record, except the launch, whose record is its own (executor_collected).
-//
-// A CALL A TURN MAKES IS CHARGED THROUGH THAT SAME METER, which its
-// attribution carries ([auxspend.Use.Budget]): the counters are the seat's and
-// the company's either way, but only the turn's meter remembers what their
-// answer said, and the turn's next call asks it. See [recordedProvider].
-//
-// # The record does not wait on the counter
-//
-// The counter exists only where a coordination store does, so a call with no
-// counter is still recorded, and one whose charge FAILED is still recorded: the
-// counter then understates, and the rollups do not. A failed CALL is recorded
-// too, with whatever tokens it reported — a provider that bills a timed-out
-// request is spend like any other, and a figure that dropped it would hide a
-// model that times out.
-//
-// # The day is the charge's
-//
-// The instant a completion returned is read ONCE, and the counter's windows and
-// the record's company day are both cut from it, so a call that returned a
-// moment before midnight is on the same day in both.
+// THE AUXILIARY SEAM: every completion made for a seat or a person outside a
+// turn's phases (the turn-start memory filter, knowledge query and episode
+// summary, compaction rewrites, reflection and learning passes, a person's
+// operator question) resolves its model through [auxiliarySeam.Auxiliary],
+// which CHARGES it to the fleet's counters after the call (an agent seat's to
+// the seat and the company, anything else to the company alone) and RECORDS it
+// in the auxiliary-spend ledger (internal/auxspend) under the attribution its
+// caller must state, so every spend figure read from events holds what the
+// counters hold. One seam rather than a call per site, so a caller added later
+// cannot skip either. Charged elsewhere: the turn loop's rounds, the round-cap
+// judge and delegated workers through meterFor's meter, and an executor's
+// launch when its spend is collected (executor_collected).
 
 // phaseHeads is the phase registry's resolution as the seam reads it: the head
 // of a seat's chain for a phase. *phase.Registry satisfies it as written, so
@@ -114,10 +75,9 @@ type auxiliarySeam struct {
 // Auxiliary resolves the seat's auxiliary chain head, wrapped so every
 // completion made through it is charged and recorded under use.
 //
-// AN ATTRIBUTION THE RECORD CANNOT BE FILED UNDER IS REFUSED here, before a
-// model is resolved: spend filed under no stage or no purpose is spend every
-// breakdown would show as nothing in particular, and this is the one place
-// that can stop it rather than count it.
+// An attribution the record cannot be filed under (no stage or no purpose) is
+// refused before a model is resolved: every breakdown would show its spend as
+// nothing in particular.
 func (s auxiliarySeam) Auxiliary(role *org.Role, use auxspend.Use) (chain.Member, error) {
 	if err := use.Validate(); err != nil {
 		return chain.Member{}, err
@@ -129,11 +89,10 @@ func (s auxiliarySeam) Auxiliary(role *org.Role, use auxspend.Use) (chain.Member
 	return s.recorded(role, member, use), nil
 }
 
-// recordedMembers wraps members of the seat's own chains, so every completion
-// made through them is charged and recorded under use, for a caller that asks a
-// chain rather than the auxiliary head: the provider park's probe, which asks
-// the very members that refused (providerpark.go). An attribution the record
-// cannot be filed under is refused, as [auxiliarySeam.Auxiliary] refuses it.
+// recordedMembers wraps members of the seat's own chains as
+// [auxiliarySeam.Auxiliary] wraps the head, refusing the same attributions, for
+// a caller that asks a chain: the provider park's probe, which asks the very
+// members that refused (providerpark.go).
 func (s auxiliarySeam) recordedMembers(role *org.Role, members []chain.Member, use auxspend.Use) ([]chain.Member, error) {
 	if err := use.Validate(); err != nil {
 		return nil, err
@@ -151,9 +110,8 @@ func (s auxiliarySeam) recorded(role *org.Role, member chain.Member, use auxspen
 	switch {
 	case use.Budget != nil:
 		// THE TURN'S OWN METER, for a call the turn makes: the same
-		// counters the seat's bare recorder would reach, through the one
-		// frame that remembers what their answer said — see
-		// [auxspend.Budget].
+		// counters, through the one frame that remembers what their answer
+		// said, which the turn's next call asks ([auxspend.Budget]).
 		meter = use.Budget
 	case s.charge != nil:
 		meter = s.charge(role, use.Stage)
@@ -169,15 +127,12 @@ func (s auxiliarySeam) recorded(role *org.Role, member chain.Member, use auxspen
 	return member
 }
 
-// seatOf is whose spend a call is, as its record names it.
-//
-// AN AGENT SEAT'S, by its derived id, except on the operator stage; anything
-// else is a PERSON's — the human seat a person's credential is bound to, or the
-// one leading a unit whose background pass runs on its chain. A human seat has
-// no agent id and no seat budget, and the record's `role` labels an AGENT seat
-// — it fills the store's `agent_role` column, which every per-seat read prints
-// as an agent's name — so a person is named on its own two keys instead
-// (`actor_seat`, `actor_role`).
+// seatOf is whose spend a call is, as its record names it: an agent seat's by
+// its derived id, except on the operator stage; anything else is a PERSON's
+// (the human seat a credential is bound to, or the lead of a unit whose
+// background pass runs on its chain), named on `actor_seat` and `actor_role`,
+// because the record's `role` fills the store's `agent_role` column, which every
+// per-seat read prints as an agent's name.
 func (s auxiliarySeam) seatOf(role *org.Role, stage types.AuxStage) auxspend.Seat {
 	if role == nil {
 		return auxspend.Seat{}
@@ -190,27 +145,16 @@ func (s auxiliarySeam) seatOf(role *org.Role, stage types.AuxStage) auxspend.Sea
 	return auxspend.Seat{Person: role.Handle(), PersonRole: role.Name}
 }
 
-// recordedProvider charges and records every completion after it returns.
-//
-// AFTER, as every charge in this engine is: a completion's size is known only
-// from its answer. And a RECORD, NEVER A VERDICT: spend that has happened is
-// recorded whole, past a ceiling included, which is what makes every gate read
-// "no room" afterwards. It used to go through the turn loop's Charge, which
-// refused a completion that did not fit and so recorded nothing: the counter
-// stayed under the ceiling, the gate still read room, and a company at its
-// ceiling paid for every pass after it with its counter hearing about none of
-// them.
-//
-// THE GATE IS ASKED BEFORE THE CALL, and is the caller's: for the reflection
-// stage, [Engine.reflectionRoom], asked by the pass through
-// [Engine.learningBudget]; for a person's question, the answer's own; and
-// for a call a TURN makes, the turn's own meter ([auxspend.Use.Budget]), asked here because
-// this is the one frame every in-turn call passes. That meter holds every
-// window the turn has seen full, its own auxiliary calls' included, so a call
-// it holds is one whose turn's next round is refused before it is sent: the
-// rewrite would be bought for a prompt nobody sends. Such a call is not made,
-// so nothing is charged or recorded, and its caller takes the error as it
-// takes any rewrite it cannot have.
+// recordedProvider charges and records every completion AFTER it returns, since
+// its size is known only from its answer, as a RECORD, NEVER A VERDICT: spent
+// tokens are recorded whole, past a ceiling included, so every gate then reads
+// "no room". The gate is asked BEFORE the call, by its caller
+// ([Engine.reflectionRoom] through [Engine.learningBudget] for reflection, the
+// answer's own for a person's question), except for a call a turn makes: the
+// turn's meter ([auxspend.Use.Budget]) is asked here, the one frame every
+// in-turn call passes. That meter holds every window the turn has seen full, so
+// a call it holds is a rewrite for a round that would be refused: it is not
+// made, nothing is charged or recorded, and the caller takes the error.
 type recordedProvider struct {
 	inner  llm.Provider
 	key    string
@@ -238,9 +182,10 @@ func (p recordedProvider) Complete(ctx context.Context, req llm.Request) (*llm.C
 	completion, err := p.inner.Complete(ctx, req)
 	ended := p.now()
 
-	// What the answer BILLED. The call is recorded whether or not it
-	// answered — a failed call is still a call — and the caller gets exactly
-	// what the provider returned.
+	// What the answer BILLED. A failed call is recorded too, with whatever
+	// tokens it reported: a vendor bills a timed-out request. ended is read
+	// ONCE, so the counter's windows and the record's company day agree
+	// across midnight. The caller gets exactly what the provider returned.
 	spent := auxspend.Spent{Calls: 1}
 	model := p.inner.Model()
 	if completion != nil {
@@ -252,21 +197,15 @@ func (p recordedProvider) Complete(ctx context.Context, req llm.Request) (*llm.C
 	}
 	p.share.record(context.WithoutCancel(ctx), spent.Tokens(), ended)
 	if tokens := spent.Tokens(); tokens > 0 && p.meter != nil {
-		// context.WithoutCancel: the tokens are already spent at the
-		// vendor. A record skipped because the caller's deadline expired
-		// between the answer and the write is money the counter never
-		// hears about — exactly the leak this seam exists to close.
+		// context.WithoutCancel: the tokens are already spent at the vendor,
+		// and a caller's deadline expiring before the write must not hide them.
 		if spendErr := p.meter.Record(context.WithoutCancel(ctx), tokens, ended); spendErr != nil {
-			// Logged, never propagated. The completion SUCCEEDED and the
-			// caller's work is valid; failing it here would turn a
-			// coordination blip into a reflection outage, and the
-			// pre-flight gates are what actually stop the spending.
-			//
-			// WHICH COUNTER IS SHORT is in the detail, because the two
-			// failures send an operator to different places: a record
-			// that reached the company and not the seat leaves the
-			// company exact (coord.SeatUncountedError), and only one
-			// seat's own ceiling judges less than it spent.
+			// Logged, never propagated: the completion succeeded, failing it
+			// turns a coordination blip into a reflection outage, the
+			// pre-flight gates are what stop spending, and the ledger below
+			// records the call regardless. The detail names WHICH counter is
+			// short: a coord.SeatUncountedError leaves the company exact and
+			// only the seat's own ceiling understating.
 			detail := "the fleet counter now understates this company's spend; "
 			var partial *coord.SeatUncountedError
 			if errors.As(spendErr, &partial) {
@@ -323,9 +262,8 @@ func (s orgSpend) Record(ctx context.Context, tokens int, at time.Time) error {
 }
 
 // spendFor is the recorder for one agent seat's auxiliary spend, or nil where
-// [Engine.meterFor] would build no meter: no coordination store, or a handle
-// the epoch does not name as an agent seat. The same scope and clock as the
-// seat's turns, so a pass and a round are counted in one window.
+// [Engine.meterFor] would build no meter. It takes the meter's scope and clock,
+// so a pass and a round are counted in one window.
 func (e *Engine) spendFor(c *Company, handle string) spendRecorder {
 	m := e.meterFor(c, handle)
 	if m == nil {
@@ -335,15 +273,10 @@ func (e *Engine) spendFor(c *Company, handle string) spendRecorder {
 }
 
 // auxiliaryCharge is which counter one auxiliary call is recorded in, or nil
-// where there is no coordination store to count on.
-//
-// THE COMPANY'S ALONE WHERE NO SEAT BUDGET NAMES THE CALL: a person's question
-// (the operator stage), and a call on a seat the epoch does not run as an agent
-// — a unit's background pass resolved on the chain of the person who leads it.
-// The second used to reach no counter at all, because the seat's meter is all
-// there was and a human seat has none, so a company whose skills were promoted
-// on a founder-led unit's chain paid for every promotion with its counter
-// hearing about none of them.
+// where there is no coordination store. It is the company's alone where no seat
+// budget names the call: a person's question (the operator stage), or a call on
+// a seat the epoch does not run as an agent, such as a unit's background pass on
+// the chain of the person who leads it, since a human seat has no meter.
 func (e *Engine) auxiliaryCharge(c *Company) func(*org.Role, types.AuxStage) spendRecorder {
 	if e.backends == nil || e.backends.Fleet == nil {
 		return nil
@@ -384,12 +317,8 @@ func (e *Engine) seamFor(c *Company) (auxiliarySeam, bool) {
 }
 
 // compactorFor is the compactor this epoch rewrites over-budget text with: the
-// seat's own auxiliary chain through the seam every learning worker uses — so a
-// rewrite is charged and recorded like any other auxiliary call — over the
-// engine's one cache.
-//
-// Built per call rather than held on the epoch, because it is two pointers:
-// what makes it worth keeping is the cache, and that is the engine's.
+// auxiliary seam, so a rewrite is charged and recorded, over the engine's one
+// cache. Built per call because it is two pointers; the cache is what is kept.
 func (e *Engine) compactorFor(c *Company) *compact.Compactor {
 	models := e.auxiliaryFor(c)
 	if models == nil {

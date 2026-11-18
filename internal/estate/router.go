@@ -28,39 +28,34 @@ type Asker interface {
 	Ask(ctx context.Context, subject string, request []byte, want int) ([][]byte, error)
 }
 
-// Placement is how the router learns which data nodes to ask. Declared here,
-// by the consumer: the engine's answer is every live data node, from its
-// watched view of the fleet's presence leases.
-//
-// ASKED ON EVERY REQUEST, so every answer comes from memory — a watched view,
-// never a listing of the fleet per call.
+// Placement is how the router learns which data nodes to ask: the engine's
+// answer is every live data node, from its watched view of the presence leases.
+// It is asked on every request, so it answers from memory, never a listing of
+// the fleet per call.
 type Placement interface {
 	// Holders is every data node that holds the estate, in no particular
 	// order. An error is UNKNOWN, never "no holder": an empty list is a
 	// fleet with no data node in it.
 	Holders() ([]string, error)
 
-	// Unanswered tells the placement a node it named did not answer — through
-	// a wait of the router's own, never one its caller ended ([Router.ask]) —
-	// so a node that left on a clean stop is gone from the next answer rather
-	// than from the one a heartbeat later. It must not block.
+	// Unanswered tells the placement a node it named went silent through a wait
+	// of the router's own, never one its caller ended ([Router.ask]), so a node gone
+	// on a clean stop leaves the next answer rather than one a heartbeat later. It
+	// must not block.
 	Unanswered(node string)
 }
 
 // LocalBackends is this data node's own copy of the estate.
 type LocalBackends interface {
-	// For is the backend over this node's copy of DOMAIN, or false while
-	// that copy is OUT OF SERVICE: wrong rather than behind, so the node
-	// answers none of that domain's operations from it while its seats'
-	// calls on it go to the other data nodes. Another domain's fault is not
-	// this one's — every other domain's copy keeps serving (ADR-0079).
-	// [SeatCopy] asks for the copy a SEAT is served by.
+	// For is the backend over this node's copy of domain, or false while that
+	// copy is OUT OF SERVICE (wrong rather than behind): the node answers none of
+	// that domain's operations from it, while every other domain's copy keeps
+	// serving (ADR-0079). [SeatCopy] asks for the copy a seat is served by. The
+	// backend's [Backend.Answers] is that domain's own.
 	//
-	// The backend's [Backend.Answers] is that domain's own.
-	//
-	// It takes a context because what a copy may answer is read from the
-	// log's broker; an implementation answers from a verdict it refreshes,
-	// never with a broker round trip per request.
+	// It takes a context because the verdict is read from the log's broker; an
+	// implementation answers from a verdict it refreshes, never with a broker round
+	// trip per request.
 	For(ctx context.Context, domain string) (Backend, bool)
 }
 
@@ -73,21 +68,18 @@ type RouterOptions struct {
 	Queue     Asker
 	Placement Placement
 
-	// Git is who serves GIT: every live node with the `gitlet` role, the
-	// engine's from the same watched presence view as Placement, and its
-	// error UNKNOWN, never "no Gitlet node". Asked by every operation on a
-	// repository's git objects ([op.keyedOnGit], ADR-0089), and — as ONE
-	// listing of the Gitlet nodes beside what each advertises it can give its
-	// background work ([GitPlacement.Listing]) — by [Router.Maintainer],
-	// which places a repository's maintenance by it. Required: a router
-	// built without one would answer every git read as a fleet with no Gitlet
-	// node in it, a wiring mistake that reads as a deployment fact.
+	// Git is who serves git: every live node with the `gitlet` role, from the
+	// same watched presence view as Placement, its error UNKNOWN, never "no Gitlet
+	// node". Every operation on a repository's git objects asks it
+	// ([op.keyedOnGit], ADR-0089), and [Router.Maintainer] places maintenance by
+	// its [GitPlacement.Listing]. Required: without one every git read would answer
+	// as a fleet with no Gitlet node, a wiring mistake that reads as a deployment
+	// fact.
 	Git GitPlacement
 
-	// LocalGit is this node's own git half, resolved PER REQUEST ([LocalGit]:
-	// Gitlet is built at boot or at the first apply that sets
-	// code.backend: gitlet, after the router) — nil on a node without the `gitlet`
-	// role, which serves none.
+	// LocalGit is this node's own git half, resolved PER REQUEST ([LocalGit]),
+	// since Gitlet may be built after the router (at the first apply that sets
+	// code.backend: gitlet); nil on a node without the `gitlet` role.
 	LocalGit LocalGit
 
 	// Local is this node's own copy, nil on a node without the `data`
@@ -118,74 +110,17 @@ type RouterOptions struct {
 }
 
 // Timing is every duration the router waits on that a test must be able to
-// scale: one attempt's budget on one data node for a read and for a write, one
-// git read's and one engine write's on one Gitlet node, and the admission
-// question's whole budget.
+// scale: one attempt on one data node for a read and for a write, one git read
+// and one engine write on one Gitlet node, and the admission question's whole
+// budget. [Production] is the value every node runs; a suite in another package
+// builds its own, one value in the jsprovision.Timing shape, since it can set
+// no unexported field.
 //
-// [Production] is the value every node runs, and nothing in the engine builds
-// another. A suite that drives the router from outside this package builds its
-// own: one value rather than three fields set from inside the package, because
-// a test in another package can reach no unexported field, and the jsprovision
-// idiom (jsprovision.Timing) is the tree's one shape for a set of durations a
-// test scales.
-//
-// WHAT A SHORTER TIMING BUYS is the cost of a WEDGED node — one that takes a
-// request and never answers it, which its asker waits out to the end of the
-// attempt — and of an admission question no data node answers. A node that is
-// GONE costs no attempt at any timing: nothing serves its subject any more,
-// and the broker's ask ends at once.
-//
-// THE SERVING NODE FITS ITS WAITS INTO THE ATTEMPT, rather than the attempt
-// having to outlast them: every wait a node makes before it answers another —
-// for the asker's floor, for a linearizable read's barrier and the position it
-// established, for a write's own record — ends gitlet.ReplyMargin short of the
-// attempt's end ([statelog.WithReplyMargin]), so a node that runs out of time
-// says so (`behind`, `no_quorum` — `broker_stalled` on a log one member
-// stores — or `pending`) while its asker is still listening. A shorter attempt therefore costs only that a node behind by more
-// than it leaves says so sooner; it never reads an HONEST node as a wedged one,
-// which is what an attempt sized below the waits used to do — the asker had
-// stopped listening when a lagging but healthy node answered, asked it last for
-// suspectFor and told the placement it went unanswered. Nor could an attempt be
-// sized to outlast the waits instead: at their whole budgets they are two
-// [statelog.ReadBudget]s and two [statelog.DefaultBarrierBudget]s (a barrier
-// may first wait out one already in flight), fourteen seconds, past production's
-// own read attempt and a figure no test could scale.
-//
-// What [NewRouter] refuses, naming the field and the arithmetic, is an attempt
-// that cannot do its job at all:
-//
-//   - A read attempt no longer than [minReadAttempt], the reply's margin: the
-//     serving node would have no time left in it to wait for anything or to
-//     run a query, so every read it is asked comes back refused or late. The
-//     same holds for a git read's attempt on a Gitlet node.
-//   - A write attempt no longer than [minWriteAttempt]: the serving node's
-//     floor wait at its whole budget, then a whole gitlet.CommitBudget and
-//     gitlet.ReplyMargin. The attempt's end travels to a repository's committer
-//     as the push's deadline, and a committer starts a batch only while a
-//     budget and the margin are left before it — so under the bound a push
-//     whose committer first waited out its floor is answered busy, undecided,
-//     and under the committer's two terms alone EVERY push asked of another
-//     node's committer is. A suite that needs a wedged committer to cost less
-//     has to shorten the committer's budget with it, which is the committer's
-//     to expose rather than the router's to assume.
-//   - A git write attempt no longer than [minGitWriteAttempt]: the proposal
-//     the write makes needs a whole [minWriteAttempt] left after its upload,
-//     and the Gitlet node is served until a reply's margin before the attempt
-//     ends, so under the bound every engine write is answered busy before
-//     its upload — "a git write's attempt must hold the proposal it makes".
-//
-// The admission budget bounds a floorless question ([opPing]), so it has only
-// to be a positive duration.
-//
-// A FIELD LEFT ZERO IS REFUSED BY NAME as well, never read as "the default",
-// because each would be read as something nobody chose: a zero attempt is no
-// bound of the router's own ([attemptContext] takes it as the caller's
-// deadline, unchanged), so a request from a caller with none would wait on a
-// wedged data node for ever rather than move on to the next; and a zero
-// admission budget is a deadline already past, so every placement sweep would
-// withhold every seat's claim — a wiring mistake that reads as a fleet with no
-// data node in it. A negative field is a deadline already past for any of
-// them.
+// A serving node ends every wait a reply's margin short of the attempt
+// ([statelog.WithReplyMargin]), so a shorter attempt makes a lagging node say so
+// sooner and never reads it as wedged. [NewRouter] refuses by name a field left
+// zero, never read as a default, or too short to do its job ([minReadAttempt],
+// [minWriteAttempt], [minGitWriteAttempt]): package doc, "The router's timing".
 type Timing struct {
 	// ReadAttempt bounds one read's wait on one data node — see
 	// [ReadAttempt]. Longer than [minReadAttempt].
@@ -214,54 +149,41 @@ func Production() Timing {
 		GitReadAttempt: GitReadAttempt, GitWriteAttempt: GitWriteAttempt}
 }
 
-// GitWriteAttemptFor is an engine write's attempt on one Gitlet node by its kind:
-// [Timing.GitWriteAttempt] with its build term — gitlet.WriteBuildDeadline, the
-// build of a write landing as one push — replaced by the kind's own
-// (gitlet.EngineWriteKind.BuildDeadline). So a merge_change, whose build is a
-// mergeability's (gitlet.MergeBuildDeadline, 30 s), is given 102 s in
-// production, a rebase_change, whose build replays up to
-// gitlet.MaxRebaseCommits commits (gitlet.RebaseBuildDeadline, 40 s), 112 s, and
-// every other kind the 82 s it was: the Gitlet node fits every
-// stage of the write into its attempt (internal/gitlet/host's deadline rule),
-// and a kind given a longer build must be given the time to run it before its
-// upload and proposal, or every such build near its bound is answered busy.
+// GitWriteAttemptFor is an engine write's attempt on one Gitlet node by its
+// kind: [Timing.GitWriteAttempt] with its build term (gitlet.WriteBuildDeadline)
+// replaced by the kind's own (gitlet.EngineWriteKind.BuildDeadline): 102 s for
+// a merge_change, 112 s for a rebase_change, 82 s for every other kind in
+// production. The Gitlet node fits every stage of the write into its attempt
+// (internal/gitlet/host's deadline rule), so a longer build needs its time
+// before the upload and proposal, or every build near its bound is answered
+// busy.
 func (t Timing) GitWriteAttemptFor(kind gitlet.EngineWriteKind) time.Duration {
 	return t.GitWriteAttempt - gitlet.WriteBuildDeadline + kind.BuildDeadline()
 }
 
 // minReadAttempt is what every read attempt must be longer than: the reply's
-// margin, gitlet.ReplyMargin — the answer's trip back, which a serving node
-// leaves between the end of every wait it makes and its asker's deadline
-// ([statelog.WithReplyMargin]). An attempt no longer than that leaves the node
-// nothing to wait or run a query in; what an attempt holds beyond it is what
-// the serving node's waits and its query share. See [Timing].
+// margin, gitlet.ReplyMargin, which a serving node leaves between its last wait
+// and its asker's deadline ([statelog.WithReplyMargin]). An attempt no longer
+// leaves it nothing to wait or query in.
 const minReadAttempt = gitlet.ReplyMargin
 
 // minWriteAttempt is what every write attempt must be longer than: the serving
 // node's floor wait at its whole budget ([statelog.ReadBudget]), then a whole
-// gitlet.CommitBudget and gitlet.ReplyMargin, which a repository's committer must
-// still find before a push's deadline to start the push's batch at all.
+// gitlet.CommitBudget and gitlet.ReplyMargin, which a repository's committer
+// must still find before a push's deadline to start its batch at all. It is what
+// a PUSH needs, not a bound on any write: a walking gesture is what writeAttempt
+// is sized for.
 //
-// It is what a PUSH needs, and no bound on how long any write's serving node
-// takes: a walking gesture — a merge, a move — appends once per object it
-// walks and waits between them, which is what production's write attempt is
-// sized for (writeAttempt), and every one of those waits ends inside whatever
-// attempt the write is given, a reply's margin short of it. See [Timing].
-//
-// IT IS gitlet.MinProposeAttempt, the domain's one sum of those three terms,
-// because Gitlet holds an engine write to it too — refusing to upload
-// a write whose caller left less than it for the proposal after the upload —
-// and two sums would let the two disagree on what a proposal needs.
+// It IS gitlet.MinProposeAttempt, because Gitlet holds an engine write's
+// proposal to the same sum, and two sums could disagree.
 const minWriteAttempt = gitlet.MinProposeAttempt
 
 // minGitWriteAttempt is what every git write attempt must be longer than: the
-// proposal the write makes ([minWriteAttempt]) and the reply's margin. The Gitlet
-// node is served until a reply's margin before the attempt ends
-// (gitlet.AnswerBy), and it uploads a write's bundle only while the proposal's
-// whole attempt is still left after the upload (internal/gitlet/host's deadline
-// rule) — so an attempt no longer than the two together leaves no write any
-// time to sync, build or upload in, and answers every one busy before its
-// upload. See [Timing].
+// proposal the write makes ([minWriteAttempt]) and the reply's margin. The
+// Gitlet node answers a reply's margin before the attempt ends (gitlet.AnswerBy)
+// and uploads only while a whole proposal's attempt is left after the upload
+// (internal/gitlet/host's deadline rule), so a shorter attempt answers every
+// write busy before its upload.
 const minGitWriteAttempt = minWriteAttempt + gitlet.ReplyMargin
 
 // refusal is why a router may not be built with t, naming the first field it
@@ -303,55 +225,17 @@ func (t Timing) refusal() error {
 }
 
 // Router routes every estate operation to a data node: this node, in-process,
-// where it holds the estate and its copy serves; otherwise the other data
-// nodes over the broker, one subject per node.
+// where its copy of the operation's domain serves; otherwise the other data
+// nodes over the broker, one subject per node. One runs on every node, so a
+// tool behaves identically with or without the `data` role, and a data node's
+// path to its own copy is its path to a peer's, floors included.
 //
-// # One per node, on every node
-//
-// A node without the `data` role holds nothing and asks for everything; a data
-// node answers its own seats from its own copy, and asks a peer only while its
-// copy of the operation's domain is out of service (ADR-0079) or cannot take
-// the request. Both are the same
-// router, so a tool behaves identically on either, and the path a data node
-// takes to its own copy is the path it takes to a peer's, floors included.
-//
-// # The order data nodes are asked in
-//
-// This node first, where its copy serves. Then the node that answered the
-// operation's domain last (sticky, per domain: its applier of that domain is
-// the one most likely to have this node's writes), then [rendezvous.Order]
-// keyed on this node's own id — with every node that recently answered that
-// its copy of the domain is out of service after the rest, and every node
-// that recently went silent last ([Router.order]). The rendezvous order picks
-// an asker's FIRST data node and every node it fails over to, spread evenly
-// across the data nodes —
-// so the askers of a node that goes silent scatter over the survivors rather
-// than fall on one neighbour — but not where an asker STAYS: it keeps asking
-// a domain's sticky node until that node goes silent or says its copy of the
-// domain is out of service. So a data node that joins is
-// asked only by askers with no sticky node yet or whose sticky node goes
-// silent, and after a rolling restart each restarted node's askers stay where
-// they failed over to. A node that ran nothing is passed over by every class
-// of operation; what may be repeated after a node MAY have run it is the
-// class's ([opClass]).
-//
-// A KEYED operation — a push — keeps the demotions and nothing else of this
-// order: it is asked in [rendezvous.Order] of its KEY over every data node,
-// this one at its place, with no sticky node ([Router.keyedOrder]) — and with
-// one demotion of its own, since no sticky node moves it off a node that
-// refused: a node that ran nothing for it is asked last for that operation
-// ([Router.markDeclined]).
-//
-// A node that said inside [suspectFor] that it is BEHIND THE COMPANY'S
-// CONFIGURATION is not asked in either order at all: it is asked only as the
-// walk's last resort, after every copy that only lags, told at once to answer
-// anyway ([Router.markBehindConfig]), for every operation but admission's
-// ungated ping.
-//
-// A GIT operation ([op.keyedOnGit]) is asked of the GITLET nodes instead, in the
-// keyed order over [RouterOptions.Git] — the repository's home first, this
-// node at its place where its git half is built — with the keyed order's
-// demotions and none of the data walk's preferences ([Router.routeGit]).
+// The order nodes are asked in is [Router.order]'s, a keyed operation's
+// [Router.keyedOrder]'s and a git operation's [Router.routeGit]'s; what may be
+// repeated after a node MAY have run it is its class's ([opClass]). A node
+// behind the company's configuration is asked only as the walk's last resort
+// ([Router.markBehindConfig]). Package doc, "One node per request, never a
+// scatter".
 type Router struct {
 	self      string
 	queue     Asker
@@ -386,17 +270,14 @@ type Router struct {
 	// declined is when each node that ran nothing for a KEYED operation —
 	// answered `no_backend` — may be asked ahead of the rest for it again.
 	declined map[nodeOp]time.Time
-	// unread is, for each node that refused a request of a KEYED operation
-	// for keys its build does not declare ([ErrUnknownKeys]), those keys
-	// and when it may be asked ahead of the rest again for a request
-	// carrying one of them ([Router.markUnread]) — by what it refused, and
-	// never for the whole operation.
+	// unread is, per node and KEYED operation, the keys a request was refused for
+	// because the node's build does not declare them ([ErrUnknownKeys]), and until
+	// when a request carrying one asks it last ([Router.markUnread]); never the
+	// whole operation.
 	unread map[nodeOp]unreadKeys
-	// behindConfig is when each node that answered `behind_config` may be
-	// asked an operation the preference holds back ahead of the last resort
-	// again ([Router.markBehindConfig]). Per NODE, because the answer is:
-	// whether a node serves the company's configuration is the node's
-	// posture, the same for every copy it holds and every operation.
+	// behindConfig is until when each node that answered `behind_config` is asked
+	// only as the last resort ([Router.markBehindConfig]). Per NODE: serving the
+	// company's configuration is the node's posture, not a copy's.
 	behindConfig map[string]time.Time
 	// admitted caches a REMOTE node's answer to the admission question —
 	// see [Router.Serves] — nil until one has been asked.
@@ -467,98 +348,60 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 }
 
 // ReadAttempt bounds one read's wait on one node: [Production]'s
-// [Timing.ReadAttempt].
+// [Timing.ReadAttempt], a ceiling under the caller's own deadline.
 //
-// TEN SECONDS: every wait a serving node makes for a linearizable read at its
-// whole budget — the asker's floor ([statelog.ReadBudget]), the read's barrier
-// ([statelog.DefaultBarrierBudget]) and the barrier's position (ReadBudget
-// again) — and the reply's margin on top (gitlet.ReplyMargin): 2 + 5 + 2 + 1.
-// So production cuts a healthy node's waits short only where its barrier
-// first waits out one already in flight, and the node then says so in time
-// ([statelog.WithReplyMargin]); a node that has said nothing at all in that
-// long is one that is gone rather than slow, and the next one answers sooner
-// than it would. TestProductionsReadAttemptHoldsALinearizableReadsWaits holds
-// the sum. It is a ceiling under the caller's own deadline, never over it, and
-// above [minReadAttempt], which [NewRouter] holds every timing to.
-//
-// GITLET'S LOCAL READS ARE BOUNDED BY THE SAME FIGURE — gitproc's
-// ReadDeadline and SlotWait, one read attempt each — and since gitproc imports
-// no engine package, TestGitprocsReadBoundsAreOneReadAttempt holds the
-// equality from here.
+// TEN SECONDS: a linearizable read's waits at their whole budgets — the
+// asker's floor ([statelog.ReadBudget]), the barrier
+// ([statelog.DefaultBarrierBudget]) and its position (ReadBudget) — plus the
+// reply's margin (gitlet.ReplyMargin): 2 + 5 + 2 + 1, held by
+// TestProductionsReadAttemptHoldsALinearizableReadsWaits. A node silent that
+// long is gone rather than slow. Gitproc's ReadDeadline and SlotWait are one
+// read attempt each; TestGitprocsReadBoundsAreOneReadAttempt holds that from
+// here, since gitproc imports no engine package.
 const ReadAttempt = 10 * time.Second
 
-// writeAttempt bounds one write's wait on one node, for a caller with no
-// deadline of its own: [Production]'s [Timing.WriteAttempt], and read by
-// nothing else, so a router waits only the timing it was built with.
+// writeAttempt bounds one write's wait on one node for a caller with no
+// deadline of its own: [Production]'s [Timing.WriteAttempt], read by nothing
+// else.
 //
-// SIXTY SECONDS: a single append resolves within [statelog.DefaultResolveBudget]
-// (five), and the longest gesture a seat's tools make — a merge or a move —
-// appends once per object it walks and waits between them. A caller with a
-// deadline is held to that instead.
-//
-// The attempt's end travels with the request ([request.Deadline]), and a
-// repository's committer answers a push inside it: it starts a batch only
-// while a gitlet.CommitBudget and gitlet.ReplyMargin are left before it, so the
-// attempt, less the serving node's floor wait, has to hold more than both —
-// [minWriteAttempt], which [NewRouter] holds every timing to — and what is left
-// over, twenty-seven seconds, is how long a push may queue behind its
-// repository's earlier ones.
+// SIXTY SECONDS: one append resolves within [statelog.DefaultResolveBudget]
+// (five), and the longest gesture, a merge or a move, appends once per object
+// it walks. A repository's committer starts a push's batch only while a
+// gitlet.CommitBudget and gitlet.ReplyMargin are left before the attempt's end
+// ([request.Deadline]), so past those and the floor wait ([minWriteAttempt]) a
+// push may queue twenty-seven seconds behind its repository's earlier ones.
 const writeAttempt = 60 * time.Second
 
 // suspectFor is how long a node that went unanswered is asked last.
 //
-// THIRTY SECONDS, which is the order of a presence lease's life: a node that
-// died leaves the placement when its lease lapses, and until then every
-// request that asked it first would wait out a whole attempt. Asked last
-// instead, it costs one attempt per router rather than one per request.
+// THIRTY SECONDS, the order of a presence lease's life: a dead node leaves the
+// placement when its lease lapses, and asked last meanwhile it costs one
+// attempt per router rather than one per request.
 //
-// AND IT IS HOW LONG A NODE THAT ANSWERED `out_of_service` FOR A DOMAIN IS
-// ASKED LAST FOR THAT DOMAIN ([Router.markOutOfService]). A copy goes out of
-// service for minutes at the least — until an eviction is lifted, a snapshot
-// is adopted, an upgrade decodes what it held — so asked first, it cost every
-// operation on the domain a round trip that ran nothing; asked last, a copy
-// that recovers inside the window is asked last meanwhile, never not asked.
-// One window rather than two, because the remedy is the same — a node not
-// worth asking first — and a second number would be a second opinion about
-// how long that lasts.
-//
-// AND HOW LONG A NODE THAT RAN NOTHING FOR A KEYED OPERATION IS ASKED LAST FOR
-// IT ([Router.markDeclined]), for the same reason again: what makes a
-// committer refuse — a maintenance window, a stop, an eviction, a log it is
-// behind — lasts minutes, not one request.
-//
-// AND HOW LONG A NODE BEHIND THE COMPANY'S CONFIGURATION IS ASKED ONLY AS THE
-// LAST RESORT ([Router.markBehindConfig]). That lasts longer still — the
-// control plane moves a node back only at its next posture decision after an
-// apply succeeds, and a stuck node stays until a person acts — so the window
-// is how long a router goes on asking a node that has since become current
-// last, and once a window, the refusal's round trip a router pays to learn
-// that the node is still behind.
+// It is the one window for every other demotion too — a copy `out_of_service`
+// ([Router.markOutOfService]), a keyed operation's `no_backend`
+// ([Router.markDeclined]), `behind_config` ([Router.markBehindConfig]) —
+// because each condition lasts minutes rather than one request and the remedy
+// is the same: a node not worth asking first. A second number would be a
+// second opinion about how long that lasts.
 const suspectFor = 30 * time.Second
 
 // admissionTrust is how long a remote data node's answer to the admission
-// question is trusted.
-//
-// FIVE SECONDS: the admission gate is asked on every placement sweep, and a
-// fresh ask per sweep is a request to a data node per heartbeat per node for
-// an answer that changes when a node joins or leaves — which the presence
-// lease's own TTL already bounds at the same order. A LOCAL answer is never
-// cached: it costs no request, and a node's own copy falling behind must
-// withhold its next claim at once.
+// question is trusted. FIVE SECONDS: it is asked on every placement sweep, and
+// its answer changes only as nodes join or leave, which the presence lease's
+// TTL bounds at the same order. A LOCAL answer is never cached: it costs no
+// request, and a node's own copy falling behind must withhold its next claim at
+// once.
 const admissionTrust = 5 * time.Second
 
-// admissionAsk bounds the REMOTE half of the admission question as a whole —
-// every data node it asks, together — where [ReadAttempt] bounds only each one:
-// [Production]'s [Timing.AdmissionAsk], and read by nothing else.
+// admissionAsk bounds the REMOTE half of the admission question as a whole,
+// every data node it asks together, where [ReadAttempt] bounds each one:
+// [Production]'s [Timing.AdmissionAsk], read by nothing else.
 //
-// FIVE SECONDS, what a node holding no data waited before the router, and for
-// its reason: admission is asked on every placement sweep, synchronously — the
-// first one at boot, before the host starts — and each data node that is
-// listed but silent (wedged, cut off, restarting while its presence lease runs
-// out) would otherwise cost the sweep a whole read attempt, ten seconds apiece,
-// with its claims and its sheds waiting behind it. A node that has not
-// answered in five is not one a seat should attach to on this sweep: the
-// router has marked it suspect, and the next sweep — a heartbeat later — asks
+// FIVE SECONDS: admission is asked synchronously on every placement sweep, the
+// first before the host starts, and each listed but silent data node would
+// otherwise cost the sweep a whole read attempt, its claims and sheds waiting
+// behind it. A node silent for five is marked suspect, and the next sweep asks
 // the others first.
 const admissionAsk = 5 * time.Second
 
@@ -586,29 +429,25 @@ type exchange struct {
 	// decode is a remote answer's result, in the caller's type.
 	decode func(raw json.RawMessage) (any, error)
 
-	// unread is the keys a serving node of this build refuses the arguments
-	// for, read from their encoding as a request off the wire is read
-	// ([decodeInput], [inputs]): what this node's own copy answers a request it
-	// was handed in process and refused for naming a value its build does not
-	// know ([unreadHere]).
+	// unread is the keys a serving node of this build would refuse the encoded
+	// arguments for ([decodeInput], [inputs]); [unreadHere] uses it to answer an
+	// in-process refusal as the wire would.
 	unread func() ([]string, error)
 
-	// written is the asking turn's [worklet.WriteLog], which every node
-	// that RAN the operation remotely answers into ([reply.Written]) — the
-	// one an answer kept is not the only one that committed, since a walk
-	// asks the next node after an unvouched one. Nil where the actor holds
-	// none; an in-process run reports into it directly.
+	// written is the asking turn's [worklet.WriteLog], which every node that RAN
+	// the operation remotely answers into ([reply.Written]): a walk asks past an
+	// unvouched node, so the answer kept is not the only commit. Nil where the
+	// actor holds none; an in-process run reports into it directly.
 	written worklet.WriteLog
 
-	// key is the arguments' routing key for a KEYED operation
-	// ([op.keyedBy], [op.keyedOnGit]), and empty for every other: the walk
-	// asks the nodes in its rendezvous order rather than this node first.
+	// key is a KEYED operation's routing key ([op.keyedBy], [op.keyedOnGit]),
+	// empty for every other: the walk asks in the key's rendezvous order rather
+	// than this node first.
 	key string
 
-	// home is the same operation with its arguments stamped as asked of the
-	// walk's effective home ([op.keyedOnGit]) — the one attempt of a git walk
-	// that may fill a copy — while this exchange's own are stamped not: nil
-	// for every operation but a git one.
+	// home is this exchange stamped as asked of the walk's effective home
+	// ([op.keyedOnGit]), the one git attempt that may fill a copy, while this one
+	// is stamped not. Nil for every operation but a git one.
 	home *exchange
 
 	// attempt is this exchange's own attempt on one node, read off its
@@ -622,13 +461,11 @@ type exchange struct {
 	here bool
 }
 
-// carrying is the matcher of a refusal's keys against this request — its
-// arguments as the wire carries them, and the actor it runs as — that a keyed
-// order asks of every node remembered refusing requests of the operation for
-// keys its build does not declare ([Router.markUnread]): true where the
-// request carries a member at one of the keys' paths ([carries]). The request
-// is decoded once, the first time a key is asked about, and never where no
-// node is remembered.
+// carrying matches a refusal's keys against this request (its arguments as
+// the wire carries them, and its actor) for a keyed order passing over a node
+// that refused requests carrying them ([Router.markUnread], [carries]). The
+// request is decoded once, on the first question, and never where no node is
+// remembered.
 func (x exchange) carrying(actor *Actor) func(keys []string) bool {
 	var (
 		read bool
@@ -660,18 +497,14 @@ func call[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, ar
 	return callAs(ctx, r, o, actor, args, false)
 }
 
-// callHere is [call] asked of THIS node's own copy first, even while that copy
-// lags its logs, and of the other data nodes only where it cannot answer.
+// callHere is [call] asked of THIS node's own copy first, even while it lags
+// its logs, and of the other data nodes only where it cannot answer.
 //
-// FOR A CALLER WHOSE QUESTION IS ABOUT THIS NODE'S OWN COPY: a decision about
-// a record this node's applier has just committed, which that copy holds by
-// construction and a peer may not yet. The ordinary walk passes a lagging copy
-// over for a peer's — the fresher answer, when "fresher" is what is wanted —
-// and for such a caller that turns every decision during a burst (the burst
-// that made the copy lag) into a network round trip to a node that may not
-// have applied the record at all. A copy that is out of service is still
-// passed over: lagging is distance, and this is a caller that does not mind
-// distance; a wrong copy is never an answer.
+// For a caller deciding about a record this node's applier has just committed,
+// which its own copy holds by construction and a peer may not: the ordinary
+// walk would pass the lagging copy over during the very burst that made it
+// lag, a round trip to a node that may lack the record. An out-of-service copy
+// is still passed over: lag is distance, and a wrong copy is never an answer.
 func callHere[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, args A) (R, error) {
 	return callAs(ctx, r, o, actor, args, true)
 }
@@ -682,11 +515,9 @@ func callAs[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, 
 	var zero R
 	spec := o.spec
 	if spec.actor && actor != nil {
-		// AN ACTOR THAT MAY WRITE NOTHING IS REFUSED BEFORE IT IS ASKED
-		// ANYWHERE, as a page or chat write's is through its arguments
-		// ([actorWrites]): the arguments are all [op.refusedBeforeAsking]
-		// sees, and every operation that runs as an actor is checked here,
-		// a read that runs as one (tracker.view_prior) included.
+		// AN ACTOR THAT MAY WRITE NOTHING IS REFUSED BEFORE IT IS ASKED ANYWHERE
+		// ([actorWrites]), here because [op.refusedBeforeAsking] sees only the
+		// arguments; a read that runs as an actor (tracker.view_prior) included.
 		if err := actorWrites(actor.Handle, iam.ActorKind(actor.Kind), actor.Provenance.WrittenFor); err != nil {
 			return zero, err
 		}
@@ -821,83 +652,63 @@ func exchangeOf[A, R any](spec *opSpec, o op[A, R], actor *Actor, args A, writte
 	}, nil
 }
 
-// unreadHere is this node's own copy refusing a request it was handed IN
-// PROCESS for naming a value its build does not know — the refusal a request's
-// own decoder makes of a name its build does not declare (jsonv2.ErrUnknownName
-// at its place), which a code write's request makes in its Validate too, of a
-// kind or an app whom it is made for names (gitlet.IsUnknownToThisBuild) —
-// answered AS THE WIRE ANSWERS THE SAME REQUEST: the keys a serving node of this
-// build refuses its arguments for, read from what the walk would send any peer
-// ([exchange.unread]), with this node among the nodes whose build does not
-// declare them. So the walk moves on from this node's copy as from a peer that
-// refused the request unread, and asks a node of a build that knows the value
-// — a carrier a run's row holds, which another build may have written, reaches
-// a node of that build where one serves — never ending at this node with a
-// refusal of the request as malformed. Nil for every other answer, and for a
-// request that reads whole, which none so refused does.
+// unreadHere answers this node's own copy refusing an in-process request for
+// naming a value its build does not know (jsonv2.ErrUnknownName from the
+// request's decoder, or gitlet.IsUnknownToThisBuild from a code write's
+// Validate) as the wire answers the same request: the keys a serving node of
+// this build refuses its arguments for ([exchange.unread]), with this node
+// among the nodes that do not declare them. So the walk moves on to a node
+// whose build knows the value (a run's row may hold one another build wrote)
+// rather than ending here refusing the request as malformed. Nil for any other
+// answer, and for a request that reads whole.
 func unreadHere(spec *opSpec, x exchange, node string, err error) *ErrUnknownKeys {
 	if _, unknown := unknownMember(err); !unknown || x.unread == nil {
 		return nil
 	}
 	keys, decodeErr := x.unread()
 	if decodeErr != nil || len(keys) == 0 {
-		// A REQUEST THIS BUILD'S OWN DECODER CANNOT READ BACK, or one that
-		// reads whole, names no key a peer of this build would refuse: no
-		// refusal of unread keys, so the answer this node's copy gave stands,
-		// as every other answer does.
+		// A REQUEST THIS BUILD CANNOT READ BACK, or one that reads whole, names no
+		// key a peer of this build would refuse, so this node's answer stands.
 		//nolint:nilerr // Deliberate: see the paragraph above.
 		return nil
 	}
 	return &ErrUnknownKeys{Op: spec.name, Keys: prefixed("args", keys), Nodes: []string{node}}
 }
 
-// ErrUnserved is an operation no data node ran: every node the asker's view
-// named — this node among them where it holds the estate — answered that its
-// copy of the operation's domain is out of service, could not run it, was
-// behind, or did not answer at all. For a GIT operation ([op.keyedOnGit]) it
-// is the same of the Gitlet nodes: none ran it.
+// ErrUnserved is an operation no node ran: every data node the asker's view
+// named, this node among them where it holds the estate, answered that its
+// copy of the domain is out of service, could not run it or was behind, or did
+// not answer; for a GIT operation ([op.keyedOnGit]), every Gitlet node.
 //
-// AND NEVER A WRITE SOMEBODY MAY HAVE RUN. A write sent to a node that did not
-// answer may have landed there, so a walk that sent one and heard no answer
-// from any node is [ErrOutcomeUnknown] instead ([walk.unserved]): this error
-// is the claim that nothing ran, and a caller acts on it by writing again —
-// unless it says a node went silent ([ErrUnserved.Silent]), which only a read
-// or a git walk can.
-//
-// NEVER A FALSE "NOT FOUND". An operation nobody answered for is refused
-// saying so, because a read reported as empty would say the company has none
-// of what it asked about.
+// It claims that nothing ran, never of a write somebody may have run: a walk
+// that sent a write and heard no answer is [ErrOutcomeUnknown] instead
+// ([walk.unserved]), so only a read or a git walk ends here with a silent node
+// ([ErrUnserved.Silent]). Nor is it ever a false "not found": a read reported
+// empty would say the company has none of what it asked about.
 type ErrUnserved struct {
 	// Detail is who was asked and what each said, in order.
 	Detail string
 
-	// NodeSilent records that a node the walk asked went SILENT, or gave a
-	// reply that did not verify ([Router.unheard]) — read through
-	// [ErrUnserved.Silent]. Exported so it crosses the wire with the rest of
-	// the refusal: an estate nobody served on the far side of a second hop
-	// says the same of its own walk.
+	// NodeSilent records that a node the walk asked went silent or gave a reply
+	// that did not verify ([Router.unheard]); read it through [ErrUnserved.Silent].
+	// Exported so it crosses the wire: a walk on the far side of a second hop says
+	// the same of its own.
 	NodeSilent bool
 
-	// Git records that the walk asked the GITLET nodes ([Router.routeGit]), not
-	// the data nodes, so the refusal names the nodes it asked: worded as
-	// every data walk's, a git read the Gitlet nodes could not answer — its
-	// home filling a copy, the rest holding none — sent whoever read it to
-	// the data nodes, which were serving.
+	// Git records that the walk asked the Gitlet nodes ([Router.routeGit]), so
+	// the refusal names them: worded as a data walk's, it would send its reader
+	// to the data nodes, which were serving.
 	Git bool
 }
 
 // Silent reports whether a node the walk asked went silent rather than
-// answering that it would not run the operation — a reply this node could not
-// believe being no such answer.
+// answering that it would not run the operation; a reply this node could not
+// believe is no such answer.
 //
-// A walk in which nobody went silent is one in which NOTHING RAN the
-// operation — every node answered that its copy was out of service, could not
-// run it, or was behind — and a caller with a write may say so definitively:
-// Gitlet tells a person "no data node took the push", which a re-run
-// then lands. One in which a node went silent may not: a write whose node
-// never answered may have run there — a committer that appended and lost its
-// reply — and told "nothing took it", the person's re-run would report the
-// push already up to date, a false negative about a push that landed.
+// Without one, NOTHING RAN the operation, and a caller with a write may say so:
+// Gitlet tells a person "no data node took the push", which a re-run lands.
+// With one it may not: a committer that appended and lost its reply has run
+// the push, and the re-run would report it already up to date.
 func (e *ErrUnserved) Silent() bool { return e.NodeSilent }
 
 func (e *ErrUnserved) Error() string {
@@ -923,11 +734,10 @@ type held struct {
 	node string
 }
 
-// heldAnswer is the answer the walk kept while it asked the next node, now
-// that no node gave a better one: a refusal another node made is named in
-// this node's log as it becomes the answer ([peerRefused]). Named here rather
-// than where it was kept, because a refusal some other node's answer
-// replaced was never anybody's answer.
+// heldAnswer is the answer the walk kept, now that no node gave a better one.
+// A peer's refusal is logged as it becomes the answer ([peerRefused]), here
+// rather than where it was kept, since a refusal another answer replaced was
+// never anybody's answer.
 func (w *walk) heldAnswer(ctx context.Context, spec *opSpec) (any, error) {
 	if w.fallback.node != "" && w.fallback.err != nil {
 		peerRefused(ctx, spec, w.fallback.node, w.fallback.err)
@@ -935,16 +745,12 @@ func (w *walk) heldAnswer(ctx context.Context, spec *opSpec) (any, error) {
 	return w.fallback.value, w.fallback.err
 }
 
-// peerRefused names in this node's log the data node whose condition failure
-// is, as it is handed back as this node's answer.
-//
-// A CONDITION ANOTHER NODE MET IS NAMED HERE, the one place that knows whose
-// it was: it is handed back as this node's answer, and every surface tells
-// the person "the node answering this" and logs the error — which carries the
-// refusal and not the node that made it, so an administrator sent to the logs
-// by "the logs name it" would otherwise check the node they asked rather than
-// the one that refused. At the level the surface logs the condition at
-// ([statelog.ConditionLevel]).
+// peerRefused logs the data node whose condition failure is, as it is handed
+// back as this node's answer, at the level the surface logs the condition at
+// ([statelog.ConditionLevel]). This is the one place that knows whose it was:
+// the error carries the refusal and not the node, so an administrator sent to
+// "the logs" would otherwise check the node they asked rather than the one
+// that refused.
 func peerRefused(ctx context.Context, spec *opSpec, node string, failure error) {
 	if errors.Is(failure, statelog.ErrUnavailable) {
 		log.Log(ctx, statelog.ConditionLevel(failure, slog.LevelDebug),
@@ -968,22 +774,15 @@ type walk struct {
 
 	// lagging is every node that answered that its copy ONLY lags its logs
 	// ([unservedLagging]), and behindConfig every node behind the company's
-	// configuration — it answered so ([unservedBehindConfig]), or the router
-	// remembers it did and did not ask it ([Router.remembersBehind]) — each
-	// in the order the walk reached them, this node among them by its own id
-	// where its own copy answered so.
+	// configuration (it answered so, or [Router.remembersBehind]), each in the
+	// order the walk reached it, this node by its own id where its copy answered so.
 	//
-	// TWO LISTS, because the last resort asks the first before the second
-	// ([Router.lastResort]): a copy that only lags answers under the current
-	// configuration, a node behind it under the one the fleet replaced. One
-	// list in the order the walk reached the refusals made that preference a
-	// matter of WHEN the router learned of them — the request that learned
-	// a node was behind asked it first wherever rendezvous ranked it first,
-	// and every request the router remembered it for asked it last — so a
-	// repository's pushes went to two committers in every window. Within each
-	// list the walk's order stands: this node first for an operation any copy
-	// answers equally, and the key's order for a keyed one, whose committer
-	// the last resort must not jump among nodes of the same standing.
+	// TWO LISTS, because [Router.lastResort] asks the first before the second: a
+	// lagging copy answers under the current configuration, a node behind it under
+	// the replaced one. One list, ordered by when the router learned of each, made
+	// the preference hang on the router's memory and sent a repository's pushes to
+	// two committers. Within each the walk's order stands, so a keyed operation's
+	// last resort never jumps among nodes of the same standing.
 	lagging, behindConfig []string
 
 	// unanswered is every node a repeatable WRITE was sent to that gave no
@@ -991,12 +790,11 @@ type walk struct {
 	// [walk.unserved].
 	unanswered []string
 
-	// spent is what the request has already paid for on the nodes it asked
-	// — the read index one node's barrier established, every position one
-	// node waited its whole bound for, every log a barrier ran out on — and
-	// every node asked after them is handed it ([statelog.Spent]), so a walk
-	// of N nodes appends at most one barrier and waits at most one bound
-	// for a position rather than N of each.
+	// spent is what the request already paid for on the nodes it asked (a
+	// barrier's read index, every position waited out for its whole bound, every
+	// log a barrier ran out on), handed to every node asked after them
+	// ([statelog.Spent]), so a walk of N nodes appends at most one barrier and
+	// waits at most one bound per position.
 	spent statelog.Spent
 
 	// unknown is what every node whose build could not read the request
@@ -1064,20 +862,15 @@ func (w *walk) note(format string, args ...any) {
 	w.reasons = append(w.reasons, fmt.Sprintf(format, args...))
 }
 
-// unserved is the answer to a walk that found no node to answer: the estate
-// unserved, or — where a write was sent to a node that never answered —
-// unknown.
+// unserved is the answer to a walk no node served: the estate unserved, or,
+// where a write was sent to a node that never answered, [ErrOutcomeUnknown].
 //
-// THE DIFFERENCE IS WHETHER ANYBODY MAY HAVE RUN IT. A node that answered "I
-// did not run it" ran nothing, and a walk of nodes that all said so is a
-// refusal the caller may act on by writing again. A node that did not answer
-// at all may have committed the write and lost only its acknowledgement —
-// which is exactly the case an [opIdempotentWrite]'s operation id exists for —
-// so reporting that walk as unserved told the caller nothing had happened: a
-// purge was answered "no data node could serve it" while its record sat on the
-// log, a seat was told its change was NOT made, and the retry each was then
-// entitled to make under a FRESH id was a second write. Unknown is the honest
-// answer, and the same operation id is the safe retry.
+// The difference is whether anybody may have run it. Nodes that each said "I
+// did not run it" ran nothing, and the caller may write again. A node that did
+// not answer may have committed the write and lost its acknowledgement, the
+// case an [opIdempotentWrite]'s operation id exists for, so "unserved" would
+// invite a retry under a FRESH id: a second write. Unknown is the honest
+// answer, and the same operation id the safe retry.
 func (w *walk) unserved(spec *opSpec) error {
 	detail := strings.Join(w.reasons, "; ")
 	if len(w.unanswered) > 0 {
@@ -1099,58 +892,26 @@ func (w *walk) askFailed(spec *opSpec, err error) error {
 		strings.Join(w.unanswered, ", "), err)
 }
 
-// route runs one operation — this node first where its copy serves, then the
-// other data nodes in order, and LAST the nodes that answered that they are a
-// worse one to ask: a copy that lags its logs, or a node behind the company's
-// configuration ([worse]).
+// route runs one operation: this node first where its copy serves, then the
+// other data nodes in order, and last the nodes that answered that they are a
+// worse one to ask ([worse]): a copy that lags its logs, then a node behind
+// the company's configuration, the latter remembered for [suspectFor]
+// ([Router.lastResort], [Router.markBehindConfig]). Each is still asked, told
+// to take the request anyway, rather than refused as though the estate had no
+// server: package doc, "A domain's copy that is WRONG is out of service; one
+// that LAGS is a worse node" and "A node behind the company's configuration is
+// a worse node too".
 //
-// # A copy that lags is a worse node to ask, never no node
-//
-// [Backend.Answers] says whether a copy is level, or drained and within the
-// snapshot slack of its logs' ends — a copy that is not is one a request should
-// not choose while another node's is. But it is the copy's DISTANCE from its
-// log, not its correctness: the floors a request carries and the level a read
-// asks for are what hold an answer to what the caller must see, and the write
-// authority decides from its own snapshot and lets the broker arbitrate. So a
-// copy that lags is asked again, told to take the request anyway
-// ([request.AcceptLagging]), once every node whose copy answers has run
-// nothing — rather than refused as though the estate had no server. A single
-// data node whose applier a burst put a thousand records behind refused every
-// call its own seats made until it caught up; a fleet the same burst put
-// behind together refused every node's.
-//
-// A node confirmed behind the company's configuration is asked last by the
-// same walk, and for the same reason: what it answers is sound — it supplies
-// the configuration the fleet replaced, a value every reader meets anyway
-// when a revision changes it — only worse than a current node's answer; and
-// refused, a fleet whose only data node failed an apply would answer nothing.
-// Unlike a lag, which the router forgets, its answer is REMEMBERED for
-// [suspectFor], because it lasts: until the window ends the walk does not ask
-// the node at all, and comes to it only as the last resort, told at once to
-// answer anyway ([Router.markBehindConfig]) — one ask where every better node
-// runs nothing, and none where one runs it. And it is the WORSE of the two:
-// the last resort asks every copy that only lags first, whose answer is held
-// to the current configuration, and a node behind the configuration after
-// them ([walk.lagging]) — on the request that learns it as on every one
-// after.
-//
-// # A keyed operation asks in its key's order
-//
-// An operation declared [op.keyedBy] asks this node at its PLACE in the
-// key's order ([Router.keyedOrder]) rather than first, and never ahead of the
-// node the key prefers; every other step of the walk — the floors, the
-// verdict of the operation's own domain, the class rule for a node that may
-// have run it, the lagging last resort — is the one above.
+// A KEYED operation ([op.keyedBy]) asks this node at its place in the key's
+// order ([Router.keyedOrder]) rather than first; every other step is the same.
 func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchange) (any, error) {
 	if spec.git {
 		return r.routeGit(ctx, spec, actor, x)
 	}
 	w := &walk{}
-	// THIS NODE FIRST, where its copy serves — in-process, with the node's
-	// floors enforced exactly as a remote node enforces them — for an
-	// operation any copy answers equally, and even while it lags where the
-	// caller asked for this node's copy ([callHere]). A keyed one asks it at
-	// its place in the key's order, below.
+	// THIS NODE FIRST where its copy serves, in-process and held to the floors a
+	// remote node enforces, even while it lags where the caller asked for this
+	// node's copy ([callHere]). A keyed operation asks it at its place, below.
 	if x.key == "" {
 		if value, final, ranErr := r.tryLocal(ctx, spec, x, x.here, w); final {
 			return value, ranErr
@@ -1159,17 +920,12 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 	budget := r.budgetFor(ctx, spec, x)
 	nodes, err := r.placement.Holders()
 	if err != nil {
-		// A PLACEMENT THAT CANNOT SAY WHO HOLDS THE ESTATE names no peer
-		// to ask, and takes nothing from this node's own copy, which the
-		// walk passed over above only for LAGGING: this node knows it
-		// holds the estate without asking anybody, so that copy is still
-		// the worse node to ask it always is rather than no node. Returned
-		// here before it was asked, a single data node whose copy a burst
-		// put behind refused every call its own seats made for as long as
-		// the presence view could not answer — while it kept those seats,
-		// rightly: a node that answers from its own copy needs no view to
-		// route. A KEYED operation has not asked it yet: with no node
-		// named to order, its own copy is the one node left to ask.
+		// A PLACEMENT THAT CANNOT SAY WHO HOLDS THE ESTATE names no peer, and takes
+		// nothing from this node's own copy, passed over above only for lagging: it is
+		// still the worse node to ask rather than no node, or a single data node whose
+		// copy a burst put behind would refuse its own seats for as long as the
+		// presence view could not answer. A KEYED operation has not asked it yet: with
+		// no node to order, its own copy is the one left.
 		if x.key != "" {
 			if value, final, ranErr := r.tryLocal(ctx, spec, x, false, w); final {
 				return value, ranErr
@@ -1241,14 +997,11 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 	return nil, w.unserved(spec)
 }
 
-// lastResort asks the nodes the walk passed over as worse ones to ask, telling
-// each to take the request anyway — this node's own in-process: every copy
-// that only lags its logs FIRST, then every node behind the company's
-// configuration, each in the order the walk reached it ([walk.lagging]). The
-// order is the REASONS', so it is the same on every request whatever the
-// router has heard: a copy that lags answers held to the caller's floors and
-// under the current configuration, a node behind it under the configuration
-// the fleet replaced. final is set when one of them gives the answer.
+// lastResort asks the nodes the walk passed over as worse ones, telling each
+// to take the request anyway, this node's own in-process: every copy that only
+// lags FIRST, then every node behind the company's configuration, each in the
+// walk's order ([walk.lagging]), an order by REASON, the same whatever the
+// router has heard. final is set when one of them gives the answer.
 func (r *Router) lastResort(ctx context.Context, spec *opSpec, actor *Actor, x exchange,
 	budget time.Duration, w *walk) (value any, final bool, err error) {
 
@@ -1304,11 +1057,10 @@ func (r *Router) tryLocal(ctx context.Context, spec *opSpec, x exchange, acceptL
 	unread := unreadHere(spec, x, r.self, ran)
 	switch {
 	case why != "":
-		// IN-PROCESS, so nothing is remembered: asking this node's own
-		// copy again costs no round trip. It still waits its turn by its
-		// REASON — a copy of its own behind the configuration is asked after
-		// a peer's that only lags, because in-process saves a round trip and
-		// never makes a decide under the replaced configuration sound.
+		// IN-PROCESS, so nothing is remembered: asking again costs no round trip. It
+		// still waits its turn by REASON: a copy behind the configuration is asked
+		// after a peer's that only lags, since saving a round trip never makes a
+		// decide under the replaced configuration sound.
 		switch refusal {
 		case unservedLagging:
 			w.lagging = append(w.lagging, r.self)
@@ -1319,11 +1071,9 @@ func (r *Router) tryLocal(ctx context.Context, spec *opSpec, x exchange, acceptL
 		}
 		w.note("%s: %s", r.self, why)
 	case unread != nil:
-		// A BUILD THAT DOES NOT KNOW A VALUE THE REQUEST NAMES RAN NOTHING OF
-		// IT, in process as on the wire ([unreadHere], and [Router.settle]'s
-		// peer that refused it unread): the walk asks the next node, and where
-		// none serves it the caller is told so. Nothing is remembered, as for
-		// every in-process refusal.
+		// A BUILD THAT DOES NOT KNOW A VALUE THE REQUEST NAMES RAN NOTHING, in process
+		// as on the wire ([unreadHere], [Router.settle]): the walk asks the next node,
+		// remembering nothing.
 		w.unreadBy(r.self, unread)
 	case unvouched(spec, value, ran):
 		w.fallback = &held{value: value, err: ran}
@@ -1337,27 +1087,18 @@ func (r *Router) tryLocal(ctx context.Context, spec *opSpec, x exchange, acceptL
 	return nil, false, nil
 }
 
-// refusedHere is a READ a copy refused for a reason about ITSELF — behind the
-// barrier its linearizable read appended, stalled, holding a record it cannot
-// decode, below the floor, evicted, cut off from its broker or from a quorum —
-// which another data node may serve ([statelog.ReadRefusal.Elsewhere]). The
-// node ran nothing, so the walk asks the next one and keeps the refusal as its
-// answer only where no node does better. Returned as the answer instead, a
-// git fetch through a data node whose applier fell a second behind was told
-// 503 while two peers' copies could have served it, and so was every seat's
-// linearizable read on that node.
+// refusedHere is a READ a copy refused for a reason about ITSELF (behind its
+// barrier, stalled, holding a record it cannot decode, below the floor,
+// evicted, cut off from its broker or a quorum), which another data node may
+// serve ([statelog.ReadRefusal.Elsewhere]). The node ran nothing, so the walk
+// asks the next one and keeps the refusal only where no node does better.
 //
-// WHAT THE REFUSAL HAD PAID FOR GOES WITH THE READ ([statelog.Refused.Spent],
-// [walk.spent]): the next node is asked at the read index the refusing one
-// established and waits for no position it already waited out. Asked afresh,
-// each node appended a barrier of its own and waited a whole read budget for
-// it, so on a fleet one burst put behind together the one final `behind`
-// cost a barrier and two seconds per data node — barriers every node's
-// applier then applied, on the very log they were all behind on.
+// What the refusal paid for goes with the read ([statelog.Refused.Spent],
+// [walk.spent]): the next node reads at the index the refusing one established
+// rather than appending a barrier and waiting a read budget of its own.
 //
-// A READ ONLY: a write is refused by the write authority's own answers
-// (statelog.Unavailable), whose class rules say what may be repeated, and a
-// read is safe to ask anywhere.
+// A read only: a write's repeats are its class's rules (statelog.Unavailable),
+// and a read is safe to ask anywhere.
 func refusedHere(spec *opSpec, err error) bool {
 	var refused *statelog.Refused
 	return spec.class == opRead && errors.As(err, &refused) && refused.Code.Elsewhere()
@@ -1414,26 +1155,18 @@ type heard struct {
 // answered reports a reply this node believes.
 func (h heard) answered() bool { return h.replied && h.unbelieved == "" }
 
-// unheard is what a node that gave no reply this node believes costs the walk:
-// nothing more for a read, the request itself for a once-write — which that
-// node may have run, whatever it said or did not say — and the caller's own
-// ending.
+// unheard is what a node that gave no reply this node believes costs the
+// walk: nothing more for a read; the request itself for a once-write, which the
+// node may have run; and the caller's own ending.
 //
-// A REPEATABLE WRITE IS REPEATED, AND REMEMBERED: the next node is asked under
-// the same operation id, and should none answer, the walk ends unknown rather
-// than unserved ([walk.unserved]) — this node may have run it. So does a
-// repeatable write whose caller's context ended while it waited: the request
-// was sent, and the caller stopping listening says nothing about whether it
-// ran.
+// A REPEATABLE WRITE is asked of the next node under the same operation id and
+// the node remembered ([walk.unanswered]), so a walk none answers ends unknown
+// rather than unserved, as does one whose caller stopped listening, which says
+// nothing about whether it ran.
 //
-// A REPLY THAT IS NOT BELIEVED IS NO ANSWER, never an answer of "did not run":
-// a refusal the fleet signed for another request is exactly what somebody
-// would replay to make a once-write run twice. But the node that sent it is
-// not SILENT — it is up, and its presence lease says so — so it is not
-// suspected, which would only move it down the order for something its key
-// configuration, not its health, explains. What the walk records of it is
-// what it records of a silent node ([walk.silent]): the node may have run the
-// operation, so a walk that ends unserved does not say that nothing ran it.
+// A REPLY NOT BELIEVED IS NO ANSWER, never "did not run": a refusal signed for
+// another request is what somebody would replay to run a once-write twice. Its
+// node is up, so not suspected, but recorded [walk.silent]: it may have run it.
 func (r *Router) unheard(ctx context.Context, spec *opSpec, node string, h heard, w *walk) error {
 	if h.replied {
 		log.WarnContext(ctx, "estate_reply_refused", "node", node, "op", spec.name,
@@ -1477,11 +1210,9 @@ func (r *Router) settle(ctx context.Context, spec *opSpec, x exchange, node stri
 		case unservedLagging:
 			w.lagging = append(w.lagging, node)
 		case unservedBehindConfig:
-			// ASKED LAST, after every copy that only lags — and
-			// remembered, because unlike a lag it lasts: forgotten, every
-			// later request, keyed or not, sent the node a refusal's round
-			// trip first — a push its whole proposal — for as long as it
-			// stayed behind.
+			// ASKED LAST, after every copy that only lags, and remembered, because
+			// unlike a lag it lasts: forgotten, every later request would send it a
+			// refusal's round trip first (for a push, its whole proposal).
 			w.behindConfig = append(w.behindConfig, node)
 			r.markBehindConfig(node)
 		case unservedBehind:
@@ -1489,13 +1220,10 @@ func (r *Router) settle(ctx context.Context, spec *opSpec, x exchange, node stri
 		case unservedOutOfService:
 			r.markOutOfService(node, spec.copies)
 		case unservedNoBackend:
-			// A KEYED ORDER HAS NO STICKY NODE to move the next request
-			// off a node that ran nothing, so it is remembered: without
-			// it, every later push to each repository the node ranks first
-			// for sent it the whole proposal again — encoded, decoded and
-			// refused — before the runner-up was asked, for as long as
-			// the node refused (a maintenance window, a stop). An
-			// unkeyed operation moves off it by its sticky node instead.
+			// A KEYED ORDER HAS NO STICKY NODE to move the next request off a node
+			// that ran nothing, so it is remembered; otherwise every push the node ranks
+			// first would send it the whole proposal again for as long as it refused. An
+			// unkeyed operation moves off it by its sticky node.
 			if x.key != "" {
 				r.markDeclined(node, spec.name)
 			}
@@ -1516,16 +1244,11 @@ func (r *Router) settle(ctx context.Context, spec *opSpec, x exchange, node stri
 		}
 		var refused *ErrUnknownKeys
 		if errors.As(failure, &refused) {
-			// A BUILD THAT COULD NOT READ THE REQUEST WHOLE RAN NOTHING,
-			// whatever the class: refused before its backend was called
-			// ([inputs]), it is a node that did not run the operation, so
-			// the next one is asked — a data node of the asking node's build
-			// serves it — and it is not the node asked first next time. A
-			// KEYED operation remembers WHAT IT REFUSED ([Router.markUnread]):
-			// its order has no sticky node to move the next such request off
-			// it, and its build outlasts one request — but the node serves
-			// every request that does not carry those keys, so only one that
-			// does is moved.
+			// A BUILD THAT COULD NOT READ THE REQUEST WHOLE RAN NOTHING, whatever the
+			// class ([inputs]), so the next node is asked and this one is not made
+			// sticky. A KEYED operation, with no sticky node to move off it, remembers
+			// WHAT it refused ([Router.markUnread]): the node still serves every request
+			// that does not carry those keys.
 			w.unreadBy(node, refused)
 			if x.key != "" {
 				r.markUnread(node, spec.name, refused.Keys)
@@ -1550,10 +1273,9 @@ func (r *Router) settle(ctx context.Context, spec *opSpec, x exchange, node stri
 	value, err = x.decode(rep.Result)
 	var unread *ErrUnknownKeys
 	if errors.As(err, &unread) {
-		// AN ANSWER THIS BUILD CANNOT READ WHOLE, for an operation whose
-		// answer a caller carries on ([op.answeredWhole]): final, since it
-		// is what the copies hold, and another node's answer would not change
-		// what this build declares of it.
+		// AN ANSWER THIS BUILD CANNOT READ WHOLE ([op.answeredWhole]) is final: it
+		// is what the copies hold, and another node's answer would not change what this
+		// build declares.
 		unread.Nodes = []string{node}
 		return nil, true, unread
 	}
@@ -1584,17 +1306,14 @@ func (x exchange) record(rep reply) {
 }
 
 // budgetFor is one attempt's budget on one node: the router's own attempt
-// ([Router.wholeAttempt]) — or, for a write on a DATA node whose caller has a
-// deadline, that deadline (zero), since a gesture the caller gave five
-// minutes must not be abandoned after one.
+// ([Router.wholeAttempt]), or for a write on a DATA node whose caller has a
+// deadline, that deadline (zero), since a gesture given five minutes must not
+// be abandoned after one.
 //
-// NEVER FOR A GIT WRITE, which keeps the router's own attempt whatever its
-// caller allows ([GitWriteAttempt]): its Gitlet node fits every stage of it —
-// the sync, the build, the upload and the proposal — into that attempt, so
+// Never for a GIT write, which keeps the router's own attempt
+// ([GitWriteAttempt]): its Gitlet node fits every stage into that attempt, so
 // one silent through it is wedged rather than slow, and the walk's next Gitlet
-// node builds the same push. Given a turn's deadline minutes away, a wedged
-// home was waited on until the turn's tool call gave up, and its runner-up
-// never asked.
+// node builds the same push rather than the turn waiting out its deadline.
 func (r *Router) budgetFor(ctx context.Context, spec *opSpec, x exchange) time.Duration {
 	if _, bounded := ctx.Deadline(); bounded && spec.class != opRead && !spec.git {
 		return 0
@@ -1602,14 +1321,11 @@ func (r *Router) budgetFor(ctx context.Context, spec *opSpec, x exchange) time.D
 	return r.wholeAttempt(spec, x)
 }
 
-// wholeAttempt is the router's own attempt on one node for spec's class:
-// [Timing.ReadAttempt] for a read, [Timing.GitReadAttempt] for a git read on a
-// Gitlet node, [Timing.GitWriteAttempt] for an engine write on one — or the
-// attempt its arguments declare ([op.attemptBy]): an engine write's by its
-// kind, [Timing.GitWriteAttemptFor] — and [Timing.WriteAttempt] for a write on
-// a data node — what a request waits where nothing shorter bounds it, and what
-// a node's silence must last to be evidence it is gone rather than slow
-// ([Router.ask]).
+// wholeAttempt is the router's own attempt on one node for spec: the attempt
+// its arguments declare ([op.attemptBy]; an engine write's is
+// [Timing.GitWriteAttemptFor]), else the [Timing] field for its class and
+// placement. It is what a request waits where nothing shorter bounds it, and
+// what a node's silence must last to be evidence it is gone ([Router.ask]).
 func (r *Router) wholeAttempt(spec *opSpec, x exchange) time.Duration {
 	switch {
 	case x.attempt != nil:
@@ -1663,30 +1379,17 @@ func (r *Router) floorsFor(spec *opSpec) []statelog.Position {
 }
 
 // ask sends one request to one node, signed and bound to an id of its own, on
-// the subject of the lane its operation is answered on ([opSpec.lane]),
-// waiting budget ([Router.budgetFor]). heard says whether anything came back
-// and whether it is believed: one whose reply does not verify, answers
-// another request or cannot be decoded is heard and not believed. err is set
-// only where the request could not be made at all, which no other node would
-// fare better with.
+// its operation's lane subject ([opSpec.lane]), waiting budget
+// ([Router.budgetFor]). heard says whether a reply came back and is believed;
+// err only that the request could not be made, as it could be to no node.
 //
-// A NODE THAT SAID NOTHING IS SUSPECTED — asked last for [suspectFor] and
-// reported to the placement — only where its silence is evidence it is gone
-// rather than slow, which is a matter of whose wait ended: the ask ended with
-// the attempt still live (nothing serves the node's subject), a budget of the
-// router's own ran out on it ([errAttemptSpent]), or it stayed silent for a
-// whole attempt of its class (whole) under a caller's longer deadline. Through
-// either wait a node that is only behind has answered: it ends every wait it
-// makes a reply's margin short of the deadline it was handed
-// ([statelog.WithReplyMargin]) and says it is behind. A caller
-// that hung up, or gave the request less than an attempt, has said nothing
-// about the node it was asking; suspected for it, a healthy node was asked
-// last by every request this router made for half a minute — and for a keyed
-// operation that sends every repository it commits to the runner-up, whose
-// committer then contends with it on the repository's subject — and dropped
-// from the placement's answer. A node whose reply is not believed is not
-// suspected either: it is up, and its key configuration rather than its
-// health explains the reply ([Router.unheard]).
+// A SILENT NODE IS SUSPECTED ([Router.markSuspect]) only where its silence
+// shows it gone rather than slow: nothing serves its subject, a budget of the
+// router's own ran out ([errAttemptSpent]), or it stayed silent a whole
+// attempt of its class (whole). A node only behind answers inside each
+// ([statelog.WithReplyMargin]); a caller that hung up or gave less than an
+// attempt says nothing about the node; and a node whose reply is not believed
+// is up ([Router.unheard]).
 func (r *Router) ask(ctx context.Context, node, subject string, req request,
 	budget, whole time.Duration) (reply, heard, error) {
 
@@ -1714,40 +1417,27 @@ func (r *Router) ask(ctx context.Context, node, subject string, req request,
 	}
 	rep, why, err := r.env.openReply(replies[0], req.ID)
 	if err != nil {
-		// A SIGNED REPLY THIS BUILD CANNOT DECODE IS NO ANSWER, as one it
-		// cannot believe is ([Router.unheard]) — never a request that could
-		// not be made. The node took the request and may have run it, so a
-		// write is not "failed" because its acknowledgement was unreadable:
-		// a once-write is unknown, and any other class asks the next node.
+		// A SIGNED REPLY THIS BUILD CANNOT DECODE IS NO ANSWER ([Router.unheard]),
+		// never a request that could not be made: the node may have run it, so a
+		// once-write is unknown and any other class asks the next node.
 		return reply{}, heard{replied: true,
 			unbelieved: "its reply cannot be decoded by this build: " + err.Error()}, nil
 	}
 	return rep, heard{replied: true, unbelieved: why}, nil
 }
 
-// order is the order the data nodes are asked in for spec, an operation any
-// copy answers equally, reading [opSpec.copies] — its own domain's, and any
-// other's it also reads: the STICKY node for those copies first, then the
-// rest, then every node that answered `out_of_service` for them inside
-// [suspectFor], and every SUSPECT node last — [rendezvous.Order] on this
-// node's own id within each class, kept by a STABLE sort, so the classes only
-// move nodes between them — and never this node, which the router asks
-// in-process or not at all. A node the router remembers behind the company's
-// configuration ([Router.markBehindConfig]) keeps its place, from which the
-// walk hands it to the last resort unasked ([Router.classes]).
+// order is the order the data nodes are asked in for spec, an unkeyed
+// operation: the STICKY node for its copies ([opSpec.copies]; the last to
+// answer, whose applier most likely has this node's writes) first, the rest,
+// every node `out_of_service` for them inside [suspectFor], every SUSPECT node
+// last ([Router.classes]), [rendezvous.Order] on this node's id within each
+// class; never this node, asked in-process or not at all. Rendezvous scatters a silent node's askers over the survivors;
+// the sticky node keeps an asker where it is, so a joining node is asked only
+// by askers with none.
 //
-// # Per domain, because the appliers are
-//
-// A node is sticky for the reason its applier is the one most likely to have
-// this node's writes, and each domain has its own applier — and since a fault
-// takes only its own domain's copy out of service (ADR-0079), a node can serve
-// one domain and not another. One sticky node for every domain made a router
-// on a node without data, between a peer whose tracker copy was out and one
-// whose knowledge base was, CHASE ITS TAIL: a tracker call asked the first,
-// was answered by the second and made it sticky; the next page call asked the
-// second, was answered by the first and made it sticky back — every call paid
-// a round trip that ran nothing, and a third node serving both was never asked
-// first at all.
+// Sticky PER set of copies, because each domain has its own applier and its
+// own out-of-service verdict (ADR-0079): one sticky node for every domain made
+// a router chase its tail between two peers each out of service for one domain.
 func (r *Router) order(spec *opSpec, nodes []string) []string {
 	// rendezvous.Order hands back a slice of its own, so the placement's
 	// listing is never the one trimmed or sorted here; and removing members
@@ -1771,28 +1461,18 @@ func (r *Router) orderFor(spec *opSpec, key string, nodes []string, carrying fun
 	return r.keyedOrder(spec, key, nodes, r.local != nil, carrying)
 }
 
-// keyedOrder is the order a KEYED operation, spec, asks nodes in:
-// [rendezvous.Order] on the KEY over nodes — THIS ONE INCLUDED where self says
-// it answers the operation (it holds the estate, or for a git operation its
-// git half is built), since the node the key prefers may be this one, and an
-// empty id never — with every node that answered `out_of_service` for the
-// operation's copies or ran nothing for it inside [suspectFor], or refused a
-// request of it for a key this request carries (carrying, [Router.markUnread]),
-// after the rest and every node that went silent inside it last, the key's
-// order kept within each by a STABLE sort. A node the router remembers behind
-// the company's configuration keeps its place in the key's order, from which
-// the walk hands it to the last resort unasked, so every asker's last resort
-// meets the nodes behind the configuration in the key's order
-// ([Router.classes]). ONE order
-// for a push's data nodes and a repository's Gitlet nodes, so the compactor's
-// home and the reads' first node can never be computed two ways.
+// keyedOrder is the order a KEYED operation asks nodes in: [Router.keyed] on
+// the key, this node included where self says it answers, then demoted by
+// [Router.classes] (a node that answered `out_of_service`, ran nothing for the
+// operation, or refused a key this request carries inside [suspectFor], after
+// the rest; every silent node last), the key's order kept within each by a
+// STABLE sort. ONE order for a push's data nodes and a repository's Gitlet
+// nodes.
 //
-// NO STICKY NODE: which node answered last says nothing about where a
-// repository's pushes should meet, and every node computing the same order
-// from the same set is the whole point — a committer holding a repository's
-// whole burst commits it in a few records, where two committers each holding
-// part of it contend on its one subject and each round one loses costs it a
-// re-decide and a re-append of its whole batch.
+// NO STICKY NODE: every node computing the same order from the same set is the
+// point. One committer holding a repository's whole burst commits it in a few
+// records; two holding parts contend on its one subject, and each lost round
+// costs a re-decide and a re-append of a whole batch.
 func (r *Router) keyedOrder(spec *opSpec, key string, nodes []string, self bool,
 	carrying func([]string) bool) []string {
 	ordered := r.keyed(key, nodes, self)
@@ -1801,14 +1481,12 @@ func (r *Router) keyedOrder(spec *opSpec, key string, nodes []string, self bool,
 	return ordered
 }
 
-// keyed is the rendezvous half of every keyed order, before any memory of the
-// router's demotes a node: [rendezvous.Order] on key over nodes — this one
+// keyed is the rendezvous half of every keyed order, before the router's
+// memory demotes anybody: [rendezvous.Order] on key over nodes, this one
 // included where self says it answers, an empty id never, a node listed twice
-// named once. ONE FUNCTION for [Router.keyedOrder], [Router.Home] and
-// [Router.Maintainer], so the node a repository's git reads ask first on a
-// quiet fleet, the node its own git work falls to and the node its
-// maintenance is placed on where every node can hold the work are one
-// computation and can never be two.
+// once. ONE function for [Router.keyedOrder], [Router.Home] and
+// [Router.Maintainer], so a repository's first reader, its git work's home and
+// its maintenance node are one computation.
 func (r *Router) keyed(key string, nodes []string, self bool) []string {
 	candidates := slices.DeleteFunc(slices.Clone(nodes), func(n string) bool {
 		return n == "" || n == r.self
@@ -1821,24 +1499,18 @@ func (r *Router) keyed(key string, nodes []string, self bool) []string {
 	return slices.Compact(rendezvous.Order(key, candidates))
 }
 
-// classes is how the router's memory ranks each node for spec, lowest asked
-// first: the STICKY node for its copies (never for a keyed order), then every
-// other node, then every node that answered `out_of_service` for its copies —
-// or, for a keyed operation, ran nothing for it, or refused a request of it
-// for a key this one carries (carrying, which may be nil: none) — inside
-// [suspectFor], then every SUSPECT node. It sweeps out every window that has
-// lapsed. ONE reading of the memory for both orders, so a node demoted for the
-// unkeyed walk is demoted alike for the keyed one.
+// classes ranks each node for spec by the router's memory, lowest asked first:
+// the STICKY node for its copies (never in a keyed order), then the rest, then
+// every node passed over inside [suspectFor] (`out_of_service` for its copies,
+// or for a keyed operation `no_backend` or a refused key this request carries;
+// carrying nil for none), then every SUSPECT node. It sweeps lapsed windows.
+// ONE reading for both orders, so a demotion holds in both.
 //
-// A node remembered behind the company's configuration HAS NO CLASS of its
-// own: the walk never asks it from its place — it hands it straight to the
-// last resort ([Router.remembersBehind]) — so its place decides only where it
-// stands among the other nodes behind the configuration there, and that must
-// be the place a router that has heard of none of them gives it. Demoted, a
-// router that remembered one node behind and had not yet heard another asked
-// the unheard one first; a router that had heard neither asked them in the
-// key's order, and the two sent one repository's pushes to two committers.
-// The memory is swept here with the rest.
+// A node remembered behind the configuration HAS NO CLASS: the walk hands it
+// straight to the last resort ([Router.remembersBehind]), so its place only
+// orders it among the others there, and must be the place a router that heard
+// of none gives it, or two routers send one repository's pushes to two
+// committers.
 func (r *Router) classes(spec *opSpec, keyed bool, carrying func([]string) bool) func(node string) int {
 	// MATCHED BEFORE THE LOCK, since matching decodes the request: a node
 	// that refused a key this request carries is passed over for it.
@@ -1932,14 +1604,10 @@ func (r *Router) markSuspect(node string) {
 		}
 	}
 	r.mu.Unlock()
-	// OUTSIDE THE LOCK: the placements are somebody else's, and a request
-	// path must not hold this router's mutex across them. BOTH OF THEM,
-	// because a suspicion is the node's and never one placement's — a node
-	// silent to a git read is as likely gone from the data nodes it may be
-	// one of — and a placement that names it lists again only when told: a
-	// git placement never told kept a dead Gitlet node in every repository's
-	// order, asked last of each walk nobody else answered, until its own
-	// view caught up.
+	// OUTSIDE THE LOCK: the placements are somebody else's. BOTH, because a
+	// suspicion is the node's, not one placement's, and a placement drops a node
+	// only when told: an untold git placement kept a dead Gitlet node in every
+	// repository's order until its own view caught up.
 	r.placement.Unanswered(node)
 	r.gitPlacement.Unanswered(node)
 }
@@ -1967,15 +1635,12 @@ func (r *Router) markDeclined(node, op string) {
 }
 
 // markUnread asks node last for [suspectFor] for every request of op, a KEYED
-// operation, that carries one of keys — what it refused a request of op for,
-// its build not declaring them ([ErrUnknownKeys]) — and for no other request:
-// a node of an older build serves every request that does not use what its
-// build lacks. Declined for the whole operation, one newer read of one
-// repository moved every repository the node is home to off it, and a
-// runner-up holding no copy filled one for each — a fill costing far more than
-// the refused round trip it saved — and one newer push sent every repository's
-// pushes it commits to a second committer, to contend with the first. The keys
-// are kept beside those it refused before, inside the one window.
+// operation, that carries one of keys, which its build does not declare
+// ([ErrUnknownKeys]), and for no other: an older build serves every request
+// that does not use what it lacks. Declined for the whole operation, one newer
+// read moved every repository the node is home to onto a runner-up filling a
+// copy for each, and one newer push gave its repositories a second committer.
+// The keys join those refused before, inside one window.
 func (r *Router) markUnread(node, op string, keys []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -2011,25 +1676,16 @@ func (r *Router) unreadFor(spec *opSpec, keyed bool) map[string][]string {
 }
 
 // markBehindConfig remembers for [suspectFor] that node answered
-// `behind_config`: until the window ends, every operation the preference holds
-// back — every one but an ungated one — asks it only as the walk's last
-// resort, after every copy that only lags, told at once to answer anyway
-// ([Router.remembersBehind]), and a keyed one asks its runner-up instead.
+// `behind_config`: until the window ends, every gated operation asks it only as
+// the walk's last resort, after every copy that only lags, told at once to
+// answer anyway ([Router.remembersBehind]), and a keyed one asks its runner-up
+// instead. Per NODE, since its configuration is its posture for all it holds.
 //
-// THE NODE, not a copy or an operation: whether it serves the company's
-// configuration is its posture, the same for everything it holds, so one
-// refusal tells the router about every domain and every repository it
-// commits for.
-//
-// NOTHING BUT THE WINDOW ENDS IT. The one answer that could — the node running
-// a held-back operation from an ordinary ask — is one the router does not
-// send it while it remembers; the last resort's answer was given because it
-// was told to answer anyway, and the ungated ping's skips the preference, so
-// neither says the node is current again. A node current again is asked last
-// until the window ends; one still behind costs a router one refusal a window.
-// Its sticky places stay: while it is remembered the walk passes it to the
-// last resort wherever it ranks, and once the window ends the node asked first
-// is the one that learns whether it is still behind.
+// NOTHING BUT THE WINDOW ENDS IT: the router sends no ordinary ask that could
+// show the node current, and neither the last resort's answer nor the ungated
+// ping's says so. A node current again is asked last until the window ends;
+// one still behind costs one refusal a window. Its sticky places stay, so the
+// first ask after the window learns whether it still is.
 func (r *Router) markBehindConfig(node string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -2066,15 +1722,12 @@ func (r *Router) markAnswered(node, copies, op string) {
 }
 
 // unvouched reports an idempotent write's answer that is NOT final: an
-// `unknown` the answering node's operation ledger could not vouch for
-// ([statelog.Result.Unvouched]) on ANY step the answer reports — a walking
-// gesture answers one outcome per step ([worklet.PlaceResult]), and a page
-// write names its outcome rather than embedding it ([doclet.Written]), or a
-// walking gesture that stopped at such a step ([worklet.ErrStepUnvouched]).
-// Another node's ledger may hold the row this one lost, so the router asks
-// it, under the same operation id, before reporting the outcome unknown. Never
-// true for another class: a read has no ledger, and a once-write is never
-// repeated.
+// `unknown` the answering node's ledger could not vouch for
+// ([statelog.Result.Unvouched]) on any step the answer reports
+// ([worklet.PlaceResult], [doclet.Written]), or a walking gesture stopped at
+// such a step ([worklet.ErrStepUnvouched]). Another node's ledger may hold the
+// row, so the router asks it under the same operation id first. Never true for
+// another class: a read has no ledger, and a once-write is never repeated.
 func unvouched(spec *opSpec, value any, err error) bool {
 	if spec.class != opIdempotentWrite {
 		return false
@@ -2126,19 +1779,12 @@ func findResults(v reflect.Value, out []statelog.Result) []statelog.Result {
 // copy that will answer the seat's reads admits one now, and which halves it
 // runs natively.
 //
-// ASKED OF THE COPY THAT WILL SERVE THE SEAT. Where this node's own copy
-// serves, that is the one — the router asks it first for every read — so the
-// answer is the local one and is never passed over for a peer's: a node whose
-// own copy is one record behind withholds its claims, because a seat attaching
-// to it would act on rows that are behind. Where it does not — a node without
-// data, or one whose copy of a domain that gates seats is out of service
-// ([SeatCopy]) — it is the first data node that answers, and that answer is
-// trusted for [admissionTrust]. A wrong copy of any other domain is not the
-// seat's copy, and admission stays local over it (ADR-0079).
-//
-// A COPY THAT ADMITS NO SEAT ANSWERS NO HALF, which is the zero [Served]: the
-// caller compares the halves its company runs against the halves served, and
-// an unadmitting copy serves none of them.
+// It asks that copy: this node's own where its [SeatCopy] serves, never passed
+// over for a peer's, since a seat on a copy one record behind would act on
+// rows that are behind; otherwise the first data node that answers, trusted
+// for [admissionTrust]. A wrong copy of a domain that does not gate seats
+// leaves admission local (ADR-0079). A copy that admits no seat answers the
+// zero [Served]: it serves none of the halves.
 func (r *Router) Serves(ctx context.Context) (Served, error) {
 	if r.local != nil {
 		if b, ok := r.local.For(ctx, SeatCopy); ok {

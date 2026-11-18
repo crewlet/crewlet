@@ -18,11 +18,9 @@ import (
 // duplicateStepsRevision is a stored company that breaks an admission rule
 // and none of the runnable ones: two sandbox setup steps under one name. A
 // newer peer may admit it under rules this build does not share, and it runs.
-//
-// The rule is a real one and its consequence is a write: a step's `env` and
-// `files` are credentials restored by the step's NAME, so two steps of one
-// name leave every later write carrying that list refused on masks nobody
-// edited.
+// The rule is real: a step's `env` and `files` credentials are restored by the
+// step's NAME, so two of one name get every later write carrying the list
+// refused on masks nobody edited.
 var duplicateStepsRevision = json.RawMessage(`{"name":"Acme",
   "providers":{
     "llm":{"zulu":{"model":"m"}},
@@ -65,13 +63,10 @@ func (b *logBuffer) records(t *testing.T, msg string) []map[string]any {
 
 // A REVISION ADMITTED UNDER OTHER RULES IS APPLIED, AND WARNED ABOUT ONCE.
 //
-// The rolling-upgrade shape: a newer peer, whose admission rules differ from
-// this build's, activates a company with two setup steps of one name. The
-// payload reaches this node only through the coordination store, never
-// through its own database. Were applying to validate every rule, this half
-// of the fleet would refuse the company the other half is running, splitting
-// the fleet's epoch. It runs, and each violation is logged once for the epoch
-// rather than once per tick.
+// A newer peer with other admission rules activates a company with two setup
+// steps of one name, reaching this node only through the coordination store.
+// Refusing it would split the fleet's epoch mid-upgrade, so it runs, and each
+// violation is logged once per epoch rather than per tick.
 func TestARevisionAdmittedUnderOtherRulesIsAppliedWithAdmissionWarnings(t *testing.T) {
 	t.Parallel()
 	logs := &logBuffer{}
@@ -96,10 +91,9 @@ func TestARevisionAdmittedUnderOtherRulesIsAppliedWithAdmissionWarnings(t *testi
 	if row := p.fleetRow(t); row.Status != string(configplane.StatusOK) {
 		t.Errorf("fleet status = %q (%s), want ok", row.Status, row.Error)
 	}
-	// THE REVISION IS SERVED, which is the point: an admission violation is
-	// a warning on a stored revision, never a refusal. Asserted on the
-	// epoch this node published, since this fixture declares no seat to
-	// count.
+	// THE REVISION IS SERVED: an admission violation on a stored revision
+	// warns, never refuses. Asserted on the published epoch, since this
+	// fixture declares no seat to count.
 	if p.engine.Company() == nil {
 		t.Fatal("the apply reported success and published no epoch")
 	}
@@ -110,8 +104,8 @@ func TestARevisionAdmittedUnderOtherRulesIsAppliedWithAdmissionWarnings(t *testi
 		t.Fatalf("%d admission warnings, want one per violation: %v",
 			len(warnings), warnings)
 	}
-	// AND IT NAMES THE PLACE, in the path the config package located it at,
-	// so a person can change the field rather than search for it.
+	// AND IT NAMES THE PATH the config package located it at, so a person
+	// can change the field rather than search for it.
 	placed := map[string][]string{}
 	for _, w := range warnings {
 		if w["revision"] != "from-a-newer-peer" {
@@ -134,8 +128,7 @@ func TestARevisionAdmittedUnderOtherRulesIsAppliedWithAdmissionWarnings(t *testi
 			placed["duplicate setup step name"], want)
 	}
 
-	// ONCE PER APPLIED EPOCH. A tick on an epoch this node already applied
-	// applies nothing, so it must not repeat the warning either.
+	// ONCE PER APPLIED EPOCH: a tick on an applied epoch repeats nothing.
 	if err := p.recon.Tick(t.Context()); err != nil {
 		t.Fatalf("second tick: %v", err)
 	}
@@ -146,9 +139,8 @@ func TestARevisionAdmittedUnderOtherRulesIsAppliedWithAdmissionWarnings(t *testi
 
 // A NODE BOOTS ON A STORED COMPANY THAT BREAKS AN ADMISSION RULE.
 //
-// Building an epoch is the other half of applying one. A store can hold such a
-// revision when a newer peer admitted it under rules this build does not
-// share, and a node that refused to build it would not start at all.
+// Building an epoch is the other half of applying one: a newer peer may have
+// admitted such a revision, and a node refusing to build it would not start.
 func TestAnEngineBootsOnAStoredCompanyThatBreaksAnAdmissionRule(t *testing.T) {
 	t.Parallel()
 	company, err := config.DecodeCompany(duplicateStepsRevision)

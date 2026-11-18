@@ -11,15 +11,11 @@ import (
 
 // A PROJECT ROW SAYS WHEN ITS WORK LAST CHANGED AND WHO CHANGED IT.
 //
-// The pair is maintained on the same terms as the census beside it: a
-// directory drawing thirty projects would otherwise run thirty seeks per poll
-// over `tracker_history`, which is one row per applied commit and which
-// nothing ever sweeps — so the cost of the screen grows for the life of the
-// deployment while the value changes on a handful of commits an hour.
-//
-// The ACTOR is asserted with the instant because the two are one record's
-// values: a stamp that took the instant from one commit and the handle from
-// another would name a person who did not make the change it is dated to.
+// The pair is maintained like the census beside it rather than sought over
+// `tracker_history`, one row per commit and never swept, so a directory poll
+// would grow costlier for the life of the deployment. The ACTOR is asserted
+// with the instant because both are one record's values: a mix of two commits
+// names a person who did not make the dated change.
 func TestAProjectRowSaysWhenItsWorkLastChangedAndWhoChangedIt(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -38,10 +34,9 @@ func TestAProjectRowSaysWhenItsWorkLastChangedAndWhoChangedIt(t *testing.T) {
 			row.LastChange.Actor, row.LastChange.ActorKind)
 	}
 
-	// AND IT IS THE HEAD OF THE PROJECT'S OWN ACTIVITY FEED, which is the
-	// invariant the stamp hangs off the history row to get: a row saying
-	// "changed two minutes ago" whose feed's newest entry is from last
-	// week is a contradiction a reader meets by clicking.
+	// AND IT IS THE HEAD OF THE PROJECT'S OWN ACTIVITY FEED: a row saying
+	// "changed two minutes ago" over a feed whose newest entry is last week
+	// contradicts itself.
 	feed := r.activity(worklet.ActivityQuery{Project: "ENG"})
 	if len(feed.Records) == 0 {
 		t.Fatal("the project's feed is empty, so this case is comparing " +
@@ -54,10 +49,8 @@ func TestAProjectRowSaysWhenItsWorkLastChangedAndWhoChangedIt(t *testing.T) {
 			"disagree", row.LastChange.At, head.At)
 	}
 
-	// A SECOND COMMIT MOVES IT, and a comment is deliberately the one
-	// chosen: it moves no count, so a stamp wired to the census rather
-	// than to the commit would sit still through the whole conversation
-	// on a task.
+	// A SECOND COMMIT MOVES IT. A comment moves no count, so a stamp wired to the
+	// census rather than to the commit would sit still here.
 	operator := r.writer.As("ops-1", worklet.AuthorOperator, worklet.Provenance{})
 	if _, err := operator.UpdateTask(t.Context(), "op-comment", "t-1", "ENG",
 		worklet.NoIfMatch, worklet.TaskPatch{Comment: &worklet.Comment{
@@ -86,11 +79,8 @@ func TestAProjectRowSaysWhenItsWorkLastChangedAndWhoChangedIt(t *testing.T) {
 
 // A PROJECT NOBODY HAS FILED WORK INTO REPORTS NO LAST CHANGE AT ALL.
 //
-// The honest report of "nothing yet" is an ABSENCE. The two values a reader
-// would otherwise have been given are both made up: a zero instant renders as
-// the year 1 on every empty project, and the project's own creation instant
-// reports a directory of untouched projects as freshly active — which is
-// exactly the reading the column exists to make possible.
+// "Nothing yet" is an ABSENCE: a zero instant renders as the year 1, and the
+// project's creation instant reports untouched projects as freshly active.
 func TestAProjectWithNoWorkReportsNoLastChange(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -119,14 +109,11 @@ func TestAProjectWithNoWorkReportsNoLastChange(t *testing.T) {
 
 // THE STAMP NAMES THE COMMIT HIGHEST IN THE LOG, NOT THE ONE APPLIED LAST.
 //
-// Two nodes at one checkpoint have seen the same SET of records and a
-// different ORDER of them — a reprocess after an upgrade and a redelivery
-// after an adoption both put a record below rows already applied. These rows
+// Nodes at one checkpoint hold the same SET of records in different ORDERs (a
+// reprocess after an upgrade, a redelivery after an adoption), and these rows
 // are compared byte for byte across the fleet, so a value folded over arrival
-// order diverges permanently, on a column nothing repairs.
-//
-// The guard is the composed position rather than the instant, which is the
-// half an instant could not do: two records can share one.
+// order diverges for good. The guard is the composed position, not the
+// instant: two records can share an instant.
 func TestTheLastChangeNamesTheHighestCommitRatherThanTheLastApplied(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -171,15 +158,11 @@ func TestTheLastChangeNamesTheHighestCommitRatherThanTheLastApplied(t *testing.T
 
 // A PURGE LOWERS THE CENSUS IT LEAVES, AND STAMPS THE PROJECT.
 //
-// # The count this closes
-//
-// Every other departure from a status bucket is a task RECORD and goes through
-// the count maintenance; a purge DELETES the row instead of writing one, and
-// nothing lowered the count it was in. A task purged while it was open left
-// `open_count` one too high on every node — for ever, because these counts are
-// maintained and nothing anywhere aggregates them back into agreement — and
-// `PurgeTask` does not require the task to have been removed first, so it is
-// the ordinary shape of the operation rather than a corner of it.
+// A purge DELETES the row rather than writing a task record, so it skips the
+// count maintenance every other departure from a status bucket goes through.
+// The counts are maintained and never re-aggregated, so a missed decrement
+// leaves `open_count` too high on every node for good, and `PurgeTask` does not
+// require a prior removal, so an open task is its ordinary case.
 func TestAPurgeLowersTheCensusAndStampsTheProject(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -208,11 +191,9 @@ func TestAPurgeLowersTheCensusAndStampsTheProject(t *testing.T) {
 			"work can undergo", got)
 	}
 
-	// THE SAME PURGE AGAIN. The deletion gate lets this record's own
-	// redelivery through by op id — it is what wrote the marker — and
-	// every statement it runs is then a no-op. A second decrement would
-	// take the census one BELOW the truth, which is the half the clamp
-	// cannot see.
+	// THE SAME PURGE AGAIN. The deletion gate lets this record's own redelivery
+	// through by op id, and every statement is then a no-op; a second decrement
+	// would take the census BELOW the truth, which the clamp cannot see.
 	if _, err := h.apply(purge, time.Unix(1_700_000_300, 0).UTC()); err != nil {
 		t.Fatalf("redelivered purge: %v", err)
 	}
@@ -226,11 +207,9 @@ func TestAPurgeLowersTheCensusAndStampsTheProject(t *testing.T) {
 
 // A TURN DOES NOT MOVE THE STAMP.
 //
-// A turn record adds an agent's spend to a task and writes no history row:
-// what it records is what the work COST, not a change to it. Counting it would
-// mark every project a seat is thinking in as changed, continuously, while
-// nothing about the work moved — and the directory would stop being able to
-// answer the question it exists for.
+// A turn record adds an agent's spend and writes no history row: it records
+// what the work COST, not a change to it. Counting it would mark every project
+// a seat is thinking in as changed, continuously.
 func TestASpendingTurnIsNotAChangeToTheProjectsWork(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -268,9 +247,8 @@ func TestASpendingTurnIsNotAChangeToTheProjectsWork(t *testing.T) {
 // AND THE PROJECT'S OWN SETTINGS ARE NOT ITS WORK.
 //
 // A rename, a field declaration or an archive is a commit about the project
-// DOCUMENT, filed under no project at all — so a directory sorted on this
-// column does not lift a project to the top because somebody fixed a typo in
-// its purpose.
+// DOCUMENT, filed under no project, so fixing a typo in its purpose does not
+// lift a project to the top of the directory.
 func TestEditingAProjectIsNotAChangeToItsWork(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

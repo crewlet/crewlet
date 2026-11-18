@@ -17,9 +17,9 @@ import (
 type spyCopies struct {
 	inner copies
 
-	// beforeAsk, when set, is called before a replay of the table whose
-	// filter it names asks its first pull, once, handed that replay's
-	// pulls: a publish or a hydration racing the hydration.
+	// beforeAsk, when set, is called once per filter, before its replay
+	// asks its first pull, with that replay's pulls: where a case races a
+	// publish or a hydration against the hydration.
 	beforeAsk func(filter string, pulls replayPulls)
 	// beforeNext, when set, is called before each word a replay reads off
 	// its inbox.

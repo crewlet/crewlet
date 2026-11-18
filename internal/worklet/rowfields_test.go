@@ -62,13 +62,10 @@ func rowOf(t *testing.T, answer worklet.Answer, id string) worklet.TaskRow {
 }
 
 // A BOARD CARD'S FACTS ARE ASKED FOR, AND PRESENT EVEN AT ZERO WHEN THEY ARE.
-//
-// The row a seat reads through `list_work_items` is the row every board reads
-// too, and every byte on it is in a model's context on every listing — so a
-// card's labels, its "blocks N", its open question and its cost ride only on
-// an answer that named them. And a card that asked is told "0" and "[]" rather
-// than left with an absent key: "asked, and none" and "the engine did not
-// understand the question" must not look the same.
+// The row `list_work_items` returns is in a model's context on every listing,
+// so labels, "blocks N", open questions and cost ride only on an answer that
+// named them; one that did gets "0" and "[]", not an absent key, which would
+// look like "the engine did not understand the question".
 func TestRowFieldsAreOptIn(t *testing.T) {
 	t.Parallel()
 	r := rowFieldsCompany(t)
@@ -186,8 +183,7 @@ func TestAListSortsBySpendTokensAndCarriesThem(t *testing.T) {
 		t.Errorf("the rows report %v tokens in the order the sort put them — "+
 			"the list ranks by one number and draws another", tokens)
 	}
-	// AND THE OLD SPELLING IS GONE rather than aliased: `spend` stopped
-	// naming one number the day a row could carry five of them.
+	// Bare `spend` is refused, not aliased: a row carries five spend numbers.
 	if _, err := worklet.ParseQuery(worklet.MapParams{
 		"container": "project:ENG", "sort": "-spend",
 	}, wednesday, berlin); err == nil {

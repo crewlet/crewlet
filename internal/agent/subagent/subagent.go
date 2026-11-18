@@ -70,6 +70,7 @@ import (
 	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/toolname"
@@ -485,7 +486,8 @@ func Permit(universe tools.Snapshot, parent, requested []string) Grant {
 
 	var active, rejected []string
 	seen := make(map[string]bool, len(requested))
-	for _, name := range requested {
+	for _, asked := range requested {
+		name := engineName(asked, reachable)
 		if seen[name] {
 			// A repeat is not a second rejection and not a second grant.
 			// Two ToolDefs with one name is a request some vendors refuse
@@ -498,7 +500,7 @@ func Permit(universe tools.Snapshot, parent, requested []string) Grant {
 			active = append(active, name)
 			continue
 		}
-		rejected = append(rejected, name)
+		rejected = append(rejected, asked)
 	}
 
 	// THE SKILL LOADER RIDES ALONG UNREQUESTED when the child can reach it,
@@ -512,6 +514,21 @@ func Permit(universe tools.Snapshot, parent, requested []string) Grant {
 	}
 
 	return Grant{Universe: safe, Active: active, Rejected: rejected}
+}
+
+// engineName is the engine's name for a tool a parent asked for: an executor asks in its harness's
+// spelling (`mcp__crewlet__get_page` for `get_page`), so a name that is none of the engine's is
+// read without a built-in harness's prefix.
+func engineName(asked string, reachable map[string]bool) string {
+	if reachable[asked] {
+		return asked
+	}
+	for _, prefix := range harnessprofile.ModelToolPrefixes() {
+		if bare, ok := strings.CutPrefix(asked, prefix); ok && reachable[bare] {
+			return bare
+		}
+	}
+	return asked
 }
 
 // childMayReach is the three-filter test, in one place so the grant and the
@@ -758,6 +775,7 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		MCPServers:     grant.Universe.MCPServers(),
 		Discoverable:   discoverable,
 		Submits:        submit != nil,
+		MaxTurns:       task.maxTurns,
 		Skills:         cfg.Skills,
 	})
 	res.UserPrompt = withDependencies(ctx, cfg.Compact, task.Prompt, deps)
@@ -786,6 +804,7 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		// what it just submitted — on the parent's budget, for output
 		// nobody reads.
 		TerminateAfter: terminators(submit),
+		LastRoundNote:  lastRoundNote(submit),
 	})
 	res.ToolsAvailable = surface.Active()
 
@@ -795,6 +814,7 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		res.InputTokens, res.OutputTokens = loop.InputTokens, loop.OutputTokens
 		res.CacheRead, res.CacheWrite = loop.CacheRead, loop.CacheWrite
 		res.RoundRecords = loop.Rounds
+		res.Exhausted = loop.ExhaustedRounds
 		res.Model = loop.Model
 		res.ProviderKey = loop.ProviderKey
 		res.Executions = loop.Executions
@@ -864,6 +884,15 @@ func terminators(submit *structured.Tool[resultPayload]) []string {
 		return nil
 	}
 	return []string{SubmitTool}
+}
+
+// lastRoundNote is what a worker is told before its last round, in the form
+// its ending takes.
+func lastRoundNote(submit *structured.Tool[resultPayload]) string {
+	if submit == nil {
+		return prompts.SubagentLastRoundProse
+	}
+	return prompts.SubagentLastRound
 }
 
 // stopReason classifies a context that ended, and returns ("", "") for one

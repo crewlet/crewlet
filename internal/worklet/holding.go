@@ -47,8 +47,8 @@ type HoldingRow struct {
 	// HeldSince is when the person came to hold it: when it last changed
 	// hands, whichever change moved its assignee ([readHandedOver]), or, for
 	// an item held by an open question, when that question was put. ABSENT
-	// where neither is recorded, never the zero instant: a reader that took
-	// year 1 for a time drew "held for 739,933 days".
+	// where neither is recorded, never the zero instant, which a reader
+	// would take for a time.
 	HeldSince time.Time `json:"held_since,omitzero"`
 
 	// Asked is the open question to the person this row is held by, its

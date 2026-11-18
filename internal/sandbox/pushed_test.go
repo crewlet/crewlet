@@ -29,9 +29,9 @@ type pushSpy struct {
 	// held, when set, holds every read until the context it runs under ends,
 	// and is closed by the first read to arrive.
 	held chan struct{}
-	// changes, set, answers every Changes call; unset, Changes names nothing
-	// and opens nothing. changed records whether each call was asked to open,
-	// and records the push record each was handed.
+	// changes, set, answers every Changes call; unset, Changes names and opens
+	// nothing. changed records whether each call was asked to open, records
+	// the push record each was handed.
 	changes func(run PendingRun, pushed []PushedRef, open bool) ([]PushedRef, []OpenedChange, error)
 	changed []bool
 	records []PushRecord
@@ -190,15 +190,12 @@ func TestACollectedRunsReportSaysWhatItPushed(t *testing.T) {
 }
 
 // A COLLECTED RUN'S REPORT SAYS THE CHANGES IT DELIVERED TO (M4-decisions
-// D33): the engine names each ref the run pushed by the live change its branch
-// heads, read at the push record's position so the collection pays its one
-// barrier alone, and opens the change the run asked to open — asked to open
-// only for a run that finished its work, succeeded and asked nothing — and
-// the run's report says both: each ref beside its change, and what became of
-// each ask, opened or why not; the run's record carries each ref's change. A run that
-// stopped on a question opens none, the job that carries it on opening the
-// change, and one that did not succeed says it opened none; a run that pushed
-// nothing and asked nothing says nothing more.
+// D33): each pushed ref is named by the live change its branch heads, read at
+// the push record's position (one barrier per collection), and the asked-for
+// change is opened only for a run that succeeded and asked nothing. The report
+// gives each ref beside its change and what became of each ask; the record
+// carries each ref's change. A run stopped on a question opens none (the job
+// carrying it on does), and a failed one says it opened none.
 //
 // Mutations: ask the engine to open for a run that did not succeed — the
 // open flag, red; leave the opened lines out of runReport — red; leave the
@@ -289,11 +286,10 @@ func TestACollectedRunsReportSaysTheChangesItDeliveredTo(t *testing.T) {
 }
 
 // A PUSH RECORD THAT CANNOT BE READ IS SAID, NOT HIDDEN: the run is still
-// collected and resumed — a collection held until Gitlet answers would
-// hold a finished run's seat for as long as the host is down — and its report
-// says its pushes are UNKNOWN, why, and which branches it worked on, never a
-// silence its reviewer would read as "nothing pushed". The run's record says
-// so too, and the log names the run.
+// collected and resumed (waiting on Gitlet would hold a finished run's seat
+// while the host is down), and its report says its pushes are UNKNOWN, why,
+// and which branches it worked on, never a silence read as "nothing pushed".
+// The run's record says so too, and the log names the run.
 //
 // Not parallel: it captures the process-wide logger ([captureLogs]).
 //

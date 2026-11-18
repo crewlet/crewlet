@@ -21,13 +21,11 @@ var writeFiles = []string{
 	"tags.go", "thread.go", "trash.go", "views.go", "write.go",
 }
 
-// unmarkedByDesign is every sentence in [writeFiles] that is built with
-// fmt.Errorf, wraps nothing and is deliberately NOT a content refusal, keyed on
-// the opening of its format string, with why.
-//
-// EACH IS A FAULT OF THE WIRING OR THE NODE rather than of what was asked:
-// nothing a caller could send differently makes it land, so a surface must
-// not tell a person to change their input over it.
+// unmarkedByDesign is every fmt.Errorf sentence in [writeFiles] that wraps
+// nothing and is deliberately NOT a content refusal, keyed on its format
+// string's opening, with why: each is a fault of the wiring or the node, which
+// no different input would fix, so no surface may tell a person to change
+// their input.
 var unmarkedByDesign = map[string]string{
 	"worklet: a writer cannot act as":                      "a surface built a writer with no identity",
 	"worklet: a writer has no publisher":                   "construction wiring",
@@ -56,14 +54,10 @@ var unmarkedByDesign = map[string]string{
 }
 
 // TestEveryWriteRefusalIsMarked walks [writeFiles] and refuses a fmt.Errorf that
-// wraps nothing and is not in [unmarkedByDesign].
-//
-// THE WALK IS THE GATE because the failure is a NEW refusal. A writer that
-// refuses a value with fmt.Errorf compiles, reads fine to a model — and
-// reaches a person's write surface as the node's failure, because what is
-// unmarked is read as the node's (see [ErrInvalid]). So every sentence either
-// carries a sentinel through %w, is built with [invalid], [forbidden] or
-// [forbiddenAs], or is named here as the node's own fault with a reason.
+// wraps nothing and is not in [unmarkedByDesign]: a new unmarked refusal
+// compiles but reaches a person's write surface as the node's failure (see
+// [ErrInvalid]). Every sentence wraps a sentinel with %w, is built with
+// [invalid], [forbidden] or [forbiddenAs], or is named there with a reason.
 func TestEveryWriteRefusalIsMarked(t *testing.T) {
 	t.Parallel()
 	fset := token.NewFileSet()
@@ -103,9 +97,8 @@ func TestEveryWriteRefusalIsMarked(t *testing.T) {
 			return true
 		})
 	}
-	// TWO-SIDED: an entry that matches nothing is a sentence that was
-	// reworded or removed, and an exemption nothing uses is one the next
-	// refusal can hide behind.
+	// TWO-SIDED: an exemption nothing uses is one the next refusal can hide
+	// behind.
 	for prefix := range unmarkedByDesign {
 		if !seen[prefix] {
 			t.Errorf("unmarkedByDesign names %q and no sentence starts with it", prefix)
@@ -118,11 +111,10 @@ func TestEveryWriteRefusalIsMarked(t *testing.T) {
 	}
 }
 
-// TestNoRefusalSpellsThePackagePrefix walks EVERY file of the package, not
-// only [writeFiles] — a read's parameter check is built with [invalid] too —
-// for a refusal whose sentence opens with "worklet:". The prefix is the
-// refusal's own to add ([Refusal.Error]): spelled again, the log reads
-// "worklet: tracker: …" and [Sentence] hands its reader the package's name.
+// TestNoRefusalSpellsThePackagePrefix walks EVERY file of the package (a
+// read's parameter check uses [invalid] too) for a refusal whose sentence opens
+// with "worklet:": [Refusal.Error] adds the prefix, so spelled again the log
+// doubles it and [Sentence] hands its reader the package's name.
 func TestNoRefusalSpellsThePackagePrefix(t *testing.T) {
 	t.Parallel()
 	files, err := filepath.Glob("*.go")
@@ -170,10 +162,9 @@ func TestNoRefusalSpellsThePackagePrefix(t *testing.T) {
 }
 
 // TestAMarkedRefusalKeepsItsSentenceAndItsChain pins the halves of [invalid],
-// [forbidden] and [forbiddenAs]: the Go error reads as every error here does, prefix and
-// all, which is the text a model was tuned against; a sentinel the sentence
-// wraps is still reachable beside the mark; and [Sentence] is the words alone,
-// which is what a tool tells a model.
+// [forbidden] and [forbiddenAs]: the Go error keeps the prefix like every error
+// here, a wrapped sentinel stays reachable beside the mark, and [Sentence] is
+// the words alone, which is what a tool tells a model.
 func TestAMarkedRefusalKeepsItsSentenceAndItsChain(t *testing.T) {
 	t.Parallel()
 	inner := errors.New("disk")
@@ -189,8 +180,7 @@ func TestAMarkedRefusalKeepsItsSentenceAndItsChain(t *testing.T) {
 			errors.Is(err, ErrInvalid), errors.Is(err, inner), errors.Is(err, ErrForbidden))
 	}
 
-	// FORBIDDEN SAYS WHOSE IT IS ONCE: the sentinel's own words used to be
-	// appended after a sentence that had already said so.
+	// FORBIDDEN SAYS WHOSE IT IS ONCE: the sentinel's words are not appended.
 	denied := forbidden("view %s is protected and belongs to %s", "v1", "ada")
 	if got, want := denied.Error(), "worklet: view v1 is protected and belongs to ada"; got != want {
 		t.Errorf("the error is %q, want %q", got, want)
@@ -203,10 +193,9 @@ func TestAMarkedRefusalKeepsItsSentenceAndItsChain(t *testing.T) {
 			errors.Is(denied, ErrForbidden), errors.Is(denied, ErrInvalid))
 	}
 
-	// FORBIDDEN-AS CARRIES ITS OWN SENTINEL BESIDE THE CLASS, and says it
-	// once: the class is what every surface maps to a status, the sentinel
-	// is what the one caller that acts on this refusal tests for, and
-	// neither's words are appended to the sentence.
+	// FORBIDDEN-AS CARRIES ITS OWN SENTINEL BESIDE THE CLASS: surfaces map the
+	// class to a status, the one caller that acts on it tests the sentinel,
+	// and neither's words are appended to the sentence.
 	sentinel := errors.New("worklet: restores others")
 	alone := forbiddenAs(sentinel, "%d other tasks went with %s", 2, "t-1")
 	if got, want := alone.Error(), "worklet: 2 other tasks went with t-1"; got != want {
@@ -220,10 +209,9 @@ func TestAMarkedRefusalKeepsItsSentenceAndItsChain(t *testing.T) {
 			errors.Is(alone, ErrForbidden), errors.Is(alone, sentinel), errors.Is(alone, ErrInvalid))
 	}
 
-	// CONTEXT IS NEVER DROPPED TO TIDY A PREFIX: an error this package wrote
-	// loses the "worklet:" it opens with and keeps every word after it, the
-	// context a caller here gave it included; one another package wrapped
-	// opens with its context and is its whole message.
+	// CONTEXT IS NEVER DROPPED TO TIDY A PREFIX: this package's error loses
+	// only its opening "worklet:"; one another package wrapped is its whole
+	// message.
 	wrapped := fmt.Errorf("worklet: create ENG: %w", err)
 	if got, want := Sentence(wrapped), strings.TrimPrefix(wrapped.Error(), "worklet: "); got != want {
 		t.Errorf("a wrapped refusal's sentence is %q, want %q", got, want)
@@ -262,9 +250,8 @@ func literal(expr ast.Expr) (string, bool) {
 
 // refusalSentence is the sentence argument of a call to one of the package's
 // marked constructors, and whether call is one: [invalid] and [forbidden] take
-// it first, [forbiddenAs] after the sentinel it carries. ONE reading for both
-// walks, because a constructor one walk recognised and the other did not is a
-// refusal the second walk passes by checking nothing.
+// it first, [forbiddenAs] after its sentinel. Both walks share it, or a
+// constructor one missed would pass it unchecked.
 func refusalSentence(call *ast.CallExpr) (ast.Expr, bool) {
 	switch {
 	case (isIdent(call.Fun, "invalid") || isIdent(call.Fun, "forbidden")) && len(call.Args) > 0:

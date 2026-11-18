@@ -32,11 +32,10 @@ func systemOfRun(t *testing.T, runner *executor.Runner, req sandbox.RunRequest) 
 // A CLAUDE CODE RUN GETS ITS STANDING INSTRUCTIONS ON THE CHANNEL THAT ADDS TO
 // THE HARNESS'S OWN SYSTEM PROMPT, and only its task as the prompt it runs.
 //
-// `--append-system-prompt-file` keeps Claude Code's own prompt — the harness
-// an executor run exists to use — and puts the seat's text after it. Sent as
-// part of `-p`, the seat's identity, policies and memory reached the model as
-// the first thing in the user's request. The report instruction comes last,
-// after the seat's own text, which comes first.
+// `--append-system-prompt-file` keeps Claude Code's own prompt, the harness an
+// executor run exists to use, and puts the seat's text after it; in `-p` the
+// seat's identity, policies and memory would reach the model as the user's
+// request. The report instruction follows the seat's text.
 func TestTheStandingInstructionsReachClaudeCodeOnItsAppendChannel(t *testing.T) {
 	t.Parallel()
 	runner := executor.NewClaudeCode()
@@ -105,8 +104,8 @@ func TestTheStandingInstructionsReachOpenCodeAsAnInstructionFile(t *testing.T) {
 
 // A harness GIVEN NO SYSTEM TEXT WRITES NOTHING AND PASSES NOTHING: no file in
 // the box, no flag on the command line, no instruction in the config. The
-// runner always gives it some — the report instruction — so this is the harness's
-// own contract, held apart from the runner's.
+// runner always gives some (the report instruction), so this holds the
+// harness's own contract apart from the runner's.
 func TestAHarnessGivenNoSystemTextWritesAndPassesNothing(t *testing.T) {
 	t.Parallel()
 	for _, cli := range []executor.Harness{executor.ClaudeCode{}, executor.OpenCode{}} {
@@ -137,14 +136,12 @@ func TestAHarnessGivenNoSystemTextWritesAndPassesNothing(t *testing.T) {
 
 // THE FILE IS PRIVATE AND INSIDE THE BOX, on a real one.
 //
-// A `direct` box is a directory on the engine host, so the system text — a
-// seat's org chart, policies and memory — is readable there by whatever its
-// mode allows. It is created afresh at the mode every box file is created with
-// even where a previous run left one wider in a reused box, which keeps its
-// files: the run's artefacts are cleared before it starts, and a box write
-// replaces a file whole rather than keeping the mode of the one it replaces.
-// And Claude Code is pointed at exactly that file, with the task alone as its
-// prompt.
+// A `direct` box is a directory on the engine host, so the system text (a
+// seat's org chart, policies and memory) is readable there by whatever its
+// mode allows. It is created afresh at the box-file mode even over a wider one
+// a previous run left in a reused box: the run's artefacts are cleared before
+// it starts, and a box write replaces a file whole rather than keeping its
+// mode. Claude Code is pointed at exactly that file, the task alone its prompt.
 func TestClaudeCodeIsPointedAtAPrivateFileInsideTheBox(t *testing.T) {
 	t.Parallel()
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})
@@ -225,20 +222,18 @@ func TestClaudeCodeIsPointedAtAPrivateFileInsideTheBox(t *testing.T) {
 	}
 }
 
-// THE STANDING INSTRUCTION ABOUT NOTES IS GIVEN EXACTLY WHEN A RUN READS THEM —
-// its own harness's: to a run whose launch wired it to its turn's notes and whose
-// harness takes them between its steps, after the report instruction — and to no
-// other. Told to a run its launch gave nothing to ask for (the assistant's deep
-// work), or to one whose harness takes none, it would describe a channel that never
-// opens; told another harness's, it would describe the wrong carrier. The harness adds
-// it, never the runner: a Claude Code run wired to its notes has its standing
-// instructions as they stand, for a release its box starts without the hooks,
-// and a second time told of notes, for one it starts with them
+// THE STANDING INSTRUCTION ABOUT NOTES IS GIVEN EXACTLY WHEN A RUN READS THEM,
+// in its own harness's words, after the report instruction, and to no other:
+// told to a run with no notes wired (the assistant's deep work) or a harness
+// that takes none, it describes a channel that never opens; another harness's
+// names the wrong carrier. The harness adds it, never the runner. A Claude Code
+// run wired to notes keeps its plain text for a release whose box starts without
+// the hooks, and a copy told of notes for one that starts with them
 // ([executor.Paths.ClaudeNotesSystem]); an OpenCode run's one file is told.
 //
-// Mutation: append the instruction in the runner, or whenever Steer is set, and
-// the unreading row goes red; tell Claude Code's plain text of notes and its
-// rows do; give every harness Claude Code's and the OpenCode rows do.
+// Mutation: append it in the runner or whenever Steer is set (the unreading row
+// fails), tell Claude Code's plain text of notes (its rows), or give every
+// harness Claude Code's (the OpenCode rows).
 func TestTheStandingInstructionIsGivenExactlyWhenARunReadsNotes(t *testing.T) {
 	t.Parallel()
 	claudeTold := func(p executor.Paths) string { return p.ClaudeNotesSystem() }
@@ -320,21 +315,18 @@ func TestTheStandingInstructionQuotesTheHeadingANoteOpensWith(t *testing.T) {
 	}
 }
 
-// CLAUDE CODE'S INSTRUCTION NAMES WHERE ITS HARNESS PUTS A NOTE, on every model it
-// was measured with. Claude Code places a hook's additional context by model:
-// on 2.1.310, after a batch, a system message after the tool results for
-// claude-opus-5-5 and claude-sonnet-5, and a system reminder at the end of the
-// batch's last tool result for claude-sonnet-4-5; at the finish, a system
-// reminder in a user message for all three — each headed with the event's name
-// and " hook additional context:". The fixture is those requests' own text
-// (testdata/claude/2.1.310/hook-context.jsonl, the measuring session's own
-// trailing token-count reminder dropped). An instruction that told the model a
-// note is never inside a tool result disowned every note a sonnet-4-5 run took
-// after a batch; one that names a heading the harness does not write leaves the
-// model nothing to tell a note by.
+// CLAUDE CODE'S INSTRUCTION NAMES WHERE ITS HARNESS PUTS A NOTE, on every model
+// measured. On 2.1.310 a hook's additional context lands, after a batch, in a
+// system message after the tool results (claude-opus-5-5, claude-sonnet-5) or a
+// system reminder at the end of the last tool result (claude-sonnet-4-5); at
+// the finish, in a system reminder in a user message for all three; each headed
+// with the event's name and " hook additional context:". The fixture is those
+// requests' own text (testdata/claude/2.1.310/hook-context.jsonl), less the
+// measuring session's own trailing token-count reminder.
 //
-// Mutation: drop the tool-result placement from the instruction, name another
-// heading, or say a tool result never holds a note, and this goes red.
+// Mutation: say a tool result never holds a note (disowning every sonnet-4-5
+// note after a batch), drop the tool-result placement, or name a heading the
+// harness does not write (leaving the model nothing to tell a note by).
 func TestClaudeCodesInstructionNamesWhereItsHarnessPutsANote(t *testing.T) {
 	t.Parallel()
 	instruction := executor.ClaudeCodeSteerInstruction

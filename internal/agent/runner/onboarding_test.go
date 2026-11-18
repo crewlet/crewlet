@@ -18,10 +18,9 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// The onboarding guard chain, which is the part where a mistake is expensive
-// in BOTH directions: a seat that re-onboards every turn burns its budget on
-// reading pages it has read, and a seat that never onboards works for ever
-// without knowing its team's conventions.
+// The onboarding guard chain, where a mistake costs in BOTH directions: a seat
+// that re-onboards every turn rereads its pages, and one that never onboards
+// never learns its team's conventions.
 
 // markers is a marker store whose every answer a test controls.
 type markers struct {
@@ -139,9 +138,8 @@ func TestAMarkedSeatIsNotAskedAgain(t *testing.T) {
 
 func TestAnUnreadableMarkerSkipsRatherThanReOnboards(t *testing.T) {
 	t.Parallel()
-	// THE TRI-STATE. Collapsing a failed lookup into "not onboarded" would
-	// re-run a full pass for an already-marked agent on every transient
-	// database blip — strictly worse than waiting one turn for the answer.
+	// THE TRI-STATE: a failed lookup is not "not onboarded", or every
+	// database blip re-runs a pass for a marked seat.
 	store := &markers{readErr: errors.New("database is unreachable"), claimHeld: true}
 	prov := marking()
 	r := onboardingRunner(t, store, runner.NewLatch(), prov)
@@ -160,8 +158,8 @@ func TestAnUnreadableMarkerSkipsRatherThanReOnboards(t *testing.T) {
 
 func TestTheLatchSurvivesALaterReadFailure(t *testing.T) {
 	t.Parallel()
-	// The marker store is best-effort. Once THIS process has seen the seat
-	// marked, no later read flake may re-fire a whole pass.
+	// Once THIS process has seen the seat marked, no later read flake may
+	// re-fire a pass.
 	latch := runner.NewLatch()
 	store := &markers{onboarded: true, claimHeld: true}
 	r := onboardingRunner(t, store, latch, marking())
@@ -179,9 +177,8 @@ func TestTheLatchSurvivesALaterReadFailure(t *testing.T) {
 
 func TestARestructureReOnboards(t *testing.T) {
 	t.Parallel()
-	// The latch is keyed by CHAIN HASH, which is what makes a live org
-	// restructure re-onboard by design: a seat that moved under a different
-	// unit is oriented to a company it has not read about.
+	// The latch is keyed by CHAIN HASH, so a seat moved by a live org
+	// restructure re-onboards.
 	latch := runner.NewLatch()
 	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
 	before := &org.Organization{Name: "Acme", Roles: []*org.Role{role}}
@@ -204,9 +201,8 @@ func TestARestructureReOnboards(t *testing.T) {
 
 func TestAPassClaimedElsewhereSkips(t *testing.T) {
 	t.Parallel()
-	// Seat inboxes are shared subscriptions, so during a rolling restart two
-	// engines can each run a turn for the same un-onboarded seat. The lease
-	// makes exactly one of them run the pass.
+	// In a rolling restart two engines can run the same seat's turn; the
+	// lease makes exactly one of them run the pass.
 	store := &markers{claimHeld: false}
 	prov := marking()
 	r := onboardingRunner(t, store, runner.NewLatch(), prov)
@@ -228,9 +224,8 @@ func TestAPassClaimedElsewhereSkips(t *testing.T) {
 
 func TestAPassThatDoesNotMarkRetriesNextTurn(t *testing.T) {
 	t.Parallel()
-	// There is no rescue path, deliberately: a rescue would have to invent a
-	// summary of pages the agent did not finish reading. An unmarked pass
-	// just ends, and the next turn tries again.
+	// No rescue path: an unmarked pass just ends, and the next turn tries
+	// again.
 	store := &markers{claimHeld: true}
 	latch := runner.NewLatch()
 	silent := &scriptedProvider{onboarding: []llmtest.Response{text("I had a look around.")}}
@@ -248,11 +243,10 @@ func TestAPassThatDoesNotMarkRetriesNextTurn(t *testing.T) {
 	}
 }
 
-// THE ONBOARDING PASS IS NEVER FORCED, its corrective round included, for the
-// reason the reviewer is not: a forced tool choice is a 400 on several current
-// models, and a pass that errors never marks — so it re-ran, and failed, on
-// every turn the seat took. Naming mark_onboarded is what re-asks a pass that
-// answered in prose, and the corrective names that tool, not the catalogue.
+// THE ONBOARDING PASS IS NEVER FORCED, its corrective round included
+// (phaseRun.terminateAfter): a forced tool choice is a 400 on several models,
+// and a pass that errors never marks, so it would fail on every turn. A pass
+// that answered in prose is re-asked naming mark_onboarded.
 func TestTheOnboardingPassAsksOnAutoAndIsReAskedToMark(t *testing.T) {
 	t.Parallel()
 	store := &markers{claimHeld: true}
@@ -282,8 +276,7 @@ func TestTheOnboardingPassAsksOnAutoAndIsReAskedToMark(t *testing.T) {
 
 func TestNoMarkerStoreMeansNoPass(t *testing.T) {
 	t.Parallel()
-	// Without somewhere to mark, the pass could never complete — it would
-	// run every turn, for ever, spending a round budget each time.
+	// Without somewhere to mark, the pass would run every turn forever.
 	prov := marking()
 	r := onboardingRunner(t, nil, runner.NewLatch(), prov)
 	if ran, err := r.Onboard(context.Background()); ran || err != nil {
@@ -296,10 +289,10 @@ func TestNoMarkerStoreMeansNoPass(t *testing.T) {
 
 func TestAZeroBudgetDisablesThePass(t *testing.T) {
 	t.Parallel()
-	// turn_engine.onboarding_max_tool_rounds: 0 is the operator's off switch,
-	// and it has to reach the pass before the lease — otherwise a company
-	// that turned onboarding off still serialises its turns behind a claim.
-	// Built with a zero budget rather than mutated: Config is per-turn.
+	// turn_engine.onboarding_max_tool_rounds: 0 is the off switch, and it
+	// must apply before the lease, or a company with onboarding off still
+	// serialises its turns behind a claim. Built, not mutated: Config is
+	// per-turn.
 	store := &markers{claimHeld: true}
 	reg := tools.NewRegistry()
 	if err := reg.Register(stubTool{name: "mark_onboarded"}, tools.OriginBuiltin); err != nil {
@@ -326,9 +319,8 @@ func TestAZeroBudgetDisablesThePass(t *testing.T) {
 
 func TestTheOnboardingSurfaceCannotSubmitWork(t *testing.T) {
 	t.Parallel()
-	// The pass has its OWN budget precisely so it never competes with the
-	// turn's own work; a surface that could submit work would make it a
-	// second executor with a different prompt.
+	// A surface that could submit work would make the pass a second executor
+	// with a different prompt.
 	store := &markers{claimHeld: true}
 	prov := marking()
 	r := onboardingRunner(t, store, runner.NewLatch(), prov)
@@ -346,15 +338,11 @@ func TestTheOnboardingSurfaceCannotSubmitWork(t *testing.T) {
 	}
 }
 
-// ONBOARDING DISCOVERS. Its knowledge-base tools are not on its surface from
-// the first round (first-party ones on Doclet, an MCP server's on
-// Confluence), so its prompt lists them under the tools to discover, and it
-// reaches them only through the discovery pair. The gate that keeps the pair
-// off the reviewer must not take it off this pass.
-//
-// AND IT LISTS ONLY WHAT IT DOES NOT HOLD: the two tools active from its first
-// round reach the model as definitions with every request, and listed again
-// they are their descriptions paid for twice.
+// ONBOARDING DISCOVERS: its knowledge-base tools are listed under the tools to
+// discover and reached only through the discovery pair, which the gate keeping
+// it off the reviewer must not take off this pass. AND IT LISTS ONLY WHAT IT
+// DOES NOT HOLD: its two always-active tools already reach the model as
+// definitions, and listed again their descriptions are paid for twice.
 func TestTheOnboardingSurfaceCanDiscoverTools(t *testing.T) {
 	t.Parallel()
 	prov := marking()

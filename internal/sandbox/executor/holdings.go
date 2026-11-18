@@ -9,52 +9,30 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// WHICH OF A ROUND'S CALLS A KEPT SESSION HOLDS, READ BY THE RUNNER OF ITS
-// HARNESS.
+// Which of a round's calls a kept session holds, read by the runner of the
+// harness that wrote it: a relaunch continuing a cut-off kept capture asks
+// [sandbox.Coordinator.HoldingsOf], which asks [Runner.ReadHoldings]. Records
+// are each harness's own shape, so reading them is too ([holdingsReader];
+// Claude Code's is claudeholdings.go's); a harness without one reads none.
 //
-// A relaunch continuing a cut-off kept capture asks the sandbox which of its
-// round's calls the session holds ([sandbox.Coordinator.HoldingsOf]), and the
-// sandbox asks the runner whose harness wrote the session
-// ([Runner.ReadHoldings]): each harness files its calls in records of its own
-// shape, so reading them is each harness's own ([holdingsReader]), and a
-// runner whose harness has no reading reads none. Claude Code's is
-// claudeholdings.go's.
-//
-// IN ORDER, NOTHING OPENED BEFORE THE LAST: the harness's reading; the ask,
-// the release that continues the session among it, and the archive held to
-// its own rule; the writer's release held to its floor; the slots; and only
-// then the archive opened, and read. A reading refused at any of the first
-// four holds no slot and opens no store connection.
-//
-// THE SEATS' ONE TRANSCRIPT SLOT, INSIDE THE PROCESS'S TWO, AND NO POOL OF ITS
-// OWN ([SeatTranscriptReadsAtOnce]). A reading holds at its worst what one
-// read of a transcript can, on the order of a hundred mebibytes
-// ([TranscriptReadsAtOnce]), and a pool beside the process's two would double
-// what reads can hold at their worst. So a relaunch's reading takes turns with
-// the seats' reads, and never takes the slot a person's read is kept: it
-// waits for its slots inside its caller's wait, and a reading that waits past
-// it is no reading, which tells the session every call after its save point,
-// never wrong.
-//
-// THE WRITER'S FLOOR IS THE READING'S OWN ([ClaudeCode.holdingsFloor]), never
-// a carry floor ([claudeCarriedWriterFloor], [claudeCarryFloor]): those say
-// what a box can continue, which is its harness's resume to do, where a
-// reading decides from the shape of what a release recorded, and is held to
-// the oldest release those shapes were measured on. A release it cannot read,
-// or none recorded, is below it ([readsRelease]): every other release check
-// of the package reads an unreadable release as a current one
-// ([releaseAtLeast]), which here would read a writer nobody measured. The
-// floor is checked here of the session's last writer, the release its row
-// records, before anything is opened; and since a session continued across
-// releases holds the records of each, the reading holds every record it reads
-// to the floor again by the release that record names
-// ([ClaudeCode.readHoldings], [writerBelowFloor]).
+// NO SLOT POOL OF ITS OWN: a reading can hold what a transcript read can, about
+// a hundred mebibytes ([TranscriptReadsAtOnce]), and a pool beside the
+// process's two would double the worst case. It takes the seats' one slot
+// ([SeatTranscriptReadsAtOnce]), never the one kept for a person's read, inside
+// its caller's wait; a reading that waits past it is no reading, which tells
+// the session every call after its save point: never wrong.
 
 // holdingsReader is a harness's reading of its own sessions for which of a
 // round's calls they hold ([Runner.ReadHoldings]).
 type holdingsReader interface {
 	// holdingsFloor is the oldest release of the harness whose sessions the
-	// reading reads: the oldest its rules were measured on.
+	// reading reads: the oldest its rules were measured on. It is the
+	// reading's own, never a carry floor ([claudeCarryFloor],
+	// [claudeCarriedWriterFloor]), which says what a box's resume can
+	// continue, not which record shapes were measured. The row's writer is
+	// held to it before anything opens, and each record again by the release
+	// it names, since a continued session holds several releases' records
+	// ([ClaudeCode.readHoldings], [writerBelowFloor]).
 	holdingsFloor() string
 
 	// checkHoldings holds ask, and the archive as its row describes it, to
@@ -70,15 +48,15 @@ type holdingsReader interface {
 
 // ReadHoldings reads what archive, a kept session of this runner's harness,
 // holds of the calls ask marks asked ([sandbox.HoldingsReader]), or says why it
-// reads none. See the file comment: only where the harness has a reading; of
-// an ask and an archive that reading answers; of a session a release at or
-// after the reading's floor wrote; inside the seats' slot and one of the
-// process's; the archive opened only then, through open, at most once, and
-// closed before the slots are given back; read within the bounds a kept
-// session is scrubbed within ([boundsFor]).
+// reads none. In order, opening nothing before the last: the harness's
+// reading; ask and archive held to it; the writer held to its floor
+// ([readsRelease]); the seats' slot and one of the process's; then archive
+// opened once, through open, closed before the slots go back, and read within
+// a kept session's scrub bounds ([boundsFor]). A refusal before the slots holds
+// none and opens no store connection.
 //
-// Whether this runner restores archive at all is not asked again: a reading's
-// caller asks [Runner.Restores] first, through [sandbox.ContinuityOf].
+// Whether this runner restores archive is not asked again: the caller asked
+// [Runner.Restores] first, through [sandbox.ContinuityOf].
 func (r *Runner) ReadHoldings(ctx context.Context, archive sandbox.SessionArchive,
 	open func(context.Context) (io.ReadCloser, error), ask sandbox.HoldingsAsk) (sandbox.SessionHoldings, error) {
 
@@ -118,24 +96,22 @@ func (r *Runner) ReadHoldings(ctx context.Context, archive sandbox.SessionArchiv
 var _ sandbox.HoldingsReader = (*Runner)(nil)
 
 // readsRelease reports whether release, the writer a session's row records,
-// is one a reading reads: a release ([sandbox.ValidRelease]) every number of
-// which this code reads ([releaseNumbers]), at or after floor.
+// is one a reading reads: valid ([sandbox.ValidRelease]), every number readable
+// ([releaseNumbers]), and at or after floor.
 //
-// A RELEASE IT CANNOT READ IS BELOW IT, never the current one [releaseAtLeast]
-// takes it for: "", a release of two numbers, and one with a number past what
-// an int holds ("0.0.99999999999999999999", which ValidRelease, holding a
-// release to its shape and its length, takes for one) would each have the
+// AN UNREADABLE RELEASE IS BELOW FLOOR, not current as [releaseAtLeast] takes
+// it: "", a two-number release, or one with a number past an int
+// ("0.0.99999999999999999999", which ValidRelease accepts) would have the
 // reading read a writer nobody measured.
 func readsRelease(release, floor string) bool {
 	_, readable := releaseNumbers(release)
 	return sandbox.ValidRelease(release) && readable && releaseAtLeast(release, floor)
 }
 
-// holdingsError is why a reading read nothing: the reading's own words, whole,
-// and what gave it, where something did, cut ([firstLine]). What gives it can
-// quote what a box wrote, a line's bytes in a decode's error or a member's
-// name a mebibyte long, and the error is a log line's detail; so a member's
-// name rides the reading's own words only as [memberNamed] cuts it.
+// holdingsError is why a reading read nothing: its own words whole, and its
+// cause cut ([firstLine]). A cause can quote what a box wrote (a line's bytes, a
+// member's name a mebibyte long) into a log line's detail, so a member's name
+// rides the reading's own words only as [memberNamed] cuts it.
 type holdingsError struct {
 	why   string
 	cause error

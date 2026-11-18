@@ -10,12 +10,11 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// THE ANSWERED READ SEARCHES ITS INDEX, and the term that makes it so is one a
-// reader would delete as redundant: `c.ask <> ”` beside `c.ask = ?`, because
-// a planner matches a partial index by syntactic implication and a bound
-// parameter could be the empty string. Without the index the read is a scan
-// of every comment the company ever wrote. The follow-up read seeks the task's
-// own history and the closing commit by its key, never the whole history.
+// THE ANSWERED READ SEARCHES ITS INDEX, through a term that looks redundant:
+// `c.ask <> ”` beside `c.ask = ?`, because a planner matches a partial index
+// by syntactic implication and a bound parameter could be the empty string.
+// Without it the read scans every comment. The follow-up read seeks the task's
+// own history and the closing commit by its key.
 func TestTheAnsweredReadSearchesItsIndex(t *testing.T) {
 	t.Parallel()
 	// AN EMPTY ESTATE, for [seededPlanStore]'s reason: no node runs

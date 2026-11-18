@@ -20,11 +20,8 @@ func totalOf(t *testing.T, answer worklet.Answer, key string) worklet.Total {
 	return worklet.Total{}
 }
 
-// A TOTAL IS OVER THE WHOLE SET, never over the page.
-//
-// A total is what the question adds up to, and a page is fifty rows of it. One
-// computed over the page changes as somebody scrolls, which is the one thing a
-// number on a header must not do.
+// A TOTAL IS OVER THE WHOLE SET, never over the page: one over the page changes
+// as somebody scrolls, which a header's number must not.
 func TestATotalCountsTheWholeSetRatherThanThePage(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -66,10 +63,8 @@ func TestATotalCountsTheWholeSetRatherThanThePage(t *testing.T) {
 	}
 }
 
-// A TOTAL SHARES THE ANSWER'S OWN PREDICATE.
-//
-// A header that added up more than the board shows is a number nobody can
-// reconcile with what is in front of them.
+// A TOTAL SHARES THE ANSWER'S OWN PREDICATE: a header adding up more than the
+// board shows cannot be reconciled with it.
 func TestATotalAddsUpOnlyWhatTheFilterMatched(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -96,19 +91,14 @@ func TestATotalAddsUpOnlyWhatTheFilterMatched(t *testing.T) {
 	}
 }
 
-// NO ROW CONTRIBUTING IS ABSENT, NOT ZERO.
-//
-// "Nothing is estimated" and "everything is estimated at nothing" are
-// different facts, and a header rendering the second for the first is how a
-// empty board reads as free.
+// NO ROW CONTRIBUTING IS ABSENT, NOT ZERO, which would make an empty board
+// read as free (see [worklet.Total]'s Value).
 func TestATotalOverNothingIsAbsentRatherThanZero(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 
-	// A task with no due date, which is the NULLABLE case: `estimate_min`
-	// is NOT NULL DEFAULT 0 in the store, so "no estimate" and "estimated
-	// at nothing" really are one value there — a fact about the schema
-	// rather than about this aggregate.
+	// A task with no due date, the NULLABLE case: `estimate_min` is NOT NULL
+	// DEFAULT 0 in the store, so it cannot tell "no estimate" from zero.
 	if _, err := r.writer.CreateTask(t.Context(), "op-1", newTask("t-1"), nil); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -142,10 +132,7 @@ func TestATotalOverNothingIsAbsentRatherThanZero(t *testing.T) {
 	}
 }
 
-// A DATE TOTAL ANSWERS AN INSTANT, and only min and max may be asked for one.
-//
-// A sum of dates is a number of microseconds since 1970 — a value nothing
-// renders and nobody meant.
+// A DATE TOTAL ANSWERS AN INSTANT, and never a number beside it.
 func TestADateTotalAnswersAnInstant(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -216,10 +203,8 @@ func TestATotalThatMeansNothingIsRefused(t *testing.T) {
 	}
 }
 
-// A CUSTOM FIELD'S TOTAL READS ITS OWN TABLE.
-//
-// A declared field's values are rows keyed by field id, typed per column — so
-// an aggregate over one is a correlated read rather than a column of the task.
+// A CUSTOM FIELD'S TOTAL READS ITS OWN TABLE: a declared field's values are
+// rows keyed by field id, typed per column, not columns of the task.
 func TestACustomFieldsTotalAddsUpItsValues(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -249,12 +234,9 @@ func TestACustomFieldsTotalAddsUpItsValues(t *testing.T) {
 	}
 }
 
-// A TOTAL DOES NOT MOVE AS SOMEBODY PAGES.
-//
-// The cursor says where this PAGE starts, and it was folded into the predicate
-// the totals and the hint share — so page two's header reported the sum of page
-// two ONWARDS. A number that changes as somebody pages is the same failure as
-// one that changes as they scroll.
+// A TOTAL DOES NOT MOVE AS SOMEBODY PAGES: the cursor says where the PAGE
+// starts, so it stays out of the predicate the totals and the hint share, or
+// page two's header sums page two onwards.
 func TestATotalDoesNotMoveAsSomebodyPages(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -299,11 +281,9 @@ func TestATotalDoesNotMoveAsSomebodyPages(t *testing.T) {
 	}
 }
 
-// PAGE TWO OF A CUSTOM-FIELD SORT IS REACHABLE.
-//
-// A `sort=f.<slug>` cursor compares the sort join's own alias, and the hint
-// and the totals carry no join — so a cursor in the shared predicate made page
-// two of every such query a hard error rather than a second page.
+// PAGE TWO OF A CUSTOM-FIELD SORT IS REACHABLE: a `sort=f.<slug>` cursor
+// compares the sort join's alias, which the hint and the totals do not carry,
+// so a cursor in their shared predicate is a hard error on page two.
 func TestPageTwoOfACustomFieldSortIsReachable(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

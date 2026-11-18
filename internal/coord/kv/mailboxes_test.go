@@ -15,25 +15,19 @@ import (
 )
 
 // mailboxSeat is the id the registry files the seat a case calls name under:
-// a stable v5, because the registry keys on a seat's id and a case needs one
-// it can derive twice and read back the same.
+// a stable v5, so a case can derive it twice and read back the same.
 func mailboxSeat(name string) uuid.UUID {
 	return uuid.NewSHA1(uuid.MustParse("5d2e7c1b-3a49-4f86-8b0e-9c1d2e3f4a5b"), []byte(name))
 }
 
 // THE MAILBOX REGISTRY IS LISTED IN ONE CERTIFIED WALK, NOT A GET PER RECORD.
 //
-// It was the one listing in this package that bypassed the walk: the client's
-// ListKeys and then a Get per handle. So a quiet registry cost one read per
-// record on top of the lister's consumer, and a registry being rewritten —
-// every sweep that judges a record rewrites it, on every node — could come
-// back without the record being rewritten, because the key lister ends where
-// the same watcher guesses the initial values end.
-//
-// The listing runs on its OWN store over the same buckets, with its registry
-// counted, so the case can tell a Get per record from a certifying read, and
-// can prove the race happened: a churn in which no listing needed a single
-// certifying read never raced a pass.
+// A Get per record costs a read each, and ListKeys can drop a record being
+// rewritten (every sweep rewrites the records it judges) because it ends where
+// it guesses the initial values end. The listing runs on its OWN store over the
+// same buckets, its registry counted, so the case tells a Get per record from a
+// certifying read, and proves the race happened: a churn in which no listing
+// needed a certifying read never raced a pass.
 func TestTheMailboxRegistryIsListedInOneCertifiedWalk(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -43,8 +37,7 @@ func TestTheMailboxRegistryIsListedInOneCertifiedWalk(t *testing.T) {
 	wire := countWireReads(t, nc, reader.mailboxes)
 
 	handles := []string{"ceo", "cto", "eng", "ops", "pm"}
-	// The registry lists by SEAT ID, the key it files each record under, so
-	// that is the order every listing must come back in.
+	// Every listing comes back in SEAT ID order, the registry's key.
 	slices.SortFunc(handles, func(a, b string) int {
 		return strings.Compare(mailboxSeat(a).String(), mailboxSeat(b).String())
 	})

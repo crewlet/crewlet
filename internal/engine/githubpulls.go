@@ -12,40 +12,27 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A pull request read for a chat link's preview.
+// A pull request read for a chat link's preview, with the company's agents'
+// apps (the participant lookup's walk): GitHub has no per-person grant here,
+// and the caller (internal/api/queries' unfurls) admits only a repository
+// under an owner the company's GitHub names, so a reader learns only a title,
+// a state and a size of the company's own code the link already points at.
 //
-// # The company's credential, and why that is the right one
-//
-// GitHub has no per-person permission in this engine: a person reads the
-// company's code through its links, never through a grant. So a preview is
-// read with the credential the company's own agents act with (their apps,
-// through the same walk as a thread's participant lookup), and only for a
-// repository under an owner the company's GitHub configuration names, which
-// the caller checks (internal/api/queries' unfurls). What a reader of the
-// room learns is a title, a state and a size of a pull request in the
-// company's own code, which the link beside it already points at.
-//
-// # Cached per pull request, briefly
-//
-// Every reader of a room previews the same links, and a room open on twenty
-// screens would otherwise read one pull request twenty times a minute against
-// an installation's rate limit. A preview is kept for [pullPreviewTTL], a
-// failure as long, at most [pullPreviewEntries] at once.
+// Cached per pull request, a failure as long as an answer: every reader of a
+// room previews the same links against an installation's rate limit.
 
-// pullPreviewTTL is how long one pull request's preview is reused: a minute,
-// the scale at which a pull request's state is worth redrawing (a review, a
-// merge) and short enough that a preview is never an afternoon old.
+// pullPreviewTTL is how long one preview is reused: a minute, the scale at
+// which a pull request's state (a review, a merge) is worth redrawing.
 const pullPreviewTTL = time.Minute
 
 // pullPreviewEntries bounds the cache: 512 pull requests is every link a busy
 // company shares in an hour, at well under a kibibyte each.
 const pullPreviewEntries = 512
 
-// pullPreviewReads bounds how many previews this node reads from GitHub at
-// once: four, so a screen opening a room of links, or many screens at once,
-// spends a handful of an installation's requests rather than a burst, and a
-// slow API holds four reads rather than every chat request on the node. A
-// read that cannot start inside its caller's deadline is a link drawn plain.
+// pullPreviewReads bounds this node's previews in flight: four, so a room of
+// links spends a handful of an installation's requests rather than a burst,
+// and a slow API holds four reads rather than every chat request. A read
+// that cannot start inside its caller's deadline is a link drawn plain.
 const pullPreviewReads = 4
 
 // errNoGitHub is a preview asked of a company that does not run GitHub.
@@ -74,9 +61,8 @@ type pullPreview struct {
 
 // wire replaces the reader's credential with a new wiring's, or empties it
 // (nil) when GitHub is retired, dropping every cached read: a rotated
-// credential or a removed app must not go on answering. Which host a pull
-// request's address is read against is the preview's own check, against the
-// company document (`chat_unfurls`), before it asks.
+// credential or a removed app must not go on answering. The host is the
+// preview's own check (`chat_unfurls`).
 func (g *githubPullReader) wire(lookup *github.SeatLookup, owners []string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -120,8 +106,8 @@ func (g *githubPullReader) read(ctx context.Context, ref github.PullRef) (
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.lookup != lookup {
-		// REWIRED WHILE THIS READ WAS OUT: its answer is the old
-		// credential's, and is not kept.
+		// REWIRED WHILE THIS READ WAS OUT: the old credential's answer is
+		// not kept.
 		return pr, err
 	}
 	if g.entries == nil {

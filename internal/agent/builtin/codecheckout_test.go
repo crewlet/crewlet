@@ -57,13 +57,11 @@ func webCheckout(outcome sandbox.GrantOutcome) builtin.Checkout {
 // webCheckoutBrief is what webCheckout's clone step says it made true.
 const webCheckoutBrief = "Repository `web` is checked out at `./web` on branch `seats/swe/ENG-7`."
 
-// A CHECKOUT'S ANSWER SAYS WHAT ITS COMMANDS MAKE TRUE: each step's own brief,
-// after the commands — where the checkout is, how another branch is fetched
-// and how it pushes. A run is given no repository at launch, so its
-// environment block names none, and this answer is the one place the run is
-// told.
+// A CHECKOUT'S ANSWER SAYS WHAT ITS COMMANDS MAKE TRUE: each step's brief,
+// after the commands. A run launches with no repository, so its environment
+// block names none and this answer is the one place it is told.
 //
-// Mutation: answer the commands alone — the brief is missing, red.
+// Mutation: answer the commands alone → the brief is missing, red.
 func TestACheckoutSaysWhatItsCommandsMakeTrue(t *testing.T) {
 	t.Parallel()
 	got := checkoutCall(t, &checkoutDesk{got: webCheckout(sandbox.GrantAdded)}, map[string]any{"repo": "web"})
@@ -78,11 +76,10 @@ func TestACheckoutSaysWhatItsCommandsMakeTrue(t *testing.T) {
 }
 
 // A CHECKOUT ASKS FOR ONE REPOSITORY, READ STRICTLY: the desk is asked exactly
-// what the call named, for the run and the job that made it, and the run is
-// answered the commands that clone what the row granted. Every malformed
-// field is refused naming it before the desk is asked, because what a
-// repository is given is a grant: a misspelt `acess` dropped would hand the
-// run the default access.
+// what the call named, for the run and job that made it, and the run is
+// answered the commands that clone what the row granted. Every malformed field
+// is refused naming it before the desk is asked: a checkout is a grant, and a
+// misspelt `acess` dropped would hand the run the default access.
 //
 // Mutations: read the fields with the tolerant argString (a list read as "")
 // → the "access that is a list" case reaches the desk, red; drop the
@@ -163,13 +160,12 @@ func TestACheckoutAsksForExactlyTheRepositoryItNames(t *testing.T) {
 	}
 }
 
-// A CHECKOUT IS AN EXECUTOR'S: a call no job made has no row to grant on,
-// and the desk is never asked. What the row did with a checkout is said in
-// the run's words: held, conflict, full and not running each refused or
-// answered as what they are — a conflict over whom the run works for naming
-// nobody among the requesters its grants may have been taken for, since a run
-// granted for nobody is never used for somebody, and what the seat can do
-// instead — and a refusal the desk composed reaches the run as it was written.
+// A CHECKOUT IS AN EXECUTOR'S: a call no job made has no row to grant on, so
+// the desk is never asked. Each row outcome (held, conflict, full, not
+// running) is answered in the run's words as what it is; a conflict over whom
+// the run works for names none of the requesters, says a run granted for
+// nobody is never used for somebody, and what the seat can do instead. A refusal the desk composed reaches the
+// run as written.
 func TestACheckoutIsAnsweredAsTheRowTookIt(t *testing.T) {
 	t.Parallel()
 	desk := &checkoutDesk{got: webCheckout(sandbox.GrantAdded)}
@@ -222,11 +218,10 @@ func TestACheckoutIsAnsweredAsTheRowTookIt(t *testing.T) {
 	}
 }
 
-// A CHECKOUT READS WHAT THE CHECK ADMITS AS THE CHECK READS IT (ADR-0059):
-// the check at the surface lets a number or a bool through where a string
-// belongs, and one string where a list of strings does, as lossless; the
-// checkout reads each of them through argval, as the model spelt it, rather
-// than refusing a call the check passed by a rule of its own.
+// A CHECKOUT READS WHAT THE CHECK ADMITS AS THE CHECK READS IT (ADR-0059): a
+// number or bool for a string, or one string for a list of strings, passes the
+// surface check as lossless, so the checkout reads it through argval rather
+// than refusing it by a rule of its own.
 //
 // Mutation: read `change` with a `case string` of its own → change 42 is
 // refused, red; read `paths` as a list only → "src, lib" is refused, red.

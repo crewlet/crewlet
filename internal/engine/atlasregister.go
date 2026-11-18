@@ -14,18 +14,14 @@ import (
 	"github.com/crewlet/crewlet/internal/trashreap"
 )
 
-// THE ATLAS LOG, wired: its entry in the register, its two sides over the
-// running log, and its history's retention through the trash reaper (ADR-0126).
-// Every data node runs it, whatever its company keeps.
+// The atlas log, wired: its register entry, its two sides, and its history's
+// retention through the trash reaper (ADR-0126). Every data node runs it.
 
-// atlasRegistrations is the atlas domain's entry in the register: the
-// THIRTEENTH domain and the ELEVENTH strict, identity-claiming one, registered
-// last.
-//
-// A BARRIER, so a read may ask for `linearizable`, and a read model of none: a
-// person's edit decides from the entry's version in its own snapshot and every
-// read of the atlas is at its caller's level, `session` by default. No wake
-// feed: no record on this log wakes anybody.
+// atlasRegistrations is the atlas domain's register entry, a strict,
+// identity-claiming domain registered last. It has a barrier, so a read may
+// ask for `linearizable`, but a read model of none: an edit decides from the
+// entry's version in its own snapshot, and reads default to `session`. No
+// record on it wakes anybody, so it has no wake feed.
 func atlasRegistrations() []registration {
 	return []registration{{
 		Domain: atlasdomain.Domain{},
@@ -51,8 +47,7 @@ func atlasRegistrations() []registration {
 		// Its arbitration anchors are replicated rows, removed below the trim
 		// floor by a record every applier takes at one position (ADR-0080).
 		Trimmed: atlasdomain.EncodeTrimmed,
-		// NO READ TAKES A BARRIER ON THIS LOG, counted rather than assumed,
-		// for the identity estate's reason: nothing here reads at
+		// Counted rather than assumed: nothing here reads at
 		// `linearizable`, so a reader that starts to meets `census_drift`.
 		Reads:      &statelog.ReadModel{PerSeatDay: atlasdomain.LinearizableReadsPerSeatDay},
 		Generation: atlasdomain.GenerationRecord{},
@@ -73,13 +68,11 @@ func atlasRegistrations() []registration {
 				return w.EvictNode(ctx, actor, opID, node)
 			}, nil
 		},
-		// The framework's one horizon: a person's edit is re-asked by the
-		// person, and a purge or an expiry by whoever owns it, on the rhythm
-		// every write re-asks.
+		// The framework's one horizon: an edit is re-asked by its person, a
+		// purge or expiry by its owner, on every write's rhythm.
 		OpsRetention: statelog.OpsRetention,
-		// NOT DERIVED FROM THE DISK, and scaled down to its field's floor where
-		// the broker is short, for the access log's reason
-		// ([config.DefaultAtlasLogMaxBytes]).
+		// Not derived from the disk, and scaled down to its floor where the
+		// broker is short, as the access log's is ([config.DefaultAtlasLogMaxBytes]).
 		Ceiling: func(stream config.Stream, _ int64) domainCeiling {
 			bytes, derived := stream.AtlasMaxBytes()
 			return domainCeiling{Bytes: bytes,
@@ -112,10 +105,9 @@ func (c *core) openAtlas(sl *stateLog) error {
 	return nil
 }
 
-// AtlasReads is the atlas log's reads as this node reaches them: through the
-// router, which answers from this node's own copy while it serves and from a
-// data node's otherwise, so a node without `data` reads the atlas too. False
-// on an engine that reaches no copy at all.
+// AtlasReads is the atlas log's reads through the router, from this node's
+// copy while it serves and a data node's otherwise, so a node without `data`
+// reads too. False on an engine that reaches no copy.
 func (e *Engine) AtlasReads() (estate.AtlasReader, bool) {
 	if e.router != nil {
 		return e.router.AtlasReads(), true
@@ -126,10 +118,9 @@ func (e *Engine) AtlasReads() (estate.AtlasReader, bool) {
 	return nil, false
 }
 
-// AtlasWrites is the atlas log's writes as this node makes them: through the
-// router, which a data node that publishes answers, this one where it does, so
-// a person's write is the same call from a node without `data`. False on an
-// engine that reaches no writer at all.
+// AtlasWrites is the atlas log's writes through the router, answered by a
+// publishing data node, so a write is the same call from a node without
+// `data`. False on an engine that reaches no writer.
 func (e *Engine) AtlasWrites() (estate.AtlasWriter, bool) {
 	if e.router != nil {
 		return e.router.AtlasWrites(), true
@@ -158,11 +149,10 @@ func (e *Engine) AtlasWriter() *atlasdomain.Writer {
 	return nil
 }
 
-// atlasRetention is how long the atlas keeps its history, asked at every reaper
-// pass: the `atlas.retention_days` of the revision the fleet's activation
-// pointer names, read on a node that runs that very activation. The fleet's
-// revision, never this node's own: an expiry is a record every data node
-// applies.
+// atlasRetention is how long the atlas keeps its history, asked at every
+// reaper pass: `atlas.retention_days` of the fleet's activated revision, never
+// this node's own, since an expiry is a record every data node applies
+// ([Engine.assistantRetention]).
 func (e *Engine) atlasRetention(ctx context.Context) (time.Duration, error) {
 	company, err := e.servedFleetRevision(ctx)
 	if err != nil {
@@ -171,8 +161,8 @@ func (e *Engine) atlasRetention(ctx context.Context) (time.Duration, error) {
 	return atlasRetentionOf(company), nil
 }
 
-// atlasRetentionOf is the retention a company's document states, the block's
-// own default where a company built in code states none.
+// atlasRetentionOf is the retention a company's document states, the default
+// for a company built in code.
 func atlasRetentionOf(c *Company) time.Duration {
 	if c == nil || c.Config == nil {
 		return config.Atlas{}.Retention()
@@ -182,8 +172,8 @@ func atlasRetentionOf(c *Company) time.Duration {
 
 // atlasTrash is the atlas log's retention as the trash reaper reaches it: the
 // hours of history past `atlas.retention_days`, oldest first, one expiry each.
-// The reaper derives each operation from its slot and the hour, so two reapers
-// in one slot publish the same record.
+// Each operation derives from the reaper's slot and the hour, so two reapers in
+// one slot publish the same record.
 type atlasTrash struct {
 	reader atlasHours
 	writer atlasExpiries

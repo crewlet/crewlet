@@ -21,16 +21,16 @@ import (
 	"github.com/crewlet/crewlet/internal/textindex"
 )
 
-// THE INDEX HOLDS EVERY CHANGE'S WORDS, whatever moved it: after a seeded run of opens, edits, moves
-// and a purge, swept at random, each live document holds its scope and exactly its terms.
-// Mutation: drop the state update on an equal hash, drop the purge follower, clear only the slots the
-// new terms overwrite, or leave last_seq unmoved.
+// Through seeded opens, edits, moves and a purge while a first build walks back, every reached row holds
+// its scope and exactly its terms after each sweep, and every live row at the end.
+// Mutation: drop the equal-hash state update or the purge follower, or let the floor or watermark slip.
 func TestTheChangeIndexHoldsEveryChangesWords(t *testing.T) {
 	t.Parallel()
 	for seed := range uint64(4) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
 			t.Parallel()
 			f := newChangeFixture(t)
+			search.SetChangeBatchCap(f.x, 96)
 			rng := rand.New(rand.NewPCG(seed, 24))
 			words := []string{"login", "deploy", "cache", "flaky", "retry", "schema", "bump", "fix", "docs",
 				"merge", "queue", "token"}
@@ -47,7 +47,7 @@ func TestTheChangeIndexHoldsEveryChangesWords(t *testing.T) {
 			}
 			rows := map[string]changeFixtureRow{}
 			position := int64(0)
-			opened := 0
+			opened, midBuild := 0, 0
 			for range 300 {
 				position++
 				switch op := rng.IntN(10); {
@@ -86,10 +86,19 @@ func TestTheChangeIndexHoldsEveryChangesWords(t *testing.T) {
 					f.write(row, position)
 				}
 				f.settle(position)
-				if rng.IntN(4) == 0 {
+				if position > 150 && rng.IntN(4) == 0 {
 					f.sweepOnce()
+					f.assertCovered()
+					if _, floor := f.backFloor(); floor != "" {
+						midBuild++
+					}
 				}
 				if position == 200 {
+					// THE PREMISE: the edits since 150 and this purge meet the backward walk.
+					if back, floor := f.backFloor(); back < 0 || floor == "" || midBuild == 0 {
+						t.Fatalf("at the purge the first build is at %d back to %q after %d sweeps mid-build: "+
+							"the run never spans it", back, floor, midBuild)
+					}
 					gone := repos[rng.IntN(len(repos))]
 					f.purge(gone)
 					for id, row := range rows {
@@ -100,13 +109,16 @@ func TestTheChangeIndexHoldsEveryChangesWords(t *testing.T) {
 				}
 			}
 			f.sweepAll()
+			if held := f.holding(search.ChangeQuery{Terms: []string{"login"}, Limit: 1}); held.BackFloor != "" {
+				t.Fatalf("swept to the end, the first build still reaches back only to %s", held.BackFloor)
+			}
 			f.assertHolds(rows)
 		})
 	}
 }
 
 // A MOVE THAT LEAVES THE TEXT WRITES NO POSTING: a head move and a state move after the first index
-// leave every posting's slot and every document's number as they were and move the watermark.
+// leave every posting's slot and every document's key as they were and move the watermark.
 // Mutation: re-index on every visit.
 func TestAMoveThatLeavesTheTextWritesNoPosting(t *testing.T) {
 	t.Parallel()
@@ -119,7 +131,7 @@ func TestAMoveThatLeavesTheTextWritesNoPosting(t *testing.T) {
 	f.write(changeFixtureRow{id: changeUUID(2), repo: "repo-a", owner: "bo", state: "open", title: "later"}, 2)
 	f.settle(2)
 	f.sweepAll()
-	before, numbered := f.postingRows(), f.docNumbers()
+	before, keyed := f.postingRows(), f.docKeys()
 	row.state = "draft"
 	f.write(row, 3)
 	f.write(row, 4)
@@ -128,8 +140,8 @@ func TestAMoveThatLeavesTheTextWritesNoPosting(t *testing.T) {
 	if after := f.postingRows(); !maps.Equal(before, after) {
 		t.Fatalf("a head move and a state move rewrote the postings: %v, then %v", before, after)
 	}
-	if after := f.docNumbers(); !maps.Equal(numbered, after) {
-		t.Fatalf("a head move and a state move renumbered the documents: %v, then %v", numbered, after)
+	if after := f.docKeys(); !maps.Equal(keyed, after) {
+		t.Fatalf("a head move and a state move moved the documents' keys: %v, then %v", keyed, after)
 	}
 	if held := f.holding(search.ChangeQuery{Terms: []string{"login"}, State: "draft", Limit: 10}); held.Through != 4 ||
 		len(held.IDs) != 1 {
@@ -137,16 +149,19 @@ func TestAMoveThatLeavesTheTextWritesNoPosting(t *testing.T) {
 	}
 }
 
-// A BATCH IS READ WHOLE AT ITS LAST POSITION: changes at one position past the row bound are indexed
-// in one batch, and descriptions past the byte bound are cut into batches each ending on a position.
-// Mutation: cut a batch at a row count.
+// A BATCH IS READ WHOLE AT ITS LAST POSITION: one position past the row bound is one forward batch;
+// descriptions past the byte budget cut into forward batches ending on a position and backward ones
+// ending on the floor's row. Mutation: cut forward at a row count, or backward past the budget.
 func TestAChangeBatchIsReadWholeAtItsLastPosition(t *testing.T) {
 	t.Parallel()
 	f := newChangeFixture(t)
 	f.addRepo("repo-a")
+	f.write(changeFixtureRow{id: changeUUID(1), repo: "repo-a", owner: "ada", state: "open", title: "first"}, 1)
+	f.settle(1)
+	f.sweepAll()
 	many := search.ChangeIndexBatchRows + 88
 	for i := range many {
-		f.write(changeFixtureRow{id: changeUUID(i + 1), repo: "repo-a", owner: "ada", state: "open",
+		f.write(changeFixtureRow{id: changeUUID(i + 2), repo: "repo-a", owner: "ada", state: "open",
 			title: "bump the schema"}, 7)
 	}
 	f.settle(7)
@@ -159,18 +174,40 @@ func TestAChangeBatchIsReadWholeAtItsLastPosition(t *testing.T) {
 			held.Through)
 	}
 
-	// DESCRIPTIONS PAST THE BYTE BOUND: two positions of three long changes each.
-	long := strings.Repeat("word ", search.ChangeIndexBatchBytes/5/3+1)
+	// DESCRIPTIONS PAST THE BYTE BUDGET: two positions of three long changes each, three to a budget.
+	long := strings.Repeat("word ", 800)
+	search.SetChangeBatchCap(f.x, 3*len(long))
 	for i := range 6 {
-		f.write(changeFixtureRow{id: changeUUID(many + i + 1), repo: "repo-a", owner: "ada", state: "open",
+		f.write(changeFixtureRow{id: changeUUID(many + i + 2), repo: "repo-a", owner: "ada", state: "open",
 			title: "a long one", body: long}, int64(8+i/3))
 	}
 	f.settle(9)
 	if n := f.sweepOnce(); n != 3 {
-		t.Fatalf("a sweep past the byte bound walked %d changes, want the three at its position", n)
+		t.Fatalf("a sweep past the byte budget walked %d changes, want the three at its position", n)
 	}
 	if held := f.holding(search.ChangeQuery{Terms: []string{"long"}, Limit: 10}); held.Through != 8 {
 		t.Fatalf("a batch cut by its bytes ended at %d, want the whole position 8", held.Through)
+	}
+
+	// AND BACKWARD, the first build's batches each end on the row whose bytes pass the budget.
+	g := newChangeFixture(t)
+	g.addRepo("repo-a")
+	search.SetChangeBatchCap(g.x, 3*len(long))
+	for i := range 7 {
+		g.write(changeFixtureRow{id: changeUUID(i + 1), repo: "repo-a", owner: "ada", state: "open",
+			title: "a long one", body: long}, int64(i+1))
+	}
+	g.settle(7)
+	for _, want := range []struct {
+		floor string
+		held  int
+	}{{changeUUID(5), 3}, {changeUUID(2), 6}, {"", 7}} {
+		g.sweepOnce()
+		if held := g.holding(search.ChangeQuery{Terms: []string{"long"}, Limit: 10}); held.BackFloor != want.floor ||
+			len(held.IDs) != want.held {
+			t.Fatalf("a backward batch reached back to %q holding %d, want %q holding %d", held.BackFloor,
+				len(held.IDs), want.floor, want.held)
+		}
 	}
 }
 
@@ -278,46 +315,74 @@ func TestThePurgeFollowerReachesEveryRepositoryTheIndexHolds(t *testing.T) {
 	}
 }
 
-// A REBUILD DROPS THE INDEX IN STEPS, AND A RESTART FINISHES IT: a sweep drops one batch, and a second
-// indexer over the same store finishes the drop before it walks, so a change the replaced copy held and
-// the donor's does not is found by nobody, and the walk after it numbers documents from 1 again.
-// Mutation: resume the walk over a half-dropped index, or leave last_seq at a rebuild's mark.
-func TestARebuildDropsTheChangeIndexInStepsAndARestartFinishesIt(t *testing.T) {
+// A rebuild over a diverged copy keeps every document, answers Rebuilding until the build begins again,
+// and leaves each reached stretch holding exactly the copy's changes, so the end holds the copy alone.
+// Mutation: drop pruneChangeDocs, or compare only the state on an equal hash.
+func TestARebuildKeepsTheChangeIndexAndWritesItAgainNewestFirst(t *testing.T) {
 	t.Parallel()
 	f := newChangeFixture(t)
 	f.addRepo("repo-a")
-	total := 2*search.ChangeDropBatch + 10
+	search.SetChangeBatchCap(f.x, 64)
+	const total = 40
+	rows := map[string]changeFixtureRow{}
 	for i := range total {
-		f.write(changeFixtureRow{id: changeUUID(i + 1), repo: "repo-a", owner: "ada", state: "open",
-			title: "the original copy"}, int64(i+1))
+		row := changeFixtureRow{id: changeUUID(i + 1), repo: "repo-a", owner: "ada", state: "open",
+			title: "the original copy", body: "twenty bytes of text"}
+		rows[row.id] = row
+		f.write(row, int64(i+1))
 	}
-	f.settle(int64(total))
+	f.settle(total)
 	f.sweepAll()
-	gone := changeUUID(total / 2)
+
+	gone, retitled, moved := changeUUID(total/2), changeUUID(5), changeUUID(30)
+	f.exec(`DELETE FROM code_change_bodies WHERE change_id = ?`, gone)
 	f.exec(`DELETE FROM code_changes WHERE id = ?`, gone)
+	delete(rows, gone)
+	row := rows[retitled]
+	row.title = "the donors words"
+	rows[retitled] = row
+	f.exec(`UPDATE code_changes SET title = ? WHERE id = ?`, row.title, retitled)
+	row = rows[moved]
+	row.owner = "bo"
+	rows[moved] = row
+	f.exec(`UPDATE code_changes SET owner = ? WHERE id = ?`, row.owner, moved)
+	fresh := changeFixtureRow{id: changeUUID(total + 1), repo: "repo-a", owner: "ada", state: "open",
+		title: "only the donor has it"}
+	rows[fresh.id] = fresh
+	f.write(fresh, total+1)
+	f.settle(total + 1)
+
 	f.x.RequestRebuild()
 	if held := f.holding(search.ChangeQuery{Terms: []string{"original"}, Limit: 10}); !held.Rebuilding {
 		t.Fatal("an index asked to rebuild answers as built")
 	}
 	f.sweepOnce()
-	if docs := f.count(`SELECT COUNT(*) FROM change_docs`); docs < total-search.ChangeDropBatch {
-		t.Fatalf("one sweep dropped %d of %d documents, past one batch of %d", total-docs, total,
-			search.ChangeDropBatch)
+	if held := f.holding(search.ChangeQuery{Terms: []string{"original"}, Limit: 10}); !held.Rebuilding {
+		t.Fatalf("an index whose first build has not begun again answers %+v, want Rebuilding", held)
+	}
+	if docs := f.count(`SELECT COUNT(*) FROM change_docs`); docs != total {
+		t.Fatalf("the rebuild's mark left %d of %d documents: it drops what the build would rewrite", docs, total)
 	}
 	f.x = search.NewChangeIndexer(f.db, f.db.Replicated().Reader(), gitlet.Domain{})
-	f.sweepAll()
-	held := f.holding(search.ChangeQuery{Terms: []string{"original"}, Limit: 1_000})
-	if held.Rebuilding || len(held.IDs) != total-1 || slices.Contains(held.IDs, gone) {
-		t.Fatalf("the restarted index answers %d ids (rebuilding %v), the gone change among them %v",
-			len(held.IDs), held.Rebuilding, slices.Contains(held.IDs, gone))
+	search.SetChangeBatchCap(f.x, 64)
+	f.sweepOnce()
+	if held := f.holding(search.ChangeQuery{Terms: []string{"donor"}, Limit: 1}); held.Rebuilding ||
+		held.BackPos != total+1 || held.BackFloor == "" || !slices.Equal(held.IDs, []string{fresh.id}) {
+		t.Fatalf("the first build again answers %+v, want it begun at %d with the newest change and "+
+			"older ones still to reach", held, total+1)
 	}
-	if orphans := f.count(orphanPostings); orphans != 0 {
-		t.Fatalf("the rebuild left %d postings of no document", orphans)
+	for range 100 {
+		f.assertCovered()
+		if _, floor := f.backFloor(); floor == "" || floor <= gone {
+			if _, held := f.indexedDocs()[gone]; held {
+				t.Fatalf("the build reached back to %q past the gone change, whose document is still held", floor)
+			}
+		}
+		if f.sweepOnce() == 0 {
+			break
+		}
 	}
-	if first, last := f.count(`SELECT MIN(seq) FROM change_docs`), f.count(`SELECT last_seq FROM change_index_state`); first != 1 ||
-		last != total-1 {
-		t.Fatalf("the walk after the rebuild numbered documents %d to %d, want 1 to %d", first, last, total-1)
-	}
+	f.assertHolds(rows)
 }
 
 // A REPLACEMENT A RESTART HID FROM THE INDEX STILL REBUILDS IT: the estate's own name for its copy,
@@ -367,10 +432,9 @@ func TestAFreshChangeIndexOnAnAdoptedEstateWalksItAndRebuildsNothing(t *testing.
 	}
 }
 
-// EVERY INDEX WRITE RECORDS WHAT IT WAS DECIDED FROM: a walk batch and a purge drop each raise Seen to
-// the settled checkpoint of the snapshot they read and never lower it, a rebuild's mark sets it to 0,
-// and an idle sweep or a walk held at a retained record writes nothing.
-// Mutation: drop the update from the purge drop, or write it without MAX.
+// Each forward batch, backward batch and purge drop raises Seen to its snapshot's settled checkpoint and
+// never lowers it; a rebuild resets it; an idle sweep or a held walk writes nothing.
+// Mutation: drop the update from the purge drop or the backward batch, or write it without MAX.
 func TestEveryChangeIndexWriteRecordsWhatItWasDecidedFrom(t *testing.T) {
 	t.Parallel()
 	f := newChangeFixture(t)
@@ -383,6 +447,11 @@ func TestEveryChangeIndexWriteRecordsWhatItWasDecidedFrom(t *testing.T) {
 	seen := func() int { return f.count(`SELECT seen_pos FROM change_index_state`) }
 	if got := seen(); got != 4 {
 		t.Fatalf("a walk batch over a snapshot settled at 4 recorded Seen %d", got)
+	}
+	if held := f.holding(search.ChangeQuery{Terms: []string{"one"}, Limit: 1}); held.BackPos != 4 ||
+		held.Through != 4 {
+		t.Fatalf("the first build over a prefix applied to 4 began at %d with the watermark at %d",
+			held.BackPos, held.Through)
 	}
 	f.settle(9)
 	if n := f.sweepOnce(); n != 0 || seen() != 4 {
@@ -420,25 +489,61 @@ func TestEveryChangeIndexWriteRecordsWhatItWasDecidedFrom(t *testing.T) {
 	}
 	f.x.RequestRebuild()
 	f.sweepOnce()
-	if got := seen(); got != 0 {
-		t.Fatalf("a rebuild's mark left Seen at %d", got)
+	if got, back, floor := seen(), f.count(`SELECT back_pos FROM change_index_state`),
+		f.count(`SELECT length(back_floor) FROM change_index_state`); got != 0 || back != -1 || floor != 0 {
+		t.Fatalf("a rebuild's mark left Seen at %d, back_pos at %d and a floor of %d bytes", got, back, floor)
+	}
+
+	// A BACKWARD BATCH records its own snapshot's settled position, and never lowers one recorded.
+	g := newChangeFixture(t)
+	g.addRepo("repo-a")
+	search.SetChangeBatchCap(g.x, 1)
+	for i := range 4 {
+		g.write(changeFixtureRow{id: changeUUID(i + 1), repo: "repo-a", owner: "ada", state: "open",
+			title: "back", body: "one row a batch"}, int64(i+1))
+	}
+	g.settle(4)
+	g.sweepOnce()
+	g.settle(8)
+	g.sweepOnce()
+	if got := g.count(`SELECT seen_pos FROM change_index_state`); got != 8 {
+		t.Fatalf("a backward batch over a snapshot settled at 8 recorded Seen %d", got)
+	}
+	if err := g.db.Tx(g.ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(g.ctx, `UPDATE change_index_state SET seen_pos = 100`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	g.sweepOnce()
+	if got := g.count(`SELECT seen_pos FROM change_index_state`); got != 100 {
+		t.Fatalf("a backward batch over a snapshot settled at 8 moved Seen from 100 to %d", got)
 	}
 }
 
-// HOLDING ANSWERS THE NEWEST CHANGES HOLDING EVERY WORD in its scope, driven by the narrowest of the
-// scope and the words, in the order the index took them in.
-// Mutation: drive every search by its rarest word, drop an EXISTS, test a word over a neighbour's
-// slot range, order ascending, or order by the change's id.
+// Holding answers the newest minted changes holding every word, driven by the narrowest of scope and
+// words, the same whether the backward or the forward walk built the corpus.
+// Mutation: key by walk order, drive by the rarest word, drop an EXISTS, or order ascending.
 func TestHoldingAnswersTheNewestChangesHoldingEveryWord(t *testing.T) {
 	t.Parallel()
-	f := newChangeFixture(t)
+	// f takes the corpus in one first build; g as each change opens, a sweep after each.
+	f, g := newChangeFixture(t), newChangeFixture(t)
 	for _, r := range []string{"busy", "quiet"} {
 		f.addRepo(r)
+		g.addRepo(r)
 	}
+	g.settle(0)
+	g.sweepAll()
 	id := 0
+	write := func(row changeFixtureRow, position int64) {
+		f.write(row, position)
+		g.write(row, position)
+		g.settle(position)
+		g.sweepAll()
+	}
 	add := func(repo, owner, state, title, body string) string {
 		id++
-		f.write(changeFixtureRow{id: changeUUID(id), repo: repo, owner: owner, state: state, title: title,
+		write(changeFixtureRow{id: changeUUID(id), repo: repo, owner: owner, state: state, title: title,
 			body: body}, int64(id))
 		return changeUUID(id)
 	}
@@ -451,15 +556,16 @@ func TestHoldingAnswersTheNewestChangesHoldingEveryWord(t *testing.T) {
 		add("busy", "ada", "merged", "common fix", "")
 	}
 	newest := add("busy", "ada", "merged", "common fix", "")
-	// AN OLDER CHANGE TAKEN IN AFTER A NEWER ONE is answered before it: the index's order, not the ids'.
+	// AN OLDER CHANGE TAKEN IN AFTER A NEWER ONE is answered after it: when it was minted, not taken in.
 	newer := add("quiet", "cy", "draft", "reordered", "")
 	id++
 	older := changeUUID(0)
-	f.write(changeFixtureRow{id: older, repo: "quiet", owner: "cy", state: "draft", title: "reordered"}, int64(id))
+	write(changeFixtureRow{id: older, repo: "quiet", owner: "cy", state: "draft", title: "reordered"}, int64(id))
 	add("quiet", "bo", "draft", "neighbour", "")
 	f.settle(int64(id))
 	f.sweepAll()
 	search.SetChangeTextScan(f.x, 20)
+	search.SetChangeTextScan(g.x, 20)
 
 	for name, tc := range map[string]struct {
 		q         search.ChangeQuery
@@ -478,10 +584,10 @@ func TestHoldingAnswersTheNewestChangesHoldingEveryWord(t *testing.T) {
 			q:    search.ChangeQuery{Terms: []string{"login"}, RepoID: "quiet", State: "open", Owner: "bo", Limit: 10},
 			want: []string{q1}},
 		"a word in no change": {q: search.ChangeQuery{Terms: []string{"absent"}, Limit: 10}},
-		"the order the index took them in": {q: search.ChangeQuery{Terms: []string{"reordered"}, Limit: 10},
-			want: []string{older, newer}},
-		"the order the index took them in, read by owner": {q: search.ChangeQuery{Terms: []string{"reordered"},
-			Owner: "cy", Limit: 10}, want: []string{older, newer}},
+		"newest minted first": {q: search.ChangeQuery{Terms: []string{"reordered"}, Limit: 10},
+			want: []string{newer, older}},
+		"newest minted first, read by owner": {q: search.ChangeQuery{Terms: []string{"reordered"},
+			Owner: "cy", Limit: 10}, want: []string{newer, older}},
 		"a word and the word of the document before": {q: search.ChangeQuery{Terms: []string{"reordered",
 			"common"}, Limit: 10}, want: []string{}},
 		"a word and the word of the document after": {q: search.ChangeQuery{Terms: []string{"reordered",
@@ -500,6 +606,10 @@ func TestHoldingAnswersTheNewestChangesHoldingEveryWord(t *testing.T) {
 			}
 			if held.Truncated != tc.truncated {
 				t.Errorf("Holding(%+v) truncated %v, want %v", tc.q, held.Truncated, tc.truncated)
+			}
+			if other := g.holding(tc.q); !slices.Equal(other.IDs, held.IDs) || other.Truncated != held.Truncated {
+				t.Errorf("Holding(%+v) built as changes opened answers %v (truncated %v), built at once %v "+
+					"(truncated %v)", tc.q, other.IDs, other.Truncated, held.IDs, held.Truncated)
 			}
 		})
 	}
@@ -594,6 +704,299 @@ func TestEveryTermOfTheLargestChangeIsKept(t *testing.T) {
 	}
 }
 
+// A document is keyed by its change's mint time whichever walk took it; a taken natural key goes to the
+// next free one, and ids with no instant or past the window take the arena's keys, all found by words.
+// Mutation: skip the window read, drop the arena, or let the last millisecond be natural.
+func TestADocumentIsKeyedByWhenItsChangeWasMinted(t *testing.T) {
+	t.Parallel()
+	f := newChangeFixture(t)
+	f.addRepo("repo-a")
+	at := changeEpoch.Add(time.Hour)
+	// The newest is taken first by the first build; the two older ones by the forward walk, oldest last.
+	minted := []string{mintedChangeID(at.Add(time.Second), 0, 1), mintedChangeID(at.Add(time.Millisecond), 0, 2),
+		mintedChangeID(at, 0, 3)}
+	for i, id := range minted {
+		f.write(changeFixtureRow{id: id, repo: "repo-a", owner: "ada", state: "open", title: "minted"}, int64(i+1))
+		f.settle(int64(i + 1))
+		f.sweepAll()
+	}
+	keys := f.docKeys()
+	if keys[minted[2]] >= keys[minted[1]] || keys[minted[1]] >= keys[minted[0]] {
+		t.Fatalf("ids minted at t, t+1ms and t+1s took keys %d, %d and %d: not in that order", keys[minted[2]],
+			keys[minted[1]], keys[minted[0]])
+	}
+	if held := f.holding(search.ChangeQuery{Terms: []string{"minted"}, Limit: 10}); !slices.Equal(held.IDs,
+		minted) {
+		t.Fatalf("the minted changes answer %v, want newest minted first %v", held.IDs, minted)
+	}
+
+	// ONE NATURAL KEY, ChangeDocProbe + 1 ids: the window's keys go first, then the arena's.
+	shared := at.Add(time.Minute)
+	var crowd []string
+	for i := range search.ChangeDocProbe + 1 {
+		crowd = append(crowd, mintedChangeID(shared, 7, uint64(i+1)))
+	}
+	odd := []string{mintedChangeID(time.UnixMilli(0), 0, 1), mintedChangeID(time.UnixMilli(1<<42-1), 31, 1)}
+	position := int64(3)
+	for i, id := range crowd {
+		position++
+		f.write(changeFixtureRow{id: id, repo: "repo-a", owner: "ada", state: "open",
+			title: fmt.Sprintf("crowded c%04d", i)}, position)
+	}
+	for i, id := range odd {
+		position++
+		f.write(changeFixtureRow{id: id, repo: "repo-a", owner: "ada", state: "open",
+			title: fmt.Sprintf("odd o%d", i)}, position)
+	}
+	f.settle(position)
+	f.sweepAll()
+	keys = f.docKeys()
+	natural := shared.UnixMilli()<<5 | 7
+	inWindow, inArena := 0, 0
+	for _, id := range append(slices.Clone(crowd), odd...) {
+		switch k := keys[id]; {
+		case k >= natural && k < natural+search.ChangeDocProbe:
+			inWindow++
+		case k < 1<<45:
+			inArena++
+		default:
+			t.Errorf("change %s took key %d, in neither its window nor the arena", id, k)
+		}
+	}
+	if inWindow != search.ChangeDocProbe || inArena != 3 {
+		t.Errorf("%d ids took window keys and %d arena keys, want %d and 3", inWindow, inArena,
+			search.ChangeDocProbe)
+	}
+	// NEIGHBOURING KEYS keep their words apart: the second of one natural key is the first's next key.
+	if keys[crowd[1]] != keys[crowd[0]]+1 {
+		t.Fatalf("the second id of one natural key took %d, want %d", keys[crowd[1]], keys[crowd[0]]+1)
+	}
+	for _, terms := range [][]string{{"c0000", "c0001"}, {"c0001", "c0000"}} {
+		if held := f.holding(search.ChangeQuery{Terms: terms, Limit: 10}); len(held.IDs) != 0 {
+			t.Errorf("%v, each a word of one of two neighbouring documents, finds %v", terms, held.IDs)
+		}
+	}
+	for i, id := range crowd {
+		if held := f.holding(search.ChangeQuery{Terms: []string{"crowded", fmt.Sprintf("c%04d", i)},
+			Limit: 10}); !slices.Equal(held.IDs, []string{id}) {
+			t.Errorf("crowded change %d finds %v, want %s", i, held.IDs, id)
+		}
+	}
+	for i, id := range odd {
+		if held := f.holding(search.ChangeQuery{Terms: []string{"odd", fmt.Sprintf("o%d", i)},
+			Limit: 10}); !slices.Equal(held.IDs, []string{id}) {
+			t.Errorf("the change minted at an implausible instant %d finds %v, want %s", i, held.IDs, id)
+		}
+	}
+}
+
+// The first build's floor only moves down, holding every change minted at or after it; changes opened or
+// edited meanwhile are held after the next sweep, and once whole every change is held.
+// Mutation: walk ids ascending, skip the forward walk while the build runs, or begin it at 0.
+func TestTheFirstBuildIndexesTheNewestChangesFirst(t *testing.T) {
+	t.Parallel()
+	f := newChangeFixture(t)
+	f.addRepo("repo-a")
+	const total = 2_000
+	rows := make([]changeFixtureRow, total)
+	for i := range rows {
+		rows[i] = changeFixtureRow{id: changeUUID(i + 1), repo: "repo-a", owner: "ada", state: "open",
+			title: fmt.Sprintf("every change w%04d", i+1), body: strings.Repeat("filler ", 10)}
+	}
+	f.writeAll(rows)
+	search.SetChangeBatchCap(f.x, 7_000)
+	floor := changeIDsTop
+	check := func(when string) {
+		t.Helper()
+		held := f.holding(search.ChangeQuery{Terms: []string{"every"}, Limit: 5})
+		if held.BackFloor > floor || held.BackFloor == floor && floor != "" {
+			t.Fatalf("%s: the floor moved from %q to %q, not down", when, floor, held.BackFloor)
+		}
+		floor = held.BackFloor
+		docs := f.docKeys()
+		for _, row := range rows {
+			if _, ok := docs[row.id]; ok != (row.id >= floor) {
+				t.Fatalf("%s: change %s held %v below or above the floor %s", when, row.id, ok, floor)
+			}
+		}
+		if want := []string{changeUUID(total), changeUUID(total - 1), changeUUID(total - 2), changeUUID(total - 3),
+			changeUUID(total - 4)}; !slices.Equal(held.IDs, want) || !held.Truncated {
+			t.Fatalf("%s: a word every change holds answers %v (truncated %v), want %v", when, held.IDs,
+				held.Truncated, want)
+		}
+	}
+	for i := range 5 {
+		f.sweepOnce()
+		check(fmt.Sprintf("sweep %d", i+1))
+	}
+	if floor == "" {
+		t.Fatal("the premise: five sweeps of a small budget reached the oldest change")
+	}
+
+	// MID-BUILD: a change opened after the build began, and one below the floor edited.
+	opened := changeFixtureRow{id: changeUUID(total + 1), repo: "repo-a", owner: "ada", state: "open",
+		title: "opened meanwhile"}
+	f.write(opened, total+1)
+	edited := rows[4]
+	edited.title = "edited meanwhile"
+	f.write(edited, total+2)
+	f.settle(total + 2)
+	f.sweepOnce()
+	if held := f.holding(search.ChangeQuery{Terms: []string{"meanwhile"}, Limit: 10}); held.BackFloor == "" ||
+		!slices.Equal(held.IDs, []string{opened.id, edited.id}) {
+		t.Fatalf("a sweep after an open and an edit mid-build answers %v (floor %q), want both", held.IDs,
+			held.BackFloor)
+	}
+	f.sweepAll()
+	rows[4] = edited
+	want := map[string]changeFixtureRow{opened.id: opened}
+	for _, row := range rows {
+		want[row.id] = row
+	}
+	if held := f.holding(search.ChangeQuery{Terms: []string{"every"}, Limit: 1}); held.BackFloor != "" {
+		t.Fatalf("swept to the end, the build reaches back only to %q", held.BackFloor)
+	}
+	f.assertHolds(want)
+}
+
+// changeIDsTop is above every change id, as a floor no build has moved yet.
+const changeIDsTop = "~"
+
+// A batch budget halves after a write past ChangeIndexBatchWrite (not below its least) and doubles after
+// one under a quarter of it (not past its cap).
+// Mutation: never halve, or halve below the least.
+func TestABatchWriteIsHeldToAboutTwoSeconds(t *testing.T) {
+	t.Parallel()
+	limit, least := search.ChangeIndexBatchBytes, search.ChangeIndexBatchMinBytes
+	for _, tc := range []struct {
+		budget int
+		took   time.Duration
+		want   int
+	}{
+		{limit, search.ChangeIndexBatchWrite + time.Millisecond, limit / 2},
+		{least + 1, 3 * search.ChangeIndexBatchWrite, least},
+		{least, 3 * search.ChangeIndexBatchWrite, least},
+		{limit / 4, search.ChangeIndexBatchWrite/4 - time.Millisecond, limit / 2},
+		{limit / 2, time.Millisecond, limit},
+		{limit, time.Millisecond, limit},
+		{limit / 2, search.ChangeIndexBatchWrite, limit / 2},
+		{limit / 2, search.ChangeIndexBatchWrite / 4, limit / 2},
+	} {
+		if got := search.NextChangeBatch(tc.budget, tc.took, least, limit); got != tc.want {
+			t.Errorf("a budget of %d after a write of %v becomes %d, want %d", tc.budget, tc.took, got, tc.want)
+		}
+	}
+}
+
+// Each walk keeps its own budget: a slow backward write halves the next backward batch despite a fast
+// forward one between, and a slow purge drop halves its next step.
+// Mutation: share one budget between the walks, time no write, or never move the drop step.
+func TestEachKindOfWriteIsHeldByItsOwnTimes(t *testing.T) {
+	t.Parallel()
+	f := newChangeFixture(t)
+	f.addRepo("repo-a")
+	f.addRepo("repo-b")
+	const kib, total = 1 << 10, 300
+	search.SetChangeBatchCap(f.x, 64*kib)
+	slow, fast := 3*search.ChangeIndexBatchWrite, time.Millisecond
+	var script []time.Duration
+	search.SetChangeWriteTimer(f.x, func(time.Time) time.Duration {
+		if len(script) == 0 {
+			return fast
+		}
+		took := script[0]
+		script = script[1:]
+		return took
+	})
+	place := map[string]int{changeIDsTop: total + 1, "": 0}
+	for i := range total {
+		f.write(changeFixtureRow{id: changeUUID(i + 1), repo: "repo-a", owner: "ada", state: "open",
+			title: "back", body: strings.Repeat("x", kib)}, int64(i+1))
+		place[changeUUID(i+1)] = i + 1
+	}
+	f.settle(total)
+	// The first sweep writes its backward batch alone; each later one a forward batch, then a backward.
+	script = []time.Duration{slow, fast, slow, fast, slow, fast, fast, fast, fast}
+	floor, position := changeIDsTop, int64(total)
+	var took []int
+	for k := range 5 {
+		if k > 0 {
+			position++
+			f.write(changeFixtureRow{id: changeUUID(1_000 + k), repo: "repo-a", owner: "ada", state: "open",
+				title: "forward"}, position)
+			f.settle(position)
+		}
+		f.sweepOnce()
+		_, next := f.backFloor()
+		took = append(took, place[floor]-place[next])
+		floor = next
+	}
+	if want := []int{64, 32, 16, 16, 32}; !slices.Equal(took, want) {
+		t.Fatalf("the backward batches took %v rows of 1 KiB, want %v", took, want)
+	}
+	if forward, back, _ := search.ChangeBatchBudgets(f.x); forward != 64*kib || back != 64*kib {
+		t.Fatalf("after fast writes the forward budget is %d and the backward %d, want both at %d",
+			forward, back, 64*kib)
+	}
+	f.sweepAll()
+
+	const doomed = 120
+	for i := range doomed {
+		position++
+		f.write(changeFixtureRow{id: changeUUID(2_000 + i), repo: "repo-b", owner: "ada", state: "open",
+			title: "doomed"}, position)
+	}
+	f.settle(position)
+	f.sweepAll()
+	f.purge("repo-b")
+	script = []time.Duration{slow, slow, slow, slow}
+	var dropped []int
+	for range 4 {
+		dropped = append(dropped, f.sweepOnce())
+	}
+	if want := []int{search.ChangeDropBatch, search.ChangeDropBatch / 2, search.ChangeDropBatch / 4,
+		search.ChangeDropBatch / 8}; !slices.Equal(dropped, want) {
+		t.Fatalf("slow drop steps removed %v documents, want %v", dropped, want)
+	}
+}
+
+// Begun while a record is retained, the first build starts at the applied prefix below it, and the
+// change that record opens is found once it applies.
+// Mutation: begin the build at the settled checkpoint.
+func TestTheFirstBuildBeginsBelowARetainedRecord(t *testing.T) {
+	t.Parallel()
+	f := newChangeFixture(t)
+	f.addRepo("repo-a")
+	f.addRepo("repo-b")
+	for i := range 3 {
+		f.write(changeFixtureRow{id: changeUUID(i + 1), repo: "repo-b", owner: "bo", state: "open",
+			title: "below"}, int64(i+1))
+	}
+	f.retain(5, "repo-a")
+	for i := range 2 {
+		f.write(changeFixtureRow{id: changeUUID(i + 4), repo: "repo-b", owner: "bo", state: "open",
+			title: "above"}, int64(7+i))
+	}
+	f.settle(8)
+	f.sweepAll()
+	held := f.holding(search.ChangeQuery{Terms: []string{"above"}, Limit: 10})
+	if held.BackPos >= 5 || len(held.IDs) != 0 || f.applied() >= held.Seen {
+		t.Fatalf("begun while a record at 5 is retained, the build answers %+v (applied %d): want it begun "+
+			"below 5, nothing above it indexed and the read not covered", held, f.applied())
+	}
+	opened := changeFixtureRow{id: changeUUID(100), repo: "repo-a", owner: "ada", state: "open",
+		title: "opened by a newer build"}
+	f.write(opened, 5)
+	f.release()
+	f.sweepAll()
+	for term, want := range map[string][]string{"newer": {opened.id}, "above": {changeUUID(5), changeUUID(4)},
+		"below": {changeUUID(3), changeUUID(2), changeUUID(1)}} {
+		if held := f.holding(search.ChangeQuery{Terms: []string{term}, Limit: 10}); !slices.Equal(held.IDs, want) {
+			t.Errorf("%q finds %v, want %v", term, held.IDs, want)
+		}
+	}
+}
+
 // distinctWords is n words of width letters and digits, the from-th onwards, each its own term.
 func distinctWords(from, n, width int) string {
 	const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -631,11 +1034,23 @@ func newChangeFixture(t testing.TB) *changeFixture {
 		x: search.NewChangeIndexer(db, db.Replicated().Reader(), gitlet.Domain{}), purged: map[string]bool{}}
 }
 
-// changeUUID is the i-th change's id, a UUIDv7 whose order is i's.
+// changeEpoch is when the fixture's changes begin to be minted.
+var changeEpoch = time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+// changeUUID is the i-th change's id: a UUIDv7 minted i seconds after changeEpoch with no random bits,
+// so its natural key's order is i's.
 func changeUUID(i int) string {
+	return mintedChangeID(changeEpoch.Add(time.Duration(i)*time.Second), 0, 0)
+}
+
+// mintedChangeID is a UUIDv7 minted at at, its five bits after the version nibble tie and its last seven
+// bytes rest.
+func mintedChangeID(at time.Time, tie byte, rest uint64) string {
 	var u uuid.UUID
-	binary.BigEndian.PutUint64(u[0:8], uint64(i)<<16)
-	u[6] = 0x70 | u[6]&0x0f
+	binary.BigEndian.PutUint64(u[0:8], uint64(at.UnixMilli())<<16)
+	u[6] = 0x70 | tie>>1&0x0f
+	u[7] = tie & 1 << 7
+	binary.BigEndian.PutUint64(u[8:16], rest)
 	u[8] = 0x80
 	return u.String()
 }
@@ -782,13 +1197,13 @@ func (f *changeFixture) postingRows() map[int64]string {
 	return out
 }
 
-// orphanPostings counts the postings whose slot names no document's number.
-const orphanPostings = `SELECT COUNT(*) FROM change_postings WHERE (slot >> 16) NOT IN (SELECT seq FROM change_docs)`
+// orphanPostings counts the postings whose slot names no document's key.
+const orphanPostings = `SELECT COUNT(*) FROM change_postings WHERE (slot >> 16) NOT IN (SELECT doc FROM change_docs)`
 
-// docNumbers is every document's number by its change's id.
-func (f *changeFixture) docNumbers() map[string]int64 {
+// docKeys is every document's key by its change's id.
+func (f *changeFixture) docKeys() map[string]int64 {
 	f.t.Helper()
-	rows, err := f.db.SQL().QueryContext(f.ctx, `SELECT id, seq FROM change_docs`)
+	rows, err := f.db.SQL().QueryContext(f.ctx, `SELECT id, doc FROM change_docs`)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -796,11 +1211,11 @@ func (f *changeFixture) docNumbers() map[string]int64 {
 	out := map[string]int64{}
 	for rows.Next() {
 		var key []byte
-		var seq int64
-		if scanErr := rows.Scan(&key, &seq); scanErr != nil {
+		var doc int64
+		if scanErr := rows.Scan(&key, &doc); scanErr != nil {
 			f.t.Fatal(scanErr)
 		}
-		out[uuid.Must(uuid.FromBytes(key)).String()] = seq
+		out[uuid.Must(uuid.FromBytes(key)).String()] = doc
 	}
 	if err := rows.Err(); err != nil {
 		f.t.Fatal(err)
@@ -808,11 +1223,11 @@ func (f *changeFixture) docNumbers() map[string]int64 {
 	return out
 }
 
-// slotTerms is the terms in document seq's slot range, in slot order.
-func (f *changeFixture) slotTerms(seq int64) []string {
+// slotTerms is the terms in document doc's slot range, in slot order.
+func (f *changeFixture) slotTerms(doc int64) []string {
 	f.t.Helper()
 	rows, err := f.db.SQL().QueryContext(f.ctx, `SELECT term FROM change_postings WHERE slot >= ? AND slot < ?
-		ORDER BY slot`, seq<<16, (seq+1)<<16)
+		ORDER BY slot`, doc<<16, (doc+1)<<16)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -831,51 +1246,138 @@ func (f *changeFixture) slotTerms(seq int64) []string {
 	return out
 }
 
-// assertHolds fails the case unless the index holds exactly want's documents, each slot range exactly
-// its terms, no posting of no document, and last_seq at or past every number.
-func (f *changeFixture) assertHolds(want map[string]changeFixtureRow) {
+// indexedDoc is one document as the index holds it.
+type indexedDoc struct {
+	doc                int64
+	repo, owner, state string
+}
+
+// indexedDocs is every document the index holds, by its change's id.
+func (f *changeFixture) indexedDocs() map[string]indexedDoc {
 	f.t.Helper()
-	type doc struct {
-		seq                int64
-		repo, owner, state string
-	}
-	got := map[string]doc{}
-	rows, err := f.db.SQL().QueryContext(f.ctx, `SELECT seq, id, repo_id, owner, state FROM change_docs`)
+	got := map[string]indexedDoc{}
+	rows, err := f.db.SQL().QueryContext(f.ctx, `SELECT doc, id, repo_id, owner, state FROM change_docs`)
 	if err != nil {
 		f.t.Fatal(err)
 	}
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var key []byte
-		var d doc
-		if scanErr := rows.Scan(&d.seq, &key, &d.repo, &d.owner, &d.state); scanErr != nil {
+		var d indexedDoc
+		if scanErr := rows.Scan(&d.doc, &key, &d.repo, &d.owner, &d.state); scanErr != nil {
 			f.t.Fatal(scanErr)
 		}
 		got[uuid.Must(uuid.FromBytes(key)).String()] = d
 	}
-	_ = rows.Close()
-	if orphans := f.count(orphanPostings); orphans != 0 {
-		f.t.Errorf("%d postings name no document's number", orphans)
+	if err = rows.Err(); err != nil {
+		f.t.Fatal(err)
 	}
-	if last, top := f.count(`SELECT last_seq FROM change_index_state`), f.count(`SELECT COALESCE(MAX(seq), 0)
-		FROM change_docs`); last < top {
-		f.t.Errorf("last_seq is %d below the document numbered %d", last, top)
+	return got
+}
+
+// assertDoc fails the case unless d holds row's scope and exactly its terms.
+func (f *changeFixture) assertDoc(id string, d indexedDoc, ok bool, row changeFixtureRow) {
+	f.t.Helper()
+	if !ok {
+		f.t.Errorf("change %s has no document", id)
+		return
+	}
+	terms := map[string]int{}
+	maps.Copy(terms, textindex.Analyze(row.title))
+	maps.Copy(terms, textindex.Analyze(row.body))
+	if held := f.slotTerms(d.doc); d.repo != row.repo || d.owner != row.owner || d.state != row.state ||
+		!slices.Equal(held, slices.Sorted(maps.Keys(terms))) {
+		f.t.Errorf("change %s's document is %+v holding %v, want %s/%s/%s %v", id, d, held, row.repo,
+			row.owner, row.state, slices.Sorted(maps.Keys(terms)))
+	}
+}
+
+// assertHolds fails the case unless the index holds exactly want's documents, each slot range exactly
+// its terms, and no posting of no document.
+func (f *changeFixture) assertHolds(want map[string]changeFixtureRow) {
+	f.t.Helper()
+	got := f.indexedDocs()
+	if orphans := f.count(orphanPostings); orphans != 0 {
+		f.t.Errorf("%d postings name no document's key", orphans)
 	}
 	if len(got) != len(want) {
 		f.t.Errorf("the index holds %d documents, want %d", len(got), len(want))
 	}
 	for id, row := range want {
 		d, ok := got[id]
-		if !ok {
-			f.t.Errorf("change %s has no document", id)
-			continue
+		f.assertDoc(id, d, ok, row)
+	}
+}
+
+// assertCovered fails the case unless every live row a walk has reached has its document decided from
+// that row: above where the first build began and no further than the watermark, or at or below it
+// with an id at or above the floor (ADR-0156). The fixture settles its log, so the index is covered.
+func (f *changeFixture) assertCovered() {
+	f.t.Helper()
+	var through, back int64
+	var floor string
+	if err := f.db.SQL().QueryRowContext(f.ctx, `SELECT through_pos, back_pos, back_floor
+		FROM change_index_state`).Scan(&through, &back, &floor); err != nil {
+		f.t.Fatal(err)
+	}
+	if back < 0 {
+		return
+	}
+	got := f.indexedDocs()
+	rows := map[string]changeFixtureRow{}
+	positions := map[string]int64{}
+	if err := f.db.Replicated().Reader().Read(f.ctx, func(tx *sql.Tx) error {
+		read, err := tx.QueryContext(f.ctx, `SELECT c.id, c.repo_id, c.owner, c.state, c.title,
+			COALESCE(b.body, ''), c.position FROM code_changes AS c
+			LEFT JOIN code_change_bodies AS b ON b.change_id = c.id`)
+		if err != nil {
+			return err
 		}
-		terms := map[string]int{}
-		maps.Copy(terms, textindex.Analyze(row.title))
-		maps.Copy(terms, textindex.Analyze(row.body))
-		if held := f.slotTerms(d.seq); d.repo != row.repo || d.owner != row.owner || d.state != row.state ||
-			!slices.Equal(held, slices.Sorted(maps.Keys(terms))) {
-			f.t.Errorf("change %s's document is %+v holding %v, want %s/%s/%s %v", id, d, held, row.repo,
-				row.owner, row.state, slices.Sorted(maps.Keys(terms)))
+		defer func() { _ = read.Close() }()
+		for read.Next() {
+			var row changeFixtureRow
+			var position int64
+			if err = read.Scan(&row.id, &row.repo, &row.owner, &row.state, &row.title, &row.body,
+				&position); err != nil {
+				return err
+			}
+			rows[row.id], positions[row.id] = row, position
+		}
+		return read.Err()
+	}); err != nil {
+		f.t.Fatal(err)
+	}
+	for id, row := range rows {
+		p := positions[id]
+		if p <= back && (floor == "" || id >= floor) || p > back && p <= through {
+			d, ok := got[id]
+			f.assertDoc(id, d, ok, row)
 		}
 	}
+}
+
+// backFloor is where the first build began and the least id it has reached back to.
+func (f *changeFixture) backFloor() (int64, string) {
+	f.t.Helper()
+	var back int64
+	var floor string
+	if err := f.db.SQL().QueryRowContext(f.ctx, `SELECT back_pos, back_floor FROM change_index_state`).
+		Scan(&back, &floor); err != nil {
+		f.t.Fatal(err)
+	}
+	return back, floor
+}
+
+// applied is the code log's applied prefix in the estate now.
+func (f *changeFixture) applied() int64 {
+	f.t.Helper()
+	var at int64
+	if err := f.db.Replicated().Reader().Read(f.ctx, func(tx *sql.Tx) error {
+		prefix, err := statelog.PrefixIn(f.ctx, tx, gitlet.Domain{})
+		at = prefix.Applied().Packed()
+		return err
+	}); err != nil {
+		f.t.Fatal(err)
+	}
+	return at
 }

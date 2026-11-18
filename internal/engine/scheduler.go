@@ -11,45 +11,22 @@ import (
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 )
 
-// The scheduler's wiring, and the reason this file exists at all.
-//
-// `internal/schedule` shipped complete — the cron grammar, the at-most-once
-// claim ledger, the missed-tick catchup, the fleet-singleton duty, its own
-// contract suite over two ledger implementations — and NOTHING EVER BUILT
-// ONE. `schedule.New` had no caller outside its own tests, so every role and
-// unit schedule a founder wrote was parsed, validated, rendered in the
-// dashboard and never fired. The subsystem was not broken; it was
-// unreachable, which is the failure mode that survives a green test suite.
-//
-// Everything the wiring needs already existed: `engine/duty.go` names "the
-// scheduler tick" as one of the fleet singletons, `startMaintenance` already
-// builds the ledger for its retention sweep, and `internal/config`'s
-// Scheduling block already carried the knobs. Only the constructor was
-// missing.
+// The scheduler's wiring: the only caller of `schedule.New`, run as the
+// fleet-singleton duty `engine/duty.go` names "the scheduler tick". Without it
+// every schedule parses, validates and renders, and never fires.
 
 // schedulerRuns reports whether this company should have a tick loop.
 //
-// The conditions the config block documents: the operator has not switched it
-// off, this node can reach the FLEET's claim store, the company actually
-// declares a schedule, and it configures a model to run the fires on. The
-// schedule condition is what keeps a company with no schedules from claiming a
-// fleet duty every ten seconds forever, and every condition is re-evaluated on
-// each config apply, so a founder's FIRST schedule, or the first provider of a
-// company that had none, starts the loop without a restart.
+// It does when scheduling is on, this node publishes, it reaches the FLEET's
+// claim store (the duty moves, so a node-local ledger would hand its successor
+// an empty one; the node's own store holds only the dashboard's audit rows and
+// is no condition), the company declares a schedule (else it claims a duty
+// every tick forever) and configures a model. Re-evaluated on every apply, so
+// a first schedule or first provider arms the loop without a restart.
 //
-// The claim is the fleet's, not this node's: the scheduler is a singleton duty
-// and therefore MOVES, so a node whose local database held the ledger handed
-// its successor an empty one. The node's own store is no longer a condition —
-// it carries the audit rows the dashboard reads, and a missing dashboard row
-// is not a reason to stop a company's crons.
-//
-// AND THIS NODE PUBLISHES: a fire is a TaskAssigned on a seat's mailbox, and a
-// node in a maintenance mode starts no publisher. Its constructor never
-// reaches [Engine.startScheduler], which sits behind the one gate that keeps
-// them off it — but an APPLY runs on such a node like any other, and this
-// predicate is the only thing between a revision declaring a schedule and an
-// armed loop. Asked here rather than at the apply's call, so both callers
-// answer the one question.
+// The publish check is here, not at the apply's call: a maintenance-mode node
+// never reaches [Engine.startScheduler], but it does run applies, and this
+// predicate is all that stands between one and an armed loop.
 func (e *Engine) schedulerRuns(c *Company) bool {
 	if c == nil || !c.Config.Scheduling.Runs() || !e.mode.Publishes() {
 		return false
@@ -57,15 +34,11 @@ func (e *Engine) schedulerRuns(c *Company) bool {
 	if e.backends == nil || e.backends.Fleet == nil || e.backends.Queue == nil {
 		return false
 	}
-	// A COMPANY WITH NO MODEL FIRES NOTHING. Every fire is a TaskAssigned
-	// on a seat's inbox, and while the company configures no providers.llm
-	// each of those inboxes holds its work until a provider exists (see
-	// nomodels.go). A loop armed here would stack every standup of that
-	// wait behind the hold and run the whole backlog the moment a provider
-	// arrived: the replay of stale fires the catchup clamp exists to
-	// refuse. Disarmed instead, the apply that adds the provider arms a
-	// fresh loop, whose first tick catches up at most the most recent
-	// missed fire, exactly as a restart does.
+	// No model, no loop: each inbox holds its work until a provider
+	// exists (nomodels.go), so an armed loop would stack every fire behind
+	// the hold and replay the backlog when one arrived, the stale replay
+	// the catchup clamp refuses. The apply adding the provider arms a
+	// fresh loop that catches up only the latest missed fire.
 	if c.Models == nil {
 		return false
 	}
@@ -73,9 +46,7 @@ func (e *Engine) schedulerRuns(c *Company) bool {
 }
 
 // noteSchedulesWaiting says so when a company's schedules are idle for want of
-// a model, which is the one reason for an idle loop an operator could not
-// otherwise see: every other condition is a field they wrote or a store the
-// node reports on.
+// a model: the one reason for an idle loop an operator could not otherwise see.
 func (e *Engine) noteSchedulesWaiting(ctx context.Context, c *Company) {
 	if c == nil || c.Models != nil || !c.Config.Scheduling.Runs() || !schedule.HasSchedules(c.Org) {
 		return
@@ -99,8 +70,8 @@ func (e *Engine) scheduleClaimer() (schedule.Claimer, error) {
 
 // startScheduler arms the tick loop if this company wants one.
 //
-// Started LAST, with the sandbox waiter and the retention sweep, because its
-// duty is claimed under the node's own incarnation.
+// Started last, with the sandbox waiter and the retention sweep: its duty is
+// claimed under the node's own incarnation.
 func (e *Engine) startScheduler(ctx context.Context) {
 	e.scheduler.mu.Lock()
 	defer e.scheduler.mu.Unlock()
@@ -126,33 +97,26 @@ func (e *Engine) armSchedulerLocked(ctx context.Context, c *Company) {
 		// Through the node's wake queue ([Engine.wakes]): a fire to a seat
 		// whose mailbox is not complete is refused, not discarded.
 		Publisher: e.wakes(),
-		// AND CONFIRMED BEFORE IT IS CLAIMED, so a refused fire is one the
-		// next tick retries rather than a claim spent on nothing.
+		// Confirmed before it is claimed, so the next tick retries a refused
+		// fire rather than spending a claim on nothing.
 		Mailboxes: e.mailboxConfirmer(),
-		// A FUNCTION, not the value: the org is swapped wholesale on every
-		// apply, so a captured pointer would pin the scheduler to the
-		// company that existed when it was built and fire deleted seats'
-		// schedules for the life of the process.
+		// A function, not the value: every apply swaps the org, and a
+		// captured pointer would fire deleted seats' schedules forever.
 		Org:    e.Chart,
 		Ledger: claimer,
-		// What the fleet's fire claims are kept for, since the fleet
-		// answers whether a fire ran: a restart judges no fire older than
-		// that missed.
+		// How long the fleet keeps fire claims: a restart judges no fire
+		// older than that missed.
 		ClaimRetention: coord.FireRetention,
-		// The node's own config posture. A node that cannot apply the
-		// current epoch must not fire the previous company's crons — and
-		// unlike a delivery there is no queued copy to fall back on, so a
-		// shedding tick skips whole rather than firing something stale.
+		// A node that cannot apply the current epoch must not fire the
+		// previous company's crons; with no queued copy to fall back on, a
+		// shedding tick skips whole.
 		Admits: e.admits,
 		Duty:   e.workerDuty(schedule.DutyName, schedule.DutyTTL(tick)),
-		// A PERSON'S PAUSE, off this node's watched copy: a paused seat's
-		// fire is recorded skipped rather than sent into its held inbox.
-		// The duty moves between nodes, and every node keeps the copy.
+		// A paused seat's fire is recorded skipped, not sent into its held
+		// inbox; every node watches the pause, since the duty moves.
 		Paused: e.seatPaused,
-		// THE COMPANY'S CLOCK, read per tick for the reason the org is:
-		// the loop outlives the apply that armed it, and a zone captured
-		// here fired every zone-less schedule on the clock the loop was
-		// armed under until something happened to re-arm it.
+		// Read per tick, as the org is: the loop outlives the apply that
+		// armed it, and a captured zone would go stale.
 		Zone:       e.Zone,
 		Tick:       tick,
 		Jitter:     time.Duration(cfg.JitterSeconds) * time.Second,
@@ -160,17 +124,14 @@ func (e *Engine) armSchedulerLocked(ctx context.Context, c *Company) {
 		CatchupMax: cfg.CatchupMax(),
 	})
 	if err != nil {
-		// Not fatal, and said loudly. Every New error names a wiring
-		// mistake rather than an operator one, so failing the whole engine
-		// would take a company down over work it can run without — but a
-		// silent nil here is precisely how this subsystem went missing.
+		// Loud but not fatal: a New error is a wiring mistake, not
+		// worth taking the company down over work it can run without.
 		log.ErrorContext(ctx, "scheduler_not_started", "error", err,
 			"detail", "role and unit schedules will not fire on this node")
 		return
 	}
-	// Detached from the signal context for the same reason the node's own
-	// loops are: stopScheduler is what ends it, so its lifetime matches the
-	// engine's rather than the first SIGTERM's.
+	// Detached from the signal context: stopScheduler ends it, so it
+	// lives as long as the engine, not until the first SIGTERM.
 	loopCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	e.scheduler.cancel = cancel
 	e.scheduler.done = make(chan struct{})
@@ -186,19 +147,16 @@ func (e *Engine) armSchedulerLocked(ctx context.Context, c *Company) {
 
 // reconcileScheduler starts or stops the loop as the company changes.
 //
-// A founder who adds the first schedule to a live company gets a firing
-// scheduler on that apply, and one who removes the last gets the duty claim
-// released — neither needs a restart. The tick KNOBS are read when the loop
-// is armed, so changing `tick_seconds` on a running scheduler lands at the
-// next start, exactly as the retention sweep's horizons do.
+// Adding the first schedule or removing the last takes effect on that apply.
+// The tick knobs are read when the loop is armed, so a changed `tick_seconds`
+// lands at the next start, as the retention sweep's horizons do.
 func (e *Engine) reconcileScheduler(ctx context.Context, next *Company) {
 	e.scheduler.mu.Lock()
 	defer e.scheduler.mu.Unlock()
 	e.noteSchedulesWaiting(ctx, next)
 	if e.schedulerRuns(next) {
-		// The apply's own context, which armSchedulerLocked strips the
-		// cancellation from: the loop must outlive the request that armed
-		// it, but it should still inherit that request's trace and values.
+		// armSchedulerLocked strips the cancellation but keeps the
+		// apply's trace and values.
 		e.armSchedulerLocked(ctx, next)
 		return
 	}
@@ -207,9 +165,8 @@ func (e *Engine) reconcileScheduler(ctx context.Context, next *Company) {
 
 // disarmSchedulerLocked stops the loop and waits for the in-flight tick.
 //
-// Waiting matters: a tick that has claimed a fire and not yet published it
-// would otherwise be abandoned mid-dispatch, and the ledger row it already
-// wrote means no peer will ever fire that run.
+// Waiting matters: a tick abandoned between claiming a fire and publishing it
+// leaves a ledger row that stops every peer from ever firing that run.
 func (e *Engine) disarmSchedulerLocked() {
 	if e.scheduler.cancel == nil {
 		return
@@ -229,9 +186,8 @@ func (e *Engine) stopScheduler() {
 
 // SchedulerRunning reports whether this node is ticking schedules.
 //
-// Exported for the same reason [Engine.Maintenance] is: "are my schedules
-// actually running?" is an operator question, and the whole reason this
-// subsystem sat dead was that nothing anywhere could answer it.
+// Exported, as [Engine.Maintenance] is, to answer the operator's "are my
+// schedules actually running?".
 func (e *Engine) SchedulerRunning() bool {
 	e.scheduler.mu.Lock()
 	defer e.scheduler.mu.Unlock()
@@ -258,19 +214,13 @@ func ScheduleRunToolDeps(e *Engine) builtin.ScheduleRunDeps {
 
 // RunScheduleNow fires one schedule on a person's ask, from THIS node.
 //
-// NOT THE DUTY HOLDER'S. The tick is a fleet singleton because every node
-// evaluating every schedule is duplicated work, never because a peer's fire
-// would be wrong: the claim is the fleet's and the fire is an event on the
-// runner seat's inbox, which the node holding that seat consumes. An ask
-// evaluates nothing, so the node a person reached claims it and sends it, and
-// its row in this node's own ledger reaches the schedule's history through
-// this node's usage day, as a tick's does from the duty holder's.
+// Not the duty holder's: the tick is a singleton only to avoid duplicated
+// evaluation. The claim is the fleet's and the fire lands on the runner seat's
+// inbox, so any node may claim and send an ask; its ledger row reaches the
+// schedule's history through this node's usage day.
 //
-// UNDER THE CONDITIONS THE LOOP IS ARMED UNDER ([Engine.schedulerRuns]), less
-// the one that the company declares a schedule, which an ask naming one has
-// answered: a company that switched scheduling off runs none by hand either,
-// and a run sent to a company with no model would sit behind every seat's
-// hold and start whenever a provider arrived.
+// Under [Engine.schedulerRuns]'s conditions, less "declares a schedule", which
+// an ask naming one has answered.
 func (e *Engine) RunScheduleNow(ctx context.Context, ask schedule.ManualAsk) ([]schedule.ManualRun, error) {
 	c := e.Company()
 	switch {
@@ -282,9 +232,8 @@ func (e *Engine) RunScheduleNow(ctx context.Context, ask schedule.ManualAsk) ([]
 	case c.Models == nil:
 		return nil, schedule.ErrNoModel
 	case !e.admits():
-		// A NODE THAT CANNOT APPLY THE CURRENT EPOCH fires nothing, as its
-		// tick does not: the schedule it would fire is the previous
-		// company's.
+		// Behind the current epoch it fires nothing, as its tick does
+		// not: the schedule it would fire is the previous company's.
 		return nil, schedule.ErrNotPublishing
 	}
 	claimer, err := e.scheduleClaimer()

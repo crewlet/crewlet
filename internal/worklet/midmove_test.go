@@ -10,11 +10,10 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// fileBehind files a subtask under one of the moving subtree's descendants the
-// moment the root's move lands and before this node applies it — which is
-// exactly what a node behind the log decides from: the root unmarked, and its
-// parent still in ENG. then, when there is one, runs inside the same hook once
-// the task is filed.
+// fileBehind files a subtask under a descendant of the moving subtree after
+// the root's move lands but before this node applies it, as a node behind the
+// log would decide: root unmarked, parent still in ENG. then, if set, runs in
+// the same hook once the task is filed.
 func fileBehind(t *testing.T, r *roundTrip, log *lossyLog, id, under string,
 	then func()) {
 
@@ -50,16 +49,11 @@ func lateTagFixture(t *testing.T) *roundTrip {
 // A TASK FILED BEHIND A MOVE BY A NODE THE MARK HAD NOT REACHED IS CARRIED BY
 // THE MOVE, tags and all.
 //
-// A move carries the subtree it read before its first append, and a create
-// under a descendant is refused mid-move only on a node that has applied the
-// root's move. This one is decided before the root's move has applied here —
-// the one ordering the refusal cannot see — so it lands in ENG under a
-// descendant the walk then carries to OPS. The walk's last append used to take
-// the mark down anyway, leaving the task in ENG under a root in OPS for good.
-// That append now finds it in its own snapshot and keeps the mark up, and the
-// walk runs the pass that carries it — declaring the tag it holds in OPS, as
-// the first run declares the subtree's, rather than moving it holding a slug
-// OPS never declared.
+// A create under a descendant is refused mid-move only on a node that has
+// applied the root's move; this one is decided before, so it lands in ENG
+// under a descendant the walk carries to OPS. The walk's last append must find
+// it in its snapshot, keep the mark up and carry it in another pass, declaring
+// its tag in OPS rather than moving it with a slug OPS never declared.
 func TestAMoveCarriesATaskFiledBehindItsWalk(t *testing.T) {
 	t.Parallel()
 	r := lateTagFixture(t)
@@ -90,12 +84,10 @@ func TestAMoveCarriesATaskFiledBehindItsWalk(t *testing.T) {
 
 // AND ONE THE MOVE CANNOT CARRY KEEPS ITS MARK UP, NAMED, until it can.
 //
-// Filed behind the walk and then put in the trash, the task is frozen: nothing
-// moves it until somebody restores it. The walk's last append used to take the
-// mark down over it all the same, so once restored it was live in ENG under a
-// root in OPS with nothing left to carry it. The mark now stays up, the move
-// says which task it is waiting for, and the duty carries it after the
-// restore.
+// Filed behind the walk and then trashed, the task is frozen until restored.
+// Taking the mark down over it would leave it, once restored, in ENG under a
+// root in OPS with nothing to carry it; so the mark stays up, the move names
+// the task it waits for, and the duty carries it after the restore.
 func TestAMoveKeepsItsMarkOverATaskFiledBehindItThatItCannotCarry(t *testing.T) {
 	t.Parallel()
 	r := lateTagFixture(t)
@@ -151,11 +143,9 @@ func TestAMoveKeepsItsMarkOverATaskFiledBehindItThatItCannotCarry(t *testing.T) 
 
 // A TASK A LIVE MOVE HAS NOT CARRIED KEEPS ITS PARENT UNTIL IT HAS.
 //
-// The walk carries every task it read, however that task has been filed since —
-// so one moved out from under the subtree in the middle of the walk was still
-// re-keyed into OPS, under a parent it had just been filed under in ENG. Both
-// a re-parent and making it a root are unavailable while the mark says the
-// walk has not reached it, and the walk then carries it with its subtree.
+// The walk carries every task it read, however it has been filed since, so a
+// re-parent or making it a root is unavailable while the mark says the walk
+// has not reached it; it would be re-keyed into OPS under an ENG parent.
 func TestATaskAMoveHasNotCarriedKeepsItsParent(t *testing.T) {
 	t.Parallel()
 	r := moveFixture(t, "m-kid-a", "m-kid-b")
@@ -165,8 +155,8 @@ func TestATaskAMoveHasNotCarriedKeepsItsParent(t *testing.T) {
 	r.drain()
 	lossy, log := r.lossyWriter(t)
 	log.afterAppendTo("m-root", func() {
-		// THIS NODE SEES THE MARK: the case is the one the refusal is
-		// for, not the ordering only the walk's last append can catch.
+		// THIS NODE SEES THE MARK: the refusal's case, not the ordering only
+		// the walk's last append can catch.
 		r.drain()
 		for name, parent := range map[string]string{
 			"a re-parent": "other", "making it a root": "",
@@ -194,8 +184,7 @@ func TestATaskAMoveHasNotCarriedKeepsItsParent(t *testing.T) {
 		t.Errorf("tasks %v are in another project than their root", got)
 	}
 
-	// AND ONCE CARRIED IT IS A TASK LIKE ANY OTHER: filed under a task in
-	// the project it is in now, it goes.
+	// AND ONCE CARRIED IT IS A TASK LIKE ANY OTHER in its new project.
 	umbrella := newTask("umbrella")
 	umbrella.Key, umbrella.Project = "", "OPS"
 	if _, err := r.writer.CreateTask(t.Context(), "op-umbrella", umbrella, nil); err != nil {
@@ -212,11 +201,9 @@ func TestATaskAMoveHasNotCarriedKeepsItsParent(t *testing.T) {
 
 // THE MARK HOLDS ITS SUBTREE WHEREVER THE MARKED TASK IS FILED.
 //
-// The refusal used to ask the task's ROOT whether it was mid-move, and the mark
-// is on the task that MOVED — so once that task was filed under another, every
-// task its walk had not carried read as settled and took a new subtask the walk
-// would never carry. It is asked of every task above, and the duty still
-// finishes the walk from the marked task.
+// The mark is on the task that MOVED, not the root, so once it is filed under
+// another task the refusal must ask every task above, not only the root; the
+// duty still finishes the walk from the marked task.
 func TestAMarkedTaskFiledUnderAnotherStillHoldsItsSubtree(t *testing.T) {
 	t.Parallel()
 	r := moveFixture(t, "m-kid-a", "m-kid-b")
@@ -265,16 +252,14 @@ func TestAMarkedTaskFiledUnderAnotherStillHoldsItsSubtree(t *testing.T) {
 // A MERGE THAT WOULD MOVE SUBTASKS WAITS FOR A MOVE TO CARRY EITHER END, and a
 // merge with nothing to carry does not.
 //
-// The walk carries the duplicate and its subtasks whatever the merge does in
-// between, so re-parenting them onto a survivor in the old project splits them
-// across two projects, and onto a survivor the walk has not carried is a child
-// it never read. Which project each end is in is about to change, so it is
-// unavailable rather than refused as a cross-project merge.
+// The walk carries the duplicate and its subtasks whatever the merge does, so
+// re-parenting them would split them across projects or add a child the walk
+// never read. Each end's project is about to change, so it is unavailable
+// rather than refused as a cross-project merge.
 func TestAMergeWaitsForAMoveToCarryItsEnds(t *testing.T) {
 	t.Parallel()
 	r := moveFixture(t, "m-kid-a", "m-kid-b")
-	// m-kid-b gets a subtask of its own before the move, so it has
-	// something for a merge to carry.
+	// m-kid-b gets a subtask, so a merge has something to carry.
 	grand := newTask("m-grand")
 	grand.Key = ""
 	parent := "m-kid-b"
@@ -316,10 +301,7 @@ func TestAMergeWaitsForAMoveToCarryItsEnds(t *testing.T) {
 // A CHART APPLY RECONCILES EVERY PROJECT IT CAN, and names every one it could
 // not.
 //
-// The loop said one project's refusal must not leave the rest of the company
-// unable to file anything, and returned at the first one — so a chart whose
-// first project met a full stream reconciled nothing after it, on every apply,
-// for as long as that one kept failing.
+// One project's refusal must not stop the projects after it from reconciling.
 func TestAChartApplyReconcilesEveryProjectItCan(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
@@ -346,9 +328,8 @@ func TestAChartApplyReconcilesEveryProjectItCan(t *testing.T) {
 // A GENERATION RECORD CARRIES WHO RAN THE REANCHOR, THEIR KIND AND THE
 // CREDENTIAL THEY RAN IT THROUGH — the three columns every other record does.
 //
-// It recorded every operator as kind `operator` with their NAME as the
-// credential, so a person's reanchor through a machine token read as a token
-// named after them, and the credential that ran it was on no record.
+// A person's reanchor through a machine token records the person, kind human,
+// and the token as the credential, not a token named after them.
 func TestAGenerationRecordNamesItsOperatorsKindAndCredential(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -372,9 +353,8 @@ func TestAGenerationRecordNamesItsOperatorsKindAndCredential(t *testing.T) {
 			facts:  statelog.GenerationFacts{},
 			author: "node-a", kind: "system",
 		},
-		// A NAME OF SPACES NAMES NOBODY, as it does on every other log's
-		// generation record ([statelog.GenerationFacts.Author]): this one
-		// read it as a person called "  ".
+		// A NAME OF SPACES NAMES NOBODY, as on every other log's generation
+		// record ([statelog.GenerationFacts.Author]).
 		"a name of spaces": {
 			facts:  statelog.GenerationFacts{By: "  ", ByKind: "human"},
 			author: "node-a", kind: "system",
@@ -404,12 +384,9 @@ func TestAGenerationRecordNamesItsOperatorsKindAndCredential(t *testing.T) {
 
 // A MOVED TASK IS FOUND BY ITS TAGS IN THE PROJECT IT MOVED TO, AND ONLY THERE.
 //
-// A project's tag filter is read from that project's tag rows — the arm seeks
-// the slug and the project together — so it answers right only while every tag
-// row carries its task's CURRENT project. The applier rewrites a task's tag
-// rows with the task on every apply, which is what this holds across the one
-// change that moves a task between projects: found in OPS after the move, and
-// never in ENG.
+// A project's tag filter seeks the slug and project together, so it is right
+// only while every tag row carries its task's CURRENT project: the applier
+// rewrites a task's tag rows with the task on every apply.
 func TestAMovedTaskIsFoundByItsTagsInItsNewProject(t *testing.T) {
 	t.Parallel()
 	r := lateTagFixture(t)

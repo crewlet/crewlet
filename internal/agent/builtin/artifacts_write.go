@@ -29,11 +29,10 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// The stale answer's budget for the live version's text: the first
-// [artifacts.ToolReadPageBytes] of each changed text file, until this much
-// text is inlined across them, so the answer stays inside one tool answer
-// ([ToolAnswerBytes]) beside the changed paths and the retry sentence. A
-// changed file past it is named, and read with get_artifact.
+// staleTextBudget caps the live text a stale answer inlines across the changed
+// files (each its first [artifacts.ToolReadPageBytes]), so the answer fits one
+// [ToolAnswerBytes] beside the paths and the retry sentence. A file past it is
+// only named, for get_artifact.
 const staleTextBudget = 40 << 10
 
 // ---- the shared parameters ---------------------------------------------- //
@@ -44,12 +43,17 @@ func filesParam(patch bool) map[string]any {
 		"turn's box, relative to its workspace), `{from_project_file: {project, " +
 		"path}}` or `{from_brand: \"logo.primary\"}` (a logo or typeface of your company's " +
 		"adopted brand, copied in; " + CompanyBrandTool + " gives each ready to paste). Inline " +
-		"content is at most 1 MiB in all."
+		"content is at most 1 MiB in all. " + filesCap
 	if patch {
 		desc += " Null removes a file; files you leave out are kept."
 	}
 	return map[string]any{"type": "object", "description": desc}
 }
+
+// filesCap is the file bounds a publish is refused past, stated where its files
+// are named.
+var filesCap = fmt.Sprintf("A publish uploads at most %d new files, and a version "+
+	"holds at most %d.", artifacts.MaxFilesPerPublish, artifacts.MaxFilesPerVersion)
 
 func sourceParam() map[string]any {
 	return map[string]any{
@@ -63,7 +67,7 @@ func sourceParam() map[string]any {
 			},
 		},
 		"description": "Publish a build's whole output. Not combined with `content`, " +
-			"`edits` or `files`.",
+			"`edits` or `files`. " + filesCap,
 	}
 }
 
@@ -485,9 +489,8 @@ func (t *createArtifact) folder(ctx context.Context, c artifactCaller, args map[
 }
 
 // requesterShare is the share an agent's new artifact is created with: the
-// person whose request the turn is serving, as an editor, so the story "an
-// agent hands a teammate a review table" needs no second gesture. Only a
-// person, and only on an agent's own create.
+// person the turn serves, as an editor, so handing it over needs no second
+// step. Only a person, and only on an agent's own create.
 func (t *createArtifact) requesterShare(c artifactCaller) []artifacts.Share {
 	if !c.agent() || c.ceiling.Kind != authz.CeilingRequester || c.turn == nil {
 		return nil
@@ -540,8 +543,7 @@ func findingCaveats(report artifactupload.Report) []caveat.Caveat {
 }
 
 // withArtifactOperation puts the call's `op_id` on its answer on the operator
-// surface, where a caller brings it back to repeat the call as the same
-// operation.
+// surface, so a caller can repeat the call as the same operation.
 func withArtifactOperation(out map[string]any, c artifactCaller) map[string]any {
 	if c.opID != "" {
 		out[opIDArg] = c.opID
@@ -597,9 +599,8 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 			"artifact with "+GetArtifactTool+" before publishing again.", tool, Unanswered),
 			Failed: true, Cause: UnknownCause(c.opID, err)}
 	case errors.As(err, &turn):
-		// THE TURN HAS DONE WHAT IT SHOULD: a thrashing loop of publishes is
-		// what the guardrail is for, and the sentence tells the model to
-		// stop and report rather than look for another way round it.
+		// A thrashing loop of publishes is what the guardrail stops: tell the
+		// model to stop and report, not to find another way round it.
 		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused that "+
 			"(turn_quota): this turn has made %d of its %d %s. Stop publishing, report "+
 			"what was done and what is left, and let the next turn continue.", tool,
@@ -623,14 +624,14 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused that: %s",
 			tool, said))
 	case errors.Is(err, artifactsdomain.ErrLabelTaken):
-		// A COLLISION: another version holds the label, which another
-		// label avoids now and which lands once that version gives it up.
+		// A collision (exists): another version holds the label; another label
+		// lands now, this one once that version gives it up.
 		return refusedBy(tools.RefusalExists, err, fmt.Sprintf("%s refused that: %s. "+
 			"Read the artifact's versions with "+GetArtifactTool+" and choose another label, "+
 			"or publish without one.", tool, said))
 	case errors.Is(err, artifactsdomain.ErrLabelsFull):
-		// THE ARTIFACT'S STATE: every label it keeps is in use, so no other
-		// label would land either until one is removed.
+		// The artifact's state (conflict): every label slot is in use, so no
+		// label lands until one is removed.
 		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s refused that: %s. "+
 			"A label is removed with "+UpdateArtifactTool+", naming its `version` with an "+
 			"empty `label`; or publish without one.", tool, said))
@@ -641,11 +642,9 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 			"removes artifacts the company no longer needs.", tool, quota.Usage,
 			quota.Limit, quota.Key)), caveat.ArtifactQuotaReached())
 	case errors.As(err, &full):
-		// NO ROOM, WHICH NO RETRY MAKES: the store refuses the same file the
-		// same way until an operator makes the room it names — never the
-		// fault a failure nothing classified reads as. The store's own words
-		// name its bucket, which is the log's ([objectFailure]'s line, with
-		// them).
+		// No retry makes room: refused the same until an operator acts, so
+		// never reported as an unclassified fault. The store's words name its
+		// bucket, so they go to the log only (as [objectFailure]'s line).
 		log.WarnContext(ctx, "builtin_tool_object_store_failed", "tool", tool,
 			"class", string(tools.RefusalStoreFull), "path", full.Path, "error", full.Err)
 		return refusedBy(tools.RefusalStoreFull, err, fmt.Sprintf("%s "+
@@ -665,8 +664,7 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 	case errors.Is(err, artifactsdomain.ErrSourceTaken):
 		return refusedBy(tools.RefusalExists, err, fmt.Sprintf("%s: %s", tool, said))
 	case errors.Is(err, artifactsdomain.ErrExists):
-		// WHAT AN EARLIER ATTEMPT OF THIS CREATE MADE, most often: read it
-		// rather than make a second one.
+		// Most often an earlier attempt of this create: read it, not a second.
 		return refusedBy(tools.RefusalExists, err, fmt.Sprintf("%s: %s. Read it with "+
 			GetArtifactTool+" or "+ListArtifactsTool+" rather than making it again.", tool, said))
 	case errors.Is(err, artifactsdomain.ErrAgentCompanyShare),
@@ -685,9 +683,8 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 			"before retrying.", tool))
 	}
 	if class, ok := WriterClass(err); ok {
-		// ANY OTHER REFUSAL A DOMAIN DECIDED, in its own class — see
-		// [writeFailure]'s same arm: a write the log refused because the
-		// artifact's purge had begun, which no arm above names.
+		// Any other domain refusal keeps its class, as in [writeFailure]: e.g.
+		// a write refused because the artifact's purge had begun.
 		return refusedBy(class, err, domainRefusal(tool, err))
 	}
 	if why, ok := Condition(err); ok {
@@ -957,17 +954,15 @@ func editsArg(args map[string]any) ([]edits.Edit, string) {
 	return out, ""
 }
 
-// stale is a publish based on a version somebody has moved past: a failed
-// result of class stale_version carrying the live version, who published it
-// and when, the paths that changed since the caller's base, and the first page
-// of each changed text file, fenced as text the live version's author wrote,
-// so the model merges and publishes again on the live number.
+// stale answers a publish on an outdated base: a stale_version failure with the
+// live version, its author and time, the paths changed since the base, and the
+// first page of each changed text file fenced as the author's words, so the
+// model merges and publishes again on the live number.
 //
-// THE TEXT IS A READ OF THE LIVE VERSION, shown only where reading it would be
-// ([ArtifactDeps.discloses]): a publish to the agent's own artifact is
-// admitted without the requester, and an administrator's on the admin path is
-// recorded first. Where it may not be shown, the answer carries the numbers,
-// the author and the paths alone.
+// The text is a read of the live version, shown only where reading it would be
+// ([ArtifactDeps.discloses]): a publish to the agent's own artifact is admitted
+// without the requester, and an administrator's on the admin path is recorded
+// first. Otherwise the answer carries numbers, author and paths alone.
 func (t *publishArtifact) stale(ctx context.Context, turn *turnctx.Turn, c artifactCaller,
 	moved *artifactsdomain.VersionMoved, base int, cause error) tools.Result {
 
@@ -1040,10 +1035,9 @@ func (t *publishArtifact) stale(ctx context.Context, turn *turnctx.Turn, c artif
 	rendered, err := read.answer(ctx, t.Name(), out, "Read the changed files one at a "+
 		"time with "+GetArtifactTool+".")
 	if err != nil || rendered.Failed {
-		// THE ONE SENTENCE, told as the answer it stands in for tells it: a
-		// turn that may not read the live version is told to merge from
-		// what it published, since the read this sentence would send it to
-		// is the one the requester ceiling refuses.
+		// The fallback sentence says what the answer would: a turn that may
+		// not read the live version merges from what it published, since the
+		// requester ceiling refuses that read.
 		merge := "Read it with " + GetArtifactTool + ", merge your change onto it"
 		if !discloses {
 			merge = "This turn may not read its content, so merge your change from " +
@@ -1058,9 +1052,9 @@ func (t *publishArtifact) stale(ctx context.Context, turn *turnctx.Turn, c artif
 		Cause: tools.Classify(tools.RefusalStaleVersion, cause)}
 }
 
-// changedPaths is every path whose bytes differ between the caller's base and
-// the live version, the live entry first, and whether the base is still
-// retained: a base the artifact no longer keeps has every live path changed.
+// changedPaths is every path whose bytes differ between the base and the live
+// version, live entry first, and whether the base is still kept: a base no
+// longer kept counts every live path changed.
 func (t *publishArtifact) changedPaths(ctx context.Context, id artifacts.ID, base int,
 	live artifacts.Manifest) ([]string, bool) {
 

@@ -44,14 +44,13 @@ func (f failingCodeWrite) UpdateDeviceSignIn(ctx context.Context, s coord.Device
 
 // A CODE NOBODY CAN READ IS NO SIGN-IN. Where the code cannot be recorded, a
 // start answers that the sign-in is unavailable, saying why, and the session
-// ends: never a zero session with no error, which the page polled for ever.
+// ends: never a zero session with no error, which the page would poll for ever.
 //
 // Mutation: answer the code's record whatever its write returned, and this
 // fails.
 func TestAStartWhoseCodeCannotBeRecordedSaysSo(t *testing.T) {
 	t.Parallel()
-	// THE FAILING STORE FROM THE START, which the node's own watch and
-	// sweep read as well.
+	// The failing store from the start, so the node's watch and sweep read it too.
 	fleet, leases := failingCodeWrite{coordmemory.NewFleet()}, coordmemory.New()
 	login := &fakeDeviceLogin{finish: make(chan error)}
 	e := signInNode(t, fleet, leases, "node-1", login)
@@ -142,11 +141,10 @@ func adoptLogin(ctx context.Context, t *testing.T, p *harness.Provider, file, co
 }
 
 // AN APPROVAL IS STORED, CARRIED TO THE FLEET, AND SAID, EACH ON ITS OWN
-// BUDGET. The login is exported, sealed under the entry's bundle and the
-// revision re-activated within the approval's budget, and the session's last
-// write gets a fresh budget of its own: a re-activation that takes longer
-// than that write is allowed still leaves the session saying it was approved,
-// with nothing left to do.
+// BUDGET. Exporting the login, sealing it under the entry's bundle and
+// re-activating the revision run on the approval's budget, and the session's
+// last write on a fresh one: a re-activation longer than that write's budget
+// still leaves the session saying approved, with nothing left to do.
 //
 // Mutation: run the approval on the last write's budget, and the slow
 // re-activation is cut off and the session says the login was not carried.
@@ -205,9 +203,8 @@ func TestSameNodeStartsAreOneSession(t *testing.T) {
 	fleet, leases := coordmemory.NewFleet(), coordmemory.New()
 	login := &fakeDeviceLogin{finish: make(chan error)}
 	e := signInNode(t, fleet, leases, "node-1", login)
-	// EVERY SESSION'S HARNESS ENDS before the node's stop waits for them, so a
-	// session two starts both believed theirs fails this case rather than
-	// hanging it.
+	// Every session's harness ends before the node's stop waits for them, so a
+	// session two starts both believed theirs fails this case, not hangs it.
 	t.Cleanup(func() { close(login.finish) })
 	var wg sync.WaitGroup
 	errs := make(chan error, 8)
@@ -235,10 +232,9 @@ func TestSameNodeStartsAreOneSession(t *testing.T) {
 }
 
 // THIS NODE'S SWEEP LEAVES A SESSION BEING STARTED, AND A STOPPING NODE STARTS
-// NONE. A session's record is written after it is reserved, and the sweep that
-// reads it in between must not fail it as one this node does not run; and a
-// node that has begun stopping refuses a start rather than adding a session to
-// a wait that has begun.
+// NONE. A session's record is written after it is reserved, and a sweep in
+// between must not fail it as one this node does not run; a node that has
+// begun stopping refuses a start rather than add a session to a begun wait.
 //
 // Mutation: judge this node's sessions by those already running rather than
 // those reserved, or let a stopping node start one, and this fails.
@@ -340,10 +336,10 @@ func snapshot(t *testing.T, dir string) map[string]string {
 }
 
 // A DRAFT WITH A BUNDLE OF ITS OWN LEAVES THE LIVE ENTRY'S DISK ALONE. A draft
-// on the live entry's state directory, naming a bundle with a newer login, is
-// checked in a home of its own holding that bundle and nothing of the live
-// login: its smoke call never runs on the live login, the live directory is
-// byte-identical after, and the throwaway home is gone.
+// on the live entry's state directory naming a bundle with a newer login is
+// checked in its own home holding only that bundle: its smoke call never runs
+// on the live login, the live directory is byte-identical after, and the
+// throwaway home is gone.
 //
 // Mutation: build the draft on its own state directory, and its bundle
 // replaces the login every seat on the entry signs in with, or the call it
@@ -409,11 +405,11 @@ func TestADraftCheckLeavesTheLiveEntrysDiskAlone(t *testing.T) {
 }
 
 // rotatingHarness is a claude-code harness on a vendor that rotates its refresh
-// token: every run that signs in with the token the vendor holds (root/vendor)
-// is handed a new one, written over its credentials file, and the old one is
-// retired; a run on any other token is refused and noted in root/refused. It
-// answers --version, fails every other run after signing in, and reads and
-// writes only under root, never the credentials of the host it runs on.
+// token: a run signing in with the token the vendor holds (root/vendor) gets a
+// new one written over its credentials file and the old one retired; a run on
+// any other token is refused and noted in root/refused. It answers --version,
+// fails every other run after signing in, and touches only files under root,
+// never the host's credentials.
 func rotatingHarness(t *testing.T, root, first string) string {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(root, "vendor"), []byte(first), 0o600); err != nil {
@@ -439,12 +435,11 @@ func rotatingHarness(t *testing.T, root, first string) string {
 	return cli
 }
 
-// A DRAFT CHECK ON THE LIVE LOGIN LEAVES IT SIGNED IN. A draft that names no
-// bundle of its own signs in with the login the active entry keeps, and its
-// smoke call checks that login out as a seat does: on a vendor that rotates
-// its refresh token and retires the old one, the token the harness was handed
-// during the check reaches the shared directory, so the live entry still
-// signs in after it.
+// A DRAFT CHECK ON THE LIVE LOGIN LEAVES IT SIGNED IN. A draft naming no
+// bundle signs in with the active entry's login, checking it out as a seat
+// does: on a vendor that rotates its refresh token and retires the old one,
+// the token handed out during the check reaches the shared directory, so the
+// live entry still signs in after it.
 //
 // Mutation: run the draft in a throwaway home seeded with a copy of the live
 // login, and the rotated token is removed with the home while the live
@@ -496,10 +491,9 @@ func TestADraftCheckCarriesARefreshedLoginBack(t *testing.T) {
 	}
 }
 
-// A DRAFT WHOSE STATE DIRECTORY CANNOT BE NAMED IS SAID. With no state_dir, no
-// harness home and no home directory, the draft names no directory to sign in
-// from, and its check says so rather than answering for a home it would never
-// run in.
+// A DRAFT WHOSE STATE DIRECTORY CANNOT BE NAMED IS SAID. With no state_dir,
+// harness home or home directory, the draft has no directory to sign in from,
+// and its check says so rather than answer for a home it would never run in.
 //
 // Mutation: drop the error naming the draft's state directory, and the check
 // answers as if the draft were fine.
@@ -548,10 +542,9 @@ func TestAFailedRetryNowLeavesThisNodesSitOut(t *testing.T) {
 // plan, and this node's sit-out still reads from the old report.
 func TestARetryNowThatMeetsTheLimitHoldsItsWindow(t *testing.T) {
 	t.Parallel()
-	// The probe meets a window that resets two hours after the one this node
-	// sits out from a minute ago. A plan holds a new window only when it ends
-	// later than the one it holds, so the probe's must end strictly later.
-	// With the same reset, this node would keep the old report's window.
+	// The probe meets a window resetting in two hours: a plan holds a new
+	// window only when it ends strictly later than the one it holds, so with
+	// the same reset this node would keep the old report's window.
 	cli := filepath.Join(t.TempDir(), "limited-claude")
 	script := "#!/bin/sh\n" +
 		"case \"$1\" in --version) echo '2.1.310 (Claude Code)'; exit 0;; esac\n" +
@@ -577,13 +570,13 @@ func TestARetryNowThatMeetsTheLimitHoldsItsWindow(t *testing.T) {
 	}
 }
 
-// A WAIT OUTLIVES AN APPLY'S RELEASE. An apply that brings new models releases
-// every park and the seat parks again at once on the same limit: the same
-// wait, still dated from when it began, and reported between the release and
-// the re-park too, so `llm_limit_waiting` does not go out and come back with
-// every config change. A wait that ended (the chain answered), or a park long
-// after a release, begins a new one, and a release no park follows stops
-// being reported once a park would no longer continue it.
+// A WAIT OUTLIVES AN APPLY'S RELEASE. An apply bringing new models releases
+// every park and the seat re-parks at once on the same limit: the same wait,
+// dated from when it began and reported between release and re-park too, so
+// `llm_limit_waiting` does not flap with every config change. A wait that
+// ended (the chain answered), or a park long after a release, begins a new
+// one; a release no park follows stops being reported once a park would no
+// longer continue it (parkCarryWindow).
 //
 // Mutation: date the wait by the probe the seat is on, end it on every
 // release, or report only the seats parked now, and this fails.
@@ -663,8 +656,8 @@ func (f *flakySecrets) SecretValues(ctx context.Context) ([]coord.SecretRecord, 
 }
 
 // A FAILED READ CARRIES THE LAST GOOD ONE. A blip in the secret store must not
-// read as "no token expires": that cleared a standing expiry alarm and raised
-// it again a tick later. The expiry read on the last good listing stands.
+// read as "no token expires", which would clear a standing expiry alarm and
+// raise it again a tick later: the last good listing's expiry stands.
 //
 // Mutation: answer an unreadable store as an empty one, and the expiry is lost
 // on the blip.

@@ -13,16 +13,10 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// A NODE WITH NO COMPANY SAYS SO, RATHER THAN DEMOTING EVERY LEAD.
-//
-// The seam this replaces opened with `if c == nil || c.Org == nil { return
-// false }`, and a node holds no company while it is booting, before its first
-// revision is applied, and while it is installing one. Every one of those told
-// a lead they lead nobody — a refusal naming the project
-// rather than the lag, on a node reporting itself healthy.
-//
-// Asserted on EVERY method, because the collapse was written once per method
-// and a repair on one is the shape that leaves the others.
+// A NODE WITH NO COMPANY SAYS SO, RATHER THAN DEMOTING EVERY LEAD: while
+// booting or installing a revision, every method answers authz.ErrNoChart,
+// never "you lead nobody". Asserted on EVERY method, since a collapse written
+// once per method is repaired one method at a time.
 func TestAChartAuthorityWithNoCompanyIsUnknownRatherThanFalse(t *testing.T) {
 	t.Parallel()
 	chart := engine.ChartAuthorityOf(nil)
@@ -45,12 +39,9 @@ func TestAChartAuthorityWithNoCompanyIsUnknownRatherThanFalse(t *testing.T) {
 	if _, err := chart.MemberOf(t.Context(), "sre", "platform"); !errors.Is(err, authz.ErrNoChart) {
 		t.Errorf("MemberOf err = %v, want it to name the absent chart", err)
 	}
-	// AND THE DECISION IS UNKNOWN, which is what a surface renders as 503
-	// rather than 403 — the whole reason the error exists.
-	//
-	// ASKED WITH THE POLICY VERB, because `write_project` itself is the
-	// tracker's own verb and reads no chart at all: adding a label is
-	// open to every seat, and only the lead-only facets ask a relation.
+	// AND THE DECISION IS UNKNOWN, which a surface renders as 503 rather
+	// than 403. Asked with the policy verb: `write_project` reads no chart (a
+	// label is open to every seat); only the lead-only facets ask a relation.
 	d := authz.Decide(t.Context(), leadPrincipal("cto"), authz.ActionProjectPolicy,
 		authz.Object{Kind: authz.KindProject, Container: "PLATFORM"}, chart,
 		time.Now())
@@ -62,9 +53,8 @@ func TestAChartAuthorityWithNoCompanyIsUnknownRatherThanFalse(t *testing.T) {
 
 // AND A RUNNING NODE ANSWERS BOTH RELATIONS A COMPANY CAN EXPRESS.
 //
-// A chart says the same authority two ways — `manages:` on a seat and `lead:`
-// on a unit — and a check that read one would refuse half the leads in any
-// company, with which half depending on how the founder wrote their chart.
+// A chart says the same authority two ways, `manages:` on a seat and `lead:` on
+// a unit; a check reading one would refuse whichever leads the other wrote.
 func TestAChartAuthorityReadsBothTheManagesChainAndTheUnitLead(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{})
@@ -74,10 +64,8 @@ func TestAChartAuthorityReadsBothTheManagesChainAndTheUnitLead(t *testing.T) {
 		t.Fatal("the fixture engine runs no company")
 	}
 
-	// EVERY SEAT IS ASKED ABOUT ITSELF, which must never be a lead
-	// relation: the own-or-lead class checks self first, and a chart that
-	// answered true here would make the two indistinguishable in the
-	// reason a refusal reports.
+	// A SEAT NEVER LEADS ITSELF: the own-or-lead class checks self first, and
+	// a true here would blur the two in the reason a refusal reports.
 	for role := range company.Org.AllRoles() {
 		handle := role.Handle()
 		led, err := chart.Leads(t.Context(), handle, handle)
@@ -90,8 +78,7 @@ func TestAChartAuthorityReadsBothTheManagesChainAndTheUnitLead(t *testing.T) {
 	}
 
 	// AND A HANDLE THE CHART DOES NOT HOLD IS AN ANSWER, NOT AN ERROR:
-	// it is a name somebody typed for a person who is not in this
-	// company, and "you do not lead them" is exactly true.
+	// "you do not lead them" is exactly true of somebody not in the company.
 	led, err := chart.Leads(t.Context(), "ceo", "nobody-here")
 	if err != nil {
 		t.Errorf("a subject the chart does not hold errored: %v", err)
@@ -101,10 +88,9 @@ func TestAChartAuthorityReadsBothTheManagesChainAndTheUnitLead(t *testing.T) {
 	}
 }
 
-// leadPrincipal is a seat principal holding the apps every agent seat holds
-// and no admin, so the decision turns on the chart alone: the admin path is
-// checked first and would hide it, and a caller short of a relation row's app
-// is refused naming the app whatever the chart says.
+// leadPrincipal is a seat principal holding the apps every agent seat holds and
+// no admin, so the decision turns on the chart alone: an admin, or a caller
+// short of a relation row's app, is decided before the chart is asked.
 func leadPrincipal(handle string) iam.Principal {
 	return iam.Principal{ID: uuid.New(), Login: handle, Kind: iam.KindSeat,
 		Seat: handle, Stage: iam.StageActive, Grants: slices.Clone(iam.Apps)}

@@ -18,23 +18,17 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
-// conversationLog is ONE executor log as the cases below play it: every node's
-// coordinator records on it and continues sessions from it, over the rows of a
-// seat's conversation — each turn's row by its turn, the ended ones
-// tombstoned, and every object's archive.
-//
-// IT KEEPS THE DOMAIN'S RULES THESE CASES TURN ON, and no others: a turn's
-// first landed record keeps its read; a begin holds its base where the base's
-// row still names the session the read saw; a live row that has landed no
-// capture holds its base against an end's absorption; only a turn that landed
-// a capture absorbs, at its end, the turns its first read handed out; and a
-// head read now names the ended turn that read the conversation last
-// ([conversationLog.head]). The domain's own suite holds those rules on the
-// real log (internal/executordomain's TestNoReleaseTakesAHeldBase,
+// conversationLog is ONE executor log shared by every node's coordinator in
+// the cases below: a seat's conversation's turn rows (ended ones tombstoned)
+// and every object's archive. It keeps only the domain rules these cases turn on: a turn's first landed
+// record keeps its read; a begin holds its base while the base's row names the
+// session the read saw; a live row with no capture holds its base against
+// absorption; only a turn that landed a capture absorbs, at its end, what its
+// first read handed out; the head is the ended turn that read last
+// ([conversationLog.head]). internal/executordomain's TestNoReleaseTakesAHeldBase,
 // TestATurnThatNeverCapturedAbsorbsNothing and
-// TestAFireThatEndsAfterTheFiresBesideItIsToldNotContinued), and
-// TestTheConversationLogsHeadIsTheTurnThatReadItLast holds this log to the
-// last of them; these cases hold what the coordinators do with them.
+// TestAFireThatEndsAfterTheFiresBesideItIsToldNotContinued hold the real log to
+// them; TestTheConversationLogsHeadIsTheTurnThatReadItLast holds this one to the head.
 type conversationLog struct {
 	mu       sync.Mutex
 	rows     map[string]logRow
@@ -46,9 +40,8 @@ type conversationLog struct {
 	captures []CaptureRecord
 }
 
-// logRow is one turn's row on the conversationLog: what the restore reads of it
-// ([executorkeep.TurnRow]) and what the log keeps beside that — the turn's
-// first read and where its end landed.
+// logRow is one turn's row: what the restore reads ([executorkeep.TurnRow]),
+// plus the turn's first read and where its end landed.
 type logRow struct {
 	executorkeep.TurnRow
 	WorkKey     string
@@ -74,8 +67,8 @@ func (l *conversationLog) nextLocked() int64 {
 	return l.seq
 }
 
-// endedTurn seeds turn of the conversation `chat:D1` of seat swe as its capture
-// and its end left it: ended, naming a session sessionID whose archive is body.
+// endedTurn seeds turn of seat swe's conversation `chat:D1`, ended, naming
+// session sessionID whose archive is body.
 func (l *conversationLog) endedTurn(t *testing.T, turn, sessionID, body string) executorkeep.TurnRow {
 	t.Helper()
 	l.mu.Lock()
@@ -100,7 +93,7 @@ func (l *conversationLog) readNow() int64 {
 	return l.seq
 }
 
-// errTurnEnded is the log's refusal of a record of a turn it tombstoned.
+// errTurnEnded refuses a record of a tombstoned turn.
 var errTurnEnded = errors.New("the turn has ended")
 
 func (l *conversationLog) Begin(_ context.Context, b BeginRecord) (BeginAnswer, error) {
@@ -115,7 +108,7 @@ func (l *conversationLog) Begin(_ context.Context, b BeginRecord) (BeginAnswer, 
 		row = logRow{TurnRow: executorkeep.TurnRow{Handle: b.Handle, Turn: b.Turn,
 			ConversationKey: b.ConversationKey}, WorkKey: b.WorkKey}
 	}
-	// THE TURN'S FIRST READ STANDS, whichever record carried it.
+	// The turn's first read stands, whichever record carried it.
 	if row.ReadThrough == 0 {
 		row.ReadThrough, row.Absorbs = b.ReadThrough, slices.Clone(b.Absorbs)
 		if base, ok := l.rows[b.BaseTurn]; ok && b.BaseTurn != "" && base.Ended &&
@@ -172,8 +165,7 @@ func (l *conversationLog) End(_ context.Context, e EndRecord) (LogAnswer, error)
 	ending := e.Ending
 	row.Ending, row.Ended, row.EndedAt, row.EndedSeq = &ending, true, time.Now().UTC(), l.nextLocked()
 	l.rows[e.Turn], l.tombs[e.Turn] = row, true
-	// ONLY A TURN THAT LANDED A CAPTURE ABSORBS what its first read handed
-	// out, and never a row a live turn holds.
+	// Only a turn that landed a capture absorbs, and never a row a live turn holds.
 	if row.LaunchSeq > 0 {
 		for _, turn := range row.Absorbs {
 			if absorbed, ok := l.rows[turn]; ok && absorbed.Ended && !l.heldLocked(turn) {
@@ -210,9 +202,8 @@ func (l *conversationLog) row(turn string) (executorkeep.TurnRow, bool) {
 	return row.TurnRow, ok
 }
 
-// head is the conversation's head, as the domain's head statement orders it:
-// of its ended rows that name a session, the one whose turn read the
-// conversation last, the newest end among turns that read it alike.
+// head is the conversation's head as the domain orders it: of the ended rows
+// naming a session, the one that read last, ties to the newest end.
 func (l *conversationLog) head(conversationKey string) string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -253,9 +244,8 @@ func (l *conversationLog) capturesOf(turn string) []CaptureRecord {
 	return out
 }
 
-// Session answers a turn's row as the restore reads it: at the level a
-// relaunch reads (the engine's adapter's), so an end another node published is
-// seen.
+// Session answers a turn's row at the level a relaunch reads (the engine's
+// adapter's), so an end another node published is seen.
 func (l *conversationLog) Session(ctx context.Context, handle, turn string) (executorkeep.TurnRow, error) {
 	// A READ UNDER A CONTEXT THAT ENDED IS NOT ANSWERED, as the estate
 	// router's is not: a fake that answered it settled what a wait whose
@@ -297,17 +287,15 @@ func (l *conversationLog) Open(_ context.Context, row executorkeep.TurnRow) (io.
 	return io.NopCloser(bytes.NewReader(body)), nil
 }
 
-// frozenReadOf is the read a turn's dispatch made of the conversation whose
-// head is base, at the log's position now, the brief having told base: what
-// the turn's first launch freezes.
+// frozenReadOf is a dispatch's read, at the log's position now, of the
+// conversation whose head is base: what the turn's first launch freezes.
 func frozenReadOf(l *conversationLog, base executorkeep.TurnRow) *ConversationBase {
 	return NewConversationBase(executorkeep.ConversationHead{Session: &base, ReadThrough: l.readNow(),
 		Absorbs: []string{base.Turn}}, []string{base.Turn})
 }
 
-// continuingBase is turnID's first launch, its conversation's read frozen as
-// read, asked to continue the base it names — with the lead and the fresh brief
-// told apart.
+// continuingBase is turnID's first launch, frozen on read and asked to
+// continue its base, with the lead and the fresh brief told apart.
 func continuingBase(turnID string, read *ConversationBase) LaunchRequest {
 	req := launchReq(turnID)
 	req.Brief = "the fresh brief, which tells how the conversation's earlier turns ended"
@@ -317,11 +305,8 @@ func continuingBase(turnID string, read *ConversationBase) LaunchRequest {
 	return req
 }
 
-// conversingRig is a keeping coordinator rig recording on, and continuing
-// sessions from, one conversation log, whose runner restores what its harness
-// wrote: node A of every case below.
-//
-// Built on [keepingRig], and so only in a bubble ([inBubble]).
+// conversingRig is node A of the cases below: a [keepingRig] recording on and
+// restoring from one conversation log, so only in a bubble ([inBubble]).
 //
 //fixedwait:bubble
 func conversingRig(t *testing.T) (*coordRig, *conversationLog, *sessionKeep) {
@@ -334,16 +319,13 @@ func conversingRig(t *testing.T) (*coordRig, *conversationLog, *sessionKeep) {
 	return rig, logbook, keep
 }
 
-// A TURN'S FIRST LAUNCH CONTINUES ITS CONVERSATION'S HEAD. The dispatch read the
-// head — the conversation's last turn, ended, its session kept — and the turn's
-// first launch is handed it: in a box of its own, the base's archive restored
-// there, the run started on the base's session with the lead that says where
-// this turn begins (the fresh brief beside it, for its script to hand a session
-// of its own), the launch's record and its caller told it is the conversation's
-// session. The read is frozen on the record the launch created and recorded as
-// the turn's begin, which holds the base; and every capture of the turn carries
-// that read, which the turn's end absorbs, while the turn's first landed
-// capture lifts the hold.
+// A TURN'S FIRST LAUNCH CONTINUES ITS CONVERSATION'S HEAD: in a box of its own,
+// the base's archive restored, the run resumed on the base's session with the
+// lead (the fresh brief beside it, for its script to hand a session of its
+// own), its record and caller told so. The read is
+// frozen on the created record and published as the turn's begin, which holds
+// the base; every capture carries that read, and the first landed one lifts
+// the hold.
 //
 // Mutation: continue no base on a first launch, read the head again at the
 // launch, freeze the read anywhere but the create, publish no begin, or leave
@@ -398,7 +380,7 @@ func TestATurnsFirstLaunchContinuesItsConversationsHead(t *testing.T) {
 			t.Fatal("no row holds the base the turn continues")
 		}
 
-		// THE JOB'S CAPTURE CARRIES THE READ, and lifts the hold.
+		// The job's capture carries the read, and lifts the hold.
 		rig.suspend("t2")
 		session := rig.runner.Session
 		rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-base", HarnessVersion: "2.1.310",
@@ -415,12 +397,10 @@ func TestATurnsFirstLaunchContinuesItsConversationsHead(t *testing.T) {
 	})
 }
 
-// THE FREEZE IS WRITTEN AT THE FIRST LAUNCH ONLY. The write that creates the
-// turn's record writes its read of the conversation; every write that opens a
-// later launch on the record — a relaunch carrying a read of its own, or none —
-// keeps it, so a relaunch on whatever node continues the base the first launch
-// was handed. And a later build's keys inside the read, the base and each
-// sibling survive this build's writes.
+// THE FREEZE IS WRITTEN AT THE FIRST LAUNCH ONLY. A relaunch, carrying a read
+// of its own or none, keeps the create's read, so a relaunch on any node
+// continues the first launch's base. A later build's keys inside the read, the
+// base and each sibling survive this build's writes.
 //
 // Mutation: write the read on the reset, or drop a section's Extra, and this
 // goes red.
@@ -467,16 +447,11 @@ func TestTheFreezeIsWrittenAtTheFirstLaunchOnly(t *testing.T) {
 }
 
 // A RELAUNCH ON ANOTHER NODE AFTER A SIBLING ENDED CONTINUES THE FROZEN BASE.
-// Turn T2's first launch, on node A, froze B1, the conversation's head, and held
-// it. Its job was lost with its box before anything of it was captured. Sibling
-// T3, which read B1 too, captured and ended — and its end, which absorbs what
-// its read handed out, passed B1 over, since T2's row holds it; T3 is the
-// conversation's head now. The seat moved to node B, over the same record and
-// the same log. T2's relaunch there is asked which session it continues and
-// answers B1 — never T3, which a read of the head now would name — and continues
-// it in a box of its own; B1 still names its object. T2's first capture there
-// carries the read its first launch made, and lifts the hold, so B1 is
-// releasable; and T2's end absorbs B1, the head it was handed.
+// T2's first launch on node A froze and held B1, then lost its job uncaptured.
+// Sibling T3, which read B1 too, captured and ended, passing over B1 (T2 holds
+// it) and becoming the head. On node B, T2's relaunch continues B1, never T3,
+// in a box of its own; its first capture carries the first launch's read and
+// lifts the hold, and its end absorbs B1.
 //
 // Mutation: read the conversation's head again on a relaunch, drop the freeze
 // on the record's reset, hold nothing on the log, or carry a read made now on
@@ -518,8 +493,7 @@ func TestARelaunchOnAnotherNodeAfterASiblingEndedContinuesTheFrozenBase(t *testi
 			t.Fatalf("the conversation's head is %q, want T3, which ended since", head)
 		}
 
-		// THE SEAT MOVES: node B holds it under a newer lease, over the same
-		// record and the same log.
+		// The seat moves to node B under a newer lease, same record and log.
 		resumer := &resumeSpy{}
 		nodeB, err := NewCoordinator(CoordinatorOptions{
 			Answers: rigAnswers(), Queue: rig.queue, Pending: rig.pending, Manager: rig.manager, Pushes: rig.pushes,
@@ -564,8 +538,7 @@ func TestARelaunchOnAnotherNodeAfterASiblingEndedContinuesTheFrozenBase(t *testi
 			t.Fatalf("B1 names no object any more: %+v (%v)", row, ok)
 		}
 
-		// T2'S FIRST CAPTURE, ON NODE B, carries the first launch's read and lifts
-		// the hold.
+		// T2's first capture, on node B, carries the first launch's read.
 		rig.suspend("t2")
 		session := rig.runner.Session
 		rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-b1", HarnessVersion: "2.1.310",
@@ -584,7 +557,7 @@ func TestARelaunchOnAnotherNodeAfterASiblingEndedContinuesTheFrozenBase(t *testi
 		if logbook.holds("b1") {
 			t.Fatal("T2's first capture left B1 held")
 		}
-		// AND T2'S END ABSORBS B1, the head it was handed.
+		// T2's end absorbs B1, the head it was handed.
 		if _, err := logbook.End(ctx, EndRecord{Handle: "swe", Turn: "t2",
 			ConversationKey: "chat:D1", WorkKey: "wk-1",
 			Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}); err != nil {
@@ -596,15 +569,10 @@ func TestARelaunchOnAnotherNodeAfterASiblingEndedContinuesTheFrozenBase(t *testi
 	})
 }
 
-// THE LOG'S HEAD IS THE DOMAIN'S, so a case that asks it which session a head
-// read made now would name is answered as the domain's head statement answers:
-// of a conversation's ended rows that name a session, the one whose turn read
-// the conversation last, never simply the one that ended last. Turn p read B1
-// and parked; turn a read B1 too, beside it, and ended, absorbing B1; turn b
-// read the conversation after a's end, continued a and ended; and p, answered,
-// ended last of all. The head is b, and p is not. The domain's own suite holds
-// its statement to the same order (internal/executordomain's
-// TestAFireThatEndsAfterTheFiresBesideItIsToldNotContinued).
+// THE LOG'S HEAD IS THE DOMAIN'S: the ended row whose turn read last, not the
+// one that ended last (internal/executordomain's
+// TestAFireThatEndsAfterTheFiresBesideItIsToldNotContinued). p and a read B1;
+// a ended; b read after it and ended; p ended last. The head is b.
 //
 // Mutation: order conversationLog.head by EndedSeq alone and p is named.
 func TestTheConversationLogsHeadIsTheTurnThatReadItLast(t *testing.T) {
@@ -644,15 +612,10 @@ func TestTheConversationLogsHeadIsTheTurnThatReadItLast(t *testing.T) {
 	}
 }
 
-// WHETHER A BASE IS CONTINUED IS ONE DECISION, of the base the turn froze, the
-// turn's own row on the executor log and its run's record. A base naming a
-// session, the turn live, not ending and having kept nothing, its row holding
-// that base, and a runner that restores it: continued. A base naming none, a
-// run whose ending is decided, a turn that kept a capture of its own — on its
-// record, or on its row — an ended row, a row holding another base or none, no
-// runner, and one that refuses the archive: not, each saying why. Asked of no
-// row and no record, as a turn's first launch is before either exists, it is the
-// base and the runner alone.
+// WHETHER A BASE IS CONTINUED IS ONE DECISION ([BaseContinuityOf]), of the
+// frozen base, the turn's row and its run's record: continued only when every
+// condition holds, otherwise refused saying why. With no row and no record, as
+// at a first launch, it is the base and the runner alone.
 //
 // Mutation: drop any one condition and its row goes red.
 func TestWhetherABaseIsContinuedIsOneDecision(t *testing.T) {
@@ -703,13 +666,10 @@ func TestWhetherABaseIsContinuedIsOneDecision(t *testing.T) {
 	}
 }
 
-// A RELAUNCH CONTINUES THE BASE ONLY WHILE THE TURN HAS KEPT NONE. A turn whose
-// first job kept nothing is relaunched into the base its first launch froze,
-// which its row still holds. Once the turn has kept a session of its own —
-// here an earlier job's, the job the relaunch follows having left none — that
-// session holds the base and everything after it, so the relaunch continues no
-// base, saying why, and a launch asked to continue it all the same starts a
-// session of its own.
+// A RELAUNCH CONTINUES THE BASE ONLY WHILE THE TURN HAS KEPT NONE. Once the
+// turn kept a session of its own (here an earlier job's), that session holds
+// the base and all after it, so the relaunch continues no base, saying why,
+// and a launch asked to continue it anyway starts a session of its own.
 //
 // Mutation: continue the frozen base whatever the turn kept, at the probe or at
 // the launch, and a case goes red.
@@ -744,7 +704,7 @@ func TestARelaunchContinuesTheBaseOnlyWhileTheTurnHasKeptNone(t *testing.T) {
 			if _, err := rig.pending.StampCapture(ctx, "t2", own); err != nil {
 				t.Fatalf("StampCapture: %v", err)
 			}
-			// THE JOB AFTER IT, which kept nothing: the relaunch follows that one.
+			// The job after it kept nothing; the relaunch follows that one.
 			if _, err := rig.pending.BeginLaunch(ctx, PendingRun{TurnID: "t2", AgentHandle: "swe",
 				AgentID: sweID, Role: "SWE", Harness: "claude-code"}, rigLease); err != nil {
 				t.Fatalf("the second job: %v", err)
@@ -770,25 +730,17 @@ func TestARelaunchContinuesTheBaseOnlyWhileTheTurnHasKeptNone(t *testing.T) {
 }
 
 // A RELAUNCH STARTS WITHOUT A CAPTURE ITS RUN'S RECORD SETTLED REFUSED, WHENEVER
-// ITS RECORD LANDS, AND SAYS WHERE THE LOG KEEPS IT. A turn that froze its
-// conversation's base kept nothing before its job's final capture, which its
-// run's record holds settled refused — its taker's lease lapsed, and the
-// turn's row named no such capture when the settle read it — while the record
-// that taker had already handed on may land after. A relaunch continues only
-// what its run's record keeps, so it continues that capture in neither order.
-// Where the log has taken the record by the time the relaunch reads the
-// turn's row, that row holds the base no longer: the relaunch continues
-// neither, its reason saying the log keeps the capture and naming no session a
-// launch continues instead. Where the log has not, the relaunch continues the
-// base, as any relaunch of a turn that has kept nothing does.
+// ITS RECORD LANDS, AND SAYS WHERE THE LOG KEEPS IT. The turn froze a base;
+// its final capture is settled refused (lease lapsed, the row naming no such
+// capture when the settle read it) while the taker's record may land after.
+// A relaunch continues only what its run's record keeps, so never that capture,
+// in either order. If the log took the record first, the row no longer holds
+// the base: the relaunch continues neither, saying the log keeps the capture,
+// and its run is told to read that; otherwise it continues the base.
 //
-// Either way the relaunch's run is told what its read found there to read: the
-// turn's own capture, the log having taken it, or else the base its row holds.
-//
-// Mutation: continue the base whatever the turn's row names, word the base's
-// refusal as a session the relaunch continues instead, leave what the log
-// keeps out of the reason, or name the run the turn's own off the record's
-// stamp alone, and a case goes red.
+// Mutation: continue the base whatever the row names, word its refusal as a
+// session continued instead, leave the log's keeping out of the reason, or name
+// the turn's own off the record's stamp alone, and a case goes red.
 func TestARelaunchStartsWithoutACaptureItsRecordSettledRefused(t *testing.T) {
 	t.Parallel()
 	for name, landed := range map[string]bool{
@@ -858,15 +810,11 @@ func TestARelaunchStartsWithoutACaptureItsRecordSettledRefused(t *testing.T) {
 }
 
 // A RELAUNCH OF A TURN THAT FROZE NO BASE READS ITS ROW FOR A CAPTURE ITS RECORD
-// REFUSED. The turn continued no conversation's session, and its job's final
-// capture is settled refused on its run's record — its taker's lease lapsed,
-// the row naming no such capture as the settle read it — while the record that
-// taker had handed on may land after. The relaunch continues it in neither
-// order, as its record stamps it; but with no base to read the row for, it
-// reads the row for that capture alone. Where the log has taken the record, its
-// reason says the log keeps the capture, and its run is told the turn's own
-// session is there to read; where the log has not, its reason is the record's
-// own, and its run is told of nothing to read.
+// REFUSED. As above but with no base: the relaunch continues the refused
+// capture in neither order, yet still reads the row for it. If the log took
+// the record, the reason says the log keeps it and the run is told the turn's
+// own session is there to read; otherwise the reason is the record's own and
+// the run is told of nothing to read.
 //
 // Mutation: read the turn's row only for a base the turn froze, and the
 // relaunch says a capture the log keeps was not kept, naming its run nothing
@@ -928,14 +876,12 @@ func TestARelaunchOfATurnThatFrozeNoBaseReadsItsRowForACaptureItsRecordRefused(t
 }
 
 // A RELAUNCH THAT WILL NOT WAIT OUT A KEEP CONTINUES THE BASE THE TURN STILL
-// HOLDS. A capture still being kept once the relaunch's short wait has run out
-// is no kept capture, and the relaunch goes as one whose job's keep was refused
-// goes: a turn that has kept nothing, whose row still holds the base its first
-// launch froze, continues that base, which holds everything a session of its
-// own would and the conversation besides, and names it to its run as the
-// session its read found. Where the keep reached the log ahead of its stamp,
-// the row holds the base no longer: the relaunch continues none, saying why,
-// and names its run the turn's own capture, which the row names, to read.
+// HOLDS. A capture still being kept after the relaunch's short wait counts as
+// refused, so a turn whose row still holds its frozen base continues it (it
+// holds all a session of its own would, and the conversation besides) and
+// names it to its run. If the keep reached the log ahead of its stamp, the row
+// holds the base no longer: the relaunch continues none, saying why, and names
+// the turn's own capture to read.
 //
 // Mutation: return before the frozen base where the capture is still being
 // kept, and the relaunch of a turn that kept nothing starts a session of its
@@ -957,8 +903,8 @@ func TestARelaunchThatWillNotWaitOutAKeepContinuesTheBaseTheTurnStillHolds(t *te
 					t.Fatalf("the first launch: %v", err)
 				}
 				job := rig.get("t2")
-				// NO TAKER NAMED, as an older build's stamp: read by its age
-				// alone, it is in flight for a capture's whole budget.
+				// No taker named, as an older build's stamp: read by age alone,
+				// it is in flight for a capture's whole budget.
 				begun := SessionCapture{LaunchSeq: job.LaunchSeq, CaptureSeq: 1, Launch: job.LaunchID,
 					State: CaptureBegun, Final: true, At: rig.coordinator.now(), Through: new(0)}
 				if took, err := rig.pending.StampCapture(ctx, "t2", begun); err != nil || !took {
@@ -1002,12 +948,9 @@ func TestARelaunchThatWillNotWaitOutAKeepContinuesTheBaseTheTurnStillHolds(t *te
 	}
 }
 
-// A BASE IS CONTINUED ONLY IN A BOX OF ITS OWN. A box the turn's job before ran
-// in holds that job's working tree and its session, which are the turn's to
-// continue in place — never the conversation's last turn's session restored
-// over them. So the launch that reuses that box carries the job before's own
-// session on there, or starts fresh, and the base is continued only in a box of
-// the launch's own.
+// A BASE IS CONTINUED ONLY IN A BOX OF ITS OWN. A reused box holds the prior
+// job's working tree and session, which the turn continues in place (or starts
+// fresh); restoring the base over them would clobber both.
 //
 // Mutation: continue the base in a reused box, and the in-place rows go red.
 func TestABaseIsContinuedOnlyInABoxOfItsOwn(t *testing.T) {

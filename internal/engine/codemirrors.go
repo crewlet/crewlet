@@ -49,30 +49,18 @@ func (e *Engine) buildMirrors(nodeID string, boot *config.Bootstrap, c *cache.Ca
 	return m, nil
 }
 
-// mirrorDial is the one outbound dial an import or a mirror makes
-// (M6-D18): the source's URL resolved and held to the public-address rule
-// unless Tier A gitlet.import_allow_private lifts it (gitproc.ResolveRemote), and
-// its credential — one whole ${VAR} reference, as the record carries it
-// (M6-D17) — resolved at the dial from the secret store and then the
-// environment (lookup: Engine.LookupSecret), never earlier and never kept.
+// mirrorDial is the one outbound dial an import or a mirror makes (M6-D18):
+// the source's URL held to the public-address rule unless Tier A
+// gitlet.import_allow_private lifts it (gitproc.ResolveRemote), and its
+// credential, one whole ${VAR} reference (M6-D17), resolved at the dial from
+// the secret store then the environment (lookup), never earlier, never kept.
 //
 // ONLY A CREDENTIAL code.remote_credentials DECLARES FOR THE URL'S HOST IS
-// RESOLVED (declared: the table this node's epoch holds at the dial,
-// Engine.codeRemoteCredentials; config.CodeRemoteCredentials.Refusal, the one
-// judgement), and any other refused before anything is looked up. The decide
-// held the request that recorded it to the table then; this holds every dial
-// to the table now — a declaration withdrawn, or narrowed to other hosts,
-// stops the value leaving at the next attempt — and to the URL each record
-// carries, whoever wrote it, so no value of this node's secret store or its
-// environment goes to a host an administrator did not name for it.
-//
-// THE CREDENTIAL'S VALUE IS SENT AS HTTP BASIC (remoteAuthorization): the one
-// scheme every forge's git endpoint accepts. A value holding a colon is
-// `user:password` as written; any other is a token, sent as the password
-// beside the user `x-access-token` — the user GitHub documents for a token
-// over https, and one GitLab, Gitea and Forgejo accept beside a token — so a
-// forge that wants a particular user (Bitbucket's `x-token-auth`) is given it
-// in the variable itself.
+// RESOLVED, under the table this node's epoch holds at the dial (declared:
+// Engine.codeRemoteCredentials; config.CodeRemoteCredentials.Refusal judges),
+// any other refused before a lookup: a declaration withdrawn or narrowed stops
+// the value at the next attempt, whoever wrote the record, so no secret goes
+// to a host an administrator did not name for it.
 func mirrorDial(allowPrivate bool, declared func() config.CodeRemoteCredentials,
 	lookup func(name string) (string, bool)) mirror.Dial {
 	return func(ctx context.Context, url, credential string) (gitproc.Remote, error) {
@@ -96,8 +84,13 @@ func mirrorDial(allowPrivate bool, declared func() config.CodeRemoteCredentials,
 	}
 }
 
-// remoteAuthorization is the header a credential's value is sent in
-// ([mirrorDial] says why Basic, and why that user).
+// remoteAuthorization is the header a credential's value is sent in: HTTP
+// Basic, the one scheme every forge's git endpoint accepts. A value holding a
+// colon is `user:password` as written; any other is a token, sent as the
+// password beside the user `x-access-token` (GitHub's documented user for a
+// token over https, which GitLab, Gitea and Forgejo accept too), so a forge
+// wanting a particular user (Bitbucket's `x-token-auth`) gets it in the
+// variable itself.
 func remoteAuthorization(value string) string {
 	if !strings.Contains(value, ":") {
 		value = "x-access-token:" + value

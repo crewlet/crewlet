@@ -48,63 +48,37 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// The native backends, wired: the half of this node's durable state that only a
-// company can say anything about. The half every data node runs from boot is
-// the core — see core.go, and why the line between them is drawn where it is;
-// a node without `data` runs neither, and reaches both halves through a data
-// node (remote.go).
+// The native backends, wired: the half of this node's durable state only a
+// company can say anything about. The core is the other half (core.go; package
+// doc, "The core runtime"); a node without `data` runs neither and reaches both
+// through a data node (remote.go).
 //
-// # What is per-NODE and what is per-EPOCH, and why the split is not obvious
-//
-// The apply loops, the indexer and the change feeds are per-NODE: they follow
-// a LOG, and a log does not change when a company revision does. Rebuilding them on an apply would restart
-// every node's applier and re-run a boot reconcile on every configuration
-// change, which for a company that edits its org chart twice a day is a node
-// that is never established.
-//
-// The parsers, the prompts and the tool wiring are per-EPOCH, because all
-// three depend on the org chart: the lead map a fallback routes through, the
-// default project a seat files into, the reserved containers. Those are
-// exactly what an apply changes.
-//
-// # Seat acquisition waits on ESTABLISHMENT, and nothing else does
-//
-// A seat whose mailbox attached before its node's tracker was established
-// would answer "there is no such task" to its own tools — which is an answer
-// it acts on, by filing a duplicate or abandoning work it was told to do. So
-// [Engine.StateLogHydrated] gates the claim, and /ready deliberately does not:
-// the control plane's rule is that lag alone never sheds a node, and a node
-// that is behind should stop taking new seats rather than be declared
-// unhealthy.
-//
-// The gate is per DOMAIN rather than per node, from each domain's own
-// declaration ([statelog.Domain.GatesSeatAdmission]): a compacted domain's gap
-// is a coverage number rather than a fault, so withholding seats for one would
-// be the outage the number exists to avoid. And the copy verdict is per domain
-// too, for every domain (ADR-0079): a domain's copy that is WRONG goes out of
-// service for its own operations, whatever it declares about seats.
+// The apply loops, the indexer and the change feeds are per-NODE: they follow a
+// LOG, and rebuilding them on an apply would restart every applier and re-run a
+// boot reconcile on every config edit. The parsers, the prompts and the tool
+// wiring are per-EPOCH, because they read the org chart.
+
+// Seat acquisition waits on ESTABLISHMENT ([Engine.StateLogHydrated]): a seat
+// whose tracker is not established would act on "there is no such task" by
+// filing a duplicate or abandoning work. /ready deliberately does not wait:
+// lag alone never sheds a node. The gate is per DOMAIN
+// ([statelog.Domain.GatesSeatAdmission]), since a compacted domain's gap is a
+// coverage number, not a fault; the copy verdict is per domain for every
+// domain (ADR-0079).
 
 // native holds this node's native-backend runtime: the tracker's, the
 // knowledge base's and chat's read and write sides over the core's logs,
-// Gitlet's write side and its git surface over the code log, the lexical
-// index the tracker and the knowledge base are searched through and chat's
-// own, and the change feeds.
+// Gitlet's write side and git surface over the code log, the lexical index
+// and chat's own, and the change feeds.
 //
 // EVERY FIELD IS WRITTEN ONCE, by [Engine.startNative], before the struct is
-// published to [Engine.native] — which is why there is no mutex here and why
-// adding one would be misleading rather than merely redundant. What the
-// running node mutates afterwards is the one field that carries its own
-// synchronisation: the wait group.
-//
-// IT HOLDS NO LOG. The logs are the core's and run from boot on every data
-// node, this company's or not; what waits for a company is only which WRITERS
-// and READERS exist over them, because that is the company's to say. A node
-// without `data` holds neither: it runs [remoteNative] instead, and reaches the
-// halves through a data node.
+// published to [Engine.native], so no mutex; the wait group carries its own
+// synchronisation. IT HOLDS NO LOG: the logs are the core's; only which
+// WRITERS and READERS exist over them is the company's to say. A node
+// without `data` runs [remoteNative] instead.
 type native struct {
 	// built is the native-backend choices of the company that started this
-	// runtime, which are what it serves until the process restarts — the
-	// halves below exist exactly where it says so, and an activation that
+	// runtime, which it serves until the process restarts; an activation that
 	// says otherwise is told so ([Engine.sayBackendSwitches]).
 	built builtWith
 
@@ -118,106 +92,87 @@ type native struct {
 	pages  *doclet.Store
 	chat   *chatlet.Store
 
-	// trackerReader, pageReader and chatReader are the read paths of the
-	// tool surfaces, each nil where the company keeps that half elsewhere —
-	// which is what every question about the TOOLS reads
-	// ([Engine.nativeHalves]).
+	// trackerReader, pageReader and chatReader are the tool surfaces' read
+	// paths, each nil where the company keeps that half elsewhere, which is
+	// what every question about the TOOLS reads ([Engine.nativeHalves]).
 	trackerReader *worklet.Reader
 	pageReader    *doclet.Reader
 	chatReader    *chatlet.Reader
 
-	// trackerFiles reads the tracker's rows that name objects, on every
-	// company, whatever its tracker: the tracker's log is the core's and is
-	// applied on every data node whatever `tracker.backend` says, so a
-	// company that moved off Worklet still holds the file rows it wrote
-	// there, and the object store's passes must still read them
-	// ([native.objectEstates]). It is trackerReader where the company runs
-	// Worklet, never a second reader beside it. Every runtime
-	// [Engine.startNative] publishes sets it; nil only on a zero runtime.
+	// trackerFiles reads the tracker's rows that name objects on every
+	// company, whatever `tracker.backend` says: the log is the core's, so a
+	// company that moved off Worklet still holds file rows the object store's
+	// passes must read ([native.objectEstates]). It is trackerReader where the
+	// company runs Worklet, never a second reader. Nil only on a zero runtime.
 	trackerFiles *worklet.Reader
 
 	// codeReader is the code log's rows as every reader reads them, set on
-	// every runtime [Engine.startNative] publishes — the code log is the
-	// core's and runs in every register, whatever the company's tools are,
-	// so its pack rows are the object store's to keep from the first push.
+	// every published runtime: the code log runs in every register, so its
+	// pack rows are the object store's to keep from the first push.
 	codeReader *gitlet.Reader
 
-	// codeStore and committer are Gitlet's WRITE side — the
-	// lifecycle store the repositories' reconcile and retention write
-	// through, and the committer a push is decided by — built only where
-	// the company that started this runtime set `code.backend: gitlet`
-	// ([builtWith.runsCode]) and nil otherwise: a log runs in every
-	// register, but a committer exists only where somebody asked for pushes
-	// to be decided. Handed out only through [Engine.writeSide], so a node
-	// in a maintenance mode decides nothing. The committer is also READ, at
-	// each alarm evaluation, for what it refused busy for a backlog — on
-	// every data node that holds one, the gitlet role or not — and its reading
-	// is assigned field by field in [Engine.codeReading] itself, where the
-	// reading's producers gate finds each field written. changeWriter and
-	// checksWriter are the committer's siblings, built and handed out with
-	// it: the writers of changes' conversations, each on the change's own
-	// subject, and of repositories' checks, each on its repository's checks
-	// subject; and marks the writer of persons' code inbox marks, each on the
-	// person's own subject.
+	// codeStore and committer are Gitlet's WRITE side (the lifecycle store the
+	// repositories' reconcile and retention write through, and the committer a
+	// push is decided by), built only where the company set `code.backend:
+	// gitlet` ([builtWith.runsCode]), and handed out only through
+	// [Engine.writeSide], so a node in a maintenance mode decides nothing. The
+	// committer is also READ by each alarm evaluation, field by field in
+	// [Engine.codeReading], where the producers gate finds each field written.
+	// changeWriter, checksWriter and marks are its siblings, built and handed out
+	// with it: the writers of changes' conversations, repositories' checks and
+	// persons' code inbox marks, each on its own subject.
 	codeStore    *gitlet.Store
 	committer    *gitlet.Committer
 	changeWriter *gitlet.ChangeWriter
 	checksWriter *gitlet.ChecksWriter
 	marks        *gitlet.Marks
 
-	// gitletHost is this node's git surface (internal/gitlet/host) — its cache,
-	// its git pool, the hook relay, and the engine writes it builds — built
-	// only where the company that started this runtime set `code.backend: gitlet` AND
-	// this node has the gitlet role ([Engine.hostsGit]), nil otherwise. Read per
-	// request through [Engine.GitletHost], and as the writing half of this
-	// node's git half through [Engine.localGit] ([gitHalf]), never captured.
+	// gitletHost is this node's git surface (internal/gitlet/host): its cache,
+	// git pool, hook relay and engine writes, built only where the company set
+	// `code.backend: gitlet` AND this node has the gitlet role
+	// ([Engine.hostsGit]). Read per request through [Engine.GitletHost] and, as
+	// the writing half of the git half, [Engine.localGit] ([gitHalf]); never
+	// captured.
 	gitletHost *host.Server
 
 	// gitReads is this node's server-side reads of a repository by object id
 	// (internal/gitlet/query), built beside gitletHost over the same cache and
-	// pool and nil where it is: what the estate's router and server ask of
-	// this node as a repository's home Gitlet node — the reading half of its git
-	// half, gitletHost's engine writes the other ([gitHalf]) — through
-	// [Engine.localGit], per request. It holds no goroutine, and
-	// Gitlet's stop stops it first, cutting its reads in flight before the
-	// cache they read ([native.stopGitletHost]).
+	// pool, nil where it is: the reading half of this node's git half
+	// ([gitHalf]) as a repository's home, reached per request through
+	// [Engine.localGit]. It holds no goroutine; Gitlet's stop stops it first,
+	// before the cache ([native.stopGitletHost]).
 	gitReads *query.Server
 
 	// mergePreviews is this node's merge previews (internal/gitlet/home's
-	// Previews), built beside gitReads over the same cache, pool and share
-	// and nil where it is: what the estate's router and server ask of this
-	// node for a comparison's preview — the third half of its git half
-	// ([gitHalf]) — answered by the merge a repository's home records a
-	// change's mergeability by. It holds no goroutine, and Gitlet's
-	// stop stops it with gitReads, cutting its previews in flight before the
-	// cache they read.
+	// Previews), built beside gitReads over the same cache, pool and share, and
+	// nil where it is: the third part of its git half ([gitHalf]), answered by
+	// the merge a repository's home records mergeability by. It holds no
+	// goroutine; Gitlet's stop stops it with gitReads, before the cache.
 	mergePreviews *gitlethome.Previews
 
 	// gitCache is the cache gitletHost serves from, built and stopped with it
-	// and nil where it is: held only to be READ, at each alarm evaluation
-	// ([Engine.codeReading]) — what a node's maintenance refused is no
-	// request's question, so no route reaches it through the host.
+	// and nil where it is: held only to be READ by each alarm evaluation
+	// ([Engine.codeReading]); no route reaches it.
 	gitCache *cache.Cache
 
 	// compactor merges the packs of the repositories this node maintains and
 	// publishes their layers (internal/gitlet/compact), built with gitletHost
-	// and nil where it is, started with the native half's duties
-	// ([Engine.startNativeDuties]); stopped first in Gitlet's one
-	// bounded stop. A CONCRETE type, never an interface this package declares,
-	// because the alarm reading's producers gate follows a call only
-	// through one ([Engine.codeReading]).
+	// and nil where it is, started by [Engine.startNativeDuties], stopped in
+	// Gitlet's one bounded stop. A CONCRETE type, never an interface here,
+	// because the alarm reading's producers gate follows a call only through
+	// one ([Engine.codeReading]).
 	compactor *gitletcompact.Compactor
 
-	// home is the change work of the repositories this node is the home Gitlet
-	// node of (internal/gitlet/home), built and started with gitletHost and the
-	// compactor, and nil where they are; stopped first in Gitlet's one
-	// bounded stop, before the compactor.
+	// home is the change work of the repositories this node is home to
+	// (internal/gitlet/home), built and started with gitletHost and the
+	// compactor, nil where they are; stopped in Gitlet's one bounded stop,
+	// before the compactor.
 	home *gitlethome.Loop
 
 	// mirrors is the imports and pull mirrors of the repositories this node
-	// is home to (internal/gitlet/mirror), a worker of home built with it, and
-	// nil where it is; stopped after home in Gitlet's one bounded
-	// stop, so no turn starts an attempt it would not wait for.
+	// is home to (internal/gitlet/mirror), a worker of home built with it and
+	// nil where it is; stopped after home, so no turn starts an attempt it
+	// would not wait for.
 	mirrors *mirror.Mirrors
 
 	// checkRunner claims and runs the company's queued checks in boxes of
@@ -227,62 +182,54 @@ type native struct {
 	// bounded stop. A concrete type, as the compactor is.
 	checkRunner *checkrun.Runner
 
-	// gitCacheSize is how this node sized gitCache when it built the host —
-	// what [Engine.warnTiers] compares with each applied epoch's repository
-	// limit. Zero where there is no host.
+	// gitCacheSize is how this node sized gitCache, which [Engine.warnTiers]
+	// compares with each applied epoch's repository limit. Zero with no host.
 	gitCacheSize codeCacheSize
 
 	// gitletHostStop is the one bounded stop the teardown and the shutdown
 	// share ([native.stopGitletHost]).
 	gitletHostStop boundedStop
 
-	// withdrawCodeStatus withdraws this node as an answerer of
-	// Gitlet's status (codestatus.go), registered beside gitletHost and nil where
-	// it is; Gitlet's stop runs it first.
+	// withdrawCodeStatus withdraws this node as an answerer of Gitlet's status
+	// (codestatus.go), registered beside gitletHost and nil where it is;
+	// Gitlet's stop runs it first.
 	withdrawCodeStatus queue.Unsubscribe
 	// withdrawCodeSearch withdraws this node as an answerer of the code
 	// search scatter (codesearch.go), beside withdrawCodeStatus.
 	withdrawCodeSearch queue.Unsubscribe
 
 	// chatIndex is the chat corpus's own keyword index, separate from
-	// [native.indexer] for the reason ADR-0071 gives: chat is in neither
-	// half of the knowledge corpus, so it has its own inverted list, its
-	// own forward-only walk and its own loop.
+	// [native.indexer] for ADR-0071's reason: chat is in neither half of the
+	// knowledge corpus.
 	chatIndex *search.ChatIndexer
 
-	// changeIndex is this node's index of Gitlet changes' words (ADR-0156), built where the company
-	// hosts code; a forward walk of chat's shape, on its own loop.
+	// changeIndex is this node's index of Gitlet changes' words (ADR-0156),
+	// built where the company hosts code: first newest first, then walked forward.
 	changeIndex *search.ChangeIndexer
 
 	// searcher is Doclet's answer to the knowledge seam.
 	searcher *doclet.Searcher
 
-	// itemSearch is the tracker's own ranked search, over the SAME index
-	// and the SAME fan-out — see worksearch.go. Its own field because the
-	// two verbs are the tracker's and the wiki's, and a caller holding one
-	// must not be able to reach the other's corpus.
+	// itemSearch is the tracker's own ranked search over the SAME index and
+	// fan-out (worksearch.go). Its own field so a caller holding one verb
+	// cannot reach the other's corpus.
 	itemSearch *worklet.Searcher
 
-	// stopSlices withdraws this node as an answerer for the fleet's
-	// search fan-out. Nil when there is no queue to serve on, which is
-	// every embedded engine and every test.
+	// stopSlices withdraws this node as an answerer for the fleet's search
+	// fan-out. Nil with no queue to serve on (every embedded engine and test).
 	stopSlices queue.Unsubscribe
 
-	// feeds is the change feeds this node started, stored once when they
-	// start and read by every alarm evaluation ([native.feedsReading]). Nil
-	// before they start, and on a node in a mode that publishes nothing.
+	// feeds is the change feeds this node started, stored once at start and
+	// read by every alarm evaluation ([native.feedsReading]). Nil before
+	// then, and on a node in a mode that publishes nothing.
 	feeds atomic.Pointer[[]*changefeed.Feed]
 
 	// run is the context every goroutine this half started runs under, and
 	// stop is what ends it.
 	//
-	// HELD, not re-derived. The feeds start later than the indexer — a feed
-	// publishes onto the inbound edge, so it is armed with the rest of the
-	// node rather than at construction — and a goroutine registered on done
-	// but started under the CALLER's context would never be ended by stop,
-	// which then blocks on the wait for ever. That is not a hypothetical: it
-	// wedged every engine test that shut down before its own context
-	// expired.
+	// HELD, not re-derived: the feeds start later than the indexer, and a
+	// goroutine registered on done but started under the CALLER's context
+	// would never be ended by stop, which would then block for ever.
 	run  context.Context
 	stop context.CancelFunc
 	done sync.WaitGroup
@@ -296,28 +243,16 @@ var errNoCore = errors.New("engine: Worklet, Doclet and Chatlet run over the " +
 // startNative opens this node's native backends, once per process, over the
 // core runtime [Engine.startCore] already published.
 //
-// ONCE, by whichever meets the node's first company: [New] for the company a
-// node boots with, or the apply that hands a node that booted without one its
-// first ([Engine.startNativeFor]). Never re-run for a later revision — the
-// halves follow the fleet's logs rather than a revision — and it returns
-// without waiting for hydration: seat acquisition is what waits, through
-// [Engine.StateLogHydrated].
+// ONCE, by whichever meets the node's first company: [New], or the apply
+// handing a node that booted without one its first ([Engine.startNativeFor]).
+// The halves follow the fleet's logs, not a revision. It neither waits for
+// hydration (seat acquisition does, [Engine.StateLogHydrated]) nor applies
+// the chart ([Engine.followCompany] does, after both callers publish one).
 //
-// IT DOES NOT APPLY THE CHART. The projects and containers a company's org
-// names follow a PUBLISHED company, stamped with the instant its revision was
-// activated, through [Engine.followCompany] — which both callers reach once
-// they have installed one. Applying it here as well would write every project
-// and container twice on a node's first company.
-//
-// A NODE WITHOUT `data` builds none of it: it holds no copy to read or write,
-// and its seats' tools reach every half through a data node
-// ([Engine.startRemote]).
-//
-// The store and the fleet are not nil-checked: [New] refuses a Backends
-// without either, so every engine that reaches this holds both.
+// A NODE WITHOUT `data` builds none of it ([Engine.startRemote]). The store
+// and the fleet are not nil-checked: [New] refuses a Backends without either.
 func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Company) error {
-	// A NODE WITHOUT `data` RUNS NONE OF WHAT FOLLOWS — no log, no index,
-	// no copy — and answers its seats' tools through a node that does.
+	// A NODE WITHOUT `data` answers its seats' tools through a node that does.
 	if !HoldsEstate(boot) {
 		return e.startRemote(c)
 	}
@@ -325,26 +260,21 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	if core == nil || core.log == nil {
 		return errNoCore
 	}
-	// WHICH HALVES THIS COMPANY RUNS, as ONE READING of its choices kept on
-	// the runtime: the halves built below are derived from it, and so is
-	// what every later activation is compared against
-	// ([Engine.sayBackendSwitches]). The logs behind every half run whatever
-	// this says — they are the core's — so a company on Jira, Confluence and
-	// Slack still applies the tracker's, the knowledge base's and chat's
-	// logs, and simply has no writer or reader over any of them.
+	// WHICH HALVES THIS COMPANY RUNS, as ONE READING kept on the runtime: the
+	// halves below derive from it, and every later activation is compared
+	// against it ([Engine.sayBackendSwitches]). The logs behind every half are
+	// the core's and run whatever this says.
 	built := builtFrom(c.Config)
 	runTracker, wiki, rooms := built.runsTracker(), built.runsWiki(), built.runsChat()
 	nodeID, sl := core.nodeID, core.log
 
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	n := &native{run: runCtx, stop: cancel, built: built}
-	// ONE FAILURE PATH FOR EVERYTHING BELOW, armed before the first thing
-	// that outlives this call and stood down only once the half is the
-	// engine's. A slice answerer's registration is copied with
-	// [context.WithoutCancel] inside the queue, because a registration
-	// scope is not a process one, so a bare `cancel()` on the way out would
-	// not withdraw it — and a caller that retried would be running two
-	// answerers scanning an index only one of them maintains.
+	// ONE FAILURE PATH FOR EVERYTHING BELOW, armed before the first thing that
+	// outlives this call, stood down once the half is the engine's. A bare
+	// `cancel()` would not withdraw a slice answerer (the queue copies its
+	// registration with [context.WithoutCancel]), and a retry would then run
+	// two answerers.
 	started := false
 	defer func() {
 		if !started {
@@ -353,16 +283,11 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	}()
 
 	var err error
-	// THE TRACKER'S FILE ROWS ARE READ ON EVERY COMPANY, through the domain's
-	// own read authority, because its log runs whatever this company's tracker
-	// is (above): a company on Jira that once ran Worklet still holds the rows
-	// naming its project files, and the object store's collector, its audit and
-	// `crewlet objects migrate` must read them, or they would read those
-	// objects as nobody's.
-	//
-	// A NODE WHOSE TRACKER LOG DID NOT COME UP IS REFUSED, whatever its
-	// tracker: the domain is in every register, and without its rows the
-	// collector would read every object they name as nobody's.
+	// THE TRACKER'S FILE ROWS ARE READ ON EVERY COMPANY, since its log runs
+	// whatever the tracker is: a company that once ran Worklet still holds rows
+	// naming its project files, which the collector, its audit and `crewlet
+	// objects migrate` must read. A node whose tracker log did not come up is
+	// refused, or every object they name would read as nobody's.
 	running := sl.Domain(worklet.Domain{}.Name())
 	if running == nil {
 		return fmt.Errorf("engine: this node runs no tracker domain, so " +
@@ -379,49 +304,34 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			DB:        sl.estate().Reader(),
 			Claims:    e.backends.Coord,
 			NodeID:    nodeID,
-			// THE CHART, read PER CALL. A project's lead is the one
-			// fact a wake's fallback recipient needs that the rows
-			// cannot give — `tracker_projects` carries no column for
-			// it, because the applier may not read an org — and the
-			// caller that needs it is a fleet singleton on a tick with
-			// no tool arguments to carry a seam through.
+			// THE CHART, read PER CALL: a wake's fallback recipient is the project's
+			// lead, which no row carries (the applier may not read an org), and the
+			// caller is a fleet singleton with no tool arguments to carry a seam.
 			Leads: liveLeads{engine: e},
-			// AND THE CHART AGAIN, for the one custom-field type whose
-			// value is a colleague: a people field resolves through the
-			// company's own roster, which belongs to the EPOCH rather
-			// than to a row — so the write resolves it and the record
-			// carries the handle, and no applier ever reads an org.
+			// THE CHART AGAIN, for a people custom field: the write resolves it
+			// against the EPOCH's roster and the record carries the handle, so no
+			// applier ever reads an org.
 			World: liveSeats{engine: e},
-			// AND THE COMPANY'S CLOCK, read per call like the chart: a
-			// date field or a project's target date given as an instant
-			// is stored as the day it falls on on this clock (ADR-0018),
-			// and the clock is the epoch's to change.
+			// THE COMPANY'S CLOCK, read per call: an instant given for a date is
+			// stored as its day on this clock (ADR-0018), the epoch's to change.
 			Zone: e.Zone,
-			// THE NODE'S OWN WRITER ACTS AS THE SYSTEM, and every
-			// surface derives its own from it with Writer.As: a seat's
-			// tools act as that seat, an operator's session as that
-			// credential. What is left acting as the system is what the
-			// node itself does — a duty finishing an abandoned walk, a
-			// repair telling somebody they were unblocked — and
-			// attributing those to a person would make a machine's
-			// housekeeping indistinguishable from somebody's decision.
+			// THE NODE'S OWN WRITER ACTS AS THE SYSTEM; every surface derives its
+			// own with Writer.As (a seat as that seat, a session as its
+			// credential). Only the node's own housekeeping acts as the system, so
+			// it is never mistaken for somebody's decision.
 			Actor:     nodeID,
 			ActorKind: worklet.AuthorSystem,
 		})
 		if err != nil {
 			return fmt.Errorf("engine: Worklet writer: %w", err)
 		}
-		// THROUGH THE DOMAIN'S OWN READ AUTHORITY, so a level asked for is
-		// a level served: the refusal ladder, the coverage probe and the
-		// barrier a linearizable read waits through. Built beside the
-		// runner rather than here, because the health it refuses on is
-		// the same one seat admission reads. The one reader the file rows
-		// are read through too.
+		// THROUGH THE DOMAIN'S OWN READ AUTHORITY, so a level asked for is a
+		// level served (refusal ladder, coverage probe, linearizable barrier);
+		// the same reader the file rows are read through.
 		n.trackerReader = n.trackerFiles
 	}
-	// THE CODE LOG'S ROWS, UNCONDITIONALLY: there is no backend to choose for
-	// Gitlet, so every data node runs the code log in its core, and
-	// the pack bundles its rows name are kept, audited and backed up from
+	// THE CODE LOG'S ROWS, UNCONDITIONALLY: every data node runs the code log
+	// in its core, and its pack bundles are kept, audited and backed up from
 	// here.
 	{
 		running := sl.Domain(gitlet.Domain{}.Name())
@@ -436,29 +346,25 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			n.changeIndex = search.NewChangeIndexer(e.backends.Store, e.domainEstate(), gitlet.Domain{})
 			words = n.changeIndex
 		}
-		// THE CURRENT EPOCH'S LIMITS, read per call: a repository's detail
-		// reports what a push to it is held to now, which is what an
-		// import chunks its pushes by.
+		// THE CURRENT EPOCH'S LIMITS, read per call: a repository's detail reports
+		// what a push is held to now, which an import chunks its pushes by.
 		if n.codeReader, err = gitlet.NewReader(gitlet.ReaderOptions{Log: running.reader, Limits: e.codeLimits,
 			Now:         e.now,
 			Roster:      e.codeRoster,
 			ChangeWords: words}); err != nil {
 			return fmt.Errorf("engine: code reader: %w", err)
 		}
-		// GITLET'S WRITE SIDE, where the company hosts code. Its log
-		// runs in every register (above); its committer and its lifecycle
-		// store exist only where a push may be decided.
+		// GITLET'S WRITE SIDE, where the company hosts code: its committer and
+		// lifecycle store exist only where a push may be decided.
 		if built.runsCode() {
 			if n.codeStore, err = gitlet.NewStore(gitlet.StoreOptions{
 				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
-				// A TOOL'S LIFECYCLE REQUEST is judged by the committer's
-				// own chart, read per request off the current epoch, and held
-				// to the epoch's code.scratch — and decided nowhere on a node
-				// confirmed behind the company's configuration, since every
-				// kind's "who may" reads the chart (Reconciler.Admits through
-				// SetAdmits). A push mirror set as a person's seat is held to
-				// the person using Gitlet, composed as the requester ceiling
-				// composes a person (turnRequesters, ADR-0110).
+				// A TOOL'S LIFECYCLE REQUEST is judged by the committer's own chart,
+				// read per request off the current epoch, held to its code.scratch,
+				// and decided nowhere on a node confirmed behind the configuration
+				// (Reconciler.Admits through SetAdmits). A push mirror set as a
+				// person's seat is held to the person using Gitlet (turnRequesters,
+				// ADR-0110).
 				SeatRules: e.codeSeatRules, Current: e.admits, Policy: e.codeLifecyclePolicy,
 				People: turnRequesters{engine: e},
 			}); err != nil {
@@ -470,34 +376,24 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			}
 			if n.committer, err = gitlet.NewCommitter(gitlet.CommitterOptions{
 				Publisher: publisher, DB: sl.estate().Reader(), NodeID: nodeID,
-				// THE DECIDING NODE'S EPOCH, read per decision, so a
-				// limit an activation moves holds from that activation
-				// on — on every committer at once, since each reads its
-				// own node's current epoch. And the chart and the
-				// calendar a seat's push is judged by, from the same
-				// current epoch, read once a batch that carries one.
+				// THE DECIDING NODE'S EPOCH, read per decision, so a limit an
+				// activation moves holds from then on, on every committer at once;
+				// the chart and calendar a seat's push is judged by come from it too.
 				Limits: e.codeLimits, Retention: e.codeDeletedRetention, SeatRules: e.codeSeatRules,
-				// THE POSTURE GATE: a node confirmed behind the company's
-				// configuration decides no seat's push (Reconciler.Admits
-				// through SetAdmits, read per proposal).
+				// THE POSTURE GATE: a node confirmed behind the configuration
+				// decides no seat's push (Reconciler.Admits through SetAdmits).
 				Current: e.admits,
-				// AND THE NODE'S EVENT STREAM a merge or an opened change
-				// this committer landed is announced on, once, from here,
-				// naming each seat by the agent id its day is counted
-				// under, off the live epoch.
+				// THE EVENT STREAM a merge or opened change it landed is announced
+				// on, once, naming each seat by the agent id its day is counted under.
 				Events: e.codeEvents(), AgentIDs: e.codeAgentID,
 				Metrics: e.metrics, Logger: logging.Get("gitlet"),
 			}); err != nil {
 				return fmt.Errorf("engine: code committer: %w", err)
 			}
-			// AND ITS SIBLING, which the estate asks a change's
-			// conversation of on the same node: the same epoch's chart
-			// a reviewer and a seat are judged by, the same posture gate
-			// and the same retention its repo_deleted sentence names — and
-			// the same event stream a review it landed is announced on. A
-			// person an ask names is asked only where they use Gitlet,
-			// composed as the requester ceiling composes a person
-			// (turnRequesters, ADR-0109 and ADR-0110).
+			// ITS SIBLING, answering a change's conversation: the same chart,
+			// posture gate, retention and event stream. A person an ask names is
+			// asked only where they use Gitlet (turnRequesters, ADR-0109,
+			// ADR-0110).
 			if n.changeWriter, err = gitlet.NewChangeWriter(gitlet.ChangeWriterOptions{
 				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
 				Retention: e.codeDeletedRetention, SeatRules: e.codeSeatRules, Current: e.admits,
@@ -506,10 +402,8 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			}); err != nil {
 				return fmt.Errorf("engine: code change writer: %w", err)
 			}
-			// AND THE WRITER OF REPOSITORIES' CHECKS, which the estate asks
-			// a check's record of on the same node: the retention its
-			// repo_deleted sentence names, and the node's event stream an
-			// applied ending is announced on, once, from here.
+			// THE REPOSITORIES' CHECKS WRITER: the same retention, and the event
+			// stream an applied ending is announced on, once, from here.
 			if n.checksWriter, err = gitlet.NewChecksWriter(gitlet.ChecksWriterOptions{
 				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
 				Retention: e.codeDeletedRetention, SeatRules: e.codeSeatRules, Current: e.admits,
@@ -517,21 +411,18 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			}); err != nil {
 				return fmt.Errorf("engine: code checks writer: %w", err)
 			}
-			// AND THE WRITER OF PERSONS' CODE INBOX MARKS, which the estate
-			// asks a mark of on any node that publishes: a mark judges no
-			// chart — it is the person's own, refused for anybody else —
-			// so it needs neither the epoch's chart nor the posture gate.
+			// THE PERSONS' CODE INBOX MARKS WRITER: a mark is the person's own,
+			// refused for anybody else, so it needs no chart and no posture gate.
 			if n.marks, err = gitlet.NewMarks(gitlet.MarksOptions{
 				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
 			}); err != nil {
 				return fmt.Errorf("engine: code marks writer: %w", err)
 			}
 		}
-		// AND ITS GIT SURFACE, on a node with the gitlet role: the cache it
-		// serves persons' clones, fetches and pushes from, which reaches
-		// the rows and the committers through the estate's router like
-		// every other surface. Inside this function's failure path, whose
-		// shutdown stops it first.
+		// ITS GIT SURFACE, on a node with the gitlet role: the cache serving
+		// persons' clones, fetches and pushes, reaching rows and committers
+		// through the estate's router. Inside this function's failure path,
+		// whose shutdown stops it first.
 		if e.hostsGit(built) {
 			var parts gitletHostParts
 			if parts, err = e.buildGitletHost(ctx, nodeID, boot, running); err != nil {
@@ -545,49 +436,32 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		}
 	}
 	// THE LEXICAL INDEX COVERS BOTH CORPORA, so it is built under EITHER
-	// backend rather than under the wiki's.
+	// backend, BEFORE the wiki block whose searcher takes it: gated on the wiki,
+	// a Worklet-and-Confluence company indexed none of its work items while still
+	// paying the embedding duty for them.
 	//
-	// It used to sit inside the block below, which was correct while the
-	// index was the knowledge base's alone and silently wrong the moment
-	// it stopped being: a company with `tracker.backend: worklet` and
-	// Confluence for its knowledge indexed none of its own work items,
-	// served no `search_work_items`, and went on paying the embedding
-	// duty for a vector on every one of them — because that duty is armed
-	// on the runtime existing, which is either backend.
-	//
-	// BEFORE the block, because the searcher built there takes it.
-	//
-	// AND IT DERIVES THE BACKLINKS from the same bodies it tokenises, through
-	// the one grammar the knowledge base owns — see [search.Backlinks].
+	// It derives the backlinks from the same bodies, through the knowledge
+	// base's one grammar ([search.Backlinks]).
 	n.indexer = search.NewIndexerOver(e.backends.Store, e.domainEstate(),
 		lexicalSources(runTracker, wiki)).WithLinks(doclet.Links)
-	// ONE QUERY-VECTOR CACHE FOR BOTH SEARCHES on this node, so a phrase
-	// the palette embedded for the work search is a hit when the same
-	// phrase is searched as knowledge. Read through [Engine.queryModel]
-	// per query, because an apply replaces the provider and can turn
-	// `knowledge.vectors` off.
+	// ONE QUERY-VECTOR CACHE FOR BOTH SEARCHES, so a phrase embedded for one
+	// is a hit for the other. Read through [Engine.queryModel] per query: an
+	// apply can replace the provider or turn `knowledge.vectors` off.
 	vectors := search.NewQueryVectors(e.queryModel)
-	// EVERY SCAN THIS NODE RUNS ASKS ITS COPIES' VERDICT FIRST — its own
-	// searches' range and every peer's slice alike (ADR-0079): a range
-	// over a copy out of service is counted missing, never answered from
-	// rows this node has stopped serving.
+	// EVERY SCAN ASKS ITS COPIES' VERDICT FIRST, this node's range and every
+	// peer's slice alike (ADR-0079): a range over a copy out of service is
+	// counted missing, never answered from it.
 	copies := e.copies()
-	// AND THE TRACKER'S OWN SEARCH over it, with its own fan-out rather
-	// than the knowledge searcher's: each verb's corpus filter is its own,
-	// and neither can widen into the other's.
+	// THE TRACKER'S OWN SEARCH, with its own fan-out: each verb's corpus
+	// filter is its own, and neither can widen into the other's.
 	//
-	// ONLY WHERE THE COMPANY KEEPS ITS TRACKER HERE, unlike the index. The
-	// index is built under either backend because it covers both corpora;
-	// this searcher reads the tracker's corpus alone, and on a company whose
-	// tracker is a vendor's — or none — that corpus is empty by
-	// construction. Built there anyway it made `work_search` a question this
-	// node answered with nothing, where every other work question is one it
-	// does not have: "there is no tracker here" read as "the tracker holds
-	// nothing matching", the one confusion [Engine.WorkSearch]'s untyped nil
-	// exists to prevent.
+	// ONLY WHERE THE COMPANY KEEPS ITS TRACKER HERE, unlike the index: on a
+	// vendor tracker the corpus is empty by construction, and a searcher would
+	// read "there is no tracker here" as "nothing matching", the confusion
+	// [Engine.WorkSearch]'s untyped nil exists to prevent.
 	//
-	// THE BUCKETS ARE DIVIDED AMONG THE DATA NODES ([Engine.dataRoster]):
-	// only a node that holds the estate holds an index to scan.
+	// THE BUCKETS ARE DIVIDED AMONG THE DATA NODES ([Engine.dataRoster]): only
+	// a node holding the estate holds an index to scan.
 	if runTracker {
 		n.itemSearch = worklet.NewSearcher(e.domainEstate(), itemRanker{
 			index: n.indexer,
@@ -603,10 +477,8 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			},
 		})
 	}
-	// AND THIS NODE ANSWERS FOR ITS PEERS. Registered here rather than
-	// beside the coordinator because they are different jobs on one node:
-	// every node with an index answers, whether or not anybody on it ever
-	// searches.
+	// THIS NODE ANSWERS FOR ITS PEERS, separately from the coordinator: every
+	// node with an index answers, whether or not anybody on it searches.
 	if e.backends.Queue != nil {
 		n.stopSlices, err = search.ServeSlices(runCtx, e.backends.Queue, nodeID,
 			search.NodeScanner{Index: n.indexer, Copies: copies})
@@ -624,10 +496,9 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		}
 		if n.pages, err = doclet.NewStore(doclet.Options{
 			Publisher: running.publisher, DB: sl.estate().Reader(),
-			// LIVE off the epoch for the reason the searcher below is:
-			// `knowledge.skills_container`, `knowledge.root_space` and
-			// every `space:` are Tier B, and this store is built once per
-			// node while an apply can move any of them underneath it.
+			// LIVE off the epoch: `knowledge.skills_container`,
+			// `knowledge.root_space` and every `space:` are Tier B, and this store
+			// is built once per node.
 			Reserved: func() doclet.Reserved {
 				return reservedContainers(e.Company())
 			},
@@ -639,15 +510,8 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		}); err != nil {
 			return fmt.Errorf("engine: pages reader: %w", err)
 		}
-		// LIVE off the epoch, not off the company this node booted
-		// with: `knowledge.skills_container` is Tier B, and this
-		// searcher is built once per node while an apply can move the
-		// key underneath it.
-		//
-		// THE INDEX ITSELF IS NOT BUILT HERE — see above. It covers the
-		// tracker too, and gating it on the WIKI's backend left a
-		// company on Worklet and Confluence indexing none of its own
-		// work items.
+		// LIVE off the epoch, as the store's Reserved above. The index is built
+		// above, not here: it covers the tracker too.
 		n.searcher = doclet.NewSearcher(doclet.SearcherOptions{
 			Index: n.indexer, SkillsContainer: e.skillsContainer,
 			Node:    nodeID,
@@ -669,18 +533,12 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		}
 		if n.chat, err = chatlet.NewStore(chatlet.Options{
 			Publisher: running.publisher, DB: sl.estate().Reader(),
-			// THE CHART, READ PER CALL. Who a message wakes is resolved
-			// at WRITE time and carried on the record, so the roster is
-			// what stands between a routing snapshot and handles the
-			// company no longer has. A captured chart would go on waking
-			// a seat that left, for the life of a process.
+			// THE CHART, READ PER CALL: who a message wakes is resolved at WRITE
+			// time, and a captured chart would go on waking a seat that left.
 			Roster: liveRoster{engine: e},
-			// THE VISIBILITY A CREATE THAT NAMES NONE GETS. Founder
-			// policy, converted once at this edge so the domain's
-			// vocabulary needs no dependency on config: the domain
-			// decides what an unstated kind resolves to and the company
-			// decides which way. A nil block answers false — public —
-			// which is the field's own documented default.
+			// THE VISIBILITY A CREATE NAMING NONE GETS: founder policy, converted
+			// once at this edge so the domain needs no config dependency. A nil
+			// block answers false (public), the field's documented default.
 			DefaultPrivate: c.Config.Chat.Chatlet.DefaultPrivate(),
 		}); err != nil {
 			return fmt.Errorf("engine: chat store: %w", err)
@@ -690,33 +548,23 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		}); err != nil {
 			return fmt.Errorf("engine: chat reader: %w", err)
 		}
-		// AND THE KEYWORD INDEX OVER THE ROOMS, which is what makes
-		// `search_messages` a tool this node can serve at all: the
-		// builtin is registered on a non-nil searcher and OMITTED
-		// otherwise, so a node that built the store and not the index
-		// runs chat with one of its nine tools permanently missing.
-		//
-		// BUILT WITH THE ROOMS rather than beside the knowledge indexer
-		// above, because its corpus is the chat domain's: a company on
-		// `chat.backend: vendor` has no `chat_messages` to walk, and an
-		// indexer over an empty table is a loop that wakes every two
-		// seconds for the life of the process to establish that chat is
-		// still switched off.
+		// THE KEYWORD INDEX OVER THE ROOMS: `search_messages` is registered
+		// only on a non-nil searcher. Built with the rooms, not beside the
+		// knowledge indexer, because a vendor-chat company has no
+		// `chat_messages`, and an indexer over nothing would wake every two
+		// seconds for the life of the process.
 		n.chatIndex = search.NewChatIndexer(e.backends.Store, e.domainEstate())
 	}
 
-	// NO PROJECTOR LOOP HERE ANY MORE. Every native backend is a state-log
-	// domain, and its apply loop is the state log's own — the core's,
-	// started at boot and stopped with it, and reporting its position
-	// rather than a hydration flag.
+	// No projector loop: every native backend is a state-log domain applied by
+	// the core's own apply loop.
 	n.done.Add(1)
 	go func() {
 		defer n.done.Done()
 		n.indexer.Run(runCtx)
 	}()
-	// AND THE CHAT INDEX'S OWN LOOP, on the same terms and stopped by the
-	// same context: two loops rather than one because the two walks are
-	// not alike — see [search.ChatIndexer.Run].
+	// THE CHAT INDEX'S OWN LOOP, on the same terms: the two walks are not
+	// alike ([search.ChatIndexer.Run]).
 	if n.chatIndex != nil {
 		n.done.Add(1)
 		go func() {
@@ -732,13 +580,12 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		}()
 	}
 
-	// PUBLISHED, whole: every field above is written before the store,
-	// which is what lets every reader load it without a lock.
+	// PUBLISHED, whole: every field above is written before the store, so
+	// readers load it without a lock.
 	e.native.Store(n)
-	// THE HALF IS THE ENGINE'S FROM HERE, so the cleanup above stands
-	// down and [Engine.stopNative] — the same shutdown — is what ends it.
-	// Its object collector is NOT started here: it appends, and a runtime
-	// built in a capacity window must not ([Engine.startNativeCollector]).
+	// THE HALF IS THE ENGINE'S FROM HERE: the cleanup above stands down and
+	// [Engine.stopNative] ends it. Its object collector is NOT started here:
+	// it appends, which a capacity window forbids ([Engine.startNativeCollector]).
 	started = true
 	log.InfoContext(ctx, "native_backends_started",
 		"tracker", runTracker, "knowledge", wiki, "chat", rooms, "code", built.runsCode(),
@@ -747,47 +594,20 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 }
 
 // objectEstates is every domain of this runtime whose rows may name objects,
-// as the object store's passes read them — the tracker's and the code log's,
-// beside which [objectEstatesFor] adds the core's artifacts log. Empty only on
-// a zero runtime.
+// as the object store's passes read them: the tracker's (a project's file row)
+// and the code log's (a push's pack); [objectEstatesFor] adds the core's
+// artifacts log. Chat's rows only LINK a file and pages carry their bodies
+// whole. Empty only on a zero runtime.
 //
-// ONE ESTATE PER DOMAIN A DECLARATION NAMES, whatever backends the company
-// chose: a domain's rows exist because its log runs, not because its tool
-// surface does, and the core runs every domain's log on every data node.
-// Offered only where the company's tools were, the tracker's estate was
-// missing on every company whose knowledge base is Doclet and whose tracker
-// is not Worklet — Jira, or none — so the rows naming objects were read by
-// nothing, and there was no collector at all: nothing collected, nothing
-// audited, and NOTHING SAID SO. The empty list never reached
-// [collect.Sources], which would have refused it by name —
-// [Engine.startNativeCollector] returned before building the sources, with no
-// warning and no status line, and the only sign was a `crewlet objects
-// status` that never showed a pass. That early return is gone
-// ([Engine.startCollectorOver]).
-//
-// The engine's own tests build the sources from this list against
-// internal/objstore/references, so a consumer declaring a table in a new
-// domain fails the build here rather than leaving the passes unstarted in
-// production.
-//
-// THE TRACKER'S AND THE CODE LOG'S, because of the native runtime's domains
-// they are the ones whose rows name an object — a project's file row, a
-// push's pack. Chat's do not: a message LINKS a file rather than holding one,
-// so no row of chat's ever pins an object, and the knowledge base's pages
-// carry their bodies whole.
-//
-// WHATEVER THE COMPANY'S TRACKER ([native.trackerFiles]). It used to be offered
-// only where the company ran Worklet, and the collector starts only with every
-// declared table's estate, so on a company whose tracker was Jira or none no
-// collection or audit ever ran — not over the artifacts' objects nor Ask
-// Crewlet's files either, whose logs every data node runs — and `crewlet
-// objects migrate` refused, saying the node held no copy of the records.
+// WHATEVER BACKENDS THE COMPANY CHOSE ([native.trackerFiles]): the rows exist
+// because the log runs, and the collector starts only with every declared
+// table's estate. The engine's tests build the sources from this list against
+// internal/objstore/references, so a table declared in a new domain fails the
+// build rather than leaving the passes unstarted in production.
 func (n *native) objectEstates() []collect.Estate {
 	if n.trackerFiles == nil {
-		// A ZERO RUNTIME — a test's — holds no domain's rows. Every
-		// runtime [Engine.startNative] publishes sets the field, and a
-		// collector over one that did not is refused by name
-		// ([Engine.startCollectorOver]).
+		// A ZERO RUNTIME (a test's) holds no domain's rows; a collector over one
+		// is refused by name ([Engine.startCollectorOver]).
 		return nil
 	}
 	estates := []collect.Estate{worklet.ObjectEstate{Reader: n.trackerFiles}}
@@ -798,57 +618,23 @@ func (n *native) objectEstates() []collect.Estate {
 }
 
 // startNativeFor brings the native halves up for the first company an APPLY
-// hands a node that is not running them, reporting whether it did.
+// hands a node that is not running them (booted with none, then `PUT
+// /config`), reporting whether it did. It runs BEFORE the tools are equipped
+// and the inbound edge started, which read these halves, and AFTER the
+// revision is BUILT. The loops [New] starts beside the halves start here too;
+// seat acquisition waits for hydration ([Engine.StateLogHydrated]). Every
+// company starts it, even one running no half natively.
 //
-// # The bug it fixes
-//
-// [Engine.startNative] was reachable from [New] alone. A node that booted with
-// no company — the documented way to start one and then `PUT /config`, or
-// create the company from the dashboard — skipped it, and no apply ever ran
-// it: the tracker, the knowledge base and their tools were missing for the
-// life of the process. Every tool call answered that the backend was not
-// wired, no project existed for a task to be filed into, and the quickstart's
-// "bootstrap live without restarting" held for everything but the company's
-// own records. A restart brought them, because then the company arrived at
-// boot.
-//
-// # Where it runs in an apply, and why there
-//
-// BEFORE the tools are equipped, because the native tools are registered only
-// where their halves exist, and before the inbound edge is started, whose
-// parsers include the native ones — both read the halves this brings up. It
-// comes after the revision is BUILT, so a revision that cannot be built never
-// starts anything.
-//
-// The loops [New] starts beside the halves once the node publishes — the
-// embedding duty and the change feeds — start here too, on the same
-// condition, so halves met at an apply are the halves a boot would have
-// built. The logs they ride, the trim over them and the identity estate's
-// duties are the CORE's, already running from boot. Nothing waits for
-// hydration: seat acquisition does, through [Engine.StateLogHydrated].
-//
-// # Every company starts it
-//
-// There is no backend test here: the halves a company on Jira and Confluence
-// runs are none, and the lexical index over nothing — which is still the
-// answer "this company keeps no tracker here", held once rather than asked of
-// every surface.
-//
-// # What a later refusal leaves
-//
-// The halves are NOT taken down if the apply is refused after this. They
-// follow the fleet's logs rather than the revision, so a node running them
-// with the previous epoch still serves that epoch correctly — and the retry
-// finds them already up. Which halves it has (the tracker, the knowledge base,
-// chat, Gitlet) are the ones this company declared; a later revision
-// that changes them takes effect on restart, as switching a backend always
-// has — and says so at its activation ([Engine.sayBackendSwitches]).
+// A later refusal of the apply does NOT take the halves down: they follow the
+// fleet's logs, not the revision, so the retry finds them up. A revision
+// changing which halves run takes effect on restart
+// ([Engine.sayBackendSwitches]).
 func (e *Engine) startNativeFor(ctx context.Context, c *Company) (bool, error) {
 	if e.native.Load() != nil || e.remote.Load() != nil || c == nil {
 		return false, nil
 	}
-	// THE INBOUND EDGE'S MAILBOX BEFORE THE FEEDS below publish onto it
-	// ([Engine.ensureInboundMailbox]), and before the halves start, so a
+	// THE INBOUND EDGE'S MAILBOX BEFORE THE FEEDS publish onto it
+	// ([Engine.ensureInboundMailbox]) and before the halves start, so a
 	// refusal leaves nothing up for the retry to skip past.
 	if e.mode.Publishes() {
 		if err := e.ensureInboundMailbox(ctx); err != nil {
@@ -868,36 +654,16 @@ func (e *Engine) startNativeFor(ctx context.Context, c *Company) (bool, error) {
 
 // startNativeCollector starts the object store's collector duty on this data
 // node: it deletes objects no row names and audits what the store has lost,
-// both against the rows of every domain a declared table names — the native
-// half's (the tracker's files, the code log's packs) and the core's (the
-// artifacts' versions and assets, Ask Crewlet's files and the seats' executor
-// sessions) alike. It runs wherever the node runs its native half, whatever
-// backends the company chose ([native.objectEstates]): a company that moved
-// its tracker off Worklet still holds the rows that name its project files'
-// objects. A runtime it cannot start over is logged as
-// `object_collector_not_started`, never passed over in silence
-// ([Engine.startCollectorOver]). ONE CALL FOR BOTH CALLERS, [New] and
-// [Engine.startNativeFor], for [Engine.startNativeDuties]'s reason.
+// over every domain a declared table names ([objectEstatesFor]; the declared
+// list, never sources written here), whatever backends the company chose
+// ([native.objectEstates]). A runtime it cannot start over is logged as
+// `object_collector_not_started`. ONE CALL FOR BOTH CALLERS, [New] and
+// [Engine.startNativeFor].
 //
-// # Only where the mode publishes
-//
-// Both callers reach it only past the gate that keeps every publisher off a
-// node in a maintenance mode — [New]'s, and [Engine.startNativeFor]'s beside
-// the duties — rather than through a check of its own, for the reason that
-// gate gives. Every pass PINS the estate first — a linearizable read of the
-// tracker's log, which appends a barrier to it — and a node in a capacity
-// window appends nothing: its reader refuses that read
-// ([statelog.RefuseMaintenance]), because a barrier is a record on a log whose
-// usage the window is measuring. Given a pin that appends nothing instead, a
-// collection would delete against an end nobody established, the one read the
-// barrier exists for. So the collector stands down with the duties, and the
-// window costs it nothing: no write lands a file whose object a collection
-// would free.
-//
-// THE DECLARED LIST, read through each domain's estate — never a source written
-// here — so the tables the collector keeps alive, and the Required ones among
-// them the audit checks and the backup carries, are the ones the schema gate
-// holds.
+// Both reach it only past their publish gate: every pass PINS the estate with
+// a barrier append, which a maintenance mode forbids (package doc,
+// "Maintenance mode"; [statelog.RefuseMaintenance]), and without which it
+// would collect against an end nobody established.
 func (e *Engine) startNativeCollector(ctx context.Context) {
 	if err := e.startCollectorOver(ctx, e.native.Load()); err != nil {
 		log.WarnContext(ctx, "object_collector_not_started", "error", err)
@@ -908,16 +674,11 @@ func (e *Engine) startNativeCollector(ctx context.Context) {
 // artifacts, assistant and executor estates ([objectEstatesFor]), and answers
 // why it did not — which [Engine.startNativeCollector] logs.
 //
-// A RUNTIME THAT OFFERS NO ESTATE IS REFUSED, NEVER SKIPPED. Every runtime
-// [Engine.startNative] publishes offers one per declaring domain
-// ([native.objectEstates]), so one that offers none is a wiring mistake, and
-// [collect.Sources] refuses it by name — the declared table no estate reads —
-// which is the line an operator can find. This step used to return early and
-// silently on an empty list, and that is how every company whose tracker was
-// not Worklet went without a collector with nothing saying so. Only a node
-// with no native half at all starts none without a word — nil, because it has
-// met no company yet, or it holds no estate and asks a data node for every
-// row.
+// A RUNTIME THAT OFFERS NO ESTATE IS REFUSED, NEVER SKIPPED: every published
+// runtime offers one per declaring domain ([native.objectEstates]), so none is
+// a wiring mistake, and [collect.Sources] refuses it by name, a line an
+// operator can find. Only a node with no native half (n nil) starts none
+// without a word.
 func (e *Engine) startCollectorOver(ctx context.Context, n *native) error {
 	if n == nil {
 		return nil
@@ -931,64 +692,44 @@ func (e *Engine) startCollectorOver(ctx context.Context, n *native) error {
 }
 
 // startNativeDuties arms the native half's fleet-singleton duties: the vector
-// domain's one writer, which turns the tracker's and the knowledge base's
-// sources into vector records, the trash reaper, which purges what has been in
-// a trash past its term ([Engine.startTrashReaper]), the chat domain's horizon
-// ([Engine.startChatRetention]), and, where the half hosts code, the purge of
-// deleted repositories ([Engine.startCodeRetention]) — and, where it serves
-// git, this node's own COMPACTOR and its HOME'S CHANGE WORK, which no lease
-// decides: every Gitlet node runs both, the compactor for the repositories it
-// maintains and the change work for those it is home to. ONE CALL FOR BOTH
-// CALLERS, [New] and [Engine.startNativeFor], so halves met at an apply cannot
-// be missing a duty a boot would have armed. The trim, the identity estate's
-// duties and the usage publisher are the core's, armed at boot by
-// [Engine.startCoreDuties].
+// domain's one writer, the trash reaper ([Engine.startTrashReaper]), chat's
+// horizon ([Engine.startChatRetention]) and, where the half hosts code, the
+// purge of deleted repositories ([Engine.startCodeRetention]); and, where it
+// serves git, this node's own COMPACTOR and HOME'S CHANGE WORK, which no lease
+// decides (every Gitlet node runs both). ONE CALL FOR BOTH CALLERS, [New] and
+// [Engine.startNativeFor], so halves met at an apply miss no duty a boot arms.
+// The core's duties are [Engine.startCoreDuties]'.
 func (e *Engine) startNativeDuties(ctx context.Context) {
 	c, n := e.core.Load(), e.native.Load()
 	if n == nil || c == nil {
 		return
 	}
-	// Without it every other half of semantic search is present and
-	// correct over an empty corpus — which reports as a healthy domain
-	// rather than as a missing one.
+	// Without it semantic search runs over an empty corpus, which reports as
+	// a healthy domain rather than a missing one.
 	e.startEmbedding(ctx, c.log)
 	e.startTrashReaper(ctx)
-	// AND THE CHAT DOMAIN'S HORIZON. Chat's retention is the one that
-	// cannot be a sweep: a message is replicated content, so "older than a
-	// year" read off each node's own clock deletes a different set on every
-	// node for ever. Without this duty nothing ever publishes the cutoff,
-	// and a company's rooms grow without bound while
-	// `message_retention_days` says otherwise in its config, its schema and
-	// its dashboard.
+	// THE CHAT DOMAIN'S HORIZON: chat's retention cannot be a per-node sweep
+	// (each clock would delete a different set of replicated messages), and
+	// without it nothing publishes the cutoff `message_retention_days` names.
 	e.startChatRetention(ctx)
-	// AND GITLET'S PURGE, where the half hosts code: without it a
-	// repository removed from code.repos is deleted and never purged, and
-	// its name and its packs are held for ever.
+	// GITLET'S PURGE, where the half hosts code: without it a repository
+	// removed from code.repos keeps its name and packs for ever.
 	e.startCodeRetention(ctx, c.nodeID, n)
-	// AND THE COMPACTOR, where the half serves git ([Engine.buildGitletHost]
-	// built it unstarted): its three loops, the compaction's, the publication's
-	// and the expunge's, started HERE for the two reasons both callers reach
-	// this past: the runtime it reads through is PUBLISHED — each loop's first
-	// pass runs at once this node is listed among the Gitlet nodes, and
-	// this node's own copy answers its due listings from the published
-	// runtime, so a pass started before found its listing unserved — and the
-	// node's mode PUBLISHES: a compaction stores its outputs, and a
-	// publication its layer, in the object store and appends its record, and
-	// a node a capacity window restarted to write nothing must start nothing
-	// that writes on its own. Its stop is Gitlet's
-	// ([native.stopGitletHost]).
+	// THE COMPACTOR, where the half serves git ([Engine.buildGitletHost] built
+	// it unstarted). Its three loops (compaction, publication, expunge) start
+	// HERE because both callers reach this only once the runtime is PUBLISHED
+	// (a pass started earlier found its listing unserved) and the mode
+	// PUBLISHES (each loop writes objects and appends records). Its stop is
+	// [native.stopGitletHost].
 	if n.compactor != nil {
 		n.compactor.Start()
 	}
-	// AND THE HOME'S CHANGE WORK, for the compactor's two reasons: its first
-	// pass asks the published runtime who is home and lists the rows its
-	// copy answers, and every turn asks a repository's writers for records.
+	// THE HOME'S CHANGE WORK, for the compactor's two reasons: its first pass
+	// reads the published runtime, and every turn asks a writer for records.
 	if n.home != nil {
 		n.home.Start()
 	}
-	// AND THE CHECK RUNNER, for the same two reasons: its first walk reads the
-	// queue through the published runtime, and every check it runs asks
-	// records of its repository's checks writer and makes a box.
+	// THE CHECK RUNNER, for the same two reasons.
 	if n.checkRunner != nil {
 		n.checkRunner.Start()
 	}
@@ -1000,51 +741,29 @@ func (e *Engine) stopNative(ctx context.Context) { e.native.Load().shutdown(ctx)
 
 // shutdown ends everything this half started and WAITS for it.
 //
-// ONE IMPLEMENTATION FOR TWO CALLERS — [Engine.stopNative] and the failure path
-// in [Engine.startNative] — because a half-built runtime leaks precisely what a
-// built one does: an answerer registered on the broker is a claim on buckets a
-// peer is counting on whether or not the node that made it went on to serve a
-// seat. A second copy of this order is how one of them stops matching the
-// other.
+// ONE IMPLEMENTATION for [Engine.stopNative] and [Engine.startNative]'s
+// failure path: a half-built runtime leaks what a built one does (a broker
+// answerer is a claim on buckets peers count on). Nil-safe throughout. IT
+// DOES NOT STOP THE LOGS, which are the core's ([Engine.stopCore], after).
 //
-// Nil-safe throughout, because the failure path can reach it with no answerer
-// registered, Gitlet not built and nothing in the wait group.
-//
-// IT DOES NOT STOP THE LOGS, which are the core's: see [Engine.stopCore], which
-// the teardown runs after this.
-//
-// # Why it takes a context it then strips
-//
-// The withdrawal below is a call to the broker, so it needs a context that is
-// not already cancelled — and BOTH of the contexts in reach routinely are. The
-// caller's is a shutdown signal or a failed boot; this runtime's own is
-// cancelled by the [native.stop] two lines further down, which is what makes a
-// second shutdown a no-op rather than a hang. So the caller's travels here for
-// its VALUES — the trace the teardown belongs to — and [context.WithoutCancel]
-// is what makes it usable, which is the rule this tree states once: a cleanup
-// that inherits a dead context does nothing at all.
+// ctx is taken for its VALUES (the teardown's trace) and stripped with
+// [context.WithoutCancel]: the withdrawal calls the broker, and both the
+// caller's context and this runtime's own ([native.stop]) are routinely dead.
 func (n *native) shutdown(ctx context.Context) {
 	if n == nil {
 		return
 	}
 	if n.stopSlices != nil {
-		// FIRST, and before the context that would cancel an answerer
-		// mid-scan: a node that has decided to go away must stop
-		// claiming buckets its peers are counting on before it stops
-		// being able to scan them. Withdrawing costs a coordinator one
-		// missing assignment on its next search, where a registration
-		// that outlived the scan costs it a silent empty slice it
-		// counts as answered.
+		// FIRST, before an answerer can be cancelled mid-scan: withdrawing costs
+		// a coordinator one missing assignment, where a registration outliving
+		// the scan costs it a silent empty slice counted as answered.
 		_ = n.stopSlices(context.WithoutCancel(ctx))
 	}
-	// GITLET'S GIT SURFACE, THEN THE COMMITTER, BEFORE THE LOG THEY PUBLISH ON,
-	// which the core stops after this. The teardown stopped both already,
-	// the host first, ahead of the estate subject ([Engine.stopGitletHost],
-	// [Engine.stopCommitter]); these are the failure path's stops. A second
-	// one of either costs nothing: the host's stop runs once however many
-	// ask for it, so a first stop cut short by its bound is not waited for
-	// again ([native.stopGitletHost]), and the committer's first stop returns
-	// only once its batches have.
+	// GITLET'S GIT SURFACE, THEN THE COMMITTER, BEFORE THE LOG THEY PUBLISH
+	// ON, which the core stops after this. The teardown already stopped both
+	// ([Engine.stopGitletHost], [Engine.stopCommitter]); these are the failure
+	// path's, and a second stop of either costs nothing
+	// ([native.stopGitletHost]).
 	n.stopGitletHost(ctx)
 	n.stopCommitter(ctx)
 	n.stop()
@@ -1056,11 +775,9 @@ func (n *native) shutdown(ctx context.Context) {
 // without `data` the halves it reaches through a data node ([remoteNative]).
 //
 // MONOTONIC: false until the halves are published and never false again, so a
-// caller that reads this FIRST and a half's accessor AFTER cannot be told the
-// half is absent by configuration when it is merely not up yet. The API's live
-// sources are that caller: a half that is not up answers 503, and one this
-// company does not run answers as a route or a question this node does not
-// have.
+// caller reading this FIRST and a half's accessor AFTER cannot mistake "not up
+// yet" for "not configured". The API's live sources rely on that: a half not
+// up answers 503, one the company does not run answers as an absent route.
 func (e *Engine) NativeStarted() bool {
 	return e.native.Load() != nil || e.remote.Load() != nil
 }
@@ -1070,56 +787,37 @@ func (e *Engine) NativeStarted() bool {
 // tools and the operator's surfaces read and write through the router.
 type halves struct {
 	// tracker, wiki and chat say which halves the company runs natively,
-	// however this node reaches them: through its own copy on a data node,
-	// through a data node on a node without `data`. All false on a node
-	// running no native runtime — none built yet, which is a node that
-	// booted with no company and has not applied one — and on one whose
-	// company runs every half on a vendor.
+	// however this node reaches them. All false on a node with no native
+	// runtime yet, and on one whose company runs every half on a vendor.
 	tracker, wiki, chat bool
 	// code says the company hosts its repositories in the engine
-	// (`code.backend: gitlet`) and this node's runtime was built to serve them —
-	// through its own copy and committer on a data node, through a data node
-	// on a node without `data`. Counted by the choice the runtime was built
-	// with rather than by a reader, because the code log's reader exists in
-	// every register whatever the company hosts.
+	// (`code.backend: gitlet`) and this runtime was built to serve them.
+	// Counted by the built choice, not a reader, because the code log's reader
+	// exists in every register whatever the company hosts.
 	code bool
-	// own is this data node's own runtime, for a reader that needs more of
-	// it than which halves it runs (the ranked item search, [OperatorNative];
-	// whether a half is reached through this node's copy or a data node's,
-	// [Engine.skillSource]) — and nil on a node without `data`, which holds
-	// no runtime of its own and reaches every half through a data node, and
-	// on a node running none.
-	// Taken in the same reading as the halves, so the two never describe
-	// different runtimes.
+	// own is this data node's own runtime, for a reader needing more than which
+	// halves run ([OperatorNative], [Engine.skillSource]); nil on a node without
+	// `data` or running none. Taken in the same reading as the halves, so the
+	// two never describe different runtimes.
 	own *native
 }
 
 // any reports a company that runs at least one of Worklet, Doclet and
-// Chatlet natively — a company on Jira, Confluence and a vendor's chat runs
-// none, and routes none of them. Gitlet is not counted: what seat
-// admission and serviceability wait on is the three halves' copies.
+// Chatlet natively. Gitlet is not counted: seat admission and
+// serviceability wait on the three halves' copies.
 func (h halves) any() bool { return h.tracker || h.wiki || h.chat }
 
 // nativeHalves is [halves] for e at this instant: THE ONE DERIVATION of which
-// halves a node runs, read by seat admission ([Engine.StateLogHydrated]), by
-// whether a node may keep its seats ([Engine.serviceable]), by every read seam
-// the operator's surfaces are handed ([OperatorNative], [OperatorChat],
-// [OperatorCode], and through the last the code tools a seat and an operator
-// read with, [CodeToolDeps]), by the seats' own tracker, knowledge-base and
-// chat seams ([Engine.trackerHalves], [Engine.pageHalves],
-// [Engine.chatHalves]), by the inbound parsers ([Engine.nativeParsers]), by the
-// knowledge searcher ([Engine.Knowledge]) and by where the skills are read
-// ([Engine.skillSource]) — so a change to what counts as running a half (a new
-// kind of runtime, a half that needs more than its reader) is made here once
-// and cannot reach one of them and not the others. Each of those used to read
-// the two runtime pointers itself, and the parsers counted a data node's
-// halves by its WRITERS where everything else counted its readers: the same
-// fact today, because one block builds both, and two facts the first time a
-// runtime is built with one and not the other.
+// halves a node runs, read by seat admission ([Engine.StateLogHydrated]),
+// [Engine.serviceable], the operator's read seams ([OperatorNative],
+// [OperatorChat], [OperatorCode], [CodeToolDeps]), the seats' seams
+// ([Engine.trackerHalves], [Engine.pageHalves], [Engine.chatHalves]), the
+// inbound parsers ([Engine.nativeParsers]), [Engine.Knowledge] and
+// [Engine.skillSource]. A change to what counts as running a half is made here
+// once; each counts a data node's halves by its READERS, never its writers.
 //
-// One atomic load on a node without `data` and two on a data node, which holds
-// no remote runtime: the two pointers are never both set, since a node builds
-// one runtime or the other once per process.
+// One or two atomic loads: the two pointers are never both set, since a node
+// builds one runtime or the other once per process.
 func (e *Engine) nativeHalves() halves {
 	if r := e.remote.Load(); r != nil {
 		return halves{tracker: r.tracker, wiki: r.wiki, chat: r.chat, code: r.built.runsCode()}
@@ -1131,10 +829,9 @@ func (e *Engine) nativeHalves() halves {
 	return halves{}
 }
 
-// Tracker is this node's OWN copy's tracker read side, or nil — what this
-// node's router answers from while its copy serves, and what a test
-// reads to see one node's copy. A surface reads through [OperatorWork]
-// instead, which answers from a peer's copy once this one is out of service.
+// Tracker is this node's OWN copy's tracker read side, or nil: what its
+// router answers from while the copy serves, and what a test reads. A
+// surface reads through [OperatorWork], which falls back to a peer's copy.
 func (e *Engine) Tracker() *worklet.Reader {
 	n := e.native.Load()
 	if n == nil {
@@ -1143,8 +840,8 @@ func (e *Engine) Tracker() *worklet.Reader {
 	return n.trackerReader
 }
 
-// TrackerWriter is this node's tracker write side, or nil — nil in a
-// maintenance mode too; see [Engine.writeSide].
+// TrackerWriter is this node's tracker write side, or nil (also in a
+// maintenance mode; see [Engine.writeSide]).
 func (e *Engine) TrackerWriter() *worklet.Writer { return e.writeSide().tracker }
 
 // Pages is this node's OWN copy's knowledge read side, or nil — see
@@ -1157,8 +854,8 @@ func (e *Engine) Pages() *doclet.Reader {
 	return n.pageReader
 }
 
-// PagesStore is this node's knowledge write side, or nil — nil in a
-// maintenance mode too; see [Engine.writeSide].
+// PagesStore is this node's knowledge write side, or nil (also in a
+// maintenance mode; see [Engine.writeSide]).
 func (e *Engine) PagesStore() *doclet.Store { return e.writeSide().pages }
 
 // Chat is this node's OWN copy's chat read side, or nil — see
@@ -1171,8 +868,8 @@ func (e *Engine) Chat() *chatlet.Reader {
 	return n.chatReader
 }
 
-// ChatStore is this node's chat write side, or nil — nil in a maintenance mode
-// too; see [Engine.writeSide]. A surface writes through [OperatorChatWriter].
+// ChatStore is this node's chat write side, or nil (also in a maintenance
+// mode; see [Engine.writeSide]). A surface writes through [OperatorChatWriter].
 func (e *Engine) ChatStore() *chatlet.Store {
 	return e.writeSide().chat
 }
@@ -1200,32 +897,21 @@ func (e *Engine) DocletSearcher() *doclet.Searcher {
 
 // startNativeFeeds starts the change feeds, per node.
 //
-// A FLEET-WIDE GROUP rather than a duty: every data node pulls, so a change is
-// handled by whichever gets there first and a lease flap on one node does not
-// stall the company's notifications. Started here rather than per epoch,
-// because a feed follows a DOMAIN and a domain does not change when a company
-// revision does.
-//
-// WITH THE NATIVE HALF rather than the core, because what a feed does with a
-// record is wake the seat it names — and a node that has met no company has
-// no seats, no inbound edge to publish a wake onto and no parser to route one.
+// A FLEET-WIDE GROUP, not a duty: every data node pulls, so whichever gets a
+// change first handles it and one node's lease flap stalls nothing. Started
+// once, not per epoch, because a feed follows a DOMAIN, which a revision does
+// not change; with the native half, not the core, because a feed wakes seats,
+// which a node that has met no company does not have.
 func (e *Engine) startNativeFeeds(ctx context.Context) {
 	n, c := e.native.Load(), e.core.Load()
 	if n == nil || c == nil || c.log == nil {
 		return
 	}
 
-	// EVERY SOURCE IS A LOG NOW, and the coordination Feeder this function
-	// used to require is gone with the last bucket family. A translator
-	// says what it can read and a feed says how to run a durable consumer
-	// over one domain's own stream; which estate the records are in was
-	// the piece the domains replaced outright.
-	//
 	// IN THE REGISTER'S ORDER and through [Engine.feedFor], which holds each
-	// feed to the group its domain declares — the consumer the trim waits
-	// on. A domain whose feed disagrees with its declaration gets no feed
-	// and an error naming it, rather than a trim that silently waits for
-	// ever or silently waits for nothing.
+	// feed to the group its domain declares (the consumer the trim waits on).
+	// A mismatch gets no feed and an error naming it, rather than a trim that
+	// silently waits for ever or for nothing.
 	var started []*changefeed.Feed
 	for _, domain := range registeredDomains() {
 		running := c.log.Domain(domain.Name())
@@ -1239,20 +925,16 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 			continue
 		}
 		if translator == nil {
-			// THE DOMAIN DECLARES NO WAKE FEED, and its trim term is
-			// absent for the same reason.
+			// THE DOMAIN DECLARES NO WAKE FEED, and no trim term either.
 			continue
 		}
-		// THROUGH THE ONE DOOR every fleet-wide group passes
-		// ([Engine.joins]): a feed reads its domain's log, applied
-		// only where the estate is held.
+		// THROUGH THE ONE DOOR every fleet-wide group passes ([Engine.joins]).
 		if !e.joins(ctx, translator.Source().Group) {
 			continue
 		}
-		// AND THE QUEUE'S DEAD-LETTER STREAM, where the feed keeps a record
-		// it handed back for an hour and its start replays what it kept,
-		// through the ledger that accounts for every entry a replay drops,
-		// so the alarm reading never counts one as a lost wake
+		// THE QUEUE'S DEAD-LETTER STREAM keeps a handed-back record for an hour
+		// and the start replays it, through the ledger that accounts for every
+		// entry a replay drops, so the alarm never counts one as a lost wake
 		// (feeddeadletters.go).
 		feed, err := changefeed.New(changefeed.Options{
 			Opener: opener, Publisher: e.backends.Queue,
@@ -1267,18 +949,16 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 		}
 		started = append(started, feed)
 	}
-	// PUBLISHED BEFORE ANY OF THEM RUNS, so the alarm evaluation reads every
-	// feed this node started from its first beat ([native.feedsReading]),
-	// one whose first open fails included.
+	// PUBLISHED BEFORE ANY RUNS, so the alarm reading sees every feed from
+	// its first beat ([native.feedsReading]), a failing one included.
 	n.feeds.Store(&started)
 	for _, feed := range started {
 		n.done.Add(1)
 		go func() {
 			defer n.done.Done()
-			// THE NATIVE HALF'S OWN CONTEXT, never the caller's: this
-			// goroutine is joined by stopNative, which ends that one. Run
-			// returns only then: a feed whose consumer fails opens it again
-			// on its own, and says so while it is down ([changefeed.Feed.Outage]).
+			// THE NATIVE HALF'S OWN CONTEXT, joined by stopNative. Run returns only
+			// then: a failing consumer reopens on its own and reports its outage
+			// ([changefeed.Feed.Outage]).
 			//nolint:contextcheck // n.run is [context.WithoutCancel] of
 			// the boot context: a feed started under the CALLER's would be one
 			// [native.shutdown] can never end, and its wait would block for ever.
@@ -1296,10 +976,9 @@ func (e *Engine) feedsReading(now time.Time, out *statelog.Reading) {
 // feedsReading fills the change feeds' half of an alarm reading: every feed
 // this node started that is down, how long for and why.
 //
-// THIS NODE'S OWN FEEDS. A feed's group is the fleet's, so a peer whose feed
-// is up still handles the records this node's cannot; the alarm names the
-// node whose consumer is down, and on a single data node that is every wake
-// in the company.
+// THIS NODE'S OWN FEEDS. A feed's group is the fleet's, so a peer's live feed
+// still handles the records; the alarm names the node whose consumer is down,
+// which on a single data node is every wake in the company.
 func (n *native) feedsReading(now time.Time, out *statelog.Reading) {
 	if n == nil {
 		return
@@ -1321,13 +1000,12 @@ func (n *native) feedsReading(now time.Time, out *statelog.Reading) {
 }
 
 // declaredInboundSources is every source this BUILD's own producers write an
-// inbound delivery under, marked first-party (types.RawWebhook.FirstParty):
-// the alarms' wakes, the access reviews, the atlas's drift wakes, and each
-// native half's change feed — whether or not the running company uses it.
-// [Engine.nativeParsers] routes exactly these, each where its half runs, and
-// the notification service passes a first-party delivery from any OTHER source
-// to a peer, as a newer build's (notify.DeferNewerSource), where it
-// acknowledges a declared one this company does not run.
+// inbound delivery under, marked first-party (types.RawWebhook.FirstParty),
+// whether or not the running company uses it. [Engine.nativeParsers] routes
+// exactly these where their half runs; the notification service defers a
+// first-party delivery from any OTHER source to a newer peer
+// (notify.DeferNewerSource) and acknowledges a declared one this company does
+// not run.
 func declaredInboundSources() []string {
 	return []string{alarmwake.Source, accessreview.Source, atlaswake.Source, worklet.Source,
 		doclet.Source, chatlet.Source, gitlet.Source, artifactsdomain.Source}
@@ -1339,84 +1017,60 @@ func declaredInboundSources() []string {
 // (internal/atlaswake).
 //
 // PER EPOCH, unlike everything else in this file: a parser's one
-// company-derived input is the org chart — the native backends' LEAD MAP, the
-// alarms' granted seats — which is exactly what an apply changes. See
+// company-derived input is the org chart, which an apply changes. See
 // [Engine.reconcileNative].
 func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 	if c == nil {
 		return nil, nil
 	}
-	// THE ALARMS' WAKES, on every node whatever halves it runs: a
-	// transition is routed by the chart's health grant alone — to the
-	// seats the health tools admit, by the one rule that admits them
-	// (orgchart.GrantedSeats) — and reads no row, so every node routes one
-	// as a data node does.
+	// THE ALARMS' WAKES, on every node: routed by the chart's health grant
+	// alone (orgchart.GrantedSeats), reading no row.
 	parsers := []notify.Parser{alarmwake.NewParser(alarmwake.ParserOptions{
 		Granted: orgchart.GrantedSeats(c.Org, authz.SeatGrantHealth),
 	})}
 	prompts := []notify.Prompt{alarmwake.Prompt{}}
-	// THE ACCESS REVIEWS, on every node too: a review names its seat, and
-	// the roster the delivery is routed against is all it reads
-	// (internal/accessreview).
+	// THE ACCESS REVIEWS, on every node too: a review names its seat and
+	// reads only the roster (internal/accessreview).
 	parsers = append(parsers, accessreview.Parser{})
 	prompts = append(prompts, accessreview.Prompt{})
-	// AND THE ATLAS'S DRIFT WAKES, on every node for the same reason: a
-	// wake names its seat and reads no row (internal/atlaswake).
+	// THE ATLAS'S DRIFT WAKES, on every node: a wake names its seat and reads
+	// no row (internal/atlaswake).
 	parsers = append(parsers, atlaswake.Parser{})
 	prompts = append(prompts, atlaswake.Prompt{})
-	// AND A COMMENT ON AN ARTIFACT, on every node: the artifacts domain is
-	// no half a company chooses, and a comment record carries the routing
-	// its writer decided, so a node holding no data routes it as one does.
+	// A COMMENT ON AN ARTIFACT, on every node: the artifacts domain is no
+	// half a company chooses, and the record carries its writer's routing.
 	parsers = append(parsers, artifactsdomain.NewParser(artifactsdomain.ParserOptions{}))
 	prompts = append(prompts, artifactsdomain.Prompt{})
-	// THE HALVES THIS COMPANY RUNS NATIVELY, wherever they are held: a
-	// parser reads a record's own routing snapshot and the chart, never a
-	// row, so a node that holds no data routes a native change exactly as
-	// a data node does.
+	// THE HALVES THIS COMPANY RUNS NATIVELY, wherever they are held: a parser
+	// reads a record's routing snapshot and the chart, never a row.
 	run := e.nativeHalves()
 	if run.tracker {
-		// NO LEAD MAP AND NO BASE URL. The tracker's own parser reads a
-		// record's routing snapshot, which the WRITER resolved at commit
-		// — a mention resolved at read time names whoever holds the role
-		// later, which is a different person.
+		// NO LEAD MAP AND NO BASE URL: the WRITER resolved the routing at
+		// commit; resolving at read time would name whoever holds the role later.
 		parsers = append(parsers, worklet.NewParser(worklet.ParserOptions{}))
 		prompts = append(prompts, worklet.Prompt{})
 	}
 	if run.wiki {
-		// THE LEAD MAP, and the base its notifications link a person to —
-		// `api.external_url`, the address people reach this deployment at,
-		// since the link is opened by whoever the change woke and never by a
-		// vendor ([Engine.publicBase]).
+		// THE LEAD MAP, and the base its links use: `api.external_url`, since the
+		// link is opened by whoever the change woke ([Engine.publicBase]).
 		parsers = append(parsers, doclet.NewParser(doclet.ParserOptions{
 			Leads: containerLeads(c.Org), BaseURL: e.publicBase(c),
 		}))
 		prompts = append(prompts, doclet.Prompt{})
 	}
 	if run.chat {
-		// NOTHING TO CONFIGURE, and that is the record rather than a
-		// shortcut. The seat an `answerer` wake names is resolved at
-		// WRITE time, inside the decide, and rides the record, so a
-		// parser handed a lead map here would answer with whoever holds
-		// the role now, which for a message somebody sent last week is a
-		// different person. It is the tracker's arm's reasoning rather
-		// than the wiki's, and it is why this arm takes nothing of the
-		// company at all.
+		// NOTHING TO CONFIGURE, for the tracker arm's reason: the `answerer` seat
+		// is resolved at WRITE time inside the decide and rides the record.
 		parsers = append(parsers, chatlet.NewParser())
-		// A CONSTRUCTOR RATHER THAN `chatlet.Prompt{}`, unlike the two arms
-		// above it, and the difference is the EMBEDDED value: this prompt
-		// is a [notify.ChatPrompt] with fields, so a zero literal carries
-		// a zero addressing rule — which reads a direct conversation as
-		// an ordinary room, and lands a person's consecutive messages in
-		// a DM in as many turns as they typed. Nothing reports that; the
-		// wakes keep arriving.
+		// A CONSTRUCTOR, not `chatlet.Prompt{}`: this [notify.ChatPrompt] has
+		// fields, and a zero value reads a DM as an ordinary room, landing a
+		// person's consecutive messages in as many turns, silently.
 		prompts = append(prompts, chatlet.NewPrompt())
 	}
 	if run.code {
-		// NO LEAD MAP AND NO BASE URL, as the tracker's: a code record
-		// carries the routing its writer decided from its own snapshot and
-		// chart — the repository owner's lead for a change nobody may
-		// review among them — and the woken seat reads the change with its
-		// code tools rather than a link.
+		// NO LEAD MAP AND NO BASE URL, as the tracker's: the record carries its
+		// writer's routing, and the woken seat reads the change with its code
+		// tools rather than a link.
 		parsers = append(parsers, gitlet.NewParser(gitlet.ParserOptions{}))
 		prompts = append(prompts, gitlet.Prompt{})
 	}
@@ -1425,41 +1079,23 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 
 // reconcileNative brings the native runtime to a newly applied epoch: it says
 // which of the epoch's choices wait for a restart, and swaps the native
-// parsers.
+// parsers. NOT the appliers, index, stores or feeds: they follow a LOG.
 //
-// NOT the appliers, the index, the stores or the feeds. Those follow a LOG,
-// which no company revision changes; rebuilding them here would restart this
-// node's apply loops and re-run a boot reconcile on every configuration edit.
+// No retirement branch: the runtime is built once per process, so switching
+// `tracker.backend` away from native takes effect on restart, and the parser
+// staying registered until then is honest ([Engine.sayBackendSwitches]).
 //
-// There is no retirement branch. Switching `tracker.backend` away from
-// native is not a live gesture — the runtime, its halves and its feeds are
-// built once per process, with the first company that runs one — so a
-// revision that changes it takes effect on restart, and the parser staying
-// registered until then is the honest state: the records are still there
-// and still reachable. What this does instead is SAY so, first: see
-// [Engine.sayBackendSwitches].
-//
-// # The applies are the published company's, not the inbound edge's
-//
-// The parsers ride the inbound edge ([Engine.swapNativeParsers]), and a node
-// with none has nothing to swap. The chart's projects, the knowledge
-// containers and the repositories code.repos declares do not: they are
-// derived from the org chart and the company document rather than from the
-// parsers, and are written through the runtime's own writers, so they follow
-// the PUBLISHED company — [Engine.followCompany] is where they run, after the
-// publish, whatever the edge is doing. Running them here as well would write
-// them twice per apply and once against a company that is not current yet.
+// The chart's projects, knowledge containers and code.repos run in
+// [Engine.followCompany] after the publish; running them here too would
+// write them twice, once against a company not yet current.
 func (e *Engine) reconcileNative(ctx context.Context, c *Company) {
 	built, runs := e.runtimeBuilt()
 	if !runs {
 		return
 	}
 	// THE CHOICES THIS RUNTIME WAS NOT BUILT WITH, said once per activation:
-	// the runtime is built once per process, so a revision that moves a
-	// native backend activates cleanly here and changes nothing until a
-	// restart — and before this line nothing said so. FIRST: the line is
-	// about the runtime, and a node with no edge (one in a maintenance mode)
-	// runs one all the same.
+	// they change nothing until a restart. FIRST, because a node with no edge
+	// (maintenance mode) still runs a runtime.
 	e.sayBackendSwitches(ctx, built, c)
 	e.swapNativeParsers(ctx, c)
 }
@@ -1467,10 +1103,8 @@ func (e *Engine) reconcileNative(ctx context.Context, c *Company) {
 // swapNativeParsers swaps the native parsers on this node's inbound edge for
 // the epoch c's, and does nothing on a node whose edge is not running.
 //
-// The same edge every vendor reconciler sits on, and for the same reason: a
-// node that kept its boot-time parser would route the new revision's work by
-// the old company's org chart — an item filed into a project whose lead moved
-// would keep waking the seat that used to own it.
+// As every vendor reconciler: a boot-time parser would route the new
+// revision's work by the old org chart, waking a project's former lead.
 func (e *Engine) swapNativeParsers(ctx context.Context, c *Company) {
 	e.notify.mu.Lock()
 	svc := e.notify.service
@@ -1481,9 +1115,8 @@ func (e *Engine) swapNativeParsers(ctx context.Context, c *Company) {
 	parsers, prompts := e.nativeParsers(c)
 	for i, parser := range parsers {
 		if err := svc.Replace(parser, prompts[i]); err != nil {
-			// THE PREVIOUS PARSER KEEPS RUNNING, the same posture every
-			// vendor takes: routing by a stale org chart is worse than
-			// the new one and much better than not routing at all.
+			// THE PREVIOUS PARSER KEEPS RUNNING, as every vendor's: a stale chart
+			// routes better than no routing at all.
 			log.ErrorContext(ctx, "native_reconcile_failed",
 				"source", parser.Source(), "error", err.Error(),
 				"detail", "the previous routing is still current")
@@ -1491,54 +1124,17 @@ func (e *Engine) swapNativeParsers(ctx context.Context, c *Company) {
 	}
 }
 
-// applyContainers makes the knowledge containers this company names exist.
+// applyContainers makes the knowledge containers this company names exist:
+// a page only NAMES its container, so without this every read that
+// ENUMERATES them (`GET /containers`, the Knowledge rail) finds none.
 //
-// # The bug this fixes
+// The keys are the chart's spaces (a unit's and a seat's own `space:`, the
+// pair [chartProjects] reads) plus the two RESERVED containers, tool skills
+// and the org root, which the engine writes into and so must list.
 //
-// [doclet.Store.EnsureContainer] HAD NO CALLER. Its own doc says it "runs on
-// every boot for every unit's space" and nothing ever ran it, so
-// `pages_containers` was empty in every deployment that ever existed: the
-// Knowledge rail said "this node knows about no containers yet" beside a
-// company whose agents had written pages, `GET /containers` answered `[]`
-// for ever, and the one piece of the knowledge base an operator navigates by
-// was unreachable from a running engine.
-//
-// A page merely NAMES its container — the string is on the page's own row —
-// so the pages themselves were fine and only the thing that lists them was
-// missing. Which is precisely why nothing caught it: every read that takes a
-// container as a parameter worked, and only the read that ENUMERATES them was
-// empty, which is indistinguishable from a company that has none.
-//
-// # Where the keys come from
-//
-// The org chart's spaces, plus the two RESERVED containers. A unit's `space:`
-// is its knowledge identity and a seat's own `space:` is the same thing one
-// level down — the same pair [chartProjects] reads for the tracker. The
-// reserved two are the engine's own: tool skills, and the org root every
-// seat's onboarding chain starts at. Both are materialised because the engine
-// writes into them itself, and a container the engine writes into and cannot
-// list is the same defect one layer in.
-//
-// # Stamped with the ACTIVATION, on the chart's terms
-//
-// c.ActivatedAt is the instant the revision this company was applied from was
-// activated, and every container is stamped with it exactly as
-// [Engine.applyChart] stamps a project — for the same two reasons: a node
-// applying an older revision late must not rewrite the containers' names and
-// purposes back to its own older view, and a reapply of one activation must
-// write nothing. A company no activation has named yet has nothing to stamp,
-// and the store refuses a zero ([doclet.ErrNoActivation]); so it is not applied
-// here, and the reconciler's first apply (which carries the pointer's instant)
-// is. See [doclet.Store.EnsureContainer].
-//
-// # Best effort, and idempotent
-//
-// A failure is LOGGED rather than raised, exactly as [Engine.applyChart]
-// explains: this is one clause of a convergence and the rest of it stands
-// without it. Running on every published company is free after the first,
-// because EnsureContainer decides nothing when the row it finds already says
-// what the company says at this activation — which is the guard its own doc
-// was written around.
+// Stamped with the ACTIVATION and best effort, as [Engine.applyChart]; the
+// store refuses a zero ([doclet.ErrNoActivation]) and writes nothing when the
+// row already matches ([doclet.Store.EnsureContainer]).
 func (e *Engine) applyContainers(ctx context.Context, c *Company) {
 	store := e.PagesStore()
 	if store == nil || c == nil || c.ActivatedAt.IsZero() {
@@ -1549,9 +1145,8 @@ func (e *Engine) applyContainers(ctx context.Context, c *Company) {
 		_, changed, err := store.EnsureContainer(ctx, c.ActivatedAt,
 			want.Key, want.Name, want.Purpose)
 		if err != nil {
-			// EVERY CONTAINER IS ATTEMPTED. One key's refusal must not
-			// leave the rest of a company's knowledge base unlistable,
-			// and the caller is a reconcile that runs again.
+			// EVERY CONTAINER IS ATTEMPTED: one key's refusal must not leave the rest
+			// unlistable, and the caller runs again.
 			log.ErrorContext(ctx, "knowledge_container_not_applied",
 				"container", want.Key, "error", err.Error(),
 				"detail", "pages in it are readable by address and the "+
@@ -1559,10 +1154,8 @@ func (e *Engine) applyContainers(ctx context.Context, c *Company) {
 					"apply or restart retries it")
 			continue
 		}
-		// ONLY WHAT WAS WRITTEN. This runs on every boot and every apply,
-		// so the ordinary outcome is that every row already says what the
-		// chart says — and a line naming all of them on every restart is
-		// a log that reports a company nobody edited as one that changed.
+		// ONLY WHAT WAS WRITTEN: this runs on every boot and apply, and naming
+		// every unchanged row would report an unedited company as changed.
 		if changed {
 			wrote = append(wrote, want.Key)
 		}
@@ -1581,15 +1174,9 @@ type chartContainer struct {
 
 // chartContainers is every knowledge container this company names.
 //
-// DE-DUPLICATED ON THE KEY and FIRST DECLARATION WINS, for the reason
-// [chartProjects] gives for the same shape: two units legitimately share a
-// space, and one container written twice in one pass would contend with
-// itself at the broker and log a failure for a configuration that is fine.
-//
-// The reserved two come LAST, so a company that has somehow named one of them
-// as a unit's space keeps the unit's own name on it rather than having the
-// engine's generic label overwrite what a founder wrote. The config loader
-// refuses that arrangement, so this is the belt to its braces.
+// DE-DUPLICATED ON THE KEY, FIRST DECLARATION WINS, for [chartProjects]'
+// reason. The reserved two come LAST, so a unit's own name on one of them
+// (which the config loader refuses anyway) is not overwritten.
 func chartContainers(c *Company) []chartContainer {
 	if c == nil || c.Config == nil {
 		return nil
@@ -1597,11 +1184,8 @@ func chartContainers(c *Company) []chartContainer {
 	var out []chartContainer
 	seen := map[string]bool{}
 	add := func(key, name, purpose string) {
-		// THE ONE CANONICAL FORM ([doclet.ContainerKey]), which is what a
-		// container key is everywhere else: a page carries `ENG` and a
-		// chart that wrote `eng` — or ` ENG` — would create a second
-		// container no page is in. A copy of the rule here is how the
-		// forms drifted before there was one.
+		// THE ONE CANONICAL FORM ([doclet.ContainerKey]): a chart writing `eng`
+		// or ` ENG` must not create a second container no page is in.
 		key = doclet.ContainerKey(key)
 		if key == "" || seen[key] {
 			return
@@ -1614,16 +1198,13 @@ func chartContainers(c *Company) []chartContainer {
 			add(unit.Space, unit.Name, unit.Purpose)
 		}
 		for role := range c.Org.AllRoles() {
-			// A SEAT'S OWN SPACE takes the SEAT's name, which is what a
-			// founder naming one on a seat meant — a container for that
-			// seat's own writing rather than for its unit's.
+			// A SEAT'S OWN SPACE takes the SEAT's name: a container for that seat's
+			// own writing rather than its unit's.
 			add(role.Space, role.Name, "")
 		}
 	}
 	// TRUE OF AN EMPTY SPACE TOO: the purpose heads the space beside its page
-	// count, and "starting with the Onboarding page every seat reads first"
-	// promised a page beside "0 pages" on every new company. The Onboarding
-	// page is a convention of its title, so the purpose states it as one.
+	// count, so it names the Onboarding page as a convention, not a promise.
 	add(c.Config.RootSpaceKey(), "Company",
 		"What is true of the whole company. A page here titled Onboarding is the first every seat reads.")
 	add(c.Config.SkillsContainerKey(), "Tool skills",
@@ -1633,54 +1214,23 @@ func chartContainers(c *Company) []chartContainer {
 
 // applyChart makes the projects this company's chart names exist.
 //
-// # Why it runs here and not at the first write
+// From the chart, not at the first write: a create takes the next number from
+// its project's counter, so a project created inside it gives two nodes filing
+// at once two projects and two ENG-1s. On every publish
+// ([Engine.followCompany]), so a new `project:` key needs no restart; the
+// decide writes nothing when the chart-owned fields match.
 //
-// A create is a SEQUENCE — it takes the next number from its project's own
-// counter and then writes the task — so the project has to be an object before
-// anything can be filed in it. Creating it inside the create instead is the
-// shape that gives two nodes two projects, two counters and two ENG-1s when
-// they file at once. Deriving it from the chart makes it one arbitrated write
-// per project, on that project's own subject.
-//
-// # And on every company publish rather than only at boot
-//
-// A founder opens a unit with a new `project:` key and the seats in it start
-// filing immediately. A reconcile that only ran at boot would leave every one
-// of those refused with "project X is not on this node" until somebody
-// restarted the fleet — a failure whose remedy is invisible from the message.
-// This runs from the steps every published company goes through
-// ([Engine.followCompany]), at boot and on every apply.
-//
-// After the first node has done it every later pass is one local read per
-// project: the decide compares the three chart-owned fields against the row
-// and says nothing when they match, so the losers of the broker's arbitration
-// and every later publish of the same company write nothing.
-//
-// # Stamped with the ACTIVATION
-//
-// c.ActivatedAt is the instant the revision this company was applied from was
-// activated, and it is what every project is stamped with
-// ([worklet.Project.ChartEpoch]): a node applying an older revision late must
-// not walk the fleet's newer project names back to its own. The activation's
-// instant and never this node's clock, because every node applies one
-// activation separately and only the instant on the pointer is the same on all
-// of them. A company no activation has named — one handed to [New] in code —
-// applies nothing here; the reconciler's first apply carries the pointer's
-// instant and applies it then.
-//
-// # Best effort, and what that costs
-//
-// A failure is LOGGED rather than raised, because this is one clause of an
-// epoch apply and the rest of it — the routing, the models, the tools — is
-// still correct without it. What a failure costs is exactly the projects that
-// did not land, and the next apply or the next boot retries them.
+// Stamped with the ACTIVATION's instant ([worklet.Project.ChartEpoch]), never
+// this node's clock, so a node applying an older revision late cannot walk
+// newer names back. A failure is LOGGED, not raised: the rest of the apply
+// stands, and the next apply or boot retries.
 func (e *Engine) applyChart(ctx context.Context, c *Company) {
 	writer := e.TrackerWriter()
 	if writer == nil || c == nil || c.Org == nil || c.ActivatedAt.IsZero() {
 		return
 	}
-	// THE SEATS' ORDER FIRST AND WHATEVER THE PROJECTS DO: `sort=assignee`
-	// reads it from the tracker's own rows ([worklet.Writer.ApplyRoster]).
+	// THE SEATS' ORDER FIRST, whatever the projects do: `sort=assignee` reads
+	// it from the tracker's own rows ([worklet.Writer.ApplyRoster]).
 	ordered, err := writer.ApplyRoster(ctx, c.ActivatedAt, seatNames(c.Org))
 	switch {
 	case err != nil:
@@ -1721,19 +1271,17 @@ func seatNames(o *org.Organization) map[string]string {
 // chartProjects is every project the org chart names, with the three fields
 // the chart owns.
 //
-// DE-DUPLICATED ON THE KEY, because two units legitimately share a project —
-// that is what [projectLeads] reports on — and one project written twice in
-// one pass would contend with itself at the broker and log a failure for a
-// configuration that is fine. The FIRST declaration wins, which matches how
-// the lead is chosen for the same key.
+// DE-DUPLICATED ON THE KEY: two units legitimately share a project, and one
+// project written twice in one pass would contend with itself at the broker
+// and log a failure for a fine config. The FIRST declaration wins, as the
+// lead does for the same key ([projectLeads]).
 func chartProjects(o *org.Organization) []worklet.ChartProject {
 	var out []worklet.ChartProject
 	seen := map[string]bool{}
 	add := func(key, name, purpose, unit string) {
-		// NORMALIZED THE WAY EVERY OTHER SCOPE IS, through the org's own
-		// helper: a project key is compared upper everywhere — a task's
-		// key is `ENG-42` and the column is an exact match — and a chart
-		// that wrote `eng` would create a project no board could find.
+		// NORMALIZED as every scope is ([org.NormalizeScope]): a project key is
+		// compared upper everywhere, so `eng` must not create a project no board
+		// can find.
 		key = org.NormalizeScope(key)
 		if key == "" || seen[key] {
 			return
@@ -1743,32 +1291,23 @@ func chartProjects(o *org.Organization) []worklet.ChartProject {
 			Key: key, Name: name, Purpose: purpose, Unit: unit,
 		})
 	}
-	// THE UNIT COLUMN IS THE UNIT'S KEY, never its name. The project's
-	// unit is what a task filed into it is filed under, and a task's filed
-	// unit is never rewritten — so writing the NAME here filed every item
-	// in the company under a spelling that moves the day somebody corrects
-	// the team's name, which is exactly what `id:` exists to prevent. The name is
-	// the project's own display name beside it, and a reader resolves the
-	// key back to the team's current name through the chart.
+	// THE UNIT COLUMN IS THE UNIT'S KEY, never its name: a task's filed unit is
+	// never rewritten, so a name would strand every item the day the team is
+	// renamed, which is what `id:` exists to prevent. Readers resolve the key
+	// back to the team's current name through the chart.
 	for unit := range o.AllUnits() {
 		add(unit.Project, unit.Name, unit.Purpose, unit.Key())
 	}
-	// A SEAT'S HOME UNIT THROUGH ONE INDEX of the chart ([org.Index.UnitFor]),
-	// built at the first seat that names a project of its own — most name
-	// none, and their home is never asked — because the chart's own
-	// [org.Organization.UnitFor] walks every unit's seats until one holds
-	// the seat, which asked of every seat on every apply cost seats².
+	// A SEAT'S HOME UNIT THROUGH ONE INDEX ([org.Index.UnitFor]), built lazily
+	// at the first seat naming its own project: [org.Organization.UnitFor] per
+	// seat on every apply would cost seats².
 	var homes *org.Index
 	for role := range o.AllRoles() {
-		// EVERY seat, not just the root-level ones: `Organization.Roles`
-		// holds only the seats declared outside a unit, and a seat
-		// nested in one that names its own project would otherwise get
-		// no project at all — and file nothing, for ever.
+		// EVERY seat: `Organization.Roles` holds only seats declared outside a
+		// unit, and a nested seat naming its own project would otherwise get none.
 		//
-		// A ROLE'S OWN PROJECT takes the ROLE's name, because that is
-		// what a founder naming one on a seat meant — a project for that
-		// seat's work rather than for its unit's — and its home unit,
-		// so the project still says where in the company it sits.
+		// A ROLE'S OWN PROJECT takes the ROLE's name (that seat's work rather than
+		// its unit's) and its home unit, so it still says where it sits.
 		if org.NormalizeScope(role.Project) == "" {
 			continue
 		}
@@ -1786,10 +1325,9 @@ func chartProjects(o *org.Organization) []worklet.ChartProject {
 
 // projectLeads maps a tracker project to the handle that owns it.
 //
-// THROUGH [org.Organization.LeadsBy], which is where "who owns this scope"
-// lives: the tracker's only contribution is naming the field. The ambiguity
-// report is logged rather than refused, because two units sharing a project
-// is an ordinary arrangement and only a DISAGREEMENT about the lead matters.
+// THROUGH [org.Organization.LeadsBy], where "who owns this scope" lives. An
+// ambiguity is logged, not refused: units sharing a project is ordinary, and
+// only a DISAGREEMENT about the lead matters.
 func projectLeads(o *org.Organization) map[string]string {
 	if o == nil {
 		return nil
@@ -1799,9 +1337,8 @@ func projectLeads(o *org.Organization) map[string]string {
 		OfRole: func(r *org.Role) string { return r.Project },
 	})
 	for _, unled := range report.Unled {
-		// LOUD, because the consequence is invisible: every item in that
-		// project naming nobody routes to nobody, which looks exactly like
-		// an item nobody filed.
+		// LOUD, because an item naming nobody in that project routes to nobody,
+		// which looks exactly like an item nobody filed.
 		log.Warn("work_project_has_no_lead", "unit", unled.Unit, "project", unled.Scope)
 	}
 	for _, conflict := range report.Ambiguous {
@@ -1834,11 +1371,9 @@ func containerLeads(o *org.Organization) doclet.Leads {
 
 // ProjectOfSeat is one seat's home project, from a chart.
 //
-// EXPORTED because two surfaces need the same answer and a second walk is how
-// one stops matching the other: the seat tools resolve it to default a create's
-// container, and the API resolves it to scope `preset=my_queue`'s second arm —
-// and a queue scoped to a different project from the one a create files into
-// is the shape a person cannot diagnose from either screen.
+// EXPORTED so the seat tools (a create's default) and the API
+// (`preset=my_queue`'s second arm) share one walk: a queue scoped to a
+// different project than creates file into is undiagnosable from either screen.
 func ProjectOfSeat(o *org.Organization, handle string) string {
 	return scopeOfSeat(o, handle,
 		func(u *org.Unit) string { return u.Project },
@@ -1858,10 +1393,9 @@ func SpaceOfSeat(o *org.Organization, handle string) string {
 // scopeOfSeat is the project or container a seat files into: its own, else
 // its unit's, else its nearest ancestor's.
 //
-// THE WALK IS UPWARD, so a seat in a team with no space of its own writes in
-// its department's rather than being told to name one. A seat with none
-// anywhere returns empty, and the tool refuses rather than guessing — which
-// is right: a page filed into a container nobody chose is one nobody finds.
+// THE WALK IS UPWARD, so a seat in a team with no space writes in its
+// department's. A seat with none anywhere returns empty and the tool refuses:
+// a page filed where nobody chose is one nobody finds.
 func scopeOfSeat(o *org.Organization, handle string, of func(*org.Unit) string,
 	own func(*org.Role) string) string {
 	if o == nil || handle == "" {
@@ -1918,22 +1452,18 @@ type skillDetector struct{}
 
 // IsSkill reports a body that parses as a tool skill.
 //
-// THROUGH THE SKILLS PACKAGE'S OWN ADMISSION TEST, so the derived flag
-// means exactly what the registry means by it: a page the sync would admit.
-// A second heuristic here would let one page be a skill to the applier and
-// prose to the loader — and the disagreement is silent, because each
-// half is self-consistent.
+// THROUGH THE SKILLS PACKAGE'S OWN ADMISSION TEST, so the flag means exactly
+// what the registry means: a second heuristic would let a page be a skill to
+// the applier and prose to the loader, silently.
 func (skillDetector) IsSkill(body string) bool { return skills.IsSkill(body) }
 
 // ---- what a seat's tools are given ------------------------------------- //
 
 // workDeps is the tracker half of a seat's builtin surface, per epoch.
 //
-// The READER AND WRITER are this node's, and do not change with a revision;
-// the DEFAULT PROJECT is the org chart's, and does. Both halves nil omits
-// every tracker tool, which is what a company on Jira has — and omitting them is
-// the point: a seat offered a tool against a tracker its company does not
-// run would reach for it and fail at the call.
+// Both halves nil omits every tracker tool, as on a company on Jira: a seat
+// offered a tool against a tracker its company does not run would fail at
+// the call.
 func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 	halves, ok := e.trackerHalves()
 	if !ok {
@@ -1941,92 +1471,62 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 	}
 	return builtin.WorkDeps{
 		Reader: halves.reader,
-		// ONE WRITER PER ACTOR, derived from the turn's own seat: the
-		// tracker's rule is that a writer acts as exactly one party, and
-		// the party here is the immutable seat the tool surface bound
-		// rather than anything a model can name. Its provenance carries
-		// the turn's write log, so every task it commits to is one the
-		// turn can be charged by (see [builtin.Actor.Provenance]).
+		// ONE WRITER PER ACTOR: the party is the immutable seat the tool surface
+		// bound, never anything a model can name. Its provenance carries the
+		// turn's write log ([builtin.Actor.Provenance]).
 		Writer: func(actor builtin.Actor) builtin.WorkWriter {
 			return halves.as(actor)
 		},
-		// AND THE PROJECT SETTINGS, which every surface has rather than
-		// the operator's alone: declaring a tag is open to every seat by
-		// design, and a create refuses a label the project has not
-		// declared — so a seat without this writer could never use the
-		// `labels` argument on the tools it already holds. The authority
-		// for every other facet is resolved per call.
+		// THE PROJECT SETTINGS for every seat: declaring a tag is open to all, and
+		// a create refuses an undeclared label, so without this writer the
+		// `labels` argument would be unusable. Other facets are authorized per call.
 		ProjectWriter: func(actor builtin.Actor) builtin.ProjectWriter {
 			return halves.as(actor)
 		},
-		// AND THE DEPENDENCY SEQUENCE, which is the same writer in its
-		// third shape: a dependency is two commits on two subjects, so
-		// it needs the replicated estate to check its counterparties
-		// before the first of them — and this writer has one.
+		// THE DEPENDENCY SEQUENCE: two commits on two subjects, so it needs the
+		// replicated estate to check its counterparties first, which this writer has.
 		Dependencies: func(actor builtin.Actor) builtin.WorkDepender {
 			return halves.as(actor)
 		},
 		Merges: func(actor builtin.Actor) builtin.WorkMerger {
 			return halves.as(actor)
 		},
-		// AND THE CROSS-PROJECT MOVE, the same writer in the shape that
-		// re-keys an item and its subtree into another project.
+		// THE CROSS-PROJECT MOVE re-keys an item and its subtree.
 		Moves: func(actor builtin.Actor) builtin.WorkMover {
 			return halves.as(actor)
 		},
-		// AND THE PROJECT'S FILES: the rows through the same halves, the
-		// bytes through this node's own object client — which on a node
-		// holding no data still writes to and reads from the data nodes
-		// directly, never through the estate service.
+		// THE PROJECT'S FILES: rows through the same halves, bytes through this
+		// node's own object client, which reaches the data nodes directly even on
+		// a node holding no data, never through the estate service.
 		Files: halves.files,
 		FileWriter: func(actor builtin.Actor) builtin.FileWriter {
 			return halves.as(actor)
 		},
 		Objects: e.ObjectStore(),
-		// THE RANKED SEARCH, which reads and therefore takes no actor:
-		// the corpus is the same for everybody and there is nothing to
-		// attribute. Nil where this node has no index, and the tool is
-		// then not advertised at all.
+		// THE RANKED SEARCH reads, so it takes no actor. Nil where this node has
+		// no index, and the tool is then not advertised.
 		Search:   WorkSearcher(e),
 		Mentions: seatMentions{org: c.Org},
-		// THE ROSTER, read PER CALL for the reason the default project
-		// and the unit seam are: a seat's tools are cloned into its
-		// lease, an apply does not rebuild the clone, and a captured
-		// chart would refuse a colleague who joined this morning and
-		// admit one who left.
+		// THE ROSTER and the chart seams below are read PER CALL against the epoch
+		// current when the tool runs: a seat's tools are cloned into its lease and
+		// an apply does not rebuild the clone, so a captured chart would refuse a
+		// colleague who joined and admit one who left.
 		FleetSeat: e.FleetSeat,
 		Grants:    e.GrantDesk(),
 		ChangeRef: e.ChangeRef,
 		Seats:     e.seatCorpus,
-		// AND THE UNIT SEAM, read per call for the reason the default
-		// project is: a seat's tools are cloned into its lease, an apply
-		// does not rebuild the clone, and a captured chart would render
-		// a project's unit against an org that has since moved.
-		Units: liveUnits{engine: e},
-		// PER CALL against the epoch current when the tool runs, not
-		// against the one that equipped it: a seat's tools are cloned
-		// into its lease and an apply does not rebuild the clone, so a
-		// captured project would outlive the org chart that named it.
+		Units:     liveUnits{engine: e},
 		DefaultProject: func(handle string) string {
 			return ProjectOfSeat(e.Company().Org, handle)
 		},
-		// THE LEAD MAP IS READ PER CALL against the epoch current when the
-		// tool runs, for the reason the default project is: a seat's
-		// tools are cloned into its lease, an apply does not rebuild the
-		// clone, and a captured map would route a change by the org chart
-		// that has since moved.
 		Leads: liveLeads{engine: e},
-		// AND WHERE AN ASKER MAY PROMISE TO REPORT A DECISION, read per
-		// call for the chart seams' reason: a captured chart would admit
-		// a channel a unit stopped declaring and a surface the company
-		// turned off.
+		// Where an asker may promise to report a decision: a captured chart
+		// would admit a channel or surface the company has since dropped.
 		Channels: liveChannels{engine: e},
 		Now:      func() time.Time { return time.Now().UTC() },
-		// THE COMPANY'S CLOCK AS THIS EPOCH SETS IT (ADR-0018), and
-		// deliberately not read per call like the chart seams above: a
-		// turn pins its epoch, and a turn that resolved "due friday" on
-		// one clock and cut its overdue marks on the next would be
-		// running a company that never existed.
+		// THE COMPANY'S CLOCK AS THIS EPOCH SETS IT (ADR-0018), deliberately not
+		// per call: a turn pins its epoch, and resolving "due friday" on one
+		// clock and overdue marks on the next mixes two companies.
 		Zone:  c.Config.Location,
 		Await: halves.await,
 	}
@@ -2044,8 +1544,7 @@ type trackerWriter interface {
 	builtin.FileWriter
 
 	// RecordTurn is the one write the ENGINE makes as a seat rather than a
-	// tool: a turn's spend onto the task it was spent on. On both halves
-	// for the reason every tool's write is — see [Engine.recordTurnSpend].
+	// tool: a turn's spend onto its task. See [Engine.recordTurnSpend].
 	RecordTurn(ctx context.Context, opID string, turn worklet.TurnRecord) (worklet.WriteResult, error)
 }
 
@@ -2061,18 +1560,13 @@ type trackerSeams struct {
 // trackerHalves is this node's tracker seams, or false where it runs no
 // Worklet.
 //
-// THE ROUTER'S, ON EVERY NODE, so every tool is handed the same kind of half:
-// a data node's router answers from its own copy and a stateless node's asks a
-// data node, and a read after a write waits for the write whichever answers it
-// — the node's floors ([estate.Session]), which the write raises and every
-// holder, this node included, waits for before it reads. A tool whose reader
-// was local and whose writer was remote would read its own write back from a
-// copy that had not seen it; one whose every call goes through the router
-// cannot.
+// THE ROUTER'S, ON EVERY NODE, so a tool's reader and writer are the same kind
+// of half: a read after a write waits on the node's floors ([estate.Session])
+// whichever holder answers. A local reader beside a remote writer would read
+// its own write back from a copy that had not seen it.
 //
-// A node that hands out no tracker writer ([Engine.writers]) — any node in a
-// maintenance mode, which may publish nothing — hands out no tracker tools
-// either, rather than tools whose every write is refused.
+// A node that hands out no tracker writer ([Engine.writers]) hands out no
+// tracker tools either, rather than tools whose every write is refused.
 func (e *Engine) trackerHalves() (trackerSeams, bool) {
 	if writes, _, _ := e.writers(e.nativeHalves()); !writes {
 		return trackerSeams{}, false
@@ -2084,26 +1578,21 @@ func (e *Engine) trackerHalves() (trackerSeams, bool) {
 		as: func(actor builtin.Actor) trackerWriter {
 			return r.WriterAs(remoteActor(actor))
 		},
-		// THE SESSION FLOOR IS THE WAIT: what the next read needs is that
-		// whichever holder answers it has applied this far.
+		// THE SESSION FLOOR IS THE WAIT: whichever holder answers the next read
+		// has applied this far.
 		await: r.Await,
 	}, true
 }
 
 // ChartUnits is an org chart as the tracker's unit seam.
 //
-// THE ONE IMPLEMENTATION, here because this package is where a concrete thing
-// is matched to a seam: the tracker holds no org — the applier may not read
-// one, since two nodes briefly on different epochs would write different rows
-// — so a stored unit is resolved at READ time, and every surface that renders,
-// filters or writes one has to reach the same answer.
+// THE ONE IMPLEMENTATION: the tracker holds no org (two nodes briefly on
+// different epochs would write different rows), so a stored unit is resolved
+// at READ time, and every surface rendering, filtering or writing one must
+// reach the same answer.
 //
-// THROUGH [org.Organization.UnitByRef], which is that answer: a stored unit
-// carries whichever spelling of a unit was its address when the row was
-// written — its key, or its name where the document gave it no key — and both
-// resolve, however they are cased. Resolving through [org.Organization.Unit]
-// instead matched EXACTLY, so `unit: engineering` on a company with a unit
-// named "Engineering" was refused with "This company has no team".
+// THROUGH [org.Organization.UnitByRef]: a stored unit carries its key, or its
+// name where it has none, in any case, and both resolve.
 func ChartUnits(o *org.Organization) worklet.Units { return chartUnits{org: o} }
 
 type chartUnits struct{ org *org.Organization }
@@ -2119,18 +1608,12 @@ func (c chartUnits) ResolveUnit(ref string) (worklet.ChartUnit, bool) {
 		return worklet.ChartUnit{}, false
 	}
 	lead := worklet.LeadRef{}
-	// THE EFFECTIVE LEAD, which is the one inherited from an ancestor
-	// where this unit declares none — because that is who actually hears
-	// about the project's work, and rendering `none` beside a unit whose
-	// parent has a lead sends a founder looking for a gap there is not.
+	// THE EFFECTIVE LEAD, inherited from an ancestor where this unit declares
+	// none: that is who hears about the work, and `none` beside a unit whose
+	// parent has a lead sends a founder looking for a gap that is not there.
 	//
-	// IT RESOLVES THE HANDLE `lead:` HOLDS, so the seat it answers is the
-	// seat the engine runs. Deriving one from the lead's display name was a
-	// SECOND derivation, and it disagreed with the first on every seat whose
-	// operator declared a handle: a unit led by "Ada Okonkwo" with
-	// `handle: ada` resolved to `ada-okonkwo`, which is nobody — so the lead
-	// could not be looked up in the chart, filtered on, asked, or opened as
-	// a person.
+	// It resolves the handle `lead:` holds, never one derived from the display
+	// name, which would miss every seat with a declared handle.
 	if role := c.org.EffectiveLead(unit); role != nil {
 		lead.Handle = role.Handle()
 		lead.Kind = worklet.AuthorAgent
@@ -2138,9 +1621,8 @@ func (c chartUnits) ResolveUnit(ref string) (worklet.ChartUnit, bool) {
 			lead.Kind = worklet.AuthorHuman
 		}
 	}
-	// THE KEY AND THE NAME, because the callers ask in both directions:
-	// what a write stores is the key ([org.Unit.Key]) and what a screen
-	// reads is the name.
+	// THE KEY AND THE NAME: a write stores the key ([org.Unit.Key]) and a
+	// screen reads the name.
 	return worklet.ChartUnit{Key: unit.Key(), Name: unit.Name, Lead: lead}, true
 }
 
@@ -2154,14 +1636,12 @@ func (l liveUnits) ResolveUnit(ref string) (worklet.ChartUnit, bool) {
 // liveSeats resolves a people field's value to exactly one seat, against the
 // CURRENT epoch, and answers its handle.
 //
-// EXACTLY ONE, and an ambiguous spelling is the same answer as an unknown one:
-// both mean "this does not name a person", which is the only thing a stored
-// value can be written from. A field holding a handle nobody has is a field
-// every filter on it misses, silently, for as long as the value is there. A
-// node holding no company names nobody, rather than dereferencing one.
+// EXACTLY ONE: an ambiguous spelling is answered as an unknown one, since a
+// stored handle nobody has is silently missed by every filter on the field. A
+// node holding no company names nobody.
 //
-// Per call for the reason every other live seam here is: the writer outlives a
-// revision, and a captured chart would admit a colleague who has left.
+// Per call, as every live seam here: the writer outlives a revision, and a
+// captured chart would admit a colleague who has left.
 type liveSeats struct{ engine *Engine }
 
 func (l liveSeats) ResolveSeat(ref string) (string, bool) {
@@ -2186,19 +1666,14 @@ var _ builtin.ChannelDirectory = liveChannels{}
 
 // ChatSurfaces is the chat surfaces a seat can post on.
 //
-// BOTH HALVES, and each alone admits a promise nobody can keep: a company
-// surface the seat holds no bot on is one whose tools the seat never gets,
-// and a seat's bot on a surface the company turned off is a credential no
-// transport or tool server is started for. Mattermost's company block is
-// switched by `enabled`; Slack's is on by being declared — the rule
+// BOTH HALVES, since each alone admits a promise nobody can keep: a company
+// surface the seat has no bot on gives it no tools, and a seat's bot on a
+// surface the company turned off has no transport. Mattermost is switched by
+// `enabled`, Slack is on by being declared: the rule
 // [Engine.startNotifications] starts each transport by.
 //
-// THE ENGINE'S OWN CHAT NEEDS NO BOT: every agent seat of a company whose chat
-// is Chatlet posts as itself, with the posting tools that deliver to
-// [decision.InformChat], and a unit room a decision is reported in is public,
-// so no membership stands between the seat and the post. Left out, every
-// inform a Chatlet company's seat promised was refused as a surface it
-// could not post on — the only surface it had.
+// THE ENGINE'S OWN CHAT NEEDS NO BOT: an agent seat of a Chatlet company posts
+// as itself ([decision.InformChat]) into a public unit room.
 func (c liveChannels) ChatSurfaces(handle string) []decision.InformSurface {
 	company := c.engine.Company()
 	if company == nil || company.Org == nil || company.Config == nil {
@@ -2244,29 +1719,21 @@ func (c liveChannels) UnitChannels() []string {
 // liveRoster is chat's four-method view of the company, resolved against the
 // epoch current when the WRITE runs.
 //
-// PER CALL, for every other live seam's reason here: a chat store is built
-// once per node and outlives every revision, so a captured chart would go on
-// admitting a colleague who has left — and in chat that is not a stale label
-// but a wake published to a seat nothing runs.
+// PER CALL, as every live seam here: the chat store outlives every revision,
+// and a captured chart would publish a wake to a seat that has left.
 //
-// NO METHOD BLOCKS, which [chatlet.Roster] requires rather than prefers:
-// each is called from inside the decide's own read transaction, where the
-// framework forbids anything that can wait. Each is a walk of the chart this
-// process already holds in memory, and nothing here reaches the broker, the
-// coordination store or a model.
+// NO METHOD BLOCKS, as [chatlet.Roster] requires: each runs inside the
+// decide's read transaction, so each is an in-memory chart walk and reaches
+// no broker, coordination store or model.
 type liveRoster struct{ engine *Engine }
 
 // Seat reports whether the company still has this handle, and whether it is a
 // PERSON.
 //
-// BOTH FROM ONE LOOKUP, because the routing needs both and they are one fact
-// about one row: a handle the company no longer has is a wake nothing can run,
-// and a person is addressable but never woken.
-//
-// [org.Organization.SeatByHandle] rather than the agent-only lookup beside it:
-// a human seat is exactly what the second answer is about, and resolving
-// through the agent one would report every person in the company as somebody
-// it does not employ.
+// BOTH FROM ONE LOOKUP, one fact about one row: a missing handle is a wake
+// nothing can run, and a person is addressable but never woken.
+// [org.Organization.SeatByHandle], not the agent-only lookup, which would
+// report every person as somebody the company does not employ.
 func (l liveRoster) Seat(handle string) (exists, human bool) {
 	company := l.engine.Company()
 	if company == nil || company.Org == nil {
@@ -2281,9 +1748,9 @@ func (l liveRoster) Seat(handle string) (exists, human bool) {
 
 // Lead names the seat that answers for a unit's room, or empty.
 //
-// [unitRoomLead], against the CURRENT epoch: the lead of the unit the chart
-// says the room belongs to — by [unitRoomOwner], the rule [applyChartRooms]
-// staffs it by, so a room the chart staffs with nobody wakes no lead either.
+// [unitRoomLead] against the CURRENT epoch, by [unitRoomOwner], the rule
+// [applyChartRooms] staffs the room by, so a room staffed with nobody wakes no
+// lead.
 func (l liveRoster) Lead(unit, room string) string {
 	company := l.engine.Company()
 	if company == nil {
@@ -2305,12 +1772,9 @@ func (l liveRoster) Senior(handles []string) string {
 // seniorAgent is who answers for a room made by hand: the most senior AGENT
 // seat among its members' handles, by [org.Organization.Senior], or empty.
 //
-// IT IS WHAT [chatlet.Roster.Senior] ANSWERS, and the chat write path puts it
-// on the record a person's post publishes as the room's answerer
-// ([chatlet.ReasonAnswerer]). A PERSON IS NEVER IT: a person is addressable and
-// runs no turn, so a room whose most senior member is a person is answered by
-// its most senior agent. And a handle the chart no longer holds is not a seat
-// at all, so a member who has left the company is never ranked.
+// IT IS WHAT [chatlet.Roster.Senior] ANSWERS, recorded as the room's answerer
+// ([chatlet.ReasonAnswerer]). A PERSON IS NEVER IT, since a person runs no
+// turn, and a handle the chart no longer holds is never ranked.
 func seniorAgent(chart *org.Organization, handles []string) string {
 	if chart == nil || len(handles) == 0 {
 		return ""
@@ -2367,22 +1831,15 @@ func (l liveLeads) UnitLead(unit string) string {
 // UnitLeadOf is who hears about work routed to a unit, named by any spelling
 // a row may hold for it.
 //
-// EVERY SPELLING, because a routing unit is a record of what was true when it
-// was written: the unit's key, or its name on a unit the document gave no key.
-// A walk that compared the stored value against each unit's `id` FIELD alone
-// resolved a lead on no company that had not given its units ids: the fallback
-// that reaches a unit's lead when a change named nobody else reached nobody,
-// and looked exactly like a unit whose lead is unset.
+// EVERY SPELLING, because a routing unit records what was true when it was
+// written: the unit's key, or its name on a unit given no key. Matching the
+// `id` field alone resolves no lead on a company whose units have no ids.
 //
-// THROUGH [org.Organization.UnitByRef] rather than a walk of its own, which is
-// what makes "every spelling" one rule rather than a claim each reader
-// repeats: a private loop folded with [strings.EqualFold] while the chart
-// claims a key under a different fold, so the two disagreed over characters
-// that are real in a team name.
+// THROUGH [org.Organization.UnitByRef] rather than a walk of its own, so the
+// fold matches the one the chart claims keys under.
 //
 // A UNIT THAT EXISTS AND LEADS NOBODY answers empty, which is not the same as
-// a unit nothing names — and the resolver draws that line once, for every
-// caller.
+// a unit nothing names; the resolver draws that line for every caller.
 func UnitLeadOf(o *org.Organization, unit string) string {
 	if o == nil {
 		return ""
@@ -2393,11 +1850,9 @@ func UnitLeadOf(o *org.Organization, unit string) string {
 // leadOfUnit is the handle of the seat that leads a unit the chart has
 // already resolved, or empty — for nil, or for a unit that leads nobody.
 //
-// ONE ANSWER TO "WHO ANSWERS FOR THIS TEAM", read by the tracker's unit
-// fallback and the chat room's alike ([unitRoomLead]): two resolutions of it
-// would let a person posting in a unit's room address somebody different from
-// the one an unassigned task in that unit wakes. What differs between the two
-// is only which unit they ask about.
+// ONE ANSWER TO "WHO ANSWERS FOR THIS TEAM", shared by the tracker's unit
+// fallback and the chat room's ([unitRoomLead]), so a person posting in a
+// unit's room addresses the same lead an unassigned task there wakes.
 func leadOfUnit(o *org.Organization, unit *org.Unit) string {
 	if unit == nil {
 		return ""
@@ -2427,10 +1882,9 @@ func (e *Engine) pageDeps(c *Company) builtin.PageDeps {
 		Mentions:         seatMentions{org: c.Org},
 		Seats:            e.seatCorpus,
 		DefaultContainer: LiveSeatSpace(e),
-		// THE TOOL-SKILLS CONTAINER, read off the CURRENT epoch for the
-		// reason the defaults are: a write into it is asked for the admin
-		// a tool skill takes, and the store itself refuses a seat every
-		// write there ([doclet.Reserved]).
+		// Read off the CURRENT epoch, as the defaults are: a write into it is asked
+		// for the admin a tool skill takes, and the store refuses a seat every write
+		// there ([doclet.Reserved]).
 		SkillsContainer: e.skillsContainer,
 		Await:           await,
 	}
@@ -2458,32 +1912,17 @@ func (e *Engine) pageHalves() (builtin.PageReader, builtin.PageWriter,
 }
 
 // writers is which of the halves one reading of this node's runtime found
-// (run) it hands a WRITER for — the tracker's, the knowledge base's and
-// chat's. THE ONE GATE every surface that writes the company's records through
-// this node's router is handed its writer behind: a seat's tools and the
-// engine's write of a turn's spend ([Engine.trackerHalves],
-// [Engine.pageHalves], [Engine.chatHalves]), the operator's MCP and act
-// transport, the purge, a project file's upload and removal, and chat's
+// (run) it hands a WRITER for. THE ONE GATE for every surface writing the
+// company's records through this node's router: a seat's tools and a turn's
+// spend ([Engine.trackerHalves], [Engine.pageHalves], [Engine.chatHalves]),
+// the operator's MCP and act transport, the purge, project files, and chat's
 // erase, prune and retention ([OperatorWorkWriter], [OperatorPageWriter],
 // [OperatorChatWriter]).
 //
-// NONE IN A MODE THAT PUBLISHES NOTHING, WHATEVER THE NODE HOLDS. The mode is
-// this node's promise that it starts nothing that writes
-// ([statelog.MaintenanceMode.Publishes]), and a write it routes to a data node
-// is one it starts. A node without `data` used to be exempt, on the reading
-// that the data node's mode was that node's to answer for — but a capacity
-// window puts every data node in the mode too, so the routed write was refused
-// there, and only after the request had done its work: a file's upload
-// streamed up to a gibibyte into the object store before its row was refused,
-// as `unavailable`, which a client retries, and each attempt left an object the
-// collector — which stands down in the mode — could not free until the window
-// closed. And outside a window it was a node in the mode writing into a fleet
-// that is not, which is the one thing its operator restarted it to rule out.
-//
-// AND ON A DATA NODE, ONLY THE HALVES ITS OWN WRITE SIDE HOLDS
-// ([Engine.writeSide]): a half is counted by its reader ([Engine.nativeHalves]),
-// and a writer is a fact of its own. A node without `data` holds no write side
-// and writes every half it runs through a data node.
+// NONE IN A MODE THAT PUBLISHES NOTHING, even without `data`: a routed write
+// is one it starts (package doc, "Maintenance mode"). On a data node, only the
+// halves its own write side holds ([Engine.writeSide]), a fact apart from its
+// readers ([Engine.nativeHalves]).
 func (e *Engine) writers(run halves) (tracker, wiki, chat bool) {
 	if !e.mode.Publishes() {
 		return false, false, false
@@ -2497,13 +1936,11 @@ func (e *Engine) writers(run halves) (tracker, wiki, chat bool) {
 
 // chatDeps is the rooms half, on the same terms as the two above.
 //
-// NO ACTOR AND NO READ STATE, which is what tells a seat's deps from the
-// operator surface's. The actor is nil so a write is attributed to the turn's
-// own seat — a model that could name its author could speak as anybody — and
-// the read state is nil because a cursor is a PERSON's attention: a seat is
-// woken rather than browsing, and reporting a room's whole tail as unread to
-// one is how a turn spends itself catching up on a conversation it was never
-// reading. See [builtin.ChatDeps.ReadState].
+// NO ACTOR AND NO READ STATE, which tells a seat's deps from the operator
+// surface's. No actor, so a write is attributed to the turn's own seat (a model
+// that could name its author could speak as anybody); no read state, because a
+// cursor is a PERSON's attention and a woken seat is not browsing. See
+// [builtin.ChatDeps.ReadState].
 func (e *Engine) chatDeps(c *Company) builtin.ChatDeps {
 	rooms, ok := e.chatHalves()
 	if !ok {
@@ -2512,31 +1949,23 @@ func (e *Engine) chatDeps(c *Company) builtin.ChatDeps {
 	return builtin.ChatDeps{
 		Reader: rooms,
 		Writer: rooms,
-		// THE SAME INTERSECTION THE WIKI TAKES: `notify.Mentions` is
-		// deliberately permissive, and this is where the company is
-		// known, so a handle nobody holds is dropped rather than
-		// becoming a wake that can never be delivered.
+		// THE SAME INTERSECTION THE WIKI TAKES ([seatMentions]): a handle nobody
+		// holds is dropped rather than becoming an undeliverable wake.
 		Mentions: seatMentions{org: c.Org},
-		// THE ROUTER'S SEARCH, which resolves the rooms the viewer may
-		// read on the serving data node, beside the index it reads — the
-		// visible set is never something a tool hands in
+		// THE ROUTER'S SEARCH resolves the rooms the viewer may read on the
+		// serving data node; the visible set is never something a tool hands in
 		// ([builtin.ChatSearcher]).
 		Search: e.router.ChatSearch(),
-		// THE SESSION FLOOR IS THE WAIT, as for the tracker's and the
-		// wiki's halves: what a seat's next read needs is that whichever
-		// holder answers it has applied this far.
+		// THE SESSION FLOOR IS THE WAIT, as for the tracker's and wiki's halves.
 		Await: e.router.Await,
 	}
 }
 
 // chatHalves is this node's chat seams, on the terms [Engine.trackerHalves]
-// gives: the router's on every node, so a seat on a node that holds no data
-// reads and writes its rooms through a data node, and a data node whose copy is
-// out of service answers its seats' chat from a peer's copy rather than from
-// the one it stopped serving. False where the company's chat is not Chatlet,
-// and where this node hands out no chat writer ([Engine.writers]) — any node
-// in a maintenance mode, which may publish nothing — which hands out no chat
-// tools either, rather than tools whose every write is refused.
+// gives: the router's on every node. False where the company's chat is not
+// Chatlet, and where this node hands out no chat writer ([Engine.writers]),
+// which then hands out no chat tools rather than tools whose every write is
+// refused.
 func (e *Engine) chatHalves() (estate.Chat, bool) {
 	if _, _, writes := e.writers(e.nativeHalves()); !writes {
 		return estate.Chat{}, false
@@ -2550,15 +1979,10 @@ func (e *Engine) chatHalves() (estate.Chat, bool) {
 // the dashboard's and the REST routes' questions, and the operator's own MCP —
 // or false where this company runs no Worklet here.
 //
-// THE ROUTER'S, ON EVERY NODE, exactly as a seat's tools are handed it
-// ([Engine.trackerHalves]), and never this node's own copy read directly. Read
-// directly, a data node whose tracker copy was out of service — wrong rather than
-// behind, or its file shut — sent its own seats' calls to a peer's copy and
-// went on answering its operator from the one it had stopped serving: a board,
-// a person's inbox or a purge read off rows the node itself would not vouch
-// for, or refused outright where the file was shut. Through the router the
-// operator is answered as the seats are, from this node's copy while it serves
-// and from another data node's while it does not.
+// THE ROUTER'S, ON EVERY NODE, as a seat's tools get it
+// ([Engine.trackerHalves]), never this node's own copy read directly: a data
+// node whose copy is out of service must answer its operator from a peer's
+// copy, as it answers its seats, not from rows it would not vouch for.
 func OperatorWork(e *Engine) (estate.Work, bool) {
 	reads := OperatorNative(e)
 	return reads.Work, reads.Tracker
@@ -2568,13 +1992,9 @@ func OperatorWork(e *Engine) (estate.Work, bool) {
 // the tracker, the knowledge base and the ranked item search — as ONE READING
 // of this node's runtime found them.
 //
-// ONE READING, because a surface that asks per request takes all three at once
-// for one answer, and three separate accessors each loaded the runtime again:
-// a node whose first apply published its runtime between two of them handed one
-// answer a view with no tracker beside a knowledge base that had one — two
-// moments in one answer. Taken here, the view describes the runtime as it was at
-// one instant, at the cost of one atomic load on a node without `data` and two
-// on a data node, and no lock, no I/O and no allocation.
+// ONE READING, because a surface takes all three at once for one answer, and
+// separate loads could straddle a runtime publish and mix two moments in one
+// answer. It costs one or two atomic loads and no lock, I/O or allocation.
 type OperatorReads struct {
 	// Work is the tracker's read side, the router's — the zero facade where
 	// Tracker is not set, for [OperatorWork]'s rule.
@@ -2585,20 +2005,17 @@ type OperatorReads struct {
 	Pages estate.Pages
 	// Tracker and Wiki say which halves this company runs natively here.
 	Tracker, Wiki bool
-	// Search says the ranked item search is served — through Work, which
-	// is the seam it is. It needs the tracker AND this node's index, which
-	// is why it is a half of its own: a runtime can hold the board with no
-	// item searcher, and the index is built under either backend, so on a
-	// company whose tracker is a vendor's it holds pages and no task.
+	// Search says the ranked item search is served, through Work. It needs the
+	// tracker AND this node's index, which is built under either backend, so on
+	// a company with a vendor tracker it holds pages and no task.
 	// [WorkSearcher]'s rule.
 	Search bool
 }
 
-// OperatorNative is [OperatorReads] for e at this instant — the one reading
-// [OperatorWork], [OperatorPages] and [WorkSearcher] are each a view of, so the
-// rule for when a seam is handed out is stated once. Which halves the company
-// runs is [Engine.nativeHalves]' answer rather than a derivation of its own, so
-// the operator is handed a half exactly where seat admission waits on it.
+// OperatorNative is [OperatorReads] for e at this instant, the one reading
+// [OperatorWork], [OperatorPages] and [WorkSearcher] each view, so the rule is
+// stated once. Which halves run is [Engine.nativeHalves]' answer, so the
+// operator is handed a half exactly where seat admission waits on it.
 func OperatorNative(e *Engine) OperatorReads {
 	if e.router == nil {
 		return OperatorReads{}
@@ -2607,12 +2024,9 @@ func OperatorNative(e *Engine) OperatorReads {
 	out := OperatorReads{
 		Tracker: run.tracker,
 		Wiki:    run.wiki,
-		// THE TRACKER'S SEARCH, so the tracker as well as the index: the
-		// index is built under either backend, and on a company whose
-		// tracker is a vendor's it holds no task to rank. A NODE WITHOUT
-		// `data` holds no index of its own (`own` is nil) and asks a data
-		// node for the ranked search as it asks for everything else, so it
-		// serves one wherever it serves the board.
+		// The tracker as well as the index (see Search). A NODE WITHOUT `data`
+		// (`own` nil) asks a data node for the ranked search, so it serves one
+		// wherever it serves the board.
 		Search: run.tracker && (run.own == nil || run.own.itemSearch != nil),
 	}
 	if out.Tracker {
@@ -2625,10 +2039,8 @@ func OperatorNative(e *Engine) OperatorReads {
 }
 
 // OperatorWorkWriter is the tracker's write side for those surfaces, acting as
-// whichever party each call names — or false where this node hands out no
-// tracker writer: a company on a vendor tracker, or any node in a maintenance
-// mode, which may publish nothing, whether or not it holds data
-// ([Engine.writers]).
+// whichever party each call names, or false where this node hands out no
+// tracker writer ([Engine.writers]).
 func OperatorWorkWriter(e *Engine) (func(estate.Actor) estate.WorkWriter, bool) {
 	if _, ok := e.trackerHalves(); !ok {
 		return nil, false
@@ -2637,10 +2049,9 @@ func OperatorWorkWriter(e *Engine) (func(estate.Actor) estate.WorkWriter, bool) 
 }
 
 // OperatorPages is the knowledge base's read side as the operator's surfaces
-// reach it, through the router for [OperatorWork]'s reason — or false where
-// this company runs no Doclet here. A page's backlinks are read through it too
-// ([estate.Pages.LinkedFrom]): they read the tracker's copy as well as the knowledge
-// base's, and are answered only where both serve.
+// reach it, through the router for [OperatorWork]'s reason, or false where this
+// company runs no Doclet here. A page's backlinks ([estate.Pages.LinkedFrom])
+// read the tracker's copy too, and are answered only where both serve.
 func OperatorPages(e *Engine) (estate.Pages, bool) {
 	reads := OperatorNative(e)
 	return reads.Pages, reads.Wiki
@@ -2686,11 +2097,9 @@ func OperatorChatSearch(e *Engine) (estate.ChatSearch, bool) {
 }
 
 // AwaitEstate raises the router's session floor to at ([estate.Router.Await]),
-// so whichever holder answers this node's next read waits until it has applied
-// that far — the seam a seat's tools are handed, and for the same reason: this
-// node's own applier is not the one that answers once its copy of that domain
-// is out of service. It waits for nothing itself and returns at once; the wait
-// is the next read's, on whichever copy takes it.
+// so whichever holder answers this node's next read has applied that far: this
+// node's own applier may not be the one answering. It returns at once; the wait
+// is the next read's.
 func (e *Engine) AwaitEstate(ctx context.Context, at statelog.Position) error {
 	if e.router == nil {
 		return nil
@@ -2702,14 +2111,12 @@ func (e *Engine) AwaitEstate(ctx context.Context, at statelog.Position) error {
 // from, each under its own rule, and every container the company DECLARES (the
 // only ones a page is created in, by anybody); see [doclet.Reserved].
 //
-// THE DECLARED SPACES ARE [chartContainers]'s, the very list the containers are
-// made from on every apply: every unit's and seat's `space:`, the root and the
-// tool skills, in one canonical form. A second walk of the chart here would be
-// how a page could be refused a space whose container exists, or created in
-// one that does not.
+// THE DECLARED SPACES ARE [chartContainers]'s, the list the containers are made
+// from on every apply; a second walk of the chart could refuse a page a space
+// whose container exists, or create one in a space that has none.
 //
-// NOTHING IS DECLARED by a node running no company, which is the meaningful
-// zero: every create is refused until there is a chart to say where pages go.
+// NOTHING IS DECLARED by a node running no company, the meaningful zero: every
+// create is refused until there is a chart.
 func reservedContainers(current *Company) doclet.Reserved {
 	if current == nil || current.Config == nil {
 		return doclet.Reserved{}
@@ -2727,44 +2134,34 @@ func reservedContainers(current *Company) doclet.Reserved {
 // seatMentions resolves the handles a body names to the seats that exist.
 //
 // THE INTERSECTION IS THE WHOLE JOB. [notify.Mentions] is deliberately
-// permissive — it yields `@here`, `@all` and every handle nobody has —
-// because filtering there would make the grammar know the company. Here is
-// where the company is known, so here is where a name that is not a seat is
-// dropped: a comment naming an outsider must not produce a notification
-// nobody can deliver.
+// permissive (`@here`, `@all`, unknown handles) so the grammar need not know
+// the company; here a name that is not a seat is dropped, so no notification
+// is made that nobody can deliver.
 type seatMentions struct{ org *org.Organization }
 
 // LiveLeads and LiveUnits are the chart seams a surface outside this package
 // needs, resolved PER CALL against the epoch current when the tool runs.
 //
-// EXPORTED BECAUSE THE OPERATOR SURFACE WENT WITHOUT THEM, and their absence
-// was invisible rather than harmless: with no Leads an operator filing an
-// unassigned task woke nobody at all — the lead fallback is precisely what
-// catches a task naming nobody — and with no Units every project that surface
-// listed rendered as belonging to no team.
+// Exported for the operator surface, which without them woke nobody on an
+// unassigned task (the lead fallback) and showed every project teamless.
 func LiveLeads(e *Engine) worklet.Leads { return liveLeads{engine: e} }
 
 // LiveUnits is the tracker's unit seam over the engine's current chart.
 func LiveUnits(e *Engine) worklet.Units { return liveUnits{engine: e} }
 
 // LiveChannels is the chart's chat surfaces and unit channels, read per call,
-// for a surface built once that outlives every apply — the person-facing tool
-// catalogue, whose `decision.inform` a nil directory would refuse while a
-// seat's own was admitted.
+// for a surface built once that outlives every apply (the person-facing tool
+// catalogue, whose `decision.inform` a nil directory would refuse).
 func LiveChannels(e *Engine) builtin.ChannelDirectory { return liveChannels{engine: e} }
 
 // LiveDefaultProject is [ProjectOfSeat] over the engine's CURRENT chart, read
-// per call, for the surfaces an apply does not rebuild for a new chart — the
-// operator surface, whose `create_work_item` files a PERSON's work, and the
-// dashboard's `viewer`, which says where that work lands. "" before any epoch
-// is running, and for a seat whose team and every team above it own no
-// project: the tool then refuses rather than guessing.
+// per call, for the surfaces an apply does not rebuild: the operator surface,
+// whose `create_work_item` files a PERSON's work, and the dashboard's
+// `viewer`, which says where it lands. "" before any epoch is running, and for
+// a seat whose team and every team above it own no project: the tool refuses.
 //
-// ONE DERIVATION FOR BOTH, because the viewer promising one project while the
-// create files into another is the exact disagreement this seam exists to
-// rule out. The operator surface used to be handed a stub answering "" for
-// everybody, so a bound founder's create that named no project was refused
-// while the viewer's doc — and every seat's own surface — said it defaulted.
+// ONE DERIVATION FOR BOTH, so the viewer can never promise one project while
+// the create files into another.
 func LiveDefaultProject(e *Engine) func(handle string) string {
 	return func(handle string) string {
 		c := e.Company()
@@ -2778,10 +2175,9 @@ func LiveDefaultProject(e *Engine) func(handle string) string {
 // Zone is the company's clock (ADR-0018) as the CURRENT epoch sets it, or UTC
 // before any epoch is running.
 //
-// For the surfaces that OUTLIVE an epoch — the scheduler's loop, built once,
-// and the operator's surface, which no apply rebuilds for a new clock — so
-// that an apply moving the clock moves them with it on their next read. A
-// seat's own tools take the clock of the epoch their turn pinned instead; see
+// For the surfaces that OUTLIVE an epoch (the scheduler's loop, the operator's
+// surface), so an apply moving the clock moves them on their next read. A
+// seat's own tools take the clock their turn pinned instead; see
 // [Engine.workDeps].
 func (e *Engine) Zone() *time.Location {
 	c := e.Company()
@@ -2795,14 +2191,11 @@ func (e *Engine) Zone() *time.Location {
 // space of the writing seat's own team, or of the seat itself, read off the
 // chart CURRENT at the call.
 //
-// Exported because the OPERATOR surface needs the same rule, and there must
-// not be a second copy of it: a person writes there AS their seat
-// ([iam.ActorFor]), and without it their "Save as a page" from the dashboard
-// named no container and was refused, while the same write from their own
-// seat's turn landed in their team's space. Keyed on the actor's handle, as
-// [LiveDefaultProject] is: a credential nobody is bound through writes under
-// its login, which no seat matches, so its write names a container or is
-// refused naming the argument rather than filed somewhere guessed for it.
+// Exported so the OPERATOR surface, where a person writes AS their seat
+// ([iam.ActorFor]), uses this rule rather than a second copy. Keyed on the
+// actor's handle, as [LiveDefaultProject] is: a credential nobody is bound
+// through matches no seat, so its write names a container or is refused
+// naming the argument, never filed somewhere guessed.
 func LiveSeatSpace(e *Engine) func(handle string) string {
 	return func(handle string) string {
 		c := e.Company()
@@ -2816,12 +2209,10 @@ func LiveSeatSpace(e *Engine) func(handle string) string {
 // LiveMentions resolves @-mentions against the chart CURRENT when the comment
 // is written, rather than the one that built the caller.
 //
-// The seat path captures its org deliberately — a seat's tools are cloned into
-// its lease and rebuilt on an apply — but the operator surface is not rebuilt
-// for a new chart, so it reads the engine per call. It is exported because the
-// OPERATOR MCP needs the same rule and there must not be a second copy of it:
-// built without one, that surface wrote comments whose @-mentions resolved to
-// nothing and woke nobody, while its own tool description promised otherwise.
+// The seat path captures its org deliberately (a seat's tools are rebuilt on an
+// apply), but the operator surface is not rebuilt for a new chart, so it reads
+// the engine per call. Exported so the OPERATOR MCP uses this rule rather than
+// a second copy.
 func LiveMentions(e *Engine) builtin.MentionResolver {
 	return liveMentions{engine: e}
 }
@@ -2843,10 +2234,8 @@ func (m seatMentions) Mentions(text string) []string {
 	}
 	var out []string
 	for _, name := range notify.Mentions(text) {
-		// A HUMAN SEAT COUNTS. `crewlet` is a transport like any other
-		// on this backend — a person mentioned on a work item is
-		// notified through whatever surface their contact declares —
-		// so the lookup is over every seat, not only the agents.
+		// A HUMAN SEAT COUNTS: a person mentioned is notified through whatever
+		// surface their contact declares, so the lookup is over every seat.
 		if m.org.SeatByHandle(name) != nil {
 			out = append(out, name)
 		}
@@ -2856,36 +2245,22 @@ func (m seatMentions) Mentions(text string) []string {
 
 // nudgeSkills asks the skill sync to re-read the tool-skill container.
 //
-// # Why it is a nudge and not a read
-//
-// It is called from the pages applier's post-commit hook, which runs on the
-// apply loop's own goroutine, so doing the read here would hold every subsequent
-// change behind a page walk and a registry replace. So it is a request to the
-// node's one sync loop, which coalesces however many arrive into one walk: the
-// read is wholesale, and one re-read after N changes is the same answer as N
-// of them.
-//
-// # And an announcement, for the nodes that apply nothing
-//
-// Every DATA node applies the page log itself, so every data node's own
-// applier sees a skill page move and calls this. A node without `data` runs
-// no applier, so it would hear of the move only on its periodic walk — which
-// is why this ANNOUNCES rather than merely refreshes: the fleet nudge tells
-// every such node to walk its container through a data node. Several data
-// nodes announce one edit; a hearer coalesces them into one walk.
+// A nudge, not a read: it runs from the pages applier's post-commit hook on
+// the apply loop's goroutine, where a read would hold every later change
+// behind a page walk; the node's one sync loop coalesces nudges. It
+// ANNOUNCES, because a node without `data` runs no applier.
 //
 // NAMED AS DOCLET'S, because the pages applier outlives an apply that moves
-// the company's skills to Confluence, and the loop ignores a refresh from a
-// backend its source is not on.
+// the skills to Confluence, and the loop ignores a refresh from a backend its
+// source is not on.
 func (e *Engine) nudgeSkills() { e.skillSync.Announce(skillBackend(config.KnowledgeDoclet)) }
 
 // walkRemoteSkills reads the tool-skill container through a data node, for a
 // node that holds none.
 //
-// STALE, for the reason [Engine.walkDocletSkills] gives, and one hop further:
-// the walk runs because a data node APPLIED the change and announced it, and
-// the floor this node carries is its own writes' — so the answering node is
-// at or past both.
+// STALE, for the reason [Engine.walkDocletSkills] gives, one hop further: the
+// walk runs because a data node APPLIED the change, and the floor this node
+// carries is its own writes', so the answering node is at or past both.
 func (e *Engine) walkRemoteSkills(ctx context.Context, container string) ([]skills.Page, error) {
 	if e.remote.Load() == nil || e.router == nil {
 		return nil, errors.New("engine: this node reaches no data node for its skills")
@@ -2908,25 +2283,17 @@ func (e *Engine) walkRemoteSkills(ctx context.Context, container string) ([]skil
 // walkDocletSkills reads the tool-skill container out of this node's own
 // applied pages.
 //
-// # It waits for hydration first
-//
-// A walk over a container this node has not applied through is a PARTIAL set,
-// and the registry replaces wholesale, so reading early would silently delete
-// every skill the walk did not reach. The wait is cancelled with the walk: a
-// source change or a stop ends it.
+// It waits for hydration first: a walk over a container not yet applied
+// through is a PARTIAL set, and the registry replaces wholesale, so reading
+// early would silently delete every skill the walk missed.
 func (e *Engine) walkDocletSkills(ctx context.Context, container string) ([]skills.Page, error) {
 	if !e.awaitHydration(ctx) {
 		return nil, ctx.Err()
 	}
-	// STALE, and it is the strongest level this walk could HONESTLY name,
-	// not a saving.
-	//
-	// What the walk must not do is rebuild the registry without the change
-	// that asked for the rebuild. It cannot: [Engine.nudgeSkills] is called
-	// from the applier's POST-COMMIT hook, so by the time the sync loop
-	// runs, the record that woke it is already in this node's own committed
-	// prefix, which is exactly what a stale read serves. The causality is
-	// LOCAL, so no barrier and no high-water mark buys anything here.
+	// STALE is the strongest level this walk could honestly name, not a saving:
+	// [Engine.nudgeSkills] runs from the applier's POST-COMMIT hook, so the
+	// record that woke the sync loop is already in this node's committed prefix.
+	// The causality is LOCAL, so no barrier buys anything.
 	found, err := e.native.Load().pageReader.SkillPages(ctx, container,
 		statelog.Freshness{Level: statelog.ReadStale})
 	if err != nil {
@@ -2960,18 +2327,15 @@ func (e *Engine) awaitHydration(ctx context.Context) bool {
 // hydrationPoll is how often the first skill read checks whether this node's
 // copy has caught up with its logs.
 //
-// A quarter-second. The wait is bounded by a boot reconcile, which is
-// hundreds of milliseconds on an ordinary company and minutes on a large one
-// — so the cost of polling is a handful of atomic reads either way, and a
-// condition variable here would be a second thing to keep correct for a wait
-// that happens once per process.
+// The wait is bounded by a boot reconcile (hundreds of milliseconds to
+// minutes), so polling costs a handful of atomic reads, and a condition
+// variable would be a second thing to keep correct for a once-per-process wait.
 const hydrationPoll = 250 * time.Millisecond
 
 // searchPeers is the fleet half of the knowledge search's fan-out.
 //
-// NIL WHEN THERE IS NO QUEUE, which is a legal deployment rather than a
-// degradation: an embedded engine with no broker holds the whole corpus and
-// takes every bucket, exactly as a single node does.
+// NIL WHEN THERE IS NO QUEUE, a legal deployment: an embedded engine with no
+// broker holds the whole corpus and takes every bucket.
 func (e *Engine) searchPeers() search.Peers {
 	if e.backends == nil || e.backends.Queue == nil {
 		return nil
@@ -2982,17 +2346,12 @@ func (e *Engine) searchPeers() search.Peers {
 // liveNodes answers which nodes are in the fleet NOW: every node a fan-out may
 // hand a share of a question to — a search's bucket range, a history read.
 //
-// FROM THE LEASE VIEW rather than from the positions register, and the two
-// differ in exactly the way that matters here: a position row is held by every
-// node the trim has to wait for, INCLUDING one that has been gone for hours,
-// while a lease expires. A dead node in the roster costs every fanned answer on
-// this node a partial result for as long as its row survives — and a history
-// read would name it as missing on every screen, for a node nobody can bring
-// back.
+// FROM THE LEASE VIEW, not the positions register: a position row outlives a
+// node gone for hours, while a lease expires, and a dead node in the roster
+// would cost every fanned answer a partial result.
 //
 // EVERY NODE, data or not: this is the fleet's SIZE, which the health envelope
-// reports. A fan-out never reads it — a search's buckets and a history read go
-// to the nodes that hold what they read, [Engine.dataRoster].
+// reports. A fan-out reads [Engine.dataRoster] instead.
 func (e *Engine) liveNodes(ctx context.Context) ([]string, error) {
 	if e.backends == nil || e.backends.Coord == nil {
 		return nil, nil
@@ -3013,14 +2372,11 @@ func (e *Engine) liveNodes(ctx context.Context) ([]string, error) {
 // LiveNodes is how many nodes hold a presence lease now — the fleet's size as
 // every fan-out on this node sees it ([Engine.liveNodes]).
 //
-// AN ERROR IS A READ THAT DID NOT HAPPEN, never zero nodes: the health envelope
-// leaves its count out on one, because "0 nodes" beside a page this node is
-// serving is a claim nobody could act on, and the plane being unreachable is
-// already the posture's to say.
+// AN ERROR IS A READ THAT DID NOT HAPPEN, never zero nodes: the health
+// envelope leaves its count out rather than claim "0 nodes".
 //
-// THE CALLER BOUNDS IT: this is a key-iterating scan the NATS client's per-API
-// timeout does not cover, so it lasts as long as ctx does. The health envelope
-// hands it [ProbeReadBudget].
+// THE CALLER BOUNDS IT: this key-iterating scan is not covered by the NATS
+// client's per-API timeout. The health envelope hands it [ProbeReadBudget].
 func (e *Engine) LiveNodes(ctx context.Context) (int, error) {
 	if e.backends == nil || e.backends.Coord == nil {
 		return 0, errors.New("engine: no coordination backend to read the fleet's presence from")
@@ -3035,15 +2391,12 @@ func (e *Engine) LiveNodes(ctx context.Context) (int, error) {
 // reportSearch counts what one answer covered, and what its scan cost on the
 // path it was run for.
 //
-// THE ONLY THING THAT MAKES FOUR ALARMS ABLE TO FIRE. `search_slow`,
-// `prefetch_slow`, `search_degraded` and `search_scoped` are each a property
-// of the answers a node gave, and an alarm whose input nobody records is
-// permanently silent — which looks exactly like a system with nothing wrong.
+// Without it `search_slow`, `prefetch_slow`, `search_degraded` and
+// `search_scoped` would be permanently silent, which looks exactly like
+// nothing wrong.
 //
 // THE PATH IS THE QUERY'S OWN ([search.FanQuery.Prefetch]), so a turn's
-// knowledge prefetch and somebody's deliberate search are two series held to
-// two budgets. Every scan was recorded `interactive` once, the prefetch series
-// had no producer, and `prefetch_slow` read a percentile of nothing.
+// prefetch and a deliberate search are two series held to two budgets.
 func (e *Engine) reportSearch(q search.FanQuery, answer search.Answer, took time.Duration) {
 	if e.metrics == nil {
 		return
@@ -3059,9 +2412,8 @@ func (e *Engine) reportSearch(q search.FanQuery, answer search.Answer, took time
 }
 
 // scanPath is what a search was run for, as the scan-duration histogram's
-// `path` attribute names it — and the one name the alarm reading splits the
-// histogram by ([retention.observed]), so the label and the budget it is held
-// to are one value rather than two strings that must agree.
+// `path` attribute names it, and the name the alarm reading splits it by
+// ([retention.observed]), so label and budget are one value.
 type scanPath string
 
 const (
@@ -3084,10 +2436,8 @@ func scanPathOf(q search.FanQuery) scanPath {
 
 // searchRung is the ranking a scan actually ran, for the duration histogram.
 //
-// THE SERVED MODE, never a constant: every scan used to be recorded as
-// `hybrid` whatever it ran, so the histogram the interactive target is read
-// from mixed keyword-only scans — a fraction of the cost — into the figure for
-// the fused ones, and a slow semantic half hid under a fast lexical majority.
+// THE SERVED MODE, never a constant, so cheap keyword-only scans do not hide a
+// slow semantic half in the figure the interactive target is read from.
 func searchRung(answer search.Answer) string {
 	if answer.Served == "" {
 		return "none"
@@ -3098,13 +2448,11 @@ func searchRung(answer search.Answer) string {
 // semanticState is whether the meaning half ran, as the degraded-search alarm
 // counts it.
 //
-// THREE VALUES, because two of them are the alarm and one must never be. The
-// half that was ASKED FOR and did not run — a participant's vector scan that
-// failed, or a query vector the provider could not compute — is `skipped`,
-// the numerator of `search_degraded`. A half nobody asked for — a keyword
-// search, or a company with no embeddings provider — is `off`: counting that
-// as skipped fires the alarm on every search such a company ever runs, which
-// is an alarm red for the life of the deployment.
+// THREE VALUES: a half ASKED FOR that did not run (a failed vector scan, a
+// query vector the provider could not compute) is `skipped`, the numerator of
+// `search_degraded`. A half nobody asked for (a keyword search, no embeddings
+// provider) is `off`; counting it as skipped would hold the alarm red for the
+// life of such a deployment.
 func semanticState(answer search.Answer) string {
 	switch {
 	case answer.SemanticSkipped,
@@ -3119,16 +2467,12 @@ func semanticState(answer search.Answer) string {
 
 // enterSearch counts one scan in, and its return counts it out.
 //
-// THE LEVEL NOTHING ELSE CAN SAMPLE. The supported-corpus table has a row per
-// concurrency — through the full scan ≈ 345 000 sources inside the budget with
-// one reader and ≈ 136 000 with eight, through an index at its probe ceiling
-// ≈ 545 000 and ≈ 183 000 (see [search.SemanticScanBudget]) — and a node
-// answering nine at once is past the last of them. A duration histogram
-// cannot say which row: it records what the scans cost without recording how
-// many were competing for the disk while they did.
+// The concurrency level no histogram can show: the supported-corpus table has
+// a row per concurrency (see [search.SemanticScanBudget]), nine at once is past
+// the last, and a duration histogram records what scans cost, not how many
+// competed for the disk.
 //
-// SET RATHER THAN ADDED, on both edges, because it is a gauge: the value is
-// the count in flight at the moment a collector reads it, and the rolling
+// SET RATHER THAN ADDED, on both edges, because it is a gauge: the rolling
 // window's peak over a day is the busiest this node got.
 func (e *Engine) enterSearch() func() {
 	if e.metrics == nil {

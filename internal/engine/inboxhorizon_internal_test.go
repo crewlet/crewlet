@@ -14,19 +14,13 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE TRACKER READS THE COMPANY'S INBOX HORIZON: the one at the top of the
-// company document, `inbox.retention_days`, under the epoch key every domain
-// that keeps an inbox reads.
-//
-// An applier reads no configuration — it reads the epoch the engine builds
-// from the published company ([Company.Epoch]) — so the horizon crosses from
-// config to the tracker by NAME, and a key the engine states under one name
-// and the tracker reads under another compiles, applies and passes every
-// tracker case, while every replay rebuilds a year of notices for a company
-// that asked to keep a month. So the epoch here is the one the engine builds
-// from a parsed company document, the applier is the register's, and the two
-// notices sit either side of the company's thirty days: the older one is never
-// written, the newer one is.
+// THE TRACKER READS THE COMPANY'S INBOX HORIZON, `inbox.retention_days`, under
+// the epoch key every inbox-keeping domain reads. An applier reads only the
+// epoch ([Company.Epoch]), so the horizon crosses by NAME, and a key stated
+// under one name and read under another passes every tracker case while every
+// replay rebuilds a year of notices for a company that keeps a month. So the
+// epoch is built from a parsed company, the applier is the register's, and two
+// notices sit either side of thirty days: only the newer one is written.
 //
 // Mutation: read the tracker's horizon under any key but [inbox.RetentionKey],
 // or have Company.Epoch state the configured days under another, and the older

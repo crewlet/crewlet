@@ -28,17 +28,15 @@ import (
 )
 
 // A SEAT IS TOLD ITS ACCESS ON EVERY TURN, AND WHAT CHANGED IN IT ONCE
-// (ADR-0104). A turn's dispatch takes the seat's capability snapshot, renders
-// "## Your access" from it, reads what the seat was last told off the access
-// log at `linearizable` and, where the two differ, renders "## What changed
-// since your last turn". Both are frozen on the turn, so every launch carries
-// the same bytes. The turn's first launch writes the told record, once per
-// turn, so the next turn diffs against what this one was told; a turn that
-// never launched told nothing.
+// (ADR-0104). A turn's dispatch renders "## Your access" from the seat's
+// capability snapshot and, where it differs from what the access log (read at
+// `linearizable`) says the seat was last told, "## What changed since your
+// last turn". Both are frozen on the turn, so every launch carries the same
+// bytes. The turn's first launch writes the told record, once, so the next
+// turn diffs against it; a turn that never launched told nothing.
 //
-// FAIL OPEN, NEVER WRONG. A ledger or a log this node cannot read tells the
-// turn nothing it cannot vouch for: no section where the snapshot cannot be
-// taken, and no change block where the baseline cannot be read.
+// FAIL OPEN, NEVER WRONG: no section where the snapshot cannot be taken, and
+// no change block where the baseline cannot be read.
 
 // toldMemoryWindow is how far back a seat's told changes mark its older notes
 // (memory Phase A): a quarter of a year, past which a note older than a change
@@ -433,10 +431,10 @@ func (e *Engine) revisionAuthors(ctx context.Context, from, to string) []string 
 	return out
 }
 
-// tellCapability writes the told record of the turn t's first launch reached
-// a run with, once per turn: a later launch of the same turn finds it recorded.
-// Logged, never failed on: a told record lost here is a change the next turn
-// tells again, never a launch refused.
+// tellCapability writes turn t's told record when its first launch reaches a
+// run, once per turn: a later launch finds it recorded. Logged, never failed
+// on: a record lost here is a change the next turn tells again, never a launch
+// refused.
 func (e *Engine) tellCapability(ctx context.Context, t *turnctx.Turn, told *toldTurn) {
 	if told == nil || told.pending == nil || t == nil {
 		return

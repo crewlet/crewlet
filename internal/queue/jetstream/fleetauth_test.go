@@ -20,9 +20,8 @@ import (
 var testRing = runtoken.OneKey("jetstream-test", "the jetstream package's test fleet key material")
 
 // testFleetAuth is the fleet credentials of [testRing], for a test that starts
-// a member with a route or leaf listener, or a leaf, through [StartServer] or
-// [Config] directly — the fixture jetstreamtest's harness gives its own
-// clusters, which this package cannot import.
+// a member with a route or leaf listener, or a leaf, directly: jetstreamtest's
+// harness has its own, but this package cannot import it.
 var testFleetAuth = sync.OnceValue(func() FleetAuth {
 	auth, err := FleetAuthFrom(testRing)
 	if err != nil {
@@ -54,17 +53,12 @@ func fleetAuthOf(t *testing.T, m runtoken.Material) FleetAuth {
 
 // EACH LISTENER DERIVES ITS OWN CREDENTIAL, PER KEY, FROM THE KEYRING'S RULE.
 //
-// The three listeners take unrelated secrets from one key — so a route
-// password captured on the wire opens no leaf or client listener — and none is
-// a run token's key for the same id. Each key derives its own, so adding a key
-// to a ring moves nothing the keys already in it present: a node that has
-// added k2 and a node that has not still agree on k1. The route username is
-// the key's tag, which names no configured id, and the active key is the one
-// presented.
-//
-// COMPARED AS DERIVED BYTES — the route password decoded, the leaf and
-// operator seeds' raw 32 bytes — never a base64 password against a seed's
-// encoding, which differ whatever the derivation does.
+// The three listeners take unrelated secrets from one key, none a run token's
+// key for the same id; adding k2 moves nothing k1 presents, so nodes on either
+// side of a rotation step agree on k1. The route username is the key's tag,
+// naming no configured id, and the active key is the one presented. Compared
+// as raw derived bytes, never a base64 password against a seed's encoding,
+// which differ whatever the derivation does.
 //
 // Mutations: one domain for two listeners → the pairwise row, red; derive every
 // key from the whole ring's material → the second-key row, red; accept a
@@ -169,10 +163,9 @@ func publicOf(t *testing.T, seed string) string {
 	return public
 }
 
-// FLEET CREDENTIALS PRINT AS THE KEY IDS THEY DERIVE FROM, AND NOTHING ELSE.
-//
-// A Config carries them, and a Config is the kind of value a log line or an
-// error prints whole: as JSON through slog, as %v, %+v and %#v through fmt.
+// FLEET CREDENTIALS PRINT AS THE KEY IDS THEY DERIVE FROM, AND NOTHING ELSE,
+// since a Config carrying them is printed whole: slog's JSON, fmt's %v, %+v
+// and %#v.
 //
 // Mutations: render the struct in LogValue, or drop String or GoString → the
 // secret appears, red.

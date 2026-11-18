@@ -12,14 +12,9 @@ import (
 
 // A MOVE WHOSE ROOT LANDED AND WHOSE WALK STOPPED ANSWERS A STOP, NEVER A
 // REFUSAL — naming what moved, what did not, and the operation that finishes
-// it.
-//
-// The walk answered the bare error of the step it stopped at, and every
-// caller rendered that as it renders a refusal: "the change was NOT made",
-// about a root already re-keyed into the target. A model told that moved it
-// again, under a new operation — which is refused, because the root is in the
-// target and that operation's ledger never put it there — and a person told
-// that went looking for the item under a key it no longer has.
+// it. Told "the change was NOT made" about a root already re-keyed, a model
+// moves it again under a new operation, which is refused, and a person looks
+// for it under a key it no longer has.
 //
 // Mutation: have the walk answer the step's error as it is, and errors.As
 // finds no stop.

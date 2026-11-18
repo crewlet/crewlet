@@ -7,29 +7,17 @@ import (
 )
 
 // FindingsInstruction is the standing instruction requiring a durable report,
-// the last part of the system text the runner composes ([finalSystem]) — which
-// only a harness's instruction about notes follows ([withNoteInstruction]).
+// the last part of the system text [finalSystem] composes, followed only by
+// [withNoteInstruction]. The harness is not the last step (the Crewlet agent
+// continues the task), and its streamed final message can be lost when the
+// process group dies or never exist on a tool-only run, so Collect reads a
+// report at a known path instead.
 //
-// The harness is NOT the last step: its findings go back to the Crewlet
-// agent, which continues the same task. The streamed final message can be lost
-// when a run's process group dies before it is written, and a tool-only run
-// leaves no parsed text at all — so a durable structured report at a known path is required,
-// and Collect always reads it.
-//
-// WHAT THE RUN DELIVERED IS NAMED, one `Delivered:` line per branch pushed and
-// per pull or merge request opened, because that is the only account of it
-// the engine can read on any code host: which hosts a box pushes to is the
-// seat's own environment's business, and a pushed branch has no URL at all.
-// Those lines are the run's delivered refs ([deliveredRefs]); a report that
-// writes none is scraped for pull-request URLs instead, which cannot tell one
-// the run opened from one it only read.
-//
-// EXCEPT ON GITLET, whose pushes the engine reads from
-// its push record and reports for the run (sandbox.Result.Pushed): native is
-// the repositories there the run may push to, by name, and where it names any
-// the run is told so and asked for lines only for what it delivered somewhere
-// else — a line for a push the record names is the same delivery said twice,
-// and the record's is the account nothing in the box can write.
+// It asks for a `Delivered:` line per branch pushed and pull or merge request
+// opened ([deliveredRefs]), the only account the engine can read on any host:
+// a pushed branch has no URL, and a scraped URL may be one the run only read.
+// Pushes to the Gitlet repositories in native are left out: the engine reports
+// them from its push record (sandbox.Result.Pushed), which the box cannot write.
 func FindingsInstruction(findingsPath string, native []string) string {
 	lines := []string{
 		"\n## Before you finish — write your report",

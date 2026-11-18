@@ -13,18 +13,15 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE ARTIFACTS ESTATE AS OPERATIONS: every read and write a tool, the serving
-// origin or the API makes of an artifact, answered by a data node whose copy
-// serves (this one where it does), so a node holding no data acts through one
-// that does (ADR-0025).
-//
-// READS ARE FLOORED ON THE ARTIFACTS LOG, the log every answer here is read
-// from, so a read after a write is served by a node that has applied it. WRITES
-// carry the caller's operation key on their [artifactsdomain.Call]: keyed, a
-// write derives every record id from it and a repeat is the same operation, so
-// an unanswered one is asked of the next data node under the same key; unkeyed
-// it is never repeated ([ErrOutcomeUnknown]). The authority a write is decided
-// under crosses whole, decided on the asking node where the grants are.
+// THE ARTIFACTS ESTATE AS OPERATIONS: every artifact read and write a tool, the
+// serving origin or the API makes, answered by a data node whose copy serves
+// (this one where it does), so a node holding no data acts through one that
+// does (ADR-0025). Reads are floored on the artifacts log, so a read after a
+// write lands on a node that has applied it. A write keyed with the caller's
+// operation key ([artifactsdomain.Call]) derives every record id from it, so an
+// unanswered one is asked of the next data node under the same key; unkeyed it
+// is never repeated ([ErrOutcomeUnknown]). A write's authority crosses whole,
+// decided on the asking node where the grants are.
 
 // ArtifactsReader is the artifacts read side the surfaces ask of: exactly the
 // domain reader's method set, so a consumer cannot tell local from routed.
@@ -133,10 +130,10 @@ type ArtifactsWriter interface {
 }
 
 // ArtifactsHalf is the artifacts estate a data node serves: its reader and its
-// writer, which every data node runs. A nil half is one this node's core runtime
-// has not built, answered like any half a node does not run — and a nil writer
+// writer, which every data node runs. A nil half (one this node's core runtime
+// has not built) is answered like any half a node does not run; a nil writer
 // beside a reader is a node that publishes nothing (a maintenance mode), whose
-// reads are served and whose writes move on to a node that publishes.
+// writes move on to a node that publishes.
 type ArtifactsHalf struct {
 	Reader ArtifactsReader
 	Writer ArtifactsWriter
@@ -211,13 +208,12 @@ type artifactVersionArgs struct {
 var opArtifactVersion = define("artifacts.version", opRead, artifactsDomain, false, artifactVersion)
 
 // ONE VERSION A PUBLISH CARRIES ON, ANSWERED WHOLE ([op.answeredWhole]): a
-// publish that keeps a file of an earlier version — a patch's base, a file
-// carried from a version it names — writes back the entry it read
-// (internal/artifactupload), so a newer build's field on an entry this build
-// would drop is refused rather than published away. ITS OWN OPERATION, beside
-// the one that shows a version, because declared on that one it blinded every
-// reader that only shows a version — a seat's get_artifact, a screen, the
-// artifact origin deciding what it serves — to one a newer node published.
+// publish keeping a file of an earlier version writes back the entry it read
+// (internal/artifactupload), so a newer build's field this build would drop is
+// refused rather than published away. Its own operation: declared on
+// opArtifactVersion it would blind every reader that only shows a version (a
+// seat's get_artifact, a screen, the artifact origin) to what a newer node
+// published.
 var opArtifactVersionCarried = define("artifacts.version_carried", opRead, artifactsDomain, false,
 	artifactVersion).answeredWhole()
 

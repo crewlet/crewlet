@@ -23,98 +23,16 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE CODE READ TOOLS: the company's own repositories (`code.backend: gitlet`), read on
-// the server rather than in a clone — code_list_repos, code_get_repo,
-// code_resolve, code_read, code_diff, code_compare, code_landed_in, code_log
-// and code_blame, and a repository's changes, code_list_changes and
-// code_get_change (codechanges.go), and a search across every repository the
-// caller reads, code_search (codesearch.go) — each named for its authority row, and ONE
-// list ([CodeTools]) that a seat's registry and the operator catalogue both
-// take, so a schema, a default and a refusal's words are written once. The
-// code WRITES join the same list where Gitlet's writes are wired
-// (codewrite.go), through the same resolution of a repository — and the same
-// turn's hold on it (codehold.go).
-//
-// # Every read is judged where it is answered
-//
-// The gate admits every principal (`authz.ClassEverybody`): who may read a
-// repository is a GRANT the serving node derives from its own chart for the
-// repository a call names (ADR-0088), which the gate cannot ask before the
-// repository is read. So each tool names its caller — [CodeAskerOf], the one
-// conversion the REST reads use too — and the data node or the Gitlet node that
-// answers holds the read to that caller's grant: a listing leaves out what the
-// caller may not read, and a read of such a repository is refused
-// `not_permitted` in the domain's own sentence. No argument names who reads.
-//
-// # Every read is decided again for whoever woke the turn
-//
-// Inside a turn somebody woke, a seat reading code is that somebody's deputy,
-// and a deputy that read out whatever it may read itself would hand a
-// `visibility: unit` repository to anybody who can message one of the unit's
-// seats. So every call is decided twice, as the artifacts tools decide theirs
-// (the REQUESTER CEILING, [ceilingOf]): by the tool's own authority row asked
-// again for the requester ([authz.DecideWithin]) — a stranger the company
-// does not know reads nothing, and neither does a person who may not act in
-// it now — and, for a requester that is a colleague SEAT, by that seat's own
-// grant on the repository, which rides on every read the call makes
-// ([gitlet.ReadQuery.CeilingSeat]) for the node that answers it to judge beside
-// the asker's, from the same chart and the same row: a listing leaves out
-// what the colleague may not read, and a read of such a repository is refused
-// in Gitlet's own sentence ([gitlet.ErrAboveCeiling]). Judged THERE,
-// never here against the repository the turn resolved once: the asker's
-// grant is judged afresh at every read, and a ceiling judged on the turn's
-// memo would keep reading for a colleague a later activation shut out. A
-// person passes — every person maintains every repository (ADR-0085) — and a
-// call outside any turn, a person's own assistant, reads for nobody but its
-// caller. The requester's authority is a ceiling and never a source: what is
-// read is the seat's own read, judged by its own grant.
-//
-// # Rows at the seat's level, objects by id
-//
-// What a repository is and what a ref points at are ROWS, read at the seat's
-// level — linearizable on both surfaces ([seatReadLevel]), so an answer
-// includes every push that landed before the call. What an object id names is
-// the same object on every node at every position, so a read by one needs no
-// level: it is asked with the caller's floor on the code log — this node's own
-// pushes to THAT repository (never its writes to any other, which no copy of
-// this one holds), and where each ref it named last MOVED, the push that set
-// it — as the Gitlet node's SYNC level, never a barrier. NEVER WHERE THE RESOLVE
-// READ THE REF: a linearizable read's checkpoint is past its own barrier, so a
-// copy current to every push of the repository still sits below it, and a
-// floor there made the Gitlet node run a sync round for nothing on every read by
-// a ref; floored at the ref's move, a current copy answers as it stands, and
-// only one behind the commits a call names syncs first. A turn pays one
-// barrier per repository it names — the repository is resolved ONCE A TURN
-// ([CodeDeps.repo], kept on the turn's lookups) — and one per call that names
-// refs, however many it names, all resolved in one read ([CodeDeps.resolveRef])
-// at one checkpoint; a call that names commits by id pays none beyond the
-// repository's.
-//
-// # Text somebody else wrote is fenced
-//
-// A file's lines (code_read, and each line code_blame names) and a patch
-// (code_diff) are text a repository's committers wrote — importers and
-// outside contributors among them — that a read by object id cannot
-// attribute, so each goes out inside a fence of the turn's boundary at trust
-// `external`, naming no writer (ADR-0040); and so does each commit's subject
-// code_log and code_blame name (`repo_commit`), a message its pusher wrote,
-// up to gitlet.MaxLogSubjectBytes of it — the long text a history is read by.
-// Every other string of every answer — paths, ref names, descriptions, a
-// commit's author and address, short and named beside a fenced subject — is
-// defused ([foreignRead]). The Gitlet node that cuts a history's or a blame's
-// page counts each of those fences and every string's defusing into the
-// page's bytes (internal/gitlet/query's page.go), so a page of a hundred fenced
-// subjects is still one answer.
-//
-// # One page is one tool answer, sent as it was measured
-//
-// A Gitlet node cuts every page at gitlet.MaxGitAnswerBytes of compact JSON, the
-// tool answer less what these tools wrap round it, and these tools send it
-// compact ([compactAnswer]): indented, a page of short entries would arrive
-// past the answer it was cut to fit. A row listing is cut by these tools, whole
-// rows, at the answer as it is sent ([foreignRead.fit]). A page whose text the
-// fence lengthens past the answer — text spelling fence markers, each of which
-// grows by its escape — is refused naming a narrower read, never cut.
+// THE CODE READ TOOLS: the company's Gitlet repositories (`code.backend:
+// gitlet`), read on the server rather than in a clone — code_list_repos,
+// code_get_repo, code_resolve, code_read, code_diff, code_compare,
+// code_landed_in, code_log and code_blame here, a repository's changes in
+// codechanges.go and code_search in codesearch.go — each named for its
+// authority row, in ONE list ([CodeTools]) a seat's registry and the operator
+// catalogue share. The writes join it (codewrite.go) through the same
+// resolution of a repository and the turn's hold on it (codehold.go). How a
+// read is judged, decided for the requester, levelled, fenced and paged:
+// package doc, "The code tools".
 
 // The code read tools' names: each is its authority row's action.
 const (
@@ -129,9 +47,9 @@ const (
 	CodeBlameTool     = string(authz.ActionCodeBlame)
 )
 
-// CodeToolNames are the twelve, in the order a catalogue lists them: the
-// repositories, a ref, then the reads by object id — the history's last — a
-// repository's changes ([ChangeToolNames]) and what a check of a commit said
+// CodeToolNames are the twelve code reads in catalogue order: the
+// repositories, a ref, the reads by object id (the history's last), a
+// repository's changes ([ChangeToolNames]) and a commit's check failures
 // (codechecks.go).
 func CodeToolNames() []string {
 	return append([]string{CodeListReposTool, CodeGetRepoTool, CodeResolveTool, CodeReadTool,
@@ -139,29 +57,26 @@ func CodeToolNames() []string {
 		append(ChangeToolNames(), CodeGetCheckFailuresTool)...)
 }
 
-// The listing pages. A repository row carries a description of up to a
-// kibibyte and its protection rules, so a page of a hundred is cut, whole
-// rows, wherever it outgrows one tool answer; twenty-five is a screen of
-// them. A branch row is a name and an id, so a hundred fit beside the detail
-// unless the names are long, and are cut the same way.
+// The listing pages. A repository row carries up to a kibibyte of
+// description and its protection rules, so a page is cut, whole rows, where it
+// outgrows one tool answer; twenty-five is a screen of them. A branch row is a
+// name and an id, so a hundred fit beside the detail unless the names are long.
 const (
 	defaultCodeRepoList = 25
 	maxCodeRepoList     = 100
 	codeBranchesPage    = 100
 )
 
-// CodeReader is Gitlet as these tools ask it, routed — estate.CodeSeam,
-// declared here by its consumer: this node's own copy of the code log where it
-// serves, a data node's otherwise, and a repository's home Gitlet node for its
-// content.
+// CodeReader is Gitlet as these tools ask it (estate.CodeSeam, declared by its
+// consumer), routed: this node's copy of the code log where it serves, a data
+// node's otherwise, and a repository's home Gitlet node for its content.
 type CodeReader interface {
 	Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error)
 	ResolveRef(ctx context.Context, q gitlet.RefQuery) (gitlet.RefAnswer, error)
 	GitRead(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error)
 	// FloorOf is this node's floor on repository repoID — its own pushes to
-	// that repository, and none of its writes to any other — which every read
-	// by object id of the repository is asked with, so the copy that answers
-	// holds them.
+	// it, never its writes to any other — which every read by object id of it
+	// is asked with, so the answering copy holds them.
 	FloorOf(repoID string) statelog.Position
 }
 
@@ -172,83 +87,66 @@ type CodeDeps struct {
 	// code tool.
 	Code CodeReader
 
-	// Actor is who is asking: the SAME resolver the work tools take
-	// ([WorkDeps.Actor]), so a seat's turn and an operator's call name their
-	// caller one way. Nil takes the turn's seat — every in-engine caller —
-	// and the operator surface sets the request's principal.
+	// Actor resolves who is asking, as [WorkDeps.Actor] does, so a seat's
+	// turn and an operator's call name their caller one way. Nil takes the
+	// turn's seat; the operator surface sets the request's principal.
 	Actor func(ctx context.Context, turn *turnctx.Turn) (Actor, error)
 
-	// CloneURL is the address a person's git clones a repository from — on
-	// the deployment's `api.external_url`, where git is served — or empty
-	// where the deployment names none. Nil names none. Only a person's and a
-	// token's answer carries it: a seat reads through these tools, and a URL
-	// it could not authenticate to would only send it round.
+	// CloneURL is the address a person's git clones a repository from (on
+	// `api.external_url`); nil or empty names none. Only a person's or a
+	// token's answer carries it: a seat reads through these tools, and could
+	// not authenticate to it.
 	CloneURL func(repo string) string
 
-	// Requesters composes who a seat's turn is acting for, and Chart is the
-	// chart the authority table decides them by: every call in a turn
-	// somebody woke is decided again for them ([CodeDeps.caller]). REQUIRED
-	// beside Code — the tools are wired together or not at all, as the
-	// artifacts tools are, so a surface that left the ceiling out serves no
-	// code read rather than every one to whoever asks a seat for it.
+	// Requesters composes whom a seat's turn acts for, and Chart decides them
+	// ([CodeDeps.caller]). REQUIRED beside Code, as for the artifacts tools: a
+	// surface that left the ceiling out serves no code read rather than every
+	// one to whoever asks a seat for it.
 	Requesters Requesters
 	Chart      authz.Chart
 
-	// Writer is Gitlet's writes — an engine-built write asked of the
-	// repository's home Gitlet node, and a repository's lifecycle request asked
-	// of a data node — routed as Code's reads are. Nil omits every
-	// code WRITE tool and leaves the reads as they are: a surface that reads
-	// the company's code and changes none of it. See codewrite.go.
+	// Writer is Gitlet's writes (engine-built writes to a repository's home
+	// Gitlet node, lifecycle requests to a data node), routed as Code's reads
+	// are. Nil omits every code WRITE tool and leaves the reads (codewrite.go).
 	Writer CodeWriter
 
-	// Tasks is Worklet as one task is read, which resolves the Worklet item
-	// a change write's `work_item` names by its key or id to the item's
-	// identity ([CodeDeps.workItemOf]), and code_list_changes' `work` by its
-	// key alone ([CodeDeps.listedWorkItem]): set where the company runs
-	// Worklet. Nil resolves none, and a call it would resolve is refused,
-	// naming the `<backend>:<id>` form every item takes — never filed, or
-	// listed, under a key nobody resolved.
+	// Tasks resolves the Worklet item a change write's `work_item` names, by
+	// key or id ([CodeDeps.workItemOf]), and code_list_changes' `work` by key
+	// ([CodeDeps.listedWorkItem]). Nil resolves none, and such a call is
+	// refused naming the `<backend>:<id>` form — never filed or listed under a
+	// key nobody resolved.
 	Tasks TaskReader
 
-	// Closer is Worklet's writer FOR ONE ACTOR, which a
-	// merged change's step two closes its Worklet work item through
-	// (code_merge_change's `close_task`), as the caller who merged it — the
-	// tracker's rule that a writer acts as exactly one party. Set beside
-	// [CodeDeps.Tasks]; nil closes none, and a merge asked to close its item
-	// says it was not closed and why.
+	// Closer is Worklet's writer FOR ONE ACTOR (the tracker's rule), through
+	// which code_merge_change's `close_task` closes a merged change's item as
+	// the caller who merged it. Set beside Tasks; nil closes none, and the
+	// merge says its item was not closed and why.
 	Closer func(actor Actor) WorkWriter
 
-	// Mentions resolves the handles a change's text names — an open's or an
+	// Mentions resolves the handles a change's text names (an open's or an
 	// edit's title and body, a review's summary and findings, a comment's
-	// body — to seats, at the write ([CodeDeps.mentionsOf]), so a mention
-	// wakes the colleague its writer meant: THE ASKER'S, as the change and
-	// conversation payloads take them, which the deciding node holds to its
-	// own chart. The same resolver the work tools take, read per call. Nil
-	// resolves nothing: the write still lands, and wakes only those it
-	// concerns by role — its owner, its authors, its reviewers.
+	// body) to seats at the write ([CodeDeps.mentionsOf]), as THE ASKER'S,
+	// which the deciding node holds to its own chart. Nil resolves nothing:
+	// the write lands and wakes only those it concerns by role.
 	Mentions MentionResolver
 
 	// Holder records a turn's hold on a scratch repository it names
-	// ([HoldRepo]), set wherever the tools are offered to seats and
-	// independently of Writer, because a seat that only reads still holds
-	// what it reads. Nil records none: a turn that reaches a scratch
-	// repository idle long enough to need its hold recorded is refused
-	// rather than sent there unordered against an expiry in flight. An
-	// operator's call has no turn, and holds nothing either way.
+	// ([HoldRepo]), set wherever seats are offered the tools, independently
+	// of Writer: a seat that only reads still holds what it reads. Nil records
+	// none, so a turn reaching a scratch repository idle long enough to need
+	// its hold recorded is refused rather than sent there unordered against
+	// an expiry in flight. An operator's call has no turn and holds nothing.
 	Holder CodeHolder
 
-	// Logs is the fleet's object store as a check's kept log is read from
-	// ([CheckLogReader]): code_get_check_failures reads a failed run's log
-	// a page at a time through it. Nil reads no log page — the failures, the
-	// summary and the tail the check's row holds are still answered, and a
-	// call naming a log page is told this node reads none.
+	// Logs reads a check's kept log from the object store ([CheckLogReader])
+	// for code_get_check_failures. Nil reads no log page: the row's failures,
+	// summary and tail are still answered, and a call naming a page is told
+	// this node reads none.
 	Logs CheckLogReader
 
-	// Searcher is the code search over the fleet's Gitlet nodes, which
-	// code_search asks (codesearch.go). Nil omits code_search and leaves the
-	// reads as they are: a surface that reads repositories one at a time and
-	// searches none. The engine wires it wherever it wires Code, so a seat
-	// that reads the company's code can search it.
+	// Searcher is the code search over the fleet's Gitlet nodes, for
+	// code_search (codesearch.go). Nil omits code_search; the engine wires it
+	// wherever it wires Code.
 	Searcher CodeSearcher
 
 	// Placement is where a repository's work is placed — its maintainer and
@@ -261,9 +159,9 @@ type CodeDeps struct {
 	// hold is taken; nil is the wall clock.
 	Now func() time.Time
 
-	// ops is how a write tool's call names its operation ([operations]):
-	// derived from a seat's turn or a request's own key, or held by the
-	// operator's assistant over MCP, which [OperatorTools] alone says.
+	// ops names a write call's operation ([operations]): derived from a seat's
+	// turn or a request's key, or held by the operator's assistant over MCP,
+	// which only [OperatorTools] sets.
 	ops operations
 }
 
@@ -271,14 +169,11 @@ type CodeDeps struct {
 // Gitlet, and the requester ceiling's composition and chart.
 func (d CodeDeps) serves() bool { return d.Code != nil && d.Requesters != nil && d.Chart != nil }
 
-// CodeTools are the code tools a seat and an operator share: ONE list, so a
-// schema, a default and a refusal's words are written once, and nil where
-// deps are not wholly wired ([CodeDeps.serves]) — a company that hosts no
-// code. The reads first, which deliver nothing — the twelve
-// ([CodeToolNames]), then, where the search is wired ([CodeDeps.Searcher]),
-// code_search, a read across them all; then, where Gitlet's writes are
-// wired ([CodeDeps.Writer]), the writes ([CodeWrites]), each a delivery to
-// Gitlet's surface.
+// CodeTools are the code tools a seat and an operator share — ONE list, so a
+// schema, a default and a refusal's words are written once — or nil where
+// deps are not wholly wired ([CodeDeps.serves]). The twelve reads
+// ([CodeToolNames]), then code_search where [CodeDeps.Searcher] is wired,
+// then the writes ([CodeWrites]) where [CodeDeps.Writer] is.
 func CodeTools(deps CodeDeps) []tools.Callable {
 	if !deps.serves() {
 		return nil
@@ -309,42 +204,17 @@ func codeCandidates(deps CodeDeps) []candidate {
 }
 
 // codeAnnotations classifies one code tool for the delivery gate and the
-// sub-agent guard; false for a name that is not one.
-//
-// EVERY READ IS A PROVEN READ, and idempotent: asking twice costs a round and
-// changes nothing. So a turn that only read code is a turn that delivered
-// nothing (the delivery check), a worker may be handed them (the guard), and
-// the operator catalogue audits no call to one, as it audits no read — the
-// operator's own `code_repo_readers` among them.
-//
-// EVERY WRITE IS A WRITE TO A SHARED SURFACE — a branch, a repository, a
-// protection, a change every colleague of the company reads — so `ReadOnly:
-// No` with `OpenWorld: Yes`, which [mcp.WritesToSharedSurface] reads as true:
-// a worker acting under its parent's name is given none of them (a second,
-// unbudgeted writer with the parent's grant), the delivery check counts a call
-// to one as a delivery, and the operator catalogue audits every call.
-// IDEMPOTENT where each is held to what its caller read: a commit, a revert, a
-// pick and a deletion to the branch's head (`expected_head`), a branch's
-// creation to its absence, a repository's to its free name, a change's open
-// to the one live change its branch may head and every other write of its
-// lifecycle to the version its caller read, an ask of a reviewer already
-// asked and an answer a finding already holds to nothing, and a setting or a
-// protection set again is the same setting — so a call made twice leaves what
-// one call left, which is what makes a retry after a lost answer safe. NOT a
-// review and not a comment, which are additive: the engine makes the same
-// call's re-run the same write, but the annotation describes the tool a model
-// is offered, and two reviews or two comments saying the same are two (the
-// tracker's comment_on_work_item, for the same reason). DESTRUCTIVE only where
-// a call can take away what somebody else made with nothing kept to undo it by
-// the same tool: a branch deleted (its commits stay in the repository, its
-// name and head only in the push history), a repository deleted (restorable
-// until its purge, then gone), a finding dismissed — a reviewer's
-// blocker cleared, which nothing moves back — and a repository's unreachable
-// objects purged, which nothing brings back once the purge commits. A commit moves a branch forward
-// over its history, which keeps every earlier version; a setting, a
-// protection or what a change says is set back by the same tool, the record
-// of each change keeping what it replaced; and an archive, a close and a
-// draft are each undone by their opposite.
+// sub-agent guard; false for a name that is not one. A READ is read-only and
+// idempotent: a turn of reads delivered nothing, a worker may be handed one,
+// the catalogue audits none. A WRITE changes a surface every colleague reads,
+// so OpenWorld ([mcp.WritesToSharedSurface]): no worker gets one (an
+// unbudgeted second writer with its parent's grant); a call delivers, audited.
+// IDEMPOTENT, each held to what its caller read (`expected_head`, a branch's
+// absence, a free name, the version read), so a retry after a lost answer is
+// safe; not a review or a comment, which are additive as a model sees them.
+// DESTRUCTIVE only where it takes away somebody's work with nothing to undo it
+// by the same tool: a branch or repository deleted, a finding dismissed,
+// unreachable objects purged.
 func codeAnnotations(name string) (tools.Annotations, bool) {
 	for _, tool := range append(CodeToolNames(), CodeSearchTool, CodeRepoReadersTool) {
 		if tool == name {
@@ -365,16 +235,14 @@ func codeAnnotations(name string) (tools.Annotations, bool) {
 	return tools.Annotations{}, false
 }
 
-// CodeAskerOf is the principal a code read is judged as, from who is asking:
-// a seat by its handle, which the serving node's chart relates to the
-// repository; a person — every person holds a human seat — as the credential
-// they act through, bound to that seat; and a credential nobody is bound
-// through, or the engine itself, as that credential alone.
+// CodeAskerOf is the principal a code read is judged as: a seat by its handle,
+// which the serving node's chart relates to the repository; a person as the
+// credential they act through, bound to their human seat; and an unbound
+// credential, or the engine, as that credential alone.
 //
-// THE ONE CONVERSION, for every surface that reads Gitlet on somebody's
-// behalf: a seat's turn and an operator's call here, and the REST reads, which
-// compose their caller with [ActorOf] first. Two conversions would be two
-// readings of one principal, free to judge the same person by two grants.
+// THE ONE CONVERSION for every surface reading Gitlet on somebody's behalf (a
+// seat's turn, an operator's call, the REST reads via [ActorOf]): two would be
+// free to judge one person by two grants.
 func CodeAskerOf(a Actor) gitlet.Principal {
 	switch a.Kind {
 	case worklet.AuthorAgent:
@@ -390,9 +258,8 @@ func CodeAskerOf(a Actor) gitlet.Principal {
 // ---- who asks, and what a call names ------------------------------------ //
 
 // asker is who this call reads as, or the refusal it is answered with: the
-// caller as a write would name them ([Actor], its run's call log on it, as
-// [WorkDeps.actor] puts it there) and the principal a repository's grant
-// judges.
+// caller as a write names them ([Actor], carrying its run's call log as
+// [WorkDeps.actor] does) and the principal a repository's grant judges.
 func (d CodeDeps) asker(ctx context.Context, turn *turnctx.Turn, tool string) (Actor, gitlet.Principal,
 	*tools.Result) {
 
@@ -426,18 +293,14 @@ func (d CodeDeps) asker(ctx context.Context, turn *turnctx.Turn, tool string) (A
 }
 
 // codeCaller is who one call of a code tool reads as: the caller as a write
-// and a hold name them, the asker its grant is judged by, and — inside a turn
-// a colleague seat woke — that seat, whose own grant bounds the asker's on
-// every read the call makes ([gitlet.ReadQuery.CeilingSeat]), "" for a call made
-// for nobody else.
-//
-// A WRITE's call carries the same requester as its write's ceiling too
-// ([CodeDeps.writeCaller]): nil for a write made for its seat alone or for a
-// person, a colleague seat's, or nobody's — a requester who may change
-// nothing, whose turn the write is still made in for the seat's own work. And
-// whom its write is made for is the actor's carrier (Actor.WrittenFor),
-// composed from the same bound ceiling, which every request the write forms
-// carries, stamped beside that ceiling ([written]).
+// and a hold name them, the asker its grant is judged by, and — in a turn a
+// colleague seat woke — that seat, whose own grant bounds the asker's on every
+// read ([gitlet.ReadQuery.CeilingSeat]); "" for a call made for nobody else.
+// write is a write's ceiling ([CodeDeps.writeCaller]): nil for a write made
+// for its seat alone or for a person, else a colleague seat's or nobody's — a
+// requester who may change nothing, whose turn the write is still made in for
+// the seat's own work. Actor.WrittenFor, composed from the same ceiling, is
+// stamped beside it on every request the write forms ([written]).
 type codeCaller struct {
 	actor   Actor
 	asker   gitlet.Principal
@@ -446,39 +309,30 @@ type codeCaller struct {
 }
 
 // caller is who this call reads as, or the refusal it is answered with: the
-// asker ([CodeDeps.asker]) and, inside a seat's turn somebody woke, whoever
-// that is ([ceilingOf]), decided AGAIN by the tool's own authority row
-// ([authz.DecideWithin], the artifacts tools' one function): a stranger
-// reads nothing, a requester who may not act in the company reads nothing,
-// and a requester the node could not compose or decide is answered as a node
-// that could not tell, never as a turn nobody woke. A colleague seat the row
-// admits rides on every read as the call's ceiling, for the node that answers
-// to judge its grant on the repository ([gitlet.JudgeRead]); a person the row
-// admits bounds nothing, since a person maintains every repository.
+// asker ([CodeDeps.asker]) and, in a seat's turn somebody woke, that somebody
+// ([ceilingOf]), decided AGAIN on the tool's own authority row
+// ([authz.DecideWithin]): a stranger or a requester who may not act in the
+// company reads nothing, and one the node could not compose or decide is
+// answered as a node that could not tell, never as a turn nobody woke. An
+// admitted colleague seat rides on every read as the ceiling, judged by the
+// answering node ([gitlet.JudgeRead]); an admitted person bounds nothing.
 //
-// FIRST, before any argument is read, as the artifacts tools compose theirs:
-// whom a call reads for decides whether it reads at all, and the composition
-// reads the running chart and, for a person, the identity directory — never a
-// barrier on a log. A person's or a token's call is no deputy, and composes
-// nothing.
+// Composed FIRST, before any argument is read: whom a call reads for decides
+// whether it reads at all, and composing reads the chart and the identity
+// directory, never a log's barrier. A person's or token's call is no deputy.
 func (d CodeDeps) caller(ctx context.Context, turn *turnctx.Turn, tool string) (codeCaller, *tools.Result) {
 	return d.callerOn(ctx, turn, tool, authz.Action(tool))
 }
 
-// callerOn is [CodeDeps.caller] with whoever woke the turn decided on action
-// rather than on the tool's own row: for a tool that is no code read itself
-// but reads Gitlet as one — code_status, the health grant's
-// (healthtools.go), whose hot list and one-repository form read repositories
-// through the code tools' resolution — the requester is decided on the verb
-// those reads are, Gitlet's ([authz.ActionCodeRead]), and NO FURTHER.
-// The requester ceiling holds a repository read (ADR-0088), so every
-// repository such a call reads is read for its requester as a code tool's is;
-// what the tool reads beyond the repositories is its own row's, which the
-// call's gate has already decided for the seat, and deciding that row again
-// for the requester would refuse every turn anybody woke: a requester holds no
-// admin and a colleague seat no grant of the asker's. Its sibling fleet_health
-// reads no repository and decides the requester likewise on a row everybody
-// of the company who may act holds ([fleetHealth.forRequester]).
+// callerOn is [CodeDeps.caller] with the requester decided on action rather
+// than the tool's own row: for a tool that is no code read but reads
+// repositories through the code tools' resolution — code_status
+// (healthtools.go) — on Gitlet's verb ([authz.ActionCodeRead]) and NO FURTHER.
+// The requester ceiling holds a repository read (ADR-0088); what the tool
+// reads beyond repositories is its own row's, already decided for the seat by
+// the gate, and deciding it again for the requester would refuse every woken
+// turn, since a requester holds no admin. fleet_health likewise decides on a
+// row everybody who may act holds ([fleetHealth.forRequester]).
 func (d CodeDeps) callerOn(ctx context.Context, turn *turnctx.Turn, tool string,
 	action authz.Action) (codeCaller, *tools.Result) {
 
@@ -522,14 +376,12 @@ func (d CodeDeps) callerOn(ctx context.Context, turn *turnctx.Turn, tool string,
 	return c, nil
 }
 
-// ceilingRefused is what a call refused for whoever its turn is acting for is
-// answered with, by who that is: a stranger, a requester who may not act in
-// the company, or one who does not use Gitlet (ADR-0110) — the three a read
-// of the company's code is refused for, since it asks the app and nothing of
-// the requester's relations. A credential acting as no seat is named as one,
-// as the authority table's own refusal names it ([DecisionRefused]): the
-// administrator gives the app to the credential, and a seat told "the person"
-// would go looking for somebody who never asked.
+// ceilingRefused answers a call refused for whoever its turn acts for, by who
+// that is: a stranger, a requester who may not act now, or one without Gitlet
+// (ADR-0110) — the three a code read is refused for, since it asks the app and
+// none of the requester's relations. A credential acting as no seat is named
+// as one, as [DecisionRefused] names it: a seat told "the person" would look
+// for somebody who never asked.
 func ceilingRefused(tool string, c authz.Ceiling) string {
 	switch {
 	case c.Kind == authz.CeilingStranger:
@@ -590,13 +442,12 @@ func repoArg(tool string, args map[string]any) (string, *tools.Result) {
 	return name, nil
 }
 
-// repo is the repository named, resolved ONCE A TURN: the first call naming it
-// reads it — kind `repo`, at the seat's level, which is where a repository the
-// asker may not read is refused before any Gitlet node is asked — and every
-// later call in the turn reuses the answer from the turn's lookups, its id
-// above all, which a read by object id names the repository by. The operator
-// surface has no turn, and resolves once a call. See [CodeDeps.repoRead],
-// whose read a call can make its own.
+// repo is the repository named, resolved ONCE A TURN: the first call reads it
+// (kind `repo`, at the seat's level, where a repository the asker may not
+// read is refused before any Gitlet node is asked), and later calls reuse it
+// from the turn's lookups — its id above all, which reads by object id name.
+// The operator surface has no turn and resolves once a call. See
+// [CodeDeps.repoRead].
 func (d CodeDeps) repo(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	name string) (gitlet.RepoRef, *tools.Result) {
 
@@ -605,36 +456,17 @@ func (d CodeDeps) repo(ctx context.Context, turn *turnctx.Turn, tool string, c c
 }
 
 // repoRead is [CodeDeps.repo] whose read, on a turn's first call naming the
-// repository, may be the call's OWN: first, where it is not nil, is a read
-// whose answer carries the repository — in detail, as code_get_repo's first
-// page of refs is held by the reader to carry it, or as the repository its
-// name resolved to, as a change read, a listing of a repository's changes and
-// one of its checks answer it when asked ([gitlet.ReadQuery.Resolve]) — made in
-// place of the read of kind `repo` and answered back for the call to use, so
-// that call is ONE linearizable read rather than the resolution's and then
-// its own: one barrier on the code log, where two were two serial quorum
-// round trips. Its asker, repository and level are this method's to set,
-// never the call's. A hit answers no read: the call makes its own.
+// repository, may be the call's OWN: first, when not nil, is a read whose
+// answer carries the repository (code_get_repo's first refs page, or one with
+// [gitlet.ReadQuery.Resolve]), sent in place of the `repo` read with asker,
+// repository and level set here: one barrier, not two. A hit answers none.
 //
-// THE ONE RESOLUTION OF A `repo` ARGUMENT, so whatever has to happen before a
-// turn's first request about a repository happens in one place; every tool
-// reads all its arguments first ([repoArg], [revArg]), so a malformed call is
-// refused before it costs a read. The memo decides nothing about access: the
-// node answering every later read judges the grant again, the asker's and the
-// ceiling's. And it holds only while it is true: a later read that answers
-// the name with another id ([CodeDeps.sameRepo]), or the id gone
-// ([CodeDeps.failed]), forgets it.
-//
-// AND THE TURN'S HOLD, taken here on a MISS, before the call sends anything
-// else about the repository ([HoldRepo]): a scratch repository the turn names
-// is never expired while the turn is unended (M3-decisions M3-O61). Taken
-// after the read that resolved the name — the hold is ON the id the name
-// resolves to, and decided at that read's position — and before the memo
-// keeps the resolution, so a resolution the turn reuses is always one its
-// hold was taken for: a hold that failed keeps nothing, the call is refused
-// with nothing more sent, and the next call naming the repository resolves
-// it, and takes its hold, again. A HIT takes none: its hold was taken with
-// it, and a turn's holds only grow.
+// THE ONE RESOLUTION OF A `repo` ARGUMENT. Its memo decides no access (every
+// read is judged again) and is forgotten once untrue ([CodeDeps.sameRepo],
+// [CodeDeps.failed]). A MISS takes the turn's hold ([HoldRepo]: no scratch
+// repository expires under an unended turn, M3-decisions M3-O61) after the
+// read, on the id it resolved, and before the memo keeps it, so a reused
+// resolution has its hold; a failed hold refuses the call and keeps nothing.
 func (d CodeDeps) repoRead(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	name string, first *gitlet.ReadQuery) (gitlet.RepoRef, *gitlet.ReadAnswer, *tools.Result) {
 
@@ -692,15 +524,11 @@ func (d CodeDeps) sameRepo(turn *turnctx.Turn, tool string, asker gitlet.Princip
 	return &r
 }
 
-// failed explains a read about repo — the repository the turn resolved — that
-// did not answer ([codeFailure]), and where the read answered the repository
-// GONE (gitlet.ErrRepoNotFound) forgets the turn's resolution of its name first,
-// as [CodeDeps.sameRepo] does for a name that answers another id: the
-// resolution is no longer true, whichever read found it out — one by name, or
-// one by the id the turn resolved, which no read by name ever re-checks. A name
-// purged and declared again names a repository of another id, so the next call
-// naming it resolves it afresh rather than asking again, for the rest of the
-// turn, about an id nothing serves.
+// failed explains a read about repo, the repository the turn resolved, that
+// did not answer ([codeFailure]), first forgetting the turn's resolution of
+// its name where the read found the repository GONE (gitlet.ErrRepoNotFound):
+// no read by name re-checks a read by id, and a name purged and declared again
+// names another id, which the next call resolves afresh.
 func (d CodeDeps) failed(ctx context.Context, turn *turnctx.Turn, tool string, asker gitlet.Principal,
 	repo gitlet.RepoRef, err error) tools.Result {
 
@@ -730,21 +558,15 @@ func forget(turn *turnctx.Turn, asker gitlet.Principal, repo gitlet.RepoRef) {
 	turn.LookedUp().Forget(codeRepoKey{asker: asker, name: repo.Name})
 }
 
-// resolveRef is the NAMES a call gives as refs of repo, every one of them
-// resolved in ONE code.resolve_ref at the seat's level — linearizable, the one
-// read about refs that pays a barrier, so a call naming two pays one barrier
-// and one round trip rather than one each, and reads both at one checkpoint:
-// a comparison compares them as they stood at the same moment. It answers each
-// name's row in the names' order — its oid, its whole name and where it last
-// moved, which a read by object id is then floored at ([resolvedRev.at]) — and
-// the checkpoint they were read at; a name no live ref holds refuses the call
-// in Gitlet's own sentence, every such name named. Its read is THE ONE
-// gitlet.RefQuery in this package ([CodeDeps.refsOf]): code_resolve's `ref`
-// calls it directly, [CodeDeps.resolveRevs] for every revision of a call that
-// is not an id, a write's branch ([CodeDeps.branch]) and an executor's launch
-// every ref it resolves ([CodeDeps.ResolveRunRepos]) — and so the one place a
-// call's caller and ceiling are stamped on a resolve, and the turn's hold on
-// every seat's branch it answers is taken ([HoldRef]).
+// resolveRef resolves the names a call gives as refs of repo in ONE
+// code.resolve_ref at the seat's level: one barrier and one round trip however
+// many it names, all read at one checkpoint, so a comparison compares them as
+// they stood together. It answers each name's row in order (its oid, whole
+// name and where it last moved, which a read by object id is floored at) and
+// the checkpoint; a name no live ref holds refuses the call in Gitlet's
+// sentence, every such name named. Its read, [CodeDeps.refsOf], is THE ONE
+// gitlet.RefQuery in this package, so the one place a resolve is stamped with
+// its caller and ceiling and the turn's holds are taken ([HoldRef]).
 func (d CodeDeps) resolveRef(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	repo gitlet.RepoRef, names ...string) ([]gitlet.ResolvedRef, statelog.Position, *tools.Result) {
 
@@ -760,20 +582,15 @@ func (d CodeDeps) resolveRef(ctx context.Context, turn *turnctx.Turn, tool strin
 }
 
 // refsOf is [CodeDeps.resolveRef]'s read, ANSWERING a name no live ref holds
-// beside the rest ([gitlet.ResolvedRef.Missing]) rather than refusing the call:
-// for the callers to which a missing ref is an answer — an executor's launch,
-// whose own branch may not exist yet ([CodeDeps.ResolveRunRepos]), and a
-// write's branch, which its own head compare answers ([CodeDeps.branch]). The
-// repository the answer names is the one the turn resolved, or the call is
-// refused ([CodeDeps.sameRepo]).
+// ([gitlet.ResolvedRef.Missing]) rather than refusing: for an executor's
+// launch, whose branch may not exist yet ([CodeDeps.ResolveRunRepos]), and a
+// write's branch, which its own head compare answers ([CodeDeps.branch]). An
+// answer naming another repository is refused ([CodeDeps.sameRepo]).
 //
-// AND THE TURN'S HOLD on every seat's branch it resolved ([HoldRef]), taken
-// here — after the read whose answer a hold is decided from, and before the
-// answer goes back to whatever sends a request through it — so no caller can
-// read a ref for a turn and forget its hold. Every key of the answer is taken
-// in ONE Take first ([takeRefHolds]): a call that resolves a comparison's two
-// seats' branches writes one compare-and-set on its run row, not two. A hold
-// that fails refuses the call with nothing sent.
+// It takes the turn's hold on every seat's branch it resolved ([HoldRef])
+// after the read and before the answer goes anywhere, so no caller can read a
+// ref and forget its hold: every key in ONE Take first ([takeRefHolds]), one
+// compare-and-set on the run row. A failed hold refuses with nothing sent.
 func (d CodeDeps) refsOf(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	repo gitlet.RepoRef, names ...string) (gitlet.RefAnswer, *tools.Result) {
 
@@ -817,30 +634,17 @@ func (d CodeDeps) refsOf(ctx context.Context, turn *turnctx.Turn, tool string, c
 	return answer, nil
 }
 
-// branch holds refs — the branch a write tool's call names, refs/heads/ and its
-// `branch`, the source branch of the change a suggestions apply commits to, or
-// the source and the target of a change it opens — for turn BEFORE the write
-// is sent ([HoldRef]): THE ONE PLACE a write's branch is held, which every
-// engine write calls before its GitWrite. ALL OF A CALL'S BRANCHES AT ONCE:
-// one ref read for every branch it resolves, and one Take for every branch it
-// holds with no read ([takeRefHolds]), so a change between two seats' branches
-// pays one barrier and one compare-and-set on the turn's run row, not two of
-// each.
-// A WRITE IS HELD AS A READ IS, because only a write that MOVES the branch is
-// ordered against a deletion of it by its own head compare: one that moves
-// nothing — refused, a revert or a pick that conflicts, a no-op — appends no
-// record. So a write naming the branch's head (existing: its expected_head
-// given) resolves it through the one ref read ([CodeDeps.refsOf]), which holds
-// it with the answer, as a read is held — and a branch the resolve finds
-// missing, or one the write CREATES, is held with no read: no deletion can
-// have listed what does not exist, and the write sets it now.
-//
-// RESOLVED ONLY WHERE A HOLD WOULD BE TAKEN AND IS NOT YET CONFIRMED
-// (M3-decisions M3-O65): a turn's call, by a seat, on a branch
-// [gitlet.Holdable] admits, whose key the turn has not confirmed. Every other
-// write — an operator's, one on a branch outside refs/heads/seats/, one on a
-// branch this turn's read already confirmed — reads nothing here; its own
-// head compare decides it, unchanged.
+// branch holds the refs a write names — its `branch`, a suggestions apply's
+// source branch, a change open's source and target — for turn BEFORE the
+// write is sent ([HoldRef]): THE ONE PLACE a write's branch is held, all at
+// once (one ref read, one Take, [takeRefHolds]). Held as a read is, because
+// only a write that MOVES the branch is ordered against its deletion by its
+// head compare; a refused, conflicting or no-op write appends nothing. So an
+// existing branch (expected_head given) resolves through [CodeDeps.refsOf],
+// held with the answer; one missing or being created is held with no read,
+// since no deletion listed it. Only where a hold is due and unconfirmed
+// (M3-decisions M3-O65): a seat's call in a turn on a [gitlet.Holdable] branch
+// the turn has not confirmed; any other write reads nothing here.
 func (d CodeDeps) branch(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller, repo gitlet.RepoRef,
 	existing bool, refs ...string) *tools.Result {
 
@@ -887,19 +691,14 @@ func (d CodeDeps) branch(ctx context.Context, turn *turnctx.Turn, tool string, c
 // one repository had moved ([refsRead]).
 type refsReadKey struct{ repoID string }
 
-// refsRead is the furthest position on the code log at which a ref this turn
-// resolved on one repository last MOVED — code_resolve's ref, and every ref a
-// call named — which a seat's engine write of the repository is floored at
-// ([CodeDeps.writeFresh]): a turn writes onto a head it read and names commits
-// it read, and a copy synced no further than the turn's first read of the
-// repository may hold neither, so its write is judged on a copy that lacks
-// them and judged again at the log's head — a barrier and a second sync, and
-// for a head the copy has not seen move, a data node's read of the write's
-// own outcome first. Kept by the turn ([turnctx.Lookups], taken with
-// LoadOrStore) and only ever raised, under its own lock, since the turn's
-// workers resolve refs while it runs; a FACT about what the turn read, never a
-// resolution: it decides nothing, and outlives a name the turn forgets
-// ([forget]), since what was read stays read.
+// refsRead is the furthest code-log position at which a ref this turn resolved
+// on one repository last MOVED, which a seat's engine write of the repository
+// is floored at ([CodeDeps.writeFresh]): the write names a head and commits
+// the turn read, and judged on a copy lacking them it is judged again at the
+// log's head — a barrier and a second sync. Kept in the turn's lookups and
+// only ever raised, under its own lock, since the turn's workers resolve refs
+// concurrently. A FACT about what was read, never a resolution: it decides
+// nothing, and outlives a name the turn forgets ([forget]).
 type refsRead struct {
 	mu sync.Mutex
 	at statelog.Position
@@ -965,13 +764,11 @@ func revArg(tool, arg string, args map[string]any) (string, *tools.Result) {
 	return rev, nil
 }
 
-// resolveRevs is a call's revision arguments as oids, in their order: an
-// object id, whole or abbreviated, passes with no read (the Gitlet node expands
-// an abbreviation from the objects alone, never as a ref); `HEAD` is the
-// repository's default branch; every other is a branch, a tag or a ref, and
-// ALL OF THEM are resolved in the one read of [CodeDeps.resolveRef] — a name
-// given twice, once — so a call pays one barrier however many refs it names.
-// A branch whose name is all hex digits is named by its whole ref.
+// resolveRevs is a call's revision arguments as oids, in order: an object id,
+// whole or abbreviated, passes unread (the Gitlet node expands it from the
+// objects, never as a ref); `HEAD` is the default branch; every other is
+// resolved, all in [CodeDeps.resolveRef]'s one read, each name once. A branch
+// whose name is all hex digits is named by its whole ref.
 func (d CodeDeps) resolveRevs(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	repo gitlet.RepoRef, revs ...string) ([]resolvedRev, *tools.Result) {
 
@@ -1020,12 +817,10 @@ func revPairArg(tool string, args map[string]any) (base, head string, refusal *t
 	return base, head, nil
 }
 
-// gitFresh is what a read by object id of repo is asked with: the furthest of
-// this node's own floor on the repository and the positions the call's refs
-// last moved at — a SYNC level for the copy that answers, so it holds the
-// commits those refs named and this node's own pushes to it — or none, which
-// reads the copy as it stands: the code domain's one rule (gitlet.RefsFloor),
-// which a question's read by object id is floored by too.
+// gitFresh is the level a read by object id of repo is asked at: a SYNC to the
+// furthest of this node's floor on it and where the call's refs last moved, so
+// the answering copy holds those commits and this node's pushes — or none,
+// reading the copy as it stands (gitlet.RefsFloor, the code domain's one rule).
 func (d CodeDeps) gitFresh(repo gitlet.RepoRef, revs ...resolvedRev) statelog.Freshness {
 	var refs []gitlet.ResolvedRef
 	for _, r := range revs {
@@ -1051,20 +846,19 @@ func furthestOnLog(a, b statelog.Position) statelog.Position {
 	return a
 }
 
-// gitRead asks q of repo's home Gitlet node as c — THE ONE GitQuery a call sends,
-// stamped here with its caller, its ceiling and a seat's turn, so no tool can name its asker
-// and forget whom it reads for — refused here first where the query is one no
-// Gitlet node would take, so a malformed argument costs no round trip and is
-// told in the domain's own words. A Gitlet node that answers the repository gone
+// gitRead asks q of repo's home Gitlet node as c — THE ONE GitQuery a call
+// sends, stamped here with its caller, ceiling and a seat's turn so no tool
+// forgets whom it reads for — refused first where no Gitlet node would take
+// it, so a malformed argument costs no round trip. A repository answered gone
 // ends the turn's resolution of its name ([CodeDeps.failed]).
 func (d CodeDeps) gitRead(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller, repo gitlet.RepoRef,
 	q gitlet.GitQuery) (gitlet.GitAnswer, *tools.Result) {
 
 	q.Asker, q.CeilingSeat = c.asker, c.ceiling
 	// A SEAT'S READ NAMES ITS TURN, whose bucket on the answering Gitlet node
-	// pays the read's one second look at the log's head (gitlet.NewResyncs):
-	// so one turn naming what its floor lacks in a loop spends its own
-	// re-syncs and, past its seat's, the seat's — never the code log's.
+	// pays the read's second look at the log's head (gitlet.NewResyncs): a
+	// turn looping on what its floor lacks spends its own re-syncs, then its
+	// seat's, never the code log's.
 	if turn != nil && c.asker.Kind == gitlet.PrincipalAgent {
 		q.Turn = turn.RunID
 	}
@@ -1115,18 +909,15 @@ func gitAnswer(repo gitlet.RepoRef, page gitlet.GitAnswer, revs map[string]resol
 	return out
 }
 
-// codeFailure explains a code read that did not answer, each sentinel the
-// domain answered in its own class and its own sentence — composed for the
-// caller, naming what to change — and, past them, a condition of the node or
-// the fleet as unavailable (waiting clears it) and anything else as this
-// node's fault.
+// codeFailure explains a code read that did not answer: each domain sentinel
+// in its own class and sentence, naming what to change; past them a node or
+// fleet condition as unavailable, and anything else as this node's fault.
 //
-// A NODE THAT CANNOT JUDGE IS NEVER A REFUSAL OF THE CALLER: a data node with
-// no chart answers a seat's read about itself (gitlet.ErrNotServing), a Gitlet node
-// unready (gitlet.ErrGitUnready), and the router asks another — so what reaches
-// here from them is the fleet having no node that could answer now, which a
-// retry clears. Only gitlet.ErrNotPermitted is a decision about who asked, and
-// gitlet.ErrAboveCeiling about whom the asker reads for.
+// A NODE THAT CANNOT JUDGE IS NEVER A REFUSAL OF THE CALLER: on
+// gitlet.ErrNotServing or gitlet.ErrGitUnready the router asks another, so
+// what reaches here is no node able to answer now, which a retry clears. Only
+// gitlet.ErrNotPermitted judges who asked, and gitlet.ErrAboveCeiling whom the
+// asker reads for.
 func codeFailure(ctx context.Context, tool, repo string, err error) tools.Result {
 	var (
 		unready  *gitlet.ErrGitUnready
@@ -1134,12 +925,9 @@ func codeFailure(ctx context.Context, tool, repo string, err error) tools.Result
 	)
 	switch {
 	case errors.Is(err, gitlet.ErrAboveCeiling):
-		// THE CEILING'S OWN SENTENCE: Gitlet names the seat this
-		// turn is working for, why it reads nothing of the repository and who
-		// does. That the asker could read it is no reason to: read for that
-		// seat, it would be the visibility set aside for whoever can message
-		// a seat that reads it — the refusal is the requester ceiling's, in
-		// the artifacts tools' terms.
+		// THE CEILING'S OWN SENTENCE names the seat this turn works for and
+		// who does read the repository. The asker's own access is no reason to
+		// read it: for that seat it would set the visibility aside.
 		said, ok := RefusalSentence(err, gitlet.ErrAboveCeiling)
 		if !ok {
 			said = fmt.Sprintf("the seat this turn is working for may not read repository %q", repo)
@@ -1149,10 +937,9 @@ func codeFailure(ctx context.Context, tool, repo string, err error) tools.Result
 			"That is a decision about whom you are reading for, not about the repository or the node, so the "+
 			"same call is refused again in this turn: tell them who does read it.", tool, said))
 	case errors.Is(err, gitlet.ErrNotPermitted):
-		// THE GRANT'S OWN SENTENCE names the visibility that shut the asker
-		// out and who does read the repository; nothing here suggests a way
-		// round it, since another seat reading it for this one would be the
-		// visibility set aside rather than answered.
+		// THE GRANT'S OWN SENTENCE names the visibility and who does read the
+		// repository; nothing suggests a way round, since another seat reading
+		// it for this one would set the visibility aside.
 		said, ok := RefusalSentence(err, gitlet.ErrNotPermitted)
 		if !ok {
 			said = fmt.Sprintf("your grant does not let you read repository %q", repo)
@@ -1188,10 +975,8 @@ func codeFailure(ctx context.Context, tool, repo string, err error) tools.Result
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused what it was asked: %s. "+
 			"Change the arguments — the same ones are refused again.", tool, domainWords(err)))
 	case errors.As(err, new(*estate.ErrUnknownKeys)):
-		// THE FLEET RUNS TWO BUILDS, which no retry clears: in the
-		// condition's own words, AHEAD of the walk nobody served that it
-		// wraps — read there, the model was told a passing outage and
-		// retried a refusal for the rest of its turn.
+		// THE FLEET RUNS TWO BUILDS, which no retry clears: matched AHEAD of
+		// the unserved walk it wraps, which would tell a passing outage.
 		why, _ := Condition(err)
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not read repository %q "+
 			"(%s). This is NOT an answer about the repository. %s", tool, repo, why, stuckRead))
@@ -1207,9 +992,8 @@ func codeFailure(ctx context.Context, tool, repo string, err error) tools.Result
 			"copy). This is NOT an answer about the repository: try again shortly.", tool, repo))
 	}
 	if why, ok := Condition(err); ok {
-		// THE CONDITION'S OWN ADVICE: a wait clears most, and a model told
-		// to try again shortly about one no wait clears retries it for as
-		// long as its turn lasts ([conditionNext]).
+		// THE CONDITION'S OWN ADVICE: a model told to retry one no wait
+		// clears retries it all turn ([conditionNext]).
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not read repository %q%s "+
 			"(%s). This is NOT an answer about the repository%s", tool, repo, rightNow(err), why,
 			conditionNext(err, ": try again shortly.", ". "+stuckRead)))
@@ -1218,33 +1002,18 @@ func codeFailure(ctx context.Context, tool, repo string, err error) tools.Result
 		"answer about the repository: say you could not read it.", tool, repo, faultSaid))
 }
 
-// codeClass is the class of a refusal Gitlet decided, by the one rule
-// every native domain's refusals are classed by (internal/mcp's
-// [tools.Refusal]) — the table the person's write surface classes a
-// tool-less code write by ([WriterClass]) and the classes [codeFailure] tells
-// a seat each one in:
-//
-//   - the repository, ref, change, check or object the call is about not
-//     being there is NOT_FOUND;
-//   - the repository refusing the gesture by what it is now — being purged,
-//     within its deleted retention, not deleted, managed by its
-//     configuration — is a CONFLICT: the request is not wrong, and it lands
-//     once somebody changes the repository;
-//   - a snapshot the history moved under is STALE_VERSION: read it again;
-//   - a grant that does not cover the call, or a seat the call is made for
-//     reading nothing of the repository, is FORBIDDEN;
-//   - an argument the domain refuses by field, a cursor or a freshness it
-//     never issued, a read too large to answer whole and a decision past a
-//     record's budget are INVALID: another request lands, the same never;
-//   - and a node that cannot answer now — not serving, its git half unready,
-//     the read's answer due — is UNAVAILABLE, which waiting clears.
-//
-// The rest are no caller's refusal: a configuration apply's own wiring
-// (ErrNoActivation, ErrSuperseded, ErrNotConfigManaged), a proposal or a
-// published layer the domain's own machinery built wrong, a re-anchoring
-// answer placing another set than its anchors (ErrMisplaced), which the
-// asking node tells as its own fault, a stored object that is not what its
-// row says, and a record a newer build wrote.
+// codeClass is the class of a refusal Gitlet decided, by the rule every native
+// domain's refusals are classed by ([tools.Refusal]); [WriterClass] and
+// [codeFailure] follow it. NOT_FOUND: what the call is about is not there.
+// CONFLICT: the repository refuses by its state (purging, in deleted
+// retention, not deleted, config-managed); it lands once that changes.
+// STALE_VERSION: the history moved under a snapshot; read again. FORBIDDEN: a
+// grant, or the seat the call is made for, refuses. INVALID: a field, cursor
+// or level refused, a read too large, a decision past a record's budget — the
+// same request never lands. UNAVAILABLE: no node can answer now; waiting
+// clears it. The rest (a configuration apply's wiring, a misbuilt proposal or
+// layer, ErrMisplaced, a stored object unlike its row, a newer build's record)
+// are no caller's refusal: the asking node tells them as its own fault.
 func codeClass(err error) (tools.Refusal, bool) {
 	var unready *gitlet.ErrGitUnready
 	switch {
@@ -1281,15 +1050,11 @@ func domainWords(err error) string {
 	return err.Error()
 }
 
-// RefusalSentence is the sentence err carries past its sentinel's own words —
-// `gitlet: the caller's grant does not cover this: <sentence>` read as the
-// sentence — wherever in the chain the sentinel was wrapped, since a refusal
-// another node answered arrives wrapped by the estate router as well; false
-// where the sentinel carries none.
-//
-// EXPORTED for Gitlet's REST reads, which answer the same refusals of
-// the same reader: one reading of where a domain's sentence starts, so a
-// person's surface and a seat's tool quote the same words.
+// RefusalSentence is the sentence err carries past its sentinel's own words
+// (`gitlet: the caller's grant does not cover this: <sentence>`), wherever in
+// the chain the sentinel was wrapped, since the estate router wraps another
+// node's refusal too; false where it carries none. Exported for Gitlet's REST
+// reads, so a person's surface and a seat's tool quote the same words.
 func RefusalSentence(err, sentinel error) (string, bool) {
 	_, said, ok := strings.Cut(err.Error(), sentinel.Error()+": ")
 	said = strings.TrimSpace(said)
@@ -1297,9 +1062,8 @@ func RefusalSentence(err, sentinel error) (string, bool) {
 }
 
 // codeRepoArg and codeCursorArg are the arguments every code tool's schema
-// shares, and codeRevArg the one each revision argument is described by —
-// each a fresh map for every schema it is put in, so a consumer that writes
-// into one tool's schema writes into no other's.
+// shares, each a fresh map per schema, so a consumer writing into one tool's
+// schema writes into no other's.
 func codeRepoArg() map[string]any {
 	return map[string]any{
 		"type":        "string",
@@ -1314,13 +1078,10 @@ func codeCursorArg() map[string]any {
 	}
 }
 
-// codeRevArg describes a revision argument by its role alone, and points to
-// [revisionGrammar] in code_resolve's description for what a revision is.
-//
-// THE GRAMMAR IS STATED ONCE: every round of every seat of a company hosting
-// code carries the catalogue uncached, and the grammar, written into each of
-// the six arguments that take a revision, was a sixth of its eleven
-// kilobytes — the same sentence, near three hundred bytes rendered, six times.
+// codeRevArg describes a revision argument by its role alone, pointing to
+// [revisionGrammar] in code_resolve's description: the catalogue rides every
+// round of every seat uncached, and the grammar repeated on the six revision
+// arguments was a sixth of it.
 func codeRevArg(what string) map[string]any {
 	return map[string]any{
 		"type":        "string",
@@ -1446,10 +1207,9 @@ func (t *codeListRepos) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	for i, s := range answer.Repos {
 		rows[i] = repoRowOf(s)
 	}
-	// A PAGE CUT WHOLE-ROW AT THE ANSWER: the reader pages by its own bound,
-	// and a repository's rules can make a page of them outgrow one tool
-	// answer. The listing is keyset by name, so the next page begins after
-	// the last row kept.
+	// A PAGE CUT WHOLE-ROW AT THE ANSWER: repositories' rules can make the
+	// reader's page outgrow one tool answer. Keyset by name, so the next page
+	// begins after the last row kept.
 	page := func(k int) any {
 		next := answer.Next
 		if k > 0 && k < len(rows) {
@@ -1466,9 +1226,8 @@ func (t *codeListRepos) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	k, rendered, err := read.fit(len(rows), page)
 	if err == nil && k == 0 && len(rows) > 0 {
 		// A REPOSITORY WHOSE RULES ALONE ARE PAST ONE ANSWER is listed without
-		// them, saying so, and the page ends at it. Answered as a refusal with
-		// no `next`, as it once was, it ended the listing there for every
-		// seat, and every repository after it by name was listed by none.
+		// them, saying so, and the page ends at it: a refusal would end the
+		// listing there, and no seat would list the repositories after it.
 		rows[0].ProtectionsLeftOut = fmt.Sprintf("its %d protection rules are past one answer beside it: "+
 			"%s pages them", len(rows[0].Protections), CodeGetRepoTool)
 		rows[0].Protections = nil
@@ -1536,12 +1295,9 @@ func (t *codeGetRepo) Call(ctx context.Context, args map[string]any) (tools.Resu
 }
 
 // codeRepoDetail is one repository in detail, as code_get_repo answers it:
-// every field of the repository's detail (gitlet.RepoDetail) a reader acts on,
-// copied by name, so one the detail grows is carried here or named left out
-// with its reason (TestCodeGetRepoCarriesEveryDetailFieldOrSaysWhy) — the
-// purge a person asked for, and an import's end, were each read on the
-// detail and dropped here, so a model that asked for either could not learn
-// how it stood.
+// every field of gitlet.RepoDetail a reader acts on, copied by name, so a field
+// the detail grows is carried here or named left out with its reason
+// (TestCodeGetRepoCarriesEveryDetailFieldOrSaysWhy).
 type codeRepoDetail struct {
 	codeRepoRow
 	ManagedBy gitlet.ManagedBy `json:"managed_by"`
@@ -1575,12 +1331,10 @@ type codeRepoAnswer struct {
 	Repo     string          `json:"repo"`
 	Detail   *codeRepoDetail `json:"detail,omitempty"`
 	CloneURL string          `json:"clone_url,omitempty"`
-	// Protections are its rules WHOLE, each with the merge gate it holds a
-	// merge to and who last set it: what its detail's row answers of each
-	// rule beside the gates and the sources the read asked for
-	// (gitlet.ReadQuery.Gates), on the detail's page alone, in pattern order —
-	// those that fit, and ProtectionsNext the pattern of the last answered
-	// where more follow it ([codeRepoRules]).
+	// Protections are its rules WHOLE ([codeRule], read with
+	// gitlet.ReadQuery.Gates), on the detail's page alone, in pattern order:
+	// those that fit, ProtectionsNext the last answered where more follow
+	// ([codeRepoRules]).
 	Protections     []codeRule        `json:"protections,omitempty"`
 	ProtectionsNext string            `json:"protections_next,omitempty"`
 	Branches        []codeBranch      `json:"branches"`
@@ -1611,13 +1365,11 @@ type codeRule struct {
 	SetAt     time.Time        `json:"set_at,omitzero"`
 }
 
-// wholeRules is a repository's rules with their merge gates and sources: the
-// rules its row answers, each given the gate and the source its detail
-// answered for its pattern — both read beside the rules, in one transaction,
-// so every gate and every source names a rule of the row
+// wholeRules is a repository's rules, each given the merge gate and source its
+// detail answered for its pattern, read beside the rules in one transaction
 // ([gitlet.RepoDetail.Gates], [gitlet.RepoDetail.RuleSources]). Only for a
-// detail read that asked for the gates: on one that did not, every rule
-// would read as ungated and set by nobody.
+// detail read that asked for the gates: otherwise every rule would read as
+// ungated and set by nobody.
 func wholeRules(rules []gitlet.PushRule, gates []gitlet.RuleGate, sources []gitlet.RuleSource) []codeRule {
 	gateOf := make(map[string]gitlet.MergeGate, len(gates))
 	for _, g := range gates {
@@ -1663,19 +1415,15 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		return t.rulesAfter(ctx, turn, c, name, after)
 	}
-	// A NAMESPACE UNDER refs/heads/, however the model spells it — with or
-	// without the root, with or without the closing slash the listing's
-	// prefix ends in.
+	// A NAMESPACE UNDER refs/heads/, with or without the root or the closing
+	// slash the listing's prefix ends in.
 	ns := strings.TrimPrefix(strings.TrimSpace(argString(args, "branches_prefix")), branchRoot)
 	if ns = strings.Trim(ns, "/"); ns != "" {
 		q.Prefix = branchRoot + ns + "/"
 	}
 	// THE FIRST PAGE CARRIES THE REPOSITORY'S DETAIL, so on a turn's first
-	// call naming it that page IS the resolution: one linearizable read, not
-	// a read of kind repo and then the page. A later page carries none, and a
-	// turn whose first word of a repository is one resolves it by its own.
-	// The detail's page asks for its rules' merge gates, which this tool
-	// answers and no other resolution reads.
+	// call naming it that page IS the resolution ([CodeDeps.repoRead]). It
+	// asks for the rules' merge gates, which no other resolution reads.
 	var first *gitlet.ReadQuery
 	if q.Cursor == "" {
 		q.Gates = true
@@ -1716,10 +1464,8 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	for i, ref := range answer.Refs {
 		branches[i] = codeBranch{Name: strings.TrimPrefix(ref.Ref, branchRoot), OID: ref.OID}
 	}
-	// RULES AND BRANCHES CUT WHOLE AT THE ANSWER, each where its own list
-	// continues: the rules are in pattern order, so the rest of them begin
-	// after the last rule kept, and the refs listing is keyset by the ref, so
-	// the next page of branches begins after the last branch kept.
+	// RULES AND BRANCHES CUT WHOLE AT THE ANSWER, each list continuing after
+	// its last entry kept: rules by pattern, the refs listing keyset by ref.
 	page := func(kr, kb int) codeRepoAnswer {
 		paged := out
 		paged.Protections = rules[:kr]
@@ -1732,14 +1478,12 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		return paged
 	}
-	// THE RULES FIRST, leaving room for one branch, and then the branches in
-	// what the rules leave: at the domain's bounds a repository's rules are
-	// half a mebibyte with their gates, far past one answer, and cut at the
-	// answer with no room kept, a repository that wide would answer no branch
-	// on its first page. A rule at its widest — its pattern and its gate, ten
-	// kilobytes — and a branch at its widest beside the detail at its widest
-	// fit one answer with room to spare, so each list makes progress on every
-	// page (TestEveryRepositoryAtTheDomainsBoundsIsAnswered).
+	// THE RULES FIRST, leaving room for one branch, then the branches in what
+	// remains: at the domain's bounds the rules with gates are half a
+	// mebibyte, and with no room kept would leave no branch on the first page.
+	// The widest rule (ten kilobytes) and widest branch beside the widest
+	// detail fit one answer, so each list progresses on every page
+	// (TestEveryRepositoryAtTheDomainsBoundsIsAnswered).
 	read := newForeignRead(turn, c.asker.Seat)
 	// ITS DESCRIPTION IS A NAME somebody chose ([codeListRepos]'s reason), and
 	// so is every address its remotes name, a person's setting; an import's
@@ -1764,17 +1508,12 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return compactAnswer(rendered, "Narrow the branches with `branches_prefix`.")
 }
 
-// rulesAfter is code_get_repo's answer to a `protections_cursor`: the
-// repository's rules whose patterns sort after after, whole and in pattern
-// order, cut whole-rule at the answer — keyset by pattern, so the rest of the
-// rules follow a rule removed meanwhile, and a rule added before the cursor is
-// answered by a first page.
-//
-// READ AS THE FIRST PAGE IS: a refs listing's first page carries the
-// repository's detail and, asked, its rules' gates — of one ref here, which
-// this answer does not present — so a turn's first call naming the
-// repository is its resolution too ([CodeDeps.repoRead]), and every later one
-// reads by the kind this tool reads, never a second resolution of its own.
+// rulesAfter is code_get_repo's answer to a `protections_cursor`: the rules
+// whose patterns sort after after, whole, cut whole-rule at the answer —
+// keyset by pattern, so a rule removed meanwhile loses no other, and one added
+// before the cursor shows on a first page. Read as the first page is (a
+// one-ref refs listing carrying the detail and gates), so a turn's first call
+// naming the repository is its resolution too ([CodeDeps.repoRead]).
 func (t *codeGetRepo) rulesAfter(ctx context.Context, turn *turnctx.Turn, c codeCaller, name,
 	after string) (tools.Result, error) {
 
@@ -1835,12 +1574,11 @@ var _ tools.SeatCallable = (*codeResolve)(nil)
 
 func (t *codeResolve) Name() string { return CodeResolveTool }
 
-// Description says what the tool is FOR: turning a ref into its commit id once,
-// so the calls after it name the commit. Never that it is the one read that
-// waits for the newest push — every code read of a row is linearizable, the
-// repositories' listing and detail and every ref a call names alike — which
-// taught the model that naming a branch anywhere else was free. And it states
-// the revision grammar every other code tool's revision argument points to.
+// Description says what the tool is FOR — a ref turned into its commit id once,
+// for later calls to name — never that it alone waits for the newest push:
+// every row read is linearizable, and saying so teaches a model that naming a
+// branch elsewhere is free. It states the revision grammar every other
+// revision argument points to.
 func (t *codeResolve) Description() string {
 	return "Resolve a branch, a tag, a whole ref or HEAD to the commit it points at now, so the calls " +
 		"after it can name that commit by its id. Call it once per ref you need and pass the id it " +
@@ -2150,15 +1888,11 @@ func (t *codeDiff) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		narrow)
 }
 
-// argPaths reads a list of paths EXACTLY as written — never trimmed and never
-// split on a comma, which a path may hold — tolerating the single string a
-// model sends where a list belongs; false for a value that is neither.
-//
-// BY THE CHECK'S OWN READERS rather than [argval.Strings], which would trim
-// each path and split a lone string on its commas: a list is read by
-// [argval.List] and each element by [argval.String], one it reads as no text
-// (a list, an object, a null) refusing the whole list rather than dropping a
-// path, and anything else is the lone path [argval.String] reads.
+// argPaths reads a list of paths EXACTLY as written — never trimmed or split
+// on a comma, which a path may hold, as [argval.Strings] would — tolerating
+// the lone string a model sends for a list; false for a value that is neither.
+// An element [argval.String] reads as no text (a list, an object, a null)
+// refuses the whole list rather than dropping a path.
 func argPaths(args map[string]any, key string) ([]string, bool) {
 	raw := args[key]
 	if raw == nil {
@@ -2311,17 +2045,15 @@ func (t *codeLandedIn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	// THE COMMIT AND THE TARGET IN ONE READ: the target is never an id (it
-	// was refused above), so it resolves as a ref — HEAD the default branch —
-	// beside the commit where that is a ref too.
+	// THE COMMIT AND THE TARGET IN ONE READ: the target, never an id (refused
+	// above), resolves as a ref beside the commit where that is a ref too.
 	revs, refusal := t.deps.resolveRevs(ctx, turn, t.Name(), c, repo, commitName, target)
 	if refusal != nil {
 		return *refusal, nil
 	}
 	commit, tip := revs[0], revs[1]
-	// THE TIP'S OWN MOVE, never where the resolve read it: the target's moves
-	// up to the one that put the tip there are every move it had when it was
-	// resolved, which is all the index must hold.
+	// THE TIP'S OWN MOVE, never where the resolve read it: the index need hold
+	// only the target's moves up to the one that set the tip.
 	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), c, repo, gitlet.GitQuery{Kind: gitlet.GitLandedIn,
 		RepoID: repo.ID, Fresh: t.deps.gitFresh(repo, commit, tip),
 		LandedIn: &gitlet.LandedInQuery{Commit: commit.oid, Target: tip.ref.Ref, TargetOID: tip.oid,
@@ -2342,10 +2074,10 @@ var _ tools.SeatCallable = (*codeLog)(nil)
 
 func (t *codeLog) Name() string { return CodeLogTool }
 
-// Description says what the history is for — "when and why did this change",
-// answered on the server — so a model reaches for it before a clone, and how
-// its two narrowings read. How a page goes on is `cursor`'s to say, as every
-// paged code tool leaves it: the catalogue is paid again every round.
+// Description says what the history is for ("when and why did this change"),
+// so a model reaches for it before a clone, and how its narrowings read.
+// Paging is `cursor`'s to say, as on every paged code tool: the catalogue is
+// paid every round.
 func (t *codeLog) Description() string {
 	return "The commits that changed a file or directory, or every commit with no `path`, newest first from a " +
 		"commit: each with its parents, author, dates, subject and the push that introduced it, read on the " +
@@ -2558,8 +2290,7 @@ func (t *codeBlame) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	read := newForeignRead(turn, c.asker.Seat)
 	if b := page.Blame; b != nil {
 		// A LINE IS THE FILE'S TEXT and a subject its pusher's words, which
-		// nobody this read can name vouches for: each fenced, at the least
-		// trust.
+		// nobody this read can name vouches for: fenced, at the least trust.
 		blame := fieldPath{}.key("blame")
 		for i, line := range b.Lines {
 			read.fenceRepository(blame.key("lines").index(i).key("text"), provenance.SourceRepoFile, line.Text)
@@ -2573,18 +2304,14 @@ func (t *codeBlame) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		"Blame fewer lines with `start_line` and `end_line`.")
 }
 
-// fit is the longest prefix of n rows whose answer fits one tool answer,
-// with that answer rendered as it is sent — n where the whole page does.
-// answer builds the answer holding the first k rows.
-//
-// MEASURED AS SENT, by rendering each probe the way the answer goes out — the
-// same defusing, the same compact encoding — so the bound is the bytes the
-// caller receives rather than an estimate of them. A search over the prefixes,
-// since an answer only grows with its rows: a page that fits costs one render,
-// and one that does not about log₂ n more.
-//
-// One read labels every probe, so a page it cuts fences nothing ([fitLabelled]
-// builds a page whose rows carry fenced text, a read a probe).
+// fit is the longest prefix of n rows whose answer fits one tool answer, and
+// that answer rendered as sent — n where the whole page fits; answer builds
+// the answer holding the first k rows. Each probe is rendered as the answer
+// goes out (same defusing, compact encoding), so the bound is the bytes the
+// caller receives. A binary search, since an answer only grows with its rows:
+// a fitting page costs one render, one that does not about log₂ n more. One
+// read labels every probe, so a page it cuts fences nothing ([fitLabelled]
+// gives each probe a read of its own where rows carry fenced text).
 func (r *foreignRead) fit(n int, answer func(k int) any) (int, json.RawMessage, error) {
 	return fitLabelled(n, func(k int) (*foreignRead, any) { return r, answer(k) })
 }

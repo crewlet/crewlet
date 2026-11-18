@@ -21,15 +21,16 @@ import (
 // every subagent working in this tree starts with it, and every later request
 // of that context sends it again: at 67 KB it was some 23k tokens of each
 // agent's starting context, injected 1,278 times in the week to 2026-11-17.
-// The budget is the restructured file's size with a little room, so text that
-// only some changes need goes where only they load it — a rule under
-// .claude/rules/, scoped by its paths, or a skill under .claude/skills/.
-const claudeMDBudget = 30 * 1024
+// The budget is the file's size with a little room, so new text is said in
+// fewer words or goes where only the changes that need it load it: a rule
+// under .claude/rules/, scoped by its paths, or a skill under .claude/skills/.
+const claudeMDBudget = 26 * 1024
 
 // ruleBudget bounds one rule. A rule loads with the first file it names and
-// stays in that context, so a broad one (architecture.md loads with any file
-// under internal/) is close to always loaded for whoever writes code.
-const ruleBudget = 16 * 1024
+// stays in that context, so the broad ones (architecture.md with any file
+// under internal/, testing.md with any test) are close to always loaded for
+// whoever writes code; the bound is the largest's size with a little room.
+const ruleBudget = 10 * 1024
 
 // skillDescriptionLimit is where Claude Code cuts a skill's description (with
 // its when_to_use) in the listing that sits in every context. The description
@@ -53,8 +54,8 @@ func TestTheAlwaysLoadedInstructionsStayWithinTheirBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(raw) > claudeMDBudget {
-		t.Errorf("CLAUDE.md is %d bytes, over its budget of %d: move what only some changes need into a .claude/rules/ file "+
-			"scoped to the paths those changes touch, or into a .claude/skills/ procedure", len(raw), claudeMDBudget)
+		t.Errorf("CLAUDE.md is %d bytes, over its budget of %d: say it in fewer words, or move what only some changes need "+
+			"into a .claude/rules/ file scoped to the paths those changes touch, or into a .claude/skills/ procedure", len(raw), claudeMDBudget)
 	}
 }
 
@@ -76,7 +77,7 @@ func TestEveryRuleLoadsOnlyWithTheFilesItNames(t *testing.T) {
 			t.Fatal(err)
 		}
 		if len(raw) > ruleBudget {
-			t.Errorf("%s is %d bytes, over the %d a rule may weigh: split it by the paths its parts need", rule, len(raw), ruleBudget)
+			t.Errorf("%s is %d bytes, over the %d a rule may weigh: say it in fewer words, or split it by the paths its parts need", rule, len(raw), ruleBudget)
 		}
 		var front struct {
 			Paths []string `yaml:"paths"`

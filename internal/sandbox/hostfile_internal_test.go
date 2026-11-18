@@ -14,14 +14,12 @@ import (
 	"github.com/crewlet/crewlet/internal/hostbox"
 )
 
-// A LINK AT THE LAST ELEMENT IS NOT FOLLOWED, AND IS REFUSED AS A LINK — not
-// even one that leads somewhere inside the root, which the root itself would
-// follow. A link there leads nowhere, or somewhere the side of a container's
-// mount that does not have to stay inside it chose: following the second would
-// read a host file into the run's record; following the first read as a file
-// not written yet. Both are a link, and both are refused as one — a refusal of
-// that piece ([ErrNotRegularFile]), saying so rather than claiming a swap that
-// may never have happened.
+// A LINK AT THE LAST ELEMENT IS NOT FOLLOWED, AND IS REFUSED AS A LINK, even
+// one leading somewhere inside the root, which the root itself would follow.
+// The box's side of the mount chose where it leads: following it could read a
+// host file into the run's record, and a dangling one would read as a file not
+// written yet. Both are refused as a link ([ErrNotRegularFile]), with no claim
+// of a swap that may never have happened.
 //
 // Mutation: drop O_NOFOLLOW, and the link is read through and the dangling
 // one reads as absent.
@@ -80,13 +78,10 @@ func TestAHostReadDoesNotFollowALinkPutThereSince(t *testing.T) {
 }
 
 // A WRITE REFUSED AFTER ITS LOOK IS NAMED FOR WHAT IT MET, AND LEAVES NOTHING
-// STAGED. The box writes its own tree, so what the look before a write found
-// can change before the rename: a directory put at the path in between makes
-// the rename fail, and that failure is the same refusal the look gives — what
-// is there, as a write refused — rather than a rename's "file exists". The
-// file the write staged beside the path is removed with it, so a box is never
-// left holding new content under a name nothing reads, and what the box put
-// at the path is left as it is.
+// STAGED. The box can change its tree between the look and the rename: a
+// directory put at the path in between fails the rename, and that failure is
+// the look's refusal (what is there, as a write refused), not a rename's "file
+// exists". The staged file is removed, and what the box put there is left.
 //
 // Mutation: return the replacement's own error without looking again, and the
 // refusal is a rename's error; or keep the staged file when the rename fails

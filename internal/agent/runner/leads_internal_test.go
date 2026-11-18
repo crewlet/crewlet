@@ -10,23 +10,18 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// EVERY FORM OF AN ANSWER IS TOLD AGAIN IN ITS OWN WORDS. What carried a round
-// on may be a person's answer, the seat's withdrawal of its question or of a
-// held call, a reply refused for its size, or a held call a person answered:
-// made, denied, allowed and not made, or of an outcome not known. Its lead keeps
-// which, as the relaunch builds it once the call is made ([makeHeld],
-// [Asked.lead]), and a later brief to a session that may lack it tells it again
-// in that form ([answerAgain]): never a refusal or a withdrawal as an answer
-// (the empty answer ADR-0114 refuses to hand a run, a seat's reason as its
-// answerer's words), a call denied as one whose outcome is not known, a call
-// made whose result could not be read as one that may never have run, or a
-// failed call as one that succeeded.
+// EVERY FORM OF AN ANSWER IS TOLD AGAIN IN ITS OWN WORDS: a person's answer,
+// the seat's withdrawal of its question or held call, a reply refused for its
+// size, or a held call made, denied, allowed and not made, or of unknown
+// outcome. The lead keeps which, built once the call is made ([makeHeld],
+// [Asked.lead]), and [answerAgain] tells it so: never a refusal or withdrawal as
+// an answer (ADR-0114's empty answer; a seat's reason as its answerer's words),
+// a denial as unknown, a made call with an unread result as maybe never run, or
+// a failed call as a success.
 //
-// Mutation: tell a withdrawal, a withdrawn call or a refused reply as an
-// answer; keep the lead without its withdrawal or its refusal; keep a denial as
-// an outcome not known, or tell one so; tell a call made whose result was
-// unread as one whose outcome is not known; or keep a call without whether it
-// failed; and a case goes red.
+// Mutation: tell a withdrawal, withdrawn call or refused reply as an answer;
+// drop the withdrawal or refusal from the lead; keep or tell a denial as
+// unknown; tell an unread made call as unknown; or drop whether it failed: red.
 func TestEveryFormOfAnAnswerIsToldAgainInItsOwnWords(t *testing.T) {
 	t.Parallel()
 	// held is the call to `tr_close_issue` the question was about, answered
@@ -134,30 +129,18 @@ func TestEveryFormOfAnAnswerIsToldAgainInItsOwnWords(t *testing.T) {
 	}
 }
 
-// AN ANSWER POINTS ONLY TO A ROUND ITS BRIEF LISTS CALL BY CALL. A held call a
-// person approved in a round the same brief tells as work already done is among
-// that round's calls, so its answer points there rather than tell its outcome
-// twice: but only where the round's list says how it ended, which it does only
-// where the round is kept whole, lists a call of the tool whose arguments are
-// sealed, and nothing of its record can count the call instead. A span of
-// rounds a park dropped (ledger.Iteration.Through) lists none: it counts their
-// calls by tool, under a heading that names no round of them alone, a span of
-// one round too, and may count any call of its rounds, so it is never pointed
-// to, whatever its tallies hold. A round's tally counts calls by tool: every
-// call of a round whose calls a park folded into it, which every park that
-// makes a span does first, and the calls its run's record dropped from its
-// middle; a count that names no tool may hold any; and a read past the list's
-// read cap is counted.
-// So an answer of a round any of those may count tells what became of its
-// call, as one of that entry's calls, or nothing in the brief would; and one of
-// a round that holds no call of the tool tells it plainly.
+// AN ANSWER POINTS ONLY TO A ROUND ITS BRIEF LISTS CALL BY CALL ([heldIn]): one
+// kept whole, listing a sealed call of the tool, with nothing that could count
+// the call instead. Never a span a park dropped (ledger.Iteration.Through), even
+// of one round, nor a round whose tally counts its tool or no tool, or of which
+// the tool is a read: its answer tells the outcome as one of that entry's
+// calls, and one whose round holds no call of the tool tells it plainly.
 //
-// Mutation: take a span for a round, or leave a round's tally of its tool or of
-// no tool, or its tool's being a read, out of what may count the call; point
-// to a round that lists no call of the tool; read only a span's first round as
-// one it stands for; count every tally whatever its tools; or tell the outcome
-// without saying it is one of the entry's calls, or name another entry, and a
-// case goes red.
+// Mutation: take a span for a round; leave a tally of the tool or of no tool,
+// or the tool's being a read, out of what may count the call; point to a round
+// with no call of the tool; read only a span's first round; count every tally
+// whatever its tools; or tell the outcome without saying it is one of the
+// entry's calls, or name another entry, and a case goes red.
 func TestAnAnswerPointsOnlyToARoundItsBriefListsCallByCall(t *testing.T) {
 	t.Parallel()
 	answer := ResumeLead{Lead: sandbox.Lead{Kind: sandbox.LeadKindAnswer, Job: "job-2", Seq: 2, Round: 2,
@@ -226,12 +209,10 @@ func TestAnAnswerPointsOnlyToARoundItsBriefListsCallByCall(t *testing.T) {
 	}
 }
 
-// A TASK LEAD KEEPS THE LAST ROUND ITS BRIEF RENDERED, BY ITS NUMBER. A park
-// past its share folds whole closed rounds into one span of them
-// (ledger.Iteration.Through), so the closed rounds a base continuation's brief
-// rendered can be fewer entries than rounds. The lead keeps the last one's
-// number, which a later park's folds leave as it is, and the task told again
-// renders every entry up to it (roundsThrough).
+// A TASK LEAD KEEPS THE LAST ROUND ITS BRIEF RENDERED, BY ITS NUMBER: a park
+// folds closed rounds into spans (ledger.Iteration.Through), so entries can be
+// fewer than rounds; the number survives a later park's folds, and the task
+// told again renders every entry up to it (roundsThrough).
 //
 // Mutation: keep how many entries the brief rendered, or a span's first round
 // for its last, and a case goes red.

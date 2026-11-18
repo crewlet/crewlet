@@ -32,8 +32,7 @@ type seatWriter struct {
 	fail  error
 
 	// authors is who each seat write was recorded as, and dropped who each
-	// company-document write was — the two a disconnect records its
-	// requester on.
+	// company-document write was: where a disconnect records its requester.
 	authors []iam.Actor
 	dropped []iam.Actor
 }
@@ -126,10 +125,8 @@ func githubTeardownWorld(t *testing.T) (*Engine, *seatWriter, *atomic.Int64) {
 	var uninstalls atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
-			// THE PATH AS AN ENTERPRISE HOST SERVES IT. A URL that is not
-			// github.com takes /api/v3 in front of every route, so matching
-			// the bare path here would answer 404 to the one call this
-			// fixture exists for.
+			// THE PATH AS AN ENTERPRISE HOST SERVES IT: a non-github.com
+			// URL prefixes every route with /api/v3.
 			if r.Method == http.MethodDelete &&
 				strings.Contains(r.URL.Path, "/app/installations/") {
 				uninstalls.Add(1)
@@ -192,21 +189,12 @@ func indent(s, with string) string {
 	return strings.Join(out, "\n")
 }
 
-// AN UNINSTALLED SEAT STOPS CLAIMING AN INSTALLATION.
+// AN UNINSTALLED SEAT STOPS CLAIMING AN INSTALLATION: a disconnect that
+// uninstalls each agent's app records it, or the seat reads `satisfied` and
+// /query/integrations keeps a github row Connecting forever.
 //
-// A GitHub disconnect uninstalls each agent's app, which is what actually
-// revokes its access, and it used to record nothing — so every reader went on
-// believing the installation was there. Measured on a live disconnect: the
-// seat still reported `satisfied: true` with its app slug while every other
-// disconnected surface said it was waiting to be connected, and
-// /query/integrations kept a github row alive on the strength of it, which
-// the dashboard renders as Connecting with a `routes nowhere` badge,
-// permanently.
-//
-// The credentials are deliberately NOT removed — GitHub offers no API to
-// delete an app registration, so the key stays valid for an app that still
-// exists and deleting the company's only copy is a move nothing can undo.
-// The installation is the one fact this teardown actually changed at GitHub.
+// The credentials are deliberately NOT removed: GitHub has no API to delete
+// an app registration, so the key stays valid and is the company's only copy.
 func TestAGitHubDisconnectStopsTheSeatClaimingAnInstallation(t *testing.T) {
 	t.Parallel()
 	e, writer, uninstalls := githubTeardownWorld(t)
@@ -232,13 +220,10 @@ func TestAGitHubDisconnectStopsTheSeatClaimingAnInstallation(t *testing.T) {
 	}
 }
 
-// AND A RECORD THAT COULD NOT BE WRITTEN FAILS THE TEARDOWN.
-//
-// The block is dropped only when the vendor step succeeds, so swallowing this
-// leaves every seat claiming an installation that no longer exists with
-// nothing that will ever look again. Holding instead keeps the surface in
-// PhaseDisconnecting, and the next attempt uninstalls nothing (already gone)
-// and writes the record again.
+// AND A RECORD THAT COULD NOT BE WRITTEN FAILS THE TEARDOWN: swallowed, the
+// block drops with every seat claiming a gone installation and nothing ever
+// looking again. Held, the surface stays PhaseDisconnecting and the next
+// attempt writes the record again.
 func TestAGitHubDisconnectThatCannotRecordTheUninstallHolds(t *testing.T) {
 	t.Parallel()
 	e, writer, _ := githubTeardownWorld(t)
@@ -252,14 +237,9 @@ func TestAGitHubDisconnectThatCannotRecordTheUninstallHolds(t *testing.T) {
 }
 
 // AN AGENT WITH NO APP IS OFF AT GITHUB, AND THE PASS SAYS NOTHING ABOUT IT
-// (D9).
-//
-// A new agent seat is off on every integration until somebody turns it on, so
-// an agent carrying no `integrations.github` block, or one switched off, is
-// not a fault: reporting each as acting as nobody would read, on a company of
-// many agents and one GitHub agent, as a problem with every other agent. What
-// an agent that IS on still needs (a person creating its app) is the access
-// sync's step for that seat.
+// (D9): a seat is off on every integration until turned on, so no block, or
+// one switched off, is not a fault. An agent that IS on and lacks its app is
+// the access sync's step for that seat.
 func TestTheGitHubPassSaysNothingAboutAnAgentThatIsOff(t *testing.T) {
 	t.Parallel()
 	doc := `
@@ -301,9 +281,8 @@ roles:
 	}
 	e.epoch.current.Store(company)
 
-	// THROUGH Run, not through the helper: what was missing was the WIRING,
-	// so a case that called the helper directly would pass over a pass that
-	// never calls it.
+	// THROUGH Run, not the helper: the invariant is the WIRING, which a
+	// direct call would pass over.
 	pass := &githubPass{engine: e}
 	findings, err := pass.Run(t.Context(), setup.PassInput{
 		Sink:        newSealingTestSink(),

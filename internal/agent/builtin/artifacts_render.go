@@ -93,16 +93,22 @@ var _ tools.SeatCallable = (*renderArtifact)(nil)
 func (t *renderArtifact) Name() string { return RenderArtifactTool }
 
 func (t *renderArtifact) Description() string {
-	return "Look at a page artifact (an html page, or a design's artboard) exactly as a " +
-		"viewer sees it, in the engine's browser: the published version in its frame, with " +
-		"the kit, the runtime and its data, at the widths, themes and scroll positions you " +
-		"ask, after any clicks or keys you name. Use it on your own work before you ask " +
-		"anybody to review it. The answer lists CSS custom properties that resolve to " +
-		"nothing, sticky or fixed bars that are see-through or hide content, console errors, " +
-		"requests the page made that failed, links that go nowhere, and writes the page " +
-		"tried; each screenshot is a PNG in your box, which you open to look at. Nothing " +
-		"is written to the artifact."
+	return renderDescription
 }
+
+// renderDescription states the render's caps up front, so a call is shaped to
+// them rather than refused for them.
+var renderDescription = "Look at a page artifact (an html page, or a design's artboard) exactly as a " +
+	"viewer sees it, in the engine's browser: the published version in its frame, with " +
+	"the kit, the runtime and its data, at the widths, themes and scroll positions you " +
+	"ask, after any clicks or keys you name. Use it on your own work before you ask " +
+	"anybody to review it. The answer lists CSS custom properties that resolve to " +
+	"nothing, sticky or fixed bars that are see-through or hide content, console errors, " +
+	"requests the page made that failed, links that go nowhere, and writes the page " +
+	"tried; each screenshot is a PNG in your box, which you open to look at. Nothing " +
+	"is written to the artifact. " + fmt.Sprintf("One render takes at most %d shots "+
+	"(widths times themes times scroll positions), and a turn renders at most %d times.",
+	artifacts.RenderShots, artifacts.TurnRenders)
 
 func (t *renderArtifact) Parameters() map[string]any {
 	themes := make([]any, 0, len(artifactrender.Themes))

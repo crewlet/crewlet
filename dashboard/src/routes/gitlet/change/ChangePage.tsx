@@ -80,18 +80,16 @@ import { useTab } from "~/app/frame/tabs.ts";
 import { QueryState } from "~/components/common.tsx";
 import { WriteButton } from "~/components/WriteButton.tsx";
 import { ago } from "~/lib/ago.ts";
-import { authoredBy, changeLive, changeRef, isRepoName, refName } from "~/lib/code.ts";
+import { changeLive, changeRef, isRepoName, refName } from "~/lib/code.ts";
 import { useNow } from "~/lib/clock.ts";
-import { fmtCount, fmtDateTime, plural } from "~/lib/format.ts";
-import { draftedRevisions, findingOf, forgetDrafts, readDrafts } from "~/lib/reviewDrafts.ts";
+import { fmtDateTime } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useAct } from "~/lib/useAct.ts";
-import { menuHold, type WriteAccess } from "~/lib/useWriteAccess.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { CodeChangeDetail, CodeRevisionRow, CodeVerdict } from "~/protocol/index.ts";
-import { DiffCounts } from "../FileTree.tsx";
 import { ChangeStateTag, ReadinessMeter } from "../ChangeRow.tsx";
+import { Diffstat } from "../Diffstat.tsx";
 import { CodeNotFound } from "../NotFound.tsx";
 import { ReviewerPicker } from "../ReviewerPicker.tsx";
 import { CHANGE_TABS, changesHref, repoHref, type ChangeTab } from "../paths.ts";
@@ -100,13 +98,8 @@ import { Checks } from "./Checks.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { Files } from "./Files.tsx";
 import { Notified, Provenance, Revisions } from "./Facts.tsx";
-import {
-  CHANGE_POLL_MS,
-  changePartParams,
-  revisionInputs,
-  useAskAgainWhenMoved,
-  useStandingFindings,
-} from "./reads.ts";
+import { ReviewDialog, heldItem, verdictItems } from "./ReviewDialog.tsx";
+import { CHANGE_POLL_MS, changePartParams, revisionInputs, useAskAgainWhenMoved } from "./reads.ts";
 import "~/styles/gitlet.css";
 
 /** Each tab's glyph: decorative, its label names it. */
@@ -149,38 +142,6 @@ function useHeadDiff(change: CodeChangeDetail, revisions: readonly CodeRevisionR
     read.refetch,
   );
   return read.data?.diff;
-}
-
-/** `+207 −51` and five squares, the head's lines added and removed. */
-function Diffstat({
-  added,
-  deleted,
-  revision,
-}: {
-  added: number;
-  deleted: number;
-  revision: number;
-}) {
-  const lines = added + deleted;
-  const plus = lines === 0 ? 0 : Math.round((5 * added) / lines);
-  return (
-    <span
-      className="code-diffstat"
-      role="img"
-      aria-label={`${plural(added, "line")} added and ${fmtCount(deleted)} removed in revision ${revision}`}
-    >
-      <span>
-        <DiffCounts added={added} deleted={deleted} />
-      </span>
-      {lines > 0 && (
-        <span className="code-diffstat__squares">
-          {[0, 1, 2, 3, 4].map((i) => (
-            <span key={i} data-kind={i < plus ? "added" : "removed"} />
-          ))}
-        </span>
-      )}
-    </span>
-  );
 }
 
 export function ChangePage({ repo, number }: { repo: string; number: number }) {
@@ -302,7 +263,11 @@ function ChangeTabs({
       panelId={panelId}
       note={
         diff ? (
-          <Diffstat added={diff.added} deleted={diff.deleted} revision={change.revision} />
+          <Diffstat
+            added={diff.added}
+            deleted={diff.deleted}
+            label={`in revision ${change.revision}`}
+          />
         ) : undefined
       }
       items={CHANGE_TABS.map((value) => ({
@@ -461,14 +426,6 @@ function ChangeHeader({ change }: { change: CodeChangeDetail }) {
 }
 
 /**
- * Why the reader's verdict on a change they wrote is held: an author's review
- * counts for nothing, so the engine takes none (`own_change`), and the step
- * that is theirs is asking somebody else.
- */
-export const OWN_CHANGE_HELD =
-  "You wrote this change, so your review would not count. Ask somebody else to review it.";
-
-/**
  * The page bar, as the change's state leaves it: on a LIVE change Close change
  * and a Review menu (the verdicts and Request review, each held with its
  * reason), a draft's Ready for review before them; a closed one's Reopen; none
@@ -487,18 +444,11 @@ function ChangeActions({ change }: { change: CodeChangeDetail }) {
   const live = changeLive(change.state);
   const draft = change.state === "draft";
   const reopenable = change.state === "closed";
-  const verdictHeld = authoredBy(change, viewer) ? OWN_CHANGE_HELD : undefined;
   const markReady = () =>
     void update.run(
       { change: change.ref, expected_version: change.version, draft: false },
       { done: `Marked ${change.ref} ready for review` },
     );
-  const held = (access: WriteAccess, blocked: string | undefined) =>
-    access.can
-      ? blocked === undefined
-        ? {}
-        : { disabled: true, description: blocked }
-      : menuHold(access);
   usePageMenu(
     live
       ? [
@@ -506,7 +456,7 @@ function ChangeActions({ change }: { change: CodeChangeDetail }) {
             key: "close",
             label: "Close change",
             onSelect: () => setClosing(true),
-            ...held(close.access, undefined),
+            ...heldItem(close.access, undefined),
           },
         ]
       : [],
@@ -554,34 +504,14 @@ function ChangeActions({ change }: { change: CodeChangeDetail }) {
         triggerVariant="secondary"
         align="end"
         items={[
-          {
-            key: "approve",
-            label: "Approve",
-            icon: <CheckGlyph size="sm" />,
-            onSelect: () => setVerdict("approve"),
-            ...held(review.access, verdictHeld),
-          },
-          {
-            key: "request_changes",
-            label: "Request changes",
-            icon: <FileDiffGlyph size="sm" />,
-            onSelect: () => setVerdict("request_changes"),
-            ...held(review.access, verdictHeld),
-          },
-          {
-            key: "comment",
-            label: "Comment",
-            icon: <MessageSquareGlyph size="sm" />,
-            onSelect: () => setVerdict("comment"),
-            ...held(review.access, verdictHeld),
-          },
+          ...verdictItems(change, review.access, viewer, setVerdict),
           { kind: "separator", key: "asks" },
           {
             key: "ask",
             label: "Request review",
             icon: <UserPlusGlyph size="sm" />,
             onSelect: () => setAsking(true),
-            ...held(ask.access, undefined),
+            ...heldItem(ask.access, undefined),
           },
         ]}
       />
@@ -591,152 +521,6 @@ function ChangeActions({ change }: { change: CodeChangeDetail }) {
       {asking && <AskDialog change={change} onClose={() => setAsking(false)} />}
       {closing && <CloseDialog change={change} reopen={false} onClose={() => setClosing(false)} />}
     </>
-  );
-}
-
-/** What each verdict's dialog is called, and what its press says it did. */
-const VERDICT_TITLES: Readonly<Record<string, { title: string; done: string }>> = {
-  approve: { title: "Approve", done: "Approved" },
-  request_changes: { title: "Request changes", done: "Asked for changes on" },
-  comment: { title: "Comment", done: "Reviewed" },
-};
-
-/**
- * One review of the change's head revision: its verdict, a summary, every
- * finding drafted on that revision's lines (`lib/reviewDrafts.ts`), and the
- * reader's own standing findings it CARRIES — checked by default, since a
- * review of a later revision supersedes every standing finding of the
- * reviewer's it does not carry (S40), and that is a choice made by unchecking
- * one, never by forgetting it. So the press is HELD until the dialog holds
- * every one of them (`useStandingFindings`, read to its last page): a review
- * sent while that read is out, or after it was refused, would carry none it
- * had not read and supersede the rest unseen. Sent as ONE
- * `code_review_change`; the drafts are forgotten only once the engine has
- * taken the review.
- */
-function ReviewDialog({
-  change,
-  verdict,
-  onClose,
-}: {
-  change: CodeChangeDetail;
-  verdict: CodeVerdict;
-  onClose: () => void;
-}) {
-  const write = useAct("code_review_change");
-  const viewer = useViewer();
-  const [summary, setSummary] = useState("");
-  const drafts = readDrafts(change.id, change.revision);
-  const elsewhere = draftedRevisions(change.id).filter((d) => d.revision !== change.revision);
-  const read = useStandingFindings(change, viewer.owner);
-  const standing = read.findings ?? [];
-  const [dropped, setDropped] = useState<ReadonlySet<string>>(new Set());
-  const carries = standing.filter((f) => !dropped.has(f.id)).map((f) => f.id);
-  const words = VERDICT_TITLES[verdict] ?? { title: "Review", done: "Reviewed" };
-  const held =
-    read.findings !== null
-      ? undefined
-      : read.error === null
-        ? "Reading your standing findings…"
-        : "Your standing findings were not read: a review sent now would supersede those it leaves out.";
-  const submit = async () => {
-    // HELD HERE TOO, where Enter reaches it past the button.
-    if (held !== undefined) return;
-    const result = await write.run(
-      {
-        change: change.ref,
-        revision: change.revision,
-        verdict,
-        ...(summary.trim() ? { summary } : {}),
-        ...(drafts.length > 0 ? { findings: drafts.map(findingOf) } : {}),
-        ...(carries.length > 0 ? { carries } : {}),
-      },
-      { done: `${words.done} ${change.ref}` },
-    );
-    if (result && (result.kind === "applied" || result.kind === "pending")) {
-      // FORGOTTEN ONCE TAKEN: an unknown answer keeps them, for the Retry
-      // the toast offers sends the same review again.
-      forgetDrafts(change.id, change.revision);
-      onClose();
-    }
-  };
-  return (
-    <Modal
-      open
-      size="md"
-      title={`${words.title} ${change.ref}`}
-      subtitle={`Revision ${change.revision}`}
-      onClose={onClose}
-      onSubmit={() => void submit()}
-      dismissable={!write.busy}
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose} disabled={write.busy}>
-            Cancel
-          </Button>
-          <WriteButton write={write} variant="primary" blocked={held} onPress={() => void submit()}>
-            {words.title}
-          </WriteButton>
-        </>
-      }
-    >
-      <Textarea
-        aria-label="Summary"
-        placeholder="What you found, in a sentence or two"
-        value={summary}
-        rows={4}
-        onChange={(event) => setSummary(event.target.value)}
-      />
-      <p className="muted">
-        {drafts.length === 0
-          ? "No finding is drafted on this revision's lines."
-          : `${drafts.length} drafted finding${drafts.length === 1 ? "" : "s"} on this revision will be raised with it.`}
-        {elsewhere.length > 0 &&
-          ` Drafts on revision ${elsewhere.map((d) => d.revision).join(", ")} stay in this tab: a review raises findings on the revision it judges.`}
-      </p>
-      {read.error !== null ? (
-        <Stack gap={2}>
-          <QueryState
-            error={read.error}
-            refusal={read.refusal}
-            {...(read.detail ? { detail: read.detail } : {})}
-            loading={false}
-          >
-            {null}
-          </QueryState>
-          <p className="muted">
-            {held}{" "}
-            <Button size="small" variant="secondary" onClick={read.retry}>
-              Read them again
-            </Button>
-          </p>
-        </Stack>
-      ) : (
-        held !== undefined && <p className="muted">{held}</p>
-      )}
-      {standing.length > 0 && (
-        <fieldset className="code-carries">
-          <legend>Your standing findings it keeps standing</legend>
-          {standing.map((f) => (
-            <label key={f.id} className="row gap-1">
-              <input
-                type="checkbox"
-                checked={!dropped.has(f.id)}
-                onChange={(event) =>
-                  setDropped((was) => {
-                    const next = new Set(was);
-                    if (event.target.checked) next.delete(f.id);
-                    else next.add(f.id);
-                    return next;
-                  })
-                }
-              />
-              {f.title} <span className="muted mono">{f.path}</span>
-            </label>
-          ))}
-        </fieldset>
-      )}
-    </Modal>
   );
 }
 

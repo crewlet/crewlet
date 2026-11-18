@@ -149,10 +149,10 @@ func TestAnUnactivatedCompanysUnitRoomIsOpenedByItsActivation(t *testing.T) {
 
 // AN OLDER ACTIVATION APPLIED LATE DOES NOT WALK A UNIT ROOM'S MEMBERSHIP BACK.
 //
-// The membership write is the whole set, so with no stamp whichever apply
-// arrived second won: a node restarting on last week's chart put last week's
-// team back in the room. Stamped with the activation, the later ACTIVATION
-// wins, and a newer one still moves the room.
+// The membership write is the whole set, so unstamped, whichever apply arrived
+// second would win and a node restarting on an old chart would put the old team
+// back. Stamped with the activation, the later ACTIVATION wins, and a newer one
+// still moves the room.
 func TestAnOlderActivationAppliedLateDoesNotWalkAUnitRoomBack(t *testing.T) {
 	t.Parallel()
 	newer := time.Date(2026, 3, 2, 10, 0, 1, 0, time.UTC)

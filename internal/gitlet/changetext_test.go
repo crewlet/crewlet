@@ -5,11 +5,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
@@ -130,10 +133,9 @@ func summariesOf(t *testing.T, r *gitlet.Reader, q gitlet.ReadQuery) []gitlet.Ch
 	return out
 }
 
-// A LISTING NARROWED BY WORDS IS EXACT AS OF ITS SNAPSHOT: a change edited past the index's watermark
-// is judged by its row, a candidate at or below it is trusted only where the read holds every record
-// the index was decided from, and an index that is not this copy's, or is rebuilding, is not used.
-// Mutation: trust candidates where not covered, or trust every candidate whatever its row's position.
+// A listing narrowed by words is exact as of its snapshot: past the watermark a row is judged itself, and
+// below it a candidate is trusted only where the read covers the index and a walk reached the row.
+// Mutation: trust uncovered candidates, or any candidate whatever its row's position or id.
 func TestAListingNarrowedByWordsIsExactAsOfItsSnapshot(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -170,6 +172,12 @@ func TestAListingNarrowedByWordsIsExactAsOfItsSnapshot(t *testing.T) {
 	// The index says web!1 and web!3 hold "login": web!3's row, at the watermark, does not.
 	indexed := search.ChangeHeld{IDs: []string{trusted3.ChangeID, held1.ChangeID}, Through: through,
 		BuiltFrom: instance}
+	// A FIRST BUILD that began at the watermark and reached back to web!3's id, or to an id just above it.
+	reached := indexed
+	reached.BackPos, reached.BackFloor = through, trusted3.ChangeID
+	unreached := reached
+	unreached.BackFloor = idJustAbove(t, trusted3.ChangeID)
+	backTo, _ := statelog.OpMintedAt(trusted3.ChangeID)
 	words := &scriptedWords{}
 	r := wordsReader(t, n, words)
 	for _, tc := range []struct {
@@ -178,25 +186,44 @@ func TestAListingNarrowedByWordsIsExactAsOfItsSnapshot(t *testing.T) {
 		tail     int
 		want     []string
 		building bool
+		backTo   time.Time
 	}{
-		{"covered", indexed, gitlet.MaxChangeTextTail, []string{"web!3", "web!2"}, false},
+		{"covered", indexed, gitlet.MaxChangeTextTail, []string{"web!3", "web!2"}, false, time.Time{}},
 		{"not covered", func() search.ChangeHeld { h := indexed; h.Seen = 1 << 62; return h }(),
-			gitlet.MaxChangeTextTail, []string{"web!2"}, true},
+			gitlet.MaxChangeTextTail, []string{"web!2"}, true, time.Time{}},
 		{"rebuilding", func() search.ChangeHeld { h := indexed; h.Rebuilding = true; return h }(),
-			gitlet.MaxChangeTextTail, []string{"web!2"}, true},
+			gitlet.MaxChangeTextTail, []string{"web!2"}, true, time.Time{}},
 		{"built from another copy", func() search.ChangeHeld { h := indexed; h.BuiltFrom = "another"; return h }(),
-			gitlet.MaxChangeTextTail, []string{"web!2"}, true},
+			gitlet.MaxChangeTextTail, []string{"web!2"}, true, time.Time{}},
 		// One change judged past the watermark, web!2's, the newest move; web!1, a candidate moved past
 		// it beyond that bound, is judged too.
-		{"a tail past its bound", indexed, 1, []string{"web!3", "web!2"}, true},
+		{"a tail past its bound", indexed, 1, []string{"web!3", "web!2"}, true, time.Time{}},
+		{"reached by the first build", reached, gitlet.MaxChangeTextTail, []string{"web!3", "web!2"}, false, backTo},
+		{"not yet reached by the first build", unreached, gitlet.MaxChangeTextTail, []string{"web!2"}, false,
+			backTo},
 	} {
 		words.script(tc.held)
 		gitlet.SetWordsBounds(r, gitlet.MaxChangeTextCandidates, tc.tail)
 		got, text := wordsListed(wordsPages(t, r, gitlet.ReadQuery{Asker: ada, Repo: "web", Text: "login"}, 50))
-		if !slices.Equal(got, tc.want) || text == nil || text.Building != tc.building {
-			t.Errorf("%s: lists %v (%+v), want %v building %v", tc.name, got, text, tc.want, tc.building)
+		if !slices.Equal(got, tc.want) || text == nil || text.Building != tc.building ||
+			!text.IndexedBackTo.Equal(tc.backTo) {
+			t.Errorf("%s: lists %v (%+v), want %v building %v back to %v", tc.name, got, text, tc.want,
+				tc.building, tc.backTo)
 		}
 	}
+}
+
+// idJustAbove is a change id above id in the same millisecond: a UUIDv7 one more in its last bytes.
+func idJustAbove(t *testing.T, id string) string {
+	t.Helper()
+	u := uuid.MustParse(id)
+	for i := len(u) - 1; i > 8; i-- {
+		if u[i]++; u[i] != 0 {
+			return u.String()
+		}
+	}
+	t.Fatalf("no id above %s in its millisecond's last bytes", id)
+	return ""
 }
 
 // A WORDS LISTING NEVER ANSWERS A CHANGE ITS ASKER MAY NOT READ: a seat outside a unit repository's
@@ -513,4 +540,95 @@ func TestAChangeEditedAMomentAgoIsFoundByItsNewWords(t *testing.T) {
 	check("before a sweep")
 	sweepWords(t, x)
 	check("after a sweep")
+}
+
+// While the first build walks back, every page the words lead carries the floor's mint instant (UTC,
+// milliseconds); none once whole, from an unused index, or on a page another walk leads.
+// Mutation: drop the field, or set it where the build is whole or another walk leads.
+func TestAWordsListingSaysHowFarBackItsIndexReaches(t *testing.T) {
+	t.Parallel()
+	n, _ := grantedChanges(t)
+	all := summariesOf(t, n.reader, gitlet.ReadQuery{Asker: ada, State: gitlet.ChangeStateOpen})
+	var everyID []string
+	for _, s := range all {
+		everyID = append(everyID, s.ID)
+	}
+	floor := slices.Min(everyID)
+	backTo, _ := statelog.OpMintedAt(floor)
+	through := all[0].Position.Packed()
+	instance := estateInstance(t, n)
+	building := search.ChangeHeld{IDs: everyID, Through: through, BackPos: through, BackFloor: floor,
+		BuiltFrom: instance}
+	words := &scriptedWords{}
+	r := wordsReader(t, n, words)
+	for _, tc := range []struct {
+		name     string
+		held     search.ChangeHeld
+		q        gitlet.ReadQuery
+		backTo   time.Time
+		building bool
+	}{
+		{"walking back", building, gitlet.ReadQuery{}, backTo, false},
+		{"walking back, in a repository", building, gitlet.ReadQuery{Repo: "platform"}, backTo, false},
+		{"whole", func() search.ChangeHeld { h := building; h.BackFloor = ""; return h }(), gitlet.ReadQuery{},
+			time.Time{}, false},
+		{"rebuilding", func() search.ChangeHeld { h := building; h.Rebuilding = true; return h }(),
+			gitlet.ReadQuery{}, time.Time{}, true},
+		{"another copy's", func() search.ChangeHeld { h := building; h.BuiltFrom = "another"; return h }(),
+			gitlet.ReadQuery{}, time.Time{}, true},
+		{"a floor carrying no instant", func() search.ChangeHeld { h := building; h.BackFloor = "no-instant"; return h }(),
+			gitlet.ReadQuery{}, time.Time{}, true},
+		{"another walk leads", building, gitlet.ReadQuery{Readiness: gitlet.BucketApproval}, time.Time{}, false},
+	} {
+		words.script(tc.held)
+		tc.q.Asker, tc.q.Text = ada, "upload"
+		pages := wordsPages(t, r, tc.q, 1)
+		if tc.name == "walking back" && len(pages) < 3 {
+			t.Fatalf("%s: the premise lists %d pages, too few to hold the field on each", tc.name, len(pages))
+		}
+		for i, page := range pages {
+			text := page.ChangesText
+			if text == nil || !text.IndexedBackTo.Equal(tc.backTo) || text.Building != tc.building {
+				t.Errorf("%s: page %d says %+v, want back to %v, building %v", tc.name, i+1, text, tc.backTo,
+					tc.building)
+				continue
+			}
+			if at := text.IndexedBackTo; !at.IsZero() && (at.Location() != time.UTC || at.Nanosecond()%1e6 != 0) {
+				t.Errorf("%s: page %d says back to %v, want UTC to the millisecond", tc.name, i+1, at)
+			}
+		}
+	}
+	// THE REAL INDEX: ten descriptions of 30 KiB, so the first backward batch stops at the ninth newest.
+	m := newNode(t)
+	m.chart = testChart()
+	c, _ := committerOn(t, m, m.pub)
+	repo := changeRepo(t, m, "web")
+	var opened []string
+	for i := range 10 {
+		source := fmt.Sprintf("refs/heads/topic-%d", i)
+		pushedBy(t, c, repo, ada, update(source, gitlet.ZeroOID, oidOf(source)))
+		p := opening(repo, source, mainRef, dev)
+		p.Open.Body = strings.Repeat("words ", 30<<10/6)
+		res, err := c.ProposeChange(t.Context(), p)
+		requireChanged(t, res, err)
+		opened = append(opened, res.ChangeID)
+	}
+	slices.Sort(opened)
+	x := search.NewChangeIndexer(m.nodeDB, m.db.Reader(), gitlet.Domain{})
+	if _, err := x.Sweep(t.Context(), time.Now()); err != nil {
+		t.Fatalf("sweep the index of changes' words once: %v", err)
+	}
+	indexed := wordsReader(t, m, x)
+	ninth, _ := statelog.OpMintedAt(opened[1])
+	listed, text := wordsListed(wordsPages(t, indexed, gitlet.ReadQuery{Asker: ada, Text: "upload"}, 50))
+	if text == nil || !text.IndexedBackTo.Equal(ninth) || text.Building || len(listed) != 9 {
+		t.Errorf("one batch into the first build the page lists %d changes and says %+v, want nine and back "+
+			"to %v", len(listed), text, ninth)
+	}
+	sweepWords(t, x)
+	listed, text = wordsListed(wordsPages(t, indexed, gitlet.ReadQuery{Asker: ada, Text: "upload"}, 50))
+	if text == nil || *text != (gitlet.ChangesText{}) || len(listed) != 10 {
+		t.Errorf("once whole the page lists %d changes and says %+v, want ten and a whole search", len(listed),
+			text)
+	}
 }

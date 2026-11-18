@@ -56,10 +56,9 @@ func (r *roundTrip) named(t *testing.T, k objstore.Key) int {
 // referenced is which of among the collector's references read finds named.
 func (r *roundTrip) referenced(t *testing.T, among ...objstore.Key) map[objstore.Key]bool {
 	t.Helper()
-	// THROUGH THE DECLARED LIST, exactly as the engine builds the
-	// collector's sources, so this reads the statement the collector runs:
-	// the tracker's own declarations in it, since this harness runs no other
-	// domain's estate.
+	// THROUGH THE DECLARED LIST, as the engine builds the collector's
+	// sources, so this reads the statement the collector runs (the
+	// tracker's declarations only: this harness runs no other estate).
 	sources, err := collect.Sources(trackerReferences(), worklet.ObjectEstate{Reader: r.reader})
 	if err != nil {
 		t.Fatal(err)
@@ -79,9 +78,8 @@ func (r *roundTrip) referenced(t *testing.T, among ...objstore.Key) map[objstore
 }
 
 // trackerReferences is the declared list's tables of the tracker's own
-// domain — the declarations the collector reads THROUGH THIS DOMAIN'S ESTATE,
-// out of the one list every domain declares into, so a table another domain
-// declares is read through that domain's estate and never asked of this one.
+// domain: the collector reads each table through its own domain's estate, so
+// another domain's table is never asked of this one.
 func trackerReferences() []objstore.ReferenceTable {
 	var out []objstore.ReferenceTable
 	for _, table := range references.All {
@@ -106,10 +104,9 @@ func (w *readWatch) Read(ctx context.Context, at statelog.Position, fn func(*sql
 }
 
 // every is every reference the collector's audit walks find, by the object it
-// names — and each walk is held to handing a page back only once the read
-// that answered it has ended, since the audit asks the backend about each
-// reference and a read must not be held open across those round trips, and to
-// key order, which the audit's ranged listings are cut from.
+// names. Each walk is held to key order (the audit's ranged listings are cut
+// from it) and to handing a page back only after its read has ended, since a
+// read must not stay open across the audit's round trips to the backend.
 func (r *roundTrip) every(t *testing.T) map[objstore.Key][]objstore.Reference {
 	t.Helper()
 	watch := &readWatch{ObjectEstate: worklet.ObjectEstate{Reader: r.reader}}
@@ -414,12 +411,10 @@ func TestAListingPagesAndFolders(t *testing.T) {
 }
 
 // A LISTING ASKED FOR MORE THAN A PAGE IS ANSWERED, NEVER REFUSED: a page past
-// [worklet.MaxFilePage] is held to it, so a caller asking for more files than
-// one answer carries reads the files there are. The listing refused it in an
-// error no surface could tell from this node's own failure, so a seat's
-// list_project_files answered internal_error and the query surface 500.
+// [worklet.MaxFilePage] is held to it, since a refusal is an error no surface
+// can tell from this node's own failure.
 //
-// Mutation: refuse a page past the cap in Reader.Files again and this fails.
+// Mutation: refuse a page past the cap in Reader.Files and this fails.
 func TestAListingAskedPastItsPageIsAnswered(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -495,13 +490,12 @@ func TestAFileOverItsCapsIsRefused(t *testing.T) {
 	}
 }
 
-// A PUT NAMING AN OLD KEY IS REFUSED — ADR-0027's bound, judged at the
-// write's own decide. A write naming a key minted more than RecordWithin ago
-// could land after the collector read that key as nobody's and deleted it; one
-// minted inside the bound is recorded. A key minted AHEAD of the deciding
-// node's clock is recorded too: the collector judges a key by its own minting
-// instant, so a key from a fast clock protects itself, and refusing it would
-// only fail uploads from that node.
+// A PUT NAMING AN OLD KEY IS REFUSED: ADR-0027's bound, judged at the write's
+// own decide. A key minted more than RecordWithin ago could land after the
+// collector deleted it as nobody's; one inside the bound is recorded. A key
+// minted AHEAD of the deciding node's clock is recorded too: the collector
+// judges a key by its own minting instant, so it protects itself, and
+// refusing it would only fail uploads from that node.
 func TestAPutNamingAnOldKeyIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -531,9 +525,8 @@ func TestAPutNamingAnOldKeyIsRefused(t *testing.T) {
 
 // THE LARGEST FILE RECORD FITS ITS COMMIT, measured rather than asserted from
 // arithmetic: a path at its cap, a content type at its cap that escapes
-// six-fold, the digest, the size and the object's key. A file record no longer
-// grows with its content — one key names a gibibyte as it names a byte — but
-// it is still a record, and the caps on what it carries are what bound it.
+// six-fold, the digest, the size and the object's key. The content's size
+// does not grow the record; the caps on what it carries bound it.
 func TestTheMaximalFileFitsItsRecord(t *testing.T) {
 	t.Parallel()
 	at := time.Unix(1_700_000_000, 0).UTC()

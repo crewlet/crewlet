@@ -13,31 +13,17 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// Folding one work item into another.
+// Folding one work item into another. A verb, not `update_work_item` setting
+// `duplicates` and `cancelled` by hand: a merge also moves the CHILDREN, which
+// needs the subtree read before the first append, and a hand-rolled merge
+// orphans the subtasks under a cancelled parent. And it is a sequence: mark the
+// duplicate, re-parent each child, close the duplicate last, all under a fleet
+// claim so one item is not folded twice, the close carrying the mark's session
+// mark so its snapshot holds the commit that started the gesture.
 //
-// # Why this is a verb and not an argument
-//
-// `update_work_item` can already draw the `duplicates` link and set the status
-// to `cancelled`, and a model that does both by hand has done most of a merge.
-// What it has not done is move the CHILDREN, and it has no way to: the subtree
-// is read before the first append, and a patch tool has no read of it. So a
-// hand-rolled merge leaves subtasks under a cancelled parent, which is an
-// orphan nobody finds — the board shows a closed item and the work under it
-// disappears with it.
-//
-// It is also a SEQUENCE and the patch verb is not. The fold marks the
-// duplicate, re-parents each child onto the survivor, and closes the
-// duplicate last, all under a fleet claim so two callers cannot fold one item
-// twice — and the close carries the session mark of the mark, so its snapshot
-// contains the commit that started the gesture.
-//
-// # And why `duplicate_of` still exists
-//
-// They are different statements. `duplicate_of` records that two items
-// OVERLAP, which is a link somebody may want while both are still being
-// worked; this closes one of them and moves its work. Collapsing the two would
-// make an ordinary patch silently re-parent a subtree, which is the one thing
-// "only the fields you pass are changed" promises it will not do.
+// `duplicate_of` stays: it records an OVERLAP while both are still worked.
+// Folding the two together would make a patch re-parent a subtree, breaking
+// "only the fields you pass are changed".
 
 // ---- merge_work_item ---------------------------------------------------- //
 
@@ -133,11 +119,9 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			before.Named())), nil
 	}
 
-	// THE SNAPSHOT DESCRIBES WHAT THE MERGE LEAVES, because that is what
-	// the `status` wake is about: a recipient reading a snapshot that still
-	// showed the item open would be told about a state the gesture was
-	// closing, and the close is the last append so nothing after it corrects
-	// the picture.
+	// The snapshot describes what the merge LEAVES: the close is the last
+	// append, so nothing after it would correct a `status` wake whose
+	// snapshot still showed the item open.
 	cancelled := before.Task
 	cancelled.Status = worklet.StatusCancelled
 	cancelled.StatusGroup = worklet.StatusCancelled.Group()
@@ -147,9 +131,8 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Kind: worklet.ChangeStatus, Before: before.Task, After: cancelled,
 		}.Notify(t.deps.Leads))
 	if errors.Is(err, worklet.ErrReparentAcrossProjects) {
-		// THE REFUSAL NAMES BOTH WAYS OUT, in this surface's own words:
-		// the tracker knows the gesture that clears it and not the tool
-		// or the argument a caller reaches it by.
+		// The refusal names both ways out in this surface's words: the
+		// tracker knows the gestures, not the tool or argument reaching them.
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf(MergeWorkItemTool+" "+
 			"was refused: %s. Move %s "+
 			"into the surviving item's project with "+worklet.MoveWorkItemTool+" first — its "+
@@ -160,10 +143,9 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return writeFailure(ctx, actor, worklet.MergeWorkItemTool, err), nil
 	}
 	if got.Outcome == statelog.OutcomeUnknown {
-		// NEVER A RECEIPT FOR A MERGE NOBODY CAN SAY LANDED — see
-		// [unknownWrite]. The sequence stops at an unknown step with an
-		// error of its own, so this is the seam's contract held here
-		// rather than an implementation's habit trusted.
+		// Never a receipt for a merge nobody can say landed ([unknownWrite]).
+		// The sequence already stops at an unknown step with its own error;
+		// this holds the seam's contract rather than trusting that habit.
 		return unknownWrite(actor, worklet.MergeWorkItemTool,
 			fmt.Sprintf("%s was merged", before.Named()), opID, got.Unvouched,
 			unknownNext(got.Unvouched, sameCall(actor, worklet.MergeWorkItemTool),
@@ -180,12 +162,9 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}, before), actor))
 }
 
-// moveSubtasks reads the one knob this verb has, and ABSENT IS TRUE.
-//
-// The zero value of a bool is the wrong default here: leaving children under a
-// closed parent is the orphan this whole verb exists to prevent, so a caller
-// that said nothing gets the safe outcome and only an explicit `false` keeps
-// them where they are.
+// moveSubtasks reads the verb's one knob, and ABSENT IS TRUE: a bool's zero
+// value would leave children under a closed parent, the orphan this verb
+// exists to prevent, so only an explicit `false` keeps them there.
 func moveSubtasks(args map[string]any) bool {
 	raw, held := argval.Bool(args["move_subtasks"])
 	return !held || raw

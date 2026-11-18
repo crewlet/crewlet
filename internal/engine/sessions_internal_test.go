@@ -32,13 +32,10 @@ func sessionDirs(t *testing.T, dir string) []string {
 }
 
 // A TMPDIR TOO LONG FOR A SOCKET IS REFUSED AT BOOT, NAMING IT, with nothing
-// opened. Every session's socket goes under it, and a socket path past the
-// platform's bound fails at every bind — in every seat, at its first phase,
-// as an error naming no setting — so the engine refuses to start on it
-// instead, before it has a store or a broker to unwind.
+// opened: every session's socket goes under it, and a path past the platform's
+// bound fails every seat's first phase with an error naming no setting.
 //
-// Not parallel: it moves TMPDIR for the process, which t.Setenv allows only
-// where nothing else is running.
+// Not parallel: t.Setenv moves TMPDIR for the process.
 //
 // Mutation: make the session directory after the backends, and the store's
 // file exists when the boot is refused.
@@ -65,10 +62,9 @@ func TestABootOnATMPDIRTooLongForASocketIsRefusedNamingIt(t *testing.T) {
 	}
 }
 
-// A BOOT THAT FAILS BEFORE THE ENGINE EXISTS REMOVES ITS SESSION DIRECTORY.
-// The directory is made with nothing else open, and every return between it
-// and the engine's own failure path is one the directory has to be removed on
-// — or each failed boot leaves one in the temp root.
+// A BOOT THAT FAILS BEFORE THE ENGINE EXISTS REMOVES ITS SESSION DIRECTORY on
+// every return before the engine's own failure path, or each failed boot
+// leaves one in the temp root.
 //
 // Mutation: drop the guard that removes it before the handover, and the
 // directory is left behind.
@@ -76,16 +72,16 @@ func TestABootThatFailsEarlyRemovesItsSessionDirectory(t *testing.T) {
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(brokertest.TempDir(t), "stream")
-	// A SHORT temp root of its own: one under t.TempDir() carries the test's
-	// name and is itself past the bound a socket's path has.
+	// A SHORT temp root: one under t.TempDir() carries the test's name and is
+	// past a socket path's bound.
 	tmp, err := os.MkdirTemp("", "crewlet-boot-") //nolint:usetesting // t.TempDir is named for the test, past a socket path's bound
 	if err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(tmp) })
 	t.Setenv("TMPDIR", tmp)
-	// Lent backends with nothing in them, which New refuses before it
-	// opens anything — after the session directory is made.
+	// Empty lent backends, which New refuses after making the session
+	// directory and before opening anything.
 	_, err = New(t.Context(), Options{Bootstrap: &b, Backends: &Backends{}})
 	if err == nil || !strings.Contains(err.Error(), "the supplied Backends has no") {
 		t.Fatalf("New = %v, want the incomplete backends refused — this case needs "+

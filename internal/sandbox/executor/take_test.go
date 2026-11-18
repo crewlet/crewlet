@@ -28,11 +28,9 @@ import (
 // takeBound is the archive bound every take here is made within: a session's.
 const takeBound = executorkeep.SessionMaxBytes
 
-// keptAndOpened is a taken session as the fleet keeps it and a later launch
-// opens it: sealed under the keyring into a spool, uploaded to the object store,
-// and read back whole through the session store — so what a case greps is what
-// a later launch would carry into its box, and never the stream before its
-// seal.
+// keptAndOpened is a taken session as a later launch opens it: sealed into a
+// spool, uploaded and read back through the session store, so a case greps what
+// a later launch carries into its box, never the stream before its seal.
 func keptAndOpened(t *testing.T, taken sandbox.TakenSession) []byte {
 	t.Helper()
 	at := func() time.Time { return time.Now().UTC() }
@@ -87,12 +85,11 @@ const (
 	plantedKeyed = "opaque-but-keyed-value"
 )
 
-// plantingHarness is a stand-in `claude` that files its session where the pinned
-// layout names, as [sessionHarness] does, with a planted secret in every kind of
-// file a session holds: the transcript (raw, JSON-escaped, and as the key a
-// tool's structured result names a member by), a subagent's transcript, a tool
-// result spilled to a text file — and one named after the secret — and a task
-// list.
+// plantingHarness is a stand-in `claude` that files its session as
+// [sessionHarness] does, with a planted secret in every kind of file a session
+// holds: the transcript (raw, JSON-escaped, and as a tool result's key), a
+// subagent's transcript, a spilled tool result (and one named after the
+// secret), and a task list.
 func plantingHarness() string {
 	return `#!/bin/sh
 if [ "$1" = --version ]; then echo '2.1.310 (Claude Code)'; exit 0; fi
@@ -114,15 +111,12 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"done","s
 }
 
 // A KEPT SESSION CARRIES NO SECRET THE ENGINE PUT IN ITS BOX, AND STAYS THE
-// ARCHIVE ITS HARNESS RESTORES. A run on a real box files its session with a
-// planted secret in a transcript line, a subagent's transcript, a spilled tool
-// result, a file's name and a task list; taken as the run's script packed it,
-// and packed again on demand, then sealed, uploaded and OPENED from the store
-// as a later launch opens it, the archive holds none of them — not the value
-// the engine named, raw, as JSON escapes it or as a key, not a credential only
-// its shape gives away, not a value under a password's key — while every
-// transcript line is still JSON, every member still there, and the box keeps
-// the digest of exactly the bytes that left it.
+// ARCHIVE ITS HARNESS RESTORES. Taken as the run's script packed it and packed
+// on demand, then opened from the store as a later launch opens it, the
+// archive holds no planted secret: not the engine's value raw, JSON-escaped or
+// as a key, not a credential only its shape gives away, not a value under a
+// password's key. Every transcript line stays JSON, every member stays, and
+// the box keeps the digest of exactly the bytes that left it.
 //
 // Mutation: skip the by-value pass, its JSON-escaped form, the keys' rewrite,
 // the members' names, the redaction, the keyed mask, or the digest's record,
@@ -183,15 +177,13 @@ func TestAKeptSessionCarriesNoSecretTheEnginePutInItsBox(t *testing.T) {
 }
 
 // A JOB THAT NEVER PACKED IS PACKED ON DEMAND BY THE RUNNER'S OWN PACK, which
-// keeps its digest in the box as the run's script's pack does: the archive is
-// the session's whole, the box knows it holds it, and it is the read's own —
-// at the pack's own place, never over the job's capture, which only the job's
-// script writes — and gone once the read is done with it.
+// keeps its digest in the box as the script's pack does. The archive is the
+// whole session, at the pack's own place (never over the job's capture, which
+// only the job's script writes), and gone once the read is done with it.
 //
-// Mutation: pack anywhere but the runner, or leave the digest out of the pack,
-// and the box takes its own archive for another box's; move the pack over the
-// job's capture, as a pack of a job that is over once did, and its archive is
-// found there.
+// Mutation: pack anywhere but the runner, or leave the digest out, and the box
+// takes its own archive for another box's; move the pack over the job's
+// capture and its archive is found there.
 func TestAPackOnDemandKeepsItsDigestInTheBox(t *testing.T) {
 	t.Parallel()
 	runner, b := sessionBox(t, "2.1.310")
@@ -259,12 +251,11 @@ func TestATakeIsBoundedByTheArchiveItKeeps(t *testing.T) {
 }
 
 // A PACK THAT FAILS IS AN ERROR, NEVER "NO SESSION"; A SESSION THERE IS NOTHING
-// OF IS NOTHING. A box whose tar breaks — its record naming a session its
-// harness wrote — answers why, so the capture is stamped refused and a later
-// launch knows the job's session is missing rather than continuing an older one
-// as its last, and the error carries the pack's whole word, though it names a
-// file nested deep in the session; a box whose harness wrote no transcript
-// answers no session at all, which is no refusal.
+// OF IS NOTHING. A box whose tar breaks answers why, so the capture is stamped
+// refused and a later launch knows the session is missing rather than
+// continuing an older one, and the error carries the pack's whole word even
+// for a file nested deep in the session; a box whose harness wrote no
+// transcript answers no session, which is no refusal.
 //
 // Mutation: read a failed pack's exit as nothing to pack, or a missing
 // transcript as a failure, or cut the pack's word at a transcript line's
@@ -320,44 +311,18 @@ func TestAPackThatFailsIsAnErrorAndNoTranscriptIsNoSession(t *testing.T) {
 	})
 }
 
-// TWO READS OF ONE JOB AT ONCE NEVER MOVE A HALF-MADE ARCHIVE. A stop's read and
-// a collection's of one job may take its session at once, and each packs it now
-// where the job left no archive of it, or where its box would not end it. Here
-// the program a pack writes its archive with (Claude Code's tar, an OpenCode
-// export's gzip) is played so that the two packs meet where they can do each
-// other the most harm. The first read starts alone, and its pack, its archive
-// made whole and not yet moved, says so and holds. The second read starts only
-// once the first pack holds, and its pack writes the first half of its archive
-// where it is told, says so and holds there. That word lets the first pack go
-// on to move its archive, and the second pack goes on only once the first read
-// has been read whole. So the second pack starts, and half makes its archive,
-// while the first pack's waits to be moved, and the first pack moves while the
-// second's is half made. The box holds both packs' staging directories as the
-// second pack writes, each read hands back the whole session, and neither pack
-// leaves its directory behind.
+// TWO READS OF ONE JOB AT ONCE NEVER MOVE A HALF-MADE ARCHIVE. A stop's read
+// and a collection's may each pack a job's session at once; [meetingPacks]
+// has them meet where it hurts most: the first pack holds, archive whole and
+// unmoved; the second writes half of its own and holds; the first moves; the
+// second ends once the first read is read whole. Both staging directories are
+// there as the second writes, each read is the whole session, none is left.
+// The job's harness has exited (one still working:
+// TestATakeOfAJobStillWorkingNeverMovesItsArchiveOverTheJobsCapture).
 //
-// On either harness, for a read of a job that left no archive, which looks for
-// one first, and for a read that packs the job as it stands
-// (sandbox.SessionTake.Pack), as a read of a job its box would not end does. In
-// both the job's harness has exited, so the case holds a read's way to its pack
-// and not a job still working, whose session can change between two packs:
-// that each read of one streams its own archive, never moved over the job's
-// capture, TestATakeOfAJobStillWorkingNeverMovesItsArchiveOverTheJobsCapture
-// holds.
-//
-// Mutation: stage both packs in one directory — the runner naming every pack's
-// alike, or a harness's pack staging in a directory of its own choosing rather
-// than the one it is handed — and the second pack's start clears the first's
-// archive: the first pack moves the second's, half made, into place — over the
-// job's capture, or where a read of a job still working reads its own — and
-// its read is not taken whole; and the second pack's move finds nothing to
-// move. Have a pack's start clear every pack's staging directory, and the first
-// pack's move finds nothing to move. Either way the box holds one staging
-// directory as the second pack writes. Leave behind the archive a read was
-// handed, once it is read, and it is found after; a staging directory a pack's
-// script leaves is removed by the take's release too, so the run's own end,
-// which has no release, holds the script to removing it
-// (TestTheRunsOwnEndPackLeavesNoStagingDirectoryBehind).
+// Mutation: stage both packs in one directory, or clear every pack's on start,
+// and the box holds one as the second writes; leave a read's archive behind and
+// it is found after (a script's own: TestTheRunsOwnEndPackLeavesNoStagingDirectoryBehind).
 func TestTwoReadsOfOneJobAtOnceNeverMoveAHalfMadeArchive(t *testing.T) {
 	t.Parallel()
 	harnesses := []struct {
@@ -365,15 +330,14 @@ func TestTwoReadsOfOneJobAtOnceNeverMoveAHalfMadeArchive(t *testing.T) {
 		// packer is the program the harness's pack writes its archive with,
 		// and word the first word of the pack's call of it.
 		packer, word string
-		// aside is the shell that makes the archive the call asks for, whole,
-		// at "$whole" with this machine's packer, "$own", its status in st,
-		// and opens descriptor 3 on where the call writes it.
+		// aside is the shell that makes the call's archive whole at "$whole"
+		// with this machine's packer, "$own", its status in st, and opens
+		// descriptor 3 on where the call writes it.
 		aside string
-		// job is a box whose job left no archive of its session, and that
-		// session's id.
+		// job is a box whose job left no archive of its session, and its id.
 		job func(t *testing.T) (*executor.Runner, sandbox.Sandbox, string)
-		// lacks is what archive, as a read handed it back, lacks of a whole
-		// archive of session: "" where it lacks nothing.
+		// lacks is what archive lacks of a whole archive of session, "" for
+		// nothing.
 		lacks func(t *testing.T, archive []byte, session string) string
 	}{
 		{name: "Claude Code", packer: "tar", word: "-czf",
@@ -452,12 +416,10 @@ func TestTwoReadsOfOneJobAtOnceNeverMoveAHalfMadeArchive(t *testing.T) {
 					if err := os.MkdirAll(flags, 0o700); err != nil {
 						t.Fatal(err)
 					}
-					// THE WORDS THE PACKS AND THE CASE PASS: the first pack's
-					// that it holds, which the case waits on before it starts
-					// the second read; the second pack's that its archive is
-					// half made, which the first pack waits on; and the case's
-					// that the first read was read whole, which the second pack
-					// waits on.
+					// THE WORDS PASSED: held (the first pack holds; the case
+					// starts the second read), half (the second's archive is
+					// half made; the first pack goes on), release (the first
+					// read was read whole; the second pack goes on).
 					heard, release := heldFifo(t, flags, "held"), heldFifo(t, flags, "release")
 					heldFifo(t, flags, "half")
 					writeBoxStandIn(t, b, paths(b).BinDir()+"/"+h.packer,
@@ -473,10 +435,9 @@ func TestTwoReadsOfOneJobAtOnceNeverMoveAHalfMadeArchive(t *testing.T) {
 					take := func(first bool) {
 						taken, takeErr := runner.TakeSession(t.Context(), b, read.take)
 						// A READ THAT ENDS WITH ITS PACK'S WORD NEVER SAID says
-						// so in its stead, so nothing waits on a word that is
-						// not coming — the case on the first pack's, the first
-						// pack on the second's — and never waits itself: the
-						// case holds every fifo open to read.
+						// so in its stead, so nothing waits on a word not
+						// coming; it never blocks, as the case holds every fifo
+						// open to read.
 						fifo := "half"
 						if first {
 							fifo = "held"
@@ -575,17 +536,13 @@ func heldFifo(t *testing.T, dir, name string) *os.File {
 	return fifo
 }
 
-// meetingPacks is a stand-in for packer, the program a harness's pack writes its
-// archive with (Claude Code's tar, an OpenCode export's gzip), for b's bin
-// directory, which a pack's PATH puts first. The packs and the case leave their
-// marks in flags and pass their words through the fifos the case holds there
-// (heldFifo). A call whose first word is not word runs this machine's own
-// packer. The FIRST pack's call makes its archive whole where it is told, says
-// so in the fifo held, and holds until a word comes in the fifo half, failing
-// on any but the second pack's. The SECOND pack's call makes its archive whole
-// aside (aside), writes the first half of it where it is told, lists the packs'
-// staging directories b holds as it finds them, says so in half, and holds
-// until the case's word comes in the fifo release; then it writes the rest.
+// meetingPacks is a stand-in for packer (Claude Code's tar, OpenCode's gzip)
+// in b's bin directory, first on a pack's PATH, marking flags and talking
+// through the fifos held there ([heldFifo]); a call not starting with word runs
+// the real packer. The FIRST pack's call makes its archive whole, says held,
+// and holds for half, failing on any other word. The SECOND makes its archive
+// aside, writes its first half, lists b's staging directories, says half, and
+// writes the rest once release comes.
 func meetingPacks(t *testing.T, b sandbox.Sandbox, packer, word, aside, flags string) string {
 	t.Helper()
 	tool := func(name string) string {
@@ -623,9 +580,8 @@ func meetingPacks(t *testing.T, b sandbox.Sandbox, packer, word, aside, flags st
 }
 
 // packStagingLeft is every staging directory a pack on demand left in box, and
-// every archive one kept for its read (executor.Paths.SessionPackHeld): each is
-// named for its pack alone (executor.Paths.SessionPackStaging), so it is found
-// by its pattern rather than named.
+// every archive one kept for its read (executor.Paths.SessionPackHeld), found
+// by pattern since each is named for its pack (executor.Paths.SessionPackStaging).
 func packStagingLeft(t *testing.T, box sandbox.Sandbox) []string {
 	t.Helper()
 	res, err := box.Exec(t.Context(), "for d in "+shQuote(paths(box).WorkDir())+"/session-pack-staging.*; do "+
@@ -637,16 +593,13 @@ func packStagingLeft(t *testing.T, box sandbox.Sandbox) []string {
 }
 
 // THE CLEAR BEFORE EVERY RUN REMOVES EVERY PACK ON DEMAND'S STAGING DIRECTORY,
-// whichever read made it: each is named for its pack alone
-// (executor.Paths.SessionPackStaging), so the clear removes what matches their
-// pattern, and two that packs cut short left — their node stopped as they
-// packed — outlive no clear: in a box whose home's path holds a space, which
-// the clear quotes, as in any other.
+// whichever read made it, by pattern (executor.Paths.SessionPackStaging): two
+// left by packs cut short outlive no clear, also where the box's home path
+// holds a space.
 //
-// Mutation: leave the packs' staging directories out of the clear, or quote
-// their pattern so it matches nothing, and they outlive it; leave the work
-// directory unquoted, and in the box whose home's path holds a space the clear
-// splits that path into words and removes neither.
+// Mutation: leave the staging directories out of the clear, or quote their
+// pattern so it matches nothing, and they outlive it; leave the work directory
+// unquoted, and the path with a space splits and neither is removed.
 func TestTheClearBeforeEveryRunRemovesEveryPacksStagingDirectory(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, root string }{
@@ -689,13 +642,11 @@ func TestTheClearBeforeEveryRunRemovesEveryPacksStagingDirectory(t *testing.T) {
 	}
 }
 
-// heldTake is a box a take of its job's session reads through, held at one
-// step of the take — its pack, the login shell a pack on demand runs in (pack),
-// or its at-th open of an archive (at) — closing held as it gets there, and
-// going on only once resume is closed: so a case orders two takes of one job,
-// or lands an archive, between the steps it holds them at. A Claude Code
-// take's second open is its scrub's, opening its archive again by its path for
-// the second pass; an OpenCode take's first is the one pass it reads.
+// heldTake is a box a take reads through, held at one step (its pack's login
+// shell where pack is set, or its at-th open of an archive), closing held there
+// and going on once resume is closed, so a case orders two takes, or lands an
+// archive, between steps. A Claude Code take's second open is its scrub's
+// second pass, by path; an OpenCode take's first is its one pass.
 type heldTake struct {
 	sandbox.Sandbox
 	pack         bool
@@ -781,16 +732,15 @@ const wentOnMark = "written on once the first read had packed"
 // as the cases of two reads of one job have it.
 type overJob struct {
 	name string
-	// at is the open of its archive at which a take of the harness's goes on
-	// to the pass that streams it ([heldTake]).
+	// at is the open at which the harness's take goes on to the pass that
+	// streams its archive ([heldTake]).
 	at int
-	// job is a box whose job is over and left no archive: its runner, the
-	// box, the session's id, and goOn, which writes the session on past what a
-	// pack made before it holds, as a process the job's harness started and
-	// that outlived it may.
+	// job is a box whose job is over and left no archive, the session's id,
+	// and goOn, which writes the session on past an earlier pack, as a process
+	// that outlived the job's harness may.
 	job func(t *testing.T) (runner *executor.Runner, b sandbox.Sandbox, session string, goOn func())
-	// wentOn reports whether archive, as a read handed it back, holds what
-	// goOn wrote, failing the case where it is no whole archive of session.
+	// wentOn reports whether archive holds what goOn wrote, failing the case
+	// where it is no whole archive of session.
 	wentOn func(t *testing.T, archive []byte, session string) bool
 }
 
@@ -872,15 +822,11 @@ func startTake(t *testing.T, runner *executor.Runner, held *heldTake) <-chan rea
 	return read
 }
 
-// THE RUN'S OWN END PACK LEAVES NO STAGING DIRECTORY BEHIND. A run's script
-// packs its session as its harness exits in a staging directory
-// (executor.Paths.SessionStaging), and removes it once the archive is moved
-// over the job's capture: nothing else removes it before the clear that comes
-// with the box's next run, which may be long after. A pack on demand's
-// staging directory is removed by its take's release as well, so only the
-// run's own end shows whether a pack's script removes what it staged. Here,
-// on either harness, a run ends by itself: its capture is there, and its
-// staging directory is not.
+// THE RUN'S OWN END PACK LEAVES NO STAGING DIRECTORY BEHIND. The script must
+// remove its staging directory (executor.Paths.SessionStaging) once the
+// archive is over the capture: nothing else does before the box's next run's
+// clear. A pack on demand's is removed by its take's release too, so only the
+// run's own end shows whether a pack's script cleans up.
 //
 // Mutation: have either harness's pack leave its staging directory, and the
 // run's own end leaves it behind.
@@ -914,26 +860,17 @@ func TestTheRunsOwnEndPackLeavesNoStagingDirectoryBehind(t *testing.T) {
 }
 
 // TWO READS OF A JOB THAT IS OVER EACH STREAM THE ARCHIVE THEIR OWN PACK MADE.
-// A stop's read and a collection's of one job may take its session at once,
-// and where the job left no archive each packs it now. Here, on either
-// harness, the two meet where a shared destination does them the most harm:
-// the second read finds no archive the job left and holds before its pack;
-// the first read then finds none either, packs the job, and holds before the
-// pass that streams what its pack made — a Claude Code take's second, which
-// opens its archive again by its path; an OpenCode take's one. The session is
-// written on, as a process the job's harness started and that outlived it may
-// write it, and only then does the second read pack and stream it, whole; then
-// the first goes on. Neither read is refused, each hands back a whole archive
-// of the session — the first's without what was written after its pack and
-// the second's with it — nothing of either lands over the job's capture, and
-// neither pack leaves a file behind.
+// Where the job left no archive, a stop's read and a collection's each pack it
+// now. Here the second read holds before its pack; the first packs and holds
+// before the pass that streams it ([overJob].at); the session is written on,
+// as a process outliving the job's harness may; the second packs and streams
+// whole; then the first goes on. Neither is refused, the first's archive lacks
+// the later write and the second's holds it, nothing lands over the job's
+// capture, and no file is left.
 //
-// Mutation: move a pack on demand of a job that is over over the job's
-// capture and stream what the capture holds, as such packs once did, and the
-// first read streams the second's archive, moved there between its pack and
-// its pass: Claude Code's second pass finds a member changed under it and the
-// take is refused, and OpenCode's hands back what was written after its own
-// pack; and the capture holds an archive after.
+// Mutation: move a pack on demand over the job's capture and stream what the
+// capture holds, and the first read streams the second's archive (refused on
+// Claude Code, the later write on OpenCode) and the capture holds an archive.
 func TestTwoReadsOfAJobThatIsOverEachStreamTheirOwnPacksArchive(t *testing.T) {
 	t.Parallel()
 	for _, h := range overJobs() {
@@ -974,19 +911,15 @@ func TestTwoReadsOfAJobThatIsOverEachStreamTheirOwnPacksArchive(t *testing.T) {
 }
 
 // THE JOB'S OWN END PACK LANDING AS A READ STREAMS CHANGES NOTHING THAT READ
-// STREAMS. The capture is the job's own script's, moved into place once as its
-// harness exits, and a read that finds the job over with no archive packs it
-// now — which the script, outliving what the read saw of its job, can still
-// land its own over while that read streams. Here, on either harness, the read
-// holds before the pass that streams what its pack made, and an archive is
-// moved over the job's capture, as the job's end pack moves its own: the read
-// goes on, hands back the whole archive its own pack made, and the capture
-// holds the end pack's archive after it.
+// STREAMS. Only the job's script moves an archive over its capture, and,
+// outliving what a read saw of its job, it may do so while a read that found
+// no archive streams its own pack's. Here the read holds before that pass
+// while an archive lands over the capture: the read hands back its own pack's
+// whole archive, and the capture holds the end pack's after.
 //
-// Mutation: move a pack on demand of a job that is over over the job's capture
-// and stream what the capture holds, as such packs once did, and the read
-// streams the end pack's archive, which is no archive its scrub can read: the
-// take is refused.
+// Mutation: move a pack on demand over the job's capture and stream what the
+// capture holds, and the read streams the end pack's archive, which its scrub
+// cannot read: the take is refused.
 func TestTheJobsOwnEndPackLandingAsAReadStreamsChangesNothingItReads(t *testing.T) {
 	t.Parallel()
 	const final = "the job's own final archive, moved over the capture as its harness exited"
@@ -1020,12 +953,10 @@ func TestTheJobsOwnEndPackLandingAsAReadStreamsChangesNothingItReads(t *testing.
 	}
 }
 
-// brokenDigestLists are the ways a box's list of the digests of the archives
-// its copy holds (executor.Paths.SessionDigests) keeps no line a pack appends,
-// each made by the shell's how, handed the list's path: a directory where the
-// list belongs, which refuses the append; and a link to /dev/null, which takes
-// the append — its writer told it landed — and keeps nothing, as a full disk
-// can.
+// brokenDigestLists are the ways a box's digest list
+// (executor.Paths.SessionDigests) keeps no appended line, each made by the
+// shell's how on the list's path: a directory, which refuses the append, and a
+// link to /dev/null, which takes it and keeps nothing, as a full disk can.
 var brokenDigestLists = []struct{ name, how string }{
 	{name: "a list the box refuses the line", how: "mkdir"},
 	{name: "a list that keeps nothing it is handed", how: "ln -s /dev/null"},
@@ -1046,21 +977,17 @@ func breakDigestList(t *testing.T, path, how string) {
 const saysDigestUnrecorded = "digest could not be recorded"
 
 // A PACK REPORTS ITS ARCHIVE MADE ONLY ONCE ITS DIGEST IS RECORDED IN THE BOX.
-// Every pack of a box's session records its archive's digest in the box's
-// list of the archives its copy holds, so the box never takes an archive of
-// its own for another box's and restores it over the copy that went on past
-// it; and a pack reported its archive made — moved to where its read reads
-// it — before it appended that line, whose write nothing checked. Here the
-// list keeps no line ([brokenDigestLists]), and every pack, on either harness,
-// fails saying why and moves nothing to where its read reads it: a pack on
-// demand of a job that is over and one beside a harness that may still work,
-// and the run's own as its harness exits, whose run's error stream says why
-// and whose collection finds no capture.
+// The digest keeps the box from taking an archive of its own for another box's
+// and restoring it over the copy that went on past it. Here the list keeps no
+// line ([brokenDigestLists]), and every pack, on either harness, fails saying
+// why and moves nothing to where its read reads it: on demand, of a job that
+// is over or beside a harness that may still work, and the run's own end,
+// whose error stream says why and whose collection finds no capture.
 //
-// Mutation: move the archive into place and report it made before its digest
-// is recorded, the line's append unchecked, as the packs once did, and every
-// pack here holds; take the append's exit for the line, never reading it
-// back, and every pack beside the list that keeps nothing holds.
+// Mutation: move the archive into place before its digest is recorded, or
+// leave the append unchecked, and every pack here holds; take the append's
+// exit for the line, never reading it back, and every pack beside the list
+// that keeps nothing holds.
 func TestAPackReportsItsArchiveMadeOnlyOnceItsDigestIsRecorded(t *testing.T) {
 	t.Parallel()
 	for _, list := range brokenDigestLists {
@@ -1118,9 +1045,8 @@ func TestAPackReportsItsArchiveMadeOnlyOnceItsDigestIsRecorded(t *testing.T) {
 	}
 }
 
-// releaseWatch is a box that records the deadline every release of a pack on
-// demand's own files is asked under: the `rm -rf` of the pack's staging
-// directory and the archive it kept for its read.
+// releaseWatch is a box that records the deadline of every release of a pack
+// on demand's files (the `rm -rf` of its staging directory and held archive).
 type releaseWatch struct {
 	sandbox.Sandbox
 
@@ -1138,30 +1064,18 @@ func (b *releaseWatch) Exec(ctx context.Context, cmd string, opts sandbox.ExecOp
 	return b.Sandbox.Exec(ctx, cmd, opts)
 }
 
-// A PACK'S RELEASE IS HELD TO ITS TAKE'S OWN DEADLINE. A pack on demand keeps
-// its archive for its take alone and removes it once the take has read it, on
-// the take's close path, which the read the take is part of waits on; so the
-// removal is held to the take's own deadline — the time that read leaves it —
-// and not to a bound of its own from the moment it runs, under which a box that
-// stopped answering once its archive was read held the read up to the two
-// minutes a pack may take past it, into the room left for the outcome stamp and
-// the box's pause. A take with less than the floor left gives its release the
-// floor ([executor.PackReleaseFloor]), and one with no deadline the pack's own
-// bound. Here three takes each pack a job that left no archive and are read
-// whole and closed: one with a minute to go when its release is made, one with
-// a second, one with no deadline. Each release ran under exactly the deadline
-// its rule gives, and left nothing behind.
+// A PACK'S RELEASE IS HELD TO ITS TAKE'S OWN DEADLINE. A pack on demand removes
+// its archive on the take's close path, which the read waits on; under a bound
+// of its own (sandbox.SessionPackWait) a box that stopped answering would hold
+// the read past its deadline, into the room left for the outcome stamp and the
+// box's pause. Less than [executor.PackReleaseFloor] left gets the floor; no
+// deadline gets the pack's own bound. The runner's clock is the case's
+// ([executor.Clocked]): off the wall clock, a slow take got the floor and a
+// healthy build failed.
 //
-// THE RUNNER'S CLOCK IS THE CASE'S ([executor.Clocked]), set to the moment the
-// release is made, so no read of the wall clock decides the case. Read off the
-// wall clock, a take that had run past a minute less the floor gave its release
-// the floor, a deadline past the take's own, and a healthy build failed. Each
-// take still has a minute of the wall clock to run in.
-//
-// Mutation: bound the release by the pack's own wait from the moment it runs,
-// as it was, and the takes with a deadline are asked under one their rule does
-// not give; drop the floor, or read the wall clock in place of the runner's,
-// and the take with a second to go is asked under its own deadline.
+// Mutation: bound the release by the pack's own wait from when it runs, and the
+// takes with a deadline are asked under one their rule does not give; drop the
+// floor, or read the wall clock, and the take with a second to go is too.
 func TestAPacksReleaseIsHeldToItsTakesOwnDeadline(t *testing.T) {
 	t.Parallel()
 	runner, b := sessionBox(t, "2.1.310")
@@ -1211,19 +1125,15 @@ func TestAPacksReleaseIsHeldToItsTakesOwnDeadline(t *testing.T) {
 	}
 }
 
-// A RESTORE IS CONTINUED ONLY ONCE ITS DIGEST IS RECORDED IN THE BOX. A run that
-// continues a session carried into its box restores the archive over the box's
-// own copy where that copy does not hold it, and records the archive's digest
-// in the box's list of the archives its copy holds, so the archive carried in
-// again is never restored over the copy that went on past it; that line was
-// appended once the restore was done, and nothing checked it. Here the list
-// keeps no line ([brokenDigestLists]) and a session is carried into a box that
-// holds none, on either harness: the run does not continue what it restored, it
-// starts the session minted for it in its place and says why.
+// A RESTORE IS CONTINUED ONLY ONCE ITS DIGEST IS RECORDED IN THE BOX. A run
+// restoring a carried session over a box copy lacking it records the archive's
+// digest, so the archive carried in again is never restored over the copy that
+// went on past it. Here the list keeps no line ([brokenDigestLists]) and a
+// session is carried into a box that holds none: the run starts the session
+// minted for it instead and says why.
 //
-// Mutation: continue the restore whose digest went unrecorded, as the restores
-// once did, and the run takes up the carried session with no line of it in the
-// box.
+// Mutation: continue the restore whose digest went unrecorded, and the run
+// takes up the carried session with no line of it in the box.
 func TestARestoreIsContinuedOnlyOnceItsDigestIsRecorded(t *testing.T) {
 	t.Parallel()
 	for _, list := range brokenDigestLists {
