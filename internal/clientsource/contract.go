@@ -304,6 +304,7 @@ var contract = []Entry{
 	{"DEVICE_SIGN_IN_ENDED", ReadLiteral, "internal/coord.TestTheModelsScreenNamesEveryDeviceSignInStatus"},
 	{"ModelSignInRoute", ReadUnion, "internal/providers/llm/harness.TestTheModelsScreenNamesTheEnginesSignIns"},
 	{"ModelLimitWindow", ReadUnion, "internal/providers/llm/harness.TestTheModelsScreenNamesTheEnginesSignIns"},
+	{"ModelLimitState", ReadUnion, "internal/providers/llm/harness.TestTheModelsScreenNamesTheEnginesSignIns"},
 	{"ModelCheckName", ReadUnion, "internal/providers/llm/harness.TestTheModelsScreenNamesTheEnginesSignIns"},
 	{"ModelCheckState", ReadUnion, "internal/api/queries.TestTheModelsScreenNamesEveryCheckState"},
 	{"MODEL_CREDENTIAL_BUDGET_SECONDS", ReadScalar, "internal/api/llmapi.TestTheModelsScreenWaitsAsLongAsTheEngineWorks"},
