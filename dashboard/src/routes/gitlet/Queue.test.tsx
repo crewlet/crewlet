@@ -9,6 +9,8 @@ import { afterEach, beforeAll, expect, test, vi } from "vitest";
 
 import { CODE_POSITION, jsonAnswer, mountCode, stubCodeEngine } from "~/test/codeScreens.tsx";
 import { afterMicrotasks } from "~/test/settle.ts";
+import { ADMIN_VIEWER } from "~/test/viewer.ts";
+import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { Queue } from "./Queue.tsx";
 
 beforeAll(() => {
@@ -129,7 +131,7 @@ const GATE = {
   },
 };
 
-type Answers = Record<string, (url: URL) => Response>;
+type Answers = Record<string, (url: URL, init?: RequestInit) => Response>;
 
 /** The story's engine: web's train and api's ejection, each answer replaceable. */
 function story(over: Answers = {}): URL[] {
@@ -442,6 +444,141 @@ test("a box's ejections are drawn newest first", async () => {
     "api!17",
     "api!16",
   ]);
+});
+
+const WRITER = { ...ADMIN_VIEWER, acts: ["code_merge_change", "code_dequeue_change"] };
+
+/** The story with every act recorded and answered by `outcome`. */
+function acting(
+  over: Answers = {},
+  outcome: () => Response = () => jsonAnswer({ outcome: "applied" }),
+) {
+  const acted: { tool: string; args: Record<string, unknown> }[] = [];
+  const urls = story({
+    "/operator/act/code_merge_change": (_url, init) => {
+      acted.push({
+        tool: "code_merge_change",
+        args: (JSON.parse(String(init?.body)) as { args: Record<string, unknown> }).args,
+      });
+      return outcome();
+    },
+    ...over,
+  });
+  return { acted, urls };
+}
+
+const requeue = () => screen.findByRole("button", { name: "Add api!17 to the queue again" });
+
+// Mutation: drop `expected_head`, send the engine's default for the branch, or send the
+// branch deletion and work-item closing as constants.
+test.each([
+  ["neither", {}, false],
+  ["its branch deleted and its work item closed", { delete_source: true, close_task: true }, true],
+])("Re-queue adds it again with how it was to land: %s", async (_how, flags, wanted) => {
+  const { acted, urls } = acting({
+    "/query/code_queue": () =>
+      jsonAnswer({
+        queue: [WEB43, WEB44],
+        trains: [TRAIN],
+        ejected: [{ ...API17, ...flags }],
+        ...page,
+      }),
+  });
+  mountCode("#/gitlet/queue", <Queue />, WRITER);
+  const button = await requeue();
+  await afterMicrotasks();
+  expect(button.getAttribute("title")).toBeNull();
+  const before = asked(urls, "/query/code_queue").length;
+  fireEvent.click(button);
+  await afterMicrotasks();
+  expect(acted).toEqual([
+    {
+      tool: "code_merge_change",
+      args: {
+        change: "api!17",
+        expected_head: HEAD,
+        method: "merge",
+        delete_branch: wanted,
+        close_task: wanted,
+      },
+    },
+  ]);
+  await afterMicrotasks();
+  expect(asked(urls, "/query/code_queue").length).toBeGreaterThan(before);
+});
+
+// Mutation: hide the button instead.
+test("Re-queue is held where the fleet does not say how it was to land, and once it is queued again", async () => {
+  const { acted } = acting({
+    "/query/code_queue": () =>
+      jsonAnswer({ queue: [], ejected: [{ ...API17, method: undefined }], ...page }),
+  });
+  mountCode("#/gitlet/queue", <Queue />, WRITER);
+  const old = await requeue();
+  await afterMicrotasks();
+  expect(old.getAttribute("title")).toBe(
+    "This fleet does not say how it was to land: add it to the queue from its page.",
+  );
+  fireEvent.click(old);
+  expect(acted).toEqual([]);
+  cleanup();
+  acting({
+    "/query/code_queue": () =>
+      jsonAnswer({
+        queue: [entry("api", 1, 17, { change_id: API17.change_id })],
+        ejected: [API17],
+        ...page,
+      }),
+  });
+  mountCode("#/gitlet/queue", <Queue />, WRITER);
+  const again = await requeue();
+  await afterMicrotasks();
+  expect(again.getAttribute("title")).toBe("It is in the queue again, at #1.");
+});
+
+// Mutation: drop the refusal under the callout.
+test("Re-queue refused says why under the callout", async () => {
+  acting({}, () =>
+    jsonAnswer(
+      {
+        error: "stale_version",
+        refusal: "head_moved",
+        detail: "Its head moved since it was taken out, so nothing was queued.",
+      },
+      409,
+    ),
+  );
+  mountCode("#/gitlet/queue", <Queue />, WRITER);
+  const button = await requeue();
+  await afterMicrotasks();
+  fireEvent.click(button);
+  expect(
+    await within(callout()).findByText(
+      "Its head moved since it was taken out, so nothing was queued.",
+    ),
+  ).toBeTruthy();
+});
+
+// Mutation: hide Re-queue or Take out from a reader who cannot act.
+test.each([
+  [
+    "an anonymous reader",
+    { login: "", grants: [], handle: "", owner: "", name: "", acts: [], anonymous: true },
+    WRITE_REASONS.anonymous,
+  ],
+  ["a person the engine does not serve", { ...ADMIN_VIEWER, acts: [] }, WRITE_REASONS.not_served],
+])("Re-queue and Take out are drawn for %s, held with the reason", async (_who, viewer, reason) => {
+  const { acted } = acting();
+  mountCode("#/gitlet/queue", <Queue />, viewer);
+  const button = await requeue();
+  const out = await screen.findByRole("button", { name: "Take web!44 out of the queue" });
+  await afterMicrotasks();
+  expect(button.getAttribute("title")).toBe(reason);
+  expect(out.getAttribute("title")).toBe(reason);
+  fireEvent.click(button);
+  fireEvent.click(out);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(acted).toEqual([]);
 });
 
 // Mutation: fall back to the listing without trains.

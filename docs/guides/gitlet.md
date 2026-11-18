@@ -1041,7 +1041,9 @@ required check. Under each box, in the danger tone, is what the queue **put
 out in the last day**: the change, why (`a required check failed`, `its merge
 conflicted`, `it no longer met the branch's gate`, `its head moved`, `the
 branch moved under the queue`) and the required checks that failed on what it
-was tested in or the paths its merge conflicted on. A branch
+was tested in or the paths its merge conflicted on. **View the run** opens the
+check that failed on the train, and **Re-queue** adds the change again as it
+was to land. A branch
 with nothing queued and nothing put out lately draws no box, and a company
 with nothing queued says so. The queues are read fifty entries at a time;
 **Load more** reads the next fifty.

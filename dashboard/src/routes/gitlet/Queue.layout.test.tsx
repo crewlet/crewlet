@@ -75,7 +75,26 @@ function answer(url: URL): Response {
             state: "testing",
           },
         ],
-        ejected_total: { total: 0 },
+        ejected: [
+          {
+            repo_id: "id-web",
+            repo: "web",
+            entry_id: "web-gone",
+            target_ref: "refs/heads/main",
+            change_id: "c-web-17",
+            number: 17,
+            title: "api: page the orders listing by keyset",
+            head_oid: oid("bbbbbbb"),
+            method: "merge",
+            enqueued_by: { handle: "jane", kind: "person" },
+            reason: "check_failed",
+            checks: ["e2e"],
+            enqueued_at: ago(23),
+            ejected_at: ago(20),
+            tested_in: { candidate_id: "cand-9", base_oid: BASE, commit_oid: T1 },
+          },
+        ],
+        ejected_total: { total: 1 },
       });
     case "/query/code_checks":
       return json({
@@ -215,6 +234,18 @@ test("an entry's checks and Take out keep their columns at 1024 px", async () =>
 // Mutation: drop the narrow rule that puts the facts under the entry's words.
 test("the queues hold their width at 390 px", async () => {
   const list = await mount(390);
+  const acts = await eventually(() => {
+    const run = [...list.querySelectorAll("a")].find((a) => a.textContent === "View the run");
+    expect(run).toBeTruthy();
+    return [run!, list.querySelector('[aria-label="Add web!17 to the queue again"]')!];
+  });
+  const card = list.querySelector(".code-list__group")!.getBoundingClientRect();
+  for (const el of acts) {
+    const at = el.getBoundingClientRect();
+    expect(at.width).toBeGreaterThan(0);
+    expect(at.left).toBeGreaterThanOrEqual(card.left);
+    expect(at.right).toBeLessThanOrEqual(card.right);
+  }
   const row = list.querySelector(".code-list__row")!;
   const body = row.querySelector(".code-list__body")!.getBoundingClientRect();
   const facts = row.querySelector(".code-list__facts")!.getBoundingClientRect();

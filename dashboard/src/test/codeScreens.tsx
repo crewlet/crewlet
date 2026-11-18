@@ -36,16 +36,18 @@ export const jsonAnswer = (payload: unknown, status = 200) => engineJson(payload
  * (`/query/code_queue`) to its answer for a URL; any other path is 404, and
  * the session's own read never settles. Returns every URL asked.
  */
-export function stubCodeEngine(answers: Record<string, (url: URL) => Response>): URL[] {
+export function stubCodeEngine(
+  answers: Record<string, (url: URL, init?: RequestInit) => Response>,
+): URL[] {
   const asked: URL[] = [];
   vi.stubGlobal(
     "fetch",
-    vi.fn((input: RequestInfo | URL) => {
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));
       asked.push(url);
       if (url.pathname === "/auth/session") return new Promise<Response>(() => {});
       const answer = answers[url.pathname];
-      return Promise.resolve(answer ? answer(url) : jsonAnswer({}, 404));
+      return Promise.resolve(answer ? answer(url, init) : jsonAnswer({}, 404));
     }),
   );
   return asked;

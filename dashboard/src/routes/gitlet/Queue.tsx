@@ -34,6 +34,7 @@ import {
   type TipRead,
 } from "./queue/Box.tsx";
 import { Ejections } from "./queue/Ejection.tsx";
+import { Requeue } from "./queue/Requeue.tsx";
 import { gateAsksApproval, gateChecks } from "./queue/words.ts";
 
 /** A queue moves when a check ends, at the checks listings' pace. */
@@ -125,6 +126,7 @@ export function Queue() {
     () => new Map(bands.flatMap((b) => b.places.map((p) => [p.row.entry_id, b] as const))),
     [bands],
   );
+  const queued = useMemo(() => bands.flatMap((b) => b.places), [bands]);
   const groups = useMemo<CodeListGroup<QueuePlace>[]>(
     () =>
       bands.map((band, index) => {
@@ -142,14 +144,18 @@ export function Queue() {
           ),
           last: (
             <>
-              <Ejections repo={band.repo} rows={band.ejected} />
+              <Ejections
+                repo={band.repo}
+                rows={band.ejected}
+                action={(e) => <Requeue ejected={e} queued={queued} />}
+              />
               <BoxNote band={band} approval={gate.approval} />
             </>
           ),
           rows: band.places,
         };
       }),
-    [bands, gateOf, paged.more],
+    [bands, gateOf, paged.more, queued],
   );
 
   return (

@@ -9248,7 +9248,9 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   Each box names its gate's required checks (the branch's matched rules and the
   repository's gates). **Load more** follows `next` through the pager every
   code listing shares, and each live entry's **Take out** is the change page's
-  (`code_dequeue_change`), confirmed in the page.
+  (`code_dequeue_change`), confirmed in the page. A change taken out lately is
+  a danger callout with why in words, **View the run** of the check that failed
+  on the train, and **Re-queue**, which adds it again as it was to land.
 - **Checks** is the window of `code_checks` naming no repository: the
   attempts that ended at or after the window's start and before its end
   (`since=`, `until=`), which the engine seeks from the end down, so a custom
