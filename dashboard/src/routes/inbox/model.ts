@@ -66,6 +66,7 @@ import {
 import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
 import { runAskTexts } from "~/lib/runs.ts";
 import { conditionKey, type Attention } from "~/lib/attention.ts";
+import { INBOX_ITEM_KINDS, type InboxItemKind } from "~/app/routes.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
 import { subjectKey } from "~/components/DecisionRow.tsx";
@@ -126,6 +127,11 @@ export type NoticeRow = Extract<InboxRow, { kind: "notice" | "change" | "artifac
 /** Whether a row is an update a reader marks, from any source. */
 export function isNoticeRow(row: InboxRow): row is NoticeRow {
   return row.kind === "notice" || row.kind === "change" || row.kind === "artifact";
+}
+
+/** A Worklet notice's row key: the record id behind the prefix that names its kind in the URL. */
+export function noticeRowKey(recordId: string): string {
+  return `notice:${recordId}`;
 }
 
 /**
@@ -301,9 +307,34 @@ export function noticeRows(notices: readonly InboxNotice[]): InboxRow[] {
       case "artifacts":
         return { kind: "artifact", key: artifactRowKey(n.record_id), at: n.at, notice: n.extra };
       case "tracker":
-        return { kind: "notice", key: n.record_id, at: n.at, notice: n.extra };
+        return { kind: "notice", key: noticeRowKey(n.record_id), at: n.at, notice: n.extra };
     }
   });
+}
+
+/** The kinds of row key a notice is listed under, each its source's. */
+const NOTICE_KEY = /^(notice|change|artifact):(.+)$/;
+
+/** The record id a notice's row key names (`inbox{record}`), or null for a key that names no notice. */
+export function noticeKeyRecord(key: string): string | null {
+  return NOTICE_KEY.exec(key)?.[2] ?? null;
+}
+
+/**
+ * The row an address names: the row of its key, or, for an executor named by
+ * its turn alone (`run:<turn>`) with no question open, the newest it answered.
+ */
+export function rowNamed(rows: readonly InboxRow[], key: string): InboxRow | undefined {
+  if (!key) return undefined;
+  const exact = rows.find((r) => r.key === key);
+  if (exact || !/^run:[^:]+$/.test(key)) return exact;
+  return rows.find((r) => r.kind === "answered" && r.key.startsWith(`${key}:`));
+}
+
+/** The row key a `?row=` address named, in today's spelling: a Worklet notice was its bare record id. */
+export function legacyRowKey(row: string): string {
+  const kind = row.slice(0, row.indexOf(":"));
+  return INBOX_ITEM_KINDS.includes(kind as InboxItemKind) ? row : noticeRowKey(row);
 }
 
 /**
