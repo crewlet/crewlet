@@ -1012,6 +1012,10 @@ var codeLogFields = map[gitlet.OpKind]struct {
 		payload: reflect.TypeFor[gitlet.CheckStarted](),
 		carried: []string{"repo_id", "oid", "target", "name", "attempt", "runner", "placement", "box",
 			"started_at"},
+		absent: map[string]string{
+			"required": "whether the gate requires a check a person's CI reports, which no queue says: " +
+				"a byte, and the reference checks are queued and run by the engine",
+		},
 	},
 	gitlet.OpCheckFinished: {
 		payload: reflect.TypeFor[gitlet.CheckFinished](),
@@ -1019,6 +1023,8 @@ var codeLogFields = map[gitlet.OpKind]struct {
 			"duration_ms", "summary", "finished_at"},
 		absent: absent(
 			map[string]string{
+				"required": "whether the gate requires a check a person's CI reports, which no queue says: " +
+					"a byte, and the reference checks are queued and run by the engine",
 				"reporter": "who reported an attempt's ending from outside its runner, and the reference " +
 					"checks are ended by the runner that ran them",
 				"tail":             "the end of a failing check's output, and the reference checks pass",
