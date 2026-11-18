@@ -35,15 +35,18 @@ func MailboxTurn(ctx context.Context, e *Engine, handle string, evs []*events.Ev
 }
 
 // TransferWindows are the windows e's bulk transfers take from: its queue's
-// link window, the object store's ([natsobj.Backend.Window]) where the store
-// is the broker's bucket, and the memory syncer's ([memsync.Syncer.Window]),
-// for a test outside the package that holds the engine to handing all three
-// the one window of the node's link.
+// link window ([jetstream.Queue.LinkWindow]), the object store's
+// ([natsobj.Backend.Window]) where the store is the broker's bucket, and the
+// memory syncer's ([memsync.Syncer.Window]), for a test outside the package
+// that holds the engine to handing both stores the one window its queue owns.
 func TransferWindows(e *Engine) (link, objects, memory *jsapi.Window) {
+	if q, ok := e.backends.Queue.(*jetstream.Queue); ok {
+		link = q.LinkWindow()
+	}
 	if b, ok := e.backends.Objects.(*natsobj.Backend); ok {
 		objects = b.Window()
 	}
-	return e.backends.window, objects, e.memory.Window()
+	return link, objects, e.memory.Window()
 }
 
 // ControlOutcome is what a seat's control-topic delivery leaves with the broker,

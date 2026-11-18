@@ -17,10 +17,12 @@ import (
 // ONE window the link's queue owns (ADR-0161). natsobj's and memsync's cases
 // hand their stores a window; this holds the engine to handing both the
 // queue's. A member crosses no link: its puts share a window of their own, and
-// a replay pulls the connection's whole bound.
+// a replay pulls the connection's whole bound. (A leaf's wiring is held by
+// TestANodesHydrationReadsItsLinksMeter.)
 //
-// Mutation: hand the object store or the memory sync a window of its own,
-// or none, and the client's half goes red.
+// Mutation: hand the object store or the memory sync a window of its own, or
+// none, or hand both one the queue does not own, and the client's half goes
+// red.
 func TestANodesTransfersShareOneWindowAcrossItsLink(t *testing.T) {
 	t.Parallel()
 	t.Run("a member", func(t *testing.T) {
