@@ -285,17 +285,13 @@ func walked(pages, perPage int) []string {
 
 // THE WALK KEEPS THE NEWEST REPLIES AND THE PARENT, NEVER THE OLDEST.
 //
-// conversations.replies pages from the OLDEST end, so a walk that accumulates
-// every page holds the BEGINNING of a long thread — and the renderer above it
-// then keeps the newest messages OF THAT PREFIX, which on a thread longer than
-// the walk can reach are not the newest messages at all. The one message that
-// is certainly missing is the one that woke the turn. So the window slides:
-// the parent survives because it is what the thread is about, and the oldest
-// reply is the first thing dropped.
+// conversations.replies pages from the OLDEST end, so a walk that keeps every
+// page holds the beginning of a long thread, and the newest messages are the
+// ones missing, including the one that woke the turn. So the window slides:
+// the parent survives, and the oldest reply is the first thing dropped.
 //
-// NOTHING IS LOST SILENTLY EITHER: every message the walk read is either in
-// front of the caller or counted in Older, which is what lets the block say
-// how many earlier messages are not shown instead of implying that none are.
+// Nothing is lost silently: every message read is either returned or counted
+// in Older, so the block can say how many earlier messages are not shown.
 func TestTheWalkKeepsTheNewestRepliesAndTheParent(t *testing.T) {
 	t.Parallel()
 	const perPage = 64
@@ -375,16 +371,14 @@ func TestAWalkThatCannotReachTheEndSaysSo(t *testing.T) {
 // A FULL PAGE HAS TO FIT UNDER THE DECODE CEILING.
 //
 // [callQuery] reads at most 1 MiB of a response and hands what it read to the
-// decoder, so a page larger than that arrives TRUNCATED and the whole read
-// fails as malformed JSON — not as a short answer. The failure lands on
-// exactly the busy thread this call exists for, on every turn in that thread,
-// and it is logged at DEBUG where nobody is looking: the seat silently gets
+// decoder, so a larger page arrives TRUNCATED and the whole read fails as
+// malformed JSON, not as a short answer. That lands on exactly the busy thread
+// this call exists for, on every turn, logged at DEBUG: the seat silently gets
 // "the thread could not be read" for ever.
 //
-// So the page size is chosen against that ceiling as well as against Slack's
-// recommendation, and the arithmetic is asserted rather than described: this
-// fixture is a full page of the fattest message shape Slack actually sends —
-// one carrying blocks, attachments or an unfurl, around 8 KB of JSON.
+// So the page size is chosen against that ceiling as well as Slack's
+// recommendation, and asserted: a full page of the fattest message shape Slack
+// sends (blocks, attachments or an unfurl, around 8 KB of JSON).
 func TestAFullPageFitsUnderTheDecodeCeiling(t *testing.T) {
 	t.Parallel()
 	ws := newWorkspace(t)

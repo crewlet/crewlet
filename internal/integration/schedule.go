@@ -42,44 +42,30 @@ type Schedule struct {
 
 // DefaultSchedule is tuned to what the third-party apps actually do.
 //
-// Every value here is anchored to an observable rather than chosen for
-// roundness:
-//
-//   - Settled at ten minutes is the horizon on which an administrator who
-//     revokes an agent's access by hand is noticed.
-//
-//     What a converged pass COSTS is the other half of that choice, and it is
-//     not "a handful of API calls", which is what this said while three of the
-//     seven reconcilers were writing at their vendor on every pass. Every one
-//     of them is certified against integrationtest now, so the write half is
-//     zero by construction. The READ half scales with the company: a pass
-//     asks each seat's own credential who it is, and the membership and hook
-//     reads that replaced the blind writes are per seat and per project. Call
-//     it O(seats x projects) requests every ten minutes, per surface — tens
-//     for a small company, a few hundred for a large one on GitLab or
-//     Mattermost. That is affordable at this interval and would not be at one.
-//     A surface whose reads are rate limited hard enough to care can take a
-//     settled interval of its own; none does today.
-//
-//   - WaitingBase at thirty seconds and WaitingMax at five minutes bracket
-//     what a grant takes to land: seconds to low minutes on every third-party app
-//     here. Starting shorter would poll a propagation delay, and capping
-//     higher would leave a company idle long after the third-party app was done.
-//
-//   - AdminBase at fifteen seconds is fast enough that "install the app"
-//     followed by installing the app looks immediate. AdminMax at ten
-//     minutes is where a person who has not acted in ten minutes is not
-//     acting right now.
-//
-//   - Operator at one hour catches a credential somebody fixed without
-//     telling anyone, at a cost of twenty-four failed calls a day.
+// Every value is anchored to an observable rather than chosen for roundness.
 var DefaultSchedule = Schedule{
-	Settled:     10 * time.Minute,
+	// Ten minutes is the horizon on which an administrator who revokes an
+	// agent's access by hand is noticed. A converged pass makes no writes
+	// (every reconciler is certified against integrationtest); its READS are
+	// O(seats x projects) per surface: tens of requests for a small company, a
+	// few hundred for a large one on GitLab or Mattermost. Affordable at this
+	// interval, not at one. A rate-limited surface can take its own interval;
+	// none does today.
+	Settled: 10 * time.Minute,
+	// Thirty seconds to five minutes brackets what a grant takes to land
+	// (seconds to low minutes on every third-party app here). Shorter would
+	// poll a propagation delay; a higher cap leaves a company idle after the
+	// third-party app is done.
 	WaitingBase: 30 * time.Second,
 	WaitingMax:  5 * time.Minute,
-	AdminBase:   15 * time.Second,
-	AdminMax:    10 * time.Minute,
-	Operator:    time.Hour,
+	// Fifteen seconds makes "install the app" then installing it look
+	// immediate; ten minutes is where a person who has not acted is not
+	// acting right now.
+	AdminBase: 15 * time.Second,
+	AdminMax:  10 * time.Minute,
+	// An hour catches a credential somebody fixed without telling anyone, at
+	// twenty-four failed calls a day.
+	Operator: time.Hour,
 }
 
 // WithDefaults fills anything left unset.

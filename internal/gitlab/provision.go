@@ -34,30 +34,15 @@ const SeatEnv = org.MCPEnvGitLab
 
 // GITLAB NAMES THE ADDRESS, AND THE ENGINE MUST NOT.
 //
-// A service account was created with a derived `crewlet-<handle>@
-// noreply.crewlet.invalid`, on the reasoning that GitLab requires an address,
-// that it must be unique per account, and that `noreply.` says "this mailbox
-// does not exist" — which is right for a robot. Two of those three are false
-// and the third is what broke it.
+// `email` is optional on both service-account routes, and omitting it has
+// GitLab generate one under its own noreply domain. A custom address "requires
+// confirmation before the account is active, unless the group has a matching
+// verified domain": a derived `…@noreply.crewlet.invalid` (reserved TLD, RFC
+// 2606) can never be confirmed or verified, so the account stays inactive and
+// every token it holds is refused with `403 Your primary email address is not
+// confirmed`, looping mint and refusal (see [Client.Tokens]).
 //
-// GitLab does NOT require one: `email` is optional on both service-account
-// routes, and omitting it has GitLab generate an address under its own noreply
-// domain. What its documentation adds is the sentence that matters — "custom
-// email addresses require confirmation before the account is active, unless
-// the group has a matching verified domain". `crewlet.invalid` is a reserved
-// TLD (RFC 2606), so no confirmation mail can ever be delivered and no domain
-// can ever be verified: every account this created was permanently inactive.
-//
-// GitLab then refuses every token such an account holds, with
-// `403 Your primary email address is not confirmed`. Measured: a seat's token
-// was minted, sealed, refused on the next pass's check, and minted again —
-// 144 live tokens with `api` scope over one connect, and 164 in total. That
-// loop is fixed at three points (see [Client.Tokens] and the fresh-token probe
-// in the vendor's mint); THIS is the point at which it stops starting.
-//
-// A GENERATED ADDRESS IS STILL A ROBOT'S. GitLab's own is
-// `service_account_group_…@noreply.<instance>`, which is the same promise the
-// derived one was making and is one the instance can actually keep.
+// A GENERATED ADDRESS IS STILL A ROBOT'S, and one the instance can keep.
 
 // Username is the service-account name for a seat.
 //

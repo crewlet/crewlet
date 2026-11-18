@@ -15,36 +15,22 @@ import (
 
 // An agent acts on GitHub as its OWN app, with a token issued at use.
 //
-// A seat's app ([SeatApp]) is one bot identity, and what it acts with is an
-// INSTALLATION TOKEN: minted from the app's private key against its
-// installation, scoped down to the seat's tier and repositories, and valid
-// for one hour. Nothing else carries the app's identity (a token is the only
-// thing GitHub accepts from a git push, a `gh pr create` or the GitHub MCP
-// server), so the same token has to reach every place the seat works: its
-// tool servers on this node, its coding box, and the tool servers inside
-// that box.
+// What a seat's app ([SeatApp]) acts with is an INSTALLATION TOKEN: minted from
+// the app's key, scoped to the seat's tier and repositories, valid one hour,
+// and the only thing GitHub accepts from a git push, `gh pr create` or the
+// MCP server, so it must reach every place the seat works.
 //
-// # Issued, never sealed
-//
-// The token is NOT a secret this engine stores. It expires within the hour,
-// it can be minted again by any node holding the app's key at any time, and a
-// copy in the replicated store would be a live credential written to every
-// node and every backup, re-written every few minutes, for nothing a fresh
-// mint does not already give. So it is held in this process's memory only,
-// by an [Issuer], and handed to exactly the places that read it.
-//
-// # One name per seat, and a seat reads only its own
-//
-// Configuration points at it the way it points at every credential, as a
-// `${VAR}`: [SeatVar] with [FieldAppToken], beside the sealed key and webhook
-// secret the app's creation wrote ([FieldAppKey], [FieldAppWebhookSecret]).
-// What answers that reference is the seat's OWN resolution: a seat's values
-// are resolved with its token laid in front of the company's sources, and no
-// other seat's. One seat naming another's variable therefore names something
-// nothing answers, which is what keeps an app's identity with the agent it was
-// created for.
+// ISSUED, NEVER SEALED: the token expires within the hour and any node holding
+// the key can mint it, so a replicated copy would be a live credential in
+// every node and backup for nothing a fresh mint does not give. It lives in an
+// [Issuer]'s memory only.
 
 // The fields a seat's app keeps under its own name ([SeatVar]).
+//
+// Configuration references each as a `${VAR}` answered by the seat's OWN
+// resolution: its token is laid in front of the company's sources for it and
+// no other seat, so a seat naming another's variable names something nothing
+// answers, which keeps an app's identity with its agent.
 const (
 	// FieldAppKey is the app's PEM private key, sealed once at creation.
 	FieldAppKey = "APP_KEY"
@@ -116,31 +102,15 @@ var ErrSeatOff = errors.New("github: this agent is turned off on GitHub")
 // Issuer holds the installation tokens this process has minted, one per
 // installation and scope, and mints again when one runs short.
 //
-// ONE PER PROCESS, shared by everything that reads a seat's token: the
-// participant lookup on the inbound path ([SeatLookup]), a seat's tool
-// servers, an executor's environment and the completion poll that keeps a
-// long run's token current. Shared so that one installation costs one mint
-// an hour however many of those ask, and so a token minted for one is the
-// token the others are handed while it is good.
+// ONE PER PROCESS, shared by everything that reads a seat's token, so one
+// installation costs one mint an hour. MEMORY ONLY: never logged, stored or
+// put in an error ([Issuer.Token]). A REFUSAL IS HELD TOO, for
+// [Issuer.RetryWait]: an installation GitHub refuses until a person acts costs
+// one request per wait, not one per reader.
 //
-// MEMORY ONLY. A token is never logged, never written to the store and never
-// put in an error: see the file comment, and [Issuer.Token].
-//
-// A REFUSAL IS HELD TOO, for [Issuer.RetryWait]: GitHub's answer to one
-// installation and scope is the answer every reader asking within the wait is
-// handed, and the first to ask after it asks GitHub again. Without it, a mint
-// GitHub refuses for as long as a person has not acted (an installation that
-// has not approved a permission the seat asks for, or one that is suspended)
-// was asked again by every reader on every read: each running box's poll and
-// the nudges after a submit, every launch, every inbound delivery. Held, one
-// refusing installation costs GitHub one request per wait however many ask,
-// and a refusal is forgotten the moment a mint succeeds.
-//
-// Safe for concurrent use. Two callers that miss at once may both mint; the
-// later token replaces the earlier in the cache and both are valid until
-// they expire, so the race costs a request rather than a correctness
-// property, and a per-key lock would hold every caller of one installation
-// behind GitHub's slowest answer.
+// Safe for concurrent use. Callers missing at once may both mint; the later
+// token replaces the earlier and both stay valid, cheaper than a per-key lock
+// holding every caller behind GitHub's slowest answer.
 type Issuer struct {
 	// Now is the clock tokens and refusals are judged against. Nil takes the
 	// wall clock.
@@ -219,17 +189,15 @@ func Issuable(seat SeatApp) bool {
 // Token is a token for seat's app that stays good for at least life, from
 // the cache where one does and minted otherwise.
 //
-// A MINTED TOKEN IS RETURNED WHATEVER LIFE IT HAS. GitHub decides how long a
-// token lives, and a fresh one is the best there is; a caller asking for more
-// than an hour is handed the hour.
+// A MINTED TOKEN IS RETURNED WHATEVER LIFE IT HAS: GitHub decides how long
+// one lives, so a caller asking for more than an hour gets the hour.
 //
-// A REFUSAL HELD FOR THE KEY is returned as it was, without a request, until
-// its wait ends (see the type). A held token good for life is returned before
-// that, so a refused renewal for a reader asking a longer life costs nothing
-// to a reader the held token still serves.
+// A REFUSAL HELD FOR THE KEY is returned without a request until its wait
+// ends (see the type); a held token good for life is returned before that, so
+// a refused renewal costs nothing to a reader the held token still serves.
 //
-// The error never carries the token, and never carries GitHub's response
-// body, which on the token endpoint is the token.
+// The error never carries the token, nor GitHub's response body, which on the
+// token endpoint is the token.
 func (i *Issuer) Token(
 	ctx context.Context, opts SeatAppOptions, seat SeatApp, life time.Duration,
 ) (InstallationToken, error) {

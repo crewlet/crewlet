@@ -320,27 +320,18 @@ func TestTheAdvisoriesAreTheOnlyReadyVerdicts(t *testing.T) {
 	}
 }
 
-// THE ORDER ITSELF, AS DATA. Not "they are all different" and not "the
-// advisory is last" — the actual sequence, so a change to it is a change to
-// this list.
+// THE ORDER ITSELF, AS DATA: the actual sequence, so a change to it is a
+// change to this list. Distinctness and advisory-last are necessary, not
+// sufficient: the drifts this ranking ends sit in the MIDDLE and keep both.
 //
-// Distinctness and advisory-last are necessary and nowhere near sufficient.
-// Every drift this ranking was written to end sits in the MIDDLE of it, and
-// each one keeps both of those properties:
-//
-//   - GitLab checked excess access immediately before the short-grant check,
-//     so a seat holding too much in one dimension and too little in another
-//     reported ready with a note.
-//   - Datadog checked it before the failed-agent count, so a company with one
-//     over-granted agent and one that could not be provisioned at all
-//     reported ready.
-//   - GitHub checked its installation-level excess before the WEBHOOK check,
-//     so an app holding one spare permission reported healthy while its
+//   - excess access before the short-grant check: a seat over in one
+//     dimension and under in another reported ready.
+//   - excess before the failed-agent count: an over-granted agent beside an
+//     unprovisionable one reported ready.
+//   - installation-level excess before the WEBHOOK check: healthy while
 //     deliveries reached nobody.
 //
-// And two more disagreed about whether an unknown access tier outranks a
-// broken delivery path. Swapping any of those pairs leaves the ranks distinct
-// and the advisory last, and passes every other test in this file.
+// An unknown tier versus a broken delivery path drifted too.
 func TestTheSeverityOrderIsPinned(t *testing.T) {
 	// Worst first: how much of the integration is not working, from "the
 	// pass could not authenticate" down to "it works, but somebody should
