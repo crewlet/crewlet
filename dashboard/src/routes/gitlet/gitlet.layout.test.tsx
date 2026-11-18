@@ -1638,3 +1638,58 @@ for (const width of [1440, 390]) {
     expect(box.left).toBeGreaterThanOrEqual(picked.getBoundingClientRect().left - 0.5);
   });
 }
+
+/** The query bar once Gitlet › Changes has drawn it, with its field and its end buttons. */
+const queryBar = () =>
+  eventually(() => {
+    const bar = document.querySelector<HTMLElement>(".code-query");
+    const end = document.querySelector<HTMLElement>(".code-query__end");
+    expect(bar?.querySelectorAll(".crewlet-chip-field__chip").length).toBe(5);
+    expect(end?.querySelectorAll("button").length).toBe(2);
+    return { bar: bar!, field: bar!.querySelector<HTMLElement>(".code-query__field")!, end: end! };
+  });
+
+const QUALIFIED = "#/gitlet?repo=web&owner=frontend&reviewer=jane&window=7d&q=stream+shell";
+
+// THE BAR SPANS ITS BAND, its chips and words inside the field and Help and Clear over its end.
+// Mutation: drop the field's end padding, and the last chip runs under the buttons.
+test("the changes' query bar spans its band and keeps its chips inside it at 1440 px", async () => {
+  await page.viewport(1440, 900);
+  listed = [carded(42)];
+  location.hash = QUALIFIED;
+  mount(<Changes />, 1200);
+  const { bar, field, end } = await queryBar();
+  const band = bar.closest<HTMLElement>(".toolbar")!.getBoundingClientRect();
+  const box = field.getBoundingClientRect();
+  expect(box.left).toBeGreaterThanOrEqual(band.left - 1);
+  expect(box.right).toBeLessThanOrEqual(band.right + 1);
+  expect(box.width).toBeGreaterThan(band.width * 0.95);
+  const buttons = end.getBoundingClientRect();
+  expect(buttons.right).toBeLessThanOrEqual(box.right);
+  expect(buttons.top).toBeGreaterThanOrEqual(box.top);
+  for (const part of field.querySelectorAll<HTMLElement>(
+    ".crewlet-chip-field__chip, .crewlet-chip-field__input",
+  )) {
+    const at = part.getBoundingClientRect();
+    expect(at.right <= buttons.left + 1 || at.top >= buttons.bottom, part.textContent ?? "").toBe(
+      true,
+    );
+  }
+});
+
+// ON A PHONE THE CHIPS WRAP inside the field, the buttons stay at its end, and nothing goes sideways.
+// Mutation: keep the field from wrapping, and the chips overflow the band.
+test("the changes' query bar wraps its chips and keeps its buttons at 390 px, and nothing overflows", async () => {
+  await page.viewport(390, 900);
+  listed = [carded(42)];
+  location.hash = QUALIFIED;
+  mount(<Changes />, 358);
+  const { bar, field, end } = await queryBar();
+  expect(overflowing(bar)).toEqual([]);
+  expect(sidewaysScrollers(bar)).toEqual([]);
+  const box = field.getBoundingClientRect();
+  expect(box.height).toBeGreaterThan(60);
+  const clear = end.querySelectorAll("button")[1]!.getBoundingClientRect();
+  expect(clear.right).toBeLessThanOrEqual(box.right);
+  expect(clear.width).toBeGreaterThan(0);
+});

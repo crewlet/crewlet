@@ -490,9 +490,11 @@ change's **conversation** ([Reviews and
 findings](../concepts/gitlet.md#reviews-and-findings)), and each record
 tells the seats and people it concerns.
 
-**Find what waits on you.** **Gitlet › Changes** lists the open changes, and
-**Waiting on** narrows them to the ones waiting on you, on a review, on a fix
-or on a person. **Waiting on you**, above the list, names each change that waits on
+**Find what waits on you.** **Gitlet › Changes** lists the open changes.
+**Search changes**, at its top, finds changes by the words of their title and description,
+narrowed by qualifiers such as `is:draft`, `author:@me` or `waiting-on:review`; **Readiness**
+lists the open changes ready to merge or waiting on a review, on checks, on findings or on a
+person. **Waiting on you**, above the list, names each change that waits on
 your review or your fix and why, with **Review** opening its files. A record that concerns you leaves a notice in your
 **Inbox** — the change, why you hear of it ("asked for your review", "asked
 to look again") and where its merge stands — whose **Open the diff** opens the

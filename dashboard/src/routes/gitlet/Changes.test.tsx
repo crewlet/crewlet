@@ -8,8 +8,10 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { Suspense, type ReactElement } from "react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 
+import { AppAnnouncer } from "~/app/announcer.tsx";
 import { PeekHost, PeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { Router } from "~/app/router.tsx";
+import { focusSearchTarget } from "~/app/searchTarget.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
@@ -189,7 +191,10 @@ function mount(ui: ReactElement, hash = "#/gitlet", viewer: object = ADMIN_VIEWE
     <ClientContext.Provider value={{ store, socket }}>
       <SessionReading>
         <ViewerProvider>
-          <Router>{ui}</Router>
+          <Router>
+            <AppAnnouncer />
+            {ui}
+          </Router>
         </ViewerProvider>
       </SessionReading>
     </ClientContext.Provider>,
@@ -197,6 +202,15 @@ function mount(ui: ReactElement, hash = "#/gitlet", viewer: object = ADMIN_VIEWE
 }
 
 const theList = () => screen.findByRole("list", { name: "Changes" });
+/** The query bar's chips, in order; none where the address names no filter but every state. */
+const chips = () =>
+  [
+    ...(screen
+      .queryByRole("list", { name: "Filters in the search" })
+      ?.querySelectorAll(".crewlet-chip-field__chip") ?? []),
+  ].map((chip) => chip.textContent);
+/** The query bar's box. */
+const theBox = () => screen.getByRole("textbox", { name: "Search changes" });
 const rowOf = (list: HTMLElement, title: string) =>
   within(list).getByRole("link", { name: title }).closest<HTMLElement>("li")!;
 
@@ -574,6 +588,7 @@ test("Sort lists a live state by its last move or its opening, and says the walk
     work: "",
     window: "",
     readiness: "",
+    text: "",
   };
   const byMove = { send: "updated", choosable: true, shown: "updated", byDefault: "updated" };
   expect(changeOrder(none, "")).toEqual(byMove);
@@ -855,9 +870,9 @@ test("Waiting on you follows next past a page that kept nothing to the change be
   expect(followed.searchParams.get("limit")).toBe("5");
 });
 
-// SHOW THEM ALL ASKS THE BOX'S OWN LISTING, every live state, so a draft it listed stays listed.
+// THE BOX'S BUTTON ASKS ITS OWN LISTING, every live state, so a draft it listed stays listed.
 // Mutation: write needs= alone, and the list keeps state=open and drops the draft.
-test("Show them all lists what the box lists, a draft among them", async () => {
+test("Filter the list by waiting-on:me lists what the box lists, a draft among them", async () => {
   const draft = change("web", 46, {
     state: "draft",
     card: {
@@ -874,7 +889,7 @@ test("Show them all lists what the box lists, a draft among them", async () => {
   });
   mount(<Changes />);
   const box = await screen.findByRole("region", { name: "Waiting on you" });
-  fireEvent.click(within(box).getByRole("button", { name: "Show them all in the list" }));
+  fireEvent.click(within(box).getByRole("button", { name: "Filter the list by waiting-on:me" }));
   expect(location.hash).toContain("needs=me");
   expect(location.hash).toContain("state=all");
   expect(
@@ -896,6 +911,7 @@ test("the foot says how many it shows of the scope's total, and only of it", asy
     work: "",
     window: "",
     readiness: "",
+    text: "",
   };
   expect(footWords(none, 5, 5, false)).toBe("Showing 5 of 5 open changes");
   expect(footWords({ ...none, state: "merged" }, 25, 54, true)).toBe(
@@ -961,6 +977,7 @@ test("a window is the engine's window, and lets every state be asked", async () 
   expect(listing.searchParams.get("window")).toBe("7d");
   expect(listing.searchParams.has("state")).toBe(false);
   expect(listing.searchParams.has("sort")).toBe(false);
+  expect(chips()).toEqual(["updated:7d"]);
 });
 
 // WHAT A CHANGE WAITS ON IS THE ENGINE'S `needs`, sent as it reads it.
@@ -969,6 +986,7 @@ test("the waiting-on filter is the engine's needs", async () => {
   mount(<Changes />, "#/gitlet?needs=me");
   expect(await screen.findByText("Nothing waits on you")).toBeTruthy();
   expect(listings(asked)[0]!.searchParams.get("needs")).toBe("me");
+  expect(chips()).toEqual(["is:open", "waiting-on:me"]);
   // THE LIST IS ITSELF needs=me, so no box asks it again.
   expect(boxAsks(asked)).toEqual([]);
 });
@@ -997,6 +1015,7 @@ test("a listing's parameters are the engine's filters, and a name no repository 
     work: "",
     window: "",
     readiness: "",
+    text: "",
   };
   expect(changesParams(none)).toEqual({ params: { state: "open" } });
   expect(changesParams({ ...none, state: "all", repo: "web" })).toEqual({
@@ -1199,6 +1218,7 @@ test("readiness beside an ended state, or every state, is said in place and neve
     work: "",
     window: "",
     readiness: "",
+    text: "",
   };
   expect(changesParams({ ...none, readiness: "checks" })).toEqual({
     params: { state: "open", readiness: "checks" },
@@ -1231,4 +1251,347 @@ test("an empty bucket says where no open change stands", async () => {
   );
   mount(<Changes />, "#/gitlet?readiness=blockers");
   expect(await screen.findByText("No open change is blocked by findings")).toBeTruthy();
+});
+
+const SHELL = change("web", 42, { title: "render: stream the product page's shell" });
+const CART = change("web", 43, { title: "checkout: retry a declined card once" });
+
+/**
+ * The list narrowed by `text=` as the engine does, the titles holding every word, echoing
+ * `changes_text` (`null` ignores the words); it answers `refuse` for every search.
+ */
+function wordsEngine(changesText: Record<string, unknown> | null = {}, refuse?: string) {
+  return (url: URL) => {
+    if (url.pathname !== "/query/code_changes") return null;
+    if (url.searchParams.has("limit")) return page([]);
+    const text = url.searchParams.get("text");
+    if (text === null) return page([SHELL, CART]);
+    if (refuse) return json({ error: "bad_params", detail: refuse }, 400);
+    const words = text.toLowerCase().split(" ");
+    const rows = [SHELL, CART].filter((c) => words.every((w) => c.title.toLowerCase().includes(w)));
+    if (changesText === null) return page([SHELL, CART]);
+    return page(rows, { changes_text: changesText });
+  };
+}
+
+/** Types into the bar's box and presses Enter. */
+function search(words: string) {
+  fireEvent.change(theBox(), { target: { value: words } });
+  fireEvent.keyDown(theBox(), { key: "Enter" });
+}
+
+const query = () => new URLSearchParams(location.hash.split("?")[1] ?? "");
+
+// THE CHIPS ARE THE ADDRESS, in the qualifiers' order, is:open where no state is named.
+// Mutation: draw chips from the draft rather than the address, or drop the default chip.
+test("the bar draws the address as chips, is:open by default", async () => {
+  stubFetch(engine([WEB_42]));
+  mount(<Changes />, "#/gitlet?window=7d&owner=dev&repo=web");
+  await theList();
+  expect(chips()).toEqual(["is:open", "author:dev", "repo:web", "updated:7d"]);
+  expect(screen.getByRole("search", { name: "Search changes" })).toBeTruthy();
+});
+
+// Mutation: send the qualifiers in `text`, or push one history entry a filter.
+test("words are searched as the engine's text, and the qualifiers typed beside them are the listing's filters", async () => {
+  const asked = stubFetch(wordsEngine());
+  mount(<Changes />);
+  await theList();
+  const before = history.length;
+  search("is:draft stream shell");
+  expect(query().get("state")).toBe("draft");
+  expect(query().get("q")).toBe("stream shell");
+  expect(history.length).toBe(before + 1);
+  expect((theBox() as HTMLInputElement).value).toBe("stream shell");
+  expect(chips()).toEqual(["is:draft"]);
+  await settled(() => listings(asked).length);
+  const last = listings(asked).at(-1)!;
+  expect(last.searchParams.get("state")).toBe("draft");
+  expect(last.searchParams.get("text")).toBe("stream shell");
+});
+
+// Mutation: submit a value the screen does not read, or say nothing.
+test("a qualifier's value the screen does not read is said under the bar and nothing is asked", async () => {
+  const asked = stubFetch(engine([WEB_42]));
+  mount(<Changes />);
+  await theList();
+  await settled(() => asked.length);
+  const before = listings(asked).length;
+  const hash = location.hash;
+  search("is:soon");
+  expect(
+    screen.getByText("“soon” is not a state: is: takes draft, open, closed or merged."),
+  ).toBeTruthy();
+  expect(theBox().getAttribute("aria-invalid")).toBe("true");
+  expect(location.hash).toBe(hash);
+  await settled(() => asked.length);
+  expect(listings(asked)).toHaveLength(before);
+  // TYPING AGAIN lifts it.
+  fireEvent.change(theBox(), { target: { value: "is:open" } });
+  expect(theBox().getAttribute("aria-invalid")).toBeNull();
+});
+
+// Mutation: refuse an unknown qualifier, or search it without saying so.
+test("an unknown qualifier is searched as words and the bar says so", async () => {
+  const asked = stubFetch(wordsEngine());
+  mount(<Changes />);
+  await theList();
+  search("auther:jane cart");
+  expect(query().get("q")).toBe("auther:jane cart");
+  expect(
+    await screen.findByText("“auther:” is not a qualifier, so it was searched as words."),
+  ).toBeTruthy();
+  await settled(() => listings(asked).length);
+  expect(listings(asked).at(-1)!.searchParams.get("text")).toBe("auther:jane cart");
+});
+
+// Mutation: remove the chip from the bar only, or write no state where is: is removed.
+test("removing a chip clears its filter, and removing is: lists every state where words narrow the walk", async () => {
+  const asked = stubFetch(wordsEngine());
+  mount(<Changes />, "#/gitlet?repo=web");
+  await theList();
+  fireEvent.click(screen.getByRole("button", { name: "Remove repo:web" }));
+  expect(query().has("repo")).toBe(false);
+  expect(chips()).toEqual(["is:open"]);
+  cleanup();
+  const searched = stubFetch(wordsEngine());
+  mount(<Changes />, "#/gitlet?q=card");
+  await theList();
+  fireEvent.click(screen.getByRole("button", { name: "Remove is:open" }));
+  expect(query().get("state")).toBe("all");
+  expect(chips()).toEqual([]);
+  expect(document.activeElement).toBe(theBox());
+  await settled(() => listings(searched).length);
+  const last = listings(searched).at(-1)!;
+  expect(last.searchParams.has("state")).toBe(false);
+  expect(last.searchParams.get("text")).toBe("card");
+  expect(asked.length).toBeGreaterThan(0);
+});
+
+// Mutation: leave a key behind, or leave focus on the gone button.
+test("Clear returns the default listing", async () => {
+  stubFetch(wordsEngine());
+  mount(<Changes />, "#/gitlet?state=draft&repo=web&owner=dev&q=card");
+  expect(chips()).toEqual(["is:draft", "author:dev", "repo:web"]);
+  fireEvent.click(screen.getByRole("button", { name: "Clear the search and its filters" }));
+  expect(query().toString()).toBe("");
+  expect(chips()).toEqual(["is:open"]);
+  expect((theBox() as HTMLInputElement).value).toBe("");
+  expect(document.activeElement).toBe(theBox());
+  expect(screen.queryByRole("button", { name: "Clear the search and its filters" })).toBeNull();
+});
+
+// Mutation: drop the Escape branch, and the edit stays in the box.
+test("Escape puts the address's words back in the box and leaves the address alone", async () => {
+  stubFetch(wordsEngine());
+  mount(<Changes />, "#/gitlet?q=card");
+  await theList();
+  const before = location.hash;
+  fireEvent.change(theBox(), { target: { value: "shell" } });
+  fireEvent.keyDown(theBox(), { key: "Escape" });
+  expect((theBox() as HTMLInputElement).value).toBe("card");
+  expect(location.hash).toBe(before);
+});
+
+// Mutation: drop the empty box's Enter, and q stays searched.
+test("Enter in an emptied box submits, and the words are no longer searched", async () => {
+  const asked = stubFetch(wordsEngine());
+  mount(<Changes />, "#/gitlet?q=card");
+  await theList();
+  const before = history.length;
+  fireEvent.change(theBox(), { target: { value: "" } });
+  fireEvent.keyDown(theBox(), { key: "Enter" });
+  expect(query().has("q")).toBe(false);
+  expect(history.length).toBe(before + 1);
+  await settled(() => listings(asked).length);
+  expect(listings(asked).at(-1)!.searchParams.has("text")).toBe(false);
+});
+
+// Mutation: drop useSearchTarget.
+test("/ focuses the bar's box", async () => {
+  stubFetch(engine([WEB_42]));
+  mount(<Changes />);
+  await theList();
+  expect(focusSearchTarget()).toBe(true);
+  expect(document.activeElement).toBe(theBox());
+});
+
+// AN INDEX STILL BEING BUILT, newest first, says how far back it reaches, in words.
+// Mutation: draw the short form, or say nothing.
+test("a search that reaches back only so far says how far, in words", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(NOW);
+  const back = minutesAgo(3 * 24 * 60);
+  stubFetch(wordsEngine({ indexed_back_to: back }));
+  mount(<Changes />, "#/gitlet?q=stream");
+  const note = await screen.findByText((_, el) =>
+    el?.className === "code-changes-head__note"
+      ? (el.textContent ?? "") ===
+        "Searched back to changes opened 3 days ago: older ones are still being indexed, so one of them may be missing. "
+      : false,
+  );
+  const time = note.querySelector("time")!;
+  expect(time.getAttribute("datetime")).toBe(back);
+  expect(time.getAttribute("title")).not.toBe("");
+  expect(await within(await theList()).findByRole("link", { name: SHELL.title })).toBeTruthy();
+});
+
+// Mutation: drop a flag's sentence, or draw the line for a whole search.
+test("a search catching up, or cut to the newest, says so, and a whole one says nothing", async () => {
+  stubFetch(wordsEngine({ building: true, truncated: true }));
+  mount(<Changes />, "#/gitlet?q=stream");
+  await theList();
+  expect(
+    await screen.findByText(
+      /The search is catching up with the newest changes, so one that holds these words may be missing\./,
+    ),
+  ).toBeTruthy();
+  expect(
+    screen.getByText(
+      /More changes may hold these words than one search reads: these are the newest\. Add a word, or narrow by repository, author or state\./,
+    ),
+  ).toBeTruthy();
+  cleanup();
+  stubFetch(wordsEngine({}));
+  mount(<Changes />, "#/gitlet?q=stream");
+  expect(await within(await theList()).findByRole("link", { name: SHELL.title })).toBeTruthy();
+  expect(document.querySelector(".code-changes-head__note")).toBeNull();
+});
+
+// A NODE THAT DOES NOT READ text= lists the changes unnarrowed: drawing them would claim a search.
+// Mutation: draw the rows.
+test("a node that ignored the words is said, and its unnarrowed rows are not drawn", async () => {
+  stubFetch(wordsEngine(null));
+  mount(<Changes />, "#/gitlet?q=stream");
+  expect(
+    await screen.findByText("Searching changes by their words is unavailable on this fleet yet."),
+  ).toBeTruthy();
+  expect(screen.queryByRole("link", { name: CART.title })).toBeNull();
+  expect(screen.queryByText(/^Showing/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "Load more changes" })).toBeNull();
+});
+
+// THE ENGINE JUDGES THE WORDS: its sentence is drawn where the rows would be.
+// Mutation: check the words in the browser, or drop the engine's sentence.
+test("the engine's refusal of the words is said in the list's place", async () => {
+  stubFetch(
+    wordsEngine({}, "text: holds no word to search by: a word is two or more letters or digits"),
+  );
+  mount(<Changes />);
+  await theList();
+  search("a");
+  expect(
+    await screen.findByText(/holds no word to search by: a word is two or more letters or digits/),
+  ).toBeTruthy();
+  expect((theBox() as HTMLInputElement).value).toBe("a");
+});
+
+// Mutation: drop needs=person when a bucket is typed beside it.
+test("a bucket typed beside Waits on a person keeps both", async () => {
+  const asked = stubFetch(bucketEngine());
+  mount(<Changes />, "#/gitlet?needs=person");
+  await settled(() => listings(asked).length);
+  search("readiness:ready");
+  await settled(() => listings(asked).length);
+  const last = listings(asked).at(-1)!;
+  expect(last.searchParams.get("needs")).toBe("person");
+  expect(last.searchParams.get("readiness")).toBe("ready");
+  expect(chips()).toEqual(["is:open", "waiting-on:person", "readiness:ready"]);
+});
+
+// Mutation: leave `text` out of narrowsTheWalk.
+test("every state is offered once words are searched", async () => {
+  stubFetch(wordsEngine());
+  mount(<Changes />, "#/gitlet?q=cart");
+  const tabs = await screen.findByRole("radiogroup", { name: "Change state" });
+  expect(within(tabs).getByRole("radio", { name: "Every state" })).toBeTruthy();
+});
+
+// Mutation: say "the filters" of a search, or drop the search from the foot.
+test("the foot and an empty search say what narrowed the list", async () => {
+  const none = {
+    state: "open",
+    needs: "",
+    repo: "",
+    owner: "",
+    reviewer: "",
+    work: "",
+    window: "",
+    readiness: "",
+    text: "",
+  };
+  expect(footWords({ ...none, text: "cart" }, 2, 4, false)).toBe(
+    "Showing 2 open changes that match the search",
+  );
+  expect(footWords({ ...none, text: "cart", repo: "web", owner: "dev" }, 1, 4, false)).toBe(
+    "Showing 1 open change that matches the search and filters",
+  );
+  stubFetch(wordsEngine());
+  mount(<Changes />, "#/gitlet?q=kubernetes");
+  expect(await screen.findByText("No open change holds these words")).toBeTruthy();
+  expect(screen.getByText("Try fewer words, or another state.")).toBeTruthy();
+});
+
+// Mutation: hold the sort beside words, or send one the engine refuses beside every state.
+test("Sort stays the reader's beside words and a bucket on the open state", async () => {
+  const none = {
+    state: "open",
+    needs: "",
+    repo: "",
+    owner: "",
+    reviewer: "",
+    work: "",
+    window: "",
+    readiness: "",
+    text: "cart",
+  };
+  expect(changeOrder({ ...none, state: "all" }, "updated")).toMatchObject({
+    send: undefined,
+    shown: "Newest opened",
+    why: "Newest opened first: a search of every state lists its changes by when each was opened",
+  });
+  expect(changesParams({ ...none, state: "all" })).toEqual({ params: { text: "cart" } });
+  const asked = stubFetch(bucketEngine());
+  mount(<Changes />, "#/gitlet?q=cart&readiness=checks");
+  await settled(() => listings(asked).length);
+  expect(listings(asked)[0]!.searchParams.get("sort")).toBe("updated");
+  pickSort("Sort: Newest");
+  await settled(() => listings(asked).length);
+  expect(listings(asked).at(-1)!.searchParams.get("sort")).toBe("opened");
+});
+
+// Mutation: list fewer qualifiers, or leave focus in the popover after Escape.
+test("How to search changes lists the qualifiers", async () => {
+  stubFetch(engine([WEB_42]));
+  mount(<Changes />);
+  await theList();
+  const button = screen.getByRole("button", { name: "How to search changes" });
+  fireEvent.click(button);
+  const help = await screen.findByRole("dialog", { name: "How to search changes" });
+  expect([...help.querySelectorAll("dt")].map((dt) => dt.textContent)).toEqual([
+    "is:open",
+    "author:frontend",
+    "reviewer:jane",
+    "repo:web",
+    "waiting-on:me",
+    "readiness:checks",
+    "updated:7d",
+    "work:<backend>:<id>",
+  ]);
+  fireEvent.keyDown(document.activeElement ?? help, { key: "Escape" });
+  await afterMicrotasks();
+  expect(screen.queryByRole("dialog", { name: "How to search changes" })).toBeNull();
+  expect(document.activeElement).toBe(button);
+});
+
+// Mutation: name the token as me for a reader bound to no seat.
+test("Waiting on you's button names the token it writes", async () => {
+  stubFetch(engine([], [WEB_42]));
+  mount(<Changes />, "#/gitlet", { ...ADMIN_VIEWER, handle: "", owner: "" });
+  const box = await screen.findByRole("region", { name: "Waiting on a person" });
+  fireEvent.click(
+    within(box).getByRole("button", { name: "Filter the list by waiting-on:person" }),
+  );
+  expect(query().get("needs")).toBe("person");
+  expect(query().get("state")).toBe("all");
 });
