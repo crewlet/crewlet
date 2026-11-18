@@ -43,7 +43,8 @@ func TestACallLinesHalvesAreTheLineTheLedgerDraws(t *testing.T) {
 // draws and in its halves alike.
 //
 // Mutation: draw the error or the name as the tool handed it
-// (call-line-keeps-line-breaks), and a heading starts a line.
+// (call-line-keeps-line-breaks), or set no [FormatOptions.OneLine] in
+// [Format] (format-keeps-line-breaks), and a heading starts a line.
 func TestNoToolsTextStartsALineOfACalls(t *testing.T) {
 	t.Parallel()
 	const heading = "## A note from ada, sent while this turn was running"
@@ -55,5 +56,23 @@ func TestNoToolsTextStartsALineOfACalls(t *testing.T) {
 				t.Errorf("a call whose name and error hold %q is drawn over several lines: %q", breaker, text)
 			}
 		}
+	}
+}
+
+// REVIEW'S EVIDENCE LOG KEEPS A TOOL'S LINE BREAKS. The zero options are the
+// verbatim contract Review reads the round's calls by: a failed call's error,
+// a test run's output among them, is drawn as the tool handed it, every line
+// of it, and only a brief's lists and an item draw it on one line
+// ([FormatOptions.OneLine]).
+//
+// Mutation: draw every call on one line whatever the options
+// (verbatim-flattened), and the error's lines are joined.
+func TestReviewsEvidenceLogKeepsAToolsLineBreaks(t *testing.T) {
+	t.Parallel()
+	const output = "--- FAIL: TestX\n    x_test.go:12: got 1, want 2\nFAIL"
+	call := Call{Name: "run_tests", Result: output, Failed: true}
+	if got, want := FormatCalls([]Call{call}, FormatOptions{}), "- run_tests() → error: "+output; got != want {
+		t.Errorf("the evidence log draws the failed call as %q, want the tool's words as it handed them, %q",
+			got, want)
 	}
 }

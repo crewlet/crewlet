@@ -114,6 +114,12 @@ type FormatOptions struct {
 	// A piece missing from it renders whole.
 	Fitted Fitted
 
+	// OneLine draws every line break in a tool's name or its error as a
+	// space ([CallLine]): a brief's lists and an item's call, where a line a
+	// tool's text starts could read as an entry of its own. Off, they are
+	// drawn as the tool handed them, as Review's evidence log reads them.
+	OneLine bool
+
 	// Notes is words a call's line ends with, per group of a
 	// [FormatCallGroups] render ([FormatCalls]: its one group) and per call
 	// of the group BY ITS PLACE IN THE GROUP: "" for none, and a group or a
@@ -146,7 +152,7 @@ type FormatOptions struct {
 func Format(skip, reads []string) FormatOptions {
 	return FormatOptions{
 		Skip: skip, Reads: reads,
-		ValueLimit: ValueLimit, MaxReadCalls: MaxReadCalls,
+		ValueLimit: ValueLimit, MaxReadCalls: MaxReadCalls, OneLine: true,
 	}
 }
 
@@ -311,11 +317,11 @@ func renderCalls(calls []Call, at []int, notes []string, opts FormatOptions) str
 // and the error, fitted as the render fits it. A line joins them with ` → `,
 // and a render adds its read marker and note after.
 //
-// ONE LINE EACH: every line break in the tool's name or its error (\r, \n,
-// U+2028, U+2029) is drawn as a space, so a tool's own text can never start a
-// line of a brief or an item, where a heading at a line's start is an entry of
-// its own (internal/sandbox/executor, transcript.go). The arguments are JSON,
-// which escapes its line breaks.
+// ONE LINE EACH under [FormatOptions.OneLine]: every line break in the tool's
+// name or its error (\r, \n, U+2028, U+2029) is drawn as a space, so a tool's
+// own text can never start a line of a brief or an item, where a heading at a
+// line's start is an entry of its own (internal/sandbox/executor,
+// transcript.go). The arguments are JSON, which escapes its line breaks.
 func CallLine(call Call, opts FormatOptions) (called, outcome string) {
 	outcome = "success"
 	if call.Failed {
@@ -329,7 +335,7 @@ func CallLine(call Call, opts FormatOptions) (called, outcome string) {
 		if over(text, opts.ValueLimit) {
 			text = opts.Fitted.text(Piece{Kind: PieceError, Text: text, Limit: opts.ValueLimit})
 		}
-		outcome = "error: " + oneLine(text)
+		outcome = "error: " + oneLine(text, opts)
 	}
 	args := renderArgs(call.Args, opts)
 	switch {
@@ -349,11 +355,15 @@ func CallLine(call Call, opts FormatOptions) (called, outcome string) {
 		// arguments is drawn with them.
 		args = unkeptArgs
 	}
-	return oneLine(call.Name) + "(" + args + ")", outcome
+	return oneLine(call.Name, opts) + "(" + args + ")", outcome
 }
 
-// oneLine is text with every line break drawn as a space ([CallLine]).
-func oneLine(text string) string {
+// oneLine is text with every line break drawn as a space where opts draws a
+// call on one line ([FormatOptions.OneLine]), and text as it is otherwise.
+func oneLine(text string, opts FormatOptions) string {
+	if !opts.OneLine {
+		return text
+	}
 	return strings.Map(func(r rune) rune {
 		switch r {
 		case '\r', '\n', '\u2028', '\u2029':
