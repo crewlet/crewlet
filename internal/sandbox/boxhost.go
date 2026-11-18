@@ -683,9 +683,10 @@ func (c *Coordinator) hostStoreSeen(ctx context.Context, run PendingRun, failed 
 // and the box the asker named, on a run whose box this node launched, in the
 // state the read is made in: a collection's on a run whose completion is
 // claimed ([StatusResumed]), a stop's on a run whose stop is decided and not
-// yet read, and a loss's on a run whose loss is decided and whose job's
-// session no take of it ended has settled ([Coordinator.capturesLoss]): beside
-// one still being kept, the loss's read stands by for it. So a request —
+// yet read, and a loss's on a run whose loss is decided and whose box is still
+// to be read ([Coordinator.capturesLoss]): its job's session not settled by a
+// take that ended it, or a note a hook served the job still to confirm; beside
+// a session still being kept, the loss's read stands by for it. So a request —
 // even a replayed or a forged one past the channel's own checks — can make no
 // read the run's own protocol is not making: a running job's box is never
 // paused under it, and no job is ended under it that is not already decided

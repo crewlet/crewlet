@@ -695,12 +695,13 @@ type SessionCapture struct {
 	// NoteCursor is the last note read ([RunSteer.Reads]) the run's record says
 	// the session holds ([notesHeld]): every note the record says was read when
 	// the archive was packed, where its harness ended its own run, up to the
-	// first read the record marks unanswered ([NoteRead.Unanswered]) or a
-	// hook's serve not yet confirmed, and not past it; none where it was cut
-	// off. READ ONLY where the launch's own test says the copy holds its brief
-	// (internal/agent/runner's keptSession): it hands every note read after
-	// it, as notes the session may show where the cursor stopped early, and of
-	// a copy that may lack its brief every note the turn has read.
+	// first read the record marks unanswered ([NoteRead.Unanswered]) or taken
+	// before the session's restart ([NoteRead.Restarted]), or a hook's serve
+	// unconfirmed, and not past it; none where it was cut off. READ ONLY where
+	// the launch's own test says the copy holds its brief
+	// (internal/agent/runner's keptSession): it hands every note read after it,
+	// as notes the session may show where the cursor stopped early, and of a
+	// copy that may lack its brief every note the turn has read.
 	NoteCursor int `json:"note_cursor,omitempty"`
 
 	// Interrupted says the session's harness was CUT OFF rather than exiting
