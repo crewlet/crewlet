@@ -9257,8 +9257,9 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   days, failing first or newest first. The engine counts each state for the
   tabs and narrows by state, check and repository.
   A run opens in the check pane beside the list (`run=`): its tests counted,
-  its facts, its failures and the end of its output numbered with its
-  failing lines tinted. The pane and its log are one component every checks
+  its facts, **Re-run** of that one run (`code_rerun_checks` by its commit and
+  branch), its failures and the end of its output numbered with its failing
+  lines tinted. The pane and its log are one component every checks
   listing shares (`routes/gitlet/checks`): this section, a repository's Checks
   tab and a change's (`change=`). The log is read by its object, an
   immutable answer, a page at a time, never until the reader asks.

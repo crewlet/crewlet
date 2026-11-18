@@ -1060,8 +1060,9 @@ has one too: the attempts that judge it, its head's, checked for its target.
 Press an attempt to open it: how many of its tests failed of how many ran,
 and its exit code; what it was checking (a change's head, a queue's
 candidate merged onto its branch, a branch's tip, a landing bisected), the
-commit and branch, how long it ran and why it ended; **Open in CI** for a run
-another CI reported; its **failures**, each
+commit and branch, how long it ran and why it ended; **Re-run**, which runs
+that one check again once it has ended; **Open in CI** for a run another CI
+reported; its **failures**, each
 `path:line` a link into the diff it was checked on — the comparison of its
 base and its commit, opened on that file with the failing line marked and
 scrolled to, however long the file's patch is: the page reads the patch on

@@ -6,7 +6,7 @@
  * failures linked into their diff, its output numbered and its log read only on demand.
  */
 
-import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 
 import {
@@ -16,7 +16,15 @@ import {
   stubCodeEngine,
   onTheRight,
 } from "~/test/codeScreens.tsx";
+import { Router } from "~/app/router.tsx";
+import { SessionReading } from "~/lib/frameSession.ts";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
+import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
+import { withDerived } from "~/test/org.ts";
+import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { Checks } from "./Checks.tsx";
 import { failureHref } from "./checks/CheckList.tsx";
 import { RepoChecks } from "./checks/RepoChecks.tsx";
@@ -663,4 +671,163 @@ test("Open in CI is drawn only for a run that names its CI", async () => {
   cleanup();
   const local = await openApiPane(apiE2EWhole({ url: undefined }));
   expect(within(local).queryByRole("link", { name: /Open in CI/ })).toBeNull();
+});
+
+// ---- Re-run one run --------------------------------------------------------------------------
+
+/** A reader who may run checks again. */
+const RERUNNER = { ...ADMIN_VIEWER, acts: ["code_rerun_checks"] };
+
+interface Acted {
+  tool: string;
+  args: Record<string, unknown>;
+}
+
+/** The section at `hash` as `viewer`, its acts answered by `answer` and kept. */
+function mountActing(
+  hash: string,
+  viewer: unknown,
+  answer: () => Response = () =>
+    jsonAnswer({
+      outcome: "applied",
+      receipt: {
+        repo: "api",
+        sha: sha("c17a9e2"),
+        reruns: [{ name: "e2e", attempt: 2, outcome: "applied", state: "queued" }],
+      },
+    }),
+) {
+  const acted: Acted[] = [];
+  const asked: URL[] = [];
+  let runningReads = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      asked.push(url);
+      if (url.pathname === "/auth/session") return new Promise<Response>(() => {});
+      if (url.pathname.startsWith("/operator/act/")) {
+        acted.push({
+          tool: decodeURIComponent(url.pathname.split("/operator/act/")[1] ?? ""),
+          args: (JSON.parse(String(init?.body)) as { args: Record<string, unknown> }).args,
+        });
+        return answer();
+      }
+      if (url.pathname === "/query/code_checks") return standing(url);
+      if (url.pathname === "/query/code_check") {
+        if (url.searchParams.get("oid") !== sha("c44b0d1")) {
+          return jsonAnswer({ check: apiE2EWhole(), ...page });
+        }
+        // THE RUNNING RUN, read whole as `code_check` answers it (no change), ends on its second read.
+        const run: Record<string, unknown> = { ...board()[2] };
+        delete run.change;
+        delete run.source_ref;
+        delete run.change_head;
+        const ended = ++runningReads > 1;
+        return jsonAnswer({
+          check: {
+            ...run,
+            def: { name: "e2e", run: "make e2e", timeout_seconds: 900 },
+            ...(ended ? { state: "failed", finished_at: minutesAgo(0), duration_ms: 240_000 } : {}),
+          },
+          ...page,
+        });
+      }
+      return jsonAnswer({}, 404);
+    }),
+  );
+  location.hash = hash;
+  const store = new Store();
+  store.applyOrg(withDerived({ name: "Acme", roles: [], units: [] }) as never);
+  store.setConnected(true);
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
+    what === "viewer" ? Promise.resolve(viewer) : new Promise(() => {});
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <SessionReading>
+        <ViewerProvider>
+          <Router>
+            <Checks />
+          </Router>
+        </ViewerProvider>
+      </SessionReading>
+    </ClientContext.Provider>,
+  );
+  return { acted, asked };
+}
+
+const AT_API_E2E = `#/gitlet/checks?run=${encodeURIComponent(API_E2E_KEY)}`;
+
+// Mutation: send `all_failed`, or name the run by its change rather than its commit and branch.
+test("Re-run runs that one attempt again by its commit and branch", async () => {
+  const { acted, asked } = mountActing(AT_API_E2E, RERUNNER);
+  const pane = await screen.findByRole("region", { name: "Check e2e, attempt 1" });
+  const rerun = await within(pane).findByRole("button", { name: "Re-run" });
+  expect(rerun.getAttribute("title")).toBe("Run e2e again as attempt 2");
+  const before = listed(asked).length;
+  fireEvent.click(rerun);
+  expect(await within(pane).findByText(/A later run, attempt 2, is its latest/)).toBeTruthy();
+  expect(acted).toEqual([
+    {
+      tool: "code_rerun_checks",
+      args: {
+        repo: "api",
+        sha: sha("c17a9e2"),
+        checked_for: "refs/heads/main",
+        checks: [{ name: "e2e", attempt: 1 }],
+      },
+    },
+  ]);
+  expect(within(pane).getByRole("button", { name: "Re-run" }).getAttribute("title")).toBe(
+    "Attempt 2 is its latest: run that one again.",
+  );
+  await afterMicrotasks();
+  expect(listed(asked).length).toBeGreaterThan(before);
+});
+
+// A REFUSED RERUN OF ONE CHECK is a refused act, its sentence drawn under Re-run.
+// Mutation: let an unended run be pressed, keep it held once it ends, or draw a refusal as a queued attempt.
+test("Re-run is held while a run has not ended, and a refused rerun says why", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  const running = `web:e2e:1:${sha("c44b0d1")}:refs/heads/main`;
+  mountActing(`#/gitlet/checks?run=${encodeURIComponent(running)}`, RERUNNER);
+  const pane = await screen.findByRole("region", { name: "Check e2e, attempt 1" });
+  const held = await within(pane).findByRole("button", { name: "Re-run" });
+  expect(held.getAttribute("title")).toBe("It has not ended: an ended run is run again.");
+  await act(async () => void vi.advanceTimersByTime(30_000));
+  await afterMicrotasks();
+  expect(within(pane).getByRole("button", { name: "Re-run" }).getAttribute("title")).toBe(
+    "Run e2e again as attempt 2",
+  );
+  cleanup();
+  vi.useRealTimers();
+  const said =
+    "code_rerun_checks ran nothing again: e2e has run its five attempts on this commit. (attempts_exhausted).";
+  const { acted } = mountActing(AT_API_E2E, RERUNNER, () =>
+    jsonAnswer({ error: "forbidden", tool: "code_rerun_checks", detail: said }, 403),
+  );
+  const again = await screen.findByRole("region", { name: "Check e2e, attempt 1" });
+  fireEvent.click(await within(again).findByRole("button", { name: "Re-run" }));
+  const refusal = await within(again).findByText(/e2e has run its five attempts on this commit/);
+  expect(refusal.closest(".crewlet-refusal-strip")).not.toBeNull();
+  expect(acted).toHaveLength(1);
+  expect(within(again).queryByText(/A later run/)).toBeNull();
+});
+
+test.each([
+  [
+    "an anonymous reader",
+    { login: "", grants: [], handle: "", owner: "", name: "", acts: [], anonymous: true },
+    WRITE_REASONS.anonymous,
+  ],
+  ["a person the engine does not serve", { ...RERUNNER, acts: [] }, WRITE_REASONS.not_served],
+])("Re-run is drawn for %s, held with the reason", async (_who, viewer, reason) => {
+  const { acted } = mountActing(AT_API_E2E, viewer);
+  const pane = await screen.findByRole("region", { name: "Check e2e, attempt 1" });
+  const rerun = await within(pane).findByRole("button", { name: "Re-run" });
+  await afterMicrotasks();
+  expect(rerun.getAttribute("title")).toBe(reason);
+  fireEvent.click(rerun);
+  expect(acted).toEqual([]);
 });

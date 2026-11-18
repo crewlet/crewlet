@@ -39,6 +39,7 @@ import { commitHref, compareHref, repoHref } from "../paths.ts";
 import { BranchChip, RefName } from "../ui.tsx";
 import { EndedAgo, CheckMark } from "./marks.tsx";
 import { checkedWords, tailLines, testsWords } from "./standing.ts";
+import { RerunCheck } from "./Rerun.tsx";
 import { Tail } from "./Tail.tsx";
 import "~/styles/gitlet.css";
 
@@ -284,6 +285,9 @@ export function CheckPane({
   const shown = d ?? row;
   const hasEnded = d !== undefined && d.state !== "queued" && d.state !== "running";
   if (hasEnded !== ended) setEnded(hasEnded);
+  // A RERUN'S RECEIPT names the attempt it queued, which is then the latest known.
+  const [queued, setQueued] = useState<number | null>(null);
+  const latest = Math.max(later ?? 0, queued ?? 0) || null;
   return (
     <section className="code-check-pane" aria-label={`Check ${row.name}, attempt ${row.attempt}`}>
       <div className="code-check-pane__head">
@@ -306,11 +310,11 @@ export function CheckPane({
         />
       </div>
       <div className="code-check-pane__body">
-        {later !== null && later > row.attempt && (
+        {latest !== null && latest > row.attempt && (
           <p className="code-check-pane__later">
-            {`A later run, attempt ${later}, is its latest: `}
+            {`A later run, attempt ${latest}, is its latest: `}
             {onOpenLater ? (
-              <button type="button" className="t-link" onClick={() => onOpenLater(later)}>
+              <button type="button" className="t-link" onClick={() => onOpenLater(latest)}>
                 <strong>open it</strong>
               </button>
             ) : (
@@ -324,7 +328,7 @@ export function CheckPane({
           detail={read.detail}
           loading={read.loading}
         >
-          {d && <CheckWhole repo={repo} d={d} />}
+          {d && <CheckWhole repo={repo} d={d} latest={latest} onReran={setQueued} />}
         </QueryState>
       </div>
     </section>
@@ -354,7 +358,17 @@ export function paneHeading(r: CodeCheckRow): string {
   return said;
 }
 
-function CheckWhole({ repo, d }: { repo: string; d: CodeCheckDetail }) {
+function CheckWhole({
+  repo,
+  d,
+  latest,
+  onReran,
+}: {
+  repo: string;
+  d: CodeCheckDetail;
+  latest: number | null;
+  onReran: (attempt: number) => void;
+}) {
   const tests = testsWords(d);
   const checked = checkedWords(d);
   const branch = d.source_ref && d.purpose !== "tip" ? d.source_ref : d.target;
@@ -425,13 +439,14 @@ function CheckWhole({ repo, d }: { repo: string; d: CodeCheckDetail }) {
           </div>
         ))}
       </dl>
-      {d.url && (
-        <div className="row gap-2 wrap">
+      <div className="row gap-2 wrap">
+        <RerunCheck row={d} latest={latest} onReran={onReran} />
+        {d.url && (
           <ButtonLink size="small" variant="secondary" href={d.url} external>
             Open in CI
           </ButtonLink>
-        </div>
-      )}
+        )}
+      </div>
       {(d.failures?.length ?? 0) > 0 && (
         <Failures repo={repo} d={d} failures={d.failures ?? []} omitted={d.failures_omitted ?? 0} />
       )}
