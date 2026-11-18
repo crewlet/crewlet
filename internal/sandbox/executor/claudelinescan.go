@@ -32,8 +32,25 @@ import (
 // writes costs its reading, never a false hold. 64 KiB: the scanner's own read
 // buffer, and 160 times the longest such value of any probe thread, a reply's
 // usage of 402 bytes. A longer value is read streamed ([threadMessage.Says],
-// [threadResultText]) or by its prefix ([threadLine.Retracted]), unbounded.
+// [threadResultText]) or by its prefix ([threadLine.Retracted]), unbounded. A
+// reader's scratch a value grew past [lineScratchKeep] goes with its line.
 const threadValueMax = 64 << 10
+
+// lineScratchKeep is the most of a scratch buffer a reader keeps past the line
+// that grew it: ten times the longest value of any probe thread, so an
+// ordinary line reuses its buffers, while a line of values at
+// [threadValueMax] pays for its scratch alone rather than the reader holding
+// seventeen such buffers, over 1 MiB, for every member it goes on to read.
+const lineScratchKeep = 4 << 10
+
+// lineScratch is b emptied for the next line, or nil where a line grew it
+// past [lineScratchKeep].
+func lineScratch(b []byte) []byte {
+	if cap(b) > lineScratchKeep {
+		return nil
+	}
+	return b[:0]
+}
 
 // errLineMember is a line that runs past what is left of its member's bound
 // ([lineSource]): the source's own, set by it alone, so no error of a
@@ -607,13 +624,21 @@ type scannedKey struct {
 }
 
 // reset makes d a pass over a line not yet read, capturing at most valueMax
-// bytes of a value and holding at most meterMax bytes of facts.
+// bytes of a value and holding at most meterMax bytes of facts, its scratch
+// kept but what the line before grew past [lineScratchKeep].
 func (d *lineDecoder) reset(valueMax, meterMax int) {
 	d.valueMax, d.meter, d.object, d.over = valueMax, lineMeter{left: meterMax}, false, ""
 	for i := range d.head {
-		d.head[i] = scannedKey{raw: d.head[i].raw[:0]}
+		d.head[i] = scannedKey{raw: lineScratch(d.head[i].raw)}
 	}
-	d.typed, d.typeText, d.missed = false, d.typeText[:0], 0
+	d.typed, d.typeText, d.missed = false, lineScratch(d.typeText), 0
+	for i := range d.held {
+		d.held[i] = lineScratch(d.held[i])
+	}
+	b := &d.block
+	for _, buf := range [...]*[]byte{&b.typ, &b.id, &b.name, &b.toolUseID, &b.isError, &b.to, &b.resultType} {
+		*buf = lineScratch(*buf)
+	}
 }
 
 // headKeys is the head's keys as the line wrote them last ([headOf]): a key

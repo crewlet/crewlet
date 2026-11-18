@@ -1235,6 +1235,46 @@ func TestAResetReaderOnTheScannerReadsAsAFreshOne(t *testing.T) {
 	}
 }
 
+// A READER KEEPS NO SCRATCH A LINE OF LONG VALUES GREW: lines holding a value
+// at [threadValueMax] in every buffer the pass holds one in (the head's keys
+// and the type's text, a block's keys, its input's `to` and its content's
+// type, a leg's answer) leave the reader that read them holding no more than
+// one that read ordinary lines but the capture buffer its scanner keeps
+// ([jsonscan.Scanner.Capture]): under twice threadValueMax more, where the 17
+// buffers kept would hold 17 times it. Not parallel: what a reader holds is
+// read off the heap.
+//
+// Mutation: keep every scratch buffer whatever it grew to.
+func TestAReaderKeepsNoScratchALineOfLongValuesGrew(t *testing.T) {
+	ctx := t.Context()
+	long := `"` + strings.Repeat("x", threadValueMax-2) + `"`
+	held := func(member string) uint64 {
+		return heldBy(func() any {
+			r := newScanReader(strings.NewReader(member), threadPlainMax)
+			for {
+				_, err := r.Next(ctx)
+				var broken *threadLineError
+				if err != nil && !errors.As(err, &broken) {
+					break
+				}
+			}
+			return r
+		})
+	}
+	brief := ctBrief(ctUUID(1))
+	ordinary := held(ctThread(brief, brief, brief))
+	hostile := held(ctThread(
+		`{"type":`+long+`,"subtype":`+long+`,"agentId":`+long+`,"parentUuid":`+long+`,"isSidechain":`+long+
+			`,"replacesSpan":`+long+`}`,
+		`{"message":{"content":[{"type":`+long+`,"id":`+long+`,"name":`+long+`,"tool_use_id":`+long+
+			`,"is_error":`+long+`,"input":{"to":`+long+`},"content":[{"type":`+long+`}]}]},"type":"user"}`,
+		`{"toolUseResult":{"status":`+long+`,"agentId":`+long+`,"success":`+long+`},"type":"user"}`))
+	if hostile > ordinary+2*threadValueMax {
+		t.Errorf("a reader that read lines of values at %d bytes holds %d bytes, where one that read ordinary "+
+			"lines holds %d; want at most %d more", threadValueMax, hostile, ordinary, 2*threadValueMax)
+	}
+}
+
 // scanEnds is every answer a reader gives of its member to its end, as text:
 // each line's place, size, head type and parent and byte facts, or its fault
 // as [scanAnswer] says it, then what ended the reading, what a Next after it
