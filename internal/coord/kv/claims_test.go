@@ -28,11 +28,9 @@ func openFleetClaims(t *testing.T, js jetstream.JetStream, prefix string,
 }
 
 // THE CEILING CLAIM ENFORCES IS THE CLAIMS BUCKET'S AGE IN FORCE, never this
-// node's config: every claim carries its own deadline and the age is the
-// ceiling on them, so a claim longer than the bucket the fleet adopted would be
-// reaped live — a socket's thirty-minute claim at a bucket's five, and a seat
-// that reconnected at six minutes delivered the post again. It is refused
-// instead, and the bucket is adopted as it stands, younger or older.
+// node's config: the age caps every claim's own deadline, so a claim longer
+// than the adopted bucket's age would be reaped live and its post delivered
+// again. It is refused instead, and the bucket adopted as it stands.
 func TestAClaimIsCappedByTheClaimsBucketAgeInForce(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
@@ -74,11 +72,10 @@ func TestAClaimIsCappedByTheClaimsBucketAgeInForce(t *testing.T) {
 	}
 }
 
-// A CLAIM VALUE THAT NAMES NO DEADLINE IS TAKEN OVER, as a lapsed one is. No
-// claim this store writes is one — every record carries its own deadline — so
-// such a value says nothing about anybody still holding the delivery, and the
-// claim contract fails open: held instead, every delivery under that key would
-// be dropped as a duplicate until the bucket reaped the value.
+// A CLAIM VALUE THAT NAMES NO DEADLINE IS TAKEN OVER, as a lapsed one is. This
+// store writes none, so it says nothing about a live holder, and the claim
+// contract fails open: held, every delivery under that key would be dropped as
+// a duplicate until the bucket reaped the value.
 func TestAClaimValueThatNamesNoDeadlineIsTakenOver(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)

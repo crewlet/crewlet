@@ -13,21 +13,13 @@ import (
 )
 
 // A LAPSED TAKER LEASE'S KEY IS REMOVED, AND NOTHING A PROCESS START LEAVES
-// ACCUMULATES. Every engine process claims a taker lease of its own
-// (coord.TakerResource), so whatever the store keeps per taker resource it
-// keeps per process start. Its lease key lives in the duty bucket, whose age
-// removes a key once its last write is that old — a released lease's
-// tombstone, and the last renewal of a process that died — and its tokens come
-// from ONE counter for the whole class in the ageless epochs bucket
-// (coord.CounterResource). So three processes, one released and two lapsed,
-// leave one counter record between them, no lease key once the age has
-// passed, and the next process's first token is still above every token they
-// held.
-//
-// ON A DUTY BUCKET OF ITS OWN WHOSE AGE IS A SECOND, since the store's own is
-// three hours old (coord.MaxDutyTTL), which no case waits out — read first, so
-// the case holds that the bucket a taker's key is written to is one with an
-// age.
+// ACCUMULATES. Every engine process claims a taker lease (coord.TakerResource):
+// its key lives in the duty bucket, whose age removes it, and its tokens come
+// from ONE class counter in the ageless epochs bucket (coord.CounterResource).
+// Three processes, one released and two lapsed, leave one counter record, no
+// lease key once the age passes, and a next first token above all they held.
+// The duty bucket is the case's own with a one-second age (the store's is
+// coord.MaxDutyTTL, three hours), read first to hold that it has an age.
 //
 // Mutation: count a taker lease on a counter of its own, and the epochs bucket
 // holds a record per process; keep the taker class in a bucket with no age,

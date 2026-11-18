@@ -18,13 +18,11 @@ import (
 // AN EXTERNAL SERVER THAT CAPS THE DUPLICATE WINDOW BELOW THE DEAD LETTERS'
 // FAILS THE OPEN, NAMING WHAT TO CHANGE.
 //
-// CREWLET_DLQ declares queue.DeadLetterWindow, fifteen minutes — what makes a
-// second keep of one identity nothing — and a server whose JetStream limits
-// cap the window below it refuses the stream as the queue opens: on
-// `stream.type: nats` the operator's setting, `jetstream { limits {
-// duplicate_window } }`. The broker's own words name its limit and neither the
-// engine's window nor where the limit is set, so the refusal says both, the
-// broker's error still wrapped beside them.
+// CREWLET_DLQ declares queue.DeadLetterWindow, which makes a second keep of
+// one identity nothing; a server whose limits cap the window below it
+// (`jetstream { limits { duplicate_window } }`) refuses the stream. The
+// broker's words name neither the engine's window nor that setting, so the
+// refusal says both, with the broker's error still wrapped.
 //
 // Mutation: return the refusal without the window and the setting
 // (windowCause answering nothing), and the error names neither.

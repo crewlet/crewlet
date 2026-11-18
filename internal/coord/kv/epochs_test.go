@@ -10,12 +10,10 @@ import (
 	"github.com/crewlet/crewlet/internal/coord/memory"
 )
 
-// A SINGLE NODE'S FENCING EPOCH OUTLIVES ITS PROCESS. Its leases are an
-// in-process table that dies with the process, and its counter used to be one
-// too: every boot minted 1 again, under the executors' rows the previous
-// process had stamped with a later token in the fleet store. Here two
-// processes are two lease tables over one broker, each with its own handle on
-// the counter.
+// A SINGLE NODE'S FENCING EPOCH OUTLIVES ITS PROCESS. Its leases die with the
+// process; a counter that did too would mint 1 again, under rows the previous
+// process stamped with a later token in the fleet store. Two processes here
+// are two lease tables over one broker, each with its own counter handle.
 func TestAnInProcessLeaseTableMintsFromTheCounterThatOutlivesIt(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
@@ -59,8 +57,7 @@ func TestAnInProcessLeaseTableMintsFromTheCounterThatOutlivesIt(t *testing.T) {
 	}
 
 	// AND A FLEET CARRIES ON FROM IT: the KV lease store mints from the same
-	// bucket, so a move from local coordination to a fleet keeps the tokens
-	// the single node's runs were stamped with below the fleet's.
+	// bucket, so the single node's tokens stay below the fleet's.
 	store, err := Open(t.Context(), jsOf(nc), Config{TTL: time.Minute, BucketPrefix: cfg.BucketPrefix, Reach: InProcess})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -71,10 +68,9 @@ func TestAnInProcessLeaseTableMintsFromTheCounterThatOutlivesIt(t *testing.T) {
 	}
 }
 
-// The in-process lease table a single node runs is certified by the one
-// contract suite on the counter it actually mints from, not only on its own
-// in-process count: the claim that mints outside the lock is a protocol of its
-// own, and this is where the suite's stampedes and lapses reach it.
+// The in-process lease table runs the contract suite on the counter it really
+// mints from: its claim mints outside the lock, a protocol of its own, and
+// this is where the suite's stampedes and lapses reach it.
 func TestContractInProcessLeasesOnThePersistentCounter(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
@@ -87,9 +83,8 @@ func TestContractInProcessLeasesOnThePersistentCounter(t *testing.T) {
 	})
 }
 
-// A FLOOR ONLY EVER RAISES. It creates the record a counter that never minted
-// for the resource lacks, lifts one below it, and leaves one at or above it
-// alone, so every node of a fleet can floor at boot and agree.
+// A FLOOR ONLY EVER RAISES: it creates a missing record, lifts one below it
+// and leaves one at or above it alone, so every node can floor at boot and agree.
 func TestAFloorRaisesTheCounterAndNeverLowersIt(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)

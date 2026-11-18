@@ -19,117 +19,39 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// The dead-letter verbs, over the one dead-letter stream every subscription's
-// budget already writes to: `CREWLET_DLQ`, kept by age — the event stream's own
-// bound, `stream.event_retention_hours` — and never by interest, so an entry is
-// there whether or not anybody reads it until the age lets it go.
-//
-// # An entry is a message whose header says what it is
-//
-// The keeper's header rides as one header of the message, [letterHeader], and
-// its body is the message's payload. That split is what lets every reader that
-// only needs to know WHAT is kept read no payload at all: a wake feed's entry
-// is a record's whole sealed frame, as large as the transport carries, and the
-// alarm's reading lists the feeds' subjects on the beat of every data node.
-// Read whole, a stalled roll that dead-lettered thousands of records would have
-// had each data node read every frame of them every beat.
-//
-// # Three reads, each the cheapest that is honest for its reader
-//
-//   - A LISTING ([Queue.DeadLettersOn]) is one ephemeral consumer that
-//     delivers HEADERS ONLY — the broker strips the payload and states its
-//     size instead (nats-server v2.15.2, server/consumer.go:5508-5512 and
-//     5774-5798, `convertToHeadersOnly`) — filtered to the subject, read
-//     until it says nothing is pending, and deleted. The pinned server has no
-//     headers-only read of a single message: the leader's message read
-//     offers `no_hdr` alone (server/jetstream_api.go:825-847,
-//     JSApiMsgGetRequest), the opposite, and a direct get always sends the
-//     payload (server/stream.go:6439). So a listing reads the copy the
-//     broker places its consumer on, one replica of the stream chosen among
-//     those it counts as up (server/jetstream_cluster.go:12339-12387,
-//     createGroupForConsumer), which may be behind the stream's leader: it
-//     can miss an entry kept a moment ago or still show one dropped a moment
-//     ago, and it never hides one the replica holds.
-//   - THE MARKS ([Queue.DeadLetterMarks]) are the LEADER's: one
-//     `STREAM.INFO` with a subjects filter, which only the leader answers
-//     ([jsapi.Leader.SubjectsSince]) and which counts each subject and states
-//     the stream's last sequence. A reader that must know its listing is
-//     current holds it to them — the alarm's reading lists again only when
-//     they moved, and takes a listing as current only when its counts are
-//     the marks' (internal/engine's deadLetterWatch).
-//   - A FRAME ([Queue.DeadLetterFrame]) is the one read that moves a payload,
-//     made by the one reader that acts on it — a feed's replay — and never
-//     reports an entry gone because a replica had not heard of it. It is the
-//     leader's message read by sequence, `STREAM.MSG.GET` ([jsapi.Leader]),
-//     wherever that read's reply reaches this node: on a member's own
-//     connection, and across a link no leaf stands on, given there the time
-//     the largest entry's reply takes to cross. ACROSS A LEAF'S LINK an entry
-//     may be too large for that reply to cross it — the reply is JSON, the
-//     entry base64-encoded inside it, and a leaf's server closes its whole
-//     link on a message past the transport — so it is found from its headers
-//     first, through a consumer on the leader's own copy ([copyRead.at]),
-//     read with the leader's message read where its own reply crosses the
-//     link, and otherwise read RAW through such a consumer
-//     ([copyRead.message]): the leader's answer either way, as copyread.go
-//     says.
-//
-// # One entry for one identity
-//
-// A keep names the identity its keeper derives from what it keeps
-// ([queue.EventQueue.KeepDeadLetter]), and the message carries it as its
-// `Nats-Msg-Id` ([letterID]): the stream's duplicate window is
-// [queue.DeadLetterWindow], so the broker stores a second keep of one identity
-// within it as nothing and acknowledges it as a duplicate, which is the
-// contract's "already kept". The window is the stream's, set where the stream
-// is declared (engineStreams), and a retention shorter than it is one the
-// broker refuses the stream for (Tier A refuses it first).
-//
-// THE DELIVERY BUDGET'S DEAD LETTER NAMES ONE TOO ([Queue.deadLetter]), on
-// either of its pair's subjects, poison's or the unhandled deliveries'
-// ([queue.RetiredTo]): the message the broker stored, its stream, its sequence
-// and its instant ([letterOf]). A message whose keep failed goes back for its
-// next delivery to keep — the broker's backstop stands past the budget for
-// that ([keepRetries]) — and a keep that stored its entry and lost its answer
-// failed as far as its keeper heard, so the identity is what makes the keep
-// made again come to nothing. A copy too large for the identity's header
-// beside it is kept with none, and twice at worst.
-//
-// A DROP ([Queue.DropDeadLetter]) asks which subject the sequence is on before
-// it deletes it, and the delete is the leader's. Wherever the leader's read
-// reaches this node the check is that read, so it moves the payload of the
-// one entry it removes: the pinned server has no read of a message's subject
-// without it (above). ACROSS A LEAF'S LINK it reads the entry's HEADERS
-// ALONE, through a consumer on the leader's own copy ([copyRead.at]) — never a
-// replica's, where an entry not yet heard of would read as already gone and
-// the drop answer done having removed nothing.
+// The dead-letter verbs, over `CREWLET_DLQ`: the one stream every
+// subscription's budget writes to, kept by age (`stream.event_retention_hours`)
+// and never by interest (package doc, "Dead letters"). An entry's keeper header
+// rides in [letterHeader] and its body is the payload, so a reader that needs
+// only what is kept reads no payload. A listing ([Queue.DeadLettersOn]) reads
+// headers from whichever replica holds its consumer; the marks
+// ([Queue.DeadLetterMarks]) are the leader's counts, which a reader holds a
+// listing to; a frame ([Queue.DeadLetterFrame]) and a drop's check are the
+// leader's, through its own copy across a leaf's link ([copyRead]). A keep's
+// identity is its message id ([letterID]), so a second keep within the
+// stream's duplicate window is answered "already kept".
 
 // letterHeader is the header a dead letter's keeper's header rides in, beside
 // the stream the keep expects (`Nats-Expected-Stream`).
 const letterHeader = "Crewlet-Dead-Letter"
 
-// letterPage is how many entries one pull of a listing asks for.
-//
-// FIVE HUNDRED, the client's own default, stated rather than inherited: what a
-// listing holds is headers — a few hundred bytes an entry, under three
-// kibibytes for a wake feed's at its worst — so a full pull is a few hundred
-// kibibytes however large the frames behind them, and the thousand entries a
-// stalled roll can leave on one subject take two.
+// letterPage is how many entries one pull of a listing asks for: 500, the
+// client's default, stated rather than inherited. A listing holds headers,
+// under 3 KiB an entry at worst, so a full pull is a few hundred KiB however
+// large the frames, and the thousand entries a stalled roll can leave on one
+// subject take two.
 const letterPage = 500
 
-// letterQuiet is how long a reader of a throwaway consumer — a listing, or a
-// copy read ([copyRead]) — hears nothing from its pull before it asks the
-// consumer what it says of itself ([jsapi.Pulls.Quiet]); a pull the consumer
-// says it is answering, a whole message crossing a link among them, is
-// waited on past it.
+// letterQuiet is how long a reader of a throwaway consumer (a listing, or a
+// [copyRead]) hears nothing from its pull before it asks the consumer about
+// itself ([jsapi.Pulls.Quiet]); a pull the consumer says it is answering, a
+// whole message crossing a link among them, is waited on past it.
 //
-// ONE SECOND, internal/objstore/natsobj's quietWait, for its reason: a cluster
-// drops a new consumer's FIRST PULL routinely — the member that made the
-// consumer answers its creation before the reader's member hears that the
-// consumer's member serves its pulls, and a pull sent in that gap goes nowhere
-// — measured there at up to one read in twenty-five on a loaded three-member
-// fleet. A listing that waited out a long pull for nothing would wait for
-// every one of those. Asked after a quiet second instead, the consumer says it
-// still holds its entries and delivered none, and the next pull reaches it.
+// One second, for internal/objstore/natsobj's quietWait reason: a cluster
+// routinely drops a new consumer's first pull (sent before the reader's member
+// hears who serves it), and a listing that waited out a long pull would wait
+// for every such drop. Asked after a quiet second, the consumer says it
+// delivered nothing, and the next pull reaches it.
 const letterQuiet = time.Second
 
 // KeepDeadLetter implements queue.EventQueue: body stored on subject in the
@@ -146,9 +68,9 @@ func (q *Queue) KeepDeadLetter(ctx context.Context, subject, id string, header, 
 	if err := queue.LetterHeader(header); err != nil {
 		return false, fmt.Errorf("jetstream: keep a dead letter on %s: %w", subject, err)
 	}
-	// THE CONTRACT'S CEILING FOR A KEEP, before the transport's: the twin
-	// refuses exactly these, so the two never disagree about an entry whose
-	// header block would take it past the transport ([queue.LetterFits]).
+	// The contract's ceiling, before the transport's: the twin refuses exactly
+	// these, so the two agree on an entry whose header block would take it past
+	// the transport ([queue.LetterFits]).
 	if !queue.LetterFits(header, body) {
 		return false, fmt.Errorf("keep a dead letter on %s: %d bytes of header and body exceed the "+
 			"%d-byte limit less the %d a keep is framed in: %w", subject, len(header)+len(body),
@@ -158,23 +80,18 @@ func (q *Queue) KeepDeadLetter(ctx context.Context, subject, id string, header, 
 	if err != nil {
 		return false, err
 	}
-	// WAITED FOR AS LONG AS ITS BYTES TAKE TO CROSS, where its caller set no
-	// deadline: the request term, and across a link the time the entry takes
-	// at the connection's pace, each time it is sent ([Queue.write]) —
-	// counted off the message as it is sent, its header block and its body
-	// ([letterMsg]). An entry at the ceiling is about four minutes at the
-	// slowest pace allowed, and held to the request term alone it failed as an
-	// outage its keeper retried for ever while the link carried each copy. For
-	// those minutes everything the node sends behind it on the link waits too,
-	// its lease renewals among them (crewlet/crewlet#1035, which this does not
-	// fix). Classified on the CALLER's context, so a budget this set and the
-	// broker outlasted reads as the silence it is.
+	// Waited for as long as its bytes take to cross where the caller set no
+	// deadline ([Queue.write]): the request term plus, across a link, the whole
+	// message ([letterMsg]) at the connection's pace. At the ceiling and the
+	// slowest pace that is minutes, which the request term alone would fail as
+	// an outage retried forever; lease renewals behind it on the link wait too
+	// (crewlet/crewlet#1035, not fixed here). Classified on the caller's
+	// context, so a budget this set and the broker outlasted reads as silence.
 	ack, err := q.write(ctx, letterMsg(subject, stream, id, header, body))
 	if err != nil {
-		// TRANSLATED, for Publish's reason: too large is the one refusal
-		// no retry changes, and nats.ErrMaxPayload is this backend's
-		// private word for it — met here only on a server announcing less
-		// than the contract.
+		// Translated, as Publish does: nats.ErrMaxPayload is this backend's
+		// word for the one refusal no retry changes, met only on a server
+		// announcing less than the contract.
 		if errors.Is(err, nats.ErrMaxPayload) {
 			return false, fmt.Errorf("%s: %w: %w", tooLarge(q.nc, "keep a dead letter on", subject,
 				len(header)+len(body)), queue.ErrTooLarge, err)
@@ -185,16 +102,11 @@ func (q *Queue) KeepDeadLetter(ctx context.Context, subject, id string, header, 
 }
 
 // letterMsg is the message a keep of id publishes: body as its payload, header
-// in [letterHeader] where there is one, the identity as its message id
-// ([letterID]), and the stream it was resolved to as the one the broker must
-// store it in.
-//
-// EXPECTED ON THE STREAM IT WAS RESOLVED TO (`Nats-Expected-Stream`, the
-// header jetstream.WithExpectStream writes), so a broker whose streams were
-// arranged differently — a namespace another stream also claims — refuses the
-// entry rather than storing it where no listing reads. Written here rather than
-// through the options, the message id's as much as the stream's, so the
-// message this returns is the whole of what crosses the wire, which the
+// in [letterHeader] where there is one, [letterID] as its message id, and the
+// stream it was resolved to as the one the broker must store it in, so a
+// broker whose streams are arranged differently refuses the entry rather than
+// store it where no listing reads. Both headers are set here, not through
+// publish options, so this message is all that crosses the wire: what the
 // framing's test measures against [queue.LetterFraming] and the keep's budget
 // counts ([carried]).
 func letterMsg(subject, stream, id string, header, body []byte) *nats.Msg {
@@ -208,14 +120,12 @@ func letterMsg(subject, stream, id string, header, body []byte) *nats.Msg {
 }
 
 // letterID is the message id a keep of id on subject carries: the identity
-// SCOPED TO ITS SUBJECT, because every dead-letter subject is one stream and
-// the broker collapses a repeated id across the whole of it — two keepers'
-// things that share an identity on two subjects are two entries — and
-// DIGESTED, so the header block a keep is framed in stays inside
-// [queue.LetterFraming] whatever the identity's length, and no byte of an
-// identity reaches a header the transport would rewrite ([queue.LetterHeader]
-// says what it rewrites). A subject holds no NUL, so the pair it digests is
-// one pair.
+// scoped to its subject, since the broker collapses a repeated id across the
+// one dead-letter stream and one identity on two subjects is two entries; and
+// digested, so a keep's framing stays inside [queue.LetterFraming] whatever
+// the identity's length and no identity byte reaches a header the transport
+// rewrites ([queue.LetterHeader]). A subject holds no NUL, so the digested
+// pair is unambiguous.
 func letterID(subject, id string) string {
 	sum := sha256.Sum256([]byte(subject + "\x00" + id))
 	return hex.EncodeToString(sum[:])
@@ -233,11 +143,10 @@ func (q *Queue) DeadLettersOn(ctx context.Context, subject string) ([]queue.Kept
 		Description:   "a listing of the dead letters on " + subject + ", headers only",
 		FilterSubject: subject,
 		DeliverPolicy: jetstream.DeliverAllPolicy,
-		// NO PAYLOAD CROSSES: the broker delivers each entry's headers,
-		// the keeper's among them, and the payload's size in place of the
-		// payload.
+		// No payload crosses: the broker sends each entry's headers and
+		// the payload's size instead.
 		HeadersOnly: true,
-		// A READER'S THROWAWAY, as a peek's is: one replica, in memory.
+		// A reader's throwaway, as a peek's is.
 		Replicas:      1,
 		MemoryStorage: true,
 	})
@@ -253,18 +162,15 @@ func (q *Queue) DeadLettersOn(ctx context.Context, subject string) ([]queue.Kept
 }
 
 // headers is every entry cons delivers, in order, until it says nothing is
-// pending — asked a pull of [letterPage] at a time on one inbox the listing
-// holds throughout ([jsapi.Pulls]), each waited for no longer than [letterQuiet],
-// so an entry delivered to a pull that has expired still reaches the
-// listing, in its place: the consumer's delivery count guards every entry,
-// and one missing from a listing reads to its reader as one that is gone.
+// pending: pulls of [letterPage] on one inbox held for the whole listing
+// ([jsapi.Pulls]), each waited on for [letterQuiet], so an entry delivered to
+// an expired pull still arrives in its place. One missing from a listing reads
+// to its reader as gone.
 //
-// THE CONSUMER'S OWN COUNT DECIDES THE END, never a quiet pull: a pull that
-// brought nothing asks the consumer ([jsapi.Pulls.Quiet]), which ends the listing
-// where it holds nothing more and has delivered nothing this listing has not
-// had, and is pulled again where it still holds entries or has delivered some
-// still on their way — for as long as the server keeps a silence
-// ([jsprovision.LookupBudget]), past which the listing fails rather than
+// The consumer's own count decides the end, never a quiet pull: after a pull
+// that brought nothing the consumer is asked ([jsapi.Pulls.Quiet]), and the
+// listing ends where it holds and owes nothing more, else pulls again, for at
+// most [jsprovision.LookupBudget] of silence, past which it fails rather than
 // answer short.
 func (s letterStream) headers(ctx context.Context, q *Queue, cons jetstream.Consumer) ([]queue.Kept, error) {
 	pending := cons.CachedInfo().NumPending
@@ -303,9 +209,8 @@ func (s letterStream) headers(ctx context.Context, q *Queue, cons jetstream.Cons
 			heard = time.Now()
 			continue
 		}
-		// NO ARRIVAL beyond the read term: a listing's deliveries are
-		// headers, each crossing the link in a fraction of it at the
-		// floor, so its consumer's answer waits behind none longer.
+		// Asked at the read term alone: header deliveries cross the link
+		// in a fraction of it even at the floor.
 		says, info, err := p.Quiet(ctx, 0)
 		switch {
 		case err != nil:
@@ -406,19 +311,14 @@ func (q *Queue) DeadLetterMarks(ctx context.Context, under string) (queue.Marks,
 // DropDeadLetter implements queue.EventQueue: the entry seq deleted from the
 // dead-letter stream, once its leader says seq holds an entry of subject.
 //
-// THE DELETE LEAVES THE ENTRY'S MESSAGE ID IN THE STREAM'S DUPLICATE WINDOW,
-// so a keep of its identity inside [queue.DeadLetterWindow] is answered a
-// duplicate — already kept — while the stream runs: in nats-server v2.15.2 a
-// delete (stream.go's deleteMsg, and eraseMsg, through which every copy
-// applies a clustered one) removes the message from the store and never
-// touches the window, which lets an id go only by its age (purgeMsgIds), and
-// a leader elected since holds the id too, since every copy records the id of
-// each message it applies. THE WINDOW IS REBUILT FROM THE MESSAGES STILL
-// STORED (rebuildDedupe) when the stream is recovered at a restart and when it
-// is reset to replay its log (prepareForWALReplay), and a copy caught up from
-// a snapshot is never sent a deleted message (processCatchupMsg records the id
-// of each message it is sent), so after any of those the identity is
-// forgotten and a keep of it stores a new entry.
+// The entry's message id stays in the duplicate window, so a keep of its
+// identity inside [queue.DeadLetterWindow] is answered "already kept" while the
+// stream runs: in nats-server v2.15.2 deleteMsg and eraseMsg never touch the
+// window, which ages an id out only (purgeMsgIds), and every copy, so any new
+// leader, records the id of each message it applies. The window is rebuilt
+// from stored messages (rebuildDedupe) on recovery at a restart and on
+// prepareForWALReplay, and a snapshot catch-up never sends a deleted message
+// (processCatchupMsg), so after any of those a keep stores a new entry.
 func (q *Queue) DropDeadLetter(ctx context.Context, subject string, seq uint64) error {
 	if seq == 0 {
 		return fmt.Errorf("jetstream: drop a dead letter on %s: sequence 0 names no entry", subject)
@@ -439,11 +339,10 @@ func (q *Queue) DropDeadLetter(ctx context.Context, subject string, seq uint64) 
 	if deleteErr == nil {
 		return nil
 	}
-	// A PEER THAT DROPPED IT FIRST: the broker refuses to delete a message
-	// that is no longer there, and that is the outcome this call asked for.
-	// Asked again rather than read off the refusal's words, which the client
-	// folds into one sentinel with every other refusal — of the leader's own
-	// copy either way, the one that refused the delete.
+	// The broker refuses to delete a message already gone: a peer may have
+	// dropped it first, the outcome this call asked for. Asked again rather
+	// than read off the refusal, which the client folds into one sentinel with
+	// every other, and of the leader's copy, the one that refused.
 	if gone, err = letters.gone(ctx, q, subject, seq); err == nil && gone {
 		return nil
 	}
@@ -456,10 +355,9 @@ func (q *Queue) DropDeadLetter(ctx context.Context, subject string, seq uint64) 
 // copies.
 type letterStream struct {
 	stream string
-	// leader reads the stream's leader: given the arrival of the largest
-	// entry's reply wherever the leader's read reaches every entry, and none
-	// where it reads through copies, whose read gives each entry its own
-	// ([letterStream.carrying]).
+	// leader reads the stream's leader: given the largest entry's reply
+	// arrival where it reads every entry, and none where copies do, each
+	// entry's read then given its own ([letterStream.carrying]).
 	leader *jsapi.Leader
 	// keep is the stream's own age bound, zero for a stream kept by none.
 	keep time.Duration
@@ -470,12 +368,10 @@ type letterStream struct {
 	copies *copyRead
 }
 
-// deadLetters opens subject's stream for a dead-letter verb: refused for a
-// subject outside the namespace, provisioned through the one door every verb
-// passes ([Queue.streamFor]), and read from its leader — and, where a leaf's
-// link stands between the connection and the leader, past which a leader's
-// reply of an entry as large as the transport carries cannot reach this node
-// ([Queue.leaderCarries]), from its copies as well.
+// deadLetters opens subject's stream for a dead-letter verb: refused outside
+// the namespace, provisioned through [Queue.streamFor], and read from its
+// leader, and from its copies as well where a leaf's link stops a leader's
+// reply as large as the transport ([Queue.leaderCarries]).
 func (q *Queue) deadLetters(ctx context.Context, subject string) (letterStream, error) {
 	if err := deadLetterSubject(subject); err != nil {
 		return letterStream{}, err
@@ -499,18 +395,13 @@ func (q *Queue) deadLetters(ctx context.Context, subject string) (letterStream, 
 		letters.copies = q.copiesOf(stream, leader)
 		return letters, nil
 	}
-	// EVERY OTHER CONNECTION reads every entry from the leader, given the
-	// arrival of a reply as large as the transport carries
-	// ([jsapi.Leader.Carrying]): its handling in the engine's own processes
-	// on a member's own connection, which crosses nothing, and its crossing at
-	// the connection's pace besides across a link no leaf stands on — a dial
-	// to a broker somebody else runs, where nothing holds the reply to the
-	// transport. On a member's own connection the reply was given the bare
-	// read term, and under load an entry at the ceiling — its reply eleven
-	// megabytes, built by the leader and decoded here, in this process — was
-	// asked again at two seconds and at four while the leader was still
-	// building the first, every re-ask another whole reply, and ran out its
-	// bound with none of them answered (crewlet/crewlet#1153).
+	// Every other connection reads every entry from the leader, given the
+	// arrival of a reply as large as the transport ([jsapi.Leader.Carrying]):
+	// its crossing at the connection's pace across a link no leaf stands on,
+	// and on a member's own connection the time to build and decode it. Under
+	// load the bare read term re-asked an eleven-megabyte reply while the
+	// leader was still building the first, each re-ask another whole reply,
+	// until its bound ran out unanswered (crewlet/crewlet#1153).
 	letters.leader = leader.Carrying(int(q.nc.MaxPayload()), q.link.pace)
 	return letters, nil
 }

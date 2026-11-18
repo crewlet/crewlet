@@ -15,30 +15,18 @@ import (
 // requirement queuetest.Capabilities places on every inspection function a
 // backend supplies, asserted against the broker this one actually runs.
 //
-// A NET, NOT A PROOF, and the comment matters more than the assertion. The
-// property is violated only when the server's own accounting falls behind,
-// which happens under CPU contention and not on demand: sizing a backlog read
-// from the consumer's pending count — the shape this replaced — was measured
-// wrong about twice in two thousand reads on an idle machine and could not be
-// provoked at all by loading the broker, yet it was frequent enough under a
-// full parallel test run to turn CI red on a merge that touched nothing here.
-// So this case cannot fail reliably when the property is broken. It also
-// cannot fail when the property holds, which is what makes it worth keeping:
-// it costs nothing, and CI is the loaded machine where the violation lives.
-//
-// What actually defends the property is the reasoning written at Backlog and
-// at queuetest.Capabilities. That is the remedy the suite itself prescribes
-// for a requirement no case can discover, and it is deliberately the load
-// this test does not carry.
+// A NET, NOT A PROOF. The property breaks only when the server's own
+// accounting falls behind, under CPU contention and never on demand, so this
+// case cannot fail reliably when it is broken; it never fails when it holds,
+// costs nothing, and CI is the loaded machine where the violation lives. What
+// defends the property is the reasoning at Backlog and queuetest.Capabilities.
 func TestBacklogReportsMailThePublishAlreadyAcked(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	q := openForTest(t, Config{})
-	// Read through the SECOND client, because that is the connection the
-	// conformance suite's capabilities read through, and the gap depends on
-	// it: measured on the publisher's own connection the consumer's count
-	// was behind on about one read in nine, and from another connection on
-	// about two in three.
+	// Read through the SECOND client, as the conformance suite's capabilities
+	// do: the consumer's count lags far more often seen from another
+	// connection than from the publisher's own.
 	reader := inspector(q)
 
 	const rounds = 100
@@ -49,10 +37,8 @@ func TestBacklogReportsMailThePublishAlreadyAcked(t *testing.T) {
 		if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
 			t.Fatalf("EnsureSubscription: %v", err)
 		}
-		// Resolved BEFORE the publish so the reads below are one round trip
-		// each. Resolving them afterwards is itself enough delay for the
-		// consumer to catch up, which is how a lagging count stays invisible
-		// in ordinary code.
+		// Resolved BEFORE the publish so each read below is one round trip:
+		// resolving them afterwards is delay enough to hide a lagging count.
 		stream, err := reader.streamFor(ctx, topic)
 		if err != nil {
 			t.Fatalf("streamFor: %v", err)
@@ -84,8 +70,8 @@ func TestBacklogReportsMailThePublishAlreadyAcked(t *testing.T) {
 				i, topic, len(got))
 		}
 	}
-	// Reported rather than asserted: the gap is a function of how busy the
-	// machine is, so requiring it here would fail on a quiet one.
+	// Reported, not asserted: the gap depends on load, so a quiet machine
+	// would fail it.
 	t.Logf("the consumer's pending count was behind on %d of %d reads; the stream's on none",
 		consumerWasBehind, rounds)
 }
@@ -95,11 +81,9 @@ func TestBacklogReportsMailThePublishAlreadyAcked(t *testing.T) {
 // subject.
 //
 // Under interest retention a message stays on the subject until every group
-// with interest has acked it, so two groups sharing a subject leave one
-// group's finished mail sitting in front of the other's. Taking a count from
-// the head of the subject therefore answers with somebody else's mail — which
-// is what sizing the read from the consumer and starting from the head used
-// to do, and this case fails every time against it.
+// with interest has acked it, so one group's finished mail sits in front of
+// the other's, and a count taken from the subject's head answers with
+// somebody else's mail.
 func TestBacklogNamesThisGroupsOwnMail(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -107,8 +91,8 @@ func TestBacklogNamesThisGroupsOwnMail(t *testing.T) {
 	const topic = "seat.shared"
 	const mine, theirs = "mine", "theirs"
 
-	// Both subscriptions exist before anything is published, so the stream
-	// keeps every message until BOTH have acked it.
+	// Both subscriptions exist before the publish, so the stream keeps every
+	// message until BOTH have acked it.
 	for _, g := range []string{mine, theirs} {
 		if _, err := q.EnsureSubscription(ctx, topic, g); err != nil {
 			t.Fatalf("EnsureSubscription(%s): %v", g, err)
@@ -150,10 +134,9 @@ func TestBacklogNamesThisGroupsOwnMail(t *testing.T) {
 // the same arithmetic: reading from the stream must not start reporting mail
 // this group is done with just because another group still holds it.
 //
-// The pair matters. Sizing the read from the stream is what makes it
-// read-your-own-write, and taken alone it would answer with every message the
-// subject still carries — so the window is closed at the bottom by this
-// group's own ack floor, and this case is what says so.
+// Sizing the read from the stream makes it read-your-own-write, but alone it
+// would answer with every message the subject still carries, so the window's
+// bottom is this group's own ack floor.
 func TestBacklogExcludesMailThisGroupHasAcked(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -193,9 +176,8 @@ func TestBacklogExcludesMailThisGroupHasAcked(t *testing.T) {
 // settledBacklog reads a backlog until it holds want events, and returns each
 // one's probe number.
 //
-// Retried because an ack is in flight: every case here asserts WHICH events a
-// settled backlog names, never how quickly an ack lands, and reading once
-// would quietly test the latter.
+// Retried because an ack is in flight: the cases assert WHICH events a
+// settled backlog names, never how quickly an ack lands.
 func settledBacklog(t *testing.T, q *Queue, topic, group string, want int) []int {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)

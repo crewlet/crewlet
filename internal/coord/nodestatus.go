@@ -9,102 +9,43 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// What a node reports about ITSELF, fleet-wide.
-//
-// # What rides on the presence lease
-//
-// Only the node running a seat knows how many turns are in flight on it,
-// whether it has begun draining, and what it concluded about its own config
-// lag. `/health` answers those about the node that served the request, so
-// behind a load balancer a refresh tells a different story each time.
-//
-// The alternative was request/reply: the lease table locates the owner, and
-// a caller asks it directly. That was refused: every answer would become partial
-// (some nodes reply, some time out), it opens a new trust edge (a request
-// carrying an operator's authority across a node boundary), and it
-// duplicates a mechanism that already works.
-//
-// The presence lease is renewed on a timer and its Meta is re-sent on EVERY
-// heartbeat — that is not an addition, it is how a node already advertises
-// its roles and labels. Its LIVE CORE goes beside them: the in-flight count,
-// the drain, the posture, the build, the appliers and the firing alarms,
-// each a few bytes and each bounded by something the engine declares (the
-// alarm table bounds the marks).
-//
-// BOUNDED AS A WHOLE: the presence's Meta is held to [MaxLeaseMetaBytes],
-// derived from every field's own bound — the alarm table for the marks,
-// [MaxBuildBytes] for the build, Tier A for the labels beside it — so a field
-// added here is a field that bound has to be derived again for
-// (internal/engine, TestThePresenceLeaseAtItsWorstFitsItsBound).
-//
-// Freshness is the heartbeat interval, which is exactly the freshness every
-// other column of the fleet view already has, and the view prints how long
-// each lease has left — so a stale row reads as stale rather than as
-// current.
-//
-// # What does not
-//
-// The rows that grow with a company's configuration — a row per MCP server
-// and per model entry, the runner cells' findings and the node's infra
-// summary — are a record of their own, [NodeStatusRecord], written when they
-// change and joined to this lease by its epoch. The presence is rewritten on
-// every beat and is what placement and liveness read, so it carries what they
-// read and the core beside it, and nothing a person's configuration can grow:
-// see nodestatusrecord.go for why, and for the join.
+// What a node reports about ITSELF rides its presence lease: only the node
+// running a seat knows its in-flight turns, drain and config posture, and
+// /health answers about whichever node a load balancer picked. Request/reply
+// to the owner was refused: partial answers, a new trust edge (an operator's
+// authority crossing nodes), and a second mechanism beside the heartbeat that
+// already re-sends roles and labels. Freshness is a heartbeat; the fleet view
+// prints each lease's time left. The Meta is held to [MaxLeaseMetaBytes],
+// derived from every field's bound (the alarm table, [MaxBuildBytes], Tier A's
+// labels), so a field added here re-derives it (internal/engine,
+// TestThePresenceLeaseAtItsWorstFitsItsBound). Rows a company's configuration
+// grows (MCP servers, model entries, runner findings, infra) are
+// [NodeStatusRecord]'s, joined by epoch: see nodestatusrecord.go.
 
-// StatusKey is where node status sits in a presence lease's Meta.
-//
-// Its own key rather than fields at the top level: placement reads `roles`
-// and `labels` off the same map, and two concerns sharing a namespace is how
-// one of them eventually shadows the other.
+// StatusKey is where node status sits in a presence lease's Meta: its own key
+// rather than top-level fields, because placement reads `roles` and `labels`
+// off the same map and a shared namespace lets one shadow the other.
 const StatusKey = "status"
 
-// GitBackgroundKey is where a Gitlet node's presence lease carries what its git
-// cache gives its background work: its MAINTENANCE BUDGET, the figure every
-// run of a repository's maintenance on that node is admitted against — the
-// node's memory less what its serving keeps — read again at every maintenance
-// pass, so a container resized in place says its new figure within a pass and
-// a beat (internal/gitlet/cache, Cache.BackgroundBudget). Every Gitlet node weighs
-// every other by it to place a repository's maintenance on the first node of
-// the repository's git order whose budget holds the work, the home on a fleet
-// of alike nodes (internal/estate, Router.Maintainer).
-//
-// ON THE HEARTBEAT, for the reason a node's status is: which Gitlet node can hold
-// a repository's maintenance is a question every Gitlet node asks about every
-// other, and a request/reply asking each in turn would be the fan-out whose
-// partial answers the file head refused. Its freshness is a heartbeat, and a
-// budget moves only when a container is resized.
-//
-// BESIDE THE STATUS, NEVER IN IT. A status is assembled under a share of the
-// beat, because answering reads the broker and the control plane, and a beat
-// whose hook overruns that share publishes no status at all — right for a
-// display column, which then reads as not saying, and wrong for a placement
-// input, which would go with it: a Gitlet node whose status was dropped for a
-// beat would say nothing of what it can hold, the large node of a fleet would
-// be weighed as one known to hold nothing, and every repository only it can
-// maintain would be left to a node whose own admission refuses the work. The
-// budget is a figure in memory that nothing can overrun, so the seat host
-// writes it on EVERY beat beside the status, as it writes its own held count
-// (internal/seat/placement, HeldKey): a live Gitlet node of this build always
-// says it.
-//
-// ZERO IS WRITTEN, never left out: it is a claim — a Gitlet node that has not
-// built Gitlet yet, or whose transfers keep all of its memory, has nothing to
-// give — and a row without the key is the other fact, a node NOT SAYING (a
-// build or a host that writes none), which [GitBackgroundFromMeta] reports as
-// such. A node without the gitlet role writes none.
+// GitBackgroundKey is where a Gitlet node's presence lease carries its git
+// cache's MAINTENANCE BUDGET: the memory every maintenance run on the node is
+// admitted against, re-read every pass (internal/gitlet/cache,
+// Cache.BackgroundBudget). Every Gitlet node weighs every other by it to place
+// maintenance (internal/estate, Router.Maintainer), on the heartbeat for the
+// reason status is. BESIDE THE STATUS, NEVER IN IT: a status whose hook
+// overruns its share of the beat is dropped, which would weigh a node as
+// holding nothing; the budget is in memory, so the seat host writes it on
+// EVERY beat, as it does its held count (internal/seat/placement, HeldKey).
+// ZERO IS WRITTEN, a claim of nothing to give; an absent key is a node not
+// saying ([GitBackgroundFromMeta]). A node without the gitlet role writes none.
 const GitBackgroundKey = "git_background_bytes"
 
 // GitBackgroundFromMeta reads a peer's maintenance budget off its presence
-// lease's Meta ([GitBackgroundKey]), and reports whether the row says one at
-// all: false where the key is absent — a node not saying, never one with
-// nothing to give — or holds what no build writes (a negative figure, a value
-// that is not a number), which says nothing this build can act on either.
-//
-// THROUGH THE ONE NUMBER READER, never a second one for int64: every target
-// this module builds is 64-bit (internal/store/platform.go), so an int holds
-// any budget a node can have, and the float64 a JSON round trip through the
-// lease store hands back holds one exactly up to 2⁵³ bytes — eight pebibytes.
+// lease's Meta ([GitBackgroundKey]), reporting false where the row says none
+// this build can act on: the key absent (a node not saying, never one with
+// nothing to give), negative, or not a number. It reads through [intFromMeta]:
+// every target is 64-bit (internal/store/platform.go), and a JSON round trip's
+// float64 holds a budget exactly up to 2⁵³ bytes.
 func GitBackgroundFromMeta(meta map[string]any) (int64, bool) {
 	raw, present := meta[GitBackgroundKey]
 	if !present {
@@ -132,30 +73,21 @@ type NodeStatus struct {
 	// InFlight is how many turns are running.
 	InFlight int
 
-	// Draining is true from the moment a drain begins.
-	//
-	// Reported even though a draining node DROPS its presence lease: the
-	// drop is what takes it out of the placement count, and this is what
-	// the last heartbeat before it said. A row that is both draining and
-	// expiring is a node shutting down cleanly; one that vanished without
-	// it is a node that died.
+	// Draining is true from the moment a drain begins. Reported though a
+	// draining node DROPS its presence lease: it is what the last heartbeat
+	// said, so a row draining and expiring is a clean shutdown, and one that
+	// vanished without it a node that died.
 	Draining bool
 
-	// Posture is what this node concluded about its own config lag —
-	// serve, wait, shed, isolated or stuck. The only place an operator can
-	// see WHY a node left rotation: /ready reports a bare 503 either way,
-	// and "draining" and "cannot apply epoch 41" call for opposite
-	// responses.
-	//
-	// EMPTY when the node could not read its control plane, beside a status
-	// that is otherwise whole: the reader's fail-open answer there is serve,
-	// which is right for the node's own readiness probe and a confident lie
-	// on a peer's screen.
+	// Posture is what this node concluded about its own config lag (serve,
+	// wait, shed, isolated or stuck): the only place an operator sees WHY a
+	// node left rotation, since /ready is a bare 503 either way. EMPTY when
+	// the node could not read its control plane: the reader's fail-open serve
+	// is right for its own probe and a confident lie on a peer's screen.
 	Posture string
 
 	// StartedAt is when the node's ENGINE was built, which is when the node
-	// started: its API runs in the same process and reports the same
-	// instant on its own health body.
+	// started; its API reports the same instant on its health body.
 	StartedAt time.Time
 
 	// Build is the engine build the node runs, as internal/version names it,
@@ -169,118 +101,57 @@ type NodeStatus struct {
 	// settled only once no live node reads it, or says nothing.
 	ParkedStateVersion int
 
-	// AppliersReady and AppliersTotal are how many of this node's
-	// state-log appliers — one per registered domain, run from boot on
-	// every data node whatever its company runs — have caught up with
-	// their logs, out of how many it runs. Zero of zero is a node without
-	// `data`, which runs no log.
-	//
-	// # Why it is here and not on /ready
-	//
-	// A node still catching up is HEALTHY. It serves its dashboard,
-	// answers its probes and runs the duties it holds; what it does not do
-	// is take on NEW seats, because a seat whose tools read a copy that is
-	// behind answers "there is no such item" — and a seat acts on that.
-	// So the fact belongs where an operator asking "why is the new node
-	// holding nothing" can see it, which is the fleet view, and NOT where
-	// it would take the node out of rotation.
-	//
-	// Two integers rather than a bool: "3 of 5" and "0 of 2" are the two
-	// readings an operator needs to tell apart, and a bool collapses
-	// them.
+	// AppliersReady and AppliersTotal are how many of this node's state-log
+	// appliers (one per registered domain, run on every data node) have
+	// caught up, out of how many it runs; zero of zero is a node without
+	// `data`. Here and not on /ready: a node catching up is HEALTHY and only
+	// takes no NEW seats (a seat reading a copy that is behind acts on "no
+	// such item"), so it belongs on the fleet view, not out of rotation. Two
+	// integers, not a bool: "3 of 5" and "0 of 2" read differently.
 	AppliersReady int
 	AppliersTotal int
 
-	// AdminPosture is this node's own `api.auth.admin`: whether it grants
-	// admin to those who hold it (`serve`) or clamps admin away and keeps
-	// every app (`refuse`).
-	//
-	// # Why a fleet publishes this at all
-	//
-	// Because the posture is applied at DECISION time, per node, per
-	// request, and nothing is written when it changes. That is what makes
-	// a fleet whose nodes disagree a LEGAL state rather than a broken one —
-	// one node published to colleagues refusing admin, another an
-	// administrator signs in on serving it, or a rolling restart halfway
-	// through a change.
-	//
-	// Legal and invisible is the problem. Without this, whether an
-	// administrator can run the company depends on which node a load
-	// balancer sent them to, and the symptom is a person who can revoke a
-	// credential on one request and cannot on the next, with nothing
-	// anywhere saying why. One word per node turns that into a row on the
-	// fleet view.
-	//
-	// THE VALUE ITSELF AND NOT A DIGEST, which is what the list of grants it
-	// replaced had to publish: two values are one short word, so there is
-	// nothing to compress.
-	//
-	// EMPTY IS A NODE THAT IS NOT SAYING, never a node that refuses admin:
-	// a node that serves no API has no posture to state and publishes
-	// nothing here, and reading that as "refuses" would draw every such node
-	// as locked down.
+	// AdminPosture is this node's own `api.auth.admin`: `serve` grants admin
+	// to those who hold it, `refuse` clamps admin away and keeps every app.
+	// It applies per node at decision time and nothing is written when it
+	// changes, so nodes that disagree are LEGAL (a rolling restart, a node
+	// published to colleagues) yet invisible: an administrator could revoke a
+	// credential on one request and not the next. Published so the fleet view
+	// shows it. EMPTY IS A NODE NOT SAYING (one serving no API), never one
+	// that refuses admin.
 	AdminPosture iam.AdminPosture
 
-	// Alarms are the alarms this node's own table has firing as of the
-	// beat: ONE MARK PER KIND however many logs a kind stands on, the
-	// longest-standing first — the order the node's health envelope takes
-	// its `worst` from, so the fleet view and the node's own health name
-	// the same condition as the one unanswered longest. Meaningful only
-	// where AlarmsEvaluated is true.
-	//
-	// # Why the firing set rides the heartbeat
-	//
-	// An alarm is evaluated by the node it describes — its reading is that
-	// node's applier, disk and refusals — and its standing set reached
-	// nobody else: the gauge needs a collector, the log line somebody
-	// reading that node's log, and the health envelope answers about
-	// whichever node a load balancer sent the request to. "What is wrong
-	// anywhere in the fleet" is therefore read here, for the reason every
-	// other field of this struct is here: every node already re-sends its
-	// status and every peer already reads it. It is also the CURRENT set,
-	// which a stream of transitions cannot be: a clear that was never said
-	// (lost with the process that would have said it) is read off the set
-	// as it stands.
-	//
-	// KIND AND SINCE, NEVER THE MEASUREMENT. An alarm's detail moves on
-	// every evaluation (a lag grows), so carrying it would make two beats
-	// over the same alarms differ, and it is unbounded prose re-sent on
-	// every renew; the node's own `alarm_raised` line carries it, and so
-	// does its retention report. What is carried is bounded by the alarm
-	// table itself — one mark a kind — so nothing here needs clipping.
+	// Alarms are the alarms this node's own table has firing as of the beat:
+	// ONE MARK PER KIND, longest-standing first, the order the node's health
+	// envelope takes `worst` from. Meaningful only where AlarmsEvaluated is
+	// true. On the heartbeat because only the node an alarm describes
+	// evaluates it, and as the CURRENT set, which a stream of transitions
+	// cannot be (a clear lost with its process). KIND AND SINCE, NEVER THE
+	// MEASUREMENT: a detail moves every evaluation and is unbounded prose (the
+	// node's `alarm_raised` line and retention report carry it); the alarm
+	// table bounds the marks, so nothing here needs clipping.
 	Alarms []AlarmMark
 
-	// AlarmsEvaluated is whether this node has an alarm table it has
-	// evaluated: false on a node running no state log, which has no table
-	// (every node without `data`), and on one whose first evaluation has
-	// not run yet.
-	//
-	// A FLAG BESIDE THE LIST, NOT A NIL LIST STANDING FOR IT. "Nothing is
-	// firing" and "this node cannot say" are opposite claims, and the
-	// second drawn as the first is the confident-zero mistake this struct
-	// is written to avoid. A nil slice cannot carry the difference safely:
-	// it is also what collecting no marks produces, so a builder that found
-	// nothing firing would publish "not saying" — and a node whose table
-	// never ran, built the other way, would read as healthy.
+	// AlarmsEvaluated is whether this node has evaluated an alarm table:
+	// false on a node without `data` (no table) and before its first
+	// evaluation. A FLAG, NOT A NIL LIST: "nothing firing" and "cannot say"
+	// are opposite claims, and a nil slice is also what collecting no marks
+	// produces.
 	AlarmsEvaluated bool
 }
 
 // AlarmMark is one alarm firing on a node: which, and since when.
 type AlarmMark struct {
 	// Kind is the alarm's name as the published table spells it
-	// (docs/reference/alarms.md): `backup_age`, `apply_lag`.
-	//
-	// A STRING rather than the table's own type, because the table belongs
-	// to the state-log framework, which sits above this package — and a
-	// kind a newer build added is still an alarm firing on that node, which
-	// a reader shows by its name rather than dropping.
+	// (docs/reference/alarms.md): `backup_age`, `apply_lag`. A STRING, not
+	// the table's type: the table is the state-log framework's, above this
+	// package, and a kind a newer build added is still shown by its name.
 	Kind string
 
-	// Since is when the node raised it, on that node's own clock, to the
-	// second: the evaluation that first found it, and for a kind standing
-	// on several logs the oldest of them, so a log joining an alarm that is
-	// already up does not make it look newer. An alarm raised again soon
-	// after it cleared keeps its run's first raise (statelog.RelapseWindow).
+	// Since is when the node raised it, on its own clock, to the second; for
+	// a kind standing on several logs the oldest, so a log joining does not
+	// make it look newer. A raise soon after a clear keeps its run's first
+	// (statelog.RelapseWindow).
 	Since time.Time
 }
 
@@ -305,24 +176,20 @@ func (s NodeStatus) Meta() map[string]any {
 		out["parked_state_version"] = s.ParkedStateVersion
 	}
 	if s.AdminPosture != "" {
-		// OMITTED WHEN UNSET, for [StatusFromMeta]'s reason: a node
-		// that serves no API has no posture to state, and an empty
-		// string on the wire would make it look like a peer whose
+		// Omitted when unset: an empty string would read as a peer whose
 		// posture differs from everybody's.
 		out["admin"] = string(s.AdminPosture)
 	}
 	if s.AppliersTotal > 0 {
-		// OMITTED where the node runs none — a node without `data` — so
-		// it reads absent rather than "0 of 0", which a reader would
-		// otherwise have to know is not a stalled applier.
+		// Omitted on a node without `data`, so it reads absent rather than
+		// as a stalled "0 of 0".
 		out["appliers_ready"] = s.AppliersReady
 		out["appliers_total"] = s.AppliersTotal
 	}
 	if s.AlarmsEvaluated {
-		// PRESENT, AND A LIST, wherever the node evaluated its table — an
-		// EMPTY list included, which is the claim that nothing is firing
-		// (and must reach JSON as `[]`, never as the `null` a nil slice
-		// marshals to). Absent only where the node cannot say.
+		// Present wherever the table was evaluated, as `[]` (never a nil
+		// slice's `null`) when nothing fires; absent only where the node
+		// cannot say.
 		marks := make([]map[string]any, 0, len(s.Alarms))
 		for _, m := range s.Alarms {
 			mark := map[string]any{"kind": m.Kind}
@@ -337,20 +204,11 @@ func (s NodeStatus) Meta() map[string]any {
 }
 
 // StatusFromMeta reads a peer's status off a presence lease's Meta, and
-// reports whether the node published one at all.
-//
-// # Absent is not zero
-//
-// A node that publishes no status — its status hook did not answer within its
-// share of that beat, so its heartbeat carried the placement half alone — is
-// not a node with no work in flight. Reporting it as 0 would draw an idle row
-// for a process that is simply not saying, which is the confident-zero mistake
-// the whole surface is written to avoid.
-//
-// A key this build does not know is IGNORED rather than refused: a successor
-// sharing the fleet publishes what it adds beside what this build reads, and a
-// status that failed to decode over it would read as absent for as long as the
-// successor ran.
+// reports whether the node published one at all. ABSENT IS NOT ZERO: a
+// status hook that overran its share of the beat publishes none, and an
+// idle row for it is the confident-zero mistake. A key this build does not
+// know is IGNORED, not refused: a successor publishes what it adds beside
+// what this build reads, and refusing would read it as absent.
 func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 	raw, ok := meta[StatusKey].(map[string]any)
 	if !ok {
@@ -375,14 +233,9 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 }
 
 // alarmsFromMeta reads a status's alarm marks, and whether it carried a list
-// of them at all.
-//
-// A KEY THAT IS ABSENT, OR NOT A LIST, IS A NODE THAT DID NOT SAY — never one
-// with nothing firing, which only a list (an empty one included) claims. A mark
-// naming no kind describes nothing a reader could show, so it is dropped, as an
-// MCP row naming no server is; a since that does not parse leaves the mark in
-// place with no instant, because the alarm firing is the fact and its start a
-// detail of it.
+// at all: an absent key or a non-list is a node not saying. A mark naming no
+// kind is dropped, as an MCP row naming no server is; an unparsable since
+// keeps the mark with no instant, since the firing is the fact.
 func alarmsFromMeta(v any) ([]AlarmMark, bool) {
 	switch v.(type) {
 	case []any, []map[string]any:
@@ -425,12 +278,9 @@ func listFromMeta(v any) []any {
 	}
 }
 
-// intFromMeta accepts the int this build writes and the float64 a JSON round
-// trip through the lease store returns.
-//
-// Both, because the same map is read locally (where it is an int) and after
-// a store round trip (where it is not), and a reader that knew only one
-// would report every peer's in-flight count as zero.
+// intFromMeta accepts the int this build writes locally and the float64 a
+// JSON round trip through the lease store returns; a reader knowing one would
+// read every peer's in-flight count as zero.
 func intFromMeta(v any) int {
 	switch n := v.(type) {
 	case int:

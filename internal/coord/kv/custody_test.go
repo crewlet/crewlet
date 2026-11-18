@@ -19,32 +19,15 @@ import (
 // A KEEPER RECORD NOTHING CAN READ IS UNDECIDABLE — NEVER A KEEPER, AND NEVER
 // THE STORE UNAVAILABLE.
 //
-// The contract suite cannot plant one, for the reason it cannot plant a
-// corrupt secret: every claim names its node or is refused, so only a value
-// that reached the bucket some other way is one — written by hand or by a
-// process that is not this engine, by a later build that reshaped the record,
-// or corrupted. Read as the store unavailable, the answer stopped the keeper's
-// pass at that batch on every pass and every boot, leaving every batch written
-// after it unsettled for the month the record lasts, since a pass lists the
-// oldest first. So each shape a record can fail to name a keeper in is
-// planted here, straight into the bucket, and must answer the one definite
-// error that lets the pass go on to the next batch — headers included, which
-// the leader read decodes before the value and the create reads back to tell
-// a marker from a value.
+// Only a value that bypassed a claim (by hand, a later build, corruption) is
+// one, so each shape is planted here, headers too (both reads decode them
+// first). Read as unavailable it would stop every keeper pass at that batch for
+// the month the record lasts, since passes list oldest first. Only an
+// unreadable keeper is undecidable: a readable `node` is answered. The error
+// names bucket and key: removing the record is the remedy, and it is logged.
 //
-// UNDECIDABLE MEANS THE KEEPER cannot be read, and nothing less: a record
-// whose `node` reads and whose diagnostic instant does not — retyped by a
-// later build, written another way by hand — names its keeper, and is answered
-// with it. And the error names the bucket and the key the record is under,
-// since removing it is the one remedy short of the month and the error is
-// what the caller logs.
-//
-// Mutation: answer a value that does not decode with a plain error in
-// ClaimCustody, and the garbled shapes fail; drop its errUndecodableHeaders
-// arms, and the raw message answers as the store unavailable; decode the
-// whole custodyRecord again, and the records with an unreadable instant are
-// answered undecidable; drop the bucket from the error, and every undecidable
-// shape fails.
+// Mutation: a plain decode error in ClaimCustody, no errUndecodableHeaders
+// arms, decoding the whole custodyRecord, or no bucket in the error: each fails.
 func TestAKeeperRecordNothingCanReadIsUndecidable(t *testing.T) {
 	t.Parallel()
 	ns, nc := listeningServer(t)
@@ -82,14 +65,12 @@ func TestAKeeperRecordNothingCanReadIsUndecidable(t *testing.T) {
 		undecidable(c.batch)
 	}
 
-	// Headers nothing can decode: a message the client library cannot
-	// write, published raw onto the key's subject.
+	// Headers nothing can decode, which the client library cannot write: raw.
 	publishRaw(t, ns, bucketSubjects(store.custody)+encodeKey("raw-headers"),
 		"NATS/1.0\r\nthis line names no header\r\n\r\n", `{"node":"data-z"}`)
 	undecidable("raw-headers")
 
-	// A record whose keeper reads is answered with it, whatever else it
-	// carries: only what decides is decoded.
+	// Only what decides is decoded: a readable keeper is answered.
 	for _, c := range []struct{ batch, value string }{
 		{"instant-retyped", `{"node":"data-z","at":1700000000}`},
 		{"instant-reformatted", `{"node":"data-z","at":"not-a-time"}`},
@@ -104,16 +85,14 @@ func TestAKeeperRecordNothingCanReadIsUndecidable(t *testing.T) {
 		}
 	}
 
-	// The bucket itself answers: a batch nobody planted is claimed and told
-	// to the next claimant, so what failed above was each record.
+	// The bucket itself answers, so what failed above was each record.
 	for _, node := range []string{"data-a", "data-b"} {
 		if keeper, err := store.ClaimCustody(ctx, "healthy", node); err != nil || keeper != "data-a" {
 			t.Fatalf("claim of a healthy batch by %s = (%q, %v), want data-a", node, keeper, err)
 		}
 	}
 
-	// And the remedy the contract names: the record removed, a claim
-	// creates it afresh.
+	// The contract's remedy: once removed, a claim creates the record afresh.
 	if err := store.custody.Delete(ctx, encodeKey("garbled")); err != nil {
 		t.Fatalf("remove the garbled record: %v", err)
 	}

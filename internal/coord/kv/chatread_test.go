@@ -17,8 +17,7 @@ import (
 )
 
 // chatReadFleet opens a fleet store on its own buckets with one person's
-// record already written: two cursors, so a record that was lost or replaced
-// is visible as cursors gone.
+// record of two cursors, so a lost or replaced record shows as cursors gone.
 func chatReadFleet(t *testing.T, handle string) (*FleetStore, *nats.Conn) {
 	t.Helper()
 	nc := embeddedNATS(t)
@@ -34,19 +33,18 @@ func chatReadFleet(t *testing.T, handle string) (*FleetStore, *nats.Conn) {
 // chatReadAt0 is the instant every case here writes at.
 var chatReadAt0 = time.Date(2026, 10, 8, 9, 0, 0, 0, time.UTC)
 
-// errWriteLost is a conditional write the leader REFUSED on a comparison —
-// another writer moved the record past the revision it named (10071) — as the
-// client hands it back through a settled bucket: the one refusal that reaches
-// this package's own code, since the in-flight answer is waited out first
-// (settle.go).
+// errWriteLost is the leader's decided refusal of a conditional write whose
+// revision another writer moved past (10071), as a settled bucket hands it
+// back: the one refusal this package's code sees, since the in-flight answer
+// is waited out first (settle.go).
 var errWriteLost = refusedAs(jetstream.JSErrCodeStreamWrongLastSequence)
 
 // A FORGET ACTS ON THE REVISION IT JUDGED, OR IT DOES NOT ACT.
 //
-// [FleetStore.purgeChatReadAt] is the rule [FleetStore.ForgetChatRead] is
-// built from, driven directly for [FleetStore.writeFollowAt]'s reason: the
-// interleaving opens inside the forget, between its read and its purge. What
-// it must never do is remove a record the caller never read.
+// [FleetStore.purgeChatReadAt], the rule [FleetStore.ForgetChatRead] is built
+// from, is driven directly (as [FleetStore.writeFollowAt] is) because the
+// interleaving opens inside the forget, between its read and its purge. It must
+// never remove a record the caller never read.
 func TestAChatReadPurgeBoundToAStaleRevisionDoesNotFire(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -94,13 +92,11 @@ func TestAChatReadPurgeBoundToAStaleRevisionDoesNotFire(t *testing.T) {
 
 // A SEAT FOUND BACK WHILE ITS RECORD WAS BEING FORGOTTEN KEEPS EVERY CURSOR.
 //
-// The whole forget, with the interleaving its condition exists for staged
-// inside it: a peer's sweep finds the seat back in the company and clears the
-// stamp after this call judged the record absent and before its purge. The
-// memory twin cannot stage that — it checks and removes under one mutex — so
-// without this case a purge that dropped its revision bound passes every
-// conformance case and removes, with no undo, the read state of a seat the
-// chart has just restored.
+// The whole forget, with a peer's sweep clearing the stamp (the seat is back)
+// after this call judged the record absent and before its purge. The memory
+// twin checks and removes under one mutex and cannot stage that, so without
+// this case a purge that dropped its revision bound passes every conformance
+// case and irreversibly removes a restored seat's read state.
 func TestAForgetOvertakenByAReturnKeepsTheRecord(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -156,11 +152,9 @@ func (k *returnedMidForget) Purge(ctx context.Context, key string, opts ...jetst
 
 // A CORRUPT READ RECORD RAISES RATHER THAN VANISHING FROM THE LISTING.
 //
-// [FleetStore.ChatReaders] is what the reconcile judges from, and a reader
-// dropped from it is one it never stamps and never forgets: the record stays
-// in a bucket nothing ages for the life of the deployment. The contract suite
-// cannot plant one — every write there goes through the merge — so it is
-// planted here, straight into the bucket.
+// The reconcile judges from [FleetStore.ChatReaders]; a reader dropped from it
+// is never stamped or forgotten and stays forever in a bucket nothing ages. The
+// contract suite writes only through the merge, so it is planted here.
 func TestAnUndecodableChatReadIsRaisedNotSkipped(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -180,8 +174,7 @@ func TestAnUndecodableChatReadIsRaisedNotSkipped(t *testing.T) {
 	if _, err := f.ChatRead(ctx, "broken"); err == nil {
 		t.Error("a corrupt record read back as somebody's read state")
 	}
-	// And the healthy one is still readable, so the failure is the record's
-	// rather than the bucket's.
+	// The healthy one still reads: the failure is the record's, not the bucket's.
 	if state, err := f.ChatRead(ctx, "reader"); err != nil || len(state.Cursors) != 2 {
 		t.Fatalf("reader: %v (err %v)", state.Cursors, err)
 	}
@@ -190,14 +183,11 @@ func TestAnUndecodableChatReadIsRaisedNotSkipped(t *testing.T) {
 // A WRITE WHOSE ANSWER WAS LOST IS MARKED AS ONE THAT MAY HAVE LANDED, AND NO
 // OTHER FAILURE IS.
 //
-// [FleetStore.AdvanceChatRead] reads before it writes, so its caller cannot
-// tell which call failed — and the two ask opposite things of a person: a
-// read that failed wrote nothing and may be called "not recorded", while a
-// put whose reply never came may have landed, and telling them otherwise is
-// a cleared badge reported as a failure. The put here LANDS and then loses its
-// answer, so the record shows exactly the write the error must not deny; the
-// cases beside it are the failures that wrote nothing, which must not carry
-// the mark, or every one of them would read as "it may have landed".
+// [FleetStore.AdvanceChatRead] reads before it writes, and its two failures
+// mean opposite things: a failed read wrote nothing ("not recorded"), while a
+// put whose reply never came may have landed. The put here LANDS and then loses
+// its answer, so the record shows the write the error must not deny; the cases
+// beside it wrote nothing and must not carry the mark.
 func TestAReadStateWriteWhoseAnswerWasLostMayHaveLanded(t *testing.T) {
 	t.Parallel()
 
@@ -266,12 +256,11 @@ func TestAReadStateWriteWhoseAnswerWasLostMayHaveLanded(t *testing.T) {
 	})
 }
 
-// A FIRST WRITE IS A CREATE, AND A CREATE READS BETWEEN ITS WRITES — so of its
-// failures, only its own write going unanswered may have landed. A create that
-// was refused and then could not read the key again, or was refused on every
-// round, made no write the broker took: marking either ErrWriteUnknown has a
-// person told that a flush which did not land "may have been recorded", which
-// the ChatReads contract promises an unmarked error is not.
+// A FIRST WRITE IS A CREATE, AND A CREATE READS BETWEEN ITS WRITES — so only
+// its own write going unanswered may have landed. A create refused and then
+// unable to re-read the key, or refused every round, wrote nothing; marking it
+// ErrWriteUnknown tells a person a flush that did not land "may have been
+// recorded", against the ChatReads contract.
 func TestAFirstReadStateWriteIsUnknownOnlyWhenItsOwnWriteWasUnanswered(t *testing.T) {
 	t.Parallel()
 	flush := coord.ChatReadDelta{Cursors: map[string]int64{"room-c": 11}, At: chatReadAt0}
@@ -345,10 +334,9 @@ func TestAFirstReadStateWriteIsUnknownOnlyWhenItsOwnWriteWasUnanswered(t *testin
 	})
 }
 
-// refusedCreate is a bucket whose every write the leader refuses as one a peer
-// beat ([errWriteLost]), reaching no broker. When blind is set, each refusal
-// also cancels the context the write was made under, so the create's re-read
-// of the key fails after it.
+// refusedCreate is a bucket whose every write is refused as one a peer beat
+// ([errWriteLost]), reaching no broker. A set blind also cancels the write's
+// context, so the create's re-read of the key fails after it.
 type refusedCreate struct {
 	jetstream.KeyValue
 	blind context.CancelFunc
@@ -420,21 +408,14 @@ func (k *answerLost) Purge(ctx context.Context, key string, opts ...jetstream.KV
 // A FLUSH THAT LOSES EVERY ATTEMPT IS UNAVAILABLE — AND IT SAYS NOTHING
 // LANDED.
 //
-// Every update is refused as one another writer beat ([errWriteLost], the
-// leader's decided refusal), writing nothing. That refusal is a LOST RACE, so
-// the flush races again after a window rather than answering an outage at
-// once ([lostUpdateRace]), up to the bound every fleet key shares
-// ([fleetCASAttempts]). Then it is unavailable, naming the contention — and
-// it is NOT marked [coord.ErrWriteUnknown]: every write it made was answered
-// and refused, so a person told "may have been recorded" would be told
-// something false, which is what the [coord.ChatReads] contract promises an
-// unmarked error never means.
+// Every update is refused as one another writer beat ([errWriteLost]): a LOST
+// RACE ([lostUpdateRace]), so the flush retries after a window up to
+// [fleetCASAttempts], then answers unavailable naming the contention — never
+// [coord.ErrWriteUnknown], since every write was answered and refused
+// ([coord.ChatReads] contract).
 //
-// THE WINDOWS BETWEEN ATTEMPTS ARE THE CASE'S, each over the moment it is
-// asked for ([roundTrip.after]) and counted: on the real clock this flush sat
-// out about two hundred and fifty of them, eighty seconds of CI, on its way
-// to the answer that is its subject. That it waits is held here, by the
-// count; how long each window is, by casline's own suite (casWindow).
+// THE WINDOWS ARE THE CASE'S ([roundTrip.after]), over at once and counted:
+// that it waits is held here, how long by casline's own suite (casWindow).
 func TestAFlushThatLosesEveryAttemptSaysNothingLanded(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -463,11 +444,9 @@ func TestAFlushThatLosesEveryAttemptSaysNothingLanded(t *testing.T) {
 		t.Fatalf("the flush was refused %d time(s), want every one of its %d attempts: "+
 			"a write another writer beat is a lost race, not an outage", n, fleetCASAttempts)
 	}
-	// A window before every attempt after the first, at the first level up,
-	// once the bucket's round trip has the two samples a window is counted
-	// in (roundTrip): the fixture's own writes may have given it them, or
-	// the flush's first two attempts do — a window before every attempt but
-	// the first, or but the first two, and never fewer.
+	// A window before every attempt once the round trip has its two samples
+	// (roundTrip): the fixture's writes may have seeded them, or the flush's
+	// first two attempts do — so every attempt but the first, or the first two.
 	if n := waits.Load(); n < fleetCASAttempts-2 || n > fleetCASAttempts-1 {
 		t.Fatalf("the flush waited %d time(s) between its %d attempts, want a window before each "+
 			"after the first, or the first two while the round trip seeds: %d or %d", n,
@@ -495,16 +474,13 @@ func (k *lostForever) Update(context.Context, string, []byte, uint64) (uint64, e
 
 // A FLUSH THE LEADER NEVER DECIDED MAY HAVE LANDED.
 //
-// The other side of the case above. A replicated bucket's leader answers a
-// write to a record that already has one in flight with neither a landing nor
-// a refusal, and the settled bucket waits that answer out for the write's own
-// budget (settle.go). A write still undecided at the end was sent and is
-// unanswered — the flush ahead of it may be this caller's own — so it is
-// marked [coord.ErrWriteUnknown], and never read as a race another tab won,
-// which would send the flush round again over a record it may already have
-// moved, nor as a refusal, which would tell a person it did not land. Every
-// answer here is the in-flight one, under a settled handle with a short
-// budget, so the write is undecided by construction.
+// The other side of the case above. A leader answers a write to a record with
+// one already in flight with neither a landing nor a refusal, and the settled
+// bucket waits that out for the write's budget (settle.go). A write still
+// undecided was sent and is unanswered, so it is [coord.ErrWriteUnknown] —
+// not a lost race, which would retry over a record it may have moved, nor a
+// refusal, which would say it did not land. Every answer here is the in-flight
+// one under a short budget, so the write is undecided by construction.
 func TestAFlushTheLeaderNeverDecidedMayHaveLanded(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -548,17 +524,14 @@ func (k *inFlightForever) Update(context.Context, string, []byte, uint64) (uint6
 // A READ-STATE WATCH'S FIRST ANSWER IS CERTIFIED, AND AN OLDER REVISION AFTER
 // IT IS NOT A CHANGE.
 //
-// The answer is what a node's hub re-syncs every connected tab from after it
-// watches again, so a record missing from it is a tab left on a state its
-// person has moved past. The client ends its initial values on a count guess,
-// and here the pass ends before delivering either of two records, as such a
-// guess can: the answer must still hold both, each as the leader holds it —
-// the one flushed again with its newer cursor.
+// A node's hub re-syncs every tab from the answer after watching again, so a
+// record missing from it leaves a tab stale. The client ends its initial values
+// on a count guess; here that ends the pass before either record, and the answer
+// must still hold both as the leader does — founder with its newer cursor.
 //
-// The consumer then delivers what a pass behind the leader would: the record
-// as it stood BEFORE that flush. That is not a change, and sent as one it
-// would push an older state onto every tab of that seat. A flush made after
-// the answer is one, and is the next update.
+// The consumer then delivers founder as it stood BEFORE that flush, as a pass
+// behind the leader would: not a change, and sent as one it would push an older
+// state onto that seat's tabs. A flush after the answer is the next update.
 func TestAChatReadWatchsFirstAnswerIsCertifiedAndNotUndoneByAnOlderRevision(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(t.Context(), 4*passIdle)

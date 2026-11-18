@@ -27,29 +27,18 @@ import (
 )
 
 // slowLinkRate is the pace the case below holds a leaf's link to, towards its
-// member: 96 KiB a second, about three times the slowest a link is allowed to
-// be ([objstore.MiBPace]), so a listing near its bound takes about nine
-// seconds to cross — past the five seconds a write whose caller set no
-// deadline was given whatever it carried, and far inside the time its bytes
-// are given at the slowest pace allowed.
+// member: 96 KiB a second, about three times the slowest allowed
+// ([objstore.MiBPace]), so a listing near its bound takes about nine seconds
+// to cross: past the client's five-second default, far inside what its bytes
+// are given at the slowest pace.
 const slowLinkRate = 96 << 10
 
 // A LISTING ACROSS A LEAF'S LINK IS WAITED FOR AS LONG AS ITS BYTES TAKE TO
-// CROSS IT.
-//
-// A node without the `data` role reaches the coordination buckets across its
-// leaf link, and every node with seats writes its MCP listings there: a record
-// of up to coord.MaxMCPListingBytes, which a link at the slowest pace the
-// engine allows carries in about 26 seconds. Written under the fifteen seconds
-// of the beat that wrote it, a listing at its bound failed on any link below
-// about 60 KiB a second as the store being unavailable while its bytes were
-// still on the link, and the next beat sent it whole again behind them — the
-// queue's defect of crewlet/crewlet#1005 in the coordination store. A listing
-// is now written with no deadline of its caller's, and a write with none was
-// given the client's five seconds alone, whatever it carried. Here the leaf's
-// link carries 96 KiB a second towards its member, so a listing near the
-// bound takes about nine seconds, and its caller sets no deadline: it is
-// written, and read back whole.
+// CROSS IT (package doc, "A write across a link waits as long as its bytes
+// take to cross"). A listing is written with no deadline of its caller's, and
+// one of up to coord.MaxMCPListingBytes takes about 26 seconds at the slowest
+// pace allowed. Here one near the bound crosses the leaf's link in about nine
+// seconds, and is written and read back whole.
 //
 // Mutation: drop the crossing from a settled bucket's budget, or open the
 // store as though its connection crossed no link, and the listing fails at
@@ -166,13 +155,11 @@ func (d *deadlined) Purge(ctx context.Context, _ string, _ ...jetstream.KVDelete
 
 // A COORDINATION WRITE IS GIVEN ITS BYTES' CROSSING ONLY ACROSS A LINK.
 //
-// Every write of a settled bucket whose caller set no deadline waits the
-// request term, and where the store reaches its buckets across a link the
-// crossing of what the write carries — its key, its value, the most header a
-// write of the client's carries — for every send the client may make of it
-// inside the one context it is handed, at the object store's floor. A store
-// in the node's own process crosses nothing, and its writes keep the request
-// term alone. A caller's own deadline is every write's as it is. Exact, in a
+// A settled bucket's write whose caller set no deadline waits the request
+// term plus, across a link, the crossing of its key, its value and the most
+// header a client write carries, for every send the client may make inside
+// its one context, at the object store's floor. In process it keeps the
+// request term alone; a caller's own deadline is kept as it is. Exact, in a
 // bubble.
 //
 // Mutation: drop the crossing from a settled bucket's budget, and every write
@@ -269,14 +256,12 @@ func (r *refusingInFlight) Bucket() string { return "refusing" }
 // A SETTLED WRITE MET BY IN-FLIGHT ANSWERS FOR EVER ENDS UNDECIDED AT ITS
 // BOUND, every call of it waiting that one bound.
 //
-// The client sends a write nobody heard again inside the one context it is
-// handed, so each call of it is given the budget's whole bound: the request
-// term and, across a link, a crossing for each of the sends a write may make.
-// An attempt after an in-flight answer is another call within that same
-// bound, never a bound of its own: counted per attempt with no end, a leader
-// answering in flight at once pushed a write's end out faster than time
-// passed, and it never ended undecided. Here every call is answered in flight
-// at once, and the write ends Undecided at its bound. Exact, in a bubble.
+// The client resends a write inside the one context it is handed, so each
+// call gets the budget's whole bound: the request term and, across a link, a
+// crossing per send. An attempt after an in-flight answer is another call
+// within that bound, never a bound of its own: counted per attempt, a leader
+// answering in flight at once pushes the end out faster than time passes, and
+// the write never ends. Exact, in a bubble.
 //
 // Mutation: give each attempt a bound of its own, or let the bound grow with
 // the attempts, and an attempt waits past it.
@@ -316,17 +301,15 @@ func TestASettledWriteMetByInFlightAnswersForeverEndsUndecidedAtItsBound(t *test
 // A STORE IS TOLD HOW ITS CONNECTION REACHES ITS BUCKETS, and refuses to open
 // without being told.
 //
-// Nothing a store is handed says whether its connection crosses a link, and a
-// store that guessed "in process" for a leaf's connection would hold a large
-// write to the request term alone. So each store's configuration states it,
-// and one that does not — or states a reach nothing knows — is refused,
-// naming the field of the configuration its caller built, exactly as the
-// error opens: the lease store's "Config.Reach" is also the tail of
-// "EpochsConfig.Reach", the configuration it derives and checks after its own.
+// Nothing a store is handed says whether its connection crosses a link, and
+// guessing "in process" for a leaf would hold a large write to the request
+// term alone. A configuration stating no reach, or one nothing knows, is
+// refused naming the field its caller built, as the error opens: the lease
+// store's "Config.Reach" is also the tail of "EpochsConfig.Reach", which it
+// derives and checks after its own.
 //
-// Mutation: open a store whose configuration states no reach, and its row
-// goes red; drop the lease store's own check, and the refusal names the
-// epochs' configuration, which its caller never built.
+// Mutation: open a store stating no reach, and its row goes red; drop the
+// lease store's own check, and the refusal names EpochsConfig.Reach instead.
 func TestAStoreRefusesToOpenWithoutItsReach(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -364,23 +347,15 @@ func TestAStoreRefusesToOpenWithoutItsReach(t *testing.T) {
 // A RUN'S VALUE IS GIVEN ITS CROSSING BY WHOEVER BOUNDS ITS CHANGE, AS THE
 // STORE GIVES IT, AND ONLY ACROSS A LINK.
 //
-// A caller that bounds a change of a run's row for a reason of its own adds
-// the time a value at what one key holds takes to cross its node's connection
-// (coord.SandboxRuns.ValueCrossing), since the store keeps a caller's deadline
-// as it is — and every change is a read and a write. So that figure is what
-// the store gives such a change itself: the read's reply crossing, read off
-// the term a read of the runs bucket is given beyond the read term, and the
-// write's crossings, read off a settled bucket's own budget for a put of a
-// value at what one key holds under the longest key a run's write is sent
-// under beyond the request term — both at the slowest pace a link is allowed,
-// the contract's figure (coord.MaxValueCrossing) — and none on a member's own
-// connection, where nothing crosses. Exact, in a bubble.
+// The store keeps a caller's deadline as it is, so a caller bounding a run's
+// change (a read and a write) adds coord.SandboxRuns.ValueCrossing: the runs
+// read term past the read term plus a settled put of a full value under the
+// longest run key past the request term, at the slowest pace allowed
+// (coord.MaxValueCrossing). In process it is zero, or a data node's every
+// change waits minutes past its reason. Exact, in a bubble.
 //
-// Mutation: give an in-process store a crossing, and every budget a data node
-// holds a row's change to waits thirteen minutes past its reason; drop the
-// read, the key or a send from the figure, count a send more in the budget,
-// or move the contract's figure, and the figure and the store's own read and
-// budget part.
+// Mutation: cross in process, drop the read, key or a send from the figure,
+// count a send more, or move coord.MaxValueCrossing, and the figures part.
 func TestARunsValueIsGivenItsCrossingOnlyAcrossALink(t *testing.T) {
 	t.Parallel()
 	turnID := uuid.Must(uuid.NewV7()).String()
@@ -425,33 +400,20 @@ func TestARunsValueIsGivenItsCrossingOnlyAcrossALink(t *testing.T) {
 // A READ OF A RUN'S VALUE IS GIVEN THE CROSSING OF A REPLY AT ITS BOUND, AND
 // NONE OF ITS HANDLING — AND NO OTHER BUCKET'S READ IS GIVEN EITHER.
 //
-// Every change of a run's record or of a part beside it begins with the
-// stream leader's read of the value, whose reply carries it base64-encoded in
-// JSON: eight mebibytes at its bound. Held to the read term and the lookup
-// ceiling, that read was asked again at two seconds and at four while the
-// first reply was still crossing — each another whole reply on the link — and
-// across a link at the slowest pace allowed, which carries such a reply in
-// four minutes, it was never answered inside the thirty-second ceiling, so no
-// value past about 768 KiB could be read, nor changed (crewlet/crewlet#1149).
-// So the runs bucket's reads are given the crossing of a reply at its bound
-// across a link — and on a member's own connection none, never the reply's
-// handling: a writer waits on every one of these reads within a reason of its
-// own, five seconds at the shortest, and a request a member dropped is asked
-// again at two seconds, inside it, where eight seconds of handling would ask
-// it again only after it (TestAMembersChangeOfARunsValueAsksItsReadAgainInsideItsReason).
-// A bucket of small values keeps the read term. Read off a store opened as the
-// engine opens one.
+// A run's change starts with the leader's read, its reply 8 MiB at the bound:
+// four minutes at the slowest link pace, re-asked mid-crossing, never answered
+// in the bare read term. So it gets that crossing across a link, none in
+// process, and never the handling, which would push a re-ask past a 5 s reason
+// (TestAMembersChangeOfARunsValueAsksItsReadAgainInsideItsReason).
 //
-// Mutation: read the runs bucket as any other, open it without declaring its
-// values large, drop the crossing from its reads, or give them the reply's
-// handling, and its row goes red; declare every bucket large, and the
-// claims' does.
+// Mutation: read the runs bucket as any other, skip declaring it large, drop
+// the crossing or add the handling, and its row goes red; declare every bucket
+// large, and the claims' does.
 func TestARunsValueIsReadGivenTheCrossingOfAReplyAtItsBoundAndNoHandling(t *testing.T) {
 	t.Parallel()
-	// THE FIGURES STATED, not derived again: a value at its bound with the most
-	// header a write leaves on it, base64-encoded in its reply beside the
-	// reply's envelope, is a reply of exactly eight mebibytes — 240 seconds
-	// crossing at thirty a mebibyte.
+	// THE FIGURES STATED, not derived again: a full value with the most header,
+	// base64-encoded in its reply's envelope, is exactly eight mebibytes: 240
+	// seconds at thirty a mebibyte.
 	if reply := jsapi.ReplyBytes(coord.MaxValueBytes + kvHeaderBytes); reply != 8<<20 {
 		t.Fatalf("the reply to a read of a run's value at its bound is %d bytes, want eight mebibytes", reply)
 	}
@@ -487,24 +449,15 @@ func TestARunsValueIsReadGivenTheCrossingOfAReplyAtItsBoundAndNoHandling(t *test
 // A MEMBER'S CHANGE OF A RUN'S VALUE ASKS ITS READ AGAIN INSIDE THE SHORTEST
 // REASON IT IS BOUNDED BY.
 //
-// Every change of a run's record is a read-decide-write, and in the store's
-// own process its caller bounds it by its reason alone: five seconds at the
-// shortest — a resumed turn's record of what it carries (internal/sandbox's
-// resumeCarryRecordBudget), the session a job's box started and a job's first
-// pull of its notes (internal/engine's sessionStartRecordBudget and the
-// steer's pull mark). A member that still believes in a leader its group has
-// just lost drops a read without a word, and the new leader answers the one
-// asked again two seconds later. Read at a term of nine seconds — the read
-// term and the eight a reply at the bound is given to be handled — the read
-// would be asked once in those five, and every such change across an election
-// refused, its record unwritten, for a read the new leader would have
-// answered. Here nobody answers the reads, and the change, bounded by five
-// seconds, asks at none, two and four. Exact, in a bubble: the change runs in
-// one and the broker outside it, and its requests are counted behind a fence
-// on its own connection ([jsapitest.Held.Fence]).
+// In process a change is bounded by its caller's reason alone: five seconds at
+// the shortest (internal/sandbox's resumeCarryRecordBudget, internal/engine's
+// sessionStartRecordBudget and the steer's pull mark). A member behind a lost
+// leader drops a read silently and the new leader answers the re-ask two
+// seconds later, so a nine-second term (read term plus a reply's handling)
+// would ask once and refuse the change. Unanswered here, it asks at none, two
+// and four ([jsapitest.Held.Fence] counts them). Exact, in a bubble.
 //
-// Mutation: give the runs bucket's reads the handling of a reply at its bound
-// on a member's own connection, and the change asks once.
+// Mutation: give the runs reads a reply's handling in process; it asks once.
 func TestAMembersChangeOfARunsValueAsksItsReadAgainInsideItsReason(t *testing.T) {
 	t.Parallel()
 	const reason = 5 * time.Second

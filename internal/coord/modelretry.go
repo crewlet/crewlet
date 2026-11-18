@@ -8,40 +8,18 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// A MODEL RETRY is a person's request that every node stop sitting a model
-// entry out: "retry now" or "clear" on the Models page.
+// A model retry is a person's request that every node stop sitting a model
+// entry out ("retry now" or "clear" on the Models page). The whole company
+// has to agree on it: a sit-out is each node's own memory of a vendor's limit
+// (internal/providers/llm/harness's Plan), so it is one record per entry key
+// in the coordination store, watched by every node (internal/engine/modelretry.go).
 //
-// # Who has to agree on it
-//
-// The whole company, now. A sit-out is each node's own memory of a vendor's
-// limit (internal/providers/llm/harness's Plan), so a request served by one
-// node changes nothing on another unless every node hears it. It is one record
-// per entry key in the coordination store, and every node keeps a watched copy
-// of all of them (internal/engine/modelretry.go), as it does of seat pauses.
-//
-// # A stamp, not a command
-//
-// The record carries the instant it was asked for, and a node clears the
-// windows opened by reports dated BEFORE it. A report after the request stands:
-// the vendor said the limit is still there after the person asked. That makes
-// the rule order-free and idempotent: a node that hears the record twice, late,
-// or after a restart clears exactly what it would have cleared on time, and a
-// record left standing for a week clears nothing that was reported since. So
-// the record needs no consumer bookkeeping and no expiry; the apply that
-// removes the entry deletes it.
-//
-// # No age
-//
-// It lives in the positions register, the bucket with no retention, for the
-// reason above: it ages out of meaning on its own, and an age would add
-// nothing but a second clock.
-//
-// # The latest request wins
-//
-// Two people retrying one entry at once both want the same thing, and the
-// later stamp clears a superset of what the earlier one does. So a write keeps
-// whichever stamp is LATER ([ModelRetries.PutModelRetry]): a request that
-// lands after a later one changes nothing, and nobody's retry is taken back.
+// A STAMP, NOT A COMMAND: a node clears the windows opened by reports dated
+// BEFORE it, and a later report stands. That is order-free and idempotent, so
+// the record needs no consumer bookkeeping and no age (it lives in the
+// positions register); the apply that removes the entry deletes it. A write
+// keeps the LATER stamp ([ModelRetries.PutModelRetry]), whose clear is a
+// superset, so nobody's retry is taken back.
 
 // ModelRetryMode is how a retry was asked for.
 type ModelRetryMode string
@@ -134,10 +112,9 @@ type ModelRetryUpdate struct {
 
 // ModelRetries is the fleet's record of the retries people asked for.
 //
-// Every read RAISES rather than answering empty when the store cannot be read,
-// though the safe direction is milder than a pause's: a retry a node missed is
-// a sit-out that runs to its own end, which is what happens with no retry at
-// all. Raising keeps a reader from confusing the two.
+// Every read RAISES rather than answering empty when the store cannot be
+// read: a missed retry only lets a sit-out run to its end, but raising keeps
+// a reader from confusing that with no retry at all.
 type ModelRetries interface {
 	// ModelRetry reads one entry's retry.
 	ModelRetry(ctx context.Context, entry string) (ModelRetry, bool, error)

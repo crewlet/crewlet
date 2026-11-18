@@ -13,16 +13,11 @@ import (
 
 // THE TABLE, THE RATIONALE AND EVERY COUNT IN THE FILE ARE ONE ASSERTION.
 //
-// Three things in this file say how many buckets there are, and they drifted:
-// the `open` table had grown, the "# Why ELEVEN buckets" header had not, and a
-// third comment on the replica count said "all eleven" — so a reader learning
-// the estate from the doc learned a number the code disagreed with, and the
-// rationale that made each bucket's retention a DECISION was missing entries
-// for four of them.
-//
-// One test rather than three, because the failure is always the same failure:
-// a bucket was added and the prose was not. It fails NAMING which of the three
-// is behind.
+// fleet.go says how many buckets there are three ways (the `open` table, the
+// rationale that makes each bucket's retention a DECISION, and any comment
+// stating a count) and they drift whenever a bucket is added and the prose is
+// not. One test, because it is always that one failure, and it fails NAMING
+// which of the three is behind.
 func TestEveryBucketHasALifetimeClass(t *testing.T) {
 	t.Parallel()
 	src, err := os.ReadFile("fleet.go")
@@ -54,9 +49,8 @@ func TestEveryBucketHasALifetimeClass(t *testing.T) {
 		}
 	}
 
-	// (3) NO COMMENT IN THE FILE STATES A COUNT THAT DISAGREES. This is the
-	// half that caught ":123" — a sentence about the replica count that
-	// happened to carry a bucket total.
+	// (3) NO COMMENT IN THE FILE STATES A COUNT THAT DISAGREES, wherever it
+	// sits: a sentence about the replica count can carry a bucket total too.
 	words := map[string]int{
 		"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
 		"seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
@@ -103,19 +97,15 @@ func section(text, start, end string) (string, bool) {
 
 // A BUCKET THAT ALREADY EXISTS IS ADOPTED, AND THE READ-BACK SAYS SO.
 //
-// This is the fact every `bucket_retention_mismatch` line is computed from,
-// and the reason the line exists at all: create-else-observe cannot apply a
-// changed retention, so a node configured for one age against a bucket a peer
-// made at another RUNS AT THE PEER'S — silently, in every direction that
-// matters. A ledger bucket adopted at a peer's shorter age forgets a
-// completion a redelivery can still reach, and nothing about the write, the
-// read or the caller says so.
+// Every `bucket_retention_mismatch` line is computed from this fact:
+// create-else-observe cannot apply a changed retention, so a node configured
+// for one age against a bucket a peer made at another RUNS AT THE PEER'S,
+// silently; a ledger bucket at a shorter age forgets a completion a
+// redelivery can still reach.
 //
-// Both halves are asserted because they are two different failures: the age in
-// force coming back as the one this node ASKED for would make every mismatch
-// invisible, and openBucket rewriting the bucket would be the silent overwrite
-// this package removed everywhere else — decided by boot order, by the node
-// that came up last.
+// Two halves, two failures: an age read back as the one this node ASKED for
+// hides every mismatch, and openBucket rewriting the bucket is a silent
+// overwrite decided by boot order.
 func TestAnAdoptedBucketKeepsItsOwnAgeAndReportsIt(t *testing.T) {
 	t.Parallel()
 	js := jsOf(embeddedNATS(t))

@@ -16,12 +16,10 @@ import (
 
 // ---- model retries, device sign-ins and model checks -------------------- //
 
-// Each is one record per model entry, filed in the positions register under
-// a class of its own and keyed by the entry's key: see internal/coord's
-// modelretry.go, devicesignin.go and modelcheck.go for why that bucket, which
-// has no age. They share every verb but their decoding, so the verbs are
-// written once here, over [entryClass], rather than once a class beside the
-// seat pauses' own.
+// Each is one record per model entry, a positions-register class with no age
+// (internal/coord's modelretry.go, devicesignin.go and modelcheck.go say why).
+// They differ only in decoding, so their verbs are written once, over
+// [entryClass].
 
 // entryClass is one record class keyed by a model entry: how its keys are
 // spelled and read back, and how its records are encoded.
@@ -112,8 +110,7 @@ func (c entryClass[T]) read(ctx context.Context, f *FleetStore, entry string) (T
 }
 
 // list reads every record of the class, ordered by entry key. A decode failure
-// is RAISED, as the seat pauses' listing raises it; a key naming no entry is
-// skipped, since this build files nothing under one.
+// is RAISED; a key naming no entry is skipped, as this build files none.
 func (c entryClass[T]) list(ctx context.Context, f *FleetStore) ([]T, error) {
 	type row struct {
 		entry string
@@ -203,10 +200,10 @@ func (c entryClass[T]) remove(ctx context.Context, f *FleetStore, entry string, 
 	}
 }
 
-// watchEntries streams every record, the marker, then every change: the certified
-// first answer and the revision filter of [FleetStore.WatchSeatPauses], for
-// the reasons it gives. deliver builds one update: the record (nil on a
-// removal) and its entry, or the marker.
+// watchEntries streams every record, the marker, then every change, with
+// [FleetStore.WatchSeatPauses]'s certified first answer and revision filter.
+// deliver builds one update: the record (nil on a removal) and its entry, or
+// the marker.
 func watchEntries[T, U any](ctx context.Context, f *FleetStore, c entryClass[T],
 	deliver func(v *T, entry string, current bool) U) (<-chan U, error) {
 
@@ -300,8 +297,7 @@ func (f *FleetStore) ListModelRetries(ctx context.Context) ([]coord.ModelRetry, 
 // PutModelRetry records a retry, keeping the later stamp.
 //
 // A READ, THEN A CREATE OR AN UPDATE AT THE VERSION READ, retried on a lost
-// race: two requests landing together each either win or find a stamp at
-// least as late as their own, so no request that was later is overwritten.
+// race, so a later stamp is never overwritten by an earlier one.
 func (f *FleetStore) PutModelRetry(ctx context.Context, r coord.ModelRetry) (coord.ModelRetry, error) {
 	if err := r.Validate(); err != nil {
 		return coord.ModelRetry{}, err
@@ -331,10 +327,9 @@ func (f *FleetStore) PutModelRetry(ctx context.Context, r coord.ModelRetry) (coo
 	return coord.ModelRetry{}, contended("PutModelRetry", r.Key)
 }
 
-// maxRetryRounds bounds [FleetStore.PutModelRetry]'s compare-and-set: a person's
-// gesture contends with at most the handful of other people retrying the same
-// entry at the same moment, so eight lost rounds is a store that is not
-// settling rather than a busy key.
+// maxRetryRounds bounds [FleetStore.PutModelRetry]'s compare-and-set: a
+// person's gesture contends with at most a handful of others on the same
+// entry, so eight lost rounds is a store not settling, not a busy key.
 const maxRetryRounds = 8
 
 // DeleteModelRetry removes an entry's retry at a version.

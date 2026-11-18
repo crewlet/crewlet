@@ -64,18 +64,11 @@ func refusedAs(code jetstream.ErrorCode) error {
 }
 
 // A CONDITIONAL WRITE IS ANSWERED BY WHAT THE LEADER DECIDED, NEVER BY ITS
-// "STILL IN FLIGHT".
-//
-// A replicated stream's leader refuses a conditional write with 10164 while
-// another write to the subject is still in flight — including one that has
-// already landed and been acknowledged, this caller's own, whose mark the
-// leader clears only after it acks. The client reports that as a revision
-// mismatch, the same as the decided refusal, and under load it was: a removal
-// at the revision its caller had just read was refused, and a charge spent its
-// sixteen compare-and-set rounds on refusals no other writer had caused.
-//
-// Staged rather than raced, because the window is a few hundred microseconds
-// on an idle machine and a race reproduces it only under load.
+// "STILL IN FLIGHT". A replicated stream's leader refuses a conditional write
+// with 10164 while another write to the subject is in flight, this caller's
+// own acknowledged one included, and the client reports that as the same
+// revision mismatch as a decided refusal. Staged rather than raced: the window
+// is a few hundred microseconds on an idle machine.
 //
 // Mutation: make [settledBucket.settle] hand back the first answer, and the
 // write that landed reads as lost, the decided refusal is unchanged, and the
@@ -132,12 +125,9 @@ func TestAConditionalWriteIsAnsweredByWhatTheLeaderDecided(t *testing.T) {
 		}
 	})
 
-	// The leader's in-flight answer is a REPLICATED stream's, so nothing a
-	// single server runs ever meets it — which is what made a call site
-	// that forgot to settle invisible. Every bucket the stores open is
-	// wrapped where it is opened; this holds that, over EVERY bucket field
-	// the fleet store has rather than a list of them, so a bucket added
-	// later is held without anybody remembering to name it here.
+	// The in-flight answer is a REPLICATED stream's, so no single server
+	// shows a call site that forgot to settle. This walks EVERY bucket field
+	// the fleet store has, not a list, so a bucket added later is held too.
 	t.Run("every bucket a store opens is settled", func(t *testing.T) {
 		t.Parallel()
 		nc := embeddedNATS(t)
@@ -177,12 +167,9 @@ func TestAConditionalWriteIsAnsweredByWhatTheLeaderDecided(t *testing.T) {
 	})
 }
 
-// A CREATE WAITS THE IN-FLIGHT ANSWER OUT TOO.
-//
-// [createKey] is a conditional publish at revision zero, and read as a refusal
-// the in-flight answer is a key that exists: a create race over a just-removed
-// record then had no winner. Through a settled bucket the create is retried
-// until the leader decides it, and lands.
+// A CREATE WAITS THE IN-FLIGHT ANSWER OUT TOO: [createKey] is a conditional
+// publish at revision zero, and the in-flight answer read as a refusal is a
+// key that exists, leaving a create race over a just-removed record no winner.
 func TestACreateWaitsOutTheLeadersInFlightAnswer(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

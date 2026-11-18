@@ -48,15 +48,13 @@ func (b *faultyBucket) Update(ctx context.Context, key string, value []byte, rev
 // A CLAIM THAT FAILS PART WAY GIVES ITS RECORD BACK, SO THE RESOURCE IS
 // CLAIMABLE AT ONCE — BY ITS OWNER AND BY A PEER — AND FENCING STAYS EXACT.
 //
-// A claim is three writes: the record in the claiming state, the counter, and
-// the token committed into the record. A failure after the first used to leave
-// the record claiming until its TTL, which every peer reads as held and the
-// owner's own retries read as a sibling one round trip from committing — so
-// the owner spun through every compare-and-swap round and answered UNKNOWN for
-// a whole TTL, and the resource was dark. Each case fails one write, some
-// after letting it land, and then claims again at once: the claim must be
-// granted, at an epoch above any token the failed call could have taken, and a
-// tenure the failed call did commit must survive it.
+// A claim is three writes (package doc, "A claim is three writes, and the order
+// carries the invariant"). A record left claiming after a failure reads as held
+// to every peer and as a sibling one round trip from committing to the owner's
+// retries, so the resource would be dark for a whole TTL. Each case fails one
+// write, some after letting it land, then claims again at once: the claim must
+// be granted, at an epoch above any token the failed call could have taken, and
+// a tenure the failed call did commit must survive it.
 func TestAClaimThatFailsPartWayGivesItsRecordBack(t *testing.T) {
 	t.Parallel()
 	// Which write a case fails, and whether it lands first.
@@ -86,16 +84,16 @@ func TestAClaimThatFailsPartWayGivesItsRecordBack(t *testing.T) {
 		// The counter moved and nobody was told: that token is a gap, and
 		// the next tenure is fenced above it.
 		{name: "the counter moved and its answer was lost", fails: theEpoch, lands: true, ownerEpoch: 2},
-		// The caller gave up mid-claim. The give-back is a teardown, and
-		// one run on the dead context would do nothing at all.
+		// The caller gave up mid-claim: the give-back is a teardown, which
+		// would do nothing on the dead context.
 		{name: "the caller gave up during the epoch step", fails: theEpoch, cancel: true, ownerEpoch: 1},
 		// The claiming record landed and the claim was never told: only
 		// the call's own claim can say the record is its.
 		{name: "the claiming record landed unannounced", fails: theClaim, lands: true, ownerEpoch: 1},
 		{name: "the commit never landed", fails: theCommit, ownerEpoch: 2},
-		// The commit landed and its answer was lost: that is a TENURE,
-		// and giving it back would hand a peer a resource its owner may
-		// already be acting on. The owner's next claim renews it.
+		// The commit landed and its answer was lost: a TENURE, which a
+		// give-back would hand to a peer while its owner may be acting on
+		// it. The owner's next claim renews it.
 		{name: "the commit landed unannounced", fails: theCommit, lands: true, ownerEpoch: 1, peerHeld: true},
 	}
 	for _, tc := range cases {
@@ -116,8 +114,7 @@ func TestAClaimThatFailsPartWayGivesItsRecordBack(t *testing.T) {
 					}
 					armed = false
 					if tc.cancel {
-						// The caller's context ends here, and the write
-						// fails because it did.
+						// The write fails because the caller's context ends.
 						cancel()
 					}
 					return true, tc.lands

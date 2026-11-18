@@ -8,34 +8,16 @@ import (
 
 // How a name becomes a NATS KV key, and why there are two shapes of it.
 //
-// A key must match [-/_=.A-Za-z0-9]+ because it becomes a subject token path
-// under $KV.<bucket>, and the names this engine keys on carry bytes that are
-// not in that set — a colon in a resource, a pipe in a ledger key — and dots,
-// which are in it but would split one name into two tokens: a node id may
-// carry one, and a Slack thread's id always does. So a name is escaped on the
-// way in and unescaped on the way out, by [coord.DocumentKey] and
-// [coord.DocumentSegments] — the ONE grammar, shared with the fleet buckets,
-// rather than a second copy of the same rule here. It was a second copy once,
-// byte-identical to the first, which is the arrangement that ends with the two
-// disagreeing.
-//
-// The two shapes differ only in how many segments the name has:
-//
-//   - [encodeKey] is for a bucket whose keys are ONE opaque name — a budget
-//     scope, a node id, a secret name, a turn id. Nothing filters inside such
-//     a bucket, because the bucket IS the class.
-//
-//   - [encodeResource] is for the LEASE and EPOCH buckets, whose keys name
-//     resources of several classes at once. A resource's segments become the
-//     key's segments, so its class is a subject token of its own and a whole
-//     class is a wildcard the broker can match. That is what lets the
-//     membership read ask for the nodes rather than reading every lease in the
-//     fleet, and the sweep ask for the seat hints rather than reading every
-//     epoch the deployment has ever minted.
-//
-// Both mappings are INJECTIVE in both directions, which is the property that
-// matters rather than the encoding: two resources that collided on one key
-// would share one lease, and that is two nodes holding one seat.
+// A key is a subject token path under $KV.<bucket> ([-/_=.A-Za-z0-9]+), and
+// names carry bytes outside that set (a colon in a resource, a pipe in a
+// ledger key) and dots that would split one name into two tokens, so every
+// name goes through [coord.DocumentKey] and [coord.DocumentSegments], the ONE
+// grammar the fleet buckets share. [encodeKey] is for a bucket whose keys are
+// one opaque name: the bucket IS the class. [encodeResource] is for the lease
+// and epoch buckets: a resource's class becomes a token, so the broker matches
+// a whole class (the nodes, the seat hints) without reading every key. Both
+// are INJECTIVE: two resources on one key would share one lease, which is two
+// nodes holding one seat.
 
 // encodeKey maps one opaque name onto a key.
 func encodeKey(name string) string { return coord.DocumentKey(name) }

@@ -14,12 +14,9 @@ import (
 
 // WHAT A FAILED CALL SAYS ABOUT THE BROKER, judged on a connection that is up:
 // silence is the contract's condition, a broker's own answer is not, and a
-// caller's own deadline stays the caller's.
-//
-// The conformance suite certifies the connection-down half on both backends
-// (runReachability); what it cannot reach is a broker that is up and still
-// does not answer — a stream with no leader, a request the client timed out —
-// so the words a connected client uses for that are pinned here, one by one.
+// caller's own deadline stays the caller's. The conformance suite certifies
+// the connection-down half (runReachability) but cannot reach a broker that
+// is up and silent, so a connected client's words for that are pinned here.
 //
 // Mutation: drop jsprovision.Unanswered from brokerFailed, and the timeout,
 // no-responders and client-deadline rows fail; drop ErrNoStreamResponse, and
@@ -69,21 +66,20 @@ func TestABrokerThatDidNotAnswerIsUnavailableAndOneThatDidIsNot(t *testing.T) {
 }
 
 // A CONNECTION NATS CLOSED FOR GOOD IS NOT LIVE, and a queue its own Stop
-// closed is not live as its Stop says. Both are what a seat release reads as
-// proof that nothing is consumed — and both are reached here the way
-// production reaches them: the connection closed under a queue that never
-// stopped, and then the stop.
+// closed is not live as its Stop says: both are what a seat release reads as
+// proof nothing is consumed, reached as production reaches them (the
+// connection closed under a running queue, then the stop).
 //
 // Mutation: answer a closed connection ErrUnavailable, and the first half
-// fails — a node stopping for a lost connection would KEEP every lease it
-// could not hand back; drop the isClosed arm, and the second does.
+// fails (a node stopping for a lost connection would KEEP every lease it could
+// not hand back); drop the isClosed arm, and the second does.
 func TestAConnectionClosedForGoodIsNotLive(t *testing.T) {
 	t.Parallel()
 	q := openForTest(t, Config{})
 	ctx := t.Context()
 
-	// CLOSED BY THE CLIENT, NOT BY Stop: the queue still believes itself
-	// open, which is the state a connection the client gave up on leaves.
+	// Closed by the client, not by Stop: the queue still believes itself
+	// open, as a connection the client gave up on leaves it.
 	q.nc.Close()
 	err := q.Publish(ctx, "crewlet.events.lost", ev(1))
 	if !errors.Is(err, ErrConnectionLost) || !errors.Is(err, queue.ErrNotLive) {

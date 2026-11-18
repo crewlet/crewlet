@@ -9,14 +9,12 @@ import (
 
 // A STREAM'S IDENTITY GOES WHERE ITS CONFIGURATION GOES.
 //
-// A snapshot restore makes a NEW stream from the configuration its request
-// names and dates it to the restore, so the broker's own creation instant
-// names the restore rather than the history the stream holds — and every node
-// restored from a backup read every log as recreated. The create that makes a
-// stream stamps the instant into that configuration instead: a stream made
-// again from its own configuration, as a restore makes it, answers the instant
-// it was first made at, while one the queue provisions afresh after it was lost
-// answers a new one, which is the recreation the identity exists to detect.
+// A snapshot restore makes a NEW stream dated to the restore, so the broker's
+// creation instant would read every restored log as recreated. The create
+// stamps the instant into the configuration instead: a stream made again from
+// its own configuration, as a restore makes it, answers its first instant,
+// while one the queue provisions afresh after it was lost answers a new one —
+// the recreation the identity exists to detect.
 func TestAStreamsIdentityGoesWhereItsConfigurationGoes(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -51,8 +49,7 @@ func TestAStreamsIdentityGoesWhereItsConfigurationGoes(t *testing.T) {
 		t.Fatalf("the log's identity is %s and its stamp %s", first.Format(time.RFC3339Nano), stamp)
 	}
 
-	// MADE AGAIN FROM ITS OWN CONFIGURATION, which is what a restore's
-	// request hands the broker.
+	// MADE AGAIN FROM ITS OWN CONFIGURATION, as a restore's request makes it.
 	if err := q.js.DeleteStream(ctx, spec.Name); err != nil {
 		t.Fatalf("delete the stream: %v", err)
 	}
@@ -74,8 +71,7 @@ func TestAStreamsIdentityGoesWhereItsConfigurationGoes(t *testing.T) {
 			"as recreated", got, first)
 	}
 
-	// PROVISIONED AFRESH after it was lost, which is a recreation and must
-	// still read as one.
+	// PROVISIONED AFRESH after it was lost: a recreation, and must read as one.
 	if err := q.js.DeleteStream(ctx, spec.Name); err != nil {
 		t.Fatalf("delete the stream again: %v", err)
 	}
