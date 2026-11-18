@@ -1182,10 +1182,14 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 	// AN INBOX PAGE RUNS UP TO TWO STATEMENTS ([inboxStatements]), each
 	// joining a notice's history row by its key: the page's range, and —
 	// under `unread`, once the seen-through position raised the range —
-	// the notices an unread mark names below it.
+	// the notices an unread mark names below it. A read of one record is one.
 	page, _, err := inboxStatements("ana", InboxQuery{}, inboxFilter{scope: inbox.SnoozeInclude}, 50)
 	if err != nil || len(page) != 1 {
 		t.Fatalf("a page of every notice is %d statements, %v; want one", len(page), err)
+	}
+	byRecord, _, err := inboxStatements("ana", InboxQuery{Record: record}, inboxFilter{scope: inbox.SnoozeInclude}, 50)
+	if err != nil || len(byRecord) != 1 {
+		t.Fatalf("a read of one record's notice is %d statements, %v; want one", len(byRecord), err)
 	}
 	unread := inboxFilter{unread: true, scope: inbox.SnoozeInclude, marked: []string{record},
 		seen: inbox.Position{Stream: historyStream, Generation: 1, Seq: 9_000}}
@@ -1202,6 +1206,7 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 		"one change's routing":            seek(historyKey, routingRecordStatement, record),
 		"where a change sits":             seek(historyKey, recordPositionStatement, record),
 		"a person's inbox":                seek(historyKey, page[0].sql, page[0].args...),
+		"an inbox's one notice by record": seek(historyKey, byRecord[0].sql, byRecord[0].args...),
 		"an inbox's unread marks below":   seek(historyKey, marked[1].sql, marked[1].args...),
 		"the repair's horizon":            seek(status, unblockHorizonStatement, at(9_000), at(9_000)),
 		"the repair's dependents": seek(status, unblockedDependentsStatement,

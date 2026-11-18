@@ -11,7 +11,8 @@ import (
 
 // WHAT THIS NODE KNOWS ABOUT ITS MODELS, as its status record publishes it: one
 // row per entry of the active revision, from the entry's sign-in [harness.Plan]
-// (sit-out, last answer, last failure), the provider park and the login watcher.
+// (sit-out, last answer, last failure, limit windows), the provider park and the
+// login watcher.
 //
 // On the status record for the reason [coord.NodeStatusRecord.MCP] is: this is
 // the node's own memory, and one listing of the records answers the Models page
@@ -57,6 +58,10 @@ func (e *Engine) modelStatus(ctx context.Context) []coord.ModelStatus {
 			row.LastFailure = &coord.ModelFailure{Kind: f.Kind.String(), At: f.At, Said: f.Said}
 		}
 		row.HostLogin = e.hostLoginOf(key)
+		for _, l := range state.Limits {
+			row.Limits = append(row.Limits, coord.ModelLimit{Window: string(l.Window), Hours: l.Hours,
+				Model: l.Model, State: string(l.State), Used: l.Used, ResetsAt: l.ResetsAt, Seen: l.Seen})
+		}
 		rows = append(rows, row)
 	}
 	return rows

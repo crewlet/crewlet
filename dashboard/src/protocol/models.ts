@@ -15,6 +15,7 @@ import type {
   ModelDeviceStatus,
   ModelHealth,
   ModelJob,
+  ModelLimitState,
   ModelLimitWindow,
   ModelSignInRoute,
   RunnerCellName,
@@ -62,6 +63,23 @@ export interface ModelSittingOut {
   said?: string;
   since: string;
   nodes: string[];
+}
+
+/** One window of a model's sign-in's vendor limit, as the newest report across nodes left it. */
+export interface ModelLimit {
+  window: ModelLimitWindow;
+  /** The window's length in hours as the vendor names it; 0 where unsaid. */
+  hours: number;
+  /** The model family a `model` window is of ("opus"). */
+  model?: string;
+  state: ModelLimitState;
+  /** The fraction used; null where unsaid, or the window has turned over since. */
+  used: number | null;
+  resets_at: string | null;
+  /** When the model is tried again, where it sits this window out. */
+  until: string | null;
+  seen: string;
+  stale: boolean;
 }
 
 export interface ModelLastFailure {
@@ -127,6 +145,7 @@ export interface ModelEntry {
   usage: ModelUsage;
   used_by: ModelUse[];
   device_sign_in: ModelDevice | null;
+  limits: ModelLimit[];
 }
 
 /** One model in a member's reading: nothing that names a credential, an account or a vendor's sentence. */
@@ -140,6 +159,7 @@ export interface MemberModelEntry {
   last_success: string | null;
   waiting: ModelWaiting | null;
   used_by: ModelUse[];
+  limits: ModelLimit[];
 }
 
 /** One model an alarm names, with what it says about it. */

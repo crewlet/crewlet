@@ -36,6 +36,7 @@ import {
   InboxToggle,
   Skeleton,
   Text,
+  peekClickHandler,
 } from "@crewlethq/ui";
 import { CheckGlyph, MessageSquareGlyph } from "@crewlethq/icons/glyphs";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
@@ -73,6 +74,8 @@ import {
   titleBeside,
 } from "./model.ts";
 import { TaskLink } from "./TaskLink.tsx";
+import { href } from "~/app/router.tsx";
+import { inboxItemPath } from "~/app/routes.ts";
 import { INBOX_PAGE } from "~/lib/useInboxCounts.ts";
 import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
 import { heldRunTitle } from "~/lib/heldCall.ts";
@@ -515,8 +518,8 @@ const InboxItem = memo(function InboxItem({
   /** The reader's own record name, so their answers read "You". */
   reader: string;
   selected: boolean;
-  /** Opens a row by its key: one function for every row, so a row's props
-   *  are the same from one draw to the next. */
+  /** Opens a row by its key on a plain press: one function for every row, so
+   *  a row's props are the same from one draw to the next. */
   onOpen: (key: string) => void;
   /** Just arrived in its group: the kit's brief wash. */
   arrived?: boolean;
@@ -578,7 +581,10 @@ const InboxItem = memo(function InboxItem({
         onLeft?.();
         onClosed?.(row.key);
       }}
-      onClick={() => onOpen(row.key)}
+      // A REAL LINK TO THE ITEM'S ADDRESS: a plain press opens it here, any
+      // other (a modifier, the middle button) opens a tab, and its link copies.
+      href={href(inboxItemPath(row.key))}
+      onClick={peekClickHandler(() => onOpen(row.key))}
       aside={
         item ? (
           <TaskLink

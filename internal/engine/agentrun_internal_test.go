@@ -84,7 +84,7 @@ func harnessProvider(t *testing.T, m chainMember) *harness.Provider {
 			// structured limit and sign-in reports, the cap's signature in it.
 			"event_type_path": []any{}, "text_events": []any{},
 			"requests": nil, "cap": nil, "limit_events": nil,
-			"limit_reset_events": nil, "auth_events": nil,
+			"limit_reports": nil, "auth_events": nil,
 			"mcp": map[string]any{"failure_events": []any{}},
 		}
 	}

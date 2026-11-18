@@ -18,6 +18,7 @@
 import { useServicesAsk } from "~/lib/services.ts";
 import { createContext, useContext, useMemo } from "react";
 import { href, useNavigator } from "~/app/router.tsx";
+import { inboxItemPath } from "~/app/routes.ts";
 import { useKeptRange } from "~/lib/keptRange.ts";
 import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
 import { choiceKey, urlAction } from "~/app/assistant/urlAction.ts";
@@ -140,7 +141,7 @@ export function useHomeData() {
   // one condition when there is exactly one.
   const conditionsHref =
     conditions === 1 && raised.length === 1
-      ? href(["inbox"], { row: conditionKey(raised[0]!.id) })
+      ? href(inboxItemPath(conditionKey(raised[0]!.id)))
       : href(["inbox"]);
 
   const sentence = statusSentence({

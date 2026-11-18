@@ -686,7 +686,7 @@ describe("the Inbox widget", () => {
     const row = screen.getByRole("link", { name: /commented on Q3 plan/ });
     expect(row.textContent).toContain("CTO commented on Q3 plan");
     expect(row.textContent).toContain("Can you check the totals?");
-    expect(row.getAttribute("href")).toBe("#/inbox?row=artifact%3Aa-4");
+    expect(row.getAttribute("href")).toBe("#/inbox/artifact/a-4");
   });
 });
 
