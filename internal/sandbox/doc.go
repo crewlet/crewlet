@@ -817,17 +817,18 @@
 // DUE-NESS IS COUNTED ON THIS NODE'S CLOCK ALONE: the interval
 // ([SessionKeep.SaveInterval], this node's revision) after the last attempt,
 // doubled for each failure in a row up to the larger of the interval and an
-// hour, and never before the seat's allowance paces it. What was not there
-// (the box, the license, the taker, the place, the box's room to pack) moves
-// the clock without doubling; a landing resets it and remembers how far the job's stream had
-// run, so a job that has not moved since is not saved again. AT FIRST SIGHT
-// (a node that restarted, or took an E2B duty over) the last save is taken
-// to be the later of the launch's start and this launch's newest capture,
-// instants other machines stamped, clamped to within one interval of now: as
-// in "A capture's life is counted on one clock", an age read across machines
-// decides only a wait one interval bounds, so the first save comes within an
-// interval of first sight whatever any clock says, and a paced seat takes no
-// unpaced save then. A memory no offer came for in an hour is forgotten.
+// hour, and never before the seat's allowance paces it. What was not there (the
+// box, the license, the taker, the place, the box's room to pack) moves the
+// clock without doubling; a landing resets it and remembers how far the job's
+// stream had run, so a job that has not moved since is not saved again.
+// AT FIRST SIGHT (a node that restarted, or took an E2B duty over) the last
+// save is taken to be the later of the launch's start and this launch's newest
+// capture, instants other machines stamped, clamped to within one interval of
+// now: as in "A capture's life is counted on one clock", an age read across
+// machines decides only a wait one interval bounds, so the first save comes
+// within an interval of first sight whatever any clock says, and a paced seat
+// takes no unpaced save then. A memory no offer came for in an hour is
+// forgotten.
 //
 // # A save as its node drains
 //

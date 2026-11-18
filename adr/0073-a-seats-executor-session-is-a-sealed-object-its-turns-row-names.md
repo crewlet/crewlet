@@ -1227,8 +1227,8 @@ capture, told only the calls after that count, was never told a call its
 harness had made and had answered without writing it, and could make that call
 again.
 
-**Placed at the newest save point the launch is already known to hold.** The
-take of a job still working (one its box would not end, packed on demand),
+**Reserved at zero, raised after its take.** The take of a job still working
+(one its box would not end, packed on demand),
 every save and every capture of a job cut off are reserved at zero, the
 round's start, and raised once the take's count states the session's newest
 compaction (internal/sandbox's `placeAtNewest`), to the save point of a
@@ -3837,8 +3837,8 @@ pass its room, and the seat's budget is then decided only at the record.
 ## Amendment: a save under way stays in sight on its run's record
 
 A SAVE is a capture of a job still working, taken while its harness runs on:
-not final, cut off, holding no note, placed at the newest save point its launch
-is known to hold. Its place is reserved on the run's row after the newest, as
+not final, cut off, holding no note, reserved at zero and raised after its take
+(above). Its place is reserved on the run's row after the newest, as
 every capture's is. What the record could not say was where a save stood once
 the job's final take overtook it: a collection, a stop's read or a loss's take
 the final capture in the place after the save while the save may still be
@@ -4547,8 +4547,8 @@ every running job whose runner saves, one pack after another.
 
 **No record version or protocol moves.** `LaunchRecord.Continued` is a row
 field of at most 86 bytes, which an older build's write keeps in
-`LaunchRecord.Extra`; no stamp field is added, and the run's script is
-unchanged, so a job any build launched is saved. A node without the identity
+`LaunchRecord.Extra`; no stamp field is added, and the save reads the room
+with a script of its own, so a job any build launched is saved. A node without the identity
 check of a continued capture (crewlet/crewlet#1538) beside a node of this build
 carries a raised OpenCode point across a compaction and tells from it, so a
 fleet takes a build with that check before this one.
