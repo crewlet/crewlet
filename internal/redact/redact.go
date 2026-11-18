@@ -211,7 +211,14 @@
 // claims, reading the key's line as written, take for the value is the
 // wrapping's, and shown. So a gutter the value's line repeats letter for
 // letter is the wrapping's, and is shown, though it be a run of base64, even a
-// key's last run where the line below its END repeats it.
+// key's last run where the line below its END repeats it. A key the claims
+// read no value of has none the cut keeps, and its block is written whole
+// too: where the line below opens with the gutter and then an armour, the
+// claims read no value, the armour ending the read, while the rule reads that
+// line in the text the blocks leave, the armour and the gutter before it one
+// marker, and redacts the word after it as the value, as it does with the
+// block whole; cut, the key's line would open otherwise than that marker, and
+// the word would be shown.
 //
 // A BLOCK NO END CLOSES TAKES A PASSWORD'S KEY ONLY WITH ITS VALUE
 // ([claims.shortOfValues]). Ended by the lines it reads, a block read forward
@@ -4798,10 +4805,11 @@ func (c *claims) shortOfNames(spans [][2]int) [][2]int {
 }
 
 // apart is spans, in order and apart, each WRITTEN APART FROM THE GUTTER of a
-// password key's line that it holds, the key outside every span: the stretch
-// of the key's line that the line its value was read on opens with too
-// ([aValue]), and the line break before it, are left out of the span, which
-// is cut in two around them where it begins on a line above.
+// password key's line that it holds whose value the claims read, the key
+// outside every span: the stretch of the key's line that the line its value
+// was read on opens with too ([aValue]), and the line break before it, are
+// left out of the span, which is cut in two around them where it begins on a
+// line above.
 func (c *claims) apart(spans [][2]int) [][2]int {
 	return c.apartIn(spans, spans)
 }
@@ -4824,7 +4832,7 @@ func (c *claims) apartIn(spans, known [][2]int) [][2]int {
 		i, _ := slices.BinarySearchFunc(c.passwords, s[1], func(p [5]int, at int) int { return cmp.Compare(p[0], at) })
 		for ; i < len(c.passwords) && c.passwords[i][0] <= limit; i++ {
 			p := c.passwords[i]
-			if p[4] <= 0 || p[4] > len(c.text) || inSpan(known, p[0]) {
+			if p[3] <= p[2] || p[4] <= 0 || p[4] > len(c.text) || inSpan(known, p[0]) {
 				continue
 			}
 			seg := segmentStart(c.text, p[4])

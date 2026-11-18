@@ -97,6 +97,7 @@ func gutterShapes() []gutterShape {
 	add("a stamped BEGIN over a bare body and END", ts+testBegin+"\n"+testKeyLine+"\n"+testEnd+"|passwd:\n"+ts+gutterValue+"\n")
 	add("a table's row over a bare END", "| "+testKeyLine+" |\n"+testEnd+"|passwd:\n| "+gutterValue+" fAt0gun+ |\n")
 	add("stamps over a bare END, a prompt above", ts+testKeyLine[:30]+"\n"+ts+"Password: |\n"+testEnd+"|passwd:\n"+ts+gutterValue+"\n"+ts+testBegin+"\n")
+	add("an armour after the gutter on the value's line", testKeyLine+"\n"+wrap(pc+" ", "", testEnd+" "+testBegin, testKeyLine, testEnd+" passwd:", testEnd+" "+gutterValue)+"done\n")
 	add("a value before the block on its line", "Password:\n"+wrap("2026-10-06T09:00:00.123Z ", "", testKeyLine[:30], testEnd+"|passwd:", gutterValue+" "+testEnd))
 	return shapes
 }
@@ -109,10 +110,10 @@ func gutterShapes() []gutterShape {
 //
 // Mutation: write a key's block whole ([claims.apart]), and the wrapping's
 // word is read as the value under every wrapping but the stamped one; cut it
-// at a key's line that has no gutter ([valueRead.gutterOf]), ignore what the
-// line a block begins on opens with ([claims.opensAlike]), or let a block no
-// END closes take a key without its value ([claims.shortOfValues]), and a
-// shape here publishes the value.
+// at a key's line that has no gutter ([valueRead.gutterOf]) or whose value
+// the claims do not read, ignore what the line a block begins on opens with
+// ([claims.opensAlike]), or let a block no END closes take a key without its
+// value ([claims.shortOfValues]), and a shape here publishes the value.
 func TestNoValueUnderAKeyLineWhoseOpeningABlockHoldsIsPublished(t *testing.T) {
 	t.Parallel()
 	for _, c := range gutterShapes() {
