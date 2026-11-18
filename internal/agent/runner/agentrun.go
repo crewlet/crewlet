@@ -1641,8 +1641,8 @@ const runRound = 1
 // was replaced, so after the cut was taken — its place, which its own job's
 // session gave it, can fall past the cut though it was made before the answer
 // — and after the brief of the job carrying the round on was built. That job
-// was never told it, and every later continuation of the round is told it as
-// no submission of the round ([prompts.AfterSave.LateSubmission]): the
+// was handed it only once under way, and whatever tells it tells it as no
+// submission of the round ([prompts.AfterSave.LateSubmission]): the
 // round's submission is the one a run carrying the round on makes. Replayed, a
 // late submission would stand for the carried-on run's work, or stand over it
 // where its place sorts after; read as the round's, a lost round would be

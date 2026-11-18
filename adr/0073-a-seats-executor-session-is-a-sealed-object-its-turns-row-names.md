@@ -1841,7 +1841,9 @@ its own run places one whose harness did, counts the late call among the calls
 its session holds, and every continuation after it would skip the call. So a marked call is
 held at no save point (internal/agent/runner's `heldAt`, the one test of what a
 session holds): every continuation of the round built after it landed is told it
-whatever its point, and again by every later one, in a section of its own under
+whatever its point, and again by every later one (but one of a session that took
+it, as the amendment on handing a late call to the job working as it lands
+says), in a section of its own under
 words that hold whatever the session's end — it finished only after the run that
 made it was replaced, the session may show it with no outcome or as interrupted,
 or an earlier brief may have told it, and it is one call, made once, whose
@@ -1910,7 +1912,7 @@ log in the coordination store alone.
 carrying the round on, or the one a relaunch was readying as it landed — is
 handed it as it works only as the amendment on handing a late call to the job
 working as it lands says (below); every continuation built after it lands
-tells it. And what a
+tells it, but one of a session that took it. And what a
 late call committed counts in the turn's outcome only where the log takes the
 call before its round's last collection reads the log, which waits for every
 call of the round in flight up to the first of its own bound, the turn's cap
@@ -2034,9 +2036,10 @@ a late call's does, whether the log lists it or has dropped it from its middle
 (`sandbox.BridgeLog.Changes`), and on the same condition: only where the log
 takes it before its round's last collection reads the log (below).
 
-**What it costs.** Each such call is told to every continuation of its round,
-in its brief and so in the continued launch's floor, and again by every later
-one. The harness of a call still running as its opening ends is handed the
+**What it costs.** Each such call is told to every continuation of its round
+that no telling credits it to (the amendment on handing a late call to the job
+working as it lands), in its brief and so in the continued launch's floor, and
+again by every later one. The harness of a call still running as its opening ends is handed the
 end's answer at once, before the end closes
 the box's sessions on the bridge, and waits for no other (ADR-0056's amendment
 on an opening's end): the session that made the call holds that answer, never
@@ -3207,8 +3210,8 @@ one); and every call of a thread the model cannot tell for.
 A brief tells a continued session the calls it may lack, and two of its lists
 say that a call shown both in the session and in the list is ONE call, made
 once: the calls since a save point the session may already show, cut off or a
-summary (`prompts.calledSinceHeader`), and the late calls, every one of which
-every continuation tells again (`prompts.lateCallsHeader`; and
+summary (`prompts.calledSinceHeader`), and the late calls, which an earlier
+message may have told (`prompts.lateCallsHeader`; and
 `prompts.MayCompactSession`, which says each is one message, call or note).
 Where a call the session may show and a call one of those lists tells read
 alike, the model reading both could take the told call for the other and lose
@@ -3920,8 +3923,7 @@ among the owed reads, a dropped late call was counted twice in one brief, as an
 owed read dropped and as a late call dropped. Every other continuation tells the
 call, under words that say an earlier message may have told it: a cursor
 stopped lower, a session cut off or possibly compacting, a telling past the
-bound, a hook's telling in a box whose release's resume was not read, a fleet
-mid-upgrade.
+bound, a hook's telling in a box whose release's resume was not read.
 
 **What it does not reach.** A Claude Code job finishing as a call lands is not
 handed it, so its report may say a call failed that ran, which its reviewer
@@ -3940,4 +3942,11 @@ amendment on the item); nothing of the item or the telling is in a state-log
 record. An older build's appends and openings file none, its readers hand an
 item to nobody and its confirmations record no telling, so the call is told by
 the continuations alone, as before; its new-round reset keeps the tellings as
-keys it carries, which this build reads for the log's round alone.
+keys it carries, which this build reads for the log's round alone. One case
+tells less: an older build's brief records no late call it counted without
+listing (`sandbox.BriefTold.LateOmitted`), nor does its capture
+(`bridge_late_omitted`), so a continuation by this build of a session holding
+only that count of a call, such as a fresh run's whose brief the read cap
+thinned, can be credited a telling of the call recorded before it, and is not
+told the call. No compatibility is owed to an unreleased build, so this is
+stated and not bridged.

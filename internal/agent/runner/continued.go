@@ -68,10 +68,10 @@ import (
 //     and every call nobody waited for by the time it returned
 //     ([BridgedCall.Abandoned]) — given up on by its harness, or outliving its
 //     job's session — whose outcome that session holds none of, told to every
-//     continuation built after it landed: apart, under words of their own
-//     whatever the session's end — one may be shown, as interrupted, failed or
-//     with no outcome, or told by an earlier brief, since every continuation
-//     of the round tells it again, and it is one call — and a submission
+//     continuation built after it landed but one of a session that took it
+//     ([heldByTelling]): apart, under words of their own whatever the
+//     session's end — one may be shown with no outcome, or told by an earlier
+//     message, and it is one call — and a submission
 //     among them told as none of the round's; and among them every call still
 //     in flight as the round was read ([Resume.Unfinished]), whose outcome is
 //     unknown, which those words say may have taken effect;
@@ -115,8 +115,8 @@ import (
 // its harness gave up on ([heldAt]), which it shows with no outcome or a failed
 // one, nor that of one still in flight as the round was read
 // ([Resume.Unfinished]), which no record holds: it is told those and the reads
-// it holds only as a count, as every continuation of the round built after
-// they landed is told them, and before them that a successful submission among
+// it holds only as a count, as a continuation of the round built after they
+// landed is told them, and before them that a successful submission among
 // the calls it holds is none of the round's
 // ([prompts.AfterSave.HeldSubmission]) — and every note from the first read no
 // session of its job holds on ([Runner.firstUnheld]), as notes it may already
@@ -656,8 +656,8 @@ func callKey(harness string, call BridgedCall) (string, bool) {
 //
 //  1. not a skipped meta-tool's, which no list tells;
 //  2. not held at the point ([heldAt]), the save point holding it already;
-//  3. neither late nor abandoned, which every continuation tells under words
-//     of their own whatever a reading says;
+//  3. neither late nor abandoned, which a telling decides ([heldByTelling])
+//     and no reading, the rest told under words of their own;
 //  4. its key valid ([callKey]): the reader refuses the whole ask where an
 //     asked call's id is not one the log keeps, so a call without one is told;
 //  5. its key carried by no other call of round, listed or in flight: the
@@ -815,9 +815,9 @@ func (r *Runner) checkoutName() string {
 // every one its job's brief told — every call of the round but the late ones,
 // listed or dropped, and the reads that brief counted without listing them
 // (owed, below) — and the outcome of each but one nobody waited for, so it is
-// told the late ones, those and the ones still in flight, whose outcome no
-// record holds, and the owed reads, and no others, listed and dropped, as
-// every continuation is told them, with the round's tally, and first that a
+// told the late ones no telling credits ([heldByTelling]), the ones still in
+// flight, whose outcome no record holds, and the owed reads, and no others,
+// listed and dropped, with the round's tally, and first that a
 // successful submission among the rest, which it holds, does not stand
 // (below). A through of zero tells every call of the round: a fresh run's
 // ([prompts.CalledBefore]), and a copy cut off ([Runner.calledInPlace]).
@@ -840,13 +840,13 @@ func (r *Runner) checkoutName() string {
 // A LATE CALL IS TOLD APART, under words of its own whatever the session's end
 // ([prompts.AfterSave.Late]): it finished only after the run that made it was
 // replaced, so the session may show it with no outcome or an interrupted one,
-// and every continuation of the round tells it again, an earlier brief among
-// them — so neither the words for calls the session lacks nor those for a
-// session cut off are true of it. SO IS A CALL NOBODY WAITED FOR, under the
-// same words, which hold of it: it finished only after its harness gave up on
-// it or its session ended, so the session shows it with no outcome or a failed
-// one, and every continuation tells it again. And a successful `submit_work`
-// among them is told as no submission of the round
+// and an earlier message may have told it, a brief or the item that handed it
+// to the job working as it landed — so neither the words for calls the session
+// lacks nor those for a session cut off are true of it. SO IS A CALL NOBODY
+// WAITED FOR, under the same words, which hold of it: it finished only after
+// its harness gave up on it or its session ended, so the session shows it with
+// no outcome or a failed one, or as its item told it. And a successful
+// `submit_work` among them is told as no submission of the round
 // ([prompts.AfterSave.LateSubmission]): the round's is the one a run carrying
 // it on makes — a late one the collection never takes ([sinceAnswer]), and
 // one nobody waited for its own run was told failed, which the run's own,
@@ -925,10 +925,10 @@ func (r *Runner) checkoutName() string {
 // ones because the session surely lacks them too: the reading found them in
 // the thread of a subagent whose report the session does not hold, so a read
 // among them left out is an outcome it surely lacks, where a call after the
-// save may be one it shows. The session never shows a
-// late call's outcome as told here: it shows the call with none, as still
-// running, as interrupted or as failed, or not at all, so a late read left out
-// leaves an outcome the session surely lacks, where a call after the save may
+// save may be one it shows. No telling credits the session a late call told
+// here: it shows the call with no outcome, as still running, as interrupted,
+// as failed, not at all, or as an item no verdict confirmed, so a late read
+// left out leaves an outcome it likely lacks, where a call after the save may
 // be one it shows. And the late calls are few, only those that outlived their
 // run or were in flight at the read, so told first they leave the calls after
 // the save most of the cap, where a long round's calls after the save, told
@@ -1216,8 +1216,8 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 		// OWED BY THE NEXT BRIEF: the reads each subagent's group, the calls
 		// after the point and the owed ones left out, the session lacking
 		// every one of them; never one listed again, which the session may
-		// show. AND, APART, THE LATE CALLS LEFT OUT, which every continuation
-		// tells again and no telling is credited for ([omittedReads.late]).
+		// show. AND, APART, THE LATE CALLS LEFT OUT, which the next brief tells
+		// again and no telling is credited for ([omittedReads.late]).
 		for g := 0; g <= oweAt; g++ {
 			group := owe
 			if g < oweAt {
@@ -1864,15 +1864,15 @@ func heldByTelling(call BridgedCall, point *int, owed []int, tellings []Telling)
 // been replaced before the call returned. Yet a save point is a prefix of the
 // log, so a later capture placed by its own read counts it among the calls its
 // session holds, and every continuation after would never be told it. Told
-// whatever the point instead — again by every later continuation of the round,
-// under words that say it may be shown or told already and is one call
-// ([Runner.calledAfter]) — and a skill it loaded is loaded again before a call
-// the skill covers, the safe direction. One its session owed after a failed
-// append and carried only once its job was replaced is told again although
-// that job's session holds its answer, and its load is not counted although
-// that session holds the skill: the same safe direction. So no session a guard
-// is rebuilt for is taken to hold a late call, a job's own copy in its box
-// among them.
+// whatever the point instead, but to a session a telling credits it to
+// ([heldByTelling]), under words that say it may be shown or told already and
+// is one call ([Runner.calledAfter]) — and a skill it loaded is loaded again
+// before a call the skill covers, the safe direction. One its session owed
+// after a failed append and carried only once its job was replaced is told
+// again although that job's session holds its answer, and its load is not
+// counted although that session holds the skill: the same safe direction. So
+// no session a guard is rebuilt for is taken to hold a late call, a job's own
+// copy in its box among them.
 //
 // NOR ONE NOBODY WAITED FOR ([BridgedCall.Abandoned]), whatever its number: its
 // harness gave up on it, or its session ended, before it returned, so the

@@ -2851,13 +2851,13 @@ func (s *CoordStore) RecordAsk(ctx context.Context, turnID, launch string, ask A
 // reviewer read the run's outcome by, and dropped from the middle, a long
 // run's record lost the question it parked on or the submission it was
 // corrected by. A call NO SAVE POINT HOLDS ([BridgeCall.unheld]: a late one,
-// or one its harness stopped waiting for) is told to every continuation of its
-// round by its mark, which a dropped call keeps none of: dropped, it is only
-// counted ([BridgeLog.LateElided]) and told as a count, past every save point,
-// beside the calls that tally names. So the call dropped is the oldest
-// ordinary one after the head, never the one just made; and only a log with no
-// ordinary call left there gives up the oldest of the others, so the log stays
-// at its cap whatever the run calls.
+// or one its harness stopped waiting for) is told by its mark to every
+// continuation no telling credits, and a dropped call keeps none: dropped, it
+// is only counted ([BridgeLog.LateElided]) and told as a count, past every
+// save point, beside the calls that tally names. So the call dropped is the
+// oldest ordinary one after the head, never the one just made; and only a log
+// with no ordinary call left there gives up the oldest of the others, so the
+// log stays at its cap whatever the run calls.
 func appendBounded(calls []BridgeCall, elided int, next BridgeCall) ([]BridgeCall, int, []BridgeCall) {
 	calls = append(calls, next)
 	if len(calls) <= MaxBridgeCalls {

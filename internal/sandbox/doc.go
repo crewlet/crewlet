@@ -832,7 +832,8 @@
 // So each section that a later build may add fields to carries an Extra of its
 // own, filled by its decode and written back by its encode under the rule the
 // record's top follows: [RunSteer], [RunNote], [NoteRead], a hook's serve of a
-// note ([HookServed]) and the call it answered ([NoteCall]), [BridgeCall],
+// note ([HookServed]) and the call it answered ([NoteCall]), a late call's
+// item ([LateCall]) and a telling of one ([CallTelling]), [BridgeCall],
 // [ElidedCall], [SessionCapture], [HeldCall], [ConversationBase] with its
 // [BaseSession] and each [BaseSibling], and [LaunchRecord] — the job's own
 // record, which grows a fact about the job with nearly every piece that touches
@@ -4152,8 +4153,8 @@
 //
 // A PERSON'S NOTE ALONE: a filing that names a job ([RunNote.For]) or hands
 // one a call ([RunNote.LateCall]) is refused with [ErrNoteKind] before
-// anything is read or written, whatever the record holds. An item for one job is the store's to file, in its own writes of the
-// record, never a filer's.
+// anything is read or written, whatever the record holds. An item for one job
+// is the store's to file, in its own writes of the record, never a filer's.
 //
 // NO FENCE, as [PendingStore.AppendBridgeCall] takes none: a note is an append
 // to the turn, never an ownership decision. The note must carry its id and its

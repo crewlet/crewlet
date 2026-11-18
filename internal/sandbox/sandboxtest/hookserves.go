@@ -113,9 +113,10 @@ func jobItem(id, job string) sandbox.RunNote {
 // of the record files one.
 //
 // ONTO THE RECORDS THE STORE IS BUILT ON, because no filer may file one
-// ([sandbox.ErrNoteKind]) and this build's store files none: what every write
-// does with an item a record holds is the store's whoever put it there, and an
-// item on the record is what these cases hold it to.
+// ([sandbox.ErrNoteKind]) and the store files one only in the writes that find
+// a call late (lateitems.go): what every write does with an item a record
+// holds is the store's whoever put it there, and an item on the record is what
+// these cases hold it to.
 func placeItem(t *testing.T, runs coord.SandboxRuns, turnID, id, job string) {
 	t.Helper()
 	if _, ok, err := runs.MutateSandboxRun(t.Context(), turnID, func(current coord.Record) (coord.SandboxRunChange, error) {

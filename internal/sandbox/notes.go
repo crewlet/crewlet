@@ -847,10 +847,11 @@ var errNoteBounds = errors.New("sandbox: a note is filed with the turn's bounds,
 
 // ErrNoteKind is a filing of a note that is not a person's: one naming the job
 // it is for ([RunNote.For]) or a call it hands one ([RunNote.LateCall]),
-// refused by [PendingStore.FileNote] before anything is written. An item for one job is the store's to file, in its own writes of
-// the record, never a filer's: the engine files a person's note, which reaches
-// a job only as that person's words, and a filer that could name a job could
-// hand it words on the store's account instead.
+// refused by [PendingStore.FileNote] before anything is written. An item for
+// one job is the store's to file, in its own writes of the record, never a
+// filer's: the engine files a person's note, which reaches a job only as that
+// person's words, and a filer that could name a job could hand it words on the
+// store's account instead.
 var ErrNoteKind = errors.New("sandbox: a filed note is a person's: an item for one job is the " +
 	"store's to file, never a filer's")
 

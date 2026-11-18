@@ -13370,16 +13370,17 @@ session](../concepts/code-sandbox.md#a-relaunch-continues-the-turns-session)).
 It is absent on a call an older engine appended. `late: true` marks a call the
 round's log took only after the job that made it was replaced by a relaunch
 that carried the round on — one still running as the relaunch was readied,
-which no brief of the round told: a continued session is told it whatever its
-save, but where its session took it as the working job's item, it is never the round's submission, and what it cost is charged to no
-job. The call a person approved is never marked. `abandoned: true` marks a
+which no brief of the round told: the job working on the round is handed it as
+an item, and a continued session is told it whatever its save point but where
+its session took it as that item; it is never the round's submission, and what
+it cost is charged to no job. The call a person approved is never marked. `abandoned: true` marks a
 call nobody waited for by the time it returned — its harness had given up on
 it and cancelled the request, or the job's session on the bridge ended while it
 ran and answered it as still running: it ran and its effect happened, while the
 session that made it holds it with no outcome, as timed out or as still
-running, so a continued session is told it whatever its save, but where its
-session took it as the working job's item.
-Both are absent on every other call.
+running, so its job is handed it as an item while it works, and a continued
+session is told it whatever its save point but where its session took it as
+that item. Both are absent on every other call.
 `bridge_calls_elided` counts the calls of the round the log does not list —
 dropped from the middle of a long run's log; a call whose own append reached
 the log only with a later one is listed, once, as the call it is — and

@@ -498,9 +498,9 @@ func otherCalls(o OtherCalls) string {
 // call with no outcome, as still running, as interrupted or as failed, its
 // harness having died, given up on it, been answered that it was still running
 // as its session on the bridge ended, or been replaced before the call
-// returned; and an earlier brief may have told it, since every continuation of
-// the work tells it again. So it is said to be ONE call, made once, whose
-// outcome as told here stands, never one the session lacks.
+// returned; and an earlier message may have told it: a brief, or the item
+// handing it to the job working as it landed. So it is said to be ONE call,
+// made once, whose outcome as told here stands, never one the session lacks.
 //
 // NEVER THAT THE CALLS FINISHED, NOR THAT EVERY ERROR FAILED. A call still in
 // flight is failed on the record, so that nothing takes it for a delivery or a
@@ -530,12 +530,12 @@ const lateCallsHeader = "## Calls the run that made them stopped waiting for, or
 // lateSubmission tells a run that a successful `submit_work` among the calls
 // under [lateCallsHeader] or [lateBeforeHeader] is no submission of the work
 // it carries on: the run that made it had stopped waiting for it before it
-// returned — replaced, and the run carrying the work on never told it, or told
-// it failed where it gave up on it — and the work's submission is the one a
-// run carrying it on makes (internal/agent/runner's sinceAnswer, which never
-// takes a late one, and replays the newest). Read as the work's, a late one
-// would leave a run that took it for done ending without its own, and the work
-// collected as one that submitted nothing.
+// returned — replaced, the run carrying the work on handed it only once under
+// way, or told it failed where it gave up on it — and the work's submission is
+// the one a run carrying it on makes (internal/agent/runner's sinceAnswer,
+// which never takes a late one, and replays the newest). Read as the work's, a
+// late one would leave a run that took it for done ending without its own, and
+// the work collected as one that submitted nothing.
 const lateSubmission = "A `" + toolname.SubmitWork + "` among them does NOT stand as this work's submission:" +
 	" the run that made it had stopped waiting for it before it returned. When your work is done, call `" +
 	toolname.SubmitWork + "` yourself."

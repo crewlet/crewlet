@@ -656,10 +656,10 @@ type BridgedCall struct {
 	// relaunch that carried the round on (sandbox.BridgeCall.Late): a call of
 	// an earlier job of the round, which no brief of the round had told when
 	// the log took it and the session of the job that made it may not hold.
-	// HELD BY NO SAVE POINT ([heldAt]), so every continuation of the round
-	// built after it landed is told it, under words of its own, and no rebuilt
-	// guard counts a load it made; and never the round's submission
-	// ([sinceAnswer]).
+	// HELD BY NO SAVE POINT ([heldAt]): a continuation built after it landed
+	// is told it under words of its own but where a telling credits it
+	// ([heldByTelling]), no rebuilt guard counts a load it made, and it is
+	// never the round's submission ([sinceAnswer]).
 	Late bool
 
 	// Abandoned is a call nobody waited for by the time it returned
@@ -670,9 +670,9 @@ type BridgedCall struct {
 	// answered it as still running. It ran and its effect happened, while the
 	// session of the job that made it shows it with no outcome, a failed one
 	// or that "still running". HELD BY NO SAVE POINT, as a late call is
-	// ([heldAt]): every continuation of the round built after it landed is
-	// told it, under the late calls' words, and no rebuilt guard counts a load
-	// it made. Unlike a late call it may be the round's submission
+	// ([heldAt]): told as a late call is ([heldByTelling]), under the late
+	// calls' words, and no rebuilt guard counts a load it made. Unlike a late
+	// call it may be the round's submission
 	// ([sinceAnswer]): its job, which was never replaced, made it.
 	Abandoned bool
 
