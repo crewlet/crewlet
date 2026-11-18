@@ -15,142 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
-// HOW A MESSAGE TOO LARGE FOR A LEADER'S REPLY IS READ ACROSS A LEAF'S LINK.
-//
-// A stream's leader answers a read of one message (`STREAM.MSG.GET`,
-// [jsapi.Leader]) in JSON, the message base64-encoded inside it, a third
-// larger than the message ([jsapi.ReplyBytes]). The server on a leaf's side
-// of its link closes the WHOLE link on any message past its max_payload, the
-// transport's eight mebibytes (nats-server v2.15.2, leafnode.go,
-// processLeafMsgArgs → maxPayloadViolation), so a leaf that asked the leader
-// for a message of more than about six mebibytes — which the transport
-// carries whole — had its link closed on the reply, asked again over the link
-// redialled, and had it closed again, every lease and mailbox the node holds
-// across it cut off until the read's deadline (crewlet/crewlet#1031).
-//
-// # Only across a leaf's link
-//
-// So a connection that crosses a LEAF'S LINK ([link.leaf]) reads such a
-// message RAW, from a consumer's delivery, which carries the message as it was
-// stored ([copyRead]) — and only such a message: one whose leader's reply the
-// leaf's server carries is the leader's read, given the time that reply takes
-// to arrive at the link's pace, beyond the read term and beyond the ceiling
-// every read is held to ([Queue.leaderCarries], [jsapi.Leader.Carrying]).
-//
-// Every other connection keeps the leader's read. A member's own crosses no
-// link, and a dial to a broker somebody else runs crosses only that broker's
-// routes and its delivery to its own client, none of which holds a message to
-// a max_payload: nats-server checks one only on a client's publish and on a
-// leaf's message (client.go's processPub and processHeaderPub, leafnode.go's
-// processLeafMsgArgs). And there the leader's read is the cheaper and the
-// sturdier: one request, where a copy read is a stream's info, consumers the
-// metadata leader makes and deletes, and a pull — on a state log's write path,
-// which every create on an external fleet's large logs asks
-// ([DomainLog.LastSeq]), that was about six metadata proposals in place of one
-// message read, and a write that failed while the metadata group elected a
-// leader, where the stream's own leader answers through it.
-//
-// # From the leader's own copy, through a consumer placed there
-//
-// The broker places a consumer of one replica on one replica of the stream
-// (nats-server v2.15.2, jetstream_cluster.go's createGroupForConsumer), and
-// the consumer reads that replica's copy. A copy behind the leader has not
-// heard of what the leader stored a moment ago, and still holds what the
-// leader removed a moment ago — so read there, an entry that exists could
-// read as gone, and one a peer dropped as still held: the two answers a
-// leader's read never gave. A copy cannot say how far behind it is, either: a
-// consumer that found nothing at or past where it stands leaves its own
-// position where it began on the pinned server's file store as often as it
-// moves it to the copy's end (filestore.go's LoadNextMsg answers sequence 0
-// for a match it did not find in a block), so "nothing here yet" and "nothing
-// here any more" look the same.
-//
-// So a copy read takes its answer ONLY FROM THE LEADER'S OWN COPY. It asks
-// the leader which server leads the stream ([jsapi.Leader.Leading]), and
-// keeps a consumer only where the broker placed it on that server: the
-// consumer's own create answer names the server it runs on, since the server
-// that runs a consumer is the one that answers its creation (nats-server
-// v2.15.2, jetstream_cluster.go's processClusterCreateConsumer, the info's
-// cluster from clusterInfo), and a consumer on a server that is not
-// clustered names none — there is one copy there, the leader's ([hosted]). A
-// consumer placed elsewhere is deleted and made again, which the broker
-// places afresh, until one is there ([copyRead.onLeader], [placements]). The
-// leader's copy holds every message the leader acknowledged storing and none
-// it acknowledged removing, as the leader's read answers from it; so each
-// answer is the leader's — through a delivery the leader's server makes from
-// that copy, which carries the message raw.
-//
-// THE BROKER'S PICK IS NOT UNIFORM. It shuffles the stream's live replicas
-// and then moves those its metadata leader counts as caught up to the front
-// ("Prefer caught up peers"), taking the first: the metadata leader itself
-// always, and any other only once it has acknowledged the metadata leader
-// since that leader's election and was heard from within three of its
-// heartbeats (raft.go's IsFollowerCaughtUp). In a healthy cluster that is
-// every live replica, and the pick is uniform among them. Just after the
-// metadata group elects a leader, or while the stream's leader lags the
-// metadata leader by more than three heartbeats, every consumer lands off the
-// stream's leader however many are made back to back, so past one draw of
-// them the read makes each a metadata heartbeat after the last
-// ([placementPause]), which is what it takes that leader to be counted again.
-//
-// # Exactly the message at that sequence and subject, and nothing else
-//
-// What a consumer begun at a sequence has to deliver is counted on the
-// leader's copy as the consumer is made (its NumPending: none means the
-// leader holds nothing there or past it); a consumer begun at a sequence
-// never delivers one before it ([atOrPast]); only a delivery at exactly the
-// sequence is taken; and a payload is read only from a consumer filtered to
-// the subject the probe of the same sequence found there — a message's
-// subject never changes — under a byte bound the probed message fits and a
-// larger one does not ([copyAt.delivered]): where a peer removed the message
-// since the probe and a larger one follows it on its subject, the broker
-// answers the pull with its bound rather than carry that one across the link
-// for nothing, and the read asks the leader's copy again what the sequence
-// holds ([copyRead.message]).
-//
-// # Every pull on one inbox, and a quiet one settled by the consumer's word
-//
-// A read's pulls are asked on an INBOX OF ITS OWN, held for the whole read
-// ([jsapi.Pulls]), so a delivery reaches it however late it arrives: a pull the
-// client had given up on, its inbox dropped at its expiry, threw away a
-// delivery queued on the link behind other bytes, and the read failed on
-// the consumer's count of a delivery that never arrived.
-//
-// A pull that hears nothing for a quiet second ([letterQuiet]) asks the
-// consumer what it says of itself ([jsapi.Pulls.Quiet]), given the time the
-// message it reads takes to cross, since the consumer's answer crosses the
-// link behind it: held to the read term and the ceiling alone, every answer
-// arrived after the ceiling on a link that carries the message in longer, and
-// the read failed while its message was on its way. A cluster drops a new
-// consumer's FIRST pull routinely — natsobj measured one read in twenty-five
-// on a loaded three-member fleet — and a consumer that holds no pull and has
-// delivered nothing never got it: it is deleted and made again, up to
-// [jsapi.FirstPullRemakes] times, as internal/objstore/natsobj's reads do. One that
-// holds the pull, or has delivered what has not arrived, is being read
-// however slowly — a whole message at the floor takes minutes to cross — and
-// is waited on, on the same inbox. Waited on with no word, the read failed
-// as a heartbeat missed: a pull long enough to have a heartbeat of its own
-// that the broker never received sends none, and was ended at two of them,
-// the whole wait spent, and never asked again.
-//
-// # One bound for the whole read, and the caller's own first
-//
-// Every request a read makes — the leader's info, the creates, the pulls, the
-// consumer's info — runs under one context ([copyRead.bounded]): the caller's,
-// so a caller that goes stops the read at once, a node's shutdown among them;
-// and where the caller set no deadline, the ceiling every read is held to
-// ([jsprovision.LookupBudget]) and the time the message it reads takes to
-// cross raw at the link's pace ([jsapi.Sending]) — longer than the five
-// seconds the client holds such a caller's one request to, because a copy
-// read is several, and a delivery may wait on the link behind a whole message
-// carried ahead of it.
-
-// throwaway makes a consumer of stream that its reader makes, reads and
-// deletes — acknowledging nothing, since a read must never change what the
-// stream retains, and reaped by the broker [peekBackstop] after its reader
-// stops pulling should the reader die before it deletes it — and answers it
-// with the delete its reader defers. cfg says the rest: where it begins, what
-// it filters to, and whether it delivers payloads.
+// throwaway makes a consumer of stream, as cfg says, for its reader to read and
+// delete, and answers it with the delete the reader defers. It acknowledges
+// nothing, since a read must never change what the stream retains, and the
+// broker reaps it [peekBackstop] after its reader stops pulling should the
+// reader die first.
 func (q *Queue) throwaway(ctx context.Context, stream string,
 	cfg jetstream.ConsumerConfig) (jetstream.Consumer, func(), error) {
 
@@ -162,10 +31,7 @@ func (q *Queue) throwaway(ctx context.Context, stream string,
 		return nil, nil, err
 	}
 	return cons, func() {
-		// WithoutCancel because a cleanup that inherits the cancellation
-		// it is cleaning up after does nothing at all — and then its OWN
-		// bound, because WithoutCancel drops the deadline along with the
-		// cancellation.
+		// Its OWN bound, because WithoutCancel drops the deadline too.
 		cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), peekCleanup)
 		defer stop()
 		_ = q.js.DeleteConsumer(cleanup, stream, cons.CachedInfo().Name)
@@ -173,8 +39,8 @@ func (q *Queue) throwaway(ctx context.Context, stream string,
 }
 
 // pulls opens a reader's pulls of cons, a consumer of stream, on an inbox of
-// their own ([jsapi.Pulls]) — see this file's head — the consumer's info asked
-// at the queue's timing ([Queue.provisioning]).
+// their own ([jsapi.Pulls]), the consumer's info asked at the queue's timing
+// ([Queue.provisioning]).
 func (q *Queue) pulls(stream string, cons jetstream.Consumer) (*jsapi.Pulls, error) {
 	return jsapi.NewPulls(q.nc, q.API(), stream, cons, q.provisioning())
 }
@@ -187,15 +53,13 @@ var errExpired = errors.New("the consumer's pull expired")
 // than its byte bound ([jsapi.PastMaxBytes]).
 var errPastMaxBytes = errors.New("the consumer's next message is larger than its pull's byte bound")
 
-// pulled is the next delivery on p's inbox before ctx ends, or what the
-// broker said of the reader's pull instead: that it expired ([errExpired]),
-// that its next message is past its byte bound ([errPastMaxBytes]), or that it
-// was refused ([jsapi.Event.Refusal]). A heartbeat, and a count filled with
-// bytes of the bound to spare, say nothing a throwaway's reader acts on, and
-// are passed over — the reader has its delivery by then.
-//
-// THE CONSUMER'S OWN COUNT GUARDS EVERY DELIVERY ([jsapi.ErrDeliveryLost]): a
-// reader that went on past one it lost would take the next delivery for it.
+// pulled is the next delivery on p's inbox before ctx ends, or what the broker
+// said of the pull instead: expired ([errExpired]), past its byte bound
+// ([errPastMaxBytes]) or refused ([jsapi.Event.Refusal]). Heartbeats and
+// spare-bytes counts say nothing a throwaway's reader acts on, and are passed
+// over. The consumer's own count guards every delivery
+// ([jsapi.ErrDeliveryLost]): a reader that went past a lost one would take the
+// next for it.
 func pulled(ctx context.Context, p *jsapi.Pulls) (jsapi.Event, error) {
 	for {
 		ev, err := p.Next(ctx)
@@ -232,27 +96,23 @@ func within(ctx context.Context, p *jsapi.Pulls, quiet time.Duration) (jsapi.Eve
 }
 
 // leaderCarries reports whether a stream leader's read of a message of
-// messageBytes, header block and payload, reaches this queue's connection —
-// see this file's head. Always, unless a leaf's link stands between the
-// connection and the leader ([link.leaf], decided where the connection was
-// made); and across one, only where the leader's reply ([jsapi.ReplyBytes])
-// is no larger than what the leaf's server holds a message to — past it, it
-// closes its whole link on the reply.
+// messageBytes, header block and payload, reaches this queue's connection
+// (package doc, "A message too large for a leader's reply is read raw"):
+// always, unless a leaf's link stands between ([link.leaf]); across one, only
+// where the leader's reply ([jsapi.ReplyBytes]) is within what the leaf's
+// server holds a message to, past which it closes its whole link.
 //
-// NEVER BY HOW LONG THE REPLY TAKES TO CROSS: a leader's read of a message
-// that may be large is given its reply's arrival beyond the read term and
-// beyond the lookup ceiling ([jsapi.Leader.Carrying], [DomainLog.At]), so a
-// reply the leaf's server carries lands however slow the link. It was routed
-// raw as well wherever its reply could not land inside the bare ceiling at
-// the link's pace — about a mebibyte at the floor — because the ceiling then
-// counted no arrival, and a read whose reply took longer than thirty seconds
-// to cross failed at every ask (crewlet/crewlet#1149).
+// NEVER BY HOW LONG THE REPLY TAKES TO CROSS: the leader's read is given its
+// reply's arrival beyond the read term and the lookup ceiling
+// ([jsapi.Leader.Carrying], [DomainLog.At]), so a reply the leaf's server
+// carries lands however slow the link.
 func (q *Queue) leaderCarries(messageBytes int) bool {
 	return !q.link.leaf || int64(jsapi.ReplyBytes(messageBytes)) <= q.nc.MaxPayload()
 }
 
-// copyRead reads one stream's messages through consumers placed on the
-// server that leads it — see this file's head.
+// copyRead reads one stream's messages raw, through consumers placed on the
+// server that leads it, where a leader's JSON reply would close a leaf's link
+// (package doc, "A message too large for a leader's reply is read raw").
 type copyRead struct {
 	q      *Queue
 	stream string
@@ -275,28 +135,24 @@ type copyAt struct {
 	held bool
 	// subject is the message's, which never changes.
 	subject string
-	// bytes is the message as it was stored, its header block and its
-	// payload — what a read of it carries raw, counted from its headers'
-	// delivery (a few bytes over, for the size the broker states beside
-	// them).
+	// bytes is the message as stored, header block and payload — what a raw
+	// read carries — counted from its headers' delivery (a few bytes over,
+	// for the size header the broker adds).
 	bytes int
 }
 
 // replyRoom is the most a delivery's reply subject takes beside the stream's
-// name, as the broker counts a delivery against a pull's byte bound
-// (nats-server v2.15.2, consumer.go: the subject, the reply, the header block
-// and the payload): `$JS.ACK.`, the JetStream domain (the embedded fleet's is
-// jsapi.Domain) and the account's eight-character hash, the consumer's name —
-// twenty-two characters, as the client names a consumer it makes — and five
-// numbers of at most twenty digits, with the dots between: about a hundred and
-// sixty bytes. A quarter kibibyte is that with room.
+// name in the broker's count against a pull's byte bound (nats-server v2.15.2,
+// consumer.go: subject, reply, header block and payload): `$JS.ACK.`, the
+// JetStream domain (jsapi.Domain on the embedded fleet), the account's
+// eight-character hash, the client's twenty-two-character consumer name and
+// five numbers of up to twenty digits, with dots: about 160 bytes, plus room.
 const replyRoom = 256
 
 // delivered is the most the broker counts a delivery of a's message of stream
-// as against a pull's byte bound: the message as its probe counted it, its
-// subject and its reply ([replyRoom]). A later message on the subject larger
-// than that by more than the room is refused by the bound; one inside the
-// room is a few hundred bytes over the message, carried and discarded.
+// as against a pull's byte bound: the message as probed, its subject and its
+// reply ([replyRoom]). A later message on the subject larger by more than the
+// room is refused by the bound; one inside it is carried and discarded.
 func (a copyAt) delivered(stream string) int {
 	return a.bytes + len(a.subject) + len(stream) + replyRoom
 }
@@ -338,16 +194,14 @@ func (c *copyRead) at(ctx context.Context, seq uint64) (copyAt, error) {
 	return found, err
 }
 
-// message is the message at seq, which a probe of the same stream found there
-// as at says, read RAW from the leader's own copy, with held false where the
-// leader has removed it since — the probe's word is never taken for the
-// payload's. Its consumer is filtered to the message's subject, so a message
-// removed since hands over at most the next on that subject in its place,
-// never another subject's — and that one only where it is no larger than this
-// one ([copyAt.delivered]): one larger is answered with the pull's byte bound,
-// and the sequence is probed again, so a message still there is never
-// answered as gone on the bound's word. Its read waits for the time the
-// message takes to cross the link at its pace ([copyRead.crossing]).
+// message is the message at seq, which a probe ([copyRead.at]) found as at
+// says, read RAW from the leader's own copy, with held false where the leader
+// has removed it since; the probe's word is never taken for the payload's. Its
+// consumer is filtered to the message's subject and bounded at
+// [copyAt.delivered], so a removed message hands over at most the next on that
+// subject no larger than it; a larger one is answered with the byte bound and
+// the sequence probed again, so a message still there never reads as gone.
+// The read waits for the message's crossing ([copyRead.crossing]).
 func (c *copyRead) message(ctx context.Context, seq uint64, at copyAt) (stored, bool, error) {
 	var (
 		got  stored
@@ -420,9 +274,10 @@ func atOrPast(d jsapi.Event, seq uint64) error {
 }
 
 // bounded is ctx for one copy read of a message taking crossing to cross raw:
-// its caller's own, where it set a deadline; and where it set none, ended at
-// the queue's lookup ceiling ([jsprovision.LookupBudget]) and that crossing —
-// see this file's head.
+// the caller's own where it set a deadline, so a caller that goes stops the
+// read; otherwise ended at the lookup ceiling ([jsprovision.LookupBudget]) plus
+// that crossing, since a copy read is several requests and a delivery may wait
+// on the link behind a whole message.
 func (c *copyRead) bounded(ctx context.Context, crossing time.Duration) (context.Context, context.CancelFunc) {
 	if _, set := ctx.Deadline(); set {
 		return context.WithCancel(ctx)
@@ -471,10 +326,9 @@ func (c *copyRead) read(ctx context.Context, cfg jetstream.ConsumerConfig, cross
 
 // first is the first message cons delivers, pulled once on an inbox of its own
 // for as long as ctx allows, or nil where it has nothing to deliver — and
-// [errUnpulled], where remake allows it, for a consumer whose pull never
-// reached it: see this file's head. crossing is how long the message takes to
-// cross raw, which the consumer's answer to a quiet pull may wait behind
-// ([jsapi.Pulls.Quiet]).
+// [errUnpulled], where remake allows it, for a consumer whose first pull a
+// cluster dropped. crossing is how long the message takes to cross raw, which
+// the consumer's answer to a quiet pull may wait behind ([jsapi.Pulls.Quiet]).
 func (c *copyRead) first(ctx context.Context, cons jetstream.Consumer, crossing time.Duration,
 	maxBytes int, remake bool) (*jsapi.Event, error) {
 
@@ -550,15 +404,12 @@ func (c *copyRead) undelivered(err error) error {
 }
 
 // placementPause is how long a read waits before each consumer it makes past
-// its first draw — as many as the stream keeps replicas, made back to back —
-// whose placements all missed the stream's leader.
-//
-// ONE SECOND, nats-server's raft heartbeat (raft.go's hbInterval): the broker
-// prefers the replicas its metadata leader counts as caught up — an
-// acknowledgement since that leader's election, and a word from it within
-// three heartbeats — so a stream leader passed over for that is counted again
-// within a heartbeat of answering, and a consumer made sooner is placed by the
-// same count as the one before.
+// its first draw (as many as the stream keeps replicas, back to back) once all
+// missed the stream's leader. One second, nats-server's raft heartbeat
+// (raft.go's hbInterval): the broker prefers replicas its metadata leader
+// counts as caught up (acknowledged since its election and heard from within
+// three heartbeats, raft.go's IsFollowerCaughtUp), so a stream leader passed over is counted again within
+// a heartbeat, and a consumer made sooner is placed by the same count.
 const placementPause = time.Second
 
 // onLeader makes a consumer of the stream as cfg says on the server that leads
@@ -620,15 +471,12 @@ const unplacedOdds = 1e-6
 
 // placements is how many consumers a read makes before it gives up on one
 // placed on the leader of a stream keeping replicas copies: enough that a
-// healthy cluster's broker, picking uniformly among the replicas it counts as
-// caught up — every live one there — misses the leader every time at most
-// [unplacedOdds] of the time: 35 at three replicas, 62 at five, and one where
-// the stream keeps one, which is the leader. Past the first replicas of them
-// each waits a metadata heartbeat ([placementPause]), so a stream leader the
-// broker passes over until it is counted caught up again has 32 heartbeats to
-// be at three replicas, and 57 at five. Each costs a consumer made and
-// deleted, a few milliseconds of the metadata leader's: a read in a healthy
-// cluster makes as many as the stream keeps copies, on average.
+// broker picking uniformly among them (every live replica counts as caught up
+// in a healthy cluster) misses the leader every time at most [unplacedOdds] of
+// the time — 35 at three replicas, 62 at five, one at one. Past the first
+// replicas each waits [placementPause], so a passed-over leader has 32
+// heartbeats to be counted again at three replicas, 57 at five. Each costs a
+// consumer made and deleted; a healthy read makes about replicas of them.
 func placements(replicas int) int {
 	if replicas <= 1 {
 		return 1

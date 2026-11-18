@@ -206,10 +206,9 @@ func TestAMemberOnAnyLeafPortSaysWhichItBound(t *testing.T) {
 	}
 }
 
-// A MEMBER WHOSE LEAF PORT SOMEBODY HOLDS IS REFUSED AS ITS LEAF PORT — named
+// A MEMBER WHOSE LEAF PORT SOMEBODY HOLDS IS REFUSED AS ITS LEAF PORT, named
 // by the setting and the sentinel of the leaf listener, never the route
-// listener's. It shared [ErrRoutePortTaken] once, and a member with no cluster
-// block at all was told its "cluster route port" was taken.
+// listener's: a member with no cluster block has no route port to blame.
 func TestATakenLeafPortIsNamedAsTheLeafPort(t *testing.T) {
 	t.Parallel()
 	held, err := net.Listen("tcp", "127.0.0.1:0")
@@ -241,12 +240,11 @@ func TestATakenLeafPortIsNamedAsTheLeafPort(t *testing.T) {
 // timing out on its first stream with a message about the stream — and what
 // it says is the SETTING to fix.
 //
-// That sentence is reached only when the leaf's own wait runs out — sixty
-// seconds in production — so the wait is shortened on the server itself and
-// the caller's context is left long. Cut short by the caller instead, which is
-// how this case used to run, the wait ends with the caller's deadline and
-// names nothing: and the assertion then read "leaf", which every error this
-// wait can return contains, so it passed whatever the message said.
+// That sentence is reached only when the leaf's own wait runs out (sixty
+// seconds in production), so the wait is shortened on the server itself and
+// the caller's context left long: cut short by the caller, the wait ends with
+// the caller's deadline and names nothing. "leaf" alone is no assertion: every
+// error this wait returns contains it.
 func TestALeafWithNoMemberToReachNamesTheLink(t *testing.T) {
 	t.Parallel()
 	cfg := testTimings(Config{
@@ -287,9 +285,7 @@ func TestALeafReportsItsLinkGoingDown(t *testing.T) {
 	memberCfg := cfg
 	memberCfg.ServerName = "member"
 	memberCfg.LeafHost = "127.0.0.1"
-	// ON [AnyPort], AND ASKED WHICH, as [unusedPort] says a member always
-	// is: started on a port found free a moment earlier, this case lost it
-	// whenever anything else on the machine took it first.
+	// ON [AnyPort], AND ASKED WHICH: [unusedPort] says why.
 	memberCfg.LeafPort = AnyPort
 	memberCfg.StoreDir, memberCfg.StoreMaxBytes = brokertest.TempDir(t), brokertest.StoreMaxBytes
 	member, err := StartServer(t.Context(), memberCfg)

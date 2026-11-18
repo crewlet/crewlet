@@ -37,9 +37,8 @@ const conversation = "C0FOUNDER/1700000000.000100"
 // crossedAt is the instant the cases' rows and listings carry.
 var crossedAt = time.Unix(1_700_000_000, 0).UTC()
 
-// sessionKey is the object every case's session names: minted ONCE, because a
-// key is random past its instant, and two answers that named two keys could
-// not be compared.
+// sessionKey is the object every case's session names, minted once: a key is
+// random past its instant, and answers naming two keys could not be compared.
 var sessionKey = objstore.KeyAt(crossedAt)
 
 // atLog is a position on the executor log.
@@ -142,10 +141,9 @@ func serveExecutor(t *testing.T, q Server, name string, local LocalBackends) {
 	t.Cleanup(func() { _ = stop(context.Background()) })
 }
 
-// logbook is one data node's executor log as the crossing case reaches it:
-// every read answers rows built from what it was asked, every write records the
-// call and the input it was made with, and a few inputs answer the refusals a
-// caller branches on.
+// logbook is one data node's executor log for the crossing case: reads answer
+// rows built from what they were asked, writes record their call and input, and
+// a few inputs answer the refusals a caller branches on.
 type logbook struct {
 	mu       sync.Mutex
 	heard    []string
@@ -315,28 +313,22 @@ func (l *logbook) DeleteSeat(_ context.Context, c executordomain.Call, handle st
 }
 
 // EVERY EXECUTOR OPERATION CROSSES WHOLE, AND A CONSUMER CANNOT TELL LOCAL FROM
-// ROUTED.
+// ROUTED: every argument (the engine's call included) and every answer crosses,
+// each refusal keeps the identity the engine branches on, each read crosses at
+// its caller's level, and a data node's own router answers the same calls
+// in-process exactly as routed, an empty sealed count included, which the wire
+// leaves out.
 //
-// A node without `data` reaches a data node's executor log with every argument
-// (the engine's call, its author and operation id included) and every answer
-// (a row's object, its ending, the position a head was read at), each refusal
-// keeping the identity the engine branches on, and each read crossing at the
-// level its caller asked. And a data node's own router, answering the same
-// calls in-process from the same copy, answers each exactly as the routed call
-// was answered: a session count that is empty included, which the wire leaves
-// out.
-//
-// Mutation: drop a field from an operation's args type — a search's query,
-// cursor or limit among them — drop the empty-map answer from
-// ExecutorReads.SealedKeys, or a sentinel from the registry, and a row goes
-// red.
+// Mutation: drop a field from an operation's args type (a search's query,
+// cursor or limit among them), the empty-map answer from
+// ExecutorReads.SealedKeys, or a sentinel from the registry, and a row goes red.
 func TestEveryExecutorOperationCrossesWhole(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	book := &logbook{sealed: secrets.KeyCounts{"k0": 1, "k1": 2}}
 	serveExecutor(t, f.start(t), "data-x", book)
 	f.placement.set(func(p *fakePlacement) { p.nodes = []string{"data-x"} })
-	// THE SAME COPY ANSWERED IN-PROCESS, by a data node that asks nobody
+	// The same copy answered in-process by a data node that asks nobody
 	// else: a walk that left it would find no node and fail.
 	local, err := NewRouter(RouterOptions{Self: "data-self", Queue: f.start(t),
 		Placement: &fakePlacement{}, Git: &fakePlacement{}, Session: NewSession(), Timing: Production(),
@@ -544,17 +536,12 @@ func TestEveryExecutorOperationCrossesWhole(t *testing.T) {
 }
 
 // A SEATS-ONLY NODE'S CAPTURE IS RECORDED THROUGH A DATA NODE, and its
-// position is that node's next floor on the executor log — and so is a turn's
-// begin.
+// position is that node's next floor on the executor log; so is a turn's begin.
 //
-// A node without `data` holds no copy and no publisher, and a seat it holds ran
-// its box there: with no route, the session's object is uploaded, nothing
-// names it, and the collector deletes it a day later. The capture runs on the
-// data node under the engine's call whole — its author and the operation the
-// domain derived — and the next read this node sends, on whichever data node
-// answers it, waits to have applied the capture. A begin is the record a
-// relaunch reads its turn's own row for, to know whether it holds its base, so
-// the read after it waits for it the same way.
+// Unrouted, the session's object would be uploaded with nothing naming it, and
+// collected. The write runs on the data node under the engine's whole call, and
+// the next read this node sends waits to have applied it: a relaunch reads its
+// turn's row to know whether it holds its base.
 //
 // Mutation: drop the capture's or the begin's Observe, or declare
 // executor.session with no domain, and the next read carries no floor.
@@ -618,9 +605,9 @@ func TestASeatsOnlyNodesCaptureIsRecordedThroughADataNode(t *testing.T) {
 	}
 }
 
-// sessionLog is the executor log as the cases' data nodes share it: the
-// operation ledger a repeat is answered from, every operation id any node ran,
-// and the turns ended on it in log order — what every copy applies.
+// sessionLog is the executor log the cases' data nodes share: the ledger a
+// repeat is answered from, every operation id any node ran, and the turns
+// ended on it in log order, which every copy applies.
 type sessionLog struct {
 	mu     sync.Mutex
 	ledger map[string]statelog.Result
@@ -630,9 +617,9 @@ type sessionLog struct {
 
 func newSessionLog() *sessionLog { return &sessionLog{ledger: map[string]statelog.Result{}} }
 
-// record runs one write under opID as the log's ledger does: the first copy
-// appends a record — effect is what it does to the log, run under the log's
-// lock — and a repeat is answered with the first copy's result, collapsed.
+// record runs one write under opID as the log's ledger does: the first appends
+// a record (effect runs under the log's lock), and a repeat is answered with
+// the first's result, collapsed.
 func (l *sessionLog) record(opID string, effect func()) statelog.Result {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -658,8 +645,7 @@ func (l *sessionLog) replica() *sessionCopy {
 // sessionCopy is one data node's copy of a [sessionLog]: the executor half it
 // serves, how far it has applied the log, and how it misbehaves.
 type sessionCopy struct {
-	// The reads and writes no case here asks: a call to one is a case
-	// asking what this fake does not model, and panics on the nil.
+	// The reads and writes no case asks: calling one panics on the nil.
 	ExecutorReader
 	ExecutorWriter
 
@@ -823,14 +809,10 @@ func twoCopies(t *testing.T) (f *fleet, shared *sessionLog, copies map[string]*s
 }
 
 // AN UNANSWERED CAPTURE IS ASKED AGAIN UNDER THE SAME OPERATION, AND LANDS
-// ONCE.
-//
-// The first data node runs the capture and its reply is lost: it landed. The
-// router asks the next data node under the same operation id — the one the
-// domain derived from the turn, its launch and the capture's ordinal — and
-// that node's ledger answers it with the first copy's outcome rather than
-// appending a second record. A once-write would have stopped at the silent
-// node, unknown; a write asked again under a fresh id would have landed twice.
+// ONCE: the first node lands it and its reply is lost, and the next node's
+// ledger answers the same operation id with the first outcome rather than a
+// second record. A once-write would stop at the silent node, unknown; a fresh
+// id would land twice.
 //
 // Mutation: declare executor.capture an opOnceWrite and the capture answers
 // ErrOutcomeUnknown, the second node never asked.
@@ -862,14 +844,10 @@ func TestAnUnansweredCaptureIsAskedAgainUnderTheSameOperationAndLandsOnce(t *tes
 	}
 }
 
-// AN UNVOUCHED EXECUTOR WRITE MOVES ON, UNDER THE SAME OPERATION.
-//
-// A data node whose ledger cannot say whether a write landed answers it
-// `unknown`, unvouched, and another node's ledger may hold it: so the router
-// asks the next under the same operation id, and the vouching node's answer is
-// the one the engine gets. Where no node vouches, the answer is that unknown —
-// never an estate nobody served, which says nothing ran and invites a second
-// write under a fresh id.
+// AN UNVOUCHED EXECUTOR WRITE MOVES ON, UNDER THE SAME OPERATION, and the
+// vouching node's answer is the engine's. Where no node vouches, the answer is
+// that unknown, never an unserved estate, which says nothing ran and invites a
+// second write under a fresh id.
 //
 // Mutation: declare executor.capture an opOnceWrite and the first node's
 // unvouched unknown is the answer.
@@ -909,15 +887,11 @@ func TestAnUnvouchedExecutorWriteMovesOnUnderTheSameOperation(t *testing.T) {
 	}
 }
 
-// THE CONVERSATION READ WAITS FOR AN END ANOTHER NODE MADE.
-//
-// A seat that moved holds no floor for the end its previous turn published
-// through another node: this node never observed it. So a launch reads its
-// conversation at `linearizable`, and the level crosses whole to whichever data
-// node answers, whose read index's barrier holds the read until its copy has
-// applied every record the log held, the end among them. Read at `session`,
-// with no floor to wait for, the same copy answers from before the end — the
-// older head a launch must never continue.
+// THE CONVERSATION READ WAITS FOR AN END ANOTHER NODE MADE: a seat that moved
+// holds no floor for it, so a launch reads at `linearizable`, and the answering
+// node's read-index barrier holds the read until its copy has applied the end.
+// Read at `session`, the same copy answers the older head a launch must never
+// continue.
 //
 // Mutation: drop Fresh from executorHeadArgs and the linearizable read answers
 // at once, without the end.
@@ -928,7 +902,7 @@ func TestAConversationReadWaitsForAnEndAnotherNodeMade(t *testing.T) {
 	data := shared.replica()
 	serveExecutor(t, f.start(t), "data-a", data)
 	f.placement.set(func(p *fakePlacement) { p.nodes = []string{"data-a"} })
-	// THE NODE THE SEAT LEFT ends its turn; the node it moved to launches.
+	// The node the seat left ends its turn; the node it moved to launches.
 	left, moved := f.router(t, "agent-left", nil), f.router(t, "agent-moved", nil)
 	ctx := t.Context()
 	if _, err := left.ExecutorWrites().End(ctx, engineCall(executordomain.EndOpID(crossedAt, "swe", liveTurn)),
@@ -975,13 +949,10 @@ func TestAConversationReadWaitsForAnEndAnotherNodeMade(t *testing.T) {
 	}
 }
 
-// THE FACADES ARE THE DOMAIN'S OWN METHOD SETS, EXACTLY: the reader's and the
-// writer's, method for method and signature for signature, and so are the
-// halves a data node serves the log with. A consumer cannot tell local from
-// routed only while it can make through the facade every call the domain's
-// own side answers: a method the domain gained and the facade lacks is a call
-// the engine makes in-process on a data node and cannot make on a node
-// without `data`.
+// THE FACADES ARE THE DOMAIN'S OWN METHOD SETS, EXACTLY, signature for
+// signature, and so are the halves a data node serves: a method the domain
+// gained and a facade lacks is a call the engine makes in-process on a data
+// node and cannot make on a node without `data`.
 //
 // Mutation: add a method to executordomain.Reader, or drop one from
 // ExecutorReads, and the reader's row names it.
@@ -1038,12 +1009,10 @@ func methodSet(ty reflect.Type) map[string]string {
 	return out
 }
 
-// THE FACADES ASK EXACTLY THE EXECUTOR LOG'S OPERATIONS, each method one:
-// every executor read through the reader facade, every write the engine
-// originates through the writer facade, and nothing else through either. The
-// method sets match the domain's (above); this holds each method to an
-// operation of its own class, so a facade method wired to a surface's
-// operation, or one that asks nothing, is named.
+// THE FACADES ASK EXACTLY THE EXECUTOR LOG'S OPERATIONS, one per method: every
+// executor read through the reader, every engine write through the writer, and
+// nothing else, so a method wired to a surface's operation, or asking nothing,
+// is named.
 //
 // Mutation: point ExecutorWrites.End at opExecutorEndLost and the writer's
 // operations lack executor.end.

@@ -17,19 +17,17 @@ import (
 
 // What a walk does with a node whose build cannot read a request whole, past
 // asking the next node: who fills a repository's copy, which later requests
-// the node is passed over for, and which reads a caller carries on.
+// pass the node over, and which reads a caller carries on.
 
-// A HOME THAT CANNOT READ A REQUEST WHOLE PASSES THE FILL. A repository's home
-// of an older build refuses a git read, an engine write or a merge preview
-// carrying what its build does not declare, before its git half is asked
-// anything — so no copy is coming there for it, and the runner-up, of the
-// asking node's build and holding no copy, is the one the walk lets fill: it is
-// stamped home, fills and answers. Kept on the home, the runner-up was asked
-// unstamped, answered that it holds no copy, and the request failed with the
-// refusal — although a node of the asking build could serve it.
+// A HOME THAT CANNOT READ A REQUEST WHOLE PASSES THE FILL. An older home refuses
+// a git read, an engine write or a merge preview carrying what its build does
+// not declare before its git half is asked anything, so no copy is coming there:
+// the runner-up, of the asking build and holding no copy, is stamped home,
+// fills and answers. Kept on the home, the runner-up would answer unstamped that
+// it holds no copy, and the request would fail with the refusal.
 //
-// Mutation: drop the refusal from passesFill and every one of the three fails
-// with the refusal, nobody stamped.
+// Mutation: drop the refusal from passesFill and all three fail with the
+// refusal, nobody stamped.
 func TestAHomeThatCannotReadARequestWholePassesTheFill(t *testing.T) {
 	t.Parallel()
 	for name, ask := range map[string]func(*fleet, string) (string, error){
@@ -79,19 +77,16 @@ func TestAHomeThatCannotReadARequestWholePassesTheFill(t *testing.T) {
 	}
 }
 
-// A REFUSAL MOVES ONLY THE REQUESTS CARRYING WHAT IT REFUSED. A repository's
-// home of an older build refuses a recursive listing of one repository, its
-// build not declaring `recursive`, and serves every other request: a read of
-// another repository it is home to is still asked of it and answered there; a
-// second recursive read is asked of the runner-up first, which the walk lets
-// fill, and never of the home. Declined for the whole operation, the other
-// repository's read was moved off its home for thirty seconds, and a runner-up
-// holding no copy of it filled one — a fill for every repository the node is
-// home to, to save one refused round trip.
+// A REFUSAL MOVES ONLY THE REQUESTS CARRYING WHAT IT REFUSED. An older home
+// refuses a recursive listing (its build not declaring `recursive`) and serves
+// everything else: a read of another repository it is home to is still asked
+// of it; a second recursive read goes to the runner-up first, which fills, and
+// never to the home. Declining the whole operation would move every repository
+// it is home to off it for thirty seconds, a fill each, to save one refused
+// round trip.
 //
-// Mutation: remember the refusal for the whole operation (markDeclined in place
-// of markUnread in Router.settle) and the other repository's read moves off its
-// home.
+// Mutation: markDeclined in place of markUnread in Router.settle and the other
+// repository's read moves off its home.
 func TestARefusalMovesOnlyTheRequestsCarryingWhatItRefused(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -178,14 +173,14 @@ func TestAPathAsARefusalNamesItIsMatchedAgainstTheRequest(t *testing.T) {
 }
 
 // A CARRIED READ IS READ WHOLE, AND THE SHOWN ONE IS NOT. A version a publish
-// carries on is refused where it holds a key this build does not declare — the
-// publish would write it back short — while the same version read to show it
-// decodes what this build declares of it: refusing that one blinded every seat,
-// screen and artifact origin on an older node to a version a newer node
-// published, for nothing it would lose.
+// carries on is refused where it holds a key this build does not declare, since
+// the publish would write it back short; the same version read to show it
+// decodes what this build declares. Refusing that one would blind every seat,
+// screen and artifact origin on an older node to a newer node's version, for
+// nothing it would lose.
 //
-// Mutation: declare artifacts.version answered whole, as it was, and the shown
-// version is refused too.
+// Mutation: declare artifacts.version answered whole and the shown version is
+// refused too.
 func TestACarriedReadIsReadWholeAndTheShownOneIsNot(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -214,13 +209,11 @@ func TestACarriedReadIsReadWholeAndTheShownOneIsNot(t *testing.T) {
 }
 
 // A VIEW SAVED AGAIN IS LISTED WHOLE, AND THE STRIP A SCREEN SHOWS IS NOT.
-// save_work_view replaces a view whole, by an id list_work_views lists, with
-// what its call re-sends of what the listing showed — so a node of an older
-// build, listing a strip a data node of a newer one answers with a field on a
-// view that this build does not declare, is refused the listing rather than
-// shown the view short: a rename built from it would save the field away, on
-// every node. The same strip read to show it, as the dashboard and the API
-// read it, answers what this build declares of it.
+// save_work_view replaces a view whole with what its call re-sends of a
+// list_work_views listing, so an older node listing a strip holding a view field
+// it does not declare is refused rather than shown the view short: a rename
+// built from it would save the field away on every node. The strip read to show
+// it, as the dashboard and the API read it, answers what this build declares.
 //
 // Mutation: answer Work.CarriedViews from tracker.views, the read a screen
 // shows, and the listing comes back without the field.

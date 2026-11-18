@@ -12,17 +12,15 @@ import (
 
 // ---- the nodes' status records ------------------------------------------ //
 
-// A node's status record is one key of the node status bucket, the node's id
-// encoded as every node key is, so a node writes only under its own name and a
-// record cannot say otherwise: the node is stamped from the key. The bucket's
-// age is the apply status's, which is what removes a dead node's record
+// A node's status record is one key of the node status bucket, its encoded
+// node id: a node writes only under its own name, and the node is stamped from
+// the key. The bucket's age, the apply status's, removes a dead node's record
 // (coord's nodestatusrecord.go).
 
 // PutNodeStatus writes this node's record, replacing it.
 //
-// A PLAIN PUT, as the apply status is: the only writer of the key is the node
-// it names, so there is no race to arbitrate, and every write refreshes the
-// key's age, which is what keeps a live node's record from ageing out.
+// A PLAIN PUT: the key's only writer is the node it names, and every write
+// refreshes the key's age, keeping a live node's record from ageing out.
 func (f *FleetStore) PutNodeStatus(ctx context.Context, r coord.NodeStatusRecord) error {
 	if err := r.Check(); err != nil {
 		return err
@@ -47,9 +45,8 @@ func (f *FleetStore) NodeStatusRecords(ctx context.Context) ([]coord.NodeStatusR
 		}
 		r, err := coord.DecodeNodeStatusRecord(node, kve.Value())
 		//nolint:nilerr // An undecodable record is SKIPPED rather than raised,
-		// for the apply status's reason: failing the listing over one row
-		// would blank every node's rows, where dropping it reads that one
-		// node as not saying.
+		// since failing the listing over one row blanks every node's rows,
+		// where dropping it reads that one node as not saying.
 		if err != nil {
 			return nil
 		}
@@ -67,11 +64,9 @@ func (f *FleetStore) NodeStatusRecords(ctx context.Context) ([]coord.NodeStatusR
 // later than through; one that is not there, or is a later epoch's, is no
 // error.
 //
-// A READ, THEN A PURGE AT THE REVISION READ: the purge refuses where the key
-// moved since, which is a later write — this node's writer has stopped, so a
-// later incarnation's — and that record stays. Purge rather than delete, as a
-// released claim is: the marker it leaves ages out with the bucket, and the
-// node's next incarnation writes over it.
+// A READ, THEN A PURGE AT THE REVISION READ: this node's writer has stopped,
+// so a key that moved since was written by a later incarnation, and that
+// record stays. A purge's marker ages out with the bucket.
 func (f *FleetStore) DeleteNodeStatus(ctx context.Context, node string, through int64) error {
 	if node == "" {
 		return fmt.Errorf("%w (removing one)", coord.ErrNoNodeStatus)
@@ -87,8 +82,7 @@ func (f *FleetStore) DeleteNodeStatus(ctx context.Context, node string, through 
 	if r, decodeErr := coord.DecodeNodeStatusRecord(node, kve.Value()); decodeErr == nil && r.Epoch > through {
 		return nil
 	}
-	// A record that does not decode is removed with the rest: no reader
-	// counts it, and nothing later than this node wrote it that could.
+	// An undecodable record is removed too: no reader counts it.
 	err = f.nodeStatus.Purge(ctx, key, jetstream.LastRevision(kve.Revision()))
 	switch {
 	case err == nil:

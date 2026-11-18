@@ -47,13 +47,9 @@ func perPeriod(floor, share float64) uint64 {
 	return uint64(math.Ceil(share * floor * meterPeriod.Seconds()))
 }
 
-// A LINK IS MOVING AT SEVEN TENTHS OF THE FLOOR, ONE WAY: the line sits midway
-// between the background a quiet link carries — presence reads up to 40% of
-// the floor, pings and heartbeats — and a link draining bulk at the floor, so
-// the floor itself moves, the background does not, and the line is
-// [movingShare] of what the floor carries over the span asked about, in
-// EITHER direction alone: two directions each under it are not added up to
-// pass it.
+// A LINK IS MOVING AT SEVEN TENTHS OF THE FLOOR, ONE WAY ([movingShare]): the
+// floor moves, a quiet link's background (up to 40%) does not, and two
+// directions each under the line are not added up to pass it.
 //
 // Mutant: Moving true on any byte — the background reads as moving. Mutant:
 // the two directions summed — two halves under the line pass it. Mutant: the
@@ -92,10 +88,9 @@ func TestALinkIsMovingAtSeventyPercentOfTheFloorOneWay(t *testing.T) {
 }
 
 // A LINK'S MOVEMENT IS JUDGED OVER THE SPAN ASKED ABOUT, from its newest
-// reading: a link that carried at the floor until a moment ago and nothing
-// since is moving over a span reaching back into the bulk and still over one
-// that does not; a meter keeps [objstore.Stall] of readings, past its ring's
-// wrap; and one that has read no span — made a moment ago — is not moving.
+// reading: a link that stopped carrying the floor a moment ago is moving over a
+// span reaching back into the bulk and still over one that does not; readings
+// survive the ring's wrap; and a meter with no span yet is not moving.
 //
 // Mutant: the oldest reading kept rather than the newest one d back — a link
 // that stopped a span ago reads as moving. Mutant: the ring read in the order
@@ -140,10 +135,8 @@ func TestALinksMovementIsJudgedOverTheSpanAskedAbout(t *testing.T) {
 	}
 }
 
-// A CLOSED METER SAYS ITS LINK IS NOT MOVING: it takes no readings once
-// closed, and its ring, frozen at the moment of its close, would otherwise say
-// a link that moved then moves for ever, and hold every wait that reads it to
-// its cap.
+// A CLOSED METER SAYS ITS LINK IS NOT MOVING: its ring, frozen at its close,
+// would otherwise say the link moves for ever and hold every wait to its cap.
 //
 // Mutant: a closed meter answers from the readings its ring held at its close.
 func TestAClosedMeterSaysItsLinkIsNotMoving(t *testing.T) {

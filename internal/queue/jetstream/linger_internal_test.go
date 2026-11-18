@@ -15,21 +15,14 @@ import (
 // drain ends at the first fetch that returns with its window's end reached,
 // though every fetch it made brought mail.
 //
-// The slide this guards against needed an arrival in every fetch past the
-// window's end — the drain used to end only on a fetch that brought nothing —
-// and that is the broker's timing to give: a case publishing to a real one
-// cannot promise an arrival lands in each fetch, so a runner slow to publish
-// passed the slide (TestTheLingerWindowDoesNotSlideWithArrivals says how).
-// Held here on the drain itself, over a scripted consumer whose every pull
-// brings one message and a quarter of the window by the case's clock: the
-// window opens with the first message in hand, and the fourth fetch after it
-// returns at the window's end, so the drain holds five.
+// Held on the drain itself, since a real broker cannot promise an arrival in
+// each fetch (TestTheLingerWindowDoesNotSlideWithArrivals). Every scripted
+// pull brings one message and a quarter of the window by the case's clock, so
+// the fourth fetch after the first message reaches the end: five held.
 //
-// Mutation: end the window only on a fetch that brought nothing, or move its
-// end to each arrival, and the drain runs on to its cap; give it no window at
-// all, and it ends at its first fetch after the one that opened it; end it on
-// the wall clock, whatever clock it was handed, and no fetch ever reaches the
-// end.
+// Mutation: end the window only on an empty fetch, move its end to each
+// arrival, or end it on the wall clock, and the drain runs to its cap; give it
+// no window, and it ends at the fetch after the first.
 func TestTheLingerWindowEndsAtItsDeadlineWhateverItsFetchesBring(t *testing.T) {
 	t.Parallel()
 	const (

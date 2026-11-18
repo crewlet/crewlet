@@ -21,24 +21,17 @@ import (
 // asks about.
 var floorDomains = []string{"tracker", "pages", "code", "vectors", "usage"}
 
-// BenchmarkAFloorRead measures what one read of the published trim floors
-// costs a node, in the three shapes a node has read them in:
+// BenchmarkAFloorRead measures one read of the published trim floors in three
+// shapes: key (ONE domain's floor, the write fence's read on every write at an
+// expectation of zero); five-keys (every registered domain's key at once, one
+// goroutine each, as the heartbeat, readiness verdict and trim read); listing
+// (the floor class listed whole, through the register's walk).
 //
-//   - key: ONE domain's floor by its key — the write fence's read, made on
-//     every write at an expectation of zero;
-//   - five-keys: every registered domain's key at once, each on a goroutine
-//     of its own — what the heartbeat, the readiness verdict and the trim read;
-//   - listing: the floor class listed whole, the read every one of them made
-//     before, through the walk every listing of the register still takes.
-//
-// On TWO TOPOLOGIES: a member, whose client is in the broker's own process,
-// and a leaf, which reaches the member's JetStream across its link. Reported
-// beside the time are its spread (ms-p50, ms-p99) and how many JetStream API
-// requests one read sends (api-requests/op), counted off `$JS.>` on the read's
-// own connection — the cost that does not show on an idle broker: a listing's
-// consumer create and delete are each a proposal to the metadata group on a
-// clustered one, where a key read is one request its stream's leader answers.
-// A read that fails fails the benchmark.
+// It runs on a member (client in the broker's process) and a leaf (across its
+// link), and reports ms-p50, ms-p99 and api-requests/op counted off `$JS.>`,
+// the cost an idle broker hides: a listing's consumer create and delete are
+// each a metadata-group proposal on a clustered broker, where a key read is
+// one request to the stream's leader. A read that fails fails the benchmark.
 func BenchmarkAFloorRead(b *testing.B) {
 	for _, topology := range []struct {
 		name   string
@@ -72,8 +65,8 @@ func benchmarkFloorRead(b *testing.B, client jetstream.JetStream, reach Reach, s
 			b.Fatalf("PutFloor(%s): %v", domain, err)
 		}
 	}
-	// THE REGISTER'S OTHER CLASSES, so a listing filters rather than
-	// walking a bucket that holds nothing else.
+	// The register's other classes, so a listing filters rather than walks a
+	// bucket of floors alone.
 	for i := range 5 {
 		if err := fleet.PutPositions(ctx, coord.NodePositions{
 			NodeID: fmt.Sprintf("node-%d", i), At: time.Now().UTC(),
@@ -143,11 +136,10 @@ func floorReadOf(fleet *FleetStore, shape string) func(context.Context) error {
 }
 
 // apiTap counts every JetStream API request nc sends from now on, and the
-// consumer creates and deletes among them — on a clustered broker, the ones
-// the metadata group must agree to — and returns both once asked: a
-// connection receives what it publishes itself, so a subscription on `$JS.>`
-// beside the reads sees each request they send, and a flush puts every request
-// already sent in its queue before the count is read.
+// consumer creates and deletes among them (metadata-group proposals on a
+// clustered broker). A connection receives what it publishes, so a `$JS.>`
+// subscription sees each request, and a flush queues every one already sent
+// before the count is read.
 func apiTap(b *testing.B, nc *nats.Conn) func() (requests, consumers int) {
 	b.Helper()
 	sub, err := nc.SubscribeSync("$JS.>")

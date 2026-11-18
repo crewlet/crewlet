@@ -19,20 +19,16 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 )
 
-// The facts in this file belong to the VENDORED CLIENT and the broker it
-// talks to, not to this package. They are asserted here because the design
-// above them is built on them and because neither is visible from a checkout:
-// a client bump that changed one would be a silently different engine, and
-// the first symptom would be a trim that removed the wrong records or a
-// catch-up replay that fetched a hundred times what it was sized for.
+// The facts in this file belong to the VENDORED CLIENT and its broker, not to
+// this package: asserted here because the design rests on them and neither is
+// visible from a checkout, so a bump changing one would silently trim the wrong
+// records or make a catch-up replay fetch a hundred times its sizing.
 
 // A PURGE BY SEQUENCE REMOVES EXACTLY WHAT IS BELOW IT.
 //
-// This is the trim's whole mechanism: the fleet computes a floor — the lowest
-// position any counted node still needs — and removes everything below it.
-// The boundary is INCLUSIVE OF NOTHING AT THE FLOOR: WithPurgeSequence(n)
-// keeps n, and a client that removed it too would delete the record a node is
-// about to replay, with no error and no way to get it back.
+// The trim removes everything below a floor, the lowest position any counted
+// node still needs. WithPurgeSequence(n) KEEPS n: a client that removed it too
+// would silently and irrecoverably delete the record a node is about to replay.
 func TestAPurgeBySequenceKeepsTheFloor(t *testing.T) {
 	t.Parallel()
 	spec := probeDomain()
@@ -41,11 +37,9 @@ func TestAPurgeBySequenceKeepsTheFloor(t *testing.T) {
 
 	const total = 10
 	for i := range total {
-		// PUBLISHED THROUGH THE CLIENT, not through Queue.Publish: that
-		// one derives a NAMESPACE stream from the subject's first token,
-		// which is the seat-mailbox topology and not a domain's. A
-		// domain publishes to its own stream, which is step 3's
-		// publisher; here the client is enough.
+		// THROUGH THE CLIENT, not Queue.Publish, which derives a NAMESPACE
+		// stream from the subject's first token: the seat-mailbox
+		// topology, not a domain's.
 		if _, err := q.js.Publish(ctx, "crewlet.probe.log.item", []byte("record")); err != nil {
 			t.Fatalf("publish %d: %v", i, err)
 		}
@@ -88,31 +82,14 @@ func TestAPurgeBySequenceKeepsTheFloor(t *testing.T) {
 	}
 }
 
-// A FETCH IS BOUNDED BY BYTES, and this is what the vendored client actually
-// offers rather than what the design asked for.
+// A FETCH IS BOUNDED BY BYTES, the bound a replay needs: its records run from
+// a 140-byte barrier to over a megabyte, so no message count fits.
 //
-// # The finding
-//
-// A replay's fetch has to be bounded by SIZE, not by message count: a log
-// whose modal record is a 140-byte barrier and whose largest is over a
-// megabyte turns any message count into a request that is either pointless or
-// enormous. The design asked for ONE pull carrying both bounds — a message
-// count and a byte ceiling.
-//
-// nats.go v1.53.1 does not offer that, and this test is the record of it:
-//
-//   - Consumer.Fetch(batch, opts...) takes no byte option at all. Every
-//     FetchOpt it accepts is about waiting (MaxWait, Heartbeat, Context) or
-//     about priority groups.
-//   - Consumer.FetchBytes(maxBytes, opts...) is the byte-bounded pull, and it
-//     fixes the message count itself at one million — effectively unbounded.
-//   - PullMaxBytes exists, but only for Consume and Messages, and its own
-//     documentation says it is EXCLUSIVE with PullMaxMessages.
-//
-// So the replay pulls with FetchBytes and the message count is bounded
-// elsewhere: by the consumer's MaxAckPending, which is a consumer property
-// and not a per-pull one. That is a better place for it — it bounds what is
-// in flight across every pull rather than within one.
+// The vendored nats.go offers no pull carrying both bounds: Fetch takes no
+// byte option, FetchBytes fixes the count at one million (unbounded), and
+// PullMaxBytes (Consume and Messages only) is exclusive with PullMaxMessages.
+// So the replay pulls with FetchBytes and the consumer's MaxAckPending bounds
+// the count, across every pull in flight rather than within one.
 func TestTheVendoredClientBoundsAFetchByBytesAndNotByBoth(t *testing.T) {
 	t.Parallel()
 	spec := probeDomain()
@@ -172,20 +149,13 @@ func TestTheVendoredClientBoundsAFetchByBytesAndNotByBoth(t *testing.T) {
 // CREATING A DURABLE CONSUMER THAT ALREADY EXISTS WITH A DIFFERENT START
 // SEQUENCE IS AN ERROR, NOT A NO-OP.
 //
-// This is what makes a clustered restart able to fail on the state-log
-// consumer, and therefore what [Queue.DomainConsumer]'s ErrConsumerExists
-// branch exists for. That consumer's name carries the node id, so no PEER can
-// race it — but the node itself made it on an earlier boot, and inside the
-// metadata propagation window the lookup that precedes the create answers
-// not-found. The create then meets the consumer that is really there.
-//
-// If it merely returned the existing consumer, the branch would be dead code
-// and a restart would need no tolerance at all. It does not, because the
-// configs differ: OptStartSeq moves with this node's checkpoint between every
-// boot, and the broker treats a durable's start sequence as immutable.
-//
-// Both halves are asserted, because the branch turns on the difference: an
-// IDENTICAL config comes back as the existing consumer with no error.
+// [Queue.DomainConsumer]'s ErrConsumerExists branch rests on it: the
+// state-log consumer's name carries the node id, so no peer races it, but the
+// node made it on an earlier boot, and inside the metadata propagation window
+// the lookup before the create answers not-found. OptStartSeq moves with the
+// checkpoint between boots and the broker holds a durable's start sequence
+// immutable, so the create errors. Both halves are asserted: an IDENTICAL
+// config comes back as the existing consumer with no error.
 func TestCreatingAnExistingConsumerErrsOnlyWhenTheConfigDiffers(t *testing.T) {
 	t.Parallel()
 	spec := probeDomain()
@@ -202,16 +172,15 @@ func TestCreatingAnExistingConsumerErrsOnlyWhenTheConfigDiffers(t *testing.T) {
 		t.Fatalf("create the consumer: %v", err)
 	}
 
-	// THE SAME CONFIG is not an error — which is why the branch cannot
-	// simply treat every re-create as a recovery.
+	// THE SAME CONFIG is not an error, so the branch cannot treat every
+	// re-create as a recovery.
 	if _, err := q.js.CreateConsumer(ctx, spec.Name, base); err != nil {
 		t.Errorf("re-creating an identical consumer failed with %v, so a "+
 			"restart whose checkpoint had not moved would fail too", err)
 	}
 
-	// A MOVED START SEQUENCE is, and this is the shape every real restart
-	// takes: the node has applied records since, so its checkpoint is
-	// higher than when the consumer was made.
+	// A MOVED START SEQUENCE is: every real restart's shape, the
+	// checkpoint having advanced since the consumer was made.
 	moved := base
 	moved.OptStartSeq = 4
 	_, err := q.js.CreateConsumer(ctx, spec.Name, moved)
@@ -290,27 +259,14 @@ func TestAReloadReachesAHandshakeStillInFlight(t *testing.T) {
 // ITS FIRST MESSAGE PAST THE NEW LIMIT, UNLESS THAT MESSAGE IS STILL BEING
 // WRITTEN WHEN THE SERVER CLOSES: THEN IT MAY RECONNECT ONTO THE LOWER LIMIT.
 //
-// Three facts, and the deployment guide's "never lower it with a live reload"
-// rests on them, as does what carriesTheContract says it cannot see. The server
-// applies the reloaded limit to the connections it holds WITHOUT an INFO once
-// their handshake is done (one still in flight is told, as the case before
-// this one holds, so this one finishes its handshake first), so the client
-// goes on reading the old figure and no check on this side can learn the new
-// one. A message the socket takes whole is refused with
-// `Maximum Payload Violation`, which the client reads and treats as final, so
-// the connection is CLOSED rather than reconnected, whatever its reconnect
-// policy (reconnect for ever here, as this package dials). And a message the
-// socket takes only part of is still being written when the server closes the
-// connection; since nats.go 1.55.0 a write that fails part way closes the
-// socket on the client's side and drops the refusal unread, so the client
-// reconnects instead and reads the lowered limit. Which of the two the larger
-// message meets is a race between the client's own reader and writer, so that
-// row holds the client to one or the other and to nothing else.
-//
-// A bump that announced a reload, that reconnected after a refusal it read,
-// or that left a connection open on the old figure turns a row red, so the
-// warning is rewritten rather than left standing over a hazard that has
-// changed.
+// The deployment guide's "never lower it with a live reload", and what
+// carriesTheContract says it cannot see, rest on this. A handshaken connection
+// gets the new limit WITHOUT an INFO (one mid-handshake is told, so this case
+// handshakes first): no client check learns it. A message the socket takes
+// whole meets `Maximum Payload Violation`, read as final: CLOSED, even
+// reconnecting for ever. One taken in part fails its write as the server
+// closes; nats.go (since 1.55.0) drops the refusal and reconnects onto the
+// lowered limit. A race decides which, so that row admits either.
 func TestALiveReloadOfALowerMaxPayloadClosesAClientForGood(t *testing.T) {
 	t.Parallel()
 	const before = 8 << 20
@@ -402,12 +358,10 @@ func TestALiveReloadOfALowerMaxPayloadClosesAClientForGood(t *testing.T) {
 					"it read, and the guide's warning is to be rewritten")
 			default:
 				// AND THE RECONNECT ENDS IT: the client has read the
-				// lowered limit, so the same message sent again is
-				// refused before a byte is written, never sent for the
-				// server to close the connection over again. Every
-				// publisher in this module writes through that check, so
-				// a producer that retries meets record_too_large rather
-				// than a reconnect per attempt.
+				// lowered limit, so the same message is refused before a
+				// byte is written. Every publisher here writes through
+				// that check, so a retrying producer meets
+				// record_too_large, not a reconnect per attempt.
 				if err := nc.Publish("crewlet.fact.oversized",
 					make([]byte, 2*tc.after)); !errors.Is(err, nats.ErrMaxPayload) {
 					t.Fatalf("after reconnecting onto the lowered limit the "+
@@ -423,11 +377,9 @@ func TestALiveReloadOfALowerMaxPayloadClosesAClientForGood(t *testing.T) {
 // THE REFUSALS [jsprovision.Refused] TAKES AS ANSWERS ARE THE PINNED SERVER'S
 // OWN CODES, and so are the race's shapes it leaves to the read-back.
 //
-// The classifier spells each code as a number, because nats.go names few of
-// them, and a number copied from a server is one a server bump can move
-// without a word. It is held here rather than beside the classifier because
-// this is the package that links the server, and its error table is the only
-// authority on what each identifier is.
+// The classifier spells each code as a number (nats.go names few), which a
+// server bump can move silently. Held here, not beside the classifier, because
+// this package links the server, whose error table is the only authority.
 func TestTheRefusalsNotReadBackAreThePinnedServersCodes(t *testing.T) {
 	t.Parallel()
 	answer := func(id server.ErrorIdentifier) *jetstream.APIError {

@@ -20,14 +20,12 @@ import (
 )
 
 // A TRACKER ACTOR CROSSES THE WIRE AS IT WAS STATED (ADR-0109), under the
-// wire's rule for what an operation takes (crewlet#910), inside itself as
-// anywhere else. The actor a tracker write crosses in carries Worklet's
-// provenance beside its kind: an agent's actor stated for nobody goes out
-// with an empty provenance (being stated is no zero, and nothing of it
-// crosses), and one stated for somebody carries them; decoded as the serving
-// node decodes a request's inputs, each arrives stated, as it was sent, and a
-// member a newer build added, beside the carrier or inside it, is named where
-// it is rather than dropped.
+// wire's rule for what an operation takes (crewlet#910). It carries Worklet's
+// provenance beside its kind: an agent's actor stated for nobody goes out with
+// an empty provenance (being stated is no zero, and nothing of it crosses),
+// one stated for somebody carries them. Decoded as the serving node decodes a
+// request's inputs, each arrives stated as sent, and a member a newer build
+// added, beside the carrier or inside it, is named where it is, not dropped.
 //
 // Mutation: give the actor a MarshalJSON over encoding/json, and the actor
 // stated for nobody goes out with every zero field of its provenance; decode
@@ -85,17 +83,14 @@ func arriving(t *testing.T, raw json.RawMessage) (*Actor, []string) {
 	return actor, nil
 }
 
-// AN ACTOR THAT CANNOT WRITE IS REFUSED BEFORE ANYTHING IS ASKED (ADR-0109), on
-// a data node answering its own seat's write from its own copy as much as on
-// one that routes it, for the tracker, the knowledge base and chat alike: an
-// agent's actor that states nobody it writes for, and a person's handed a
-// carrier, may write nothing ([types.WrittenFor.For]). A node the write is
-// routed to reads an absent carrier as stated nobody, and would run an agent's
-// write that states nothing as the seat's own work; so the router refuses such
-// an actor before it asks anything, in process as routed ([actorWrites]), and
-// one answer comes from every node. Nothing runs on the node's own copy and no
-// request leaves it, and tracker.view_prior, a read that runs as the actor, is
-// held to the same. The same calls with their actors stated run in process.
+// AN ACTOR THAT CANNOT WRITE IS REFUSED BEFORE ANYTHING IS ASKED (ADR-0109),
+// on a data node answering its own seat's write from its own copy as on one
+// that routes it, for tracker, knowledge base and chat alike. An agent's actor
+// stating nobody, or a person's handed a carrier, may write nothing
+// ([types.WrittenFor.For]). A routed-to node reads an absent carrier as nobody
+// and would run such a write as the seat's own work, so the router refuses it
+// before asking ([actorWrites]), in process as routed, so every node answers
+// alike; tracker.view_prior, a read run as the actor, too. Stated, they run.
 //
 // Mutation: drop the actor's check from callAs, and the tracker's write and
 // its prior read run on the node's own copy; have pageActorWrites or
@@ -185,15 +180,13 @@ func TestAnActorThatCannotWriteIsRefusedBeforeAnythingIsAsked(t *testing.T) {
 }
 
 // AN AGENT'S WRITE FROM A BUILD WITHOUT THE CARRIER RUNS AS ITS SEAT'S OWN
-// (ADR-0109's roll). A node of the build before the carrier, with the wire's
-// rule for what an operation takes (crewlet#910), leaves an agent's provenance
-// that carries nothing off the request whole: the merge queue's close of a
-// landed change's item is one such write. So the serving node states whom an
-// actor's writes are for whether or not a provenance arrived, and an agent's
-// write that arrives with none runs as the seat's own work, never refused for
-// a key its sender left out because it carried nobody. (Its run on a real
-// tracker is internal/engine's
-// TestAnAgentsTrackerWriteFromABuildWithoutTheCarrierRunsForNobody.)
+// (ADR-0109's roll). A node of the build before the carrier, under
+// crewlet#910's wire rule, leaves an agent's provenance that carries nothing
+// off the request whole (the merge queue's close of a landed change's item is
+// one). So the serving node states whom an actor's writes are for whether or
+// not a provenance arrived, and such a write runs as the seat's own work,
+// never refused for a key its sender left out. (On a real tracker:
+// internal/engine's TestAnAgentsTrackerWriteFromABuildWithoutTheCarrierRunsForNobody.)
 //
 // Mutation: state whom the writes are for only where a provenance arrives (in
 // a decode of worklet.Provenance rather than of the actor), and this write
@@ -221,14 +214,11 @@ func TestAnAgentsWriteFromABuildWithoutTheCarrierRunsAsItsSeatsOwn(t *testing.T)
 
 // AN UNKNOWN MEMBER INSIDE A ROUTED ACTOR IS REFUSED AT ITS PATH (crewlet#910's
 // rule, held inside ADR-0109's actors). Each actor decodes itself, to state
-// whom its writes are for, and does so through the serving node's own decoder,
-// so the rule refuses a member a newer build added inside it as it refuses one
-// anywhere else in what an operation takes: the serving node refuses the
-// request, naming the member where it is (beside the tracker's carrier, inside
-// it, in the actor of a page write's or a chat gesture's arguments, inside
-// that actor's carrier), and runs nothing of it. An actor that decoded with an
-// encoding/json of its own dropped every such member without a word, and the
-// write ran without it.
+// whom its writes are for, through the serving node's own decoder, so a member
+// a newer build added inside it is refused as anywhere else in what an
+// operation takes: the request is refused, naming the member where it is
+// (beside the tracker's carrier, inside it, in a page write's or chat
+// gesture's actor, inside that actor's carrier), and nothing of it runs.
 //
 // Mutation: give doclet.Actor back an UnmarshalJSON over encoding/json, and
 // the page writes run with their member dropped; decode the carrier with
@@ -283,15 +273,13 @@ func TestAnUnknownMemberInsideARoutedActorIsRefusedAtItsPath(t *testing.T) {
 }
 
 // A WRITE FOR SOMEBODY MOVES OFF A DATA NODE WHOSE BUILD HAS NO CARRIER
-// (ADR-0109's roll). A data node of the build before the carrier, with the
-// wire's rule for what an operation takes (crewlet#910), does not declare it,
-// so it refuses a write that carries one, naming it, and runs nothing of it:
-// the asking router moves on to a data node of this build, where the write
-// runs for whom it was made. A write that carries nobody sends no key for it
-// and runs on the older node as it always did. And where no data node
-// declares the carrier, the caller is told that nothing ran and a data node of
-// the writer's build is needed, never that the write ran for nobody: so the
-// data nodes are upgraded first.
+// (ADR-0109's roll). Under crewlet#910's wire rule, an older data node that
+// does not declare the carrier refuses a write carrying one, naming it, and
+// runs nothing, so the router moves on to a data node of this build. A write
+// for nobody sends no key and runs on the older node as ever. Where no data
+// node declares the carrier, the caller is told nothing ran and a data node
+// of the writer's build is needed, never that it ran for nobody: so the data
+// nodes are upgraded first.
 //
 // Mutation: have WrittenFor.IsZero answer the zero value alone, and the write
 // for nobody carries a key the older node refuses; drop the refusal's arm from
@@ -409,14 +397,13 @@ func TestAWriteForSomebodyMovesOffADataNodeWithoutTheCarrier(t *testing.T) {
 }
 
 // A WRITE WHOSE ACTOR CANNOT WRITE IS REFUSED BEFORE ANY PEER RUNS IT
-// (ADR-0109). This router holds no data, so every write it makes is decided on
-// another data node, which reads an absent carrier as nobody and would run an
-// agent's write that states nothing as the writing seat's own work. So the
-// node that built the actor refuses it before asking anything ([actorWrites]),
-// for the tracker, the knowledge base and chat alike: no request leaves it,
-// and the caller is told why rather than that no data node served it or that
-// its write may have run. The same writes with their actors stated run there,
-// each arriving as it was stated.
+// (ADR-0109). This router holds no data, and the data node deciding each write
+// reads an absent carrier as nobody, running an agent's write that states
+// nothing as the seat's own work. So the node that built the actor refuses it
+// before asking ([actorWrites]), for tracker, knowledge base and chat alike:
+// no request leaves, and the caller is told why rather than that no data node
+// served it or that its write may have run. Stated, the same writes run
+// there, each arriving as stated.
 //
 // Mutation: drop the actor's check from callAs, and the tracker's write and
 // its prior read run on the data node; have pageActorWrites or
@@ -577,17 +564,14 @@ func actorsIn(v reflect.Value, path string, writtenFor types.WrittenFor) (set, u
 }
 
 // EVERY OPERATION WHOSE ARGUMENTS HOLD A PAGE OR CHAT ACTOR REFUSES ONE THAT
-// CANNOT WRITE BEFORE IT IS ASKED (ADR-0109). Such an operation runs as the
-// actor its arguments hold, which the router never sees as the actor an
-// operation runs as ([callAs] holds only that one), so each declares the
-// refusal itself ([op.refusedBeforeAsking] over [actorWrites]). Found from the
-// registry, at any depth an actor can be held, and asked of each declaration
-// with its arguments built around an agent's actor that states nothing —
-// refused for it — and around one that is stated, which is not: so a new page
-// or chat write cannot be declared without the refusal, nor a refusal pass for
-// something other than the actor. A read that holds an actor and writes
-// nothing is named with why ([askedWhateverItsActor]). And a walk that finds no
-// holder of either actor fails, rather than hold nothing to anything.
+// CANNOT WRITE BEFORE IT IS ASKED (ADR-0109). Such an operation runs as that
+// actor, which [callAs] never sees, so each declares the refusal itself
+// ([op.refusedBeforeAsking] over [actorWrites]). Every one the registry holds,
+// at any depth, is asked with an agent's actor stating nothing (refused) and
+// one stated (not): so no page or chat write is declared without the refusal,
+// nor does a refusal pass for something other than the actor. A read holding
+// an actor that writes nothing is named with why ([askedWhateverItsActor]);
+// a walk that finds no actor holder fails rather than hold nothing.
 //
 // Mutation: drop refusedBeforeAsking from any page or chat write, and the gate
 // names it; have the walk find no actor, and the gate fails.
@@ -647,18 +631,14 @@ func TestEveryOperationHoldingAPageOrChatActorRefusesOneThatCannotWrite(t *testi
 }
 
 // EVERY CODE WRITE REFUSES AN AGENT'S REQUEST THAT STATES NOBODY, BEFORE IT IS
-// ASKED (ADR-0109). A code operation runs as no actor: its asker travels inside
-// its request, beside whom the write is made for, so a serving node reads a
-// carrier that never arrived as stated nobody — whichever build left it off —
-// and would decide an agent's write that states nothing as the seat's own
-// work. So each operation whose request holds an asker and a carrier declares
-// the refusal itself ([op.refusedBeforeAsking] over [codeWrites]). Found from
-// the registry — every operation whose arguments hold a gitlet.Principal and a
-// types.WrittenFor — each is asked with its request built around an agent
-// asker that states nothing, which it refuses, and around one stated for
-// nobody, which it admits. A walk that finds fewer than the six code writes
-// fails, rather than hold nothing to anything; one holding the two deeper than
-// the request itself is named, for this gate to be taught.
+// ASKED (ADR-0109). A code operation runs as no actor; its asker travels in its
+// request, and a serving node reads a carrier that never arrived as nobody,
+// deciding an agent's write that states nothing as the seat's own work. So each
+// operation whose request holds a gitlet.Principal and a types.WrittenFor,
+// found from the registry, declares the refusal ([op.refusedBeforeAsking] over
+// [codeWrites]): asked with an agent asker stating nothing it refuses, stated
+// for nobody it admits. Finding fewer than the six code writes fails; one
+// holding the two deeper than the request is named, for this gate to be taught.
 //
 // Mutation: drop refusedBeforeAsking from code.conversation, and the gate
 // names it; have the walk find no request, and the gate fails.
@@ -715,23 +695,17 @@ func TestEveryCodeWriteRefusesAnAgentsRequestThatStatesNobody(t *testing.T) {
 }
 
 // A CODE WRITE FOR SOMEBODY MOVES OFF A NODE WHOSE BUILD HAS NO CARRIER
-// (ADR-0109's roll). A data node or a Gitlet node of the build before the
-// carrier, with the wire's rule for what an operation takes (crewlet#910),
-// does not declare whom a code write is made for, so it refuses a request
-// carrying somebody, naming args.written_for, and runs nothing of it: the walk
-// asks the repository's next node, of this build, where the write is decided
-// for whom it was made. A request made for nobody sends no member, and runs on
-// the older node as it always did. And a request from a seat of the older
-// build, which sends its ceiling and no carrier at all, is served by a node of
-// this build as stated nobody beside the ceiling it sent, which its decide
-// holds it to as before the carrier. For a change's write and a push, asked
-// of the repository's committing data nodes, and an engine write, asked of its
-// Gitlet nodes.
+// (ADR-0109's roll). An older data or Gitlet node refuses a request carrying
+// somebody (crewlet#910), naming args.written_for, and runs nothing; the walk
+// asks the repository's next node, of this build. A request for nobody sends
+// no member and runs on the older node. An older seat's request (its ceiling,
+// no carrier) is served here as stated nobody beside that ceiling, held to it
+// as before the carrier. For a change's write and a push (committing data
+// nodes) and an engine write (Gitlet nodes).
 //
-// Mutation: have WrittenFor.IsZero answer the zero value alone, and the writes
-// for nobody carry a key the older node refuses; have a request's decoder
-// state nothing it received, and the older seat's writes arrive stating
-// nothing.
+// Mutation: WrittenFor.IsZero answering the zero value alone, and the writes
+// for nobody carry a key the older node refuses; a request's decoder stating
+// nothing it received, and the older seat's writes arrive stating nothing.
 func TestACodeWriteForSomebodyMovesOffANodeWithoutTheCarrier(t *testing.T) {
 	t.Parallel()
 	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
@@ -863,15 +837,13 @@ func TestACodeWriteForSomebodyMovesOffANodeWithoutTheCarrier(t *testing.T) {
 }
 
 // A CODE WRITE FROM A BUILD WITHOUT THE CARRIER IS MADE FOR NOBODY (ADR-0109's
-// roll). A seat or a Gitlet node of the build before the carrier sends a code
-// write's request with no member for whom it is made at all, beside its
-// ceiling where the request takes one. Decoded as a serving node decodes a
-// request's inputs, each of the six arrives stated nobody, and the rule every
-// node holds one to admits it: with no ceiling, with a colleague's and with
-// nobody's — the two its decide still holds it to as before the carrier, a
-// colleague's grant bounding it and nobody's sparing only the seat's own work
-// (gitlet's TestACodeWriteWhoseCarrierAndCeilingDisagreeIsRefused, its older
-// sender's rows).
+// roll). An older seat or Gitlet node sends a code write's request with no
+// carrier member, beside its ceiling where the request takes one. Decoded as a
+// serving node decodes a request's inputs, each of the six arrives stated
+// nobody and the rule every node holds admits it: with no ceiling, a
+// colleague's (bounding it) and nobody's (sparing only the seat's own work),
+// as before the carrier (gitlet's
+// TestACodeWriteWhoseCarrierAndCeilingDisagreeIsRefused, older sender's rows).
 //
 // Mutations: a request's decoder stating nothing it received — that request
 // arrives stating nothing, red; the rule refusing a ceiling that comes with no
@@ -944,10 +916,10 @@ func TestACodeWriteFromABuildWithoutTheCarrierIsMadeForNobody(t *testing.T) {
 }
 
 // laterApp is a name this build does not know as an app: one a newer build
-// adds, as #1020 added atlas. laterKind is a name this build does not know as
-// a kind of carrier: one a newer build adds beside the seat and the
-// credential. The cases that read either check first that this build still
-// does not know it.
+// adds, as atlas once was. laterKind is a name this build does not know as a
+// kind of carrier: one a newer build adds beside the seat and the credential.
+// The cases that read either check first that this build still does not know
+// it.
 const (
 	laterApp  iam.Grant            = "ledger"
 	laterKind types.WorkingForKind = "group"
@@ -1136,21 +1108,14 @@ func walksPastANodeLacking(t *testing.T, older func(request) request, lacks, key
 }
 
 // A CODE WRITE FOR A CREDENTIAL MOVES OFF A NODE WHOSE BUILD DOES NOT KNOW ITS
-// APP (ADR-0109's roll). A credential's carrier names the apps its turn was
-// held to, and no sender composes one its own build does not know, so a node
-// whose build does not know one is an older build's, in the roll that adds the
-// app — as atlas was to every build before it became one. That node runs
-// nothing of a code write made for such a credential: the request's decoder
-// refuses the app as the wire refuses a member the build does not declare,
-// naming args.written_for.apps[], so the walk asks the repository's next node,
-// which knows it and decides the write carrying it. A write made for a
-// credential holding only apps the older node knows runs there as ever. And
-// where no node knows the app, the caller is told that nothing ran and that a
-// node of the writer's build is needed — the tool's fleet_builds_differ —
-// never that the request is malformed, which would end the walk and tell a
-// newer build's valid request it is. For a change's write and a push, asked of
-// the repository's committing data nodes, and an engine write, asked of its
-// Gitlet nodes.
+// APP (ADR-0109's roll). No sender composes an app its build does not know, so
+// a node that does not know one is an older build's. Its request decoder
+// refuses the app as the wire refuses an undeclared member, naming
+// args.written_for.apps[], runs nothing, and the walk asks the repository's
+// next node, which knows it. A credential holding only apps the older node
+// knows runs there. Where no node knows the app, the caller is told nothing
+// ran and a node of the writer's build is needed (fleet_builds_differ), never
+// that the request is malformed, which would end the walk.
 //
 // Mutation: refuse the app this build does not know as invalid, and the writes
 // for the credential holding atlas end at the node that does not know it.
@@ -1171,21 +1136,14 @@ func TestACodeWriteForACredentialMovesOffANodeThatDoesNotKnowItsApp(t *testing.T
 }
 
 // A CODE WRITE MOVES OFF A NODE WHOSE BUILD DOES NOT KNOW ITS CARRIER'S KIND
-// (ADR-0109's roll). A carrier names by its kind whom a write is made for — a
-// seat, a credential — and no sender composes a kind its own build does not
-// know, so a node whose build does not know one is an older build's, in the
-// roll that adds the kind. That node runs nothing of a code write carrying
-// one: the request's decoder refuses the kind as the wire refuses a member the
-// build does not declare, naming args.written_for.kind, so the walk asks the
-// repository's next node, which knows it and decides the write carrying it. A
-// write made for a kind the older node knows runs there as ever. And where no
-// node knows the kind, the caller is told that nothing ran and that a node of
-// the writer's build is needed — the tool's fleet_builds_differ — never that
-// the request is malformed, which would end the walk and tell a newer build's
-// valid request it is. The older node here knows no credential's carrier, as
-// a build before that kind would not; for a change's write and a push, asked
-// of the repository's committing data nodes, and an engine write, asked of
-// its Gitlet nodes.
+// (ADR-0109's roll): as for an app
+// (TestACodeWriteForACredentialMovesOffANodeThatDoesNotKnowItsApp), so for a
+// carrier's kind — a seat, a credential. The older node's decoder refuses the
+// kind, naming args.written_for.kind, and runs nothing; the walk asks the next
+// node, which knows it. A kind the older node knows runs there; where no node
+// knows it, the caller is told the fleet's builds differ, never that the
+// request is malformed. The older node here knows no credential's carrier, as
+// a build before that kind would not.
 //
 // Mutation: refuse the kind this build does not know as invalid, and the
 // writes made for the credential end at the node that does not know its kind.
@@ -1208,23 +1166,17 @@ func TestACodeWriteMovesOffANodeThatDoesNotKnowItsCarriersKind(t *testing.T) {
 }
 
 // AN IN-PROCESS COMMITTER ANSWERS A STORED CARRIER'S UNKNOWN APP AS A NODE OF
-// ANOTHER BUILD (ADR-0109's roll). A carrier read from a stored row — a run's,
-// whose box's pushes and whose collection's open carry it — is one off the
-// wire in this: another build may have written it, naming an app this build
-// does not know. Handed to this node's own committer in process, where nothing
-// decodes the request, its Validate meets the app before anything else of the
-// carrier and answers it as the request's decoder answers it off the wire: a
-// name the build does not declare, never a request malformed. So the walk
-// moves on from this node's own copy, as from a peer that refused the request
-// unread, and the repository's runner-up — of the build that knows the app —
-// decides the push and the change's write carrying it, nothing appended here;
-// and where no node knows it, the caller is told that nothing ran and that the
-// fleet's builds differ (the tool's fleet_builds_differ), naming
-// args.written_for.apps[] and both nodes.
+// ANOTHER BUILD (ADR-0109's roll). A carrier read from a run's stored row (its
+// box's pushes, its collection's open) may name an app another build wrote.
+// Handed to this node's committer in process, where nothing decodes the
+// request, its Validate meets the app first and answers as the wire's decoder
+// does: an undeclared name, never malformed. So the walk moves on, as from a
+// peer that refused unread, and the runner-up that knows the app decides the
+// push and the change's write, nothing appended here; where none knows it, the
+// fleet's builds differ, naming args.written_for.apps[] and both nodes.
 //
-// Mutations: the in-process Validate refusing the app as malformed — each
-// write's walk ends at this node, red; the walk taking this node's refusal of a
-// value its build does not know for its answer — likewise, red.
+// Mutations: the in-process Validate refusing the app as malformed, or the walk
+// taking this node's refusal of it for its answer — the walk ends here, red.
 func TestAnInProcessCommitterAnswersAStoredCarriersUnknownAppAsAnotherBuild(t *testing.T) {
 	t.Parallel()
 	if laterApp.Valid() {
@@ -1256,21 +1208,17 @@ func TestAnInProcessCommitterAnswersAStoredCarriersUnknownKindAsAnotherBuild(t *
 }
 
 // A GITLET NODE ASKED IN PROCESS ANSWERS A CARRIER'S UNKNOWN APP AS A NODE OF
-// ANOTHER BUILD (ADR-0109's roll): the one rule holds on the git walk too. An
-// engine write whose carrier names an app this build does not know is carried
-// by the router that asks it rather than refused there, since a node of the
-// build that knows the app builds it; asked of the repository's home Gitlet
-// node in process, it is refused by its Validate as its decoder refuses it off
-// the wire, a name the build does not declare; the walk moves on from that
-// node — and passes the fill on, as after a peer's refusal unread — to the
-// next Gitlet node, of the build that knows the app, which builds it; and
-// where none knows it, the caller is told that the fleet's builds differ,
+// ANOTHER BUILD (ADR-0109's roll). The router carries an engine write naming
+// an app this build does not know rather than refuse it, as a node that knows
+// the app builds it. The home Gitlet node, asked in process, refuses it by its
+// Validate as its decoder would off the wire; the walk moves on (passing the
+// fill on, as after a peer's unread refusal) to the next Gitlet node, which
+// knows the app and builds it; where none knows it, the fleet's builds differ,
 // naming args.written_for.apps[] and both nodes.
 //
 // Mutations: the git walk taking its own node's in-process refusal of a value
 // its build does not know for its answer — the write ends at the home, red;
-// the router refusing that value before it asks — the write is asked of no
-// node, red.
+// the router refusing that value before it asks — asked of no node, red.
 func TestAnInProcessGitletNodeAnswersACarriersUnknownAppAsAnotherBuild(t *testing.T) {
 	t.Parallel()
 	if laterApp.Valid() {
@@ -1519,15 +1467,12 @@ func readsEachCodeWrite(t *testing.T, repo string, cases []carrierRead) {
 }
 
 // A CODE WRITE NAMING AN APP ITS BUILD DOES NOT KNOW IS REFUSED UNREAD, by
-// every request a code write forms (ADR-0109's roll). Decoded as a serving node
-// decodes a request's inputs, each of the six, its credential's carrier naming
-// an app this build does not know, is refused as one the build cannot read
-// whole — named args.written_for.apps[], nothing of it to run — and never read
-// to be refused as malformed. A name this build knows is the rule's to judge:
-// admin, which it knows as no app, and the zero, which names none, are read
-// whole and refused by the rule every node holds the request to, since no
-// build composes either; and a credential holding apps this build knows is
-// read whole and admitted.
+// every request a code write forms (ADR-0109's roll). Decoded as a serving
+// node decodes a request's inputs, each of the six whose credential names such
+// an app is refused as unreadable whole, named args.written_for.apps[], never
+// read to be refused as malformed. A name this build knows is the rule's to
+// judge: admin (no app) and the zero (none), which no build composes, are read
+// whole and refused by the rule; a credential holding known apps is admitted.
 //
 // Mutations: the merge's decoder skipping the apps — code.merge's request read
 // whole, red; every name that is no app read as one the build does not know —
@@ -1551,23 +1496,17 @@ func TestACodeWriteNamingAnAppItsBuildDoesNotKnowIsRefusedUnread(t *testing.T) {
 }
 
 // A CODE WRITE NAMING A KIND ITS BUILD DOES NOT KNOW IS REFUSED UNREAD, by
-// every request a code write forms (ADR-0109's roll). Decoded as a serving node
-// decodes a request's inputs, each of the six, its carrier of a kind this
-// build does not know, is refused as one the build cannot read whole — named
-// args.written_for.kind, nothing of it to run — and never read to be refused
-// as malformed: whether this build knows a carrier's kind is decided where it
-// decides whether it knows its apps, in one place every request's decoder
-// asks. A kind this build knows is the rule's to judge, and so is the zero:
-// the zero, which names none, is read whole and refused by the rule every node
-// holds the request to, since no build composes it, and so is a stranger's,
-// which this build knows and no code write is made for; and a credential's is
-// read whole and admitted.
+// every request a code write forms (ADR-0109's roll): as for an app, refused
+// as unreadable whole, named args.written_for.kind, never read to be refused
+// as malformed — decided where its apps are, in one place every request's
+// decoder asks. A known kind is the rule's to judge, and so is the zero: the
+// zero (no build composes it) and a stranger's (no code write is for one) are
+// read whole and refused by the rule; a credential's is admitted.
 //
-// Mutations: the kind this build does not know read whole — every request
-// refused by the rule as malformed, red; the zero kind read as one the build
-// does not know — refused unread, red; a stranger's read as one the build does
-// not know — refused unread, red; the conversation's decoder skipping the one
-// place — code.conversation's request read whole, red.
+// Mutations: the unknown kind read whole — refused by the rule as malformed,
+// red; the zero kind, or a stranger's, read as unknown — refused unread, red;
+// the conversation's decoder skipping the one place — code.conversation's
+// request read whole, red.
 func TestACodeWriteNamingAKindItsBuildDoesNotKnowIsRefusedUnread(t *testing.T) {
 	t.Parallel()
 	if laterKind.Valid() {
@@ -1586,10 +1525,10 @@ func TestACodeWriteNamingAKindItsBuildDoesNotKnowIsRefusedUnread(t *testing.T) {
 }
 
 // malformedElsewhere is sent, one of the requests [codeWritesOn] forms, broken
-// by a rule of its own that is no rule of whom it is made for, which its
-// Validate judged before the carrier's values until it met those first: a
-// push naming no node that received it, an engine write of no kind, and every
-// other request under an operation id this engine does not accept.
+// by a rule of its own that is no rule of whom it is made for, and that its
+// Validate judges only after the carrier's values: a push naming no node that
+// received it, an engine write of no kind, and every other request under an
+// operation id this engine does not accept.
 func malformedElsewhere(spec *opSpec, sent any) any {
 	switch spec {
 	case opCodePropose.spec:
@@ -1601,15 +1540,13 @@ func malformedElsewhere(spec *opSpec, sent any) any {
 }
 
 // EVERY CODE WRITE NAMING A VALUE ITS BUILD DOES NOT KNOW IS ANSWERED SO BEFORE
-// ANY OTHER RULE (ADR-0109's roll). A request whose carrier names an app, or a
-// kind, this build does not know cannot be judged here at all: only a build
-// that knows the value can tell whether the request is well formed. So each of
-// the six requests a code write forms, broken by a rule of its own as well
-// ([malformedElsewhere]), is answered alike on either path: refused unread on
-// the wire, naming the value, as a serving node decodes it; and in process,
-// where nothing decodes it, by its Validate with the same decoder's refusal,
-// never as malformed. Each is malformed indeed: made for a credential holding
-// apps this build knows, its Validate refuses it as such.
+// ANY OTHER RULE (ADR-0109's roll). Only a build that knows a carrier's app or
+// kind can tell whether the request is well formed. So each of the six
+// requests, broken by a rule of its own as well ([malformedElsewhere]), is
+// answered alike on either path: refused unread on the wire, naming the value;
+// and in process, where nothing decodes it, by its Validate with the decoder's
+// refusal, never as malformed. Each is malformed indeed: made for a credential
+// holding known apps, its Validate refuses it as such.
 //
 // Mutations: any of the six requests' Validates judging its other rules before
 // the carrier's values — that request is refused in process as malformed, red.
@@ -1661,19 +1598,16 @@ func TestEveryCodeWriteNamingAValueItsBuildDoesNotKnowIsAnsweredSoBeforeAnyOther
 
 // A CODE WRITE THIS BUILD CANNOT JUDGE ANSWERS THAT THE BUILDS DIFFER WHATEVER
 // ELSE IT BREAKS, IN PROCESS AS ON THE WIRE (ADR-0109's roll). Each write here
-// is made for a credential naming an app no node of the fleet knows, and also
-// breaks a rule of its own — a box's push naming no node that received it, a
-// close of a change under an operation id this engine does not accept, an
-// engine write of no kind — which only a node that can judge the write may
-// refuse it for. Asked of the repository's own committer, or its home Gitlet
-// node, in process, and asked of them over the wire, each answers alike: that
-// the fleet's builds differ, naming args.written_for.apps[] and both nodes,
-// nothing having run — never that the request is malformed.
+// names an app no node knows and also breaks a rule of its own (a push naming
+// no receiving node, a change's close under an unaccepted operation id, an
+// engine write of no kind) that only a node able to judge it may refuse for.
+// Asked of the repository's committer or home Gitlet node, in process or over
+// the wire, each answers that the fleet's builds differ, naming
+// args.written_for.apps[] and both nodes, nothing run — never malformed.
 //
-// Mutations: the push's, the change's write's or the engine write's Validate
-// judging its other rules before the carrier's values — each answers in
-// process that it is malformed, red, and the engine write over the wire too,
-// where the asking router holds it to its Validate before anything is asked.
+// Mutations: the push's, change write's or engine write's Validate judging its
+// other rules first — each answers malformed in process, red, and the engine
+// write over the wire too, as the router holds it to its Validate before asking.
 func TestACodeWriteThisBuildCannotJudgeAnswersThatTheBuildsDifferWhateverElseItBreaks(t *testing.T) {
 	t.Parallel()
 	if laterApp.Valid() {

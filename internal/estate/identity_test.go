@@ -206,9 +206,9 @@ func TestSeatHoldersCrossWhole(t *testing.T) {
 // ONE SEAT'S REQUESTER CROSSES AS ITS OWN QUESTION — the seat named on the
 // wire and the three answers kept apart: a holder at their stage with their
 // grants, a removal's tombstone holding none, and nobody. A turn composes the
-// person it acts for from it, so it asks the serving node about that seat
-// alone, and an unreadable directory is UNKNOWN rather than a seat nobody
-// holds, which the turn would read as one the chart alone speaks for.
+// person it acts for from it, so it asks about that seat alone, and an
+// unreadable directory is UNKNOWN rather than a seat nobody holds, which the
+// turn would read as one the chart alone speaks for.
 func TestARequesterCrossesAsOneSeatsAnswer(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -277,8 +277,8 @@ func TestTheRequesterReadCarriesGrantsAndNothingElse(t *testing.T) {
 // node one build behind asks identity.seat_holder, the seat's holder alone,
 // which this build answers as identity.requester — and the asker moves on to a
 // node that knows it, or reads no answer at all, never a seat nobody holds.
-// The same holds the other way round, which is why the requester read took a
-// new name rather than a reshaped answer.
+// The same holds the other way round: why the requester read is a new name,
+// not a reshaped answer.
 func TestARetiredIdentityQuestionIsLeftUnserved(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")

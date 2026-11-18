@@ -18,11 +18,10 @@ const loopEndsWithin = 10 * time.Second
 
 // A LOOP LET GO OF LEAVES NOTHING BEHIND IN LOOPS, however it ends.
 //
-// Detach and Stop keep what they let go of in Loops until each loop has
-// returned, so the conformance suite's Settle can wait out a loop still inside
-// a handler. What keeps that from being a leak is the loop forgetting itself as
-// it returns — and a loop that had returned already when it was let go of never
-// being kept, since nothing would forget it then.
+// Detach and Stop keep what they let go of in Loops until each loop returns
+// (for the conformance suite's Settle). No leak because a loop forgets itself
+// as it returns, and one already returned when let go of is never kept, since
+// nothing would forget it then.
 //
 // Mutation: drop the loop's own loopEnded, and the detached and stopped cases
 // keep their entries; keep a loop that has ended on a Detach, and the last case

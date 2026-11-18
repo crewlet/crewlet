@@ -8,9 +8,9 @@ import (
 
 // ---- MCP checks ---------------------------------------------------------- //
 
-// One record per server, its latest test, filed in the positions register
-// under a class of their own: see internal/coord's mcpcheck.go. The model
-// retries' verbs (modelrecords.go), over the server's name.
+// One record per server, its latest test, in the positions register under its
+// own class (internal/coord's mcpcheck.go), with the model retries' verbs
+// (modelrecords.go) over the server's name.
 
 var mcpCheckClass = entryClass[coord.MCPCheck]{
 	name:   "the MCP checks",
@@ -36,10 +36,9 @@ func (f *FleetStore) ListMCPChecks(ctx context.Context) ([]coord.MCPCheck, error
 }
 
 // PutMCPCheck records a check, keeping the later stamp: a read, then a create
-// or an update at the version read, retried on a lost race, as
-// [FleetStore.PutMCPRestart] is. At most [fleetCASAttempts] times, by the
-// rule for every fleet compare-and-swap loop: its contenders are the nodes
-// checking the server, which the fleet's head count bounds.
+// or an update at the version read, retried on a lost race as
+// [FleetStore.PutMCPRestart] is, at most [fleetCASAttempts] times (its
+// contenders, the nodes checking the server, are bounded by the fleet's size).
 func (f *FleetStore) PutMCPCheck(ctx context.Context, c coord.MCPCheck) (coord.MCPCheck, error) {
 	if err := c.Validate(); err != nil {
 		return coord.MCPCheck{}, err

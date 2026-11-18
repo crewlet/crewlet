@@ -53,11 +53,10 @@ func rowsOf(t *testing.T, conn *nats.Conn, agent, table string) int {
 }
 
 // A RETIRED TABLE'S ROWS ARE PURGED BY THE FIRST HYDRATION THAT FINDS THEM, AND
-// ONLY THE SEAT'S. They were replayed and warned about once per row at every
-// hydration because nothing republishes or replaces them; one hydration now
-// takes them off the changelog for every node, so the next, here or on another
-// node, finds none and has nothing to say. Another seat's rows wait for its own
-// hydration, and a newer build's table is never read, and never purged.
+// ONLY THE SEAT'S. Nothing republishes or replaces them, so one hydration takes
+// them off the changelog for every node and the next finds none to replay or
+// warn about. Another seat's rows wait for its own hydration, and a newer
+// build's table is never read, and never purged.
 //
 // Mutation: skip the purge, purge by the table alone, or purge a newer build's
 // table, and this goes red.

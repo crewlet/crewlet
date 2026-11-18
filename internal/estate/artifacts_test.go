@@ -187,16 +187,7 @@ func (v *vault) ReadElevated(_ context.Context, c artifactsdomain.Call, _ artifa
 	return v.wrote(fmt.Sprintf("read_elevated:%d", version), c), nil
 }
 
-// EVERY ARTIFACTS OPERATION CROSSES WHOLE: a node holding no data reaches a
-// data node's artifacts estate with every argument (the call's authority and
-// key included), every answer (a head's shares, a read's position, the held
-// objects by digest), and every refusal keeps its identity: a moved head's
-// fields for the merge, an agent's company share by its sentinel.
-//
-// Mutation: drop an argument from an operation's args type, or a typed error
-// from typedKinds, and a row goes red.
-// ambiguousPath is the folder path every resolution of which answers two
-// candidates.
+// ambiguousPath is the folder path whose every resolution answers two candidates.
 const ambiguousPath = "Reports/"
 
 func (v *vault) Folders(_ context.Context, viewer artifactsdomain.Viewer, fresh statelog.Freshness) (
@@ -368,6 +359,14 @@ func (v *vault) Reopen(_ context.Context, c artifactsdomain.Call, in artifactsdo
 	return v.wrote("reopen:"+in.Thread.String(), c), nil
 }
 
+// EVERY ARTIFACTS OPERATION CROSSES WHOLE: a node holding no data reaches a
+// data node's artifacts estate with every argument (the call's authority and
+// key included), every answer (a head's shares, a read's position, the held
+// objects by digest), and every refusal keeps its identity: a moved head's
+// fields for the merge, an agent's company share by its sentinel.
+//
+// Mutation: drop an argument from an operation's args type, or a typed error
+// from typedKinds, and a row goes red.
 func TestEveryArtifactsOperationCrossesWhole(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)

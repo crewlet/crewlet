@@ -3,26 +3,16 @@ package coord
 import "context"
 
 // GrantRequests is the agents' requests for one grant each beside their level
-// (internal/seataccess): what an agent asked, kept from the moment it asks
-// until a person grants or declines it, or it lapses.
+// (internal/seataccess), kept from the ask until a person grants or declines
+// it, or it lapses.
 //
-// # Who has to agree on it
-//
-// The whole company, now. An agent asks on the node holding its seat, and a
-// person answers on whichever node serves the dashboard, which builds the
-// grant from the stored request rather than from anything the agent wrote.
-//
-// # The value is OPAQUE, as [SeatAccess]'s is
-//
-// A record is internal/seataccess's vocabulary. Each request is its own key,
-// written once by the asking node and deleted once by whoever settles it, so
-// no write can lose another and no lease is needed.
-//
-// # No age
-//
-// It lives in the positions register under its own key class. The engine
-// sweeps a request past its own stamp (seataccess.RequestTTL); an age would
-// restart at nothing and is a retention nobody chose.
+// Fleet-wide: an agent asks on its seat's node and a person answers on
+// whichever node serves the dashboard, which builds the grant from the stored
+// request, never from anything the agent wrote. The value is OPAQUE,
+// internal/seataccess's vocabulary as [SeatAccess]'s is. Each request is its
+// own key, written once by the asker and deleted once by whoever settles it,
+// so no write can lose another and no lease is needed. No age ([PositionKey]):
+// the engine sweeps a request past its own stamp (seataccess.RequestTTL).
 type GrantRequests interface {
 	// GrantRequest is one request, and whether there is one. RAISES on an
 	// unreachable store.

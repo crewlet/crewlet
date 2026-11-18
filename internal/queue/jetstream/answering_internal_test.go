@@ -8,10 +8,8 @@ import (
 )
 
 // A WITHDRAWN REGISTRATION LEAVES NOTHING IN THE RECORD [Queue.Answering]
-// READS. The record is this client's own, kept for the conformance suite, and a
-// withdrawal that left its gate there would keep every withdrawn registration's
-// gate for the queue's life and go on summing it into what the client reports
-// it is answering on that subject.
+// READS; a gate left there would be summed into what the client reports it is
+// answering on that subject for the queue's life.
 //
 // Mutation: drop the unanswer at the top of the withdrawal, and the record
 // keeps both gates.

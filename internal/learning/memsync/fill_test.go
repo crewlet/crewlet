@@ -11,12 +11,10 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A FILLED VECTOR REACHES THE SEAT'S NEXT HOLDER. A diary note written with no
-// vector is carried to a peer as it is; when the holder later fills its vector,
-// that change has to travel too, or the peer's copy stays vectorless — and the
-// day the seat moves there, that stale copy is the holder's and the note is
-// out of reach of every similarity recall. Two things carry it: the fill
-// re-files the row past the watermark the first carry left, and the peer's
+// A FILLED VECTOR REACHES THE SEAT'S NEXT HOLDER. A note carried before its
+// vector was filled must travel again once it is, or the peer's copy stays
+// vectorless and, once the seat moves there, out of every similarity recall.
+// The fill re-files the row past the first carry's watermark, and the peer's
 // import takes the carried vector over a stored one of no model.
 
 // carryRows moves rows exported from one store into another, the way a
@@ -120,9 +118,8 @@ func TestAFilledVectorReachesAPeerHoldingTheVectorlessNote(t *testing.T) {
 	}
 }
 
-// A RE-EMBED UNDER ANOTHER MODEL TRAVELS TOO: a company that moved models has
-// every note re-filled by the holder, and a peer's copy in the old space is
-// replaced rather than kept because it already had a vector.
+// A RE-EMBED UNDER ANOTHER MODEL TRAVELS TOO: a peer's copy in the old space
+// is replaced, not kept because it already had a vector.
 func TestAReembeddedNoteReplacesAPeersCopyFromTheOldModel(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -157,10 +154,9 @@ func TestAReembeddedNoteReplacesAPeersCopyFromTheOldModel(t *testing.T) {
 	}
 }
 
-// THE SAME MODEL AT ANOTHER WIDTH IS ANOTHER SPACE TOO: a restart that moved
-// the width leaves notes of the same model the recall's width filter no longer
-// admits, and the holder's re-fill has to replace a peer's copy at the old
-// width rather than be skipped because the model matches.
+// THE SAME MODEL AT ANOTHER WIDTH IS ANOTHER SPACE TOO: the recall's width
+// filter no longer admits the old width, so the holder's re-fill replaces a
+// peer's copy at it rather than being skipped because the model matches.
 func TestARefillAtANewWidthReplacesAPeersCopyAtTheOld(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -195,10 +191,9 @@ func TestARefillAtANewWidthReplacesAPeersCopyAtTheOld(t *testing.T) {
 	}
 }
 
-// AN EPISODE IS FILLED AND CARRIED LIKE A NOTE, and what its turn was asked
-// travels with it: the ask is the part of the episode's vector nothing else on
-// the row holds, so a peer that took the seat with a row lacking it could never
-// make that vector again.
+// AN EPISODE IS FILLED AND CARRIED LIKE A NOTE, its ask with it: the ask is
+// the part of the episode's vector nothing else on the row holds, so a peer
+// lacking it could never make that vector again.
 func TestAFilledEpisodeAndItsAskReachAPeerHoldingTheVectorlessRow(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -230,9 +225,8 @@ func TestAFilledEpisodeAndItsAskReachAPeerHoldingTheVectorlessRow(t *testing.T) 
 	if ask != "The staging deploy keeps failing." {
 		t.Fatalf("the peer holds the ask %q", ask)
 	}
-	// AND WHO WROTE IT, with it (ADR-0040): a peer that took the seat with
-	// the ask and not its label would show the seat a stranger's message
-	// as its own words.
+	// AND WHO WROTE IT (ADR-0040): without its label the peer would show the
+	// seat a stranger's message as its own words.
 	carried, err := learning.NewEpisodes(peer).Recent(ctx, seat.Handle, 1)
 	if err != nil || len(carried) != 1 || carried[0].AskProvenance == nil ||
 		carried[0].AskProvenance.Trust != provenance.TrustExternal {

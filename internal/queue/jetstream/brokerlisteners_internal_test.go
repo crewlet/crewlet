@@ -176,13 +176,11 @@ func TestTheSystemKeyReachesOnlyTheSystemAccount(t *testing.T) {
 
 // THE BROKER'S OWN AUTHENTICATION LINE IS DEBUG.
 //
-// nats-server reports each refused attempt itself, carrying the username the
-// peer sent, at the rate the peer dials. The authenticator already counts every
-// refusal and logs a class once a minute, so the server's line goes to DEBUG —
-// recognised by the sentinel as an argument or as the format's tail, the two
-// shapes a client's Errorf hands the logger (server/client.go authViolation,
-// v2.15.1). The dialer's own route error and every other error keep their
-// level.
+// nats-server logs each refused attempt, with the username the peer sent, at
+// the peer's dial rate; the authenticator already counts and rate-limits them,
+// so that line goes to DEBUG, recognised by the sentinel as an argument or as
+// the format's tail (server/client.go authViolation). The dialer's own route
+// error and every other error keep their level.
 //
 // Mutations: drop the routing → the sentinel rows, red; route every Errorf to
 // DEBUG → the route-error row, red; match the bare sentinel only when it is the

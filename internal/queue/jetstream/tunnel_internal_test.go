@@ -287,9 +287,9 @@ func TestTheTunnelCarriesALinkEachWayAndMetersIt(t *testing.T) {
 
 // A CLOSE AT EITHER END OF A TUNNELLED LINK CLOSES BOTH: a member that goes
 // away is a link the leaf sees close, so it dials again at once rather than
-// believe the link up until its pings give it up — four minutes at the
-// engine's — while every renewal the link carries until piece 7 is lost; and a
-// leaf that closes its side leaves no socket open to the member.
+// believe the link up until its pings give it up four minutes later, losing
+// what it carries meanwhile; and a leaf that closes its side leaves no socket
+// open to the member.
 //
 // Mutant: the member's close not passed on — the leaf's side stays open.
 func TestATunnelledLinkClosesAtBothEndsWhenEitherCloses(t *testing.T) {
@@ -369,19 +369,16 @@ func TestTheTunnelDialsAMemberAsTheExternalDialDoes(t *testing.T) {
 }
 
 // THE TUNNEL HOLDS NOTHING FOR A CALLER THAT SENDS NO CONNECT: a request is
-// read no further than its header bound and the connection ended, one that
-// sends nothing is closed at a read's term, and while [tunnelHandshakes]
-// connections wait to show the credential the next one taken closes the
-// oldest of them — so nothing that reaches the loopback port holds the
-// tunnel's goroutines or descriptors, and no number of callers holding
-// connections idle keeps the leaf's own CONNECT from being served.
+// read no further than its header bound, one that sends nothing is closed at
+// a read's term, and at [tunnelHandshakes] connections waiting to show the
+// credential the next one taken closes the oldest, so no number of idle
+// callers holds the tunnel's descriptors or keeps the leaf's CONNECT unserved.
 //
-// Mutant: the request read without its bound — the tunnel reads a caller's
-// stream for its whole term. Mutant: no deadline on the request. Mutant: no
-// cap on the connections waiting to show the credential — the oldest idle
-// one is held. Mutant: the newest connection closed at the cap, as the
-// tunnel first did — the leaf's CONNECT is never answered. Mutant: a place
-// held through the dial — one more is held once the leaf is served.
+// Mutant: the request read without its bound. Mutant: no deadline on the
+// request. Mutant: no cap on the unproven connections — the oldest idle one
+// is held. Mutant: the newest closed at the cap — the leaf's CONNECT is never
+// answered. Mutant: a place held through the dial — one more is held once the
+// leaf is served.
 func TestTheTunnelHoldsNothingForACallerThatSendsNoConnect(t *testing.T) {
 	t.Parallel()
 	member, _ := echoMember(t, "")
@@ -395,10 +392,9 @@ func TestTheTunnelHoldsNothingForACallerThatSendsNoConnect(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer c.Close()
-		// A HEADER THAT NEVER ENDS, written until the tunnel stops it:
-		// bounded, it reads the bound and answers, and what the caller
-		// could write meanwhile is what the sockets hold; unbounded, it
-		// reads on for its whole term.
+		// A HEADER THAT NEVER ENDS: a bounded tunnel answers once it has
+		// read the bound, leaving the caller only what the sockets hold;
+		// an unbounded one reads on for its whole term.
 		var written atomic.Int64
 		go func() {
 			if _, err := io.WriteString(c, "CONNECT a:1 HTTP/1.1\r\nX: "); err != nil {
@@ -406,8 +402,7 @@ func TestTheTunnelHoldsNothingForACallerThatSendsNoConnect(t *testing.T) {
 			}
 			chunk := []byte(strings.Repeat("y", 64<<10))
 			// AT MOST TWICE THE CLAIM'S BOUND, so a tunnel that reads
-			// without one is shown reading past it rather than holding
-			// all a caller sends until the process runs out of memory.
+			// without one is shown past it rather than run out of memory.
 			for written.Load() < 128<<20 {
 				n, err := c.Write(chunk)
 				written.Add(int64(n))
@@ -598,22 +593,17 @@ func until(t *testing.T, what string, cond func() bool) {
 }
 
 // A LINK'S HANDSHAKE IS GIVEN A REQUEST'S TERM, on a leaf and on an external
-// dial alike: its packets queue at the link's bottleneck like any request's,
-// which the engine sizes every request across a link to wait behind. So the
-// tunnel's dial of a member gets [jsapi.RequestTerm], and the leaf's CONNECT
-// to its tunnel a read's term more, so the tunnel's 502 reaches it; the leaf
-// waits a term for the member's INFO, and the member a term for the leaf's
-// CONNECT ([leafHandshakeTerm]); and an external dial's connect and
-// handshake get the term too — where nats-server's leaf default is its
-// one-second dial, its one-second wait for INFO and its two-second wait for
-// CONNECT, and the external dial had two seconds, and a node whose link
-// dropped behind a deep queue could never dial again. The tunnel carries the
-// leaf's data link, in the global account, and no other remote.
+// dial alike, since its packets queue at the link's bottleneck like any
+// request's: the tunnel's dial of a member gets [jsapi.RequestTerm] and the
+// leaf's CONNECT to its tunnel a read's term more, so the tunnel's 502
+// reaches it; the leaf waits a term for the member's INFO, the member a term
+// for the leaf's CONNECT ([leafHandshakeTerm]), and an external dial gets the
+// term too, where one- and two-second defaults strand a link dropped behind a
+// deep queue. The tunnel carries only the global account's (data) link.
 //
-// Mutant: the tunnel's connect term at nats-server's one second. Mutant: the
-// tunnel's connect term no longer than its dial. Mutant: the external
-// handshake at two seconds. Mutant: every remote proxied. Mutant: the leaf's
-// wait for INFO unset. Mutant: the member's wait for CONNECT unset.
+// Mutant: the tunnel's connect term at one second, or no longer than its
+// dial. Mutant: the external handshake at two seconds. Mutant: every remote
+// proxied. Mutant: the leaf's wait for INFO, or the member's for CONNECT, unset.
 func TestALinksHandshakeIsGivenARequestsTerm(t *testing.T) {
 	t.Parallel()
 	var rec dialRecord

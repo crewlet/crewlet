@@ -13,15 +13,11 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// A VALVE UNDER CONTENTION ALWAYS ANSWERS.
-//
-// Every attempt a write to the valve loses is another node's increment, so it
-// either wins room or reads the window full — the two answers the valve
-// exists to give. Sixteen attempts answered "could not say" instead once more
-// than sixteen increments overlapped a caller's attempts, and the
-// notification path fails open on that: the valve opened under exactly the
-// pressure it is for. Twenty losses here, each a real increment by another
-// node, against a limit with room for them and one without.
+// A VALVE UNDER CONTENTION ALWAYS ANSWERS. Every lost write is another node's
+// increment, so the caller either wins room or reads the window full, never
+// "could not say": the notification path fails open on that, opening the valve
+// under exactly the pressure it is for. Twenty real peer increments, against a
+// limit with room for them and one without.
 func TestAValveUnderContentionAlwaysAnswers(t *testing.T) {
 	t.Parallel()
 	at := time.Now()
@@ -32,11 +28,9 @@ func TestAValveUnderContentionAlwaysAnswers(t *testing.T) {
 		lost    int64
 		count   int
 	}{
-		// Seeded with one, so twenty peers' increments leave room: the
-		// caller's own lands twenty-second.
+		// Seeded with one; the caller's own lands twenty-second.
 		{name: "with room it is let through", limit: 40, allowed: true, lost: 20, count: 22},
-		// The ninth peer increment fills the window; the caller's next
-		// read finds it full and stops racing.
+		// The ninth peer increment fills the window; the caller stops racing.
 		{name: "without room it is refused", limit: 10, allowed: false, lost: 9, count: 10},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -68,17 +62,12 @@ func TestAValveUnderContentionAlwaysAnswers(t *testing.T) {
 	}
 }
 
-// THE FLEET STORE'S OTHER RACES OUTLAST MORE LOSSES THAN SIXTEEN.
-//
-// Each lost race is a store that answered, so none of these is an outage
-// until the shared bound says it is ([fleetCASAttempts]), sized for the nodes
-// writing a key rather than for the calls: a channel's count, coalesced on its
-// line ([writeLines]), and a follow and a person's chat read record flushed
-// and forgotten behind every other tab of theirs ([casRetry]), each made to
-// lose twenty in a row. The custody claim and the object backend's record lose
-// a race only to a key removed between a refused create and the leader's read
-// of it, which no bucket in front of the leader can stage; they take the same
-// [casRetry].
+// THE FLEET STORE'S OTHER RACES OUTLAST MORE LOSSES THAN SIXTEEN. A lost race
+// is a store that answered, so none is an outage within [fleetCASAttempts]: a
+// channel's count ([writeLines]), a follow, and a chat read flush and forget
+// ([casRetry]) each lose twenty in a row. The custody claim and the object
+// backend's record take the same [casRetry] but cannot be staged here: they
+// lose only to a key removed between a refused create and the leader's read.
 func TestTheFleetStoresOtherRacesOutlastMoreLossesThanSixteen(t *testing.T) {
 	t.Parallel()
 	const losses = 20
@@ -106,8 +95,7 @@ func TestTheFleetStoresOtherRacesOutlastMoreLossesThanSixteen(t *testing.T) {
 			}
 		},
 	}, {
-		// A follow already recorded, so every re-assert is a write at the
-		// revision it read.
+		// Already recorded, so a re-assert writes at the revision read.
 		name:   "a follow",
 		bucket: func(f *FleetStore) *jetstream.KeyValue { return &f.follows },
 		key:    followKey("slack", "ceo", "C1", "T2"),
@@ -184,14 +172,10 @@ func TestTheFleetStoresOtherRacesOutlastMoreLossesThanSixteen(t *testing.T) {
 	}
 }
 
-// A RACE WHOSE CALLER HANGS UP IS TOLD SO, AND WRITES NOTHING.
-//
-// Between a lost attempt and the next nothing of a write has landed, so a
-// caller that stops listening there is withdrawn rather than raced on for: told
-// its own context's error, and the record left as it was. A write that loses
-// every attempt is the other end of the same rule, and fails closed after
-// exactly [fleetCASAttempts] of them
-// (TestAWriteThatNeverSettlesFailsClosedAsAnOutage).
+// A RACE WHOSE CALLER HANGS UP IS TOLD SO, AND WRITES NOTHING: between lost
+// attempts nothing has landed, so the caller gets its context's error and the
+// record is unchanged. A write losing every attempt fails closed after
+// [fleetCASAttempts] (TestAWriteThatNeverSettlesFailsClosedAsAnOutage).
 func TestARaceEndsAtTheCallersHangUp(t *testing.T) {
 	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
@@ -256,8 +240,7 @@ func rateCount(t *testing.T, kv jetstream.KeyValue, key string) int {
 }
 
 // peerIncrements is a rate bucket on which the next `remaining` writes to one
-// key lose their race — each to another node's increment, landed just before
-// it, which is what every lost race on a valve is.
+// key each lose to another node's increment, landed just before.
 type peerIncrements struct {
 	jetstream.KeyValue
 	key       string
@@ -288,9 +271,8 @@ func (k *peerIncrements) Update(ctx context.Context, key string, value []byte, r
 	return 0, jetstream.ErrKeyRevisionMismatch
 }
 
-// loseWrites is a bucket on which writes to one key lose their race and write
-// nothing — an update or a purge refused at the revision it was made at. It
-// loses the next `remaining`, or every one when forever is set.
+// loseWrites is a bucket whose updates and purges of one key lose their race
+// and write nothing: the next `remaining`, or every one when forever is set.
 type loseWrites struct {
 	jetstream.KeyValue
 	key       string

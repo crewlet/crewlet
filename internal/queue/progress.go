@@ -5,7 +5,6 @@ import (
 	"time"
 )
 
-// progressKey is the private context key [WithProgress]'s value travels under.
 type progressKey struct{}
 
 // progress is how a handler keeps the delivery it holds from timing out.
@@ -17,17 +16,12 @@ type progress struct {
 // WithProgress states, for one handler invocation, how the handler tells the
 // backend it is still working on the delivery it holds, and how often it must:
 // signal resets the delivery's acknowledgement window, and every is the
-// interval that keeps a waiting handler well inside it.
+// interval that keeps a waiting handler well inside it. Only a backend whose
+// deliveries time out calls it; otherwise [Progress] answers false.
 //
-// ONLY A BACKEND CALLS THIS, on the delivery it is about to hand over, and
-// only a backend whose deliveries time out: one with no acknowledgement window
-// states nothing, and [Progress] answers false.
-//
-// IT EXISTS FOR A HANDLER THAT WAITS ON SOMETHING OUTSIDE THE QUEUE, the seat
-// it would run a turn on being busy with another of its turns, say. Its work
-// has not started, so a timeout would hand the delivery back and spend one of
-// its deliveries on nothing but the wait (see [OutcomeDefer]); signalling
-// keeps it, unspent, for as long as the wait lasts.
+// It is for a handler waiting on something outside the queue (its seat busy
+// with another turn): a timeout would spend a delivery on the wait alone (see
+// [OutcomeDefer]), and signalling keeps it unspent.
 func WithProgress(ctx context.Context, every time.Duration, signal func() error) context.Context {
 	if every <= 0 || signal == nil {
 		return ctx

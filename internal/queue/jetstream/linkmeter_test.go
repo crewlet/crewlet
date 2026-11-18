@@ -22,9 +22,8 @@ import (
 )
 
 // meterRate is the pace the meter's cases hold a link to: 128 KiB a second,
-// so a mebibyte takes eight seconds to cross each way — long enough that a
-// meter reading four times a second judges spans of seconds inside one
-// transfer.
+// so a mebibyte takes eight seconds each way — spans of seconds inside one
+// transfer for a meter reading four times a second.
 const meterRate = 128 << 10
 
 // meterInflight is what a first-in, first-out link lets each connection
@@ -32,8 +31,7 @@ const meterRate = 128 << 10
 // leaf writes are given ([linktest.SharedFIFO]).
 const meterInflight = 64 << 10
 
-// meterSpan is the span the meter's cases ask whether the link is moving
-// over.
+// meterSpan is the span the meter's cases ask whether the link moves over.
 const meterSpan = 2 * time.Second
 
 // meterFleet is a member serving leaves, a link in front of its leaf
@@ -146,26 +144,16 @@ func incompressibleMiB(t *testing.T) []byte {
 }
 
 // A LINK'S METER COUNTS WHAT CROSSES IT EACH WAY, at the leaf's own socket
-// and never ahead of the link: a mebibyte published from the leaf, then a
-// mebibyte delivered to it, across a first-in, first-out link whose relay's
-// receive buffer is pinned. At every piece the link carries, decided by the
-// link's own count rather than by a clock:
+// and never ahead of the link: a mebibyte up from the leaf, then one down to
+// it, across a FIFO link with a pinned relay receive buffer. At every piece
+// the link carries (its count, not a clock): acknowledged ≤ the link's read
+// plus that buffer (all a kernel takes before the relay reads); read ≤ what
+// the link wrote to the leaf; and past a span's warm-up the link reads moving
+// at a floor of half its rate — up by acknowledged bytes alone, down by read
+// ones alone. Each transfer is then counted whole.
 //
-//   - what the meter says the member acknowledged is at most what the link
-//     has read plus the relay's receive buffer — what a kernel takes and
-//     acknowledges before the relay reads it, and all it can;
-//   - what the meter says the leaf read is at most what the link has written
-//     to the leaf;
-//   - once a transfer has run for a span, the link reads as moving over it —
-//     the upload by its acknowledged bytes alone, the delivery by its read
-//     ones alone — at a floor played at half the link's rate;
-//
-// and each transfer is counted whole: the upload acknowledged once the member
-// has it, the delivery read once the leaf has it.
-//
-// Mutant: no acknowledgement half (the meter counts reads alone) — the upload
-// never moves and is never counted. Mutant: acknowledged = written (no kernel
-// count, no send queue) — past what the link read and its buffer.
+// Mutant: no acknowledgement half — the upload never moves nor is counted.
+// Mutant: acknowledged = written — past what the link read and its buffer.
 func TestALinksMeterCountsWhatCrossesItEachWay(t *testing.T) {
 	t.Parallel()
 	f := newMeterFleet(t, func(t testing.TB, target string) *linktest.Link {
@@ -289,13 +277,11 @@ func TestALinksMeterCountsWhatCrossesItEachWay(t *testing.T) {
 	f.link.Watch(nil)
 }
 
-// A LINK'S METER STANDS STILL ON A BLACKHOLED LINK: once the link reads
-// nothing more of the leaf, a mebibyte the leaf publishes is written to its
-// socket, and what the meter says the member acknowledged comes to rest at no
-// more than the link had read and its receive buffer holds — below what was
-// written, the rest held in the leaf's socket, unacknowledged — and over a
-// span of readings at rest the link reads as still. Decided at the meter's
-// own readings, by their count.
+// A LINK'S METER STANDS STILL ON A BLACKHOLED LINK: a mebibyte the leaf
+// publishes once the link reads nothing more is written to its socket, the
+// acknowledged count comes to rest at no more than the link had read plus its
+// receive buffer, below what was written, and over a span of readings at rest
+// the link reads still. Decided at the meter's own readings, by their count.
 //
 // Mutant: acknowledged = written — as much as was written, past the link's
 // read and its buffer.
@@ -356,11 +342,10 @@ func TestALinksMeterStandsStillOnABlackholedLink(t *testing.T) {
 	}
 }
 
-// A LEAF'S DATA LINK CROSSES ITS TUNNEL, every time it links: a leaf whose URLs
-// name two members links to one of them through the tunnel, and when that
-// member stops, links to the other through it again — so whatever member the
-// leaf reaches, its meter reads the link. It is the guard on nats-server's
-// proxy path for every bump of it, which the meter rests on.
+// A LEAF'S DATA LINK CROSSES ITS TUNNEL, every time it links: a leaf naming two
+// members links to one through the tunnel and, when that one stops, to the
+// other through it again, so its meter reads whichever it reaches. The guard
+// on the nats-server proxy path the meter rests on, for every bump of it.
 //
 // Mutant: no Proxy on the leaf's remote — the leaf links, and its meter never
 // opens a socket.
@@ -404,22 +389,19 @@ func TestALeafsDataLinkCrossesItsTunnel(t *testing.T) {
 	})
 }
 
-// relinkLag is how late the relink case's link delivers every chunk, each
-// way, once it has linked: 700 ms, so a leaf's handshake meets a round trip of
-// 1.4 s — the member's INFO, the leaf's INFO and the member's again 2.1 s
-// after the dial, past nats-server's one-second wait for them, and the leaf's
-// CONNECT 2.8 s after the member took the connection, past its two-second
-// wait — and stays under the fixed two seconds nats-server gives the
-// member's answer to CONNECT, which no option moves ([leafHandshakeTerm]).
+// relinkLag is how late the relink case's link delivers every chunk each way:
+// 700 ms, a 1.4 s round trip, so the INFO exchange ends 2.1 s after the dial
+// (past nats-server's one-second wait) and the leaf's CONNECT lands 2.8 s
+// after the accept (past its two-second wait), yet under the fixed two seconds
+// given the member's answer to CONNECT, which no option moves
+// ([leafHandshakeTerm]).
 const relinkLag = 700 * time.Millisecond
 
 // A LEAF LINKS AGAIN ACROSS A LINK WHOSE QUEUE IS DEEP: once its link drops
-// while every byte either way crosses 700 ms late, as behind a bottleneck
-// that other flows keep that deep, the leaf dials again through
+// while every byte crosses 700 ms late each way, the leaf dials again through
 // its tunnel, the handshake completes, and a request crosses the new link —
-// decided by the request's answer, never by a clock. Left at nats-server's
-// waits, every attempt timed out at the member's INFO or the leaf's CONNECT,
-// and the leaf never linked again while the queue stayed deep.
+// decided by the answer, never a clock. At nats-server's default waits every
+// attempt times out at the member's INFO or the leaf's CONNECT.
 //
 // Mutant: the leaf's wait for the member's INFO left at its one second.
 // Mutant: the member's wait for the leaf's CONNECT left at its two seconds.
@@ -480,9 +462,8 @@ func TestALeafWhoseTunnelStopsAcceptingIsADeadBroker(t *testing.T) {
 }
 
 // AN EXTERNAL DIAL'S METER COUNTS WHAT CROSSES IT, its reconnects included:
-// a queue on an external broker across a link meters every connection it
-// dials as one link, so after the server restarts and the client dials again,
-// what crosses the new connection is counted as the first's was, each way.
+// every connection a queue on an external broker dials is metered as one
+// link, so after a server restart the new connection is counted each way too.
 //
 // Mutant: a reconnect handed to the client unmetered.
 func TestAnExternalDialsMeterCountsWhatCrossesIt(t *testing.T) {
@@ -561,12 +542,10 @@ func TestAnExternalDialsMeterCountsWhatCrossesIt(t *testing.T) {
 }
 
 // AN EXTERNAL DIAL CLOSES THE SOCKET ITS CLIENT GAVE UP: nats.go's reconnect
-// loop moves on past a handshake that failed without closing the socket it
-// opened, which a metered dialer would otherwise hold for ever — a
-// descriptor, and one more socket read at every reading, each failed attempt.
-// Three dials through one dialer, as three passes of the loop: the two sockets
-// handed out before are closed at their far end, and the meter holds the one
-// the client has.
+// loop moves past a failed handshake without closing its socket, which a
+// metered dialer would hold for ever — a descriptor, and one more socket read
+// at every reading, per failed attempt. Three dials through one dialer: the
+// two handed out before are closed at their far end, and the meter holds one.
 //
 // Mutant: the dialer keeps what it handed out before — the first two stay
 // open, and the meter holds three.
@@ -610,12 +589,10 @@ func TestAnExternalDialClosesTheSocketItsClientGaveUp(t *testing.T) {
 
 // A METERED WRITE IS COUNTED AS ITS SOCKET TAKES IT, never only once it
 // returns: nats.go flushes a large message as one Write, and where the kernel
-// keeps no count of what the far end acknowledged (darwin) the meter's count
-// is what was written less what the socket still holds, so a Write counted
-// whole would read as nothing acknowledged for the whole of its crossing.
-// Sixty-four MiB written to a peer that reads nothing, far past both sockets'
-// buffers, blocks, and is counted while it does; once the peer reads it all,
-// the Write returns, counted whole.
+// counts no acknowledged bytes (darwin) the meter reads written less what the
+// socket holds, so a Write counted whole reads as nothing acknowledged while
+// it crosses. 64 MiB to a peer that reads nothing blocks and is counted while
+// it does; once the peer reads it all, the Write is counted whole.
 //
 // Mutant: the Write handed to the socket whole — nothing is counted while it
 // blocks.

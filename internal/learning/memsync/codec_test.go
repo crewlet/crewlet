@@ -23,14 +23,12 @@ func openStore(t *testing.T) *store.DB {
 
 var seat = seatRef{Handle: "eng", AgentID: "11111111-2222-3333-4444-555555555555"}
 
-// seedMemory writes one row into every table a seat's memory lives in, so a
-// round trip is tested over the whole registry rather than the one table
-// somebody remembered.
+// seedMemory writes one row into every memory table, so a round trip covers
+// the whole registry.
 func seedMemory(t *testing.T, db *store.DB) {
 	t.Helper()
 	at := time.Now().UTC().Add(-time.Hour).UnixMicro()
-	// An embedding, so the blob path is exercised: a vector carried as its
-	// own base64 spelling reads back as nothing and breaks recall silently.
+	// An embedding, so the blob path is exercised.
 	embedding := []byte{0x00, 0x01, 0xfe, 0xff, 0x7f}
 	exec := func(statement string, args ...any) {
 		t.Helper()
@@ -78,10 +76,9 @@ func countRows(t *testing.T, db *store.DB, tableName string) int {
 	return n
 }
 
-// exportAll is every row of the seat's a turn would carry from spec above
-// after, read as a turn reads them, and the mark it would leave: a watermark
-// table page after page, the mark the last row's, and a whole-each-cycle
-// table whole, after left as it was.
+// exportAll reads every row of the seat's a turn would carry from spec above
+// after, as a turn reads them, and returns the mark it would leave (after
+// itself for a whole-each-cycle table).
 func exportAll(t *testing.T, db *store.DB, spec table, after int64) ([]Row, int64) {
 	t.Helper()
 	if spec.wholeEachCycle {
@@ -107,8 +104,8 @@ func exportAll(t *testing.T, db *store.DB, spec table, after int64) ([]Row, int6
 	}
 }
 
-// carry moves every one of a seat's rows from one store to another the way a
-// handoff would: export from the old owner, import into the new one.
+// carry moves every one of a seat's rows from one store to another as a
+// handoff would, through the wire encoding.
 func carry(t *testing.T, from, to *store.DB) int {
 	t.Helper()
 	ctx := context.Background()
@@ -135,9 +132,8 @@ func carry(t *testing.T, from, to *store.DB) int {
 	return carried
 }
 
-// THE BUG, stated as a test: a seat's memory has to survive moving to a node
-// that has never run it. Before this package the new owner queried its own
-// store and found nothing.
+// A seat's memory survives moving to a node that has never run it (package
+// doc, "The bug this exists for").
 func TestASeatsMemoryCrossesToANodeThatHasNeverRunIt(t *testing.T) {
 	t.Parallel()
 	oldOwner, newOwner := openStore(t), openStore(t)
@@ -153,8 +149,7 @@ func TestASeatsMemoryCrossesToANodeThatHasNeverRunIt(t *testing.T) {
 		}
 	}
 
-	// The content, not just the row count: a memory that arrives empty is
-	// the same amnesia with extra steps.
+	// The content, not just the row count.
 	var content string
 	if err := newOwner.SQL().QueryRowContext(t.Context(),
 		"SELECT content FROM agent_diary WHERE id = 'd1'").Scan(&content); err != nil {
@@ -165,9 +160,8 @@ func TestASeatsMemoryCrossesToANodeThatHasNeverRunIt(t *testing.T) {
 	}
 }
 
-// An embedding is BYTES. Carried as text it comes back as its own base64
-// spelling — a vector of nothing — and that row's recall is silently dead,
-// which is worse than the row not arriving at all.
+// An embedding arrives as bytes: carried as text it would come back as its
+// base64 spelling, and that row's recall would be silently dead.
 func TestAnEmbeddingSurvivesAsBytes(t *testing.T) {
 	t.Parallel()
 	oldOwner, newOwner := openStore(t), openStore(t)
@@ -190,10 +184,8 @@ func TestAnEmbeddingSurvivesAsBytes(t *testing.T) {
 	}
 }
 
-// A VECTOR TRAVELS WITH THE MODEL IT CAME FROM. Recall compares only rows of
-// the query's model, so a vector that arrived without its model would be a
-// row the new holder can never recall — the same silent amnesia as a vector
-// that arrived as text.
+// A vector travels with its model: recall compares only rows of the query's
+// model, so a vector without one could never be recalled.
 func TestAVectorsModelTravelsWithIt(t *testing.T) {
 	t.Parallel()
 	oldOwner, newOwner := openStore(t), openStore(t)
@@ -212,9 +204,8 @@ func TestAVectorsModelTravelsWithIt(t *testing.T) {
 	}
 }
 
-// Hydration is repeatable: a seat re-acquired, a redelivered message, a node
-// that restarts mid-replay must not leave the seat remembering everything
-// twice.
+// Hydration is repeatable: a re-acquire, a redelivery or a restart mid-replay
+// must not leave the seat remembering everything twice.
 func TestCarryingTwiceCarriesOnce(t *testing.T) {
 	t.Parallel()
 	oldOwner, newOwner := openStore(t), openStore(t)
@@ -230,8 +221,8 @@ func TestCarryingTwiceCarriesOnce(t *testing.T) {
 	}
 }
 
-// The incremental read must not re-carry what it already carried, or every
-// cycle republishes a seat's whole history.
+// The incremental read never re-carries what it already carried, or every
+// cycle would republish a seat's whole history.
 func TestTheWatermarkOnlyCarriesWhatIsNew(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -250,8 +241,7 @@ func TestTheWatermarkOnlyCarriesWhatIsNew(t *testing.T) {
 		t.Errorf("the watermark re-carried %d rows nothing had changed about", len(again))
 	}
 
-	// A table whose rows are rewritten in place carries whole, because a
-	// watermark over an insert sequence cannot see an update.
+	// A table rewritten in place carries whole: a watermark cannot see an update.
 	profiles := tables[2]
 	if profiles.name != "counterparty_profiles" || !profiles.wholeEachCycle {
 		t.Fatalf("fixture drifted: tables[2] is %s", profiles.name)
@@ -262,8 +252,7 @@ func TestTheWatermarkOnlyCarriesWhatIsNew(t *testing.T) {
 	}
 }
 
-// One seat's memory is its own. Carrying a seat must never carry a peer's
-// rows into a node that has no business holding them.
+// Carrying a seat never carries a peer's rows.
 func TestOnlyTheNamedSeatsMemoryTravels(t *testing.T) {
 	t.Parallel()
 	oldOwner, newOwner := openStore(t), openStore(t)
@@ -298,9 +287,8 @@ func TestOnlyTheNamedSeatsMemoryTravels(t *testing.T) {
 	}
 }
 
-// A subject has to be a legal one for any value a natural key can hold. A
-// counterparty is named by whatever a chat platform calls them, and dots,
-// spaces and wildcards are all subject syntax.
+// A subject is legal for any natural key, dots, spaces and wildcards included,
+// and two keys never collide onto one subject.
 func TestASubjectIsSafeForAnyKey(t *testing.T) {
 	t.Parallel()
 	profiles := tables[2]
@@ -314,8 +302,7 @@ func TestASubjectIsSafeForAnyKey(t *testing.T) {
 	if !regexp.MustCompile(`^crewlet\.memory\.eng\.counterparty_profiles\.[0-9a-f]{32}$`).MatchString(got) {
 		t.Fatalf("subject %q is not a safe, addressable token", got)
 	}
-	// Different keys must not collide onto one subject, or one
-	// counterparty's profile would overwrite another's.
+	// A collision would overwrite one counterparty's profile with another's.
 	other := map[string]any{
 		"observer_handle": "eng", "subject_handle": "first",
 		"subject_external_id": "last", "subject_platform": "a b>c.*",
@@ -325,10 +312,8 @@ func TestASubjectIsSafeForAnyKey(t *testing.T) {
 	}
 }
 
-// THE ANTI-ROT GUARD. Memory that is not in the registry does not follow its
-// seat, and the failure is silent — the seat works and has simply forgotten.
-// So a table keyed by an agent has to be either carried or named here as
-// deliberately not.
+// Every agent-keyed table is carried or named here as deliberately not memory:
+// one in neither silently stays behind when its seat moves.
 func TestEveryAgentKeyedTableTravels(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -381,20 +366,14 @@ func TestEveryAgentKeyedTableTravels(t *testing.T) {
 	}
 }
 
-// A node that held a seat, lost it while a peer kept learning, and took it
-// back must arrive holding the PEER's memory rather than its own stale copy.
-//
-// This is the whole reason table.wholeEachCycle republishes a small mutable
-// table every cycle: with DO NOTHING on every conflict the republish is
-// carried across the wire and then discarded at the write, the returning node
-// keeps the profile it had, and its next publish overwrites the peer's
-// learning on the changelog for the whole fleet.
+// A node that lost a seat while a peer kept learning, and took it back, holds
+// the peer's wholeEachCycle rows rather than its own stale copy, which its next
+// publish would put over the peer's learning for the whole fleet.
 func TestAReturningNodeTakesThePeersUpdatesOverItsOwnStaleRow(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	// The node that is about to take the seat back — it still holds what
-	// it wrote before it lost it.
+	// The returning node still holds what it wrote before it lost the seat.
 	returning := openStore(t)
 	seedMemory(t, returning)
 
@@ -453,10 +432,8 @@ func TestAReturningNodeTakesThePeersUpdatesOverItsOwnStaleRow(t *testing.T) {
 	}
 }
 
-// The other half of the same split: an append-only row is immutable once
-// written, so a conflict there must NOT rewrite what is already here — a
-// redelivery or a second hydration is not a licence to touch a row a turn may
-// be reading.
+// An append-only row already here is not rewritten by a second carry: its
+// bookkeeping is this node's, and a turn may be reading it.
 func TestAnAppendOnlyRowIsNotRewrittenByASecondCarry(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -486,30 +463,20 @@ func TestAnAppendOnlyRowIsNotRewrittenByASecondCarry(t *testing.T) {
 	}
 }
 
-// A carried row that collides on a unique index the import does NOT target
-// must be skipped, not raised.
+// A carried row colliding on a unique index the import does not target is
+// skipped, not raised: a raise inside hydration refuses the seat everywhere.
 //
-// The collision is ordinary fleet history rather than corruption, and it can
-// only be built the way it actually arises — on TWO nodes, since neither
-// index lets one store hold both rows. episodes is unique on
-// (agent_handle, work_key): a node that died mid-turn without acking leaves an
-// episode for a work key a peer then re-ran and recorded under its own id.
-// synthesized_skills is unique on (agent_handle, name): a skill re-synthesized
-// under the same name gets a new id. Both rows reach the changelog under
-// different subjects, so a third node replaying that seat is handed both.
-//
-// It matters far more than a skipped row, because hydration runs inside seat
-// acquisition and a failure REFUSES THE SEAT — so a raise here is a seat that
-// silently stops being placeable anywhere in the fleet.
+// Built on two nodes, as it arises, since neither index lets one store hold
+// both rows: episodes on (agent_handle, work_key), from a dead node's work a
+// peer re-ran under its own id, and synthesized_skills on (agent_handle, name),
+// from a skill re-synthesized under a new id. A third node is handed both.
 func TestARowCollidingOnAnUntargetedIndexIsSkippedNotRaised(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	at := time.Now().UTC().Add(-time.Hour).UnixMicro()
 
-	// Two nodes, each holding its own version of the same work. The store
-	// is opened by the caller rather than in here: this closure's job is
-	// seeding, and opening a database inside it would start a second
-	// context chain beside the one it is already seeding through.
+	// Each node holds its own version of the same work. The caller opens the
+	// store, so this closure seeds through one context chain.
 	seed := func(db *store.DB, episodeID, skillID, body string) {
 		t.Helper()
 		exec := func(statement string, args ...any) {
@@ -533,8 +500,7 @@ func TestARowCollidingOnAnUntargetedIndexIsSkippedNotRaised(t *testing.T) {
 	seed(first, "e1", "s1", "body")
 	seed(second, "e2", "s2", "body-again")
 
-	// A third node replays the seat and is handed both. carry fails the
-	// test on an import error, which is the assertion: this must not raise.
+	// carry fails the test on an import error, which is the assertion.
 	target := openStore(t)
 	carry(t, first, target)
 	carry(t, second, target)
@@ -547,14 +513,9 @@ func TestARowCollidingOnAnUntargetedIndexIsSkippedNotRaised(t *testing.T) {
 	}
 }
 
-// A carried row must arrive with its column TYPES intact.
-//
-// The wire is JSON, which has one number type: an INTEGER column scanned out,
-// marshalled and read back comes through float64, and a driver handed a float
-// for an integer column can store a REAL. Timestamps are the ones that matter
-// — every recency window, retention sweep and ordering in the learning
-// subsystem compares them — and a REAL where an INTEGER is expected either
-// fails the scan or silently sorts differently.
+// A carried row keeps its column storage types. JSON has one number type, and
+// a float handed to an integer column can store a REAL, which fails a scan or
+// sorts differently; timestamps drive every recency window, sweep and ordering.
 func TestCarriedColumnsKeepTheirStorageTypes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -597,19 +558,13 @@ func TestCarriedColumnsKeepTheirStorageTypes(t *testing.T) {
 	}
 }
 
-// An integer past 2^53 must arrive unchanged.
-//
-// It is the cliff JSON's single number type puts under every integer column
-// here: decoded as a float64, 9007199254740993 comes back as ...92. Nothing
-// in this schema reaches it today — a microsecond stamp gets there in the
-// 23rd century — but the columns are int64 and the next one added may be a
-// token count, a byte count or a hash, and the failure is silent.
+// An integer past 2^53 arrives unchanged, where a float64 decoding would
+// silently change it. No column reaches it today, but every one is an int64.
 func TestALargeIntegerArrivesUnchanged(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	// 2^53 + 1, the smallest integer a float64 cannot hold: it rounds to
-	// 2^53. A power of two would round-trip fine however it was decoded
-	// and would test nothing.
+	// The smallest integer a float64 cannot hold; a power of two would
+	// round-trip however it was decoded.
 	const past2p53 = int64(1)<<53 + 1
 
 	source := openStore(t)

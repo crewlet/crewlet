@@ -11,93 +11,17 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// The protocol gate's view of the seat lease bucket.
-//
-// The protocol gate asks a question about EVERY live lease record of the
-// classes it counts — presence and seats, [coord.ProtocolGateCounts], which
-// says why a duty is not one: whether any is held at a lower protocol than the
-// claim (coord.ProtocolVersion, ADR-0016). It asked it by LISTING the lease
-// buckets — a certified walk of every lease in the fleet — on every gated
-// claim, twice (the check and the re-check), and in every FleetProtocolFloor.
-// So a claim cost a function of the leases already held: measured on a
-// three-member cluster with about 9,300 seats held, a gated seat claim took
-// 296–506 ms (p99 1.4–3.4 s), ten claimers managed 27 claims a second
-// between them, and a hundred nodes claiming ten thousand seats from cold
-// drove the process past 10 GB and the members' raft groups out of quorum —
-// the placement sweep claims seats one after another, each claim a walk of
-// everything the claims before it had written.
-//
-// # What the gate actually needs, and what it cannot be told
-//
-// The question is about VALUES — a record's protocol is in its body, not its
-// key — and the builds it exists for are the LOWER-protocol ones, whose lease
-// records are all the gate can count on them writing. So nothing such a build
-// writes can be narrowed at the broker by protocol, and no record a higher
-// build could add would be written by the builds the gate is for. Three
-// cheaper shapes were weighed and each breaks the gate:
-//
-//   - GATING ON PRESENCE ALONE, a listing of the `node` class — O(nodes) —
-//     misses a lower-protocol node that holds seats without presence, and
-//     that is not a corner: a drain gives presence up at its FIRST step (it
-//     is what moves the node's share to its peers) and goes on serving its
-//     seats until each is handed over. Every higher node would claim beside
-//     it for the whole drain, which is the mixed-protocol fleet the gate
-//     exists to prevent.
-//   - A FLOOR REFRESHED ON A CADENCE, by this node or published by a
-//     singleton, is as old as its cadence: a lower-protocol node that joined
-//     inside it is missed by the check AND by the re-check, so the window the
-//     re-check bounds to one claim widens to the cadence.
-//   - A PER-OWNER PROTOCOL RECORD, which a class listing could read in
-//     O(nodes), is written only by the builds that publish it — and the gate
-//     must stop for any lower build that does not.
-//
-// # So the view is incremental, and exact by a sequence barrier
-//
-// The view is a WATCH of the seat lease bucket — the one holding `seat:` and
-// `node:` leases and nothing else — keeping the newest record of every key of
-// a counted class as it arrives, indexed by the protocol the gate judges. The
-// duty bucket is not watched at all: no record in it is counted, and its
-// writes are the fleet's duty re-claims and the tracker's walk-claim
-// heartbeats, which the view would only take in to throw away. The view still
-// keeps only what [coord.ProtocolGateCounts] counts, rather than trusting
-// where a record was written: which bucket a class lives in is this store's
-// layout, and which classes the gate judges is the contract's. The cost of a
-// gate is then the lower-protocol records — none outside a rolling
-// upgrade — plus one BARRIER, and the barrier is what makes it exact rather
-// than merely recent. Before a gate is judged, the bucket's last sequence is
-// read from the stream LEADER (a stream info refused when it names no leader,
-// as a listing's index is), and the gate waits until the view has consumed
-// through it. Then the view holds the newest record of every key written
-// before that read — every key live from before the read until after it is in
-// the view, which is the certified listing's own guarantee (walk.go) — so the
-// check and the re-check see what a walk would have seen. The same read
-// carries the store's clock, so judging a record's deadline costs nothing
-// more. A view that cannot reach the leader, or does not catch up within the
-// read budget, answers UNKNOWN; its watch dying does too, and the next gate
-// starts it again.
-//
-// The watch reads whichever member the broker places it on, which may be
-// behind; the barrier waits that out, which is why no copy's lag can hide a
-// record from a gate.
-//
-// # What it costs, and why it stops
-//
-// Per gate: one stream info, where the listing it replaces was a watch
-// consumer created and deleted per bucket (two metadata proposals each) and
-// every record in the fleet read, twice per claim. Measured on one embedded
-// member (BenchmarkAGatedClaim): a gated claim took 5.8 ms with ten leases
-// held and 231 ms with ten thousand; it takes about 1.0 ms at both, and the
-// view's load of ten thousand records, paid once per run, about 130 ms. What
-// the view costs INSTEAD is every write to the seat lease bucket delivered to
-// it while it runs — a fleet's heartbeats, one per held seat or presence
-// lease per renew — so it runs only while this node is judging gates and
-// stops [gateViewIdle] after the last one. A node at its share of seats
-// claims nothing and pays nothing, and neither does one with room whose
-// every candidate a peer holds: a claim on a held resource is refused
-// [coord.RefusedHeld] before any gate, and the seat host reads the fleet's
-// floor only after a claim the gate refused. One converging from cold pays
-// one load of the bucket and then the writes of the minutes it claims
-// through. A duty claim is ungated, so holding a duty starts no view.
+// gateView is the protocol gate's view of the seat lease bucket: a WATCH that
+// keeps the newest record of every key of a class [coord.ProtocolGateCounts]
+// counts, indexed by protocol, made exact by a BARRIER. Before a gate is
+// judged, [Store.streamPoint] reads the bucket's last sequence and clock from
+// the stream leader and the gate waits until the view has consumed through it,
+// so it sees what a certified listing would, whatever member the watch reads.
+// A listing per claim costs a function of the leases held, and the cheaper
+// shapes break the gate (package doc, "The protocol gate's view").
+// It runs only while this node judges gates, stopping [gateViewIdle] after the
+// last; a view that cannot reach the leader, does not catch up within the read
+// budget, or whose watch dies answers UNKNOWN, and the next gate restarts it.
 type gateView struct {
 	s *Store
 
@@ -140,13 +64,10 @@ type gateRun struct {
 }
 
 // gateViewIdle is how long the view keeps running after the last gate it
-// judged.
-//
-// A MINUTE: twelve of the seat sweep's five-second passes, so a node that is
-// converging — claiming a share of seats a pass at a time — keeps one view
-// through all of it instead of loading the bucket again every pass. Past it a
-// node that has stopped claiming stops receiving the fleet's lease writes,
-// which is the whole of the view's standing cost.
+// judged: twelve of the seat sweep's five-second passes, so a converging node
+// keeps one view across its passes rather than reloading the bucket each one,
+// while a node that has stopped claiming stops receiving the fleet's lease
+// writes, the view's whole standing cost.
 const gateViewIdle = time.Minute
 
 func newGateView(s *Store) *gateView {
@@ -155,7 +76,7 @@ func newGateView(s *Store) *gateView {
 
 // blocked reports whether any live presence or seat lease is held at a
 // protocol below protocol — the protocol gate's predicate, judged exactly
-// (see the file doc).
+// (see [gateView]).
 func (v *gateView) blocked(ctx context.Context, protocol int) (bool, error) {
 	run, clk, err := v.settle(ctx)
 	if err != nil {
@@ -221,12 +142,10 @@ type gateClock time.Time
 // live is the gate's "held": a record naming an owner whose deadline, on its
 // own bucket's clock, has not passed.
 //
-// Judged by the DEADLINE even on the seat lease bucket, where a record taken
-// at the bucket's full age is otherwise judged live for as long as it can be
-// read ([Store.held]): the bucket reaps such a record at that same deadline,
-// and a view — which learns of a write but never of an expiry — would keep a
-// reaped record for ever. A claiming record (epoch 0) is held, as the gate
-// has always counted it.
+// By the DEADLINE even on the seat lease bucket, where [Store.held] reads a
+// record taken at the bucket's full age as live while readable: the bucket
+// reaps it at that deadline, and a view, which learns of writes but never of
+// expiries, would keep it for ever. A claiming record (epoch 0) is held.
 func (c gateClock) live(e entry) bool {
 	return e.value.Owner != "" && e.created.Add(e.value.ttl()).After(time.Time(c))
 }
@@ -272,10 +191,9 @@ func (v *gateView) settle(ctx context.Context) (*gateRun, gateClock, error) {
 // ensure starts the view's watch if it is not running — or if the run that
 // was running failed — and marks the use the idle stop measures from.
 //
-// The watch OUTLIVES the gate that starts it: its lifetime is the view's, ended
-// by the idle stop or by Close. So it takes the caller's context without its
-// cancellation — a claim that gives up must not stop the view every later
-// claim reads.
+// The watch OUTLIVES the gate that starts it, ended by the idle stop or Close,
+// so it takes the caller's context without its cancellation: a claim that
+// gives up must not stop the view every later claim reads.
 func (v *gateView) ensure(ctx context.Context) (*gateRun, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -435,14 +353,11 @@ func (v *gateView) halt() {
 }
 
 // streamPoint reads a lease bucket's last sequence and clock from its stream
-// LEADER, in one request.
-//
-// The sequence is the barrier's target; the clock is the store's own, the one
+// LEADER, in one request: the barrier's target, and the store's own clock
 // every deadline is judged against ([Store.storeNow]). A stream info a member
-// answers while its group has NO leader is that member's own copy — the hole
-// [keysUnder] refuses for the same reason — so it is refused here too: a
-// barrier short of the quorum's last write would let a gate pass a record the
-// quorum holds. An empty bucket has nothing to wait for.
+// answers with NO leader is its own copy, refused as [keysUnder] refuses it:
+// a barrier short of the quorum's last write would let a gate pass a record
+// the quorum holds. An empty bucket has nothing to wait for.
 func (s *Store) streamPoint(ctx context.Context, l *lane) (uint64, time.Time, error) {
 	info, err := leaderInfo(ctx, s.js, l.stream)
 	if err != nil {
