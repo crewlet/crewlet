@@ -141,7 +141,7 @@ func (s *server) relist(ctx context.Context, c *client) bool {
 	defs, err := c.listTools(ctx)
 	if err != nil {
 		if ctx.Err() == nil && !c.gone() {
-			s.b.log.Warn("server_relist_failed", "server", s.spec.Name, "error", err.Error(),
+			s.b.log.Warn("server_relist_failed", "server", s.spec().Name, "error", err.Error(),
 				"retry_in_seconds", s.b.sup.relistFloor().Seconds(),
 				"detail", "the tools it listed last stay filed; it is listed again a minute later")
 		}
@@ -153,7 +153,7 @@ func (s *server) relist(ctx context.Context, c *client) bool {
 	}
 	s.noteAnswer()
 	if len(change.Added) > 0 || len(change.Removed) > 0 {
-		s.b.log.Info("server_catalogue_changed", "server", s.spec.Name, "cause", "relisted",
+		s.b.log.Info("server_catalogue_changed", "server", s.spec().Name, "cause", "relisted",
 			"added", toolNames(change.Added), "removed", change.Removed)
 		if changed := s.b.sup.CatalogueChanged; changed != nil {
 			changed(ctx)

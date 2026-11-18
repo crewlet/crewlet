@@ -218,7 +218,7 @@ func TestASpecsBearerIsComparedAsTheGrantNotItsToken(t *testing.T) {
 	a := httpSpec("vendor", "https://mcp.example.com/mcp")
 	a.Bearer = grant
 	b := a
-	if !a.equal(b) || !a.SameProcess(b) {
+	if !a.equal(b) || !a.sameProcess(b) {
 		t.Fatal("one grant's spec is not equal to itself")
 	}
 	grant.token = "at-2"
@@ -227,7 +227,7 @@ func TestASpecsBearerIsComparedAsTheGrantNotItsToken(t *testing.T) {
 	}
 	c := a
 	c.Bearer = &scriptedBearer{token: "at-2"}
-	if a.equal(c) || a.SameProcess(c) {
+	if a.equal(c) || a.sameProcess(c) {
 		t.Fatal("a new grant's spec is equal to the old one's, so the server keeps the old grant")
 	}
 	if !errors.Is(fmt.Errorf("x: %w", ErrSignInNeeded), ErrSignInNeeded) ||
