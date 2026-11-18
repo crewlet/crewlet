@@ -191,6 +191,13 @@ func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyCont
 		return 0, fmt.Errorf("gitlet: write change %s at %s: %w", changeID, at.position, err)
 	}
 	rows := 1
+	// WHAT THE RECORD DID, as the change's timeline reads it (changemoves.go).
+	if moves := lifecycleMoves(payload, row, next); len(moves) > 0 {
+		if err := writeMoves(ctx, tx, at.maxVariables, at.packed, at.at(), moves); err != nil {
+			return 0, fmt.Errorf("%w (the record at %s)", err, at.position)
+		}
+		rows += len(moves)
+	}
 	if body != nil {
 		stmt, args := setBodySQL, []any{changeID, *body}
 		if *body == "" {
@@ -318,6 +325,23 @@ func writeChanges(ctx context.Context, tx store.Execer, maxVariables int, w chan
 	return err
 }
 
+// writeMoves writes moves at the record's position and instant, in as few statements as the
+// parameters allow; a key already held is a skip, never an abort that would stall the log.
+func writeMoves(ctx context.Context, tx store.Execer, maxVariables int, packed, at int64, moves []moveRow) error {
+	_, err := store.InsertRows(ctx, tx, maxVariables,
+		`INSERT INTO code_change_moves (change_id, position, kind, by_handle, by_kind, reason, was, became, at)
+			VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?, ?, ?)`, `ON CONFLICT (change_id, position, kind) DO NOTHING`, len(moves),
+		func(i int) []any {
+			m := moves[i]
+			return []any{m.change, packed, string(m.kind), m.by, string(m.byKind), m.reason, m.was, m.became, at}
+		})
+	if err != nil {
+		return fmt.Errorf("gitlet: write the changes' moves: %w", err)
+	}
+	return nil
+}
+
 // write writes what a push record's [changeBook] made of the changes it
 // reached (rows by [pushWrite], revisions, new authors, opened changes' bodies,
 // ended changes' queue entries and readiness, the next number) and answers
@@ -367,6 +391,9 @@ func (b *changeBook) write(ctx context.Context, tx store.Execer, maxVariables in
 			return []any{r.change, r.n, r.head, r.pusher, string(r.kind), r.pushID, b.packed, b.at, madeFor[i]}
 		}); err != nil {
 		return 0, fmt.Errorf("gitlet: write the revisions: %w", err)
+	}
+	if err := writeMoves(ctx, tx, maxVariables, b.packed, b.at, w.moves); err != nil {
+		return 0, err
 	}
 	if _, err := store.InsertRows(ctx, tx, maxVariables,
 		`INSERT INTO code_change_authors (change_id, author, author_kind, first_revision, position) VALUES `,

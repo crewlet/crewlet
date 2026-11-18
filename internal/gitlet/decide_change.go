@@ -193,17 +193,23 @@ func (p ChangeProposal) mentions() []string {
 // landing's change, the live queue entry it ends, its stored readiness
 // ([clearReadiness]) and the repository; a reopen's change, the revision a
 // moved source makes, and the repository. Each that moves a change's state
-// writes its tally row too (apply_counts.go).
+// writes its tally row too (apply_counts.go), and each but an open and a
+// landing its moves (changemoves.go): one, or an edit's one for each part it
+// sets.
 func (p ChangeProposal) decidedRows() int {
 	switch {
 	case p.Open != nil:
 		return 5 + tallyRows
-	case p.Close != nil, p.Landed != nil:
+	case p.Landed != nil:
 		return 4 + tallyRows
+	case p.Close != nil:
+		return 4 + tallyRows + 1
 	case p.Reopen != nil, p.Draft != nil:
-		return 3 + tallyRows
-	case p.Edit != nil, p.Retarget != nil:
-		return 3
+		return 3 + tallyRows + 1
+	case p.Edit != nil:
+		return 3 + p.Edit.parts()
+	case p.Retarget != nil:
+		return 3 + 1
 	}
 	return 2
 }

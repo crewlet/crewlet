@@ -60,8 +60,9 @@
 //
 // # A change is rows on its repository's subject
 //
-// A change (web!42) is code_changes, code_change_bodies, code_change_authors
-// and code_revisions (replicated migrations 0086 and 0094), written by records
+// A change (web!42) is code_changes, code_change_bodies, code_change_authors,
+// code_revisions and code_change_moves (replicated migrations 0086, 0094 and
+// 0188: the moves of its lifecycle, changemoves.go), written by records
 // on its REPOSITORY's subject and on no subject of its own, so its lifecycle
 // and the pushes that move its branches meet at one committer and one
 // arbitration, and its number — the repository's code_repos.next_change, read

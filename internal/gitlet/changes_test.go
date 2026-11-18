@@ -607,6 +607,97 @@ func TestAClosedChangeNamesWhoClosedIt(t *testing.T) {
 	}
 }
 
+// A CHANGE'S MOVES ARE ITS LIFECYCLE'S HISTORY: every lifecycle write that
+// moved it is a move of its `moves` part, oldest first, naming who made it:
+// an edit's title, description and work item each a move, a draft and its
+// readying, a retarget from and to, a close with its reason, a reopen, and a
+// push that deletes the source a close named for its pusher. A page resumes
+// after the move its cursor names.
+//
+// Mutation: write no move in the lifecycle's apply, or none in a push's
+// close, or resume a page at its cursor's move, and this fails.
+func TestAChangesMovesAreItsLifecyclesHistory(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	ctx := t.Context()
+	repo := changeRepo(t, n, "web")
+	opened, err := c.ProposeChange(ctx, opening(repo, featureRef, mainRef, dev))
+	requireChanged(t, opened, err)
+	id, version := opened.ChangeID, opened.Version
+	title, body := "Retry the upload, twice", "why it retries"
+	item := types.WorkItem{Backend: types.WorkJira, ID: "10042", Key: "ENG-7", Project: "ENG"}
+	for _, step := range []struct {
+		who   gitlet.Principal
+		write func(p *gitlet.ChangeProposal)
+	}{
+		{dev, func(p *gitlet.ChangeProposal) {
+			p.Edit = &gitlet.ChangeEdit{RepoID: repo, ChangeID: id, Title: &title, Body: &body, WorkItem: &item}
+		}},
+		{dev, func(p *gitlet.ChangeProposal) { p.Draft = &gitlet.ChangeDraft{RepoID: repo, ChangeID: id, Draft: true} }},
+		{dev, func(p *gitlet.ChangeProposal) { p.Draft = &gitlet.ChangeDraft{RepoID: repo, ChangeID: id} }},
+		{dev, func(p *gitlet.ChangeProposal) {
+			p.Retarget = &gitlet.ChangeRetarget{RepoID: repo, ChangeID: id, TargetRef: releaseRef}
+		}},
+		{ada, func(p *gitlet.ChangeProposal) {
+			p.Close = &gitlet.ChangeClose{RepoID: repo, ChangeID: id, Reason: "superseded"}
+		}},
+		{dev, func(p *gitlet.ChangeProposal) { p.Reopen = &gitlet.ChangeReopen{RepoID: repo, ChangeID: id} }},
+	} {
+		res, err := c.ProposeChange(ctx, writing(step.who, version, step.write))
+		requireChanged(t, res, err)
+		version = res.Version
+	}
+	pushedBy(t, c, repo, ada, update(featureRef, oidOf("B"), gitlet.ZeroOID))
+
+	type said struct {
+		kind              gitlet.ChangeMoveKind
+		by                string
+		reason, was, then string
+	}
+	want := []said{
+		// ONE RECORD'S MOVES in their kinds' order, the table's key after the record.
+		{gitlet.MoveDescribed, "dev", "", "", ""}, {gitlet.MoveRetitled, "dev", "", "", ""},
+		{gitlet.MoveWorkItem, "dev", "", "", "ENG-7"}, {gitlet.MoveDrafted, "dev", "", "", ""},
+		{gitlet.MoveReadied, "dev", "", "", ""}, {gitlet.MoveRetargeted, "dev", "", mainRef, releaseRef},
+		{gitlet.MoveClosed, "founder", "superseded", "", ""}, {gitlet.MoveReopened, "dev", "", "", ""},
+		{gitlet.MoveClosed, "founder", gitlet.SourceDeleted, "", ""},
+	}
+	read := func(limit int, cursor string) gitlet.ReadAnswer {
+		t.Helper()
+		answer, err := n.reader.Read(ctx, gitlet.ReadQuery{Asker: ada, Kind: gitlet.ReadChange, Repo: "web",
+			Change: opened.Number, Part: gitlet.PartMoves, Limit: limit, Cursor: cursor, Fresh: stale})
+		if err != nil {
+			t.Fatalf("read the change's moves after %q: %v", cursor, err)
+		}
+		return answer
+	}
+	var got []said
+	cursor, pages := "", 0
+	for {
+		answer := read(4, cursor)
+		pages++
+		for _, m := range answer.Moves {
+			if m.Position.IsZero() || m.At.IsZero() {
+				t.Fatalf("move %+v names no record", m)
+			}
+			got = append(got, said{m.Kind, m.By, m.Reason, m.Was, m.Became})
+		}
+		if cursor = answer.Next; cursor == "" || pages > 5 {
+			break
+		}
+	}
+	if !slices.Equal(got, want) || pages != 3 {
+		t.Fatalf("the change's moves, four a page, read in %d pages as\n%+v\nwant three pages of\n%+v", pages, got,
+			want)
+	}
+	if whole := read(0, ""); len(whole.Moves) != len(want) || whole.Next != "" {
+		t.Fatalf("a first page of the default size holds %d moves and next %q, want all %d", len(whole.Moves),
+			whole.Next, len(want))
+	}
+}
+
 // A WRITE IS REFUSED FOR WHAT ITS REPOSITORY, ITS BRANCHES AND ITS CHANGE ARE,
 // each in a sentence of its own, appending nothing: an open from a branch to
 // itself, from a branch or to one that is not live, or from one at its
@@ -853,7 +944,8 @@ func TestAChangesRowsReplayIdentically(t *testing.T) {
 	closed, err := c.ProposeChange(ctx, closing(repo, opened.ChangeID, cto, edited.Version))
 	requireChanged(t, closed, err)
 	b.drain()
-	for _, table := range []string{"code_changes", "code_change_bodies", "code_change_authors", "code_revisions"} {
+	for _, table := range []string{"code_changes", "code_change_bodies", "code_change_authors", "code_revisions",
+		"code_change_moves"} {
 		if got, want := tableRows(t, b.db, table), tableRows(t, a.db, table); !slices.Equal(got, want) {
 			t.Errorf("%s replayed on another node holds\n\t%v\nwant\n\t%v", table, got, want)
 		}

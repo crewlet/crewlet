@@ -1461,9 +1461,11 @@ type ReadAnswer struct {
 	Resolved  *RepoRef      `json:"resolved,omitempty"`
 	Revisions []RevisionRow `json:"revisions,omitempty"`
 	Reviewers []ReviewerRow `json:"reviewers,omitempty"`
-	Comments  []CommentRow  `json:"comments,omitempty"`
-	Reviews   []ReviewRow   `json:"reviews,omitempty"`
-	Findings  []FindingRow  `json:"findings,omitempty"`
+	// Moves is a page of a change's moves ([PartMoves]).
+	Moves    []ChangeMove `json:"moves,omitempty"`
+	Comments []CommentRow `json:"comments,omitempty"`
+	Reviews  []ReviewRow  `json:"reviews,omitempty"`
+	Findings []FindingRow `json:"findings,omitempty"`
 	// FindingPaths is a `finding_paths` page of a change ([ReadQuery.FindingPaths]).
 	FindingPaths []FindingPathRow `json:"finding_paths,omitempty"`
 	// Viewed is a `viewed` page of a change ([ReadQuery.Viewed]): the asker's own marks.

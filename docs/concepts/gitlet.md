@@ -1643,7 +1643,7 @@ pushes that move its branches: the repository's one
 [committer](#the-committer) decides them in order and the broker arbitrates
 them together, so a change is never both merged and closed.
 
-Four tables hold a change, on every data node:
+Five tables hold a change, on every data node:
 
 | Table | A row for | What it holds |
 |---|---|---|
@@ -1651,6 +1651,7 @@ Four tables hold a change, on every data node:
 | `code_change_bodies` | each change with a description | Its description, up to 32 KiB |
 | `code_change_authors` | each of its authors | Who wrote the change: whoever opened it, and everyone whose push moved its head, each from the revision they first wrote. An author's approval of their own change counts for nothing |
 | `code_revisions` | each time its head moved while it was live | The new head, who pushed it and the push that did. Revision 1 is the source branch's head when the change was opened — made by the push that opened it, for a change a push opened, and otherwise by whoever opened it, by no push — and a reopen's revision its head when the change was reopened, made by whoever reopened it |
+| `code_change_moves` | each move of its lifecycle | What the move did (`closed`, `reopened`, `drafted`, `readied`, `retitled`, `described`, `work_item` or `retargeted`), who made it, a close's reason, the branches a retarget moved its target between, the work item an edit set, and when: every edit, draft's state, retarget, close and reopen, and a close a push made by deleting its source, named for its pusher. Its timeline reads them beside its revisions and its conversation |
 
 - **A number is the repository's own**, counted from 1 in the order the code
   log applies the records that open changes, so two changes of a repository
@@ -1671,7 +1672,7 @@ Four tables hold a change, on every data node:
   the row still says how long it is, so a purge weighs it without reading it.
 - **A change has no horizon of its own.** It is kept as long as its
   repository, and the repository's [purge](#deletion-and-purge) removes it:
-  each change whole, its revisions, authors, description and
+  each change whole, its revisions, authors, moves, description and
   [conversation](#reviews-and-findings) before its row, in the same bounded
   steps as the rest of the repository's rows.
 

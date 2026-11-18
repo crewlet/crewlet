@@ -1155,6 +1155,27 @@ func nullableStringsBytes(ss []string) int {
 	return stringsBytes(ss)
 }
 
+// encodedBytes is the length of the move's JSON encoding.
+func (m ChangeMove) encodedBytes() int {
+	n := 2 + field("kind", stringBytes(string(m.Kind)), true)
+	if m.By != "" {
+		n += field("by", stringBytes(m.By), false)
+	}
+	if m.ByKind != "" {
+		n += field("by_kind", stringBytes(string(m.ByKind)), false)
+	}
+	if m.Reason != "" {
+		n += field("reason", stringBytes(m.Reason), false)
+	}
+	if m.Was != "" {
+		n += field("was", stringBytes(m.Was), false)
+	}
+	if m.Became != "" {
+		n += field("became", stringBytes(m.Became), false)
+	}
+	return n + field("position", positionBytes(m.Position), false) + field("at", timeBytes(m.At), false)
+}
+
 // encodedBytes is the length of the reviewer's JSON encoding.
 func (r ReviewerRow) encodedBytes() int {
 	n := 2 + field("reviewer", stringBytes(r.Reviewer), true) +

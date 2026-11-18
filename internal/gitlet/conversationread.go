@@ -125,11 +125,17 @@ const (
 	// refuses it as an unknown part rather than answer another set; it is an
 	// estate request's word, no record's, so it takes no versionedFields row.
 	PartStanding ChangePart = "standing"
+	// PartMoves is the moves of the change's lifecycle, oldest first
+	// ([ChangeMove]): who closed, reopened, drafted, readied, edited or
+	// retargeted it. An older build refuses it as an unknown part, as it does
+	// [PartStanding].
+	PartMoves ChangePart = "moves"
 )
 
 // ChangeParts is the closed set, in this order.
 func ChangeParts() []ChangePart {
-	return []ChangePart{PartRevisions, PartReviewers, PartComments, PartReviews, PartFindings, PartStanding}
+	return []ChangePart{PartRevisions, PartReviewers, PartComments, PartReviews, PartFindings, PartStanding,
+		PartMoves}
 }
 
 // Valid reports a part this build knows.
@@ -150,6 +156,8 @@ func (p ChangePart) maxPerPage() int {
 		return MaxReviewsPerPage
 	case PartFindings, PartStanding:
 		return MaxFindingsPerPage
+	case PartMoves:
+		return MaxMovesPerPage
 	}
 	return MaxRevisionsPerPage
 }
@@ -165,6 +173,11 @@ const (
 	MaxReviewsPerPage    = 200
 	defaultFindingLimit  = 50
 	MaxFindingsPerPage   = 200
+	// A change makes a handful of moves, each about 150 bytes encoded: a
+	// first page of 100 is a change's whole timeline but a pathological one's,
+	// and 500, some 75 KB, is under a page's bytes.
+	defaultMoveLimit = 100
+	MaxMovesPerPage  = 500
 )
 
 // waitedOn is the handle a listing of what its changes wait on names: for
