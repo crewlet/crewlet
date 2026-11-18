@@ -23,18 +23,12 @@ import (
 )
 
 // A TURN REPORTS THE WAITING MESSAGES ITS THREAD BLOCK SHOWED IT, through the
-// real [Engine.runTurn].
-//
-// The dispatcher records [turn.Result.WorkedThrough] beside the turn's own
-// triggers, so a failed message that comes round behind the newer one whose
-// turn already answered the thread is dropped instead of answered twice (see
-// workedthrough.go). Nothing but runTurn fills that field — the loop never
-// knew what a prompt showed — so every dispatcher test that sets it by hand
-// would keep passing with the one line that fills it gone. This drives the
-// whole frame: a Slack thread in which the seat replied, then Ana asked
-// something (M1, waiting), then Ana asked again (M2, the trigger). The turn
-// woken by M2 is shown M1 waiting, and reports it — and only it: not the
-// trigger, not the root, not anything up to the seat's own reply.
+// real [Engine.runTurn]. Only runTurn fills [turn.Result.WorkedThrough], which
+// the dispatcher records (see workedthrough.go), so a dispatcher test setting
+// it by hand passes with that line gone. In a Slack thread the seat replied,
+// then Ana asked M1, then M2 (the trigger): M2's turn is shown M1 waiting and
+// reports only it, not the trigger, the root or anything up to the seat's
+// reply.
 func TestRunTurnReportsTheWaitingMessagesItsThreadShowedIt(t *testing.T) {
 	t.Parallel()
 	e := threadedEngine(t, []map[string]string{
@@ -119,10 +113,9 @@ func threadedEngine(t *testing.T, thread []map[string]string) *Engine {
 		t.Fatalf("queue.Start: %v", err)
 	}
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
-	// A SESSION HOST, as every engine `crewlet run` builds has one: the
-	// runner refuses to be built without the host its phases serve their
-	// tools on, and the turn would stop there rather than at the depth
-	// guard this case relies on.
+	// A SESSION HOST, as every `crewlet run` engine has: the runner refuses
+	// to be built without one, and the turn would stop there rather than at
+	// the depth guard this case relies on.
 	e := withSessions(t, &Engine{backends: &Backends{Queue: q, Fleet: coordmem.NewFleet()}})
 	e.epoch.current.Store(&Company{
 		Org: organization, Models: models, Tools: tools.NewRegistry(),

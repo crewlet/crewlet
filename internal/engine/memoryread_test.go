@@ -8,14 +8,11 @@ import (
 	"github.com/crewlet/crewlet/internal/learning/memread"
 )
 
-// A SEAT THIS NODE HOLDS HAS ITS MEMORY READ HERE, and the answer says so.
-//
-// The reader finds a seat's holder by the incarnation its lease names, so the
-// reader has to be armed with the SEAT HOST's owner — the one the leases are
-// written under — and not with any other incarnation this process mints. Armed
-// with the wrong one, every read of a seat this node holds is sent to the
-// broker addressed to an incarnation nobody answers as, and a node reading its
-// own seats' memory is told the holder is silent.
+// A SEAT THIS NODE HOLDS HAS ITS MEMORY READ HERE, and the answer says so. The
+// reader finds a holder by the incarnation a lease names, so it must be armed
+// with the seat host's owner, the one leases are written under. Armed with any
+// other incarnation, a read of this node's own seat goes to the broker,
+// addressed to nobody, and reports the holder silent.
 func TestASeatThisNodeHoldsHasItsMemoryReadHere(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{})
@@ -36,8 +33,7 @@ func TestASeatThisNodeHoldsHasItsMemoryReadHere(t *testing.T) {
 	}
 	company := e.Company()
 	for _, placed := range company.Seats() {
-		// THE SEAT AS THE ASKER RESOLVES IT: its id and its handle —
-		// memread re-resolves nothing.
+		// The seat as the asker resolves it: memread re-resolves nothing.
 		seat := memread.Seat{ID: placed.ID, Handle: placed.Handle}
 		got, err := reads.Memory(t.Context(), seat, memread.MemoryQuery{Limit: 1})
 		if err != nil {

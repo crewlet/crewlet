@@ -14,96 +14,26 @@ import (
 
 var log = logging.Get("coord")
 
-// A LEASE VIEW: one class of live leases, WATCHED — listed on a cadence and
-// on demand, told of every claim and release as it lands, and read from
-// memory by every caller in between.
+// A LEASE VIEW: one class of live leases, listed on a cadence and on demand,
+// WATCHED for claims and releases, and read from memory by every caller in
+// between, since a listing is an O(fleet) read (across the leaf link on a node
+// without `data`) for an answer that changes only when a node joins or leaves.
 //
-// # Why a view, and not a listing per question
-//
-// A listing is an O(fleet) read of the coordination store, and on a node
-// without the `data` role it crosses the leaf link as well. Asked per request
-// — which data nodes may this tool call go to, which nodes divide this search
-// — it was one such read per tool call and per keystroke of search, for an
-// answer that only changes when a node joins, leaves or lets its lease lapse.
-// A view reads it once per heartbeat and answers every caller from memory.
-//
-// # What it answers, and when it answers UNKNOWN
-//
-// [LeaseView.Leases] is THREE-VALUED, on this package's rule that an
-// unreachable store is never read as an empty one: the leases as of the last
-// listing, or an error wrapping [ErrUnavailable] — never an empty or a stale
-// list standing in for "could not say". It is unknown when the view has never
-// listed, and when its last successful listing is older than the TRUST it was
-// built with: a lease is renewed within its TTL or it lapses, so a listing a
-// TTL old may name a node that is gone and miss one that has joined, and past
-// that a stale roster is a guess rather than an answer.
-//
-// # Why it watches as well as lists
-//
-// A roster listed once a heartbeat learns of a node that JOINED up to a
-// heartbeat late, and so did every view of it: a node joining was missing from
-// every peer's routing for up to fifteen seconds, and a fleet booted at once
-// — every node's first listing taken before any presence lease, its own
-// included, existed — routed for its first heartbeat as though each node were
-// alone. A node holding the estate committed every push it received itself
-// rather than meeting its peers at the repository's one committer, and a node
-// without it had no data node to ask and refused every push, fetch and read.
-// A shorter cadence only shrinks that window by listing the whole class more
-// often, which is the cost the view exists to remove.
-//
-// So the view WATCHES its class ([Backend.WatchLive]) for as long as it runs,
-// and a write that disagrees with what it holds — a holder it does not name, a
-// tenure it names under another owner or epoch, a release of a lease it names
-// — asks for a listing at once, held to [MinViewRefresh] like an invalidation.
-// A renewal agrees with the listing and asks for nothing, so the watch costs a
-// node the class's write rate (for presence, one message per node per
-// heartbeat) and a listing only when the roster moved. A join therefore
-// reaches every view within about a second of its claim, and a clean
-// departure as fast.
-//
-// THE WATCH IS A HINT AND THE LISTING IS STILL THE ANSWER: a write is held
-// against the last listing and never applied to it, because what a listing
-// holds is the store's judgement of what is live (a backend decides liveness
-// on its own clock) and a write is one message about one key. What the watch
-// cannot say is what the cadence is still for: a lease that LAPSES is no write
-// at all, so a node that stopped without releasing leaves the roster at the
-// first listing past its TTL, as it always did; a payload that moves with no
-// change of holder (a renewal's fresh profile) is read at the next listing; and
-// while the watch is down the view is exactly the listed view it was before.
-//
-// The watch begins BEFORE the first listing, so nothing written between the
-// two goes unheard: what landed before the watch is in the listing, and what
-// landed after is delivered. A watch that ends is begun again — after
-// [MinViewRefresh], doubling to the view's cadence, since past that a listing
-// would have caught what it missed anyway — and asks for a listing as it
-// resumes, for whatever was written while nobody was listening.
-//
-// # Invalidation
-//
-// A caller that asked a node the view named and got nothing back says so
-// ([LeaseView.Invalidate]), and the view lists again rather than waiting out
-// its cadence — a node that released its lease on a clean stop is gone from
-// the next answer. It is a REQUEST, not a wait: the view goes on answering
-// from the listing it has, which is still within its trust, and the caller
-// already knows the node it asked is suspect. Repeated invalidations are
-// coalesced and held to [MinViewRefresh] apart, so a node that stays silent
-// cannot turn the view back into a listing per request.
-//
-// # What it is kept small for
-//
-// It holds the LEASES, not a projection of them, so a caller that needs more
-// than an id — a node's profile, what it advertises — reads it off the same
-// answer rather than asking the store again.
+// The watch makes a join reach every view within about a second rather than a
+// heartbeat, which a shorter cadence could only buy by listing the whole class
+// more often. THE WATCH IS A HINT AND THE LISTING IS STILL THE ANSWER: a write
+// that disagrees with the listing asks for a new one ([LeaseView.moves]) and is
+// never applied to it, since what is live is the store's judgement on its own
+// clock. A lapse is no write, so a stopped node leaves at the first listing past
+// its TTL; while the watch is down the view is the plain listed view.
 
 // MinViewRefresh is the shortest interval between two listings a view makes
 // because a caller invalidated it or its watch heard the roster move.
 //
-// ONE SECOND: long enough that a node which never answers costs at most one
-// listing a second however many requests fail against it, and that a fleet
-// booting at once — every node's claim a write each view hears — costs each
-// view a listing a second while it boots rather than one per claim; and short
-// enough that a lease released on a clean stop leaves the roster before a
-// caller has retried more than once or twice.
+// ONE SECOND: long enough that a node which never answers, or a fleet booting
+// at once (every claim a write each view hears), costs a view at most a listing
+// a second; short enough that a lease released on a clean stop leaves the roster
+// before a caller has retried more than once or twice.
 const MinViewRefresh = time.Second
 
 // ViewOptions configure a [LeaseView].
@@ -113,7 +43,8 @@ type ViewOptions struct {
 	Every time.Duration
 
 	// Trust is how old a listing may be and still be an answer. Required,
-	// and at least Every: it is the TTL of the leases it watches.
+	// and at least Every: it is the TTL of the leases it watches, past which
+	// a listing may name a node that is gone and miss one that joined.
 	Trust time.Duration
 
 	// Now is the clock, for tests. Nil is the wall clock.
@@ -128,7 +59,8 @@ type ViewStore interface {
 }
 
 // LeaseView watches one class of leases. Build it with [NewLeaseView] and run
-// it with [LeaseView.Run]; its lifetime is the Run's.
+// it with [LeaseView.Run]; its lifetime is the Run's. It holds the LEASES, not
+// a projection, so a caller needing a node's profile reads it off the answer.
 type LeaseView struct {
 	store ViewStore
 	class Class
@@ -195,10 +127,9 @@ func (v *LeaseView) Run(ctx context.Context) error {
 		stopWatching()
 		<-watched
 	}()
-	// THE WATCH FIRST, so the first listing answers for everything written
-	// before the watch could hear it. Its first attempt is bounded by the
-	// store's own request budget, and one that fails lets the listing go
-	// ahead: the view is then the listed view it would have been anyway.
+	// THE WATCH FIRST, so nothing written between the two goes unheard. Its
+	// first attempt is bounded by the store's request budget, and one that
+	// fails lets the listing go ahead as the plain listed view.
 	select {
 	case <-began:
 	case <-ctx.Done():
@@ -238,7 +169,9 @@ func (v *LeaseView) Run(ctx context.Context) error {
 }
 
 // watch runs the view's watch of its class until ctx ends, beginning it again
-// whenever it ends, and closes began once its first attempt has answered.
+// whenever it ends (after [MinViewRefresh], doubling to the cadence, past which
+// a listing would have caught what it missed), and closes began once its first
+// attempt has answered.
 func (v *LeaseView) watch(ctx context.Context, began chan struct{}) {
 	first := true
 	failures := 0
@@ -249,9 +182,8 @@ func (v *LeaseView) watch(ctx context.Context, began chan struct{}) {
 		}
 		if err == nil {
 			if !first {
-				// RESUMED: whatever was written while no watch was
-				// listening is answered by a listing, not by waiting
-				// out the cadence for it.
+				// RESUMED: what was written while nobody listened is
+				// answered by a listing now, not at the cadence.
 				v.Invalidate()
 				if failures > 0 {
 					log.InfoContext(ctx, "coord_view_watch_resumed", "class", string(v.class))
@@ -291,12 +223,10 @@ func (v *LeaseView) watch(ctx context.Context, began chan struct{}) {
 
 // moves reports whether a watched write disagrees with the last listing — a
 // holder the listing does not name, the tenure it names under another owner
-// or epoch, or a release of a lease it names — which is a roster that may
-// have moved since. A renewal of a lease the listing names agrees with it.
-//
-// Before any listing, every write moves it: the listing about to be taken
-// answers for it, and asking costs nothing a listing in flight was not
-// already going to pay.
+// or epoch, or a release of a lease it names. A renewal agrees, so the watch
+// costs a listing only when the roster moved; a renewal's fresh payload is
+// read at the next listing. Before any listing every write moves it, at no
+// cost beyond the listing already coming.
 func (v *LeaseView) moves(w LeaseWrite) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -317,12 +247,10 @@ func (v *LeaseView) moves(w LeaseWrite) bool {
 // refresh takes one listing, bounded by the view's own cadence so a store that
 // hangs cannot stop the next one.
 //
-// DATED WHEN IT WAS ASKED, never when its answer arrived. What a listing
-// answers held at some instant between the two, and a lease in it was live
-// then — so it is renewed or lapsed a TTL after that instant, not after the
-// answer: dated on arrival, a listing that took ten seconds was trusted ten
-// seconds past anything the store said, and could name a node whose lease had
-// already lapsed as a live answer.
+// DATED WHEN IT WAS ASKED, never when its answer arrived: a lease in it was
+// live at some instant between the two, so it lapses a TTL after that instant.
+// Dated on arrival, a slow listing would be trusted past what the store said
+// and could name a lapsed lease as live.
 func (v *LeaseView) refresh(ctx context.Context) {
 	listing, cancel := context.WithTimeout(ctx, v.every)
 	defer cancel()
@@ -349,7 +277,8 @@ func (v *LeaseView) refresh(ctx context.Context) {
 // Leases is the view's answer: every lease of its class live as of its last
 // listing, and when that listing was taken — or an error wrapping
 // [ErrUnavailable] when the view has never listed or its last listing is older
-// than its trust. Never an empty list standing in for unknown.
+// than its trust. THREE-VALUED: never an empty or stale list standing in for
+// unknown (package doc, "The tri-state, and why Go gets it for free").
 //
 // The slice is the caller's own.
 func (v *LeaseView) Leases() ([]Lease, time.Time, error) {
@@ -389,16 +318,16 @@ func (v *LeaseView) ListedAt() time.Time {
 // [LeaseView.ListedAt] stops reading zero — and never before, however many
 // listings failed first.
 //
-// FOR A GATE THAT WAITS ON THE FIRST LISTING, which no reading of the view
-// can learn without asking again: a node's seat claims are refused while the
-// view that routes its seats' calls has never listed the fleet, and the
-// claims are asked again when this closes rather than at the next sweep. Read
-// it, never poll ListedAt for it.
+// FOR A GATE THAT WAITS ON THE FIRST LISTING: a node's seat claims are refused
+// until the view routing its seats' calls has listed, and are asked again when
+// this closes rather than at the next sweep. Never poll ListedAt for it.
 func (v *LeaseView) Listed() <-chan struct{} { return v.listed }
 
 // Invalidate asks for a listing now, because a caller asked a node this view
-// named and got no answer. It does not wait, and it does not drop the answer
-// the view has — see the file's doc.
+// named and got no answer, so a node that released its lease on a clean stop
+// leaves the next answer. A REQUEST, not a wait: the view answers from the
+// listing it has, still within trust, meanwhile. Requests coalesce and are held
+// [MinViewRefresh] apart, so a silent node cannot make every request a listing.
 func (v *LeaseView) Invalidate() {
 	select {
 	case v.kick <- struct{}{}:

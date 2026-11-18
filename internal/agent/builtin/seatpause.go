@@ -27,26 +27,19 @@ const (
 	ResumeSeatTool = "resume_seat"
 )
 
-// MaxPauseReasonRunes bounds the reason a pause carries.
-//
-// The same bound as a reassignment's reason (E-W15), and for the same
-// reader: it is one line on a seat's profile and in the feed, saying why, and
-// a person writing more than that is writing a note that belongs on the work
-// item the seat was on.
+// MaxPauseReasonRunes bounds the reason a pause carries, as a reassignment's
+// is (E-W15): it is one line on a seat's profile and in the feed, and more
+// belongs on the work item.
 const MaxPauseReasonRunes = 500
 
-// pauseAttempts bounds how many times a pause or a resume re-reads the record
-// after losing a compare-and-set to somebody else's write. Each loss means a
-// person changed the seat between this call's read and its write; four in a
-// row is contention no person produces, and the call refuses rather than spin.
+// pauseAttempts bounds a pause's or resume's re-reads after losing a
+// compare-and-set: each loss is a person changing the seat meanwhile, and four
+// in a row is contention no person produces, so the call refuses, not spins.
 const pauseAttempts = 4
 
-// SeatPauseStore is the record pause_seat and resume_seat change —
+// SeatPauseStore is the record pause_seat and resume_seat change:
 // [coord.SeatPauses] less its watch, which only the nodes carrying a pause out
-// read.
-//
-// KEYED ON THE SEAT'S AGENT ID, derived from its handle (ADR-0013), as the
-// inbox the hold sits on is.
+// read. Keyed on the seat's agent id (ADR-0013), as the held inbox is.
 type SeatPauseStore interface {
 	SeatPause(ctx context.Context, seat uuid.UUID) (coord.SeatPause, bool, error)
 	CreateSeatPause(ctx context.Context, p coord.SeatPause) (coord.SeatPause, bool, error)
@@ -72,10 +65,9 @@ type SeatPauseDeps struct {
 	// Required with Pauses.
 	Org func() *org.Organization
 
-	// Actor is who is pausing, off the caller's own credential — the same
-	// resolution every other operator write takes ([PrincipalActor]), so a
-	// person bound to a seat pauses AS that seat, kind human, with their
-	// credential beside it. Required with Pauses.
+	// Actor is who is pausing, off the caller's own credential
+	// ([PrincipalActor]), so a person bound to a seat pauses AS that seat,
+	// kind human, with their credential beside it. Required with Pauses.
 	Actor func(ctx context.Context, turn *turnctx.Turn) (Actor, error)
 
 	// Now is the clock a pause is stamped with; nil is the wall clock.
@@ -94,34 +86,16 @@ func (d SeatPauseDeps) wired() bool {
 }
 
 // pauseSeat pauses a seat: it takes no new work until somebody resumes it.
-//
-// # What it promises
-//
-// `applied` means the pause is the fleet's record: every node holding or later
-// acquiring the seat holds its mail, its schedules are skipped, and — with
-// `stop_running` — its running work ends: the turn it is on at its next round,
-// and its executor in its box at once, the box reclaimed, what it had spent
-// charged and its turn closed as stopped. An executor parked on a person's
-// question stays parked behind the pause, and until the seat is resumed every
-// Gitlet node refuses its executors' box pushes (internal/gitlet/host's box
-// admission) and their bridge sessions refuse their calls of every tool not
-// proven read-only (internal/api/mcpbridge), both through the engine's
-// stoppedBy. The node holding the seat carries that out from its own watched
-// copy, typically within a second; nothing here waits for it, because the
-// record IS the pause and a node that has not heard yet holds its mail — and
-// ends the seat's running run — the moment it does.
-//
-// # Whose decision it is
-//
-// The seat's lead's, or an admin's ([authz.ActionSeatPause]) — decided
-// here once the typed handle has resolved to a seat, on the seat's CURRENT
-// handle, because that is what the lead relation is asked about.
-//
-// # A second pause is not a second change
-//
-// Pausing a paused seat changes nothing and announces nothing — unless it asks
-// to stop the running turn and the pause in place did not, which is a real
-// change: the record is amended, under the version read, to name the person
+// `applied` means the record IS the pause: every node holding the seat, now or
+// later, holds its mail and skips its schedules; `stop_running` also ends its
+// turn at its next round and its executor at once (box reclaimed, spend
+// charged, turn closed as stopped). Until resumed, a parked executor stays
+// parked, and Gitlet's box admission refuses its executors' pushes and
+// mcpbridge their calls of tools not proven read-only, both through the
+// engine's stoppedBy. Nothing waits for the holding node to act on it.
+// Decided by the seat's lead or an admin ([authz.ActionSeatPause]) on the
+// seat's CURRENT handle. A second pause changes nothing unless it adds
+// `stop_running`, which amends the record, under the version read, to name
 // who asked for the stop.
 type pauseSeat struct {
 	deps      SeatPauseDeps
@@ -257,11 +231,9 @@ func (t *pauseSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 }
 
 // resumeSeat lifts a seat's pause: it takes work again, the mail that waited
-// first and in order.
-//
-// Resuming a seat that is not paused changes nothing and announces nothing, as
-// a second pause does not: both answer `applied`, because the seat is in the
-// state asked for. Decided as a pause is ([authz.ActionSeatResume]).
+// first and in order. Resuming an unpaused seat changes and announces nothing
+// but answers `applied`, the seat being in the state asked for. Decided as a
+// pause is ([authz.ActionSeatResume]).
 type resumeSeat struct {
 	deps      SeatPauseDeps
 	authorize Authorizer
@@ -345,15 +317,11 @@ type pauseTarget struct {
 }
 
 // resolvePauseCall resolves who is calling and which seat, decides whether
-// they may, and refuses in the class a person's surface acts on.
-//
-// DECIDED ON THE SEAT, NOT ON WHAT WAS TYPED. The handle resolves through the
-// org first — `@sre` names it — and the authority is asked about the seat's
-// handle, which is the one the lead relation is asked about. A handle that
-// names no agent seat is decided on the name AS TYPED, which nobody leads, so
-// only admin passes — and only then refused as naming no
-// seat, so the refusal a caller reads never depends on whether the seat
-// exists.
+// they may, and refuses in the class a person's surface acts on. DECIDED ON
+// THE SEAT's resolved handle, which the lead relation is asked about. A handle
+// naming no agent seat is decided AS TYPED, which nobody leads, so only an
+// admin passes and is only then refused as naming no seat: the refusal a
+// caller reads never depends on whether the seat exists.
 func resolvePauseCall(ctx context.Context, deps SeatPauseDeps, authorize Authorizer,
 	turn *turnctx.Turn, tool string, args map[string]any) (Actor, pauseTarget, *tools.Result) {
 
@@ -396,11 +364,10 @@ func resolvePauseCall(ctx context.Context, deps SeatPauseDeps, authorize Authori
 	return actor, target, nil
 }
 
-// pauseUnknown answers a write the store may or may not have taken.
-//
-// NOT A REFUSAL: a compare-and-set whose reply never came may have landed, and
-// the watch will say so on every node. A retry is safe — a pause of a paused
-// seat and a resume of a free one both change nothing.
+// pauseUnknown answers a write the store may or may not have taken. NOT A
+// REFUSAL: a compare-and-set whose reply never came may have landed. A retry
+// is safe, since a pause of a paused seat and a resume of a free one both
+// change nothing.
 func pauseUnknown(ctx context.Context, tool, handle string, err error) tools.Result {
 	log.WarnContext(ctx, "seat_pause_write_unknown", "tool", tool, "seat", handle,
 		"error", err.Error())

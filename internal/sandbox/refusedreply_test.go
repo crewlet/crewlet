@@ -20,7 +20,7 @@ import (
 // and resumed like an answer (ADR-0114).
 
 // refusingRig is a rig whose coordinator reads back the deliveries it recorded
-// as worked, as a node's reads its completion ledger
+// as worked, as a node reads its completion ledger
 // ([CoordinatorOptions.WasSpent]): what decides whether a refused reply's
 // delivery is kept or spent.
 func refusingRig(t *testing.T) *coordRig {
@@ -40,8 +40,8 @@ func (r *coordRig) spentOf(id string) bool {
 }
 
 // tooLargeReply is one chat message past what a run's row carries as an answer
-// (a page of markup, each `<`, `>` and `&` six bytes as the row holds it),
-// posted a minute after the question rig's run parked on.
+// (a page of markup, each `<`, `>` and `&` six bytes on the row), posted a
+// minute after the question rig's run parked on.
 func tooLargeReply(rig *coordRig) Reply {
 	text := strings.Repeat("<li>a & b</li>", MaxAnswerBytes/14)
 	return chatReply(answerOnTheDM, text, replyAt(text, rig.get("t1").AskedAt.Add(time.Minute)))
@@ -62,20 +62,17 @@ func (r *coordRig) tooLargeRecords() []*events.Event {
 }
 
 // A REPLY PAST WHAT THE ROW CARRIES IS RECORDED AS ITS QUESTION'S REFUSAL, AND
-// THE RUN IS RESUMED TOLD SO. A reply is recorded on the run's row as its
-// answer, and one past its share (MaxAnswerBytes) cannot be: its refusal is
-// recorded in the answer's place instead — the reply's delivery, its figures,
-// none of its words — and resumed as an answer is, the run handed the refusal
-// where an answer would be ([AskedRun.Refused]) and never an answer with no
-// words. The refusal is announced once, `executor_answered` with the outcome
-// too_large, and never as `resumed`, which a person's answered decisions read
-// as an answer. The turn that took it kept it, so the delivery the seat's
-// inbox held for it is spent, and the delivery is acknowledged.
+// THE RUN IS RESUMED TOLD SO. A reply past MaxAnswerBytes cannot be the row's
+// answer, so its refusal (the delivery and its figures, none of its words) is
+// recorded in its place and resumed as an answer is, the run handed it as
+// [AskedRun.Refused], never an answer with no words. It is announced once,
+// `executor_answered` too_large, never `resumed`, which a person's answered
+// decisions read as an answer. The turn that took it kept it, so the delivery
+// is spent and acknowledged.
 //
-// Mutation: hand the reply on as the ordinary message it looks like, as the
-// coordinator did, and no run is resumed; resume with the refusal's words as an
-// answer, and the run is handed an empty answer and no refusal; announce the
-// resume, and a `resumed` record reads it as an answered decision.
+// Mutation: hand the reply on as an ordinary message, and no run resumes;
+// resume with the refusal's words as an answer, and the run gets an empty one;
+// announce the resume, and `resumed` reads as an answered decision.
 func TestAReplyPastWhatTheRowCarriesIsRecordedAsItsQuestionsRefusal(t *testing.T) {
 	t.Parallel()
 	rig := refusingRig(t)
@@ -124,18 +121,15 @@ func TestAReplyPastWhatTheRowCarriesIsRecordedAsItsQuestionsRefusal(t *testing.T
 	}
 }
 
-// A MESSAGE AFTER A REFUSED REPLY IS NOT THE RUN'S ANSWER. From the refusal's
-// record on, while the refusal is the run's, the question no longer waits: the
-// person's next short message ("any luck?") is the ordinary message it is, and
-// never the run's answer — which it was, while a refused reply left the
-// question waiting with its old anchor. The refusal stays the question's
-// outcome, owed its resume, and the refused reply's own delivery is kept, not
-// spent, while no turn has kept it. (A refusal LET GO OF puts the question
-// back to waiting, as an answer let go of does:
-// TestARefusalLetGoOfLeavesItsQuestionToTheNextReply.)
+// A MESSAGE AFTER A REFUSED REPLY IS NOT THE RUN'S ANSWER. While the refusal is
+// the run's, the question no longer waits: the person's next short message
+// ("any luck?") is the ordinary message it is. The refusal stays the question's
+// outcome, owed its resume, and the refused reply's delivery is kept, not
+// spent, while no turn has kept it. A refusal let go of puts the question back
+// to waiting (TestARefusalLetGoOfLeavesItsQuestionToTheNextReply).
 //
-// Mutation: leave the question waiting on a refusal, as the store did, and
-// "any luck?" is recorded as the run's answer.
+// Mutation: leave the question waiting on a refusal, and "any luck?" is
+// recorded as the run's answer.
 func TestAMessageAfterARefusedReplyIsNotTheRunsAnswer(t *testing.T) {
 	t.Parallel()
 	rig := refusingRig(t)
@@ -164,18 +158,16 @@ func TestAMessageAfterARefusedReplyIsNotTheRunsAnswer(t *testing.T) {
 
 // A REFUSAL LET GO OF SENDS THE REPLY BACK AS IT CAME. A refusal no attempt can
 // resume is let go of after its attempts, as an answer is: the run waits on its
-// question again with the reply declined for it. The row carried none of the
-// reply, so nothing is handed back from it; the reply's delivery, kept on the
-// seat's inbox and never spent, comes round as the ordinary message it is. And
-// the let-go is announced, once, after the refusal's own record — `declined`
-// on the chat route with the refusal's figures, by whom the seal names — since
-// that record said the run would be told, and it never was.
+// question again with the reply declined. The row carried none of the reply, so
+// nothing is handed back; the delivery, kept and never spent, comes round as
+// the ordinary message it is. The let-go is announced once, after the refusal's
+// record (`declined` on the chat route, its figures, by whom the seal names),
+// since that record said the run would be told and it never was.
 //
-// Mutation: spend the refused reply's delivery when its refusal is let go of,
-// as an answer's is before its copies are handed back, and the reply is
-// dropped as worked with nothing to hand back; announce nothing of the let-go,
-// as a chat answer let go of announces nothing, and the feed keeps "is resumed
-// told" for a run waiting on its question again.
+// Mutation: spend the delivery at the let-go, as an answer's is, and the reply
+// is dropped as worked with nothing handed back; announce nothing of it, as of
+// a chat answer let go of, and the feed keeps "is resumed told" for a run
+// waiting on its question.
 func TestARefusalLetGoOfSendsTheReplyBackAsItCame(t *testing.T) {
 	t.Parallel()
 	rig := refusingRig(t)
@@ -225,22 +217,18 @@ func TestARefusalLetGoOfSendsTheReplyBackAsItCame(t *testing.T) {
 	}
 }
 
-// A REFUSAL LET GO OF LEAVES ITS QUESTION TO THE NEXT REPLY. The guarantee that
-// nothing written after a refusal is the run's answer holds while the refusal
-// is the run's. Let go of after its attempts — no resume could tell the run —
-// the question waits again under the anchor it was asked at, as one whose
-// answer was let go of does, and the next reply that qualifies answers it: the
-// person's "any luck?" written since included, which then carries the run on
-// as its answer. The ADR and the docs say so beside the guarantee.
-//
-// THE CLOCK MOVES ON after the question is asked, so a let-go that anchored
-// it again would anchor it at another instant, where the rig's clock left
-// standing read the two equal.
+// A REFUSAL LET GO OF LEAVES ITS QUESTION TO THE NEXT REPLY. Nothing written
+// after a refusal is the run's answer only while the refusal is the run's. Let
+// go of, the question waits again under the anchor it was asked at, as one
+// whose answer was let go of does, and the next qualifying reply answers it,
+// the person's "any luck?" since included; the ADR and docs say so beside the
+// guarantee. The rig's clock moves on after the question is asked, so a let-go
+// that anchored it again would show.
 //
 // Mutation: close the question for good once it has let a reply go (WaitsOn
-// false while DeclinedAnswers holds any), and the person's next reply is an
-// ordinary message, the run waiting on a question nothing can answer; anchor
-// the question again as the refusal is let go of, and it was not asked then.
+// false while DeclinedAnswers holds any), and the next reply is an ordinary
+// message, the run waiting on what nothing can answer; or anchor the question
+// again at the let-go, and it was not asked then.
 func TestARefusalLetGoOfLeavesItsQuestionToTheNextReply(t *testing.T) {
 	t.Parallel()
 	rig := refusingRig(t)
@@ -273,20 +261,17 @@ func TestARefusalLetGoOfLeavesItsQuestionToTheNextReply(t *testing.T) {
 }
 
 // A REFUSAL THE INLINE ATTEMPT LET GO OF IS THE ORDINARY MESSAGE AT ONCE. The
-// inline attempt at a refusal's resume can let the refusal go before any turn
-// takes it — here a resume that broke before its turn, which ends the run — and
-// what becomes of the reply's delivery is decided from the row as the attempt
-// left it: the refusal has left the run unspent, so the delivery is the
-// ordinary message it is, handed on now rather than deferred as kept for a
-// refusal no run holds (which stopped the seat's inbox until its next renew and
-// spent one of the delivery's deliveries for nothing). And the run's ending
-// says that what goes back to the seat is a reply too large for it, which it
-// was never told of — not "the answer a person gave it".
+// inline attempt can let a refusal go before any turn takes it (here a resume
+// broken before its turn, which ends the run), so the delivery is decided from
+// the row as the attempt left it: no refusal holds the run, so it is handed on
+// now as an ordinary message, not deferred as kept, which would stop the seat's
+// inbox until its next renew and spend one of its deliveries for nothing. The
+// run's ending says a reply too large for it, never told it, goes back to the
+// seat, not "the answer a person gave it".
 //
-// Mutation: decide off the snapshot the reply was matched against, as
-// refusedReply did, and the delivery comes back AnswerRefused; announce the
-// ending as one that hands back an answer, and it names an answer the run never
-// had.
+// Mutation: decide off the snapshot the reply was matched against, and the
+// delivery comes back AnswerRefused; announce the ending as handing back an
+// answer, and it names one the run never had.
 func TestARefusalTheInlineAttemptLetGoOfIsTheOrdinaryMessageAtOnce(t *testing.T) {
 	t.Parallel()
 	rig := refusingRig(t)
@@ -316,15 +301,13 @@ func TestARefusalTheInlineAttemptLetGoOfIsTheOrdinaryMessageAtOnce(t *testing.T)
 
 // A REFUSAL'S RESUME IS RAISED WHERE THE REPLY WAS POSTED, AND CARRIES NONE OF
 // ITS WORDS. A resumed turn raises its working indicator off its trigger's
-// transport metadata, for the person who replied; an answer's resume reads it
-// off the deliveries the answer carries, and a refusal carries none of them. So
-// the refusal keeps the reply's address (AnswerRefusal.Address) and its resume
-// is triggered by a notification carrying that address and no body, subject or
-// salient text: on every attempt, the inline one and a retry alike.
+// transport metadata; an answer's resume reads it off the deliveries it
+// carries, and a refusal carries none. So the refusal keeps the reply's address
+// (AnswerRefusal.Address) and every attempt, inline or retry, is triggered by a
+// notification carrying it and no body, subject or salient text.
 //
-// Mutation: raise the refusal's resume off answer.trigger(), as an answer's,
-// and it carries no trigger, so no indicator is raised; keep no address on the
-// refusal (addressOf answering nil), and the same.
+// Mutation: raise the resume off answer.trigger(), as an answer's, or keep no
+// address on the refusal (addressOf answering nil), and no indicator is raised.
 func TestARefusalsResumeIsRaisedWhereTheReplyWasPosted(t *testing.T) {
 	t.Parallel()
 	address := map[string]string{"transport": "slack", "channel": "D0ANA", "thread_ts": "1712345678.000100"}
@@ -370,11 +353,10 @@ func TestARefusalsResumeIsRaisedWhereTheReplyWasPosted(t *testing.T) {
 	}
 }
 
-// A REFUSAL A TURN GAVE BACK KEEPS ITS REPLY. A turn takes the refusal and then
-// gives its claim back as a retry, which says nothing it did reached anybody:
-// the refusal is owed again and may yet be let go of, so its delivery — the
-// only copy of the reply — is not spent at the take, as an answer's is (its
-// row carries copies), but only once a turn that took it keeps it.
+// A REFUSAL A TURN GAVE BACK KEEPS ITS REPLY. A turn that gives its claim back
+// as a retry reached nobody: the refusal is owed again and may yet be let go
+// of, so its delivery, the reply's only copy, is spent not at the take, as an
+// answer's is (its row carries copies), but once a turn that took it keeps it.
 //
 // Mutation: spend the refusal's delivery at the take, and it is recorded as
 // worked by a turn that gave it back.
@@ -404,14 +386,14 @@ func TestARefusalATurnGaveBackKeepsItsReply(t *testing.T) {
 	}
 }
 
-// A REFUSED REPLY OFFERED AGAIN IS ONE RECORD. The refusal's record is published
-// as it is recorded and again by every copy of the kept delivery that finds it
-// on the run — a node that recorded it may have stopped before it published —
-// and every publish carries the one id and the one instant the run, its
-// question and the delivery derive, which the event store keeps as one row.
+// A REFUSED REPLY OFFERED AGAIN IS ONE RECORD. The refusal's record is
+// published when recorded and again by every copy of the kept delivery that
+// finds it on the run (the recording node may have stopped before publishing),
+// each with the one id and instant the run, its question and the delivery
+// derive, so the event store keeps one row.
 //
-// Mutation: publish the record under a fresh identity, as every other
-// announcement is, and the second offer is a second row.
+// Mutation: publish the record under a fresh identity, as other announcements
+// are, and the second offer is a second row.
 func TestARefusedReplyOfferedAgainIsOneRecord(t *testing.T) {
 	t.Parallel()
 	rig := refusingRig(t)
@@ -439,15 +421,13 @@ func TestARefusedReplyOfferedAgainIsOneRecord(t *testing.T) {
 	}
 }
 
-// A REFUSAL OPENS ONLY AS THE REFUSAL ITS ROW RECORDS. What a resumed run is
-// handed comes out of the answer's seal, and the seal binds whether it is an
-// answer or a refusal to what the row records beside it: a row recording a
-// refusal opens only to a seal of that very refusal, which hands the run the
-// refusal and no words, and a row recording an answer never opens to a
-// refusal's seal — so no refusal is ever handed over as an answer with no
-// words, nor an answer as a refusal. A refusal key beside an answer naming
-// other deliveries (one a build that did not know the key carried while it let
-// the refusal go and recorded another) is no refusal at all.
+// A REFUSAL OPENS ONLY AS THE REFUSAL ITS ROW RECORDS. The answer's seal binds
+// whether it is an answer or a refusal to what the row records beside it: a row
+// recording a refusal opens only to a seal of that very refusal, handing the
+// run the refusal and no words, and a row recording an answer never opens to a
+// refusal's seal. A refusal key beside an answer naming other deliveries
+// (carried by a build that did not know the key while it let the refusal go and
+// recorded another) is no refusal at all.
 //
 // Mutation: open the seal without comparing its refusal with the row's, and a
 // refusal's seal opens on a row recording an answer as an answer with no words.
@@ -499,9 +479,8 @@ func TestARefusalOpensOnlyAsTheRefusalItsRowRecords(t *testing.T) {
 }
 
 // failingOpenLedgerRig is a rig whose completion ledger cannot be read, as a
-// coordination store that times out, or a drain that cancels the read, leaves
-// it: every delivery reads as unspent, which is what every ledger read answers
-// when it fails ([CoordinatorOptions.WasSpent]).
+// store timeout or a drain's cancelled read leaves it: every delivery reads as
+// unspent, as every failed ledger read answers ([CoordinatorOptions.WasSpent]).
 func failingOpenLedgerRig(t *testing.T) *coordRig {
 	t.Helper()
 	return newCoordRigWith(t, func(o *CoordinatorOptions) {
@@ -510,20 +489,16 @@ func failingOpenLedgerRig(t *testing.T) *coordRig {
 }
 
 // A REFUSAL THE INLINE ATTEMPT'S TURN KEPT IS SPENT, WHATEVER THE LEDGER SAYS.
-// The reply's delivery is in hand while the inline attempt resumes the run with
-// its refusal, and once a turn of that attempt has told the run the reply never
-// reached it, the delivery is spent — acknowledged, and run as no turn — on the
-// attempt's own account, as an answer's is at its record. Nothing else the node
-// reads then says so for certain: the relaunch that told the run cleared the
-// refusal from the row, or the run is over and its row gone, and the completion
-// ledger the turn recorded the delivery as worked in fails open, an unreadable
-// read answering "unspent". Decided off those, the seat was handed, as a new
-// message, the very reply its run had just been told never reached it.
+// Once a turn of the inline attempt has told the run the reply never reached
+// it, the delivery in hand is spent (acknowledged, run as no turn) on the
+// attempt's own account, as an answer's is at its record. Nothing else says so
+// for certain: the relaunch cleared the refusal from the row, or the run is
+// over and its row gone, and the completion ledger fails open, an unreadable
+// read answering "unspent".
 //
-// Mutation: decide the delivery off the ledger and the row alone, reading the
-// attempt's account as nothing kept (refusedReply's kept false), and both
-// cases answer AnswerNotMine: the dispatcher runs the reply as an ordinary turn
-// of the seat.
+// Mutation: decide off the ledger and row alone (refusedReply's kept false),
+// and both cases answer AnswerNotMine: the dispatcher hands the seat, as a new
+// message, the reply its run was just told never reached it.
 func TestARefusalTheInlineAttemptsTurnKeptIsSpentWhateverTheLedgerSays(t *testing.T) {
 	t.Parallel()
 	for name, turn := range map[string]func(*testing.T, *coordRig) func(context.Context, PendingRun){
@@ -553,12 +528,12 @@ func TestARefusalTheInlineAttemptsTurnKeptIsSpentWhateverTheLedgerSays(t *testin
 	}
 }
 
-// claimTakenFirst is a store on which another attempt claims an owed refusal's
-// run the instant before this node's does — the seat's next holder, across a
-// handoff — and that attempt's turn takes the refusal and tells the run of it,
-// relaunching the run to carry its round on from the refused question as such a
-// turn does (sandbox.LaunchRequest.Continue): this node's claim then finds the
-// run moved on, and no turn of its own keeps anything.
+// claimTakenFirst is a store on which another attempt (the seat's next holder,
+// across a handoff) claims an owed refusal's run the instant before this node
+// does, and its turn takes the refusal and relaunches the run to carry its
+// round on from the refused question (sandbox.LaunchRequest.Continue): this
+// node's claim then finds the run moved on, and no turn of its own keeps
+// anything.
 type claimTakenFirst struct {
 	PendingStore
 	t    *testing.T
@@ -585,16 +560,13 @@ func (s *claimTakenFirst) ClaimForResume(ctx context.Context, turnID string, tai
 	return s.PendingStore.ClaimForResume(ctx, turnID, tail, fence)
 }
 
-// A REFUSED REPLY WHOSE ROUND WAS CARRIED ON FROM ITS REFUSAL IS SPENT. Another
-// attempt can win the claim of an owed refusal's run — the seat's next holder,
-// across a handoff — and its turn tells the run of the refusal by relaunching it
-// to carry the round on from the refused question. This node's own attempt then
-// finds the run moved on, no turn of its own kept anything, and the refusal is
-// gone from the row; the completion ledger, which that turn writes once it
-// returns, may not say so yet, and fails open besides. What says so is the
-// row: the relaunch that told the run keeps the refused question for the
-// round's review (PendingRun.RoundRefusals), and only a turn that took the
-// refusal writes it. So the delivery in hand is spent, never run as a new
+// A REFUSED REPLY WHOSE ROUND WAS CARRIED ON FROM ITS REFUSAL IS SPENT. When
+// another attempt wins the claim (claimTakenFirst), this node's attempt finds
+// the run moved on, no turn of its own kept anything, and the refusal gone from
+// the row; the completion ledger, written once that turn returns, may not say
+// so yet, and fails open besides. The row does: the relaunch keeps the refused
+// question for the round's review (PendingRun.RoundRefusals), written only by a
+// turn that took the refusal. So the delivery is spent, never run as a new
 // message to a seat whose run was just told the reply never reached it.
 //
 // Mutation: read nothing of the round's record (carriedOnFromRefusal false),
@@ -624,10 +596,10 @@ func TestARefusedReplyWhoseRoundWasCarriedOnFromItsRefusalIsSpent(t *testing.T) 
 	}
 }
 
-// refusedAndClaimed records a reply too large for t1 as its question's refusal
-// — the inline attempt failing, so the refusal is owed and its delivery kept —
-// and then claims the run for the refusal's resume and has its turn take the
-// refusal, as the node holding the seat does the instant before it stops.
+// refusedAndClaimed records a reply too large for t1 as its question's refusal,
+// the inline attempt failing so it is owed and its delivery kept, then claims
+// the run for its resume and has its turn take the refusal, as the seat's
+// holder does the instant before it stops.
 func refusedAndClaimed(t *testing.T, rig *coordRig) Reply {
 	t.Helper()
 	parkOnAQuestion(t, rig)
@@ -649,20 +621,18 @@ func refusedAndClaimed(t *testing.T, rig *coordRig) Reply {
 	return reply
 }
 
-// A REFUSAL A TURN TOOK AND DIED HOLDING IS SPENT BY THE REAP. A turn that took
-// a refusal may have told the run of it before its node stopped, so the seat's
-// next holder reaps the claim as spent, as it reaps an answer a turn took:
-// nothing is handed back — the row carries none of the reply, and the turn may
-// have reached the person — and the refusal's delivery, which the seat's inbox
-// kept and which comes round to this holder unacknowledged, is recorded as
-// worked in the completion ledger, which drops it when it does. The take
-// itself spends nothing (TestARefusalATurnGaveBackKeepsItsReply), so for a
-// turn that died holding the refusal the reap is the one place its delivery is
+// A REFUSAL A TURN TOOK AND DIED HOLDING IS SPENT BY THE REAP. The turn may
+// have told the run before its node stopped, so the seat's next holder reaps
+// the claim as spent, as it does a taken answer: nothing handed back (the row
+// carries none of the reply, and the turn may have reached the person), and the
+// kept delivery, which comes round unacknowledged, recorded as worked so the
+// completion ledger drops it. The take spends nothing
+// (TestARefusalATurnGaveBackKeepsItsReply), so the reap is the one place it is
 // spent.
 //
 // Mutation: spend nothing of a refusal at the reap (spendTaken without
-// spendRefused), and its delivery comes round to the next holder unspent,
-// matched to no run, and runs as an ordinary turn of the seat.
+// spendRefused), and its delivery comes round unspent, matched to no run, and
+// runs as an ordinary turn of the seat.
 func TestARefusalATurnTookAndDiedHoldingIsSpentByTheReap(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -686,27 +656,18 @@ func TestARefusalATurnTookAndDiedHoldingIsSpentByTheReap(t *testing.T) {
 	abandonedOnce(t, rig, false)
 }
 
-// A REFUSAL WHOSE SEAL DOES NOT OPEN IS LET GO OF, AND SAID ONCE. What a resumed
-// run is handed comes out of the answer's seal, so a refusal whose seal does not
-// open under this node's keyring is never resumed: it is let go of as an answer
-// whose seal does not open is — the run waits on its question again with the
-// reply declined for it, nothing spent and nothing handed back, so the kept
-// delivery comes round as the ordinary message it is. Unlike that answer it is
-// announced, because the refusal's own `too_large` record said the run would be
-// told: its let-go is published once, `declined` on the chat route at the
-// refusal's figures, with none of the reply's words and naming nobody, since
-// nothing on the row about the reply can be attributed once its seal does not
-// open.
+// A REFUSAL WHOSE SEAL DOES NOT OPEN IS LET GO OF, AND SAID ONCE. It is never
+// resumed, but let go of as an unopenable answer is: the run waits on its
+// question again with the reply declined, nothing spent or handed back, so the
+// kept delivery comes round as an ordinary message. Unlike that answer it is
+// announced, since its `too_large` record said the run would be told: once,
+// `declined` on the chat route at the refusal's figures, with no words and
+// naming nobody, the seal being unopened. The rig's clock moves on after the
+// question is asked, so a re-anchored question would show.
 //
-// THE CLOCK MOVES ON after the question is asked, so a let-go that anchored
-// it again would anchor it at another instant, where the rig's clock left
-// standing read the two equal.
-//
-// Mutation: let it go without its announcement, as an answer whose seal does
-// not open is (dropUnopened skipping announceRefusalLetGo), and the record
-// that the run would be told stands for a run waiting on its question again;
-// anchor the question again as the refusal is let go of, and it was not asked
-// then.
+// Mutation: skip announceRefusalLetGo in dropUnopened, and the record that the
+// run would be told stands; anchor the question again at the let-go, and it was
+// not asked then.
 func TestARefusalWhoseSealDoesNotOpenIsLetGoOfAndSaidOnce(t *testing.T) {
 	t.Parallel()
 	rig := refusingRig(t)

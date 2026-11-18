@@ -9,10 +9,9 @@ import (
 
 // ---- MCP accepted definitions ------------------------------------------ //
 
-// One record per (server, tool), filed in the positions register under a
-// class of its own: see internal/coord's mcpaccepted.go. Written through
-// [entryClass], whose "entry" is the whole key, as a listing's is, because two
-// segments name it.
+// One record per (server, tool), in the positions register under its own
+// class (internal/coord's mcpaccepted.go). Its [entryClass] "entry" is the
+// whole key, as a listing's is, because two segments name it.
 
 var acceptedClass = entryClass[coord.MCPAcceptedTool]{
 	name:   "the MCP accepted definitions",
@@ -22,8 +21,7 @@ var acceptedClass = entryClass[coord.MCPAcceptedTool]{
 		_, _, ok := coord.MCPAcceptedOf(key)
 		return key, ok
 	},
-	// THE KEY NAMES THE SERVER AND THE TOOL, and a record cannot say
-	// otherwise.
+	// THE KEY NAMES THE SERVER AND THE TOOL; a record cannot say otherwise.
 	stored: func(a coord.MCPAcceptedTool, key string, version uint64) coord.MCPAcceptedTool {
 		a.Server, a.Tool, _ = coord.MCPAcceptedOf(key)
 		a.At, a.Version = a.At.UTC(), version

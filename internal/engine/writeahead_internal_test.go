@@ -16,16 +16,14 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// A CALL'S RECORD IS ONE ENTRY, UPDATED BY ITS IDENTITY, end to end: through the
-// real launcher, bridge, ledger and run store. While the call's tool runs, the
-// run's log holds its entry in flight — its identity, written before the tool
-// ran — and no finished call; once the tool returns, the log holds the call
-// once, finished, with what it answered, at the instant its entry named, and no
-// entry: the update took the entry out in the same write it listed the call.
+// A CALL'S RECORD IS ONE ENTRY, UPDATED BY ITS IDENTITY, end to end through the
+// real launcher, bridge, ledger and run store. While the tool runs, the run's log
+// holds the call's entry in flight (written before the tool ran) and no finished
+// call; once it returns, the log holds the call once, finished at the instant its
+// entry named, and no entry: one write lists the call and takes the entry out.
 //
-// Mutation: list the call without taking its entry out, and the log holds it
-// twice once it returns; write no entry ahead of it, and the log holds nothing
-// while it runs.
+// Mutation: list the call without taking its entry out, and it is held twice;
+// write no entry ahead of it, and the log holds nothing while it runs.
 func TestACallsRecordIsUpdatedOnceByItsIdentity(t *testing.T) {
 	t.Parallel()
 	const turnID = "t-one-record"
@@ -59,17 +57,15 @@ func TestACallsRecordIsUpdatedOnceByItsIdentity(t *testing.T) {
 	}
 }
 
-// A RESUMED TURN THAT SHOWS NO REPLY BESIDE A CALL WHOSE OUTCOME IS UNKNOWN IS
-// NOT KNOWN TO HAVE FAILED TO REPLY. A call the round's log held in flight as its
-// collection read it — or a closed round's record holds so, listed or, where a
-// park past its share folded the round's calls, counted in its tally — may be
-// the reply, so the turn's end says whether it replied is unknown, never that it
-// did not; a turn whose record shows its reply, or holds no such call, is read
-// as it was.
+// A RESUMED TURN BESIDE A CALL WHOSE OUTCOME IS UNKNOWN IS NOT KNOWN TO HAVE
+// FAILED TO REPLY. Such a call (in flight as collection read the round's log, or
+// so recorded by a closed round, listed or counted in a folded tally) may be the
+// reply, so the turn's end says delivery is unknown, never that it did not reply;
+// a record showing the reply, or holding no such call, is read as it was.
 //
-// Mutation: read a resumed turn's delivery off its record alone, and a reply
-// still running is said not to have gone; read a closed round's listed calls
-// alone, and a park that folded them says so too.
+// Mutation: read delivery off the record alone, and a reply still running is
+// said not to have gone; read a closed round's listed calls alone, and a park
+// that folded them says so too.
 func TestAResumedTurnsDeliveryIsUnknownBesideACallWhoseOutcomeIsUnknown(t *testing.T) {
 	t.Parallel()
 	reply := turn.Reply{Kind: turn.ReplyTool, Surface: "vendor"}
@@ -103,8 +99,7 @@ func TestAResumedTurnsDeliveryIsUnknownBesideACallWhoseOutcomeIsUnknown(t *testi
 	}
 }
 
-// submitTool is a seat's submit_work as a run's record reads it: the call that
-// hands the round's work in, answered once it runs.
+// submitTool is a seat's submit_work: the call that hands the round's work in.
 type submitTool struct{}
 
 func (submitTool) Name() string               { return runner.SubmitWorkTool }
@@ -115,9 +110,8 @@ func (submitTool) Call(context.Context, map[string]any) (tools.Result, error) {
 }
 
 // heldRecords is a run store whose calls' updates fail while it is down, as a
-// coordination store does through an outage its ledger's own attempts do not
-// outlast, and which closes landed once an update lands after it is back; it
-// counts the updates it refused.
+// coordination store's outage longer than the ledger's own attempts does. It
+// counts the updates it refused and closes landed once one lands after it is back.
 type heldRecords struct {
 	sandbox.PendingStore
 	down    atomic.Bool
@@ -142,18 +136,16 @@ func (s *heldRecords) AppendBridgeCall(ctx context.Context, turnID string, a san
 }
 
 // A SUBMISSION WHOSE UPDATE THE STORE REFUSED LANDS ONCE THE STORE IS BACK, end
-// to end: through the real launcher, bridge, ledger and run store. The run hands
-// its work in while the coordination store refuses every update for longer than
-// the ledger's own attempts: the box is answered with the call's own result, the
-// run's log holds the call's entry — its identity, its outcome not yet — and the
-// bridge asks for the update again once the answer is out. Once the store is
-// back the update lands, takes the entry out and lists the submission, so the
-// collection that waited for the call reads it, and the resume replays it as the
-// round's submission rather than a call whose outcome is unknown.
+// to end through the real launcher, bridge, ledger and run store. While the store
+// refuses updates past the ledger's own attempts, the box is answered with the
+// call's result, the log holds the call's entry, and the bridge asks for the
+// update again once the answer is out. Once the store is back the update lands,
+// so collection reads the submission and the resume replays it as the round's
+// submission, not a call whose outcome is unknown.
 //
-// Mutation: answer an update the store refused as an error the bridge does not
-// ask again (refused-update-not-owed), or have the bridge ask for none
-// (owed-update-never-asked-again), and the submission's update never lands.
+// Mutation: answer a refused update as an error the bridge does not ask again
+// (refused-update-not-owed), or have the bridge ask for none
+// (owed-update-never-asked-again), and the update never lands.
 func TestASubmissionWhoseUpdateTheStoreRefusedLandsOnceTheStoreIsBack(t *testing.T) {
 	t.Parallel()
 	const turnID = "t-owed-update"

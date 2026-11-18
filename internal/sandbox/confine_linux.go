@@ -22,11 +22,9 @@ const confineProbeTimeout = 10 * time.Second
 
 // ProbeConfinement reports the strongest confinement this host enforces.
 //
-// BUBBLEWRAP FIRST, because its namespaces give the job a /proc of its own
-// besides a filesystem view, and it is proven by a trial run rather than
-// assumed from its presence: a distribution that restricts unprivileged user
-// namespaces leaves bwrap installed and unable to start anything. LANDLOCK
-// SECOND, applied by this binary re-executed, when the kernel has it.
+// BUBBLEWRAP FIRST, for the job's own /proc besides a filesystem view, proven
+// by a trial run: a distribution that restricts unprivileged user namespaces
+// leaves bwrap installed and unable to start anything. LANDLOCK SECOND.
 func ProbeConfinement() (*HostConfinement, error) {
 	var reasons []string
 	if bwrap, err := exec.LookPath("bwrap"); err != nil {
@@ -141,9 +139,9 @@ func ConfineMain(args []string) int {
 
 // applyLandlock restricts the calling thread to spec.
 //
-// The ruleset's descriptor is closed on every path, and a failed close is
-// reported with whatever else failed: the job is not started on a thread whose
-// confinement left a descriptor in an unknown state.
+// The ruleset is closed on every path and a failed close joined into the
+// error, so the job never starts on a thread whose confinement left a
+// descriptor in an unknown state.
 func applyLandlock(spec landlockSpec) (err error) {
 	abi, err := landlockABI()
 	if err != nil {
@@ -186,9 +184,8 @@ func applyLandlock(spec landlockSpec) (err error) {
 	return nil
 }
 
-// addLandlockRule grants rights beneath one path. A path that does not exist
-// grants nothing and is skipped: an allowlist entry for a directory this host
-// lacks is simply nothing to reach.
+// addLandlockRule grants rights beneath one path; a path this host lacks (or
+// cannot open) is skipped, as there is nothing to reach.
 func addLandlockRule(ruleset int, path string, rights uint64) (err error) {
 	fd, err := unix.Open(path, unix.O_PATH|unix.O_CLOEXEC, 0)
 	if errors.Is(err, unix.ENOENT) || errors.Is(err, unix.EACCES) {

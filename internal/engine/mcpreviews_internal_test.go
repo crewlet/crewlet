@@ -78,15 +78,13 @@ func (h *heldOnce) Hold(_ context.Context, _ *turnctx.Turn, call tools.HeldCall)
 	return tools.Result{Output: "held for a person"}, true
 }
 
-// A CHANGED DEFINITION HOLDS AN ALLOWED TOOL AT APPROVE UNTIL ACCEPTED (ADR-0078,
-// the series' named invariant), end to end against a real server that changes
-// its tool while it runs. Its first listing is accepted as it is, and the tool
-// its entry allows runs unasked; the server rewords the tool, the engine lists
-// it again on the TTL it states and refiles it, and from then on a phase on the
-// engine host is refused the call, saying the definition changed, and the
-// executor's run is asked to park on it, marked as held for a change; once a
-// person accepts the new definition the call runs unasked again, on every
-// surface, with nothing refiled.
+// A CHANGED DEFINITION HOLDS AN ALLOWED TOOL AT APPROVE UNTIL ACCEPTED
+// (ADR-0078), end to end against a real server that changes its tool while it
+// runs: its first listing is accepted and the allowed tool runs unasked; once
+// the server rewords it and the engine relists it on its stated TTL, a host
+// phase is refused the call as changed and the executor's run is asked to park
+// on it, held for a change; once a person accepts the new definition it runs
+// unasked again on every surface, with nothing refiled.
 //
 // Mutation: drop Entry.Unreviewed from Registry.RegisterMCP, decide
 // toolUnreviewed by the server alone, or accept the listing again at every
@@ -168,13 +166,11 @@ roles:
 }
 
 // ALWAYS ALLOW ON A SERVER'S 336TH TOOL STICKS ACROSS A NEW SESSION AND A
-// RESTART, end to end against a real server listing 500 tools. Its listing,
-// as the fleet stores it, names every tool, and its first listing accepts every
-// one; the server rewords its 336th tool, whose call is then held for the
-// change; accepting the definition the held call was made under (what Always
-// allow writes beside the level) releases it, and it stays released when the
-// server's session is started again and when the engine is, on the same fleet
-// store.
+// RESTART, end to end against a real server listing 500 tools: the fleet's
+// stored listing names every tool and the first listing accepts every one; the
+// rewording of the 336th holds its call, and accepting the definition it was
+// held under (what Always allow writes beside the level) releases it, across a
+// new session and an engine restart on the same fleet store.
 //
 // Mutation: cut a listing at 256 tools, or baseline only the tools a listing
 // names first, and this is red.
@@ -396,9 +392,8 @@ func TestANodeThatHasNotReadWhatWasAcceptedHoldsEveryTool(t *testing.T) {
 
 // WHAT WAS ACCEPTED KEEPS ITS DEFINITION: a change is shown beside the
 // definition its level was decided on, which no listing names once the server
-// changed it, so the sweep keeps every definition an accepted record names; and an
-// accepted definition of a server nothing declares or lists goes, so a server
-// added later under its name lists for the first time.
+// changed it, so the sweep keeps every definition an accepted record names; an
+// accepted definition of a server nothing declares or lists goes.
 //
 // Mutation: compute the sweep's named digests from the listings alone, or keep
 // every accepted definition, and this is red.

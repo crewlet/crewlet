@@ -16,19 +16,17 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// AskAndWaitTool is the tool's wire name, declared in internal/toolname: no
-// authority row names the run's own ending, so the walk that holds every tool
-// name to one declaration reads it there ([toolname.AskAndWait]). The run
-// record reads the same constant ([sandbox.AskAndWaitTool]): its call log's
-// bound keeps the call by that name, and the bridge's nudge reads it there
-// ([sandbox.EndsRun]).
+// AskAndWaitTool is the tool's wire name, declared at [toolname.AskAndWait]:
+// no authority row names the run's own ending, so the walk holding every tool
+// name to one declaration reads it there. The run record's call-log bound
+// ([sandbox.AskAndWaitTool]) and the bridge's nudge ([sandbox.EndsRun]) read
+// the same constant.
 const AskAndWaitTool = toolname.AskAndWait
 
-// RunAskDesk is the run record an executor asks through: the write that
-// records its question onto the job's row ([sandbox.PendingStore.RecordAsk])
-// and the read of that row ([sandbox.PendingStore.Get]) a submission is held to
-// ([AskAndWait.Gate]), which the engine hands over through the sandbox runtime
-// it holds now.
+// RunAskDesk is the run record an executor asks through: the write recording
+// its question on the job's row ([sandbox.PendingStore.RecordAsk]) and the
+// read of that row ([sandbox.PendingStore.Get]) a submission is held to
+// ([AskAndWait.Gate]), handed over through the engine's sandbox runtime.
 type RunAskDesk interface {
 	RecordAsk(ctx context.Context, turnID, launch string, ask sandbox.Ask) (sandbox.AskOutcome, error)
 	Get(ctx context.Context, turnID string) (sandbox.PendingRun, bool, error)
@@ -40,48 +38,26 @@ type RunAskDeps struct {
 	// without one.
 	Desk RunAskDesk
 
-	// Work and Pages check the evidence an ask cites, as a work item's
-	// decision is checked ([worklet.ValidateDecision]): a task resolves
-	// to its id and a page must exist. Either nil refuses evidence of its
-	// kind, telling the run to cite it as a url, which is what a company
-	// that runs neither Worklet nor Doclet has.
+	// Work and Pages check an ask's evidence as a work item's decision is
+	// checked ([worklet.ValidateDecision]): a task resolves to its id, a page
+	// must exist. Either nil refuses evidence of its kind and tells the run to
+	// cite a url: a company without Worklet or Doclet.
 	Work  WorkDeps
 	Pages PageReader
 }
 
 // NewAskAndWait is the tool a seat's executor run asks a person through and
-// parks on, or nil without a desk.
-//
-// # Why a tool, and why only on the run's surface
-//
-// An executor cannot wait on a person inside its harness: a headless run goes on
-// until it ends. So a question the work cannot go on without PARKS the
-// executor: the ask is recorded on its row, the launch ends, a person
-// answers, and the answer resumes the same executor. Asking through a tool
-// over its bridge means the ask is validated whole BEFORE anything is
-// written, every fault named at once while the executor can still fix it
-// (ADR-0059), and the options a person chooses between are a structure rather
-// than prose: a shell command's one free-text argument carried them as a
-// paragraph, and the person answering got a wall of text with the options
-// somewhere in it.
-//
-// It is offered on the executor's run surface alone, beside `submit_work`,
-// because those are the two ways that run ends, and it means something only
-// there: no other phase has a run to park. A question that only shapes what
-// comes next is asked on the work item instead (`comment_on_work_item` with
-// `ask`), and the run finishes as usual.
-//
-// # One shape for every ask a person answers
-//
-// The choice is a [decision.Decision], the shape a work item's decision has,
-// read with the same schema ([choiceProperties]) and checked against the
-// world the same way, so the person answering reads either in one layout and
-// the run learns one structure (ADR-0068). Every ask carries one, with the
-// option the run recommends and why (ADR-0100): there is no open question,
-// because the person answers in words through "Something else" whatever the
-// options are. A run's ask carries no `inform`:
-// the answer resumes the run itself, and there is no answered turn of the
-// seat's to hold to a promise.
+// parks on, or nil without a desk. A headless run cannot wait inside its
+// harness, so the ask is recorded on the job's row, the launch ends, and the
+// answer resumes the same executor. A tool rather than a shell argument, so
+// the ask is validated whole before anything is written (ADR-0059) and its
+// options are a structure, not a paragraph. Offered only on the run's
+// surface, beside `submit_work`: no other phase has a run to park; a
+// question that only shapes what comes next goes on the work item. The
+// choice is a [decision.Decision], read with [choiceProperties] and
+// checked as a work item's is (ADR-0068), always with a recommended option
+// (ADR-0100), since a person can still answer in words. No `inform`: the
+// answer resumes the run itself.
 func NewAskAndWait(deps RunAskDeps) *AskAndWait {
 	if deps.Desk == nil {
 		return nil
@@ -182,9 +158,8 @@ func (t *AskAndWait) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		runID = turn.RunID
 	}
 	if runID == "" || launch == "" {
-		// NOT AN EXECUTOR'S CALL: nothing names the launch to park. The tool
-		// is offered on the executor's surface alone, so this is a wiring
-		// fault, said as one rather than as the model's mistake.
+		// NOT AN EXECUTOR'S CALL: nothing names the launch to park. The tool is
+		// on the executor's surface alone, so this is a wiring fault, said as one.
 		return refusedBy(tools.RefusalUnavailable, waitless(), AskAndWaitTool+
 			" is unavailable here: it parks a seat's executor in its box, and this call "+
 			"was not made by one. Ask on the work item with `"+CommentOnWorkTool+"` and "+
@@ -200,9 +175,8 @@ func (t *AskAndWait) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return nodeFailure(ctx, AskAndWaitTool, err, AskAndWaitTool+" could not record "+
 			"your question", "Nothing was asked: call it again."), nil
 	case outcome == sandbox.AskAlreadyAsked:
-		// NOT RUNNING rather than a conflict: a conflict clears on a retry,
-		// and this never does. The job is parked on the question it asked,
-		// so it is not waiting for another.
+		// NOT RUNNING, not a conflict: a conflict clears on a retry, and this
+		// never does, since the job stays parked on the question it asked.
 		return refused(tools.RefusalNotRunning, "You already asked a question in this run, "+
 			"and it stands: one answer resumes the run, so it asks one question at a "+
 			"time. End your turn now; ask the next question once you have the answer."), nil
@@ -235,17 +209,15 @@ func (t *AskAndWait) readAsk(ctx context.Context, args map[string]any) (sandbox.
 			"options [{id, label, detail}], recommended, rationale, evidence [{kind, ref, "+
 			"label}] and role. Nothing was asked.", AskAndWaitTool, err)))
 	}
-	// EVERY QUESTION IS A CHOICE (ADR-0100): the decision is built from the
-	// arguments whether or not they carry options, so one with none is
-	// refused in the decision's own words, beside every other fault.
+	// EVERY QUESTION IS A CHOICE (ADR-0100): the decision is built even with
+	// no options, so their absence is refused in the decision's own words.
 	ask := sandbox.Ask{Question: in.Question, Context: in.Context, To: in.To, Branch: in.Branch,
 		Decision: &decision.Decision{Question: in.Question, Options: in.Options,
 			Recommended: in.Recommended, Rationale: in.Rationale, Evidence: in.Evidence,
 			Role: in.Role}}
-	// THE ASK'S OWN FIELDS, THE DECISION'S SHAPE AND ITS EVIDENCE IN THE SAME
-	// PASS, named as the arguments carry them (at their top, with no
-	// `decision.`), so one refusal names every fault the run has to fix
-	// (ADR-0059, ADR-0068).
+	// THE ASK'S FIELDS, THE DECISION'S SHAPE AND ITS EVIDENCE IN ONE PASS,
+	// named as the arguments carry them (no `decision.` prefix), so one
+	// refusal names every fault (ADR-0059, ADR-0068).
 	var said []string
 	if err = ask.ValidateOwn(); err != nil {
 		said = append(said, err.Error())
@@ -271,34 +243,24 @@ func (t *AskAndWait) readAsk(ctx context.Context, args map[string]any) (sandbox.
 
 // Gate is submit as an executor run's surface offers it beside this tool:
 // refused to a job whose question is on its row ([sandbox.PendingRun.AskedBy]).
+// Such a job is parked on the answer, and its round submits the work done
+// after it; accepted, a `submit_work` made after the question would tell the
+// harness its work was delivered while the turn waits on a person. The
+// collection also never replays such a call (the runner's resume keeps only
+// calls after the asking job): the gate is what the run is told, the cut what
+// the round reports, and either holds without the other.
 //
-// # Why the bridge refuses a submission once the job has asked
-//
-// A job that asked a person is parked on their answer: its collection carries
-// the run on with that answer rather than reporting it, and the work the run
-// goes on to do is what its round submits. A `submit_work` made after the
-// question is a run that did not stop when it was told to, and accepted, it
-// read as success to the harness that made it, which then ended believing its work
-// was delivered while the turn waited on a person. Refused, the harness is told
-// what is true: the run is parked, and its next prompt is the answer.
-//
-// The collection never replays such a call either (the replay keeps only the
-// calls made after the asking job, read off the row by the runner's resume): the gate is
-// what the run is told, the cut is what the round reports, and either holds
-// without the other.
-//
-// A READ OF THE ROW, before the submission is decoded, so a row that cannot be
-// read refuses the call as the node's condition, and the run calls again. A
-// call no run makes (no run id or job on its context) passes untouched: there
-// is no question it could have asked.
+// The row is read before the submission is decoded, so an unreadable row
+// refuses the call as the node's condition and the run calls again. A call
+// with no run id or job on its context passes: it could have asked nothing.
 func (t *AskAndWait) Gate(submit tools.Callable) tools.Callable {
 	return &submitGate{submit: submit, desk: t.deps.Desk}
 }
 
 // submitGate is [AskAndWait.Gate]'s submission: a FORWARDER, reached only
-// through [tools.Invoke] on the run's surface, which has checked the call
-// against the submission's own schema before the gate decides it (the
-// forwarders list in internal/tools holds it to that).
+// through [tools.Invoke], which checks the call against the submission's
+// schema before the gate decides it (internal/tools' forwarders list holds
+// it to that).
 type submitGate struct {
 	submit tools.Callable
 	desk   RunAskDesk

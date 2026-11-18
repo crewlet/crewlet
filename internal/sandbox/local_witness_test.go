@@ -71,12 +71,11 @@ func jobOver(t *testing.T, box Sandbox, handle string) JobState {
 }
 
 // A JOB KILLED WITH ITS ENGINE IS LOST: the engine process that last saw it
-// running is gone too, so nothing saw it end — it went with that process, as a
-// direct box's job does when its container restarts or its systemd unit is
-// stopped with its control group. What it left is no result.
+// running is gone too (a container restart, a systemd stop with its control
+// group), so nothing saw it end and what it left is no result.
 //
-// Mutation: answer every job that is not running as ended, and a job its
-// engine's restart killed is collected as though it had crashed on its own.
+// Mutation: answer every job not running as ended, and a job its engine's
+// restart killed is collected as though it had crashed on its own.
 func TestAJobKilledWithItsEngineIsLost(t *testing.T) {
 	t.Parallel()
 	local := newDirect(t)
@@ -94,14 +93,11 @@ func TestAJobKilledWithItsEngineIsLost(t *testing.T) {
 }
 
 // A JOB FOUND RUNNING AFTER ITS ENGINE RESTARTED IS WATCHED BY THE NEW ONE: the
-// job outlived the process that started it — only that process died — and this
-// process found it running, so it is the job's witness from then on. A job that
-// then dies dies in this engine's sight: a crash of its own, ended and
-// collected, never taken for a loss and started again beside its own result.
+// process that finds it running becomes its witness, so a later death is a
+// crash of its own, ended and collected, never relaunched beside its result.
 //
 // Mutation: leave the witness as the process that started the job, and a job
-// that survived its engine's crash and failed on its own an hour later is
-// relaunched as though the crash had killed it.
+// that survived its engine's crash and failed later is relaunched.
 func TestAJobFoundRunningAfterARestartIsWatchedByTheNewEngine(t *testing.T) {
 	t.Parallel()
 	local := newDirect(t)
@@ -130,10 +126,9 @@ func TestAJobFoundRunningAfterARestartIsWatchedByTheNewEngine(t *testing.T) {
 	}
 }
 
-// A BOX WITH NO WITNESS ENDED ITS JOB: nothing says the job was lost, and only
-// a lost job is started again — so a box whose record of its witness is gone,
-// or is not one this engine wrote, is collected as every job was before a job
-// could be lost, which never starts a second run beside the first.
+// A BOX WITH NO WITNESS ENDED ITS JOB: only a lost job is started again, so a
+// witness record that is gone, or not one this engine wrote, is collected,
+// which never starts a second run beside the first.
 //
 // Mutation: read a missing or unreadable witness as a gone one, and a box that
 // cannot say starts its round again.
@@ -214,10 +209,9 @@ esac
 }
 
 // A CONTAINER JOB IS ASKED OF ITS RUNTIME BEFORE ITS PROCESS: an exec into the
-// container fails the same way whether the job is gone or the daemon is, so
-// read alone a daemon that was briefly away ended a running job — and, with an
-// engine that had just restarted as no witness to it, had its round started
-// again beside it. The listing tells the two apart.
+// container fails alike whether the job or the daemon is gone, so read alone a
+// briefly absent daemon ends a running job, or, under a just-restarted engine,
+// relaunches its round beside it. The listing tells the two apart.
 //
 // Mutation: answer from the exec alone, and a daemon that does not answer is a
 // job that is over.

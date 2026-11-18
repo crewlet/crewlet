@@ -9,13 +9,10 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// The fixtures below are Claude Code's `--output-format stream-json` as the
-// vendor's Agent SDK documents its messages — a `system` init, `assistant`
-// messages whose content is `text`, `thinking` and `tool_use` blocks, `user`
-// messages handing back `tool_result` blocks (with `is_error` on a failure,
-// and the harness's own `tool_use_result` copy beside them), and the `result`
-// message last — written by hand from that schema rather than captured from
-// a run, because a test must not call a model.
+// The fixtures below are Claude Code's `--output-format stream-json`, written by
+// hand from the Agent SDK's documented messages (the `tool_result` blocks with
+// the harness's `tool_use_result` copy beside them) rather than captured from a
+// run, because a test must not call a model.
 
 // A tool result's BODY, which no transcript may carry: what a command printed
 // and the whole of a file the agent read.
@@ -95,10 +92,8 @@ func TestTheClaudeStreamBecomesATranscriptOfWhatTheRunDid(t *testing.T) {
 }
 
 // A TOOL RESULT'S BODY NEVER REACHES THE TRANSCRIPT — not as the result block,
-// not as the harness's copy beside it, and not as text blocks — and neither does
-// the model's thinking. A body is a whole file or everything a command
-// printed: echoed, it would grow the record and the live view by orders of
-// magnitude and push far more of somebody's files through redaction.
+// the harness's copy beside it, or text blocks — and neither does the model's
+// thinking (why: the comment atop claudestream.go).
 func TestAClaudeToolResultsBodyNeverReachesTheTranscript(t *testing.T) {
 	t.Parallel()
 	got := decodeClaude(claudeRunStream...)
@@ -145,13 +140,11 @@ func TestAClaudeStreamSkipsWhatItDoesNotKnow(t *testing.T) {
 	}
 }
 
-// AN INFORMATIONAL HOOK NOTE BECOMES A [steer] LINE: when the run's own hook
-// hands its model a person's note, the harness streams the hook's transcript line as
-// `system/informational`, `<event> says: crewlet: …` (measured, the fixtures),
-// and that is the one place a person watching the run sees the note arrive.
+// AN INFORMATIONAL HOOK NOTE BECOMES A [steer] LINE: the harness streams the
+// line the run's own hook prints as it hands its model a note as
+// `system/informational`, `<event> says: crewlet: …` (measured, the fixtures).
 // Every other system line — another informational line, a hook's own start and
-// end, a notice of the same shape from an event that takes no note — is
-// skipped, as every system line was.
+// end, the same shape from an event that takes no note — is skipped.
 //
 // Mutation: drop the system case from the decoder and the measured lines vanish;
 // match any informational line and the others appear.
@@ -197,8 +190,8 @@ func TestAClaudeRunThatDidNotSucceedSaysHowItEnded(t *testing.T) {
 	}
 }
 
-// THE RESULT IS THE STREAM'S LAST LINE, parsed as the one object `json` used
-// to print: its text, its session, its cost and its whole prompt.
+// THE RESULT IS THE STREAM'S LAST LINE, parsed as the one object
+// `--output-format json` prints: its text, session, cost and whole prompt.
 func TestTheClaudeResultIsTheStreamsLastLine(t *testing.T) {
 	t.Parallel()
 	res := claude().Parse(claudeRunStream[len(claudeRunStream)-1] + "\n")
@@ -246,14 +239,11 @@ func TestAClaudeStreamThatEndsBeforeItsResultIsNotASuccess(t *testing.T) {
 }
 
 // A RUN WHOSE WRAPPER NEVER COPIED ITS RESULT IS READ FROM ITS STREAM. The
-// result file is the stream's last line, written by the wrapper once the harness
-// has exited, so a run whose process group died — an OOM kill, a host
-// restart — has none, and it used to be parsed as empty: a run that streamed a
-// whole session, pushed a branch and was killed read "the harness
-// produced no output" beside a transcript of everything it did. The stream's
-// last line is what the copy would have held, so it is read in its place:
-// the harness's result, where it printed one before the wrapper died, and what
-// the stream was saying when it stopped otherwise.
+// wrapper copies the stream's last line once the harness exits, so a run whose
+// process group died (an OOM kill, a host restart) has no result file; read as
+// empty, a run that pushed a branch would say "produced no output". The stream's
+// last line is what the copy would have held: the harness's result, or what
+// the stream was saying when it stopped.
 //
 // Mutation: parse the missing result file as it is, and each case reads as a
 // run that produced no output.
@@ -368,10 +358,9 @@ func TestAClaudeRunInARealBoxIsCollectedFromItsStream(t *testing.T) {
 	}
 	p := executor.PathsFor(box)
 
-	// The stand-in sits in the box's own bin directory, which the wrapper
-	// puts first on PATH, so `claude` resolves to it. It exits 3 AFTER printing a
-	// successful result: the status recorded must be its own, not the
-	// copy's.
+	// The stand-in sits in the box's bin directory, first on the wrapper's
+	// PATH, so `claude` resolves to it. It exits 3 AFTER printing a successful
+	// result: the status recorded must be its own, not the copy's.
 	stream := strings.Join(claudeRunStream, "\n") + "\n"
 	if err = box.WriteFile(t.Context(), p.WorkDir()+"/stream.fixture", []byte(stream)); err != nil {
 		t.Fatalf("write the fixture: %v", err)

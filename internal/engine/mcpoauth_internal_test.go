@@ -28,10 +28,10 @@ import (
 )
 
 // oauthVendor is a remote MCP server and its authorization server on one
-// origin, holding to what a careful vendor holds a client to: a code is
-// exchanged once, with the verifier its challenge was made from, and a refresh
-// token is ROTATED at every renewal, a retired one presented again being read
-// as a stolen grant, which revokes the whole family.
+// origin, as strict as a careful vendor: a code is exchanged once, with the
+// verifier its challenge was made from, and a refresh token is ROTATED at
+// every renewal, a retired one presented again (a stolen grant) revoking the
+// whole family.
 type oauthVendor struct {
 	srv *httptest.Server
 
@@ -47,8 +47,8 @@ type oauthVendor struct {
 	reuses     int
 	revoked    []string
 	accessLife int
-	// presented is the Authorization each request to the server's own
-	// address carried, which it refuses whatever it is.
+	// presented is each Authorization the server's own address was sent; it
+	// refuses every one.
 	presented []string
 	// authorizeAt is the authorization endpoint its metadata names in place
 	// of its own, or "".
@@ -225,12 +225,10 @@ func signIn(t *testing.T, v *oauthVendor, a, b *Engine) {
 }
 
 // A SIGN-IN'S STATE IS SIGNED AND SPENT ONCE: the browser carries the
-// authorization address and nothing the engine keeps (no verifier, which is
-// sealed on the sign-in's record and never in plain on it); a state anybody
-// edited, one past its expiry and one already used are each refused before
-// the vendor is asked to exchange anything; and the one good callback, on
-// any node, seals the grant, records its public half and approves the
-// sign-in.
+// authorization address and nothing the engine keeps (the verifier is only
+// sealed on the sign-in's record); an edited, lapsed or used state is refused
+// before the vendor exchanges anything; and the one good callback, on any
+// node, seals the grant, records its public half and approves the sign-in.
 //
 // Mutation: skip the version check that spends the state, or drop the
 // signature check, and a second or forged callback exchanges a code.
@@ -362,11 +360,10 @@ func TestASignInComingBackFromAnotherIssuerIsRefused(t *testing.T) {
 	}
 }
 
-// TWO RENEWERS CANNOT STRAND A TOKEN: two nodes renewing the one grant at once,
-// round after round, each hold the fleet's renewal lease in turn and read the
-// refresh token the other just wrote, so the vendor never sees a retired one
-// presented again (which revokes the grant) and the token every node renews
-// with afterwards is the one the vendor issued last.
+// TWO RENEWERS CANNOT STRAND A TOKEN: two nodes renewing one grant at once
+// take the fleet's renewal lease in turn and read the refresh token the other
+// just wrote, so the vendor never sees a retired one again (which revokes the
+// grant) and the kept token is the one the vendor issued last.
 //
 // Mutation: renew without the lease, or write the rotated token without the
 // version it was read at, and the vendor revokes the grant mid-run.
@@ -424,9 +421,9 @@ func TestTwoRenewersCannotStrandAToken(t *testing.T) {
 	}
 }
 
-// A REFUSED RENEWAL ASKS FOR A SIGN-IN, IN THE VENDOR'S WORDS, AND THE VENDOR IS
-// NOT ASKED AGAIN by any node until somebody signs in; the server's next pass
-// holds it back for the sign-in.
+// A REFUSED RENEWAL ASKS FOR A SIGN-IN, IN THE VENDOR'S WORDS, AND NO NODE ASKS
+// THE VENDOR AGAIN until somebody signs in; the server's next pass holds it
+// back for the sign-in.
 func TestARefusedRenewalAsksForASignInAndTheVendorNoMore(t *testing.T) {
 	t.Parallel()
 	v := newOAuthVendor(t)
@@ -574,10 +571,9 @@ mcp_servers:
 	}
 }
 
-// A SIGN-IN REFUSED BEFORE ANYBODY IS SENT ANYWHERE LEAVES THE SERVER'S AS
-// IT WAS: a vendor whose metadata now names an authorization endpoint the
-// engine sends nobody to, plain http on another origin, is refused, and the
-// sign-in already pending is still there to finish.
+// A SIGN-IN REFUSED BEFORE ANYBODY IS SENT ANYWHERE LEAVES THE PENDING ONE: a
+// vendor whose metadata now names plain http on another origin as its
+// authorization endpoint is refused, and the pending sign-in can still finish.
 //
 // Mutation: store the sign-in before its authorize URL is made, and the
 // pending one is replaced by one nobody can finish.
@@ -654,11 +650,10 @@ func mustGrant(t *testing.T, e *Engine) coord.MCPGrant {
 	return g
 }
 
-// A VALUE TEST SENDS THE GRANT ONLY TO THE ADDRESS THIS NODE RUNS: a value is
-// tested with its entry as the fleet's active revision states it, sent with the
-// test ahead of this node's apply, and where that entry names another address
-// than the one the grant was checked against, it is tested without the
-// company's token; at the address this node runs, under it.
+// A VALUE TEST SENDS THE GRANT ONLY TO THE ADDRESS THIS NODE RUNS: the entry
+// sent with the test (the fleet's active revision, ahead of this node's apply)
+// may name another address than the grant was checked against, and is then
+// tested without the company's token.
 //
 // Mutation: compare the address under test with the sent entry's own, and the
 // token is handed to the new address.
@@ -685,8 +680,8 @@ func TestAValueTestSendsTheGrantOnlyToTheAddressThisNodeRuns(t *testing.T) {
 			sent.Load())
 	}
 
-	// THE ADDRESS THIS NODE RUNS is sent the grant's token: the vendor's own
-	// server, which refuses every request, says what it was presented.
+	// THE ADDRESS THIS NODE RUNS is sent the grant's token, as the vendor's
+	// server records.
 	here := a.Company().Config.MCPServers[0]
 	a.testServer(t.Context(), &here, nil, nil, nil, nil, nil, a.testBearer(t.Context(), "vendor"))
 	v.mu.Lock()

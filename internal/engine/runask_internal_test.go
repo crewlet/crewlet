@@ -11,16 +11,16 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 )
 
-// A RUN'S QUESTION IS AS MUCH ITS END AS ITS SUBMISSION. The waiter that drives
-// a run is nudged once a call that ends it is on its row, so a run that asked
-// is collected and parked at once rather than at the waiter's next pass; a
-// call the gate refused ends nothing.
+// A RUN'S QUESTION IS AS MUCH ITS END AS ITS SUBMISSION. The run's waiter is
+// nudged once a call that ends it is on its row, so a run that asked is parked
+// at once rather than at the waiter's next pass; a call the gate refused ends
+// nothing.
 //
 // Mutation: nudge on `submit_work` alone, and the asking run is not nudged.
 func TestARunsAskEndsItLikeItsSubmission(t *testing.T) {
 	t.Parallel()
-	// ONE NAME FOR EACH: the runner's submission is the run record's, which
-	// the row's bound and this nudge read it by.
+	// ONE NAME: the row's bound and this nudge read the runner's submission
+	// by the run record's name.
 	if runner.SubmitWorkTool != sandbox.SubmitWorkTool {
 		t.Fatalf("the runner submits through %q and the run record names %q",
 			runner.SubmitWorkTool, sandbox.SubmitWorkTool)
@@ -35,9 +35,8 @@ func TestARunsAskEndsItLikeItsSubmission(t *testing.T) {
 	}
 }
 
-// A NODE WITHOUT A SANDBOX RUNTIME RECORDS NO QUESTION, and says why: there is
-// no row for it to land on, and the tool answers the run that the question was
-// not asked rather than that it was.
+// A NODE WITHOUT A SANDBOX RUNTIME RECORDS NO QUESTION, and says why, so the
+// tool tells the run its question was not asked rather than that it was.
 func TestAnAskOnANodeWithNoRunStoreIsAnError(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
@@ -48,10 +47,9 @@ func TestAnAskOnANodeWithNoRunStoreIsAnError(t *testing.T) {
 	}
 }
 
-// A RESUMED ROUND IS CUT WHERE ITS ROW SAYS THE ANSWER CUT IT. The collection
-// reports only a submission made after a person's answer carried the round on,
-// and the place it cuts at is the log's own (sandbox.BridgeLog.AnsweredThrough),
-// handed to the runner with the calls it cuts.
+// A RESUMED ROUND IS CUT WHERE ITS ROW SAYS THE ANSWER CUT IT. Only a
+// submission after the person's answer counts, and the cut is the log's own
+// (sandbox.BridgeLog.AnsweredThrough), handed to the runner with the calls.
 //
 // Mutation: leave Answered unset, and the runner replays a submission the
 // asking job made before it knew the answer.
@@ -72,11 +70,10 @@ func TestAResumeIsCutWhereTheAnswerCutTheRound(t *testing.T) {
 }
 
 // A RESUME IS SEEDED WITH WHAT ITS LOG COUNTS WITHOUT LISTING. A long run's log
-// keeps its calls' head and tail and tallies the middle it dropped and the
-// calls its calls' own work made; the resume is handed both, which the turn's
-// call log is seeded with beside the listed calls and its delivery checks read
-// — and a count the tally does not account for, a drop by a build without
-// tallies, as calls of no known tool.
+// keeps its head and tail and tallies the dropped middle and the calls its
+// workers made; the resume hands both to the turn's call log, which the
+// delivery checks read, and a count no tally accounts for as calls of no known
+// tool.
 //
 // Mutation: hand the resume the log's listed calls alone, and the resumed
 // round's seed is short of every call the log dropped and every worker's call.

@@ -13,11 +13,10 @@ import (
 )
 
 // WHAT A JOB'S RECORD KEEPS OF WHAT ITS BRIEF LEFT OUT ([BriefTold]). A brief
-// that tells a round's calls past the prior-work ledger's read cap counts the
-// reads past it rather than listing them, so the session it is handed holds
-// them only as a count: the launch records which reads they were on the job it
-// opens, by the brief its run read, and a capture of that job's session placed
-// by its own read states them, so every later continuation tells them.
+// past the prior-work ledger's read cap counts the reads past it instead of
+// listing them, so its session holds them only as a count: the launch records
+// which they were on the job's record, by the brief its run read, and a capture
+// placed by its own read states them, so every later continuation tells them.
 
 // toldApart is a launch's continuation with each brief's left-out set told
 // apart: the copy's brief left out the round's first call, the fresh one its
@@ -27,13 +26,12 @@ func toldApart(c *Continuation) *Continuation {
 	return c
 }
 
-// A LAUNCH RECORDS THE OMITTED CALLS OF EACH BRIEF. Which brief a launch hands
-// its run is the launch's to decide, once it has its box, so its request carries
-// what each brief left out of the round it carries on, and its record keeps the
-// one of the brief it handed (the copy's in the asking job's own box, the kept
-// capture's in a box that replaced that one's, the fresh one's where its box was
-// reclaimed) and, beside a brief that continues a session, the fresh one's too,
-// which its box hands the run where it cannot take the session up after all.
+// A LAUNCH RECORDS THE OMITTED CALLS OF EACH BRIEF. The launch picks the brief
+// once it has its box, so its request carries each brief's left-out set and its
+// record keeps the handed brief's (the copy's in the asking job's box, the kept
+// capture's in a replacing box, the fresh one's where the box was reclaimed)
+// and, beside a brief that continues a session, the fresh one's too, which the
+// box falls back to where it cannot take the session up.
 //
 // Mutation: record every launch's fresh set as the brief's, read the kept
 // capture's set off another brief, or record the fresh set beside a fresh brief
@@ -86,12 +84,10 @@ func TestALaunchRecordsTheOmittedCallsOfEachBrief(t *testing.T) {
 	})
 }
 
-// A NEW ROUND RECORDS NO OMITTED CALL. A reviewer's send-back continues the kept
-// session of the collected job, whose brief tells the collected round's calls,
-// but opens a new round, whose log numbers its calls from its start: a set of
-// the collected round's places, read against the new round's log, would name
-// calls the new log holds under those numbers, which no brief left out. So a
-// launch that carries no round on records none, whatever its briefs left out.
+// A NEW ROUND RECORDS NO OMITTED CALL. A reviewer's send-back continues the
+// collected job's kept session but opens a new round, whose log numbers calls
+// from its start: the collected round's places read against it would name
+// calls no brief left out. So a launch carrying no round on records none.
 //
 // Mutation: record the brief's set where the launch carries no round on, and
 // the send-back's job names calls of a round it never told.
@@ -113,9 +109,8 @@ func TestANewRoundRecordsNoOmittedCall(t *testing.T) {
 }
 
 // A FRESH LAUNCH READS NO CONTINUATION IT WAS NOT GIVEN. A turn's first launch
-// and a send-back that continues no session carry no round on and name no
-// continuation, so the fresh brief's set is read off a continuation only where
-// the request carries one: such a launch takes none, and launches.
+// and a send-back continuing no session name no continuation, so the fresh
+// brief's set is read off one only where the request carries it.
 //
 // Mutation: read the fresh brief's set off the request's continuation whether
 // or not it carries one, and a first launch fails.
@@ -140,10 +135,9 @@ func TestAFreshLaunchReadsNoContinuationItWasNotGiven(t *testing.T) {
 }
 
 // A LAUNCH WHOSE BRIEFS LEFT OUT MORE THAN A ROUND'S LOG LISTS IS REFUSED, BEFORE
-// ANYTHING IS OPENED. A brief tells at most the calls a round's log lists, so a
-// set past [MaxBridgeCalls] names calls no log holds, and would ride the job's
-// record for nothing: the launch is refused naming the field, before its row is
-// written. So is a capture stating such a set ([SessionCapture.Bounded]).
+// ANYTHING IS OPENED. A set past [MaxBridgeCalls] names calls no log holds: the
+// launch is refused naming the field before its row is written, and so is a
+// capture stating one ([SessionCapture.Bounded]).
 //
 // Mutation: drop the bound from the launch, or from the capture's, and a case
 // goes red.
@@ -178,14 +172,12 @@ func TestALaunchWhoseBriefsLeftOutMoreThanALogListsIsRefused(t *testing.T) {
 	}
 }
 
-// A RECORD READS THE OMITTED CALLS OF THE BRIEF ITS RUN READ. The launch hands
-// its run one brief and, beside one that continues a session, the fresh one its
-// box falls back to, and only the box says which it read: so the record is read
-// by its brief, and a brief that continues a session by the session its box
-// said it started. Where the box never said, said it in a word this build does
-// not know, or the record names a brief this build does not know, the run read
-// one of the two and the record cannot say which: both, told again rather than
-// never. A record a build before this one wrote names none.
+// A RECORD READS THE OMITTED CALLS OF THE BRIEF ITS RUN READ. Beside a brief
+// that continues a session the launch hands the fresh one its box falls back
+// to, and only the box says which it read, so a continuing brief's set is read
+// by the session the box said it started. Where the box never said, said a
+// word this build does not know, or the record names an unknown brief, both
+// are read: told again rather than never. An older build's record names none.
 //
 // Mutation: read a continuing brief's set whatever its box said, or a word this
 // build does not know as the session it continued, and a row goes red.
@@ -216,13 +208,11 @@ func TestARecordReadsTheOmittedCallsOfTheBriefItsRunRead(t *testing.T) {
 
 // AN OWN-RUN CAPTURE STATES THE READS ITS BRIEF LEFT OUT. A capture of a job
 // whose harness ended its own run is placed by its read of the round's log,
-// which counts every call the log had taken as one its session holds, the
-// reads its job's brief counted without listing them among them, which it holds
-// only as that count: so the capture states those, off the job's record by the
-// brief its run read, and a relaunch continuing it tells them. A capture placed
-// at the newest point its launch is known to hold states that capture's, copied
-// with its point, and one placed at the round's start, which holds no read to
-// owe, none.
+// counting as held every call the log took, its brief's counted-not-listed
+// reads among them: so it states those, off the job's record by the brief its
+// run read, and a relaunch continuing it tells them. One placed at the newest
+// point its launch is known to hold copies that capture's set with the point;
+// one at the round's start owes none.
 //
 // Mutation: place an own-run capture by its read without its job's set, or one
 // placed at an earlier capture's point without that capture's, or share that
@@ -286,12 +276,10 @@ func TestAnOwnRunCaptureStatesTheReadsItsBriefLeftOut(t *testing.T) {
 }
 
 // AN OLDER BUILD'S WRITE CARRIES A JOB'S OMITTED CALLS, AND A CAPTURE'S. A fleet
-// mid-upgrade rewrites the job's record, and the capture stamped on the row, on
-// a build that does not know the fields (a status, a lease, a bridged call),
-// and the relaunch that reads them may run on this build: so each rides the
-// record under its own key, and a build that does not declare that key keeps
-// it verbatim and writes it back (wirekeys.go), whatever it decoded of the
-// rest.
+// mid-upgrade may rewrite the job's record and the row's capture on a build
+// that does not know the fields, before a relaunch on this build reads them:
+// so each rides under its own key, which a build that does not declare it
+// keeps verbatim and writes back (wirekeys.go).
 //
 // Mutation: leave a field off the wire, and no older build's record holds a key
 // of it; drop the carried keys from a section's encode (marshalCarrying), and

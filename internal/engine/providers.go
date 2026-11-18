@@ -369,8 +369,8 @@
 // request and a pass naming it twice issues once; what was issued is held by
 // the issuer's process-wide cache, never by the source past its read.
 //
-// When it cannot be issued, there are three stories, told apart as
-// toolcredentials.go tells the rest of the credential rule. (1) The integration
+// When it cannot be issued, there are three stories, told apart as "Tool
+// server credentials" tells the rest. (1) The integration
 // cannot issue it yet: a person's step its card already asks for, or the
 // integration's own wait (a grant its vendor is still applying). The variable
 // is declared the integration's ([Engine.mintedFor]), so the value is held back
@@ -477,6 +477,75 @@
 // the builtins shrinking. Refusing the seat would take a company offline
 // because one vendor's harness was slow to install.
 //
+// # Tool server credentials
+//
+// A tool server starts only with what its configuration references: every
+// `${VAR}` its spec resolves (its own `env` or `headers`, its `url`, and for a
+// seat's child of a per-role template the seat's `mcp_env` block, a unit's
+// beneath it) resolves to a value first, whether it runs on this node, as a
+// shared server or a seat's child, or in a harness's box. Handed an empty
+// credential a server either fails, retried for a value that is not coming, or
+// acts as nobody, or as its default identity, under the seat's name. A
+// reference that resolves to nothing is one of three stories, told apart
+// ([credentialGap]):
+//
+//   - A provisioning pass will mint it: the seat was claimed before the pass
+//     that creates each agent's account and seals its credential had run (every
+//     first boot, every seat a revision adds). The child is not started, and
+//     that is no failure: the status record counts it as waiting, naming the
+//     variable and the minting integration, logged once per pass at info. Only
+//     a seat's values can be this, since a pass mints per seat.
+//   - A pass would mint it, but not until a person acts: its own credential
+//     does not resolve or is refused, an administrator must switch something
+//     on, or the seat's account could not be made or was switched off. Waiting
+//     would wait for ever behind a screen saying nothing is wrong, so it is a
+//     failure whose sentence is what the integration's last pass recorded, read
+//     as its card reads it, never re-derived ([mintStopped]).
+//   - Nothing will: the operator's secret is missing, or a value names a
+//     variable nobody holds. A failure naming the variable and the remedies:
+//     supply it (for a seat's bot or account, the integration's provision
+//     command too), or, where the server's own key may go without it, declare
+//     the key optional.
+//
+// None is retried on a timer: a held-back server can change only when this
+// node's secret snapshot does, and every change to it is followed by a pass
+// over every seat this node holds and an apply's reconcile of the shared
+// servers. A pass that seals asks for the seats' pass the moment it refreshes
+// this node's snapshot ([refreshingSink.Flush]), whatever becomes of the
+// re-activation it asks of every other node ([Engine.rebuildForSealedSecrets]);
+// `crewlet secrets set` is followed by a reload, which is an apply. What a
+// person does at an integration no pass here sees, so a child held back on one
+// is judged again against the integration's last report on every pass of the
+// status record's writer ([Engine.mcpStatus]).
+//
+// A key that may go without its value is declared, and left out. A host setting
+// passed through by name (`NPM_CONFIG_REGISTRY: "${NPM_CONFIG_REGISTRY}"`) may
+// rightly resolve to nothing, and nothing in a value can say so: a key in
+// [config.MCPServer.OptionalKeys] whose value does not resolve is left out
+// whole (never half a value, as "Bearer " looks set, and never an empty one)
+// and holds nothing back. The list is the server's and governs a seat's block
+// too, read after the layers merge, so a seat's unresolved value leaves the key
+// out rather than handing back the template's, which for an identity key would
+// start the seat's child as whoever the template names. The url is never
+// optional. A declaration never skips the wait for a variable a pass mints for
+// the seat (the child would act as nobody until the seal), and the failure
+// never offers it for a seat's own block or a key whose variable the url needs.
+// The shell's `${VAR:-}` is not the spelling: the reference grammar parses no
+// shell expansion, so a sandbox setup step's script survives resolution
+// untouched (internal/envref).
+//
+// It is decided here, not in internal/mcp, which is handed resolved values and
+// never reads the secret store: there an unset token and a deliberately empty
+// value are the same string, and neither the variable nor its minter is in
+// hand. [resolveServer] is the one place a server's values are resolved;
+// [serverSpec] and a harness's box are built from it, so no path starts a
+// server around it.
+//
+// A seat's mailbox does not wait for a held-back child: a claim waits for what
+// the first turn needs, nothing can be addressed to an identity the vendor does
+// not have yet, and holding the mailbox would hold every message the seat could
+// answer with the tools it has.
+//
 // # Testing an MCP server
 //
 // A person's "Test now" of an MCP server (on its page, and in the add flow
@@ -510,6 +579,57 @@
 // coord.MaxMCPCheckNodes nodes, removed by the apply that removes the server
 // (clearRemovedMCPChecks); its tools answer the person who asked and are never
 // stored.
+//
+// # Memory sync cycles
+//
+// A memory sync cycle (one every [memorySyncInterval], bounded by it) is one
+// lap over its turns: each held seat's own pass in sorted order (what it wrote
+// while held here, then its counterparty profiles, skills and onboarding
+// marker, sent whole every pass), then one backlogs' turn carrying, with what
+// the cycle has left, the rows this node held for each seat when it took it,
+// its seats taking turns from backlogResume. A seat still being taken is
+// carried by no cycle until its hydration completes (memsync.ErrNotHeld).
+//
+// The next cycle starts at the turn the bound ran out inside, which had only
+// part of a cycle, or after it, wrapping round, when it was the cycle's first
+// and so had the whole cycle ([nextStart]); at the first turn not reached when
+// the bound ran out between two; at the first seat when every turn was had. The
+// seats within the backlogs' turn follow the same rule over what the cycle left
+// it. Two exceptions: a backlogs' turn cut after it moved a mark hands the next
+// cycle to the first seat, or a backlog longer than a cycle (the whole store a
+// restart leaves a data node to carry back) would take every other cycle's
+// start and the seats' own rows would wait behind it. And a backlogs' turn that
+// was not the cycle's first and moved nothing gives the next cycle whole to the
+// seat it was cut in, even the turn's first: passed, a backlog whose next row
+// needs more than the own passes leave would never move while another seat's
+// drained.
+//
+// The backlogs take a turn of their own, not what each cycle leaves after the
+// own passes: leftovers carry no backlog at all while the own passes fill
+// cycles (a burst, crewlet/crewlet#1041; profiles and skills that fill a cycle,
+// crewlet/crewlet#1040). The cost: under overload a cycle can start part-way
+// through the seats, and the backlogs' turn then precedes the own passes of the
+// seats after it.
+//
+// It is not the memory fill's rule ([memoryFill.resume], start at the cut seat
+// wherever it sits): a turn that had the whole cycle would keep every cycle
+// until it ran dry, every other turn waiting (18 000 rows at 100 ms a publish
+// is half an hour). Nor always the turn after: a turn that runs a cycle out
+// second would never go first, so of two seats each needing most of a cycle the
+// second never has a whole one, and its whole-each-cycle tables and onboarding
+// marker are never carried past the cut.
+//
+// The guarantee, with k the held seats whose own pass a cycle runs out in: no
+// seat waits more than 2k + 2 cycles between two that reach its own pass (each
+// cut turn holds the turns after it back at most two cycles, the backlogs' turn
+// is the +2, and the first exception only shortens it). A seat whose own pass
+// fits a cycle completes it at least once in every 2k + 3 cycles, one needing
+// more has a whole cycle once in every 2k + 2, and a crash loses up to 2k + 3
+// cycles' writes. The bounds are reached: of seats a, b, c, d, from b's turn,
+// with own passes running out in c's alone twice and the backlogs' turn moving
+// nothing in two, a waits four cycles, 2k + 2 for k = 1. A smaller bound needs
+// per-turn state one resume cannot hold, and denying a cut turn its whole cycle
+// is the turn-after rule, which starves.
 package engine
 
 import (
@@ -530,24 +650,15 @@ import (
 // buildProviders turns the company's providers.llm map into the ordered
 // registry the per-phase resolver reads.
 //
-// ORDER COMES FROM THE CONFIG DOCUMENT, not from the map. Resolution's last
-// resort is "the first provider configured", which is a real answer over the
-// order an operator wrote and no answer at all over a Go map — two seats booted
-// from one config would land on different models, and one seat would change
-// model across a restart. config.Company.ProviderOrder is what preserves it.
+// ORDER COMES FROM THE CONFIG DOCUMENT (config.Company.ProviderOrder): the
+// last resort, "the first provider configured", over a Go map would differ
+// between seats and restarts. NO PROVIDERS IS A NIL REGISTRY, not an error: an
+// empty providers.llm validates, and the dispatcher holds work on it until a
+// provider arrives ([Company.Models]).
 //
-// NO PROVIDERS IS NO REGISTRY, and not an error. A company with an empty
-// providers.llm validates (an org chart written before its credentials exist,
-// and what a company created from the dashboard is until one is added), so
-// refusing it here made every node refuse to apply a revision its own dry run
-// had just called valid. The epoch carries a nil registry instead, which is
-// what [Company.Models] documents and what the dispatcher reads to hold every
-// seat's work until a provider arrives.
-//
-// EVERY ENTRY ON THE NODE'S ONE [harness.Plans], which outlives the revision:
-// an entry rebuilt with the same sign-in finds the windows its predecessor was
-// sitting out there, and nil (a company built to validate it, not to run it)
-// gives each entry a registry of its own.
+// EVERY ENTRY ON THE NODE'S ONE [harness.Plans], which outlives the revision,
+// so a rebuilt entry finds the windows its predecessor sat out; nil (a company
+// built only to validate) gives each entry its own.
 func buildProviders(c *config.Company, r *config.Resolver, plans *harness.Plans) (*phase.Registry, error) {
 	order := c.Providers.ProviderOrder()
 	if len(order) == 0 {
@@ -557,10 +668,8 @@ func buildProviders(c *config.Company, r *config.Resolver, plans *harness.Plans)
 	for _, key := range order {
 		spec, ok := c.Providers.LLM[key]
 		if !ok {
-			// ProviderOrder is derived from the same map, so this cannot
-			// happen — but a silent skip here would produce a registry
-			// missing a provider the operator configured, and the seat
-			// using it would fall back to another model with nothing said.
+			// Cannot happen (ProviderOrder comes from the map), but a silent
+			// skip would move a seat onto another model with nothing said.
 			return nil, fmt.Errorf("engine: provider %q is in the order but not in the map", key)
 		}
 		p, err := BuildHarness(key, spec, r, plans)
@@ -576,28 +685,17 @@ func buildProviders(c *config.Company, r *config.Resolver, plans *harness.Plans)
 var log = logging.Get("engine")
 
 // restoreBundles restores every harness entry's configured credential bundle
-// into its state directory where that directory holds no login yet
+// where its state directory holds no login yet
 // ([harness.Provider.RestoreConfiguredBundle]).
 //
-// A STEP OF ITS OWN, made by the paths that build an epoch to RUN it — a node's
-// boot and every apply — and not by building one: [NewCompany] is also what
-// `crewlet validate` calls, and validating a document must neither write a
-// login onto the host nor wait on the shared login's lock. It runs before
-// anything calls the epoch's models — before the epoch is published, and on an
-// apply before the revision's reflection workers are swapped in behind the
-// running seats ([Engine.prepareReflection]) — so the epoch's first call
-// already finds the login. And on an apply only after every stage that can
-// refuse the revision ([Engine.Apply]), because the state directory it writes
-// is the running epoch's too, and a refused revision must leave no login
-// behind.
-//
-// A failed restore is WARNED and never refuses the epoch: a node with a broken
-// bundle can still be logged in by hand, and refusing a whole revision over one
-// blob is the worse outcome. An entry `crewlet llm logout` emptied restores
-// nothing either ([harness.ErrLoggedOut]) — the logout is the operator's
-// decision and outlives every apply until a login is written again — and that
-// is warned as what it is, `harness_bundle_withheld`, naming the logout and
-// how to sign in again, rather than as a bundle that failed.
+// Taken only by boot and apply, never by [NewCompany]: `crewlet validate` must
+// neither write a login nor wait on the login's lock. It runs before anything
+// calls the epoch's models (before publication; on an apply before
+// [Engine.prepareReflection]), and on an apply only after every stage that can
+// refuse the revision ([Engine.Apply]), so a refused one leaves no login in the
+// running epoch's state directory. A failure is only WARNED (a node can be
+// logged in by hand); an entry `crewlet llm logout` emptied
+// ([harness.ErrLoggedOut]) is warned as `harness_bundle_withheld`.
 func (c *Company) restoreBundles(ctx context.Context) {
 	if c == nil || c.Models == nil {
 		return
@@ -620,54 +718,32 @@ func (c *Company) restoreBundles(ctx context.Context) {
 
 // BuildHarness constructs one providers.llm entry's provider.
 //
-// Exported for `crewlet llm`, which has to build the SAME provider the engine
-// would in order to report on it: a doctor that constructed its own would
-// diagnose a provider no seat is using, and the two would drift the first
-// time a default changed.
+// Exported for `crewlet llm`, which must report on the SAME provider the
+// engine builds, not a lookalike that drifts.
 //
-// A provider whose credentials are missing still BUILDS. Every call then fails
-// with the harness's own "not authenticated", which names the harness and is exactly
-// what `crewlet llm doctor` explains — far easier to diagnose than a
-// constructor that refused to exist and took the whole company down at boot
-// over one login.
-//
-// ITS CREDENTIALS DO NOT ARRIVE AS A BAG OF KEYS. The entry holds ONE login,
-// kept by the vendor's harness in a directory on disk, and at most a single
-// long-lived token or API key beside it, so there is no pool here and nothing
-// to rotate: a second key is a second entry in the seat's fallback chain.
+// Missing credentials still BUILD: every call then fails with the harness's
+// own "not authenticated", which `crewlet llm doctor` explains, rather than
+// one login taking the company down at boot. The entry holds ONE login and at
+// most one token or API key: a second key is a second fallback entry.
 //
 // plans is the node's registry of sign-ins ([harness.Config.Plans]); nil
-// gives the entry one of its own, which is what a command that reports on one
-// entry needs.
+// gives the entry one of its own.
 func BuildHarness(key string, spec config.LLMProvider, r *config.Resolver,
 	plans *harness.Plans) (*harness.Provider, error) {
 	stateDir, err := spec.ResolvedStateDir(key)
 	if err != nil {
 		return nil, fmt.Errorf("engine: provider %q: %w", key, err)
 	}
-	// The model, RESOLVED HERE: Tier B stores "${VAR}" verbatim, so a harness
-	// handed the raw field would receive the literal reference on its
-	// --model flag and refuse a model by that name.
+	// The model, RESOLVED HERE: Tier B stores "${VAR}" verbatim, and the
+	// harness would get the literal reference on --model.
 	//
-	// A REFERENCE THAT RESOLVED TO NOTHING is refused, and that is not the
-	// same as a field somebody left out (which validation refuses). An entry
-	// that plainly reads `model: "${LLM_MODEL}"` and silently ran on the
-	// harness's own default model when LLM_MODEL was unset would bill and answer
-	// as a model nobody chose; naming the variable sends the operator to the
-	// one thing they have to change. A missing CREDENTIAL still builds,
-	// because every call then fails with the harness's own sign-in error that
-	// names it; a missing model has no such tell.
-	//
-	// "RESOLVED TO NOTHING" IS THE PRESENCE RULE, NOT SUBSTITUTION'S. Expand
-	// reports a name only when no source answered, so a variable set to ""
-	// — compose passing through an unset host variable, an empty Kubernetes
-	// env value, an empty stored secret, which the resolver treats as
-	// authoritative — expanded to "" with nothing reported, and the entry
-	// built with no model at all. [config.Resolver.Missing] counts an empty
-	// answer as absent and tests every reference rather than the result, so
-	// `${PROVIDER}/sonnet` with PROVIDER unset is refused too instead of
-	// handing the harness "/sonnet". The blank check catches what is left: a
-	// value that is all white space, which no harness reads as a model.
+	// A REFERENCE THAT RESOLVED TO NOTHING is refused, naming the variable:
+	// unlike a missing credential, whose sign-in error names it, a missing
+	// model silently runs the harness's default, a model nobody chose.
+	// [config.Resolver.Missing] counts an empty answer as absent (Expand
+	// would not report it) and tests every reference, so `${PROVIDER}/sonnet`
+	// with PROVIDER unset is refused too; the blank check catches a value
+	// that is all white space.
 	model := strings.TrimSpace(r.Value(spec.Model))
 	if missing := r.Missing(spec.Model); len(missing) > 0 || model == "" {
 		if len(missing) == 0 {
@@ -681,40 +757,30 @@ func BuildHarness(key string, spec config.LLMProvider, r *config.Resolver,
 				"`crewlet secrets set`",
 			key, spec.Model, strings.Join(missing, ", "))
 	}
-	// RESOLVED HERE for the same reason: a child handed the raw map would
-	// receive the literal reference as its value.
+	// RESOLVED HERE for the same reason.
 	env, missing := r.Map(fmt.Sprintf("providers.llm.%s.env", key), spec.Env)
 	for _, ref := range missing {
-		// Warned rather than refused: a harness whose optional tuning
-		// variable is unset still runs, and a provider that refused to
-		// build would take the company down over it.
+		// Warned, not refused: an unset optional tuning variable must not
+		// take the company down.
 		log.Warn("harness_env_unresolved", "provider", key,
 			"path", ref.Path, "variables", strings.Join(ref.Names, ","))
 	}
 
-	// Config loads this same merged profile under its runnable rules
-	// (LLMProvider.validateProfile), so a failure here is a document that
-	// never went through validation — refused here rather than built on
-	// whatever CredentialSources made of a profile it could not load.
+	// Validation loads this profile too (LLMProvider.validateProfile), so a
+	// failure means an unvalidated document: refused rather than built on
+	// whatever CredentialSources made of it.
 	if _, err := harnessprofile.Load(spec.HarnessName(), spec.Overrides); err != nil {
 		return nil, fmt.Errorf("engine: provider %q: %w", key, err)
 	}
 
-	// Every credential falls back to a CONVENTIONAL name when the entry
-	// points at none, and each goes through the resolver, which reads the
-	// secret store BEFORE the environment. That order is the whole point:
-	// `crewlet llm login <key> -capture-token` writes the token into the
-	// store, and an entry that had to name it explicitly would leave every
-	// operator wiring up a ${VAR} for a value Crewlet itself just wrote. The
-	// API key reads the harness's own key variable — ANTHROPIC_API_KEY for
-	// Claude Code — so a key already exported, or set with `crewlet secrets
-	// set`, signs an api-key entry in with no YAML change; it reaches the
-	// child only under auth.mode api-key ([harness.Auth]).
-	//
-	// WHICH variable each falls back to is [config.LLMProvider.CredentialSources],
-	// the one rule the company's account of the variables it reads also
-	// follows, so a credential this resolves is never one the Secrets screen
-	// calls read by nothing.
+	// Every credential falls back to a CONVENTIONAL name
+	// ([config.LLMProvider.CredentialSources], the rule the Secrets screen's
+	// account also follows), and the resolver reads the secret store BEFORE
+	// the environment, so the token `crewlet llm login <key> -capture-token`
+	// stores is found with no ${VAR}. The API key's convention is the
+	// harness's own variable (ANTHROPIC_API_KEY for Claude Code), so an
+	// exported key needs no YAML change; it reaches the child only under
+	// auth.mode api-key ([harness.Auth]).
 	sources := spec.CredentialSources(key)
 	auth := harness.Auth{
 		Mode:            harness.AuthMode(spec.ResolvedAuthMode()),
@@ -745,9 +811,8 @@ func BuildHarness(key string, spec config.LLMProvider, r *config.Resolver,
 // resolveOrConvention resolves a configured ${VAR} reference, or falls back to
 // looking up a conventional variable name.
 //
-// The fallback is a LOOKUP, not an expansion: `conventional` is a bare name
-// rather than a reference, and passing it through Value would leave it
-// unresolved and return the literal name as if it were a credential.
+// The fallback is a LOOKUP, not an expansion: Value would return the bare
+// name itself as if it were the credential.
 func resolveOrConvention(r *config.Resolver, configured, conventional string) string {
 	if configured != "" {
 		return r.Value(configured)

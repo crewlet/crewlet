@@ -26,16 +26,12 @@ import (
 )
 
 // worst is n bytes of the byte that costs the most once encoded: a `<`, six
-// bytes as encoding/json writes it. The words a record carries that somebody
-// else wrote — a tool's answer, a model's prose, a prompt, a person's name —
-// are any bytes, and are filled with it.
+// bytes as encoding/json writes it. Words somebody else wrote (an answer,
+// prose, a prompt, a person's name) may be any bytes, so are filled with it.
 func worst(n int) string { return strings.Repeat("<", n) }
 
-// named is n bytes of what an identifier is made of, which encodes as itself:
-// the names a company's configuration gives (a model, a provider entry, an MCP
-// server, a tool) and the ids and words the engine mints (a note's id, an
-// origin's, a refusal's class, a harness's outcome) are held to such
-// grammars, and filled with it at the most each may be.
+// named is n bytes of an identifier character, which encodes as itself: names
+// from configuration and ids the engine mints are held to such grammars.
 func named(n int) string { return strings.Repeat("n", n) }
 
 // worstPrompt is a prompt of n bytes in parts outlined parts, each of the byte
@@ -55,9 +51,9 @@ func worstPrompt(n, parts int) prompts.Prompt {
 // lists, so its window is past its bound.
 const worstRounds = 2 * maxRecordRounds
 
-// worstArgs is arguments of n values, each of the byte that escapes the most:
-// past a share, they keep as many of their values as fit it, which is the most
-// arguments a record can keep, where one large value would be left out whole.
+// worstArgs is n values of the byte that escapes the most: past a share as many
+// values as fit are kept, the most a record can keep, where one large value
+// would be left out whole.
 func worstArgs(n int) map[string]any {
 	args := map[string]any{}
 	for i := range n {
@@ -67,10 +63,9 @@ func worstArgs(n int) map[string]any {
 }
 
 // worstCalls is a phase's calls at their worst, one a round: each failed, its
-// name past the longest a record keeps and unique in its opening, its id one
-// no log keeps, its arguments and its answer past their shares in the byte
-// that escapes the most — and, last, a successful submission whose arguments
-// are past what any record keeps of them.
+// name past the longest kept and unique in its opening, its id one no log
+// keeps, its arguments and answer past their shares; and, last, a successful
+// submission whose arguments are past what any record keeps.
 func worstCalls(rounds int) []toolloop.Execution {
 	answer := worst(1 << 10)
 	args := worstArgs(20)
@@ -88,12 +83,9 @@ func worstCalls(rounds int) []toolloop.Execution {
 }
 
 // worstRecord is a phase's record with every input at its worst, a collected
-// run's where run is set. EACH PAST ITS SHARE, AND NO FURTHER — the prompts
-// past promptBytes, the response past responseBytes, the notes past
-// notesBytes and the error past its clip, once escaped — since what a record
-// keeps of a payload past its share does not grow with it, and a case that
-// weighed its own test binary down by megabytes more would measure nothing
-// more.
+// run's where run is set. Each is past its share once escaped AND NO FURTHER:
+// what a record keeps past its share does not grow with the input, so larger
+// inputs would only slow the case.
 func worstRecord(run bool) phaseRecord {
 	rec := phaseRecord{
 		Phase: phase.Execute, Iteration: 1,
@@ -116,15 +108,13 @@ func worstRecord(run bool) phaseRecord {
 		rec.Result.Steers = append(rec.Result.Steers, toolloop.SteerMark{Round: round, ID: named(64)})
 	}
 	for i := range 4096 {
-		// THE LONGEST NAME AN MCP SERVER'S TOOL MAY HAVE, in the characters a
-		// tool's name is held to, which no escape grows.
+		// The longest name an MCP server's tool may have; no escape grows it.
 		rec.Available = append(rec.Available, fmt.Sprintf("%0128d", i))
 		rec.Catalogue = append(rec.Catalogue, fmt.Sprintf("%0128d", i))
 	}
 	if run {
-		// THE PUSH RECORD'S REASON, whose worst is past the pushed refs' own
-		// (internal/sandbox's runtext.go): a record carries the refs only
-		// where it has no reason, and the reason where it read none.
+		// The push record's reason, whose worst is past the pushed refs'
+		// (internal/sandbox's runtext.go); a record carries one or the other.
 		rec.Run = RunRecord{Harness: named(64), SandboxID: named(128), ProviderKey: named(256), Model: named(256),
 			LaunchID: named(64), PushedUnread: events.ClipDiagnostic(worst(1 << 20))}
 		for used := 0; used < sandbox.MaxDeliveredRefBytes; used += 256 {
@@ -173,22 +163,18 @@ func worstEmitter(pub *collector, mu *sync.Mutex) emitter {
 		Trigger: worstTrigger(), ConversationKey: named(256)}, role: worst(256), tally: &Spend{}, mu: mu}
 }
 
-// A PHASE'S RECORD AT EVERY BOUND FITS ONE MESSAGE. Each of its variable
-// payloads past its share — its prompts, its response, its prose, its notes,
-// its tool names, its rounds and its calls, every one of them of the byte that
-// escapes the most, and a collected run's refs, push record and dropped calls
-// besides — is kept to its share, and the record, its trigger at its worst
-// beside it, is published within the queue's ceiling rather than refused by
-// it and lost; and it still says what it left out, by count and by tool.
+// A PHASE'S RECORD AT EVERY BOUND FITS ONE MESSAGE. Every variable payload
+// past its share (prompts, response, prose, notes, tool names, rounds, calls,
+// and a collected run's refs, push record and dropped calls) is kept to it,
+// and the record, its worst trigger beside it, is published within the
+// queue's ceiling rather than refused and lost, still saying what it left out.
 //
-// Mutation: carry any one payload whole (the calls, a prompt, the response,
-// the prose, the notes, the names), or widen a share past what the sum leaves,
-// and the record is past the ceiling; drop the round window, and a record of a
-// thousand rounds is.
+// Mutation: carry any one payload whole, or widen a share past what the sum
+// leaves, and the record is past the ceiling; drop the round window, and a
+// record of a thousand rounds is.
 func TestAPhaseRecordAtEveryBoundFitsOneMessage(t *testing.T) {
 	t.Parallel()
-	// ONE AT A TIME: each builds a record of megabytes, and the package's other
-	// cases run beside them.
+	// One at a time: each builds megabytes beside the package's other cases.
 	for name, run := range map[string]bool{"a host phase": false, "a collected run": true} {
 		t.Run(name, func(t *testing.T) {
 			pub := &collector{}
@@ -255,11 +241,9 @@ func TestAToolListWithinItsShareIsKeptWhole(t *testing.T) {
 }
 
 // A PHASE'S TOOL LIST PAST ITS SHARE KEEPS ITS FIRST AND NEWEST CALLS AND
-// COUNTS THE REST BY TOOL. Every row is held to the bridged call's shares —
-// its answer and a failure's error to their openings, its arguments to their
-// share with the newest submission's to its own, a name past its bound cut —
-// and past the call cap the middle is dropped: the first half and the newest
-// half kept, and every dropped call counted under its tool, with its failure.
+// COUNTS THE REST BY TOOL. Every row is held to the bridged call's shares (the
+// newest submission's arguments to their own), and past the call cap the
+// middle is dropped, each dropped call counted under its tool with its failure.
 //
 // Mutation: drop from either end, and how the phase began or ended is gone;
 // tally a dropped call under no tool, or not at all, and a reader counts fewer
@@ -267,9 +251,8 @@ func TestAToolListWithinItsShareIsKeptWhole(t *testing.T) {
 // shows a submission other than the one the phase made.
 func TestAPhaseRecordsToolListPastItsShareKeepsItsEndsAndCountsTheRest(t *testing.T) {
 	t.Parallel()
-	// EACH ANSWER PAST ITS SHARE ONCE ESCAPED, AND NO FURTHER: seven hundred
-	// `<` are 4,200 bytes encoded, past sandbox.MaxBridgeOutputBytes, so every
-	// row is cut and the cut rows are still past the list's share together.
+	// 700 `<` encode to 4,200 bytes, past sandbox.MaxBridgeOutputBytes: every
+	// row is cut, and the cut rows are still past the list's share together.
 	body := worst(700)
 	var execs []toolloop.Execution
 	for i := range 1000 {
@@ -326,10 +309,8 @@ func TestAPhaseRecordsToolListPastItsShareKeepsItsEndsAndCountsTheRest(t *testin
 }
 
 // A RECORD'S TALLY NAMES THE TOOLS CALLED MOST, AND COUNTS THE REST UNDER NO
-// NAME. A model can call names no tool has, each once, and a tally that named
-// them all would grow with them: past its census the tools with the fewest
-// calls are counted unnamed, every call and failure still counted, and the
-// names it keeps in name order with the unnamed last.
+// NAME, so names a model invents cannot grow it: every call and failure still
+// counted, the kept names in name order and the unnamed last.
 //
 // Mutation: name every tool, and the tally grows with what the model invents;
 // drop the calls past the census rather than count them, and a reader counts
@@ -358,11 +339,9 @@ func TestARecordsTallyNamesTheToolsCalledMost(t *testing.T) {
 }
 
 // A PROMPT PAST ITS SHARE KEEPS EVERY PART'S OPENING, AND AN OUTLINE THAT
-// STILL TILES IT. The dashboard reads a prompt by its outline only where the
-// outline tiles the text — byte counts adding up, every boundary between two
-// characters — so the record cuts the prompt part by part, the longest first,
-// and rewrites each part's size to what it kept; a prompt within its share is
-// kept as it was.
+// STILL TILES IT (byte counts adding up, every boundary between characters),
+// as the dashboard needs to read it by its outline; a prompt within its share
+// is kept as it was.
 //
 // Mutation: cut the whole text to its opening, and every part after the first
 // is gone; keep the outline as it was, and it no longer tiles the text.
@@ -397,10 +376,8 @@ func TestAPromptPastItsShareKeepsEveryPartsOpeningAndAnOutlineThatTilesIt(t *tes
 }
 
 // A RECORD'S ROUNDS PAST THEIR WINDOW KEEP THE FIRST HALF AND THE NEWEST HALF,
-// each kept round with everything of it — its provider call, its prose, the
-// harness runs over it, the notes read in it and the calls made in it — and
-// the calls of the rounds left out tallied by tool for the tool list, so no
-// round is half drawn.
+// each kept round with everything of it and the left-out rounds' calls
+// tallied by tool, so no round is half drawn.
 //
 // Mutation: keep a dropped round's calls, prose or notes, and the record draws
 // a round it says it left out; tally none of its calls, and a reader counts
@@ -424,8 +401,7 @@ func TestARecordsRoundsPastTheirWindowKeepTheirEnds(t *testing.T) {
 		t.Errorf("the window keeps rounds through %d and from %d, want through %d and from %d",
 			got.Rounds[half-1].Round, got.Rounds[half].Round, half, worstRounds-half+1)
 	}
-	// One call a round, and the submission in the last: the kept rounds' and
-	// the rest tallied.
+	// One call a round, plus the submission in the last.
 	if len(got.Calls) != maxRecordRounds+1 || tallied(got.Dropped) != worstRounds-maxRecordRounds {
 		t.Errorf("the window keeps %d calls and tallies %d, want %d and %d", len(got.Calls),
 			tallied(got.Dropped), maxRecordRounds+1, worstRounds-maxRecordRounds)
@@ -435,11 +411,10 @@ func TestARecordsRoundsPastTheirWindowKeepTheirEnds(t *testing.T) {
 	}
 }
 
-// A COLLECTED RUN'S COPY OF ITS ANSWER SAYS THE RESPONSE HOLDS IT. The record
-// carries a run's report whole as its response, and its round's prose carries
-// a copy, which past the prose's share keeps its opening, its cut saying where
-// the rest is, rather than doubling the report on the record or reading as the
-// whole lost; and the record keeps the copy as it was made.
+// A COLLECTED RUN'S COPY OF ITS ANSWER SAYS THE RESPONSE HOLDS IT. The
+// response carries the report whole; the round's prose copy past its share
+// keeps its opening, its cut saying where the rest is, and the record keeps
+// the copy as made rather than cutting it again.
 //
 // Mutation: copy the answer whole, and a long report rides its record twice;
 // cut it with the record's own marker, and it reads as lost.
@@ -490,8 +465,7 @@ const liveFrameBytes = 1 << 20
 
 // worstRunning is a phase in flight at its worst: the worst record's rounds,
 // calls and prose, a hundred calls in flight with arguments past their share,
-// and a round being written with three abandoned attempts, each of the byte
-// that escapes the most.
+// and a round being written with three abandoned attempts.
 func worstRunning() toolloop.Result {
 	res := worstRecord(false).Result
 	for i := range 100 {
@@ -506,12 +480,9 @@ func worstRunning() toolloop.Result {
 	return res
 }
 
-// A RUNNING PHASE'S FRAME AT EVERY BOUND STAYS UNDER A MIB. It is republished
-// whole five times a second to every dashboard open on its seat, and the
-// socket hub queues hundreds for a client that falls behind: past its live
-// shares it keeps the newest of what grows — its calls, its prose, its calls
-// in flight, the attempts at the round in flight — and its round window, and
-// says what it left out.
+// A RUNNING PHASE'S FRAME AT EVERY BOUND STAYS UNDER A MIB (why: recordbytes.go,
+// "The live frame"): past its live shares it keeps the newest of what grows
+// and its round window, and says what it left out.
 //
 // Mutation: carry the frame's calls, its prose, its calls in flight or its
 // abandoned attempts whole, or drop its round window, and the frame is past
@@ -535,11 +506,10 @@ func TestARunningPhasesFrameAtEveryBoundStaysUnderAMiB(t *testing.T) {
 	}
 }
 
-// A RUNNING PHASE'S OPENING FRAME KEEPS ITS PROMPTS TO A RECORD'S SHARE, part by
-// part with the outline rewritten to the kept text, as the phase's record does:
-// the frame is sent once, and the prompt the model was sent is not changed. The
-// user's prompt rides it twice, as its `prompt` and as its second message, so
-// the frame is held to three shares and its trigger.
+// A RUNNING PHASE'S OPENING FRAME KEEPS ITS PROMPTS TO A RECORD'S SHARE, as
+// the record does ([keptPrompt]). The user's prompt rides it twice, as its
+// `prompt` and its second message, so the frame is held to three shares and
+// its trigger.
 //
 // Mutation: send the prompts whole, and a company's document at length puts
 // megabytes on a frame every open dashboard is sent.
@@ -608,10 +578,8 @@ func TestARunningPhasesCallsInFlightKeepTheirShare(t *testing.T) {
 	}
 }
 
-// A ROUND IN FLIGHT KEEPS ITS NEWEST ABANDONED ATTEMPTS' TAILS. A provider that
-// gave up partway left text a reader already watched arrive, and the frame keeps
-// what it saw last of each of the newest attempts, as it keeps the round's own
-// text, the attempts together held to their share.
+// A ROUND IN FLIGHT KEEPS ITS NEWEST ABANDONED ATTEMPTS' TAILS: what a reader
+// saw last of each, the attempts together held to their share.
 //
 // Mutation: keep each attempt's opening, and the frame shows a reader text it
 // scrolled past rather than where the attempt died; keep every attempt, and an

@@ -18,18 +18,16 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// noted is a status write carrying a megabyte note: a call whose arguments the
-// run's log keeps only in part.
+// noted is a status write with a megabyte note: the log keeps its arguments
+// only in part.
 var noted = map[string]any{"item": "GP-12", "status": "draft", "note": strings.Repeat("<x>", 1<<20/3)}
 
-// published is the call between the two noted ones, which asked for something
-// else.
+// published is the different call between the two noted ones.
 var published = map[string]any{"item": "GP-12", "status": "published"}
 
-// loggedCall is the call a run's log holds for a call made with args: its
-// arguments kept as the log keeps them (the left-out note's marker in place of
-// the note) and read back as the engine reads a log's, its identity the digest
-// the bridge admitted it under, and the size of what it was sent with.
+// loggedCall is what a run's log holds for a call made with args: the
+// arguments as the log keeps them (a marker for a left-out note), read back as
+// the engine reads them, the bridge's digest, and the whole arguments' size.
 func loggedCall(t *testing.T, seq int, args map[string]any) runner.BridgedCall {
 	t.Helper()
 	text, err := tools.RecordArgs(args)
@@ -42,17 +40,11 @@ func loggedCall(t *testing.T, seq int, args map[string]any) runner.BridgedCall {
 }
 
 // A RESUME PAST A DROPPED CALL AND A CUT ONE DERIVES EVERY ID A RUN THAT NEVER
-// PARKED DERIVES (#477). A run wrote a status with a megabyte note, then
-// another status, then — after its turn parked and was resumed — the first
-// status again: a run that never parked counts the third call one different
-// call after the first, so it is a second operation. In the log, the first
-// call's note is left out (its arguments kept in part) and the second call was
-// dropped from the middle of a long log, kept only as its identity. Seeded by
-// what the log KEPT, the first counted as another call and the second as none;
-// seeded by identity, the resumed run counts what the run that never parked
-// counts, on every path a run's calls are read back on: its collection, its
-// continuation after a person's answer, and its reopening on a node that took
-// it over.
+// PARKED DERIVES. A run writes noted, then published, then (resumed) noted
+// again: a second operation, one different call after the first. The log cut
+// the first call's note and dropped the second to its identity, so the seed
+// must go by digest, not by what the log kept, on every read-back path:
+// collection, continuation after an answer, and reopening on another node.
 //
 // Mutation: seed a kept call from the log's arguments rather than its digest,
 // and the count is two; leave the dropped identities out of the seed, and it
@@ -129,8 +121,7 @@ func TestAResumePastADroppedCallAndACutOneDerivesTheIdsOfARunThatNeverParked(t *
 	})
 	t.Run("a closed round", func(t *testing.T) {
 		t.Parallel()
-		// THE SAME TWO CALLS, a round earlier: the closed round carries the
-		// kept call with its identity and the dropped one in its tally.
+		// The same two calls a round earlier, in the closed round's record.
 		calls := turnctx.NewCallLog()
 		closed := state
 		closed.Iterations = []ledger.Iteration{{Iteration: 1, Calls: []ledger.Call{cut.Call}, Elided: dropped}}
@@ -145,9 +136,9 @@ func TestAResumePastADroppedCallAndACutOneDerivesTheIdsOfARunThatNeverParked(t *
 	})
 }
 
-// reopenedLog is the call log a run reopened from its row and its log seeds:
-// bridged, its calls the log lists; elided and absorbed, the identities it
-// counts without listing; closed, the turn's closed rounds.
+// reopenedLog is the call log a reopened run seeds: bridged, the calls the
+// log lists; elided and absorbed, identities counted without listing; closed,
+// the turn's closed rounds.
 func reopenedLog(t *testing.T, bridged []runner.BridgedCall, elided, absorbed []ledger.Elided,
 	closed []ledger.Iteration) *turnctx.CallLog {
 
@@ -170,14 +161,10 @@ func reopenedLog(t *testing.T, bridged []runner.BridgedCall, elided, absorbed []
 }
 
 // A TALLY'S UNNAMED COUNT IS SEEDED AGAINST EVERY LATER CALL, and a named
-// identity BY ITS DIGEST. A long run's record that folded its dropped middle
-// past what its tally holds keeps a count with no tool — or an older build
-// dropped calls and kept nothing of them, which reads the same — and each of
-// those calls asked for something a later call may not: so each counts
-// against every later call, of every tool, as one that asked for something
-// else. While a dropped call's identity is kept, it is THAT call: a later call
-// repeating it with nothing different between is its retry, as the run's own
-// process would count it.
+// identity BY ITS DIGEST. A count with no tool (a tally folded past its
+// capacity) may have asked for anything, so it counts against every later
+// call of every tool; a kept identity is THAT call, so a later call repeating
+// it with nothing between is its retry.
 //
 // Mutation: skip an entry that names no tool, and a later call counts none of
 // those calls; seed every tallied call as one of its tool with no identity,
@@ -198,14 +185,11 @@ func TestATallysCountsAreSeededAsTheCallsTheyWere(t *testing.T) {
 	}
 }
 
-// A WORKER'S CALLS ARE SEEDED FROM THE ROUND'S RECORD (#477). A bridged
-// `delegate` runs its workers on forks of the run's call log, and the log
-// absorbs their calls once the wave is done — so a later call of the run counts
-// a worker's call between two of its own. No call of the round's record is a
-// worker's, so the record keeps them as identities beside it, the open round's
-// and each closed round's, and a resumed segment counts them as the run did:
-// a set_status the worker made between two of the run's own makes the second
-// a different operation, never the first one's retry.
+// A WORKER'S CALLS ARE SEEDED FROM THE ROUND'S RECORD. A bridged `delegate`'s
+// workers run on forks of the call log, absorbed once the wave is done, so the
+// record keeps them as identities (open round and closed rounds alike), and a
+// worker's set_status between two of the run's own makes the second a
+// different operation, never the first one's retry.
 //
 // Mutation: leave the absorbed identities out of the seed — the open round's
 // or a closed round's — and the repeat counts 0: the first call's operation,
@@ -226,12 +210,9 @@ func TestAWorkersCallsAreSeededFromTheRoundsRecord(t *testing.T) {
 }
 
 // A CALL WHOSE ARGUMENTS ARE WITHHELD IS SEEDED AS ONE NO LATER CALL REPEATS. A
-// call held for a person's approval, and the one they approved, keep neither
-// their arguments nor a digest of them on any record — the arguments ride the
-// row sealed — so a resumed segment cannot know what they asked for, and
-// counts each as a call of its tool that asked for something else: an
-// over-count, the safe direction. Seeded by the arguments the record holds,
-// which are none, the call read as the tool called with no arguments.
+// held call and its approved one keep no arguments or digest on any record
+// (the arguments ride the row sealed), so each counts as a different call of its tool:
+// an over-count, the safe direction, never the tool called with no arguments.
 //
 // Mutation: seed a withheld call by what its record holds, and a later call
 // with no arguments counts it as the same call.
@@ -248,12 +229,9 @@ func TestACallWhoseArgumentsAreWithheldIsSeededAsOneNoLaterCallRepeats(t *testin
 }
 
 // A CALL WHOSE ARGUMENTS DID NOT READ BACK IS SEEDED AS ONE NO LATER CALL
-// REPEATS. A call with no digest, as an older build's is, whose record holds
-// its arguments in text that does not read back (ledger.Call.ArgsUnread) was
-// made with arguments no record says, so a resumed segment counts it as a call
-// of its tool that asked for something else, as it does a withheld one. Seeded
-// by the arguments it reads as, which are none, it counted as the tool called
-// with none, and a later call with none took it for the same call.
+// REPEATS. A call with no digest whose arguments do not read back
+// (ledger.Call.ArgsUnread) counts as a different call of its tool, as a
+// withheld one does, never as the tool called with no arguments.
 //
 // Mutation: seed such a call by the arguments it reads as, and a later call
 // with no arguments counts it as the same call.
@@ -273,19 +251,18 @@ func TestACallWhoseArgumentsDidNotReadBackIsSeededAsOneNoLaterCallRepeats(t *tes
 	}
 }
 
-// submissionOf is submit_work's arguments with a summary of n bytes: a round
-// blocked, which every turn may report.
+// submissionOf is a blocked submit_work (which every turn may report) with an
+// n-byte summary.
 func submissionOf(n int) map[string]any {
 	return map[string]any{"outcome": "blocked", "summary": strings.Repeat("s", n),
 		"evidence": "the build is red"}
 }
 
 // A COLLECTED RUN WHOSE NEWEST SUBMISSION ITS LOG DID NOT KEEP WHOLE IS RESCUED,
-// never reported with the log's marker as its summary, nor with the submission
-// before it as its outcome. The log keeps the newest successful submission
-// whole, and the live tool refuses one past what it keeps, so this is a run
-// whose own spelling took one past it: what it submitted is not on the record,
-// and the round reads as one that said nothing.
+// never reported with the log's marker as its summary, nor with the earlier
+// submission as its outcome. The live tool refuses a submission the log cannot
+// keep whole, so only the run's own spelling takes one past it: what it
+// submitted is not on the record, so the round said nothing.
 //
 // Mutation: replay a submission whatever its record kept, and the round's
 // summary is the marker; skip only the cut one, and the earlier submission is
@@ -312,9 +289,8 @@ func TestACollectedRunWhoseNewestSubmissionWasNotKeptIsRescued(t *testing.T) {
 }
 
 // A LIVE SUBMISSION PAST WHAT THE LOG KEEPS WHOLE IS REFUSED WHILE THE RUN CAN
-// SHORTEN IT, naming its size; one within it is taken. The collection replays a
-// submission off the run's log, so one the log could not keep whole would be a
-// round collected as having said nothing.
+// SHORTEN IT; one within it is taken. Collection replays the submission off
+// the log, so one not kept whole would be collected as having said nothing.
 //
 // Mutation: take a submission whatever its size, and the oversized one is
 // recorded as the run's outcome.

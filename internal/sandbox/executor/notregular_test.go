@@ -13,19 +13,14 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// A PIECE THAT IS NOT A REGULAR FILE DEGRADES ONLY ITSELF, as a piece past the
-// size cap does. What a path names is the box's own doing — a harness can
-// make a pipe where its report goes — so a collection that answered it with an
-// error was retried until the run was settled as lost: its spend uncharged and
-// its record unpublished, every attempt refused again. The piece is described
-// for what it is, the run reads as not succeeded with that as the reason, and
-// what the rest of the box holds — its spend among it — is still collected: a
-// refused result file is read from the stream's last line, which is what the
-// wrapper copies into it.
-//
-// On a real local box, because it is the engine host's own open that refuses
-// a named pipe, and every piece a collection reads is covered: the whole
-// files, the event stream and the error stream.
+// A PIECE THAT IS NOT A REGULAR FILE DEGRADES ONLY ITSELF, as one past the size
+// cap does. A harness can make a pipe where its report goes, and a collection
+// that answered that with an error would be retried until the run settled as
+// lost, its spend uncharged and its record unpublished. So the piece is
+// described for what it is, the run reads as not succeeded for that reason, and
+// the rest, spend included, is still collected: a refused result file is read
+// from the stream's last line, which the wrapper copies into it. A real local
+// box, whose host open refuses a named pipe, covers every piece read.
 //
 // Mutation: answer the refusal as an error in any one reader, and its case
 // fails the collection; skip the stream's line for a refused result file, and
@@ -102,8 +97,8 @@ func TestAPieceThatIsNotARegularFileDegradesOnlyItself(t *testing.T) {
 			if want := tc.what + " (" + target + ") is a named pipe, not a regular file"; !strings.Contains(res.Error, want) {
 				t.Errorf("the failure = %q; want it to say %q", res.Error, want)
 			}
-			// THE SPEND IS STILL CHARGED: it is what a collection that
-			// answered an error lost along with the record.
+			// THE SPEND IS STILL CHARGED: what a collection answering an
+			// error would lose with the record.
 			if res.InputTokens != 30+2400+51200 || res.CostUSD != 0.1834 {
 				t.Errorf("input %d, cost %v; want the run's spend still collected", res.InputTokens, res.CostUSD)
 			}

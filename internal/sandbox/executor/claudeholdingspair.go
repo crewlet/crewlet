@@ -5,94 +5,24 @@ import (
 	"strings"
 )
 
-// WHERE THE REQUEST A RESUMED SESSION SENDS PAIRS A CALL'S USE WITH ITS RESULT,
-// as the reading of a kept session holds it ([holdingsPairing]): a rule of the
-// reading's own, read off the order in which Claude Code's resume hands its
-// model a thread's records ([threadChain]), which is the resume's truth and
-// never this file's.
-//
-// WHAT THE REQUEST DOES WITH THE HANDED RECORDS, in both releases, 2.1.310 and
-// 2.1.322 (read as data, never run). Its fold merges an assistant record into
-// the latest earlier message of its `message.id` AS WRITTEN, an absent id
-// among them, unless a user message holding no tool result came between
-// (2.1.322's scan `Lr.set(Wu.message.id,Mr)`, `Lr.get(yl.message.id)`
-// @298577650, Dm @298586531, and the `projectread_` clause Aje @298545849;
-// 2.1.310's `Oo.set(Es.message.id,kr)` @251760100, Yh). Its pairing repair
-// then keeps a call's FIRST use and answers it only from the message RIGHT
-// AFTER the one holding that use, the first result block of its id there,
-// answering it with a synthetic error otherwise and stripping a result found
-// anywhere else (2.1.322's FQs @298693792, `Ee=e[y+1]`; 2.1.310's TSn
-// @251869313, line for line the same). And the deserializer stamps a fresh id
-// on an assistant record whose `message.id` is falsy only where it carries no
-// `requestId` (2.1.322's e_n, `!fs.message.id&&fs.requestId===void 0`
-// @295266158; 2.1.310's TJt @248494944), so an id-less reply with one merges
-// back into another id-less one across other messages.
-//
-// SO A CALL IS PAIRED ONLY BY STRUCTURE, the conservative rule (C), never by
-// the request's whole model, every place of which more lenient than a release
-// would be a call counted held whose result its model was never handed: for a
-// call x whose use is block of record U and whose result is block of record R,
-//
-//   - C0: U's `message.id` is a string that says something
-//     ([threadChain.Reply]): an id-less use merges across other messages where
-//     it carries a requestId and stands alone where it carries none, neither a
-//     shape the rule can place;
-//   - C1 is its caller's: exactly one use of x and one result in the thread,
-//     the use naming a tool of the bridge's own MCP server
-//     ([claudeBridgedToolPrefix]), no batch naming x, and x neither split
-//     from nor split into another id ([holdingsWalk.idsFold]);
-//   - C2: the resume hands U and R under every variant ([handedYes]);
-//
-// and on EVERY order the resume may hand the thread in ([threadChain.EachOrder]):
-//
-//   - C3: where F is the first record of U's reply in the order, R comes after
-//     F (which C5 holds too, R being a result of a call U's reply made), and
-//     every record from F to the later of U and R is a PLAIN record of
-//     U's reply or a PLAIN results record ([holdingsPairing.see]): no other
-//     reply's record, no prompt, no meta, virtual or text user record, no
-//     attachment and no system record lies there, so the fold puts U's block
-//     in F's message and R's in the one right after it;
-//   - C4: R is a plain results record, which C3 holds already, the stretch
-//     running to R wherever it lies;
-//   - C5: no user record before F holds a result of any call U's reply made,
-//     which 2.1.322's regroup of a split reply would move after it;
-//   - C6: no compaction's boundary lies at or after F, where the relaunch's
-//     first request would cut the conversation.
-//
-// NO RULE OF A TOOL'S NAME but C1's, which leaves nothing the request treats
-// by name: it clears on a context hint only the results of Claude Code's own
-// tools (2.1.322's IAi @294945524, over gAe @294943436), withholds only its
-// memory server's (dvs @289057540, `mcp__${IL}__memory_` @284883475, IL
-// "memory"), and its code mode folds only its own Poll calls (KFt
-// @293413848, `H.name===wi`, wi "Poll" @288129013), none of them a bridged
-// call. So no rule of the Poll calls a reply holds is needed: no bridged call
-// is a Poll.
-//
-// MEASURED over the orders the facility hands, each thread file the reading
-// reads: of the calls the probes kept with one use and one result, both
-// handed, (C) holds all 935 of the main threads' and all 113 of the
-// subagents', and of the fixtures' all 50 and all 24. It TELLS, knowingly,
-// some shapes the request does pair, none measured: another reply between F
-// and U whose use merges back, a prompt merged into a results message before
-// the reply goes on, a results record in the stretch answering another reply,
-// a record the fold skips (a microcompaction's boundary among them), and an
-// id-less reply the request does pair. Every relaxation that would hold one is
-// a piece of the request's whole model, with its own false holds.
-//
-// ONE PASS OVER EACH ORDER makes every asked pair's test a few lookups: the
-// first place of each asked reply, prefix counts of the records that are
-// neither plain kind and of the changes of reply between one assistant record
-// and the next, the first user record holding a result of each asked reply's
-// calls, and the last boundary's place. Linear in the thread, with no cap of
-// its own.
+// THE PAIRING RULE of a kept session's reading ([holdingsPairing]): where the
+// request a resumed session sends pairs a call's use with its result, read off
+// the order Claude Code's resume hands a thread's records ([threadChain]). That
+// request (2.1.310 and 2.1.322, read as data) folds an assistant record into
+// the latest earlier message of its `message.id` unless a user message with no
+// tool result came between (2.1.322's Dm, 2.1.310's Yh); answers a call's first
+// use only from the message right after it, else with a synthetic error,
+// stripping a result anywhere else (FQs, TSn); and stamps a fresh id only on an
+// id-less record with no `requestId` (e_n, TJt), so id-less replies with one
+// merge across messages (C0). It treats by name only its own tools', its memory
+// server's and Poll calls (IAi, dvs, KFt), none bridged. So a call pairs by
+// structure alone: more would count held a call whose result was never handed.
 
-// claudeHarnessIDPrefixes are the prefixes of the ids of the calls and results
-// Claude Code's request writes of its own, which it places as it builds
-// rounds of its own: a poll's (2.1.322's NKe @288139238, 2.1.310's iLe
-// @243029149), a project's read documents' (Lvo @298554259, KZn @251746803),
-// a voice call's record (2.1.322's K1e @293381964) and a delivered task's
-// (ke @291414785, bEt @246850119). A results record answering such an id is
-// no plain record of a pair, so a call under one is never paired (C4).
+// claudeHarnessIDPrefixes prefix the ids Claude Code's request writes for
+// rounds of its own: a poll's (2.1.322's NKe, 2.1.310's iLe), a project's read
+// documents' (Lvo, KZn), a voice call record's (K1e) and a delivered task's
+// (ke, bEt). A results record answering one is not plain, so a call under one
+// is never paired (C4).
 var claudeHarnessIDPrefixes = [...]string{"poll_", "projectread_", "voicecallrecord_", "gettask_"}
 
 // harnessID reports whether id is one Claude Code's request writes of its own
@@ -106,10 +36,9 @@ func harnessID(id string) bool {
 	return false
 }
 
-// splitBase is the id a batch's split call or result of id was split from:
-// id without its last `_` and the digits after it, where id ends so, as
-// Claude Code reads one (`/_(\d+)$/`, 2.1.322's k @291387109 in _2e, 2.1.310's
-// in qGe @244964051, the digits ASCII alone); false where it does not.
+// splitBase is the id a batch's split call or result id was split from: id
+// without a trailing `_` and ASCII digits, as Claude Code reads one (`/_(\d+)$/`,
+// 2.1.322's _2e, 2.1.310's qGe); false where it has none.
 func splitBase(id string) (string, bool) {
 	at := strings.LastIndexByte(id, '_')
 	if at < 0 || at == len(id)-1 {
@@ -124,7 +53,7 @@ func splitBase(id string) (string, bool) {
 }
 
 // pairMark is what the pairing rule files of one record ([holdingsPairing.see]),
-// and what rule 2 files beside it of a subagent's ([holdingsPairing.flag]).
+// and what rule 2 adds of a subagent's ([holdingsPairing.flag]).
 type pairMark uint16
 
 const (
@@ -139,29 +68,35 @@ const (
 	pairPlainResults
 	// pairBoundary is a compaction's boundary.
 	pairBoundary
-	// pairAssistant is an assistant record, plain or not, and pairUser a user
-	// record.
+	// pairAssistant is an assistant record, plain or not; pairUser a user record.
 	pairAssistant
 	pairUser
-	// pairLegStart is a subagent's own user record that starts a leg of its
-	// work, and pairFinished its own reply that finished one, as rule 2
-	// reads them ([legStart], [finishedReply]); filed by that rule alone, of a
-	// subagent's thread.
+	// pairLegStart is a subagent's own user record starting a leg of its work,
+	// and pairFinished its own reply that finished one, as rule 2 alone files
+	// them ([legStart], [finishedReply]).
 	pairLegStart
 	pairFinished
 )
 
-// holdingsPairing is what the pairing rule files of one thread as it is read,
-// a mark a record by its handle, and then decides of each pair asked of it.
-// One goroutine reads one thread; it holds no lock and starts none.
+// holdingsPairing marks each record of one thread by its handle as it is read,
+// then decides each pair asked by rule (C), structure alone, for a call whose
+// use is in record U and result in record R: C0, U's `message.id` says
+// something ([threadChain.Reply]); C1, the caller's: one use and one result,
+// of a bridged tool ([claudeBridgedToolPrefix]), no batch, no split
+// ([holdingsWalk.idsFold]); C2, U and R handed under every variant
+// ([handedYes]); then on every order ([threadChain.EachOrder]), F the first
+// record of U's reply: C3, R after F and only plain records of U's reply or
+// plain results records from F to the later of U and R ([holdingsPairing.see]);
+// C4, R plain results; C5, no user record before F answers a call of U's
+// reply; C6, no compaction boundary at or after F. It refuses, knowingly, some
+// shapes the request pairs, none measured. One goroutine owns it; no lock.
 type holdingsPairing struct {
 	// marks is each record's, by handle - 1.
 	marks []pairMark
 }
 
-// see files the marks of line, record h of the thread, whose message is m (a
-// user or assistant record's, decoded once by the chain). A record filed past
-// the chain's bound, or none at all, has none.
+// see files the marks of line, record h, whose message m the chain decoded
+// once. A record past the chain's bound, or none, has none.
 func (p *holdingsPairing) see(h chainHandle, line threadLine, m threadMessage) {
 	if h <= 0 {
 		return
@@ -189,8 +124,8 @@ func (p *holdingsPairing) see(h chainHandle, line threadLine, m threadMessage) {
 	p.marks[h-1] = mark
 }
 
-// flag adds mark to record h's marks, filed by see already. A record filed
-// past the chain's bound, or none at all, has none.
+// flag adds mark to record h's marks, filed by see already; a record past the
+// chain's bound, or none, has none.
 func (p *holdingsPairing) flag(h chainHandle, mark pairMark) {
 	if h > 0 && int(h) <= len(p.marks) {
 		p.marks[h-1] |= mark
@@ -198,8 +133,8 @@ func (p *holdingsPairing) flag(h chainHandle, mark pairMark) {
 }
 
 // plainReply reports whether line, an assistant record, is a plain record of
-// its reply ([pairPlainReply]): each mark it carries read as no plain one
-// where its accessor cannot read it.
+// its reply ([pairPlainReply]). A mark its accessor cannot read counts as
+// carried.
 func plainReply(line threadLine) bool {
 	virtual, virtualErr := line.IsVirtual()
 	failed, failedErr := line.APIError()
@@ -210,9 +145,8 @@ func plainReply(line threadLine) bool {
 }
 
 // plainResults reports whether line, a user record whose message is m, is a
-// plain results record ([pairPlainResults]): each mark it carries read as one
-// where its accessor cannot read it, and an origin of any kind, or one whose
-// kind does not decode, as one.
+// plain results record ([pairPlainResults]). A mark or origin kind its accessor
+// cannot read counts as carried.
 func plainResults(line threadLine, m threadMessage) bool {
 	if blocks := m.Blocks(); m.IsText() || blocks.Len() == 0 || !blocks.All(blockToolResult) {
 		return false
@@ -231,7 +165,7 @@ func plainResults(line threadLine, m threadMessage) bool {
 		summaryErr == nil && !summary && !line.TaskDelivery() && originErr == nil && origin == ""
 }
 
-// counts hands each, for every call id a block of a user or assistant record
+// counts hands each, for every call id a user or assistant record's block
 // carries, its key and whether the block is its use, once End decided chain.
 func (p *holdingsPairing) counts(chain *threadChain, each func(key chainCallID, use bool)) {
 	for h := chainHandle(1); int(h) <= len(p.marks); h++ {
@@ -252,9 +186,8 @@ func (p *holdingsPairing) mark(h chainHandle) pairMark {
 	return p.marks[h-1]
 }
 
-// pairAsk is one pair asked of a thread: the record of a call's use and the
-// record of its result, and, once [holdingsPairing.pairs] answered, whether
-// the request pairs them.
+// pairAsk is one pair asked of a thread, the records of a call's use and of
+// its result, and whether [holdingsPairing.pairs] pairs them.
 type pairAsk struct {
 	use, result chainHandle
 	paired      bool
@@ -263,21 +196,24 @@ type pairAsk struct {
 }
 
 // pairReply is what the pass gathers of one asked reply, in one order: its
-// first record's place and the first place of a user record holding a result
-// of a call it made.
+// first record's place and that of the first user record holding a result of
+// its calls.
 type pairReply struct {
 	first, results int
 }
 
-// pairs answers each of asks of chain, once End decided it: paired where (C)
-// holds of the pair (the file comment), C1 aside, which is its caller's.
+// pairs answers each of asks of chain, once End decided it, by rule (C) of
+// [holdingsPairing], C1 aside. One pass over each order makes every test a few
+// lookups: each asked reply's first place, prefix counts of the records neither
+// plain kind and of changes of reply, the first user record holding a result
+// of each asked reply's calls, and the last boundary. Linear, with no cap.
 func (p *holdingsPairing) pairs(chain *threadChain, asks []*pairAsk) {
 	replies := map[chainReplyID]*pairReply{}
 	for _, a := range asks {
 		a.paired = false
 		reply, ok := chain.Reply(a.use)
-		// C2 is held twice: here, and on every order, which holds U and R
-		// only where every variant the order is handed under hands them.
+		// C2 here, and again on every order, which holds U and R only where
+		// every variant it is handed under hands them.
 		switch {
 		case !ok: // C0
 		case chain.Handed(a.use) != handedYes || chain.Handed(a.result) != handedYes: // C2
@@ -291,8 +227,8 @@ func (p *holdingsPairing) pairs(chain *threadChain, asks []*pairAsk) {
 	if len(replies) == 0 {
 		return
 	}
-	// WHAT EACH ASKED REPLY'S RECORDS CALL, over every record of the thread
-	// that carries its id, handed or not: C5's results.
+	// THE CALLS OF EACH ASKED REPLY, from every record carrying its id, handed
+	// or not: C5's results.
 	answering := map[chainCallID][]chainReplyID{}
 	for h := chainHandle(1); int(h) <= len(p.marks); h++ {
 		reply, ok := chain.Reply(h)
@@ -313,8 +249,7 @@ func (p *holdingsPairing) pairs(chain *threadChain, asks []*pairAsk) {
 		for _, r := range replies {
 			r.first, r.results = -1, -1
 		}
-		// previous is the reply of the last assistant record met, and met
-		// whether one was.
+		// previous is the last assistant record's reply, met whether one was.
 		var (
 			previous chainReplyID
 			met      bool
@@ -362,13 +297,13 @@ func (p *holdingsPairing) pairs(chain *threadChain, asks []*pairAsk) {
 				a.paired = false
 			case result <= first: // C3: R after F
 				a.paired = false
-			case bad[end+1]-bad[first] != 0: // C3 and C4: every record from F to the later plain
+			case bad[end+1]-bad[first] != 0: // C3 and C4: only plain records from F to the later
 				a.paired = false
 			case changes[end+1]-changes[first+1] != 0: // C3: every reply record of U's reply
 				a.paired = false
-			case r.results >= 0 && r.results < first: // C5
+			case r.results >= 0 && r.results < first: // C5: 2.1.322 regroups such a split reply's results after it
 				a.paired = false
-			case lastBoundary >= first: // C6
+			case lastBoundary >= first: // C6: the relaunch's first request cuts the conversation there
 				a.paired = false
 			}
 		}

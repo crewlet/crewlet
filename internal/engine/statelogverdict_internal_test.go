@@ -15,12 +15,11 @@ import (
 
 // EVERY DOMAIN'S COPY IS JUDGED, whatever it declares about seats — ADR-0079.
 //
-// The verdict the router serves by holds an entry for every registered domain,
-// read from that domain's own health, and carries the domain's own
-// declaration of whether a seat depends on it. When one declaration answered
-// both questions, the vectors and usage copies answered "a seat does not
-// depend on me" and were never judged at all, so a wrong one was served for
-// ever.
+// The router's verdict holds an entry for every registered domain, read from
+// its own health, and carries separately the domain's declaration of whether a
+// seat depends on it: one declaration answering both would leave the vectors
+// and usage copies, which no seat depends on, unjudged and a wrong one served
+// forever.
 func TestEveryDomainsCopyIsJudged(t *testing.T) {
 	t.Parallel()
 	e, _, _ := bootRejoinNode(t)
@@ -50,16 +49,15 @@ func TestEveryDomainsCopyIsJudged(t *testing.T) {
 	}
 }
 
-// wrongCopyOf leaves a running node's copy of one domain BELOW ITS LOG, and
-// waits until the node has taken it out of service: the domain's applier is
-// halted and the records it never applies are purged from its log — a hole no
-// replay can fill, and the one wrong state every domain can be in, compacted
-// or not.
+// wrongCopyOf leaves a running node's copy of one domain BELOW ITS LOG (its
+// applier halted, the records it never applies purged: a hole no replay can
+// fill, the one wrong state every domain can be in, compacted or not), and
+// waits until the node takes it out of service.
 //
-// THE NODE'S OWN TRIM IS STOPPED, since the floors it publishes are not what a
-// case is about, and its HEARTBEAT IS WATCHED RATHER THAN OBEYED: a node below
-// a log asks to adopt a snapshot, and an adoption racing a case's assertions
-// would halt every applier and restart them over another copy.
+// THE NODE'S OWN TRIM IS STOPPED, since its floors are not what a case is
+// about, and its rejoin is RECORDED RATHER THAN OBEYED: a node below a log
+// asks to adopt a snapshot, which would halt every applier mid-assertion and
+// restart them over another copy.
 func wrongCopyOf(t *testing.T, e *Engine, name string) {
 	t.Helper()
 	e.stopRetention()
@@ -104,30 +102,17 @@ func wrongCopyOf(t *testing.T, e *Engine, name string) {
 }
 
 // ONE LOG'S SILENCE LEAVES NO OTHER DOMAIN UNREAD: the vectors stream's group
-// does not answer for the whole of the reading's deadline — mid-election, its
-// leader lost — and every other domain's health is still read in that same
-// reading, so a fault on the knowledge base starting meanwhile is seen at once
-// rather than carried over as the verdict it had. The reading takes one round
-// trip's time, not the sum of them.
+// does not answer for the whole reading deadline (mid-election), yet every
+// other domain's health is read in that same reading, so a knowledge-base
+// fault is seen at once rather than carried over as its old verdict. The
+// reading takes one round trip's time, not the sum.
 //
-// Read one after another inside one deadline, the silent log spent all of it
-// and the knowledge base and usage, read after it, failed on the expired
-// context and kept their old verdicts.
+// ON THE BUBBLE'S CLOCK, which a loaded runner cannot skew as it does the wall
+// clock: a reading that ends at its deadline takes exactly it.
 //
-// ON THE BUBBLE'S CLOCK, AND EXACTLY. The reading's time was measured on the
-// wall clock against twice its deadline, and a loaded race runner that
-// scheduled the reading's goroutines late measured a correct reading past it
-// (crewlet/crewlet#1115). In a synctest bubble the deadline and the
-// measurement both read the bubble's clock, which moves only once every
-// goroutine in it is blocked, so a reading that ends at its deadline takes
-// exactly the deadline, and one that waits past it for anything takes more.
-// Serialisation needs no slack either: the logs read after the silent one
-// would meet an ended context and stop answering, which the verdicts below
-// catch.
-//
-// Mutation: give each log's reading a deadline of its own past the reading's,
-// and the reading takes longer than its deadline; read the logs one after
-// another, and the domains after the silent one are left unread.
+// Mutation: give each log a deadline of its own past the reading's, and the
+// reading overruns; read the logs serially, and those after the silent one
+// meet an ended context and are left unread.
 func TestOneLogsSilenceLeavesNoOtherDomainUnread(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, oneLogsSilenceLeavesNoOtherDomainUnread)
@@ -149,9 +134,8 @@ func oneLogsSilenceLeavesNoOtherDomainUnread(t *testing.T) {
 			<-ctx.Done()
 			return statelog.Health{}, ctx.Err()
 		}
-		// A REAL REQUEST FAILS ON A CONTEXT ALREADY ENDED, which is what
-		// a reading made one log after another handed every log after
-		// the silent one.
+		// A REAL REQUEST FAILS ON AN ENDED CONTEXT, which a serial reading
+		// would hand every log after the silent one.
 		if err := ctx.Err(); err != nil {
 			return statelog.Health{}, err
 		}
@@ -198,27 +182,21 @@ func oneLogsSilenceLeavesNoOtherDomainUnread(t *testing.T) {
 
 // A WRONG COPY OF ONE DOMAIN LEAVES THE OTHERS IN SERVICE, on a real node.
 //
-// The vectors applier is halted and the records it never applied are purged
-// from its log, so its copy is BELOW THE LOG — a hole no replay can fill, and
-// the one state a compacted domain shares with every other. That copy goes out
+// With the vectors copy below its log (see wrongCopyOf), that copy goes out
 // of service; the tracker's and the knowledge base's keep answering, the seat
-// copy is still this node's, its seats stay and its claims go on — and a
-// single node's own tracker read is still answered from its own copy. Before
-// ADR-0079 the vectors copy was never judged, so it stayed in service with its
-// hole.
+// copy stays this node's with its seats and claims, and a single node's own
+// tracker read is still answered from its own copy.
 func TestAWrongCopyOfOneDomainLeavesTheOthersInService(t *testing.T) {
 	t.Parallel()
 	e, _, _ := bootRejoinNode(t)
 	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
-	// AND FOR THE TRACKER'S AND THE KNOWLEDGE BASE'S OWN DRAIN, which is what
-	// "keep answering" is measured from. A copy answers as SERVING — drained
-	// since its applier started and within the snapshot slack of its log — or
-	// as level at that instant, and admitting a seat proves only the second:
-	// the drained latch is set on the fetch AFTER the last commit. A copy that
-	// has not learned it drained reads as not answering whenever a record is
-	// in flight on its log — a barrier a linearizable read appends — at the
-	// instant the verdict is judged afresh below, whatever the vectors copy
-	// does; under load that instant was caught one run in fifty.
+	// AND FOR THE TRACKER'S AND THE KNOWLEDGE BASE'S OWN DRAIN, which "keep
+	// answering" is measured from. Admitting a seat proves only that a copy
+	// was level at that instant, not SERVING (drained since its applier
+	// started); the drained latch is set on the fetch AFTER
+	// the last commit, and a copy without it reads as not answering whenever
+	// a record (a linearizable read's barrier) is in flight as the verdict is
+	// judged afresh below, whatever the vectors copy does.
 	s := e.core.Load().log
 	for _, name := range []string{trackerName, pagesName} {
 		running := s.Domain(name)

@@ -21,17 +21,12 @@ import (
 
 // A STORE FAULT IN A READ TOOL IS A FAULT: `internal_error`, a sentence that
 // says the node broke without saying how, and the store's own error in the
-// node's log — where whoever runs the node reads it — and nowhere else. It
-// was `unavailable` carrying the error's text, so a model was told to try
-// again for ever and handed a database path in its prompt, and a person's
-// screen showed the same path under "try again in a moment".
-//
-// The control beside it is a read the STATE LOG refused: a condition waiting
-// clears, which keeps `unavailable`, the hint it derived and the state log's
-// words for its code — never its detail, which is the log's too.
+// node's log and nowhere a model or a person reads. The control is a read the
+// STATE LOG refused, a condition waiting clears: `unavailable`, its hint and
+// the state log's words for its code, never its detail.
 //
 // NOT PARALLEL: it reads the process's log, which [logging.Configure] owns,
-// and Go resumes every parallel test only after the sequential ones end.
+// and parallel tests resume only after the sequential ones end.
 //
 // Mutation: let readFailure class an unmarked error `unavailable`, put the
 // error back in its sentence, or drop the log line in faulted, and this goes
@@ -90,15 +85,11 @@ func TestAStoreFaultInAReadToolIsAFault(t *testing.T) {
 }
 
 // A BROKER BLIP AND A BUSY STORE ARE CONDITIONS, NOT FAULTS: each clears by
-// waiting — a reconnect completes, the writers ahead of this one commit — so
-// the tool answers `unavailable` and a cause a surface derives a Retry-After
-// from, in words of its own rather than the client's or the driver's. They
-// were faults the moment the fault line was drawn, because neither backend
-// marked them: a2a_ask and steer_turn answered a broker that was reconnecting
-// as a broken node, and a write that waited out a busy store as one too. The
-// marks are the backends' — queue.ErrUnavailable, store.ErrBusy — and the
-// control is the same words with no mark, which stays a fault: a classifier
-// that read text would call any error naming a lock a wait.
+// waiting, so the tool answers `unavailable` with a cause a surface derives a
+// Retry-After from, in its own words rather than the client's or the driver's.
+// The marks are the backends' (queue.ErrUnavailable, store.ErrBusy); the
+// control, the same words unmarked, stays a fault, since a classifier reading
+// text would call any error naming a lock a wait.
 //
 // Mutation: drop either case from [builtin.Condition], and its half goes red;
 // match on the error's words instead of the mark, and the controls do.
@@ -150,11 +141,9 @@ func TestABrokerBlipAndABusyStoreAreConditions(t *testing.T) {
 }
 
 // assertCondition holds a failed result to what a condition answers: the
-// unavailable class — which is what tells a surface to answer 503 and a model
-// that the call may be made again — a sentence that keeps the backend's own
-// words out, the mark beneath the class, and a cause from which a surface
-// derives its own Retry-After rather than the none a refusal waiting cannot
-// clear carries. How a tool words the retry is its own; steer_turn's is
+// unavailable class (a surface's 503, a model's "may call again"), none of the
+// backend's words, the mark beneath the class, and a cause a surface derives
+// its own Retry-After from. Each tool words its retry itself; steer_turn's is
 // asserted where it is called.
 func assertCondition(t *testing.T, what string, got tools.Result, mark error, words string) {
 	t.Helper()

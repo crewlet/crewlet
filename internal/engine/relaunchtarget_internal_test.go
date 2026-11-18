@@ -39,23 +39,17 @@ func (onlyClaude) Restores(archive sandbox.SessionArchive) (bool, string) {
 }
 
 // THE NODE HOLDING THE SEAT IS ASKED WHAT A RELAUNCH OF ITS TURNS IS LAUNCHED
-// ON. Which member sits out a spent plan is the holder's own bench, and which
-// chain a turn's relaunch picks from is the revision that turn's relaunch runs
-// on there, so a reader on another node asks the incarnation the seat's lease
-// names, once for every session it reads, each named with its turn, and is
-// answered for each with that node's pick for the turn — its member's harness,
-// the cell its run lands in, the node itself, whether the company keeps
-// sessions, why there is no member or why none can be said now — and its
-// runner's answer for the session, never the reader's own pick. A reader that
-// holds the seat answers itself. And what cannot be said is undecided, never a
-// no: a lease table that cannot be read, a seat no node holds, a holder that
-// does not answer — and a holder's own undecided pick, which crosses as one,
-// with its reason. A question addressed to another incarnation is not answered.
+// ON, its bench and each turn's revision being its own: a reader elsewhere asks
+// the incarnation the lease names once for every session, each with its turn,
+// and gets that node's pick per turn (harness, cell, node, kept sessions, why)
+// and its runner's answer, never its own pick; a holder answers itself. What
+// cannot be said is undecided, never a no: an unreadable lease, an unheld seat,
+// a silent holder, and a holder's own undecided pick, crossing with its reason.
+// A question addressed to another incarnation is not answered.
 //
-// Mutation: answer from the reader's own pick, answer every turn with one pick,
-// drop a field from the reply — its undecided word or its reason included —
-// answer the sessions in another order, read an unreadable lease as one held by
-// nobody, or answer a question addressed elsewhere, and a case goes red.
+// Mutation: answer with the reader's own pick or one pick for every turn, drop
+// a reply field (undecided or its reason included), reorder the sessions, read
+// an unreadable lease as unheld, or answer a question addressed elsewhere: red.
 func TestTheNodeHoldingTheSeatIsAskedWhatARelaunchIsLaunchedOn(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -65,8 +59,8 @@ func TestTheNodeHoldingTheSeatIsAskedWhatARelaunchIsLaunchedOn(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(ctx)) })
 	// THE HOLDER'S PICKS, by turn: a member that restores what Claude Code
-	// wrote in a company that keeps none; every member sitting out; and no
-	// member at all, which says why.
+	// wrote, in a company that keeps none; every member sitting out; and no
+	// member at all, saying why.
 	picks := map[string]sandbox.RelaunchTarget{
 		"t-held": {Harness: "claude-code", Placement: sandbox.Container, Node: "node-a",
 			Restorer: onlyClaude{}, NoKept: sandbox.NoKeptSession},

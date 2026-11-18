@@ -16,26 +16,14 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
-// stallingJS answers EVERY existence probe with the error a broker that never
-// replied produces, until it is told to stop, and passes everything else
-// through.
-//
-// EMBEDDED rather than hand-written, because [jetstream.JetStream] is a wide
-// interface and a stub of the whole thing would be a second broker to keep
-// correct. What is under test is one switch arm, so exactly the two methods
-// that reach it are overridden.
-//
-// It models the failure precisely: the real call returns [context.Canceled] or
-// [context.DeadlineExceeded] from nats.go's own request path when the metadata
-// group holds a request past the deadline — see [jsprovision.Unanswered] for
-// why the client's error set is what it is.
-//
-// EVERY attempt, not the first. Stalling one and letting the next through is
-// what made this file's own case pass with the branch it protects deleted:
-// [jsprovision.Ask] re-asks, the second attempt reached the real broker and
-// answered "not found", and the caller took the ordinary absent path. The
-// probe has to go unanswered until its whole ceiling is spent, which is what
-// the queue's own timing ([Queue.timing]) exists to make affordable.
+// stallingJS answers EVERY existence probe with err, the error an unanswered
+// request produces ([jsprovision.Unanswered] has the client's set), until told
+// to stop, and passes everything else through. It embeds [jetstream.JetStream]
+// and overrides only the two methods the switch under test reaches, since a
+// stub of the whole interface would be a second broker to keep correct. It
+// stalls every attempt, not the first: [jsprovision.Ask] re-asks, and a second
+// attempt reaching the real broker answers "not found", the ordinary absent
+// path, which passed with the guarded branch deleted.
 type stallingJS struct {
 	jetstream.JetStream
 
@@ -45,9 +33,8 @@ type stallingJS struct {
 	err    error
 }
 
-// speak stops stalling and reports how many times it was asked, which is the
-// other half of the claim: the fall-through is reached by EXHAUSTION, so more
-// than one request must have been sent.
+// speak stops stalling and reports how many times it was asked: the
+// fall-through is reached by EXHAUSTION, so more than one request went out.
 func (s *stallingJS) speak() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -81,24 +68,11 @@ func (s *stallingJS) Consumer(ctx context.Context, stream, name string) (jetstre
 
 // A LOOKUP THE BROKER NEVER ANSWERED IS NOT A LOOKUP THAT SAID "NO".
 //
-// # The failure this protects against
-//
-// Every provisioning path here read a lookup's three possible answers as two:
-// `err == nil` meant observe, [jetstream.ErrStreamNotFound] meant create, and
-// EVERYTHING ELSE failed the boot. A metadata group that was merely slow to
-// answer therefore produced `ensure stream CREWLET_CONFIG: context deadline
-// exceeded` and a node that refused to start — on a cluster where nothing was
-// wrong with the stream, the config or the peer.
-//
-// It is the engine's own three-valued rule (see internal/coord) applied to the
-// broker: "it is there", "it is not there" and "nobody said" are three facts,
-// and collapsing the last two is what turned a transient stall into a failed
-// boot. The create that follows answers the question either way, so an
-// unanswered probe costs one wasted round trip and nothing else.
-//
-// Run over every error nats.go produces for an unanswered request, because the
-// one that reached CI was a deadline and the others come from the same client
-// on the same path.
+// "It is there", "it is not there" and "nobody said" are three facts (the
+// rule internal/coord states); read as two, a merely slow metadata group
+// failed the boot with "context deadline exceeded". The create that follows
+// answers the question either way, so an unanswered probe costs one round
+// trip. Run over every error nats.go produces for an unanswered request.
 func TestAnUnansweredExistenceProbeStillProvisions(t *testing.T) {
 	t.Parallel()
 	for _, unanswered := range []error{
@@ -109,22 +83,13 @@ func TestAnUnansweredExistenceProbeStillProvisions(t *testing.T) {
 		t.Run(unanswered.Error(), func(t *testing.T) {
 			t.Parallel()
 			q := newQueue(t)
-			// A SHORT CEILING AND A SHORT PAUSE, because the branch
-			// under test is only reached once a probe has spent its
-			// WHOLE ceiling — see [Queue.timing]. At the shipped
-			// thirty seconds this case would cost thirty seconds to
-			// prove; here it costs a quarter of one, and proves the
-			// same thing, because what is exercised is the
-			// EXHAUSTION rather than the duration.
-			//
-			// THE CEILING IS DERIVED FROM THE PAUSE rather than a
-			// number of its own: it has to outlast the gap between
-			// attempts or only one attempt fits, and the assertion
-			// below that more than one went out would then be
-			// measuring a single timeout. Room for four gaps and the
-			// attempts around them. Set after the open, so the
-			// engine's own streams were provisioned at production
-			// timing and only this case's probe runs at this one.
+			// A short ceiling: what is exercised is the EXHAUSTION of a
+			// probe's whole ceiling ([Queue.timing]), not its duration.
+			// The ceiling is derived from the pause, with room for four
+			// gaps, or only one attempt fits and the more-than-one
+			// assertion below measures a single timeout. Set after the
+			// open, so the engine's own streams provisioned at
+			// production timing.
 			timing := q.Clustered().Timing()
 			timing.ReAsk = 50 * time.Millisecond
 			timing.Lookup = 5 * timing.ReAsk
@@ -134,8 +99,7 @@ func TestAnUnansweredExistenceProbeStillProvisions(t *testing.T) {
 			topic := seatInbox("unanswered-" + sanitizeName(unanswered.Error()))
 			group := seatGroup("unanswered-" + sanitizeName(unanswered.Error()))
 
-			// BOTH PROBES AT ONCE, because a subscribe reaches
-			// both: EnsureSubscription looks the consumer up and
+			// Both probes: EnsureSubscription looks the consumer up, and
 			// streamFor may look the stream up on the way.
 			real := q.js
 			stalled := &stallingJS{JetStream: real, silent: true, err: unanswered}
@@ -153,18 +117,15 @@ func TestAnUnansweredExistenceProbeStillProvisions(t *testing.T) {
 					"must leave `existed` false and let the create decide")
 			}
 
-			// THE PROBE WAS EXHAUSTED, not answered. More than one
-			// request had to go out, or [jsprovision.Ask] did not
-			// re-ask and this case is measuring a single timeout
-			// rather than the ceiling.
+			// Exhausted, not answered: one request means [jsprovision.Ask]
+			// did not re-ask.
 			if asks := stalled.speak(); asks < 2 {
 				t.Errorf("the probe was sent %d time(s) before the boot carried "+
 					"on; the ceiling is meant to hold several attempts, and one "+
 					"means Ask did not re-ask", asks)
 			}
 
-			// AND IT REALLY IS THERE. The point is a provisioned
-			// object, not a call that returned nil.
+			// A provisioned object, not merely a call that returned nil.
 			q.js = real
 			if _, err := q.js.Consumer(ctx, q.mustStream(t, topic), consumerName(topic, group)); err != nil {
 				t.Errorf("the mailbox is not there after a successful "+
@@ -176,11 +137,10 @@ func TestAnUnansweredExistenceProbeStillProvisions(t *testing.T) {
 
 // AND A PROBE THAT FAILED FOR A REASON THAT IS NOT SILENCE STILL FAILS.
 //
-// The fall-through above is scoped to "nobody answered". An error that IS an
-// answer — a malformed name, an auth failure — clears by nobody waiting, and
-// carrying on to the create would turn a configuration mistake into a second
-// round trip ending in a worse message. This is the half that makes the switch
-// a decision rather than a blanket retry.
+// An error that IS an answer (a malformed name, an auth failure) does not
+// clear by waiting; carrying on to the create would turn a configuration
+// mistake into a worse message. This half makes the switch a decision rather
+// than a blanket retry.
 func TestAnAnsweredFailureStillFailsTheProbe(t *testing.T) {
 	t.Parallel()
 	q := newQueue(t)
@@ -197,7 +157,7 @@ func TestAnAnsweredFailureStillFailsTheProbe(t *testing.T) {
 }
 
 // mustStream resolves the stream a topic belongs to, failing the test if it
-// cannot — the tests above need it only to confirm what they provisioned.
+// cannot.
 func (q *Queue) mustStream(t *testing.T, topic string) string {
 	t.Helper()
 	stream, err := q.streamFor(t.Context(), topic)
@@ -223,22 +183,15 @@ func sanitizeName(s string) string {
 }
 
 // lookupTermJS DROPS the first request of every existence lookup, as a member
-// that is not leading the object drops a read without a word, and answers from
-// the real broker every request sent while a dropped one is still outstanding:
-// the re-ask of a read that keeps listening for its lost request. It records
-// each dropped request, by the lookup's call, and whether a re-ask was sent
-// beside it.
+// not leading the object drops a read without a word, and answers from the real
+// broker every request sent while a dropped one is outstanding (the re-ask). It
+// records each dropped request per call, and whether a re-ask went beside it.
 //
-// A LOOKUP'S FIRST REQUEST IS TOLD BY WHAT IS OUTSTANDING, not by a count. A
-// request that finds no dropped one of its call outstanding opens a lookup; one
-// that finds one is a re-ask of it. Counted as every other request instead, a
-// re-ask the broker answered slower than the read term was followed by a
-// second one, which was dropped as if it opened a lookup, and the next
-// lookup's first request was answered.
-//
-// A REQUEST ON A DONE CONTEXT IS NEVER SENT (nats.go checks before publishing),
-// so it opens no lookup, though a read's last re-ask can arrive after the read
-// ended. Checked under mu: a dropped request ends only after its context does.
+// A lookup's first request is told by what is outstanding, not by a count: a
+// count dropped a slow re-ask's successor as a new lookup. A request on a done
+// context is never sent (nats.go checks before publishing), so it opens no
+// lookup though a read's last re-ask can arrive after the read ended; checked
+// under mu, since a dropped request ends only after its context does.
 type lookupTermJS struct {
 	jetstream.JetStream
 
@@ -308,37 +261,23 @@ func (d *lookupTermJS) Consumer(ctx context.Context, stream, name string) (jetst
 }
 
 // lookupTermPatience bounds [TestEveryLookupIsAskedAgainAtTheReadTerm] as a
-// hang guard and nothing more. At the read term the case's lookups end in a
-// fraction of a second. A lookup asked at the case's hour-long write term never
-// ends inside it, and neither does one held as a single request to the
-// thirty-second lookup ceiling, which the guard sits under.
+// hang guard only: at the read term its lookups end in a fraction of a second,
+// while one at the case's hour-long write term, or held as one request to the
+// thirty-second lookup ceiling (which this sits under), never ends inside it.
 const lookupTermPatience = 20 * time.Second
 
 // EVERY LOOKUP IS ASKED AGAIN AT THE READ TERM, never at a write's.
 //
-// The server answers a read when it processes it or never
-// ([jsprovision.ReadTerm]): an object another node has just asked for is in
-// flight, and until the member preferred to lead it has applied the assignment
-// every other member drops a lookup of it without a word. A lookup held for a
-// write's term waits on a reply that does not exist — a three-member fleet
-// booting together was measured spending sixteen idle seconds on one stream
-// lookup that way. So a lookup whose request is dropped is asked again a read
-// term and a re-ask later, its dropped request still outstanding beside it.
-//
-// Every lookup the provisioning path makes has its first request dropped. They
-// include the stream's before its create, the mailbox's before its create and
-// the attachment's open. Each must be asked again while that request is still
-// outstanding.
-//
-// THE WRITE'S TERM IS AN HOUR, so what tells the cadences apart is whether the
-// re-ask comes at all, never how long it took. A lookup asked at the write's
-// term, or not asked again, is still waiting when [lookupTermPatience] ends the
-// case, and the step reports it. A lookup that abandons its lost request before
-// asking again finds nothing outstanding, so each of its requests is dropped in
-// turn and it never ends either. Measured instead against a gap of a read term
-// past the cadence, the case failed on a loaded race-detector run whose re-ask
-// came 63 ms behind its 70 ms timer: how late a timer's goroutine wakes is the
-// scheduler's latency, which the read never promised.
+// A server answers a read when it processes it or never ([jsprovision.ReadTerm]):
+// until a just-requested object's preferred leader applies the assignment,
+// every other member drops a lookup of it, so one held for a write's term
+// waits on no reply. A dropped lookup is asked again a read term and a re-ask
+// later, its dropped request still outstanding; every lookup the provisioning
+// path makes (the stream's and mailbox's before their creates, the
+// attachment's open) has its first request dropped. The write term is an hour,
+// so the case judges whether the re-ask comes, never its timing (a timer's
+// wake-up is the scheduler's): a lookup not re-asked, re-asked at a write's
+// term or abandoning its request first outlasts [lookupTermPatience].
 func TestEveryLookupIsAskedAgainAtTheReadTerm(t *testing.T) {
 	t.Parallel()
 	q := newQueue(t)
@@ -427,10 +366,8 @@ func (a answerAfter) Consumer(ctx context.Context, _, _ string) (jetstream.Consu
 	return nil, a.wait(ctx, jetstream.ErrConsumerNotFound)
 }
 
-// A RE-ASK THAT REACHES THE BROKER AFTER ITS READ HAS ENDED OPENS NO LOOKUP.
-//
-// [lookupTermJS] once counted it as a new lookup that was never asked again,
-// failing [TestEveryLookupIsAskedAgainAtTheReadTerm] on a loaded race run.
+// A RE-ASK THAT REACHES THE BROKER AFTER ITS READ HAS ENDED OPENS NO LOOKUP,
+// so [lookupTermJS] never counts it as a lookup that was not asked again.
 func TestALateReAskOpensNoLookup(t *testing.T) {
 	t.Parallel()
 	for _, method := range []struct {

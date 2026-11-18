@@ -8,57 +8,35 @@ import (
 	"time"
 )
 
-// The reader's own marks, kept in the same record as their read cursors: how a
-// room reaches them, the rooms they starred, the messages they saved for later
-// and the threads they followed or unfollowed by hand.
-//
-// # Why they share the read state's record
-//
-// Each is a fact about one reader's attention, exactly as a cursor and a mute
-// are: nobody replays it, no member of the fleet derives anything from its
-// history, and it passes with the seat to whoever holds it next. So it is
-// kept where that kind of fact already lives, for the reasons the read state
-// gives ([ChatReads]), and it rides the same merge, the same compare-and-set
-// and the same watch: a mark made in one tab reaches every other tab of the
-// seat through the push the record already raises, with no message of its
-// own for a peer to forge.
-//
-// # Why every mark is named, never the list
-//
-// For the mute's reason ([ChatReadDelta]): a flush names the rooms, messages
-// or threads whose mark changes, and everything it does not name keeps its
-// state, so two tabs marking two things at once both land and a screen opened
-// a moment ago needs nothing read before it marks.
-//
+// The reader's own marks, kept in the read state's record: how a room reaches
+// them, the rooms they starred, the messages they saved and the threads they
+// followed or unfollowed by hand. Each is one reader's attention, as a cursor
+// is, so it passes with the seat and rides [ChatReads]' merge, compare-and-set
+// and watch: a mark made in one tab reaches every other tab through the push
+// the record already raises, with no message of its own for a peer to forge.
+// Every mark is NAMED, never the list, for the mute's reason ([ChatReadDelta]).
+
 // # Why the caps differ in what they do at the edge
 //
 // A star, a notify level and a save are each one deliberate gesture, so one
-// past [MaxReaderMarks] is REFUSED, as a mute is: dropping an older one
-// silently is a saved message gone with no way to find out. A thread mark is
-// different, because every unfollow leaves one: a cap that refused would keep
-// somebody in a thread they asked to leave, so past the cap the mark made
-// longest ago is dropped instead, and that thread falls back to what the
+// past [MaxReaderMarks] is REFUSED, as a mute is: a silent drop is a saved
+// message gone with no way to find out. Every unfollow leaves a thread mark,
+// and a refusal would keep somebody in a thread they asked to leave, so past
+// the cap the oldest mark is dropped and that thread falls back to what the
 // conversation says (followed when the reader spoke or was named in it).
 
 // MaxReaderMarks bounds each of the reader's mark sets on its own: the rooms
 // set to every message, the starred rooms, the saved messages and the thread
-// marks.
-//
-// 256, the bound [MaxReadCursors] puts on the cursors and the mutes, for the
-// same reason and so that the record stays one small value: at the cap every
-// set together is about a hundred kilobytes, inside one coordination value
-// with room to spare. The dashboard holds the same number
-// (`contract/chat.ts`, MAX_READER_MARKS) to say so before a press is refused.
+// marks. 256, [MaxReadCursors]'s bound, so every set at the cap is about a
+// hundred kilobytes, well inside one coordination value. The dashboard holds
+// the same number (`contract/chat.ts`, MAX_READER_MARKS) to say so before a
+// press is refused.
 const MaxReaderMarks = 256
 
-// NotifyLevel is how a room reaches one reader.
-//
-// A READER'S OWN CHOICE, and nothing else's: a person is never woken, so the
-// level decides what the reader's own screens raise for the room (every
-// message, mentions only, or nothing), never a delivery, and a seat's wake is
-// not touched by anybody's level. It is not the membership's `follow_all`,
-// which is the wake policy on the chat log and is the org chart's for a unit
-// room.
+// NotifyLevel is how a room reaches one reader: what their own screens raise
+// for it (every message, mentions only, or nothing), never a delivery. No
+// seat's wake reads it: that is the membership's `follow_all`, the chat log's
+// wake policy (the org chart's for a unit room).
 type NotifyLevel string
 
 const (
@@ -134,15 +112,12 @@ var (
 		remedy: "unstar something first"}
 )
 
-// mergeRoomSet is a set of rooms after one flush: stored, plus every room add
-// names, less every room remove names, sorted so a set two backends hold is
-// one value.
+// mergeRoomSet is a set of rooms after one flush: stored, plus add, less
+// remove, sorted so two backends hold one value.
 //
-// THE CAP IS CHECKED AGAINST THE SET THE FLUSH LEAVES, and only when the flush
-// grows it, at capAt. A flush that does not grow the set is never refused for
-// its size, so a removal, or a flush about something else entirely, always
-// lands on whatever the record holds, one kept from a build with a larger
-// cap included.
+// The cap (capAt) is checked against the set the flush leaves, and only when
+// the flush GROWS it, so a removal or an unrelated flush always lands, even on
+// a record kept under a larger cap.
 func mergeRoomSet(stored, add, remove []string, capAt int, w setWords) ([]string, error) {
 	if len(add) == 0 && len(remove) == 0 {
 		return slices.Clone(stored), nil
@@ -180,21 +155,17 @@ func mergeRoomSet(stored, add, remove []string, capAt int, w setWords) ([]string
 			"is %d; %s", ErrInvalidReadState, w.growing, len(set), capAt, w.remedy)
 	}
 	if len(set) == 0 {
-		// ONE SHAPE FOR AN EMPTY SET: the record is compared by the suite,
-		// and an empty list and a nil one encode differently.
+		// One shape for an empty set: the suite compares records, and an
+		// empty list and a nil one encode differently.
 		return nil, nil
 	}
 	return slices.Sorted(maps.Keys(set)), nil
 }
 
-// mergeLevels is the muted set and the every-message set after one flush:
-// its mutes and unmutes, and the levels it sets.
-//
-// ONE ROOM, ONE LEVEL. A room is in at most one of the two sets, so a mute
-// takes a room out of every message as well, and a level moves a room between
-// them. A room a flush both gives a level and mutes or unmutes is refused,
-// because the flush would be stating two facts about it and no order between
-// them is the caller's.
+// mergeLevels is the muted and every-message sets after one flush's mutes,
+// unmutes and levels. ONE ROOM, ONE LEVEL: a room is in at most one set, so a
+// mute also takes it out of every message. A room given a level and a mute or
+// unmute in one flush is refused: two facts with no order between them.
 func mergeLevels(muted, every, mute, unmute []string,
 	levels map[string]NotifyLevel) ([]string, []string, error) {
 
@@ -207,8 +178,8 @@ func mergeLevels(muted, every, mute, unmute []string,
 	}
 	muteAdd, muteLift := slices.Clone(mute), slices.Clone(unmute)
 	everyAdd, everyLift := []string(nil), slices.Clone(mute)
-	// SORTED, so two nodes merging one flush build the same lists in the
-	// same order and refuse it, if they do, in the same words.
+	// Sorted, so two nodes merging one flush refuse it, if they do, in the
+	// same words.
 	for _, channel := range slices.Sorted(maps.Keys(levels)) {
 		level := levels[channel]
 		switch {
@@ -247,12 +218,9 @@ func mergeLevels(muted, every, mute, unmute []string,
 	return outMuted, outEvery, nil
 }
 
-// mergeSaved is the saved messages after one flush, the newest save first.
-//
-// A SAVE OF A MESSAGE ALREADY SAVED KEEPS ITS FIRST INSTANT, which is what
-// makes the merge idempotent: a flush whose answer was lost and is sent again
-// leaves the record exactly as the first one did, rather than lifting the
-// message to the top of the list a second time.
+// mergeSaved is the saved messages after one flush, the newest save first. A
+// save of a message already saved KEEPS ITS FIRST INSTANT, so the merge is
+// idempotent: a resent flush does not lift the message to the top again.
 func mergeSaved(stored []SavedMessage, save, unsave []MessageRef,
 	at time.Time) ([]SavedMessage, error) {
 
@@ -306,12 +274,10 @@ func mergeSaved(stored []SavedMessage, save, unsave []MessageRef,
 	return out, nil
 }
 
-// mergeThreadMarks is the thread marks after one flush, the newest first.
-//
-// A MARK THAT ALREADY SAYS WHAT THE FLUSH SAYS KEEPS ITS INSTANT, for
-// [mergeSaved]'s reason; one that says the opposite is replaced, at the
-// flush's instant. Past [MaxReaderMarks] the marks made longest ago are
-// dropped, never refused: see "Why the caps differ".
+// mergeThreadMarks is the thread marks after one flush, the newest first. A
+// mark already saying what the flush says KEEPS ITS INSTANT, for
+// [mergeSaved]'s reason; the opposite mark is replaced at the flush's instant.
+// Past [MaxReaderMarks] the oldest are dropped (see "Why the caps differ").
 func mergeThreadMarks(stored []ThreadMark, follow, unfollow []ThreadRef,
 	at time.Time) ([]ThreadMark, error) {
 
@@ -353,8 +319,8 @@ func mergeThreadMarks(stored []ThreadMark, follow, unfollow []ThreadRef,
 		}
 	}
 	out := slices.Collect(maps.Values(marks))
-	// NEWEST FIRST, the root id breaking a tie, so two nodes holding the
-	// same marks hold them in the same order and drop the same ones.
+	// The root id breaks a tie, so two nodes holding the same marks drop
+	// the same ones.
 	slices.SortFunc(out, func(a, b ThreadMark) int {
 		return cmp.Or(b.At.Compare(a.At), cmp.Compare(a.RootID, b.RootID))
 	})
@@ -367,9 +333,8 @@ func mergeThreadMarks(stored []ThreadMark, follow, unfollow []ThreadRef,
 	return out, nil
 }
 
-// advanceCursors moves each named cursor forward, never back, and bounds the
-// map at [MaxReadCursors] by dropping the stalest: the rule the room cursors
-// and the thread cursors share. what names the key in a refusal ("a read
+// advanceCursors moves each named cursor forward, never back: the rule room
+// and thread cursors share. what is the refusal of an empty key ("a read
 // cursor needs a channel").
 func advanceCursors(stored, delta map[string]int64, what string) (map[string]int64, error) {
 	out := make(map[string]int64, len(stored)+len(delta))
@@ -380,10 +345,8 @@ func advanceCursors(stored, delta map[string]int64, what string) (map[string]int
 				"which is a client that lost the value on the way here",
 				ErrInvalidReadState, what)
 		}
-		// FORWARD ONLY. A cursor that could move backwards would make an
-		// unread badge flicker as two tabs disagree about which is
-		// further along, and the loser would be whichever flush the
-		// network happened to deliver second.
+		// Forward only: a cursor moving back would make an unread badge
+		// flicker as two tabs disagree, decided by delivery order.
 		if at > out[key] {
 			out[key] = at
 		}

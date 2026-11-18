@@ -14,24 +14,14 @@ import (
 // A NODE WHOSE ROWS WENT BACKWARDS REPLAYS WHAT ITS READER HAD ALREADY
 // ACKNOWLEDGED, and hydrates.
 //
-// # The node this is
-//
-// Its replicated database was deleted and rebuilt — or restored from a copy
-// older than the broker estate beside it, which is what a backup restore is,
-// since a backup copies the store first — under the SAME node id, on a broker
-// that kept the node's consumer of every log. The rows resume at nothing; the
-// consumers had delivered and acknowledged everything the last run applied.
-// The broker never hands an acknowledged record over again, so the node sat
-// unhydrated for ever: `applying: 2 record(s) behind the log's head` at every
-// sample to forty-five seconds, the knowledge base's boot refusing on a home
-// container it could not see, and nothing below the floor for the heartbeat to
-// notice, because the records were all still on the log.
-//
-// # The bound
-//
-// Far inside the consumer's thirty-second ack window, so a fix that merely
-// waited for a redelivery would fail it as surely as the node that never got
-// one. Measured against the unfixed build it fails on the hydration wait.
+// Its replicated database was deleted, or restored from a copy older than the
+// broker beside it (a backup copies the store first), under the SAME node id,
+// on a broker that kept the node's consumer of every log. Those consumers had
+// acknowledged everything the last run applied, and the broker never hands an
+// acknowledged record over again, and nothing falls below the floor for the
+// heartbeat to notice, so without a replay the node never hydrates. The waits
+// are far inside the consumer's thirty-second ack window, so a fix that merely
+// waited for a redelivery fails as surely as no fix.
 func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
@@ -48,11 +38,10 @@ func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.
 	}
 	t.Cleanup(func() { back.Close(context.Background()) })
 
-	// THE FIRST RUN applies everything its own boot wrote, which is what
-	// leaves each consumer acknowledged through the head of its log.
-	// A COMPANY WITH UNITS, booted at an activation, so its boot applies
-	// their projects and their knowledge spaces: those are the records this
-	// case needs on every log it can.
+	// THE FIRST RUN applies everything its own boot wrote, leaving each
+	// consumer acknowledged through its log's head. A company with units,
+	// booted at an activation, writes their projects and knowledge spaces:
+	// records on every log it can.
 	activated := time.Now().UTC()
 	first, err := New(t.Context(), Options{
 		Bootstrap: &b, Company: cfg, Backends: back, ActivatedAt: activated,
@@ -116,12 +105,10 @@ func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.
 		"a consumer the broker was told is done never hands them over",
 		hydrated(t, second))
 
-	// EVERY LOG REPLAYS, not only the ones hydration waits for. Hydration
-	// gates seat admission, so it reads only the domains whose health is a
-	// readiness input; a log that is not one (artifacts, IAM, usage,
-	// search) may still be applying when it reports true, so this waits
-	// for each to reach the head the first run applied, under the same
-	// bound as above rather than reading it at one instant.
+	// EVERY LOG REPLAYS, not only the ones hydration waits for: hydration
+	// reads only the domains whose health gates seat admission, so the
+	// others (artifacts, IAM, usage, search) may still be applying when it
+	// reports true and are waited on to the first run's head.
 	behind := map[string]uint64{}
 	waitUntil(t, 10*time.Second, "every log to replay to the head the first run "+
 		"had applied", func() bool {

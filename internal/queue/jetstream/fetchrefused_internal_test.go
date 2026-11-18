@@ -28,8 +28,8 @@ type scriptedConsumer struct {
 	fetches []time.Time
 
 	// clock, where set, is moved on by step at every pull: a broker whose
-	// every answer takes that long by a clock the case moves, which is the
-	// one a drain handed it ends its linger window on (Config.clock).
+	// every answer takes that long by the clock a drain ends its linger
+	// window on (Config.clock).
 	clock *queuetest.Clock
 	step  time.Duration
 }
@@ -42,9 +42,9 @@ type pullAnswer struct {
 	refusal   error
 }
 
-// spunPulls is more pulls than any case here asks for. A loop that asks again
+// spunPulls is more pulls than any case here asks for: a loop that asks again
 // at once never lets a bubble's clock move, so past it the case fails from
-// inside the loop rather than hanging the run that shows the old code red.
+// inside the loop rather than hanging.
 const spunPulls = 64
 
 func (c *scriptedConsumer) Fetch(int, ...jetstream.FetchOpt) (jetstream.MessageBatch, error) {
@@ -89,10 +89,9 @@ var refusals = map[string]error{
 	"bad request (400)":          jetstream.ErrBadRequest,
 }
 
-// A FETCH THE BROKER REFUSED IS A FAILED FETCH, after what it did deliver.
-// The client closes a refused request's batch with nothing more in it and
-// keeps the status for Error; a fetch that read only the messages took the
-// refusal for an empty fetch (#765).
+// A FETCH THE BROKER REFUSED IS A FAILED FETCH, after what it did deliver:
+// the client closes a refused request's batch empty and keeps the status for
+// Error, so a fetch reading only the messages would take it for an empty one.
 func TestAFetchTheBrokerRefusedIsAFailure(t *testing.T) {
 	t.Parallel()
 	for name, refusal := range refusals {
@@ -115,10 +114,9 @@ func TestAFetchTheBrokerRefusedIsAFailure(t *testing.T) {
 }
 
 // A CONSUME LOOP THE BROKER REFUSES REPORTS IT AND ASKS AGAIN A POLL LATER,
-// rather than asking again at once for as long as the refusal lasts (#765).
-// Held on the batch loop's own cycle, drain, run twice in a bubble, whose
-// clock moves only when the loop waits: the second request is a poll after
-// the first, and each refusal is logged once.
+// rather than at once for as long as the refusal lasts. Held on drain run
+// twice in a bubble, whose clock moves only when the loop waits: the second
+// request is a poll after the first, and each refusal is logged once.
 func TestALoopTheBrokerRefusesReportsItAndAsksAgainAPollLater(t *testing.T) {
 	t.Parallel()
 	for name, refusal := range refusals {
@@ -154,9 +152,9 @@ func TestALoopTheBrokerRefusesReportsItAndAsksAgainAPollLater(t *testing.T) {
 }
 
 // A REFUSAL INSIDE A DRAIN'S WINDOW ENDS IT, and the drain hands over what it
-// holds. A positive linger waits out a fetch that comes back empty, for the
-// arrivals the window exists to collect, and a refusal read as one: the drain
-// asked again at once until its window closed, a minute at the cap (#765).
+// holds: a positive linger waits out an empty fetch for arrivals, and a
+// refusal read as one would ask again at once until the window closed, a
+// minute at the cap.
 func TestARefusalInsideADrainsWindowEndsIt(t *testing.T) {
 	t.Parallel()
 	for name, refusal := range refusals {

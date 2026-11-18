@@ -13,17 +13,12 @@ import (
 	"github.com/nats-io/nats-server/v2/server"
 )
 
-// EVERY ANSWER TO A REMOVAL MEANS WHAT IT SAYS ON THE FIRST ASK, and two of them
-// mean something else from the second on — because a lost answer is what the
-// second ask exists for, so the second answer may be about the first ask.
-//
-//   - "in flight" on the first ask is somebody else's change and is refused; on
-//     a later one it is most likely this call's own proposal still being
-//     committed, and is waited out.
-//   - "not a member" on the first ask is refused; on a later one, for a server
-//     this member counted before asking, it is this call's own earlier commit
-//     once this member no longer counts it — and a typo, a server nobody
-//     counted, is never reported removed however many asks it took.
+// EVERY ANSWER TO A REMOVAL MEANS WHAT IT SAYS ON THE FIRST ASK, and two mean
+// something else from the second on, which may be about a lost earlier answer:
+// "in flight" is then this call's own proposal and is waited out; "not a
+// member", for a server counted before asking, is this call's own commit once
+// this member no longer counts it. A server nobody counted (a typo) is never
+// reported removed however many asks it took.
 func TestEachAnswerToARemovalIsReadByWhichAskItCouldBeAbout(t *testing.T) {
 	t.Parallel()
 	answer := func(apiErr *server.ApiError, success bool) []byte {
@@ -110,12 +105,9 @@ func TestEachAnswerToARemovalIsReadByWhichAskItCouldBeAbout(t *testing.T) {
 
 // A COMMITTED REMOVAL IS REPORTED ONLY ONCE THIS MEMBER'S OWN VIEW HAS DROPPED
 // THE VOTER, because the group a removal reports is read from that view next.
-// A member drops a removed peer when it stores the change and the leader
-// answers once a quorum has — which need not include the member that carried
-// it — so no cluster can stage the lag on demand, and the wait is held here
-// against a view that lags by construction. A view that never catches up is
-// reported as a member behind its own group, never as a removal it has not
-// seen.
+// No cluster stages that lag on demand, so the wait is held against a view
+// that lags by construction. A view that never catches up is reported as a
+// member behind its own group, never as a removal it has not seen.
 func TestARemovalWaitsForThisMembersOwnViewToDropTheVoter(t *testing.T) {
 	t.Parallel()
 	gone := PeerIDOf("gone")
@@ -124,8 +116,7 @@ func TestARemovalWaitsForThisMembersOwnViewToDropTheVoter(t *testing.T) {
 		g := MetaGroup{Cluster: "c", Peers: []MetaPeer{
 			{Name: "a", Peer: PeerIDOf("a")}, {Name: "b", Peer: PeerIDOf("b")}}}
 		if reads.Add(1) <= 3 {
-			// NAMELESS, as a voter nobody has heard from since a restart
-			// is: the wait follows the id the removal named.
+			// NAMELESS, as after a restart: the wait follows the id.
 			g.Peers = append(g.Peers, MetaPeer{Peer: gone})
 		}
 		return g, nil
@@ -156,10 +147,8 @@ func TestARemovalWaitsForThisMembersOwnViewToDropTheVoter(t *testing.T) {
 	}
 }
 
-// A PEER ID IS SPELLED AS NATS-SERVER SPELLS ONE, and a name hashes to one of
-// them — the check an operator's gesture naming a voter by its id is held to.
-// Whether the hash is nats-server's OWN is pinned against running servers in
-// the cluster suite, where an upgrade that changed it would fail.
+// A PEER ID IS SPELLED AS NATS-SERVER SPELLS ONE, and a name hashes to one.
+// Whether the hash is nats-server's OWN is pinned in the cluster suite.
 func TestAPeerIDIsSpelledAsTheServerSpellsOne(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"node-a", "crewlet-test-0", "", "a.b"} {
@@ -177,15 +166,11 @@ func TestAPeerIDIsSpelledAsTheServerSpellsOne(t *testing.T) {
 	}
 }
 
-// THE GROUP COUNTS THIS MEMBER ONLY WHILE IT DOES, AND NAMES NOBODY IT CANNOT.
-//
-// nats-server's report leaves the answering member out of the list whenever
-// the group has a leader, and goes on answering after the group has removed
-// it — so the member is a voter exactly while the peers beside it fall one
-// short of the group's size. Leaderless, the report lists it like any other.
-// And a peer whose name is the server's placeholder for a voter it has not
-// heard from is reported nameless, by its id, rather than as a node called
-// "Server name unknown at this time".
+// THE GROUP COUNTS THIS MEMBER ONLY WHILE IT DOES, AND NAMES NOBODY IT CANNOT:
+// with a leader, the member is a voter exactly while the peers beside it fall
+// one short of the group's size; leaderless, it is listed like any other. A
+// peer under the server's placeholder name is reported nameless, by its id,
+// never as a node called "Server name unknown at this time".
 func TestTheGroupCountsThisMemberOnlyWhileItDoes(t *testing.T) {
 	t.Parallel()
 	self, b, c := "node-a", "node-b", "node-c"
@@ -259,8 +244,8 @@ func TestTheGroupCountsThisMemberOnlyWhileItDoes(t *testing.T) {
 }
 
 // THE RESEND IS THE HEARTBEAT THAT ANNOUNCES A NEW LEADER, and the view is read
-// well inside one: a removal made across an election is answered within a
-// heartbeat of it, and a committed one costs at most a tenth of one more.
+// at least ten times a heartbeat: a removal across an election is answered
+// within a heartbeat of it, and a committed one costs at most a tenth more.
 func TestTheRemovalCadenceFollowsTheRaftHeartbeat(t *testing.T) {
 	t.Parallel()
 	if removeResend != time.Second {

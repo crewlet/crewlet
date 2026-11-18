@@ -116,14 +116,13 @@ func recordedWhy(t *testing.T, run scriptRun) string {
 }
 
 // A SESSION CARRIED INTO A BOX IS IMPORTED BEFORE THE RUN, AND CONTINUED. The
-// run's script unpacks the export it was handed and imports it through a
-// private server of its own (`--standalone`) — never the background service
-// every box on a host shares — into the directory the run works in, before the
-// run's server starts, since that server is handed the session it runs; then
-// the run takes the session up, the report before it taken after the import,
-// so the totals the import restored are among what is taken off. The archive
-// is removed once read, its digest is kept as one the box's copy holds, and
-// the record says the run continued.
+// script unpacks the export it was handed and imports it through a private
+// server of its own (`--standalone`), never the background service every box
+// on a host shares, into the run's directory, before the run's server starts,
+// since that server is handed the session it runs. The report before the run
+// is taken after the import, so the totals the import restored are taken off. The
+// archive is removed once read, its digest kept as one the box's copy holds,
+// and the record says the run continued.
 //
 // Mutation: import after the server starts, through the background service, or
 // into another directory, run the minted session after an import, or keep no
@@ -180,15 +179,14 @@ func TestAnOpenCodeSessionCarriedIntoABoxIsImportedBeforeTheRun(t *testing.T) {
 }
 
 // AN IMPORT THAT DID NOT HAPPEN IS NO CONTINUATION. OpenCode answers an id its
-// database already holds with "Session already exists" and success, and an
-// import can also say nothing at all — and `run --session` on an id it does
-// not hold creates an empty session under it, which the brief would then be
-// answered in as if it remembered. So the import must say it imported THAT
-// session; where it did not, where the box's own copy that the export would
-// replace could not be deleted, or where nothing was carried and the box holds
-// none, the run starts the session minted for it in its place, says why on its
-// error stream and in its record, prints no report before it, and its record
-// says it did not continue.
+// database already holds with "Session already exists" and success, an import
+// can say nothing at all, and `run --session` on an id it does not hold makes
+// an empty session the brief would be answered in as if it remembered. So the
+// import must say it imported THAT session; where it did not, where the box's
+// copy the export replaces could not be deleted, or where nothing was carried
+// and the box holds none, the run starts its minted session instead, says why
+// on its error stream and in its record, prints no report before it, and
+// records that it did not continue.
 //
 // Mutation: take the import's success as the session's, run the asked session
 // after a failed one, or record no reason, and a row goes red.
@@ -364,14 +362,11 @@ func TestAnOpenCodeRunsSessionIsExportedBeforeItsServerStops(t *testing.T) {
 
 // A SESSION IS CAPTURED WHOLE BY AN OPENCODE THAT CUTS WHAT IT WRITES INTO A
 // PIPE. Into a pipe, OpenCode 2.0.32 and 2.1.4 stop writing a large answer
-// after a 64 KiB multiple and exit 0, and the run's capture piped the session's
-// export into gzip: a session whose export is 615,676 bytes was captured as
-// 327,680 of them on 2.0.32, with status 0, and the take's scrub refused the
-// cut archive on an unexpected EOF, so the session was not kept. The export is
-// written to a file and gzipped from there, so the capture of a session whose
-// export runs past the cut gunzips to all of it, and that whole archive's
-// digest is the one the box keeps, under every sh a box may run the script
-// with.
+// after a 64 KiB multiple and exit 0, so an export piped into gzip is a cut
+// archive the take's scrub refuses. The export is written to a file and
+// gzipped from there, so the capture of an export past the cut gunzips to all
+// of it, and the box keeps that whole archive's digest, under every sh a box
+// may run the script with.
 //
 // Mutation: pipe the export into gzip again, and the capture holds the first
 // 64 KiB of it.

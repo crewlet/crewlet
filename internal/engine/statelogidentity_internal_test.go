@@ -25,21 +25,15 @@ import (
 // THE APPLIER IS HANDED THE STREAM'S STAMPED IDENTITY, and a stream recreated
 // between two boots stops it.
 //
-// The identity is the instant [statelog.StreamCreatedAt] reads: the one the
-// create that made the stream stamped into its configuration
-// ([statelog.CreatedAtKey]), which a snapshot restore hands back with the
-// configuration — never the broker's own, which a restore moves (ADR-0083).
+// The identity is the instant [statelog.StreamCreatedAt] reads: the create's
+// stamp in the stream's configuration ([statelog.CreatedAtKey]), which a
+// snapshot restore hands back — never the broker's own instant, which a
+// restore moves (ADR-0083).
 //
-// # Why this is an engine test and not only a framework one
-//
-// The framework's detector is one comparison, and it was correct. What was
-// wrong was the wiring: the engine read the instant back OUT OF THE CURSOR
-// ROW and passed that as the stream's, so the loop compared the row against
-// itself. Every recreated stream went undetected, a fresh node's cursor row
-// recorded the year one, the snapshot manifest carried a zero instant, and
-// the reanchor verb asked an operator to confirm 0001-01-01. A framework test
-// passing a real instant proves nothing about a caller that passes the wrong
-// one, so this boots the engine over its own broker and checks both halves.
+// An engine test, not only a framework one: the detector is one comparison,
+// and what breaks is a caller handing it the wrong instant (one read back out
+// of the cursor row compares the row with itself). So this boots the engine
+// over its own broker and checks both halves.
 func TestTheApplierIsHandedTheStreamsStampedIdentity(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
@@ -77,9 +71,8 @@ func TestTheApplierIsHandedTheStreamsStampedIdentity(t *testing.T) {
 	if stats.CreatedAt.IsZero() {
 		t.Fatal("the log reports no creation instant, so nothing below can be checked")
 	}
-	// THE STAMP, read off the stream's own configuration: the engine made
-	// this log, so it carries the instant a restore hands back, and the
-	// log's identity is that instant rather than the broker's.
+	// THE STAMP, off the stream's own configuration: the log's identity is
+	// that instant, which a restore hands back, not the broker's.
 	js, err := natsjs.New(q.Conn())
 	if err != nil {
 		t.Fatalf("jetstream: %v", err)
@@ -107,8 +100,8 @@ func TestTheApplierIsHandedTheStreamsStampedIdentity(t *testing.T) {
 			"value read back out of the checkpoint detects nothing",
 			running.runner.StreamCreatedAt(), stats.CreatedAt)
 	}
-	// Commit a checkpoint under that identity, the way the applier does
-	// with every batch, so the second boot has something to compare.
+	// A checkpoint under that identity, as the applier commits one, for the
+	// second boot to compare.
 	if err := back.Store.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor
@@ -123,19 +116,15 @@ func TestTheApplierIsHandedTheStreamsStampedIdentity(t *testing.T) {
 	e.Stop(context.Background())
 
 	// THE STREAM IS LOST, and the second boot provisions it again under the
-	// same name — stamped with a new instant, as the queue stamps every
-	// stream it creates. That is the recreation the identity exists to
-	// detect, and so is a hand rebuild from a configuration that carries no
-	// stamp: either way its sequences restart and its identity moves. A
-	// snapshot restore is NOT this: it hands the broker the configuration
-	// the snapshot recorded, stamp and all, and keeps every sequence.
+	// same name with a new stamp: the recreation the identity detects (as is
+	// a hand rebuild with no stamp). A snapshot restore is not one: it hands
+	// back the recorded configuration, stamp included, and every sequence.
 	if err := js.DeleteStream(t.Context(), stream); err != nil {
 		t.Fatalf("delete the stream: %v", err)
 	}
 	back.Close(context.Background())
-	// The stamp keeps the creating node's instant at nanosecond precision
-	// and the row keeps microseconds; a second boot inside the same
-	// microsecond would compare equal, so it waits one out.
+	// The stamp has nanoseconds and the row microseconds: a second boot in
+	// the same microsecond would compare equal.
 	time.Sleep(2 * time.Millisecond)
 
 	// SECOND BOOT: the applier stops and says why.
@@ -167,11 +156,9 @@ func TestTheApplierIsHandedTheStreamsStampedIdentity(t *testing.T) {
 			"stream has not reached, report nothing pending, and apply none of "+
 			"the new stream's records", stopped)
 	}
-	// AND ITS WRITES REFUSE. The stop ends the apply loop and nothing else:
-	// the publisher beside it forms its expectations and clears its zero
-	// fence from that same checkpoint, so a write at zero is cleared
-	// against a history the new stream does not have and lands on it as
-	// though it continued the old one.
+	// AND ITS WRITES REFUSE. The stop ends only the apply loop, and the
+	// publisher clears its zero fence from the same checkpoint, so a write at
+	// zero would land on the new stream as though it continued the old one.
 	before, err := running.log.End(t.Context())
 	if err != nil {
 		t.Fatalf("read the new stream's end: %v", err)
@@ -182,9 +169,8 @@ func TestTheApplierIsHandedTheStreamsStampedIdentity(t *testing.T) {
 		t.Fatalf("the new stream ends at %d (err %v), want %d — a write from a "+
 			"node whose checkpoint names another stream landed on it", end, err, before)
 	}
-	// AND THE OPERATOR SURFACE SAYS SO rather than reporting a caught-up
-	// loop: a stopped applier has a lag of zero, and the row read as ready
-	// for as long as nobody looked at the error beside the number.
+	// AND THE OPERATOR SURFACE SAYS SO: a stopped applier's lag of zero alone
+	// reads as caught up.
 	for _, row := range e2.StateLogStatus(t.Context()) {
 		if row.Name != (worklet.Domain{}).Name() {
 			continue
@@ -196,22 +182,15 @@ func TestTheApplierIsHandedTheStreamsStampedIdentity(t *testing.T) {
 	}
 }
 
-// AND A STREAM REBUILT UNDER A RUNNING NODE IS NAMED WHILE IT RUNS.
+// AND A STREAM REBUILT UNDER A RUNNING NODE IS NAMED WHILE IT RUNS, not only
+// at boot: the heartbeat reads the live creation instant from the answer it
+// already fetches for the stream's bounds.
 //
-// The boot's identity check is the one above, and it was the only one: the
-// live creation instant was sampled once in start and never read again, so a
-// stream deleted and rebuilt under a node that stayed up was never named as a
-// recreation at all.
-//
-// The sequence terms cannot stand in for it. A rebuilt stream comes back at
-// generation 0 counting from 1, so the checkpoint-past-the-end term reports it
-// only until the new stream has published past this node's position — after
-// which every term reads healthy while the node applies a different history
-// into rows keyed by the old one, and the diagnosis an operator gets names
-// anything but the rebuild.
-//
-// The instant arrives in the same answer the heartbeat already reads for the
-// stream's bounds; it was being thrown away.
+// The sequence terms cannot stand in for it: a rebuilt stream restarts at
+// generation 0 from 1, so the checkpoint-past-the-end term reports it only
+// until the new stream passes this node's position, after which every term
+// reads healthy while the node applies a different history into rows keyed by
+// the old one.
 func TestAStreamRebuiltUnderARunningNodeIsNamed(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
@@ -250,28 +229,14 @@ func TestAStreamRebuiltUnderARunningNodeIsNamed(t *testing.T) {
 // A NODE WHOSE LOG WAS REBUILT UNDER IT REFUSES TO WRITE, as well as to read —
 // on a real embedded stream, deleted and remade under an engine that stays up.
 //
-// # What a write did before
+// Its expectations are sequences from the old history, which the rebuilt log
+// (same name and generation, counting from 1) would arbitrate as its own, and
+// every data node would apply what lands. Both shapes must refuse:
 //
-// The heartbeat named the rebuild and the reads refused, and the write path
-// consulted nothing: its expectations are sequences from the old history, and
-// the rebuilt log — same name, same generation, counting from 1 — arbitrated
-// them as sequences about itself. Two shapes, both below, and both LANDED:
-//
-//   - A RETRY AT ZERO. The row's anchor names a record the rebuilt log does
-//     not hold, so the broker refuses the expectation, the empty subject reads
-//     as a trimmed anchor, and the zero fence clears it against a floor and a
-//     checkpoint from the old history. The record went onto the rebuilt log
-//     at sequence 1, and the write was then reported as a ledger contract
-//     violation, because the resolution compared that position with the old
-//     checkpoint and read it as already applied.
-//   - AN ORDINARY EXPECTATION the rebuilt log happens to satisfy: its own
-//     history on the subject ends at exactly the sequence this node's row
-//     names. The broker has no way to know the two numbers come from
-//     different logs and accepts the write.
-//
-// Whatever lands is not a local mistake: the recovery follows the rebuilt log
-// from its head, so every data node applies it as though it continued the
-// history it was never arbitrated in.
+//   - A RETRY AT ZERO: the missing anchor reads as trimmed, and the zero fence
+//     would clear it against the old history's floor and checkpoint.
+//   - AN ORDINARY EXPECTATION the rebuilt log satisfies: its history on the
+//     subject ends exactly at the sequence this node's row names.
 func TestAStreamRebuiltUnderARunningNodeRefusesItsWrites(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
@@ -285,9 +250,8 @@ func TestAStreamRebuiltUnderARunningNodeRefusesItsWrites(t *testing.T) {
 		t.Fatal("the node runs no tracker writer")
 	}
 
-	// TWO OBJECTS WITH HISTORY on the log this node started against, and
-	// the first one's record kept byte for byte, to be replayed onto the
-	// rebuilt log where this node's row says it is.
+	// TWO OBJECTS WITH HISTORY on the old log, node-x's record kept byte for
+	// byte to replay onto the rebuilt log where this node's row says it is.
 	anchors := map[string]uint64{}
 	for _, node := range []string{"node-x", "node-y"} {
 		res, err := writer.EvictNode(t.Context(), "op-evict-"+node, node)
@@ -303,10 +267,9 @@ func TestAStreamRebuiltUnderARunningNodeRefusesItsWrites(t *testing.T) {
 
 	rebuildLog(t, js, worklet.Domain{}.Stream())
 
-	// THE RETRY AT ZERO, BEFORE ANY HEARTBEAT HAS SEEN THE REBUILD. The
-	// zero fence's own read of the log carries the stream's creation
-	// instant, and that is what refuses this write within the call — a
-	// check that waited for the next beat would have let it land.
+	// THE RETRY AT ZERO, BEFORE ANY HEARTBEAT SEES THE REBUILD: the zero
+	// fence's own read of the log carries the creation instant, so it refuses
+	// within the call rather than at the next beat.
 	_, err = writer.ReadmitNode(t.Context(), "op-readmit-y", "node-y")
 	requireRebuiltLogRefusal(t, err)
 	if end := endOf(t, running); end != 0 {
@@ -314,9 +277,8 @@ func TestAStreamRebuiltUnderARunningNodeRefusesItsWrites(t *testing.T) {
 			"against the old history's floor landed on it", end)
 	}
 
-	// THE ORDINARY EXPECTATION the rebuilt log would accept: its own history
-	// on node-x's subject ends at exactly the sequence this node's row
-	// names, which is the one condition under which the broker says yes.
+	// THE ORDINARY EXPECTATION: node-x's history on the rebuilt log ends
+	// exactly at the sequence this node's row names, so the broker accepts it.
 	for endOf(t, running)+1 < anchors["node-x"] {
 		barrierOn(t, running)
 	}
@@ -333,9 +295,9 @@ func TestAStreamRebuiltUnderARunningNodeRefusesItsWrites(t *testing.T) {
 			"old history was accepted by the new one", end, replayed)
 	}
 
-	// AND THE READS, FROM THE SAME ANSWER, and the operator surface with
-	// them — including once the rebuilt log has reached this node's own
-	// checkpoint, where every sequence term reads caught up.
+	// AND THE READS, FROM THE SAME ANSWER, and the operator surface — even
+	// once the rebuilt log reaches this node's checkpoint and every sequence
+	// term reads caught up.
 	for endOf(t, running) < running.runner.Committed().Seq {
 		barrierOn(t, running)
 	}
@@ -361,25 +323,14 @@ func TestAStreamRebuiltUnderARunningNodeRefusesItsWrites(t *testing.T) {
 }
 
 // A NODE WHOSE CHECKPOINT IS PAST THE LOG'S END REFUSES TO WRITE, as well as to
-// read — on a real embedded stream that KEEPS its creation instant, which is
-// what a broker restored from an older copy looks like to the node, and the
-// one shape the rebuild check above cannot see.
+// read — on a real embedded stream that KEEPS its creation instant, as a
+// broker restored from an older copy does: the shape the rebuild check above
+// cannot see. Both shapes must refuse:
 //
-// # What a write did before
-//
-// Reads refused, `wrong_stream`, because the health compares the checkpoint
-// against the log's end. Writes consulted nothing that could see it, and both
-// shapes below LANDED:
-//
-//   - AN ORDINARY EXPECTATION. The row's anchor is a record the restored log
-//     still holds, so the broker accepted it — at the log's next sequence,
-//     which is below this node's checkpoint. Its applier had already passed
-//     that sequence and never applies the record, so the resolution found no
-//     ledger row and reported a contract violation, while the record sat on the
-//     log for every other node.
-//   - AN EXPECTATION OF ZERO. The zero fence cleared it, because a checkpoint
-//     past the end is past the floor and the first sequence too: a fence that
-//     asks only whether the cursor is HIGH ENOUGH passes one that is too high.
+//   - AN ORDINARY EXPECTATION on a record the restored log holds lands at a
+//     sequence below the checkpoint, which this node's applier never applies.
+//   - AN EXPECTATION OF ZERO: a fence asking only whether the cursor is HIGH
+//     ENOUGH passes one that is too high.
 func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
@@ -412,14 +363,12 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 	end := endOf(t, e.core.Load().log.Domain(worklet.Domain{}.Name()))
 	e.Stop(context.Background())
 
-	// THE CHECKPOINT MOVES PAST THE LOG'S END, and nothing else does: the
-	// row keeps the instant it was committed under, so the stream the second
-	// boot finds is — by every identity check — the one it started against.
-	// This is a node whose rows are newer than the broker it came back to.
+	// THE CHECKPOINT MOVES PAST THE LOG'S END and nothing else does: the row
+	// keeps its instant, so by every identity check this is the stream it
+	// started against — rows newer than the broker the node came back to.
 	ahead := end + 5
-	// The node still holds its replicated estate open after e.Stop — a
-	// state log that stops leaves the file to the store — so the row is
-	// staged through it directly.
+	// Staged through the store, which still holds the replicated estate open
+	// after e.Stop: a stopped state log leaves the file to it.
 	if err := back.Store.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(),
 			`UPDATE statelog_cursor SET seq = ? WHERE stream = ?`, ahead, stream)
@@ -446,9 +395,8 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 		t.Fatal("the tracker domain is not running after the second boot")
 	}
 
-	// THE BOOT ESTABLISHED IT, before any heartbeat could have read the end:
-	// without the boot's own reading an ordinary write had a whole interval
-	// to land.
+	// THE BOOT ESTABLISHED IT, before any heartbeat read the end: otherwise
+	// an ordinary write has a whole interval to land.
 	if identity := running.runner.StreamIdentity(); !errors.Is(identity, statelog.ErrAheadOfLog) {
 		t.Fatalf("right after boot the runner's identity is %v, want %v",
 			identity, statelog.ErrAheadOfLog)
@@ -461,9 +409,8 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 		return running.runner.Committed().Seq == ahead
 	})
 
-	// AN ORDINARY EXPECTATION the log would accept: node-x's last record is
-	// one the restored log holds, at exactly the sequence this node's row
-	// names.
+	// AN ORDINARY EXPECTATION the log would accept: the restored log holds
+	// node-x's last record at exactly the sequence this node's row names.
 	_, err = e2.native.Load().writer.EvictNode(t.Context(), "op-evict-x-again", "node-x")
 	requireAheadOfLogRefusal(t, err)
 	if got := endOf(t, running); got != end {
@@ -471,10 +418,9 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 			"past the end landed at a sequence its own applier had passed", got, end)
 	}
 
-	// AN EXPECTATION OF ZERO, WITH NOTHING ESTABLISHED BEFORE IT. The verdict
-	// is cleared as a reading reaching the checkpoint would clear it, so what
-	// refuses this write is the zero fence's own read of the log, within the
-	// call.
+	// AN EXPECTATION OF ZERO, WITH NOTHING ESTABLISHED BEFORE IT: the verdict
+	// is cleared as a reading at the checkpoint would, so only the zero
+	// fence's own read of the log, within the call, can refuse this write.
 	running.runner.ObserveEnd(statelog.Stance{}, ahead)
 	if err := running.runner.StreamIdentity(); err != nil {
 		t.Fatalf("the verdict did not clear for the zero case: %v", err)
@@ -514,13 +460,11 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 // THE BOOT HANDS THE APPLIER WHERE THE LOG ENDS, beside the checkpoint, before
 // its loop or any write has run.
 //
-// Boot is when a broker restored from an older copy is met — the embedded one
-// runs in this process, so bringing its store back IS a restart — and nothing
-// else establishes the verdict in time: the first heartbeat is an interval
-// away, and an ordinary write arriving first would find nothing refusing it.
-// Driven through [stateLog.start] itself, which launches no loop and no
-// heartbeat, so the only reading that can have established it is the boot's
-// own.
+// Boot is when a broker restored from an older copy is met (the embedded one
+// restarts with this process), and the first heartbeat is an interval away, so
+// an ordinary write could arrive with nothing refusing it. Driven through
+// [stateLog.start], which launches no loop or heartbeat, so only the boot's
+// own reading can establish it.
 func TestTheBootReadsTheLogsEndBesideTheCheckpoint(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -533,8 +477,7 @@ func TestTheBootReadsTheLogsEndBesideTheCheckpoint(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			s, q, appendTo := aProvisionedTrackerLog(t)
-			// Records nobody will apply — the loop never starts here —
-			// so their bytes do not matter, only where the log ends.
+			// The loop never starts, so only where the log ends matters.
 			subject := worklet.Domain{}.Stream().SubjectPrefix + ".probe.x"
 			for i := range 2 {
 				if _, _, err := appendTo.Append(t.Context(), subject,
@@ -583,10 +526,9 @@ func TestTheBootReadsTheLogsEndBesideTheCheckpoint(t *testing.T) {
 // aProvisionedTrackerLog is the tracker's log provisioned on a fresh embedded
 // broker, over a fresh store, by a state log that has started nothing.
 //
-// THE BROKER IS SIZED, at [brokertest.StoreMaxBytes]: the ceilings below are
-// divided from the limit it reports, and left to derive one it reports three
-// quarters of this machine's free disk — so the log this case reads would be
-// sized by the runner, and refused on a disk short of even its floor.
+// The broker is sized ([brokertest.StoreMaxBytes]) because the ceilings divide
+// its reported limit; unsized, that is three quarters of the machine's free
+// disk, which may be short of even the log's floor.
 func aProvisionedTrackerLog(t *testing.T) (*stateLog, *jetstream.Queue, *jetstream.DomainLog) {
 	t.Helper()
 	q, err := jetstream.Open(t.Context(), jetstream.Config{
@@ -607,14 +549,14 @@ func aProvisionedTrackerLog(t *testing.T) (*stateLog, *jetstream.Queue, *jetstre
 	if err != nil {
 		t.Fatalf("sizeCeilings: %v", err)
 	}
-	// THE KEYRING A BOOT HANDS EVERY DOMAIN: a runner verifies every
-	// record against it and refuses to start without one.
+	// A runner verifies every record against the keyring and refuses to
+	// start without one.
 	s := &stateLog{
 		mode: statelog.ModeNormal, nodeID: "node-a", db: db,
 		ceilings: ceilings, run: t.Context(), ring: recordKeyring(&boot),
 	}
-	// THE REPLICATED ESTATE FIRST, as the runtime's own start opens it
-	// before any log's checkpoint is read.
+	// The replicated estate first, as the runtime's start opens it before
+	// reading any checkpoint.
 	if err := s.reopenEstate(t.Context()); err != nil {
 		t.Fatalf("open the replicated estate: %v", err)
 	}
@@ -626,8 +568,8 @@ func aProvisionedTrackerLog(t *testing.T) (*stateLog, *jetstream.Queue, *jetstre
 }
 
 // requireAheadOfLogRefusal is the refusal a write from a node past the log's
-// end earns: the framework's `wrong_stream`, recognisable by its own cause and
-// NOT as a rebuild, and naming what the operator has to do.
+// end earns: `wrong_stream`, caused by [statelog.ErrAheadOfLog] and not a
+// rebuild, naming the verb that repairs it.
 func requireAheadOfLogRefusal(t *testing.T, err error) {
 	t.Helper()
 	var refusal *statelog.Unavailable
@@ -643,9 +585,9 @@ func requireAheadOfLogRefusal(t *testing.T, err error) {
 	}
 }
 
-// requireRebuiltLogRefusal is the refusal a write on a rebuilt log earns: the
-// framework's `wrong_stream`, recognisable by its cause without switching on
-// the reason, and naming what the operator has to do.
+// requireRebuiltLogRefusal is the refusal a write on a rebuilt log earns:
+// `wrong_stream`, caused by [statelog.ErrStreamRecreated], naming the verb
+// that repairs it.
 func requireRebuiltLogRefusal(t *testing.T, err error) {
 	t.Helper()
 	var refusal *statelog.Unavailable
@@ -674,10 +616,9 @@ func aRunningNodeOf(t *testing.T, company string) (*Engine, natsjs.JetStream) {
 	return aRunningNodeWith(t, company, Options{})
 }
 
-// aRunningNodeWith is [aRunningNodeOf] built with opts, whose bootstrap,
-// company and backends it supplies itself — for a node that needs one more
-// option, such as the recorder its own trim reads its alarms from
-// ([Options.Metrics]).
+// aRunningNodeWith is [aRunningNodeOf] built with opts, for a node needing one
+// more option ([Options.Metrics], say); it supplies the bootstrap, company and
+// backends itself.
 func aRunningNodeWith(t *testing.T, company string, opts Options) (*Engine, natsjs.JetStream) {
 	t.Helper()
 	return aRunningNodeOver(t, company, opts, nil)
@@ -730,18 +671,13 @@ func aRunningNodeOver(t *testing.T, company string, opts Options,
 // rebuildLog deletes a domain's stream and makes it again under the same name:
 // a new identity, and sequences counting from 1 again.
 //
-// THROUGH THE BROKER'S OWN API rather than the queue's, which remembers what
-// it has provisioned and would no-op — and a broker-level rebuild is precisely
-// a stream this process did not create. FROM A CONFIGURATION WITH NO STAMP, as
-// an operator's hand rebuild makes one, so its identity is the broker's new
-// instant ([statelog.StreamCreatedAt]); one remade from the original's own
-// configuration would carry its stamp and be the same stream.
-//
-// AT THE CEILING AND THE MESSAGE LIMIT THE STREAM HAD, as an operator's rebuild
-// of a log would be: the node sized both, and a log of an arbitrary size is
-// one whose gate reserve — seven of its largest appends and a mebibyte — may
-// be all of it, so every ordinary write after the rebuild would be refused
-// for a reason the rebuild is not about.
+// Through the broker's API, not the queue's, which would no-op on a stream it
+// provisioned. From a configuration with no stamp, as a hand rebuild makes
+// one, so the identity is the broker's new instant ([statelog.StreamCreatedAt]);
+// the original's configuration would carry its stamp and be the same stream.
+// At the old MaxBytes and MaxMsgSize, which the node sized: at an arbitrary
+// size the gate reserve (seven largest appends and a mebibyte) may be all of
+// it, refusing every write for a reason the rebuild is not about.
 func rebuildLog(t *testing.T, js natsjs.JetStream, spec statelog.StreamSpec) {
 	t.Helper()
 	old, err := js.Stream(t.Context(), spec.Name)
@@ -752,9 +688,8 @@ func rebuildLog(t *testing.T, js natsjs.JetStream, spec statelog.StreamSpec) {
 	if err := js.DeleteStream(t.Context(), spec.Name); err != nil {
 		t.Fatalf("delete the stream: %v", err)
 	}
-	// The broker keeps creation instants at nanosecond precision and the
-	// identity compares microseconds; a rebuild inside the same microsecond
-	// as the create would compare equal, so it waits one out.
+	// Creation instants have nanoseconds and the identity compares
+	// microseconds: a rebuild in the create's microsecond would compare equal.
 	time.Sleep(2 * time.Millisecond)
 	if _, err := js.CreateStream(t.Context(), natsjs.StreamConfig{
 		Name: spec.Name, Subjects: spec.Subjects,

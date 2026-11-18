@@ -9,76 +9,26 @@ import (
 )
 
 // ErrMaintenanceMoved reports a compare-and-set that lost its race: the
-// operation record changed between the read this write was formed from and the
-// write itself.
+// operation record changed since the read this write was formed from.
 //
-// A SENTINEL rather than a message, because the caller's answer is specific
-// and not a retry: re-read the record and re-decide from the phase it is
-// actually in. A coordinator that lost its lease and came back holds a view
-// that a successor has moved past, and blindly retrying its own write is
-// exactly what the compare-and-set exists to refuse.
+// A sentinel because the caller's answer is not a retry: re-read the record
+// and re-decide from the phase it is actually in. A coordinator that lost its
+// lease and came back holds a view a successor has moved past, and retrying
+// its own write is what the compare-and-set exists to refuse.
 var ErrMaintenanceMoved = errors.New("coord: the maintenance operation moved since it was read")
 
-// MAINTENANCE MODE: what a fleet does when a stream's own configuration has to
-// change, and why it is one record rather than several.
+// MAINTENANCE MODE: a stream's byte ceiling changes only while no request to
+// it can be outstanding, and closing a client retires nothing the broker has
+// queued, so the fleet restarts into a mode that starts every broker and no
+// publisher (package doc, "Maintenance mode").
 //
-// # What the mode is for
-//
-// A stream's byte ceiling can be raised or lowered, and neither direction is
-// safe while anything is publishing. A reduction below current usage is
-// refused by the broker, so the usage has to be an OBSERVATION of a quantity
-// nothing can move — and a raise is no different, because what makes a
-// configuration write safe is knowing which requests are outstanding, not
-// which way the number went.
-//
-// What retires an outstanding request is not a closed client. A request the
-// broker has RECEIVED AND QUEUED lives in a server's receive buffer and its
-// connection state; closing the client cancels the client's wait and not the
-// server's work. Both die with the broker PROCESS — so the fleet restarts
-// into a mode that starts every broker and no publisher, and the exclusion is
-// structural rather than observed.
-//
-// # Why the exclusion and the operation are ONE record
-//
-// They have one lifetime. Maintenance exists exactly while an operation is
-// unresolved; there is no maintenance without an operation and no unresolved
-// operation without maintenance. Held as two records, an interrupted
-// activation — state written, operation not yet created — is byte-identical to
-// a finished resize whose cleanup was interrupted, and any rule that reads one
-// reads the other: it releases the exclusion while a coordinator is still
-// preparing.
-//
-// So [MaintenanceOperation] IS the exclusion. Its existence excludes
-// publishers, its deletion releases them, and there is no crash-between-the-
-// halves state to interpret because there are no halves.
-//
-// # The three things that are NOT this record, and why
-//
-//   - THE COORDINATOR'S LEASE has a TTL and this record must not. They have
-//     different lifetimes on purpose: the lease expires so another
-//     maintenance-mode node can take over the same operation, and the state
-//     must never expire, because a key that forgets is a key that admits a
-//     publisher. A coordinator that is merely paused, GC-stalled or
-//     partitioned has not finished its operation.
-//   - AN ADMISSION is one node's positive record that it intends to publish.
-//     Admission is a HANDSHAKE rather than an absence check: a node writes
-//     [Admission] and then re-reads this record, and a coordinator writes this
-//     record and then reads the admissions: it deletes the record again over
-//     one whose process still holds its node's presence, and issues no
-//     request while any other stands. Either order is safe, which is the
-//     point — a node that slipped
-//     between the coordinator's write and its own start leaves a durable key
-//     the coordinator's later read sees, where an absence would have let it
-//     proceed.
-//   - AN ACK is one participant's evidence that its process restarted for this
-//     operation's current attempt. It is what the seal is established from,
-//     and it is per node because the barrier is about processes rather than
-//     about a fleet-wide fact anybody could assert. And it is per LOG, because
-//     a window is: a fleet resizing two logs restarts once for both, and each
-//     boot acknowledges each log's window. Kept one per node, the boot's
-//     acknowledgement of one window replaced its acknowledgement of the other,
-//     and the window that lost read "acknowledged another operation" from
-//     every node for as long as both were open.
+// [MaintenanceOperation] IS the exclusion: its existence excludes publishers
+// and its deletion releases them. Held as two records, an interrupted
+// activation would read exactly like an interrupted cleanup. Not this record:
+// the coordinator's lease ([MaintenanceResource]) expires and this never does;
+// an [Admission] is a handshake rather than an absence check; and a
+// [MaintenanceAck] is per node and per log, because the barrier is about
+// processes and a window is per log.
 
 // MaintenancePhase is where a capacity operation stands.
 //
@@ -139,12 +89,10 @@ func (p MaintenancePhase) Valid() bool {
 // MaintenanceBlock is why a capacity operation can't go on without a person,
 // as the operation carries it.
 //
-// A CODE FOR SCRIPTS, NEVER FOR A PERSON: the record carries it, and the API
-// and the report carry it on, so a script can branch on it. What a person
-// reads is statelog.BlockedDetail, one sentence per block saying who blocked
-// the window and what clears it, which a test holds to every block declared
-// here: printed raw, `capacity_operation_unsealed` told an operator at an
-// inconvenient hour nothing they could act on.
+// A CODE FOR SCRIPTS, NEVER FOR A PERSON: the record, the API and the report
+// carry it so a script can branch on it. What a person reads is
+// statelog.BlockedDetail, one sentence per block saying who blocked the window
+// and what clears it, which a test holds to every block declared here.
 type MaintenanceBlock string
 
 const (
@@ -186,11 +134,9 @@ func (p MaintenancePhase) Index() int {
 
 // JournalState is a write-attempt record's THREE-VALUED outcome.
 //
-// A record of "I am about to issue a configuration request" is an UNKNOWN in
-// exactly the sense a publish whose call returned an error is: it may have
-// landed and it may not. An unknown is RESOLVED BY a procedure; it is never a
-// veto over the procedure that resolves it — which is the shape that made an
-// earlier draft's journal block the very seal that clears it.
+// "I am about to issue a configuration request" is an UNKNOWN, as a publish
+// whose call errored is: it may have landed. An unknown is RESOLVED BY a
+// procedure (the seal) and is never a veto over the procedure that resolves it.
 type JournalState string
 
 const (
@@ -205,11 +151,9 @@ const (
 	// JournalRetired — no process that could deliver this request still
 	// exists.
 	//
-	// ESTABLISHED BY THE BARRIER AND NEVER BY A VALUE. Observing the
-	// ceiling equal to the target retires nothing: another request may
-	// have set it while this one is still in flight, and a record retired
-	// on value equality declares a live request dead because somebody
-	// else wrote the same number.
+	// ESTABLISHED BY THE BARRIER AND NEVER BY A VALUE: another request may
+	// have set the target while this one is still in flight, and retiring
+	// on value equality declares a live request dead.
 	JournalRetired JournalState = "retired"
 )
 
@@ -257,12 +201,10 @@ type MaintenanceOperation struct {
 	// Phase is where this operation stands and Attempt which write-then-
 	// seal cycle it is on.
 	//
-	// ONE COUNTER. An earlier draft carried a separate seal attempt, and
-	// two numbers that must move together is this record's own two-record
-	// bug in miniature — it produced a seal predicate whose comparison
-	// exempted the same-attempt record the journal exists to catch. There
-	// is nothing to compare now: every journal record must be completed or
-	// retired.
+	// ONE COUNTER for writes and seals: two numbers that must move together
+	// let a seal predicate exempt the same-attempt record the journal exists
+	// to catch. The seal compares no attempts; every journal record must be
+	// completed or retired.
 	Phase   MaintenancePhase `json:"phase"`
 	Attempt int              `json:"attempt"`
 
@@ -275,13 +217,12 @@ type MaintenanceOperation struct {
 	// WriteIncarnations is each participant's incarnation as this attempt's
 	// newest request left, and the seal compares an ack against it.
 	//
-	// PERSISTED BEFORE EACH REQUEST IS ISSUED, by the process issuing it,
-	// in the write that adds the request's journal record. Recorded after
-	// the read-back, a crash in between leaves an operation that may have
-	// written with nothing to compare against; recorded once at the
-	// baseline, a request a resumed window sent later was compared against
-	// processes that were gone before it left, and a node restarted into
-	// seal mode in between passed the seal without restarting after it.
+	// PERSISTED BEFORE EACH REQUEST IS ISSUED, by its issuer, in the write
+	// that adds its journal record. Recorded after the read-back, a crash
+	// between leaves a possible write with nothing to compare against;
+	// recorded once at the baseline, a request a resumed window sent later
+	// is compared against processes gone before it left, and a node that
+	// restarted into seal mode in between passes without restarting after.
 	WriteIncarnations map[string]string `json:"write_incarnations,omitempty"`
 
 	// Excluded names participants an operator has asserted are stopped and
@@ -290,15 +231,12 @@ type MaintenanceOperation struct {
 	Excluded []string `json:"excluded,omitempty"`
 
 	// ExcludedBy is who made each of those assertions, keyed by the node
-	// it names: the author and the credential they made it through, as By
-	// and OperatorID are for whoever opened the window.
+	// it names, as By and OperatorID are for whoever opened the window.
 	//
 	// AN EXCLUSION IS THE ONE FACT THE SEAL TAKES ON SOMEBODY'S WORD, so
-	// whose word it was is the first question a post-mortem asks when the
-	// process turns out not to have been stopped — and it was answered only
-	// by the log line of whichever node served the request. The exclusion
-	// writes the entry in the same update that adds the node to Excluded,
-	// so every excluded node has one.
+	// whose word is the first question a post-mortem asks. It is written in
+	// the same update that adds the node to Excluded, so every excluded
+	// node has one.
 	ExcludedBy map[string]MaintenanceParty `json:"excluded_by,omitempty"`
 
 	// Journal is every write attempt against this stream's configuration
@@ -306,20 +244,18 @@ type MaintenanceOperation struct {
 	// leaves.
 	Journal []JournalRecord `json:"journal,omitempty"`
 
-	// ObservedMaxBytes is what the last read-back saw, and Verified
-	// whether the final verify matched the target.
+	// ObservedMaxBytes is what the last read-back saw.
 	ObservedMaxBytes uint64 `json:"observed_max_bytes,omitempty"`
 
 	// Blocked names why the operation cannot proceed without a person,
 	// empty while it can.
 	Blocked MaintenanceBlock `json:"blocked,omitempty"`
 
-	// AbandonedBy is who abandoned the operation, and zero until somebody
-	// does. An abandonment that may have left a request outstanding keeps
-	// the record — and the fleet in its window — until the seal restart,
-	// so the operation says whose decision it is still carrying out. One
-	// abandoned before any request clears the record outright, and only
-	// the serving node's log names who did it.
+	// AbandonedBy is who abandoned the operation, zero until somebody does.
+	// An abandonment that may have left a request outstanding keeps the
+	// record, and the fleet in its window, until the seal restart, so the
+	// operation names whose decision it is still carrying out. One made
+	// before any request clears the record outright.
 	AbandonedBy MaintenanceParty `json:"abandoned_by,omitzero"`
 
 	// EnteredAt is when the exclusion was taken and By which operator ran
@@ -351,30 +287,26 @@ type MaintenanceAck struct {
 	Stream string `json:"stream"`
 	NodeID string `json:"node_id"`
 
-	// OperationID and Attempt bind the acknowledgement. An ack that named
-	// neither would be satisfied by a restart that happened for an
-	// unrelated reason, so the seal takes none that does not name its own.
+	// OperationID and Attempt bind the acknowledgement: the seal takes none
+	// that does not name its own, or a restart for an unrelated reason
+	// would satisfy it.
 	//
-	// BOTH EMPTY on the record a node writes as it boots into a maintenance
+	// BOTH EMPTY on the record a node writes booting into a maintenance
 	// mode while no window is open on the log ([MaintenanceAck.Windowless]).
-	// It says
-	// which process the node restarted as and in which mode, which is all
-	// a BASELINE reads, and it binds nothing, which is why no seal accepts
-	// it: the fleet restarts into maintenance mode before anybody runs the
-	// verb, and a baseline that read only bound acknowledgements found
-	// none from any node but the coordinator and sent the operator to
-	// restart a fleet that had just restarted.
+	// It names the process and mode, all a BASELINE reads, and binds
+	// nothing, so no seal accepts it. The fleet restarts into maintenance
+	// mode before anybody runs the verb, so a baseline reading only bound
+	// acknowledgements would find none but the coordinator's.
 	OperationID string `json:"operation_id"`
 	Attempt     int    `json:"attempt"`
 
 	// Incarnation is this PROCESS's identity, which the seal compares
 	// against the one recorded as the newest request left.
 	//
-	// COMPARED FOR INEQUALITY rather than for order, because an
-	// incarnation is minted per process from a uuid: it is unique rather
-	// than ordered, and an ordering would be a second property nothing
-	// mints. What the seal needs is that the process holding the request
-	// is gone, and a different identity is exactly that evidence.
+	// COMPARED FOR INEQUALITY, not order: an incarnation is minted per
+	// process from a uuid, unique rather than ordered, and a different
+	// identity is exactly the evidence that the process holding the
+	// request is gone.
 	Incarnation string `json:"incarnation"`
 
 	// Mode says which start mode acknowledged. A seal acknowledgement
@@ -391,14 +323,13 @@ func (a MaintenanceAck) Windowless() bool { return a.OperationID == "" && a.Atte
 
 // Admission is one node's positive record that it is about to publish.
 //
-// NO TTL, EVER. A key that forgets is a key that admits: a node whose
-// admission expired while it went on publishing is invisible to the
-// coordinator's check, which is the whole failure the handshake replaces.
-// What retires the admission of a process that crashed is its node booting
-// again as a process the admission does not name: into a maintenance mode,
-// which withdraws it once the fleet's presence shows the process it names is
-// not running (its presence lease lapsed, or another process of the node holds
-// it), or in service as a data node, whose own admission replaces it.
+// NO TTL, EVER: a node whose admission expired while it went on publishing is
+// invisible to the coordinator's check. A crashed process's admission is
+// retired by its node booting again as another process: into a maintenance
+// mode, which withdraws it once the fleet's presence shows the process it
+// names is not running (its presence lease lapsed, or another process of the
+// node holds it), or in service as a data node, whose own admission replaces
+// it.
 type Admission struct {
 	// NodeID is who admitted itself, and the key.
 	NodeID string `json:"node_id"`
@@ -416,11 +347,9 @@ type Admission struct {
 type MaintenanceRegister interface {
 	// OpenMaintenance creates the record, first-writer-wins.
 	//
-	// It reports the operation that IS there when the key is taken —
-	// which may be this caller's own, because the id is minted once and
-	// reused across create attempts, and an unknown create is retried
-	// with the same id. Distinguishing "mine" from "somebody else's" is
-	// the caller's, on that id.
+	// It reports the operation that IS there when the key is taken, which
+	// may be this caller's own: an unknown create is retried with the same
+	// id. Telling "mine" from "somebody else's" by that id is the caller's.
 	OpenMaintenance(ctx context.Context, op MaintenanceOperation) (MaintenanceOperation, bool, error)
 
 	// Maintenance reads one stream's operation, or reports that there is
@@ -431,9 +360,8 @@ type MaintenanceRegister interface {
 	// read at.
 	//
 	// A COMPARE-AND-SET ON THE REVISION, never on the operation id: a
-	// successor RESUMES the same id, so an id comparison checks the one
-	// quantity guaranteed not to change and would let a coordinator that
-	// lost its lease commit over a successor's progress.
+	// successor RESUMES the same id, so an id comparison would let a
+	// coordinator that lost its lease commit over a successor's progress.
 	UpdateMaintenance(ctx context.Context, op MaintenanceOperation) error
 
 	// CloseMaintenance deletes it, conditional on the same revision. That
@@ -442,12 +370,10 @@ type MaintenanceRegister interface {
 
 	// PutAdmission records that a node is about to publish, and
 	// ForgetAdmission withdraws it: by its own process on an orderly
-	// shutdown after publishers drain, by the node's NEXT process as it
-	// boots into a maintenance mode (a new incarnation of the node, while
-	// the one the admission names holds no presence lease, is the evidence
-	// that one is gone), or with an operator's exclusion, which asserts the
-	// same thing on their word. Always conditional on the incarnation, so
-	// none of the three can remove a newer process's.
+	// shutdown after publishers drain, by the node's NEXT process booting
+	// into a maintenance mode while the one named holds no presence lease,
+	// or with an operator's exclusion. Always conditional on the
+	// incarnation, so none of the three can remove a newer process's.
 	PutAdmission(ctx context.Context, a Admission) error
 	Admissions(ctx context.Context) ([]Admission, error)
 	ForgetAdmission(ctx context.Context, nodeID, incarnation string) error
@@ -464,30 +390,25 @@ type MaintenanceRegister interface {
 // the exclusion itself: the key's existence is what keeps publishers off that
 // stream, so there is exactly one per stream and the delete is the release.
 //
-// It is the first of the three key classes the window is made of — with
-// [AdmissionKey] and [MaintenanceAckKey] — and all three live in the positions
-// register beside the trim's own. IN THAT REGISTER because it is the bucket
-// with no age at all, and every one of these must outlive any clock: an
-// expiring operation admits publishers, an expiring admission hides one, and
-// an expiring acknowledgement un-seals a barrier that has already run.
+// The window's three key classes (this, [AdmissionKey], [MaintenanceAckKey])
+// live in the positions register, the bucket with no age, because each must
+// outlive any clock: an expiring operation admits publishers, an expiring
+// admission hides one, and an expiring acknowledgement un-seals a barrier that
+// has already run.
 func MaintenanceKey(stream string) string { return DocumentKey("maintenance", stream) }
 
 // AdmissionKey addresses one node's admission: its POSITIVE record that it
-// intends to publish, which is what a coordinator establishes exclusion
-// against. Per node rather than per stream, because the handshake is about
-// which processes are running and a node admits itself before it re-reads the
-// operation — see the ADMISSION note above for why an absence check is not the
-// same thing.
+// intends to publish, which a coordinator establishes exclusion against. Per
+// node rather than per stream, because the handshake is about which processes
+// are running (package doc, "Maintenance mode").
 func AdmissionKey(nodeID string) string { return DocumentKey("admitted", nodeID) }
 
 // MaintenanceAckKey addresses one participant's acknowledgement that its
-// process restarted for the current attempt of one log's window. Per node for
-// the reason an admission is: the seal is established from evidence each
-// process leaves about itself, never from a fleet-wide fact a coordinator
-// could assert on everyone's behalf. And per log because a window is, and two
-// can be open at once: the log is the second segment, so one log's
-// acknowledgements are read with a filter the broker matches, never by
-// reading every log's and dropping the rest.
+// process restarted for the current attempt of one log's window. Per node
+// because the seal is established from evidence each process leaves about
+// itself, never a fleet-wide fact a coordinator could assert; per log because
+// two windows can be open at once. The log is the second segment, so one log's
+// acknowledgements are read with a filter the broker matches.
 func MaintenanceAckKey(stream, nodeID string) string {
 	return DocumentKey("maintenance-ack", stream, nodeID)
 }

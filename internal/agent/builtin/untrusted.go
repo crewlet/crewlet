@@ -10,26 +10,18 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
-// Which fields of an answer somebody else wrote, as the records say.
+// Which fields of an answer somebody else wrote, as the records declare them
+// ([provenance.FieldTag]). This walks an answer as its encoding will write it,
+// so both places a tool answer is encoded hold it to the declaration rather
+// than to a hand-kept list of tools:
 //
-// A record declares a field somebody's words where the field is declared
-// ([provenance.FieldTag]): a task's title, a comment's body, a change's
-// excerpt. This walks an answer the way its encoding will write it and finds
-// every such field that holds something, so the two places a tool answer is
-// encoded can hold the answer to the declaration rather than to a list of
-// tools somebody keeps:
+//   - [jsonAnswer] refuses an answer carrying one at all: such a tool answers
+//     through a [foreignRead] or not at all;
+//   - [foreignRead.render] refuses a fenced field it did not fence, or a named
+//     field with no envelope saying whose it is.
 //
-//   - [jsonAnswer], the plain encoder, refuses an answer carrying one at all:
-//     a tool that hands a model a record holding somebody's words answers
-//     through a [foreignRead], or it does not answer;
-//   - [foreignRead.render] refuses one whose fenced field it did not fence,
-//     or whose named field it answers with no envelope saying whose it is.
-//
-// WHAT IT CANNOT SEE is a string copied out of a record into an answer of the
-// tool's own making — a map's value, a field of a struct with no tag. Those
-// are the tool's to label, and the walk over every registered tool
-// (TestEveryToolThatHandsOverSomebodysWordsIsFenced) is what finds one that
-// does not.
+// It cannot see a string copied into an untagged field or map of the tool's
+// own: TestEveryToolThatHandsOverSomebodysWordsIsFenced finds those.
 
 // declaredField is one tagged field an answer carries, where its encoding
 // writes it.

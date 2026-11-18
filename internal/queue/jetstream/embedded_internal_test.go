@@ -17,14 +17,10 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
-// A PROBE THAT COULD NOT ANSWER IS NOT AN ANSWER, and telling the two apart is
-// what keeps the caller's message honest.
-//
-// This collapsed every listen failure into "not free", so a cancelled start,
-// an address this host does not have and a privileged port all reported
-// themselves as a port somebody else was holding — three different remedies
-// behind one sentence, and two of them send the reader hunting for a process
-// that does not exist.
+// A PROBE THAT COULD NOT ANSWER IS NOT AN ANSWER: a cancelled start, an
+// address this host does not have and a privileged port each come back as an
+// error, never as a port somebody holds; three remedies, two of which would
+// send the reader hunting for a process that does not exist.
 func TestAPortProbeSaysWhetherItCouldAnswerAtAll(t *testing.T) {
 	t.Parallel()
 
@@ -37,8 +33,8 @@ func TestAPortProbeSaysWhetherItCouldAnswerAtAll(t *testing.T) {
 	//nolint:errcheck // Listen on a TCP address always yields *TCPAddr.
 	port := l.Addr().(*net.TCPAddr).Port
 
-	// HELD: in use, and that IS the answer this exists to give — free is
-	// false and err is nil, because the probe ran and the port is taken.
+	// HELD: free is false and err nil, since the probe ran and the port is
+	// taken.
 	switch free, err := PortAvailable(t.Context(), "127.0.0.1", port); {
 	case err != nil:
 		t.Errorf("a held port reported a probe failure: %v", err)
@@ -79,35 +75,17 @@ func TestAPortProbeSaysWhetherItCouldAnswerAtAll(t *testing.T) {
 }
 
 // A CONNECTION TO THIS PROCESS'S OWN BROKER HANDSHAKES WITHIN THE LISTENER
-// BUDGET, never nats's two-second default for a remote dial.
+// BUDGET ([listenTimeout]), never nats's two-second default for a remote dial:
+// the server already answered ReadyForConnections, so a slow handshake is only
+// host load, and failing it fails the queue against a broker that is up. Held
+// on the pipe [embeddedServer.connect] dials, not an option list a dial could
+// stop passing, clustered and solo alike. Its reconnects span the same budget
+// ([embeddedReconnects]), to THIS server alone (IgnoreDiscoveredServers), or a
+// node whose broker stopped lands on a peer and never stops itself;
+// jetstreamtest's TestAMembersOwnClientDiscoversNoPeer holds that on a cluster.
 //
-// The server a connection is opened to has already answered
-// ReadyForConnections, so a slow handshake measures only host load — and on a
-// loaded host the default failed the queue's own connection with `read pipe:
-// i/o timeout` against a broker that was up. The budget has to be the one a
-// started server is given to take a connection ([listenTimeout]), or the two
-// drift.
-//
-// HELD ON THE CONNECTION [embeddedServer.connect] OPENS — through the
-// in-memory pipe, its one dial on every topology — rather than on an option
-// list read beside it: a list a test reads certifies nothing about a dial that
-// stopped passing it. Asked of a clustered member's flag as well as a solo
-// server's, because the two budgets this replaced were picked by that flag,
-// and a member given its own number again would be the drift.
-//
-// AND ITS RECONNECTS SPAN THAT SAME BUDGET, since running them out is how a
-// node whose own broker has stopped stops itself ([embeddedReconnects]) — and
-// they are made to THIS server alone, ignoring any peer a pool could be told
-// of, or a reconnect lands on a peer and never runs out. That half is asserted
-// on the option here, and as behaviour against a real cluster in
-// jetstreamtest, which is where a cluster may be formed.
-//
-// Mutation: drop the budget from the dial in connect and every row goes red;
-// drop the reconnect options and every row does (nats's own sixty attempts two
-// seconds apart span two minutes); drop IgnoreDiscoveredServers and every row
-// does. (That a real clustered member's connection is in process too is
-// jetstreamtest's TestAMembersOwnClientDiscoversNoPeer: this package forms no
-// cluster.)
+// Mutation: drop the budget from connect, the reconnect options or
+// IgnoreDiscoveredServers, and every row goes red.
 func TestAConnectionToItsOwnBrokerHandshakesWithinTheListenerBudget(t *testing.T) {
 	t.Parallel()
 	broker, err := startEmbedded(t.Context(), Config{})
@@ -144,10 +122,8 @@ func TestAConnectionToItsOwnBrokerHandshakesWithinTheListenerBudget(t *testing.T
 				"rather than one in this process", clustered, got, want,
 				nats.DefaultTimeout)
 		}
-		// AND THE RECONNECTS SPAN THE SAME BUDGET, one wait at a time:
-		// running them out is how a node whose own broker stopped stops
-		// itself, and nats's own sixty attempts two seconds apart were two
-		// minutes dark whatever the topology.
+		// THE RECONNECTS SPAN THE SAME BUDGET: nats's own sixty attempts two
+		// seconds apart leave a node whose broker stopped two minutes dark.
 		if span := time.Duration(reconnects) * wait; reconnects <= 0 ||
 			span != listenTimeout {
 			t.Errorf("clustered=%v: %d reconnects %v apart span %v, want the "+
@@ -169,14 +145,10 @@ func startJoined(ns *server.Server) <-chan struct{} {
 	return started
 }
 
-// AN EXTERNAL SERVER'S HANDSHAKE IS NOT GIVEN THE EMBEDDED MEMBER'S BUDGET.
-//
-// A connection to this process's own member takes the listener budget because
-// that server has already answered; a remote one has not, and the reconnect
-// loop waits this long on every silent member of its pool before asking the
-// next, which is time a node spends not renewing its seats' leases. The two
-// option lists sit a screen apart, so this holds the one a shared list would
-// break. Mutation: dial with listenTimeout and it goes red.
+// AN EXTERNAL SERVER'S HANDSHAKE IS NOT GIVEN THE EMBEDDED MEMBER'S BUDGET: a
+// remote server has not already answered, and the reconnect loop waits that
+// long on every silent pool member, time a node spends not renewing its seats'
+// leases. Mutation: dial with listenTimeout and it goes red.
 func TestAnExternalDialKeepsItsOwnHandshakeBudget(t *testing.T) {
 	t.Parallel()
 	opts, _, err := dialOptions(Config{}, nil)
@@ -200,15 +172,12 @@ func TestAnExternalDialKeepsItsOwnHandshakeBudget(t *testing.T) {
 // AN EXTERNAL DIAL GIVES EVERY SOCKET WRITE THE CROSSING OF THE LARGEST ONE THE
 // CLIENT MAKES before it cuts the connection under it.
 //
-// The client writes a large message whole, in one socket Write under one
-// deadline, and a reconnect flushes what it buffered the same way. Left at the
-// client's minute, a write of more than about two mebibytes across a link at
-// the floor broke the connection — and everything riding it — long before the
-// write's own budget ended. So the deadline covers the largest Write the
-// client makes: one message at the contract's ceiling behind as much as either
-// of its buffers holds short of its limit, at the object store's floor —
-// worked out here off the options the dial applies, so a buffer a later change
-// sets larger raises what the deadline has to cover.
+// The client writes a large message whole, in one Write under one deadline,
+// and a reconnect flushes its buffer the same way; the client's minute would
+// break the connection on a link at the floor. The largest Write is a message
+// at the contract's ceiling behind either buffer short of its limit, at the
+// object store's floor, computed off the options the dial applies so a larger
+// buffer raises the bound.
 //
 // Mutation: dial without FlusherTimeout, and the client's minute holds every
 // Write.
@@ -238,17 +207,12 @@ func TestAnExternalDialGivesEveryWriteTheLargestWritesCrossing(t *testing.T) {
 }
 
 // droppingInfoJS drops the account report it is asked for — returning only
-// when the request's own term ends, as a request a metadata group with no
-// leader never replies to does — until it has dropped `drop` of them, and
-// then answers at once.
+// when the request's own term ends, as a metadata group with no leader never
+// replies — until it has dropped `drop` of them, and then answers at once.
 //
-// THE ANSWER IS ITS OWN, never the real server's. The wait gives every ask
-// the same term, and the cases shorten it to 20 ms so three dropped asks cost
-// little; a real round trip under a loaded race build ran past that term, the
-// wait rightly asked a fifth time, and the case reported the count it exists
-// to pin as a defect (1 run in 900 beside three busy CPUs, and once in 20 runs
-// of this package). How often the wait asks is the assertion, so the latency
-// of an answer must not decide it.
+// THE ANSWER IS ITS OWN, never the real server's: how often the wait asks is
+// the assertion, and a real round trip under a loaded race build can outrun the
+// cases' 20 ms term and make the wait ask again.
 type droppingInfoJS struct {
 	jetstream.JetStream
 	drop  int32
@@ -266,17 +230,14 @@ func (f *droppingInfoJS) AccountInfo(ctx context.Context) (*jetstream.AccountInf
 // A CLUSTERED MEMBER IS READY ONLY ONCE THE METADATA LEADER ANSWERS IT, not
 // once it believes itself current.
 //
-// "Current" is a local flag, and a member that knows of no leader can hold it
-// — so provisioning that started on it sent its first lookup to a group that
-// dropped it, and the lookup waited out a whole fifteen-second ask term before
-// anything asked again. Every fleet boot paid that by timer. The wait now
-// ends on an ANSWER, and a dropped question is asked again rather than waited
-// on; when none ever comes, the refusal says that it was the leader that never
-// answered, which is a different remedy from a member that never caught up or
-// was never routed.
+// "Current" is a local flag a member that knows of no leader can hold, and a
+// lookup sent to a leaderless group waits out a whole ask term. So the wait
+// ends on an ANSWER, a dropped question is asked again rather than waited on,
+// and when none comes the refusal names the leader, a different remedy from a
+// member that never caught up or was never routed.
 //
-// A member named into a cluster of its own, so the two local halves hold at
-// once and what the wait does is decided by the answer alone.
+// A member in a cluster of its own, so both local halves hold at once and the
+// answer alone decides the wait.
 func TestAClusteredMemberIsReadyOnlyOnceTheLeaderAnswers(t *testing.T) {
 	t.Parallel()
 	e, err := startEmbedded(t.Context(), Config{ClusterName: "alone", ServerName: "a"})

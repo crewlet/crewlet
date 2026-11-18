@@ -17,16 +17,13 @@ import (
 // refusingKV is a broker whose bucket CREATE is refused, and which counts how
 // many times it was asked.
 //
-// IT WRAPS A REAL ONE, so every other call on the path is a genuine JetStream:
-// only the create's answer and the lookup's are substituted, and the lookup
-// answers not-found on purpose — that is what makes a read-back visible. An arm
-// that stops being terminal falls through to [jsprovision.Settle], spends its
-// window asking after an object nobody made, and appends "it is not there" to
-// a refusal that had already said what was wrong.
+// IT WRAPS A REAL ONE: only the create's answer and the lookup's are
+// substituted, and the lookup answers not-found on purpose so that a read-back
+// shows: an arm that stops being terminal falls through to [jsprovision.Settle]
+// and appends "it is not there" to a refusal that already said what was wrong.
 //
-// UNLESS A PEER WON: with peerWon set, a lookup made after the create was
-// refused is answered from the real broker, where the case has made the bucket
-// itself — the shape a node that lost a create race to a peer meets.
+// UNLESS A PEER WON: with peerWon set, a lookup after the refused create is
+// answered from the real broker, where the case made the bucket itself.
 type refusingKV struct {
 	jetstream.JetStream
 	refusal error
@@ -60,39 +57,15 @@ func refusingBroker(t *testing.T, refusal error) *refusingKV {
 // A STORAGE REFUSAL ON A BUCKET IS TERMINAL, AND IS NEVER REPORTED AS A BUCKET
 // THAT IS NOT THERE.
 //
-// # What this arm is for
+// [openBucket] classifies a create the broker cannot back as terminal: nothing
+// was placed, and waiting frees no capacity. Falling through to the read-back
+// spends [jsprovision.ReadBack] asking after an object nobody made, then sends
+// an operator looking for a missing bucket on a broker that is full. Only the
+// create is substituted, so the lookup, the budgets and the read-back are real.
 //
-// `stream.store_max_bytes` made the broker's storage limit a declared number,
-// and a create it cannot back is refused with text naming no limit, no usage
-// and no field. [openBucket] classifies that refusal as terminal — nothing was
-// placed, and nothing frees capacity by being waited for — and the classification
-// arrived with no case behind it: deleting the arm left the refusal falling
-// through to the read-back, which spends [jsprovision.ReadBack] asking after an
-// object nobody made and then reports a bucket that is "not there". An operator
-// reading that goes looking for a missing bucket on a broker that is full.
-//
-// # Why the create is substituted and the broker is not
-//
-// Because everything else on this path has to be real for the assertions to
-// mean anything — the lookup, the budgets, the read-back this must not reach.
-// The wire shapes are the server's own.
-//
-// # Which shape a bucket actually gets, and why the others are here anyway
-//
-// A BUCKET DECLARES NO CEILING, so the refusals it can receive are not the ones
-// a stream can. A standalone create is checked against the account's limit and
-// the server's, and answers 10047 (or 10028 where its streams are in memory).
-// A clustered create runs the account half alone, and the metadata leader's
-// peer selection — where a clustered STREAM's server limit surfaces — skips its
-// storage check entirely for an object with no ceiling
-// (`maxBytes > 0 && maxBytes > available`, server/jetstream_cluster.go,
-// selectPeerGroup). So the "no suitable peers, insufficient storage" shape
-// cannot reach a bucket today.
-//
-// And where it could, it would not be this arm anyway: that refusal is about
-// ANOTHER member's disk, which this node cannot read, so it stays
-// [jsprovision.Unplaceable] and is waited out rather than reported. Its case is
-// below, with the rest of placement.
+// With no ceiling, a bucket never meets "no suitable peers, insufficient
+// storage" (selectPeerGroup skips its storage check), a placement refusal
+// anyway (the case below).
 func TestAStorageRefusalOnABucketIsTerminalAndNotAMissingBucket(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -158,33 +131,19 @@ func TestAStorageRefusalOnABucketIsTerminalAndNotAMissingBucket(t *testing.T) {
 // AND A PLACEMENT REFUSAL IS THE OPPOSITE CASE: IT IS WAITED OUT, AND THEN ALSO
 // REPORTED WITHOUT A READ-BACK.
 //
-// # Why the two are told apart by the retry alone
+// Both end in the broker's own error with no read-back ([jsprovision.Refused]);
+// only the RETRY, [jsprovision.Place]'s, tells them apart: a storage refusal is
+// attempted once, a cluster still gathering members is re-asked every
+// [jsprovision.PlacementRetry] until the deadline.
 //
-// Both end in the broker's own error, unwrapped, with no read-back, which is
-// why [openBucket] asks one predicate of both ([jsprovision.Refused]). What
-// separates them is the RETRY, and that is [jsprovision.Place]'s: a storage
-// refusal is attempted once, and a cluster that has not gathered enough
-// members is re-asked every [jsprovision.PlacementRetry] until the create's
-// deadline. Each has an observable of its own, so each has a case.
-//
-// That difference is the whole of b5e4481: keyed on the placement code alone,
-// a capacity refusal was waited out for the entire provisioning budget, and
-// then reported as the broker's bare text.
-//
-// THE PARENT CONTEXT IS THE BUDGET HERE. [jsprovision.Clustered.Budget] is
-// minutes, and `WithTimeout` only ever shortens — so a caller with a deadline
-// of its own bounds both the lookup and the create, which is what makes the
-// retry loop observable in a test rather than in a boot.
+// THE PARENT CONTEXT IS THE BUDGET: [jsprovision.Clustered.Budget] is minutes
+// and `WithTimeout` only shortens, so the case's own deadline bounds the loop.
 func TestAPlacementRefusalIsRetriedAndThenReportedWithoutAReadBack(t *testing.T) {
 	t.Parallel()
-	// A STORAGE CLAUSE INSIDE THE PLACEMENT CODE IS STILL PLACEMENT, which
-	// is the reading the split turns on: the room that refused is another
-	// member's disk, this node cannot read it, and a peer that is offline
-	// or about to be given room clears by being waited for. A bucket
-	// cannot receive this shape today — peer selection skips its storage
-	// check for an object with no ceiling — but the predicate is shared
-	// with the stream path, which can, and a bucket path reading it as
-	// terminal would be that drift invisibly.
+	// A STORAGE CLAUSE INSIDE THE PLACEMENT CODE IS STILL PLACEMENT: the room
+	// that refused is another member's disk, which this node cannot read and
+	// waiting can clear. A bucket cannot meet this shape today, but the predicate
+	// is shared with the stream path, which can.
 	refusal := &jetstream.APIError{
 		ErrorCode: 10005, Code: 400,
 		Description: "no suitable peers for placement, insufficient storage",
@@ -222,23 +181,13 @@ func TestAPlacementRefusalIsRetriedAndThenReportedWithoutAReadBack(t *testing.T)
 // A BUCKET THE ACCOUNT HAS NO LIMIT FOR NAMES THE CLASS, AND IS NOT A MISSING
 // BUCKET EITHER.
 //
-// # A third refusal, and it was the one nothing classified
-//
-// `no JetStream default or applicable tiered limit present` (10120) is the
-// broker answering that the account's limits are TIERED and carry none for the
-// replica class `stream.replicas` puts this node in. It is decided before a
-// byte is compared, so it is not the storage refusal above wearing another
-// code — and it keeps an arm of its own in [openBucket], ahead of the general
-// refusal, because it is the one worded differently: a bucket
-// declares no ceiling at all, which makes it the clearest case of the two being
-// different — there is nothing here to make smaller.
-//
-// Unclassified it matched neither [jsprovision.OutOfCapacity] nor
-// [jsprovision.Unplaceable] and fell through to [jsprovision.Settle], which
-// spent its window asking after a bucket nobody made and reported one that is
-// "not there". Of everything a boot path can say about the store that holds the
-// fleet's leases and this company's secrets, that is the sentence most likely
-// to be read as corruption.
+// 10120 means the account's limits are TIERED with none for the replica class
+// `stream.replicas` puts this node in. It is decided before a byte is compared,
+// so it is no storage refusal, and keeps its own arm in [openBucket], ahead of
+// the general refusal, worded to name the class: a bucket declares no ceiling,
+// so there is nothing to make smaller. Read back, it reports the bucket holding
+// the fleet's leases and secrets as "not there": the sentence most likely to
+// be read as corruption.
 func TestABucketWithNoApplicableLimitNamesTheClassAndIsNotAMissingBucket(t *testing.T) {
 	t.Parallel()
 	refusal := &jetstream.APIError{ErrorCode: 10120, Code: 400,
@@ -298,17 +247,12 @@ func pinnedRefusal(t *testing.T, id server.ErrorIdentifier) *jetstream.APIError 
 		Code: e.Code, Description: e.Description}
 }
 
-// EVERY REFUSAL NO PEER COULD HAVE CAUSED IS TERMINAL, NOT ONLY THE THREE THIS
-// SITE ONCE LISTED.
+// EVERY REFUSAL NO PEER COULD HAVE CAUSED IS TERMINAL, NOT ONLY CAPACITY, NO
+// APPLICABLE LIMIT AND STILL FORMING.
 //
-// The bucket create gated its read-back on its own three refusals — capacity,
-// no applicable limit, still forming — so every other answer the broker gives
-// a create it refused on the request alone fell through to
-// [jsprovision.Settle]: a bucket whose subjects another stream already holds,
-// or an account at its stream count, spent the read-back window asking after a
-// bucket nobody made and was reported as one that is "not there". The site now
-// asks [jsprovision.Refused], the one list every create site shares, and these
-// are the codes on it the old arms did not name.
+// [openBucket] asks [jsprovision.Refused], the one list every create site
+// shares; these are codes on it beyond those three, each of which a bucket
+// create must not read back and report as a bucket "not there".
 func TestEveryRefusalNoPeerCouldHaveCausedIsNotReadBack(t *testing.T) {
 	t.Parallel()
 	for name, id := range map[string]server.ErrorIdentifier{
@@ -353,11 +297,10 @@ func TestEveryRefusalNoPeerCouldHaveCausedIsNotReadBack(t *testing.T) {
 
 // AND A CREATE A PEER WON IS STILL READ BACK, AND ITS BUCKET OPENED.
 //
-// The other direction of the same list, and the one whose failure is worse: a
-// code wrongly taken as a refusal turns the node that lost a create race into
-// a node that refuses to boot over a bucket that exists. "Stream name already
-// in use" is the tidy shape of that race — the peer's create committed first —
-// so it must reach the read-back, find the peer's bucket and carry on.
+// The worse failure of the same list: a code wrongly taken as a refusal makes
+// the node that lost a create race refuse to boot over a bucket that exists.
+// "Stream name already in use" is that race's shape, so it must reach the
+// read-back and open the peer's bucket.
 func TestABucketAPeerMadeFirstIsReadBackAndOpened(t *testing.T) {
 	t.Parallel()
 	refusal := pinnedRefusal(t, server.JSStreamNameExistErr)

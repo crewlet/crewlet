@@ -14,8 +14,8 @@ import (
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
-// The repositories the cases give a run, valid by [RunRepo.ValidateFor] a
-// executor ([CloneCoding]).
+// The repositories the cases give a run, valid for a coding executor
+// ([RunRepo.ValidateFor], [CloneCoding]).
 const (
 	webRepoID = "0190d8f0-0000-7000-8000-00000000000a"
 	apiRepoID = "0190d8f0-0000-7000-8000-00000000000b"
@@ -31,9 +31,9 @@ func granted(name, id string) RunRepo {
 	}
 }
 
-// withRepos is req given repos the way the engine gives a carried-on round
-// its job's grants: on the spec, with the floor their resolution read. No
-// launch clones them: the run does, with the commands its checkout answered.
+// withRepos is req given repos as the engine gives a carried-on round its
+// job's grants: on the spec, with the floor their resolution read. The run,
+// not the launch, clones them.
 func withRepos(t *testing.T, req LaunchRequest, repos ...RunRepo) LaunchRequest {
 	t.Helper()
 	req.Spec.Repos = repos
@@ -41,11 +41,10 @@ func withRepos(t *testing.T, req LaunchRequest, repos ...RunRepo) LaunchRequest 
 	return req
 }
 
-// A LAUNCH WRITES THE JOB'S GRANTS AND ITS FLOOR ON THE ROW BEFORE ITS BOX
-// EXISTS: the row is what a box's request to Gitlet is admitted
-// against, and that request can come before the launch returns — and so is
-// whom the job's pushes are made for, which a round carried on keeps with its
-// grants. The launch floor is the floor the job opened at.
+// A LAUNCH WRITES THE JOB'S GRANTS, ITS FLOOR AND WHOM ITS PUSHES ARE MADE FOR
+// ON THE ROW BEFORE ITS BOX EXISTS: a box's request to Gitlet is admitted
+// against the row and can come before the launch returns. The launch floor is
+// the floor the job opened at.
 //
 // Mutations: leave Repos off the run BeginLaunch is handed — the row at the
 // box's creation carries none, red; leave whom its pushes are made for off it
@@ -109,12 +108,10 @@ func (w *grantWitness) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 }
 
 // A LAUNCH WHOSE GRANTS ITS ROW COULD NOT CARRY IS REFUSED BEFORE ANYTHING IS
-// WRITTEN: more repositories than a run is given, one that is not a RunRepo,
-// one named twice — by its name or by its id, either giving one repository two
-// grants and one checkout two clones — a floor that does not go with its
-// repositories, and a colleague's ceiling, or whom its pushes are made for, on
-// a run given none, which would bound and carry nothing. Nothing is on the
-// store and no box was made.
+// WRITTEN: too many repositories, one that is not a RunRepo, one named twice by
+// name or id (two grants, two clones), a floor that does not go with its
+// repositories, and a colleague's ceiling or whom its pushes are made for on a
+// run given none. No row is stored and no box made.
 //
 // Mutation: drop checkRepos from Launch — the duplicate and floor rows open a
 // row, red.
@@ -189,17 +186,13 @@ func (r LaunchRequest) withFloor(floor string) LaunchRequest {
 	return r
 }
 
-// THE LAUNCH'S OWN ENVIRONMENT REACHES EVERY SETUP STEP AND THE RUN. A run
-// clones each repository it checks out with the job's own credential, which
-// the engine mints for the launch the store has just named
-// ([LaunchRequest.RunEnv]): asked once, with the row's launch id, its
-// variables are in the environment of the operator's setup command and of the
-// harness, winning over an operator's value of the same name. The run's
-// telemetry is minted at the job's start and reaches the run alone. The spec
-// the caller built keeps its own map. A launch runs the operator's steps
-// alone — a grant the job carries is cloned by the run, never at launch — and
-// its environment block names no checkout, which the checkout's own answer
-// does.
+// THE LAUNCH'S OWN ENVIRONMENT REACHES EVERY SETUP STEP AND THE RUN.
+// [LaunchRequest.RunEnv], the job's own clone credential, is asked once with
+// the row's launch id, and its variables reach the operator's setup and the
+// harness, winning over an operator's value of the same name. Telemetry is
+// minted at the job's start and reaches the run alone. The caller's spec keeps
+// its own map. A launch runs only the operator's steps (the run clones a
+// grant) and its environment block names no checkout.
 //
 // Mutation: provision with req.Spec rather than the launch's — the setup
 // commands' environment lacks the token, red.
@@ -240,8 +233,7 @@ func TestTheLaunchEnvironmentReachesSetupAndTheRun(t *testing.T) {
 	var ran []string
 	for _, e := range execs {
 		if e.Command == boxFactsScript {
-			// THE LAUNCH'S READ OF THE BOX, which needs no credential and is
-			// handed none.
+			// THE LAUNCH'S READ OF THE BOX needs no credential and gets none.
 			if len(e.Env) != 0 {
 				t.Errorf("the box's read was handed an environment: %v", e.Env)
 			}
@@ -345,11 +337,10 @@ func (p *scriptedBoxes) Create(ctx context.Context, spec Spec) (Sandbox, error) 
 	return box, nil
 }
 
-// resumeInItsBox puts the rig's run t1 where a job that CONTINUES in the box
-// the job before it left is launched: that job over and its turn resumed, the row
-// still naming its box ([PriorBox.ContinuesIn]) — what a reviewer's send-back
-// and an answered question both relaunch from. The next launch of t1 in the
-// same cell, on the same CLI, is given that box back.
+// resumeInItsBox puts the rig's run t1 where a send-back or an answered
+// question relaunches it: the job over, its turn resumed, the row still naming
+// its box ([PriorBox.ContinuesIn]). The next launch of t1 in the same cell and
+// CLI is given that box back.
 func resumeInItsBox(t *testing.T, rig *waiterRig) {
 	t.Helper()
 	if err := rig.pending.SetStatus(t.Context(), "t1", StatusResumed, Fence{}); err != nil {

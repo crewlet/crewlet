@@ -50,7 +50,7 @@ func TestWriteProjectLetsAnySeatDeclareATag(t *testing.T) {
 
 // THE TABLE DECIDES THE LEAD-ONLY FACETS, and a chart that refuses is a
 // REFUSAL of the call rather than a write carrying a false authority: the
-// decision is taken before the writer is reached now, so the tracker's own
+// decision is taken before the writer is reached, so the tracker's own
 // gate is the second line and not the first.
 func TestWriteProjectCarriesTheLeadAnswer(t *testing.T) {
 	t.Parallel()
@@ -156,15 +156,9 @@ func TestWriteProjectTellsAbsentFromEmpty(t *testing.T) {
 	}
 }
 
-// AN AGENT NEVER ARCHIVES A PROJECT, and the bar is the TABLE's now rather
-// than a kind the tool reported.
-//
-// It used to be `ProjectAuthority.Operator`, filled from "the actor is not a
-// seat" — which was the same fact the policy gate accepted as a SUBSTITUTE for
-// the lead relation, so a person's own credential was authority over every
-// project in the company. [authz] states it once, as a human-only bar on the
-// archive verb alone, and a seat that leads the project is refused by it while
-// keeping every other facet.
+// AN AGENT NEVER ARCHIVES A PROJECT, and the bar is the TABLE's ([authz]'s
+// human-only bar on the archive verb alone), never a kind the tool reports: a
+// seat that leads the project is refused it while keeping every other facet.
 func TestAnAgentNeverArchivesAProject(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -217,12 +211,10 @@ func TestAnAgentNeverArchivesAProject(t *testing.T) {
 	}
 }
 
-// A NEAR-DUPLICATE CAVEAT REACHES BOTH READERS. It is advisory by design, so
-// the only thing that makes it useful is that the caller actually sees it: a
-// model in the answer's one top-level `warnings` list, a person through the
-// result's caveats, which the act route answers in a person's words. Nested
-// under the answer's `tags` half, it was a list the act route could not take
-// off a person's receipt.
+// A NEAR-DUPLICATE CAVEAT REACHES BOTH READERS: it is advisory, so useful only
+// if seen — by a model in the answer's one top-level `warnings` list, by a
+// person through the result's caveats. Nested under the `tags` half, the act
+// route could not take it off a person's receipt.
 func TestWriteProjectCarriesTheTagWarnings(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -382,16 +374,11 @@ func TestLabelsAreDeclaredBeforeTheTaskIsFiled(t *testing.T) {
 	}
 }
 
-// A REFUSED CALL DECLARES NO LABEL. The declare is the call's first PUBLISH,
-// on its own subject, so it has to come after every check that can still
-// refuse the call — its ask, its decision, its blockers, its re-route. A call
-// the tool turned down files nothing and must leave the project's label set
-// exactly as it found it, or every refused retry adds a label nobody went on
-// to use.
-//
-// And an update that cannot write its dependency change writes NOTHING: the
-// patch landing before a refusal would tell the caller the call failed about
-// an item whose fields it did in fact change.
+// A REFUSED CALL DECLARES NO LABEL. The declare is the call's first PUBLISH, so
+// it comes after every check that can still refuse (ask, decision, blockers,
+// re-route), or every refused retry adds a label nobody uses. And an update
+// that cannot write its dependency change writes NOTHING, or the caller is told
+// "failed" about an item whose fields did change.
 func TestARefusedWriteDeclaresNoLabel(t *testing.T) {
 	t.Parallel()
 	labels := func(args map[string]any) map[string]any {
@@ -442,16 +429,11 @@ func TestARefusedWriteDeclaresNoLabel(t *testing.T) {
 	}
 }
 
-// THE VERB IS DECLARED DESTRUCTIVE, and the facet that makes it so is the one
-// a caller is most likely to reach for by accident rather than the one it is
-// named after: `fields` REPLACES a project's declarations, so a call sending a
-// short list retires every field it left out. The flag asks whether a call can
-// undo somebody else's work, and this one can.
-//
-// Asserted here rather than left to the classification table, because that
-// table only reads [mcp.WritesToSharedSurface] — which the fail-closed DEFAULT
-// arm already answers true. Without this, the arm could be deleted outright
-// and every suite would stay green.
+// THE VERB IS DECLARED DESTRUCTIVE because `fields` REPLACES a project's
+// declarations: a short list retires every field it left out, undoing
+// somebody else's work. Asserted here because the classification table only
+// reads [mcp.WritesToSharedSurface], which the fail-closed DEFAULT arm already
+// answers true: without this, deleting the arm would leave every suite green.
 func TestWriteProjectIsDeclaredDestructive(t *testing.T) {
 	t.Parallel()
 	reg := projectRegistry(t, newFakeTracker(), chartRefuses)
@@ -474,12 +456,8 @@ func TestWriteProjectIsDeclaredDestructive(t *testing.T) {
 // ---- helpers ------------------------------------------------------------ //
 
 // projectChart answers the project relation and nothing else, which is what
-// every case in this file turns on.
-//
-// THE OTHER TWO RELATIONS REFUSE rather than mirroring this one, on
-// [authz.Chart.LeadsUnit]'s own rule: a fixture that folded them would agree
-// with a rule asking either, and the whole point of three methods is that a
-// rule asking the wrong one is caught.
+// every case in this file turns on. THE OTHER TWO RELATIONS REFUSE
+// ([authz.Chart.LeadsUnit]'s rule), so a rule asking the wrong one is caught.
 type projectChart struct {
 	leads bool
 	err   error
@@ -501,9 +479,8 @@ func (c projectChart) LeadsContainer(context.Context, string, string) (bool, err
 	return false, nil
 }
 
-// LeadsAnyone answers the person relation's "anybody at all", which is the
-// person relation's own and refuses here for the reason [projectChart.Leads]
-// does.
+// LeadsAnyone, the person relation's "anybody at all", refuses for the reason
+// [projectChart.Leads] does.
 func (c projectChart) LeadsAnyone(context.Context, string) (bool, error) {
 	return false, nil
 }
@@ -527,9 +504,7 @@ var (
 )
 
 // chartUnknown is a chart that could not answer — a node booting, or one
-// running no company yet. It is a fixture rather than an error
-// literal at the call sites because the outcome it drives is the one the
-// two-valued seam could not express at all.
+// running no company yet.
 var chartUnknown = projectChart{err: errors.New("this node runs no company yet")}
 
 func projectRegistry(t *testing.T, trk *fakeTracker, chart authz.Chart) *tools.Registry {
@@ -557,18 +532,12 @@ func projectRegistryIn(t *testing.T, trk *fakeTracker, chart authz.Chart,
 	return reg
 }
 
-// A CHART THAT COULD NOT ANSWER REFUSES THE WRITE, AND SAYS WHY.
-//
-// The outcome the two-valued seam had no way to express. `person` alone is
-// enough for the operator half of this authority, so a chart that could not
-// answer would land a lead's edit as an operator's — or, for a seat, refuse
-// it naming the lead relation rather than the lag. A node holds no company
-// while it is booting, before its first revision is applied, and while it is
-// installing one, and none of those is "you do not lead this".
-//
-// TOLD TO TRY AGAIN, which is the difference that matters to whoever is
-// holding the keyboard: they try again and it works, rather than going to
-// find an authority they already hold.
+// A CHART THAT COULD NOT ANSWER REFUSES THE WRITE, AND SAYS WHY: a node holds
+// no company while booting or installing a revision, which is not "you do not
+// lead this". Since `person` alone grants the operator half, answering anyway
+// would land a lead's edit as an operator's, or refuse a seat naming the lead
+// relation rather than the lag. TOLD TO TRY AGAIN, so the caller retries rather
+// than hunting for an authority they already hold.
 func TestWriteProjectRefusesWhenTheChartCannotAnswer(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -592,14 +561,10 @@ func TestWriteProjectRefusesWhenTheChartCannotAnswer(t *testing.T) {
 	}
 }
 
-// THE TARGET DATE TRAVELS AS SENT, AND NULL CLEARS IT.
-//
-// Presence decides here too: a call that says nothing about the target must
-// not clear the one the lead set, and one that sends null or "" must — "no
-// target" is a setting. What the value MEANS is the tracker's to coerce, so
-// the tool carries the text and surfaces what the write was not refused for:
-// an instant stored as its day changed the caller's value, and an answer that
-// said `applied` alone would read as stored verbatim.
+// THE TARGET DATE TRAVELS AS SENT, AND NULL CLEARS IT. Presence decides: a
+// call silent on the target keeps it, null or "" clears it. The tracker
+// coerces the value, and an instant stored as its day is surfaced, since
+// `applied` alone would read as stored verbatim.
 func TestWriteProjectCarriesTheTargetDate(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {

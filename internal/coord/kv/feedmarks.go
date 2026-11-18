@@ -15,13 +15,11 @@ import (
 // RaiseFeedMark writes a wake feed's mark unless the one held is at the same
 // generation and at or above it ([coord.FeedMarkRegister]).
 //
-// IN THE POSITIONS BUCKET, under its own key class, for the reason the trim
-// floors are there: a mark has no age, and one that expired would read as a
-// group nobody ever consumed. A COMPARE-AND-SET on the revision it read from
-// the leader, because every node consuming the group writes the mark, and a
-// plain put landing out of order would move it back. Retried as every fleet
-// compare-and-swap loop is, at most [fleetCASAttempts] times: its contenders
-// are the nodes consuming the group, which the fleet's head count bounds.
+// IN THE POSITIONS BUCKET, as the trim floors are: a mark has no age, and an
+// expired one would read as a group nobody ever consumed. A COMPARE-AND-SET on
+// the leader's revision, because every node consuming the group writes it and
+// an out-of-order plain put would move it back. At most [fleetCASAttempts]
+// tries: the contenders are the group's consumers, bounded by the fleet's size.
 func (f *FleetStore) RaiseFeedMark(ctx context.Context, m coord.FeedMark) (bool, error) {
 	if err := m.Validate(); err != nil {
 		return false, err
@@ -73,9 +71,9 @@ func (f *FleetStore) RaiseFeedMark(ctx context.Context, m coord.FeedMark) (bool,
 	return raised, err
 }
 
-// FeedMark reads one log's mark for one group, from the leader: a replica
-// behind the latest raise would answer an older floor, and a group created
-// from it replays what the newer one had already passed.
+// FeedMark reads one log's mark for one group, from the leader: a lagging
+// replica's older floor would make a group created from it replay what the
+// newer mark had passed.
 func (f *FleetStore) FeedMark(ctx context.Context, stream, group string) (coord.FeedMark, bool, error) {
 	held, _, found, err := f.feedMarkAt(ctx, coord.FeedMarkKey(stream, group))
 	return held, found, err

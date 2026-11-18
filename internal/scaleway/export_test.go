@@ -2,7 +2,9 @@ package scaleway
 
 import (
 	"context"
+	"maps"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/seataccess"
@@ -39,8 +41,14 @@ func RulesFor(level, org string, projects []string) ([]RuleSpec, error) {
 	return rulesFor(level, org, projects)
 }
 
-// NeverGranted is what no level may hold.
+// NeverGranted is what no level holds and no grant offers.
 func NeverGranted() []string { return append([]string(nil), neverGranted...) }
+
+// OneChangeSets is each set granted only for one change, sorted.
+func OneChangeSets() []string { return slices.Sorted(maps.Keys(oneChange)) }
+
+// OneChangeHours is the hours a set granted for one change lasts at most.
+func OneChangeHours(set string) int { return oneChange[set].maxHours }
 
 // ProvisionerSets is what the provisioner's own policy must grant.
 func ProvisionerSets() []string { return append([]string(nil), provisionerSets...) }

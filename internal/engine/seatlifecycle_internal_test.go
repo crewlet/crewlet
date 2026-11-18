@@ -14,10 +14,9 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// A SEAT'S ARRIVAL IS KEYED BY ITS AGENT ID, the one field the live
-// projection reads its key from on every seat-level event. It carried the
-// HANDLE on `agent_spawned` and `agent_terminated` alone, so a seat's arrival
-// and its first turn landed under two identities.
+// A SEAT'S ARRIVAL IS KEYED BY ITS AGENT ID, the field the live projection
+// keys every seat-level event on, so `agent_spawned` and `agent_terminated`
+// land under the same identity as the seat's turns.
 func TestASeatsLifecycleEventNamesTheSeatByItsAgentID(t *testing.T) {
 	t.Parallel()
 	q := memory.New()
@@ -68,8 +67,7 @@ func TestASeatsLifecycleEventNamesTheSeatByItsAgentID(t *testing.T) {
 		t.Fatal("no agent_spawned was published")
 	}
 
-	// A handle this company does not hold publishes nothing: there is no
-	// seat to key the row on, and an identity made up from the handle
+	// An unknown handle publishes nothing: an identity made up from it
 	// would be a second row for one seat.
 	e.publishSeatLifecycle(t.Context(), "nobody", types.AgentSpawned{})
 	select {

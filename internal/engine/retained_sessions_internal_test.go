@@ -30,14 +30,12 @@ func peopleInBuckets(n int) []string {
 }
 
 // enrolMachine creates one active service account through the node's own
-// writer, so a row under its login exists for a retained record to cover.
-//
-// A SERVICE ACCOUNT, BOUND TO NO SEAT: its seat is optional (ADR-0032), so the
-// row needs no company declaring a human seat — and the id is the caller's,
-// because which bucket each principal falls in is what the cases are about.
-// The operation id is MINTED, carrying its instant, for the reason
-// [statelog.NewOpID] gives: one with none is read as older than every loss the
-// ledger has had and answered `unknown` unpublished once a sweep has run.
+// writer, so a row under its login exists for a retained record to cover. It
+// is bound to no seat (optional, ADR-0032), so no company need declare a human
+// seat; the id is the caller's because the cases turn on its bucket. The op id
+// is MINTED with its instant ([statelog.NewOpID]): one without is read as older
+// than every ledger loss and answered `unknown` unpublished once a sweep has
+// run.
 func enrolMachine(t *testing.T, e *Engine, id, login string) {
 	t.Helper()
 	if _, err := e.core.Load().iamWriter.Create(t.Context(), iamdomain.Creation{
@@ -51,21 +49,16 @@ func enrolMachine(t *testing.T, e *Engine, id, login string) {
 
 // A RETAINED RECORD COVERS EXACTLY ITS PERSON'S BUCKET — EVERY RETAINED RECORD.
 //
-// A Tier A token's binding, the record a login keeps its holder's work under
-// and the session table each refuse to vouch for somebody while this node
-// holds a record about them it could not apply: a 401 there would sign a
-// person out of a session that record opened, on a node that simply has not
-// applied it. The answer was the runner's EARLIEST deferral, which the runner
-// read without its scope — so no retained record was ever about anybody, and
-// that refusal never fired. And even with its scope, the earliest record is
-// about one bucket: a later record about somebody else was invisible to it.
+// A Tier A token's binding, a login's work record and the session table each
+// refuse to vouch for somebody while this node holds a record about them it
+// could not apply: a 401 there would sign them out of a session that record
+// opened, on a node that merely has not applied it. So coverage is per
+// bucket, over every retained record, not the first.
 //
-// Here three principals in three buckets are enrolled, and the node retains a
-// record about A and then one about C. A and C are covered, the later C
-// included; B, in a bucket neither touches, is not; and a login nobody holds
-// is covered by any record there is, since nothing can say whose enrolment a
-// record this node could not decode is. The CONTROL is the same four reads
-// before anything was retained.
+// Records about A then C are retained: A and C (the later included) are
+// covered, B in an untouched bucket is not, and a login nobody holds is covered
+// by any record, since nothing says whose enrolment an undecodable record is.
+// The CONTROL is the same four reads before anything was retained.
 func TestARetainedRecordCoversExactlyItsPersonsBucket(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -125,21 +118,15 @@ func TestARetainedRecordCoversExactlyItsPersonsBucket(t *testing.T) {
 // A MACHINE TOKEN IS VOUCHED FOR ONLY WHERE NOTHING RETAINED COVERS ITS OWNER,
 // read in the SAME SNAPSHOT as the token's row.
 //
-// A token is checked on every request a pipeline makes, and the rows that say
-// whether it still stands — the credential, the owner's epoch — are exactly
-// what a retained record about the owner may have changed: a newer peer's
-// revocation, or one signed under a keyring key this node was not restarted
-// with. The deferral was the runner's, read beside the transaction — after the
-// rows first, which paired rows from before a reprocessed revocation with
-// "nothing deferred", then before them — and it carried no scope, so it covered
-// nobody in either order. It is now the deferral index inside the row's own
-// snapshot, which is a verdict that held at one instant.
+// A retained record about the owner (a newer peer's revocation, or one under a
+// keyring key this node lacks) may have changed the token's rows, credential
+// and epoch. A deferral read beside their snapshot can pair pre-revocation
+// rows with "nothing deferred", hence the owner-scoped index inside it.
 //
-// Two service accounts in different buckets each hold a token and the node
-// retains a record about the first. The first token is not vouched for, the
-// second is, and a token this node holds no row for is covered by any record
-// retained at all, since nothing can say whose it is. The CONTROL is the same
-// three reads before anything was retained.
+// Of two tokens whose owners sit in different buckets, a record about the
+// first's owner leaves only the second vouched for; a token with no row here is
+// covered by any record, since nothing says whose it is. The CONTROL is the
+// same three reads, retaining none.
 func TestAMachineTokenIsVouchedForOnlyWhereNothingRetainedCoversItsOwner(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

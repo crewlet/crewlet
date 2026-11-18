@@ -13,35 +13,24 @@ import (
 
 // The project tools: where work is filed, and what each project expects of it.
 //
-// # Both are a SEAT's, and the reason is the same as the catalogue's
+// A seat's, as the catalogue is: `create_work_item` refuses an unknown
+// project, an undeclared type and an empty required field, and a model that
+// cannot read those can only guess. `describe_project` is how a seat learns
+// any project but its own (the turn-start prefetch covers only that): its
+// statuses, which fields each type requires, and who leads the owning unit.
 //
-// `create_work_item` refuses a project the company does not have, refuses a
-// type it has not declared and refuses a required field left empty — and a
-// model that cannot READ any of that can only guess. Telling it what exists is
-// cheaper than refusing it repeatedly, and a refusal that names the valid
-// values is only half an answer if the model had no way to look them up first.
-//
-// `describe_project` is the one a woken seat reaches for. The turn-start
-// prefetch renders a ≤2 KB block from local rows for the seat's OWN project;
-// this is how it learns any other one — which statuses exist, which fields are
-// required of which type, and who leads the unit that owns it.
-//
-// # Neither writes, and there is no companion that does
-//
-// A project's name, purpose and owning unit are CHART-OWNED: they are written
-// by the epoch apply from the org chart and by nothing else, so a seat editing
-// them would be editing the company's structure through the back door. Its
-// field declarations are a lead's, through the operator surface.
+// Neither writes, and no companion does: a project's name, purpose and owning
+// unit are chart-owned, written only by the epoch apply, and its field
+// declarations are a lead's, through the operator surface.
 
 // ProjectReader is the tracker read side these tools need.
 type ProjectReader interface {
 	Projects(ctx context.Context, q worklet.ProjectQuery) (
 		worklet.ProjectListing, error)
 	// CarriedProject is one project as describe_project hands it to a model,
-	// whose field declarations write_project tells it to send back as the
-	// whole set: read whole or refused where this node's build would drop
-	// part of it (estate's tracker.project_carried), never shown short and
-	// written back.
+	// whose field declarations write_project has it send back whole: so it
+	// is read whole or refused where this node's build would drop part of it
+	// (estate's tracker.project_carried), never shown short and written back.
 	CarriedProject(ctx context.Context, q worklet.ProjectDetailQuery) (
 		worklet.ProjectDetail, error)
 }
@@ -83,11 +72,10 @@ func (t *listProjects) Parameters() map[string]any {
 			},
 			"sort": map[string]any{
 				"type": "string",
-				// THE ENGINE'S OWN LIST, rendered rather than retyped:
-				// a description naming a key the parse refuses is a
-				// refusal a model cannot act on. No `enum`, because the
-				// leading `-` doubles the set and a fourteen-entry
-				// enumeration teaches a model less than the sentence.
+				// The engine's own list, rendered: a key the parse refuses
+				// is a refusal a model cannot act on. No `enum`: the
+				// leading `-` doubles the set, and fourteen entries teach
+				// less than the sentence.
 				"description": "Orders the whole company's projects before " +
 					"the page is taken, so `-active` is the most started work " +
 					"anywhere rather than the most of one page, and `target` " +
@@ -113,9 +101,8 @@ func (t *listProjects) Call(ctx context.Context, args map[string]any) (tools.Res
 func (t *listProjects) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
-	// THE IDENTITY CHECK IS ON A READ TOO, exactly as it is on
-	// get_work_catalogue beside it: outside a turn a seat's registry has
-	// no seat, and a tool that answered anyway would answer as nobody.
+	// Identity is checked on a read too, as get_work_catalogue does: outside
+	// a turn a seat's registry has no seat, and the tool would answer as nobody.
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
@@ -125,38 +112,32 @@ func (t *listProjects) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if !ok || t.deps.Reader == nil {
 		return unconfigured(worklet.ListProjectsTool), nil
 	}
-	// THE SAME GRAMMAR THE SCREEN'S `archived=` AND `sort=` ARE, parsed by
-	// the one function that owns them (see [worklet.ParseProjectQuery]). A
-	// model that spelled one wrong is told what is accepted rather than
-	// quietly answered about a different set.
+	// The screen's `archived=` and `sort=` grammar, parsed by its owner
+	// [worklet.ParseProjectQuery]: a misspelling is told what is accepted,
+	// never answered about a different set.
 	q, err := worklet.ParseProjectQuery(worklet.MapParams(args))
 	if err != nil {
-		// CLIPPED, because the refusal quotes the model's OWN argument
-		// back at it and a smuggled newline breaks the render — see
-		// [clip], which is also why it is not shortened.
+		// Clipped: the refusal quotes the model's own argument, and a
+		// smuggled newline breaks the render (see [clip]).
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
 		return failed(clip(err.Error())), nil
 	}
-	// THE SEAT'S OWN PAGE, which is smaller than the listing's own cap and
-	// has to be: two hundred rows encode at ≈ 93 KiB and [jsonAnswer]
-	// REFUSES a tool answer past [ToolAnswerBytes] rather than cutting it,
-	// so the tracker's screen-sized cap reached a model as advice to narrow
-	// and no projects at all. A page with `total` beside it is the honest
-	// answer (see [worklet.MaxProjectsPerToolAnswer]).
+	// The seat's page, below the listing's own cap: [jsonAnswer] refuses an
+	// answer past [ToolAnswerBytes] rather than cutting it (200 rows ≈ 93 KiB),
+	// so the screen's cap would answer with no projects. A page with `total`
+	// is the honest answer (see [worklet.MaxProjectsPerToolAnswer]).
 	if q.Limit <= 0 || q.Limit > worklet.MaxProjectsPerToolAnswer {
 		q.Limit = worklet.MaxProjectsPerToolAnswer
 	}
 	q.Units = t.deps.Units
-	// THE SEAT'S OWN LEVEL, like every other read here — see
-	// [seatReadLevel] for why it is a name and not a literal.
+	// The seat's own level; [seatReadLevel] says why a name, not a literal.
 	q.Level = seatReadLevel
 	listing, err := reader.Projects(ctx, q)
 	if err != nil {
 		return readFailure(ctx, worklet.ListProjectsTool, err), nil
 	}
-	// A PROJECT'S NAME AND PURPOSE are words whoever set them wrote, and
-	// the row records who changed the project last rather than who wrote
-	// either (ADR-0040).
+	// Name and purpose are words whoever set them wrote; the row records
+	// only the last changer (ADR-0040).
 	read := newForeignRead(turn, actor.Handle)
 	if len(listing.Projects) > 0 {
 		namesBy(read)
@@ -218,8 +199,7 @@ func (t *describeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	project := strings.TrimSpace(argString(args, "project"))
 	if project == "" {
-		// THE CALLER'S OWN, which is what a model omitting the argument
-		// meant — and the one project it is certain to be asking about.
+		// Omitted means the caller's own project.
 		project = t.deps.defaultProject(actor)
 	}
 	if project == "" {
@@ -234,23 +214,20 @@ func (t *describeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	})
 	switch {
 	case errors.Is(err, worklet.ErrNoProject):
-		// THE READER'S OWN SENTENCE, which names the nearest keys. This
-		// used to go through [readFailure], which told a model that
-		// typed a key wrong that the tracker could not be read and that
-		// it must not conclude the project does not exist — the one
-		// conclusion it needed to draw.
+		// The reader's own sentence, naming the nearest keys: [readFailure]
+		// would tell a model that mistyped a key not to conclude the
+		// project is missing, the one conclusion it needs.
 		return refusedBy(tools.RefusalNotFound, err, clip(err.Error())), nil
 	case errors.Is(err, worklet.ErrNoType):
-		// A `for_type` THE PROJECT DOES NOT FILE is the argument to
-		// change, and the reader's sentence names the types it does.
+		// A `for_type` the project does not file is the argument to change;
+		// the reader's sentence names the types it does.
 		return refusedBy(tools.RefusalInvalid, err, clip(err.Error())), nil
 	case err != nil:
 		return readFailure(ctx, worklet.DescribeProjectTool, err), nil
 	}
-	// ITS NAME, ITS PURPOSE AND ITS OWN STATUSES AND LABELS are words
-	// whoever set its policy wrote, which the project records no writer of
-	// (ADR-0040); the catalogue's types and fields beside them are the
-	// company's own configuration and are only neutralised.
+	// Name, purpose, statuses and labels are words whoever set the policy
+	// wrote, with no writer recorded (ADR-0040); the catalogue's types and
+	// fields are company configuration, only neutralised.
 	read := newForeignRead(turn, actor.Handle)
 	namesBy(read)
 	return read.answer(ctx, worklet.DescribeProjectTool, detail,

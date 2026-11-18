@@ -20,51 +20,34 @@ import (
 )
 
 // THE MERGE: code_merge_change merges a live change into its target by its
-// method, from the head its caller read, as ONE ENGINE WRITE
-// (gitlet.WriteMergeChange) the repository's Gitlet node builds and lands as one
-// merge record its committer decides (M5-D10, M5-D11) — or, on a target whose
-// gate requires a check, puts in that target's queue (M5-D9). It answers one
-// of three things:
-//
-//   - merged: the commit the target moved to and where the record landed;
-//   - queued: the change's place in its target's queue, from 1 — the queue's
-//     landing is the merge, and a `merged` wake says when it lands;
-//   - not_ready (mcp.RefusalNotReady): EVERY precondition of the target's
-//     merge gate the change does not meet, each naming whom it waits on —
-//     never only the first, so a caller learns in one answer everything
-//     between the change and its merge, and a ready_to_merge wake follows
-//     once the last is met (M5-D31). Nothing is merged or queued.
-//
-// Every other refusal of the merge is the committer's or the Gitlet node's, in
+// method, from the head its caller read, as ONE engine write
+// (gitlet.WriteMergeChange) landing one merge record its committer decides
+// (M5-D10, M5-D11), or, where the target's gate requires a check, queues it
+// (M5-D9). It answers merged (the commit and where the record landed), queued
+// (its place from 1; a `merged` wake says when it lands) or not_ready
+// (mcp.RefusalNotReady): EVERY unmet precondition of the gate and whom each
+// waits on, never only the first, then a ready_to_merge wake once the last is
+// met (M5-D31). Every other refusal is the committer's or the Gitlet node's, in
 // its class ([mergeRefusalClass]).
-//
-// # Close the work item as step two
-//
-// Asked to (`close_task`), a DIRECT merge's change's work item is closed by a
-// second write of the same operation's step ([stepTwo], statelog.StepOpID),
-// once the merge applied or is pending — so the same call made again makes
-// the same close, which the tracker's ledger collapses — and a close that
-// fails leaves the merge merged and says why beside it ("merged; ENG-42 not
-// closed: <reason>", M5-D27): the merge is the call's gesture and the close
-// its consequence, and one refused is no reason to report the other undone. A
-// QUEUED merge records the ask on its entry, and its landing closes the item
-// as the enqueuer.
-//
-// # The source branch
-//
-// `delete_branch` is the caller's; unsaid, a source in a seat's namespace
-// (refs/heads/seats/…) is deleted with the merge unless a gate over the
-// target keeps it (delete_source: none, gitlet.GateRules.KeepsSource), and every
-// other source is kept (Q4): a seat's branch is the engine's working copy,
-// and a person's is theirs. The default is the Gitlet node's to decide, on the
-// snapshot it judges the merge on ([deleteSource]), and its answer says what
-// it decided (`deleted_branch`).
-//
-// THE DEQUEUE: code_dequeue_change takes a change's live entry out of its
-// target's queue — the entry the call's one read of the change names
-// ([entryOf]) — by one dequeue record its committer decides (gitlet.Dequeue),
-// at the ask of its enqueuer, the change's owner, a maintainer of the
-// repository or a person.
+
+// `close_task`: a DIRECT merge's work item is closed by a second write under
+// the same operation ([stepTwo], statelog.StepOpID) once the merge applied or
+// is pending, so the same call made again makes the same close. A failed close
+// leaves the merge merged and says why beside it (M5-D27): the close is the
+// merge's consequence, and one refused is no reason to report the other
+// undone. A QUEUED merge records the ask on its entry; its landing closes the
+// item as the enqueuer.
+
+// `delete_branch`, unsaid: a source under refs/heads/seats/ is deleted unless a
+// gate over the target keeps it (gitlet.GateRules.KeepsSource), and any other
+// is kept (Q4): a seat's branch is the engine's working copy, a person's is
+// theirs. The Gitlet node decides the default ([deleteSource]) and answers it
+// as `deleted_branch`.
+
+// THE DEQUEUE: code_dequeue_change takes the change's live entry ([entryOf])
+// out of its target's queue by one dequeue record its committer decides
+// (gitlet.Dequeue), at the ask of its enqueuer, the change's owner, a
+// repository maintainer or a person.
 
 // The merge tools' names: each is its authority row's action.
 const (
@@ -72,8 +55,7 @@ const (
 	CodeDequeueChangeTool = string(authz.ActionCodeDequeueChange)
 )
 
-// The verbs a merge's and a dequeue's operations are named by (m3-w1's op
-// rule; M5's verbs).
+// The verbs a merge's and a dequeue's operations are named by ([opIDFor]).
 const (
 	mergeVerb = "code-merge"
 	queueVerb = "code-queue"
@@ -146,10 +128,8 @@ func (t *codeMergeChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	if !cv.change.State.Live() {
-		// THE COMMITTER'S OWN WORD, refused before a merge is built: a
-		// change the call's read found closed or merged is the
-		// change_not_open its committer would answer, in the class and
-		// under the word every other merge refusal takes.
+		// Refused before a merge is built, as the change_not_open its
+		// committer would answer, in that refusal's class and word.
 		return mergeRefused(tool, cv.g.ref(), strings.TrimPrefix(cv.change.TargetRef, branchRoot),
 			gitlet.MergeRefusalChangeNotOpen, fmt.Sprintf("%s is %s, and only a live change merges", cv.g.ref(),
 				cv.change.State), nil), nil
@@ -237,11 +217,9 @@ type codeMergeAnswer struct {
 }
 
 // deleteSource is the caller's `delete_branch`, nil where it said none: the
-// default — a seat's branch deleted unless a gate over the target keeps it,
-// and no other ([codeMergeChange]'s doc) — is the Gitlet node's to decide, on
-// the snapshot it judges the merge on, reading the gate it reads for the
-// merge anyway (gitlet.EngineWrite.DeleteSource), so the call reads nothing
-// for it.
+// default is the Gitlet node's to decide on the snapshot it judges the merge
+// on, from the gate it reads anyway (gitlet.EngineWrite.DeleteSource), so the
+// call reads nothing for it.
 func deleteSource(args map[string]any) *bool {
 	if _, said := args["delete_branch"]; !said {
 		return nil
@@ -270,12 +248,10 @@ func (t *codeMergeChange) closeTask(ctx context.Context, cv conversing, op strin
 	case t.deps.Tasks == nil || t.deps.Closer == nil:
 		return notClosed("this company runs no Worklet here")
 	}
-	// THE CLOSE IS WORKLET'S WRITE, DECIDED AS ITS OWN TOOL'S IS: the
-	// merge's row admits everybody, and update_work_item's is the Worklet
-	// app's (authz.ActionWorkUpdate), so a person who does not use
-	// Worklet — whose own update_work_item is refused — must not change an
-	// item's status by asking a merge to. Decided for the call's principal
-	// as the gate decides that tool, before anything is read.
+	// Decided as update_work_item is (authz.ActionWorkUpdate), before
+	// anything is read: the merge's row admits everybody, and a person
+	// refused update_work_item must not change an item's status through a
+	// merge.
 	if err := Decide(t.deps.Chart)(ctx, authz.ActionWorkUpdate, authz.Object{}); err != nil {
 		return notClosed(Refusal(UpdateWorkItemTool, err))
 	}
@@ -352,12 +328,11 @@ func gateConditions(unmet []gitlet.Precondition) []caveat.GateCondition {
 
 // mergeRefusalWords is a person's words for the merge refusals the change
 // page's controls leave to the engine (the dashboard's
-// MERGE_REFUSAL_SENTENCES draws the engine's words for them): a merge that
-// would delete a branch it may not, a repository at its size, and a merge or
-// a dequeue asked by or for somebody who may not make it. The gate's own is
-// [caveat.MergeGateUnmet]. Every other merge refusal is answered in the
-// controls' own words on the change page, by the host's word beside its class,
-// and in its code's own sentence everywhere else: the floor ADR-0060 sets.
+// MERGE_REFUSAL_SENTENCES draws on them): a branch deletion refused, a
+// repository at its size, and a merge or dequeue by or for somebody who may
+// not. The gate's own is [caveat.MergeGateUnmet]; every other refusal takes
+// the controls' own words on the change page and its code's own sentence
+// elsewhere, the floor ADR-0060 sets.
 func mergeRefusalWords(tool string, refusal gitlet.MergeRefusal) caveat.Refusal {
 	switch refusal {
 	case gitlet.MergeRefusalSourceRefused:
@@ -373,53 +348,18 @@ func mergeRefusalWords(tool string, refusal gitlet.MergeRefusal) caveat.Refusal 
 	return caveat.Refusal{}
 }
 
-// mergeRefusalClass is the class a merge refusal is answered in, by
-// internal/mcp's one rule for every domain ([tools.Refusal]'s doc) — what the
-// refusal is about and what would make the same request land — which a push's
-// ([pushClass]), a change's ([changeClass]) and a conversation's
-// ([conversationClass]) follow too, so one state is one class on every code
-// tool:
-//
-//   - NOT_READY: a gate the change does not meet yet, which its people
-//     clear and a ready_to_merge wake reports;
-//   - STALE_VERSION: a head, a target or a change that moved since its
-//     caller read it — read again;
-//   - CONFLICT: the change or its repository in a state that refuses the
-//     merge until somebody changes it — a change closed or merged, a draft its
-//     owner or a person marks ready, a repository archived or a pull mirror —
-//     a merge that lost its race to a target moving faster than a merge is
-//     built onto it, and a queue holding all it may, its contents at their
-//     cap until it lands what it holds;
-//   - QUOTA_EXCEEDED: a repository the merge would take past
-//     code.limits.repo_max_bytes, as a push's repo_size is, which no
-//     permission lifts and no retry clears;
-//   - UNAVAILABLE: what waiting on the node clears, as a push's is, and in
-//     the same class wherever Gitlet answers it — a committer busy,
-//     a repository its compaction has not caught up with, an import
-//     finishing, an expunge that began, a pack the merge's own builder
-//     uploaded too long ago (it builds it again), a log that refused or a
-//     record applied nowhere;
-//   - FORBIDDEN: a rule refusing the caller — a seat asking a person's
-//     override, an asker the repository or the change does not let;
-//   - NOT_FOUND: a repository, a change or a queue entry that is not there —
-//     a dequeue of a change no queue holds live among them, which a re-read
-//     or a retry never brings back;
-//   - EXISTS: a change its target's queue already holds;
-//   - INVALID: the request itself, which only another call clears — a queue
-//     target asked directly, a target with no queue asked to queue, a source
-//     branch the merger may not delete — and the queue's own records'
-//     refusals (not_green, not_red, no_landing, record_full), which its home
-//     Gitlet node answers and no tool's call is ever refused.
-//
-// NEVER INVALID OR FORBIDDEN FOR A STATE: a merge of a closed change or into
-// an archived repository asks nothing wrong of a caller who may ask it, so
-// "send something different" and "you may not" both mislead its reader; the
-// object refuses it, and the same request lands once somebody changes that
-// (or, for a change merged, never). Every value is listed, so a refusal the
-// domain adds is examined here
-// (TestEveryMergeRefusalIsClassedByWhatClearsIt walks gitlet.MergeRefusals());
-// one off the wire this build does not know is invalid, the class that says
-// nothing more specific.
+// mergeRefusalClass is a merge refusal's class by [tools.Refusal]'s one rule,
+// what would make the same request land, which [pushClass], [changeClass] and
+// [conversationClass] follow too, so one state is one class on every code tool.
+// A state of the change or repository (closed, merged, draft, archived,
+// mirrored, a target moving faster than a merge builds, a full queue) is
+// CONFLICT, never INVALID or FORBIDDEN: the caller asked nothing wrong, and the
+// same request lands once somebody changes the object. Waiting on the node is
+// UNAVAILABLE and code.limits.repo_max_bytes QUOTA_EXCEEDED, as a push's are;
+// an entry no queue holds is NOT_FOUND, since no retry revives it; the queue
+// records' own refusals (not_green, …) are INVALID, as no tool call meets them.
+// Every value is listed (TestEveryMergeRefusalIsClassedByWhatClearsIt walks
+// gitlet.MergeRefusals()); one this build does not know is INVALID.
 func mergeRefusalClass(r gitlet.MergeRefusal) tools.Refusal {
 	switch r {
 	case gitlet.MergeRefusalGateUnmet:
@@ -495,11 +435,10 @@ func (t *codeDequeueChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	op := opIDFor(g.c.actor, tool, queueVerb, g.repo.ID, args)
 	asker := writer(ctx, turn, g.c)
-	// AN ENTRY IS ITS ENQUEUER'S, NEVER A TURN'S: the committer judges the
-	// asker as a party, so the dequeue names no run, as the enqueue does —
-	// but it carries whom the turn works for (the write's ceiling), which
-	// the committer holds the dequeue to beside the seat itself, and whom
-	// the dequeue is made for, composed beside that ceiling.
+	// An entry is its enqueuer's, never a turn's: the committer judges the
+	// asker as a party, so the dequeue names no run, as the enqueue does,
+	// but keeps the turn's Ceiling, which the committer holds it to beside
+	// the seat, and WrittenFor.
 	asker.Run = gitlet.RunProvenance{}
 	p := gitlet.QueueProposal{OpID: op, Asker: asker, Seen: cv.at, Ceiling: g.c.write,
 		WrittenFor: g.c.actor.WrittenFor, Dequeue: &gitlet.Dequeue{RepoID: g.repo.ID, EntryID: entry}}
@@ -526,16 +465,11 @@ func (t *codeDequeueChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return newForeignRead(turn, g.c.asker.Seat).page(ctx, tool, out, "")
 }
 
-// entryOf is the change's LIVE entry in its target's queue as the call's one
-// read of the change named it — on its readiness's queue precondition
-// (gitlet.Precondition.Queue), which that read resolves over the change's own
-// index — or the refusal of a change no queue holds. The dequeue reads
-// nothing more: its committer decides it at or past that read
-// (gitlet.QueueProposal.Seen), so an entry the queue landed or ejected since is
-// the committer's to refuse, from its own snapshot. A change no queue holds
-// is the committer's not_queued, refused before anything is asked: not
-// found, since an entry that is not live — never queued, landed or ejected —
-// never becomes live again by itself.
+// entryOf is the change's LIVE queue entry as the call's one read named it,
+// on its readiness's queue precondition (gitlet.Precondition.Queue), or the
+// committer's not_queued refused before anything is asked. Nothing more is
+// read: the committer decides at or past that read (gitlet.QueueProposal.Seen)
+// and refuses an entry landed or ejected since.
 func entryOf(cv conversing) (string, *tools.Result) {
 	if r := cv.change.Readiness; r != nil {
 		for _, p := range r.Preconditions {

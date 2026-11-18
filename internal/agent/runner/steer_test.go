@@ -50,13 +50,10 @@ func (c *capture) steered() []*types.AgentTurnSteered {
 	return out
 }
 
-// THE REVIEWER READS A NOTE SENT WHILE THE RUN WORKED.
-//
-// A person who corrects a turn while its run is out is correcting the work the
-// reviewer is about to judge. The segment that collects the run drains the
-// turn's box at the reviewer's first round, so the reviewer judges the work
-// against the task as corrected — and the read is recorded once, as delivered
-// to the phase that read it.
+// THE REVIEWER READS A NOTE SENT WHILE THE RUN WORKED: the collecting segment
+// drains the box at the reviewer's first round, so the work is judged against
+// the task as corrected, and the read is recorded once, delivered to the phase
+// that read it.
 func TestTheReviewerReadsANoteSentWhileTheRunWorked(t *testing.T) {
 	t.Parallel()
 	box := steer.New()
@@ -92,12 +89,10 @@ func TestTheReviewerReadsANoteSentWhileTheRunWorked(t *testing.T) {
 	}
 }
 
-// A NOTE BINDS THE TURN'S LATER ITERATIONS, across every park between them.
-// The reviewer that read it sends the work back; the next run is launched
-// with the note in its brief, since a run is a fresh session with nowhere
-// else to read it; and the reviewer of THAT run — a fresh runner in whichever
-// process collects it — opens with the note too, carried from the run's
-// record (every read is written there) rather than read again.
+// A NOTE BINDS THE TURN'S LATER ITERATIONS, across every park: the next run
+// carries it in its brief (a fresh session has nowhere else to read it), and
+// that run's reviewer, a fresh runner, opens with it carried from the run's
+// record rather than read again.
 //
 // Mutations: leave the carried notes out of the brief, or out of what a
 // resumed runner opens with, and one half goes red.
@@ -114,8 +109,7 @@ func TestANoteBindsTheTurnsLaterIterations(t *testing.T) {
 
 	launched, req := launch(t, entries, opts, 1, "", nil)
 	bridged := play(t, req, deliver(t, "posted"))
-	// The collecting runner's own launcher: it is the one that launches the
-	// turn's next run.
+	// The collecting runner's launcher launches the turn's next run.
 	relauncher := &playLauncher{}
 	collecting := opts
 	collecting.launcher = relauncher
@@ -180,9 +174,8 @@ type steeringWorker struct {
 	box *steer.Box
 
 	mu sync.Mutex
-	// runs are each kind's harness runs, requests what each run was opened on,
-	// and responses how many model requests each kind was asked for across
-	// them.
+	// Per kind: its harness runs, what each was opened on, and how many
+	// model requests it was asked for across them.
 	runs      map[string][]*llmtest.Conn
 	requests  map[string][]llm.Request
 	responses map[string]int
@@ -213,10 +206,9 @@ func (p *steeringWorker) Complete(ctx context.Context, req llm.Request) (*llm.Co
 			return submitCall(p.t, runner.SubmitReviewTool, `{"decision":"done","final_artifact":"a"}`), nil
 		}
 		if p.responses[kind] == 1 {
-			// The person steers the turn while its worker runs, and the
-			// worker's first submission is malformed — so the worker has
-			// a SECOND round, the one that would read the note if a
-			// worker were steered.
+			// Steered while the worker runs, whose first submission is
+			// malformed: its SECOND round would read a note if workers
+			// were steered.
 			p.box.Offer(founderNote)
 			return calling(llmtest.Call{Name: subagent.SubmitTool, Args: `{}`}), nil
 		}
@@ -224,10 +216,9 @@ func (p *steeringWorker) Complete(ctx context.Context, req llm.Request) (*llm.Co
 	})
 }
 
-// SUBAGENTS ARE NOT STEERED. A worker is a leaf its parent directs, and a note
-// meant for the turn is the turn's to read: offered while a worker the run
-// delegated to is running, it waits in the box through every round the worker
-// takes and reaches the reviewer that judges the run instead.
+// SUBAGENTS ARE NOT STEERED: a worker is a leaf its parent directs, so a note
+// offered while it runs waits in the box through its rounds and reaches the
+// reviewer instead.
 func TestSubagentsAreNotSteered(t *testing.T) {
 	t.Parallel()
 	box := steer.New()
@@ -249,10 +240,8 @@ func TestSubagentsAreNotSteered(t *testing.T) {
 	if n := prov.responses["worker"]; n < 2 {
 		t.Fatalf("the worker ran %d rounds; this case needs a round after the offer", n)
 	}
-	// NOT PAUSED FOR IT: a steerable loop ends its harness's run once a note is
-	// waiting, and the next run reads it — so a worker steered by mistake
-	// would show a second run that opens on the note. One run, its rounds
-	// one harness loop, is a worker the note never reached.
+	// NOT PAUSED FOR IT: a steerable loop ends its run once a note waits, so
+	// a worker steered by mistake would show a second run opening on it.
 	workers := prov.requests["worker"]
 	if len(workers) != 1 {
 		t.Errorf("the worker took %d harness runs, want one the note never ended", len(workers))
@@ -265,8 +254,7 @@ func TestSubagentsAreNotSteered(t *testing.T) {
 			t.Error("the note reached a worker's prompt")
 		}
 	}
-	// And never inside a tool's result, where any tool's output could
-	// imitate one.
+	// Never inside a tool's result, which any tool's output could imitate.
 	for _, conn := range prov.runs["worker"] {
 		for _, res := range conn.Results() {
 			if strings.Contains(res.Output, founderNote.Text) {
@@ -279,10 +267,9 @@ func TestSubagentsAreNotSteered(t *testing.T) {
 	}
 }
 
-// watchingLauncher is a launcher that records what the turn had published of
-// its notes at the moment it was asked to launch, and launches as a store
-// names a job — or fails, where err is set, naming the job it opened before it
-// did where wrote is set.
+// watchingLauncher records what the turn had published of its notes when asked
+// to launch, and launches as store names a job, or fails with err, naming the
+// job it opened first where wrote is set.
 type watchingLauncher struct {
 	pub   *capture
 	err   error
@@ -301,10 +288,10 @@ func (l *watchingLauncher) LaunchExecutor(_ context.Context, req runner.AgentRun
 }
 
 // A LAUNCH TAKES ITS BRIEF'S NOTES ONCE, AND RECORDS THEM DELIVERED ONLY ONCE
-// LAUNCHED. The note is in the brief, after the task, and named to the launch so
-// the write that opens the job records it read by that job; the box is empty
-// after; and the delivery — at the brief, by the job — is published after the
-// launch answered, never before: a launch that fails delivered nothing.
+// LAUNCHED: the note is in the brief after the task, named to the launch so the
+// job's opening write records it read; the box is empty after; and the
+// delivery is published after the launch answered, since a failed one
+// delivered nothing.
 //
 // Mutation: publish before the launch, or take the box twice, and this goes red.
 func TestALaunchTakesItsBriefOnceAndPublishesItOnlyOnceLaunched(t *testing.T) {
@@ -341,9 +328,9 @@ func TestALaunchTakesItsBriefOnceAndPublishesItOnlyOnceLaunched(t *testing.T) {
 	}
 }
 
-// A FAILED LAUNCH RETURNS ITS BRIEF'S NOTES: nothing read them, so nothing is
-// published delivered, and they are the box's again — read by whatever step
-// comes next, or recorded expired when the segment's box closes.
+// A FAILED LAUNCH RETURNS ITS BRIEF'S NOTES: nothing read them, so none is
+// published delivered; the next step reads them, or the box's close expires
+// them.
 func TestAFailedLaunchReturnsItsBriefNotes(t *testing.T) {
 	t.Parallel()
 	box := steer.New()
@@ -364,10 +351,9 @@ func TestAFailedLaunchReturnsItsBriefNotes(t *testing.T) {
 	}
 }
 
-// A LAUNCH THAT FAILED AFTER ITS WRITE HANDS NOTHING BACK: it names the job it
-// opened, so its brief's notes are on that job's record, read by a job that
-// never ran — and the record's ending reports them. Handed back to the box as
-// well, they were reported a second time when the segment closed it.
+// A LAUNCH THAT FAILED AFTER ITS WRITE HANDS NOTHING BACK: its notes are on
+// the opened job's record, whose ending reports them; handed back too, they
+// would be reported again when the box closes.
 //
 // Mutation: hand the brief back whatever the launch answered, and this goes red.
 func TestALaunchThatFailedAfterItsWriteHandsNothingBack(t *testing.T) {
@@ -389,9 +375,8 @@ func TestALaunchThatFailedAfterItsWriteHandsNothingBack(t *testing.T) {
 	}
 }
 
-// A RESUME CARRIES THE RUN'S READ NOTES: a segment that resumes the turn opens
-// its reviewer with every note the run's record says the turn read — carried,
-// not read again, so nothing more is published.
+// A RESUME CARRIES THE RUN'S READ NOTES: the resuming reviewer opens with every
+// note the run's record says was read, carried, so nothing more is published.
 func TestAResumeCarriesTheRunsReadNotes(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
@@ -423,14 +408,12 @@ func TestAResumeCarriesTheRunsReadNotes(t *testing.T) {
 	}
 }
 
-// THE EXECUTE RECORD LISTS ITS ROUND'S READS — every job's of the round, its
-// briefs' and its harness's, at the run's one round, each with where it was read —
-// and no note a reviewer, the first segment or an earlier round's run read. A
-// job carried on with a person's answer continues the asking job's round, whose
-// calls the record lists first, so the notes the asking job read are listed
-// with them, in the order read. A read the record marks unanswered — a take
-// whose answer never reached the job's harness — is no read of the job's, and
-// is not listed.
+// THE EXECUTE RECORD LISTS ITS ROUND'S READS: every job's of the round, briefs'
+// and harness's, each with where it was read, and none a reviewer, the first
+// segment or an earlier round read. A job carried on with an answer continues
+// the asking job's round, so that job's notes are listed first, in read order.
+// A read marked unanswered (its answer never reached the harness) is not
+// listed.
 //
 // Mutation: list the collected job's reads alone, and the asking job's note is
 // missing; drop the round from the key, and the earlier round's is listed; list
@@ -482,13 +465,11 @@ func TestTheExecuteRecordListsItsRoundsReads(t *testing.T) {
 }
 
 // A FRESH SESSION'S BRIEF CARRIES EVERY READ NOTE; A CONTINUED ONE'S ONLY THE NEW.
-// A run carried on with a person's answer continues the asking run's own harness
-// session where it can, which — its harness having ended its own run — already
-// holds every note it read, so its prompt is the answer and the notes since; a
-// fresh run started instead holds nothing, so its brief carries every note the
-// turn read and then the new ones. Both take the new notes once, named to the
-// launch. (A copy whose harness may have been cut off is told the turn's notes
-// again: TestARunCarriedOnInItsBoxIsToldAgainEveryNoteTheTurnRead.)
+// A continued harness session already holds the notes it read, so its prompt is
+// the answer and the notes since; a fresh run holds nothing, so it gets every
+// read note, then the new. Both take the new ones once, named to the launch.
+// (A copy whose harness may have been cut off is told them all again:
+// TestARunCarriedOnInItsBoxIsToldAgainEveryNoteTheTurnRead.)
 func TestABriefCarriesTheNotesItsSessionLacks(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}

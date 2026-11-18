@@ -7,17 +7,14 @@ import (
 )
 
 // AN OPENING COUNTS LATE THE CALLS TAKEN AFTER ITS READ THAT THE MIDDLE DROPPED.
-// An opening that carries the round on marks late every call the log took after
-// the read its relaunch's briefs were built from ([BridgeLog.lateAfter]); one of
-// those the log has dropped from its middle since keeps no field to mark, so
-// the opening counts it late ([BridgeLog.LateElided]) — exactly, since every
-// append is numbered: the appends past the read the log no longer lists. The
-// calls the read saw are neither marked nor counted, and the log the opening
-// copied is left as it was.
+// An opening marks late every call the log took after the read its relaunch's
+// briefs came from ([BridgeLog.lateAfter]); one since dropped from the middle
+// has no field to mark, so it is counted ([BridgeLog.LateElided]), exactly,
+// since every append is numbered. Calls the read saw are neither marked nor
+// counted, and the copied log is left as it was.
 //
-// Mutation: count none of them, and a call dropped before it could be marked
-// leaves no record that it is late; mark the copy's list in place, and the log
-// it was copied from is marked too.
+// Mutation: count none, and a call dropped before marking leaves no record it
+// is late; mark the copy's list in place, and the original is marked too.
 func TestAnOpeningCountsLateTheCallsTakenAfterItsReadThatTheMiddleDropped(t *testing.T) {
 	t.Parallel()
 	var l BridgeLog

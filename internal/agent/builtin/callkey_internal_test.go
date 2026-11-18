@@ -11,15 +11,9 @@ import (
 )
 
 // THE TOOL IS PART OF EVERY KEY A TURN DERIVES, so two tools called with the
-// same arguments at the same count in one turn are two calls.
-//
-// [callOpKey] is the one derivation every keyed domain's tools share, and the
-// arguments' digest names only what was typed: `{"channel": "eng"}` is what a
-// join, a leave and a read of one room all say. Without the tool those calls
-// derive one key, and what tells their writes apart is left to each store's
-// own verb — the derivation's doc promises the key names the call, and this
-// is what holds it. Outside a turn the key is the caller's own, whatever the
-// tool.
+// same arguments at the same count in one turn are two calls: a join, a leave
+// and a read of one room all say `{"channel": "eng"}`. Outside a turn the key
+// is the caller's own, whatever the tool.
 //
 // Mutation: drop the tool from callKey's identity and the two keys are one.
 func TestTwoToolsCalledAlikeInOneTurnDeriveTwoKeys(t *testing.T) {
@@ -51,18 +45,10 @@ func seatInATurn() Actor {
 }
 
 // THE TRACKER'S IDS ARE DERIVED FROM THE CALL'S KEY, so two tools making one
-// write are two operations.
-//
-// A work item's operation and a comment's id were each derived from the
-// turn's seed, the verb and the object, the arguments and the call's repeat
-// count — a copy of the call-key rule ([Actor.callKey]) that named no TOOL,
-// while the count it carried is kept per tool. So two tools each making their
-// first call with the same arguments both counted zero, and a write one made
-// and a write the other made of the same verb on the same object were one
-// operation and one comment: the second answered `applied` from the ledger
-// with nothing of it written, or met the first one's comment row and never
-// landed. A declaration of a project's tags is made by write_project and,
-// through `labels_create_missing`, by every write that files a label.
+// write are two operations. The repeat count is kept per tool, so two tools'
+// first calls with the same arguments both count zero: without the tool, a
+// project's tags declared by two tools, or two tools' comments on one task,
+// were one operation or one comment, the second answered `applied` unwritten.
 //
 // Mutation: drop the tool from callKey's identity and both ids are one.
 func TestTwoToolsMakingOneWriteAreTwoOperations(t *testing.T) {
@@ -83,15 +69,11 @@ func TestTwoToolsMakingOneWriteAreTwoOperations(t *testing.T) {
 
 // A COMMENT KEEPS ITS ROW ACROSS A REBASE, while its operation moves.
 //
-// A turn whose work began further back than the operation ledger remembers is
-// REBASED: every operation it derives carries the attempt's own instant
-// ([turnctx.Turn.RebasedTo], ADR-0029), so the ledger decides them again
-// rather than answer every one `unknown`. A tracker comment's id is not an
-// operation but the key of its row — so derived as the work began, the
-// rebased attempt's comment names the row the attempt before it wrote, the
-// writer answers it from that row and publishes nothing, and a remark already
-// posted is not posted a second time beside it. Derived from the rebased key, it moved with the operation, and
-// every rebased re-run of a turn that had commented said it twice.
+// A rebased turn ([turnctx.Turn.RebasedTo], ADR-0029) re-mints its operations
+// at the attempt's own instant, so a ledger that forgot them decides them
+// again. A tracker comment's id is the key of its row, not an operation, so it
+// is derived as the work began: the rebased attempt names the row already
+// written, and a remark is not posted twice.
 //
 // Mutation: derive commentID from the rebased call key and the rebased
 // comment takes a new id.
@@ -134,13 +116,9 @@ func TestACommentKeepsItsRowAcrossARebase(t *testing.T) {
 }
 
 // A CREATED ITEM AND A CREATED VIEW KEEP THEIR IDS ACROSS A REBASE, as a
-// comment does, while their operations move.
-//
-// Each id is the subject its create arbitrates on and the key of the row it
-// files, so it is derived from the create's operation as the work began. A
-// rebased attempt re-mints the operation for a ledger that forgot it; derived
-// from that, the id moved with it, and every rebased re-run of a turn that had
-// filed an item or saved a view filed a second one beside it.
+// comment does, while their operations move: each id is the subject its create
+// arbitrates on and the key of its row, so an id that moved with a rebase
+// filed a second item or view beside the first.
 //
 // Mutation: derive createdTaskID or createdViewID from the rebased actor and
 // the rebased attempt names a new item or view.
@@ -177,11 +155,9 @@ func TestACreatedItemAndViewKeepTheirIdsAcrossARebase(t *testing.T) {
 }
 
 // A REQUEST'S KEY IS ITS CALL'S, AS SENT, for the tracker as for the knowledge
-// base and chat: a request's actor carries the key as its work key with no run
-// behind it, and every id its tracker writes derive is derived from that key —
-// the one a page or chat write the same request makes is handed — bound to
-// what the call asks, so the same key sent with other arguments is another
-// write.
+// base and chat, and every id the request's tracker writes derive from it is
+// bound to what the call asks: the same key sent with other arguments is
+// another write.
 //
 // Mutation: derive a request's call key from its work key as a turn's is, and
 // it is no longer the key the request sent.

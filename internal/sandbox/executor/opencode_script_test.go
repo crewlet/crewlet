@@ -19,142 +19,18 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// fakeOpenCode is an `opencode` that records what the run's script asks of it,
-// in the order it asks, and answers as OpenCode 2.0.32 measured:
-//
-//   - `serve` prints where it listens and the password it minted, then serves
-//     until it is stopped — and, given OPENCODE_PASSWORD or
-//     OPENCODE_SERVER_PASSWORD, takes that as its password and prints none.
-//     It KEEPS ITS PASSWORD BEFORE IT SAYS ANYTHING, as a server holds the one
-//     it minted before printing it: kept after, a script that read the
-//     printed lines on a loaded runner presented the password to a fake that
-//     had not yet written down what to check it against, was refused, and
-//     the case read the refused run as a login never refreshed;
-//   - every call to the server is refused unless it presents the server's
-//     password, read as 2.0.32's client reads it: OPENCODE_PASSWORD, and
-//     OPENCODE_SERVER_PASSWORD only where that is unset; a call with
-//     `--standalone` is answered by a private server of its own, and
-//     presents none;
-//   - `api mcp.list` lists nothing at first — the workspace's servers start as
-//     it is first asked about — then the bridge pending, then connected, or
-//     always FAKE_MCP_LIST where that is set;
-//   - its database HOLDS a session it ran, imported, or found under
-//     `sessions/` in the case's directory as the case started — a box that
-//     already holds one;
-//   - `api session.get` prints a held session's usage report on one line, and
-//     fails for any other, as OpenCode answers an id it does not hold;
-//   - `session export` prints a held session's export document — its info
-//     and its messages, those `export-messages` in the case's directory holds
-//     where it is there — or FAKE_SESSION_EXPORT where that is set, a
-//     document of a run's whole conversation for a case that reads one back
-//     — through the server or with `--standalone` beside it, and fails for
-//     any other, recording in `exported` the session and whether the server
-//     was still serving; it takes FAKE_SESSION_EXPORT_SLEEP seconds before it
-//     prints where that is set, the file `packing` saying it has begun — a
-//     pack under way that a case can time a signal into, with no stand-in for
-//     a packer such as `gzip`, which a busybox that prefers its own applets
-//     runs past whatever the PATH holds; `session import` keeps the
-//     file it was handed (`imported-session`) and the directory it was told
-//     (`import-directory`), and holds the session the file names and prints
-//     `Imported session: <id>`, as 2.0.32 does — or, where FAKE_IMPORT is
-//     `409`, says "Session already exists" on stderr and imports nothing, and
-//     where it is `empty`, says nothing and imports nothing, each with
-//     success, as OpenCode's import answers a conflict; `session delete`
-//     drops a held session and says so, as 2.0.32 does, and fails for any
-//     other — or for every one, where FAKE_DELETE is `fail`;
-//   - `api session.inbox.list` prints FAKE_INBOX, or an empty inbox, and
-//     `api session.inbox.cancel` records in `cancelled` the session, the item
-//     and whether the server was still serving — `serving` or `stopped`;
-//   - `api session.interrupt` records in `interrupted` the session and
-//     whether the server was serving, and answers as 2.0.32 does — which
-//     ends a run working in that session, where FAKE_RUN_UNTIL names
-//     `interrupted`;
-//   - `api session.message.list` records its parameters in `listed`, a line
-//     a call, and answers the page `pages/<cursor>` holds in the case's
-//     directory, `pages/first` where it is handed no cursor, and nothing
-//     where the case wrote no such page; and, where FAKE_LIST_UNTIL is set,
-//     it holds its answer until the case's directory holds the file that
-//     names, the file `listing` saying it was asked: a page under way that a
-//     case can time an end request into;
-//   - any other `api` operation fails with "Operation not found", as
-//     OpenCode answers an operation its API does not have;
-//   - `auth import` keeps what it was given as its database, and `auth export`
-//     prints that database, whether through the server or beside it — taking
-//     FAKE_EXPORT_SLEEP seconds over it where that is set, the file
-//     `exporting` saying it has begun;
-//   - `run` holds the session it names, as `run --session` creates one it
-//     does not hold; keeps its stdin and the password it presented, puts
-//     FAKE_REFRESH in the database where that is set — a login refreshed
-//     mid-run — prints a text event, naming the step FAKE_RUN_MESSAGE where
-//     that is set, and
-//     then works for FAKE_RUN_SLEEP seconds, and until the case's directory holds
-//     the file FAKE_RUN_UNTIL names, before it exits — with FAKE_RUN_TERM_EXIT
-//     where a SIGTERM ends it first, as a client given one exits with a status
-//     of its own. Where only FAKE_RUN_SLEEP
-//     is set, the run BECOMES the sleep (`exec`), because every case that sets
-//     it ends the run by a signal, and a shell left in front of the sleep can
-//     swallow one: the fake is a `#!/bin/sh` script, dash catches SIGINT in a
-//     script file and holds one that lands while it forks a foreground
-//     command until that command returns, so a group SIGINT sent the moment
-//     `refreshed` appears could miss the sleep and wait out all sixty seconds
-//     of it — the interrupt case failed so, now and then, under load. With no
-//     shell left there is nothing to hold it.
-//
-// Every call also records, in `configured`, whether it was handed
-// OPENCODE_CONFIG_CONTENT — `handed|<subcommand>` or `|<subcommand>` — and
-// `serve` keeps the content it was handed, in `serve-config`; and, in
-// `steered`, the CREWLET_STEER_SESSION it was handed — `<session>|<subcommand>`.
-//
-// A SERVER'S END IS READ OFF WHAT THE KERNEL DOES AS IT EXITS, never off its
-// pid: kill(pid, 0) and `kill -0` succeed on a server that was stopped and is
-// not yet reaped, which its parent, the script, may never get to, and nothing
-// reaps for it in a container whose first process reaps nothing (#1164, as
-// #1080 was). So:
-//
-//   - `serve` holds `serve.alive` in the case's directory open for writing for
-//     its whole life, and nothing else holds it: the one command it runs
-//     before it serves is handed it closed, and the sleep it serves as is the
-//     server itself (`exec`). The kernel closes every descriptor a process
-//     holds as it exits, before anything reaps it, so a case that holds the
-//     read end ([serverPipe]) reads a server gone, zombie or not, off a pipe
-//     with no writer left ([assertServerStopped]). Where the case made no such
-//     pipe the same open makes a plain file, so a case that reads no server's
-//     end needs none.
-//   - whether the server was still serving, where a call records it, is the
-//     state the kernel reports for its pid (`up`), in which a zombie is Z:
-//     /proc/<pid>/stat where the kernel keeps one, and `ps` where it keeps
-//     none, as on darwin, where this file builds too. Not the pipe, which sh
-//     cannot ask without waiting: it has no open that does not block, and a
-//     read end opened on a pipe whose server has gone waits for a writer that
-//     never comes — the very case the reading has to answer.
-//
-// FAKE_PIPE_CUT=<n> is an OpenCode that cuts what it writes into a PIPE: the
-// answers that can run long (`session export`, `api mcp.list`, `api
-// session.inbox.list` and `api session.message.list`'s pages) stop after their
-// first n bytes where its stdout is a pipe, with success, and are printed whole
-// into anything else, as 2.0.32 and 2.1.4 stop a large answer written into a
-// pipe after a 64 KiB multiple and exit 0, and write it whole into a regular
-// file (measured on both, a session's export through gzip and through cat). A
-// pipe is told by `[ -p /dev/stdout ]`, which dash, bash and busybox ash all
-// answer alike. A page is printed as its case wrote it, byte for byte
-// (`answerfile`), rather than as a line (`answer`), since the pages' budget
-// cases measure what the pages put into the stream to the byte.
-//
-// FAKE_SERVE=listen-only is a server that says where it listens and never
-// prints a password; FAKE_SERVE=silent one that says nothing at all; and
-// FAKE_SERVE=password-first one that prints its password a second before it
-// says where it listens. Each writes `serve-settled` once it has printed all it
-// ever will.
-//
-// FAKE_HANG names, space-separated, the kinds of call to the run's own server
-// that server takes and never answers — an `api` operation by its name
-// (`session.get`), `session.export` and `auth.export` for the two exports
-// through it: such a call records its kind and its pid in `hung`, as it is
-// taken, and then waits, as a client waits on a server that never answers,
-// until it is ended — and with FAKE_HANG_DEAF set it ignores SIGTERM, so only
-// SIGKILL ends it; with FAKE_HANG_ONCE set only the first call of each kind
-// hangs, and every later one is answered. A call beside the server
-// (`--standalone`) never hangs.
+// fakeOpenCode is an `opencode` answering as 2.0.32 does, recording each call in
+// FAKE_DIR. `serve` writes its password down before printing it, as a real
+// server does: written after, a loaded runner's script presented it first and
+// was refused. A server's end is read off `serve.alive`, which only it holds
+// open and the kernel closes as it exits ([serverPipe]), never its pid, which
+// kill -0 finds until reaped (#1164); `up` reads the pid's state, since sh
+// cannot ask a pipe without blocking. FAKE_PIPE_CUT stops an answer into a pipe
+// after n bytes with success, as 2.0.32 and 2.1.4 stop past a 64 KiB multiple;
+// pages print byte for byte (`answerfile`), as the budget cases measure them.
+// FAKE_RUN_SLEEP alone `exec`s the sleep: dash holds a SIGINT landing as it
+// forks a foreground command, so a shell in front could miss a group SIGINT.
+// Exports are slowed by a sleep, not a packer stand-in busybox would bypass.
 const fakeOpenCode = `#!/bin/sh
 d="$FAKE_DIR"
 echo "$*" >> "$d/calls"
@@ -301,64 +177,51 @@ type scriptOpts struct {
 	req   sandbox.RunRequest
 	login string
 	env   []string
-	// times, where set, runs the script at these waits
-	// ([executor.OpenCodeCommandTimed]) rather than as Command builds it.
+	// times, where set, replaces Command's waits ([executor.OpenCodeCommandTimed]).
 	times *executor.OpenCodeTimes
-	// shell is the sh the script runs under; the zero value is the sh on
-	// PATH, which is what Command names.
+	// shell is the sh the script runs under; zero is the sh on PATH, as Command names.
 	shell boxShell
 	// clocked runs the script's waits on the case's clock ([caseClock]), which
 	// stands at [clockStart] until the case moves it ([scriptJob.listenRunsOut]).
 	clocked bool
-	// unconfigured starts the script with no run configuration where
-	// [executor.Paths.OpenCodeConfig] names it; every other case finds
-	// [scriptConfig] there, as WriteConfig would have left one.
+	// unconfigured leaves no [executor.Paths.OpenCodeConfig]; every other case
+	// finds [scriptConfig] there, as WriteConfig would have left it.
 	unconfigured bool
 	// session, where set, is the session the run works in, rather than the
 	// one [executor.OpenCode.Session] names for req.
 	session *executor.Session
-	// held is every session the box's database holds as the case starts, as
-	// a box a run already worked in holds its own.
+	// held is every session the box's database holds as the case starts.
 	held []string
-	// carried, where set, is the export of a session carried into the box,
-	// gzipped where [executor.Paths.SessionCarried] names it as a run's
-	// start would have written it.
+	// carried, where set, is a session export carried into the box, gzipped at
+	// [executor.Paths.SessionCarried] as a run's start writes it.
 	carried string
-	// ownsCarried keeps the carried export's digest among the box's own for
-	// the session ([executor.Paths.SessionDigests]), as a box that packed
-	// or restored that export keeps it.
+	// ownsCarried keeps the carried export's digest among the box's own
+	// ([executor.Paths.SessionDigests]), as a box that packed or restored it does.
 	ownsCarried bool
-	// brokenDigests, where set, makes the box's list of those digests one
-	// that keeps no line, as the shell command it names makes it
-	// ([brokenDigestLists]), before the script starts.
+	// brokenDigests, where set, is the shell command ([brokenDigestLists]) that
+	// makes the box's digest list one that keeps no line, before the script starts.
 	brokenDigests string
-	// freshBrief, where set, is the brief a session of the run's own is
-	// handed, written where [executor.Paths.FreshBrief] names it as a run's
-	// start would have written it ([sandbox.RunRequest.FreshBrief]).
+	// freshBrief, where set, is the brief a session of the run's own is handed,
+	// at [executor.Paths.FreshBrief] ([sandbox.RunRequest.FreshBrief]).
 	freshBrief string
-	// values and freshValues, where set, are the run's first configuration
-	// value under the continued session's bridge token and under a session
-	// of its own's, written where [executor.Paths.OpenCodeValues] and
-	// [executor.Paths.OpenCodeValuesFresh] name them as WriteConfig would have
+	// values and freshValues, where set, are the run's first configuration value
+	// under the continued session's bridge token and under a fresh session's, at
+	// [executor.Paths.OpenCodeValues] and [executor.Paths.OpenCodeValuesFresh]
 	// ([sandbox.RunRequest.FreshWiring]); the fake's server records which it
 	// started on, and whether the other was still in the box.
 	values, freshValues string
-	// pages is what the fake's server answers `session.message.list` with, by
-	// the cursor it is handed, "first" for none.
+	// pages is the fake's `session.message.list` answer by cursor, "first" for none.
 	pages map[string]string
-	// exportMessages, where set, is the messages the export of a session the
-	// fake holds carries (`export-messages` in the case's directory), for a
-	// case whose export has to be longer than an environment variable holds.
+	// exportMessages, where set, is the messages a held session's export carries
+	// (`export-messages`), for an export longer than an environment variable holds.
 	exportMessages string
 }
 
-// pipeCut is where a case's OpenCode cuts an answer it writes into a pipe
-// (FAKE_PIPE_CUT): 64 KiB, the multiple 2.0.32 and 2.1.4 stop at, so an answer
-// longer than that runs past the first place one of them may stop.
+// pipeCut is where a case's OpenCode cuts an answer into a pipe (FAKE_PIPE_CUT):
+// 64 KiB, the multiple 2.0.32 and 2.1.4 stop at.
 const pipeCut = 64 << 10
 
-// longMessages is a session's messages, one whose text alone is longer than n
-// bytes.
+// longMessages is a session's messages, one whose text alone passes n bytes.
 func longMessages(n int) string {
 	return `[{"id":"msg_1","type":"user","text":"` + strings.Repeat("fix the flake ", n/len("fix the flake ")+1) + `"}]`
 }
@@ -369,8 +232,8 @@ func exportOf(session, messages string) string {
 }
 
 // scriptConfig is the run configuration a case's script finds, as
-// [executor.OpenCode.WriteConfig] would have left it — with text a shell
-// would expand, were it ever read as anything but a value.
+// [executor.OpenCode.WriteConfig] would have left it, holding text a shell
+// would expand, to catch any read of it as other than a value.
 const scriptConfig = "{\n  \"$schema\": \"https://opencode.ai/config.json\",\n" +
 	"  \"instructions\": [\"/box/$HOME/$(echo expanded)/`id`.md\"]\n}"
 
@@ -400,20 +263,13 @@ type scriptRun struct {
 }
 
 // signalsDeliverable gives every script this file starts the default action
-// for SIGHUP and SIGINT, however the test binary itself was started.
-//
-// A signal ignored when a process starts is ignored in everything it execs,
-// and a non-interactive sh may not trap one it was started ignoring: POSIX
-// says so, and dash, bash and busybox ash all comply. So a suite run under
-// nohup (SIGHUP) or as a background job of a script (SIGINT) handed every
-// script a signal it could neither trap nor die of, and the cases about that
-// signal failed on how the runner was started rather than on the script:
-// under nohup each hangup case waited out its whole bound.
-//
-// Go hands an ignored SIGHUP or SIGINT on to the processes it starts, and
-// resets every signal it HANDLES to the default in them, so asking os/signal
-// for the two is what gives them back. Only where they are ignored: a handler
-// on one that is not would stop an interrupt ending the test binary.
+// for SIGHUP and SIGINT, however the test binary was started: a signal ignored
+// at start stays ignored across exec, and a non-interactive sh may not trap one
+// (POSIX; dash, bash and busybox ash comply), so under nohup or as a background
+// job the cases about that signal failed on how the runner was started.
+// Go resets every signal it HANDLES to the default in what it starts, so asking
+// os/signal for the two gives them back; only where ignored, since a handler on
+// one that is not would stop an interrupt ending the test binary.
 var signalsDeliverable = sync.OnceFunc(func() {
 	for _, sig := range []os.Signal{syscall.SIGHUP, syscall.SIGINT} {
 		if signal.Ignored(sig) {
@@ -542,15 +398,11 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 	return j
 }
 
-// serverPipe makes the pipe the fake's server holds open for writing for as
-// long as it runs (`serve.alive` in dir, [fakeOpenCode]) and holds its read
-// end for the case, which reads the server's end off it
-// ([assertServerStopped]).
-//
-// Opened before the script starts and without waiting for a writer
-// (O_NONBLOCK): a pipe opened for writing waits for a reader, so the server's
-// own open would hang on a pipe nobody held, and a read end opened plainly
-// would wait for a server the case may never see start.
+// serverPipe makes the pipe the fake's server holds open for writing while it
+// runs (`serve.alive`, [fakeOpenCode]) and holds its read end for the case
+// ([assertServerStopped]). It is opened before the script starts, O_NONBLOCK:
+// an open for writing waits for a reader, so the server would hang on a pipe
+// nobody held, and a plain read open waits for a server that may never start.
 func serverPipe(t *testing.T, dir string) *os.File {
 	t.Helper()
 	path := filepath.Join(dir, "serve.alive")
@@ -585,10 +437,9 @@ func writeClock(t *testing.T, dir string, now int) {
 	}
 }
 
-// listenRunsOut runs a clocked script's listen wait out, but only once the
-// script has read its deadline and its server has printed all it ever will: so
-// what the script reports is the server's last word, never how far a loaded
-// runner had got the fake by a second's turn.
+// listenRunsOut runs a clocked script's listen wait out once the script has
+// read its deadline and its server has printed all it ever will, so the script
+// reports the server's last word, never how far a loaded runner got the fake.
 func (j *scriptJob) listenRunsOut() {
 	j.t.Helper()
 	j.await("the script to read its listen deadline", func() bool {
@@ -659,11 +510,10 @@ func (j *scriptJob) signal(sig syscall.Signal) {
 	}
 }
 
-// await polls until cond holds, failing the case after ten seconds — the
-// script's own steps take milliseconds against the fake — or AT ONCE when the
-// script has exited without it holding: nothing an exited script left behind
-// will change, and a case that waited out its bound reported a script that
-// stopped at its first line as one that was slow.
+// await polls until cond holds, failing after ten seconds (the script's steps
+// take milliseconds against the fake), or AT ONCE when the script exits
+// without it: nothing an exited script left will change, and waiting out the
+// bound would report a script stuck at its first line as merely slow.
 func (j *scriptJob) await(what string, cond func() bool) {
 	j.t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -742,15 +592,11 @@ func (j *scriptJob) waitWithin(limit time.Duration, why string) scriptRun {
 	return run
 }
 
-// assertGroupGone fails the case if anything of the script's process group is
-// still running five seconds after the script exited — and nothing should be:
-// the script stops what it started, and waits for it, before it exits, so
-// what this waits out is only the kernel's own bookkeeping.
-//
-// A ZOMBIE IS NOT A LEFTOVER. A process the group's signal killed whose parent
-// it killed too is reaped by whatever reaps orphans, which on a machine whose
-// first process does not may be never; it runs nothing, so where /proc says
-// every process left in the group is one, the group is gone.
+// assertGroupGone fails the case if anything of the script's process group
+// still runs five seconds after it exited: the script stops and waits for all
+// it started, so this waits out only the kernel's bookkeeping. A ZOMBIE IS NOT
+// A LEFTOVER: one whose parent the group's signal also killed may never be
+// reaped where the first process reaps nothing, and it runs nothing.
 func (j *scriptJob) assertGroupGone() {
 	j.t.Helper()
 	pgid := j.cmd.Process.Pid
@@ -845,16 +691,11 @@ type boxShell struct {
 const busyboxKill = `kill() { for a; do [ -n "$a" ] || return 0; done; command kill "$@"; }` + "\n"
 
 // boxShells is every sh a box's image may run the script under that this
-// machine has: the sh on PATH, which is what the runner names; dash, Debian's
-// and Ubuntu's sh; bash in POSIX mode, which is what it is as Fedora's, RHEL's
-// and Arch's sh; and busybox ash, Alpine's — the image OpenCode 2's musl builds
-// are for. Each only where it is installed, and once however many names reach
-// the same binary.
-//
-// AND ALWAYS the sh on PATH with busybox ash's kill ([busyboxKill]), because
-// that is the behaviour of busybox's the script has tripped on, and a machine
-// without busybox — most CI runners — would otherwise never run the cases that
-// caught it.
+// machine has, once per binary: the sh on PATH, which the runner names; dash
+// (Debian, Ubuntu); bash --posix (Fedora, RHEL, Arch); and busybox ash (Alpine,
+// which OpenCode 2's musl builds are for). AND ALWAYS the sh on PATH with
+// [busyboxKill], so a machine without busybox, as most CI runners are, still
+// runs the cases busybox's kill tripped the script on.
 func boxShells(t *testing.T) []boxShell {
 	t.Helper()
 	candidates := []boxShell{
@@ -901,11 +742,10 @@ func forEachShell(t *testing.T, test func(t *testing.T, sh boxShell)) {
 	}
 }
 
-// loginFree reports whether name, in a box's work directory, is one of the
-// files a run's script leaves there that holds no login: the run's
-// configuration ([scriptConfig], as WriteConfig would have left it), its record
-// of its session, its session's export and the digests of the exports the box
-// holds, and its end protocol's records — its pid, and how it was ended.
+// loginFree reports whether name, in a box's work directory, is a file a run's
+// script leaves there that holds no login: its configuration ([scriptConfig]),
+// its session record, export and export digests, and its end protocol's pid
+// and end records.
 func loginFree(p executor.Paths, name string) bool {
 	for _, path := range []string{p.OpenCodeConfig(), p.SessionRecord(), p.SessionCapture(), p.SessionDigests(),
 		p.JobScript(), p.JobEnded()} {
@@ -925,23 +765,20 @@ const (
 	refreshedLogin = `[{"id":"cred_1","key":"new"}]`
 )
 
-// promptEnd is how long a run's script may take to end against the fake in a
-// case that stretches its stop wait to [stretchedStop]: an end there takes
-// about a second, and one that waited out a stop of nothing takes the whole
-// minute — so the bound sits far from both, where a loaded runner cannot
-// carry a prompt end past it.
+// promptEnd bounds a run's end against the fake at [stretchedStop]: an end
+// takes about a second, one that waits out a stop of nothing the whole minute,
+// so the bound sits far from both, past a loaded runner's reach.
 const promptEnd = 15 * time.Second
 
 // stretchedStop is the stop wait a case about an end not waiting runs the
 // script at: long enough that waiting it out once is unmistakable.
 const stretchedStop = time.Minute
 
-// THE BRIEF IS SENT ONLY ONCE THE SEAT'S TOOLS EXIST. OpenCode 2 fixes a step's
-// tools as the step starts, so a brief sent before the run's MCP servers have
-// connected gets a first step with none of them — which is what `--standalone`
-// does. The script waits until every declared server has left `pending`, across
-// an answer that lists nothing and one that lists it pending, and only then
-// runs the brief, verbatim on stdin, against the server it started.
+// THE BRIEF IS SENT ONLY ONCE THE SEAT'S TOOLS EXIST: OpenCode 2 fixes a step's
+// tools as it starts, so a brief sent before the MCP servers connect gets a
+// first step with none (as `--standalone` would). The script waits until every
+// declared server has left `pending`, through an empty answer and a pending
+// one, then runs the brief verbatim on stdin against its own server.
 func TestTheBriefWaitsForTheSeatsTools(t *testing.T) {
 	t.Parallel()
 	forEachShell(t, func(t *testing.T, sh boxShell) {
@@ -973,14 +810,11 @@ func TestTheBriefWaitsForTheSeatsTools(t *testing.T) {
 	})
 }
 
-// ONLY THE SERVER IS HANDED THE CONFIGURATION. The run's configuration is the
-// content of the file WriteConfig left, handed to `opencode serve` as
-// OPENCODE_CONFIG_CONTENT — verbatim, its `$` and backquotes never expanded —
-// and to no other command the script runs: the login's import and export, the
-// run's own client and its `api` calls are each started without it.
+// ONLY THE SERVER IS HANDED THE CONFIGURATION: WriteConfig's file, as
+// OPENCODE_CONFIG_CONTENT, verbatim with `$` and backquotes unexpanded. The
+// login's import and export, the run's client and its `api` calls get none.
 //
-// Mutation: export the variable for the whole script, and every other command
-// is handed it.
+// Mutation: export the variable for the whole script, and every command has it.
 func TestOnlyTheServerIsHandedTheConfiguration(t *testing.T) {
 	t.Parallel()
 	forEachShell(t, func(t *testing.T, sh boxShell) {
@@ -1008,11 +842,9 @@ func TestOnlyTheServerIsHandedTheConfiguration(t *testing.T) {
 	})
 }
 
-// ONLY THE SERVER IS HANDED THE RUN'S SESSION, and only for a run wired to its
-// notes: the notes plugin the server loads admits notes to the session the
-// run's script names, which it reads from CREWLET_STEER_SESSION — the same id
-// the run's client is pointed at with --session. No other command the script
-// runs is handed it, and a run wired to no notes hands nobody it.
+// ONLY THE SERVER IS HANDED THE RUN'S SESSION, and only for a run wired to
+// notes: the notes plugin admits notes to the session CREWLET_STEER_SESSION
+// names, the one the client is pointed at with --session.
 //
 // Mutation: export the variable for the whole script, or hand it the run's
 // server whatever its wiring.
@@ -1059,18 +891,12 @@ func TestOnlyTheServerIsHandedTheRunsSession(t *testing.T) {
 }
 
 // NOTHING THE NOTES PLUGIN ADMITTED IS LEFT PENDING IN THE SESSION. A note
-// whose admission lands as the session settles is neither delivered nor
-// confirmed, so it waits on the run's record — and it also stays pending in the
-// session's own inbox, which a run carried on in the same session would hand
-// its model ahead of the next prompt, beside the continuation brief's copy. So
-// once the run has ended, and before its server is stopped, the script lists
-// the session's inbox and cancels every item of the plugin's own shape — and
-// nothing else: an id OpenCode minted, and an id that is only text inside a
-// note, are left alone. A run wired to no notes has no plugin, and asks
-// nothing.
-//
-// The listing is OpenCode 2.1.4's own shape (`session.inbox.list` with two
-// steers pending, a note's text holding an id of the plugin's shape).
+// admitted as the session settles waits on the run's record, and would also
+// stay in the session's inbox, which a run carried on in the session hands its
+// model beside the continuation brief's copy. So after the run and before its
+// server stops, the script cancels every inbox item of the plugin's shape and
+// nothing else (an id OpenCode minted, an id inside a note's text). A run wired
+// to no notes asks nothing. The listing is OpenCode 2.1.4's own shape.
 //
 // Mutation: drop the cancel, run it after the server stops, or match any
 // `msg_` id, and this goes red.
@@ -1127,12 +953,9 @@ func TestARunCancelsTheNotesItsSessionNeverDelivered(t *testing.T) {
 	})
 }
 
-// A NOTE LISTED PAST WHAT A PIPE HOLDS IS CANCELLED TOO. The inbox listing
-// carries every pending item's whole text, and OpenCode 2.0.32 and 2.1.4 stop
-// writing an answer into a pipe after a 64 KiB multiple and exit 0. The script
-// reads the listing from a file, so a note of the plugin's listed after a long
-// item OpenCode queued is cancelled as the one before it is, under every sh a
-// box may run the script with.
+// A NOTE LISTED PAST WHAT A PIPE HOLDS IS CANCELLED TOO: the listing carries
+// each item's whole text, and 2.0.32 and 2.1.4 stop an answer into a pipe after
+// a 64 KiB multiple and exit 0, so the script reads it from a file. Every sh.
 //
 // Mutation: read the listing through a pipe again, and the note past the cut
 // is left pending.
@@ -1169,13 +992,11 @@ func TestANoteListedPastWhatAPipeHoldsIsCancelledToo(t *testing.T) {
 	})
 }
 
-// A RUN WITH NO CONFIGURATION STARTS NOTHING. Handed none, the server would run
-// on whatever the image and the checkout hold, with neither the run's posture
-// nor its servers; so a run whose configuration is missing is refused before
-// any login is imported or any server started, naming the file it looked for.
+// A RUN WITH NO CONFIGURATION STARTS NOTHING: its server would run on whatever
+// the image and checkout hold, without the run's posture or servers, so it is
+// refused before any login import or server start, naming the missing file.
 //
-// Mutation: drop the check and the server starts, handed an empty
-// configuration.
+// Mutation: drop the check, and the server starts on an empty configuration.
 func TestARunWithNoConfigurationStartsNothing(t *testing.T) {
 	t.Parallel()
 	forEachShell(t, func(t *testing.T, sh boxShell) {
@@ -1193,15 +1014,11 @@ func TestARunWithNoConfigurationStartsNothing(t *testing.T) {
 	})
 }
 
-// A SERVER NAMED THE WAY OPENCODE NAMES IT. The readiness check matches the
-// `mcp.list` answer as text, so each name has to be spelled as OpenCode's
-// JSON.stringify spells it — and encoding/json spells `&`, `<`, `>`, U+2028
-// and U+2029 otherwise, so a server named with any of them never matched and
-// every run waited out the whole bound for one that had settled at once.
-//
-// The answer is OpenCode 2.0.32's own, recorded from `opencode api mcp.list`
-// with two servers that exit at once — only the location's directory, a
-// scratch path, is replaced.
+// A SERVER NAMED THE WAY OPENCODE NAMES IT: readiness matches the `mcp.list`
+// answer as text, so a name is spelled as JSON.stringify spells it; spelled by
+// encoding/json, which escapes `&`, `<`, `>`, U+2028 and U+2029, such a server
+// never matches and the run waits out the bound. The answer is 2.0.32's own
+// from `opencode api mcp.list`, only its scratch directory replaced.
 //
 // Mutation: spell the names with json.Marshal, and the run waits the bound
 // and says a server was still connecting.
@@ -1234,16 +1051,13 @@ func TestTheReadinessCheckSpellsANameAsOpenCodeDoes(t *testing.T) {
 }
 
 // A SERVER THAT WOULD SHADOW THE ENGINE'S TOOLS ENDS THE RUN BEFORE IT STARTS.
-// OpenCode names a server's tool `<server>_<tool>`, writing every character
-// but letters, digits, `_` and `-` as `_`, and keeps one tool per name. So a
-// server the image or the repository declares as `crewlet_x` or `crewlet.x`,
-// with a tool `y`, takes the name of the engine's own `x_y`. The readiness
-// loop reads every server OpenCode lists and refuses such a run, naming the
-// server, before `opencode run` starts, whichever side of the engine's own
-// server it is listed on. `crewlet-x` and `crewletx` keep names of their own
-// and the run starts, and a name is held only to the prefix of a server the
-// run offers directly, never to one behind Code Mode. Under every sh a box
-// may run the script with.
+// OpenCode names a tool `<server>_<tool>`, rewriting all but letters, digits,
+// `_` and `-` to `_`, and keeps one tool per name, so an image's or a
+// repository's `crewlet_x` or `crewlet.x` with tool `y` takes the engine's
+// `x_y`. The readiness loop refuses such a run, naming the server, before
+// `opencode run`, wherever it is listed; `crewlet-x` and `crewletx` start.
+// Names are held only to the prefixes of servers the run offers directly,
+// never one behind Code Mode. Under every sh.
 //
 // Mutation: leave the check out of the loop, take `-` for a character
 // OpenCode rewrites, or hold every server's name rather than those offered
@@ -1312,19 +1126,14 @@ func TestOpenCodeServersThatShadowTheEnginesToolsAreRefused(t *testing.T) {
 	}
 }
 
-// A SERVER LISTED PAST WHAT A PIPE HOLDS IS STILL SEEN. The `mcp.list` answer
-// the readiness loop reads lists every server the image's and the repository's
-// configuration declare beside the run's, a failed one with its error, and
-// OpenCode 2.0.32 and 2.1.4 stop writing an answer into a pipe after a 64 KiB
-// multiple and exit 0. The script reads the answer from a file, so a server
-// listed after a failed one's long error is seen as it would be listed first:
-// one the run declares, settled, starts the run at once, and one that would
-// take the names of the engine's tools refuses it.
-//
-// The stand-in cuts this case's answers at 4 KiB rather than [pipeCut]: where
-// the cut falls is the release's, not this invariant's, and the shadow check
-// strips each name it finds with `${r#*…}`, which is slow to reach a name far
-// into the answer: one 64 KiB in took five seconds under dash on two cores.
+// A SERVER LISTED PAST WHAT A PIPE HOLDS IS STILL SEEN. `mcp.list` lists every
+// server the image and repository declare, a failed one with its error, and
+// 2.0.32 and 2.1.4 stop an answer into a pipe after a 64 KiB multiple and exit
+// 0; read from a file, a server listed after a long error is seen: a declared
+// one, settled, starts the run, and a shadowing one refuses it. The stand-in
+// cuts at 4 KiB rather than [pipeCut]: the cut's place is the release's, and
+// the shadow check's `${r#*…}` is slow far into an answer (five seconds at
+// 64 KiB, under dash on two cores).
 //
 // Mutation: read the answer through a pipe again, and the run waits out the
 // bound for the declared server and starts beside the other.
@@ -1384,10 +1193,9 @@ func TestAServerListedPastWhatAPipeHoldsIsStillSeen(t *testing.T) {
 }
 
 // JSON.stringify's spelling, to the byte: `"`, `\` and the control characters
-// escaped — five by their short forms, the rest as \u and lowercase hex — and
-// everything else literal, DEL and U+2029 included. A byte that is not UTF-8
-// is U+FFFD written as itself, which is the name OpenCode read from the config
-// encoding/json wrote it into.
+// escaped (five by their short forms, the rest as lowercase \u hex) and the
+// rest literal, DEL and U+2029 included. A byte that is not UTF-8 is U+FFFD
+// written as itself: the name OpenCode reads from encoding/json's config.
 func TestANameIsSpelledAsJSONStringifySpellsIt(t *testing.T) {
 	t.Parallel()
 	for in, want := range map[string]string{
@@ -1407,9 +1215,8 @@ func TestANameIsSpelledAsJSONStringifySpellsIt(t *testing.T) {
 }
 
 // THE SERVER IS THE RUN'S AND ENDS WITH IT: the done marker is written only
-// once the script exits, so a server left running would hold nothing open,
-// and one the script never stopped would keep the box's bridge connection
-// and its credentials alive past the run.
+// once the script exits, so a server left running holds nothing open, and one
+// never stopped would keep the box's bridge connection and credentials alive.
 func TestTheRunsServerIsStoppedWithIt(t *testing.T) {
 	t.Parallel()
 	forEachShell(t, func(t *testing.T, sh boxShell) {
@@ -1418,18 +1225,13 @@ func TestTheRunsServerIsStoppedWithIt(t *testing.T) {
 	})
 }
 
-// assertServerStopped fails the case if the run's server is still running
-// once the run is over: if its pipe ([serverPipe]) still has a writer. None
-// left is a server that has exited, reaped or not, since the kernel closes a
-// process's descriptors as it exits; kill(pid, 0), which this read replaces,
-// succeeds on a server the run stopped and nothing has reaped yet (#1164).
-//
-// ONE READ, WHICH NEVER WAITS. The run is over, so its server is gone already
-// or it outlived the run, and the pipe answers which at once: no data and no
-// writer is end of file, a writer still holding it is EAGAIN. A read that
-// waited for end of file would wait for nothing on a server that is gone, and
-// on one that outlived the run would end only when it did, which the fake's
-// does by itself after sixty seconds ([fakeOpenCode]), and pass it.
+// assertServerStopped fails the case if the run's server outlived the run: if
+// its pipe ([serverPipe]) still has a writer. The kernel closes an exiting
+// process's descriptors, so none left is a server gone, reaped or not, where
+// kill(pid, 0) succeeds until it is reaped (#1164). ONE READ, WHICH NEVER
+// WAITS: end of file is no writer, EAGAIN a writer still there; a read waiting
+// for end of file would pass a server that outlived the run once the fake's
+// own sixty seconds end it ([fakeOpenCode]).
 func assertServerStopped(t *testing.T, run scriptRun) {
 	t.Helper()
 	raw := readIn(t, run.dir, "serve.pid")
@@ -1463,15 +1265,11 @@ func assertServerStopped(t *testing.T, run scriptRun) {
 	}
 }
 
-// A RUN THAT STARTED NOTHING TO STOP ENDS AT ONCE, under every sh a box can
-// have. The script's stops are bounded waits for a process to go, and a stop of
-// a process that was never started — the login exporter of a run given no
-// login, and both of them at an exit before the server listens — must not wait
-// at all. It did, under busybox ash, whose `kill ""` and `kill -0 ""` succeed:
-// five seconds at the end of every run given no login.
-//
-// Each case stretches the stop wait to a minute, so a run that waited out one
-// stop of nothing cannot pass for a prompt one on a loaded runner.
+// A RUN THAT STARTED NOTHING TO STOP ENDS AT ONCE, under every sh. A stop is
+// a bounded wait for a process to go, and one never started (a run given no
+// login's exporter; both, at an exit before the server listens) must not be
+// waited for, though busybox ash's `kill ""` and `kill -0 ""` succeed. Each
+// case stretches the stop wait to a minute, so one waited out cannot pass.
 //
 // Mutation: drop end's test for an empty pid, and the busybox-kill shell waits
 // out the minute in both cases.
@@ -1502,12 +1300,11 @@ func TestARunThatStartedNothingToStopEndsAtOnce(t *testing.T) {
 	})
 }
 
-// THE SERVER'S PASSWORD IS ITS OWN. `opencode serve` takes a password from
+// THE SERVER'S PASSWORD IS ITS OWN. `opencode serve` takes one from
 // OPENCODE_PASSWORD or OPENCODE_SERVER_PASSWORD and then prints none, so a box
-// environment carrying either — an operator's role.sandbox.env, an image built
-// for OpenCode — had the script wait out the whole bound and fail saying the
-// server never listened. The server is started with neither, and the run's
-// own clients present the password it minted.
+// environment carrying either (role.sandbox.env, an OpenCode image) would leave
+// the script waiting for one. The server starts with neither, and the run's
+// clients present the one it minted.
 //
 // Mutation: drop the unset, and the run fails with no password printed.
 func TestARunsServerNeverTakesAnOutsidePassword(t *testing.T) {
@@ -1584,9 +1381,9 @@ func TestTheRunWaitsForTheServersAddressAndItsPassword(t *testing.T) {
 }
 
 // THE RUN'S EXIT IS THE RUN'S, and its usage follows it: the session's report,
-// asked of the run's own session once the run has ended, as a line of its own
-// type, which the decoder reads as the run's tokens and price. Not the stream's
-// last line: the session's message list's pages are printed after it.
+// asked once the run has ended, as a line of its own type the decoder reads as
+// the run's tokens and price. Not the stream's last line: the message list's
+// pages follow it.
 func TestTheScriptReportsTheSessionsUsageAndKeepsTheRunsExit(t *testing.T) {
 	t.Parallel()
 	forEachShell(t, func(t *testing.T, sh boxShell) {
@@ -1611,10 +1408,9 @@ func TestTheScriptReportsTheSessionsUsageAndKeepsTheRunsExit(t *testing.T) {
 }
 
 // A BOX GIVEN A LOGIN IMPORTS IT BEFORE THE RUN AND WRITES THE REFRESHED ONE
-// BACK AFTER — the export, over the document the box was seeded with, which is
-// what the box's teardown copies back to the shared login. Never an export
-// that holds no login over it, and never a document where the box was given
-// none.
+// BACK AFTER: the export, over the seeded document the teardown copies back to
+// the shared login. Never an export holding no login, and no document where
+// the box was given none.
 func TestABoxsLoginIsImportedAndTheRefreshedOneWrittenBack(t *testing.T) {
 	t.Parallel()
 	forEachShell(t, func(t *testing.T, sh boxShell) {
@@ -1637,10 +1433,7 @@ func TestABoxsLoginIsImportedAndTheRefreshedOneWrittenBack(t *testing.T) {
 	})
 }
 
-// exportsHoldingNoLogin are what an export can print that is no login to keep:
-// the empty array OpenCode prints for a database with nothing in it (with and
-// without whitespace), nothing at all, an array cut short, and text that is
-// not the JSON an export prints.
+// exportsHoldingNoLogin are what an export can print that is no login to keep.
 var exportsHoldingNoLogin = map[string]string{
 	"empty array":       "[]",
 	"spaced empty":      " [ ]\n",
@@ -1667,15 +1460,12 @@ func TestAnExportHoldingNoLoginNeverReplacesTheBoxs(t *testing.T) {
 	})
 }
 
-// A LOGIN REFRESHED MID-RUN SURVIVES THE RUN BEING KILLED. Every production
-// teardown of a run in flight is a SIGKILL of its group or a `docker rm -f`,
-// in which nothing in the box runs again, and a login OpenCode refreshed lives
-// in its database until it is exported — so it is exported while the run
-// works, through the run's own server, and what a kill finds is the document
-// the last export left.
+// A LOGIN REFRESHED MID-RUN SURVIVES THE RUN BEING KILLED. A teardown of a run
+// in flight is a group SIGKILL or `docker rm -f`, after which nothing in the
+// box runs, and a refreshed login lives in OpenCode's database until exported;
+// so it is exported through the run's server while the run works.
 //
-// Mutation: export only when the run ends, and the document is still the seed
-// when the run is killed.
+// Mutation: export only when the run ends, and a kill leaves the seed.
 func TestALoginRefreshedMidRunSurvivesTheRunBeingKilled(t *testing.T) {
 	t.Parallel()
 	forEachShell(t, func(t *testing.T, sh boxShell) {
@@ -1739,12 +1529,9 @@ func TestTheLoginLoopNeverWritesAnExportHoldingNoLogin(t *testing.T) {
 }
 
 // NOTHING OF A RUN OUTLIVES IT. The login exporter is stopped, and waited for,
-// before the run's last export — or the two would race to rename, and the
-// exporter would go on exporting against a dead server, in the job's group,
-// until the box was torn down — and it reaps its own sleep before it goes, or
-// that sleep would be left in the group for up to an interval. Both at an
-// exporter asleep when the run ends and at one that may be part way through an
-// export.
+// before the last export (else the two race to rename, and it keeps exporting
+// against a dead server in the job's group until teardown), and it reaps its
+// own sleep first. Both with the exporter asleep and part way through one.
 //
 // Mutations: drop the final unsync, and the exporter is still running after
 // the script; drop the exporter's TERM trap, and its sleep is.
@@ -1775,21 +1562,14 @@ func TestNothingOfARunOutlivesIt(t *testing.T) {
 	})
 }
 
-// THE EXPORTER SIGNALS NO PID IT HAS ALREADY REAPED. It is stopped by a
-// SIGTERM that may arrive while it is exporting — an interval after it last
-// reaped its sleep — and the trap that ends it kills the sleep it is waiting
-// on. So it forgets a sleep's pid the moment it has reaped it: kept, that trap
-// signalled a pid the system was free to have handed to another process by
-// then, which in a `direct` box, sharing the host's pids, is any process of
-// the engine's user.
-//
-// Every kill the script makes and every sleep it starts and sees end are
-// recorded, by functions standing in for both, and the exporter is stopped
-// part way through an export. The tenth-of-a-second waits a shell polls with
-// — end's, and a bounded call's, which the exporter's exports are — are no
-// sleep the exporter starts, and are left out: one in the exporter's own
-// shell would be recorded under that shell's pid, which the script's stop
-// signals by design.
+// THE EXPORTER SIGNALS NO PID IT HAS ALREADY REAPED. The SIGTERM that stops it
+// may land mid-export, an interval after it last reaped its sleep, and its
+// trap kills the sleep it waits on; so it forgets a sleep's pid once reaped,
+// or the trap could signal a reused pid: in a `direct` box, any process of the
+// engine's user. Stand-ins record every kill and sleep, and the exporter is
+// stopped mid-export. A shell's tenth-of-a-second polls (end's, a bounded
+// call's) are left out: one in the exporter's shell is recorded under that
+// shell's pid, which the stop signals by design.
 //
 // Mutation: keep the sleep's pid after its wait, and the trap kills it.
 func TestTheLoginExporterSignalsNoPidItHasReaped(t *testing.T) {
@@ -1818,8 +1598,7 @@ sleep() { [ "$1" != 0.1 ] || { command sleep "$@"; return; }; __p=$(exec sh -c '
 	ended := map[string]bool{}
 	reaped := 0
 	for _, line := range strings.Split(strings.TrimSpace(readIn(t, run.dir, "pids")), "\n") {
-		// THE PID IS THE LAST WORD, after any signal a kill names: the
-		// sleep is ended with `kill -9`.
+		// THE PID IS THE LAST WORD, after any signal: the sleep is ended by `kill -9`.
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
 			t.Fatalf("an unreadable record %q", line)
@@ -1840,21 +1619,14 @@ sleep() { [ "$1" != 0.1 ] || { command sleep "$@"; return; }; __p=$(exec sh -c '
 	}
 }
 
-// AN EXPORTER STOPPED AS IT STARTS GOES AT ONCE, under every sh a box can
-// have, and leaves nothing behind. It is forked while the script traps
-// SIGTERM, and a SIGTERM that reaches it before it has run lands on the
-// script's handler, which dash clears as the subshell begins: the stop is
-// dropped, so unsync tells it again until it goes.
-//
-// TWENTY EXPORTERS, ONE AFTER ANOTHER, each stopped straight after its fork,
-// because whether one stop is lost depends on whether the fork ran first: one
-// at a time, every stop is lost under dash, but with this case's shells
-// running beside each other a fork often runs first, so a single exporter
-// stopped once passed two runs in three with the repeat removed. Twenty make
-// a lost stop all but certain under dash on every run.
-//
-// The stop wait is stretched to a minute, so a stop that was lost and waited
-// out cannot pass for a prompt one.
+// AN EXPORTER STOPPED AS IT STARTS GOES AT ONCE, under every sh, leaving
+// nothing. It is forked while the script traps SIGTERM, and a SIGTERM before
+// it runs lands on the script's handler, which dash clears as the subshell
+// begins: the stop is dropped, so unsync tells it again until it goes. TWENTY
+// EXPORTERS, each stopped straight after its fork: a stop is lost only if it
+// beats the fork's first run, which shells running side by side make rarer,
+// and twenty make a loss all but certain under dash. The stop wait is a
+// minute, so a lost stop waited out cannot pass for a prompt one.
 //
 // Mutation: tell the exporter once (drop unsync's second operand), and the
 // dash cases wait out the minute.
@@ -1874,11 +1646,10 @@ func TestAnExporterStoppedAsItStartsGoesAtOnce(t *testing.T) {
 }
 
 // A STOP AS THE EXPORTER STARTS ITS SLEEP LEAVES NO SLEEP. Between starting a
-// sleep in the background and holding its pid the exporter has nothing it
-// could kill, so a SIGTERM there is kept until it does. Acted on at once, the
-// trap found no pid and left the sleep in the job's group for the rest of its
-// interval. No signal from outside can be timed into that window, so the
-// exporter here signals itself in it, once, from inside its own text.
+// sleep and holding its pid the exporter has nothing to kill, so a SIGTERM
+// there is kept until it has; acted on at once, the trap would leave the sleep
+// in the job's group for its interval. No outside signal can be timed into
+// that window, so the exporter here signals itself in it, once.
 //
 // Mutation: act on the stop at once (drop the trap's test of w), and the
 // hour's sleep is still running after the exporter has gone.
@@ -1904,11 +1675,10 @@ func TestAStopAsTheExporterStartsItsSleepLeavesNoSleep(t *testing.T) {
 	})
 }
 
-// A STOPPED EXPORT LEAVES NO COPY OF THE LOGIN. The exporter is stopped part
-// way through an export, and the stop is acted on as the export ends, before
-// keep has moved it over the document: the file it was writing is dropped
-// with it, so the box holds the login in one place, the document, which is
-// the one place a teardown writes back by its rule.
+// A STOPPED EXPORT LEAVES NO COPY OF THE LOGIN. Stopped mid-export, the
+// exporter acts on the stop as the export ends, before keep moves it over the
+// document, and drops the file it was writing: the login stays only in the
+// document, the one place a teardown writes back.
 //
 // Mutation: leave the exporter's file when it goes, and the box keeps a
 // second copy beside the document.
@@ -1935,8 +1705,7 @@ func TestAStoppedExportLeavesNoCopyOfTheLogin(t *testing.T) {
 		if run.document != refreshedLogin {
 			t.Errorf("the box's login is %q, want the refreshed export", run.document)
 		}
-		// Besides the document, the directory holds only what a run's own
-		// artefacts are ([loginFree]).
+		// Besides the document, only a run's own artefacts ([loginFree]).
 		doc := j.paths.CredentialDocument()
 		entries, err := os.ReadDir(filepath.Dir(doc))
 		if err != nil {
@@ -1950,9 +1719,9 @@ func TestAStoppedExportLeavesNoCopyOfTheLogin(t *testing.T) {
 	})
 }
 
-// AN EXPORT THE STOP OUTLASTS LEAVES NO COPY EITHER. An exporter in an export
-// longer than the stop's bound never hears the stop: end kills it, which runs
-// no trap, so the file it was writing is unsync's to drop.
+// AN EXPORT THE STOP OUTLASTS LEAVES NO COPY EITHER: end kills an exporter
+// whose export outlasts the stop's bound, which runs no trap, so the file it
+// was writing is unsync's to drop.
 //
 // Mutation: leave the drop to the exporter's own trap, and the box keeps the
 // copy beside the document.
@@ -1978,8 +1747,7 @@ func TestAnExportTheStopOutlastsLeavesNoCopy(t *testing.T) {
 		if run.code != 0 {
 			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
 		}
-		// Besides the document, the directory holds only what a run's own
-		// artefacts are ([loginFree]).
+		// Besides the document, only a run's own artefacts ([loginFree]).
 		doc := j.paths.CredentialDocument()
 		entries, err := os.ReadDir(filepath.Dir(doc))
 		if err != nil {
@@ -1993,14 +1761,12 @@ func TestAnExportTheStopOutlastsLeavesNoCopy(t *testing.T) {
 	})
 }
 
-// A SIGNALLED RUN EXPORTS ITS LOGIN BEFORE IT GOES, beside a server that is
-// going with the group, and exits with the conventional status — PROMPTLY, and
-// leaving nothing behind. A plain sh runs no EXIT trap on a signal it does not
-// trap, so a run stopped this way left the export to an end it never reached;
-// and under busybox ash, whose `kill ""` succeeds, the trap's exit ran the
-// EXIT trap's stops again over processes already gone and waited each out, so
-// a run told to stop took ten seconds and was killed before it could exit 143.
-// The stop wait is stretched to a minute here so that cannot pass unseen.
+// A SIGNALLED RUN EXPORTS ITS LOGIN BEFORE IT GOES, beside a server going with
+// the group, and exits with the conventional status PROMPTLY, leaving nothing.
+// A plain sh runs no EXIT trap on a signal it does not trap, so the signals
+// are trapped; and under busybox ash, whose `kill ""` succeeds, the EXIT
+// trap's stops must not run again over processes already gone. The stop wait
+// is a minute, so waiting one out cannot pass unseen.
 //
 // Mutations: drop the signal traps, and the refreshed login is lost; drop
 // end's test for an empty pid and quit's clearing of the EXIT trap together,
@@ -2022,8 +1788,7 @@ func TestASignalledRunExportsItsLoginBeforeItGoes(t *testing.T) {
 					shell: sh,
 					login: seededLogin,
 					env:   []string{"FAKE_REFRESH=" + refreshedLogin, "FAKE_RUN_SLEEP=60"},
-					// A sync that never comes round, so only the signal's
-					// export can have written the document.
+					// A sync that never comes round: only the signal's export writes the document.
 					times: &executor.OpenCodeTimes{Sync: time.Hour, Stop: stretchedStop},
 				})
 				j.await("the run to refresh the login", func() bool {
@@ -2051,11 +1816,9 @@ func TestASignalledRunExportsItsLoginBeforeItGoes(t *testing.T) {
 	})
 }
 
-// AN OPENCODE THAT IS THERE BUT FAILS IS NOT CALLED MISSING. The script said
-// "no opencode on the box PATH" whenever `opencode --version` failed, so a
-// binary that was installed but could not start, or crashed on --version, was
-// told to be installed, and what it failed with was dropped. That stderr is
-// the run's transcript when nothing else was written.
+// AN OPENCODE THAT IS THERE BUT FAILS IS NOT CALLED MISSING: a failing
+// `opencode --version` is reported with its own stderr, the run's transcript
+// when nothing else was written, never as "no opencode on the box PATH".
 //
 // Mutation: answer a failing --version with the PATH sentence, or drop its
 // stderr, and the first row goes red; answer absence with the failure's, and
@@ -2098,18 +1861,15 @@ func TestOpenCodeOneIsRefusedByName(t *testing.T) {
 }
 
 // AN ENDED OPENCODE RUN EXPORTS ITS SESSION BEFORE ITS SERVER STOPS. The end
-// request reaches the run's script alone, by the pid it published: the script
-// interrupts its session through its own server first — which settles the step
-// in flight, so the export holds it — then ends the run's client, records the
-// end, and goes on to its own tail while the server still serves: what the
-// plugin admitted and the session never delivered cancelled, the session's
-// usage asked, the session exported through the server, the refreshed login
-// exported through it too, and only then the server stopped. The run's exit is
-// its client's own.
+// request reaches the script alone, by its published pid: it interrupts the
+// session through its server (settling the step in flight, so the export
+// holds it), ends the client, records the end, then, while the server still
+// serves, cancels the undelivered notes, asks usage, exports the session and
+// the login, and only then stops the server. The run exits as its client did.
 //
-// Mutations: drop the interrupt, and no step is settled before the export; stop
-// the server before the export, and the export is recorded beside a stopped
-// server.
+// Mutations: drop the interrupt, and no step is settled before the export;
+// stop the server before the export, and the export is recorded beside a
+// stopped server.
 func TestAnEndedOpenCodeRunExportsItsSessionBeforeItsServerStops(t *testing.T) {
 	t.Parallel()
 	forEachShell(t, func(t *testing.T, sh boxShell) {
@@ -2117,13 +1877,11 @@ func TestAnEndedOpenCodeRunExportsItsSessionBeforeItsServerStops(t *testing.T) {
 			shell: sh,
 			login: seededLogin,
 			req:   sandbox.RunRequest{Steer: steerWiring},
-			// A CLIENT THAT EXITS 7 whichever way it is ended — interrupted,
-			// or told by SIGTERM — so its status is known whichever lands
-			// first.
+			// A CLIENT THAT EXITS 7 however it is ended, interrupt or SIGTERM, so its
+			// status is known whichever lands first.
 			env: []string{"FAKE_REFRESH=" + refreshedLogin, "FAKE_RUN_UNTIL=interrupted",
 				"FAKE_RUN_EXIT=7", "FAKE_RUN_TERM_EXIT=7"},
-			// A sync that never comes round, so only the end's export can have
-			// written the document.
+			// A sync that never comes round: only the end's export writes the document.
 			times: &executor.OpenCodeTimes{Sync: time.Hour},
 		})
 		j.await("the run to start", func() bool {
@@ -2165,10 +1923,9 @@ func TestAnEndedOpenCodeRunExportsItsSessionBeforeItsServerStops(t *testing.T) {
 }
 
 // AN OPENCODE RUN ASKED TO END AS ITS SERVER STARTS GOES AT ONCE: a request
-// that comes while the script waits for its server to say where it listens
-// starts no run, records the job as ended before its harness started, and the
-// script goes — the server it started stopped by its EXIT trap — rather than
-// waiting out the listen bound for a server it will never use.
+// while the script waits for its server's address starts no run, records the
+// job ended before its harness started, and the script goes (its EXIT trap
+// stopping the server) rather than waiting out the listen bound.
 //
 // Mutation: drop the request's check in the listen loop, and the script waits
 // out the whole minute.
@@ -2200,10 +1957,9 @@ func TestAnOpenCodeRunAskedToEndAsItsServerStartsGoesAtOnce(t *testing.T) {
 	})
 }
 
-// A SECOND END REQUEST LEAVES THE PACK WHOLE: once a run's end is under way the
-// script ignores the request, so one that comes while it packs — a read that
-// asked again — neither kills the script nor cuts the archive it is writing,
-// and the run's exit is what it would have been.
+// A SECOND END REQUEST LEAVES THE PACK WHOLE: once a run's end is under way
+// the script ignores the request, so one that comes while it packs neither
+// kills the script nor cuts its archive, and the run's exit is unchanged.
 //
 // Mutation: put the request back to its default once the end is under way
 // rather than ignoring it, and the second request kills the script mid-pack.

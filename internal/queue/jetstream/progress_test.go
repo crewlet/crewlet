@@ -14,28 +14,14 @@ import (
 )
 
 // A HANDLER THAT SIGNALS PROGRESS KEEPS ITS DELIVERY PAST THE ACK WINDOW, and
-// spends none of it. A mailbox delivery that meets a seat busy with another of
-// its turns waits for the seat inside its handler, and that turn can outlast
-// the window: a window that ran out redelivered the message and spent one of
-// its deliveries on nothing but the wait. The handler here holds its delivery,
-// signalling as often as the backend asks, while other members of the group
-// pull beside it, as the seat's next holder would: the message is handed over
-// exactly once.
+// spends none of it: a mailbox delivery waiting in its handler for a busy seat
+// can outlast the window, and while other members pull beside it the message
+// is handed over exactly once.
 //
-// # Held past two windows, by the broker's word
-//
-// The hold used to be twice the window by the handler's clock, followed by a
-// window's sleep for a redelivery that should not come: a redelivery handed
-// over late landed after both, and the case passed with the signal doing
-// nothing. Whether a window ran out is the broker's to say, so the case asks
-// it, through CONTROLS: messages delivered after the held one and held WITHOUT
-// a signal, which the broker redelivers once their window runs out. It
-// redelivers what has run out in stream order, the held message first, so by
-// the time a control's redelivery is handed over, the held message's would
-// have been, had its own window run out. Two controls, the second delivered
-// after the first one's redelivery: the held message is read for how often it
-// was handed over once it has been held past two windows by the broker's own
-// measure.
+// Whether a window ran out is the broker's to say, so the case asks it through
+// CONTROLS: later messages held WITHOUT a signal, redelivered in stream order,
+// so a control's redelivery follows the held message's, had it run out. Two
+// controls, the second after the first's redelivery, hold it past two windows.
 //
 // Mutation: state no progress for a batch, or make the signal a no-op, and the
 // message is redelivered while the first handler still holds it.

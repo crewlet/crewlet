@@ -30,10 +30,9 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// The listing page: twenty-five rows by default and a hundred at most. A row
-// carries a title, a one-sentence description of up to a kilobyte and a
-// dozen short fields, so a hundred is what still fits one tool answer
-// ([ToolAnswerBytes]) when every description is long.
+// The listing page: twenty-five rows by default and a hundred at most, what
+// still fits one tool answer ([ToolAnswerBytes]) when every row carries a
+// kilobyte of description beside its dozen short fields.
 const (
 	defaultArtifactList = 25
 	maxArtifactList     = 100
@@ -231,10 +230,9 @@ func (t *listArtifacts) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			continue
 		}
 		row := t.deps.listRow(item.Head, dec.Standing.Role)
-		// THE HTTP LISTING'S SHAPE (S3's, section 3.1 of the folders
-		// design): a row's `folder` is the folder's id and `folder_path` its
-		// path, each answered only for a folder the agent and the requester
-		// both see (the listing has already emptied any other).
+		// THE HTTP LISTING'S SHAPE: `folder` is the folder's id and
+		// `folder_path` its path, answered only for a folder the agent and the
+		// requester both see (the listing has already emptied any other).
 		if item.Folder != "" && !stranger {
 			row["folder"], row["folder_path"] = item.Folder, item.FolderPath
 		}
@@ -318,12 +316,11 @@ func (d ArtifactDeps) viewer(ctx context.Context, c artifactCaller) (artifactsdo
 	return d.viewerOf(ctx, c.principal, c.turn)
 }
 
-// viewerOf is what a listing narrows by for principal p: their record, the
-// units their seat sits in (a unit share admits the unit and everything below
-// it, so a seat is reached by every unit above it), and the agents they lead
-// (the lead arm, which opens only an agent owner's artifacts). The caller's,
-// and the requester's where a turn acts for one (the folder names and rows a
-// listing may disclose are narrowed by both).
+// viewerOf is what a listing narrows by for principal p: their record, every
+// unit above their seat (a unit share admits everything below the unit), and
+// the agents they lead (the lead arm opens only an agent owner's artifacts).
+// Taken for the caller and for the requester a turn acts for: a listing's rows
+// and folder names are narrowed by both.
 //
 // NEVER THE ADMIN PATH: a listing that surfaced every private artifact by the
 // override would disclose what nobody recorded ([authz.Visible]).
@@ -666,7 +663,7 @@ func (t *getArtifact) readFile(ctx context.Context, read *foreignRead, c artifac
 	return file, nil
 }
 
-// viewOutline is get_artifact's view of a deck's or a doc's structure.
+// viewOutline is get_artifact's view of an artifact's structure.
 const viewOutline = "outline"
 
 // outline is a version's structure as its kind's format reads it, as one text

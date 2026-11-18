@@ -18,14 +18,12 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// A TURN'S RECORD AT EVERY BOUND FITS ONE MESSAGE. It carries every phase's
-// calls at once — three phases' worth here, each list at its record's worst —
-// beside the turn's answer at the longest a run's report or a review's final
-// artifact may be, the trigger at its worst and an error past its clip, every
-// payload of the byte that escapes the most: and it is published within the
-// queue's ceiling, its calls held to a record's one share and the rest counted
-// by tool, rather than refused by it — which would leave the seat's live row
-// running for good, since this is the record that ends it.
+// A TURN'S RECORD AT EVERY BOUND FITS ONE MESSAGE: three phases' calls each at
+// their worst, the longest answer a run's report or review may be, the trigger
+// at its worst and an error past its clip, all of the most-escaping byte, and
+// it publishes within the queue's ceiling, its calls held to one share and the
+// rest counted by tool. Refused, it would leave the seat's live row running
+// for good, since this is the record that ends it.
 //
 // Mutation: publish the phases' calls whole, and the record is past the
 // ceiling.
@@ -41,11 +39,10 @@ func TestATurnsRecordAtEveryBoundFitsOneMessage(t *testing.T) {
 	}
 	var spend runner.Spend
 	answer := strings.Repeat("<", sandbox.MaxRunTextBytes)
-	// EACH PAST ITS ROW'S SHARES, and no further: a row's arguments past
-	// sandbox.MaxBridgeArgsBytes and its answer past sandbox.MaxBridgeOutputBytes
-	// once escaped, shared by every row, so the list is past its share whole
-	// and past it again with every row cut, without the case weighing its
-	// own test binary down by more than the record it measures.
+	// EACH PAST ITS ROW'S SHARES, and no further: arguments past
+	// sandbox.MaxBridgeArgsBytes and answer past sandbox.MaxBridgeOutputBytes
+	// once escaped, so the list is past its share whole and again with every
+	// row cut, without weighing the test down more than the record it measures.
 	name, args, output := strings.Repeat("<", 512), strings.Repeat("<", 2<<10), strings.Repeat("<", 1<<10)
 	for i := range 3 * sandbox.MaxBridgeCalls {
 		spend.ToolExecutions = append(spend.ToolExecutions, types.ToolExecution{

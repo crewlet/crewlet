@@ -18,28 +18,18 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// THE REF LIFECYCLE THROUGH A NODE'S OWN DUTY (M3-boxes §10.6.6, C9b's engine
-// cases): what a live turn holds from Gitlet's idle-branch expiry,
-// asked of the real code-retention pass a node builds — its listing, its
-// proposals to the repository's committer through the estate router, and the
-// committer's decide — over Gitlet's real rows. The turns are the
-// engine's own: its launches, the checkouts that resolve a run's repositories
-// and the seat's code tools, each through the node's code seam
-// (CodeToolDeps); and what the pass asks of the live turns is the engine's own
-// holds reader over the run store the launches wrote and the node's registry
-// of running turns.
+// THE REF LIFECYCLE THROUGH A NODE'S OWN DUTY: what a live turn holds from
+// Gitlet's idle-branch expiry, asked of the real code-retention pass over
+// Gitlet's real rows, with the engine's own launches, checkouts and code tools
+// (CodeToolDeps) and its holds reader over the run store and running turns.
 //
-// THE BOXES ARE THE LAUNCH RIG'S, never the node's own sandbox runtime: the
-// rig's coordinator is never started, so a parked run stays parked until a
-// case ends it, where a node's waiter would poll a box its provider never
-// made and end the run under the case. So the run store the pass reads is the
-// rig's, through the reader a node builds ([holdsReader]); that the node's
-// duty reads its own store through [Engine.codeHolds] is
-// TestTheRetentionDutyExpiresAnIdleSeatBranchNoRunHolds's.
-//
-// THE CLOCK IS THE PASS'S, and where a case needs it the tools': a branch's
-// broker instant cannot be moved, so a fortnight passes on the clocks that
-// judge it (gitlet.Retention.Now, builtin.CodeDeps.Now).
+// THE BOXES ARE THE LAUNCH RIG'S: its coordinator never starts, so a parked run
+// stays parked until a case ends it, where a node's waiter would end it under
+// the case. The pass reads the rig's store through [holdsReader]; the duty's
+// own wiring ([Engine.codeHolds]) is
+// TestTheRetentionDutyExpiresAnIdleSeatBranchNoRunHolds's. A branch's broker
+// instant cannot move, so time passes on the clocks that judge it
+// (gitlet.Retention.Now, builtin.CodeDeps.Now).
 
 // refLifecycleDoc is a company hosting web and api, both owned by the
 // Engineering unit, whose two seats write code at full_access and run it in
@@ -242,12 +232,10 @@ func TestABranchAnEarlierJobCheckedOutIsHeld(t *testing.T) {
 	}
 }
 
-// A BRANCH IS EXPIRED ON TIME ONCE ITS RUN ENDS: the run of the relaunch case
-// ends — its ending decided and its row deleted — and nothing holds the
-// branch any more; a pass on a clock short of the expiry window keeps it (not
-// yet due), and the next pass past the window expires it. So a branch is
-// never expired before RefExpiry, and is expired by the first pass after its
-// run ends that finds it due: within one RetentionInterval, the duty's tick.
+// A BRANCH IS EXPIRED ON TIME ONCE ITS RUN ENDS: once the relaunch case's run
+// ends (its row deleted), a pass short of the expiry window keeps the branch
+// and the next past it expires it — never before RefExpiry, and within one
+// RetentionInterval of being due.
 //
 // Mutation: the registry never forgetting a turn that returned → the resumed
 // turn's frame still reads the branch held, never expired, red.
@@ -277,20 +265,13 @@ func TestABranchIsExpiredOnTimeOnceItsRunEnds(t *testing.T) {
 }
 
 // A BRANCH A PARKED RUN ONLY READ IS HELD: qa's seats/qa/fixtures on web was
-// last pushed 337 hours ago by the pass's clock — due, and older than
-// gitlet.RefHoldRecordAfter. The pass reads its page and then the live holds,
-// and only once that read has answered (nothing held) does a Worklet executor
-// of another seat, swe, resolve the branch with code_resolve — the one hold
-// the pass cannot have seen, which the read records on the code log because
-// the branch is that old. The pass proposes, and the committer keeps the
-// branch: the expiry is answered stale, the hold recorded after the page
-// listed it (refs_kept 1). The executor then launches checking out no
-// repository and parks, its frame returning: every later pass keeps the
-// branch from the row (refs_held 1).
-//
-// code_resolve rather than code_read: the case's commits are rows with no
-// objects, and a read of a file would fail its git read after the hold it
-// took; the hold is resolveRef's either way.
+// pushed 337 hours before the pass's clock — due, and older than
+// gitlet.RefHoldRecordAfter. The pass lists its page, reads the live holds
+// (none), and only then does swe's code_resolve read the branch: a hold the
+// pass cannot have seen, recorded on the code log for the branch's age, so the
+// committer answers the expiry stale (refs_kept 1). Once the executor parks,
+// its row holds the branch (refs_held 1). code_resolve, not code_read: the
+// commits have no objects, and the hold is resolveRef's either way.
 //
 // Mutations: skip the hold record → the first pass deletes the branch, red;
 // drop ExpiryRule's held term → the same, red; read the holds before the page
@@ -352,14 +333,11 @@ func TestABranchAParkedRunOnlyReadIsHeld(t *testing.T) {
 	}
 }
 
-// A BRIDGED RUN HOLDS THE BRANCH IT WROTE: an executor's run — the launch
-// rig's box driving the MCP bridge — makes a bridged code_commit_files creating seats/swe/notes on the project repository web, a
-// branch no launch granted, through the node's code seam, so the write lands
-// on Gitlet; its hold is on the run's row before the write is
-// sent. The run parks on a question and the node restarts: a fresh registry
-// of running turns, every hold its memory kept gone, the row alone. A
-// fortnight and an hour after the write, the node's pass keeps the branch,
-// held from the row, which names the branch's hold key.
+// A BRIDGED RUN HOLDS THE BRANCH IT WROTE: an executor's bridged
+// code_commit_files creates seats/swe/notes on web, a branch no launch
+// granted, its hold on the run's row before the write is sent. After the run
+// parks and the node restarts (a fresh registry of running turns, the row
+// alone), a pass a fortnight and an hour on keeps the branch from the row.
 //
 // Mutation: CodeDeps.branch skipping HoldRef → the branch is expired after
 // the restart, red.

@@ -12,14 +12,13 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 )
 
-// retryNode is one node of a fleet sharing fleet: its own revision, its own
-// sign-in plans, and the retry watch running.
+// retryNode is one node sharing fleet, with its own revision and sign-in plans
+// and the retry watch running.
 func retryNode(t *testing.T, fleet coord.Fleet) (*Engine, *Company) {
 	t.Helper()
 	c, _ := chainCompany(t, chainMember{key: "plan", agent: "claude-code", model: "opus"})
-	// THE ENTRY AS THE REVISION WRITES IT, on a harness that is not there: a
-	// "retry now" builds its probe from the revision, and a case must never
-	// start a real harness.
+	// A harness binary that is not there: "retry now" builds its probe from the
+	// revision, and a case must never start a real harness.
 	spec := c.Config.Providers.LLM["plan"]
 	spec.StateDir = t.TempDir()
 	spec.Overrides = map[string]any{"binary": filepath.Join(t.TempDir(), "no-cli-here")}
@@ -39,14 +38,10 @@ func spend(t *testing.T, c *Company, at time.Time) {
 	}
 }
 
-// limitReport is Claude Code's usage-limit sentence as a report made at `at`
-// says it: its window resets on the hour, in UTC, two to three hours later.
-// It is relative to the report because a fixed hour fails at that hour.
-// "resets 5pm" reported at 16:59 is a window over by 17:00, and the harness
-// reads one that passed less than five minutes ago as no reset at all
-// (clockResetGrace). Every case naming it then found no sit-out for five
-// minutes of each day. The zone is named so that the sentence means the same
-// instant under whatever TZ the suite runs.
+// limitReport is Claude Code's usage-limit sentence as reported at `at`: a reset
+// on the hour, in UTC, two to three hours later. Relative, because a fixed hour
+// reported just before it reads as a reset already passed (clockResetGrace) and
+// no sit-out; the zone is named so the instant holds under any TZ.
 func limitReport(at time.Time) string {
 	return "Usage limit reached · resets " + at.UTC().Add(3*time.Hour).Format("3pm") + " (UTC)"
 }
@@ -54,11 +49,9 @@ func limitReport(at time.Time) string {
 var person = iam.Actor{Name: "jane-doe", Kind: iam.ActorHuman, OperatorID: "session-1"}
 
 // A RETRY CLEARS EVERY NODE'S SIT-OUT, FOR THE REPORTS BEFORE IT AND NONE AFTER.
-// A person clears through one node; every node hears the record and clears its
-// own memory of the limit, which no request to one node could reach. A report
-// the vendor made after the request stands, and hearing the record again (a
-// re-watch, a restart) clears nothing more: the rule is the stamp, not the
-// delivery.
+// A clear through one node reaches every node's own memory of the limit; a
+// report after the request stands, and hearing the record again (a re-watch,
+// a restart) clears nothing more: the rule is the stamp, not the delivery.
 //
 // Mutation: clear without the stamp (everything), apply on the taking node
 // alone, or clear again on a re-delivered record, and this fails.
@@ -97,9 +90,9 @@ func TestARetryClearsEveryNodesSitOut(t *testing.T) {
 	}
 }
 
-// "RETRY NOW" ASKS FIRST AND TELLS NOBODY UNLESS IT ANSWERED: on an entry no
-// node sits out there is nothing to retry; a probe that fails writes no record,
-// so no node clears a limit nothing has shown is over.
+// "RETRY NOW" ASKS FIRST AND TELLS NOBODY UNLESS IT ANSWERED: an entry no node
+// sits out has nothing to retry, and a failed probe writes no record, so no
+// node clears a limit nothing has shown is over.
 //
 // Mutation: write the record before the probe, or regardless of its answer,
 // and this fails.
@@ -116,8 +109,7 @@ func TestRetryNowWritesNothingUnlessTheProbeAnswered(t *testing.T) {
 	}
 
 	spend(t, c, time.Now().Add(-time.Minute))
-	// The entry's harness does not exist, so the probe fails for a reason that is
-	// not a limit.
+	// The harness does not exist, so the probe fails for a reason not a limit.
 	result, err := e.RetryModel(t.Context(), "plan", coord.RetryProbe, person)
 	if err != nil || result.Cleared || result.Failed == "" {
 		t.Fatalf("RetryModel(probe) on a harness that cannot answer = %+v, %v; want nothing "+

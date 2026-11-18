@@ -1,22 +1,17 @@
 package executor
 
 // harnesses is every harness this build can drive, in a stable order: the one
-// list [Names] and the session carriers ([carrierOf]) are read from.
-//
-// ONE LIST FOR BOTH, because a second one — a map of the harnesses whose
-// session this build reads — is a list nothing keeps beside this one: a harness
-// added here and missed there would have every session it captured read as
-// one this build does not carry.
+// list both [Names] and [carrierOf] read. A second list of the harnesses whose
+// session this build carries could miss one added here, and every session it
+// captured would read as one this build does not carry.
 var harnesses = []Harness{ClaudeCode{}, OpenCode{}}
 
 // Names is every harness this build can drive, in a stable order.
 //
-// THE LIST AND THE ENGINE'S REGISTRY MUST AGREE, and this is the one place
-// either is written: `crewlet llm doctor` checks an executor entry's harness
-// against it, and the engine builds its runner map from the same constants. A
-// second list would let the doctor pass an entry the engine then refuses at
-// the seat's first turn — which is precisely the failure the probe exists to
-// catch, reintroduced by the check for it.
+// `crewlet llm doctor` checks an executor entry's harness against it and the
+// engine builds its runner map from the same constants, so the two cannot
+// disagree: a second list would let the doctor pass an entry the engine refuses
+// at the seat's first turn, the very failure the probe exists to catch.
 func Names() []string {
 	out := make([]string, len(harnesses))
 	for i, h := range harnesses {

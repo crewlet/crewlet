@@ -12,18 +12,14 @@ import (
 // A RUN READS A REPLY TO ITS QUESTION FENCED, AND AN ANSWER BY TURN AS ITS
 // ANSWERER'S OWN.
 //
-// A reply in the conversation the run asked in is somebody's words, which the
-// chat surface vouched for and the engine did not (ADR-0040): the run carrying
-// on reads it inside one fence of its turn's token, under who wrote it as the
-// trigger labelled them, whether it continues its own session or starts
-// afresh, and nothing the reply says, nor anything in the question the run's
-// own session wrote, opens or closes a fence. An answer given by turn
-// (answer_executor) came from a person the engine let answer the run, its
-// requester, its seat's lead or an administrator, and is that person's
-// instruction to it (ADR-0068): read defused, never fenced, under their name.
+// A chat reply is words the engine did not vouch for (ADR-0040): continued or
+// reseeded, the run reads it in exactly one fence of its turn's token, labelled
+// as the trigger labelled its writer, and neither the reply nor the question
+// opens or closes a fence. An answer by turn (answer_executor) is its
+// answerer's instruction (ADR-0068): defused, never fenced, under their name.
 //
-// Mutation: hand the reply over bare, as the continuation did, and both reply
-// cases are red; fence an answer by turn and both of its cases are.
+// Mutation: hand the reply over bare and both reply cases are red; fence an
+// answer by turn and both of its cases are.
 func TestARunReadsAReplyFencedAndAnAnswerByTurnAsItsAnswerersOwn(t *testing.T) {
 	t.Parallel()
 	turnToken := provenance.NewBoundary()

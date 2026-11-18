@@ -21,11 +21,9 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
-// truncatingKV is a bucket whose listing STOPS WITHOUT SAYING SO.
-//
-// Embedding the interface rather than implementing it: only Watch and Bucket
-// are reached, and a method this test does not mean to exercise should panic
-// rather than quietly answer a zero value.
+// truncatingKV is a bucket whose listing STOPS WITHOUT SAYING SO. It embeds
+// the interface so a method the test does not mean to reach panics rather
+// than quietly answers a zero value.
 type truncatingKV struct {
 	jetstream.KeyValue
 	deliver int // entries handed over before the channel closes
@@ -38,8 +36,8 @@ func (k truncatingKV) Watch(context.Context, string, ...jetstream.WatchOpt) (jet
 	for i := range k.deliver {
 		ch <- stubEntry{key: fmt.Sprintf("k%d", i)}
 	}
-	// CLOSED, never the nil end-of-initial-values marker. This is what the
-	// client's own watcher does when its subscription dies mid-listing.
+	// CLOSED, never the nil end-of-initial-values marker: the client's
+	// watcher does this when its subscription dies mid-listing.
 	close(ch)
 	return stubWatcher{ch: ch}, nil
 }
@@ -61,18 +59,13 @@ func (e stubEntry) Revision() uint64 { return 1 }
 // A LISTING THAT ENDS EARLY IS AN ERROR, NEVER A SHORT LIST — and it hands
 // the caller NOTHING, rather than the part it read before the cut.
 //
-// This is the whole reason this package does not use the client's ListKeys.
-// That helper's goroutine ends on a nil entry, and a receive from the channel
-// its subscription closes on failure yields exactly that nil — so a listing
-// cut off half way came back TRUNCATED WITH A NIL ERROR. This package's rule
-// is that "held", "definitively not held" and "the store could not be
-// reached" are three different facts; a short list with no error collapses the
-// third into the second at every caller at once, and for the trim's published
-// floor that is a delete of records a node still needs.
-//
-// The visit count is the second half. A walk that streamed into its caller
-// handed over the entries delivered before the cut and THEN failed, so a
-// caller accumulating as it went held a partial listing next to the error.
+// The client's ListKeys ends on a nil entry, which a closed subscription's
+// channel also yields, so a cut listing came back TRUNCATED WITH A NIL ERROR:
+// "the store could not be reached" collapsed into "definitively not held",
+// and for the trim's published floor that deletes records a node still needs
+// (package doc, "Every listing is ONE CERTIFIED PASS, and never the client's
+// ListKeys"). The visit count holds the second half: no entry reaches a
+// caller before the error.
 func TestAListingThatEndsEarlyIsUnavailableRatherThanShort(t *testing.T) {
 	t.Parallel()
 	js := jsOf(embeddedNATS(t))
@@ -105,22 +98,18 @@ func TestAListingThatEndsEarlyIsUnavailableRatherThanShort(t *testing.T) {
 }
 
 // openFleetForTest opens a fleet store with retentions long enough that
-// nothing lapses under a case that did not ask it to — the same reasoning
-// TestFleetContract gives for its own numbers.
+// nothing lapses under a case that did not ask it to (as TestFleetContract).
 func openFleetForTest(t *testing.T, nc *nats.Conn, prefix string) *FleetStore {
 	t.Helper()
 	return openFleetVia(t, jsOf(nc), InProcess, prefix)
 }
 
-// openFleetVia is [openFleetForTest] over a client in any API — a leaf's,
-// which addresses the embedded fleet's domain — which reaches the buckets as
-// reach says.
+// openFleetVia is [openFleetForTest] over a client in any API (a leaf's
+// addresses the embedded fleet's domain), reaching the buckets as reach says.
 //
-// The retentions are the suite's, not production's: every case reasons about
-// a window or a claim it names both sides of, and a bucket sized for the
-// production ledger's seven days would make a "this has lapsed" case wait
-// seven days. Every one is above the broker's 100 ms floor and far longer
-// than a case takes, so nothing lapses under a case that did not ask it to.
+// The retentions are the suite's, not production's seven days, which would
+// make a "this has lapsed" case wait a week: each is above the broker's
+// 100 ms floor and far longer than a case takes.
 func openFleetVia(t testing.TB, client jetstream.JetStream, reach Reach, prefix string) *FleetStore {
 	t.Helper()
 	store, err := OpenFleet(context.Background(), client, FleetConfig{
@@ -142,9 +131,9 @@ func openFleetVia(t testing.TB, client jetstream.JetStream, reach Reach, prefix 
 	return store
 }
 
-// AND AN EMPTY BUCKET IS NOT AN ERROR. The nil entry is the end of the initial
-// values and the only thing that ends a walk successfully — so "there are no
-// keys" has to stay distinguishable from the case above.
+// AND AN EMPTY BUCKET IS NOT AN ERROR. The nil entry, the end of the initial
+// values, is the only successful end of a walk, so "there are no keys" stays
+// distinguishable from the case above.
 func TestAnEmptyBucketWalksCleanly(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
@@ -163,12 +152,10 @@ func TestAnEmptyBucketWalksCleanly(t *testing.T) {
 // NO ENUMERATION LEAVES A CONSUMER BEHIND, INCLUDING ONE THAT ABANDONS THE
 // WALK.
 //
-// The shape this replaced could not keep that promise. The client's key lister
-// hands keys over a 256-buffered channel with a BLOCKING send, so a caller
-// that returned early — which five of these methods do on a bad record — left
-// the goroutine parked on that send for ever, and the server-side consumer
-// with it. A listing stops its watcher the moment its pass ends, on every
-// path, so the walk has no early-return path that leaks.
+// The client's key lister sends on a 256-buffered channel with a BLOCKING
+// send, so a caller returning early on a bad record parks its goroutine, and
+// the server-side consumer, for ever. A listing stops its watcher the moment
+// its pass ends, on every path.
 func TestAnAbandonedWalkLeavesNoConsumer(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
@@ -176,8 +163,8 @@ func TestAnAbandonedWalkLeavesNoConsumer(t *testing.T) {
 	store := openFleetForTest(t, nc, prefix)
 	ctx := context.Background()
 
-	// Past the client lister's 256-entry buffer, so the shape this replaced
-	// would park rather than merely linger.
+	// Past the client lister's 256-entry buffer, so a blocking send would
+	// park rather than merely linger.
 	const keys = 300
 	good, err := encodeTally(coord.Tally{At: time.Now().UTC()}.Roll(coord.WindowsAt(time.Now(), time.UTC)).Add(1, time.Now().UTC()))
 	if err != nil {
@@ -218,13 +205,10 @@ func TestAnAbandonedWalkLeavesNoConsumer(t *testing.T) {
 	}
 }
 
-// A FAILED LISTING NAMES THE LISTING, not the bucket it lives in.
-//
-// Eight key classes share the positions register, so every one of them used to
-// fail with "read crewlet_positions" — a sentence that names the file an
-// operator would inspect and never the duty that stalled. The trim floors, the
-// trim holds and the maintenance acknowledgements are three very different
-// outages behind that one message.
+// A FAILED LISTING NAMES THE LISTING, not the bucket it lives in: eight key
+// classes share the positions register, and "read crewlet_positions" names
+// none of the trim floors, trim holds or maintenance acknowledgements, three
+// very different outages.
 func TestAFailedListingNamesTheListingRatherThanTheBucket(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
@@ -232,7 +216,7 @@ func TestAFailedListingNamesTheListingRatherThanTheBucket(t *testing.T) {
 	store := openFleetForTest(t, nc, prefix)
 
 	// A cancelled walk is the cheapest failure both transports share, and
-	// the message is composed in the same place every other failure's is.
+	// its message is composed where every other failure's is.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -252,15 +236,11 @@ func TestAFailedListingNamesTheListingRatherThanTheBucket(t *testing.T) {
 	}
 }
 
-// probeKV is a REAL bucket whose pass LOSES one key.
-//
-// That is how the broker's own failure is reproduced deterministically. What
-// the pass does on a busy bucket — end its initial values while a key's only
-// revision is still ahead of the cursor — is a race against the broker's
-// signal queue; what it LEAVES is a key the pass never delivered while the
-// stream still holds it, and that is exactly what this hands the listing
-// every time. Everything else — the index read, the certifying read, the
-// stream — is the broker's own.
+// probeKV is a REAL bucket whose pass LOSES one key: the broker's own race (a
+// busy bucket's pass ending while a key's only revision is still ahead of the
+// cursor) made deterministic. What it leaves, a key the pass never delivered
+// that the stream still holds, is handed to the listing every time; the index
+// read, the certifying read and the stream are the broker's own.
 type probeKV struct {
 	jetstream.KeyValue
 	lose string // a key whose revisions the pass never delivers
@@ -337,13 +317,9 @@ func putBudget(ctx context.Context, t *testing.T, kv jetstream.KeyValue, scope s
 
 // wireReads counts, ON THE WIRE, the single-key reads a listing sends one
 // bucket's stream: the leader's `STREAM.MSG.GET` and the direct gets any
-// replica may answer.
-//
-// The wire rather than a wrapper, because the question is what the broker was
-// ASKED — a wrapper around a read function counts calls to that function and
-// is blind to a second path that reaches the broker another way, which is
-// exactly the shape of the defect these counts guard: a certification that
-// looked like a read and went out as a direct get.
+// replica may answer. The wire, not a wrapper, because the question is what
+// the broker was ASKED: a wrapper is blind to a second path to the broker,
+// the defect these counts guard (a certification sent as a direct get).
 type wireReads struct {
 	conn   *nats.Conn
 	leader *nats.Subscription
@@ -351,9 +327,9 @@ type wireReads struct {
 }
 
 // countWireReads starts counting on nc, which must be the connection the
-// listing's own client rides: a subscriber sees each request before the
-// broker's answer to it reaches the same connection, so a count taken after
-// the listing returns has seen every request it made.
+// listing's client rides: a subscriber sees each request before the broker's
+// answer reaches that connection, so a count taken after the listing returns
+// has seen every request it made.
 func countWireReads(t *testing.T, nc *nats.Conn, kv jetstream.KeyValue) *wireReads {
 	t.Helper()
 	sub := func(subject string) *nats.Subscription {
@@ -421,21 +397,14 @@ func listScopes(ctx context.Context, f *FleetStore, kv jetstream.KeyValue) (map[
 
 // A KEY THE PASS NEVER DELIVERED IS READ BACK INTO THE LISTING.
 //
-// This is the defect the certification exists for, made deterministic. The
-// pass's end marker is the client's guess — a pending count the broker
-// decrements when an overwrite removes a revision and re-increments later, off
-// a queue — so on a busy bucket the pass ends with a key it never delivered
-// still in the stream. A listing that trusted the pass returned that key as
-// ABSENT: a live node read as gone, a positions row that raises the trim floor.
-// The stream's key index names it, and the listing reads it by itself — ONE
-// read, for the one key the pass lost.
-//
-// And that read is the LEADER's. A direct get is what the bucket handle's own
-// Get sends, and any replica may answer one from a copy that is behind — see
-// TestACertifyingReadIsNeverAnsweredByAReplicaThatIsBehind for that failure on
-// a real cluster. On one server the two reads return the same bytes, so what
-// this case can hold on the regular runner is the request itself: not one
-// direct get, ever.
+// The pass's end is the client's guess off the broker's pending count, so a
+// busy bucket's pass can end with an undelivered key still in the stream,
+// which a trusting listing returned as ABSENT (a live node gone, a raised
+// trim floor). The key index names it, and the listing reads it: ONE read,
+// and the LEADER's. A direct get (the handle's own Get) may be answered by a
+// replica that is behind (TestACertifyingReadIsNeverAnsweredByAReplicaThatIsBehind);
+// one server returns the same bytes either way, so this case holds the
+// request itself: not one direct get, ever.
 func TestAKeyThePassNeverDeliveredIsReadBackIntoTheListing(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -470,11 +439,9 @@ func TestAKeyThePassNeverDeliveredIsReadBackIntoTheListing(t *testing.T) {
 
 // AND A KEY THAT IS GONE BY THE TIME IT IS READ IS ABSENT, NOT AN ERROR.
 //
-// The index names every subject with a message, which includes a key whose
-// newest message is a delete marker. When the pass lost such a key, the
-// certifying read finds nothing — and that is an answer (the key is gone), not
-// a store that could not be reached. Raising it would fail every listing that
-// raced a delete.
+// The index names a key whose newest message is a delete marker too; the
+// certifying read finding nothing is an answer (the key is gone), not an
+// unreachable store. Raising it would fail every listing that raced a delete.
 func TestAKeyThePassLostThatIsGoneByItsReadIsAbsentRatherThanAnError(t *testing.T) {
 	t.Parallel()
 	for _, gone := range []struct {
@@ -519,14 +486,11 @@ func TestAKeyThePassLostThatIsGoneByItsReadIsAbsentRatherThanAnError(t *testing.
 // replayKV is a REAL bucket whose pass is one RECORDED EARLIER — what a pass
 // served by a replica that is behind delivers.
 //
-// The broker places a listing's pass on a random member of the stream's group
-// and gives a caller no way to choose one, so "a replica that applied the
-// delete but not the re-creation" cannot be arranged by picking the member.
-// What such a pass DELIVERS can be: it is exactly the pass the bucket gave
-// before the re-creation, and replaying that one to a listing taken after it
-// hands the certification the real broker's marker — its revision, its
-// headers, its timestamp — against a leader that has since moved on. The index
-// read, the certifying read and the stream are all the broker's own.
+// A caller cannot pick the member that serves a pass, but what a lagging one
+// DELIVERS is the pass the bucket gave before the re-creation: replayed, it
+// hands the certification the real broker's marker (revision, headers,
+// timestamp) against a leader that has moved on. The index read, the
+// certifying read and the stream are the broker's own.
 type replayKV struct {
 	jetstream.KeyValue
 	pass []jetstream.KeyValueEntry
@@ -574,13 +538,11 @@ func markerIn(pass []jetstream.KeyValueEntry, key string) bool {
 
 // A TOMBSTONE A REPLICA SERVED FOR A LIVE KEY IS READ FROM THE LEADER.
 //
-// A key deleted and created again before the listing began, read by a pass on
-// a member that had applied the delete and not yet the re-creation, comes back
-// as a marker. A listing that took the marker as the key's answer dropped a
-// key live throughout it — a secret the boot snapshot left out, a mailbox a
-// sweep then treated as never registered. The index names the key, because the
-// leader holds its value, and a marker in the pass is read again exactly as a
-// key the pass never delivered is: ONE leader read, and not one direct get.
+// A key deleted and re-created before the listing, passed by a member that
+// applied only the delete, comes back as a marker; taken as the answer, it
+// drops a key live throughout (a secret left out of the boot snapshot, a
+// mailbox swept as never registered). A marker in the pass is read again as
+// an undelivered key is: ONE leader read, and not one direct get.
 func TestATombstoneAReplicaServedForALiveKeyIsReadFromTheLeader(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -621,19 +583,12 @@ func TestATombstoneAReplicaServedForALiveKeyIsReadFromTheLeader(t *testing.T) {
 // A TOMBSTONE COSTS ONE LEADER READ UNTIL IT IS SWEPT, and a quiet bucket with
 // none costs no read at all.
 //
-// The cost half of the certification's promise. A marker the pass delivers is
-// read again from the leader, so every marker a bucket keeps is a read on
-// every listing that meets it — and a bucket the broker never ages keeps each
-// one for the life of the deployment unless the sweep removes it. Before the
-// sweep, three markers are three reads; after it, the same listing reads
-// nothing, which is what bounds the term by the records removed recently
-// rather than by every record ever removed.
-//
-// ON THE CHANNELS BUCKET, which has no age and removes a record as each ask
-// closes. The values are a counter's because the listing helper reads them,
-// and neither the walk nor the sweep reads a value at all. (The budgets bucket
-// these were first written over now has an age, and the broker ages its
-// markers with it: the fleet's sweep rightly leaves it alone.)
+// Every kept marker is a leader read on every listing, and a bucket the broker
+// never ages keeps each one unless the sweep removes it: three markers are
+// three reads before the sweep and none after, which bounds the cost by
+// records removed recently. ON THE CHANNELS BUCKET, which has no age (the
+// budgets bucket's age ages its markers, so the sweep leaves it alone); the
+// values are a counter's only because the listing helper reads them.
 func TestATombstoneCostsOneLeaderReadUntilItIsSwept(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -687,12 +642,10 @@ func TestATombstoneCostsOneLeaderReadUntilItIsSwept(t *testing.T) {
 	}
 }
 
-// A LISTING THAT CANNOT BE CERTIFIED IS NOT A LISTING.
-//
-// The pass alone cannot tell a complete answer from one that lost a key, so a
-// failure of either certifying read is the third answer, named as the listing
-// that could not finish — never the pass's answer handed over as if it were
-// whole, and never a partial visit before the error.
+// A LISTING THAT CANNOT BE CERTIFIED IS NOT A LISTING. The pass alone cannot
+// tell a complete answer from one that lost a key, so a failure of either
+// certifying read is the third answer, naming the listing: never the pass's
+// answer as if whole, and never a partial visit before the error.
 func TestAListingThatCannotBeCertifiedIsUnavailable(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
@@ -702,10 +655,9 @@ func TestAListingThatCannotBeCertifiedIsUnavailable(t *testing.T) {
 		f := openFleetForTest(t, nc, fmt.Sprintf("f%d", bucketSeq.Add(1)))
 		ctx := context.Background()
 		putBudget(ctx, t, f.budgets, "org", 1)
-		// A client that cannot reach the stream's index: it addresses the
-		// embedded fleet's domain, which this raw broker does not serve, so
-		// every JetStream API request finds no responder — while the
-		// bucket's own pass goes through the handle it already holds.
+		// A client that cannot reach the stream's index: it addresses a
+		// domain this raw broker does not serve, so every API request finds
+		// no responder, while the pass goes through the handle it holds.
 		blind, err := jsapi.Embedded().Client(nc)
 		if err != nil {
 			t.Fatalf("client: %v", err)
@@ -735,8 +687,7 @@ func TestAListingThatCannotBeCertifiedIsUnavailable(t *testing.T) {
 		putBudget(ctx, t, f.budgets, "org", 1)
 		putBudget(ctx, t, f.budgets, "seat-a", 1)
 		// The index goes through the working client and the certifying read
-		// through one whose API no responder serves: the read the listing
-		// needs is the one that cannot be made.
+		// through one whose API no responder serves.
 		blind, err := jsapi.Embedded().Client(nc)
 		if err != nil {
 			t.Fatalf("client: %v", err)
@@ -764,8 +715,8 @@ func TestAListingThatCannotBeCertifiedIsUnavailable(t *testing.T) {
 
 // churnFor runs write in tight loops, one goroutine per key, until the
 // returned stop is called; stop reports how many writes landed and the first
-// failure. A write that fails ends its loop, because the case asserts about
-// keys that were live THROUGHOUT and a failed renew is a key that may not be.
+// failure. A failed write ends its loop: the case asserts about keys live
+// THROUGHOUT, and a failed renew is a key that may not be.
 func churnFor(t *testing.T, keys []string, write func(key string) error) (stop func() (int64, error)) {
 	t.Helper()
 	var (
@@ -802,25 +753,21 @@ func churnFor(t *testing.T, keys []string, write func(key string) error) (stop f
 	}
 }
 
-// churnListings is how many listings a churn case takes. Measured before the
-// certification existed, 23% of ListLive calls against three tight renewers
-// lost a live lease, so this many passes lose one with certainty; afterwards
-// every one of them must be whole.
+// churnListings is how many listings a churn case takes: an uncertified walk
+// lost a live lease on 23% of ListLive calls against three tight renewers, so
+// this many passes lose one with certainty, and certified every one is whole.
 const churnListings = 300
 
-// A LEASE RENEWED THROUGHOUT A LISTING IS IN IT. The regression.
+// A LEASE RENEWED THROUGHOUT A LISTING IS IN IT.
 //
-// Every membership read is ListLive: seat placement divides the company by
-// ListLive(ClassNode). A
-// renew is an overwrite, and on a bucket keeping one revision per key an
-// overwrite of a key the pass has not reached removes the revision it was
-// about to deliver — measured at 848 misses in 3634 listings, each a live
-// node that looked gone to the node reading.
+// Every membership read is ListLive. A renew is an overwrite, and on a bucket
+// keeping one revision per key, overwriting a key the pass has not reached
+// removes the revision it was about to deliver: a live node read as gone.
 //
-// The listing runs on its OWN store over the same buckets, with its lease
-// bucket counted, so the case can prove the race actually happened: a run in
-// which no listing needed a certifying read is a run in which the renewals
-// never overlapped a pass, and it would pass whatever the walk did.
+// The listing runs on its OWN store over the same buckets, its lease bucket
+// counted, so the case proves the race happened: a run in which no listing
+// needed a certifying read never overlapped a pass, and would pass whatever
+// the walk did.
 func TestAListingNeverMissesALeaseBeingRenewed(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -894,11 +841,10 @@ func resourcesOf(leases []coord.Lease) []string {
 
 // A POSITIONS ROW HEARTBEATED THROUGHOUT A LISTING IS IN IT, ONCE.
 //
-// The same walk under the FleetStore's listings, and the sharpest of them: the
-// trim takes a MINIMUM across these rows, so a row the listing misses raises
-// the floor and deletes log records its node has not applied. And the pass can
-// deliver one row at two revisions, which every appending listing used to
-// return twice — two rows for one node, one of them stale.
+// The trim takes a MINIMUM across these rows, so a missed row raises the
+// floor and deletes log records its node has not applied. And the pass can
+// deliver one row at two revisions, which an appending listing returns twice:
+// two rows for one node, one of them stale.
 func TestAPositionsListingNeverMissesOrRepeatsARowBeingHeartbeated(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -956,12 +902,11 @@ func TestAPositionsListingNeverMissesOrRepeatsARowBeingHeartbeated(t *testing.T)
 
 // A LEADER READ DECODES A KEY EXACTLY AS THE CLIENT'S OWN READS DO.
 //
-// The certifying read goes past the client, so it decodes the stored message
-// itself — and an entry it decoded differently from the pass would list a key
-// the pass would have dropped, or drop one it would have listed. On one server
-// the client's direct get is exact, so the two must agree field by field: a
-// live key's value, revision and time, a delete marker and a purge marker as
-// what they are, and a key that was never written as not found.
+// The certifying read decodes the stored message itself, and a different
+// decoding would list a key the pass dropped or drop one it listed. On one
+// server the client's direct get is exact, so the two agree field by field: a
+// live key's value, revision and time, delete and purge markers as what they
+// are, and a never-written key as not found.
 func TestALeaderReadDecodesAKeyExactlyAsTheClientDoes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -980,9 +925,9 @@ func TestALeaderReadDecodesAKeyExactlyAsTheClientDoes(t *testing.T) {
 		t.Fatalf("reader: %v", err)
 	}
 
-	// The client's own view of each key: its Get for a live one, and its
-	// watcher for a marker, since Get folds every marker into "not found"
-	// and the operation is the part that has to agree.
+	// The client's view of each key: Get for a live one, its watcher for a
+	// marker, since Get folds every marker into "not found" and the
+	// operation has to agree.
 	clientView := func(key string) jetstream.KeyValueEntry {
 		t.Helper()
 		w, err := f.budgets.Watch(ctx, key)
@@ -1023,10 +968,9 @@ func TestALeaderReadDecodesAKeyExactlyAsTheClientDoes(t *testing.T) {
 }
 
 // A LISTING OVER A CLIENT BUILT ANY WAY BUT internal/jsapi FAILS AS A WIRING
-// MISTAKE. Its certifying read goes past the client, so it has to be
-// addressed in the API the client speaks ([jsapi.Of]), and a client that
-// speaks neither is named before the broker is asked anything — rather than a
-// certifying read that fails only on the listings that raced a write, and is
+// MISTAKE. Its certifying read is addressed in the API the client speaks
+// ([jsapi.Of]), so a client that speaks neither is named before the broker is
+// asked anything, not left to fail only listings that raced a write and be
 // retried for ever as though the store were down.
 func TestAListingOverAMisbuiltClientIsAWiringError(t *testing.T) {
 	t.Parallel()
@@ -1089,13 +1033,10 @@ func embeddedNATSServing(t *testing.T, domain string) *nats.Conn {
 // AND ON THE EMBEDDED FLEET'S OWN DOMAIN THE READ IS ANSWERED.
 //
 // The case above holds which API is chosen; this one holds the address it
-// produces, end to end, on a broker serving the domain every member of the
-// fleet serves — the only address a leaf's client has, since a leaf runs no
-// JetStream of its own. A leader read addressed anywhere else on that client
-// finds no responder, so a key the pass lost could never be certified and
-// every listing that raced a write would fail. (A member answers its account's
-// API as well, which is why the choice itself is held by the case above rather
-// than here.)
+// produces, end to end, on the fleet's domain: the only address a leaf's
+// client has, since a leaf runs no JetStream. Addressed anywhere else, a
+// leader read finds no responder and every listing that raced a write fails.
+// (A member answers its account's API too, hence the choice is held above.)
 func TestAKeyThePassLostIsReadBackOnTheEmbeddedFleetsDomain(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

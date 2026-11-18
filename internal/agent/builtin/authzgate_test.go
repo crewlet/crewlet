@@ -21,19 +21,11 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// EVERY TOOL THIS BUILD REGISTERS HAS AN AUTHORITY RULE.
-//
-// internal/authz's own walks can only hold its table against ITSELF — every
-// verb resolves to a class, every class is reached by a verb, every grant is
-// asked for by something. None of them can see the surface the table is about,
-// so a tool added without a row is a tool that ships ungated and ships looking
-// correct, which is exactly what [authz.Decide]'s unknown-action refusal is
-// the last line against rather than the first.
-//
-// THE WALK LIVES HERE because this is the package that owns the tools:
-// internal/authz cannot import it without the cycle, and a gate written
-// against a list of names somebody maintains by hand is the drift it was
-// supposed to catch.
+// EVERY TOOL THIS BUILD REGISTERS HAS AN AUTHORITY RULE. internal/authz can
+// hold its table only against itself, so a tool added without a row ships
+// ungated and looking correct, [authz.Decide]'s unknown-action refusal the only
+// backstop. The walk lives here because internal/authz cannot import the tools,
+// and a hand-kept list of names is the drift it exists to catch.
 func TestEveryRegisteredToolHasAnAuthorityRule(t *testing.T) {
 	t.Parallel()
 	names := everyToolName(t)
@@ -49,19 +41,11 @@ func TestEveryRegisteredToolHasAnAuthorityRule(t *testing.T) {
 	}
 }
 
-// AND EVERY TOOL-SHAPED VERB IN THE TABLE IS A TOOL THIS BUILD REGISTERS.
-//
-// THE DIRECTION THAT DECAYS QUIETLY, and it has already decayed once: the
-// goal verbs left the tracker and `list_work_goals` and `write_work_goal` sat
-// in the table for as long as it took somebody to read them, two rows deciding
-// nothing. Nothing inside internal/authz could see it — the table was
-// perfectly consistent with itself.
-//
-// TOLD APART BY THE DOT. A verb a tool serves is named after that tool, so it
-// carries no separator; one with no tool behind it — an HTTP-only surface, a
-// store call the route layer makes — is spelled `pages.trash`, `config.read`.
-// That convention is what makes this walk possible at all, which is why
-// internal/authz's own doc states it as load-bearing.
+// AND EVERY TOOL-SHAPED VERB IN THE TABLE IS A TOOL THIS BUILD REGISTERS: the
+// direction that decays quietly, a row deciding nothing that internal/authz,
+// consistent with itself, cannot see. Told apart by the dot: a verb a tool
+// serves carries none, and one with no tool behind it (an HTTP-only surface, a
+// route's store call) is spelled `pages.trash` (internal/authz's doc).
 func TestEveryToolShapedActionIsARegisteredTool(t *testing.T) {
 	t.Parallel()
 	names := everyToolName(t)
@@ -79,16 +63,11 @@ func TestEveryToolShapedActionIsARegisteredTool(t *testing.T) {
 	}
 }
 
-// EVERY APP OPENS A TOOL A PERSON REACHES.
-//
-// An app is a permission somebody is given so they can USE something, and a
-// person uses Worklet and Doclet through the operator
-// catalogue — the dashboard's act route, their assistant, the HTTP write
-// surface all dispatch into it. An app no operator tool belongs to is a
-// permission nobody could be told what it opens: ticked on somebody's row, it
-// would change nothing they can do. internal/authz's own walk holds that every
-// app is named by SOME row; this one holds it against the tools a person is
-// actually served, which that package cannot import.
+// EVERY APP OPENS A TOOL A PERSON REACHES. A person uses an app through the
+// operator catalogue (the act route, their assistant, the HTTP write surface),
+// so an app no operator tool belongs to changes nothing they can do.
+// internal/authz holds that some row names every app; this holds it against
+// the tools a person is served, which that package cannot import.
 func TestEveryAppOpensAPersonFacingTool(t *testing.T) {
 	t.Parallel()
 	opened := map[iam.Grant][]string{}
@@ -106,15 +85,10 @@ func TestEveryAppOpensAPersonFacingTool(t *testing.T) {
 	}
 }
 
-// NO SEAT-ONLY VERB IS OFFERED TO A PERSON.
-//
-// `a2a_ask` spends an agent's turn — a colleague seat's — so the table refuses
-// it to anybody but a seat before any class is read. A person's catalogue that
-// still listed one would offer a tool every call to which is refused: the shape a
-// model learns to distrust a whole catalogue from, and an act route a screen
-// would draw a button for. And the table must say so for each: a seat-only row
-// whose tool a seat's registry does not register would be a rule nobody
-// reaches.
+// NO SEAT-ONLY VERB IS OFFERED TO A PERSON. The table refuses `a2a_ask` (it
+// spends a colleague seat's turn) to anybody but a seat, so a person's
+// catalogue listing it would offer a tool every call to which is refused, and
+// a screen a button that never works.
 func TestNoSeatOnlyVerbIsOfferedToAPerson(t *testing.T) {
 	t.Parallel()
 	offered := map[string]bool{}
@@ -138,18 +112,13 @@ func TestNoSeatOnlyVerbIsOfferedToAPerson(t *testing.T) {
 	}
 }
 
-// NO VERB MADE AS A SEAT IS OFFERED TO A CREDENTIAL ACTING AS ITSELF.
-//
-// A person's surface offers what [builtin.Admits] says the table could admit
-// before any object is named (the dashboard's `viewer.acts`), so a seated row
-// is the difference between a screen that draws no control for an unbound
-// credential and one whose every press of that control is refused. Held for
-// every seated verb the operator catalogue serves, against a credential
-// holding admin — what the table admits on — and beside a person bound to a
-// seat holding the same, who must still be offered it, or a surface refusing
-// everybody would pass. Mutation: drop `seated` from answer_knowledge's row
-// and this goes red, which is the bug it was written for: viewer.acts offered
-// the answer to a Tier A token's session and every press was refused.
+// NO VERB MADE AS A SEAT IS OFFERED TO A CREDENTIAL ACTING AS ITSELF. A
+// person's surface offers what [builtin.Admits] says (the dashboard's
+// `viewer.acts`), so every seated verb the operator catalogue serves must be
+// refused [authz.ReasonUnseated] to an all-grants credential bound to no seat,
+// yet offered to a person bound to a seat holding the same, or a surface
+// refusing everybody would pass. Mutation: drop `seated` from
+// answer_knowledge's row and this goes red.
 func TestNoSeatedVerbIsOfferedToACredentialActingAsItself(t *testing.T) {
 	t.Parallel()
 	authorize := builtin.Decide(chartLeads)
@@ -187,16 +156,12 @@ func TestNoSeatedVerbIsOfferedToACredentialActingAsItself(t *testing.T) {
 	}
 }
 
-// EVERY APP ROW BELONGS TO ITS KIND'S APP.
-//
-// A row names the app a verb belongs to, and nothing in the table pairs a verb
-// with the KIND of thing it acts on — so `list_pages` could carry the tracker
-// and every check inside internal/authz would still pass, while a person given
-// the knowledge base alone was refused the pages and one given the tracker
-// alone read them. Where the tool comes from is the one place the kind is
-// stated: the tracker's own catalogue and the knowledge base's. Every one of
-// their tools whose row names an app names that catalogue's app (one that
-// names none — a seat's own, everybody's — is not an app row).
+// EVERY APP ROW BELONGS TO ITS KIND'S APP. Nothing in the table pairs a verb
+// with the KIND it acts on, so `list_pages` could carry the tracker with every
+// internal/authz check passing. A tool's catalogue (the tracker's, the
+// knowledge base's, chat's) is where the kind is stated, so each of their tools
+// whose row names an app names that catalogue's (a row naming none, a seat's
+// own or everybody's, is not an app row).
 func TestEveryAppRowHasItsKindsApp(t *testing.T) {
 	t.Parallel()
 	for app, names := range map[iam.Grant][]string{
@@ -218,16 +183,9 @@ func TestEveryAppRowHasItsKindsApp(t *testing.T) {
 	}
 }
 
-// everyToolName is every verb this build serves as a tool, over BOTH
-// surfaces.
-//
-// THE UNION, because the authority table's whole premise is that a verb asked
-// two ways is one verb: a seat's own registry and the operator's assistant
-// each serve a set the other does not, and either one alone makes the walks
-// above wrong in both directions. Measured with the seat's alone: nine rows
-// the operator surface serves — set_priorities, work_inbox, remove_work_item
-// and the rest — read as rules deciding nothing, and the tools they govern
-// read as ungated.
+// everyToolName is every verb this build serves as a tool, over BOTH surfaces:
+// a seat's registry and the operator's assistant each serve verbs the other
+// does not, and either alone makes the walks above wrong in both directions.
 func everyToolName(t *testing.T) []string {
 	t.Helper()
 	reg := tools.NewRegistry()
@@ -243,10 +201,9 @@ func everyToolName(t *testing.T) []string {
 	return names
 }
 
-// operatorDeps wires EVERY operator tool on, because a walk over a catalogue
-// that omitted half of it would certify the half it saw. OperatorTools drops
-// a tool whose dependency is nil by design (a company on Jira is shown no
-// Worklet), so a nil here is a verb this walk silently stops covering.
+// operatorDeps wires EVERY operator tool on: OperatorTools drops a tool whose
+// dependency is nil (a company on Jira gets no Worklet), so a nil here is a
+// verb the walks silently stop covering.
 func operatorDeps(t *testing.T) builtin.OperatorDeps {
 	t.Helper()
 	trk := newFakeTracker()
@@ -264,16 +221,13 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 			PersonWriter:  func(builtin.Actor) builtin.PersonWriter { return person },
 			ProjectWriter: func(builtin.Actor) builtin.ProjectWriter { return trk },
 			Placer:        func(builtin.Actor) builtin.WorkPlacer { return nil },
-			// A CONSTRUCTOR THAT ANSWERS NIL still registers the tool,
-			// because OperatorTools gates on whether the SEAM is wired
-			// rather than on what it yields. That is what this walk
-			// needs: it reads the catalogue's names and calls nothing.
+			// A constructor answering nil still registers the tool:
+			// OperatorTools gates on the seam being wired, and the
+			// walks only read names.
 			TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return nil },
 			ViewWriter:      func(builtin.Actor) builtin.ViewWriter { return nil },
 			CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
-			// THE PROJECT FILES TOO, each over the seam the seat's own
-			// registry is built with: a catalogue that left them off would
-			// be one whose four file verbs no walk here ever reached.
+			// The project files too, over the seat registry's seams.
 			Files:          full.Work.Files,
 			FileWriter:     full.Work.FileWriter,
 			Objects:        full.Work.Objects,
@@ -287,34 +241,29 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 		Knowledge:    full.Knowledge,
 		Artifacts:    full.Artifacts,
 		ArtifactData: full.ArtifactData,
-		// THE ATLAS, over the settings acme runs: the app's one person-facing
-		// tool, without which holding atlas would open nothing here.
+		// The atlas: the app's one person-facing tool, without which
+		// holding atlas would open nothing here.
 		Atlas: builtin.AtlasDeps{Settings: runsAcme, Records: atlasLogOnly(ledger)},
-		// AND ITS WRITES, over the same log and the chart an owner is named
-		// from.
+		// And its writes.
 		AtlasWrite: builtin.AtlasWriteDeps{Log: ledger, Actor: builtin.PrincipalActor, Org: orgOf},
-		// AND THE ASK THAT ONE OF ITS SOURCES BE READ NOW.
+		// And the ask that one of its sources be read now.
 		AtlasRefresh: builtin.AtlasRefreshDeps{Sources: stillSources{}, Actor: builtin.PrincipalActor},
-		// THE CODE TOOLS, over the seams the seat's registry is built with —
-		// Gitlet, its writes, and the requester ceiling's halves —
-		// read as the request's principal as the surface reads them.
+		// The code tools, over the seat registry's seams, read as the
+		// request's principal.
 		Code: builtin.CodeDeps{Code: full.Code.Code, Writer: full.Code.Writer, Holder: full.Code.Holder,
 			Searcher: full.Code.Searcher, Requesters: full.Code.Requesters, Chart: full.Code.Chart,
 			Actor: builtin.PrincipalActor},
-		// WHO READ A UNIT REPOSITORY, an admin's read beside the code
-		// reads it stands with: left nil, it is a verb no seat holds and
-		// this walk would never see.
+		// Who read a unit repository: an operator-only verb, so left
+		// nil no walk would see it.
 		Readers: builtin.ReadersDeps{Readers: &readersFake{}},
-		// THE HEALTH TOOLS, over the seams the seat's registry is built with —
-		// fleet_health's requester ceiling and code_status's code half the
-		// code reads' own, the requester ceiling's halves included — read as
-		// the request's principal as the surface reads them.
+		// The health tools, over the seat registry's seams (requester
+		// ceilings and code_status's code half included).
 		Health: builtin.HealthDeps{Leases: full.Health.Leases, Requesters: full.Health.Requesters,
 			Chart: full.Health.Chart, Status: full.Health.Status,
 			Code: builtin.CodeDeps{Code: full.Code.Code, Requesters: full.Code.Requesters,
 				Chart: full.Code.Chart, Actor: builtin.PrincipalActor}},
-		// THE CHAT, its read-state store included, which only this surface
-		// is given — left nil, mark_chat_read is a verb no walk sees.
+		// The chat with its read-state store, which only this surface is
+		// given: left nil, no walk sees mark_chat_read.
 		Chat: func() builtin.ChatDeps {
 			talk := full.Chat
 			talk.Cursors = fakeCursors{}
@@ -322,10 +271,9 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 			return talk
 		}(),
 		Org: orgOf,
-		// The operator-only verbs: a parked run's answer, a seat's pause
-		// and resume, a note to a running turn and an answer from the
-		// company's knowledge. Each is a seam of its own, and each left
-		// nil is a verb no seat holds and this walk would never see.
+		// The operator-only verbs (a parked run's answer, a seat's pause
+		// and resume, a note to a running turn, a knowledge answer), each
+		// its own seam: left nil, no walk would see it.
 		Runs: builtin.RunDeps{Desk: &deskFake{}, Actor: builtin.PrincipalActor},
 		Pauses: builtin.SeatPauseDeps{Pauses: coordmem.NewFleet(), Announce: &announced{},
 			Org: orgOf, Actor: builtin.PrincipalActor},

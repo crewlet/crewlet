@@ -10,7 +10,14 @@ import type { AccessAnswer, AccessGrantRequest } from "~/contract/access.ts";
 import { Modal } from "./Modal.tsx";
 import { pathSegment, rest } from "~/protocol/rest.ts";
 import { refusalText } from "~/lib/refusal.ts";
-import { grantEntry, grantReach, hoursWords, newGrant, type RequestOption } from "~/lib/grants.ts";
+import {
+  grantCaution,
+  grantEntry,
+  grantReach,
+  hoursWords,
+  newGrant,
+  type RequestOption,
+} from "~/lib/grants.ts";
 
 /** What the dialog has read: the request, and the integration's Agents tab that draws it. */
 type Read =
@@ -122,14 +129,24 @@ export function RequestGrantDialog({
               ["Agent", seat.name],
               ["Permission", entry ? `${entry.name} (${entry.id})` : request.permission],
               ["Where", grantReach(lane, grant)],
+              ...(request.target
+                ? [["For one change to", request.target] as [string, string]]
+                : []),
               ["How long", option.permanent ? hoursWords(0) : hoursWords(request.hours)],
               ["Why", request.reason],
             ]}
           />
         )}
-        {entry?.write && (
+        {(entry?.write || grantCaution(entry)) && (
           <Callout variant="warning">
-            {`${entry.name} can change things there, so granting it asks you to sign in again.`}
+            {[
+              grantCaution(entry),
+              entry?.write
+                ? `${entry.name} can change things there, so granting it asks you to sign in again.`
+                : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
           </Callout>
         )}
         {entry?.unavailable && (

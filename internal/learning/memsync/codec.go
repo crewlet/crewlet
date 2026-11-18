@@ -71,9 +71,9 @@
 // trips where its rows are small, and at most one message at the transport's
 // limit and the room the broker counts beside it ([Syncer.pullBytes]), which
 // is what a hydration holds of the changelog's rows at once; across a link, a
-// window the floor carries within the node's lease heartbeat, so a lease
-// renewal crosses behind its pull in time ([Syncer.pullBound], which says
-// what it does not cover). Bounded by its count
+// window the floor carries within a request's term less its own round trip, so
+// a request sent behind its pull is answered in time ([Syncer.pullBound]; what
+// it does not cover is below). Bounded by its count
 // alone, one pull held up to 256 rows of up to 8 MiB each
 // (crewlet/crewlet#1052). A row larger than this node's pull is refused by
 // name, never read as a copy that stalled.
@@ -109,6 +109,25 @@
 // the release has forgotten it. Every call checks the holding before each row
 // it sends, so a cycle partway through a seat as its release begins stops at
 // its next row (crewlet/crewlet#511).
+//
+// # A window across a link
+//
+// A replay's pull window ([pullWindow]) is the hydration's own, and bounds
+// only what crosses the link toward the node. Until crewlet/crewlet#1035 puts
+// one window across the link, both directions and the object store's
+// downloads inside it, the object store's upload window is another, for what
+// crosses outbound (internal/objstore/natsobj, linkWindow), so a request
+// whose bytes cross behind an upload and whose reply crosses behind a pull
+// waits behind both: 7.75 seconds at the floor beyond its own round trip,
+// past its term, a lease renewal sent there among them. (A node hydrates one
+// seat at a time: the seat host's placement pass claims them one after
+// another.) And nothing windows the rest of what crosses toward the node: a
+// download holds four of the object store's 128 KiB messages in hand
+// (natsobj, readAhead), fifteen seconds at the floor, for each download in
+// flight, and an event delivered to one of the node's seats crosses whole, so
+// a request whose reply queues behind them waits for all of it. A replay's
+// next row queued there refuses no seat: across a metered link the replay
+// waits while the link moves (replay.go, "What silence is").
 //
 // # What is deliberately not replicated
 //

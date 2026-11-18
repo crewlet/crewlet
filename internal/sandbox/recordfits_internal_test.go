@@ -41,10 +41,9 @@ func TestADeliveredRefIsRedactedBeforeItIsRecorded(t *testing.T) {
 	}
 }
 
-// THE REFS ARE DEDUPLICATED AND BOUNDED, the rest counted. They are read from
-// the whole report with no count to them, so a report that listed pull
-// requests put every one of them on the record, as many times as it named
-// them.
+// THE REFS ARE DEDUPLICATED AND BOUNDED, the rest counted: they are read from
+// the whole report with no count to them, so a report naming many pull requests,
+// some twice, would otherwise put each on the record as often as it named it.
 func TestDeliveredRefsAreDedupedAndBoundedWithTheRestCounted(t *testing.T) {
 	t.Parallel()
 	var refs []string
@@ -83,10 +82,9 @@ func TestDeliveredRefsAreDedupedAndBoundedWithTheRestCounted(t *testing.T) {
 }
 
 // REFS THE RECORD LISTS NONE OF ARE STILL SAID. A ref longer than the bound is
-// past it on its own, so a record can list nothing and count what the run
-// named; the run's report then said nothing of it at all, and the run read to
-// its reviewer as one that delivered nothing, while the record and the
-// dashboard both counted the ref.
+// past it alone, so a record can list nothing yet count what the run named; the
+// report must still say so, or the run reads to its reviewer as one that
+// delivered nothing while the record and the dashboard count the ref.
 func TestTheRunsReportSaysRefsTheRecordListsNoneOf(t *testing.T) {
 	t.Parallel()
 	long := "https://h/a/b/pull/1?x=" + strings.Repeat("y", MaxDeliveredRefBytes)
@@ -109,12 +107,11 @@ func TestTheRunsReportSaysRefsTheRecordListsNoneOf(t *testing.T) {
 }
 
 // A REF THE RECORD WOULD RENAME IS COUNTED, NEVER LISTED. Every reader of the
-// refs reads them through JSON — the launch's own record, the run's report —
-// where a byte that is not UTF-8 is replaced: listed, such a ref arrived as
-// another, a URL the run never delivered, and refs that differ only there
-// arrived as one. A URL holds whatever bytes a report puts in it, on a
-// `Delivered:` line or in the host a scrape reads, so it is judged here, where
-// every runner's refs pass.
+// refs reads them through JSON — the launch's record, the run's report — which
+// replaces a byte that is not UTF-8: listed, such a ref arrives as another URL
+// the run never delivered, and refs differing only there arrive as one. A URL
+// holds whatever bytes a report puts in it (a `Delivered:` line, a scraped
+// host), so it is judged here, where every runner's refs pass.
 func TestADeliveredRefThatIsNotUTF8IsCountedNeverListed(t *testing.T) {
 	t.Parallel()
 	refs := []string{
@@ -165,11 +162,10 @@ func TestADeliveredRefThatIsNotUTF8IsCountedNeverListed(t *testing.T) {
 }
 
 // THE RECORD NAMES A SESSION AND A RELEASE OF A HARNESS'S SHAPES ALONE. Both
-// are the box's words, which a runner holds to those shapes as it reads the
-// box, and the record holds them again as it is published — trusting no
-// runner, nor a host of another build, to have done so, as it holds its two
-// reasons: one of any other shape, or past its bound, is none on the record,
-// never cut, since a shortened id or release names another one.
+// are the box's words; a runner holds them to those shapes, and the record
+// holds them again as it is published, trusting no runner or host of another
+// build, as it does its two reasons. One of any other shape, or past its bound,
+// is none on the record, never cut: a shortened id or release names another.
 //
 // Mutation: carry either as the runner handed it, hold it to its length alone
 // or its characters alone, or cut it to its bound, and a case goes red.
@@ -199,15 +195,13 @@ func TestTheRecordNamesASessionAndAReleaseOfTheirShapesAlone(t *testing.T) {
 }
 
 // A PIECE IS MEASURED AS THE RECORD CARRIES IT: REDACTED. A redaction can
-// lengthen a text — a password's value written in pieces between escaped
-// breaks becomes a marker a piece, seven times its bytes — and the record is
-// redacted as it is published, so a report or a failure measured before its
-// last redaction rode the record at up to seven times its bound: a runner's
-// that redacted nothing, which the coordinator trusts no runner not to hand
-// over, and a model's rewrite, which no runner ever saw. Each is redacted as
-// it is fitted, a rewrite before it is measured, and one the redaction puts
-// past the bound is refused as a long one is: whole lines of the redacted text
-// stand in its place.
+// lengthen a text — a password written in pieces between escaped breaks becomes
+// a marker a piece, seven times its bytes — and the record is redacted as it is
+// published, so a piece measured before its last redaction can ride it at up to
+// seven times its bound: a runner's that redacted nothing (no runner is trusted to),
+// or a model's rewrite, which no runner saw. Each is redacted as it is fitted,
+// a rewrite before it is measured, and one the redaction puts past the bound is
+// refused as a long one is: whole lines of the redacted text stand in its place.
 //
 // Mutation: fit the report or the failure before redacting it, or measure the
 // rewrite before redacting it, and a case goes red.
@@ -260,13 +254,12 @@ func TestTheWholeRecordFitsTheQueuesCeiling(t *testing.T) {
 	// LINES of control bytes, so the whole-line fallback keeps each piece
 	// right up to its bound — \u0001 on the wire, six bytes for one.
 	//
-	// EACH PIECE JUST PAST WHAT IT IS HELD TO, which is where its fitted form
-	// is at its largest: the report and the transcript twice the record's
-	// bound, the failure past what one condensation reads (so it is brought
-	// inside that first, as the longest failure is). A larger input fits to
-	// the same record and only costs the redactions it passes through. The
-	// question is the row's, which the ask held to [decision.MaxQuestion]
-	// when it was recorded, so it is at that bound, in bytes JSON escapes.
+	// EACH PIECE JUST PAST WHAT IT IS HELD TO, where its fitted form is
+	// largest: the report and the transcript twice the record's bound, the
+	// failure past what one condensation reads (so it is brought inside that
+	// first). A larger input fits to the same record. The question is the
+	// row's, held to [decision.MaxQuestion] when recorded, so it is at that
+	// bound, in bytes JSON escapes.
 	line := strings.Repeat("\x01", 99) + "\n"
 	twice := strings.Repeat(line, 2*MaxRunTextBytes/len(line)+1)
 	failure := strings.Repeat(line, MaxCondenseBytes/len(line)+2)
@@ -286,15 +279,12 @@ func TestTheWholeRecordFitsTheQueuesCeiling(t *testing.T) {
 	}
 	unread := strings.Repeat("<", 1<<20)
 	// THE TWO REASONS FAR PAST THEIR KiB: one line of control bytes a MiB
-	// long, as a box's own agent can make the session record's line the
-	// fall-back reason is read from — and as a runner, or a host of another
-	// build, that did not hold it would hand it over. Held as the record is
-	// published, each is at its widest whatever it came as; carried whole,
-	// either one puts the record past the ceiling. AND THE SESSION AND THE
-	// RELEASE THE BOX NAMED, the same MiB each, as such a runner would hand
-	// them over too: identifiers, which the record refuses rather than cuts
-	// when they are not of a harness's shapes; carried whole, either one puts
-	// the record past the ceiling as well.
+	// long — a box's own agent can write the session record line the
+	// fall-back reason is read from, and a runner or host of another build
+	// may not hold it. AND THE SESSION AND THE RELEASE THE BOX NAMED, the
+	// same MiB each: identifiers the record refuses, rather than cuts, off a
+	// harness's shapes. Each is held as the record is published; carried
+	// whole, any one puts the record past the ceiling.
 	reason := strings.Repeat("\x01", 1<<20)
 	kept := &SessionKept{NotKept: reason}
 	c := &Coordinator{condense: &fakeCondenser{answer: func(RunPart, string, int) (string, error) {

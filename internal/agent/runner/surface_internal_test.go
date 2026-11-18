@@ -21,8 +21,8 @@ import (
 // THE EXECUTOR NEVER REACHES mark_onboarded, by activation or by catalogue.
 //
 // A seat that marked itself onboarded from inside the executor would skip
-// orientation for ever. It was kept off the executor's active list only, so
-// the catalogue the prompt rendered listed it and activate_tool reached it.
+// orientation for ever; keeping it off the active list alone leaves it in the
+// catalogue and reachable by activate_tool.
 //
 // Mutation: return the snapshot whole from executorUniverse, and this goes
 // red.
@@ -58,13 +58,11 @@ func TestTheExecutorCannotReachThePhaseScopedTools(t *testing.T) {
 
 // A TOOL THE SEAT IS WITHHELD IS ON NONE OF ITS SURFACES.
 //
-// The registry is the epoch's, so a tool only some seats may call — the health
-// tools, which a role's grant opens — is registered for every seat, and the
-// engine names what this seat's surfaces must leave out (Config.Withheld).
-// Every surface is built from the seat's snapshot, so a withheld tool is not
-// offered, not listed to discover and not reachable by activation on the
-// executor's, the reviewer's or the onboarding pass's (the last two built from
-// the seat's snapshot as it is), while every other tool stays.
+// The registry is the epoch's, so a tool only some seats may call (the health
+// tools a role's grant opens) is registered for every seat, and
+// Config.Withheld names what this seat's surfaces leave out. Every surface is
+// built from the seat's snapshot, so a withheld tool is not offered, listed or
+// activatable on any of them, while every other tool stays.
 //
 // Mutation: build any of them from the registry whole and the withheld tool is
 // one activation away there.
@@ -111,13 +109,11 @@ func TestAWithheldToolIsOnNoSurface(t *testing.T) {
 // THE DISCOVERY PAIR REACHES A SURFACE PROVEN READ-ONLY, AS IT WAS BUILT.
 // The pair never passes through the registry: it carries only the hints
 // [DiscoveryTools] gives it, and only if the phase surface adds it as built.
-// Listing reads the phase's own universe and activating changes only which of
-// its tools the phase is offered, never anything done as the seat, so a
-// reader of the hints — a worker's guard, the phase's known reads — that met
-// the pair unannotated would take a read for a write it could not classify.
-// The executor holds no pair (every tool its seat holds is on its surface from
-// its launch), so the surface read here is the onboarding pass's, the phase
-// that discovers.
+// Listing reads the phase's own universe and activating changes only what it
+// is offered; neither acts as the seat, so a reader of the hints (a worker's
+// guard, the phase's known reads) meeting it unannotated would take a read for
+// a write. The executor holds no pair (its surface holds every tool from
+// launch), so the surface read is the onboarding pass's.
 //
 // Mutation: rewrap the pair in surfaceWith as a bare builtin entry, or drop
 // the hints from DiscoveryTools — both tools read unproven — red.
@@ -150,8 +146,8 @@ func TestTheDiscoveryPairIsProvenReadOnlyOnTheSurface(t *testing.T) {
 	}
 }
 
-// stubTool is a name on the surface and nothing else — what is under test is
-// which names survive the filter, not what any of them do.
+// stubTool is a name on the surface and nothing else: the tests read which
+// names survive the filter, not what any of them do.
 type stubTool string
 
 func (s stubTool) Name() string               { return string(s) }
@@ -172,14 +168,11 @@ func (stubLauncher) LaunchExecutor(context.Context, AgentRunRequest) (Launched, 
 // THE OPEN-WORLD HALF OF THE PREDICATE REACHES THE TURN, or it is dead code.
 //
 // [turn.Acted] decides whether a broken turn's trigger is given up rather than
-// redelivered, and its two halves come from different places: a delivery off
-// `Deliveries`, and a tool whose own annotations say it leaves the process off
-// `KnownOpenWorld` — a colleague ask, a reaction, a published artifact, none of
-// them a delivery — less the reads of the world off `KnownReads`. If `describe`
-// stops filling either set, the engine silently loses the ability to tell "this
-// turn woke a colleague" from "this turn did nothing", and every such failure
-// goes back to replaying its ask twenty-five times; or it reads a turn that
-// only searched as one that wrote, and gives up a trigger worth retrying.
+// redelivered: a delivery off `Deliveries`, or a tool annotated as leaving the
+// process off `KnownOpenWorld` (a colleague ask, a reaction, a published
+// artifact) less the reads of the world off `KnownReads`. If `describe` stops
+// filling either set, a turn that woke a colleague is redelivered and replays
+// its ask, or one that only searched gives up a trigger worth retrying.
 func TestTheSurfaceHandedToTheTurnCarriesWhatLeavesTheProcess(t *testing.T) {
 	t.Parallel()
 	reg := tools.NewRegistry()
@@ -197,8 +190,8 @@ func TestTheSurfaceHandedToTheTurnCarriesWhatLeavesTheProcess(t *testing.T) {
 		tools.Annotations{ReadOnly: mcp.Yes, OpenWorld: mcp.Yes}); err != nil {
 		t.Fatal(err)
 	}
-	// The shape that matters most: a tool nobody classified. It must appear
-	// in NEITHER list, so it proves nothing in either direction.
+	// A tool nobody classified must appear in NEITHER list: it proves
+	// nothing in either direction.
 	if err := reg.RegisterWith(stubTool("submit_work"), tools.OriginBuiltin,
 		tools.Annotations{}); err != nil {
 		t.Fatal(err)
@@ -229,11 +222,10 @@ func TestTheSurfaceHandedToTheTurnCarriesWhatLeavesTheProcess(t *testing.T) {
 }
 
 // A CALL THE ENGINE ONLY PRESUMES WROTE REACHES THE TURN AS ONE. An MCP tool
-// that no hint marks as a read or as a write delivers by the fence's
-// fail-closed default, and so counts as an act; the turn must also know which
-// calls it counts by that default alone, or a turn nobody asked for that only
-// searched through one is told it "already acted outside the engine". A tool
-// its server marks a write is an act, and one it marks a read is neither.
+// no hint marks counts as an act by the fence's fail-closed default; the turn
+// must know which calls count by that default alone, or a turn nobody asked
+// for that only searched through one is told it "already acted outside the
+// engine". A marked write is an act, and a marked read is neither.
 //
 // Mutation: stop filling PresumedWrites in describe, and the search is told it
 // acted.
@@ -270,14 +262,11 @@ func TestTheSurfaceHandedToTheTurnSaysWhichWritesItPresumes(t *testing.T) {
 }
 
 // WHAT A SEAT HOLDS AND WHAT IT HAS TO GO AND FIND reach the turn too, or a
-// delivery refusal cannot tell them apart. It once could not: every refusal
-// sent the seat to `list_mcp_server_tools`, and a seat woken on Worklet
-// (whose tools no discovery call lists) went to the only MCP
-// server it held and posted in chat instead. See [turn.Remedy].
+// delivery refusal sends a seat to discovery for a first-party tool no
+// discovery call lists ([turn.Remedy]).
 //
 // AND A SURFACE WITH NO WAY TO DISCOVER HAS NOTHING BEHIND DISCOVERY: the
-// executor's, which holds every tool it can reach, and whose refusals once
-// sent it to a pair of tools it does not hold.
+// executor's holds every tool it can reach, and no discovery pair.
 //
 // Mutation: report the universe's MCP tools whatever the surface holds, and the
 // executor's surface says it has tools to discover.
@@ -317,11 +306,11 @@ func TestTheSurfaceHandedToTheTurnSaysWhichToolsSitBehindDiscovery(t *testing.T)
 	}
 }
 
-// A GUARD IS ARMED ONLY WHERE ITS LOADER IS ACTIVE. The triggers are matched
-// over the surface's whole universe, so the catalogue and the guard agree on
-// an MCP tool the executor activates later — but a loader that sits in the
-// universe without being active is one the phase's model may never reach, and
-// a guard armed there would refuse a covered tool it had no way to unlock.
+// A GUARD IS ARMED ONLY WHERE ITS LOADER IS ACTIVE. Triggers match over the
+// surface's whole universe, so the catalogue and guard agree on an MCP tool
+// activated later; but a loader in the universe and not active may never be
+// reached, and a guard armed there would refuse a covered tool the model had
+// no way to unlock.
 //
 // Drop the active-list check in guardFor and the first case goes red.
 func TestASkillGuardNeedsItsLoaderActive(t *testing.T) {
@@ -353,16 +342,12 @@ func TestASkillGuardNeedsItsLoaderActive(t *testing.T) {
 }
 
 // A COLLECTED RUN'S GUARD HOLDS WHAT THE RUN LOADED. A collection rebuilds the
-// run's surface as the run left it, guard included, by the one rebuild every
-// segment that re-enters a run makes (rebuiltSurface): the skills the launch
-// recorded — where the run's box said it took up the session its launch chose,
-// as the job's record keeps it — and then every skill the run loaded over the
-// bridge. A reopened run and a carried-on run go on calling through that guard;
-// the collection calls nothing through it, and is rebuilt the same way because
-// a rebuild of its own is how the collection came to drift from the other two.
-// And where the box started a session of its own in that one's place, or said
-// nothing, the session read none of what the launch recorded: the guard holds
-// what the run loaded alone.
+// guard by the one rebuild every segment that re-enters a run makes
+// (rebuiltSurface), so it cannot drift from a reopened or carried-on run's:
+// the launch's recorded skills where the box said it took up the session its
+// launch chose, then every skill the run loaded over the bridge. Where the box
+// started a session of its own, or said nothing, the guard holds the run's
+// own loads alone.
 //
 // Mutation: leave the run's bridged loads out of the collection's rebuild, and
 // its guard holds only what the launch recorded; replay a failed load, and it
@@ -456,14 +441,12 @@ func guardedSkillsRunner(t *testing.T, resume *Resume) *Runner {
 	return r
 }
 
-// A RUN TAKEN OVER IS HELD TO THE SESSION ITS BOX SAYS IT STARTED THERE. A node
-// that takes a run over while it works rebuilds its guard as the job's record
-// says — the launch's recorded skills only where the box had said it took up the
-// session its launch chose; here it had said nothing — and the box, saying it
-// on its first request to the reopened bridge, holds the run to that session
-// before any call: the launch's skills and the job's own loads where it
-// continued the session its launch chose, the job's own loads alone where it
-// started one of its own in that one's place, whose model read nothing else.
+// A RUN TAKEN OVER IS HELD TO THE SESSION ITS BOX SAYS IT STARTED THERE. The
+// node taking it over rebuilds its guard from the job's record (here silent on
+// the session, so the job's own loads alone); the box's word on its first
+// request to the reopened bridge then arms, before any call, the launch's
+// skills plus the job's loads where it continued the launch's session, or the
+// job's loads alone where it started its own.
 //
 // Mutation: arm the launch's skills whatever the box says, or leave the job's
 // own loads out of what the box's word arms, and a case goes red.
@@ -503,11 +486,10 @@ func TestARunTakenOverIsHeldToTheSessionItsBoxSaysItStarted(t *testing.T) {
 }
 
 // A REBUILT GUARD REPLAYS ITS OWN JOB'S LOADS, NEVER AN EARLIER JOB'S. A round
-// can be carried on in a session of its own — its job before lost a second time,
-// or its kept session refused — so the job a rebuild re-enters may not be the
-// session an earlier job of the round loaded a skill in: its parked state says
-// where its own calls begin, and only a load past that is replayed beside the
-// skills its launch was armed with.
+// can be carried on in a fresh session (its job lost twice, or its kept
+// session refused), so an earlier job's loads were read by another session:
+// the parked state's BridgeFrom says where this job's calls begin, and only a
+// load past it is replayed beside the launch's skills.
 //
 // Mutation: replay every load of the round's calls, and the guard holds a skill
 // the run's model never read.
@@ -565,11 +547,10 @@ func TestARebuiltGuardReplaysItsOwnJobsLoadsNeverAnEarlierJobs(t *testing.T) {
 	}
 }
 
-// A REBUILT GUARD NAMES A SKILL AS THE RUN'S HARNESS LISTS IT: the names its
-// launch handed its skills under are on the parked state, and every rebuild
-// of the run's surface — a reopened run's, a carried-on run's, a collection's
-// — hands them to its guard, so a call refused after a restart or a seat move
-// names the skill the run's model can load, not a key it was never told.
+// A REBUILT GUARD NAMES A SKILL AS THE RUN'S HARNESS LISTS IT: the launch's
+// names are on the parked state, and every rebuild of the surface hands them
+// to its guard, so a refusal after a restart or a seat move names the skill
+// the model can load, not a key it was never told.
 //
 // Mutation: rebuild the guard without the parked names, and the refusal sends
 // the run to load_tool_skill, which its harness is never listed.

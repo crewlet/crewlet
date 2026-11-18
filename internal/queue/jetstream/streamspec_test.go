@@ -9,12 +9,8 @@ import (
 )
 
 // EVERY FIELD OF streamSpec IS CLASSIFIED, by reflection over the struct
-// rather than against a list somebody maintains.
-//
-// A hand-written list is what this replaces, and it had two holes: `retention`
-// and `subjects` were both missing, and both are fields whose difference
-// changes what every message on the stream means. A list cannot notice a field
-// that was added and not classified; this can.
+// rather than against a maintained list, which cannot notice a field added
+// and left unclassified.
 //
 // Mutation: add a field to streamSpec and leave classifyStreamSpec alone —
 // red, naming the field.

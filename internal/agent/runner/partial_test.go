@@ -6,11 +6,10 @@ import (
 	"unicode/utf8"
 )
 
-// The accumulated text is republished five times a second for the life of a
-// round, so its cost is quadratic in the round's length. Deltas cannot be sent
-// instead — the socket hub drops the OLDEST frame when a client falls behind,
-// and a consumer that missed one would splice the rest into nonsense — so the
-// accumulation is bounded instead.
+// The accumulated text is republished five times a second for a round's life,
+// so unbounded it costs quadratic in the round's length. Not deltas: the
+// socket hub drops the OLDEST frame when a client falls behind, and a
+// consumer missing one would splice the rest into nonsense.
 func TestALongRoundDoesNotSendItsWholeSelfEveryTime(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("a", partialTail*3)
@@ -34,10 +33,8 @@ func TestAShortRoundIsSentWhole(t *testing.T) {
 	}
 }
 
-// Slicing UTF-8 by bytes can cut a character in half, and the replacement
-// glyph would be the first thing on screen every time the cut landed
-// mid-character — which, on prose full of em dashes and quotes, is most of
-// the time.
+// A byte cut can split a character, putting a replacement glyph first on
+// screen; on prose full of em dashes and quotes that is most cuts.
 func TestTheElisionCutsOnACharacterNotAByte(t *testing.T) {
 	t.Parallel()
 	// Three-byte runes, so most byte offsets land mid-character.

@@ -12,47 +12,31 @@ import (
 	"time"
 )
 
-// The embedded broker must not touch the process's signals.
+// The embedded broker must not touch the process's signals: nats-server's
+// Server.Start, unless Options.NoSigs is set, installs a SIGINT/SIGTERM handler
+// that shuts the broker down and calls os.Exit(0), mid-way through the
+// engine's graceful drain of seats and in-flight turns.
 //
-// nats-server's Server.Start installs its own SIGINT/SIGTERM handler unless
-// Options.NoSigs is set, and that handler shuts the broker down and then calls
-// os.Exit(0) — from a library, inside a process that is in the middle of
-// something. The something, here, is the engine's graceful drain: it hands
-// every seat back and waits for in-flight turns, and a turn is the whole
-// reason it exists. Measured before the fix: SIGTERM to a solo node ran the
-// drain and the process vanished part way through, exit 0, with everything
-// after it simply absent.
-//
-// A signal handler cannot be observed from inside the process that installed
-// it — os.Exit takes the test binary with it — so this runs the check in a
-// CHILD: the test binary re-executes itself, and the child starts a broker
-// and sends itself SIGTERM with no handler of its own.
-//
-// # Decided by who took the signal, never by how long the child lived
-//
-// A SIGTERM nobody asked for is the Go runtime's to act on, and it ends the
-// process BY that signal, which the parent reads off the exit status. A handler
-// anybody installed takes the signal instead — nats-server's shuts the broker
-// down and exits 0 — and the status says so however long that shutdown takes.
-// The child used to keep a handler of its own and report itself alive half a
-// second after the signal, a stand-in for a drain: a broker whose shutdown took
-// longer than that exited after the report, and the case passed with
-// nats-server's handler installed.
+// os.Exit would take the test binary with it, so a CHILD runs the check: the
+// binary re-executes itself, starts a broker and sends itself SIGTERM with no
+// handler of its own. Decided by who took the signal, never by how long the
+// child lived: an untouched SIGTERM ends the process BY that signal, which the
+// parent reads off the exit status, and a handler that took it shows there
+// however long its shutdown takes.
 const (
 	signalProbeEnv  = "CREWLET_JETSTREAM_SIGNAL_PROBE"
 	signalProbeMark = "PROBE-BROKER-STARTED"
 
-	// Distinctive, and specifically not 0 or 1: nats-server's handler
-	// exits 0 and an ordinary test failure exits 1, so an exit code that
-	// could be either would not tell them apart. The child exits with it
-	// only if nothing has ended it by signalProbeBound.
+	// Neither 0 (nats-server's handler) nor 1 (an ordinary test
+	// failure). The child exits with it only if nothing has ended it by
+	// signalProbeBound.
 	signalProbeExit = 7
 
-	// signalProbeBound is how long the child waits to be ended by the
-	// SIGTERM it sent itself. A bound and no more: the signal untouched ends
-	// the child as it is delivered, a handler that took it ends the child
-	// however long its shutdown takes, and a child still alive at the bound
-	// exits with signalProbeExit — none of them an exit by SIGTERM.
+	// signalProbeBound is how long the child waits to be ended by its own
+	// SIGTERM. Only a liveness bound: the untouched signal ends the child
+	// on delivery, a handler that took it ends it however long its
+	// shutdown takes, and a child alive at the bound exits with
+	// signalProbeExit — none of them an exit by SIGTERM.
 	signalProbeBound = time.Minute
 )
 

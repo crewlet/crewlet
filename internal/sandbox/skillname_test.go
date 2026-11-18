@@ -8,10 +8,10 @@ import (
 )
 
 // A SKILL'S NAME IS ONE A HARNESS READS A SKILL BY, AND A SINGLE DIRECTORY: the
-// Agent Skills grammar — lowercase letters and digits in runs joined by single
-// hyphens, at most 64 — which OpenCode names a skill by its directory under and
-// Claude Code prefixes with its plugin's name. A name outside it is one a
-// harness may refuse, or one that names a path outside the run's own skills.
+// Agent Skills grammar (lowercase letters and digits in runs joined by single
+// hyphens, at most 64), which OpenCode reads as a directory name and Claude
+// Code prefixes with its plugin's. A name outside it is one a harness may
+// refuse, or a path outside the run's own skills.
 func TestASkillsNameIsOneAHarnessReadsASkillBy(t *testing.T) {
 	t.Parallel()
 	for name, valid := range map[string]bool{

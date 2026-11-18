@@ -34,19 +34,14 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE RUNNING ESTATE IS THE DECLARED ESTATE: its streams, its keys and its
+// THE RUNNING ESTATE IS THE DECLARED ESTATE: its streams, keys and
 // coordination records are the ones the domain declarations, the topics
 // constants and the register name, byte for byte.
 //
-// Each surface here is named in more than one place — the domain's own
-// declaration, the topics constants, the positions register, the floors — and
-// a node whose answer drifted from the declarations provisions a second, empty
-// stream beside the real one, publishes a register row nobody else's trim
-// reads, or writes a floor under a key the fleet's fences never look at. So
-// this boots a node the way `crewlet run` does and reads each surface back:
-// the logs it runs and their order, each log's stream on the broker, the
-// consumer each is applied through, the row its heartbeat writes and the floor
-// its trim publishes.
+// A node that drifted from them provisions a second, empty stream beside the
+// real one, publishes a register row nobody's trim reads, or writes a floor
+// under a key the fleet's fences never look at. So this boots a node as
+// `crewlet run` does and reads each surface back.
 func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
@@ -114,9 +109,9 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 				"its stream: %v", name, running.consumer.Name(), err)
 		}
 	}
-	// NO OTHER STREAM OF A DOMAIN'S: every stream on the broker that names
-	// one of the state logs' families is one of the five, so nothing beside
-	// them holds a second copy of a domain's records.
+	// NO OTHER STREAM OF A DOMAIN'S: every stream on the broker that names one
+	// of the state logs' families is a declared one, so nothing beside them
+	// holds a second copy of a domain's records.
 	logStreams := []string{}
 	for _, names := range declared {
 		logStreams = append(logStreams, names[0])
@@ -157,11 +152,10 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 				key, rowFields)
 		}
 	}
-	// AND ITS DUTIES AND ITS ARTEFACTS ARE WHERE THEY ARE DECLARED: the trim
-	// and the embedding are one fleet singleton each, on the lease named
-	// here, which the next build must claim too — so two builds sharing a
-	// fleet in a rolling upgrade contend for ONE lease rather than both
-	// running the duty — and the snapshots are in their directory.
+	// AND ITS DUTIES AND ARTEFACTS ARE WHERE THEY ARE DECLARED: the trim and the
+	// embedding are one fleet singleton each, on the lease named here, which
+	// the next build must claim too so two builds in a rolling upgrade contend
+	// for ONE lease; and the snapshots are in their directory.
 	for duty, resource := range map[string]string{
 		retentionDutyName: "worker:retention", embedDutyName: "worker:embeddings",
 	} {
@@ -268,14 +262,11 @@ func runsLogs(s *stateLog, running ...*runningLog) *stateLog {
 // why it is not held, nil once it is. Shared with dutyclaim_internal_test.go,
 // which pins it.
 //
-// THE RUNNING NODE CLAIMS THE SAME LEASE, under the same owner, on its own
-// duty loop, and a claim is three steps: win the record, mint the fencing
-// epoch, commit. A claim answered while the loop's own is between them is
-// [coord.ErrClaimInFlight], neither a grant nor a refusal; this waits for
-// that sibling to commit (the lease held by owner at an epoch) and claims
-// again, which renews it. Only that answer is waited on: any other error,
-// [coord.ErrUnavailable] from a store that cannot answer included, and a
-// refusal, are returned as they are.
+// The running node claims the same lease under the same owner on its own duty
+// loop, and a claim answered mid-way through the loop's own is
+// [coord.ErrClaimInFlight], neither grant nor refusal: this waits for that
+// sibling to commit (held by owner at an epoch) and claims again. Every other
+// error, [coord.ErrUnavailable] included, and a refusal return as they are.
 func claimHeld(ctx context.Context, claim schedule.DutyFunc, backend coord.Backend,
 	resource, owner string) error {
 

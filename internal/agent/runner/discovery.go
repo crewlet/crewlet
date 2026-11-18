@@ -11,59 +11,30 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// The two discovery meta-tools.
-//
-// They exist because the executor is shown SERVER NAMES, not tool names: a
-// real MCP server publishes dozens of tools, and handing a model all of them
-// buries the ones that matter under a wall of schemas nobody reads.
-// Discovery being a tool call is also what keeps the prompt prefix stable
-// while a server's catalogue changes underneath, which is what makes provider
-// prompt caching worth anything.
+// The two discovery meta-tools, for a phase shown SERVER NAMES rather than
+// tool names: a real MCP server publishes dozens of tools, and a tool call
+// keeps the prompt prefix stable (and cacheable) while a catalogue changes.
 //
 // They are per-PHASE, like the submission tools, because activation mutates
-// one surface. Registering them into the shared registry would let one phase's
-// activation leak into the next — or into the next turn.
+// one surface: in the shared registry one phase's activation would leak into
+// the next phase or turn.
 //
-// THEIR NAMES ARE internal/toolname's, not this package's: the skill guard,
-// the worker deny list, the prompts and the delivery remedy all have to spell
-// them, and every one of those sits below this package.
+// Their names are internal/toolname's: the skill guard, the worker deny list,
+// the prompts and the delivery remedy all spell them, and all sit below this
+// package.
 
-// DiscoveryTools returns the pair bound to one surface, reached through a
-// getter.
+// DiscoveryTools returns the pair bound to one surface through a getter read
+// at call time: activate must mutate the very Surface the loop reads its
+// definitions from, which cannot resolve the pair before it is in its snapshot
+// (a placeholder Surface assigned over later copies a struct holding a mutex).
+// Exported for [subagent.Config.Discovery]: a sub-agent's prompt names both
+// tools, so a nil Discovery wastes a round each time the child obeys it.
 //
-// A getter and not a pointer, because of a genuine cycle: activate must mutate
-// the SAME Surface the loop reads its tool definitions from, so the tools
-// cannot exist before the surface — and the surface cannot resolve them until
-// they are in its snapshot. The getter is read at CALL time, by which point
-// the surface exists.
-//
-// The alternative was building a placeholder Surface and assigning over it,
-// which copies a struct holding a mutex. It is harmless while nothing holds
-// that lock, and it is exactly the kind of harmless that stops being harmless.
-//
-// EXPORTED for [subagent.Config.Discovery], whose type it matches exactly: a
-// sub-agent's own prompt tells it to call both tools by name, so a nil
-// Discovery makes that prompt a lie and costs a wasted
-// round every time the child obeys it.
-//
-// ENTRIES, CARRYING THEIR OWN HINTS, rather than bare tools a caller wraps:
-// the pair never passes through the registry, so whatever entry its caller
-// built was all anything downstream could read — and both callers built one
-// with no annotations. An unannotated tool is one no reader can prove
-// read-only, so a person's stop refused a stopped detached run's discovery
-// over the bridge (api/mcpbridge fences every call not proven read-only),
-// and the run could neither list an MCP server's tools nor activate a read it
-// had not activated yet. Built here, the hints cannot be dropped by a caller.
-//
-// READ-ONLY, both of them. Listing reads the phase's own universe. Activating
-// changes only which of the universe's tools THIS phase is offered — state
-// the phase owns, never anything done as the seat — and grants nothing: the
-// universe is already the seat's grant, and the activated tool is called
-// under its own hints, so a write it activates is still refused by a stop
-// and still classified by every other reader. IDEMPOTENT, both: a second
-// listing answers the same, and a second activation of an active tool is a
-// no-op ([tools.Surface.Activate]). CLOSED-WORLD, both: neither leaves the
-// process.
+// The entries carry their own hints because the pair bypasses the registry,
+// and api/mcpbridge fences a stopped run's calls not proven read-only. Both
+// are read-only (activating changes only which of the seat's granted tools
+// this phase is offered, each still called under its own hints), idempotent
+// ([tools.Surface.Activate]) and closed-world.
 func DiscoveryTools(surface func() *tools.Surface) []tools.Entry {
 	return []tools.Entry{
 		{Tool: &listMCPTools{surface: surface}, Origin: tools.OriginBuiltin, Annotations: discoveryHints},
@@ -80,12 +51,10 @@ type listMCPTools struct{ surface func() *tools.Surface }
 
 func (t *listMCPTools) Name() string { return toolname.ListMCPServerTools }
 
-// Description says what the call answers and what follows it, in words every
-// harness reads truly: "callable from your next round" — a harness that re-lists the
-// server's tools mid-run offers an activated tool at its model's next request,
-// and one that does not is ended after the activation and starts its next run
-// with it — never "its schema arrives on the next message", which described a
-// vendor's tool channel this engine no longer has.
+// Description promises "callable from your next round", which holds on every
+// harness: one that re-lists a server's tools mid-run offers an activated tool
+// at its model's next request, and one that does not is ended after the
+// activation and starts its next run with it.
 func (t *listMCPTools) Description() string {
 	return "List the tools one MCP server offers. Your system prompt names " +
 		"your MCP servers, not their tools; use this when you need one and do " +
@@ -123,10 +92,9 @@ func (t *listMCPTools) Call(_ context.Context, args map[string]any) (tools.Resul
 		lines = append(lines, tools.CatalogueLine(e.Name(), e.Tool.Description()))
 	}
 	if len(lines) == 0 {
-		// A named server with no tools and an unknown server read very
-		// differently to a model: one means "ask again later", the other
-		// means "you have the name wrong". Listing what exists is what
-		// turns the second into a recoverable round.
+		// An empty server means "ask again later", an unknown one "you have
+		// the name wrong"; listing the known servers makes the second
+		// recoverable.
 		return tools.Result{
 			Output: fmt.Sprintf("No tools found on MCP server %q. %s", server, t.knownServers()),
 			Failed: true,
@@ -188,9 +156,8 @@ func (t *activateTool) Call(_ context.Context, args map[string]any) (tools.Resul
 	if t.surface().Activate(name) {
 		return tools.Result{Output: name + " is active: you can call it from your next round."}, nil
 	}
-	// A miss is almost always a guessed MCP tool name. Saying so, and
-	// naming the way to find the real one, is the difference between a
-	// recoverable round and a phase that keeps guessing.
+	// A miss is almost always a guessed MCP tool name: naming the way to the
+	// real one keeps the phase from guessing again.
 	return tools.Result{
 		Output: fmt.Sprintf("No tool named %q. If it belongs to an MCP server, call "+
 			"%s to see that server's real tool names.", name, toolname.ListMCPServerTools),

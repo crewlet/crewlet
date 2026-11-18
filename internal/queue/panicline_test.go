@@ -12,18 +12,10 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
-// The contract says every backend must emit the same name for the same
-// situation. Nothing connected that sentence to the backends, and they
-// drifted: `memory` logged a recovered listener panic as
-// `publish_listener_failed` with the value under `error`, while the
-// broker-backed ones logged `publish_listener_panicked` with it under
-// `panic`; the stream side additionally keyed the topic as `subject` on
-// those and `topic` on the twin.
-//
-// The reason it survived is that the in-memory twin is the one the tests run
-// on, so the suite watched the divergent spelling go past on every run. These
-// two tests are what would have caught it: one pins the wire shape of the
-// contract's own line, the other refuses a backend that writes its own.
+// Every backend must emit the same name for the same situation, and a suite
+// run on the in-memory twin cannot see a backend's divergent spelling: one
+// test pins the wire shape of the contract's own panic line, the other refuses
+// a backend that writes its own.
 
 func TestAPanicLineNamesThePanicAndTheTopic(t *testing.T) {
 	ev := &events.Event{Type: "task.created"}
@@ -51,17 +43,16 @@ func TestAPanicLineNamesThePanicAndTheTopic(t *testing.T) {
 			if got := line["msg"]; got != tc.event {
 				t.Errorf("event name = %v, want %q", got, tc.event)
 			}
-			// `panic`, not `error`: a recovered value is whatever was
-			// passed to panic(), and the key is what tells an operator
-			// the callback crashed rather than returned badly.
+			// `panic`, not `error`: the key tells an operator the
+			// callback crashed rather than returned badly.
 			if got := line["panic"]; got != "boom" {
 				t.Errorf("panic = %v, want \"boom\"", got)
 			}
 			if _, bad := line["error"]; bad {
 				t.Error("a recovered panic must not be reported under `error`")
 			}
-			// `topic` on every backend — `subject` is NATS's word, and
-			// two backends used to leak it into the contract's vocabulary.
+			// `topic` on every backend: `subject` is NATS's word, not
+			// the contract's.
 			if got := line["topic"]; got != "crewlet.agent.alice.inbox" {
 				t.Errorf("topic = %v, want the topic", got)
 			}
@@ -79,14 +70,12 @@ func TestAPanicLineNamesThePanicAndTheTopic(t *testing.T) {
 	}
 }
 
-// TestNoBackendWritesItsOwnPanicLine is the guard that would have caught the
-// drift. A backend must call the contract's helper rather than spell the
-// event itself, because a hand-written line is how three backends ended up
-// with three names for one situation.
+// TestNoBackendWritesItsOwnPanicLine refuses a backend spelling the event
+// itself rather than calling the contract's helper: a hand-written line
+// drifts into a second name for one situation.
 func TestNoBackendWritesItsOwnPanicLine(t *testing.T) {
-	// The names a backend must not emit directly — the two the contract
-	// owns, plus the two spellings the backends had drifted onto, so a
-	// revert to either is caught rather than silently re-landing.
+	// The two names the contract owns, plus the two drifted spellings, so
+	// a revert to either is caught.
 	forbidden := []string{
 		`"publish_listener_panicked"`,
 		`"stream_handler_panicked"`,
@@ -105,10 +94,8 @@ func TestNoBackendWritesItsOwnPanicLine(t *testing.T) {
 	}
 }
 
-// The contract's helpers must not format anything the caller did not ask
-// for: a nil event is what a backend has when the panic happened before the
-// event was decoded, and it must still produce a line rather than a nil
-// dereference.
+// A nil event (a panic before the event was decoded) must still produce a
+// line rather than a nil dereference.
 func TestAPanicLineSurvivesANilEvent(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewJSONHandler(&buf, nil))
@@ -119,18 +106,11 @@ func TestAPanicLineSurvivesANilEvent(t *testing.T) {
 	}
 }
 
-// AND THE LINE CARRIES THE STACK, from the frame that actually panicked.
-//
-// A recovered panic that logs only its value is a bug report with the address
-// removed: "panic: runtime error: index out of range [3]" says nothing about
-// which of a dozen handlers holds that index. The stack is what makes
-// recovering free — the process survives AND the report is the one an
-// unrecovered panic would have printed.
-//
-// It works because these helpers are called from inside the deferred function
-// that recovered: a deferred call runs before its frame is popped, so
-// debug.Stack() still walks down through runtime.gopanic into the panicking
-// function. Asserted by panicking in a named function and looking for it.
+// AND THE LINE CARRIES THE STACK, from the frame that actually panicked: a
+// value alone does not say which handler failed. The helpers are called from
+// inside the recovering deferred function, whose frame is not yet popped, so
+// debug.Stack() still reaches the panicking function. Asserted by panicking in
+// a named function and looking for it.
 func TestAPanicLineCarriesTheStackOfWhatPanicked(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))

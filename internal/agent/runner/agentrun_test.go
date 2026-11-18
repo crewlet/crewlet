@@ -38,10 +38,9 @@ func agentFixture(t *testing.T, launcher runner.AgentLauncher, resume *runner.Re
 
 // THE EXECUTOR SPENDS NO MODEL CALL OF ITS OWN.
 //
-// This is the whole shape: the harness's loop drives the model, so the engine's
-// job is to hand it a brief and park. A launch that also called a model here
-// would run the phase twice — once on the engine's tokens and once in the box
-// on the subscription's — and only the second would have the tools.
+// The harness's loop drives the model, so the engine hands it a brief and
+// parks. A launch that also called a model would run the phase twice, the
+// engine's copy without the tools.
 func TestTheExecutorLaunchesItsRunAndParks(t *testing.T) {
 	t.Parallel()
 	launcher := &playLauncher{}
@@ -73,10 +72,9 @@ func TestTheExecutorLaunchesItsRunAndParks(t *testing.T) {
 	if !strings.Contains(req.System, "CTO") {
 		t.Errorf("the system prompt does not carry the seat's identity: %q", req.System)
 	}
-	// The SUBMISSION is on the surface, because that is how the harness ends
-	// its run — over the bridge. Read off the tool DEFINITIONS, which is
-	// what the bridge serves to a tools/list: a submission the surface holds
-	// but does not publish is one the harness can never call.
+	// The SUBMISSION is on the surface, since the harness ends its run with
+	// it over the bridge. Read off the DEFINITIONS the bridge serves to a
+	// tools/list: one held but not published can never be called.
 	if !slices.Contains(toolNames(req.Surface.ToolDefs()), runner.SubmitWorkTool) {
 		t.Error("the bridged surface does not publish submit_work, so the run cannot say what it did")
 	}
@@ -85,10 +83,9 @@ func TestTheExecutorLaunchesItsRunAndParks(t *testing.T) {
 // THE PROMPT TRAVELS IN TWO HALVES: the seat's standing instructions as system
 // text, the turn's ask as the brief.
 //
-// The harness appends the first to its own system prompt and runs the
-// second. Joined into one brief, as they once were, the seat's identity,
-// policies and memory reached the model as the opening of the user's request,
-// and the harness's system prompt said nothing of whose work it was doing.
+// The harness appends the first to its own system prompt and runs the second;
+// joined into one brief, the seat's identity, policies and memory would read
+// as the opening of the user's request.
 func TestTheExecutorsPromptTravelsInItsTwoHalves(t *testing.T) {
 	t.Parallel()
 	launcher := &playLauncher{}
@@ -110,10 +107,10 @@ func TestTheExecutorsPromptTravelsInItsTwoHalves(t *testing.T) {
 
 // THE COLLECTION REACHES ONLY WHAT THE LAUNCH DID.
 //
-// A resume rebuilds the executor's surface from the registry, so it is the
-// second place the narrowing has to hold: built from the whole registry, the
-// collected surface could reach mark_onboarded — and a citation replayed at
-// collection would be judged against a surface the run never had.
+// A resume rebuilds the executor's surface from the registry, so the narrowing
+// must hold there too: built from the whole registry it could reach
+// mark_onboarded, and a replayed citation would be judged against a surface
+// the run never had.
 func TestACollectedRunReachesOnlyWhatItsLaunchDid(t *testing.T) {
 	t.Parallel()
 	marker := func(t *testing.T, reg *tools.Registry) {
@@ -158,10 +155,9 @@ func TestAParkedRunCarriesWhatItsCollectionNeeds(t *testing.T) {
 }
 
 // A PARK IS COLLECTED FROM WHAT THE ENGINE PERSISTED, not from the value the
-// launching runner held: the process that collects a run reads the state back
-// off the wire, so a field that does not survive its encoding is one the
-// collection silently loses. Launched, encoded, decoded, and collected by a
-// fresh runner, the run's delivery is the turn's.
+// launching runner held: the collector reads the state back off the wire, so a
+// field that does not survive encoding is silently lost. Encoded, decoded and
+// collected by a fresh runner, the run's delivery is the turn's.
 func TestAParkedRunIsCollectedFromItsPersistedForm(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
@@ -201,11 +197,10 @@ func TestAParkedRunIsCollectedFromItsPersistedForm(t *testing.T) {
 
 // A LAUNCH THAT FAILS FAILS THE PHASE, and CLOSES it.
 //
-// There is no other way to run the executor, so the error is the phase's. And
-// the phase's started record was published before the launch — it carries the
-// prompt the run was sent — so a launch that never happened publishes the
-// phase's completion too: failed, with the error. Left open, the phase reads
-// as running for ever on every screen that draws it.
+// There is no other way to run the executor, so the error is the phase's. The
+// started record (carrying the prompt) was published before the launch, so a
+// failed launch publishes the completion too, failed with the error; left
+// open, the phase reads as running for ever.
 //
 // Mutation: drop the completion on the error path, and the record is gone.
 func TestALaunchFailureFailsAndClosesThePhase(t *testing.T) {
@@ -240,9 +235,8 @@ func TestALaunchFailureFailsAndClosesThePhase(t *testing.T) {
 }
 
 // A LAUNCH A PERSON STOPPED DID NOT FAIL. The phase closes carrying the stop
-// as its error and not marked failed, exactly as a phase the engine drives
-// does: a turn is listed as failed when any of its rows is, and a turn
-// somebody deliberately ended is not one that broke.
+// as its error and not marked failed, as an engine-driven phase does: a turn
+// is listed failed when any row is, and a deliberately ended turn did not break.
 func TestALaunchAPersonStoppedClosesThePhaseWithoutFailingIt(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
@@ -263,10 +257,9 @@ func TestALaunchAPersonStoppedClosesThePhaseWithoutFailingIt(t *testing.T) {
 	}
 }
 
-// A CLOSED FENCE LAUNCHES NOTHING. A run outlives the segment that launched it
-// and is not fenced once it runs, so the launch is the last moment a seat that
-// moved node, or one a person stopped, can be kept from starting one — and
-// nothing is opened, published or parked first.
+// A CLOSED FENCE LAUNCHES NOTHING. A running run is not fenced, so the launch
+// is the last moment a seat that moved node or was stopped can be kept from
+// starting one, and nothing is opened, published or parked first.
 //
 // Mutation: check the fence after the launch, and a run starts on a seat this
 // node no longer holds.
@@ -304,10 +297,10 @@ func TestAClosedFenceLaunchesNothing(t *testing.T) {
 }
 
 // THE LAUNCH IS HANDED THE TURN'S OWN FENCE, to ask again before it opens
-// anything: the prompt built since the phase opened can take a model call of
-// its own. The same closure the runner was built with — a fence compares the
-// grant it captured when it was built with the one held when it is called, so
-// the launch is held to the turn's admission only by this one.
+// anything, since building the prompt can take a model call of its own. It
+// must be the runner's own closure: a fence compares the grant it captured
+// when built with the one held when called, so only this one holds the launch
+// to the turn's admission.
 func TestTheLaunchIsHandedTheTurnsOwnFence(t *testing.T) {
 	t.Parallel()
 	launcher := &playLauncher{}
@@ -331,11 +324,10 @@ func TestTheLaunchIsHandedTheTurnsOwnFence(t *testing.T) {
 
 // THE EXECUTOR LAUNCHES NOTHING ON A REFUSAL ALREADY CERTAIN.
 //
-// Its calls are made in a box and post-charged when the run is collected, so
-// no round of an engine loop is there to stop them: a run launched on a
-// window already past its ceiling is paid for whole, and every token of it is
-// over the cap. Asked before the launch, the executor is refused as an engine
-// phase is before its first round — and opens nothing.
+// Its calls are made in a box and post-charged at collection, so no engine
+// round can stop them: a run launched past the window's ceiling is paid for
+// whole over the cap. Asked before the launch, it is refused as an engine
+// phase is before its first round, and opens nothing.
 func TestTheExecutorLaunchesNothingOnAStandingRefusal(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
@@ -385,11 +377,10 @@ func (r chargingRewriter) Complete(ctx context.Context, _ llm.Request) (*llm.Com
 
 // THE EXECUTOR LAUNCHES NOTHING WHEN ITS OWN BRIEF FILLS THE WINDOW.
 //
-// The phase asks the meter before it builds anything, and the answer is room;
-// building the brief then rewrites a prior round's long output with the seat's
-// auxiliary model, charged to the same counters, and that rewrite takes the
-// window past its ceiling. A run launched now is paid for whole past it, so the
-// executor asks again once the brief exists and is refused.
+// The meter says there is room before the brief is built, but building it
+// rewrites a prior round's long output with the seat's auxiliary model on the
+// same counters, taking the window past its ceiling. So the executor asks
+// again once the brief exists, and is refused.
 func TestTheExecutorLaunchesNothingWhenItsBriefFillsTheWindow(t *testing.T) {
 	t.Parallel()
 	launcher := &playLauncher{}
@@ -457,8 +448,8 @@ func TestAResumedAgentRunReportsWhatTheRunSubmitted(t *testing.T) {
 // AN ABSENT SUBMISSION IS NOT A VALUE.
 //
 // A run that stopped without saying what it did is rescued as incomplete and
-// judged on its record. Reading the prose it happened to end with as a
-// delivery would put a claim in its mouth on the one question that matters.
+// judged on its record; reading its closing prose as a delivery would put a
+// claim in its mouth.
 func TestAnAgentRunThatNeverSubmittedIsRescued(t *testing.T) {
 	t.Parallel()
 	r := agentFixture(t, &playLauncher{}, &runner.Resume{
@@ -485,9 +476,8 @@ func TestAnAgentRunThatNeverSubmittedIsRescued(t *testing.T) {
 	}
 }
 
-// A SECOND SUBMISSION IS A CORRECTION, which is the submission contract
-// everywhere else and has to hold here too: the replay is in call order, so
-// the last write wins.
+// A SECOND SUBMISSION IS A CORRECTION, as everywhere else: the replay is in
+// call order, so the last write wins.
 func TestTheLastSubmissionAnAgentRunMadeWins(t *testing.T) {
 	t.Parallel()
 	r := agentFixture(t, &playLauncher{}, &runner.Resume{
@@ -515,11 +505,9 @@ func TestTheLastSubmissionAnAgentRunMadeWins(t *testing.T) {
 }
 
 // THE CORRECTION IS THE CALL MADE LAST, NOT THE ONE THAT FINISHED LAST. The
-// log holds a run's calls in the order they finished — each is appended once
-// it returns — and a harness that makes calls at once finishes them in whatever
-// order their tools take. So the collection reads them in the order the bridge
-// admitted them, and states each with when it ran, for how long and who
-// answered, as the phase record of any other phase does.
+// log holds calls in finish order, and parallel calls finish in any order, so
+// the collection reads them in the order the bridge admitted them, each with
+// when it ran, for how long and who answered.
 //
 // Mutation: replay and record the row's own order, and the draft the model
 // replaced is the turn's answer; drop the timing from the executions, and the
@@ -585,8 +573,8 @@ func TestARunIsRecordedInTheOrderItMadeItsCalls(t *testing.T) {
 
 // A MALFORMED SUBMISSION IS THE "SAID NOTHING" CASE, not a failed resume.
 //
-// The run happened and its other calls happened; losing the whole turn over a
-// call the decoder rejects would throw away work that was really done.
+// The run and its other calls happened; losing the turn over one call the
+// decoder rejects would throw that work away.
 func TestAMalformedSubmissionRescuesRatherThanFailing(t *testing.T) {
 	t.Parallel()
 	r := agentFixture(t, &playLauncher{}, &runner.Resume{
@@ -609,11 +597,9 @@ func TestAMalformedSubmissionRescuesRatherThanFailing(t *testing.T) {
 
 // THE PROMPT REACHES THE RECORD, published at the launch.
 //
-// Nothing else will: the collection's own record deliberately carries none (it
-// collects a run rather than opening a conversation). Without this an operator
-// reading a turn on the dashboard sees a run that finished and no sign of what
-// it was asked — and the prompt is the whole of the engine's instruction to
-// the agent.
+// Nothing else will: the collection's record deliberately carries none (it
+// opens no conversation), so without this an operator sees a finished run and
+// nothing of the engine's whole instruction to it.
 func TestAnAgentRunPublishesThePromptItWasLaunchedWith(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
@@ -635,13 +621,10 @@ func TestAnAgentRunPublishesThePromptItWasLaunchedWith(t *testing.T) {
 // THE EXECUTOR'S PROMPT IS MEASURED WITH ITS TOOL ARRAY, although neither
 // half of the prompt contains it.
 //
-// The launcher is handed the system and user text and the surface separately:
-// the definitions reach the harness over the MCP bridge, not in the prompt.
-// The harness's own model is billed for every one of them all the same, so a
-// meter that counted only the text would report the engine's most tool-heavy
-// phase as its slimmest — and the argument for leaving them out ("they are not
-// in the prompt") is exactly the one a reader will make when deleting the
-// term, which is why the case is here.
+// The definitions reach the harness over the MCP bridge, not in the prompt,
+// but its model is billed for every one, so a meter counting only the text
+// would report the most tool-heavy phase as the slimmest. "They are not in the
+// prompt" is the argument for deleting the term; this case refutes it.
 func TestAnAgentRunMeasuresTheToolsItAdvertisedOverTheBridge(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
@@ -676,17 +659,13 @@ func TestAnAgentRunMeasuresTheToolsItAdvertisedOverTheBridge(t *testing.T) {
 // A RUN'S EVENT SAYS WHAT IT DID, which box it did it in, and which member of
 // the seat's executor chain ran it.
 //
-// The resume used to hand the record builder a zero result while holding the
-// whole account in the bridged log, so the published event carried no
-// response, no tool calls, no rounds and no model — and stamped `native` on a
-// run that had not run here. The card rendered EMPTY: an empty ledger and an
-// empty response leave no transcript to fall back on, and the "composing its
-// first round" placeholder only shows on a LIVE phase. An operator saw a
-// decision word and a blank card for a run that made real tool calls.
+// The event is built from the bridged log, not a zero result: an empty
+// response and ledger render a blank card for a finished run, and `native`
+// would be stamped on a run that did not run here.
 //
 // THE MEMBER IS THE LAUNCH'S, not the chain's head: a launch that fell back
-// to the second entry ran on it, and a record naming the head — or nobody —
-// charges the run's spend to an entry that never served it.
+// ran on the later entry, and naming the head charges an entry that never
+// served it.
 func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
@@ -726,9 +705,8 @@ func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 	if len(done.ToolExecutions) != 2 {
 		t.Errorf("tool_executions = %+v, want the run's own two calls", done.ToolExecutions)
 	}
-	// ONE ROUND, and every call on it — the engine made one request, the
-	// launch, and got one answer. Splitting the log into a round per call
-	// would claim a structure nobody observed.
+	// ONE ROUND, every call on it: the engine made one request, the launch;
+	// a round per call would claim a structure nobody observed.
 	if done.RoundsUsed != 1 {
 		t.Errorf("rounds_used = %d, want the one round the engine actually drove", done.RoundsUsed)
 	}
@@ -743,8 +721,7 @@ func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 	if done.RoundNarration[0]["content"] == "" {
 		t.Error("the round carries no content, so its tool rows have nothing above them")
 	}
-	// AND WHICH BOX: the harness that did the work and the box it ran in, which
-	// only the run knows and nothing on the resuming side could re-derive.
+	// AND WHICH BOX: the harness and box, which only the run knows.
 	if done.Harness != "claude-code" || done.SandboxID != "box-7" {
 		t.Errorf("the box is unnamed: agent=%q id=%q", done.Harness, done.SandboxID)
 	}
@@ -769,12 +746,9 @@ const zeroOID = "0000000000000000000000000000000000000000"
 
 // A COLLECTED RUN LISTS EVERY TOOL IT HELD, AND NOTHING LEFT TO DISCOVER. The
 // round's record states what the run held (tools_available): every tool its
-// launch recorded, which is every tool its seat holds, MCP servers' included.
-// It used to list beside that what the run could still have discovered
-// (tool_catalogue), and an executor has nothing left to discover — its harness
-// keeps a large server's tools out of its requests by itself — so the record
-// carries no such list rather than one a reader would take for tools the run
-// never had.
+// launch recorded, MCP servers' included. It carries no tool_catalogue: the
+// harness defers a large server's tools by itself, so nothing is left to
+// discover, and such a list would read as tools the run never had.
 //
 // Mutation: put a catalogue back on the executor's record, or rebuild the
 // collection's surface without the launch's record, and this goes red.

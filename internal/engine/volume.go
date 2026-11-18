@@ -9,55 +9,22 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// WHETHER TWO DIRECTORIES DRAW ON ONE POOL OF SPACE — the question the code
-// cache's budget turns on, since a volume of its own takes seven eighths of
-// what it has room for and a volume it shares takes half of what its bounded
-// tenants leave (config.DerivedCacheMaxBytes).
+// Whether two directories draw on one pool of space decides the code cache's
+// budget (config.DerivedCacheMaxBytes). They are ONE VOLUME when any reading
+// says so: the same st_dev; the same nonzero f_fsid (overlay and bind mounts);
+// or, on two filesystems with blocks, the same bytes available (f_bavail ×
+// f_bsize) at one instant, within the coarser block size ([sameSpaceLeft]):
+// the one reading a pool's btrfs subvolumes and quota-less ZFS datasets share,
+// each having its own st_dev and f_fsid. The instant is read, not assumed: the
+// cache's volume is read before and after the other, and the pair is apart
+// only if it held still ([volumeReads]).
 //
-// # Why the device id is not the whole answer
-//
-// A POOLED filesystem gives each subvolume or dataset a device id of its own
-// while every one of them writes into the same space: btrfs subvolumes (the
-// default layout of Fedora and openSUSE, where /home and /var are two of them)
-// and ZFS datasets without a quota. A cache on one and the store on another
-// compared by st_dev alone were judged apart, and the cache took seven eighths
-// of the pool's free space while the broker beside the store still claimed
-// three quarters of the same pool. So a pair is ONE VOLUME when any of three
-// readings says so:
-//
-//   - the same device id (stat's st_dev) — one filesystem;
-//   - the same filesystem id (statfs's f_fsid), where the filesystem gives one
-//     — overlay and bind mounts of one filesystem;
-//   - the same bytes available (f_bavail × f_bsize) read at ONE INSTANT, on two
-//     filesystems that have any blocks at all — what a pool reports for every
-//     subvolume and dataset that draws on it. btrfs masks each subvolume's id
-//     into its f_fsid, and a ZFS dataset's f_blocks counts what it refers to,
-//     so the space left is the one reading both share. "The same" is within
-//     the coarser of the two block sizes, never to the byte: a ZFS dataset
-//     counts in its own recordsize and rounds the pool's space down to it, so
-//     two datasets of one pool tuned differently (a database's 16 KiB beside
-//     the default 128 KiB) report it up to a block apart ([sameSpaceLeft]).
-//
-// "One instant" is read, not assumed: the cache's volume is read before and
-// after the other, and a pair the space left could make one is judged APART
-// only when the cache's reading did not move across the other's — a pool that
-// changed and changed back in that window is the one shape that escapes. A
-// volume that keeps moving is read again, a few times, and then read as
-// shared. A pair one of whose filesystems has no blocks at all needs no
-// instant: no reading of space can make it one, so it is apart at once.
-//
-// # Uncertain is shared
-//
-// The question decides whether one tenant may take a volume to itself, and
-// the wrong yes is the one that fills the disk. So a directory that cannot be
-// read reads as sharing, and so does a pair whose readings never hold still.
-// Two distinct filesystems that happen to report the same space to within a
-// block are read as one — the cheap direction to be wrong in.
+// UNCERTAIN IS SHARED: the wrong yes lets one tenant fill the disk, so a
+// directory that cannot be read, or readings that never hold still, share.
 
 // volumeReads is how many times a pair whose readings moved under them is read
-// again before it is judged shared: three — a volume busy enough to change
-// between every pair of statfs calls three times running is one whose
-// identity cannot be read, and shared is the safe answer for it.
+// before it is judged shared: a volume that changes between every pair of
+// statfs calls three times running has an identity that cannot be read.
 const volumeReads = 3
 
 // volumeStat is what decides whether two directories draw on one pool of
@@ -102,18 +69,14 @@ func sameVolumeBy(read func(dir string) (volumeStat, error), a, b string) bool {
 		case before.fsid != [2]int32{} && before.fsid == other.fsid:
 			return true
 		case before.blocks == 0 || other.blocks == 0:
-			// A FILESYSTEM OF NO BLOCKS (proc, sysfs) holds no space, so
-			// the space left — the one reading the instant is for — cannot
-			// make the pair one: apart, whether or not the cache's volume
-			// moved. Asked after the instant, a cache volume written to
-			// between every pair of reads (any busy disk: a suite's other
-			// cases writing beside it) was read again until the reads ran
-			// out, and then judged to share with procfs.
+			// A FILESYSTEM OF NO BLOCKS (proc, sysfs) holds no space, so the
+			// space left cannot make the pair one: apart, asked before the
+			// instant, or a busy cache volume would use up the reads and be
+			// judged to share with procfs.
 			return false
 		case before.avail != after.avail:
-			// THE CACHE'S VOLUME MOVED while the other was read, so the
-			// space left on each is not one instant's: read again. To the
-			// byte, since both readings are of one filesystem in one block.
+			// THE CACHE'S VOLUME MOVED while the other was read: not one
+			// instant, so read again. To the byte: one filesystem, one block.
 			continue
 		}
 		return sameSpaceLeft(before, other)
@@ -122,15 +85,11 @@ func sameVolumeBy(read func(dir string) (volumeStat, error), a, b string) bool {
 }
 
 // sameSpaceLeft reports whether two readings of the space left are one pool's
-// at one instant: within the COARSER of their two blocks, since each counts
-// the pool's space in its own block and rounds down to it — a ZFS dataset's
-// f_bsize is its recordsize, so a store's dataset at 16 KiB and a cache's at
-// 128 KiB read the same pool up to 128 KiB apart, and compared to the byte
-// they agreed only when the pool's free bytes fell within 16 KiB of a 128 KiB
-// boundary. Two readings of one quantity rounded down to blocks of b1 and b2
-// lie within max(b1, b2) of it and of each other; two filesystems that happen
-// to be that close are read as one, the safe direction. A block that reads as
-// none compares to the byte.
+// at one instant: within the COARSER of their two blocks, since each rounds the
+// pool's space down to its own f_bsize (a ZFS dataset's recordsize, so datasets
+// at 16 KiB and 128 KiB read one pool up to 128 KiB apart). Two filesystems
+// that close are read as one, the safe direction. A zero block compares to the
+// byte.
 func sameSpaceLeft(a, b volumeStat) bool {
 	diff := a.avail - b.avail
 	if diff < 0 {
@@ -141,10 +100,9 @@ func sameSpaceLeft(a, b volumeStat) bool {
 
 // statVolume reads the volume dir is on, or will be made on.
 //
-// A DIRECTORY NOT MADE YET is judged by its nearest ancestor that exists, which
-// is the filesystem it will be made on — the snapshots' directory, say, before
-// the first snapshot. Any other failure is an error, which [sameVolumeBy] reads
-// as sharing.
+// A DIRECTORY NOT MADE YET is judged by its nearest existing ancestor, the
+// filesystem it will be made on. Any other failure is an error, which
+// [sameVolumeBy] reads as sharing.
 func statVolume(dir string) (volumeStat, error) {
 	dir, err := filepath.Abs(dir)
 	if err != nil {

@@ -30,13 +30,10 @@ func specCompany(t *testing.T, doc string) *Company {
 
 // A SEAT'S CREDENTIALS REACH A PER-ROLE SERVER THROUGH WHAT ITS TRANSPORT
 // AUTHENTICATES WITH: the environment of a stdio child, the headers of an http
-// connection.
-//
-// They went into the environment whatever the transport, and an http
-// connection reads none, so the remote GitHub server a seat reaches with its
-// own `Authorization: Bearer …` was dialled with the template's headers alone
-// — for every seat. The stdio neighbour is here to hold the other half: its
-// credential stays in the environment, and an http child carries none.
+// connection, which reads no environment (an `Authorization: Bearer …` there
+// would be dropped, dialling as the template alone for every seat). The stdio
+// neighbour holds the other half: its credential stays in the environment,
+// and the http child carries none.
 func TestASeatsCredentialsReachAnHTTPServerAsHeaders(t *testing.T) {
 	t.Parallel()
 	company := specCompany(t, `
@@ -99,16 +96,14 @@ roles:
 	}
 }
 
-// provisioningDoc is a company whose agents are each on at four vendors, with
-// the integrations migrated onto per-seat access and the provisioning blocks
-// as provisioned says. Off, nothing asks a pass to mint: the integrations hold
-// no authority to create an agent's account, so the bots, accounts and keys
-// are the operator's, made by hand, and Datadog, which refuses an enabled
-// block with no provisioning, is switched off.
+// provisioningDoc is a company whose agents are each on at four vendors under
+// per-seat access, with the provisioning blocks iff provisioned. Off, no
+// integration may create an agent's account, so the accounts are made by hand
+// and Datadog (which refuses an enabled block without provisioning) is off.
 //
-// Each seat's tool names its own sealed names ([envref.SealedName]), which is
-// what the engine seals under where it provisions, and what an operator's
-// external credential may be handed in under where it does not.
+// Each seat's tool names its own sealed names ([envref.SealedName]): what the
+// engine seals under where it provisions, and what an operator hands an
+// external credential in under where it does not.
 func provisioningDoc(provisioned bool) string {
 	atlassian, gitlab, mattermost := "", "", ""
 	datadogEnabled := "false"
@@ -196,11 +191,9 @@ roles:
 //
 // The access sync seals each seat that is on under the seat's own names
 // ([Engine.seatAccessPlan]), Atlassian's assigned address as well as the
-// token, and that is what a seat's child waits for. A company that connects
-// the same vendors with no authority to create an account made its accounts
-// by hand: nothing it runs will ever mint a variable, and a child that read
-// one of them as on its way would wait for ever, reported as waiting rather
-// than as the missing secret it is.
+// token, and a seat's child waits for those. Without the authority to create
+// accounts nothing mints a variable, and a child reading one as on its way
+// would wait forever, reported as waiting instead of as a missing secret.
 func TestWhatAPassMintsIsReadFromItsOwnPlan(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
@@ -230,33 +223,26 @@ func TestWhatAPassMintsIsReadFromItsOwnPlan(t *testing.T) {
 }
 
 // EVERY PASS THAT MINTS A SEAT'S CREDENTIAL DECLARES THE PLAN IT MINTS BY, or
-// a seat's child would be spawned with that credential empty again.
+// a seat's child would be spawned with that credential empty.
 //
-// The plan is how the engine tells a credential on its way from a secret
-// somebody forgot, and only a pass can declare it. So every pass this build
-// runs is either a seat minter or named here with why it mints none: a new
-// pass that mints and says nothing fails this rather than quietly bringing
-// back an empty-token spawn on every first boot.
+// The plan is how the engine tells a credential on its way from a forgotten
+// secret, and only a pass can declare it. So every pass is a seatMinter or
+// named here with why it mints none, and a new minting pass that declares
+// nothing fails this.
 func TestEveryPassThatMintsASeatsCredentialDeclaresItsPlan(t *testing.T) {
 	t.Parallel()
 	mintsNoSeatCredential := map[integration.Kind]string{
-		// An agent's GitHub App is created by a person's own gesture,
-		// which seals its key and writes the pointer to it together, and
-		// the token it acts with is issued at use, never sealed by a pass
-		// (githubtoken.go), so no plan is waited on.
+		// An agent's GitHub App is created by a person's gesture, and its
+		// token is issued at use (githubtoken.go), never sealed by a pass.
 		integration.KindGitHub: "no pass mints a seat's GitHub credential",
-		// An agent's Google Cloud token is issued at use for an hour by
-		// impersonating its service account, never sealed by a pass.
+		// Issued at use by impersonating its service account.
 		integration.KindGoogleCloud: "no pass mints a seat's Google Cloud credential",
-		// Both read an agent's Atlassian account, which the Atlassian
-		// pass mints.
+		// Both read the agent's Atlassian account.
 		integration.KindJira:       "reads the account the atlassian pass mints",
 		integration.KindConfluence: "reads the account the atlassian pass mints",
-		// An agent's AWS session is issued at use for 15 minutes through the
-		// broker, never sealed by a pass.
+		// Issued at use through the broker.
 		integration.KindAWS: "no pass mints a seat's AWS credential",
-		// An agent's SSH certificate is signed at use for minutes, never
-		// sealed by a pass.
+		// Signed at use.
 		integration.KindSSH: "no pass mints a seat's SSH credential",
 	}
 	e := &Engine{}
@@ -273,11 +259,10 @@ func TestEveryPassThatMintsASeatsCredentialDeclaresItsPlan(t *testing.T) {
 	}
 }
 
-// heldBackCompany is a company that provisions its agents' Atlassian accounts,
-// whose per-role servers point at binaries that do not exist — so a start
-// that is attempted at all comes back failed, and one that is not leaves
-// nothing behind. The CEO's Atlassian credentials are the pass's to mint; the
-// CTO's tracker token is a variable nothing mints.
+// heldBackCompany provisions its agents' Atlassian accounts, and its per-role
+// servers name missing binaries, so an attempted start comes back failed and
+// an unattempted one leaves nothing. The CEO's Atlassian credentials are the
+// pass's to mint; the CTO's tracker token is a variable nothing mints.
 func heldBackCompany(t *testing.T) *Company {
 	t.Helper()
 	return specCompany(t, `
@@ -330,15 +315,10 @@ roles:
 // retried by neither, and started by the first pass after the snapshot holds
 // it.
 //
-// The claim used to spawn such a child with the credential empty, and a
-// vendor's server refuses that: every first boot under provisioning logged
-// each seat's server failed and retried it on the restart schedule for a
-// credential the engine knew it had not minted. Here nothing may reach a
-// bridge before the seal, the status record must count the CEO's child as waiting
-// — not as failed, which it is not — with the sentence naming what it waits
-// for, and the CTO's as failed with the variable to set. Neither arms a
-// retry, since nothing changes either until the snapshot does; and the pass
-// an apply runs once the CEO's credentials are sealed starts the child.
+// A vendor's server refuses an empty credential, so nothing may reach a bridge
+// before the seal. The status counts the CEO's child as waiting (not failed),
+// naming what it waits for, and the CTO's as failed, naming the variable to
+// set. Neither arms a retry: nothing changes until the snapshot does.
 func TestASeatChildWithoutItsCredentialIsHeldBackNotStarted(t *testing.T) {
 	t.Parallel()
 	e := &Engine{mcp: mcp.NewBridge(nil, mcp.Supervision{})}
@@ -392,8 +372,8 @@ func TestASeatChildWithoutItsCredentialIsHeldBackNotStarted(t *testing.T) {
 		}
 	}
 
-	// THE SEAL, as the apply after it sees it: the snapshot holds the
-	// credentials, and the apply asks the seat's runner for a pass.
+	// The seal, as the next apply sees it: the snapshot holds the credentials
+	// and the apply asks the seat's runner for a pass.
 	e.secretsMu.Lock()
 	e.installSecrets(map[string]string{
 		"ATLASSIAN_EMAIL_CEO": "agent-ceo@example.com", "ATLASSIAN_TOKEN_CEO": "ceo-minted",
@@ -409,14 +389,9 @@ func TestASeatChildWithoutItsCredentialIsHeldBackNotStarted(t *testing.T) {
 }
 
 // A HARNESS IS NOT OFFERED A SERVER WHOSE SEAT CREDENTIALS ARE MISSING,
-// by the rule a seat's own child is started by.
-//
-// The box gets the servers role.sandbox.mcp.servers names, with the seat's
-// credentials resolved into them. One whose credential resolved to nothing
-// used to be rendered anyway, under a warning that it "will not
-// authenticate": the agent then spent a round finding that out, or the server
-// acted as nobody. The neighbour whose credential resolves is still offered,
-// with it.
+// by the rule a seat's own child is started by: offered, the agent would spend
+// a round finding out, or the server would act as nobody. The neighbour whose
+// credential resolves is still offered, with it.
 func TestAHarnessIsNotOfferedAServerWhoseSeatCredentialIsMissing(t *testing.T) {
 	t.Parallel()
 	company := heldBackCompany(t)
@@ -446,13 +421,10 @@ func TestAHarnessIsNotOfferedAServerWhoseSeatCredentialIsMissing(t *testing.T) {
 }
 
 // A BOX'S TOOL SERVER READS ITS OWN REFERENCES THROUGH THE ENGINE, as the
-// engine's own child of the same server does: the server's env, its headers
-// and its url, beside the seat's credentials.
-//
-// They were handed to the box verbatim and written into the harness's
-// config as `${VAR}` text. OpenCode reads `{env:VAR}`, so a shared key reached
-// its server as the literal, and Claude Code expands one from the run env,
-// which holds no company secret unless a seat repeats it there.
+// engine's own child of the same server does: its env, headers and url, beside
+// the seat's credentials. Left as `${VAR}` text, OpenCode (which reads
+// `{env:VAR}`) sends the literal, and Claude Code expands it from the run env,
+// which holds no company secret.
 func TestABoxsToolServerReadsItsOwnReferencesThroughTheEngine(t *testing.T) {
 	t.Parallel()
 	company := specCompany(t, `

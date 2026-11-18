@@ -15,12 +15,10 @@ import (
 // TWO DIFFERENT WRITES IN ONE TURN ARE TWO OPERATIONS, and the same write asked
 // twice is one.
 //
-// An operation id derived only from the turn, the verb and the object named
-// WHICH write this was and not which of two: a turn that moved an item to
-// in_progress and later to done, or commented on it twice, wrote both under
-// one id. The second was then the first's retry to everything downstream —
-// inside the log's duplicate window the broker acknowledged it as the first
-// record and the tool answered `applied` for a change that never landed.
+// An id from only the turn, the verb and the object cannot tell two writes
+// apart: moving an item to in_progress then done, or commenting twice, makes
+// the second the first's retry, acknowledged inside the broker's duplicate
+// window, and the tool answers `applied` for a change that never landed.
 func TestTwoDifferentWritesInOneTurnAreTwoOperations(t *testing.T) {
 	t.Parallel()
 
@@ -98,10 +96,10 @@ func commentOf(t *testing.T, patch worklet.TaskPatch) *worklet.Comment {
 // A RE-RUN OF ONE CREATE ADDRESSES THE TASK THE FIRST RUN FILED, and two
 // different creates file two.
 //
-// The new task's id is the subject its create arbitrates on, and it was a
-// fresh uuid per call — which was also part of the operation's name — so a
-// turn redelivered after it had filed its item filed a second one under a
-// second key, and no retry of a create could ever reach the first copy.
+// The new task's id is the subject its create arbitrates on and part of the
+// operation's name, so it is derived from the call: a fresh uuid per call
+// files a second item when a turn is redelivered, and no retry reaches the
+// first.
 func TestARerunCreateAddressesTheTaskItFiled(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -139,11 +137,9 @@ func TestARerunCreateAddressesTheTaskItFiled(t *testing.T) {
 // with nothing different between is the same one, and a re-run reproduces
 // every id.
 //
-// What a call asks for names WHICH write it is and not WHEN, so a run that
-// moved an item to in_progress, then to done, then back to in_progress derived
-// one id for the first and the third: the third was answered as the first's
-// retry — `applied`, at the first's position — and the item stayed done while
-// the tool said otherwise.
+// What a call asks for names WHICH write it is, not WHEN: from it alone,
+// in_progress, done, in_progress again answers the third as the first's retry
+// (`applied`, at the first's position) while the item stays done.
 func TestAWriteMadeAgainAfterADifferentOneIsANewOperation(t *testing.T) {
 	t.Parallel()
 	started := map[string]any{"item": "ENG-1", "status": "in_progress"}

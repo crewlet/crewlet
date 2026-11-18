@@ -12,13 +12,11 @@ import (
 // THE SATELLITE GUIDE'S BOOT LINE NAMES EVERY REGISTERED LOG, IN THE
 // REGISTER'S ORDER.
 //
-// A `roles: [data, seats]` satellite serves no API, so the guide sends its
-// operator to the `statelog_started` line a data node logs at boot, and prints
-// one to compare against. Typed by hand, the printed line named five logs on a
-// register of eight, and an operator holding their node's line beside it would
-// read every log after the fifth as one their node should not be running. The
-// guide prints what [stateLog]'s boot logs: `domains=` and the register's
-// names, in order.
+// A `roles: [data, seats]` satellite serves no API, so the guide has its
+// operator compare the `statelog_started` line a data node logs at boot with
+// one it prints; a printed line short of a log reads as a node running one it
+// should not. It prints what [stateLog]'s boot logs: `domains=` and the
+// register's names, in order.
 //
 // Mutation: drop a name from the guide's line, or register a log the line
 // does not name, and this fails naming the line.

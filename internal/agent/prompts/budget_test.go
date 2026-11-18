@@ -9,12 +9,10 @@ import (
 )
 
 // The measure is part of the contract: someone "simplifying" it to len(s)/4
-// would change every budget without touching a number.
-//
-// [approxTokens] itself lives in sections.go now, beside the roster allowance
-// it also measures. ONE implementation: a roster planned against one
-// approximation and asserted against another is a budget that holds here and
-// not in the prompt.
+// would change every budget without touching a number. [approxTokens] has ONE
+// implementation, in sections.go, which the roster allowance measures with too:
+// a roster planned against one approximation and asserted against another is a
+// budget that holds here and not in the prompt.
 func TestApproxTokensCountsCodePointsNotBytes(t *testing.T) {
 	t.Parallel()
 	const fourEmDashes = "————" // 4 code points, 12 bytes
@@ -36,86 +34,27 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 	t.Logf("%s prompt: ~%d tokens (budget %d, headroom %d)", name, got, budget, budget-got)
 }
 
-// Reference role: a lead, with a roster, and the surface a production
-// executor has — see referenceExecutor.
+// Reference role: a lead with a roster and a production executor's surface
+// (referenceExecutor), measured with EVERY section a tool on it turns on
+// (escalation, workers, the code guidance): a lead on the default tracker
+// carries the escalation section on every turn. No tool catalogue is measured,
+// since the harness delivers the definitions and the prompt lists none. The
+// code sections render only for a seat of a company hosting code, so their room
+// is charged to those prompts alone. Measured at ~1,030, so ~3% headroom: the
+// next sentence must justify a raise here.
 //
-// The budget covers the identity scaffold, the turn contract (act with tool
-// calls, finish the arc and discover what is missing, stay reachable) and
-// EVERY section a tool on the surface turns on: the escalation guidance, the
-// workers list and the code guidance. Measured with
-// all of them rendered, because that is the seat the budget is for: a lead on
-// the default work tracker holds `comment_on_work_item` and so carries the
-// escalation section on every turn, and a budget measured on a seat without
-// it bounded a prompt no such lead is sent. The review budget below turns
-// every gate on for the same reason.
-//
-// It used to be measured against a synthetic catalogue of a hundred one-line
-// tools, which measured nothing production sends: the executor holds every
-// tool its seat holds from its first round, whose definitions reach the model
-// through its harness, each under the server it comes from, so its system
-// prompt lists no tool and no server.
-//
-// 2200 -> 870 when the prompt stopped saying what the model gets elsewhere:
-// the first-party tool catalogue (every description a second time), the rules
-// the submission and `decision` schemas state beside their fields, and the
-// meta sentences about what the prompt already holds. 870 -> 795 when the
-// sandbox section went with the tool it taught: every executor is its harness's
-// own run now, and a section about handing code work to a box is a section
-// about a box the run is already in.
-//
-// Measured at ~733 before the code guidance, which left ~8%: enough that a
-// sentence can be added, tight enough that a section cannot. The plain
-// contract alone — no tracker, no workers, no code — measures ~486 of it.
-//
-// 795 -> 930 for two sections, deliberately: the guidance on reading the
-// company's code (`code_history`, ~83 — what a file says, what changed, who
-// last changed a line, how its history went, whether a commit reached a
-// branch, and a change read with `code_get_change`) and on changing it
-// (`code_writes`, ~72, cut to the one choice no tool's description can
-// carry). Each renders only for a seat of a company that hosts code (and
-// serves its writes), so the room is charged to those seats' prompts alone;
-// together they take the prompt to ~888, ~4% under the budget — the next
-// sentence needs a decision here, as a section did.
-//
-// 930 -> 985 for a section, deliberately: `code_merging` says a merge that
-// is not ready, or is queued for its checks, is not waited on — the turn ends
-// and a `ready_to_merge` or `merged` wake brings the seat back — which took the
-// prompt from ~888 to ~944 (~56, its heading with it): a seat that polls a
-// merge spends a round on every poll, which no tool's answer reaches a seat
-// early enough to stop. ~944 with it, so ~4% is left, as before it.
-//
-// 985 -> 1030 for a section, deliberately: `code_search` says where something
-// is defined, used or mentioned is found with one search across every
-// repository the seat reads — search before reading whole trees — which took
-// the prompt from ~944 to ~989 (~45, its heading with it): a seat that walks
-// trees file by file with code_read to find where something lives spends a
-// round and its context on every file that does not hold it, which no tool's
-// description reaches a seat early enough to stop. ~4% is left, as before it.
-//
-// 1030 -> 1060 for a sentence, deliberately: the escalation section says every
-// question to a person is asked with a decision, a request included
-// (ADR-0100), which took the prompt from ~1,000 to ~1,030 (~30). Over a third
-// of the questions a person was asked arrived as prose with nothing to press,
-// and the tool's refusal reaches a seat only after it composed one. ~3% is
-// left, as before it.
-//
-// IT BOUNDS THE PROSE, NOT THE ROSTER. The reference lead has one direct
-// report, so what this number holds down is the contract text — the part that
-// grows when somebody writes a paragraph. What a roster costs is bounded by
-// rosterAllowanceTokens instead, because it grows with the company rather
-// than with the diff, and the two together are measured by
-// TestTheWholeTurnStaysUnderBudget below.
+// IT BOUNDS THE PROSE, NOT THE ROSTER: the reference lead has one report. A
+// roster grows with the company, so rosterAllowanceTokens bounds it instead,
+// and TestTheWholeTurnStaysUnderBudget measures the two together.
 func TestTheExecutorPromptStaysUnderBudget(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(lead(), referenceExecutor(t)).Text
 	withinBudget(t, "executor", p, 1060)
 }
 
-// THE REFERENCE RENDERS EVERY GATED SECTION. A budget measured on an input
-// that turns one off is a budget on a prompt smaller than the one production
-// sends, which is how the executor's ceiling was once set ~100 tokens under
-// what every lead on the default tracker was sent: nothing failed, because
-// nothing measured that lead.
+// THE REFERENCE RENDERS EVERY GATED SECTION: a budget measured on an input
+// that turns one off bounds a prompt smaller than the one production sends,
+// and nothing fails.
 func TestTheBudgetReferenceRendersEveryGatedSection(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(lead(), referenceExecutor(t))
@@ -128,39 +67,17 @@ func TestTheBudgetReferenceRendersEveryGatedSection(t *testing.T) {
 	}
 }
 
-// Review is identity + the rules that decide its one decision: the evidence
+// Review is identity plus the rules that decide its one decision (the evidence
 // pointer, the run's-work-is-in-no-log rule, the settled-delivery note, the
-// incomplete, duplicate, missing-tool and blocked rules — measured with the
-// gated rule rendered (`a2a_ask`), which is the largest a review prompt gets.
+// incomplete, duplicate, missing-tool and blocked rules), measured with the
+// gated `a2a_ask` rule rendered, the largest a review prompt gets. What a
+// decision means and what `notes` and `completed_work` carry is the submission
+// schema's, beside its fields. Measured at ~589, so ~8% headroom: the next rule
+// must justify itself here, not slip in.
 //
-// The original budget was 300 (identity + a six-line enum), and it grew to
-// 800 as each rule arrived for a turn-ending failure — the rule on reading an
-// executor's report, the cross-round duplicate rule keyed on target and
-// content, the settled delivery and incomplete notes, and the blocked rule's
-// three-way split on whether the person has been told.
-//
-// 800 -> 590 when each rule was stated once: what a decision means and what
-// `notes` and `completed_work` carry is the submission schema's, beside the
-// fields, and the gated rules rendered only for a seat holding their tool.
-// 590 -> 620 when the rule on a run's local work became UNCONDITIONAL: every
-// executor is a harness whose shell, edits and tests are in no log, so
-// every review carries it where it used to render for the few seats offered
-// a box. Measured at ~572 with the gate on, so ~8% headroom: the next rule
-// should have to justify itself here, not slip in.
-// 620 -> 640 when the evidence rule stopped saying that every `→ error` call
-// did not take effect: one whose line says its outcome is unknown, a call its
-// run's log still held in flight when the round was read, may have, which the
-// rule now says in the line's own terms (~16 tokens), since a reviewer told
-// otherwise would send the round back to make the call again. A correction of
-// a rule every review carries, so on every review. Measured at ~589, so ~8%
-// headroom again.
-//
-// The roster allowance does not reach this prompt and the number is unmoved
-// by it: review renders [BuildIdentityLine], which names the reviewer's
-// manager and not one of its reports, so a lead of 500 measures the same as
-// the reference lead. That is why the whole turn's budget below is the
-// allowance plus the two prompts, with nothing added for a second copy of the
-// roster.
+// The roster allowance never reaches this prompt: review renders
+// [BuildIdentityLine], naming the reviewer's manager and none of its reports,
+// so the whole turn's budget below adds nothing for a second roster.
 func TestReviewPromptIsSmall(t *testing.T) {
 	t.Parallel()
 	withinBudget(t, "review", BuildReview(lead(), ReviewInput{OffersA2A: true}).Text, 640)
@@ -180,16 +97,12 @@ func sectionText(sections ...[]string) string {
 
 // referenceExecutor is the executor input the budgets measure: a lead's
 // surface with every tool that gates a section on it, and the workers the
-// shipped example company configures.
-//
-// The surface is NAMES, because that is all a gate reads — what each tool
-// says reaches the model with the request, never through this prompt, and
-// that holds for every MCP server's tool as much as a first-party one: the
-// executor lists none, and its harness defers a server's tools itself. The
-// names are the ones production's surface carries: `comment_on_work_item`
-// and `create_work_item` from the default work tracker, `delegate` for a
-// seat with workers, the code tools for a seat of a company that hosts code
-// (`code.backend: gitlet`), and `submit_work`, which every executor adds.
+// shipped example company configures. The surface is NAMES, all a gate reads:
+// what a tool says reaches the model through its harness, never this prompt.
+// The names are production's: `comment_on_work_item` and `create_work_item`
+// from the default work tracker, `delegate` for a seat with workers, the code
+// tools for a company with `code.backend: gitlet`, and `submit_work`, which
+// every executor adds.
 func referenceExecutor(t *testing.T) ExecutorInput {
 	t.Helper()
 	return ExecutorInput{
@@ -229,56 +142,18 @@ func referenceWorkers() string {
 	return strings.Join(lines, "\n")
 }
 
-// THE WHOLE TURN, which is the number that actually bills.
+// THE WHOLE TURN, the number that actually bills: moving a section between the
+// two prompts leaves each under its own budget while the turn costs the same.
+// IT IS MEASURED ON A LEAD OF 500, because the roster is the one section that
+// grows with the company rather than with the diff.
 //
-// Two prompts where there were three, and the executor's is the only one that
-// carries the scaffold. A budget on each prompt separately cannot catch the
-// regression that matters here — moving a section from one prompt to another
-// leaves both under their own budgets while the turn costs the same.
-//
-// IT IS MEASURED ON A LEAD OF 500, not on the reference lead, because the
-// roster is the one section that grows with the company instead of with the
-// diff. A budget measured on a one-report seat says nothing about the seat
-// the defect was found on.
-//
-// 3000 -> 4000 for the roster allowance, and the raise was the allowance.
-// 4000 -> 2430 when the prompts stopped saying what the model gets elsewhere.
-// 2430 -> 2385 when the executor's sandbox section and the review's gated
-// sandbox rule went, and the review's unconditional rule on a run's local
-// work came in: the turn's own prose measures ~1,200 with every gated section
-// of both prompts rendered (referenceExecutor, and the review's `a2a_ask`),
-// the roster allowance is 1000 (see rosterAllowanceTokens) and spends ~998 of
-// it here, and a mixed company pays another ~93 for the `## Human colleagues`
-// note this fixture triggers. Measured at ~2,291, so ~4% headroom —
-// deliberately tighter than the ~8% the prose budgets carry, because the next
-// thing that wants room here should take it out of the allowance rather than
-// out of the budget.
-//
-// 2385 -> 2525 for the code guidance (~91 tokens) and the code writes
-// guidance (~71), the one exception that rule has met, and why: each section
-// is rendered only for a seat of a company hosting code (and serving its
-// writes), while the allowance is every lead's in every company — taken out
-// of it, the room would be charged to leads whose prompt never carries the
-// sections. Measured merged with main's prompts at ~2,476 with both — the
-// turn's own prose ~1,396, the allowance spending ~987 and the human
-// colleagues note ~93 — so ~2% headroom, with nothing taken from the
-// allowance.
-//
-// 2525 -> 2585 for the code merging guidance (~56 tokens), the same exception
-// once more: rendered only for a seat holding `code_merge_change`. ~2,532 with
-// it, ~2% headroom, as before it.
-//
-// 2585 -> 2625 for the code search guidance (~45 tokens), the same exception
-// once more: rendered only for a seat holding `code_search`. ~2,577 with it,
-// ~2% headroom again.
-//
-// 2625 stands for the review's exception to its evidence rule for a call whose
-// outcome is unknown (~16 tokens, on every review; see TestReviewPromptIsSmall):
-// the turn measures ~2,604 with it, ~0.8% under the budget, the room coming
-// out of the headroom rather than out of the allowance, which a correction
-// this small does not warrant retuning. So the next thing that wants room here
-// takes it out of the allowance, or raises this budget with its reason
-// recorded here.
+// Measured at ~2,604 (the prose of both prompts with every gated section, the
+// ~1,000-token roster allowance and the `## Human colleagues` note this fixture
+// triggers), ~0.8% under wholeTurnBudget: the next thing that wants room takes
+// it out of the allowance, or raises the budget with its reason recorded here.
+// The code sections are the exception, charged here rather than to the
+// allowance: they render only for a seat of a company hosting code, while the
+// allowance is every lead's in every company.
 func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
 	t.Parallel()
 	seat := bigLead(500)
@@ -286,10 +161,8 @@ func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
 		BuildReview(seat, ReviewInput{OffersA2A: true}).Text
 	withinBudget(t, "turn", whole, wholeTurnBudget)
 
-	// THE CONTROL. The same 500 reports with the allowance taken off: every
-	// one of them rendered in full, which is what this prompt did until now
-	// and what no budget could hold. Without it the assertion above passes on
-	// a fixture that was never big enough to test anything.
+	// THE CONTROL: the same 500 reports uncapped, every one in full. Without it
+	// the assertion above passes on a fixture never big enough to test anything.
 	uncapped := planRoster(seat, newRosterAllowance(1<<20))
 	control := sectionText(BuildIdentitySection(seat, uncapped), BuildRosterSection(seat, uncapped))
 	if got := approxTokens(control); got < wholeTurnBudget {
@@ -306,14 +179,11 @@ func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
 const wholeTurnBudget = 2625
 
 // THE LADDER, and it is an order rather than a set: a lead reads profiles,
-// then names, then one line telling it where the rest of its team went.
-//
-// Each rung buys something the rung below cannot. A profile is what a lead
-// assigns work from; a name is what stops it believing the team ends at the
-// last profile; and the closing line is the only one that gives it a MOVE —
-// which is why it names `lookup_colleague` rather than saying that some
-// colleagues were omitted, since a model told only that something is missing
-// invents the missing thing.
+// then names, then one line telling it where the rest of its team went. A
+// profile is what a lead assigns work from; a name stops it believing the team
+// ends at the last profile; and the closing line gives it a MOVE, naming
+// `lookup_colleague` rather than saying colleagues were omitted, since a model
+// told only that something is missing invents the missing thing.
 func TestTheRosterLadderReachesEveryRungInOrder(t *testing.T) {
 	t.Parallel()
 	seat := bigLead(500)
@@ -346,9 +216,8 @@ func TestTheRosterLadderReachesEveryRungInOrder(t *testing.T) {
 		t.Errorf("%d profiles rendered for %d planned — rung 2 is not handle-only",
 			got, len(r.full))
 	}
-	// And a human capped to rung 2 keeps the marker, which is not decoration:
-	// it is how the lead knows this colleague answers asynchronously instead
-	// of taking an engine turn.
+	// A human capped to rung 2 keeps the marker: it is how the lead knows this
+	// colleague answers asynchronously instead of taking an engine turn.
 	human := false
 	for _, report := range r.handles {
 		if report.IsHuman() {
@@ -361,10 +230,9 @@ func TestTheRosterLadderReachesEveryRungInOrder(t *testing.T) {
 		t.Error("no human report reached rung 2 — the marker assertion above ran on nothing")
 	}
 
-	// THE LADDER DESCENDS, so the profiles are the head of the chart's own
-	// order rather than whichever colleagues happened to have a short
-	// backstory. A lead reading down a list wants the same list its chart
-	// has, cut off — not a selection nobody can predict.
+	// THE LADDER DESCENDS: the profiles are the head of the chart's own order,
+	// not whichever colleagues have a short backstory, so the lead reads its
+	// chart's list cut off rather than a selection nobody can predict.
 	reports := seat.reports()
 	for i, report := range append(slices.Clone(r.full), r.handles...) {
 		if report != reports[i] {
@@ -374,11 +242,9 @@ func TestTheRosterLadderReachesEveryRungInOrder(t *testing.T) {
 		}
 	}
 
-	// And it is only OBSERVABLE when a later report is cheaper than an
-	// earlier one, so here is one that is: leave the report that failed rung 1
-	// expensive — it is what makes the ladder descend — and strip the profiles
-	// from everything behind it. A descending ladder leaves them at rung 2,
-	// queued behind the cost that closed rung 1. One that climbed back up
+	// That is only OBSERVABLE when a later report is cheaper than an earlier one:
+	// keep the report that failed rung 1 expensive and strip the profiles behind
+	// it. A descending ladder leaves them at rung 2; one that climbed back up
 	// would promote them past colleagues the lead was told about first.
 	varied := bigLead(500)
 	for _, report := range varied.reports()[len(r.full)+1:] {
@@ -404,14 +270,10 @@ func TestTheRosterLadderReachesEveryRungInOrder(t *testing.T) {
 	}
 }
 
-// ONE COUNTER, NOT TWO.
-//
-// The identity line and the roster are two renderings of one team, and two
-// caps of a thousand each would let the prompt pay two thousand: neither
-// knows what the other spent, and nothing above them adds the two up. This is
-// the property a budget on the whole turn cannot see, because a turn that
-// doubled its roster and lost a paragraph elsewhere would still measure the
-// same.
+// ONE COUNTER, NOT TWO: the identity line and the roster render one team, and
+// two caps of a thousand each would let the prompt pay two thousand, neither
+// knowing what the other spent. A whole-turn budget cannot see this: a turn that
+// doubled its roster and lost a paragraph elsewhere measures the same.
 func TestTheAllowanceIsOneCounterNotTwo(t *testing.T) {
 	t.Parallel()
 	seat := bigLead(500)
@@ -424,10 +286,8 @@ func TestTheAllowanceIsOneCounterNotTwo(t *testing.T) {
 	}
 	t.Logf("one counter: ~%d tokens (allowance %d)", one, rosterAllowanceTokens)
 
-	// THE CONTROL: the design this one is not. Give the identity line a
-	// thousand tokens of its own — the obvious second cap, naming reports
-	// until its own budget runs out — and leave the roster with the thousand
-	// it already has.
+	// THE CONTROL, the design this is not: the identity line naming reports
+	// under a thousand tokens of its own, beside the roster's thousand.
 	two := approxTokens(namesUnderTheirOwnCap(seat, rosterAllowanceTokens)) +
 		approxTokens(sectionText(BuildRosterSection(seat, r)))
 	if two <= rosterAllowanceTokens {
@@ -436,11 +296,9 @@ func TestTheAllowanceIsOneCounterNotTwo(t *testing.T) {
 	}
 	t.Logf("control, two counters: ~%d tokens (allowance %d)", two, rosterAllowanceTokens)
 
-	// And the signature of one shared counter: what the ROSTER spends changes
-	// what the IDENTITY line can say. Strip the profiles and the same 500
-	// reports leave room for many more names. Under two independent caps the
-	// identity line would name exactly as many either way, because nothing
-	// the roster spent would ever reach it.
+	// One shared counter's signature: what the ROSTER spends changes what the
+	// IDENTITY line can say, so stripped profiles leave room for more names.
+	// Under two independent caps it would name exactly as many either way.
 	bare := bigLead(500)
 	for role := range bare.Org.AllRoles() {
 		role.Backstory, role.Goal, role.Responsibilities, role.Availability = "", "", nil, ""
@@ -452,9 +310,8 @@ func TestTheAllowanceIsOneCounterNotTwo(t *testing.T) {
 			len(cheap.full)+len(cheap.handles), len(r.full)+len(r.handles))
 	}
 
-	// And the prompt itself is built from ONE plan. Two counters inside
-	// BuildExecutor would leave these two sections naming different sets of
-	// colleagues, each within a budget of its own.
+	// And the prompt is built from ONE plan: two counters inside BuildExecutor
+	// would leave these sections naming different colleagues.
 	p := BuildExecutor(seat, ExecutorInput{}).Text
 	if !strings.Contains(p, "**Direct reports:** "+reportsLabel(r)) ||
 		!strings.Contains(p, sectionText(BuildRosterSection(seat, r))) {
@@ -464,18 +321,17 @@ func TestTheAllowanceIsOneCounterNotTwo(t *testing.T) {
 	}
 }
 
-// spentOn is what the allowance actually bought: the two renderings of the
-// reports, and neither section's fixed chrome. The heading and the
-// "**Direct reports:** " label are the same handful of tokens for a team of
-// one and a team of five hundred, so charging them to a budget that exists to
-// bound GROWTH would measure the wrong thing.
+// spentOn is what the allowance bought: the two renderings of the reports,
+// without either section's fixed chrome (the heading, the "**Direct reports:** "
+// label), which costs the same for a team of one or five hundred and so has no
+// place in a budget that bounds GROWTH.
 func spentOn(seat Seat, r roster) string {
 	return reportsLabel(r) + "\n" + strings.Join(BuildRosterSection(seat, r)[1:], "\n")
 }
 
 // namesUnderTheirOwnCap is the identity line as a SECOND counter would render
-// it: reports named until a budget of its own is spent, knowing nothing about
-// what the roster spent. It exists for the control above and nowhere else.
+// it, naming reports until its own budget is spent, blind to the roster's.
+// It exists for the control above alone.
 func namesUnderTheirOwnCap(seat Seat, tokens int) string {
 	a := newRosterAllowance(tokens)
 	var names []string
@@ -489,13 +345,11 @@ func namesUnderTheirOwnCap(seat Seat, tokens int) string {
 	return strings.Join(names, ", ")
 }
 
-// THE CAP IS RENDERING, NEVER AUTHORIZATION.
-//
-// `manages` is the chart's answer to who this seat may direct work to, and it
-// is read from the chart on every lookup — the roster allowance never touches
-// it. Read as an authorization cap it would be the worst possible reading of
-// this change: a lead silently stripped of 457 reports it is still
-// accountable for, with the engine agreeing that they are not its people.
+// THE CAP IS RENDERING, NEVER AUTHORIZATION: `manages` is the chart's answer
+// to who this seat may direct work to, read from the chart on every lookup, and
+// the roster allowance never touches it. Read as an authorization cap it would
+// strip a lead of reports it is still accountable for, with the engine
+// agreeing they are not its people.
 func TestCappingTheRosterDoesNotCapManages(t *testing.T) {
 	t.Parallel()
 	o := profiledReports(500)

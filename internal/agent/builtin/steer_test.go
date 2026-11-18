@@ -146,9 +146,9 @@ var operatorCaller = boundTo("ops", iam.GrantAdmin)
 // newSteerRig builds the tool with the actor the act route hands it
 // (internal/api/operator's workActor): the caller's principal, carrying the
 // request's operation key as its WORK KEY, at the instant the key was minted.
-// The note's id is taken from that and from nothing else, so a rig that put
-// the key anywhere the act route does not would certify a path no request
-// takes. An empty key is a call whose transport named no operation.
+// The note's id comes from that alone: a rig putting the key anywhere else
+// would certify a path no request takes. An empty key is a call whose
+// transport named no operation.
 func newSteerRig(t *testing.T, asker builtin.FleetAsker, key string,
 	caller iam.Principal, chart authz.Chart) steerRig {
 
@@ -222,9 +222,8 @@ func steerCall(t *testing.T, rig steerRig, turnID, note string) (tools.Result, m
 	return res, out
 }
 
-// A TAKEN NOTE IS PENDING, sent as the person, under the request's own id.
-// What became of it is the running node's to record — this one cannot see that
-// far.
+// A TAKEN NOTE IS PENDING, sent as the person, under the request's own id:
+// what became of it is the running node's to record.
 func TestSteerTurnSendsTheNoteAsThePersonAndAnswersPending(t *testing.T) {
 	t.Parallel()
 	asker := &fleetAsker{replies: []steer.Reply{{Version: 1, TurnID: "run-1",
@@ -256,23 +255,19 @@ func TestSteerTurnSendsTheNoteAsThePersonAndAnswersPending(t *testing.T) {
 	}
 }
 
-// A RETRY OF ONE REQUEST IS ONE NOTE. The dashboard mints one key per gesture
-// and sends it again, unchanged, when an answer never came — and the answer
-// that never came is exactly the `unknown` a retry exists for: the note may
-// have been taken. So both offers must carry ONE note id, the request's own,
-// and the box that took the first answers the second `accepted` without
-// taking it twice. A note id minted per call is a note the turn reads, and
-// acts on, twice.
+// A RETRY OF ONE REQUEST IS ONE NOTE. The dashboard resends a gesture's key
+// unchanged when no answer came, and that `unknown` may mean the note was
+// taken, so both offers carry the request's own note id and the box that took
+// the first answers the second `accepted` without taking it twice.
 //
 // AND ONLY THEN: two requests are two notes, however alike their text, and a
 // call whose transport named no operation is a new note every time — a stable
 // id there would answer a person's second, different gesture as the first.
 func TestARetriedRequestIsOneNote(t *testing.T) {
 	t.Parallel()
-	// sent calls steer_turn once per key, each through a catalogue built
-	// for its own call — which is how the act route serves a retry — and
-	// answers the note id every offer carried, holding each answer's
-	// `note_id` to the id that was offered.
+	// sent calls steer_turn once per key, each through its own catalogue
+	// (as the act route serves a retry), and answers the note id every offer
+	// carried, holding each answer's `note_id` to the id offered.
 	sent := func(t *testing.T, keys ...string) []string {
 		t.Helper()
 		asker := &fleetAsker{replies: []steer.Reply{{Version: 1, TurnID: "run-1",
@@ -323,10 +318,9 @@ func TestARetriedRequestIsOneNote(t *testing.T) {
 	})
 }
 
-// NO REPLY IS UNKNOWN, NOT NOT RUNNING. A reply lost on its way back is
-// indistinguishable from none, so the note may well have been taken: the
-// person is told nobody confirmed it — which a retry settles, since the retry
-// is the same note — and never that the turn is over, which nobody said.
+// NO REPLY IS UNKNOWN, NOT NOT RUNNING: a lost reply is indistinguishable from
+// none, so the person is told nobody confirmed the note (a retry, being the
+// same note, settles it), never that the turn is over.
 func TestNoReplyIsUnknownNotNotRunning(t *testing.T) {
 	t.Parallel()
 	accepted := steer.Reply{Version: 1, TurnID: "run-1", AgentHandle: "swe",
@@ -414,8 +408,7 @@ func TestSteerTurnRefusesABadNote(t *testing.T) {
 
 // A LEAD STEERS THEIR REPORT'S TURN, and the fleet is asked whose turn it is
 // FIRST: a probe that offers nothing, then the decision on the seat it names,
-// then the note. Asked in the other order the note would be taken before
-// anybody decided whether the caller may send it.
+// then the note, so nothing is taken before the caller is decided.
 func TestALeadSteersTheirReportsTurnAfterAProbe(t *testing.T) {
 	t.Parallel()
 	asker := &fleetAsker{replies: []steer.Reply{{Version: 1, TurnID: "run-1",
@@ -526,9 +519,8 @@ func TestEveryNoteIsSignedAndBound(t *testing.T) {
 }
 
 // AN UNVERIFIED NOTE IS LOGGED ON THE ASKING NODE NAMING THE NODE THAT RUNS THE
-// TURN AND THE KEYS IT HOLDS, as fields of their own: the running node used to
-// write them as a sentence about "this node", which the asking node's line read
-// as itself, beside advice to add the key "on the node running the turn".
+// TURN AND THE KEYS IT HOLDS, as fields of their own, so the asking node's line
+// cannot read a sentence about "this node" as itself.
 // Mutation: drop either field from the line and this fails. Not parallel: it
 // adds a destination to the process's logger.
 func TestAnUnverifiedNoteIsLoggedWithTheNodeToAddTheKeyOn(t *testing.T) {
@@ -586,14 +578,11 @@ func (l *lockedLines) records(t *testing.T) []map[string]any {
 }
 
 // THE RUNNING NODE COULD NOT VERIFY THE NOTE: it took nothing, and the refusal
-// says so rather than `unknown`, which a retry would never change, and under
-// no wait, since only an operator bringing the keys into agreement does. It is
-// a CONDITION ([steer.ErrUnverified]), so each reader has words of their own:
-// the person's sentence says who fixes it, and the assistant that called the
-// tool is told the same and that sending it again won't help. The keys and the
-// turn go to the log: said to the person steering, they were a turn id and key
-// ids nobody at a dashboard chose. On the probe as on the offer, and nothing is
-// offered after a probe that says so.
+// says so rather than `unknown`, under no wait, since only an operator bringing
+// the keys into agreement clears it. It is a CONDITION ([steer.ErrUnverified]):
+// the person's sentence says who fixes it, the calling assistant is told that
+// sending it again won't help, and the keys and the turn go only to the log.
+// On the probe as on the offer, and nothing is offered after such a probe.
 // Mutation: put reply.Unverified back into the sentence, refuse on another
 // cause, or let the condition clear on a wait, and this fails.
 func TestANoteTheRunningNodeCouldNotVerifyIsRefusedAsUnavailable(t *testing.T) {
@@ -646,10 +635,9 @@ func recordedTurn(t *testing.T, filed builtin.RunFiled) *runRecords {
 }
 
 // A RUN RECORD DECIDES WITHOUT A SCATTER: a turn that has launched its executor
-// keeps its notes on the run's record, which every node reads — so the note is
-// filed there, by this node, and the fleet is asked nothing. A lead is decided on
-// the seat the record names; asking the fleet as well would be a second answer
-// to a question the record already answered.
+// keeps its notes on the run's record, which every node reads, so this node
+// files the note there, decides a lead on the seat the record names, and asks
+// the fleet nothing.
 func TestARunRecordDecidesWithoutAScatter(t *testing.T) {
 	t.Parallel()
 	asker := &fleetAsker{}
@@ -702,16 +690,14 @@ func TestNoRunRecordProbesThenOffers(t *testing.T) {
 }
 
 // AUTHORITY IS DECIDED ON THE ANCHORED SEAT: a lead of another seat is refused
-// on the seat the run's sealed record names, with nothing filed and the fleet
-// asked nothing — and a record whose anchor did not open decides nothing at all,
-// under no wait, since the launch sealed the anchor once.
+// on the seat the run's sealed record names, nothing filed, the fleet asked
+// nothing; a record whose anchor did not open decides nothing, under no wait:
+// the launch sealed it once.
 //
-// ONE UNDER A KEY THIS NODE DOES NOT HOLD is the fleet's nodes not holding the
-// same keys, the fact a note the running node could not verify is, and it is
-// told the same way: the condition [steer.ErrSeatKeyUnknown], whose words for a
-// person say who fixes it and name neither the keys nor the turn, and a model
-// told that sending it again won't help. A record that names no seat, or whose
-// anchor does not verify, is no condition: no keyring opens it.
+// ONE UNDER A KEY THIS NODE DOES NOT HOLD means the fleet's keys disagree, and
+// is told as an unverified note is ([steer.ErrSeatKeyUnknown]). A record
+// naming no seat, or whose anchor does not verify, is no condition: no
+// keyring opens it.
 //
 // Mutation: refuse the unheld key on the bare no-wait mark again, drop its arm
 // from the condition table, or let it clear on a wait, and its row fails.
@@ -781,14 +767,11 @@ func TestAuthorityIsDecidedOnTheAnchoredSeat(t *testing.T) {
 }
 
 // EVERY FILING OUTCOME HAS ITS REFUSAL, each in the class the person's surface
-// acts on and with its own sentence: a turn that holds too many unread notes,
-// one that has taken all it takes, one that has ended — and a record that
-// could not be read or written, told as what stopped it. A store that did not
-// answer is a condition, `unavailable` in its own words with the wait that
-// clears it; anything else is a fault of this node, `internal_error`, its error
-// in the log and never in the sentence, and no retry invited: a record this
-// node cannot decode was answered "Try again" under the undecided hint, and
-// polled for as long as the person kept pressing.
+// acts on and with its own sentence: too many unread notes, all the notes the
+// turn takes, a turn that has ended, and a record that could not be read or
+// written. A store that did not answer is a condition, `unavailable` with the
+// wait that clears it; anything else is this node's fault, `internal_error`,
+// its error in the log and never in the sentence, and no retry invited.
 //
 // Mutation: answer a record's failure as a bare unavailable again, or put the
 // error's text into the sentence, and the fault rows go red.

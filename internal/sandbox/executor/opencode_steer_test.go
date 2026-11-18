@@ -27,9 +27,8 @@ import (
 // the plugin it drives.
 const probeScript = "opencode_steer_probe.mjs"
 
-// nodeForNotes is the node the notes plugin is driven under, found by the
-// suite's one rule for a program it needs: under the make targets that run the
-// suite a missing node fails the case, and a bare `go test` skips it.
+// nodeForNotes is the node the notes plugin is driven under, found through
+// prereqtest.OnPath.
 func nodeForNotes(t *testing.T) string {
 	t.Helper()
 	return prereqtest.OnPath(t, "node", "the OpenCode notes plugin's probe runs the plugin under it",
@@ -343,22 +342,12 @@ const (
 	otherSession = "ses_fedcba9876543210fedcba9876543210"
 )
 
-// THE PLUGIN ADMITS A PERSON'S NOTES INTO THE RUN'S SESSION AT ITS NEXT STEP —
-// run as the engine writes it into a real box, under node, against a stand-in
-// of the bridge's notes route and of the context OpenCode hands a plugin:
-//
-//   - its setup resolves at once, and nothing is polled before the run's own
-//     session's execution starts;
-//   - each note is admitted under its inbox id, as a steer, without resuming
-//     the session, and the cursor moves past it only once it is admitted;
-//   - a note is confirmed read only on its own session's delivery of an id the
-//     plugin admitted, and nothing is admitted or polled once the execution
-//     settles — until OpenCode starts another;
-//   - a failing route is asked again after a pause that doubles and resets on
-//     a success; a refused token (401) or a run with no notes route (404) ends
-//     it, as does its cleanup;
-//   - a run wired to nothing polls nothing, and the plugin writes nothing
-//     under its own directory, which OpenCode reloads it on any change to.
+// THE PLUGIN ADMITS A PERSON'S NOTES INTO THE RUN'S SESSION AT ITS NEXT STEP,
+// run as WriteConfig writes it into a real box, under node, against stand-ins
+// of the bridge's notes route and of OpenCode's plugin context. Its setup
+// resolves at once, it polls only while its own session executes, and it
+// writes nothing under its own directory, which OpenCode reloads it on any
+// change to; each subtest names one more invariant.
 //
 // Mutations, each red: admit with `resume: true`; open the gate at setup;
 // advance the cursor on a failed admission; leave the gate open on
@@ -545,11 +534,10 @@ func TestThePluginAdmitsNotesAtTheRunsNextStep(t *testing.T) {
 		second := route.next("GET notes", "poll after an empty answer")
 		second.reply(http.StatusOK, `{"notes":[]}`)
 		third := route.next("GET notes", "poll after a second empty answer")
-		// MEASURED WHERE THE FLOOR IS KEPT: from one poll's start to the
-		// next's, on the plugin's own clock. The route sees each arrive, and
-		// the first pays for the client's setup and its connection, so the
-		// gap it measures to the second is short by that much — under load,
-		// by more than the tolerance below.
+		// MEASURED WHERE THE FLOOR IS KEPT, poll start to poll start on the
+		// plugin's own clock: the route's first arrival pays for the client's
+		// setup and connection, so under load its first gap reads short by
+		// more than the tolerance below.
 		starts := pr.pollStarts(3)
 		for i := range 2 {
 			if gap := starts[i+1] - starts[i]; gap < 950*time.Millisecond {
@@ -662,15 +650,12 @@ func (i *routeInbox) Read(_ context.Context, ids []string) error {
 
 func (i *routeInbox) Close() {}
 
-// THE PLUGIN READS THE BRIDGE'S OWN NOTES ROUTE. The other cases answer the
-// plugin from a stand-in of the route; this one runs it against a real bridge
-// serving a run's session, its inbox a stand-in of the engine's, so the
-// route's answer and its read are crossed as a run's harness crosses them — the
-// note's place, its id, the id it is admitted under and its message, the
-// cursor the plugin asks past and the ids it confirms. A field either side
-// renamed would leave every OpenCode run admitting nothing, with no error
-// anywhere: the plugin skips a note it cannot read, and the note waits for the
-// review.
+// THE PLUGIN READS THE BRIDGE'S OWN NOTES ROUTE: run against a real bridge (its
+// inbox a stand-in of the engine's), the route's answer and read are crossed as
+// a run's harness crosses them: the note's place, id, inbox id and message, the
+// cursor polled past and the ids confirmed. A field either side renamed would
+// leave every OpenCode run admitting nothing with no error anywhere, since the
+// plugin skips a note it cannot read.
 //
 // Mutation: rename `inbox`, `message` or `seq` on mcpbridge.SteerNote, or `ids`
 // on the route's read, or the field the plugin reads for any of them, and this

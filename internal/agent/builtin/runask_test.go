@@ -163,8 +163,8 @@ func TestARunsAskIsRecordedAsADecisionOnItsJob(t *testing.T) {
 // handed a question with nothing to press. "Something else" is how they
 // answer in words.
 //
-// Mutation: build the decision only when options are given, as the open
-// question once was, and the question in words is recorded.
+// Mutation: build the decision only when options are given, and the question
+// in words is recorded.
 func TestARunsAskAlwaysOffersOptions(t *testing.T) {
 	t.Parallel()
 	unrecommended := askArgs()
@@ -389,12 +389,12 @@ func (g *gatedTool) Call(context.Context, map[string]any) (tools.Result, error) 
 }
 
 // A JOB THAT ASKED IS PARKED, AND ITS RUN IS TOLD SO IF IT SUBMITS. Once the
-// job's question is on its row, a `submit_work` it makes is refused with the
+// job's question is on its row, its `submit_work` is refused with the
 // instruction to end its turn and never reaches the submission: accepted, the
-// harness read it as delivered and ended believing so while the turn waited on a
-// person (ADR-0068). A job that has not asked, and a call no job makes, submit
-// as before; a row that cannot be read refuses the call as the node's fault,
-// so the run calls again.
+// harness would end believing it delivered while the turn waits on a person
+// (ADR-0068). A job that has not asked, and a call no job makes, submit as
+// usual; a row that cannot be read refuses the call as the node's fault, so
+// the run calls again.
 //
 // Mutation: drop the gate's row read, and the asking job's submission lands.
 func TestAJobThatAskedCannotSubmit(t *testing.T) {

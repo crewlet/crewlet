@@ -8,26 +8,18 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
-// A RUN TOLD ITS REPLY WAS TOO LARGE IS GIVEN NONE OF IT (ADR-0114).
+// A RUN TOLD ITS REPLY WAS TOO LARGE IS GIVEN NONE OF IT (ADR-0114). The
+// refusal reaches the run as an answer would (its session's next prompt or
+// a fresh brief), in the engine's words quoting nothing: the reply's message
+// count and both figures (the reply's rounded up, so a byte over reads over),
+// that it got none of it, to `ask_and_wait` again saying why if it still needs
+// it, else to carry on and say the reply never reached it. Never a wordless
+// answer or "with this answer incorporated"; its question reads back defused.
+// The reviewer sees only calls, so the stated why marks a follow-up.
 //
-// A reply past what a run's answer can carry is refused, and the run is resumed
-// with the refusal through the channel an answer reaches it — its own session's
-// next prompt, or a fresh run's brief. It is told, in the engine's words and
-// quoting nothing, that the person replied and the reply was too large to take,
-// with how many messages it was and both figures (the reply's rounded up, so a
-// byte past the bound reads past it); that it was given none of it; to ask
-// again with `ask_and_wait` if it still needs it, saying in the question why,
-// for a shorter form or another way to receive it; and otherwise to carry on
-// and say in its reply that the reply never reached it. Never an answer with
-// no words, and never told to carry on "with this answer incorporated". Its
-// own question is read back defused, as an answered question's is. The reason
-// in the question is what the round's reviewer reads: its evidence is the
-// run's calls, never the person's replies, so a second `ask_and_wait` that
-// says why is the follow-up it is, and not the same question asked twice.
-//
-// Mutation: hand the refusal over as an answer with no words, as a resume that
-// did not know it would, and the run reads "answered:" and nothing; drop the
-// figures or the message count, and the run cannot say what will fit.
+// Mutation: hand the refusal over as a wordless answer, and the run reads
+// "answered:" and nothing; drop the figures or the count, and it cannot say
+// what will fit.
 func TestARunToldItsReplyWasTooLargeIsGivenNoneOfIt(t *testing.T) {
 	t.Parallel()
 	turnToken := provenance.NewBoundary()

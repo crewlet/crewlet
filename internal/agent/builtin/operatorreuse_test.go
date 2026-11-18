@@ -10,21 +10,11 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// AN `op_id` BROUGHT BACK WITH ANOTHER CALL IS REFUSED BEFORE ANY WRITE.
-//
-// Each step of an operator's call was named by its verb and its object, so a
-// create in OPS under the op_id a create in ENG was answered with derived
-// `X.create-OPS` beside `X.create-ENG` — two operations, two task ids, and on a
-// real ledger two items: the duplicate the op_id's own contract says cannot
-// happen. The same held for an update, a merge, a move, a removal or a restore
-// naming another item, another person's priorities and another view. And
-// naming the object alone would not have closed it: with the same object and
-// other arguments, the steps that matched were answered as the first call's
-// while the ones that did not — a dependency mirror on a blocker the first call
-// never named — landed as a write nothing had authored.
-//
-// So the op_id names the whole call it was answered for, and with any other it
-// is refused naming `op_id`, before the writer is reached at all.
+// AN `op_id` BROUGHT BACK WITH ANOTHER CALL IS REFUSED BEFORE ANY WRITE. The
+// op_id names the whole call it was answered for: under a call with another
+// object it would derive a second operation (a duplicate item), and under the
+// same object with other arguments the unmatched steps (a dependency mirror on
+// another blocker) would land as writes nothing authored.
 func TestAnOpIDBroughtBackWithAnotherCallIsRefusedBeforeAnyWrite(t *testing.T) {
 	t.Parallel()
 	view := func(id string) map[string]any {
@@ -98,7 +88,7 @@ func TestAnOpIDBroughtBackWithAnotherCallIsRefusedBeforeAnyWrite(t *testing.T) {
 	}
 
 	// A STEP'S OWN ID HANDED BACK IS REFUSED TOO: as an op_id it would be a
-	// NEW call's operation, deriving new objects under it.
+	// NEW call's operation, deriving new objects.
 	t.Run("a step's id", func(t *testing.T) {
 		t.Parallel()
 		u := &unknownWriter{fakeTracker: newFakeTracker()}
@@ -122,10 +112,9 @@ func writesOf(u *unknownWriter) int {
 
 // AN OPERATION THAT ALREADY WROTE TO SOMETHING ELSE IS ANSWERED WITH ITS
 // REMEDY: leave `op_id` out. Brought back with its own call, a step can still
-// meet another object — the key a move aliases is the item's current one, and
-// somebody may have moved it since — and the state log refuses it `op_reused`.
-// The generic "the change was NOT made" is true, and gives an operator's
-// assistant nothing to try but the same call, which meets the same record.
+// meet another object (the item may have moved since), which the state log
+// refuses `op_reused`; a bare "NOT made" leaves only the same call to try,
+// which meets the same record.
 func TestAnOperationThatWroteElsewhereIsAnsweredWithItsRemedy(t *testing.T) {
 	t.Parallel()
 	reused := &statelog.Unavailable{Reason: statelog.ReasonOpReused,

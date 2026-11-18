@@ -134,13 +134,11 @@ func enrolRecord(t *testing.T, person, login, blind string) iamdomain.MutationRe
 	}
 }
 
-// THE BLIND KEY IS NOT MINTED OVER ROWS A NODE RETAINED.
-//
-// A missing blind-index key on an estate that holds a blind was DELETED, and
-// minting another orphans every address. Here the only blinded row is a peer's
-// enrolment this node retained, so its rows hold none — and judged
-// "caught up" off its checkpoint the node minted a fresh key over the deleted
-// one on the first sign-in by address.
+// THE BLIND KEY IS NOT MINTED OVER ROWS A NODE RETAINED: a missing
+// blind-index key on an estate holding a blind was DELETED, and minting
+// another orphans every address. Here the only blinded row is a peer's
+// enrolment this node retained, so its rows hold none, and "caught up" off
+// its checkpoint would mint a fresh key on the first sign-in by address.
 func TestTheBlindKeyIsNotMintedOverRowsANodeRetained(t *testing.T) {
 	t.Parallel()
 	for _, why := range []retentionCause{retainedUnderUnknownKey, retainedFromNewerBuild} {

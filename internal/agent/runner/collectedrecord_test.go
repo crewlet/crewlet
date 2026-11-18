@@ -14,24 +14,17 @@ import (
 )
 
 // A COLLECTED ROUND IS EVERY CALL ITS RUN MADE, ITS RECORD'S AND THE ONES IT
-// DID NOT KEEP. A long run's log keeps its calls' head and tail and tallies the
-// middle it dropped, and the calls its calls' own work made; its collection is
-// handed both (runner.Resume), and the round it collects is the whole of them
-// in two places that outlive the log:
+// DID NOT KEEP. A long run's log keeps its calls' head and tail and tallies
+// both the dropped middle and the calls its calls' own work made; the
+// collection is handed both (runner.Resume) and counts them where the round
+// outlives the log: its Work (which seeds the next round's call log, and whose
+// dropped calls a delivery check reads as the round's) and the execute phase's
+// published record (the dropped calls in its round's count and said by tool).
 //
-//   - the round's Work, which the loop closes the round with — the next
-//     round's call log is seeded from its tallies, and a delivery check reads
-//     the dropped calls as calls the round made;
-//   - the execute phase's published record, the turn's account of what its
-//     executor did once the log is gone — the dropped calls counted in its
-//     round's calls and said by tool.
-//
-// Mutation: hand the round's Work back without the tallies, or publish the
-// record without the dropped calls, from the collection's own path — the
-// result it builds or the record it files — and the round reads as the calls
-// its log kept: a reply dropped from the middle is refuted, the next round's
-// seed under-counts, and the turn's record says two hundred calls of a run
-// that made more.
+// Mutation: drop the tallies from the Work the collection builds, or the
+// dropped calls from the record it files, and a reply dropped from the middle
+// is refuted, the next round's seed under-counts, and the record says fewer
+// calls than the run made.
 func TestACollectedRoundIsEveryCallItsRunMade(t *testing.T) {
 	t.Parallel()
 	launched := time.Now().Add(-time.Hour).UTC()

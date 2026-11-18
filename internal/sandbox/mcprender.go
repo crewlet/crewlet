@@ -6,39 +6,25 @@ import (
 	"time"
 )
 
-// The scoped MCP surface the in-box harness gets.
+// The scoped MCP surface the in-box harness gets: ONLY the servers the seat
+// named in role.sandbox.mcp.servers, each with the seat's own credentials.
 //
-// The harness is itself an MCP client, so the runner hands it a config of
-// its own: ONLY the servers the seat named in role.sandbox.mcp.servers, each
-// with the seat's own credentials.
+// SCOPING IS PER SERVER because neither supported harness offers a per-tool
+// allowlist the engine could enforce (one has no such flag, the other runs
+// with permissions bypassed so no prompt hangs a headless run): a curated tool
+// list would be a claim, not a control.
 //
-// SCOPING IS AT THE SERVER LEVEL, and that is a platform fact rather than a
-// simplification. Neither supported harness offers a per-tool allowlist the engine
-// could enforce — one has no such flag, and the other runs with permissions
-// bypassed because a prompt would hang a headless run — so a curated tool list
-// would be a claim rather than a control. What the engine decides is which
-// SERVERS reach the box, which it decides before the agent starts.
-//
-// This is a pure SELECTION, deliberately: the engine's servers in, each with
-// its values already resolved and the seat's credentials already laid over
-// them, the same server shape out with the unscoped and unreachable entries
-// dropped. The merge is the engine's, beside the rule that decides whether a
-// server may start at all, because the two cannot be separated: a key a
-// server may go without is left out of the MERGED values, so a seat's value
-// that resolves to nothing never hands the key back to the server's default.
-// What each harness's config file looks like belongs to its runner — which is
-// where the key names live, because this package once rendered them and then
-// told the reader they belonged elsewhere.
+// A pure SELECTION over servers already resolved and merged with the seat's
+// credentials by the engine, beside its may-it-start rule: an optional key is
+// left out of the MERGED values, so a seat value resolving to nothing never
+// restores the default. Config file shape and key names are each runner's.
 
 // MCPServer is the engine's view of one configured server.
 //
-// Declared here rather than imported from config so this package depends on
-// the SHAPE and not on the config tree — the same reason the setup step is a
-// translation. A caller assembles these from whatever its config says, with
-// every `${VAR}` reference already RESOLVED and the seat's own credentials
-// already merged in: what lands here is written into the harness's own
-// config as it stands, and neither harness reads a reference the way the engine
-// does.
+// Declared here, not imported from config, so this package depends on the
+// SHAPE rather than the config tree. Every `${VAR}` is already RESOLVED and
+// the seat's credentials merged: it is written into the harness's config as
+// is, and neither harness reads a reference as the engine does.
 type MCPServer struct {
 	Name      string
 	Transport Transport
@@ -52,57 +38,43 @@ type MCPServer struct {
 	URL     string
 	Headers map[string]string
 
-	// Secrets is what the references in the server's url resolved to: a
-	// secret an operator keeps in a URL's path rather than in a header
-	// (`https://mcp.example.com/s/${TOKEN}/mcp`), which the box's MCP
-	// configuration then holds. Never rendered — the url carries it — and
-	// read by the scrub a capture of the box's session passes through
-	// ([HandedSecrets]), beside the server's env and headers, which are
-	// credential positions whole.
+	// Secrets is what the references in the url resolved to (a secret kept
+	// in a URL path, `https://mcp.example.com/s/${TOKEN}/mcp`). Never
+	// rendered, since the url carries it, but read by the session-capture
+	// scrub ([HandedSecrets]) beside env and headers, credentials whole.
 	Secrets []string
 
 	// AlwaysLoaded asks the harness to offer this server's tools on every
-	// request rather than keep them back until its model looks for one:
-	// Claude Code's `alwaysLoad`, which exempts a server from its tool search,
-	// and OpenCode's `codemode: false`, which offers its tools directly rather
-	// than through Code Mode's `execute`.
+	// request rather than defer them: Claude Code's `alwaysLoad` (exempt from
+	// its tool search), OpenCode's `codemode: false` (not behind Code Mode's
+	// `execute`).
 	//
-	// THE ENGINE'S OWN TOOLS ALONE are offered so — the bridge's `crewlet`
-	// server, which holds what a run reports through (submit_work) and asks a
-	// person through (ask_and_wait), and the seat's colleagues, work and
-	// knowledge. Every MCP server the seat holds is left to the harness's own
-	// way of keeping a large tool list out of each request, as a person's
-	// harness keeps theirs: a seat with 150 MCP tools sends their definitions
-	// on no request it does not need them for.
+	// Set on THE ENGINE'S OWN TOOLS ALONE: the bridge's `crewlet` server
+	// (submit_work, ask_and_wait, the seat's colleagues, work and knowledge).
+	// Every other server is left to the harness's deferral, so a seat with 150
+	// MCP tools sends their definitions only on requests that need them.
 	AlwaysLoaded bool
 
-	// CallTimeout is how long the harness waits for one call to the server
-	// before it gives the call up and cancels its request: Claude Code's
-	// per-server `timeout`, OpenCode's `timeout.execution`. Zero leaves the
-	// harness its own.
+	// CallTimeout is how long the harness waits on one call before cancelling
+	// it: Claude Code's per-server `timeout`, OpenCode's `timeout.execution`.
+	// Zero leaves the harness its own.
 	//
-	// SET ON THE BRIDGE'S SERVERS ALONE, to the longest the bridge can take
-	// to answer a call (internal/api/mcpbridge's Bridge.CallTimeout). The
-	// bridge keeps a running call's answer going, which answers every silence
-	// check a harness keeps on a call, so without it a call that hangs keeps
-	// its run waiting the harness's own default out: Claude Code's 1e8 ms,
-	// OpenCode's twelve hours (by reading 2.1.310's and 2.1.4's bundles). A
-	// server that runs in the box is the harness's to time.
+	// SET ON THE BRIDGE'S SERVERS ALONE, to the bridge's longest answer
+	// (internal/api/mcpbridge's Bridge.CallTimeout): the bridge keeps a running
+	// call alive past every silence check, so a hung call would otherwise wait
+	// out the harness default (Claude Code's 1e8 ms, OpenCode's twelve hours,
+	// per 2.1.310's and 2.1.4's bundles). An in-box server is the harness's to
+	// time.
 	CallTimeout time.Duration
 }
 
 // Transport is how the in-box agent reaches one server.
 //
-// A NAMED TYPE over a closed set, not a bare string, and this is the third
-// place the same set is spelled — `config.MCPTransport` and `mcp.TransportKind`
-// are the other two, each owned by the layer that acts on it, because this
-// package deliberately depends on the SHAPE of a server rather than on the
-// config tree.
-//
-// What the type buys is [Transport.Valid]: as a bare string an unrecognised
-// value fell through to the stdio branch and rendered `{"command": ""}` — a
-// server the agent inside the box then spends a round failing to launch, with
-// nothing anywhere saying why.
+// A NAMED TYPE over a closed set, spelled a third time beside
+// `config.MCPTransport` and `mcp.TransportKind` because this package depends
+// on the server's SHAPE, not the config tree. It buys [Transport.Valid]: an
+// unrecognised value would otherwise fall to stdio and render
+// `{"command": ""}`, a server the agent spends a round failing to launch.
 type Transport string
 
 const (
@@ -114,8 +86,7 @@ const (
 
 // Valid reports whether t is a transport this package can render.
 //
-// EMPTY IS VALID and means stdio, which is the default an operator gets by
-// saying nothing — the same default `config.MCPServer.Kind` applies.
+// EMPTY IS VALID and means stdio, the default `config.MCPServer.Kind` applies.
 func (t Transport) Valid() bool {
 	switch t {
 	case "", TransportStdio, TransportHTTP:
@@ -127,21 +98,13 @@ func (t Transport) Valid() bool {
 
 // RenderMCP selects a seat's scoped sandbox surface.
 //
-// It answers in the SAME type it takes — not a generic `map[string]any` of
-// each harness's own config keys. That shape erased everything a runner needed:
-// internal/sandbox/executor's OpenCode writer had to assert its way back
-// out of it, and its args branch carried two fallbacks (`[]string` and
-// `[]any`) because nothing but a convention said which one it would find. The
-// keys it erased into were Claude Code's, which this package's own doc said
-// belonged to a runner.
+// It answers in the SAME type it takes, not a `map[string]any` of one
+// harness's config keys, which each runner would assert its way back out of.
 //
 // Only the named servers are included, and one with no matching configuration
-// is SKIPPED rather than returned empty: the agent must never be shown a
-// server the engine does not know, because it would spend a round discovering
-// that it cannot connect.
-//
-// Order does not matter to the output — it is a map — but the input list is
-// walked in the seat's own order so a duplicate name resolves once.
+// is SKIPPED rather than returned empty: the agent would spend a round
+// discovering it cannot connect. The input is walked in the seat's own order
+// so a duplicate name resolves once.
 func RenderMCP(servers []MCPServer, scoped []string) map[string]MCPServer {
 	if len(scoped) == 0 {
 		return nil
@@ -159,12 +122,8 @@ func RenderMCP(servers []MCPServer, scoped []string) map[string]MCPServer {
 					"in mcp.servers, so the harness will not get it")
 			continue
 		}
-		// SKIPPED like an unknown name, for the same reason: handing a
-		// runner a server it cannot render would put a broken entry in the
-		// agent's config, and a round spent discovering that is worse than
-		// not offering it. Rendering an unrecognised transport as stdio —
-		// which is what a bare string field did — produced an empty command
-		// and said nothing at all.
+		// SKIPPED like an unknown name: a server a runner cannot render is a
+		// broken entry the agent would spend a round on.
 		if !server.Transport.Valid() {
 			log.Warn("sandbox_mcp_transport_unknown", "server", name,
 				"transport", string(server.Transport),
@@ -183,9 +142,9 @@ func RenderMCP(servers []MCPServer, scoped []string) map[string]MCPServer {
 // forTransport is one server as its transport reads it, sharing nothing with
 // the server it was made from.
 //
-// The OTHER transport's field is cleared rather than carried: a stdio server
-// with headers on it is a config nobody wrote, and leaving one there would let
-// a future runner render a credential into a file the transport never reads.
+// The OTHER transport's fields are cleared: a stdio server with headers is a
+// config nobody wrote, and a runner could render that credential into a file
+// the transport never reads.
 func forTransport(server MCPServer) MCPServer {
 	out := server
 	if server.Transport == TransportHTTP {

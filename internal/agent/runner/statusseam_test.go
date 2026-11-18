@@ -12,21 +12,16 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 )
 
-// THE PHASE SEAM AND THE PHASE EVENT ARE ONE ANNOUNCEMENT.
-//
-// The working indicator has to say which phase a seat is in, and the frame
-// that owns a turn's lifetime cannot see one: a phase opens several layers
-// below the engine. This seam is what tells it — and it is invoked at the call
-// that publishes agent_phase_started rather than beside it, so the words a
-// person watching a chat thread reads and the phase every dashboard reads
-// cannot drift. Wired anywhere else, one surface could say `review` while the
-// other still said `execute`, and nothing would be wrong enough to fail.
+// THE PHASE SEAM AND THE PHASE EVENT ARE ONE ANNOUNCEMENT. The seam tells
+// the working indicator which phase a seat is in, and is invoked at the call
+// that publishes agent_phase_started, so a chat thread and a dashboard
+// cannot disagree (one saying `review` while the other says `execute`).
 func TestThePhaseSeamNamesThePhaseTheEventNames(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
 	var seen []phase.Phase
-	// One seam across the launching segment and the collecting one, as a
-	// chat thread has one indicator for the whole turn.
+	// One seam across launch and collect: a chat thread has one indicator
+	// per turn.
 	round := executeRound(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
 		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	}}}, buildOpts{
@@ -37,15 +32,11 @@ func TestThePhaseSeamNamesThePhaseTheEventNames(t *testing.T) {
 		t.Fatalf("Review: %v", err)
 	}
 
-	// The turn's own two passes, in the order they ran: the run's launch,
-	// then the review of what it did.
 	if !slices.Equal(seen, []phase.Phase{phase.Execute, phase.Review}) {
 		t.Fatalf("the seam reported %v, want the executor then the reviewer", seen)
 	}
-	// And the SAME names the events carry. Compared as the wire strings,
-	// because that is what a dashboard reads and what the phrase pools are
-	// keyed on: a phase whose seam said one word and whose event said
-	// another would show a reader something no screen could corroborate.
+	// Compared as wire strings: what a dashboard reads and the phrase pools
+	// are keyed on.
 	var wire []string
 	for _, ph := range seen {
 		wire = append(wire, ph.String())
@@ -56,12 +47,8 @@ func TestThePhaseSeamNamesThePhaseTheEventNames(t *testing.T) {
 }
 
 // AN INDICATOR IS NOT TELEMETRY, so the seam fires on a runner that publishes
-// nothing at all.
-//
-// A node whose phases are silent — no broker wired, a test driving a runner
-// directly — still has a person watching a chat thread. Gating this on the
-// publisher would make what a reader sees depend on whether the engine's
-// observability happened to be wired, which is a question they cannot ask.
+// nothing: a node with no broker wired still has a person watching a chat
+// thread.
 func TestThePhaseSeamFiresWithNothingListening(t *testing.T) {
 	t.Parallel()
 	var seen []phase.Phase

@@ -18,31 +18,22 @@ import (
 
 // Deps are the node-level things the builtins act through.
 //
-// NODE-LEVEL, not turn-level, and the split is the whole reason these tools
-// can be registered once per epoch: a store or a service is the same for every
-// seat, while the SEAT is what varies per call and arrives on the turn (see
-// tools.SeatCallable). Getting that backwards would mean one registration per
-// seat, and an agent's catalogue listing every builtin once per colleague.
+// Node-level so the tools register once per epoch: a store is the same for
+// every seat, while the seat arrives on each call (tools.SeatCallable).
+// Per-seat deps would list every builtin once per colleague.
 //
-// EVERY FIELD IS OPTIONAL. A node without a store, a company without agent-to-
-// agent messaging, a `validate` run with neither — each is a real deployment,
-// and each should get the tools it can actually serve rather than a boot
-// failure or a tool that answers every call with a nil dereference.
+// Every field is optional: a node without a store, or a company without A2A,
+// gets the tools it can serve rather than a boot failure or a nil dereference.
 type Deps struct {
 	// A2A opens agent-to-agent channels. Nil omits a2a_ask.
 	A2A Asker
 
-	// Env resolves a `${VAR}` the chart's contacts carry — a person's Slack
-	// id, their operator binding — for lookup_colleague and a2a_ask: this
-	// node's own chain, the secret store and then the environment it was
-	// handed. Nil reads the process environment, which is what a registry
-	// built outside an engine has.
-	//
-	// THE NODE'S CHAIN because the notification routing that mentions these
-	// same people resolves the same fields through it: read from the process
-	// environment here, a person whose id was sealed in the store — or whose
-	// node was handed an environment of its own — was mentioned by every
-	// notification and found by no lookup.
+	// Env resolves a `${VAR}` the chart's contacts carry (a Slack id, an
+	// operator binding) for lookup_colleague and a2a_ask through this node's
+	// chain: its secret store, then the environment it was handed. Nil reads
+	// the process environment, as a registry built outside an engine has.
+	// It is the chain notification routing resolves the same fields through,
+	// so a person a notification mentions is also found by a lookup.
 	Env org.EnvLookup
 
 	// Skills, Episodes, Diary and Onboarding are the learning stores. Each
@@ -54,19 +45,13 @@ type Deps struct {
 	Onboarding OnboardingStore
 
 	// ToolSkills is the operator-authored tool guidance. Nil omits
-	// load_tool_skill, which is what a company that has published none
-	// has — and omitting it also disarms the required-skill guard, since
-	// a guard with no unlock would refuse tools the model cannot free.
+	// load_tool_skill and disarms the required-skill guard, since a guard
+	// with no unlock would refuse tools the model cannot free.
 	ToolSkills ToolSkills
 
 	// EpisodeLimit is how many turns query_episodes returns when the model
-	// names no limit: the company's learning.episodic.retrieval_limit.
-	// Zero takes [DefaultEpisodeLimit].
-	//
-	// It reaches a builtin at all because the setting was otherwise inert —
-	// validated, schema'd, documented, and read by nothing, so
-	// `retrieval_limit: 20` produced a new revision and changed nothing an
-	// operator could observe.
+	// names no limit: learning.episodic.retrieval_limit. Zero takes
+	// [DefaultEpisodeLimit].
 	EpisodeLimit int
 
 	// SkillBodyMax caps a refined skill's body:
@@ -85,10 +70,9 @@ type Deps struct {
 	// condenses nothing, and such an account is named by its size instead.
 	Compact *compact.Compactor
 
-	// Recall is the turn-start prefetch's semantic search, re-run on demand. Nil
-	// leaves query_episodes on recency and conversation and refresh_memory
-	// on recency — which is what a company with no embeddings has, and what
-	// EVERY company had while the tools declared no way to search at all.
+	// Recall is the turn-start prefetch's semantic search, re-run on demand.
+	// Nil leaves query_episodes on recency and conversation and refresh_memory
+	// on recency, as a company with no embeddings has.
 	Recall Recaller
 
 	// RefreshesPerTurn is how many DISTINCT context hints one turn may
@@ -96,17 +80,14 @@ type Deps struct {
 	// Zero takes [DefaultRefreshesPerTurn].
 	RefreshesPerTurn int
 
-	// Events is where the skill lifecycle's own telemetry goes. Nil
-	// publishes nothing, which is what a registry built outside an engine
-	// has — and what the shipped binary had until this existed, so
-	// skill_used, skill_refined and skill_promoted were registered types
-	// with topics and no publisher.
+	// Events is where the skill lifecycle's telemetry (skill_used,
+	// skill_refined, skill_promoted) goes. Nil publishes nothing, as a
+	// registry built outside an engine has.
 	Events Telemetry
 
 	// Knowledge searches the team knowledge base on demand. Nil omits
-	// search_knowledge, which is what a company with no knowledge backend
-	// has — and it is the same seam the turn-start prefetch reads, so the
-	// two can never disagree about scope, exclusions or credentials.
+	// search_knowledge. It is the seam the turn-start prefetch reads, so the
+	// two never disagree about scope, exclusions or credentials.
 	Knowledge KnowledgeSearcher
 
 	// GrantHeld reads whether the engine's grant to a seat on an access lane
@@ -114,14 +95,13 @@ type Deps struct {
 	// the ledger cannot be read. Nil knows nothing.
 	GrantHeld func(ctx context.Context, handle, lane string) (held, known bool)
 
-	// Pages is Doclet. Both halves nil omits all five
-	// tools, which is what a company running Confluence has.
+	// Pages is Doclet. Both halves nil omits all five tools, as a company
+	// running Confluence has.
 	Pages PageDeps
 
-	// Work is Worklet. Both halves nil omits every one of its tools,
-	// which is what a company running Jira has — and omitting them is the
-	// point: a seat offered a tracker tool against a tracker this company
-	// does not run would reach for it and fail at the call.
+	// Work is Worklet. Both halves nil omits every one of its tools, as a
+	// company running Jira has: a seat offered a tracker tool for a tracker
+	// the company does not run would reach for it and fail at the call.
 	Work WorkDeps
 
 	// Artifacts are the artifacts tools' dependencies; ArtifactData are the
@@ -139,12 +119,11 @@ type Deps struct {
 	// hosts no code. See codetools.go.
 	Code CodeDeps
 
-	// Health is the health tools' — the fleet's nodes and their alarms, and
-	// the Gitlet nodes' status. The zero value omits both. Registered for every
-	// seat with the rest of the epoch's builtins, and offered only to a seat
-	// whose role carries the health grant: the table refuses every other seat
-	// before any object is named, which is what withholds them from its
-	// surfaces ([Withheld]). See healthtools.go.
+	// Health is the health tools': the fleet's nodes and their alarms, and the
+	// Gitlet nodes' status. The zero value omits both. Registered for every
+	// seat, offered only to one whose role carries the health grant: the table
+	// refuses every other seat before any object is named ([Withheld]). See
+	// healthtools.go.
 	Health HealthDeps
 
 	// SSH is the SSH tools': the company's servers, reached for a seat whose
@@ -181,63 +160,51 @@ type Deps struct {
 	// reads and writes are [Deps.Work]'s, set by [Register].
 	Withdraw WithdrawDeps
 
-	// Chat is Chatlet. Every half nil omits all nine tools, which
-	// is what a company on Slack or Mattermost has — there the colleague
-	// surface is that vendor's own MCP server, and a seat offered
-	// `post_message` against a chat this company does not run would answer
-	// a founder into a room nobody reads.
+	// Chat is Chatlet. Every half nil omits all nine tools, as a company on
+	// Slack or Mattermost has: there the vendor's own MCP server is the
+	// colleague surface, and `post_message` would answer into a room nobody
+	// reads.
 	Chat ChatDeps
 
 	// Authorize decides whether the party behind a call may make it.
 	//
-	// EVERY TOOL GOES THROUGH IT, wrapped once at registration rather
-	// than checked inside each one, because the action IS the tool's own
-	// name and there is therefore exactly one place the check could be
-	// forgotten.
+	// [Register] wraps every tool in it once: the action is the tool's own
+	// name, so one wrapper is the one place the check cannot be forgotten.
+	// Nil refuses everything, unlike a nil skill gate: a missing authority
+	// decision is a surface shipped without wiring one. See authority.go.
 	//
-	// NIL REFUSES EVERYTHING, which is the opposite of what a nil skill
-	// gate means and deliberately so: a missing skill gate is a company
-	// that locked nothing, and a missing authority decision is a surface
-	// that shipped without wiring one. See authority.go.
-	//
-	// ONE FIELD, PUSHED DOWN into [WorkDeps], [PageDeps] and [ChatDeps] by
-	// [Register],
-	// because a few checks can only be taken after a read and those tools
-	// reach the decision through their own deps. A caller that set three
-	// fields could set two of them differently, which is the drift this
-	// whole seam exists to remove.
+	// [Register] pushes it down into [WorkDeps], [PageDeps] and [ChatDeps],
+	// whose tools take some checks only after a read; one field means no
+	// caller can set those three differently.
 	Authorize Authorizer
 
-	// Requesters composes who a seat's turn is acting for — the requester
-	// ceiling — which the gate binds to every call the turn makes, so every
-	// app verb is held to the apps whoever woke the turn uses (ADR-0109) and
-	// the families that decide a relation for them read the same
-	// composition. Nil binds nobody, and a call is then decided for the seat
-	// alone, as on a surface no seat calls through: a seat's registry is
-	// always handed one (internal/engine's equip).
+	// Requesters composes who a seat's turn acts for (the requester ceiling,
+	// ADR-0109), which the gate binds to every call the turn makes, holding
+	// each app verb to the apps whoever woke the turn uses; the families
+	// deciding a relation for them read it too. Nil binds nobody, and a call
+	// is decided for the seat alone: a seat's registry is always handed one
+	// (internal/engine's equip).
 	Requesters Requesters
 }
 
 // Register adds every builtin the given dependencies can support.
 //
-// It reports the names registered, so a caller can log what a seat will
-// actually be able to reach — the difference between "the model never called
-// query_episodes" and "query_episodes was not there" is otherwise invisible
-// from the outside, and they send a reader to opposite places.
+// It returns the names registered, so a caller can log what a seat can
+// reach: "the model never called query_episodes" and "query_episodes was
+// not there" send a reader to opposite places.
 //
-// A tool whose dependency is absent is OMITTED, never registered-and-broken.
-// A model shown a tool that always fails learns to distrust the whole
-// catalogue, and burns a round finding out each time.
+// A tool whose dependency is absent is omitted, never registered and
+// broken: a model shown a tool that always fails learns to distrust the
+// whole catalogue.
 func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	if reg == nil {
 		return nil, fmt.Errorf("builtin: no registry")
 	}
 	deps.Work.Authorize, deps.Pages.Authorize = deps.Authorize, deps.Authorize
 	deps.Chat.Authorize = deps.Authorize
-	// AND THE ONE COMPOSER, for [Deps.Authorize]'s reason: the gate binds a
-	// turn's ceiling from it, and the families that decide a relation for
-	// the requester read that binding — handed a second composer, a family
-	// could compose somebody else than the gate did.
+	// And the one composer, for [Deps.Authorize]'s reason: the families read
+	// the ceiling the gate bound, and a second composer could compose somebody
+	// else than the gate did.
 	if deps.Requesters != nil {
 		deps.Artifacts.Requesters, deps.Code.Requesters = deps.Requesters, deps.Requesters
 		deps.Health.Requesters = deps.Requesters
@@ -248,9 +215,8 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	withdraw := deps.Withdraw
 	withdraw.Work = deps.Work
 
-	// lookup_colleague is unconditional: its corpus is the turn's own org,
-	// so it works on any node that is running a company at all — and it is
-	// the tool every other addressing decision goes through.
+	// lookup_colleague is unconditional: its corpus is the turn's own org, and
+	// every other addressing decision goes through it.
 	candidates := []candidate{
 		{&lookupColleague{env: deps.Env}, true},
 		{&a2aAsk{svc: deps.A2A, env: deps.Env, requesters: deps.Requesters}, deps.A2A != nil},
@@ -273,10 +239,8 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 			maxHints: deps.RefreshesPerTurn,
 		}, deps.Diary != nil},
 		{&reflectAndPersist{diary: deps.Diary}, deps.Diary != nil},
-		// THE SEAT'S OWN SESSIONS, all three parts or neither: a listing
-		// of sessions no read can open, a read with no rows to find one
-		// by, or either with no switch to ask, is a tool that cannot
-		// answer a call. See sessions.go.
+		// THE SEAT'S OWN SESSIONS, all three parts or neither: missing any one,
+		// neither tool can answer a call. See sessions.go.
 		{&listSessions{deps: deps.Sessions}, deps.Sessions.serves()},
 		{&readSession{deps: deps.Sessions, within: SessionReadWithin}, deps.Sessions.serves()},
 		{&markOnboarded{onboarding: deps.Onboarding}, deps.Onboarding != nil},
@@ -301,11 +265,9 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		// tool posts whose run option the engine builds. See sshask.go.
 		{&askToOperate{deps: deps.SSH, comment: &commentOnWorkItem{deps: deps.Work, pages: deps.Pages.Reader}},
 			deps.SSH.serves() && deps.Work.Writer != nil && deps.Work.Reader != nil},
-		// AND THE FOLD, which is a seat's for the reason the trash is
-		// not: it leaves the item where it was, cancelled and linked, so
-		// there is no absence for anybody to miss — and a seat can
-		// already cancel and link by hand, which is the same gesture
-		// without the children. See workmerge.go.
+		// AND THE FOLD, a seat's where the trash is not: it leaves the item
+		// cancelled and linked, the gesture a seat can already make by hand,
+		// so nothing goes missing. See workmerge.go.
 		{&mergeWorkItem{deps: deps.Work}, deps.Work.Merges != nil && deps.Work.Reader != nil},
 		// AND THE MOVE, which is a seat's behind the gate a re-route has:
 		// the lead of the item's project decides where its work lives.
@@ -319,10 +281,8 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		// refuses a type the company has not declared, and a model that
 		// cannot read the catalogue can only guess at one.
 		{&getWorkCatalogue{deps: deps.Work}, deps.Work.Reader != nil},
-		// AND SO IS READING THE PROJECT, for the same reason and one more:
-		// a create refuses a project the company does not have and a
-		// required field left empty, and both refusals are one round a
-		// model could have skipped by looking the container up first.
+		// AND SO IS READING THE PROJECT: a create refuses an unknown project and
+		// an empty required field, a round a model skips by looking first.
 		{&listProjects{deps: deps.Work}, projectReads(deps.Work)},
 		{&describeProject{deps: deps.Work}, projectReads(deps.Work)},
 		// AND THE ONE PROJECT WRITE a seat holds, for one facet: a
@@ -335,19 +295,15 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		// "who moved this" or "what is waiting on me".
 		{&taskActivity{deps: deps.Work}, feedReads(deps.Work)},
 		{&myWork{deps: deps.Work}, feedReads(deps.Work)},
-		// AND THE PROJECT'S FILES, which need the object store as well as
-		// the tracker — a file is a row naming an object, and a surface
-		// holding one half could only record content it cannot store. See
-		// workfiles.go.
+		// AND THE PROJECT'S FILES, which need the object store as well as the
+		// tracker: a file is a row naming an object. See workfiles.go.
 		{&listProjectFiles{deps: deps.Work}, deps.Work.Files != nil},
 		{&readProjectFile{deps: deps.Work}, deps.Work.Files != nil && deps.Work.Objects != nil},
 		{&writeProjectFile{deps: deps.Work},
 			deps.Work.FileWriter != nil && deps.Work.Objects != nil},
 		{&removeProjectFile{deps: deps.Work}, deps.Work.FileWriter != nil},
-		// THE CHAT TOOLS, gated on the half each one needs: a build with
-		// a reader and no writer is a company whose chat is readable and
-		// not writable, which is what a seat should be offered rather
-		// than a `post_message` that fails at the call.
+		// THE CHAT TOOLS, each gated on the half it needs: a readable, unwritable
+		// chat gets the reads, not a `post_message` that fails at the call.
 		{&postMessage{deps: deps.Chat}, deps.Chat.Writer != nil},
 		{&replyInThread{deps: deps.Chat}, deps.Chat.Writer != nil},
 		{&sendDM{deps: deps.Chat}, deps.Chat.Writer != nil},
@@ -366,13 +322,10 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&savePage{deps: deps.Pages}, deps.Pages.Writer != nil && deps.Pages.Reader != nil},
 		{&commentOnPage{deps: deps.Pages}, deps.Pages.Writer != nil && deps.Pages.Reader != nil},
 	}
-	// AND THE CODE TOOLS, the very list the operator catalogue takes
-	// ([CodeTools]): the reads, which name no delivery surface, and where
-	// Gitlet's writes are wired the writes, each a delivery to it
-	// (the switch below) — and the health tools after them, the same way
-	// ([HealthTools]).
-	// THE RELEASE REQUESTS read Gitlet through the code tools' own deps, and
-	// the verdict tool reads their conditions through the same.
+	// AND THE CODE TOOLS, the operator catalogue's own list ([CodeTools]),
+	// the writes only where Gitlet's are wired (each a delivery, the switch
+	// below); the health tools the same way ([HealthTools]). The release
+	// requests and the verdict tool read Gitlet through the code tools' deps.
 	release := ReleaseDeps{Code: deps.Code, Pulls: deps.Pulls}
 	delegatedDeps := deps.Delegated
 	delegatedDeps.Release = release
@@ -395,35 +348,24 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		if u, ok := c.tool.(interface{ OutputUnkept() bool }); ok && u.OutputUnkept() {
 			opts = append(opts, tools.KeepsNoOutput)
 		}
-		// A DELIVERY, AND WHERE IT LANDS. A turn woken by an assignment
-		// answers by moving the item, commenting on it, filing the
-		// follow-up, or merging it into the item it duplicates — and without
-		// this the gate sees only builtins, concludes the turn reached
-		// nobody, and corrects it into another round. The SURFACE is what
-		// stops the opposite error: these reach Worklet and
-		// Doclet, and a founder waiting in a chat thread is on
-		// neither of them.
-		// THE FEED'S OWN SOURCE NAME, never a second spelling. The gate
-		// compares a delivery's surface against the NotificationSource an
-		// inbound wake carried, and the three native feeds publish
-		// under [worklet.Source], [doclet.Source] and [chatlet.Source], so
-		// inventing `tracker` and `pages` here made every Worklet, Doclet
-		// and Chatlet obligation unreachable and the check silently fell back
-		// to "any delivery counts".
+		// A DELIVERY, AND WHERE IT LANDS. A turn woken by an assignment answers by
+		// writing to the item; without this the gate sees only builtins and
+		// corrects the turn into another round. The surface stops the opposite
+		// error: a founder waiting in a chat thread is on neither Worklet nor
+		// Doclet. It is the feed's own source name, which the gate compares with
+		// an inbound wake's NotificationSource: a second spelling makes every
+		// obligation unreachable and the check falls back to "any delivery counts"
+		// (TestTheNativeWritesDeliverToTheirOwnFeedSource).
 		switch {
 		case slices.Contains(WorkWrites(), c.tool.Name()):
 			opts = append(opts, tools.DeliversTo(worklet.Source))
 		case slices.Contains(PageWrites(), c.tool.Name()):
 			opts = append(opts, tools.DeliversTo(doclet.Source))
 		case slices.Contains(ChatWrites(), c.tool.Name()):
-			// THE THREE POSTING TOOLS AND NOT THE REACTION. The gate
-			// asks whether the person waiting was reached, and an
-			// emoji reaches nobody — it wakes no seat and obliges
-			// nothing — so counting one would let every addressed
-			// turn discharge its obligation with a thumb. Joining a
-			// room is not a delivery either: it changes where this
-			// seat listens, which leaves the asker exactly as
-			// unanswered. See [chatlet.WriteTools].
+			// THE THREE POSTING TOOLS, NOT THE REACTION OR A JOIN: the gate asks
+			// whether the person waiting was reached, and neither reaches anybody, so
+			// counting them would let a turn discharge its obligation with a thumb.
+			// See [chatlet.WriteTools].
 			opts = append(opts, tools.DeliversTo(chatlet.Source))
 		case slices.Contains(CodeWrites(), c.tool.Name()):
 			// AND A CODE WRITE REACHES GITLET: a branch moved or a
@@ -434,10 +376,8 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 			// person whose comment woke the turn reads it.
 			opts = append(opts, tools.DeliversTo(artifactsdomain.Source))
 		}
-		// THE GATE WRAPS EVERY ONE, and it wraps HERE rather than at
-		// each tool: the authority table is keyed on the tool's own
-		// name, so one wrapper covers every verb and a new tool cannot
-		// ship ungated by somebody forgetting a line inside it.
+		// THE GATE WRAPS EVERY ONE, here rather than in each tool
+		// ([Deps.Authorize]), so a new tool cannot ship ungated.
 		if err := reg.RegisterWith(gate(c.tool, deps.Authorize, deps.Requesters),
 			tools.OriginBuiltin,
 			annotationsFor(c.tool.Name()), opts...); err != nil {
@@ -449,47 +389,24 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	return names, nil
 }
 
-// candidate is one builtin a registry may offer, and whether its dependencies
-// are present to serve it: a tool whose dependency is absent is omitted, never
-// registered and broken.
+// candidate is one builtin a registry may offer, and whether its
+// dependencies are present to serve it ([Register]).
 type candidate struct {
 	tool tools.Callable
 	on   bool
 }
 
-// annotationsFor classifies a builtin for the delivery gate and the sub-agent
-// guard.
+// annotationsFor classifies a builtin for the delivery gate and the
+// sub-agent guard, and [AnnotationsFor] for the MCP surfaces this engine
+// serves (docs/concepts/tool-capabilities.md).
 //
-// THE DELIVERY CHECK IS WHY ReadOnly MATTERS. A turn that set out to act and
-// then only read is a turn that delivered nothing, and the check can only see
-// that if it knows which calls were reads. Unannotated counts as NOT a known
-// read — the safe default for an MCP server nobody has classified — so a
-// read-only builtin left unannotated would make every recall look like a
-// delivery.
+// ReadOnly lets the delivery check see a turn that only read: unannotated
+// is not a known read, so an unannotated read-only builtin would make
+// every recall look like a delivery.
 //
-// OPEN-WORLD IS A TRI-STATE, AND THE THIRD VALUE IS LOAD-BEARING HERE. The
-// sub-agent guard asks [mcp.WritesToSharedSurface], whose rule is `ReadOnly ==
-// No` AND `OpenWorld != No` — so leaving OpenWorld UNSET on a tool that writes
-// only the agent's own private state classifies it as a write to a surface a
-// human reads. That is the exact shape internal/mcp/probe.go reaches past the
-// SDK to avoid producing by accident for a third-party server ("the sub-agent
-// guard would deny every under-annotated tool in the company, having been told
-// nothing at all"), and these three produced it by hand: a diary note, a
-// refined skill and an onboarding marker were all denied to a worker the
-// parent had explicitly granted them to, on the strength of a hint nobody had
-// set. Each says `OpenWorld: mcp.No` now, because each is genuinely false —
-// the question the classifier asks is whether a sub-agent would write "to a
-// surface a human reads, under the parent agent's identity", and an agent's
-// own memory is read by its own next turn and by nobody else.
-//
-// The DEFAULT arm stays conservative and is meant to have no members: a
-// builtin nobody classified is treated as a shared write, so a future tool
-// that posts somewhere is denied to workers until someone says otherwise.
-// See docs/concepts/tool-capabilities.md.
-//
-// EXPORTED AS [AnnotationsFor], because two MCP surfaces this engine SERVES
-// have to advertise the same decision: a hint written down here and thrown
-// away at the edge is a hint nobody outside this process ever sees.
+// OpenWorld is a tri-state: [mcp.WritesToSharedSurface] is `ReadOnly == No`
+// AND `OpenWorld != No`, so a write to private state only (a seat's or a
+// person's own) says `OpenWorld: mcp.No`, or a sub-agent is denied it.
 func annotationsFor(name string) tools.Annotations {
 	if a, ok := artifactAnnotations(name); ok {
 		return a
@@ -522,34 +439,23 @@ func annotationsFor(name string) tools.Annotations {
 	case LookupColleagueTool, UseSkillTool, QueryEpisodesTool, RefreshMemoryTool,
 		LoadToolSkillTool, SearchKnowledgeTool, ListSessionsTool, ReadSessionTool, AtlasSearchTool, AtlasGetTool,
 		AtlasTraceTool:
-		// Reads, and idempotent: asking twice costs a round and changes
-		// nothing, which is what lets a phase retry one safely. The
-		// session tools are reads of the seat's own record that take no
-		// hold: left to the default arm, a worker its parent granted
-		// read_session would be refused it as a write somebody reads.
+		// Reads, and idempotent, so a phase may retry one. The session tools
+		// read the seat's own record and take no hold.
 		return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}
 	case A2AAskTool:
-		// It leaves this process, as every open-world builtin does. Not
-		// destructive — an ask is a message, not an edit — but NOT
-		// idempotent: asking twice wakes a colleague twice and spends two of
-		// their turns. A worker is additionally denied it BY NAME, because
-		// "one colleague's desk" is a narrower objection than open-world and
-		// deserves its own sentence; see internal/agent/subagent.
+		// It leaves this process. Not destructive (a message, not an edit), and
+		// not idempotent: asking twice spends two of a colleague's turns. A worker
+		// is also denied it by name; see internal/agent/subagent.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
 	case MarkOnboardedTool:
-		// A write whose repeat is genuinely free: the marker is a fact
-		// about this seat, and setting it again sets the same fact. Private
-		// state — a row in the seat's own store — so OpenWorld is
-		// explicitly No.
+		// Setting it again sets the same fact about this seat: idempotent.
+		// Private state, so OpenWorld is No.
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.No, Idempotent: mcp.Yes, OpenWorld: mcp.No,
 		}
 	case ReflectAndPersistTool:
-		// The agent's own diary: a write, and each call is another note, so
-		// nowhere near idempotent. Private state — read back by this seat's
-		// own next turn and by nobody else — so OpenWorld is explicitly No.
-		// It used to fall through the default arm, where the missing hint
-		// made it a shared write.
+		// The agent's own diary: each call is another note, so not idempotent.
+		// Read only by this seat's next turn, so OpenWorld is No.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.No}
 	case ReadChannelTool, ListChannelsTool, SearchMessagesTool,
 		ListWorkItemsTool, GetWorkItemTool, ListPagesTool, GetPageTool,
@@ -560,241 +466,131 @@ func annotationsFor(name string) tools.Annotations {
 		worklet.GetPersonTool, worklet.WorkInboxTool,
 		worklet.ListWorkViewsTool,
 		worklet.ListProjectFilesTool, worklet.ReadProjectFileTool:
-		// Reads, and idempotent: asking twice costs a round and changes
-		// nothing. The catalogue lookup belongs here with the rest — left
-		// out, it fell to the default arm, whose ReadOnly=No with
-		// OpenWorld unset is the combination [mcp.WritesToSharedSurface]
-		// reads as TRUE, so a worker granted a read-only vocabulary
-		// lookup was refused it as a write to a surface a human reads
-		// while list_work_items beside it was admitted.
+		// Reads, and idempotent: asking twice costs a round and changes nothing.
 		return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}
 	case worklet.MarkInboxTool, worklet.SetPinsTool, CodeMarkInboxTool, CodeMarkViewedTool, ArtifactMarkInboxTool:
-		// A PERSON'S OWN STATE IS NOT A SHARED SURFACE, and saying so
-		// takes an explicit `OpenWorld: No` — these two fell to the
-		// default arm, whose `ReadOnly: No` with OpenWorld UNSET is
-		// exactly what [mcp.WritesToSharedSurface] reads as true. Each
-		// is written only on behalf of the person whose it is (the
-		// tracker refuses anything else), so there is no second party
-		// to be surprised by one, which is the question the flag asks
-		// rather than "does this write".
-		//
-		// IDEMPOTENT, because each REPLACES the list it names: calling
-		// twice with the same argument leaves the same state, which is
-		// what makes a retry after a lost answer safe.
+		// A PERSON'S OWN STATE, written only for the person whose it is (the
+		// tracker refuses anything else): no second party, so OpenWorld is No.
+		// Idempotent: each replaces the list it names, so a retry after a lost
+		// answer is safe.
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.No,
 		}
 	case worklet.DeleteWorkViewTool:
-		// A WRITE EVERYBODY SEES: a shared view leaves the strip and the
-		// pins of everyone who had it, so OpenWorld is Yes and
-		// [mcp.WritesToSharedSurface] reads true. DESTRUCTIVE, because
-		// nothing brings the view back and the flag asks whether a call
-		// can undo somebody else's work. NOT idempotent as a tool: a
-		// second delete as a new operation finds no view and is refused.
+		// SHARED: a deleted view leaves everyone's strip and pins. Destructive:
+		// nothing brings it back. Not idempotent: a second delete finds no view
+		// and is refused.
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes,
 		}
 	case worklet.SetPrioritiesTool:
-		// THE ONE PERSON WRITE THAT REACHES ACROSS PEOPLE, which is why
-		// it is not in the arm above: a LEAD may set the queue of
-		// somebody in their line, and that person opens their day on
-		// work they did not choose. `priorities_set_by` is what makes
-		// the authority visible to them, and OpenWorld is Yes because
-		// the surface it writes is somebody else's.
-		//
-		// Idempotent for the same reason the two above are — the list
-		// replaces — and not destructive: the previous order is not
-		// work, and the person's own next write takes their queue back.
+		// THE ONE PERSON WRITE THAT REACHES ACROSS PEOPLE, hence not in the arm
+		// above: a lead may set the queue of somebody in their line
+		// (`priorities_set_by` shows them who), so OpenWorld is Yes. Idempotent,
+		// as the list replaces; not destructive, since the previous order is not
+		// work and the person's own next write takes their queue back.
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
 		}
 	case worklet.MergeWorkItemTool:
-		// A WRITE EVERYBODY SEES: the duplicate is closed on every board
-		// in the company and its subtasks move to somebody else's item,
-		// so OpenWorld is Yes and [mcp.WritesToSharedSurface] reads true
-		// — which keeps it away from a sub-agent acting under its
-		// parent's name.
-		//
-		// DESTRUCTIVE, because the flag asks whether a call can undo
-		// somebody else's work and this one can: the subtree moves, and
-		// nothing puts it back.
-		//
-		// NOT idempotent. A second fold of the same pair is refused —
-		// the duplicate is already cancelled and already linked — and a
-		// fold of a DIFFERENT pair after it is another item closed.
+		// SHARED: the duplicate closes on every board and its subtasks move to
+		// somebody else's item. Destructive: nothing puts the subtree back. Not
+		// idempotent: a second fold of the pair is refused, and a fold of another
+		// pair closes another item.
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes,
 		}
 	case worklet.WriteProjectFileTool:
-		// A WRITE EVERYBODY ON THE PROJECT SEES, so OpenWorld is Yes and
-		// [mcp.WritesToSharedSurface] reads true, which keeps it away from
-		// a sub-agent acting under its parent's name.
-		//
-		// DESTRUCTIVE: a put over an existing path REPLACES it, and the
-		// content it replaced is collected — the flag asks whether a call
-		// can undo somebody else's work, and this one can. IDEMPOTENT: the
-		// same content at the same path leaves the same file, which is
-		// what makes a retry after a lost answer safe.
+		// SHARED with the project. Destructive: a put over an existing path
+		// replaces it and the old content is collected. Idempotent: the same
+		// content at the same path leaves the same file.
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.Yes, Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
 		}
 	case worklet.RemoveProjectFileTool:
-		// DESTRUCTIVE and shared for the put's reason: the file leaves the
-		// project and its content is collected. NOT idempotent — a second
-		// removal is refused, the file being gone.
+		// Destructive and shared for the put's reason: the content is collected.
+		// Not idempotent: a second removal is refused, the file being gone.
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes,
 		}
 	case worklet.MoveWorkItemTool:
-		// A WRITE EVERYBODY SEES — an item and its subtree leave one
-		// project's board for another's and every key in it changes — so
-		// OpenWorld is Yes and [mcp.WritesToSharedSurface] reads true,
-		// which keeps it away from a sub-agent acting under its parent's
-		// name.
-		//
-		// NOT DESTRUCTIVE: nothing is lost, every former key still
-		// resolves, and a move back undoes it. NOT idempotent: the same
-		// move made again as a new operation is refused — the item is
-		// already there, and something else put it there as far as that
-		// operation can tell.
+		// SHARED: an item and its subtree change boards and every key changes.
+		// Not destructive: every former key still resolves and a move back undoes
+		// it. Not idempotent: the same move again is refused, the item already
+		// being there.
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes,
 		}
 	case worklet.WriteProjectTool:
-		// A WRITE EVERYBODY SEES — a declared tag is a filter on
-		// everybody's board and an archived project takes no work from
-		// anyone — so OpenWorld is Yes and [mcp.WritesToSharedSurface]
-		// reads true, which keeps it away from a sub-agent acting under
-		// its parent's name.
-		//
-		// DESTRUCTIVE, and the reason is the facet a caller is most
-		// likely to reach for by accident rather than the one it is
-		// named after: `fields` REPLACES a project's declarations, so a
-		// call sending a short list retires every field it left out.
-		// Declaring a tag is additive and archiving is reversible by
-		// nothing, and the flag asks whether a call can undo somebody
-		// else's work — which this one can.
-		//
-		// NOT idempotent as a whole, although an add genuinely is: a
-		// second `tags_rename` against a set a lead has since edited is
-		// a different change, and the annotation describes the tool a
-		// model is offered rather than its luckiest facet.
+		// SHARED: a declared tag filters everybody's board and an archived project
+		// takes no work. Destructive: `fields` REPLACES a project's declarations,
+		// so a short list retires every field it left out, and nothing undoes an
+		// archive. Not idempotent as a whole: a second `tags_rename` against an
+		// edited set is a different change, and the annotation describes the tool
+		// a model is offered, not its luckiest facet.
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes,
 		}
 	case worklet.RemoveWorkItemTool, worklet.RestoreWorkItemTool:
-		// WRITES EVERYBODY SEES — a removal takes an item off every board
-		// in the company — so OpenWorld is Yes and
-		// [mcp.WritesToSharedSurface] reads true, which keeps them away
-		// from a sub-agent acting under its parent's name. Not
-		// destructive: a removal is reversible at any age and destroys
-		// nothing, which is exactly what separates it from a purge. And
-		// each is IDEMPOTENT: a task already where the gesture leaves it
-		// is nothing to do, because a subtree removal or restore that
-		// stopped part of the way through has to be able to be made
-		// again. (A restore with nothing left to bring back says so, and
-		// changes nothing either.)
+		// SHARED: a removal takes an item off every board. Not destructive: a
+		// removal is reversible at any age, unlike a purge. Idempotent: a subtree
+		// removal or restore stopped part-way must be able to be made again.
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
 		}
 	case worklet.PlaceWorkItemTool:
-		// A WRITE EVERYBODY SEES — the board is shared, and a lane change
-		// is a status change the item's people are woken about — so
-		// OpenWorld is Yes and [mcp.WritesToSharedSurface] reads true.
-		// Not destructive: nothing is lost that dragging the card back
-		// does not restore. And IDEMPOTENT: the same drop again finds the
-		// card already between its neighbours and in its lane, and writes
-		// nothing.
+		// SHARED: a lane change is a status change the item's people are woken
+		// about. Not destructive: dragging the card back restores it. Idempotent:
+		// the same drop finds the card in place and writes nothing.
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
 		}
 	case CreateWorkItemTool:
-		// A write everybody in the company sees, so OpenWorld is Yes and
-		// [mcp.WritesToSharedSurface] reads true — which keeps it away
-		// from a sub-agent acting under its parent's name. Not
-		// destructive (an item is additive) and NOT idempotent: a second
-		// call is a second item, which is the duplicate the tool's own
-		// description tells the model to search for first.
+		// Shared, additive, and not idempotent: a second call is a second item,
+		// the duplicate the tool's description tells the model to search for first.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
 	case CommentOnWorkTool:
-		// Shared, additive, and idempotent IN PRACTICE because a comment
-		// made from a turn takes a deterministic id — but declared NOT
-		// idempotent, because the annotation describes the tool a model
-		// is offered and a model calling it twice with different text
-		// says two things. The idempotence is the engine protecting a
-		// re-run turn, not a licence to repeat.
+		// Shared and additive. Not idempotent although a turn's comment takes a
+		// deterministic id: that protects a re-run turn, and a model calling twice
+		// with different text says two things.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
 	case UpdateWorkItemTool:
-		// Shared, and DESTRUCTIVE: it replaces a title, a description or
-		// an assignee, and the previous value survives only in the change
-		// record. That is what the flag asks — whether a call can undo
-		// somebody's work — and a status flip riding the same tool does
-		// not make the whole tool safe.
+		// Shared and destructive: it replaces a title, a description or an
+		// assignee, the old value surviving only in the change record. A status
+		// flip riding the same tool does not make the tool safe.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes}
 	case PostMessageTool, ReplyInThreadTool, SendDMTool:
-		// WORDS ON SOMEBODY ELSE'S SCREEN, which ReadOnly=No plus
-		// OpenWorld=Yes is how that is stated: a message is read by
-		// whoever is in the room and wakes whoever it named, so
-		// [mcp.WritesToSharedSurface] reads true and the sub-agent guard
-		// keeps all three away from a worker acting under its parent's
-		// name. A worker that could speak as its parent would be a
-		// colleague answering in somebody else's voice, and the room has
-		// no way to tell.
-		//
-		// A DIRECT MESSAGE IS THE SAME ANSWER, not a narrower one: the
-		// flag asks whether a second party is reached, and a private
-		// conversation reaches exactly one.
-		//
-		// Not destructive — a post adds a remark and takes none back,
-		// and an edit is a verb no seat is offered — and NOT idempotent: a second call is
-		// a second message. The derived key makes a RE-RUN of one turn
-		// post once, which is the engine protecting a redelivery rather
-		// than a licence to repeat.
+		// WORDS ON SOMEBODY ELSE'S SCREEN, a DM's included (it reaches exactly one
+		// second party): shared, so a worker cannot speak in its parent's voice
+		// where the room has no way to tell. Not destructive (no seat is offered
+		// an edit) and not idempotent: a second call is a second message. The
+		// derived key that makes a re-run turn post once is the engine's
+		// protection, not a licence to repeat.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
 	case ReactToMessageTool:
-		// SHARED, because everybody in the room sees it, but IDEMPOTENT
-		// where the three above are not: a reaction is keyed on
-		// (message, emoji, handle), so adding the same one twice leaves
-		// the same state and removing one that is not there is a no-op.
-		// That is what makes a retry after a lost answer safe.
-		//
-		// It is NOT a delivery, and that is a different flag — see the
-		// registration switch in [Register].
+		// SHARED, but idempotent where the three above are not: a reaction is
+		// keyed on (message, emoji, handle). It is not a delivery, a different
+		// flag: see the registration switch in [Register].
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
 		}
 	case JoinChannelTool, LeaveChannelTool:
-		// A SEAT'S OWN SUBSCRIPTION IS NOT A SHARED SURFACE, and saying
-		// so takes an explicit `OpenWorld: No` — the arm the tracker's
-		// `mark_inbox` and `set_pins` are in, for the same reason and
-		// with the same trap: left to the default arm, `ReadOnly: No`
-		// with OpenWorld UNSET is exactly what
-		// [mcp.WritesToSharedSurface] reads as true, and a worker would
-		// be refused a subscription change its parent had granted.
-		//
-		// The question the flag asks is whether a second party is
-		// written FOR, not whether a row changes. These two move this
-		// seat's membership and nobody else's — the write path refuses
-		// any other handle — so what they change is where this seat
-		// listens.
-		//
-		// IDEMPOTENT, because each states a membership rather than
-		// toggling one: joining a room you are in leaves you in it, and
-		// the store publishes nothing when the set does not move.
+		// A SEAT'S OWN SUBSCRIPTION, in `mark_inbox`'s arm for its reason: the
+		// write path refuses any other handle, so no second party is written for
+		// and OpenWorld is No. Idempotent: each states a membership rather than
+		// toggling one.
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.No,
 		}
 	case chatlet.AddChannelMembersTool:
-		// PEOPLE PUT IN A ROOM THE OTHERS SEE, so OpenWorld is Yes. Not
-		// destructive: it takes nobody out and replaces nothing. IDEMPOTENT,
-		// because it states who is in the room after it: adding somebody
-		// already there leaves them there.
+		// People put in a room the others see: OpenWorld is Yes. Not destructive.
+		// Idempotent: it states who is in the room after it.
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
@@ -815,57 +611,40 @@ func annotationsFor(name string) tools.Annotations {
 		}
 	case chatlet.UpdateChannelTool, chatlet.SetChannelMembersTool, chatlet.EditMessageTool,
 		chatlet.DeleteMessageTool:
-		// WRITES EVERYBODY IN THE ROOM SEES, and DESTRUCTIVE: a setting is
-		// replaced (archiving closes the room to everybody in it), a
-		// membership set takes people out of a room they could read, an
-		// edit replaces what somebody said and a delete takes it back.
-		// IDEMPOTENT, because each STATES its result — the same settings,
-		// the same members, the same words, the same tombstone — so a
-		// retry after a lost answer changes nothing where the first one
-		// landed.
+		// SHARED and destructive: a setting is replaced (archiving closes the
+		// room), a membership set removes readers, an edit replaces what somebody
+		// said and a delete takes it back. Idempotent: each states its result.
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.Yes,
 			Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
 		}
 	case chatlet.MarkChatReadTool:
-		// A PERSON'S OWN STATE, in the arm `mark_inbox` and `set_pins` are
-		// in and for their reason: nobody else reads where somebody got
-		// to, so OpenWorld is explicitly No. Idempotent — a cursor only
-		// advances and a mute states one room's — and destroys nothing.
+		// A PERSON'S OWN STATE, in `mark_inbox`'s arm: OpenWorld is No.
+		// Idempotent: a cursor only advances and a mute states one room's.
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.No,
 		}
 	case WritePageTool, CommentOnPageTool:
-		// Shared and additive: a page and a comment on one are both new
-		// records everyone in the company can read, so OpenWorld is Yes
-		// and the sub-agent guard keeps them from a worker acting under
-		// its parent's name.
+		// Shared and additive: new records everyone in the company can read.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
 	case SavePageTool:
-		// Shared, and DESTRUCTIVE: it replaces a body somebody wrote.
-		// The revision history is what makes it recoverable, which is
-		// exactly the distinction Destructive draws — reversible, not
-		// harmless.
+		// Shared and destructive: it replaces a body somebody wrote. The revision
+		// history makes it reversible, not harmless.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes}
 	case AnswerKnowledgeTool:
-		// A READ THAT SPENDS, declared a write for that reason: every call
-		// that misses the cache is a model call charged to the company, so
-		// it is NOT read-only (which is also what keeps the dashboard from
-		// refetching it on focus) and NOT idempotent (a second call after
-		// the corpus moved spends again). It writes nothing anybody reads,
-		// so OpenWorld is explicitly No, and it destroys nothing.
+		// A READ THAT SPENDS: a cache miss is a model call charged to the
+		// company, so it is not read-only (which also keeps the dashboard from
+		// refetching it on focus) and not idempotent. It writes nothing anybody
+		// reads, so OpenWorld is No.
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.No, Idempotent: mcp.No, OpenWorld: mcp.No,
 		}
 	case AnswerExecutorTool:
-		// A WRITE SOMEBODY ELSE ACTS ON: the answer resumes a seat's
-		// executor, whose next moves reach the company, so OpenWorld
-		// is Yes. Not destructive — it supplies what a run asked for and
-		// replaces nothing — and NOT idempotent: a second call with other
-		// words is a second answer, which the run declines once the first
-		// has resumed it, and the annotation describes the tool rather
-		// than the engine's protection.
+		// A WRITE SOMEBODY ELSE ACTS ON: the answer resumes a seat's executor,
+		// whose moves reach the company. Not destructive, and not idempotent: the
+		// run declines a second answer once the first resumed it, which is the
+		// engine's protection, not the tool's shape.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
 	case AtlasRefreshTool:
 		// AN ASK, which replaces nothing and is the same ask made twice, so
@@ -881,21 +660,16 @@ func annotationsFor(name string) tools.Annotations {
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.No, OpenWorld: mcp.Yes}
 	case PauseSeatTool:
-		// DESTRUCTIVE, because `stop_running` ends a turn mid-flight, and the
-		// executor it has out with its box, and neither is run again —
-		// what they had not yet done is lost. Otherwise
-		// reversible, and IDEMPOTENT: a second pause of a paused seat changes
-		// nothing. Closed-world: it changes whether one of the company's own
-		// seats works, and reaches nothing outside the engine.
+		// DESTRUCTIVE: `stop_running` ends a turn and its executor mid-flight,
+		// and what they had not done is lost. Otherwise reversible, and
+		// idempotent. Closed-world: it changes only whether a seat works.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.Yes,
 			Idempotent: mcp.Yes, OpenWorld: mcp.No}
 	case SteerTurnTool:
-		// A WRITE SOMEBODY ELSE ACTS ON, like answer_executor: the note
-		// changes what a running turn does next, and its next moves reach the
-		// company, so OpenWorld is Yes. Not destructive — it replaces
-		// nothing — and NOT idempotent as a tool: a second call with other
-		// words is a second note. A retry of ONE request is collapsed by
-		// the box, which is the engine's protection, not the tool's shape.
+		// A WRITE SOMEBODY ELSE ACTS ON: the note changes what a running turn does
+		// next. Not destructive, and not idempotent: a second call is a second
+		// note. The box collapses a retry of one request, which is the engine's
+		// protection, not the tool's shape.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
 	case ResumeSeatTool:
 		// Not destructive: the held mail is delivered, nothing is lost.
@@ -903,29 +677,22 @@ func annotationsFor(name string) tools.Annotations {
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.No}
 	case RefineSkillTool:
-		// It replaces a body. The prior version is archived, so this is
-		// reversible — which is exactly what Destructive asks about. The
-		// body lives in the agent's OWN learning store, not in the
-		// knowledge base `load_tool_skill` reads, so OpenWorld is
-		// explicitly No.
+		// Not destructive: the replaced body is archived. It lives in the agent's
+		// own learning store, not the knowledge base load_tool_skill reads, so
+		// OpenWorld is No.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.No}
 	default:
-		// NO MEMBERS, deliberately. Every builtin is named above, and a new
-		// one that lands here is classified as a write to a shared surface
-		// until somebody says which it is — the fail-closed direction for a
-		// security boundary, and the reason the private-state tools are
-		// named rather than defaulted.
+		// NO MEMBERS, deliberately: an unclassified builtin is a shared write
+		// until somebody says which it is, the fail-closed direction.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No}
 	}
 }
 
 // The shipped values for the knobs a caller may leave at zero.
 //
-// They MATCH config.DefaultLearning, and they exist separately because this
-// package does not import internal/config: a builtin registry built directly
-// — a test, an embedder — must land on the same numbers a parsed company
-// does, and a zero that meant "no episodes" or "no body at all" would be a
-// tool that refuses everything.
+// They match config.DefaultLearning: this package does not import
+// internal/config, and a registry built directly (a test, an embedder)
+// must land on the same numbers, not a zero that refuses everything.
 const (
 	// DefaultEpisodeLimit is learning.episodic.retrieval_limit's default.
 	DefaultEpisodeLimit = 5
@@ -943,11 +710,8 @@ func orDefault(value, fallback int) int {
 }
 
 // projectReads reports whether this build's reader answers the project seam.
-//
-// A TYPE ASSERTION rather than a second field on the deps, because the reader
-// is ONE object: a build wiring Worklet satisfies the whole seam
-// and a build wiring none satisfies nothing, so a separate switch would be a
-// second thing to keep in step with the first.
+// A type assertion rather than a deps field: the reader is one object, so a
+// separate switch would be a second thing to keep in step.
 func projectReads(deps WorkDeps) bool {
 	if deps.Reader == nil {
 		return false
@@ -965,22 +729,14 @@ func feedReads(deps WorkDeps) bool {
 	return ok
 }
 
-// AnnotationsFor is one builtin's hints, for a surface that SERVES the
-// catalogue to somebody else's MCP client.
+// AnnotationsFor is one builtin's hints, for a surface that serves the
+// catalogue to somebody else's MCP client: [internal/api/operator] to an
+// operator's assistant and [internal/api/mcpbridge] to a seat's sandboxed
+// harness, whose clients otherwise cannot tell a read from an irreversible
+// write.
 //
-// # Why an exported accessor rather than a field on the tool
-//
-// The decision is a property of the NAME rather than of the implementation —
-// one tool type serves a seat and an operator, and the hints are the same on
-// both — so it belongs in one switch rather than on a method every tool would
-// have to remember to write. What made it worth exporting is that both surfaces
-// the engine serves published every tool with a name, a description and a
-// schema and nothing else: [internal/api/operator] hands a company's whole
-// tracker to an operator's own assistant, and [internal/api/mcpbridge] hands a
-// seat's tools to a sandboxed harness, and neither client could tell a
-// read from an irreversible write. The registry has carried these hints the
-// whole time; nothing outside this process had ever been told one.
-//
-// A name this package does not classify gets the same conservative default the
-// switch gives a seat's own registration — see [annotationsFor].
+// The hints belong to the name, not the implementation (one tool type
+// serves a seat and an operator), so they live in one switch rather than a
+// method on every tool. A name this package does not classify gets the
+// conservative default ([annotationsFor]).
 func AnnotationsFor(name string) tools.Annotations { return annotationsFor(name) }

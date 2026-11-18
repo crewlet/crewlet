@@ -15,19 +15,15 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// endingHarness is a stand-in `claude` that files the session it was started in
-// as [sessionHarness] does and then WORKS ON — becomes a sleep that only a
-// signal ends — rather than printing its result: a harness a run's end request
-// finds mid-run. ignoreTerm makes it a harness that will not go when told to.
+// endingHarness is a stand-in `claude` that files its session as
+// [sessionHarness] does and then WORKS ON, a sleep only a signal ends: a harness
+// an end request finds mid-run. ignoreTerm makes it ignore SIGTERM.
 //
-// IT SAYS WHEN IT IS WORKING, as the last thing before the sleep, and a case
-// asks the end only once it has ([harnessWorking]). By then the session is
-// filed whole, and a harness that ignores SIGTERM has made it ignored. The
-// transcript is the FIRST thing the harness files, before its sidecars, its
-// task list and the ignore, so an end asked once the transcript appears could
-// land before any of them: the capture then lacks sidecars it was meant to
-// hold, or the harness meant to outlive its grace dies of the SIGTERM it was
-// meant to ignore, recorded as asked with 143 rather than as killed with 137.
+// It writes [workingMarker] last, and a case asks the end only once that is
+// there ([harnessWorking]). The transcript is filed FIRST, before its sidecars,
+// task list and the ignore, so an end asked on the transcript alone could catch
+// a capture missing its sidecars, or kill a harness meant to outlive its grace
+// (recorded as asked with 143, not killed with 137).
 func endingHarness(release string, ignoreTerm bool) string {
 	harness := sessionHarness(release)
 	work := `echo working > "$HOME/` + workingMarker + "\"\nexec sleep 300\n"
@@ -112,13 +108,10 @@ func askEnd(t *testing.T, runner *executor.Runner, box sandbox.Sandbox, handle s
 }
 
 // AN ENDED CLAUDE CODE RUN PACKS AS ITS OWN END DOES, under every sh a box may
-// have. A stand-in harness files its session and works on; the end request,
-// sent to the pid its script published, ends it: the script stops the
-// harness, packs its session through the very pack its own exit makes — the
-// transcript, its sidecars and its task list, its digest kept — records that
-// the job was ended, and exits with the harness's own status, which the
-// wrapper writes beside the done marker as on every exit. The collection reads
-// the run as not succeeded, saying first that it was ended.
+// have: the end request stops the working harness, the script packs the session
+// through its own exit's pack (transcript, sidecars, task list, digest kept),
+// records the end and exits with the harness's status, which the wrapper writes
+// to the done marker. The collection reads not succeeded, opening with the end.
 //
 // Mutations: drop the script's trap, and SIGUSR1's default kills it with no pack
 // and no record; pack only on a clean exit, and there is no capture; drop the
@@ -186,9 +179,8 @@ func TestAnEndedClaudeCodeRunPacksAsItsOwnEndDoes(t *testing.T) {
 }
 
 // A CLAUDE CODE HARNESS THAT OUTLIVES ITS GRACE IS KILLED, THEN PACKED, under
-// every sh a box may have: a harness that ignores SIGTERM is killed once its
-// grace is out, the job recorded as ended by a kill, and its session packed all
-// the same.
+// every sh a box may have: a harness ignoring SIGTERM is killed when its grace
+// is out, the end recorded as a kill, and its session packed all the same.
 //
 // Mutation: drop the kill after the grace, and the script waits for its
 // harness for ever, past the case's bound.
@@ -225,11 +217,10 @@ func TestAClaudeCodeHarnessThatOutlivesItsGraceIsKilledThenPacked(t *testing.T) 
 }
 
 // AN END ASKED BEFORE THE HARNESS STARTS STARTS NOTHING, under every sh a box
-// may have. The request comes while the run's script asks the harness its
-// release — the first thing it does after it publishes its pid — and the
-// script, which cannot handle it until that returns, starts no harness: the job
-// is recorded as ended before its harness started, with the status a SIGTERM
-// leaves.
+// may have. The request comes while the script asks the harness its release,
+// right after publishing its pid, and is handled once that returns: the script
+// starts no harness, records the end as `before`, and exits with SIGTERM's
+// status.
 //
 // Mutation: drop the check before the launch, and the harness runs its brief.
 func TestAnEndAskedBeforeTheHarnessStartsStartsNothing(t *testing.T) {
@@ -279,13 +270,11 @@ func waitForFile(t *testing.T, path, what string) {
 	}
 }
 
-// THE SCRIPT PUBLISHES ITS PID ONLY ONCE ITS TRAP IS SET. Its first command is
-// the trap, before the pid is written — so a request sent the moment the pid
-// can be read meets the script's handler and never kills it by SIGUSR1's
-// default — and what it publishes is protocol 1 and its own pid, there by the
-// time it asks its harness anything: a stand-in whose `--version` reads the
-// record and sends the request at once leaves a script that ends its job, and
-// records that it did, under every sh a box may have.
+// THE SCRIPT PUBLISHES ITS PID ONLY ONCE ITS TRAP IS SET, so a request sent the
+// moment the pid is readable meets the handler, never SIGUSR1's default. The
+// script's text sets the trap, then publishes `1 <pid>`, before it runs the
+// harness; and under every sh a box may have, a stand-in whose `--version` reads
+// the record and sends the request at once leaves a job ended and recorded so.
 //
 // Mutation: write the pid before the trap, and the script's text says so; send
 // the request through a record that names another process, and the job is
@@ -336,14 +325,12 @@ func TestTheScriptPublishesItsPIDOnlyOnceItsTrapIsSet(t *testing.T) {
 	})
 }
 
-// slowTar is a prelude for a run's script that stands in front of its `tar`: a
-// FUNCTION, which a shell runs ahead of its builtins' applets and of its PATH
-// alike — a stand-in on the PATH is passed over by a busybox that prefers its
-// own applets, Debian's and Ubuntu's busybox-static among them — that says it
-// has begun in begun and then, where partial is set, writes part of an archive
-// at the path its -f names and works on for good; and otherwise takes a second
-// before it runs the box's own tar. Its variables are its own, so the
-// script's are left as they were.
+// slowTar is a prelude for a run's script that shadows its `tar` with a
+// FUNCTION, which a shell runs ahead of applets and PATH alike (a busybox that
+// prefers its own applets, Debian's and Ubuntu's busybox-static among them,
+// passes over a PATH stand-in). It marks begun, then: with partial, writes part
+// of an archive at its -f path and sleeps for good; otherwise sleeps a second
+// and runs the box's tar. Its variables are its own, leaving the script's alone.
 func slowTar(begun string, partial bool) string {
 	if partial {
 		return `tar() { slowtarout= slowtarprev=; for slowtararg; do [ "$slowtarprev" = -czf ] && ` +
@@ -355,12 +342,12 @@ func slowTar(begun string, partial bool) string {
 
 // A SECOND END REQUEST LEAVES THE PACK WHOLE, on Claude Code as on OpenCode (see
 // the OpenCode case beside the script's), under every sh a box may have: a
-// request that comes while the ended run packs is ignored, and the archive is
-// whole and the exit the harness's.
+// request during the ended run's pack is ignored, the archive whole and the exit
+// the harness's.
 //
-// Mutation: put the request back to its default once the end is under way
-// rather than ignoring it, and the second request kills the script mid-pack,
-// with no archive left.
+// Mutation: restore SIGUSR1's default once the end is under way rather than
+// ignoring it, and the second request kills the script mid-pack, leaving no
+// archive.
 func TestASecondEndRequestLeavesAClaudeCodePackWhole(t *testing.T) {
 	t.Parallel()
 	forEachShell(t, func(t *testing.T, sh boxShell) {
@@ -394,14 +381,12 @@ func TestASecondEndRequestLeavesAClaudeCodePackWhole(t *testing.T) {
 }
 
 // A PACK KILLED MIDWAY LEAVES NO ARCHIVE WHERE THE TAKE READS, under every sh a
-// box may have: the run's script packs in its staging directory and moves a
-// whole archive into place, so a job killed while it packs — an end past its
-// wait — leaves only the staging directory, which the clear before the box's
-// next run removes. AND THE JOB'S END STANDS: recorded as soon as its harness
-// was over, before the pack, so the collection of a run killed mid-pack —
-// which wrote no exit status, its wrapper killed with it — still reads it as
-// ended on request, never as the success the report its harness wrote would
-// make it.
+// box may have: the script packs in its staging directory and moves a whole
+// archive into place, so a job killed mid-pack leaves only the staging
+// directory, which the clear before the next run removes. AND THE JOB'S END
+// STANDS: recorded before the pack, so a run killed mid-pack (its wrapper killed
+// too, writing no exit status) still collects as ended on request, never as the
+// success its harness's report would make it.
 //
 // Mutations: tar straight into the capture's path, and the kill leaves part of
 // an archive where the take reads it as whole; record the end only after the
@@ -563,12 +548,12 @@ func TestACollectionSaysItsJobWasEnded(t *testing.T) {
 }
 
 // A TAKE OF AN ENDED JOB PACKS ONLY WHERE ITS SCRIPT LEFT NO ARCHIVE. A job that
-// is over is taken as its script packed it, with no pack made again; and one
-// whose script left none — killed before its pack, lost with its engine — is
-// packed now, by the same pack, its digest kept.
+// is over is taken as its script packed it, with no pack made again; one whose
+// script left none (killed before its pack, lost with its engine) is packed now,
+// by the same pack, its digest kept.
 //
-// Mutation: answer a take of a job that is over with the archive alone, as one
-// once was, and a job that left none keeps no session.
+// Mutation: answer a take of a job that is over with the archive alone, and a
+// job that left none keeps no session.
 func TestATakeOfAnEndedJobPacksOnlyWhereItsScriptLeftNoArchive(t *testing.T) {
 	t.Parallel()
 	runner, box := sessionBox(t, "2.1.310")

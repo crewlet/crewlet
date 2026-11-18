@@ -23,22 +23,17 @@ type RefinableSkills interface {
 
 // refineSkill lets an agent correct one of its own skills.
 //
-// A WHOLE-BODY REPLACEMENT, not a patch. A model asked to produce a diff
-// produces something diff-shaped that does not apply, and a partial edit that
-// half-applied would leave a procedure that is neither the old one nor the new
-// one — with nothing to compare against, because the prior body is already
-// archived by then. Handing back the full text is also what makes the archived
-// version meaningful: two complete bodies a person can read side by side.
+// A WHOLE-BODY REPLACEMENT, not a patch: a model's diff often does not apply,
+// and a half-applied edit leaves a procedure that is neither old nor new. Two
+// complete bodies are also what a person compares side by side.
 //
 // The prior body is kept (learning.RefineTool), which is what makes this safe
-// to offer an agent at all: a refinement that made a skill worse is one
-// rollback away rather than a loss.
+// to offer an agent: a refinement that made a skill worse is one rollback away.
 type refineSkill struct {
 	skills RefinableSkills
 
 	// bodyMax is learning.skill_refinement.max_body_chars: the ceiling on
-	// the whole procedure after the edit. It was documented as a runaway
-	// guard and enforced nowhere — refine.go clipped only the note.
+	// the whole procedure after the edit.
 	bodyMax int
 
 	// versions is learning.skill_refinement.max_versions_kept, passed
@@ -108,21 +103,16 @@ func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 			"procedure. It replaces the current body, so a partial edit " +
 			"would delete the rest of the skill."), nil
 	case len(reason) > diaryNoteMax:
-		// REFUSED, not clipped — the same rule the body cap below states,
-		// and checked HERE, beside it, before any store work: a refusal
-		// after the skill has been loaded costs a round for an argument
-		// the model could have fixed up front.
+		// REFUSED, not clipped, as the body cap below is, and before any
+		// store work so the model fixes it in the same round.
 		return failed(fmt.Sprintf(
 			"That `reason` is %d characters and is capped at %d. Say what "+
 				"practice superseded the old text, in a sentence.",
 			len(reason), diaryNoteMax)), nil
 	case t.bodyMax > 0 && len(content) > t.bodyMax:
-		// REFUSED, not truncated. A skill is a procedure the seat will
-		// follow, and half a procedure is worse than the one it already
-		// has — a clip lands mid-step and the model reads the remainder
-		// as the whole. The cap exists because a body that grows an
-		// annotation per turn grows without bound, so the answer is to
-		// tighten the text, which is something the model can do.
+		// REFUSED, not truncated: a clip lands mid-step and the seat follows
+		// the remainder as the whole procedure. The cap stops a body that
+		// grows an annotation per turn; the remedy is tighter text.
 		return failed(fmt.Sprintf(
 			"That body is %d characters and this company caps a skill at %d "+
 				"(learning.skill_refinement.max_body_chars). Tighten it: drop "+
@@ -130,8 +120,7 @@ func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 			len(content), t.bodyMax)), nil
 	}
 
-	// This seat's own skills only. Editing a colleague's would let one
-	// agent rewrite another's learned procedure with nothing in the way.
+	// This seat's own skills only: no agent rewrites another's procedure.
 	sk, found, err := t.skills.Get(ctx, handle, name)
 	if err != nil {
 		return nodeFailure(ctx, RefineSkillTool, err, fmt.Sprintf("Could not load %q", clip(name)), ""), nil
@@ -146,9 +135,8 @@ func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	rev := sk.Revision()
 	rev.Content = content
 	if reason != "" {
-		// Recorded on the REFINEMENT rather than folded into the body: it
-		// explains the change, and a body carrying its own changelog grows
-		// one entry per edit in every prompt that loads it.
+		// The reason goes on the REFINEMENT, not into the body: a body
+		// carrying its changelog grows per edit in every prompt that loads it.
 		rev.Description = sk.Description
 	}
 	updated, err := t.skills.Update(ctx, sk.ID, rev, learning.Refinement{
@@ -161,10 +149,9 @@ func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 		return nodeFailure(ctx, RefineSkillTool, err, fmt.Sprintf("Could not refine %q", clip(name)),
 			"The skill is as it was."), nil
 	}
-	// The VERSION is what makes successive refinements distinguishable, and
-	// the kind tells a success annotation from a counter-example. Published
-	// after the write, because an event for a refinement that failed to
-	// store would put a version in the feed that no rollback can reach.
+	// The VERSION tells successive refinements apart, the kind a success
+	// annotation from a counter-example. Published after the write, so the
+	// feed never names a version no rollback can reach.
 	if agentID, why := seatAgentID(turn); why == "" {
 		note(ctx, t.events, turn, types.SkillRefined{
 			Agent: agentID, AgentHandle: handle, RoleName: turn.Role(),

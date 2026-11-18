@@ -16,9 +16,9 @@ const (
 )
 
 // A RELAUNCH CARRIES THE SAME BLOCK. What the dispatch told the seat is frozen
-// on the turn's park, so a relaunch of the turn, built from the parked state
-// alone, briefs its run with the same "What changed" bytes and the same "Your
-// access" section the first launch did, whatever the access is by then.
+// on the turn's park, so a relaunch, built from the parked state alone, briefs
+// its run with the first launch's "What changed" and "Your access" bytes,
+// whatever the access is by then.
 //
 // Mutation: drop Access or CapabilityChanges from frozen or thawed and the
 // relaunch's prompts lose them.
@@ -53,10 +53,9 @@ func TestARelaunchCarriesTheSameBlock(t *testing.T) {
 }
 
 // A CONTINUED CONVERSATION IS TOLD THE CHANGE. A conversation's next turn
-// continues the session its last turn left, which said whatever it said about
-// the seat's access before it changed; its run is handed the lead and then the
-// turn's whole fresh brief, so the change block reaches the continued session
-// as the newest message in it.
+// continues a session that described the seat's access before it changed; its
+// run is handed the lead and then the turn's whole fresh brief, so the change
+// block is the newest message in the continued session.
 //
 // Mutation: leave CapabilityChanges out of the fresh brief and the continued
 // session is never told.
