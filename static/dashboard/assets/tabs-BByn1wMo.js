@@ -1,0 +1,1 @@
+import{bi as e}from"./Modal-Dv2Sj11l.js";import{u as t}from"./keymap-hB1crjto.js";function n(n,r,i=`section`,a=r[0]){let[o,s]=e(n,a,i),c=r.includes(o)?o:a;return t({tab:{run:(e,t)=>s(r[t]),when:e=>i===`section`&&e<r.length}}),[c,s]}export{n as t};
