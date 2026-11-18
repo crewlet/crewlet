@@ -99,11 +99,16 @@ func (w *Window) Take(ctx context.Context, n int) error {
 }
 
 // Give returns n bytes a [Window.Take] held, and lets the oldest takes out
-// that now fit.
+// that now fit. More than w holds is a take given back twice, which would let
+// out more than the window: a bug in its caller, so it panics rather than
+// clamps.
 func (w *Window) Give(n int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.held = max(w.held-n, 0)
+	if n < 1 || n > w.held {
+		panic(fmt.Sprintf("jsapi: %d bytes given back to a link's window that holds %d", n, w.held))
+	}
+	w.held -= n
 	w.admitLocked()
 }
 
@@ -133,7 +138,7 @@ func (w *Window) withdraw(t *windowTake) {
 	defer w.mu.Unlock()
 	select {
 	case <-t.given:
-		w.held = max(w.held-t.n, 0)
+		w.held -= t.n
 	default:
 		w.queue = slices.DeleteFunc(w.queue, func(q *windowTake) bool { return q == t })
 	}

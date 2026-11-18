@@ -180,3 +180,23 @@ func TestATakeWithdrawnLetsTheTakesBehindItOut(t *testing.T) {
 		t.Fatal("a window of no bytes was made")
 	}
 }
+
+// A TAKE GIVEN BACK TWICE IS A BUG, NEVER ROOM: the window panics rather than
+// let out more than its size behind it.
+//
+// Mutation: clamp what is held at zero, and the second give lets a take out
+// beside one already holding the window.
+func TestAWindowGivenBackMoreThanItHoldsPanics(t *testing.T) {
+	t.Parallel()
+	w := jsapi.NewLinkWindow()
+	if err := w.Take(t.Context(), deliveryBytes); err != nil {
+		t.Fatal(err)
+	}
+	w.Give(deliveryBytes)
+	defer func() {
+		if recover() == nil {
+			t.Fatal("a take given back twice was taken as room")
+		}
+	}()
+	w.Give(deliveryBytes)
+}
