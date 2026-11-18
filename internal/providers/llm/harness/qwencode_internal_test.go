@@ -138,21 +138,17 @@ func TestQwenCodeOffersTheWebToolsAndNothingElse(t *testing.T) {
 	}
 }
 
-// NOTHING IS CARRIED FROM ONE CALL TO THE NEXT. Measured, both builds wrote
-// the call's transcript under `.qwen/projects/<slug>/chats` and ran a second,
-// background request with file-writing tools after every call to extract
-// memories into `.qwen/memories` and `.qwen/projects/*/memory`, whose index the
-// next call was then handed. The switches stop each at the source — no
-// recording, no extraction, no consolidation, no skill review — and the
-// volatile paths prune whatever a build that ignores a switch leaves behind,
-// together with the per-project scratch and the usage record both builds
-// write on every call, and the global QWEN.md, AGENTS.md and rules, which both
-// read into every call's system prompt.
+// NOTHING IS CARRIED FROM ONE CALL TO THE NEXT. Measured, both builds wrote the call's
+// transcript under `.qwen/projects/<slug>/chats` and ran a second, background request
+// after every call to extract memories into `.qwen/memories` and `.qwen/projects/*/memory`,
+// whose index the next call was handed. The switches stop each at the source (no
+// recording, extraction, consolidation or skill review) and the volatile paths prune what
+// a build ignoring a switch leaves, with the per-project scratch, the usage record both
+// write per call, and the global QWEN.md, AGENTS.md and rules both read into the system prompt.
 //
-// The request-log directory is pinned in the seat's home for the same reason:
-// the harness keys a housekeeping marker file in the home by that directory, which
-// otherwise lies under each call's own working directory, so the home gained a
-// marker for every call it ever ran.
+// The request-log directory is pinned in the seat's home for the same reason: the
+// harness keys a housekeeping marker in the home by that directory, which otherwise lies
+// under each call's own working directory, so the home gained a marker per call.
 func TestQwenCodeKeepsNothingFromOneCallForTheNext(t *testing.T) {
 	t.Parallel()
 	doc := qwenSettings(t)
@@ -215,19 +211,17 @@ func TestQwenCodeKeepsNothingFromOneCallForTheNext(t *testing.T) {
 	}
 }
 
-// NOTHING ABOVE THE CALL'S DIRECTORY CONFIGURES IT, AND NOTHING BUT THE CALL
-// LEAVES THE MACHINE. Qwen Code reads `.qwen/.env`, else `.env`, from the
-// first directory that has one on the walk from its working directory to the
-// root — the engine's `.git` file does not stop that walk — and applies every
-// variable the environment leaves unset: measured on both builds, an `.env`
-// between a checkout and the state directory set QWEN_SYSTEM_MD for a seat's
-// call, and the seat's system prompt was replaced by a file of the checkout's.
-// A `.qwen/.env` in the call's own directory is the first the walk meets.
+// NOTHING ABOVE THE CALL'S DIRECTORY CONFIGURES IT, AND NOTHING BUT THE CALL LEAVES THE
+// MACHINE. Qwen Code reads `.qwen/.env`, else `.env`, from the first directory that has
+// one on the walk from its working directory to the root (the engine's `.git` file does
+// not stop it) and applies every variable the environment leaves unset: measured on both
+// builds, an `.env` between a checkout and the state directory set QWEN_SYSTEM_MD for a
+// seat's call, replacing its system prompt with a file of the checkout's. A `.qwen/.env`
+// in the call's own directory is the first the walk meets.
 //
-// The other switches keep the harness to the one connection the call is for —
-// usage statistics, update checks and the model catalogue each opened their
-// own — and stop it starting a process that holds the host awake, reading
-// hooks or listing skills.
+// The other switches keep the harness to the one connection the call is for (usage
+// statistics, update checks and the model catalogue each opened their own) and stop it
+// starting a process that holds the host awake, reading hooks or listing skills.
 func TestQwenCodeIsConfiguredByTheCallAlone(t *testing.T) {
 	t.Parallel()
 	doc := qwenSettings(t)

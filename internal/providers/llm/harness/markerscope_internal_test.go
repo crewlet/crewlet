@@ -13,20 +13,15 @@ import (
 
 // A SENTENCE THE MODEL WROTE MUST NOT BENCH THE SEAT'S CREDENTIAL.
 //
-// What a harness says on stdout is searched in the default scope, and it has to be:
-// Claude Code reports a spent plan on a ZERO exit with the vendor's sentence
-// standing where the answer should be, so a marker confined to stderr would
-// never fire and the entry would never sit out. But on a healthy run what it
-// says is the MODEL's words, so there a sentinel counts only where it begins
-// the first line — the answer IS the vendor's report — and anywhere only in a
-// run the harness itself reported failed. A seat ASKED about rate limits answers
-// in prose that mentions one, and that is an answer.
+// Stdout is searched in the default scope, and must be: Claude Code reports a spent
+// plan on a ZERO exit with the vendor's sentence where the answer should be, so a
+// stderr-only marker would never fire. But on a healthy run stdout is the MODEL's
+// words, so a sentinel counts there only where it begins the first line, and
+// anywhere only in a run the harness reported failed: a seat ASKED about rate limits
+// answers in prose that mentions one. A harness whose failures only reach stderr says
+// so, and then no sentence the model writes classifies anything.
 //
-// A harness whose failures only ever reach stderr says so, and then no sentence
-// the model writes classifies anything, failed run or not.
-//
-// Mutation: match the answer anywhere on a clean run, and the innocent answer
-// classifies.
+// Mutation: match the answer anywhere on a clean run, and the innocent answer classifies.
 func TestOnlyAVendorsOwnReportInTheAnswerClassifies(t *testing.T) {
 	t.Parallel()
 	// What a seat asked about its own limits might legitimately say.

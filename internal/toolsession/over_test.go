@@ -77,15 +77,12 @@ func (c answerGatedConn) Write(ctx context.Context, msg jsonrpc.Message) error {
 }
 
 // A CALL'S REQUEST IS OVER ONLY ONCE ITS ANSWER IS WRITTEN. A dispatcher that
-// answers a call while its tool runs on — the bridge, as the opening a call was
-// made on ends — waits for that answer to be out before it closes the session,
-// whose close writes no answer once it has begun; what it waits on is the
-// request's end ([toolsession.Call.Over]). That end comes after the answer's
-// write by the SDK's own order (go-sdk v1.8.0 writes a call's response, then
-// cancels its request), which is its behaviour rather than its promise, so it
-// is held here at the write itself: with the answer's write held on the
-// transport, the SDK already writing it, the request is not over; once the
-// write has returned and the client has the answer, it is.
+// answers while its tool runs on (the bridge) waits on the request's end
+// ([toolsession.Call.Over]) before closing the session, whose close writes no
+// answer. That end follows the answer's write by the SDK's own order (go-sdk
+// v1.8.0), a behaviour rather than a promise, so it is held here at the write:
+// with the write held on the transport the request is not over; once it has
+// returned and the client has the answer, it is.
 //
 // Mutation: hand the dispatcher the beat's own end as Over (`going.unread`,
 // which the handler's return ends), or have the SDK cancel the request ahead

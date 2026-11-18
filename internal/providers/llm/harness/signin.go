@@ -231,21 +231,12 @@ func (p *Provider) signsInWithKey() bool {
 // and how an operator supplies it.
 //
 // WORDED ONCE, for every message that tells an operator how to sign such an
-// entry in — the doctor's "no sign-in", a remote launch's refusal,
-// `crewlet llm login`'s refusal of a token the mode never reads, and its
-// `-username` refusal of a harness with no credential login
-// ([Provider.CredentialLogin]). Each used to choose its remedy for itself, and
-// three of them chose it by the harness's profile alone: an api-key or inherit-env
-// Claude Code entry was told to mint a headless token, which api-key removes
-// from the harness's environment and inherit-env never looks for in the secret
-// store the token is stored in — and the command that mints one stored it
-// anyway and printed an auth.token snippet that validation refuses under
-// either mode.
-//
-// A subscription entry has none: its credentials are a login, which the login
-// commands write, and a headless token, which the mode reads from the secret
-// store — each message words those for its own setting, since what travels to
-// a remote box differs from what a host-side call can read.
+// entry in: the doctor's "no sign-in", a remote launch's refusal, `crewlet llm
+// login`'s refusals ([Provider.CredentialLogin]). Choosing the remedy by profile
+// alone told these entries to mint a headless token, which neither mode reads.
+// A subscription entry has none: its credentials are a login and a headless
+// token from the secret store, which each message words for its own setting
+// (what travels to a remote box differs from what a host-side call can read).
 type ModeSignIn struct {
 	// Mode is the entry's auth mode, api-key or inherit-env.
 	Mode AuthMode
@@ -280,18 +271,14 @@ func (m ModeSignIn) Missing() string {
 // ModeSignIn is this entry's [ModeSignIn], or false under subscription.
 //
 // THE VARIABLES ARE THE PROFILE'S, as [applyAuth] uses them. An entry whose
-// profile names none for its mode — api-key on a harness with no api_key_env,
-// inherit-env on one with neither variable — is refused on every write of the
-// configuration and only warned about where a revision is applied, so it can
-// run; its mode then hands the harness nothing at all, and the remedy is the mode.
+// profile names none for its mode is refused on every configuration write and
+// only warned about where a revision is applied, so it can run; its mode then
+// hands the harness nothing, and the remedy is the mode.
 //
-// A VARIABLE OUTSIDE THE REFERENCE GRAMMAR IS NO ROUTE ([misnamedVariable]): no
-// secret store or ${VAR} can hold the name and no shell can export it, so a key
-// stored with `crewlet secrets set` or exported never reaches the harness under it.
-// It is left out of what the operator is told to supply, and where it is the
-// only variable the mode has, the remedy is the overrides field that names it —
-// never a seat's role.sandbox.env: every write of the company document refuses
-// such a name, so the field is the change to make either way, and a name
+// A VARIABLE OUTSIDE THE REFERENCE GRAMMAR IS NO ROUTE ([misnamedVariable]): it
+// is left out of what the operator is told to supply, and where it is the mode's
+// only variable the remedy is the overrides field naming it, never a seat's
+// role.sandbox.env: every company-document write refuses such a name, and one
 // carrying `=` sets a different variable wherever it is placed.
 func (p *Provider) ModeSignIn() (ModeSignIn, bool) {
 	// No Variables: none would reach the harness.
@@ -421,16 +408,13 @@ func (p *Provider) ModeSignIn() (ModeSignIn, bool) {
 // outside the reference grammar: `MY-TOKEN`, `MY=KEY`.
 //
 // NOTHING THAT KEEPS A CREDENTIAL CAN HOLD ONE. The secret store refuses the
-// name, so `crewlet llm login -capture-token` would have nowhere to put a token
-// the vendor had just minted; a ${VAR} cannot spell it; no shell exports one;
-// and a name carrying `=` sets a different variable in the harness's environment.
-// Only overrides can name one — every shipped profile names its variables in
-// the grammar — and every write of the company document refuses it, but that
-// is an admission rule: an entry loaded to run, a revision being applied or the
-// file `crewlet llm` reads, still carries it. So every route this package words
-// for an operator leaves such a variable out, and the doctor names its field:
-// a route through it is advice nobody can follow. The grammar is envref's, the
-// one the store and the resolver hold every name to.
+// name (so `crewlet llm login -capture-token` has nowhere to put a minted
+// token), a ${VAR} cannot spell it, no shell exports one, and a name carrying
+// `=` sets a different variable. Only overrides can name one, and every
+// company-document write refuses it, but that is an admission rule: an entry
+// loaded to run, a revision being applied or the file `crewlet llm` reads still
+// carries it. So every route this package words for an operator leaves such a
+// variable out, and the doctor names its field. The grammar is envref's.
 type misnamedVariable struct {
 	// field is the overrides key that names it: token_env or api_key_env.
 	field string

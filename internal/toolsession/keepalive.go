@@ -10,36 +10,16 @@ import (
 
 // A RUNNING CALL'S ANSWER, KEPT GOING ([Server.KeepAnswersGoing]).
 //
-// A call's answer is a response its harness reads, and a harness times that
-// response: over streamable HTTP the SDK writes nothing on a call's response
-// until its first event, which for a call that sends no progress is the
-// answer itself, so a call whose tool takes minutes has a response that is
-// silent for minutes. So the response is started the moment the call starts
-// running, by a progress on the call's own token, and kept going by another
-// every cadence: what a harness's silence checks read as a call still at
-// work.
-//
-// WHAT IS SENT is the protocol's own notification, the progress counted from
-// zero and nothing else of it: no total, which nobody knows, and no message,
-// which a harness may show its model (neither harness that dials the bridge
-// hands one to it). Over the session the call came on, under the request's
-// own context, which is what puts the notification on the call's own
-// response rather than on the session's stream for messages no request
-// carries.
-//
-// WHEN IT STOPS, and never writes again: the dispatcher returned (the handler
-// stops the beat and waits for it before it hands the answer back, so no
-// progress races the answer or follows it, and none is left to cross a
-// stream the answer closed); the request's context ended (the harness
-// cancelled the call, or its connection failed, and a progress for a token
-// it no longer holds is one more error for it to log); or a write failed.
-//
-// A FAILED WRITE IS THE CALL'S RESPONSE GONE. The SDK refuses a write on a
-// stream whose POST has ended, and a session that is closing; with no event
-// store it keeps nothing a harness could resume a stream from. So nobody can
-// read the call's answer any longer, which is what [Call.Abandoned] says, and
-// it is closed: a harness that hung up on its POST without cancelling the
-// call is seen at the next beat, where before it was seen not at all.
+// Over streamable HTTP the SDK writes nothing on a call's response until its
+// first event, so a tool that takes minutes leaves a harness's timer a silent
+// one. A progress on the call's token starts the response as the call starts
+// running; another every cadence reads as a call still at work. No total, no
+// message (a harness may show it), under the request's context so it lands on
+// the call's own response.
+// IT STOPS, never writing again, when the dispatcher returned (the handler
+// waits for the beat first, so no progress races the answer), the request's
+// context ended, or a write failed. A FAILED WRITE IS THE RESPONSE GONE: the
+// SDK keeps nothing to resume, so [Call.Abandoned] reports it at the next beat.
 
 // beat keeps one call's answer going while its tool runs.
 type beat struct {

@@ -208,21 +208,17 @@ func TestASystemPromptFileNameMayNotBeAPath(t *testing.T) {
 	}
 }
 
-// THE KIMI PROFILE'S AGENT FILE IS THE PROFILE'S TOOL DENIAL, on both of its
-// channels, so each has to be a file that harness accepts: the vendor's reference
-// says a file passed through `--agent-file` "must be valid, otherwise the harness
-// reports the error and exits", and `description` is the one required field.
+// THE KIMI PROFILE'S AGENT FILE IS THE PROFILE'S TOOL DENIAL, on both channels,
+// so each must be a file that harness accepts: a file passed through
+// `--agent-file` must be valid or the harness exits, and `description` is the
+// one required field.
 //
-// The two channels are one file whose body differs. The replacing body is the
-// engine's text alone, so a side pass gets nothing of the vendor's; the
-// appending body is the engine's text and THEN `${base_prompt}`, the vendor's
-// default — in that order because the default carries the call's directory,
-// its listing and the AGENTS.md chain, and anything per call ahead of a seat's
-// prompt makes every call's copy of it a cache miss.
-//
-// Stated once here so that an edit dropping the frontmatter — or the two web
-// tools, or the allowlist that removes everything else, or the order — has to
-// argue with this rather than with nothing.
+// One file, two bodies. The replacing body is the engine's text alone, so a
+// side pass gets nothing of the vendor's; the appending body is the engine's
+// text THEN `${base_prompt}`, in that order because the default carries the
+// call's directory, listing and AGENTS.md chain, and anything per call ahead of
+// a seat's prompt makes every call's copy a cache miss. An edit dropping the
+// frontmatter, the two web tools, the allowlist or the order must argue here.
 func TestTheKimiProfilesAgentFilesDenyTheirToolsAndKeepTheWeb(t *testing.T) {
 	t.Parallel()
 	p, ok := harnessprofile.Builtin("kimi-code")

@@ -23,48 +23,14 @@ import (
 
 // TESTING A SERVER: one connection of its own, walked stage by stage.
 //
-// A test brings up a connection exactly as the engine brings up the server it
-// runs ([connect]): the same transport, for a local server the same launch,
-// the same scrubbed environment ([mergedEnv]) and the same startup budget per
-// stage. It then lists the server's tools and closes the connection. Nothing
-// it opens is handed to a bridge, so a test changes nothing a seat's turn
-// sees, and a server that is serving keeps serving beside it.
-//
-// # A test never calls a tool
-//
-// It makes three requests of the server: the handshake, the listing and the
-// session's close. A tool call is a write somebody else's system carries out,
-// and a person asking whether a server works has not asked for one; nothing
-// here can make one, since [Test] holds a client whose only methods it uses
-// are connect, list and stop.
-//
-// # Each stage is timed where it happens
-//
-// A remote server's connection reports each of its stages through the
-// standard library's trace hooks ([httptrace.ClientTrace]): the name looked
-// up, the socket connected, the TLS handshake. A test dials on a transport of
-// its own, a clone of the shared one, so its first request opens a connection
-// rather than reusing one a running server holds, and every stage is measured
-// rather than skipped; the clone's pool is closed when the test ends. A local
-// server's launch is timed from the moment its process starts.
-//
-// # The class is decided where the facts are
-//
-// A failure carries the class [connect] and [ClassOf] decide (failure.go), and
-// the stage is the one whose facts produced it: a lookup that failed is the
-// resolve stage's, a dial the connect stage's, a certificate the TLS stage's,
-// an answer the server gave the discover stage's, a process that could not
-// start or exited before it answered the launch stage's. A server that answers
-// and lists no tool it can be offered under is [FailEmptyTools], a finding
-// about a server that works rather than a failure to reach it.
-//
-// # The words carry no value
-//
-// Every sentence the report holds names the address with its credentials
-// withheld ([redact.URL]), and the values the spec carries (its headers and
-// its environment) are withheld wherever a server's error or its process's
-// last words repeat them ([withheld]). The engine passes the sentences through
-// the redaction pass and bounds them before they leave the node.
+// A test connects as the engine does ([connect]: same transport, launch,
+// scrubbed environment [mergedEnv], startup budget) and reaches no bridge. It
+// never calls a tool, a write in somebody else's system: [Test] uses only
+// connect, list and stop. A remote stage is timed by [httptrace.ClientTrace]
+// on a clone of the shared transport, so every stage opens a fresh connection
+// and is measured. A failure's class is [ClassOf]'s (failure.go), its stage
+// the one whose facts produced it; no offerable tool is [FailEmptyTools], a
+// finding. Sentences carry no credentials ([redact.URL], [withheld]).
 
 // TestStage is one stage of a test, in the order a test walks them.
 type TestStage string
