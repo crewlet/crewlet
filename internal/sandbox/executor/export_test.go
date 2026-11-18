@@ -97,6 +97,10 @@ func RecordStart(text string) (began bool, after string) {
 	return rec.began, rec.from
 }
 
+// SessionRecordOf is the record of a run that worked in session, as
+// [Runner.packNow] hands it to a pack.
+func SessionRecordOf(session string) sessionRecord { return sessionRecord{id: session} }
+
 // OpenCodeCursorTail is how much of a list answer's end a run's script reads
 // its cursor from ([openCodeCursor]).
 const OpenCodeCursorTail = openCodeCursorTail

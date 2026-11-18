@@ -237,14 +237,17 @@ type carrier interface {
 // database the run's server holds, reachable only from the run's script (the
 // server's address and password are the script's alone), so none is saved.
 type saver interface {
-	// PackSave is the script that packs session now, beside a harness that
-	// may still be working ([claudeHeldTar]), staged in staged
+	// PackSave is the script that packs rec's session now, beside a harness
+	// that may still be working ([claudeHeldTar]), staged in staged
 	// ([Paths.SessionSaveStaging]) and moved to dest ([Paths.SessionSave]) —
 	// never [Paths.SessionCapture] nor a place another save moves over — its
 	// digest kept as every pack's is. It ends as [carrier.Pack] does
 	// ([packNothing] where the harness wrote no transcript, [packFailed] where
-	// no save was made, its error stream saying why) and runs as it does.
-	PackSave(paths Paths, session, staged, dest string) string
+	// no save was made, its error stream saying why) and runs as it does. An
+	// error, and no script, where the record alone refuses the save: handed
+	// the record as the box holds it ([Runner.packNow]), a saver judges it
+	// before any script runs.
+	PackSave(paths Paths, rec sessionRecord, staged, dest string) (string, error)
 }
 
 // mcpHolder is a harness that can be held to the MCP servers a run hands it,

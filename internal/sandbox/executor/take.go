@@ -373,8 +373,8 @@ func (r *Runner) PackCapture(ctx context.Context, box sandbox.Sandbox,
 	paths := PathsFor(box)
 	staged, dest := paths.SessionPackStaging(pack), paths.SessionPackHeld(pack)
 	release := func(ctx context.Context) { r.dropPack(ctx, box, staged, dest) }
-	rec, packed, err := r.packNow(ctx, box, func(paths Paths, session string) string {
-		return carries.Pack(paths, session, staged, dest, working)
+	rec, packed, err := r.packNow(ctx, box, func(paths Paths, rec sessionRecord) (string, error) {
+		return carries.Pack(paths, rec.id, staged, dest, working), nil
 	})
 	if err != nil || !packed {
 		release(ctx)
@@ -504,8 +504,8 @@ func (r *Runner) PackSave(ctx context.Context, box sandbox.Sandbox, taker string
 	pack := uuid.NewString()
 	paths := PathsFor(box)
 	staged, dest := paths.SessionSaveStaging(taker, pack), paths.SessionSave(taker, pack)
-	rec, packed, err := r.packNow(ctx, box, func(paths Paths, session string) string {
-		return saves.PackSave(paths, session, staged, dest)
+	rec, packed, err := r.packNow(ctx, box, func(paths Paths, rec sessionRecord) (string, error) {
+		return saves.PackSave(paths, rec, staged, dest)
 	})
 	if err != nil || !packed {
 		return sandbox.SessionArchive{}, err
@@ -615,14 +615,16 @@ func savePath(paths Paths, path string) bool {
 }
 
 // packNow runs pack — a harness's script that packs a session now, beside or
-// after its harness — for the session the box's record names, in a login shell
-// with the box's bin directory first on its PATH as the run's wrapper runs it,
-// within [sandbox.SessionPackWait]: packed, where the pack made its archive;
-// not, with no error, where there is nothing to pack — a record that names no
-// session, a harness that wrote no transcript ([packNothing]); and an error
-// where the pack failed, with what it said ([packFailed]).
+// after its harness — for the session the box's record names, handed that
+// record as the box holds it, in a login shell with the box's bin directory
+// first on its PATH as the run's wrapper runs it, within
+// [sandbox.SessionPackWait]: packed, where the pack made its archive; not, with
+// no error, where there is nothing to pack — a record that names no session, a
+// harness that wrote no transcript ([packNothing]); and an error where pack
+// refused the record before any script ran, saying why, or where the pack
+// failed, with what it said ([packFailed]).
 func (r *Runner) packNow(ctx context.Context, box sandbox.Sandbox,
-	pack func(paths Paths, session string) string) (sessionRecord, bool, error) {
+	pack func(paths Paths, rec sessionRecord) (string, error)) (sessionRecord, bool, error) {
 
 	paths := PathsFor(box)
 	rec, refusal, err := r.readSessionRecord(ctx, box, paths)
@@ -632,7 +634,11 @@ func (r *Runner) packNow(ctx context.Context, box sandbox.Sandbox,
 	if refusal != "" || rec.id == "" {
 		return sessionRecord{}, false, nil
 	}
-	script := "PATH=" + sandbox.ShellQuote(paths.BinDir()) + `:"$PATH"; export PATH` + "\n" + pack(paths, rec.id)
+	packs, err := pack(paths, rec)
+	if err != nil {
+		return sessionRecord{}, false, err
+	}
+	script := "PATH=" + sandbox.ShellQuote(paths.BinDir()) + `:"$PATH"; export PATH` + "\n" + packs
 	res, err := box.Exec(ctx, "sh -lc "+sandbox.ShellQuote(script),
 		sandbox.ExecOptions{TimeoutSec: sandbox.SessionPackWait.Seconds()})
 	if err != nil {

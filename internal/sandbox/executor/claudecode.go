@@ -1555,9 +1555,10 @@ func (ClaudeCode) Pack(paths Paths, session, staged, dest string, working bool) 
 // own staging directory, and over dest, this save's own place — never the
 // job's capture, which every read of a job that is over takes as its final
 // archive — its digest kept, ending as [ClaudeCode.Pack] does
-// ([Runner.PackSave]).
-func (ClaudeCode) PackSave(paths Paths, session, staged, dest string) string {
-	return claudeOnDemand(paths, session, packAt{staged: staged, dest: dest, working: true})
+// ([Runner.PackSave]). The record refuses no Claude Code save, so it never
+// errs.
+func (ClaudeCode) PackSave(paths Paths, rec sessionRecord, staged, dest string) (string, error) {
+	return claudeOnDemand(paths, rec.id, packAt{staged: staged, dest: dest, working: true}), nil
 }
 
 // claudeOnDemand is a pack the engine makes of session, outside the run's own
