@@ -2722,7 +2722,7 @@ const (
 	// A change's conversation as a timeline with finding excerpts: 6801.9 KiB (6,965,137 bytes),
 	// 21,743 over main: 6802 KiB.
 	// A Usage limits column of compact meters per model, and Finish and save in the model
-	// wizard, on kit 0.156.0: 6889.8 KiB (7,055,206 bytes), 16,349 over main: 6890 KiB.
+	// wizard, on kit 0.156.0: 6890.0 KiB (7,055,339 bytes), 16,482 over main: 6890 KiB.
 	treeBudget = 5<<20 + 1770<<10
 )
 

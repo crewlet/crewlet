@@ -1,14 +1,14 @@
 /**
  * Add a model, or edit one, step by step: its name and harness, how it signs in,
  * the model, where it runs a seat's executor, what it is used for, its limits and a
- * test call. Review checks the whole change with the engine before anything
- * is stored, and the engine's problems land on the fields they are about,
- * each with the step that fixes it.
+ * test call. Finish and save runs the test call and the engine's check before
+ * anything is stored, and the engine's problems land on the fields they are
+ * about, each with the step that fixes it.
  *
  * EDITING IS THE SAME WIZARD, prefilled from the model (`editing`): every step
  * is reachable at once, the name and the harness are its identity and stay, a
- * stored credential is shown as stored and replaced only on request, and
- * Finish and save tests, checks and saves from any step in one click.
+ * stored credential is shown as stored and replaced only on request, Finish and
+ * save is a footer button on every step, and Review lists every seat it moves.
  *
  * THE COMMIT ORDER IS SETUP'S, value then pointer (design §5.1): a pasted
  * credential is tested in a fresh home and stored first, with the draft entry
@@ -280,9 +280,9 @@ export function ModelWizard({
   const [base] = useState(() => (editing ? baseOf(editing) : undefined));
   const [initial] = useState(() => openingDraft(data, editing, target));
   const [draft, setDraft] = useDraftState<Draft>(initial);
-  const steps = stepsFor(draft);
+  const steps = stepsFor(draft, !!editing);
   const [step, setStep] = useState<WizardStep>(() =>
-    target && stepsFor(initial).includes(target.step) ? target.step : "harness",
+    target && stepsFor(initial, !!editing).includes(target.step) ? target.step : "harness",
   );
   // WHAT IS BEING SET UP reaches the Dashboard Assistant, read-only and with no credential (assistantDraft.ts).
   const draftFields = useMemo(
@@ -668,7 +668,9 @@ export function ModelWizard({
     setFinish({ kind: "running" });
     try {
       if (local.length > 0) setAttempted(new Set(steps));
-      const ready = await runCheck(true);
+      // A new device sign-in is made after the save, so it has nothing to test yet.
+      const device = draft.method === "device" && original?.method !== "device";
+      const ready = await runCheck(!device);
       if (!ready && inflight.current?.signal.aborted) return;
       const saved = ready ? await save(ready) : false;
       if (!saved && !lifetime().aborted) setFinish({ kind: "failed" });
@@ -692,6 +694,10 @@ export function ModelWizard({
     if (step === "review") {
       if (check.kind === "ready") void save();
       else if (check.kind === "idle") void runCheck();
+      return;
+    }
+    if (step === "test") {
+      void finishAndSave();
       return;
     }
     if (local.some((p) => stepOf(p, draft.key) === step)) {
@@ -748,36 +754,40 @@ export function ModelWizard({
 
   const reviewing = step === "review";
   const checking = check.kind === "checking";
-  const primary = next ? (
-    <Button variant="primary" onClick={advance}>
-      Continue
-    </Button>
-  ) : (
+  const finishButton = (variant: "primary" | "secondary") => (
     <Button
-      variant="primary"
-      onClick={advance}
-      loading={saving !== false || checking}
-      disabled={listedProblems.length > 0 || check.kind === "blocked"}
+      variant={variant}
+      onClick={() => void finishAndSave()}
+      loading={finish.kind === "running"}
+      disabled={finish.kind === "running" || saving !== false}
     >
-      {checking ? "Checking…" : original ? "Save changes" : "Create model"}
+      Finish and save
     </Button>
   );
+  const primary =
+    step === "test" ? (
+      finishButton("primary")
+    ) : next ? (
+      <Button variant="primary" onClick={advance}>
+        Continue
+      </Button>
+    ) : (
+      <Button
+        variant="primary"
+        onClick={advance}
+        loading={saving !== false || checking}
+        disabled={listedProblems.length > 0 || check.kind === "blocked"}
+      >
+        {checking ? "Checking…" : original ? "Save changes" : "Create model"}
+      </Button>
+    );
   const footer = (
     <>
       {/* BACK IS ALWAYS IN THE ROW, disabled on the first step, so the row keeps one shape. */}
       <Button variant="secondary" disabled={!back} onClick={() => back && go(back)}>
         Back
       </Button>
-      {original && !reviewing ? (
-        <Button
-          variant="secondary"
-          onClick={() => void finishAndSave()}
-          loading={finish.kind === "running"}
-          disabled={finish.kind === "running" || saving !== false}
-        >
-          Finish and save
-        </Button>
-      ) : null}
+      {original && !reviewing && step !== "test" ? finishButton("secondary") : null}
     </>
   );
   const reviewErrors = errorWhere(
