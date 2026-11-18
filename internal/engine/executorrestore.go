@@ -126,25 +126,17 @@ func storedSession(row executorkeep.TurnRow) executordomain.Session {
 }
 
 // ProbeSession answers which session a launch of the turn continues
-// ([runner.SessionProber]): on the turn's FIRST launch, the head its dispatch
-// read and the turn will freeze, answered from that read with no other
-// ([conversationRead.basis]); on a relaunch, the kept capture of the job it
-// follows, else the base the turn's first launch froze where the turn has kept
-// nothing, as [sandbox.Coordinator.ContinuedCapture] decides it for the seat's
-// chain — where the runner of a member that could take the launch restores it —
-// or why it continues none, which is logged, but for a conversation's first
-// turn, which had nothing to continue; and either way what the job before's
-// session's last request carried, which the in-place floor is made of.
-//
-// ANY MEMBER OF THE CHAIN, never one picked here: the launch picks its member
-// once, as it launches ([agentLauncher.member]), and a member's plan can be
-// spent or come back between this and that pick. Asked for one member, the
-// probe answered for a member the launch then passed over — holding the launch
-// to the floor of a session it would start fresh, or writing no continuation
-// for a session its member could have taken up. So the briefs that continue the
-// session are written wherever some member restores it, and the launch hands
-// them on only where the member it picked runs the harness that wrote the
-// session ([SessionBasis.Harness], [agentLauncher.continuedFloor]).
+// ([runner.SessionProber]): on the FIRST launch, the head its dispatch read
+// ([conversationRead.basis]); on a relaunch, as
+// [sandbox.Coordinator.ContinuedCapture] decides for the seat's chain, or why
+// none (logged, but for a conversation's first turn). EACH SESSION'S CONTEXT
+// IS ITS OWN: a kept capture's own measure and next-request estimate
+// ([runner.SessionBasis.ContextTokens], NextRequest) for the floor in any box,
+// its job's newest capture's, either way, for its copy in place (CopyContext,
+// CopyNextRequest), since one figure would hold a session to what another
+// carried. ANY MEMBER OF THE CHAIN, never one picked here: the launch picks
+// once as it launches, and hands the briefs on only where its member runs the
+// session's harness ([agentLauncher.continuedFloor]).
 func (l *agentLauncher) ProbeSession(ctx context.Context) runner.SessionBasis {
 	basis := l.probeSession(ctx)
 	// AND THE WINDOW EVERY PATH'S FIRST REQUEST IS JUDGED UNDER, on every basis
@@ -185,15 +177,16 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 	if base := continued.Base; base != nil {
 		// A TURN THAT HAS KEPT NOTHING, relaunched: the base its first launch
 		// froze, which its row still holds.
-		basis := baseBasis(*base, continued.Context)
-		basis.KeptTurn = continued.KeptTurn
+		basis := baseBasis(*base, continued.CopyContext)
+		basis.KeptTurn, basis.CopyNextRequest = continued.KeptTurn, continued.CopyNextRequest
 		return basis
 	}
 	if why != "" {
 		// THE SESSION THE TURN KEEPS, or else the base it froze, where the
 		// relaunch continues neither: a run that starts a session of its own
 		// beside it is told it may read it.
-		return runner.SessionBasis{Why: why, ContextTokens: continued.Context, KeptTurn: continued.KeptTurn}
+		return runner.SessionBasis{Why: why, CopyContext: continued.CopyContext,
+			CopyNextRequest: continued.CopyNextRequest, KeptTurn: continued.KeptTurn}
 	}
 	captured := continued.Capture
 	// ITS SAVE POINT, which every capture a relaunch continues states: one
@@ -209,12 +202,22 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 		// resumes it, its own box not yet acquired.
 		Release: continued.Row.HarnessVersion,
 		Through: through, NoteCursor: captured.NoteCursor,
-		Interrupted: captured.Interrupted, Home: captured.Home, ContextTokens: continued.Context,
+		Interrupted: captured.Interrupted, Home: captured.Home,
+		// AND WHETHER ITS JOB WENT ON PAST IT, and when it was taken: a
+		// capture that is not final was taken while its job still worked, so
+		// the run continuing it is told the session ends where it was saved,
+		// not where its job stopped.
+		WentOn: !captured.Final, CapturedAt: captured.At,
+		// WHAT THE CAPTURE ITSELF CARRIED AND ITS HARNESS PUT ITS NEXT REQUEST
+		// AT, the kept path's floor, and the same of the job's copy in its
+		// box, the in-place path's.
+		ContextTokens: captured.ContextTokens, NextRequest: captured.NextRequest(),
+		CopyContext: continued.CopyContext, CopyNextRequest: continued.CopyNextRequest,
 		KeptTurn: continued.KeptTurn,
-		// AND WHAT CLAUDE CODE COUNTS THE CAPTURE'S SESSION AT, as its take
-		// read its archive whole: what the kept path's first request is judged
-		// by.
-		Count: captured.ResumedCount,
+		// AND WHAT ITS HARNESS COUNTS THE CAPTURE'S SESSION AT, as its take
+		// read its archive whole, with the provider an OpenCode count's reply
+		// was answered by: what the kept path's first request is judged by.
+		Count: captured.ResumedCount, CountProvider: captured.CountProvider,
 		// AND THE READS AT OR BELOW IT THE SESSION HOLDS ONLY AS ITS JOB'S
 		// BRIEF'S COUNT, which the brief continuing it tells.
 		Owed: slices.Clone(captured.Omitted),
@@ -588,6 +591,10 @@ func sandboxSession(s *runner.SessionContinuation) *sandbox.SessionContinuation 
 	if x := s.Exact; x != nil {
 		out.Exact = &sandbox.ExactTelling{Resumer: x.Resumer, Brief: x.Brief, Replaced: x.Replaced, Told: x.Told}
 	}
+	if x := s.Summarized; x != nil {
+		out.Summarized = &sandbox.SummarizedTelling{Brief: x.Brief, Replaced: x.Replaced, Told: x.Told}
+		out.Count, out.CountProvider = s.Count, s.CountProvider
+	}
 	if u := s.Unheld; u != nil {
 		out.Unheld = &sandbox.UnheldTelling{Brief: u.Brief, Replaced: u.Replaced, Told: u.Told}
 	}
@@ -603,5 +610,5 @@ func sandboxSession(s *runner.SessionContinuation) *sandbox.SessionContinuation 
 func sessionDecision(d sandbox.LaunchDecision) runner.SessionDecision {
 	return runner.SessionDecision{Continues: d.Brief.Continues(), Kept: d.Kept, Base: d.Base,
 		NewBox: d.Brief == sandbox.BriefContinuedNewBox || d.Brief == sandbox.BriefContinuedConversation,
-		Exact:  d.Exact, Unheld: d.Unheld}
+		Exact:  d.Exact, Summarized: d.Summarized, Unheld: d.Unheld}
 }

@@ -425,14 +425,24 @@ type Resume struct {
 	// record holds none.
 	ContextTokens int64
 
-	// Count is what Claude Code counts the copy the box of the job State
-	// parked holds at before its next request, as the read that collected the
-	// job found it (sandbox.LaunchRecord.ResumedCount): what a relaunch that
-	// carries the round on in that box judges its first request by, and, where
-	// it continues a kept capture of the job taken whole in the same box, the
-	// count the capture's own is held beside ([keptCount]). Nil where nothing
-	// read the copy, which reads as a copy that may compact.
-	Count *sandbox.ResumedCount
+	// NextRequest is the harness's own estimate of the next request of that
+	// copy, as the read that collected the job found it
+	// (sandbox.LaunchRecord.NextRequest): what a relaunch that carries the
+	// round on in the job's box is held to with its brief where it holds a
+	// figure ([Continuation.NextRequest]). Zero where the record holds none.
+	NextRequest sandbox.NextRequest
+
+	// Count is what the copy's harness counts the copy the box of the job
+	// State parked holds at before its next request, as the read that
+	// collected the job found it (sandbox.LaunchRecord.ResumedCount): what a
+	// relaunch that carries the round on in that box judges its first request
+	// by, and, where it continues a kept capture of the job taken whole in the
+	// same box, the count the capture's own is held beside ([keptCount]). Nil
+	// where nothing read the copy, which reads as a copy that may compact.
+	// CountProvider is the provider of the reply an OpenCode count is
+	// anchored on (sandbox.LaunchRecord.CountProvider), "" for any other.
+	Count         *sandbox.ResumedCount
+	CountProvider string
 
 	// BasisRestart is the newest restart of the session the job State parked
 	// took up, as its launch knew it (sandbox.LaunchRecord.RestartBasis): ""

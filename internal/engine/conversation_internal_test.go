@@ -355,6 +355,8 @@ func (conversingKeep) Policy(context.Context) (sandbox.SessionPolicy, error) {
 
 func (conversingKeep) Keeps() bool { return true }
 
+func (conversingKeep) SaveInterval() time.Duration { return 10 * time.Minute }
+
 func (conversingKeep) SealHanded(turnID string, handed []byte) (string, error) {
 	return turnID + "|" + string(handed), nil
 }

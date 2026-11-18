@@ -11,12 +11,9 @@ import (
 )
 
 // AN ABSENT CHECKPOINT ROW VERIFIES AS THE ZERO POSITION, and as nothing else.
-//
-// The donor stamps a domain that has applied nothing at zero, because that is
-// what the file says about it. A recipient that refused the absent row would
-// refuse every artefact a fleet produced before its newest domain's first
-// record; one that accepted any position for it would install a manifest the
-// file does not keep.
+// The donor stamps a domain that applied nothing at zero: refusing the absent
+// row would refuse every artefact made before the newest domain's first
+// record, and accepting any position would install a claim the file lacks.
 func TestAnAbsentCheckpointVerifiesOnlyAsTheZeroPosition(t *testing.T) {
 	t.Parallel()
 	db, estate := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
@@ -42,12 +39,8 @@ func TestAnAbsentCheckpointVerifiesOnlyAsTheZeroPosition(t *testing.T) {
 }
 
 // A MANIFEST NAMING AN IDENTITY THE FILE DOES NOT KEEP IS A CORRUPT SNAPSHOT,
-// exactly as one naming the wrong sequence is.
-//
-// The identity is a checkpoint field like the generation and the sequence, and
-// this is the recipient's last chance to notice: it runs after the transfer
-// and before the install, on the file itself rather than on anything the donor
-// says about it.
+// as one naming the wrong sequence is: this is the recipient's last check,
+// after the transfer and before the install, on the file itself.
 func TestAManifestNamingAnotherStreamInstanceIsRefused(t *testing.T) {
 	t.Parallel()
 	db, estate := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
@@ -88,8 +81,7 @@ func TestAManifestNamingAnotherStreamInstanceIsRefused(t *testing.T) {
 	}
 
 	// AND A MANIFEST MAKING NO CLAIM IS NOT A MISMATCH: the column
-	// post-dates some rows, and a domain at the zero position was
-	// applying nothing.
+	// post-dates some rows.
 	silent := Manifest{Domains: map[string]DomainPosition{"probe": {
 		Stream: "CREWLET_PROBE_LOG", Generation: 1, Seq: 9,
 	}}}

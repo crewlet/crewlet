@@ -13,18 +13,16 @@ import (
 )
 
 // A FILE RECORD NAMES THE OBJECT ITS ROW NAMES (ADR-0082). A conversation's
-// files are Required (ADR-0081), so a backup reads the assistant's log past its
-// store copy and carries every object a record names, because a restore
-// replays those records into the rows: what the declaration's reader says one
-// record writes has to be the row the applier wrote, spelled as the table's
-// walk spells it, with the object the row names. Read here off the bytes the
-// real writer published, applied by the real applier.
+// files are Required (ADR-0081): a backup carries every object a record past
+// its store copy names, and a restore replays those records into rows, so the
+// declaration's reader must name the row the applier wrote, spelled as the
+// table's walk spells it, with that row's object. Read off the real writer's
+// bytes, applied by the real applier.
 //
 // AND EVERY OTHER RECORD IS ANSWERED: none for one that writes no file (a
-// conversation's create, the barrier), and a refusal the backup recognises
-// for a record this build cannot read whose scope reaches a conversation.
-// Mutation: answer a newer build's file record as none, or spell the row
-// file-first, and this fails.
+// create, the barrier), and a refusal the backup recognises for an unreadable
+// record whose scope reaches a conversation. Mutation: answer a newer build's
+// file record as none, or spell the row file-first, and this fails.
 func TestAFileRecordNamesTheObjectItsRowNames(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)

@@ -69,10 +69,10 @@ import (
 // its instant from, the [ObjectStores] backend the fleet's files are in, the
 // [TrashReaps] account of the trash reaper's last pass, the
 // [Custody] of a stateless node's event batches, the [UploadReservations]
-// that hold the company's bytes before an artifact's upload moves them, and
-// the [Markers] sweep that
-// keeps every removal from being read again for ever. The list above is the
-// migration, not the estate.
+// that hold the company's bytes before an artifact's upload moves them, the
+// [SaveAllowances] that count each seat's saved executor sessions, and the
+// [Markers] sweep that keeps every removal from being read again for ever.
+// The list above is the migration, not the estate.
 //
 // The sign-in throttle is deliberately NOT here. Its curve was once shared
 // through a bucket of its own, so a guessing run a load balancer rotated
@@ -259,8 +259,8 @@ const (
 	CustodyRetention = 32 * 24 * time.Hour
 
 	// UploadRetention is how long an upload reservation's records outlive
-	// their last write (see [UploadReservations]), and so the uploads
-	// bucket's age.
+	// their last write (see [UploadReservations]), and a seat's save ledger
+	// its own ([SaveAllowances]), and so the uploads bucket's age.
 	//
 	// THIRTY HOURS: the longest a reservation must still be readable after
 	// its last write is the hold it keeps on bytes nothing names yet, which
@@ -273,7 +273,7 @@ const (
 	// forget a hold on bytes still in the store, which the ledger would then
 	// stop counting; longer keeps records nobody reads. This package cannot
 	// import the object store, so internal/artifactupload's tests hold the
-	// two together.
+	// two together, and internal/sandbox's a save ledger entry's hold.
 	UploadRetention = 30 * time.Hour
 
 	// SandboxRunRetention is absent for the same reason as the channel
@@ -2137,6 +2137,7 @@ type Fleet interface {
 	Markers
 	Custody
 	UploadReservations
+	SaveAllowances
 }
 
 // ErrObjectBackendMoved is a move of the fleet's object backend from a store

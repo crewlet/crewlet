@@ -45,31 +45,17 @@ func standingAt(p statelog.Position) func() statelog.Position {
 }
 
 // THE ZERO FENCE NAMES EVERY REFUSAL IT MAKES, in the order that makes each
-// answer mean what it says, and asks each question of the position it is
-// about.
+// answer mean what it says, asking each question of the position it is about.
+// Every identity-claiming domain's fence runs this one implementation, so the
+// rule lives in this table; each domain's tests pin that its fence reaches it.
 //
-// It is the one implementation every identity-claiming domain's fence runs, so
-// this is the table the rule lives in; each domain's own tests pin that its
-// fence reaches it. Five properties, each a way a fence was or could be wrong:
-//
-//   - every refusal is an Unavailable naming its reason — the copies answered
-//     an evicted node with ErrConflict and a node below the floor with prose,
-//     so `below_floor` and `floor_unknown` were produced by nothing;
-//   - a checkpoint PAST the log's end refuses, `wrong_stream` — the copies
-//     cleared it, because a cursor past every bound clears all of them;
-//   - that check comes BEFORE the floor's, because the floor comparison is
-//     between sequences in one space and this is the finding that they are
-//     not: a node past the end of a restored log whose floor was published
-//     from the old history reads as below the floor, and would be sent to adopt
-//     a snapshot rather than to the re-anchor that repairs it;
-//   - the end is judged on the NODE's checkpoint rather than the decision's,
-//     because it asks where an append lands against where the applier stands,
-//     and the applier only leads the decision;
-//   - below the floor the refusal is `below_floor` only when the node's next
-//     record is gone from the LOG: a node replaying records the log still
-//     holds is `behind`, which clears on its own, and is the word the read
-//     path gives the same state — `below_floor` sends a caller away and an
-//     operator to a snapshot the node does not need.
+//   - every refusal is an Unavailable naming its reason, never ErrConflict;
+//   - a checkpoint PAST the log's end refuses `wrong_stream`, BEFORE the floor
+//     check: past a restored log whose floor came from the old history, it
+//     would read as below the floor and be sent to adopt, not to re-anchor;
+//   - the end is judged on the NODE's checkpoint, which leads the decision's;
+//   - below the floor, `below_floor` only when the node's next record is gone
+//     from the LOG; one replaying what the log holds is `behind`.
 func TestTheZeroFenceNamesEveryRefusal(t *testing.T) {
 	t.Parallel()
 	cursor := statelog.Position{Stream: probeStream, Generation: 1, Seq: 100}
@@ -206,13 +192,10 @@ func TestTheZeroFenceNamesEveryRefusal(t *testing.T) {
 	}
 }
 
-// THE NODE'S CHECKPOINT IS READ BEFORE THE LOG, never after.
-//
-// On a healthy log the end only grows and the checkpoint only follows it, so a
-// checkpoint read first can never exceed an end read after it. Read the other
-// way round, a record that lands and is applied between the two reads — every
-// few milliseconds on a busy company — makes a healthy node look past the end,
-// and it refuses its own writes as a restored broker. The staging lands that
+// THE NODE'S CHECKPOINT IS READ BEFORE THE LOG, never after: read after, a
+// record that lands and is applied between the two reads (every few
+// milliseconds on a busy company) makes a healthy node look past the end, and
+// it refuses its own writes as a restored broker. The staging lands that
 // record inside the log read itself.
 func TestTheZeroFenceReadsTheNodesCheckpointBeforeTheLog(t *testing.T) {
 	t.Parallel()
@@ -236,11 +219,9 @@ func TestTheZeroFenceReadsTheNodesCheckpointBeforeTheLog(t *testing.T) {
 }
 
 // THE FLOOR AND THE LOG ARE READ AT ONCE, so a write at an expectation of zero
-// waits for the slower of the two round trips rather than their sum. Each read
-// here answers only once the other has begun, which a fence that reads them in
-// turn can never satisfy: it is refused, by the first read's own bound, rather
-// than measured slower — a timing assertion would pass on an idle machine
-// whichever way the fence reads them.
+// waits for the slower round trip rather than their sum. Each read here answers
+// only once the other has begun, which a fence reading them in turn never
+// satisfies; a timing assertion would pass on an idle machine either way.
 func TestTheZeroFenceReadsTheFloorBesideTheLog(t *testing.T) {
 	t.Parallel()
 	cursor := statelog.Position{Stream: probeStream, Generation: 1, Seq: 100}
@@ -271,10 +252,9 @@ func TestTheZeroFenceReadsTheFloorBesideTheLog(t *testing.T) {
 	}
 }
 
-// A FENCE MISSING A READ IS A WIRING MISTAKE, and it refuses as one: it cannot
-// establish what an absent anchor means, and clearing on the reads it has is
-// the shape that cleared a node below the log whenever the trim was blocked.
-// It is NOT a reason, because no state of the fleet produces it.
+// A FENCE MISSING A READ IS A WIRING MISTAKE, and it refuses as one, not as
+// a reason (no fleet state produces it): clearing on the reads it has would
+// clear a node below the log whenever the trim was blocked.
 func TestAZeroFenceMissingARead(t *testing.T) {
 	t.Parallel()
 	cursor := statelog.Position{Stream: probeStream, Generation: 1, Seq: 100}
@@ -298,10 +278,9 @@ func TestAZeroFenceMissingARead(t *testing.T) {
 	}
 }
 
-// A CALLER THAT LEFT IS NOT A FLEET EVENT. A read that failed because the
-// caller's context ended answers the context's own error, not a refusal: a
-// shutdown counted as `floor_unknown` would read on the refusal counter as a
-// coordination outage.
+// A CALLER THAT LEFT IS NOT A FLEET EVENT: a read failed by the caller's
+// context answers the context's own error, since a shutdown counted as
+// `floor_unknown` would read on the refusal counter as a coordination outage.
 func TestAZeroFenceAnswersACancelledCallerWithItsOwnError(t *testing.T) {
 	t.Parallel()
 	cursor := statelog.Position{Stream: probeStream, Generation: 1, Seq: 100}
@@ -320,15 +299,10 @@ func TestAZeroFenceAnswersACancelledCallerWithItsOwnError(t *testing.T) {
 	}
 }
 
-// A FLOOR THE FENCE COULD NOT READ IS REFUSED WITH THE REMEDY ITS CAUSE HAS.
-//
-// The two causes clear in opposite ways: a store that does not answer clears
-// by itself, and a row that does not read as its domain's floor stays until
-// somebody removes it. The refusal used to end "it clears when coordination
-// answers" whatever the cause, so a write refused over a misfiled row carried
-// the row's own remedy — remove the key — and the fence's, which waits for
-// coordination that was answering all along. A cause that is neither (a floor
-// published at another generation) gets neither remedy.
+// A FLOOR THE FENCE COULD NOT READ IS REFUSED WITH THE REMEDY ITS CAUSE HAS:
+// a store that does not answer clears by itself, a row that does not read as
+// its domain's floor stays until somebody removes it, and a cause that is
+// neither (a floor published at another generation) gets neither remedy.
 //
 // Mutation: end every floor refusal with the coordination clause, or name the
 // key's removal for a store that did not answer, and a case below fails.
@@ -383,13 +357,10 @@ func TestAZeroFenceFloorRefusalNamesItsCausesRemedy(t *testing.T) {
 }
 
 // A ZERO-FENCE REFUSAL REACHES THE CALLER AND THE COUNTER UNDER ITS OWN REASON,
-// through the publisher, and nothing lands.
-//
-// The refusal counter is an operator's only view of which remedy a fleet
-// needs, and before this every one of these arrived as `error` or — for an
-// evicted node — as `conflict`, which also bumped the per-kind conflict counter
-// that says an object is contended. Driven through a real publisher over a real
-// broker, with the fence's own implementation producing each refusal.
+// through the publisher, and nothing lands: the refusal counter is an
+// operator's only view of which remedy a fleet needs, and a refusal counted as
+// `conflict` would also bump the per-kind counter that says an object is
+// contended. Driven through a real publisher over a real broker.
 func TestAZeroFenceRefusalIsCountedUnderItsOwnReason(t *testing.T) {
 	t.Parallel()
 	unreadable := errors.New("unreadable")
@@ -476,14 +447,11 @@ func TestAZeroFenceRefusalIsCountedUnderItsOwnReason(t *testing.T) {
 	}
 }
 
-// A REBUILD OUTRANKS THE ZERO FENCE'S OWN END CHECK.
-//
-// A log rebuilt under a node counts from 1 again, so the fence's read that
-// establishes the rebuild also finds the checkpoint past the rebuilt log's end,
-// and the fence refuses on the end before the publisher asks the identity.
-// Answered in that order, a rebuild was reported as a restored broker — the
-// same word, `wrong_stream`, but the wrong cause, and the one an operator acts
-// on differently. Measured on a real engine before the order was fixed.
+// A REBUILD OUTRANKS THE ZERO FENCE'S OWN END CHECK: a log rebuilt under a
+// node counts from 1 again, so the fence also finds the checkpoint past the
+// rebuilt end, and refusing on the end before the publisher asks the identity
+// reports the right word, `wrong_stream`, with the wrong cause, which an
+// operator acts on differently.
 func TestARebuildOutranksTheZeroFencesEndCheck(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)

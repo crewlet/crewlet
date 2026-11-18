@@ -339,6 +339,29 @@
 // kept under a larger window, continued on a member whose model has a smaller
 // one, can be past what one request can send (launchFloor.carriedBy).
 //
+// THE CONTEXT A CONTINUED SESSION'S FLOOR HOLDS is its harness's own estimate
+// of the session's next request where the capture or the job's record holds
+// one, read at the rate of the model the member names (continuedContext over
+// sandbox.NextRequest.At), and the last request's input only where neither
+// does: never the larger of the two, since past a compaction no request has
+// followed, the last request's input is the compacted-away conversation's.
+// Both are the continued session's own: a kept capture's its stamp's
+// (runner.SessionBasis.NextRequest), never a newer capture's of its job that
+// the relaunch continued past, and the job's copy in its box its job's
+// record's, else its newest capture's (runner.SessionBasis.CopyNextRequest).
+//
+// WHICH SESSION A LAUNCH CONTINUES is answered for ANY MEMBER OF THE CHAIN,
+// never one picked by the probe (agentLauncher.ProbeSession): the launch picks
+// its member once, as it launches (agentLauncher.member), and a member's plan
+// can be spent or come back between the probe and that pick. Asked for one
+// member, the probe answered for a member the launch then passed over,
+// holding the launch to the floor of a session it would start fresh, or
+// writing no continuation for a session its member could have taken up. So
+// the briefs that continue the session are written wherever some member
+// restores it, and the launch hands them on only where the member it picked
+// runs the harness that wrote the session (runner.SessionBasis.Harness,
+// agentLauncher.continuedFloor).
+//
 // # Seat credentials issued at use
 //
 // Some integrations never seal an agent's credential: the engine issues it,
@@ -439,6 +462,20 @@
 // before its box does, and every capture of the job's session taken once it
 // ends is scrubbed of it (internal/sandbox's handed.go). Never logged, never
 // returned: the lines name the seat, the path and the expiry.
+//
+// # A running executor's session, saved as it works
+//
+// The sandbox coordinator saves a running Claude Code job's session as it
+// works (internal/sandbox's "A save is offered by the poll, from memory"), and
+// this package wires it: both waiters offer it every box their poll finds
+// running ([Engine.sandboxWaiterOptions]), each save is charged to the fleet
+// store's ledger of its seat's saves ([Engine.coordinatorOptions]), and the
+// interval is read off the revision this node runs
+// ([executorKeep.SaveInterval]), since a cadence binds only the node driving
+// the box. A drain saves each Direct job this node launched beside its wait
+// for turns, since such a job goes with whatever stops this process, and
+// joins those saves before it returns ([Engine.Drain],
+// [sandbox.Coordinator.SaveHosted]), saying so while it waits.
 //
 // # MCP servers
 //
@@ -1671,6 +1708,15 @@
 // is the answer after the item, which the item's words say. An account is held
 // to [maxLateItemUnits], so it always shares one hook answer with a person's
 // widest note.
+//
+// # A continued session's floor
+//
+// A launch's floor for a session it may continue is that session's own
+// context with the brief that continues it: the turn's kept capture as that
+// capture measured it (runner's SessionBasis.ContextTokens), never its job's
+// newest capture's, and the job's own copy in its box as its newest capture
+// measured it, kept or not (SessionBasis.CopyContext), or its record where
+// larger.
 package engine
 
 import (

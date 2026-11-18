@@ -16,9 +16,8 @@ import "slices"
 // would name and a continuation never be told, so [savePlaces] places it.
 
 // savePlaces is what a capture whose harness may not have written every call it
-// made — a save ([SessionTake.Save]; this version stamps none), the take of a
-// job still working, a capture of a job cut off — is placed by
-// ([SessionCapture.placeAtNewest]).
+// made — a save ([Coordinator.saveTask]), the take of a job still working, a
+// capture of a job cut off — is placed by ([SessionCapture.placeAtNewest]).
 type savePlaces struct {
 	// run is the run's row as the capture read it, its launch the one whose
 	// session is taken; its kept capture counts only where it is that
@@ -28,9 +27,10 @@ type savePlaces struct {
 	// continued is the capture whose archive the launch's box took up
 	// ([LaunchRequest.Session]); nil where it continued none (a session of its
 	// own, its conversation's last turn's, or the copy left in the box) and
-	// where the reader cannot say: a launch records none on its row, so the
-	// take of a job still working or cut off hands none and is placed lower,
-	// which tells more, never less.
+	// where the reader cannot say: a launch records none on its row, so a
+	// save, and the take of a job still working or cut off, hand none and
+	// are placed lower, which tells more, never less. No caller of this
+	// version hands one.
 	continued *SessionCapture
 }
 

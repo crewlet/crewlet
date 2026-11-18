@@ -30,77 +30,52 @@ func stoppedReanchor(fault error, format string, args ...any) error {
 }
 
 // A REANCHOR MOVES ONE DOMAIN, and the generation it moves is that domain's.
-//
-// # Why one, when the verb used to move every cursor
-//
-// Every fact a reanchor is decided from is a fact about ONE stream — its
-// creation instant, its first surviving sequence, this node's position on it
-// and the fleet's high-water mark there — and each domain has its own stream,
-// its own sequence space and its own generation ([Position] carries the stream
-// beside the generation for exactly that reason). The transition used to write
-// every registered domain's checkpoint from the one stream the operator named:
-// a reanchor of the tracker's log keyed the pages and vector checkpoints to the
-// tracker's creation instant and its first sequence, so the next boot found
-// both of THOSE streams "recreated", stopped their appliers and refused their
-// writes — and reanchoring either of them then did the same to the tracker. An
-// operator could never converge.
-//
-// So the generation is PER DOMAIN, and it always was everywhere else: the
-// positions register reports one per domain, the trim publishes one floor per
-// domain at that domain's generation, and a join asks for an artefact at each
-// domain's own. A reanchor of one stream advances that domain's generation and
-// leaves every other domain's checkpoint — its generation, its sequence and the
-// instant it is keyed to — exactly where it was.
+// Every fact it is decided from (the creation instant, the first surviving
+// sequence, this node's position, the fleet's high-water mark) is about ONE
+// stream, and each domain has its own stream, sequence space and generation
+// ([Position] carries the stream beside the generation). Keying every domain's
+// checkpoint to the one stream named makes the others' next boot find them
+// "recreated", and reanchoring those does the same back: no convergence. So a
+// reanchor advances one domain's generation and leaves every other domain's
+// checkpoint (generation, sequence, keyed instant) where it was, as the
+// positions register, the trim's floors and a join's artefacts already do.
 
 // ReanchorGuard is what an operator must satisfy before a domain's generation
 // moves.
 type ReanchorGuard struct {
 	// Confirm is what the operator typed, which must name the live stream's
-	// own creation instant (see [ConfirmationOf]). It is a guard against
-	// running the verb on the wrong estate — the one mistake that cannot be
-	// undone.
+	// own creation instant ([ConfirmationOf]): a guard against running the
+	// verb on the wrong estate, the one mistake that cannot be undone.
 	Confirm string
 
 	// Force overrides the "only the most caught-up node may reanchor"
 	// rule, and its message must name exactly what may be lost.
 	Force bool
 
-	// Discard accepts that a RESTORED log's records these rows do not hold —
-	// written after the restore, by a node whose rows were the copy's age —
+	// Discard accepts that a RESTORED log's records these rows do not hold
+	// (written after the restore by a node whose rows were the copy's age)
 	// are applied nowhere ([ReanchorInputs.Unheld]). Without it such a
-	// reanchor refuses, naming the newest of them, because following the log
-	// from its end would lose writes somebody was told had landed, with
-	// nothing anywhere saying so.
-	//
-	// ITS OWN FLAG rather than Force: Force answers "I cannot ask the fleet
-	// who is most caught up", which says nothing about a log's tail, and an
-	// operator forcing past an unreadable register must not discard writes
-	// on the same keystroke.
+	// reanchor refuses, naming the newest, since following the log from its
+	// end silently loses acknowledged writes. Not Force: Force answers "I
+	// cannot ask the fleet who is most caught up", which says nothing about
+	// a log's tail, so forcing must not also discard.
 	Discard bool
 }
 
 // ConfirmationOf renders a stream's creation instant the way an operator is
-// asked to echo it.
-//
-// ONE SPELLING, and it is the one every surface already prints: the status
-// read answers the instant as a JSON time, which is RFC 3339 with nanoseconds;
-// the CLI prints that and tells the operator to paste it back; and a
-// `wrong_stream` refusal names the live instant at the same precision. The
-// check used to compare against whole seconds instead, so the command the CLI
-// printed was refused whenever the broker's instant had a fraction — which a
-// real one always does.
+// asked to echo it: RFC 3339 with nanoseconds, the one spelling every surface
+// prints (the status read's JSON time, the CLI, a `wrong_stream` refusal).
+// Whole seconds would refuse what the CLI printed, since a real broker's
+// instant has a fraction.
 func ConfirmationOf(created time.Time) string {
 	return created.UTC().Format(time.RFC3339Nano)
 }
 
 // confirms reports whether what the operator typed names instant, at the
-// precision a stream's identity is compared at ([identityResolution]).
-//
-// PARSED, never compared as text, so a confirmation that names the same
-// instant in another zone or with trailing zeros is the same confirmation —
-// and at the identity's own resolution, because a checkpoint row keeps
-// microseconds while the broker reports nanoseconds, and an instant read back
-// from either is still the same stream.
+// precision a stream's identity is compared at ([identityResolution]). Parsed,
+// not compared as text, so another zone or trailing zeros still confirm; and
+// truncated, since a checkpoint row keeps microseconds while the broker
+// reports nanoseconds.
 func confirms(typed string, instant time.Time) bool {
 	at, err := time.Parse(time.RFC3339Nano, typed)
 	if err != nil {
@@ -112,120 +87,88 @@ func confirms(typed string, instant time.Time) bool {
 // ReanchorInputs is everything the guards read, and the one stream they were
 // read from.
 type ReanchorInputs struct {
-	// Stream is the log the operator named — the one these facts were
-	// read from. No guard reads it; the lines do, because every other
-	// field here is a fact about ONE stream, and a line carrying the
-	// high-water mark without the stream it belongs to leaves the number
-	// with nothing to be read against.
+	// Stream is the log the operator named, the one these facts were read
+	// from. No guard reads it; the log lines carry it so a high-water mark
+	// has a stream to be read against.
 	Stream string
 
 	// StreamCreatedAt is the LIVE stream's creation instant, read in the
-	// same answer as FirstSeq. It is what the operator's confirmation is
-	// checked against, what a `wrong_stream` refusal names as the live
-	// instant, and what the new checkpoint is keyed to — ONE value for all
-	// three. An instant sampled when the node booted is none of them once
-	// the stream has been rebuilt under a running node: confirming it keys
-	// the checkpoint to a stream that no longer exists, and the next boot
-	// finds the domain recreated again.
+	// same answer as FirstSeq: ONE value the confirmation is checked
+	// against, a `wrong_stream` refusal names and the new checkpoint is
+	// keyed to. An instant sampled at boot is stale once the stream is
+	// rebuilt under a running node, and keying to it makes the next boot
+	// find the domain recreated again.
 	StreamCreatedAt time.Time
 
-	// KeyedTo is the instant this domain's rows were keyed to before the
-	// transition — its checkpoint row's own — and zero where there was no
-	// checkpoint. Compared with StreamCreatedAt it decides the case: the
-	// same instant is the same stream, restored rather than recreated
-	// ([ReanchorInputs.Case]). The generation record carries it too, so the
-	// audit says which stream the fleet walked away from.
+	// KeyedTo is the instant this domain's checkpoint row was keyed to
+	// before the transition, zero with no checkpoint. Equal to
+	// StreamCreatedAt, the case is restored rather than recreated
+	// ([ReanchorInputs.Case]). The generation record carries it, so the
+	// audit names the stream the fleet walked away from.
 	KeyedTo time.Time
 
-	// FirstSeq is the live stream's first surviving sequence, and LastSeq
-	// the last one it wrote — both in the SAME answer as StreamCreatedAt,
-	// because together they are what decides the case ([ReanchorCase]) and
-	// where its checkpoint goes, and read separately they can straddle a
-	// rebuild. A recreated stream's new checkpoint is one below FirstSeq
-	// (zero on a fresh stream); a restored one's is LastSeq.
+	// FirstSeq is the live stream's first surviving sequence and LastSeq
+	// the last it wrote, both in the SAME answer as StreamCreatedAt: they
+	// decide the case ([ReanchorCase]) and its checkpoint, and read
+	// separately they can straddle a rebuild. A recreated stream's
+	// checkpoint is one below FirstSeq (zero on a fresh stream); a restored
+	// one's is LastSeq.
 	FirstSeq uint64
 	LastSeq  uint64
 
 	// Diverged reports that the log holds, at this node's checkpoint,
-	// ANOTHER record than the one the checkpoint names ([ErrLogDiverged]) —
-	// read from the checkpoint row and the log's record at its sequence
-	// ([CheckpointDiverged]). It is the restored case by another route: the
-	// broker came back from an older copy and was written past these rows
-	// before this node looked, so the log no longer ENDS below them.
+	// another record than the one the checkpoint names ([ErrLogDiverged],
+	// [CheckpointDiverged]): the restored case by another route, a broker
+	// back from an older copy and written past these rows before this node
+	// looked.
 	Diverged bool
 
 	// Unheld is, for the RESTORED case of a domain that claims identity,
-	// the newest record on the log that writes rows and that this node's
-	// rows do not hold ([UnheldTail]) — nil when there is none. On a
-	// restored log such a record was written after the restore, and so was
-	// every record above it; following the log from its end applies none of
-	// them anywhere, so the transition refuses unless the operator accepts
-	// that ([ReanchorGuard.Discard]).
+	// the newest record on the log that writes rows these rows do not hold
+	// ([UnheldTail]), nil when none. It and every record above it came
+	// after the restore, and following the log from its end applies none of
+	// them, so the transition refuses without [ReanchorGuard.Discard].
 	//
-	// NIL FOR EVERY OTHER CASE: a recreated log is followed from its first
-	// record and an abandoned one from these rows' own checkpoint, so each
-	// applies everything past where it starts. And nil for a domain that
-	// claims no identity — the vectors and the usage days — which every data
-	// node re-anchors on its own copy, with no fleet guard and no walk of the
-	// tail. The vectors' post-restore records are re-embeddings of sources:
-	// skipping them keeps these rows' vectors, which describe the sources
-	// these rows' own domains keep.
+	// Nil for every other case: a recreated log is followed from its first
+	// record and an abandoned one from these rows' checkpoint, so each
+	// applies everything past its start. Nil for a domain claiming no
+	// identity (the vectors, the usage days): each node re-anchors its own
+	// copy, and the vectors' skipped re-embeddings describe sources these
+	// rows already keep.
 	Unheld *TailRecord
 
 	// Opened is the sequence of THIS node's own record opening the
-	// generation this reanchor would open, when an earlier attempt appended
-	// it and failed before its checkpoint committed ([OwnGeneration]) — and
-	// zero when there is none. The restored case's checkpoint goes one below
-	// it, and the walk for Unheld stops there: the record is this node's own
-	// transition rather than one written after the restore, and everything
-	// beneath it is what the walk exists to find.
+	// generation this reanchor would open, left by an earlier attempt that
+	// failed before its checkpoint committed ([OwnGeneration]), zero when
+	// none. The restored case's checkpoint goes one below it, and the walk
+	// for Unheld stops there: it is this node's transition, not a write
+	// made after the restore.
 	Opened uint64
 
-	// ReanchoredPeers are the peers that have already re-anchored THIS
-	// stream, by node id: they stand at a later generation of this domain
-	// than this node's checkpoint, and a generation moves only by a
-	// reanchor or by adopting the snapshot of a node that ran one. BY NAME,
-	// because the refusal they cause sends the operator to one of them:
-	// adopt its snapshot, or evict it if it is gone, and neither can be
-	// done to a count.
+	// ReanchoredPeers are the peers, by node id, that already re-anchored
+	// THIS stream: they stand at a later generation of this domain than
+	// this node's checkpoint. By name, because the refusal sends the
+	// operator to one of them (adopt its snapshot, or evict it if gone).
+	// ANY refuses, force or no force: a second reanchor would open the same
+	// generation over a different prefix of the lost history, violating
+	// the identity claim for ever with no log to reconcile from.
 	//
-	// ANY IS A REFUSAL, force or no force, and the reason is not caution:
-	// the fleet's history in that generation is the re-anchored peer's
-	// rows, and a second reanchor from this node's would open the same
-	// generation number over a different prefix of the lost history — the
-	// identity claim violated silently and for ever, with no log left to
-	// reconcile the two from.
-	//
-	// A PEER AT THIS NODE'S OWN GENERATION IS NOT ONE. It is on the stream
-	// this node's rows came from, or on one it cannot vouch for, and the
-	// most-caught-up rule below is what weighs it. It used to be counted
-	// here as "hydrated on the live stream" — which every peer still on the
-	// lost stream was, so in a fleet of two or more no node could ever
-	// re-anchor, and the snapshot the refusal sent the operator to was keyed
-	// to the lost stream and adoptable by nobody.
-	//
-	// NOR IS AN EVICTED PEER. Its rows are not the fleet's history in any
-	// generation any more — the eviction says it is not coming back — and
-	// counted, a decommissioned node that had re-anchored held every other
-	// node's reanchor refused for ever ([ReanchorInputs.Abandoned]).
+	// A peer at this node's own generation is not one: the most-caught-up
+	// rule below weighs it, and counted here no fleet of two could ever
+	// re-anchor. Nor is an EVICTED peer: counted, a decommissioned one
+	// would refuse every reanchor for ever ([ReanchorInputs.Abandoned]).
 	ReanchoredPeers []string
 
-	// Position is this node's own committed sequence at the OLD
-	// generation, and Highest is the highest any peer published at that
-	// same generation ON THE SAME STREAM — the one this node's rows are
-	// keyed to, or any stream when no checkpoint keys them to one — among
-	// the peers holding history the LOG DOES NOT: whose checkpoint record
-	// the log does not hold, past its end or with another record at the
-	// sequence, or which name no record
-	// ([coord.DomainPosition.CheckpointStoredAt]). A sequence at
-	// another generation, or on another stream at this one, is a number in
-	// another space and says nothing about who went further along this one;
-	// and a peer whose checkpoint record the log holds is on the log, so
-	// nothing it applied is lost by a reanchor that follows it. Only the
-	// most caught-up node may reanchor, because whatever it did not apply is
-	// what the fleet loses — and an EVICTED peer is left out for
-	// ReanchoredPeers's reason: what it applied is on no disk the fleet will
-	// read again. HighestPeer names the peer at Highest, for the refusal.
+	// Position is this node's committed sequence at the OLD generation,
+	// and Highest the highest any peer published at that generation ON THE
+	// SAME STREAM (the one these rows are keyed to, or any when unkeyed),
+	// counting only peers holding history the LOG DOES NOT: whose
+	// checkpoint record the log lacks or holds another record for, or which
+	// name none ([coord.DomainPosition.CheckpointStoredAt]). Another
+	// generation or stream is another number space, and a peer on the log
+	// loses nothing. Only the most caught-up node may reanchor, since what
+	// it did not apply the fleet loses; evicted peers are left out as in
+	// ReanchoredPeers. HighestPeer names the peer at Highest, for the refusal.
 	Position    uint64
 	Highest     uint64
 	HighestPeer string
@@ -236,113 +179,63 @@ type ReanchorInputs struct {
 	RegisterReadable bool
 
 	// Generation is THIS DOMAIN's generation, read LOCALLY from its own
-	// checkpoint — no coordination read, because the verb runs when
-	// coordination may be exactly what was lost, and the checkpoint is the
-	// one value every other reader of the generation takes (the publisher,
-	// the applier, the trim and the positions heartbeat).
+	// checkpoint: the verb runs when coordination may be what was lost, and
+	// the checkpoint is what every other reader of the generation takes.
 	Generation uint32
 
 	// Abandoned is the highest generation of this domain opened by a node
-	// the fleet has EVICTED, when that is above Generation, and zero
-	// otherwise — read from the evicted node's position row, the trim floor
-	// it published and the generation records it left on the log.
-	//
-	// # What an evicted node's generation is, and why it is neither a guard nor ignored
-	//
-	// A node that re-anchored a log and was then decommissioned before any
-	// peer adopted from it leaves a generation whose history is on no disk
-	// the fleet still has: its rows are gone, and what it wrote on the log in
-	// that generation was decided from them. Counted as a peer that has
-	// already re-anchored — which is what its row says — it refused every
-	// remaining node's reanchor for ever, force or no force, while every
-	// one of them waited for a donor that did not exist. The operator's
-	// eviction of it is the statement that it is not coming back, so its
-	// generation stops being the fleet's ([ReanchorInputs.ReanchoredPeers]
-	// and [ReanchorInputs.Highest] leave evicted peers out) — but its NUMBER
-	// was used, and its record holds that generation's subject, so the
-	// transition opens the generation after it rather than a second history
-	// under the same number. And every record written in the generations it
-	// skips is VOID where this node follows the log from — decided from rows
-	// nobody holds, applied into none ([ReanchorPlan.From]).
+	// the fleet has EVICTED, when above Generation, else zero: read from the
+	// evicted node's position row, its trim floor and its generation records
+	// on the log. That generation's history is on no disk the fleet has, so
+	// it is no guard (ReanchoredPeers and Highest leave evicted peers out,
+	// or every node waits for ever on a donor that is gone), yet not
+	// ignored: its NUMBER was used, so the transition opens the one after
+	// it, and records written in the skipped generations are VOID where
+	// this node follows the log from ([ReanchorPlan.From]).
 	Abandoned uint32
 
 	// ClaimsIdentity is the domain's own [Domain.ClaimsIdentity], which
-	// decides whether the two fleet guards apply at all — see
-	// [PermitReanchor]. [Reanchor] takes it from the domain rather than
-	// from its caller, so the two cannot disagree.
+	// decides whether the two fleet guards apply ([PermitReanchor]).
+	// [Reanchor] takes it from the domain, never its caller.
 	ClaimsIdentity bool
 }
 
 // ReanchorCase is which of the three things that can happen to a log under a
-// node's rows a reanchor is answering. They put the new generation's checkpoint
-// in different places, and getting that wrong either loses records or applies
-// them twice.
-//
-// # Recreated: the live stream is not the one the rows are keyed to
-//
-// The stream was deleted and remade, or rebuilt by hand, so it has a new
-// creation instant and its sequences started again at 1. The rows hold nothing
-// from it, so the checkpoint goes one below its first surviving sequence and
-// the domain applies everything it still holds.
-//
-// # Restored: the live stream IS the one the rows are keyed to, and it is not their history past a point
-//
-// The broker was brought back from an older copy of its store, which keeps the
-// stream's creation instant. Its surviving records are a PREFIX of the history
-// the rows were derived from, so the rows already hold every one of them — and
-// the checkpoint goes at the log's END. One below the first surviving sequence
-// would replay that whole prefix into the new generation, and a record from a
-// higher generation outranks every version a row holds: every object would roll
-// back to the state it had when the copy was taken, and whatever the rows
-// gained since — the tail the copy never had — would be written over.
-//
-// It is met two ways: the log ENDS below the checkpoint, or it has been
-// written past it before this node looked and holds another record at the
-// checkpoint's sequence ([ReanchorInputs.Diverged]). The checkpoint goes at
-// the end either way, because either way the rows are the history the fleet
-// keeps and the log is followed from where it now stands. What that cannot do
-// is apply what a node whose rows were the copy's age wrote to the restored log
-// before anybody re-anchored it: those records sit below the end, so a
-// reanchor over any that write rows these do not hold runs only on the
-// operator's word ([ReanchorInputs.Unheld], [ReanchorGuard.Discard]).
-//
-// # Abandoned: the live stream is the rows' own, and it continues in a generation only an evicted node held
-//
-// A node re-anchored the log and was decommissioned — and evicted — before any
-// peer adopted from it. The log holds every record the rows are missing, so
-// neither case above applies, and yet nothing on it can bring the rows level:
-// it continues in a generation whose history is on no disk the fleet still
-// has. The checkpoint STAYS where the rows are, in the generation after the
-// evicted node's, and the domain applies everything the log holds past it —
-// except the records written in the generations it skips, which are void
-// ([ReanchorPlan.From]): they were decided from the evicted node's rows, and
-// applied into these they would mix two histories nothing could separate.
-// Everything else past the checkpoint — records the fleet's other nodes wrote
-// in this node's own generation before they learned of the move — is the
-// history these rows continue, and is kept.
-//
-// A same-instant stream that ends AT OR PAST the checkpoint, holds there the
-// record the checkpoint names, and continues in no abandoned generation is none
-// of the three: it holds every record the rows are missing, so there is nothing
-// to re-anchor ([ReanchorInputs.Case] refuses it).
-//
-// A named string for the reason every enum here is one: it travels — in the
-// log lines, the API's answer and the CLI's text — and an unknown value off the
-// wire is a value rather than a panic.
+// node's rows a reanchor is answering. Each puts the new generation's
+// checkpoint in a different place, and the wrong place loses records or
+// applies them twice. A same-instant stream that ends at or past the
+// checkpoint, holds there the record it names, and continues in no abandoned
+// generation is none of them: there is nothing to re-anchor
+// ([ReanchorInputs.Case] refuses it). A named string, so an unknown value off
+// the wire is a value rather than a panic.
 type ReanchorCase string
 
 const (
 	// ReanchorRecreated is a stream with another creation instant than the
-	// one the rows are keyed to — or rows keyed to none — so the rows hold
-	// none of its records.
+	// one the rows are keyed to, or rows keyed to none: deleted and remade
+	// or rebuilt, its sequences restarted. The rows hold none of its
+	// records, so the checkpoint goes one below its first surviving sequence.
 	ReanchorRecreated ReanchorCase = "recreated"
 
-	// ReanchorRestored is the stream the rows are keyed to, ending below
-	// their checkpoint: a broker brought back from an older copy.
+	// ReanchorRestored is the stream the rows are keyed to, brought back
+	// from an older copy: it ends below their checkpoint, or was written
+	// past it and holds another record there ([ReanchorInputs.Diverged]).
+	// Its records are a PREFIX of the rows' history, so the checkpoint goes
+	// at the log's END: replayed into a higher generation they outrank
+	// every row's version and roll every object back to the copy. What
+	// copy-age nodes wrote to the restored log sits below the end, so a
+	// reanchor over any these rows lack runs only on the operator's word
+	// ([ReanchorInputs.Unheld], [ReanchorGuard.Discard]).
 	ReanchorRestored ReanchorCase = "restored"
 
 	// ReanchorAbandoned is the stream the rows are keyed to, continuing in a
-	// generation only an evicted node held.
+	// generation only an evicted node held (it re-anchored and was evicted
+	// before any peer adopted from it). The checkpoint STAYS where the rows
+	// are, in the generation after the evicted node's, and the domain
+	// applies everything past it except records written in the skipped
+	// generations, which are void ([ReanchorPlan.From]): applied here they
+	// would mix two histories. Records other nodes wrote in this node's own
+	// generation are the history these rows continue, and are kept.
 	ReanchorAbandoned ReanchorCase = "abandoned"
 )
 
@@ -361,62 +254,44 @@ type ReanchorPlan struct {
 
 	// From is the generation the rows stood at before the transition. A
 	// record written in a generation strictly between From and Generation
-	// was written in a generation this transition ABANDONED — one only an
-	// evicted node held — and is void wherever this checkpoint is followed
-	// from: consumed, its anchor advanced, and applied into no row. Empty
-	// unless the evicted node's generation made the transition skip one
-	// ([ReanchorInputs.Abandoned]).
+	// (one only an evicted node held, [ReanchorInputs.Abandoned]) is void
+	// wherever this checkpoint is followed from: consumed, its anchor
+	// advanced, applied into no row.
 	From uint32
 
-	// Discarded is the newest record the operator accepted discarding — a
-	// restored log's record these rows did not hold ([ReanchorGuard.Discard]),
-	// applied on no node from here — and nil when the transition discards
-	// nothing.
+	// Discarded is the newest record the operator accepted discarding (a
+	// restored log's record these rows did not hold, [ReanchorGuard.Discard]),
+	// applied on no node from here, and nil when nothing is discarded.
 	Discarded *TailRecord
 
 	// StaleAfter is, for the RESTORED case, the sequence of the generation
-	// record the transition appended, and zero otherwise. Every record
-	// positioned after it that was written in a generation below Generation
-	// is void wherever this checkpoint is followed from: consumed, its anchor
-	// advanced, applied into no row ([ReasonOvertaken]). The fleet's other
-	// nodes learn of the move only when their appliers reach the record or
-	// their heartbeat reads the fleet's generation, and a node whose rows
-	// were the copy's age writes in the old generation until then — decided
-	// from the rows the reanchor did not keep. An abandoned reanchor keeps
-	// such records, because there the other nodes' rows are the history
-	// these continue; a restored one cannot.
+	// record the transition appended, else zero. A record after it written
+	// in a generation below Generation is void wherever this checkpoint is
+	// followed from ([ReasonOvertaken]): other nodes write in the old
+	// generation until they learn of the move, decided from rows the
+	// reanchor did not keep. An abandoned reanchor keeps such records, since
+	// there the other nodes' rows are the history these continue.
 	StaleAfter uint64
 }
 
 // Case is which case these facts describe and where the new checkpoint goes,
-// or a refusal when they describe none.
-//
-// A PURE FUNCTION OF ONE READING, so the status an operator reads before
-// confirming and the transition that runs after name the same case from the
-// same rule.
-//
-// The live instant is compared with the rows' own through [IdentityOf], at the
-// resolution a checkpoint keeps. Rows keyed to NO instant — a domain with no
-// checkpoint — are the recreated case: they hold none of this stream's
-// records, whatever it is.
+// or a refusal when they describe none. A pure function of one reading, so
+// the status read before confirming and the transition after agree. Rows
+// keyed to no instant (no checkpoint) are the recreated case.
 func (in ReanchorInputs) Case() (ReanchorCase, uint64, error) {
 	if IdentityOf(in.KeyedTo, in.StreamCreatedAt, !in.KeyedTo.IsZero()) != StreamSame {
-		// ONE BELOW THE LIVE STREAM'S FIRST SURVIVING SEQUENCE — zero on a
-		// fresh stream — because that is the position from which everything
-		// the stream still holds is un-applied here.
+		// ONE BELOW THE FIRST SURVIVING SEQUENCE (zero on a fresh stream):
+		// everything the stream still holds is un-applied here.
 		if in.FirstSeq == 0 {
 			return ReanchorRecreated, 0, nil
 		}
 		return ReanchorRecreated, in.FirstSeq - 1, nil
 	}
 	if pastEnd(in.Position, in.LastSeq) || in.Diverged {
-		// AT THE LOG'S END, because the rows already hold every record the
-		// restored copy kept — see [ReanchorRestored] for what replaying
-		// them into a new generation does. One below this node's own
-		// generation record where an earlier attempt already appended it
-		// ([ReanchorInputs.Opened]): that record opens the generation, and
-		// the resumed applier applies it first. The transition places it
-		// below the record it appends in the same way ([Reanchor]).
+		// AT THE LOG'S END: the rows hold every record the restored copy
+		// kept ([ReanchorRestored]). One below this node's own generation
+		// record where an earlier attempt appended it ([ReanchorInputs.Opened]),
+		// so the resumed applier applies it first, as [Reanchor] places it.
 		if in.Opened > 0 {
 			return ReanchorRestored, in.Opened - 1, nil
 		}
@@ -427,8 +302,8 @@ func (in ReanchorInputs) Case() (ReanchorCase, uint64, error) {
 		// and what it holds in the abandoned generations is void.
 		return ReanchorAbandoned, in.Position, nil
 	}
-	// AND WHO MOVED IT ON, where somebody did: this is the refusal a node a
-	// peer re-anchored past reads, and the peer is what it acts on.
+	// NAME WHO MOVED IT ON, where somebody did: a node a peer re-anchored
+	// past acts on that peer.
 	onward := "the applier follows it, a node below its first surviving " +
 		"sequence adopts a peer's snapshot instead, and a node a peer " +
 		"re-anchored past adopts from that peer (or, if the peer is gone for " +
@@ -460,14 +335,10 @@ func reanchoredPast(peers []string) (have, snapshot, evict string) {
 // Discarding is the refusal a reanchor of these facts makes unless the operator
 // accepts discarding what it names ([ReanchorGuard.Discard]), and nil when it
 // discards nothing: the restored case over a log holding records these rows do
-// not ([ReanchorInputs.Unheld]).
-//
-// A METHOD OF THE FACTS, beside [ReanchorInputs.Case], so the status an
-// operator reads before confirming and the transition that runs after say the
-// same thing from the same reading.
+// not ([ReanchorInputs.Unheld]). A method of the facts, like
+// [ReanchorInputs.Case], so the status and the transition agree.
 func (in ReanchorInputs) Discarding() error {
-	// NOTHING TO RE-ANCHOR, OR ANOTHER CASE, DISCARDS NOTHING: Case's own
-	// refusal is that reading's answer, and only the restored case skips.
+	// ONLY THE RESTORED CASE DISCARDS; Case reports its own refusal.
 	if which, _, caseErr := in.Case(); caseErr != nil || which != ReanchorRestored ||
 		in.Unheld == nil {
 		return nil //nolint:nilerr // see above: Case's refusal is reported by Case
@@ -505,27 +376,19 @@ func unheldCaveat(r TailRecord) string {
 // PermitReanchor decides whether the transition may run, to which generation,
 // and where it puts the checkpoint.
 //
-// # The two fleet guards belong to a domain that claims identity
-//
-// A peer that has already re-anchored the stream refuses, and so does a peer
-// further along the stream this node's rows came from, because two nodes that
-// reanchor independently keep two different prefixes of a history no log holds
-// any more — which violates the claim that two nodes at one checkpoint hold the
-// same rows. A domain that makes no such claim has
-// nothing for either guard to protect: the vectors' per-node coverage differs
-// by construction, what one node never applied is a gap in that node's own
-// coverage rather than something the fleet loses, and every node re-anchoring
-// its own copy is the recovery rather than the hazard. Refusing there would
-// leave every node but the first stranded on a stream it can neither read nor
-// write, since the one remedy the refusal names — adopting a peer's snapshot —
-// replaces every domain's rows to repair one derived index.
+// The two fleet guards (a peer already re-anchored, a peer further along)
+// apply only to a domain that claims identity: two independent reanchors keep
+// two prefixes of a history no log holds, so two nodes at one checkpoint
+// would hold different rows. Without the claim (the vectors), coverage
+// differs per node by construction, each node re-anchoring its own copy is
+// the recovery, and the refusal's remedy (adopting a peer's snapshot) would
+// replace every domain's rows to repair one derived index.
 func PermitReanchor(in ReanchorInputs, guard ReanchorGuard) (ReanchorPlan, error) {
 	live := ConfirmationOf(in.StreamCreatedAt)
 	switch {
 	case in.StreamCreatedAt.IsZero():
-		// NO INSTANT IS NO CONFIRMATION, whatever was typed: the check
-		// below would compare against the year one, and the checkpoint
-		// would be keyed to a stream nobody can name.
+		// NO INSTANT IS NO CONFIRMATION: the check below would compare
+		// against the year one, keying the checkpoint to an unnamed stream.
 		return ReanchorPlan{}, refuseReanchor("%s's creation instant is unknown, so there's "+
 			"nothing a confirmation could name. Read the stream again", in.Stream)
 	case guard.Confirm == "":
@@ -537,15 +400,14 @@ func PermitReanchor(in ReanchorInputs, guard ReanchorGuard) (ReanchorPlan, error
 			"live stream %s was created at %s. Running this on the wrong estate "+
 			"can't be undone", guard.Confirm, in.Stream, live)
 	}
-	// WHICH CASE, BEFORE THE FLEET: a stream that holds every record the rows
-	// are missing is one no guard below has anything to weigh on.
+	// WHICH CASE, BEFORE THE FLEET: a stream holding every record the rows
+	// are missing leaves no guard below anything to weigh.
 	which, cursor, err := in.Case()
 	if err != nil {
 		return ReanchorPlan{}, err
 	}
-	// AND WHAT FOLLOWING IT FROM THERE WOULD DISCARD, which only the operator
-	// may accept — before the fleet guards, because it is a fact about the
-	// log whichever node runs the verb.
+	// THEN WHAT IT WOULD DISCARD, which only the operator may accept: before
+	// the fleet guards, as a fact about the log whichever node runs the verb.
 	if refusal := in.Discarding(); refusal != nil && !guard.Discard {
 		return ReanchorPlan{}, refusal
 	}
@@ -582,20 +444,18 @@ func PermitReanchor(in ReanchorInputs, guard ReanchorGuard) (ReanchorPlan, error
 				"the reanchor discards; %s", in.Position, who, in.Highest, remedy)
 		}
 	}
-	// THE GENERATION AFTER EVERY ONE THIS DOMAIN HAS USED: this node's own,
-	// and any an evicted node opened ([ReanchorInputs.Abandoned]). That
-	// number was used — its record holds that generation's subject — and a
-	// second opening of it is two histories under one number.
+	// THE GENERATION AFTER EVERY ONE THIS DOMAIN HAS USED, an evicted node's
+	// included ([ReanchorInputs.Abandoned]): its record holds that
+	// generation's subject, and a second opening is two histories under one
+	// number.
 	base := max(in.Generation, in.Abandoned)
 	if base >= MaxGeneration {
 		return ReanchorPlan{}, refuseReanchor("%s is at generation %d, the last "+
 			"the packed position can carry", in.Stream, base)
 	}
-	// THE NEW GENERATION IS DERIVED LOCALLY, from this domain's own
-	// checkpoint and what the caller already read: this verb runs when the
-	// broker estate has been lost, so a generation that needed a further
-	// coordination read could not be computed at the one moment it is
-	// needed. An abandoned generation only ever raises it.
+	// DERIVED LOCALLY, from this domain's checkpoint and what the caller
+	// read: the verb runs when the broker estate is lost, so it cannot need
+	// a coordination read. An abandoned generation only raises it.
 	plan := ReanchorPlan{Generation: base + 1, Case: which, Cursor: cursor, From: in.Generation}
 	if in.Discarding() != nil {
 		plan.Discarded = in.Unheld
@@ -606,7 +466,7 @@ func PermitReanchor(in ReanchorInputs, guard ReanchorGuard) (ReanchorPlan, error
 // GenerationRecord is the one record a reanchor appends: the domain's own
 // statement of the transition, on the stream it adopts.
 type GenerationRecord struct {
-	// Subject is the domain's generation subject for the new generation —
+	// Subject is the domain's generation subject for the new generation:
 	// the arbitration unit, so two operators deriving the same number
 	// contend on it and exactly one record lands.
 	Subject Subject
@@ -621,7 +481,7 @@ type GenerationRecord struct {
 // GenerationFacts is what a domain's generation record is written from.
 type GenerationFacts struct {
 	// Generation is the one the transition moves to, and Case what it is
-	// answering — which is what the record's own account of why has to say.
+	// answering, which the record's account of why has to say.
 	Generation uint32
 	Case       ReanchorCase
 
@@ -632,12 +492,11 @@ type GenerationFacts struct {
 	// Inputs are the facts the transition was decided from.
 	Inputs ReanchorInputs
 
-	// By names the operator as the audit trail records them, ByKind the
-	// kind of actor that is — in the vocabulary [iam.ActorFor] records a
-	// party under — and OperatorID the credential they acted through: the
-	// three columns every other write carries, so a generation's audit row
-	// says who moved the log and through what, and never only a name — read
-	// for every domain by [GenerationFacts.Author]. Writer is this node.
+	// By names the operator as the audit trail records them, ByKind their
+	// actor kind (the vocabulary [iam.ActorFor] records under) and
+	// OperatorID the credential they acted through: the three columns every
+	// write carries, read for every domain by [GenerationFacts.Author].
+	// Writer is this node.
 	By         string
 	ByKind     iam.ActorKind
 	OperatorID string
@@ -647,36 +506,16 @@ type GenerationFacts struct {
 	At time.Time
 }
 
-// Author is the party a generation record names as its author, in the ACTOR
-// vocabulary ([iam.ActorKind]) every domain's audit columns are written in —
-// the name bare, the kind beside it and the credential beside both — and
-// false where the facts name nobody: then the record is the NODE's, under
-// [GenerationFacts.Writer], which each domain records the way its own node
-// writer records itself rather than as an empty author column.
-//
-// ONE MAPPING FOR EVERY DOMAIN'S GENERATION RECORD, because one reanchor names
-// one party and the audit feed reads the histories side by side: written once
-// per domain — the tracker's, the knowledge base's, the identity estate's, the
-// artifacts log's, the artifact datastore's, the Dashboard Assistant's, chat's,
-// the executor log's and the code log's — it was nine copies of one rule,
-// already apart on what counts as nobody (a name of spaces was a party to two
-// of them and the node to the others) and on which vocabulary a kind is read in. A domain only says
-// what the actor kind is in its own columns.
-//
-// THE KIND IS AN ACTOR KIND, the one [iam.ActorFor] records a party under,
-// which is what the engine's reanchor passes — typed, so a principal's word (a
-// seat, a person, a machine) is not one a caller can hand in without saying
-// it converts. A kind the actor vocabulary does not hold, the zero value of a
-// hand-built set of facts included, is an OPERATOR: a party acting on the
-// company's behalf that claims to be neither a seat nor a person nor the
-// engine, which is what [iam.ActorFor] itself answers for a kind it cannot
-// read.
-//
-// AN OPERATOR WITH NO CREDENTIAL BESIDE IT is a credential acting under its
-// own login — the one party whose name [iam.ActorFor] also records as its
-// credential — so the name stands in for the credential there and nowhere
-// else: under any other kind it would put a seat's handle or a person's in the
-// credential column, and the engine acts through no credential at all.
+// Author is the party a generation record names as its author, in the actor
+// vocabulary ([iam.ActorKind]) every domain's audit columns use, and false
+// where the facts name nobody (a blank By): then the record is the node's,
+// under [GenerationFacts.Writer], never an empty author column. One mapping for every domain, since one
+// reanchor names one party and the audit feed reads the histories side by
+// side; a domain only maps the kind into its own columns. A kind the
+// vocabulary does not hold (the zero value included) is an OPERATOR, as
+// [iam.ActorFor] reads it. An operator with no credential is a credential
+// acting under its own login, so its name stands in for the credential there
+// only: under another kind it would put a seat's or person's handle there.
 func (f GenerationFacts) Author() (iam.Actor, bool) {
 	if strings.TrimSpace(f.By) == "" {
 		return iam.Actor{}, false
@@ -694,48 +533,41 @@ func (f GenerationFacts) Author() (iam.Actor, bool) {
 
 // GenerationEncoder is the one step of a reanchor only the targeted domain can
 // take: saying, in its own record format, that the transition happened.
-//
-// DECLARED HERE because the transition is the caller. And REQUIRED of every
-// domain rather than optional, because "this domain keeps no record of it" is a
-// claim the domain has to make about itself — the vectors and the usage log
-// each make it, and say why — rather than something a nil could leave unsaid.
+// Declared here because the transition is the caller. Required of every
+// domain: "keeps no record" is a claim the domain makes (the vectors and the
+// usage log do), not something a nil leaves unsaid.
 type GenerationEncoder interface {
 	// GenerationRecord encodes the record, and reports false for a domain
 	// that keeps none.
 	GenerationRecord(f GenerationFacts) (GenerationRecord, bool, error)
 
 	// GenerationSubject is the subject generation gen's record is published
-	// on, and false for a domain that keeps none — what a reader of the log
-	// asks to learn which generations were opened, and by whom
-	// ([GenerationOpeners]).
+	// on, and false for a domain that keeps none: how a reader of the log
+	// learns which generations were opened, and by whom ([GenerationOpeners]).
 	GenerationSubject(gen uint32) (Subject, bool)
 }
 
 // ReanchorStream is the live log as the transition needs it: the append, the
 // per-subject probe that tells a lost race from nothing at all, a read of the
 // record a lost race lost to, and a LIVE reading of the stream's creation
-// instant.
-//
-// DECLARED HERE because the transition is the caller.
+// instant. Declared here because the transition is the caller.
 type ReanchorStream interface {
 	Appender
-	// VerifiedReader because the transition decodes what it reads back —
-	// whose record already opened a generation, the tail its rows do not
-	// hold — and the log holds signed frames.
+	// VerifiedReader because the transition decodes what it reads back
+	// (whose record opened a generation, the tail its rows do not hold) and
+	// the log holds signed frames.
 	VerifiedReader
 
 	// CreatedAt is the stream's creation instant ([StreamCreatedAt]) as a
-	// reading of it reports it NOW — read on every call, never cached.
+	// reading reports it NOW: read on every call, never cached.
 	CreatedAt(ctx context.Context) (time.Time, error)
 }
 
 // LogReader reads one record of a log back by its sequence: its subject, its
 // bytes and the broker's own instant for it, and false with a nil error for a
-// sequence the log no longer holds.
-//
-// DECLARED HERE because the framework is the caller, and for the paths that
-// address the log rather than follow it — a consumer is how records are
-// delivered, and nothing here needs one to answer "what is at this sequence".
+// sequence the log no longer holds. Declared here because the framework is
+// the caller, for the paths that address the log rather than follow it with
+// a consumer.
 type LogReader interface {
 	At(ctx context.Context, seq uint64) (subject string, payload []byte,
 		storedAt time.Time, ok bool, err error)
@@ -758,10 +590,10 @@ type ReanchorRunner interface {
 
 // ReanchorDeps is everything the transition needs that it does not own.
 type ReanchorDeps struct {
-	// Domain is the domain being re-anchored, and Spec the ONE LOG of it:
-	// the one whose stream the operator confirmed. Its checkpoint is the
-	// only one this writes, and a generation is a coordinate in that one
-	// stream's number space — a domain's other logs keep theirs.
+	// Domain is the domain being re-anchored, and Spec the ONE LOG of it
+	// whose stream the operator confirmed: its checkpoint is the only one
+	// this writes, since a generation is a coordinate in one stream's number
+	// space and a domain's other logs keep theirs.
 	Domain Domain
 	Spec   StreamSpec
 
@@ -773,31 +605,29 @@ type ReanchorDeps struct {
 	Runner   ReanchorRunner
 
 	// Evicted reports this node's own eviction from the domain, nil for a
-	// domain with no eviction gate — the one the write path's fence 0
-	// reads, so the reanchor refuses on exactly what a write would.
+	// domain with no eviction gate: the reader the write path's fence 0
+	// asks, so the reanchor refuses on exactly what a write would.
 	Evicted func(ctx context.Context) (bool, error)
 
 	// DB is the replicated estate, which holds the checkpoint.
 	DB Estate
 
-	// By names the operator for the record, ByKind the kind of actor they
-	// are and OperatorID the credential they acted through
-	// ([GenerationFacts.By]); NodeID is this node — the writer the eviction
-	// gate compares against. All three about the operator travel, because a
-	// generation record that carried only a name recorded every reanchor as
-	// an operator acting through a credential named after themselves.
+	// By, ByKind and OperatorID name the operator for the record
+	// ([GenerationFacts.By]); all three travel, or the record misnames the
+	// actor's kind and credential. NodeID is this node, the writer the
+	// eviction gate compares against.
 	By         string
 	ByKind     iam.ActorKind
 	OperatorID string
 	NodeID     string
 
 	// CompletionBudget bounds the steps after the generation record is
-	// appended, which run on a context DETACHED from the caller's — see
-	// [Reanchor] — and zero is [ReanchorCompletionBudget].
+	// appended, which run on a context DETACHED from the caller's
+	// ([Reanchor]); zero is [ReanchorCompletionBudget].
 	CompletionBudget time.Duration
 
 	// Logger is where this writes. Nil is the package's own component
-	// logger, never silence: see loggerOr for what silence cost.
+	// logger, never silence (loggerOr).
 	Logger *slog.Logger
 	Now    func() time.Time
 }
@@ -805,22 +635,16 @@ type ReanchorDeps struct {
 // ReanchorCompletionBudget is how long a reanchor's steps after its append get
 // when the caller names no budget of its own.
 //
-// TWO MINUTES: the steps are a stream read, the walk of the log's tail, one
-// record read, a local transaction — and the rebuild of this node's consumer,
-// which is a delete and a create of a replicated object and dominates the rest.
-// That is a bring-up of two creates, and two minutes is the ceiling a whole
-// bring-up gets on a broker with no peers; a caller on a clustered broker
-// passes the clustered bring-up's own, which is longer because each create is a
-// raft round trip against peers ([ReanchorDeps.CompletionBudget]).
+// TWO MINUTES: the steps are dominated by rebuilding this node's consumer (a
+// delete and a create of a replicated object), and two minutes is a whole
+// bring-up's ceiling on a broker with no peers. A clustered caller passes its
+// clustered bring-up's longer budget, each create there being a raft round
+// trip ([ReanchorDeps.CompletionBudget]).
 const ReanchorCompletionBudget = 2 * time.Minute
 
 // resolved is these deps with every optional one defaulted, and the only
-// value [Reanchor] reads them from.
-//
-// A METHOD rather than two lines at the top of Reanchor, because Reanchor is
-// a function and keeps nothing a test could inspect afterwards: the default
-// logger is asserted through this, the way every constructor's is asserted
-// through the field it stores.
+// value [Reanchor] reads them from: a method so a test can assert the
+// defaults, since Reanchor keeps nothing to inspect.
 func (d ReanchorDeps) resolved() ReanchorDeps {
 	d.Logger = loggerOr(d.Logger)
 	if d.Now == nil {
@@ -834,68 +658,16 @@ func (d ReanchorDeps) resolved() ReanchorDeps {
 
 // Reanchor runs one domain's generation transition, and reports what it did.
 //
-// # Seven steps, and the order is its crash matrix
-//
-//  1. Check the operator's confirmation against the LIVE stream's instant, and
-//     decide the case ([ReanchorCase]): recreated or restored, or neither — a
-//     stream that still holds every record the rows are missing, which is
-//     refused because there is nothing to re-anchor.
-//  2. Refuse while any peer has already re-anchored it, and — when none has —
-//     require this to be the most caught-up node on the stream its rows came
-//     from. Refuse on a node evicted from the
-//     domain, whose every record every applier drops.
-//  3. Derive the new generation LOCALLY, from the domain's own checkpoint.
-//  4. Append the domain's generation record on the live stream, at an
-//     expectation of zero on its own subject. A crash after the append leaves
-//     the record on the stream: the re-run derives the SAME generation —
-//     nothing below has moved the checkpoint — races itself, is refused, finds
-//     its OWN record there and carries on, first-writer-wins used for the one
-//     thing it is perfectly suited to. A record another node wrote there is a
-//     refusal, force or no force: that node opened the generation from its own
-//     rows ([appendGeneration]). Everything after the append runs on a
-//     context detached from the caller's, under its own budget: the
-//     generation is open once the record is on the log, and a caller giving
-//     up must not leave it open with nothing committed. Then read the
-//     stream's instant AGAIN: the same instant before and after the append is
-//     the same stream throughout, because an instant never comes back. For a
-//     restored log, walk its tail again up to one below the record — what
-//     landed between the reading and the append is below it too — and refuse,
-//     unless the operator accepted discarding, over a record these rows do not
-//     hold ([ReanchorInputs.Unheld]).
-//  5. Move this node's consumer to the case's checkpoint: one below the
-//     stream's first surviving sequence for a recreated one, one below the
-//     generation record for a restored one. BEFORE the checkpoint, so a consumer
-//     that cannot be moved leaves nothing committed: the broker will not move
-//     a consumer's start on its own, and one left at the old checkpoint on a
-//     rebuilt stream starts past every record the applier then waits for.
-//  6. ONE transaction: the domain's checkpoint, at the new generation and that
-//     sequence, keyed to the live instant. A crash before it leaves the domain
-//     as it was.
-//  7. Re-key the domain's applier to that checkpoint and that instant, which
-//     clears the verdict that the stream was recreated or that the checkpoint
-//     was past its end — so the engine starts the loop again and the domain
-//     resumes without a restart.
-//
-// Every checkpoint sits below the generation record the transition appended —
-// the first sequence was read before the append, and the restored case's is
-// placed one below the record itself — so the resumed applier applies that
-// record first, whichever case it was.
-//
-// # What it no longer does, and why
-//
-// It rewrote every object's `version` into the new generation and wrote the
-// audit row directly, beside the checkpoint. Neither was right. A version is
-// not what the broker arbitrates against — the ANCHOR is — and an anchor below
-// the current generation is already "no anchor here" to the publisher, which
-// asks the broker and publishes at zero under the floor theorem; so a reset
-// bought nothing, and it had never once run: its table list named columns the
-// schema does not have and a body-revision counter it would have corrupted.
-// Run, it would have re-billed every embedding, since a task's vector is
-// current while its `source_rev` equals the task's version. And the audit row
-// is what the generation record APPLIES as: the relaunched applier reads the
-// new stream from its head, the record is on it, and the row is then derived
-// like every other — where a row written beside the checkpoint was one no
-// replay of the log could reproduce.
+// The step order is its crash matrix: decide ([PermitReanchor], then the
+// eviction gate), append the generation record ([appendGeneration]), move
+// this node's consumer, commit the checkpoint alone, and re-key the applier,
+// which clears the recreated or past-end verdict without a restart. A crash
+// before the commit leaves the domain as it was, and a re-run finds its own
+// record. Every checkpoint sits below that record, so the resumed applier
+// applies it first, and the audit row is derived from it rather than written
+// beside the checkpoint, where no replay could reproduce it. Object versions
+// are not rewritten: the broker arbitrates on the ANCHOR, and one below the
+// current generation is already "no anchor" under the floor theorem.
 func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 	guard ReanchorGuard) (ReanchorPlan, error) {
 
@@ -931,9 +703,8 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 	}
 	d = d.resolved()
 
-	// THE DOMAIN SAYS WHETHER IT CLAIMS IDENTITY, never the caller: it is
-	// what decides whether the fleet guards apply, and a caller that
-	// filled it wrongly would waive them for the tracker.
+	// THE DOMAIN SAYS WHETHER IT CLAIMS IDENTITY, never the caller: a
+	// caller filling it wrongly would waive the fleet guards.
 	in.ClaimsIdentity = d.Domain.ClaimsIdentity()
 	plan, err := PermitReanchor(in, guard)
 	if err != nil {
@@ -941,11 +712,9 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 	}
 	gen := plan.Generation
 	if d.Evicted != nil {
-		// THE SAME QUESTION FENCE 0 ASKS BEFORE EVERY APPEND, because the
-		// record below is an append: an evicted node's is dropped by every
-		// applier, and so is everything it writes after — the reanchor
-		// would complete and leave a node whose every write applies
-		// nowhere. The remedy is the readmission, first.
+		// FENCE 0's QUESTION, since the record below is an append: every
+		// applier drops an evicted node's records, so the reanchor would
+		// leave a node whose every write applies nowhere. Readmit first.
 		evicted, readErr := d.Evicted(ctx)
 		if refusal := evictionRefusal(ctx, evicted, readErr); refusal != nil {
 			return ReanchorPlan{}, fmt.Errorf("%w: %s: %w", ErrReanchorRefused,
@@ -963,7 +732,9 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 		"cursor", plan.Cursor, "from_generation", plan.From, "forced", guard.Force,
 		"discarding", discardedSeq(plan))
 
-	// 4. THE RECORD, first-writer-wins, and the instant read again.
+	// THE RECORD, first-writer-wins at an expectation of zero on its own
+	// subject. A crash after it leaves the record: the re-run derives the
+	// same generation and finds its own record ([appendGeneration]).
 	record, keeps, err := d.Record.GenerationRecord(GenerationFacts{
 		Generation: gen, Case: plan.Case, Discarded: plan.Discarded, Inputs: in,
 		By: d.By, ByKind: d.ByKind, OperatorID: d.OperatorID, Writer: d.NodeID,
@@ -981,16 +752,11 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 		}
 	}
 
-	// FROM HERE ON, NOT THE CALLER'S CONTEXT. The record is on the log, so
-	// the generation is open whatever happens next, and every step after it
-	// exists to make this node the one the fleet continues from. On the
-	// caller's context a client that gave up — the operator's CLI waits a
-	// bounded time, and the API runs this on the request's own context —
-	// cancelled the consumer's rebuild halfway, leaving the generation open
-	// on the log with nothing committed; and a re-run then met its own
-	// record. Detached, bounded by its own budget
-	// ([ReanchorDeps.CompletionBudget]), the transition finishes or fails on
-	// its own account.
+	// FROM HERE ON, NOT THE CALLER'S CONTEXT: the record is on the log, so
+	// the generation is open whatever happens, and a caller giving up (the
+	// CLI waits a bounded time; the API runs this on the request's context)
+	// must not leave it open with nothing committed. Bounded by
+	// [ReanchorDeps.CompletionBudget]. Then the instant is read again.
 	post, cancelPost := context.WithTimeout(context.WithoutCancel(ctx), d.CompletionBudget)
 	defer cancelPost()
 	if err := stillConfirmed(post, d.Stream, in); err != nil {
@@ -998,15 +764,11 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 	}
 
 	// THE RESTORED CASE FOLLOWS THE LOG FROM ONE BELOW ITS OWN RECORD, not
-	// from the end it read: whatever landed between that reading and the
-	// append sits below the record, and one earlier attempt's record may be
-	// above that reading's end or below it. Placed at the end as read, a
-	// record a copy-age node wrote in between was applied at the new
-	// generation on top of these rows, and a re-run's checkpoint went above
-	// its own record, which was then applied nowhere. And the walk for what
-	// that discards is taken again up to there, because the records that
-	// landed in between are ones the first walk never saw
-	// ([ReanchorInputs.Unheld]).
+	// the end it read: what a copy-age node wrote in between would otherwise
+	// apply at the new generation over these rows, and a re-run's checkpoint
+	// would sit above its own record, applying it nowhere. The walk for what
+	// that discards is taken again up to there, since the first walk never
+	// saw those records ([ReanchorInputs.Unheld]).
 	if keeps && plan.Case == ReanchorRestored {
 		plan.Cursor, plan.StaleAfter = opened-1, opened
 		at.Seq = plan.Cursor
@@ -1034,7 +796,10 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 		}
 	}
 
-	// 5. THIS NODE'S CONSUMER, before the checkpoint it resumes from.
+	// THIS NODE'S CONSUMER, BEFORE THE CHECKPOINT, so one that cannot be
+	// moved leaves nothing committed: the broker never moves a consumer's
+	// start itself, and one left at the old checkpoint on a rebuilt stream
+	// starts past every record the applier waits for.
 	if err := d.Consumer.Reset(post, plan.Cursor); err != nil {
 		return ReanchorPlan{}, stoppedReanchor(err, "this node's %s consumer "+
 			"couldn't be moved to sequence %d of the adopted stream. Nothing is "+
@@ -1042,13 +807,11 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 			plan.Cursor)
 	}
 
-	// THE RECORD THE NEW CHECKPOINT NAMES — the log's own at its sequence,
-	// which is what the applier verifies the log against from here on
-	// ([Runner.VerifyCheckpoint]). None where the log holds none there: one
-	// below a rebuilt stream's first record, or sequence 0. Read before the
-	// transaction because a broker read inside it would hold the writer for
-	// a round trip; the sequence is below the generation record, so nothing
-	// the log does meanwhile moves it.
+	// THE RECORD THE NEW CHECKPOINT NAMES, which the applier verifies the
+	// log against from here on ([Runner.VerifyCheckpoint]); none one below a
+	// rebuilt stream's first record or at 0. Read before the transaction so
+	// no broker round trip holds the writer; the sequence is below the
+	// generation record, so nothing moves it meanwhile.
 	var names time.Time
 	if plan.Cursor > 0 {
 		_, _, storedAt, ok, readErr := d.Stream.At(post, plan.Cursor)
@@ -1059,16 +822,15 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 				plan.Cursor)
 		}
 		if ok {
-			// IN THE STORE'S ENCODING ([AppliedInstant]), as every
-			// other path that sets the checkpoint's instant holds it:
-			// the runner keeps this value until its next commit, and a
-			// stance or `retention status` read meanwhile would report
-			// the broker client's nanoseconds in the node's zone.
+			// IN THE STORE'S ENCODING ([AppliedInstant]), like every path
+			// setting the checkpoint's instant: the runner keeps it until
+			// its next commit, and a stance or `retention status` read must
+			// not see the broker's nanoseconds in the node's zone.
 			names = AppliedInstant(storedAt)
 		}
 	}
 
-	// 6. THE ONE CHECKPOINT, alone in its transaction.
+	// THE ONE CHECKPOINT, alone in its transaction.
 	if err := d.DB.Tx(post, func(tx *sql.Tx) error {
 		return t.reanchorCursor(post, tx, at, in.StreamCreatedAt, names, plan.From,
 			plan.StaleAfter, d.Now())
@@ -1077,15 +839,14 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 			"generation %d: %w", d.Domain.Name(), gen, err)
 	}
 
-	// 7. THE APPLIER, re-keyed to what just committed.
+	// THE APPLIER, re-keyed to what just committed.
 	if err := d.Runner.Reanchored(at, in.StreamCreatedAt, names); err != nil {
 		return ReanchorPlan{}, fmt.Errorf("statelog: re-key %s's applier to %s: %w",
 			d.Domain.Name(), at, err)
 	}
 
-	// THE ONE COMPLETION LINE. Who asked is the API's line (`reanchored`,
-	// carrying the operator) and the generation record's, and neither is a
-	// fact this function has.
+	// THE ONE COMPLETION LINE. Who asked is in the API's `reanchored` line
+	// and the generation record, not a fact this function has.
 	d.Logger.WarnContext(ctx, "statelog_reanchored",
 		"domain", d.Domain.Name(), "generation", gen, "case", string(plan.Case),
 		"stream", in.Stream, "stream_created_at", in.StreamCreatedAt,
@@ -1096,8 +857,7 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 }
 
 // discardedSeq is the sequence of the newest record a plan discards, and 0 when
-// it discards none — what the two log lines carry, since a line cannot hold the
-// record whole.
+// it discards none: what the two log lines carry of it.
 func discardedSeq(plan ReanchorPlan) uint64 {
 	if plan.Discarded == nil {
 		return 0
@@ -1131,72 +891,17 @@ func reanchoredDetail(c ReanchorCase) string {
 }
 
 // appendGeneration appends a domain's generation record at an expectation of
-// zero on its own subject, and establishes that the record the subject then
-// holds is THIS node's.
+// zero on its own subject, establishes that the record the subject then holds
+// is THIS node's ([generationIsOurs]), and answers its sequence (where it
+// landed, or where a re-run found its own): the restored case's checkpoint
+// goes one below it.
 //
-// # Why this is not an ordinary write through the domain's publisher
-//
-// Because every fence the write authority runs is a statement about the stream
-// this node's rows are keyed to, and the one write a reanchor makes is the one
-// whose purpose is to leave that stream. Fence 0 refuses while the runner holds
-// the recreation verdict — which is the only state a reanchor is ever run in —
-// and the zero fence clears an expectation of zero against a checkpoint and a
-// floor from the old history, which on a rebuilt log end below the checkpoint
-// and refuse. What the publisher's fences would establish, this establishes
-// differently, and soundly:
-//
-//   - THE IDENTITY is the operator's confirmation of the LIVE instant, checked
-//     before this runs and read again after it ([stillConfirmed]). An instant
-//     is never reissued, so the same instant on both sides of the append is the
-//     same stream throughout it.
-//   - THE EVICTION is asked by [Reanchor] before this, from the same reader
-//     fence 0 asks.
-//   - THE FLOOR THEOREM is not in play. It protects an object whose record was
-//     trimmed from a writer whose rows are stale; the generation subject is
-//     written by nothing but a reanchor to that generation, and the one record
-//     on it is what the arbitration below decides.
-//   - THE RESOLUTION is not waited for. The applier that would resolve it is
-//     the one this transition is about to point at the stream, and it applies
-//     the record the moment it resumes, from the case's checkpoint — which the
-//     record is above, because the first sequence and the end that checkpoint
-//     was taken from were both read before the append.
-//   - THE GATE RESERVE ([Reservation.Bytes]) is not asked either, so the
-//     record may land in it. It is a gate record in the reserve's sense — it
-//     installs the generation every later record is placed in — and the
-//     stream it lands on is one every node's fence refuses ordinary writes to
-//     until it has, so nothing ordinary can have filled it since, and it
-//     lands at most once per generation.
-//
-// # A record already there is carried on from only if it is this node's own
-//
-// The subject holds at most one record, so an append that did not land — the
-// broker refused the expectation, or its answer never arrived and the probe
-// found the subject taken — or that the broker acknowledged as a DUPLICATE of
-// a record already in its window has lost to whatever the subject holds. That
-// is this node's own earlier attempt when a re-run races itself, and the
-// transition carries on: first-writer-wins, used for the one thing it is
-// perfectly suited to.
-//
-// It is ANOTHER node's record when two nodes opened the generation
-// independently — the register could not be read and both forced, or each read
-// it before the other's row said anything — and carrying on from it was the
-// defect. Both committed a checkpoint in the generation, each over its own
-// rows: two histories under one number, which the identity claim forbids and
-// nothing on the log could ever reconcile, since every data node applies the
-// same records into whichever rows it holds. So the record is READ BACK and its
-// writer compared with this node's, whatever the guard allowed: no force and no
-// unreadable register reaches past it, because nothing the operator could know
-// makes two openings of one generation safe. The duplicate case needs the read
-// too — the broker checks its window before the expectation on a clustered
-// stream, so a message id that collided with a peer's would be acknowledged as
-// though it had landed; the domains' message ids name their writer, and this
-// does not rely on it.
-//
-// # It answers where the record is
-//
-// The sequence the record stands at — the one it landed at, or the one the
-// subject held it at when this was a re-run finding its own — because that is
-// where the restored case's checkpoint goes: one below it.
+// Not a write through the publisher: its fences are about the stream these
+// rows are keyed to, and this write exists to leave it (fence 0 refuses under
+// the recreation verdict, the only state a reanchor runs in). Identity,
+// eviction, the floor theorem, resolution and the gate reserve are each
+// settled otherwise (package doc, "A reanchor's generation record skips the
+// publisher").
 func appendGeneration(ctx context.Context, d ReanchorDeps, spec StreamSpec, gen uint32,
 	record GenerationRecord) (uint64, error) {
 
@@ -1206,15 +911,13 @@ func appendGeneration(ctx context.Context, d ReanchorDeps, spec StreamSpec, gen 
 	switch f, detail := classify(err); f {
 	case faultNone:
 		if !duplicate {
-			// LANDED AT ZERO: the subject held nothing, so nobody's
-			// record is there but this one.
+			// LANDED AT ZERO: the subject held nothing but this record.
 			return seq, nil
 		}
 		return seq, generationIsOurs(ctx, d, subject, seq, gen)
-	// EACH REFUSAL WITH ITS OWN REMEDY, because they have opposite ones: a
-	// full log is cleared by raising its ceiling, and the other two are not
-	// cleared by anything an operator re-runs. Folded into one sentence, none
-	// said what to do. What the broker said goes to the lines this node logs.
+	// EACH REFUSAL WITH ITS OWN REMEDY: a full log is cleared by raising its
+	// ceiling, the other two by nothing a re-run changes. What the broker
+	// said goes to this node's log lines.
 	case faultFull:
 		return 0, stoppedReanchor(errors.New(detail), "%s is at its ceiling, so the "+
 			"broker refused the generation record and nothing landed. Raise the "+
@@ -1248,12 +951,15 @@ func appendGeneration(ctx context.Context, d ReanchorDeps, spec StreamSpec, gen 
 }
 
 // generationIsOurs reads the record a generation subject holds at seq and
-// refuses unless this node wrote it — see [appendGeneration].
-//
-// EVERY ANSWER BUT "OURS" STOPS THE TRANSITION BEFORE ANYTHING COMMITS: a
-// record that cannot be read is an error to re-run, and one that cannot say who
-// wrote it is refused, because the one thing this read exists to rule out is a
-// record this node cannot vouch for.
+// refuses unless this node wrote it. The subject holds one record, so an
+// append refused, unanswered or acknowledged as a DUPLICATE lost to it: a
+// re-run's own record is carried on from, but another node's means two nodes
+// opened the generation from their own rows, two histories under one number
+// that no log reconciles, so no force or unreadable register reaches past
+// this. Duplicates need the read too: a clustered broker checks its dedupe
+// window before the expectation, so a colliding message id is acked as landed.
+// Every answer but "ours" stops before anything commits: an unreadable record
+// is an error to re-run, and one that cannot say who wrote it is refused.
 func generationIsOurs(ctx context.Context, d ReanchorDeps, subject string, seq uint64,
 	gen uint32) error {
 
@@ -1298,13 +1004,11 @@ func generationIsOurs(ctx context.Context, d ReanchorDeps, subject string, seq u
 }
 
 // stillConfirmed reads the stream's instant again and refuses unless it is the
-// one the operator confirmed.
-//
-// AFTER THE APPEND, which is the read that makes the append's identity a fact
-// rather than a hope: the confirmation was checked against a reading taken
-// before it, and a stream rebuilt in between would have taken the record
-// under a name the operator never looked at. The checkpoint is keyed to the
-// confirmed instant, so it must not commit over a stream that is not it.
+// one the operator confirmed. Called after the append: the confirmation was
+// checked against an earlier reading, and a stream rebuilt in between took the
+// record under a name the operator never saw, so the checkpoint keyed to the
+// confirmed instant must not commit. An instant is never reissued, so the same
+// one on both sides is the same stream throughout.
 func stillConfirmed(ctx context.Context, stream ReanchorStream, in ReanchorInputs) error {
 	live, err := stream.CreatedAt(ctx)
 	if err != nil {

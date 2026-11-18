@@ -104,6 +104,10 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AMeasureLandsWhereTheEndIsAlreadyRecorded", testAMeasureLandsWhereTheEndIsAlreadyRecorded},
 		{"AJobsCountIsItsOwnReadsAndNeverCarried", testAJobsCountIsItsOwnReadsAndNeverCarried},
 		{"ACountLandsWhereTheEndIsAlreadyRecorded", testACountLandsWhereTheEndIsAlreadyRecorded},
+		{"TheNextRequestIsNeverCarried", testTheNextRequestIsNeverCarried},
+		{"AHarnessEndWritesTheNextRequest", testAHarnessEndWritesTheNextRequest},
+		{"AHarnessEndWritesTheCountsProvider", testAHarnessEndWritesTheCountsProvider},
+		{"TheCopysWriterIsHandedToTheRelaunchAndNeverCarried", testTheCopysWriterIsHandedToTheRelaunchAndNeverCarried},
 		{"ALaunchRecordsWhatTheBriefItHandedLeftOut", testALaunchRecordsWhatTheBriefItHandedLeftOut},
 		{"TheTurnsLeadsAreKeptBesideItsRowAndOutliveEveryRelaunch", testTheTurnsLeadsAreKeptBesideItsRowAndOutliveEveryRelaunch},
 		{"AResumedTurnsCarryIsItsClaimsOwn", testAResumedTurnsCarryIsItsClaimsOwn},
@@ -226,6 +230,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	cases = append(cases, tellingCases...)
 	cases = append(cases, briefReadCases...)
 	cases = append(cases, inFlightCases...)
+	cases = append(cases, savingCases...)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -245,11 +250,21 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	}
 	raw = append(raw, noteRawCases...)
 	raw = append(raw, bytesRawCases...)
+	raw = append(raw, savingRawCases...)
 	for _, tc := range raw {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			store, runs := newStore(t)
 			tc.fn(t, store, runs)
+		})
+	}
+	// TWO NODES' STORES OVER ONE BACKEND, for the cases whose subject is what
+	// one node's write leaves the other.
+	for _, tc := range savingFleetCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store, runs := newStore(t)
+			tc.fn(t, store, over(runs))
 		})
 	}
 	for _, tc := range slices.Concat(stagedLogCases, lateStagedCases, lateItemStagedCases) {
@@ -738,7 +753,7 @@ func testAJobsMeasureIsItsOwnOrCarriedAlongItsCopy(t *testing.T, s sandbox.Pendi
 }
 
 // A JOB'S COUNT IS ITS OWN READS', AND NEVER CARRIED. The read that collects a job
-// records what Claude Code counts the copy its box holds at beside how its harness
+// records what its harness counts the copy its box holds at beside how its harness
 // ended: the read's count wherever it made one, a mark among them, so a later
 // read that could not bound the copy replaces an earlier bound; the record's own
 // where a read made none; a mark longer than a record carries written as
@@ -824,6 +839,150 @@ func testACountLandsWhereTheEndIsAlreadyRecorded(t *testing.T, s sandbox.Pending
 	}
 	if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, read); err != nil || ok {
 		t.Errorf("the same read again = %v, %v, want nothing written", ok, err)
+	}
+}
+
+// THE NEXT REQUEST IS NEVER CARRIED. The read that collects a job records what
+// the harness estimates the next request of the copy its box holds at beside
+// how its harness ended: the read's wherever it made one, and the record's own
+// where a read made none, since the copy of a job that is over does not change.
+// Every write of the job's record after it keeps it, and the next launch's
+// record starts with none: an estimate is the read of this job's copy, never a
+// lineage's, since a job that made no request of its own may have grown the
+// copy it took up by its brief.
+//
+// Mutation: carry the estimate through the relaunch's reset, and this goes red.
+func testTheNextRequestIsNeverCarried(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-next-own"
+	launch := mustLaunched(t, s, run(turn))
+	claimed := mustClaim(t, s, turn)
+	estimate := sandbox.NextRequest{Tokens: 42_000, OlderTokens: 31_500}
+	mark := func(read sandbox.NextRequest) {
+		t.Helper()
+		if _, err := s.MarkHarnessEnd(t.Context(), turn, launch, sandbox.EndRead{End: sandbox.HarnessEndOwnRun,
+			Next: read}); err != nil {
+			t.Fatalf("MarkHarnessEnd: %v", err)
+		}
+	}
+	check := func(step string, want sandbox.NextRequest) {
+		t.Helper()
+		if got := mustGet(t, s, turn).Launch.NextRequest(); got != want {
+			t.Errorf("after %s the job's record holds the next request %+v, want %+v", step, got, want)
+		}
+	}
+	mark(estimate)
+	check("the read that collected the job", estimate)
+	mark(sandbox.NextRequest{})
+	check("a read that made none", estimate)
+	mustRelease(t, s, claimed)
+	check("the release of its claim", estimate)
+	if err := s.SetStatus(t.Context(), turn, sandbox.StatusRunning, sandbox.Fence{}); err != nil {
+		t.Fatal(err)
+	}
+	check("a status write", estimate)
+	park(t, s, turn)
+	check("a park", estimate)
+	mustBeginLaunch(t, s, run(turn))
+	check("the next launch's begin", sandbox.NextRequest{})
+}
+
+// A HARNESS END WRITES THE NEXT REQUEST. The read that collects a job records its
+// harness's end, its newest request's measure, its count and its estimate of the
+// next request in one write, which lands where any changes: a collection made
+// again, whose end the first read recorded already, brings an estimate the
+// first had none of, or another. The same read again changes nothing.
+//
+// Mutation: leave the estimate out of the write's test of a change, and this
+// goes red.
+func testAHarnessEndWritesTheNextRequest(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-next-after-end"
+	launch := mustLaunched(t, s, run(turn))
+	mustClaim(t, s, turn)
+	if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, sandbox.EndRead{End: sandbox.HarnessEndCutOff}); err != nil ||
+		!ok {
+		t.Fatalf("the first read's record = %v, %v", ok, err)
+	}
+	for _, estimate := range []sandbox.NextRequest{{Tokens: 42_000, OlderTokens: 31_500}, {Tokens: 43_000}} {
+		read := sandbox.EndRead{End: sandbox.HarnessEndCutOff, Next: estimate}
+		if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, read); err != nil || !ok {
+			t.Fatalf("a read bringing the estimate %+v beside the end recorded = %v, %v, want it written",
+				estimate, ok, err)
+		}
+		if got := mustGet(t, s, turn).Launch.NextRequest(); got != estimate {
+			t.Errorf("the job's record holds the next request %+v, want %+v", got, estimate)
+		}
+		if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, read); err != nil || ok {
+			t.Errorf("the same read again = %v, %v, want nothing written", ok, err)
+		}
+	}
+}
+
+// A HARNESS END WRITES THE COUNT'S PROVIDER AND WRITER: a read that brings an
+// OpenCode count whose figure is already on the job's record, anchored on
+// another provider's reply or read off a copy another release wrote, is a
+// change to record beside the end, since a figure is the report of the provider
+// and the release beside it; and the same read again writes nothing.
+//
+// Mutation: leave the provider or the writer out of the write's test of a
+// change, and this goes red.
+func testAHarnessEndWritesTheCountsProvider(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-provider-after-end"
+	launch := mustLaunched(t, s, run(turn))
+	mustClaim(t, s, turn)
+	count := &sandbox.ResumedCount{Tokens: 42_000, Restart: new("msg_c")}
+	for _, said := range []struct{ provider, release string }{{"stub", "2.3.0"}, {"openrouter", "2.3.0"},
+		{"openrouter", "2.2.7"}} {
+		read := sandbox.EndRead{End: sandbox.HarnessEndOwnRun, Count: count, CountProvider: said.provider,
+			CountRelease: said.release}
+		if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, read); err != nil || !ok {
+			t.Fatalf("a read bringing %+v beside the count recorded = %v, %v, want it written", said, ok, err)
+		}
+		if got := mustGet(t, s, turn).Launch; got.CountProvider != said.provider ||
+			got.CountRelease != said.release {
+			t.Errorf("the job's record names the provider %q written by %q, want %+v", got.CountProvider,
+				got.CountRelease, said)
+		}
+		if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, read); err != nil || ok {
+			t.Errorf("the same read again = %v, %v, want nothing written", ok, err)
+		}
+	}
+}
+
+// THE COPY'S WRITER IS HANDED TO THE RELAUNCH AND NEVER CARRIED. The release
+// the read that collected a job names beside its count is kept by a later read
+// that brings no count, and the relaunch that replaces the job's record is
+// handed it as the writer of the copy the box holds, in the write that replaces
+// the record, whose own record names none: the next job's copy is its own run's.
+//
+// Mutation: hand the relaunch no writer, or carry it onto the new record, and
+// this goes red.
+func testTheCopysWriterIsHandedToTheRelaunchAndNeverCarried(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-writer-handed"
+	launch := mustLaunched(t, s, run(turn))
+	claimed := mustClaim(t, s, turn)
+	count := &sandbox.ResumedCount{Tokens: 42_000, Restart: new("msg_c")}
+	for _, read := range []sandbox.EndRead{
+		{End: sandbox.HarnessEndOwnRun, Count: count, CountProvider: "stub", CountRelease: "2.3.0"},
+		{End: sandbox.HarnessEndOwnRun},
+	} {
+		if _, err := s.MarkHarnessEnd(t.Context(), turn, launch, read); err != nil {
+			t.Fatalf("MarkHarnessEnd: %v", err)
+		}
+		if got := mustGet(t, s, turn).Launch.CountRelease; got != "2.3.0" {
+			t.Errorf("after a read bringing %+v the job's record names the writer %q, want 2.3.0", read, got)
+		}
+	}
+	mustRelease(t, s, claimed)
+	park(t, s, turn)
+	opened, err := s.BeginLaunch(t.Context(), run(turn), sandbox.Fence{})
+	if err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	if opened.Prior.Writer != "2.3.0" {
+		t.Errorf("the relaunch was handed the writer %q, want 2.3.0", opened.Prior.Writer)
+	}
+	if got := mustGet(t, s, turn).Launch.CountRelease; got != "" {
+		t.Errorf("the relaunch's own record names the writer %q, want none", got)
 	}
 }
 

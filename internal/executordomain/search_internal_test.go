@@ -37,13 +37,10 @@ func (e *estate) search(seat, query, cursor string, limit int) SearchPage {
 	return page
 }
 
-// A SEAT'S SEARCH FINDS EVERY SESSION WHOSE WORDS HOLD EVERY TERM, newest begun
-// first, and never another seat's: the terms may sit in different fields of a
-// row — what it was asked, its conversation, how it ended — and each is found
-// only as a whole term, so a row holding one term, or holding a term only
-// inside a longer word, is no hit. Rows are ordered by where they began,
-// whatever order their turns ended in, and a page whose hits are full says
-// where the next goes on from.
+// A SEAT'S SEARCH FINDS EVERY SESSION WHOSE WORDS HOLD EVERY TERM, across the
+// row's fields and each only as a whole term, newest begun first whatever
+// order the turns ended in, and never another seat's; a full page says where
+// the next goes on from.
 //
 // Mutation: match any term rather than every one, order the page by the turns'
 // ends, or drop the seat from the page statement, and a check goes red.
@@ -123,12 +120,10 @@ func TestASeatsSearchFindsEverySessionHoldingEveryWord(t *testing.T) {
 // asked for.
 var githubToken = "ghp_" + strings.Repeat("Qx7Rb2", 6)
 
-// A SEARCH MATCHES WHAT A READER WOULD BE SHOWN: a term found only inside a
-// credential the row's redaction takes out finds nothing, though the row's raw
-// words hold it — asked alone, or beside a word the row shows — and so does a
-// term only the marker the redaction wrote in its place spells, a password
-// that was the very word its marker names; a hit's snippet is cut from the
-// redacted words.
+// A SEARCH MATCHES WHAT A READER WOULD BE SHOWN: a term only inside a
+// credential the redaction takes out, alone or beside a shown word, or only in
+// the marker written in its place, finds nothing; a hit's snippet is cut from
+// the redacted words.
 //
 // Mutation: match the row's raw words, read the marker's words as the row's,
 // or cut the snippet from the raw words, and a check goes red.
@@ -165,14 +160,11 @@ func TestASearchMatchesWhatAReadWouldShow(t *testing.T) {
 	}
 }
 
-// TWO ROWS THAT REDACT ALIKE ARE SEARCHED ALIKE. Two seats' rows whose words
-// differ only in what the redaction takes out — a password a guess names and
-// one it does not, as long, beside a token the rules of the build that wrote
-// them did not know — are shown alike, so a search for any words finds both or
-// neither, each matching the same fields with the same snippet. A word a
-// redaction's marker ends, `deploy` before the token, is a word the reader is
-// shown, and a hit in both, though as the rows hold it it is a piece of a
-// longer word and only one of the passwords held it whole.
+// TWO ROWS THAT REDACT ALIKE ARE SEARCHED ALIKE: two seats' rows differing
+// only in what the redaction takes out (a password a guess names or not, beside
+// a token their writer's rules did not know) find both or neither, with the
+// same fields and snippet. `deploy` before the token is shown as a word, so it
+// is a hit in both, though in the raw rows it is a piece of a longer word.
 //
 // Mutation: ask the rows' words whether they hold every term whole before
 // redacting them, and a check goes red.
@@ -207,11 +199,9 @@ func TestTwoRowsThatRedactAlikeAreSearchedAlike(t *testing.T) {
 	}
 }
 
-// A HIT'S SNIPPET SHOWS THE WORD IT WAS FOUND BY. A search decides a hit on
-// the words a row shows of its own, so a hit's snippet is centred on the first
-// of those, never on the same letters in a marker the redaction wrote before
-// it: in a field longer than a snippet, centred on `token` in the marker of a
-// GitHub token, the snippet left out the sentence the row was found by.
+// A HIT'S SNIPPET SHOWS THE WORD IT WAS FOUND BY: centred on the first term
+// the row shows of its own, never the same letters in a marker before it
+// (`token` in a GitHub token's), which in a long field cuts out the match.
 //
 // Mutation: centre the snippet on the first term anywhere in the field, a
 // marker's words among them, and a check goes red.
@@ -232,11 +222,10 @@ func TestAHitsSnippetShowsTheWordItWasFoundBy(t *testing.T) {
 	}
 }
 
-// A SEARCH THAT STOPS AT ITS BOUND SAYS WHERE AND HOW FAR: a seat whose rows
-// past the newest SearchScanRows hold the only match is answered no hit, the
-// rows it examined counted, not exhausted, and a cursor at the last row it
-// examined, from which the next page finds the older match and reaches the
-// seat's oldest row.
+// A SEARCH THAT STOPS AT ITS BOUND SAYS WHERE AND HOW FAR: with the only match
+// past the newest SearchScanRows rows, the page has no hit, counts the rows it
+// examined, is not exhausted, and its cursor's next page finds the match and
+// reaches the seat's oldest row.
 //
 // Mutation: drop the cursor of a page stopped at its bound, or say it reached
 // the seat's oldest, and the older match is never searched.

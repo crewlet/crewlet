@@ -1,6 +1,9 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // TurnEngine configures the two-stage turn: an executor that decides and acts
 // in one agentic run — the seat's harness's own, in a box — and a reviewer
@@ -251,16 +254,30 @@ type ConversationSession struct {
 	// MaxBytesPerSeat is the most object-store bytes one seat's captured
 	// executor sessions may hold (internal/executordomain): past it a new
 	// capture releases the seat's oldest ENDED turns' sessions, keeping how
-	// each ended, and a capture the seat's live turns leave no room for is
-	// refused, so that turn's next launch starts fresh. A session a live
-	// turn's first launch was handed to continue is HELD, and no release
-	// takes it, until that turn keeps a session of its own or ends — so it
-	// counts against the budget beside the seat's live turns for as long.
-	//
-	// SIXTY-FOUR MEBIBYTES BY DEFAULT ([DefaultSessionBytesPerSeat]), which
-	// says why. The engine reads it off the revision the fleet runs, and
-	// every node applies the one number a capture carries.
-	MaxBytesPerSeat int64 `yaml:"max_bytes_per_seat,omitempty" json:"max_bytes_per_seat,omitempty" js:"min=34603008;max=68719476736" desc:"Object-store bytes one seat's captured executor sessions may hold; past it the oldest ended turns' sessions are released (default 64 MiB, 33 MiB..64 GiB)."`
+	// each ended, and a capture its live turns leave no room for is refused,
+	// so that turn's next launch starts fresh. A session a live turn's first
+	// launch was handed to continue is HELD, and counted, until that turn
+	// keeps its own or ends. It is also the allowance of the seat's saves of
+	// running sessions, whose superseded objects the store keeps about a
+	// day, so a seat holds up to TWICE it. SIXTY-FOUR MEBIBYTES BY DEFAULT
+	// ([DefaultSessionBytesPerSeat]), which says why. The engine reads it
+	// off the revision the fleet runs, and every node applies the one
+	// number a capture carries.
+	MaxBytesPerSeat int64 `yaml:"max_bytes_per_seat,omitempty" json:"max_bytes_per_seat,omitempty" js:"min=34603008;max=68719476736" desc:"Object-store bytes one seat's captured executor sessions may hold; past it the oldest ended turns' sessions are released. It is also the allowance of the seat's saves of running sessions, which the object store keeps for about a day once a newer one replaces them, so a seat holds up to twice it (default 64 MiB, 33 MiB..64 GiB)."`
+
+	// SaveIntervalSeconds is the shortest time between saves of a running
+	// Claude Code executor's session: the node driving its box keeps what
+	// the harness has written so far as the turn's newest capture, so a run
+	// whose box or node is lost continues from that save. A seat's saves are
+	// paced by their size beyond it, so its superseded saves hold at most
+	// [ConversationSession.MaxBytesPerSeat] while they wait for the
+	// collector; the desc gives the figures. 0 takes [DefaultSaveInterval];
+	// any other value outside [MinSaveInterval]..[MaxSaveInterval] is
+	// refused, never clamped (a clamp leaves the document saying one thing
+	// and the node another). There is no "off" short of `enabled: false`,
+	// which keeps no session at all. Each node reads it off its own
+	// revision, since a cadence binds only the node driving the box.
+	SaveIntervalSeconds int `yaml:"save_interval_seconds,omitempty" json:"save_interval_seconds,omitempty" js:"min=0;max=3600" desc:"Shortest time in seconds between saves of a running executor's session (Claude Code runs; default 600, 0 takes it, 300..3600). A seat's saves are paced by their size beyond it, so at the default max_bytes_per_seat a session past about 0.4 MiB sealed is saved about every 27 minutes per sealed MiB, twice that once the seat has saved for a day."`
 }
 
 // The per-seat session budget's default and bounds.
@@ -274,12 +291,12 @@ const (
 	// working day. (A live turn's capped session never needs the head it
 	// continued beside it: its own capture holds that transcript and more,
 	// so releasing the head then loses nothing.) It is shared with every
-	// other object: on the default nats backend
-	// the bucket is a quarter of the broker's limit, about 2.6 GiB at the
-	// smallest data volume crewlet-operator admits, beside project files,
-	// artifacts and Ask Crewlet's files; ten seats at their budget take a
-	// quarter of it, and a company of forty seats or more belongs on S3
-	// (store.objects.backend), where the bound is the bucket's own.
+	// other object: on the default nats backend the bucket is a quarter of
+	// the broker's limit, about 2.6 GiB at the smallest data volume
+	// crewlet-operator admits, beside project files, artifacts and Ask
+	// Crewlet's files. A seat at its budget holds up to twice it while its
+	// superseded saves wait for the collector: five seats take a quarter of
+	// the bucket, and twenty or more belong on S3 (store.objects.backend).
 	DefaultSessionBytesPerSeat int64 = 64 << 20
 
 	// SessionBytesPerSeatFloor is the least a seat may be given: ONE
@@ -293,6 +310,32 @@ const (
 	// SessionBytesPerSeatCeiling is a typo guard: a thousand times the
 	// default is past any bucket a seat could be given.
 	SessionBytesPerSeatCeiling int64 = 64 << 30
+)
+
+// The bounds of save_interval_seconds, and what an unset one takes.
+const (
+	// MinSaveInterval is the floor: FIVE MINUTES, sized from the executor
+	// log's census (DefaultExecutorLogMaxBytes says it). Every save writes
+	// one capture record of about a kibibyte, and a long launch saving at
+	// this floor at most doubles its turn's records, about 44 MB a day at
+	// the reference company against the default's 32 MB, which the log's
+	// ceiling still holds for more than a week of a blocked trim. Below it a
+	// saving fleet's records would outgrow the log's sizing.
+	MinSaveInterval = 5 * time.Minute
+
+	// DefaultSaveInterval is what an unset or 0 save_interval_seconds takes:
+	// TEN MINUTES. A lost run redoes what it did since its newest save, so
+	// about this plus one save's take, longer where the pacing by size
+	// spaces a large session's saves further apart. A judgment, to be tuned
+	// from what a lost run's line reports as the time since its newest save
+	// (since_save_s).
+	DefaultSaveInterval = 10 * time.Minute
+
+	// MaxSaveInterval is a typo guard: past an hour a save hardly happens
+	// before an ordinary run ends, so a larger value is likelier a stray
+	// zero or milliseconds than a cadence anybody meant. (Minutes typed as
+	// seconds come out below the floor, which refuses them.)
+	MaxSaveInterval = time.Hour
 )
 
 // DefaultConversationSession is the block's shipped defaults.
@@ -314,6 +357,17 @@ func (c *ConversationSession) SessionBudget() int64 {
 	return c.MaxBytesPerSeat
 }
 
+// SaveInterval is the shortest time between saves of a running executor's
+// session, the default where the field is unset. Validation refuses every
+// other value outside the bounds, so this never answers 0 and never a value a
+// document did not say.
+func (c *ConversationSession) SaveInterval() time.Duration {
+	if c.SaveIntervalSeconds <= 0 {
+		return DefaultSaveInterval
+	}
+	return time.Duration(c.SaveIntervalSeconds) * time.Second
+}
+
 // KeepsSessions reports whether each executor launch's harness session is
 // kept and continued, applying the true default: one switch, so one gesture
 // turns off everything a conversation carries between turns — its session,
@@ -330,6 +384,16 @@ func (c *ConversationSession) validate(path Path) error {
 		p.add(at(path, "max_bytes_per_seat"), ErrOutOfRange,
 			"must be between %d (one executor session at its bound, sealed) and %d, got %d",
 			SessionBytesPerSeatFloor, SessionBytesPerSeatCeiling, b)
+	}
+	// REFUSED, NEVER CLAMPED, and compared in seconds so a value too large
+	// for a Duration cannot wrap into the range.
+	if secs := c.SaveIntervalSeconds; secs != 0 &&
+		(secs < int(MinSaveInterval/time.Second) || secs > int(MaxSaveInterval/time.Second)) {
+		p.add(at(path, "save_interval_seconds"), ErrOutOfRange,
+			"must be between %d and %d, got %d: leave it unset for the default of %d "+
+				"(enabled: false is what keeps no session at all)",
+			int(MinSaveInterval/time.Second), int(MaxSaveInterval/time.Second), secs,
+			int(DefaultSaveInterval/time.Second))
 	}
 	return p.err()
 }

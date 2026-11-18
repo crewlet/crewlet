@@ -128,6 +128,10 @@ func sandboxRunners() map[string]sandbox.Runner {
 	}
 }
 
+// Every runner [sandboxRunners] registers is offered for a save as its job
+// works; whether its harness takes one is its own Saves.
+var _ sandbox.SessionSaver = (*executor.Runner)(nil)
+
 // fakePlayer is what a `providers.sandbox.fake` run does: called once per run
 // with the request it was started with, answering its result. See
 // [sandbox.FakeRunner.Player].
@@ -1854,12 +1858,19 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal,
 		// in that box is held to it with its brief, beside the job's newest
 		// capture's measure ([runner.Resume.ContextTokens]).
 		ContextTokens: in.Run.Launch.Context.ContextTokens(),
-		// AND WHAT CLAUDE CODE COUNTS THAT COPY AT, as the read that collected
-		// the job found it, and the restart the job's launch handed it, which
-		// the copy's own and a capture of the job are compared with: a
+		// AND WHAT ITS HARNESS ESTIMATES THAT COPY'S NEXT REQUEST AT, off the
+		// same record, never carried along the copy's lineage: what that
+		// relaunch is held to in place of the measure where it holds a figure
+		// ([runner.Resume.NextRequest]).
+		NextRequest: in.Run.Launch.NextRequest(),
+		// AND WHAT ITS HARNESS COUNTS THAT COPY AT, as the read that
+		// collected the job found it, with the provider an OpenCode count's
+		// reply was answered by, and the restart the job's launch handed it,
+		// which the copy's own and a capture of the job are compared with: a
 		// relaunch judges whether the session reaches its first request whole
 		// by them ([runner.Resume.Count], [runner.Resume.BasisRestart]).
-		Count: in.Run.Launch.ResumedCount, BasisRestart: in.Run.Launch.RestartBasis(),
+		Count: in.Run.Launch.ResumedCount, CountProvider: in.Run.Launch.CountProvider,
+		BasisRestart: in.Run.Launch.RestartBasis(),
 		// AND THE TURN'S LEADS AS THE RESUME READ THEM BESIDE ITS ROW, opened,
 		// those its job's brief told marked: a relaunch continuing that job's
 		// session where it may lack the brief tells them again
@@ -3246,6 +3257,13 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		opts.Incarnation, opts.TakerTTL = e.incarnation, e.leaseTTL
 		opts.Takers = holdLeases{Backend: e.backends.Coord, engine: e}
 	}
+	// AND THE FLEET'S LEDGER OF EACH SEAT'S SAVES, which a save of a running
+	// job is charged against before its stamp: the whole company agrees on a
+	// seat's allowance, so the coordination store keeps it
+	// ([sandbox.CoordinatorOptions.Saves]). With none, no save is taken.
+	if e.backends.Fleet != nil {
+		opts.Saves = e.backends.Fleet
+	}
 	return opts
 }
 
@@ -3410,6 +3428,10 @@ func (e *Engine) sandboxWaiterOptions(
 		// job's sealed set beside its row, which every capture of the job's
 		// session is scrubbed by (issued.go, "Recorded before it is written").
 		Record: rt.coordinator.RecordHanded,
+		// AND EVERY BOX IT FINDS RUNNING IS OFFERED FOR A SAVE of its job's
+		// session as it works: decided from the coordinator's memory and taken
+		// on its lifetime, never the poll's ([sandbox.WaiterOptions.Save]).
+		Save: rt.coordinator.SaveRunning,
 	}
 }
 

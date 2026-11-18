@@ -42,9 +42,11 @@ export type SessionOutcome = "completed" | "failed" | "stopped" | "lost";
 
 /**
  * Where a launch would continue a turn's session (`sandbox.ContinuesIns`): in
- * whichever box the launch gets — a relaunch from the turn's kept capture, or
- * the conversation's next turn from its head; or, a relaunch's alone, only in
- * the box the turn's run parked in, while that box is held.
+ * whichever box the launch gets — a relaunch from the turn's kept capture (in
+ * the box its job parked in, where that capture was taken while the job still
+ * worked, from the copy that box holds, which went on past it), or the
+ * conversation's next turn from its head; or, a relaunch's alone, only in the
+ * box the turn's run parked in, while that box is held.
  */
 export type SessionContinuesIn = "any_box" | "parked_box";
 

@@ -87,9 +87,8 @@ func TestAnOrdinaryAppendIsRefusedAtTheSoftCeiling(t *testing.T) {
 // admission's blind spot can spend, and it is the LOG's: at a ceiling a
 // sixteenth of which is less, the reserve is the fleet term, and at one a
 // sixteenth of which is more, it is the sixteenth, so a larger log absorbs a
-// larger fleet. It was the sixteenth alone, which at the 64 MiB floor of the
-// two smallest logs was under one append at the size the budget admitted.
-// Mutation: drop the fleet term and the small ceiling's row keeps 4 MiB.
+// larger fleet. Mutation: drop the fleet term and the small ceiling's row
+// keeps 4 MiB, under one append at the size the budget admits.
 func TestTheReserveIsTheLargerOfASixteenthAndTheFleetTerm(t *testing.T) {
 	t.Parallel()
 	const maxAppend = 2<<20 + 4<<10
@@ -240,8 +239,7 @@ func TestAReadingAlreadyOutIsNotALaterAdmissionsReading(t *testing.T) {
 //
 // What this node has in flight is taken when the reading starts, not when it
 // answers: an append that lands and releases in between is in neither the
-// broker's figure (which was taken before it landed) nor a count taken
-// afterwards, so an admission counted that way let it through uncounted.
+// broker's figure (taken before it landed) nor a count taken afterwards.
 func TestAnAppendThatLandsDuringTheReadingIsStillCounted(t *testing.T) {
 	t.Parallel()
 	const size = 4096
@@ -488,17 +486,15 @@ func TestALogFullForOrdinaryWritesStillTakesAGateRecord(t *testing.T) {
 
 // AN EVICTION PASSES THE TRUNCATION FENCE AND THE GATE RESERVE TOGETHER.
 //
-// The two faults come as a pair more often than apart: a peer whose rows hold
-// what a restored log lost stops every write on it (`log_truncated`), and a log
-// nothing can write to is a log nothing trims, so it fills. Evicting that peer
-// is the way out of both, so an eviction must pass each fence with the other up
-// — excused by one and refused by the other, it leaves the operator exactly the
-// loop either fence alone was built to end.
+// The two faults often come as a pair: a peer whose rows hold what a restored log
+// lost stops every write on it (`log_truncated`), and a log nothing writes to
+// is a log nothing trims, so it fills. Evicting that peer ends both, so an
+// eviction excused by one fence and refused by the other would leave the
+// operator the loop either fence was built to end.
 //
-// AND THE LOG'S OTHER GATE DOES NOT: a purge installs an apply gate too, and
-// flagged a node gate by mistake it is refused before anything is sent, with
-// both fences up — the flag is held to the domain's NODE-gate answer, so a
-// purge can neither spend the reserve nor pass the truncation fence.
+// AND A PURGE DOES NOT: it installs an apply gate too, but flagged a node gate
+// by mistake it is refused before anything is sent, with both fences up, since
+// the flag is held to the domain's NODE-gate answer.
 func TestAnEvictionPassesTheTruncationFenceAndTheReserveTogether(t *testing.T) {
 	t.Parallel()
 	h := newHarnessFor(t, smallPurgingDomain{})
@@ -562,8 +558,8 @@ func TestAnEvictionPassesTheTruncationFenceAndTheReserveTogether(t *testing.T) {
 //
 // The admission reads the log's usage before every ordinary append, and a
 // broker whose meta group has no leader answers that read 503, err_code 10008.
-// Untyped, a committer took the failure for an unknown outcome and never asked
-// the repository's runner-up, for a push nothing had appended.
+// Untyped, a committer would take it for an unknown outcome and never ask the
+// repository's runner-up, for a push nothing had appended.
 //
 // Mutation: return the reading's error wrapped plain and the type check goes
 // red; admit after the append and the append count does.

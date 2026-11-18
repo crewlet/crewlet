@@ -222,7 +222,769 @@
 // ([Coordinator.capturesLoss]), and its ending reads the row again before it
 // reports its notes.
 //
+// AND AN OPENCODE CONTINUATION'S FIRST REQUEST IS JUDGED IN ITS BOX. OpenCode
+// compacts a session before a request, a continued run's first among them,
+// where its count of the session with the brief reaches the point its box's
+// configuration sets for the run's model: the model's limit less a buffer.
+// Unlike Claude Code's window, that point is not the engine's to pin: it is
+// read off the model catalog and the documents of the box the run is handed,
+// which the relaunch's briefs are written before. So the runner builds both
+// tellings where the session's count has a bound, the held one and the one
+// told as a session that may be a summary, and the launch, once it has the
+// box, asks the box for its point ([PointReader]) and hands the held telling
+// only where the count's bound, the brief and what the box hands over before
+// it sit strictly below that point ([OpenCodePoint.SendsWhole]); anywhere
+// else, and wherever the point cannot be read, it hands the summarized one
+// ([SessionContinuation.Summarized], [Continuation.Summarized]). What the box
+// hands over before the brief is charged only in the box that holds the
+// session's copy ([PointAsk.Sources]): there OpenCode tells the session every
+// context source that changed since its last request in that box (its
+// instruction files, the run's own instructions, the skill and MCP server
+// listings, the date and the environment), each at most its whole render,
+// where after an import into another box it starts afresh and hands none. A
+// box document that adds a source the read cannot size is no point
+// ([PointBoxSources]). A box whose release is not the writer's is no point
+// either: no pair of differing releases has been measured. See
+// opencodefirst.go.
+//
+// AND A SESSION THE RUN STARTS OF ITS OWN KEEPS ITS TASK. A fresh brief opens a
+// session with the turn's task, and a later continuation of that session that
+// may be a summary may lack it as surely as a cut-off copy lacks its brief. So
+// every launch whose run may start a session on its fresh brief keeps that
+// brief's task beside the run's record as a lead of its own kind
+// ([LeadKindFresh]): a turn's first launch ([LaunchRequest.FreshOwn]), a
+// relaunch handed its fresh brief ([Continuation.Fresh]), and one whose handed
+// brief continues a session, whose box may start one of its own after a failed
+// restore ([BriefLeads.Fresh]). That last is kept unmarked: the brief the job's
+// run read did not tell it, so no continuation of a session that run did not
+// start on it is told it as a lead its brief told, while a continuation that
+// may be a summary is told every lead the run keeps (leads.go).
+//
+// AND THE HARNESS'S OWN ESTIMATE OF A SESSION'S NEXT REQUEST, read in the same
+// read as its count, of a Claude Code job's main thread or an OpenCode job's
+// export (asksMainThread): stamped on a capture
+// ([SessionCapture.NextRequestTokens], [TakenSession.Next]) and written in the
+// collection's one write ([EndRead.Next], [LaunchRecord.NextRequestTokens]),
+// never carried and never on the executor log, and handed to the floor beside
+// the last request's input of the same capture: a kept capture's own for its
+// restore ([SessionCapture.NextRequest]), never a newer one's it was continued
+// past, and its job's newest capture's for the copy in place
+// ([ContinuedSession.CopyNextRequest]). An OpenCode count
+// names the provider of the reply it is anchored on BESIDE it, never in it
+// ([SessionCapture.CountProvider], [LaunchRecord.CountProvider],
+// [ValidCountProvider]), written and cleared with the count
+// (LaunchRecord.counted), so no record names one count's provider beside
+// another's figure. internal/sandbox/executor's package doc says how each is
+// read.
+//
+// The estimate is held AT BOTH RATES Claude Code counts text at
+// ([NextRequest]'s Tokens and OlderTokens), since which model the next
+// request goes to is the launch's to pick ([NextRequest.At]). Zero is no
+// figure (a thread not read whole, a release whose rules were not read, a
+// compaction whose kept stretch could not be found), and its reader then
+// reads the last request's input. It is NEVER CARRIED along a session's
+// lineage, as [ResumedCount] is not: a job that made no request of its own
+// may have grown its copy by its brief, so a figure carried from its basis
+// would under-state it. And never on the executor log: a stamp settled off
+// the log carries the last request's input alone.
+//
 // See docs/concepts/code-sandbox.md.
+//
+// # A launch's harness session is kept, and a turn's end recorded
+//
+// EACH LAUNCH'S HARNESS SESSION, KEPT, and each turn's END, recorded
+// (ADR-0073), by session.go.
+//
+// # A session is taken wherever its box can still be read
+//
+// A run's harness keeps its conversation in its box, and a box does not outlive
+// its turn. So the session is taken out at every point the box can still be
+// read, ON THE NODE WHOSE HOST THE BOX IS ON (ADR-0065), before the box is
+// paused or reclaimed:
+//
+//   - a completion's collection ([Coordinator.readBox]): the archive the run's
+//     script packed when its harness exited — or, for a job that never got to
+//     (one that failed before it packed, one lost with its engine whose box is
+//     still there), one packed now. A job its turn's cap passed while it still
+//     ran is ENDED first, as a stop's is, since the cap is an end;
+//   - a stop's read of what the run had spent, which first ENDS THE JOB
+//     ([Coordinator.endJob]): its script, asked, stops its harness and packs
+//     the session as its own exit does, and the archive it left is taken —
+//     one packed now where it left none, the job killed past the wait;
+//   - the ending of a run LOST with its box still there (a launch whose engine
+//     restarted before its turn could park), whose job is ended the same way
+//     before the ending reclaims the box — on this node's host, or asked of the
+//     host the box is on ([BoxReadLoss]).
+//
+// So a capture is FINAL wherever its job ended — by itself, asked, or killed —
+// and taken as it stands, not final, only where the job still works: one a box
+// would not end. No pack is made beside a harness still working but that.
+//
+// A box that is GONE — lost with its host, or with a node that left the fleet —
+// has nothing left to read, and keeps nothing.
+//
+// # Two halves: taken before the box goes, kept off every frame
+//
+// What has to happen before the box is paused or reclaimed is only what reads
+// it: the TAKE ([Coordinator.takeCapture]) — the box's archive, packed where it
+// must be, streamed through the scrub of every secret the engine handed the box
+// and the redaction every text leaving a box passes ([SessionTaker],
+// [HandedSecrets]), sealed under the fleet keyring as it streams and spooled
+// to this node's disk sealed ([SessionKeep.Seal]). It is bounded
+// ([SessionTakeBudget]), and never past where the read it is part of must stop
+// to leave its pause and its answer their room.
+//
+// What can take minutes — the upload of a session at its bound at the object
+// store's slowest pace, and the record — is the KEEP ([Coordinator.keepCapture]),
+// made off the read's frame from the moment its take is spooled, under a
+// budget of its own ([SessionKeepBudget]): no read a node is waiting on, and
+// no ending, holds for an upload, and no keep waits on what its read does
+// after the take (a collection's record of how its job's harness ended, the
+// box's pause and the pause's record), steps no capture's budget counts. The
+// spool is the node's own and goes once the keep is done.
+//
+// # Every capture is stamped on the run's row
+//
+// Its place — the launch's ordinal ([PendingRun.LaunchSeq]) and its own among
+// that launch's captures — is reserved on the row before a byte is spooled
+// ([PendingStore.StampCapture]), with its SAVE POINT — how many of its round's
+// calls the run's log had taken when it was read once the job was over, for a
+// job whose harness ended its own run ([SessionCapture.Through]; every call the
+// log takes is numbered as it is appended, [BridgeCall.Appended]), or, for
+// the take of a job still working or one cut off, the newest its launch is
+// known to hold (savepoint.go) — and the last note read the record says it
+// holds, none for a session cut off and none from a take the record marks
+// unanswered on ([SessionCapture.NoteCursor]): what a launch that continues the
+// session would need to know of what came after it.
+// How it came out is stamped beside: LANDED, REFUSED with why (no box to
+// read it out of, a pack that failed, a session past its bounds, the seat's
+// budget, an upload the store had no room for, a record the log will never
+// take), or UNRESOLVED — uploaded, and whether its record landed unknown —
+// which the turn's end, and a relaunch before it decides, asks again under the
+// same operation.
+//
+// A SAVE, a capture of a job still working, reserves its place the same way
+// and keeps a second one beside it ([PendingRun.Saving],
+// [PendingStore.ReserveSave]) until it can no longer become the turn's kept
+// capture, so a final take of the job that overtakes it never hides it; it is
+// reserved only while its job runs undecided ([licensesSave]); "A save under
+// way" below is its account.
+//
+// # Two reads of one job: one holds the place, the other stands by
+//
+// A stop's read and a collection's of one job can take its session at once,
+// and the place both ask for is the store's to give one of them. The other —
+// its reservation refused, or the job's capture found begun by the first —
+// takes the session all the same, whole, each read streaming the archive its
+// own pack made, or the job's own capture where its script left one
+// (internal/sandbox/executor's PackCapture), and STANDS BY for
+// that capture rather than walking away from it: named on the capture's stamp
+// as its standby ([PendingStore.StandBy]) before it spools, its session sealed
+// on its own node's disk, and its keep waiting to see what the capture comes
+// to ([Coordinator.takeOver]). Where it LANDS, the standby keeps nothing: one
+// read's upload of the job's session, never two. Where it does not — the read
+// holding the place had its scrub refused, its seal or its upload fail, its
+// node stop mid-keep, or its record go unanswered and then refused, asked
+// again ([Coordinator.settleCapture]), or begun past its budget and not
+// named by the turn's row on the executor log, read once by the standby then
+// ([Coordinator.awaitStood]) — the standby takes the place after it
+// ([PendingStore.TakeOver]) and keeps its own. So a session one read took
+// whole is kept wherever either read could have kept it, and that holds of
+// every read that finds its place taken: a stop's, a collection's and a
+// loss's, its reservation refused, found begun, or never answered
+// ([Coordinator.abandonPlace]). A read of the job ENDED beside a capture taken
+// as the job stood — a read whose end could not end the job — takes the place
+// after it instead ([Coordinator.besideAnother]), its session the more whole.
+// A turn's end waits for a standby as for a capture still being kept
+// ([captureInFlight]), for as long as its takeover and its keep can take
+// ([Coordinator.awaitEndCaptures]); a standby that cannot keep what it took
+// withdraws ([PendingStore.StandDown]), and one whose taker is gone is
+// withdrawn by the wait ([Coordinator.standDownGone]). A standby or a takeover
+// the store never answered is settled, never left on the row with nothing
+// behind it ([Coordinator.standBy], [Coordinator.tookOver]). One standby per
+// place: a third read of the same job at once stands down.
+//
+// # A capture whose taker stopped is settled from the log, not waited out
+//
+// A take dies with its process, leaving its place stamped begun and its spool
+// on that process's disk. Read by its age alone ([captureInFlight]), such a
+// capture would hold the turn's end for as long as a capture can take
+// ([captureLife], over an hour at the bounds), and a relaunch that followed it
+// would start a session of its own beside a record the log may well have taken.
+//
+// So every process keeps the captures it takes under a TAKER LEASE of its own
+// in the coordination store ([coord.ClassTaker], taker.go): claimed when its
+// coordinator is built, renewed [coord.KeptRenewals] times a TTL, held until
+// its last keep has ended — through a drain, which gives presence up while the
+// keeps still upload — and released then; a process that dies leaves it to
+// lapse on its TTL. Every stamp names that lease: its holder, the process
+// incarnation ([SessionCapture.Taker]), and its fencing token
+// ([SessionCapture.TakerEpoch]), read again right before the take reserves its
+// place, so a lease claimed afresh while the session was packed is the one
+// named.
+//
+// A TAKER IS GONE where that lease has lapsed or is held at another epoch, and
+// nothing else: one coordination read, three-valued, so a store that cannot
+// answer is never a taker gone ([Coordinator.takerGone]). Every wait for a
+// capture ([Coordinator.awaitCapture]) — the end's and the relaunch's — asks
+// it of every begun stamp in sight, the newest capture and a save under way
+// beside it, and settles one whose taker is gone from the turn's row on the
+// executor log, read once a pass at the level a relaunch reads it, which has
+// seen every record the log took before it ([Coordinator.settleGone]):
+// LANDED where the row names its place, written from the row; REFUSED where it
+// does not, since a taker gone sends nothing more. Written only over the begun
+// stamp it was decided from ([PendingStore.SettleBegun]), so a stamp the taker
+// wrote in the meantime stands — an unresolved one among them, which says a
+// record was sent and may yet land, and which a wait then asks again under its
+// own operation rather than settle refused.
+//
+// A CAPTURE THE LOG TOOK IS LANDED WHATEVER ITS TAKER'S LEASE. A host whose
+// coordination store answers its leases and not its runs (the two are other
+// streams) keeps its taker lease while no stamp of its own reaches the row, so
+// its begun stamp is never settled by the lease, and a job lost with that host
+// would leave its relaunch starting without a capture the log had kept. So a wait
+// reads the turn's row for a begun stamp under a lease that holds, or that the
+// store cannot say of, as well, and settles it LANDED where the row names its
+// place, never refused, since a taker not read gone may still send its
+// record: the turn's end at most once every [heldRowPace] of its wait, and a
+// relaunch once, after its wait has run out, for a capture of the job it
+// follows whatever its age ([Coordinator.ContinuedCapture]), and a read
+// standing by before it takes the place after the capture it stands by for:
+// once, at the pass that finds that capture begun past its budget
+// ([Coordinator.awaitStood]), and once where its own wait runs out first
+// ([Coordinator.waitedOut]), deciding on the row's word alone, whether or not
+// the run's record then takes the landed settle, so the session is not
+// uploaded a second time beside a record the log took. A stamp that names no
+// taker is not read so.
+//
+// A SETTLE IS THIS NODE'S OWN WRITE. A wait's patience bounds its waiting and
+// every read and ask it makes; each settle write it decides (a gone taker's
+// capture settled, a gone standby withdrawn, the stamp of what an ask of an
+// unanswered record settled) is given its own room past it, a record's budget
+// and this node's crossing of the run's row ([Coordinator.settleContext]), and
+// an ask that leaves a record unanswered writes nothing. Cut where the wait
+// ends, a settle the store was slow to take would not be applied, and the wait
+// would answer the capture still being kept.
+//
+// THAT IS WHAT THE FENCE BUYS. A keep checks its own lease before its upload
+// and again before every attempt at its record, from its own renewals rather
+// than a store read: held at the epoch its stamp names, inside the exclusive
+// window of its last confirmed renewal (coord.ExclusiveThrough, one renewal
+// interval its margin) — and EVERY ATTEMPT AT THE RECORD IS CUT AT THAT
+// WINDOW'S END, so none outlasts it. Fenced, it uploads and records nothing,
+// stamps what it knows — refused where no record was sent, unresolved where
+// one was and went unanswered, which a wait asks again under its own operation
+// rather than settle — and says so (`executor_session_fenced`, beside the
+// `executor_session_not_kept` every unkept capture logs). So no attempt the
+// taker makes outlives the window, which closes a renewal interval before any
+// peer can read the lease lapsed.
+//
+// WHAT THE FENCE CANNOT REACH is a request the taker had already handed on
+// before its window closed — to a data node the router asked, or to the
+// broker connection's own buffer while it reconnects — and that the log takes
+// only after a peer's read of the turn's row: the capture's record then lands
+// beside a stamp that says refused. On the turn's end the log orders the two
+// itself — a record it took before the end is the row's place and is kept,
+// one after it is refused by the end's tombstone — and never contradicts
+// itself. THAT IS DECIDED, AND NO REFUSAL GOES TO THE LOG: ordered there as the
+// end's tombstone is, the settle's refusal would have the applier refuse the
+// late capture and lose a session, and no session history is given up for a
+// stamp's sake. So a late capture the log takes before the turn's end is kept
+// and read as any other — the turn's row names it, a session read and the
+// conversation's next turn take it — and one decision alone goes by the stamp
+// once the log names the capture: the relaunch that follows the job whose
+// capture was settled, which continues only what the run's record keeps, and
+// the record never keeps a place it holds refused — so every attempt at that
+// relaunch starts without the capture, the one whose wait settled it and one
+// asked again after the record landed alike; and where the decision is told
+// with the turn's row in hand — to a reader of the seat's sessions, and in the
+// relaunch's own reason, which reads the row for a capture its record refused
+// — it says the log keeps the capture, never that it was not kept, and the
+// relaunch's run, starting without it, is named the turn's own as a session it
+// may read ([namedThoughRefused], [ContinuedSession.KeptTurn]).
+// Nothing else treats the stamp as authoritative once the log names the
+// capture: the end names it unkept at the row's own place, which releases
+// nothing ([executorkeep.Ending.Unkept]), and an account of how the turn ended
+// tells a capture as not kept only where it is newer than the row's own place
+// (internal/executordomain's Session.Unkept). The end says too that the turn
+// went on, which the record holds — and where that capture is the turn's last
+// word, names it so ([executorkeep.Ending.LastWord]): a row at its place is
+// read as all the turn did, never as one its turn went on past
+// (internal/executordomain's Session.WentOn).
+//
+// THAT RELAUNCH STARTS WITHOUT IT, AS ONE WHOSE JOB KEPT NOTHING BEFORE A SLOW
+// KEEP DOES ([relaunchCaptureWait], [Coordinator.continuedWithout]): in the
+// base the turn's first launch froze, where the turn has kept nothing and its
+// row still held that base when the relaunch read it — the late record landing
+// only after — and otherwise in a session of its own, or the one its job's box
+// holds where it carries the run on in that box. Beside an older capture its
+// job kept, which a relaunch past a slow keep continues, it starts without that
+// one too: the turn's row names the newer, and a relaunch restores only the
+// object the row names ([ContinuityOf]).
+//
+// NOT PRESENCE, which answers another question. A draining node gives its
+// presence up at once while its keeps still upload, so a taker read as gone
+// without it would have its capture refused under it, the turn's end would
+// tombstone the turn before the draining node's record landed, and the turn's
+// last session would be lost — with the older one the end's unkept capture
+// lets go. Presence says whether a node may take new work; only the taker's
+// own lease says whether a process still keeps what it began.
+//
+// A stamp that names no taker, which only a coordinator built with no taker
+// lease writes (a test's, since every engine wires one), is waited for by its
+// age alone.
+//
+// # A capture's life is counted on one clock, and read on another within twice their skew
+//
+// Every step between a capture's instant ([SessionCapture.At]) and its taker's
+// last attempt at the stamp of what came of it is bounded, each at its bound
+// at the slowest crossing a link is allowed: the rest of its take with its
+// reservation, its digest, its keep with its two reads, its stamp, and for a
+// takeover the takeover and, where the store did not answer it, the standby's
+// withdrawal and its read of the row back ([captureLife]). Past that, nothing
+// the taker sends lands. A read standing by can take the place after it no
+// later than its window past its own instant ([standbyWindow]).
+//
+// A STAMP'S INSTANT IS ITS TAKER'S CLOCK'S, and every node that reads its age
+// reads it on its own. The engine holds each machine within an hour of the
+// fleet's clock, so any two within two (objstore.AssumedClockSkew); so a node
+// reads a begun stamp as being kept until its life and two hours have passed
+// ([SessionCaptureBudget], [SessionCapture.keeping]), and a read standing by
+// as standing until its window and two hours have ([standbyBudget],
+// [SessionCapture.standing]). A reader whose clock stands ahead never releases
+// a stamp before its life ends; one behind holds it up to four hours longer,
+// which the waits bound on their own clocks:
+//
+//   - A READ STANDING BY waits for the capture it stood by for on its own
+//     monotonic clock, that capture's whole life and one read
+//     ([standbyWait]), and then reads the turn's row on the executor log
+//     once, for that capture still begun, keeping nothing where the row
+//     names it ([Coordinator.namedAtWaitsEnd]), and the run's row once more:
+//     that capture still begun or refused, it takes the place after it;
+//     landed, or the row moved on, it keeps nothing; its record still
+//     awaiting the log's answer, it stands down ([Coordinator.waitedOut]).
+//   - A TURN'S END waits for each capture it sees for at most its life, and
+//     each read standing by for at most its window, from the moment it first
+//     sees it, on its own monotonic clock, and once every one has passed
+//     reads the row once more and decides on that read
+//     ([Coordinator.awaitEndCaptures]).
+//
+// And the sweep of spools a crash left spares a spool for as long as its keep
+// may still wait to open it, and an hour more for a step of the machine's own
+// clock ([Coordinator.sweepSpools]).
+//
+// A RECORD SENT AND NEVER ANSWERED is asked again whatever its object's age
+// reads on the asking node's clock: the log decides the window a record may
+// name an object in (objstore.RecordWithin) on its own clock, from the instant
+// another node's clock minted the object's key ([Coordinator.settleCapture]).
+// A reader holds such a capture as awaiting that answer until the window and
+// two hours have passed on its own clock ([pastRecordWithin]), past which the
+// log, on any clock the engine holds, refuses it.
+//
+// # And every turn's end, owed on the row until the log takes it
+//
+// How the turn ended — completed or failed, the reviewer's decision, whether
+// its reply reached the party waiting, who stopped it and why, what lost it —
+// is the account a transcript cannot hold ([executorkeep.Ending]), recorded on
+// the turn's row of the log beside the session it kept. Whatever ends the turn
+// writes it on the run's row ([PendingStore.OweEnd]): the engine's resumed
+// turn, and this package's endings that no frame of the turn reaches — a loss,
+// a stop ([CoordinatorOptions.TurnLost], [CoordinatorOptions.CloseStopped]).
+// The run's ending records it on the executor log ([Coordinator.publishEnd])
+// before it deletes the row, which the delete refuses until then
+// ([ErrEndOwed]): after every capture of the turn has settled, a save under
+// way that a final take overtook among them, which may still become the turn's
+// kept capture ([captureInFlight]), so the end's tombstone never refuses the
+// turn's own last session, with the turn's NEWEST
+// capture where it was not kept ([executorkeep.Unkept]), and saying whether the
+// turn WENT ON PAST the session its row names ([wentOnPast]) — wherever its
+// run's record does not hold the turn's last word kept: a capture taken while
+// its job still worked, an earlier launch's, or none beside a newer one that
+// was not kept — and naming that last word where it is the newest capture,
+// which the record did not keep ([lastWordOf]), so the log's row never names an
+// older session as the turn's last without saying so: the log keeps that
+// session, and says the turn went on past it unless its place is the last word
+// named. On every frame somebody waits on — a completion's resume, a stop, a
+// seat's recovery — the ending is decided there and the end recorded by the
+// ending's own retry, armed at once ([errAskAway]): a capture still being kept,
+// and the log's write after it, are not that frame's to wait on. A seat's
+// retirement, which holds the seat's lease and a budget of its own, both
+// decides its endings and records their ends on its own frame. So the row
+// outlives the frame that decided its ending by the settling of the turn's
+// captures — each capture the end sees bounded by its life from the moment
+// the end first sees it and one more read of the row ([captureLife], an hour
+// and twenty-five and a half minutes at the bounds), and where a read stands by
+// for one that does not land, by that read's window and its takeover's life
+// from the moment the end first sees the read, each with its read
+// ([standbyWindow], about four hours and sixteen and a half minutes in
+// all), and for a capture whose taker is gone by its lease's TTL and one
+// read of the log (above) — and the end's write, and the seat's mail waits on
+// it as on every ending kept for its retry ([Coordinator.awaitEndCaptures]). A turn
+// with no capture still ends: its row names no object, and holds the account.
+//
+// # And every turn's first read of its conversation, held on the log
+//
+// A turn's first launch freezes the read its dispatch made of its conversation
+// on the turn's run record ([PendingRun.Base]) and records it on the log as the
+// turn's BEGIN ([Coordinator.recordBegin]): the turn's row from then on names
+// where the read was made, the turns it handed out that the turn was told of —
+// which its end absorbs once it has landed a capture — and the head it froze,
+// which the row HOLDS against every release but a retirement while the turn is
+// live and has landed no capture. Every capture carries the same read
+// ([Coordinator.recordCapture]), which the log takes where no begin landed
+// first: a turn's first landed record keeps the read.
+//
+// # The session switch
+//
+// `turn_engine.conversation_session.enabled: false` keeps nothing — no capture
+// is taken or stamped ([SessionPolicy.Keep], the fleet's word) — and prepares
+// nothing for one: no launch seals what it handed its box, and no loss asks
+// another node's host to read a box, holding the seat's mail for a take that
+// would keep nothing ([Coordinator.capturing], this node's word). It still
+// records every end, which is the account and not the session; and a stop
+// still ends its job before its box goes, which is how a stop ends a job.
+//
+// # A save under way
+//
+// Kept by saving.go. A SAVE is a capture of a job STILL WORKING, taken while
+// its harness runs on ([SessionCapture.Final] false,
+// [SessionCapture.Interrupted] true): its place is reserved on the run's row
+// like every capture's, after the row's newest, and stamped there as it comes
+// out. What makes it more than a take is that the job goes on, and so do the
+// reads of it: the job's collection, a stop's read or a loss's take the job's
+// FINAL capture in the place after the save while the save may still be
+// uploading, and every stamp of that final take replaces the row's newest
+// capture ([PendingRun.Capture]). Read off that section alone, a save the final
+// overtook is out of sight while it may still become the turn's kept capture:
+// where the final is refused, the save is the newest session of the job anybody
+// kept, and an end that recorded over it, waiting on the final alone, would
+// leave its record to meet the end's tombstone.
+//
+// SO A SAVE KEEPS A SECOND PLACE ON THE ROW, [PendingRun.Saving], from its
+// reservation ([PendingStore.ReserveSave]) until it can no longer become the
+// turn's kept capture: it lands or is refused, or a capture at or past its
+// place is kept ([PendingRun.Kept]), so its landing could change nothing. Every
+// stamp of the save's own take moves it on there, and every stamp that takes
+// lets it go once that holds ([stampOnto], [savingAfter]). A READING, NOT A ROW
+// INVARIANT: a build without the field carries it in [PendingRun.Extra] and
+// writes it back unchanged, so a row may hold a stale save: one that build
+// settled or asked again in [PendingRun.Capture], or one whose evidence its
+// final take overwrote. So nothing reads the field but through one rule
+// ([PendingRun.savingTake], [PendingRun.saving]), which a source walk holds
+// every reader to, and the next stamp that takes reconciles it from the row as
+// that stamp found it.
+//
+// # A save's license
+//
+// A save takes its place ONLY WHILE ITS JOB RUNS UNDECIDED ([licensesSave]),
+// decided in one read-decide-write of the row as it stands: the run running,
+// the save of its current launch, nothing of the job's end read, no refusal
+// of its completion owed and no loss marked ([PendingRun.jobOver]), no ending
+// decided, no capture or save of the turn that may still land
+// ([PendingRun.capturesMayLand]), and at the place after the row's newest.
+// Every read that takes a job's final capture writes its decision on the row
+// before it reads the row for its place (the claim, a stop's ending, a loss),
+// so a final take either finds the save's place reserved and takes the one
+// after it, or the save is refused: A FINAL TAKE NEVER LOSES ITS PLACE TO A
+// SAVE.
+//
+// THE PLACE ORDER IS THE CONTENT ORDER. A save's place, its save point and its
+// note cursor come from ONE read of the row made before its pack, so any
+// capture placed since that read moves the next place and refuses the save:
+// read after the pack, a save packed before a final take could be handed the
+// save point that final take's own read placed after the job's end, counting
+// calls the save never held. The store holds a save that reads late to the
+// job's end besides ([PendingRun.jobOver]).
+//
+// WHAT THE ARMS LEAVE. A save of a job whose completion is announced but not
+// yet recorded on its row (on its way to the seat's holder, claimed and handed
+// back before its collection heard from the box's host, or refused on a
+// condition the holder hands on, [SeatLost] or [Draining], which nothing
+// records) is licensed as an ordinary take of a job that may have ended: the
+// collection's final take is placed after it and supersedes it, and where that
+// take is not kept, the save is kept holding all the job did, told as a session
+// its run went on past. It over-tells; it never holds a call the session did
+// not see.
+//
+// # A save taken as its job works
+//
+// Kept by save.go and saveledger.go. A save task runs its steps CHEAPEST FIRST,
+// so a save the store would refuse costs its box nothing: the box attached
+// (never woken), its job's event stream read for whether it moved since this
+// node's last landed save, then ONE READ OF THE RUN'S ROW, settled where a
+// save of the turn was left begun by a gone taker or unanswered, and held to
+// the license's pre-check; the fleet's policy, the seat's allowance, what the
+// box was handed and the taker lease; and only then the pack. The place, the
+// save point and the cursor all come from that one read, made before the
+// pack, for "The place order is the content order".
+//
+// THE BOX PHASE IS THE DUTY'S, nothing after it: the attach, the stream's read
+// and the pack end with the stint of duty the offer came under (an E2B duty
+// handed to a peer, the coordinator stopping, a drain's end), and a save cut
+// there stamps nothing and is released from its box. Past the pack the save is
+// the coordinator's, as every take is: its take context starts after the pack,
+// so the scrub has its whole budget, and the scrub's values are read after the
+// pack too, so a token the poll recorded while the pack ran is in them.
+//
+// THE SEAT'S ALLOWANCE IS CHARGED BEFORE THE STAMP'S INSTANT, never after: the
+// whole company agrees on it (one value per seat in the coordination store's
+// uploads bucket, which ages a value out with the hold it needs), written by
+// compare-and-swap, sized from the packed archive and a margin for what the
+// scrub changes, keyed by an entry id so an append asked again counts once. A
+// crash, a lost answer or a cut keep can then only over-count, which is the
+// safe direction for a bound every artifact's bucket shares, and nothing waits
+// between the stamp's instant and its reservation. A spool that seals past what
+// was counted is refused before its keep, so a landed save is never
+// under-counted. An entry is held for [saveLedgerHold]: a save's object is
+// stored within the take's life after its entry, the collector deletes a
+// superseded one within its grace and two of its passes, and the entry's end is
+// read on another node's clock, so twice the engine's assumed skew.
+//
+// A SAVE CONTINUES NOTHING ([savePlaces.continued] nil): a run's row records no
+// capture its launch continued, the saver is often not the launching process,
+// and the launch's request names what it ASKED for, which a failed restore
+// replaced with a fresh session. So a save is placed at its launch's newest
+// landed save's point, or zero, which tells more, never less.
+//
+// # A save is offered by the poll, from memory
+//
+// Kept by save.go and the waiter's hook. THE POLL IS THE ONE TRIGGER: it
+// reaches every running box each interval already, under the duty that
+// authorises touching it, so each box a poll finds running within its turn's
+// cap is offered ([WaiterOptions.Save]); a bridge call, a clock in the box's
+// script or a signal would each be a second way into the box, under no duty.
+// THE OFFER DECIDES FROM MEMORY AND NEVER BLOCKS, since the poll is the box's
+// keepalive: saves on, the runner saving, the stint live and no task of the
+// turn under way on this node, the save due, and one of [maxConcurrentSaves]
+// slots free, taken without waiting (the next poll offers again). The task
+// runs on the coordinator's own lifetime, counted for its stop, and gives its
+// slot back only once its keep has ended, so the slots bound the uploads too.
+//
+// THE STINT is the waiter's duty, made by the pass that claimed it and ended
+// by its stand-down. A task carries the stint it began under, so a poll that
+// returns after a stand-down offers nothing under a duty this node lost.
+//
+// DUE-NESS IS COUNTED ON THIS NODE'S CLOCK ALONE: the interval
+// ([SessionKeep.SaveInterval], this node's revision) after the last attempt,
+// doubled for each failure in a row up to the larger of the interval and an
+// hour, and never before the seat's allowance paces it. What was not there
+// (the box, the license, the taker, the place) moves the clock without
+// doubling; a landing resets it and remembers how far the job's stream had
+// run, so a job that has not moved since is not saved again. AT FIRST SIGHT
+// (a node that restarted, or took an E2B duty over) the last save is taken
+// to be the later of the launch's start and this launch's newest capture,
+// instants other machines stamped, clamped to within one interval of now: as
+// in "A capture's life is counted on one clock", an age read across machines
+// decides only a wait one interval bounds, so the first save comes within an
+// interval of first sight whatever any clock says, and a paced seat takes no
+// unpaced save then. A memory no offer came for in an hour is forgotten.
+//
+// # A save as its node drains
+//
+// Kept by [Coordinator.SaveHosted]. A DRAINING NODE SAVES EACH DIRECT JOB IT
+// LAUNCHED whose session moved since its last save here, since that job's box
+// is on the node's host. Not a container's, which survives an engine's restart
+// and dies only with its host, nor an E2B one, which outlives the engine and
+// whose duty a peer takes up, saving it within an interval of first sight.
+// It LISTS the runs rather than reading the waiter's offers, so a box whose
+// poll is stuck at its bound is not missed, and saves THE MOST STALE FIRST
+// under the same slots, waiting for one for at most [drainSaveWait]. A save
+// of the turn under way counts; a drain save is never paced, only charged;
+// and from the drain's first instant no offer starts a save. The drain's end
+// bounds each save's box phase, and its take once the take's own context is
+// made, never that context's parent, whose deadline would end the take before
+// it began. A take cut before its place stamps nothing, one cut after it is
+// stamped refused, and the run keeps its newest periodic save.
+//
+// # A turn's session is continued in whichever box its next launch gets
+//
+// A TURN'S SESSION, CONTINUED IN WHICHEVER BOX ITS NEXT LAUNCH GETS — AND A
+// CONVERSATION'S, BY ITS NEXT TURN, by restore.go.
+//
+// Every launch of a turn keeps its harness's session in the object store
+// (above), named by the turn's row on the executor log. So a relaunch of
+// the turn — a reviewer's send-back, a person's answer to a run that parked, a
+// job lost with its engine whose box was left behind, a sign-in replaced while
+// it ran — continues the session of THE JOB BEFORE IT, as that job's kept
+// capture holds it, in whatever box and cell the relaunch gets: the box the
+// session was last worked in, its own copy kept, or any other, the archive
+// restored there before its harness takes the session up ([RunRequest.Carried]).
+// And a conversation's NEXT TURN continues the session its last turn left — the
+// conversation's head, read once at the turn's dispatch and frozen by its first
+// launch (conversationbase.go) — in a box of its own.
+//
+// # Which session: the job before's own, the conversation's, or none
+//
+// A relaunch follows one job — the one its reviewer collected, the one whose
+// question was answered, the one lost or refused — and only that job's session
+// holds everything the turn's jobs were told: the round's task or the review
+// that sent the round back, a person's answer, and the job's own work. A
+// capture an EARLIER job took holds none of what the jobs after it were told,
+// and the calls a continuation lists after it would be numbered in another
+// round's order where a send-back began one. So a relaunch whose job before
+// left no kept capture — its box went with its host, its take or its keep was
+// refused, its record was never answered — continues none of the turn's own:
+// it starts a session of its own, told what the jobs before it did. And that
+// job's NEWEST KEPT capture, past newer ones of it that will not be kept
+// (refused, begun longer ago than a capture can take, sent and never answered
+// past the window a record may name it in), and past one still being kept, or
+// whose record still awaits its answer, once the relaunch's wait for it has
+// run out: the relaunch waits for that one and asks it first, and continues
+// it where it lands. A newer capture went further than the kept one, and the
+// run continued from the older is told every logged call its session lacks
+// after it (by what the capture is read to hold, where it is read, and by its
+// save point otherwise) and, where it was taken while its harness may still
+// have worked, that it was cut off there, so it never takes itself to know
+// what the newer one held. One that lands after the launch changes nothing
+// the launch's session or its words rest on, and one that lands between the
+// relaunch's choice and its launch is caught by the launch's own check
+// ([Coordinator.continueKept]). And only one whose stamp states its SAVE
+// POINT ([SessionCapture.Through]), a count of the round's calls the session is
+// known to hold — the run's log as the capture read it once its job was over,
+// where its harness ended its own run, and else the newest point its launch
+// was known to hold (savepoint.go) — which is what the continuation is told the
+// calls after by: one an older build stamped states only the places it read
+// the log at, which cannot say which calls came after it.
+//
+// AND NEVER OVER A COPY THAT WENT ON PAST IT ([copyWentPast]): a capture taken
+// while its job still worked is a point the job's session passed through, so
+// where a relaunch carries the round on in that job's own box, offered the copy
+// of the same session the box holds, it continues that copy, which holds
+// everything the capture does and all the job did after it, rather than roll
+// the session back to the capture. A final capture holds the ended job's whole
+// session and is continued there as anywhere.
+//
+// EXCEPT WHILE THE TURN HAS KEPT NOTHING AT ALL: its first job lost with its
+// box before any capture of it landed, its captures refused or unanswered. Then
+// the relaunch continues the session the turn's first launch froze — the one
+// the conversation's last turn left — told where this turn begins and then
+// handed its own fresh brief or reseed, which say what the turn's jobs did:
+// otherwise a first job lost with its box would end the conversation's session
+// line for good. The turn's row on the log HOLDS that base while the turn is
+// live and has kept nothing (its `begin`), so a sibling's end, the seat's
+// budget and the retention pass it over; and once the turn keeps any session
+// of its own, that one holds the base and everything after, and only the rule
+// above applies. A base is continued ONLY IN A BOX OF ITS OWN: a box the turn's
+// earlier job ran in holds that job's working tree and session, which are the
+// rule above's to continue in place.
+//
+// ONE DECISION EACH, [ContinuityOf] and [BaseContinuityOf]. The first: the turn
+// live and not ending, the job before's newest capture kept, stating its save
+// point and named by the turn's row on the executor log, in a format and by a
+// release a runner restores ([ArchiveRestorer]). The second: a base the turn
+// froze — or, before its first launch, the head its dispatch read — the turn
+// live, not ending and having kept nothing, its row holding that base, and a
+// runner that restores it. The launch's caller asks it before it builds the
+// run's surface and briefs ([Coordinator.ContinuedCapture], and
+// internal/engine's probe of a first launch), of every member of the seat's
+// chain, since which of them takes the launch is the launch's to pick; the
+// launch asks it again of the record as it opened the job, of the runner of the
+// member it picked; and the read surface asks it of each row of a seat's
+// sessions (internal/api/queries' `continuable`) through [ReadContinuityOf] —
+// of a live turn's row, by a relaunch, of the same two records read as a
+// relaunch reads them; of an ended turn's row that is its conversation's head,
+// by that conversation's next turn, [BaseContinuityOf] as that turn's first
+// launch asks it — each of the member the node holding the seat would launch it
+// on now ([RelaunchTarget]), with the half a person's answer takes beside the
+// first, carrying a parked run on in the box it parked in where the kept
+// capture is not continued, by the launch's own tests of a box it continues in
+// ([PriorBox.ContinuesIn], [Coordinator.hostsPrior]). What only a launch can
+// know is the launch's alone, and no reader states it: whether the box it got
+// runs a harness that takes the session up ([SessionRestorer.CheckCarry]),
+// whether that box is one of its own, and whether the seat's budget can carry
+// the session's context beside the brief it hands the run (internal/engine's
+// launch floor).
+//
+// # The job before's capture, still being kept
+//
+// The job's capture is taken by the read that collected it, and its upload and
+// record — the keep — are made off that read ([Coordinator.keepCapture]), while
+// a relaunch can follow at once: a lost job's round is carried on by the very
+// frame that read its box. So the relaunch waits for the keep, but only for
+// as long as an ordinary keep takes ([relaunchCaptureWait]): the frame that
+// waits holds the seat and a slot of the node's admission, and a keep that has
+// not landed by then is one a slow store or a stopped node is holding, which a
+// relaunch does not wait out on that frame. A keep still under way is then no
+// kept capture: the relaunch continues the newest capture that job kept
+// before it, where it kept one ([followedCapture]), and logs the newer one it
+// passed over ([Coordinator.passedOver]); and where it kept none, it goes as
+// one whose job's keep was refused does
+// ([Coordinator.continuedWithout]): it continues the base the turn's first
+// launch froze, where the turn has kept nothing and its row still holds that
+// base — a base holds everything a session of its own would, and the
+// conversation besides — and otherwise starts a session of its own, saying
+// so, or carries its run on in the session its job's box holds, where it
+// relaunches in that box. Should the capture land after the relaunch read the
+// row, the relaunch's first landed capture supersedes it, as any newer
+// capture does: what that job did is lost to the relaunch whichever session
+// it starts in.
+//
+// A SAVE UNDER WAY IS WAITED FOR THE SAME WAY ([PendingRun.Saving], "A save
+// under way" above): a capture of the job taken while it still worked, which a
+// final take of the job can overtake while it still uploads. Where that final
+// take is refused, the save is the job's newest session anybody kept, so the
+// relaunch waits for it as for the newest capture ([relaunchWaitsOn]), settles
+// and asks it as the newest, and names it by its own place.
+//
+// ONLY FOR WHAT ITS DECISION DEPENDS ON ([relaunchDependsOn]): a capture or a
+// save of the job it follows, and an earlier job's only while the turn has
+// kept nothing, whose landing ends the base the relaunch would otherwise
+// continue. An earlier job's keep beside a capture the turn kept changes
+// nothing a relaunch decides, so it decides at once rather than hold the
+// seat's frame for it; the turn's end, whose tombstone would refuse it, still
+// waits for every keep in flight.
+//
+// WITHIN THE SAME WAIT, WHAT IS UNSETTLED IS SETTLED BEFORE THE DECISION: a
+// capture whose taker is gone — its taker lease lapsed or held at another
+// epoch ([Coordinator.settleGone], session.go) — is settled from the
+// turn's row on the log, so a relaunch that follows its taker's crash or
+// restart continues a capture whose record the log took before that read
+// rather than starting fresh beside it; and a capture whose record was sent
+// and never answered is asked again under its own operation, as the turn's end
+// asks it ([Coordinator.settleUnresolved]): one that lands is continued. Each
+// settle the wait decides is written in its own room past the wait, as this
+// node's own write ([Coordinator.awaitCapture]); an ask that leaves the record
+// unanswered writes nothing. And once the wait has run out, a capture of the
+// job it follows still begun under a taker whose lease HOLDS, or that the
+// store cannot say of, however long ago it began, is read off the turn's row
+// once more, in a read held to as long again as the wait, and settled landed
+// where the row names its place, never refused: a host whose store answers its
+// leases and not its runs keeps its lease while no stamp of its own reaches
+// the row, for as long as that silence lasts, and the relaunch that follows a
+// job lost with that host continues the capture the log took rather than
+// start fresh beside it. A record the log takes only after the settle's read —
+// one its taker had handed on before its lease's window closed — lands beside
+// a stamp that says refused (above, "WHAT THE FENCE CANNOT REACH"): the
+// log keeps it, and the relaunch starts without it, told with the row in hand
+// as a capture the log keeps, and its run named the turn's own as a session
+// it may read ([namedThoughRefused], [ContinuedSession.KeptTurn]).
+//
+// SO A READER IS TOLD NEITHER AS DECIDED: while a capture or a save under way
+// is still being kept ([relaunchWaitsOn]), or its record awaits the log's
+// answer, which the relaunch asks again ([captureAwaitsAnswer]), what the
+// relaunch continues cannot be said, and a reader is told that rather than a
+// no ([ReadContinuityOf]).
+//
+// # Never a session that ran out of context
+//
+// Another launch of it fails the same way, so its collection records it on the
+// run's record ([PendingRun.ExhaustedSessions]) and refuses its capture, and
+// each way a later launch could take it up refuses it: [ContinuityOf],
+// [BaseContinuityOf] and [Coordinator.continueSession]. The turn's end retires
+// it for later turns.
+//
+// # Never a failed launch
+//
+// An object the store no longer holds or whose seal does not open
+// (executordomain.ErrUnreadable), a log that does not answer, a box whose
+// harness cannot take the session up: each starts the run on a session of its
+// own, handed the brief written for one — or, where the launch reuses the box
+// the job before ran in, the session that box holds — and is logged with its
+// reason once what the launch continues instead is decided, naming that
+// (`executor_session_not_continued`). The session is fetched SEALED onto this
+// node's disk and opened whole once before a byte of it reaches the box
+// (executordomain.SessionStore.Fetch), so the decision is made before the
+// brief is, never part way through writing the archive into the box.
 //
 // # Resume routing
 //
@@ -950,8 +1712,8 @@
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... measuredOtherFields     2,192,713
-//	to spare, measured .............. measuredSpare             403,195
+//	every other field, measured ..... measuredOtherFields     2,219,257
+//	to spare, measured .............. measuredSpare             376,651
 //
 // Every other field is the identity, status and time fields, the run its turn's
 // leads are kept for and how many leads that part has taken
@@ -972,24 +1734,25 @@
 // and which of the turn's leads its brief told, by their numbers in the run's
 // leads part ([LaunchRecord.LeadMarks], at most [MaxKeptLeads]), what the
 // session its box holds carried at its newest request the engine measured
-// ([LaunchRecord.Context]), what Claude Code counts that copy at and the
-// restart its launch's session held ([LaunchRecord.ResumedCount],
-// [LaunchRecord.BasisRestart]), and a refused completion its seat's holder owes
-// ([LaunchRecord.RefusalOwed], its condition at most [MaxOwedConditionBytes]);
-// the owed end and the captures, each with the reads its session holds only as
-// a count ([SessionCapture.Omitted]) and its count
-// ([SessionCapture.ResumedCount]); and what the job may do on Gitlet: the holds
-// of its turn ([MaxCodeHolds]), its repositories ([MaxRunRepos], each held to
-// its grammar, its cone and its change's title, [MaxChangeTitleBytes], among
-// them), its floors and whom its pushes and its change are made for
-// ([PendingRun.CodeWorkingFor]). Every one of them is bounded by THIS ENGINE: a
-// person's reply, a tool's arguments and a box's account of its session are
-// each held to their share by the write that puts them on the row, which
-// refuses one past it by name ([ErrAnswerTooLarge], [ErrHeldCallTooLarge],
-// [ErrCaptureUnbounded]) rather than leave it to the store; and the turn's read
-// of its conversation is held to its line by construction, made of a read the
-// executor log bounds field by field ([NewConversationBase]), the largest of
-// which a test holds under it.
+// ([LaunchRecord.Context]), its harness's count of that copy, the count's
+// provider and writer and its next request (ResumedCount, CountProvider,
+// CountRelease, NextRequestTokens on [LaunchRecord]) and the restart its
+// launch's session held ([LaunchRecord.BasisRestart]), and a refused
+// completion its seat's holder owes ([LaunchRecord.RefusalOwed], its condition
+// at most [MaxOwedConditionBytes]); the owed end and the captures (newest,
+// kept and [PendingRun.Saving]), each with the reads its session holds only as
+// a count ([SessionCapture.Omitted]) and the same three figures; and what the
+// job may do on Gitlet: the holds of its turn ([MaxCodeHolds]), its
+// repositories ([MaxRunRepos], each held to its grammar, its cone and its
+// change's title, [MaxChangeTitleBytes], among them), its floors and whom its
+// pushes and its change are made for ([PendingRun.CodeWorkingFor]). Every one
+// of them is bounded by THIS ENGINE: a person's reply, a tool's arguments and
+// a box's account of its session are each held to their share by the write
+// that puts them on the row, which refuses one past it by name
+// ([ErrAnswerTooLarge], [ErrHeldCallTooLarge], [ErrCaptureUnbounded]) rather
+// than leave it to the store; and the turn's read of its conversation is held
+// to its line by construction, made of a read the executor log bounds field by
+// field ([NewConversationBase]), the largest of which a test holds under it.
 //
 // The two measured lines are the model's, and pinned ([measuredOtherFields],
 // [measuredSpare]): what every other field weighs at its worst, a held call's

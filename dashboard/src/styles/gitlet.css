@@ -36,6 +36,13 @@
 .code-wait__all {
   margin-inline-start: auto;
 }
+/* The qualifier the box's button writes, as the bar's chip says it. */
+.code-wait__filter {
+  margin-inline-start: var(--spacing-1);
+  padding: 0 var(--spacing-1);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-surface-subtle);
+}
 .code-wait__reason {
   display: inline-flex;
   align-items: center;
@@ -68,6 +75,82 @@
   align-items: center;
   gap: var(--spacing-2);
   margin-inline-start: auto;
+}
+/* How whole a search of words was: a quiet line under the head's rows. */
+.code-changes-head__note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-1);
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+.code-changes-head__note > svg {
+  flex: none;
+  margin-block-start: 0.125rem;
+}
+
+/* THE QUERY BAR spans the toolbar; Help and Clear sit over the field's end padding. */
+.code-query {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  flex: 1 1 100%;
+  min-inline-size: 0;
+}
+/* Inside the bar, over the kit's own boxed padding. */
+.code-query > .code-query__field {
+  grid-area: 1 / 1;
+  padding-inline-end: calc(2 * var(--size-control-sm) + var(--spacing-3));
+}
+.code-query__end {
+  grid-area: 1 / 1;
+  justify-self: end;
+  align-self: start;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  block-size: var(--size-control-lg);
+  padding-inline-end: var(--spacing-2);
+}
+.code-query__help {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  max-inline-size: 28rem;
+  padding: var(--spacing-3);
+  font-size: var(--font-size-sm);
+}
+.code-query__help dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--spacing-1) var(--spacing-3);
+  margin: 0;
+}
+.code-query__help dl > div {
+  display: contents;
+}
+.code-query__help dd {
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+.code-query__help p {
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+.code-query__problem,
+.code-query__note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-1);
+  margin: var(--spacing-1) 0 0;
+  font-size: var(--font-size-xs);
+}
+.code-query__problem {
+  color: var(--color-feedback-danger-ink);
+}
+.code-query__note {
+  color: var(--color-text-tertiary);
 }
 
 /* NEW CHANGE without a repository: which repository's branches to compare. */

@@ -31,6 +31,19 @@
 // carry a conversation's ordering rules), and not the coordination store (a
 // value of mebibytes in a bucket every lease shares).
 //
+// # Who writes the rows and who reads them
+//
+// Only the engine writes them: its sandbox runtime publishes each turn's
+// begin, every launch's capture and the turn's end through the estate
+// router's internal/estate ExecutorWrites, so a node without `data` records
+// through a data node, uploading through the [SessionStore] the engine builds
+// on every node with an object store. Everything else only reads: a launch
+// restores its base or its own kept capture through ExecutorReads as the
+// leaf's view of a row ([Session.Kept], internal/executorkeep, since the
+// sandbox links no state log), and a person reads a seat's rows and opens a
+// session as the seat's trail (`audit.seat.read`, internal/executorread):
+// reads and an open, never a record.
+//
 // # One row per turn, never per conversation
 //
 // A conversation's HEAD is, of its ended turns whose rows still name a session,

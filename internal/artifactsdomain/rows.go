@@ -18,16 +18,13 @@ func NewRows(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows
 	return statelog.NewRows(db, Domain{}, spec, guards)
 }
 
-// guards answers the two object-level facts a first write needs: a deletion
-// marker (permanent) and a guarding row (what still says an object exists once
-// the record that created it has been trimmed off the log).
-//
-// FOUR KINDS HAVE THEM. An ARTIFACT has both. An ASSET has a guarding row and
-// its artifact's marker. A SOURCE address has a guarding row, the claim, and no
-// marker: releasing an address is a transfer or a purge, not a destruction of
-// the address. A reader's state and the framework's kinds are created by their
-// first record and removed by nothing, so false for both is the answer. A
-// COMMENT thread has what an ASSET has.
+// guards answers a first write's two object-level facts: a deletion marker
+// (permanent) and a guarding row (what says an object exists once its creating
+// record is trimmed). An ARTIFACT has both; an ASSET or COMMENT thread has its
+// row and its artifact's marker; a SOURCE address has its claim and no marker,
+// since releasing one is a transfer or purge, not a destruction. A reader's
+// state and the framework's kinds are created by their first record and
+// removed by nothing: false for both.
 func guards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (deleted, guard bool, err error) {
 	switch ObjectKind(subj.Kind) {
 	case KindArtifact:
@@ -80,9 +77,8 @@ func guards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (deleted, gu
 }
 
 // Fence refuses a write this node must not make: Evicted on every append, from
-// rows this node already has, and ClearForZero before an expectation of zero,
-// which pays a coordination round trip because being wrong there is a lost
-// update.
+// local rows, and ClearForZero before an expectation of zero, which pays a
+// coordination round trip because being wrong there is a lost update.
 type Fence struct {
 	db     store.ReplicatedReader
 	nodeID string
@@ -100,10 +96,9 @@ func NewFence(db store.ReplicatedReader, nodeID string) *Fence {
 	return &Fence{db: db, nodeID: nodeID}
 }
 
-// Evicted reports this node's own eviction, FROM ITS OWN APPLIED ROWS, which
-// are the one source still fresh when coordination is wedged. UNREADABLE IS NOT
-// "not evicted": a fence that failed open would collect acknowledgements for
-// writes every other node drops.
+// Evicted reports this node's own eviction FROM ITS OWN APPLIED ROWS, the one
+// source still fresh when coordination is wedged. UNREADABLE IS NOT "not
+// evicted": failing open would acknowledge writes every other node drops.
 func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 	if f == nil || f.db.IsZero() || f.nodeID == "" {
 		return false, nil
@@ -127,8 +122,7 @@ func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 }
 
 // ClearForZero verifies, freshly, that publishing at an expectation of zero is
-// safe from this node ([statelog.ZeroFence], the check every strict domain's
-// fence runs).
+// safe from this node ([statelog.ZeroFence]).
 func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) error {
 	return statelog.ZeroFence{
 		Evicted: f.Evicted, Floor: f.Floor, Ends: f.Ends, Committed: f.Committed,
@@ -136,19 +130,16 @@ func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) erro
 }
 
 // Gates answers whether a durable record produced rows on NO node: the two gates
-// [Applier.Gated] installs, read from the publisher's side by the rule
-// [statelog.Gates] states.
+// [Applier.Gated] installs, read from the publisher's side ([statelog.Gates]).
 type Gates struct{ db store.ReplicatedReader }
 
 // NewGates builds it.
 func NewGates(db store.ReplicatedReader) *Gates { return &Gates{db: db} }
 
-// GatedAt reports whether a record at p applies nowhere, and the gate that
-// answers for it: THE DELETION GATE FIRST (a fact about the object, holding for
-// every writer for ever), over the subjects the applier's own gate covers
-// ([gatedArtifact]), with the purge's own record exempt by its operation id; then
-// the writer's eviction window. One transaction for both halves, through the
-// handle, so the answer describes one committed state.
+// GatedAt reports whether a record at p applies nowhere, and which gate says so:
+// THE DELETION GATE FIRST (it holds for every writer for ever) over
+// [gatedArtifact]'s subjects, the purge's own record exempt by its op id; then
+// the writer's eviction window. One transaction, so both describe one state.
 func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 	writer, opID string, p statelog.Position, _ []byte) (statelog.Reason, bool, error) {
 

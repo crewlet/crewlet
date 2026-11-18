@@ -17,8 +17,8 @@ import (
 	"github.com/crewlet/crewlet/internal/routing"
 )
 
-// The metadata keys a comment wake carries, which the prompt reads back
-// ([Prompt]). Named, because the parser writes them and the prompt reads them.
+// The metadata keys a comment wake carries: the parser writes them and
+// [Prompt] reads them back.
 const (
 	// MetaVia is why this seat hears: one [NotifyReason].
 	MetaVia = "routed_via"
@@ -197,7 +197,7 @@ func inboundOf(record MutationRecord, payload any, n CommentNotify, recordID str
 
 // recordFromBody recovers the record the feed relayed, through the domain's
 // own decoder. A record at a version a newer build writes is DEFERRED to a
-// peer on that build ([notify.Defer]), never refused (crewlet#993).
+// peer on that build ([notify.Defer]), never refused.
 func recordFromBody(body map[string]any) (MutationRecord, error) {
 	if len(body) == 0 {
 		return MutationRecord{}, errors.New("artifactsdomain: the delivery carries no record")

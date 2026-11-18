@@ -12,21 +12,12 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// AN ABSENT LOGGER IS THE PACKAGE'S OWN, AT EVERY CONSTRUCTOR.
-//
-// It was a discarding one at every constructor, and the engine handed a logger
-// to three of the six — so the applier, the write authority and the re-anchor
-// wrote every warning they have into nothing on every production node, while
-// the snapshotter, the donor and the adopter beside them went on logging and
-// made the silence read as a quiet log. The engine now hands none, so what
-// these constructors do with nil IS what production logs through.
-//
-// The re-anchor is a function rather than a constructor, so it keeps nothing
-// to inspect afterwards; it reads its deps only through [ReanchorDeps.resolved],
-// and that is what is asserted for it. A discarding handler anywhere outside a
-// test is refused by internal/logging's guard; this is what catches the
-// defaults that guard cannot see — the process-wide `slog.Default()`, which
-// loses `component=statelog`, or a handler filtered to a level.
+// AN ABSENT LOGGER IS THE PACKAGE'S OWN, AT EVERY CONSTRUCTOR: the engine
+// hands none, so what these constructors do with nil IS what production logs
+// through. The re-anchor keeps nothing to inspect, so its deps are asserted
+// through [ReanchorDeps.resolved]. internal/logging's guard refuses a
+// discarding handler; this catches what it cannot see, the process-wide
+// `slog.Default()` (no `component=statelog`) or a handler filtered to a level.
 func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) {
 	t.Parallel()
 

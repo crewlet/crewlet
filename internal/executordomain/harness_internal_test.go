@@ -19,10 +19,9 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// THE APPLY HARNESS: records applied through the shipped applier into a
-// migrated replicated estate, at positions this harness hands out and broker
-// instants a second apart, exactly as the framework's loop would apply them.
-// The cases read the rows back with the same scan the reader uses.
+// The apply harness: records go through the shipped applier into a migrated
+// estate, at positions it hands out and broker instants a second apart, as the
+// framework's loop would apply them; cases read rows back with the reader's scan.
 
 // monday is the harness's clock.
 var monday = time.Date(2031, 4, 7, 9, 0, 0, 0, time.UTC)
@@ -167,9 +166,8 @@ func (e *estate) at() statelog.Position {
 	return statelog.Position{Stream: Domain{}.Stream().Name, Generation: 1, Seq: e.seq}
 }
 
-// reader is the domain's reader over e's rows, served at the position of the
-// last record applied: the shipped reader through the framework's read
-// authority, as a node caught up to that position serves it.
+// reader is the shipped reader over e's rows, through the framework's read
+// authority, as a node caught up to the last applied position serves it.
 func (e *estate) reader() *Reader {
 	e.t.Helper()
 	authority, err := statelogtest.LocalReader(Domain{}, e.db, e.at())

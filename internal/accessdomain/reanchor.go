@@ -8,14 +8,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE ACCESS LOG'S HALF OF A REANCHOR, and it is one record.
-//
-// [statelog.Reanchor] owns the steps and their order; this domain's part is to
-// say, in its own record format, that its log was adopted at a new generation.
-// The applier writes `access_log_generations` from it. No version reset:
-// every row's version guard and every history row's position compares against
-// positions in the new generation, which are above every old one by
-// construction.
+// The access log's half of a reanchor is one record ([statelog.Reanchor] owns
+// the steps), from which the applier writes `access_log_generations`. No
+// version reset: every version guard and history position compares against the
+// new generation's positions, which are above every old one by construction.
 
 // GenerationRecord is the access log's [statelog.GenerationEncoder].
 type GenerationRecord struct{}
@@ -28,7 +24,7 @@ func (GenerationRecord) GenerationSubject(gen uint32) (statelog.Subject, bool) {
 // GenerationRecord encodes the reanchor's record for the new generation,
 // create-only on the generation's own subject, under the operation id the
 // framework derives ([statelog.GenerationFacts.OpID]) and authored by the
-// operator who ran it, recorded the way every write here is.
+// operator who ran it.
 func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.GenerationRecord, bool, error) {
 	subject := GenerationSubject(f.Generation)
 	actor := generationActor(f)
@@ -58,11 +54,9 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 	}, true, nil
 }
 
-// generationActor is who a generation record names as its author:
-// [statelog.GenerationFacts.Author]'s party, which every domain's generation
-// record names alike, and whose kinds are the identity vocabulary's actor
-// kinds this domain records in. NOBODY NAMED IS THE NODE, recorded under its
-// own id as the engine.
+// generationActor is a generation record's author:
+// [statelog.GenerationFacts.Author]'s party, as every domain names it, or,
+// when nobody is named, the node under its own id as the engine.
 func generationActor(f statelog.GenerationFacts) iam.Actor {
 	party, named := f.Author()
 	if !named {

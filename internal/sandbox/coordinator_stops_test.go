@@ -410,6 +410,24 @@ var coordinatorEntries = map[string][]entryDrive{
 			rig.fireRetries()
 		},
 	}},
+	"SaveRunning": {{
+		// IT ENDS NOTHING: a save's stamp is a place on the row its license
+		// grants only a running job, and what came of it moves no status; what
+		// becomes of the run is its poll's to say.
+		name: "a running box the poll offers for a save of its session",
+		call: func(t *testing.T, rig *coordRig) {
+			run, _, _ := rig.pending.Get(t.Context(), "t1")
+			rig.coordinator.SaveRunning(t.Context(), run, rig.runner)
+		},
+	}},
+	"SaveHosted": {{
+		// IT ENDS NOTHING: a drain's save is a save as an offered one is, of a
+		// job the drain leaves running.
+		name: "a draining node saving its Direct jobs' sessions",
+		call: func(t *testing.T, rig *coordRig) {
+			rig.coordinator.SaveHosted(t.Context())
+		},
+	}},
 	"Manager": {{
 		name: "the manager a caller mints a box through",
 		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.Manager() },
@@ -1357,6 +1375,13 @@ func (s *refusingStore) SettleBegun(ctx context.Context, turnID string, capture 
 		return false, errRefusedCall
 	}
 	return s.inner.SettleBegun(ctx, turnID, capture)
+}
+
+func (s *refusingStore) ReserveSave(ctx context.Context, turnID string, save SessionCapture) (bool, error) {
+	if s.called("ReserveSave") {
+		return false, errRefusedCall
+	}
+	return s.inner.ReserveSave(ctx, turnID, save)
 }
 
 func (s *refusingStore) StandBy(ctx context.Context, turnID string, capture SessionCapture) (bool, error) {

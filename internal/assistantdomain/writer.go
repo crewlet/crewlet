@@ -18,29 +18,17 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE ASSISTANT WRITE PATH: one record per step of a turn, published to the
+// The assistant write path: one record per step of a turn, published to the
 // subject of the thing it contends for, decided inside one snapshot of this
-// node's own rows.
-//
-// # Every write is the owner's
-//
-// A [Call] names the conversation's owner, and every decide refuses a
-// conversation, turn or proposal that is not theirs as not found, in the same
-// snapshot the record is formed in. So a turn of one person can never record
-// into another person's conversation, whichever id it was handed.
-//
-// # The writer seals
-//
+// node's own rows. Every decide refuses a conversation, turn or proposal that
+// is not the [Call]'s owner's as not found, in that snapshot, so a turn never
+// records into another person's conversation whichever id it was handed.
 // Every value a person said or was shown is sealed here, before the record is
-// formed, under associated data naming the conversation and the record
-// ([AAD]). The applier writes the envelope through.
-//
-// # What a write answers
-//
-// Every write answers its whole [statelog.Result] and never a bare position,
-// because a position cannot tell `applied` and `pending` from `unknown`; and a
-// write the rows refused at the apply (a conversation purged between the
-// decide and the apply) answers the refusal its own rows say, read back.
+// formed, under [AAD] naming the conversation and the record; the applier
+// writes the envelope through. A write answers its
+// whole [statelog.Result], never a bare position, which cannot tell `applied`
+// and `pending` from `unknown`; one the rows refused at the apply (a purge
+// between the decide and the apply) answers the refusal its rows say, read back.
 
 // Call is one write's caller: whose conversation it is, who is acting and
 // under which operation.
@@ -364,9 +352,9 @@ func (w *Writer) PurgeInactive(ctx context.Context, by iam.Actor, opID string,
 	if err != nil {
 		return res, err
 	}
-	// THE APPLY MAY HAVE REFUSED IT: a message recorded between the decide
-	// and the apply keeps the conversation, and only its marker says the
-	// purge landed.
+	// The apply may have refused it: a message recorded between the decide
+	// and the apply keeps the conversation, so only its marker says the purge
+	// landed.
 	if res.Outcome == statelog.OutcomeApplied {
 		var marked bool
 		if err := w.db.Read(ctx, func(tx *sql.Tx) error {
@@ -388,18 +376,17 @@ func (w *Writer) PurgeInactive(ctx context.Context, by iam.Actor, opID string,
 // is the assistant's half of a person's removal from the identity estate,
 // published by the engine when the identity applier reports the removal.
 //
-// IDEMPOTENT: an owner already erased answers the erasure that landed, with
-// nothing published.
+// Idempotent: an owner already erased answers the erasure that landed,
+// publishing nothing.
 func (w *Writer) EraseOwner(ctx context.Context, c Call) (statelog.Result, error) {
 	if err := c.validate(true); err != nil {
 		return statelog.Result{}, err
 	}
 	at := w.now()
 	subject := OwnerSubject(c.Owner)
-	// THE WHOLE DOMAIN, the widest scope a record may name: an erasure's
-	// rows are every conversation the owner holds, which no bounded list of
-	// terms could name, so a node that defers it has every read here
-	// reported stale until it can apply it.
+	// The whole domain: an erasure's rows are every conversation the owner
+	// holds, which no bounded list of terms could name, so a node that defers
+	// it reports every read here stale until it can apply it.
 	scope := ScopeSet{Terms: []ScopeTerm{{Kind: TermDomain}}}
 	return w.publish(ctx, request(subject, scope, c.OpID, statelog.PatternArbitrated,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
@@ -431,8 +418,8 @@ func (r AuditReceipt) Result() statelog.Result { return r.result }
 // answers is what [Reader.AuditTranscript] reads the conversation with.
 //
 // The verb's authority (admin, a recent proof, a person present, never through
-// the assistant) is the authority table's, decided at the route before this is
-// called; the audit event naming the reader is the route's as well.
+// the assistant) is decided by the authority table at the route, which also
+// emits the audit event naming the reader.
 func (w *Writer) RecordAuditRead(ctx context.Context, c Call, conversation uuid.UUID,
 	reason string) (AuditReceipt, error) {
 

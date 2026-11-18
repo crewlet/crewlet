@@ -156,13 +156,13 @@ import (
 // lease, naming that node ([RelaunchTargets]), on every page that asks, the
 // holder's own included. And A LIVE ROW IS DECIDED ON THE LOG AS A RELAUNCH
 // READS IT: read again at the relaunch's level ([executordomain.RelaunchRead])
-// where the page was read below it and the row names another capture than the one
-// its run's record keeps, or the record keeps none ([sandbox.RereadsRow]),
-// since a copy of the log behind the record would read a session a relaunch
-// continues as one the log no longer names — and nowhere else, since a read at
-// that level appends a barrier to the executor log, and a row naming the kept
-// capture already decides as one read there would. An ended row is decided on
-// the snapshot its page was read in, which `read_level` states.
+// where the page was read below it and the row names another capture than the
+// record keeps, or it keeps none or not a newer one of the followed job
+// ([sandbox.RereadsRow]), since a copy behind the record would read a session
+// a relaunch continues as one the log no longer names; and nowhere else, since
+// a read at that level appends a barrier to the executor log, and a row naming
+// the kept capture beside nothing newer decides as one read there would. An
+// ended row is decided on the snapshot its page was read in (`read_level`).
 //
 // A TRANSCRIPT'S LATER PAGES DO NOT DECIDE IT AGAIN: its first page, read with
 // no cursor, says it beside the transcript's opening, and every later page —
@@ -590,19 +590,13 @@ func nextLaunch(conversationKey string) sandbox.ContinuedBy {
 
 // relaunchRow is row on its way to its continuity, head being its
 // conversation's head as the read that answered row named it: undecided where
-// its turn is live and its record could not be read (unread) — the decision
-// would read a missing record as a run that is over — and otherwise decided on
-// the row as a relaunch reads it: read again at the relaunch's level
-// ([executordomain.RelaunchRead]) where the caller's read was below it and the
-// decision reaches a row that names another capture than the run's record
-// keeps ([sandbox.RereadsRow]), and row itself everywhere else, which decides
-// as that read would — undecided where the read again fails.
-//
-// A ROW READ AGAIN IS DECIDED ON THE HEAD THAT READ NAMED, never the page's: the
-// turn's end can land between the two reads, and the row read again then
-// comes back ended, the head of its conversation in its own snapshot, while
-// the page's older head names the turn before it — a definite no, naming a
-// row the end that came back with it may have absorbed.
+// the turn is live and its record unread, and otherwise decided on the row as
+// a relaunch reads it: read again at the relaunch's level
+// ([executordomain.RelaunchRead]) where [sandbox.RereadsRow] says so, and row
+// itself elsewhere; undecided where the read again fails. A ROW READ AGAIN IS
+// DECIDED ON THE HEAD THAT READ NAMED, never the page's: the turn's end can
+// land between the two reads, and the page's older head would name a row the
+// end may have absorbed.
 func (s Sources) relaunchRow(ctx context.Context, row executordomain.Session, head string,
 	run *sandbox.PendingRun, unread error, fresh statelog.Freshness, now time.Time) rowContinuity {
 

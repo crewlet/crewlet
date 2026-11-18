@@ -1658,7 +1658,7 @@ type openCodeMessageWire struct {
 // field's zero value, a time that is no object as none, and the rest of the
 // message as written. Its tokens, its error and when a step settled are left
 // as none: a person's transcript reads none of them, and the context a session
-// carries reads them off the export itself ([exportMessageInput]).
+// carries reads them off the export itself ([exportMessageAt]).
 func (w openCodeMessageWire) message() openCodeMessage {
 	m := openCodeMessage{Type: openCodeKind(looseString(w.Type)), Text: looseString(w.Text), Content: w.Content,
 		Status: looseString(w.Status), Summary: looseString(w.Summary)}

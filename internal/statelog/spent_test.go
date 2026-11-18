@@ -45,15 +45,11 @@ func (l committingLog) Append(context.Context, string, string, *uint64, []byte) 
 func (committingLog) LastSeq(context.Context, string) (uint64, bool, error) { return 0, false, nil }
 
 // A LINEARIZABLE READ HANDED A READ INDEX WAITS FOR IT AND APPENDS NOTHING.
-// The index is one a node asked for the same read before this one established;
-// a barrier that started after the request reached that node and committed is
-// a bound on every write acknowledged before the request began, whichever
-// node's applier the read is then served from. What the read waits for is
-// the record BEFORE the index, as it is before its own barrier — the barrier
-// writes no row on any node — so the position the waiter is handed is that
-// record's, spelled out here rather than derived, so a reader that waited for
-// the barrier itself again is seen. The control appends: without it a reader
-// that never appended anything would pass the case.
+// An index an earlier node established for the same request bounds every write
+// acknowledged before the request began, whichever node serves the read. The read waits
+// for the record BEFORE the index (a barrier writes no row), spelled out rather
+// than derived so a reader waiting for the barrier itself is caught. The
+// control appends, or a reader that never appends would pass.
 func TestAReadHandedAReadIndexWaitsForItAndAppendsNothing(t *testing.T) {
 	t.Parallel()
 	var appends atomic.Int64
@@ -84,8 +80,7 @@ func TestAReadHandedAReadIndexWaitsForItAndAppendsNothing(t *testing.T) {
 			waiter.last.Load(), want.Packed())
 	}
 
-	// NOT AN INDEX FROM A GENERATION THIS NODE'S LOG HAS PASSED: its
-	// sequence is a number in another space.
+	// NOT AN INDEX FROM A PASSED GENERATION: its sequence is in another space.
 	passed := statelog.Position{Stream: probeStream, Generation: 0, Seq: 1_000_000}
 	ctx = statelog.WithSpent(t.Context(), statelog.Spent{Index: []statelog.Position{passed}})
 	if _, err := read(ctx); err != nil {
@@ -102,12 +97,10 @@ func TestAReadHandedAReadIndexWaitsForItAndAppendsNothing(t *testing.T) {
 }
 
 // A REFUSED READ SAYS WHAT IT PAID FOR, AND A NODE ASKED NEXT PAYS FOR NONE OF
-// IT. The first node appends its barrier and waits its whole bound for the
-// record before it: refused `behind`, carrying the read index (the barrier)
-// and the position it waited out (that record).
-// Handed both, the next node appends nothing and waits for nothing — refused
-// `behind` at once, its applier being no further on. Asked afresh, it
-// appended a barrier of its own and waited another whole read budget.
+// IT. The first node, refused `behind` after its whole bound, carries the read
+// index (its barrier) and the position it waited out (the record before it).
+// Handed both, the next node appends and waits for nothing: refused `behind` at
+// once, its applier being no further on.
 func TestARefusedReadSaysWhatItPaidForAndTheNextNodePaysForNone(t *testing.T) {
 	t.Parallel()
 	var appends atomic.Int64
@@ -192,14 +185,12 @@ func TestAPositionWaitedOutIsNotWaitedForAgainAndALaterOneIs(t *testing.T) {
 // A SINGLE MEMBER'S BARRIER THAT RUNS OUT OF ITS BUDGET IS ITS OWN WRITE
 // STALLED, NEVER A MISSED QUORUM.
 //
-// One member stores the log — the count read off the harness's own broker, as
-// the engine reads its stream's — and the member holds the barrier's write
-// past the barrier's whole budget, as a disk holding the fsync `stream.sync:
-// always` makes of every append holds it. No majority was asked and no
-// election is coming, and refused `no_quorum` with an election's hint, a
-// single node on a stalling disk sent its operator looking for peers it does
-// not have. It is refused `broker_stalled`: one budget's hint, the stall named,
-// and no node asked next appends a barrier behind it.
+// One member stores the log (the count read off the harness's broker, as the
+// engine reads its stream's) and holds the barrier's write past its budget, as
+// a disk stalling `stream.sync: always`'s fsync does. `no_quorum` with an election's
+// hint would send the operator looking for peers it does not have: it is
+// refused `broker_stalled`, one budget's hint, the stall named, and no node
+// asked next appends a barrier behind it.
 func TestASingleMembersStalledBarrierIsNeverAMissedQuorum(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -249,10 +240,9 @@ func TestASingleMembersStalledBarrierIsNeverAMissedQuorum(t *testing.T) {
 	})
 	t.Run("the asker's attempt ran out", func(t *testing.T) {
 		t.Parallel()
-		// IN A SYNCTEST BUBBLE, which holds the answer to the instant its
-		// asker must be answered by ([answeredAt]). The bubble holds no
-		// broker, whose own goroutines never wait durably, so the log's one
-		// member is the count the premise above read off it, stated.
+		// IN A SYNCTEST BUBBLE, to hold the answer to its asker's deadline
+		// ([answeredAt]). A broker's goroutines never wait durably, so the
+		// bubble holds none: the one member the premise read is stated.
 		synctest.Test(t, func(t *testing.T) {
 			r := newReader(t, unreadStore{t}, healthy, &stubWaiter{at: healthy().Position},
 				heldIndex(t, newHeldAppender(t), members(1)))
@@ -287,11 +277,9 @@ func TestASingleMembersStalledBarrierIsNeverAMissedQuorum(t *testing.T) {
 
 // A BARRIER THAT RUNS ITS WHOLE BUDGET IS A LOG WITHOUT A QUORUM, where several
 // members store it, and no node asked after it appends another: every node's
-// barrier goes to the one log's leader. The first node's refusal says so —
-// whether its asker's attempt or the barrier's own budget is what ran out —
-// and the next node is refused `no_quorum` at once, appending nothing. A
-// barrier refused at once by a full log spent nothing of the kind, and the
-// next node appends its own.
+// barrier goes to the same leader. The first refusal says so, whichever budget
+// ran out; the next node is refused `no_quorum` at once. A barrier a full log
+// refused at once spent nothing, and the next node appends its own.
 func TestNoNodeAppendsASecondBarrierToALogWithoutAQuorum(t *testing.T) {
 	t.Parallel()
 	read := func(ctx context.Context, r *statelog.Reader) error {

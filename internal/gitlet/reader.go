@@ -1125,7 +1125,7 @@ func scanIntroduced(rows *sql.Rows) (IntroducedRow, int, error) {
 // reviews, findings and checks a push history's) while a page of the widest
 // rows ends at the byte budget first. latestCheckLimit is MaxChecksPerFile,
 // so a branch's latest checks are one page. The maxima are exported for a
-// client that pages.
+// client that pages, and [ReadQuery.PageMax] says which one a query is held to.
 const (
 	defaultRepoLimit     = 100
 	MaxReposPerPage      = 500
@@ -1141,6 +1141,57 @@ const (
 	defaultRevisionLimit = 200
 	MaxRevisionsPerPage  = 1_000
 )
+
+// PageMax is the most rows one page of q carries, the bound its Limit is
+// refused past: the one a caller that reads a kind to its end pages at, never
+// [MaxSnapshotItems], which caps every page the reader serves rather than
+// naming any kind's. 0 is a read no limit pages (one row, one answer, or the
+// rows it names). TestEveryKindsPageMaxIsTheBoundItsReadRefusesPast holds it
+// to every kind's validator, and TestEveryEngineReadAsksAPageItsKindCarries
+// every limit the module's own reads ask to it.
+func (q ReadQuery) PageMax() int {
+	switch q.Kind {
+	case ReadRepos:
+		if q.DayBounds != nil {
+			return MaxSparkReposPerPage
+		}
+		return MaxReposPerPage
+	case ReadPushes:
+		if q.Push != "" {
+			return 0
+		}
+		return MaxPushesPerPage
+	case ReadRefs:
+		return MaxRefsPerPage
+	case ReadChanges:
+		return MaxChangesPerPage
+	case ReadChange:
+		switch {
+		case q.DetailOnly, len(q.FindingIDs) > 0:
+			return 0
+		case q.FindingPaths:
+			return MaxFindingPathsPerPage
+		case q.Viewed:
+			return MaxViewedPerPage
+		}
+		return q.Part.maxPerPage()
+	case ReadChangeRouting:
+		return MaxRoutedRecordsPerPage
+	case ReadReviews:
+		return MaxReviewsPerPage
+	case ReadChecks:
+		return MaxChecksPerPage
+	case ReadQueue:
+		return MaxQueueRowsPerPage
+	case ReadLandings:
+		return MaxLandingsPerPage
+	case ReadInbox:
+		return inbox.MaxRows
+	case ReadIntroduced, ReadRunPushes, ReadChecksQueued:
+		return MaxSnapshotItems
+	}
+	return 0
+}
 
 // BriefCommands is how many of a push's commands a row of its history read
 // IN BRIEF carries ([ReadQuery.Brief]): the lines a screen gives one push.
@@ -1639,12 +1690,7 @@ func (q ReadQuery) validate() error {
 			return err
 		}
 	}
-	bound := map[ReadKind]int{ReadRepos: MaxReposPerPage, ReadPushes: MaxPushesPerPage,
-		ReadRefs: MaxRefsPerPage, ReadChanges: MaxChangesPerPage, ReadChange: q.changePageMax(),
-		ReadChangeRouting: MaxRoutedRecordsPerPage, ReadReviews: MaxReviewsPerPage,
-		ReadChecks: MaxChecksPerPage, ReadQueue: MaxQueueRowsPerPage, ReadLandings: MaxLandingsPerPage,
-		ReadInbox: inbox.MaxRows}[q.Kind]
-	switch {
+	switch bound := q.PageMax(); {
 	case q.Limit < 0:
 		return fmt.Errorf("%w: limit: %d", ErrInvalid, q.Limit)
 	case q.Kind == ReadRepo && q.Limit != 0:

@@ -801,12 +801,10 @@ func (a *Applier) applyRestore(ctx context.Context, tx *sql.Tx, c applyContext, 
 	return 1 + n, nil
 }
 
-// applyPurgeBegin commits an artifact to its purge: it stamps the instant the
-// purge began and, for an artifact not yet in the trash, trashes it in the same
-// row (serving stops and the access epoch moves, as a trash's does), so from
-// this record on the artifact is never served, never written and never
-// restored, and only the purge's own record removes it. The purge runs its
-// dependents' irreversible steps only once this has applied.
+// applyPurgeBegin commits an artifact to its purge, trashing a live one in the
+// same row: from this record on it is never served, written or restored, and
+// only the purge's own record removes it. The purge runs its dependents'
+// irreversible steps only once this has applied.
 func (a *Applier) applyPurgeBegin(ctx context.Context, tx *sql.Tx, c applyContext, id string) (int, error) {
 	done, err := applied(ctx, tx, c, id)
 	if err != nil || done {
@@ -852,15 +850,13 @@ func (a *Applier) applyPurgeBegin(ctx context.Context, tx *sql.Tx, c applyContex
 
 // applyPurge removes an artifact permanently and writes its deletion marker.
 //
-// EVERY ROW OF THE ARTIFACT GOES IN THIS STATEMENT LIST, since the estate keeps
-// no foreign key and a cascade is a delete nobody committed: its versions, its
-// objects (which become unnamed, and the collector reclaims their files after
-// its grace), its assets, shares, pins, reads, source claim, history, comment
-// threads and the notices they wrote. The
-// MARKER IS WRITTEN WHETHER OR NOT THE ROW IS HERE, so a record about the
-// artifact that arrives later is gated on every data node alike. A purge writes no
-// history row of its own: the history goes with the artifact, and the marker
-// names the purge's operation, which is what its writer reads back.
+// EVERY ROW OF THE ARTIFACT GOES IN THIS STATEMENT LIST: the estate keeps no
+// foreign key, so a cascade is a delete nobody committed. Its objects become
+// unnamed and the collector reclaims their files after its grace. THE MARKER
+// IS WRITTEN WHETHER OR NOT THE ROW IS HERE, so a later record about the
+// artifact is gated on every data node alike. A purge writes no history row:
+// the history goes with the artifact, and its writer reads back the marker,
+// which names the purge's operation.
 func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, c applyContext, id string) (int, error) {
 	head, found, err := readHead(ctx, tx, id)
 	if err != nil {
@@ -1095,11 +1091,10 @@ func pinsAnyBrand(ctx context.Context, tx *sql.Tx, id string, numbers []int) (bo
 	return pinned, nil
 }
 
-// pruneRetiredBrands prunes, after versions that pinned a stylesheet are gone
-// (pinned), the files of every superseded adoption no retained version names
-// any more ([pruneBrandFiles] against the adoption that stands), so a page
-// pinned to an old brand keeps it served while it is retained and not an
-// apply longer. A record retiring a pinned version names the brand in its
+// pruneRetiredBrands, once versions that pinned a stylesheet are gone (pinned),
+// prunes every superseded adoption no retained version names
+// ([pruneBrandFiles]), so an old brand is served exactly while a page pinning
+// it is retained. A record retiring a pinned version names the brand in its
 // scope ([namesBrand]); one whose versions pin nothing touches no brand row.
 func pruneRetiredBrands(ctx context.Context, tx *sql.Tx, pinned bool) (int, error) {
 	if !pinned {
@@ -1138,23 +1133,14 @@ type refusalFacts struct {
 
 // planObjects decides, in this transaction, how adding adds and removing
 // removes moves artifact id's object references, refusing a record the carry
-// rule forbids.
+// rule forbids (package doc, "The carry rule, and why the collector needs no
+// lock"). An uploaded entry's object named by another artifact or an asset is
+// a carry across artifacts in disguise: a key is named only by the write that
+// uploaded it.
 //
-// # The carry rule (ADR-0027, as extended for carrying)
-//
-// A CARRIED ENTRY IS WRITTEN ONLY WHEN THIS TRANSACTION FINDS ITS OBJECT NAMED
-// BY THIS ARTIFACT, with a positive count and the digest and size the entry
-// claims; otherwise the record is refused and its writer told which paths to
-// upload again. An UPLOADED entry's object must be named by no other artifact
-// and no asset: a key is named only by the write that uploaded it, so one named
-// elsewhere is a carry across artifacts in disguise. Together these keep the
-// collector's invariant without a lock: once no row names a key, no later record
-// can name it.
-//
-// THE CARRY CHECK READS THE ROWS BEFORE THIS RECORD'S OWN REMOVALS, because the
-// decide found the object named when it chose to carry it, and an object a
-// publish both carries and retires a version of is still named afterwards by
-// the new version.
+// THE CARRY CHECK READS THE ROWS BEFORE THIS RECORD'S OWN REMOVALS: the decide
+// found the object named when it chose to carry it, and an object a publish
+// both carries and retires a version of is still named by the new version.
 func planObjects(ctx context.Context, tx *sql.Tx, id string, adds, removes []artifacts.Entry) (
 	objectPlan, *refusalFacts, error) {
 
@@ -1243,9 +1229,9 @@ func planObjects(ctx context.Context, tx *sql.Tx, id string, adds, removes []art
 		}
 		after := h.refs + delta[k]
 		if after < 0 {
-			// A REFERENCE COUNT BELOW ZERO is rows that disagree with the
-			// versions they count, which no record can produce: stopping
-			// here is the honest answer, and every data node stops on it alike.
+			// A REFERENCE COUNT BELOW ZERO is rows disagreeing with the
+			// versions they count, which no record can produce: every data
+			// node stops on it alike.
 			return objectPlan{}, nil, fmt.Errorf("artifactsdomain: %s's object %s "+
 				"would be named %d times: the reference table disagrees with the "+
 				"versions it counts", id, k, after)

@@ -57,7 +57,7 @@ func TestAHookNoteIsToldAgainInABoxWhoseReleaseTheResumeWasNotReadIn(t *testing.
 				req.Session.Unheld, req.Session.UnheldDropped = nil, true
 			}
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-				rig.runner, tc.reused, false)
+				rig.runner, tc.reused, false, RunSources{})
 			t.Cleanup(got.release)
 			if tc.brief == "" {
 				if got.session != "" || got.kind != BriefFresh {

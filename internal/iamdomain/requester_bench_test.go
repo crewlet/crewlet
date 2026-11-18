@@ -17,20 +17,17 @@ import (
 )
 
 // BenchmarkRequester is what a seat's turn pays to compose the person it acts
-// for, at most once per call of a tool that decides an app or a relation for
-// somebody (internal/engine's turnRequesters): ONE seat's requester — its
-// holder and the holder's grants — over a directory of people={100,10000}
-// bound people and removed={100,10000} removal tombstones, alternating a bound
-// seat and a removed one — read=one, Reader.Requester's two seeks and one
-// document's decode — beside read=whole, the whole directory
-// (Reader.SeatHolders) that composition read before, which grows with both.
-// ns/op is per question.
+// for, at most once per tool call deciding an app or relation for somebody
+// (internal/engine's turnRequesters): one seat's requester (holder and grants)
+// over people={100,10000} bound people and removed={100,10000} tombstones,
+// alternating a bound seat and a removed one. read=one is Reader.Requester's
+// two seeks and one decode; read=whole, the alternative, is the whole
+// directory (Reader.SeatHolders), which grows with both. ns/op is per question.
 //
-// The rows are written straight into a migrated estate: a directory of this
-// size through the write path would be twenty thousand records applied for a
-// fixture the reads never look behind. Each person's document is a real one,
-// of a real one's size — sealed name and address, a password credential and
-// three apps — since the read decodes the bound holder's.
+// The rows are written straight into a migrated estate: twenty thousand
+// records through the write path would build a fixture the reads never look
+// behind. Each document is real-sized (sealed name and address, a password,
+// three apps), since the read decodes the bound holder's.
 func BenchmarkRequester(b *testing.B) {
 	for _, size := range []int{100, 10_000} {
 		reader := benchDirectory(b, size, size)

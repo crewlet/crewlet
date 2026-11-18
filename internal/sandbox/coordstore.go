@@ -281,8 +281,9 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 			Context: existing.Launch.Context,
 			// AND WHERE IT RESTARTS LAST, as that record's count read it, for
 			// a job continuing the copy to record as its basis
-			// ([PriorBox.Restart]).
-			Restart: restartOf(existing.Launch.ResumedCount),
+			// ([PriorBox.Restart]), and the release that wrote it
+			// ([PriorBox.Writer]).
+			Restart: restartOf(existing.Launch.ResumedCount), Writer: existing.Launch.CountRelease,
 		}
 		// THE TURN'S CODE HOLDS ARE UNIONED, never reset with the rest: a
 		// relaunch's turn may still depend on what an earlier job, or an
@@ -782,12 +783,46 @@ func (s *CoordStore) SettleBegun(ctx context.Context, turnID string, capture Ses
 	return s.stampCapture(ctx, turnID, capture, stillBegun)
 }
 
-// stillBegun reports whether run's newest capture is capture's own take, still
-// standing begun: the stamp a settle decided from it may be written over
-// ([PendingStore.SettleBegun]).
+// stillBegun reports whether run's newest capture, or its save under way
+// ([PendingRun.Saving]), is capture's own take, still standing begun: the stamp
+// a settle decided from it may be written over ([PendingStore.SettleBegun]). A
+// save a final take overtook is settled in its own section, where the row keeps
+// it in sight.
 func stillBegun(run PendingRun, capture SessionCapture) bool {
-	newest := run.Capture
-	return newest != nil && capture.sameTake(*newest) && newest.State == CaptureBegun
+	begun := func(section *SessionCapture) bool {
+		return section != nil && capture.sameTake(*section) && section.State == CaptureBegun
+	}
+	return begun(run.Capture) || begun(run.Saving)
+}
+
+// ReserveSave reserves a save's place on the turn's row. See the contract on
+// [PendingStore].
+//
+// ONE READ-DECIDE-WRITE OF THE ROW AS IT STANDS ([CoordStore.writeFound]),
+// fenced by nothing: any node may take a save's place, and the license is the
+// row's own state ([licensesSave]), decided on the clock of the node making
+// the write. Taken, the save holds the newest place by the row's own rule
+// ([stampOnto]) and its save under way beside it.
+func (s *CoordStore) ReserveSave(ctx context.Context, turnID string, save SessionCapture) (bool, error) {
+	if err := reservable(turnID, save); err != nil {
+		return false, err
+	}
+	// SET ON EVERY ASK OF decide, as a stamp's is ([CoordStore.stampCapture]).
+	var held bool
+	_, won, found, err := s.writeFound(ctx, turnID, false, Fence{}, func(run *PendingRun) bool {
+		held = holdsSave(*run, save)
+		if held || licensesSave(*run, save, s.clock()) != "" {
+			return false
+		}
+		stampOnto(run, save)
+		reserved := save
+		run.Saving = &reserved
+		return true
+	})
+	if err != nil {
+		return false, err
+	}
+	return won || (found && held), nil
 }
 
 // StandBy records capture's take as the read standing by for the row's newest
@@ -1950,7 +1985,8 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 	// writes anything: the launch then abandons its box, as for any refused
 	// attach.
 	var took leadsTaken
-	if box.CommandID != "" && (len(box.Leads.Own) > 0 || len(box.Leads.Told) > 0 || len(box.Leads.ToldUnread) > 0) {
+	if box.CommandID != "" && (len(box.Leads.Own) > 0 || len(box.Leads.Fresh) > 0 || len(box.Leads.Told) > 0 ||
+		len(box.Leads.ToldUnread) > 0) {
 		if took, err = s.takeLeads(ctx, turnID, box.Leads, fence); err != nil {
 			return fmt.Errorf("sandbox: attach box %s to run %s: %w", box.SandboxID, turnID, err)
 		}
@@ -2111,7 +2147,7 @@ func (s *CoordStore) takeLeads(ctx context.Context, turnID string, b BriefLeads,
 		// part with and the store kept it; a take that only tells earlier
 		// leads again writes nothing, and leaves the other run's part to the
 		// next take that has one.
-		if err == nil && taken.landed && len(b.Own) > 0 {
+		if err == nil && taken.landed && len(b.Own)+len(b.Fresh) > 0 {
 			log.InfoContext(ctx, "sandbox_leads_part_replaced", "turn_id", turnID, "run", b.Run,
 				"replaced_run", foreign.run, "undecoded", foreign.undecoded)
 		}
@@ -2159,7 +2195,7 @@ func (s *CoordStore) takeLeadsOnce(ctx context.Context, turnID string, b BriefLe
 				}
 			}
 			part.Appends = max(part.Appends, b.Counted)
-			next, marks, grew := part.took(b.Own, b.Told, b.ToldUnread)
+			next, marks, grew := part.took(b.Own, b.Fresh, b.Told, b.ToldUnread)
 			taken = leadsTaken{marks: marks, appends: next.Appends}
 			if !grew {
 				return nil, nil
@@ -2964,9 +3000,9 @@ func (s *CoordStore) MarkEndedAtDeadline(ctx context.Context, turnID, launch str
 // carried, as a read that collected the job found them. See the contract on
 // [PendingStore].
 //
-// A WRITE WHERE ANY CHANGES: an end already recorded beside a measure or a count
-// the read brings is a measure or a count to record, which a test of the end
-// alone would drop.
+// A WRITE WHERE ANY CHANGES: an end already recorded beside a measure, a count,
+// its provider, its writer or an estimate of the next request the read brings
+// is one to record, which a test of the end alone would drop.
 func (s *CoordStore) MarkHarnessEnd(ctx context.Context, turnID, launch string, read EndRead) (bool, error) {
 	if !read.End.Valid() {
 		return false, fmt.Errorf("sandbox: %q is no way a job's harness ends; it is one of %s",
@@ -2980,12 +3016,16 @@ func (s *CoordStore) MarkHarnessEnd(ctx context.Context, turnID, launch string, 
 			return false
 		}
 		next, measure := run.Launch.HarnessEnd.after(read.End), run.Launch.measured(read.Request, launch)
-		count := run.Launch.counted(read.Count)
+		count, provider, release := run.Launch.counted(read.Count, read.CountProvider, read.CountRelease)
+		estimate := run.Launch.nextRequested(read.Next)
 		if next == run.Launch.HarnessEnd && measure.same(run.Launch.Context) &&
-			count.same(run.Launch.ResumedCount) {
+			count.same(run.Launch.ResumedCount) && provider == run.Launch.CountProvider &&
+			release == run.Launch.CountRelease && estimate == run.Launch.NextRequest() {
 			return false
 		}
 		run.Launch.HarnessEnd, run.Launch.Context, run.Launch.ResumedCount = next, measure, count
+		run.Launch.CountProvider, run.Launch.CountRelease = provider, release
+		run.Launch.setNextRequest(estimate)
 		return true
 	})
 	return marked, err

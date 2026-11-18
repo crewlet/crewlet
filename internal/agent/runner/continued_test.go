@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -903,8 +904,9 @@ func TestASessionContinuedInANewBoxIsToldWhatThatBoxHolds(t *testing.T) {
 // hold the launch to the floor of what it sends ([runner.Continuation]), where
 // whether the seat's budget can carry it at all is the launch's to decide.
 //
-// Mutation: hand the launch the context only of a kept capture it continues, or
-// withhold the box's own session for its size here, and this goes red.
+// Mutation: hand the launch the context only of a kept capture it continues
+// (SessionBasis.ContextTokens) in place of the copy's (SessionBasis.CopyContext),
+// or withhold the box's own session for its size here, and this goes red.
 func TestARelaunchHandsItsLaunchWhatItsSessionSendsFirst(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
@@ -913,7 +915,7 @@ func TestARelaunchHandsItsLaunchWhatItsSessionSendsFirst(t *testing.T) {
 	parked, _ := launched.Suspended()
 	parked.State.ActiveTools = req.Surface.Active()
 	relauncher := &probingLauncher{basis: runner.SessionBasis{
-		Why: "the newest capture of the job was not kept: refused", ContextTokens: 150000}}
+		Why: "the newest capture of the job was not kept: refused", CopyContext: 150000}}
 	asked := &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
 		Branch: "wip/t1", SessionID: "sess-ask", BoxKept: true}
 	collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
@@ -932,10 +934,11 @@ func TestARelaunchHandsItsLaunchWhatItsSessionSendsFirst(t *testing.T) {
 // AN IN-PLACE CONTINUATION IS HELD TO THE LARGER OF ITS COPY'S AND ITS CAPTURE'S
 // MEASURE. A person's answer carries the asking run on in the session its box
 // holds, whose whole context it sends before the answer. Two figures say what
-// that context is: the job's newest capture's measure of its archive, and the
-// job's record's of the copy itself, which the read that collected the job took
-// off its run's own account of its requests ([runner.Resume.ContextTokens]),
-// and which a company that keeps no session has alone. The copy is the capture
+// that context is: the job's newest capture's measure of its archive
+// ([runner.SessionBasis.CopyContext]), and the job's record's of the copy
+// itself, which the read that collected the job took off its run's own account
+// of its requests ([runner.Resume.ContextTokens]), and which a company that
+// keeps no session has alone. The copy is the capture
 // or grew past it, so the launch is held to the larger of the two.
 //
 // Mutation: hand the launch the capture's measure alone, and a copy that grew
@@ -957,7 +960,7 @@ func TestAnInPlaceContinuationIsHeldToTheLargerOfItsCopysAndItsCapturesMeasure(t
 			parked, _ := launched.Suspended()
 			parked.State.ActiveTools = req.Surface.Active()
 			relauncher := &probingLauncher{basis: runner.SessionBasis{
-				Why: "the newest capture of the job was not kept: refused", ContextTokens: tc.capture}}
+				Why: "the newest capture of the job was not kept: refused", CopyContext: tc.capture}}
 			asked := &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
 				Branch: "wip/t1", SessionID: "sess-ask", BoxKept: true}
 			collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
@@ -970,6 +973,57 @@ func TestAnInPlaceContinuationIsHeldToTheLargerOfItsCopysAndItsCapturesMeasure(t
 				again.Continue.ContextTokens != tc.want {
 				t.Fatalf("the relaunch continues in place %+v, want the asking run's own session carrying the %d "+
 					"tokens it sends first", again.Continue, tc.want)
+			}
+		})
+	}
+}
+
+// AN IN-PLACE COPY BESIDE AN OLDER KEPT CAPTURE IS HELD TO THE COPY'S MEASURE:
+// the kept continuation to its capture's own (SessionBasis.ContextTokens and
+// NextRequest), the job's copy to its newest capture's (CopyContext, or its
+// record's where larger, and CopyNextRequest, or its record's where it holds
+// one). Where the capture continued is older than the newest, the two differ,
+// and the copy held to the older's would be held to less than it sends.
+//
+// Mutation: hand the in-place launch basis.ContextTokens or basis.NextRequest,
+// and the copy is held to 40000 or 45000 while it sends 150000 or 155000.
+func TestAnInPlaceCopyBesideAnOlderKeptCaptureIsHeldToTheCopysMeasure(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct{ copied, want, recordNext, wantNext int64 }{
+		"its newest capture measured more than its record": {copied: 90000, want: 150000, wantNext: 155000},
+		"its record measured more than its newest capture": {copied: 180000, want: 180000, recordNext: 185000,
+			wantNext: 185000},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+			launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
+			before := play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"looking into it"}`)}})
+			parked, _ := launched.Suspended()
+			parked.State.ActiveTools = req.Surface.Active()
+			older := keptBasis
+			older.ContextTokens, older.CopyContext = 40000, 150000
+			older.NextRequest, older.CopyNextRequest = sandbox.NextRequest{Tokens: 45000},
+				sandbox.NextRequest{Tokens: 155000}
+			relauncher := &probingLauncher{basis: older}
+			asked := &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
+				Branch: "wip/t1", SessionID: "sess-ask", BoxKept: true}
+			collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
+				resume: &runner.Resume{State: parked.State, Asked: asked, Bridged: before, ContextTokens: tc.copied,
+					NextRequest: sandbox.NextRequest{Tokens: tc.recordNext}}})
+			if _, _, err := collector.Resume(t.Context(), nil); err != nil {
+				t.Fatalf("Resume: %v", err)
+			}
+			again := relauncher.last(t)
+			if again.Session == nil || again.Session.Basis.ContextTokens != 40000 ||
+				again.Session.Basis.NextRequest.Tokens != 45000 {
+				t.Fatalf("the relaunch continues kept %+v, want the older kept capture, held to its own 40000 "+
+					"and 45000", again.Session)
+			}
+			if again.Continue == nil || again.Continue.SessionID != "sess-ask" ||
+				again.Continue.ContextTokens != tc.want || again.Continue.NextRequest.Tokens != tc.wantNext {
+				t.Fatalf("the relaunch continues in place %+v, want the asking run's own copy carrying the %d "+
+					"tokens it sends first, estimated at %d", again.Continue, tc.want, tc.wantNext)
 			}
 		})
 	}

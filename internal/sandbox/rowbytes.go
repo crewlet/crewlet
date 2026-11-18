@@ -52,15 +52,15 @@ const (
 	// what a later build adds.
 	RestBytes = RowBytes - ExecuteStateBytes
 
-	// ExtraRowBytes is the room, inside RestBytes, for keys a later build
-	// adds to the row, at its top ([PendingRun.Extra]) or in one of its
-	// sections ([LaunchRecord.Extra], [HeldCall.Extra], [OwedCall.Extra],
-	// [SessionCapture.Extra], [ConversationBase.Extra] and its session's and
-	// siblings', [RunSteer.Extra] and its notes', their hooks' serves', the
-	// calls those answered, an item's late call and the notes' tellings), and
-	// that this build carries without reading: STATED HERE, so the next field a
-	// build adds is added inside it, and the build that adds it moves its own
-	// figure out of this one rather than out of a share somebody else's
+	// ExtraRowBytes is the room, inside RestBytes, for keys a later build adds to
+	// the row, at its top ([PendingRun.Extra]) or in one of its sections
+	// ([LaunchRecord.Extra], [HeldCall.Extra], [OwedCall.Extra],
+	// [SessionCapture.Extra] in each capture section, [ConversationBase.Extra] and
+	// its session's and siblings', [RunSteer.Extra] and its notes', their hooks'
+	// serves', the calls those answered, an item's late call and the notes'
+	// tellings), and that this build carries without reading: STATED HERE, so the
+	// next field a build adds is added inside it, and the build that adds it moves
+	// its own figure out of this one rather than out of a share somebody else's
 	// arithmetic needs. The turn's read of its conversation ([PendingRun.Base])
 	// has its own place, at [ConversationBaseMaxBytes], and takes none of this
 	// room: all of it is still a later build's.
@@ -207,8 +207,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_192_713
-	measuredSpare       = 403_195
+	measuredOtherFields = 2_219_257
+	measuredSpare       = 376_651
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].
