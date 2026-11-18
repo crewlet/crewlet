@@ -1182,6 +1182,7 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		CacheReadTokens:  res.CacheRead,
 		CacheWriteTokens: res.CacheWrite,
 		RoundsUsed:       res.Rounds,
+		ExhaustedRounds:  res.Exhausted,
 		// A worker has no extension: its cap is its ceiling.
 		MaxRounds:    res.MaxRounds,
 		RoundCeiling: res.MaxRounds,

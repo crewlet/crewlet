@@ -776,6 +776,7 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		MCPServers:     grant.Universe.MCPServers(),
 		Discoverable:   discoverable,
 		Submits:        submit != nil,
+		MaxTurns:       task.maxTurns,
 		Skills:         cfg.Skills,
 	})
 	res.UserPrompt = withDependencies(ctx, cfg.Compact, task.Prompt, deps)
@@ -804,6 +805,7 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		// what it just submitted — on the parent's budget, for output
 		// nobody reads.
 		TerminateAfter: terminators(submit),
+		LastRoundNote:  lastRoundNote(submit),
 	})
 	res.ToolsAvailable = surface.Active()
 
@@ -813,6 +815,7 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		res.InputTokens, res.OutputTokens = loop.InputTokens, loop.OutputTokens
 		res.CacheRead, res.CacheWrite = loop.CacheRead, loop.CacheWrite
 		res.RoundRecords = loop.Rounds
+		res.Exhausted = loop.ExhaustedRounds
 		res.Model = loop.Model
 		res.ProviderKey = loop.ProviderKey
 		res.Executions = loop.Executions
@@ -882,6 +885,15 @@ func terminators(submit *structured.Tool[resultPayload]) []string {
 		return nil
 	}
 	return []string{SubmitTool}
+}
+
+// lastRoundNote is what a worker is told before its last round, in the form
+// its ending takes.
+func lastRoundNote(submit *structured.Tool[resultPayload]) string {
+	if submit == nil {
+		return prompts.SubagentLastRoundProse
+	}
+	return prompts.SubagentLastRound
 }
 
 // stopReason classifies a context that ended, and returns ("", "") for one

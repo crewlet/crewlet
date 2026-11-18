@@ -1,6 +1,8 @@
 package prompts
 
 import (
+	"fmt"
+
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/toolname"
 )
@@ -44,6 +46,16 @@ const SubagentSubmitRule = "End by calling `" + toolname.SubmitResult + "` with 
 const SubagentProseRule = "Return a concise final answer as text when done. If " +
 	"you cannot complete the task, return what you have with a brief note on why."
 
+// SubagentLastRound is said to a worker before its last round, so one that has
+// not finished answers with what it has rather than nothing: the submission
+// form, and the prose form for a worker without the tool.
+const (
+	SubagentLastRound = "This is your last round. Call `" + toolname.SubmitResult +
+		"` now with what you have, and say what is missing."
+	SubagentLastRoundProse = "This is your last round. Answer now with what you have, " +
+		"and say what is missing."
+)
+
 // SubagentInput is what a sub-agent prompt renders around the preamble.
 type SubagentInput struct {
 	// ParentSystemPrompt is the task-specific prompt the spawning agent
@@ -70,6 +82,10 @@ type SubagentInput struct {
 	// SURFACE rather than a preference: telling a worker to call a tool it
 	// does not have costs it a round to find out.
 	Submits bool
+
+	// MaxTurns is the worker's round cap (its task's `max_turns`), said in
+	// its rules; zero says none.
+	MaxTurns int
 
 	// Skills is the tool-skill registry; nil keeps the prompt free of skill
 	// scaffolding.
@@ -104,6 +120,9 @@ func BuildSubagent(seat Seat, in SubagentInput) Prompt {
 	ending := SubagentProseRule
 	if in.Submits {
 		ending = SubagentSubmitRule
+	}
+	if in.MaxTurns > 0 {
+		ending = fmt.Sprintf("You have up to %d rounds of tool calls. %s", in.MaxTurns, ending)
 	}
 	b.Add("")
 	// THE STANDING SENTENCE ABOUT FENCED TEXT rides the rules, because a

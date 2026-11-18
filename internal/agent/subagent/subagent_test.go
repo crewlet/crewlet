@@ -3399,3 +3399,31 @@ func TestTheDelegateSchemaIsOneTheCheckKeeps(t *testing.T) {
 		t.Errorf("delegate advertises what the check cannot keep: %v", bad)
 	}
 }
+
+// A WORKER IS TOLD ITS ROUNDS, AND ITS LAST ONE. A worker that spent every
+// round reading ended `no_result` with most of its answer in hand; told its
+// cap up front, and before its last round to submit what it has, it answers.
+//
+// Mutation: hand the worker's loop no last-round note, and it reads on to its
+// cap and ends with no result.
+func TestAWorkerIsToldToSubmitBeforeItsLastRound(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	p := &provider{name: "sub", reply: func(_ context.Context, _ int, req modelView) (llmtest.Response, error) {
+		for _, m := range req.Messages {
+			if m.Role == llm.RoleUser && m.Content == prompts.SubagentLastRound {
+				return answer("four of five found", 2, 2), nil
+			}
+		}
+		return callTool("read_file", map[string]any{"path": "a"}, 2, 2), nil
+	}}
+	tk := task("t1", "read_file")
+	tk.MaxTurns = 3
+	res := one(t, baseConfig(t, w, p), subagent.Request{Tasks: []subagent.Task{tk}})
+	if res.Status != subagent.StatusOK || res.Output["result"] != "four of five found" {
+		t.Fatalf("result = %q %+v, want the partial answer submitted", res.Status, res.Output)
+	}
+	if !strings.Contains(res.SystemPrompt.Text, "You have up to 3 rounds of tool calls.") {
+		t.Errorf("the worker was not told its round cap: %q", res.SystemPrompt.Text)
+	}
+}
