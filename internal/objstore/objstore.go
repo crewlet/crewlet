@@ -404,14 +404,14 @@ const RecordWithin = 12 * time.Hour
 // clock disagree by at most this, and any TWO such machines by up to TWICE it —
 // two nodes, or a node and a broker member stamping some other log's records,
 // which on an embedded fleet is a data node the alarm holds too. Every rule
-// bounded here compares two machines, so each margin is twice it. Not every one
-// of them is a machine the alarm holds: a rule judged on the clock of a node
-// that runs seats (a turn's hold on a repository, and every sandbox rule above)
-// rests on a clock the alarm measures only where that node holds data too,
-// since a node without the data role writes no row to the register. The servers
-// of an external NATS cluster are not nodes, and nothing measures them but the
-// one leading the register. Those clocks are the operator's to keep, so NTP
-// runs on every node and every server, not only on the machines the alarm
+// bounded here compares two machines, so each margin it takes is twice it. Not
+// every one of them is a machine the alarm holds: a rule judged on the clock of
+// a node that runs seats (a turn's hold on a repository, and every sandbox rule
+// above) rests on a clock the alarm measures only where that node holds data
+// too, since a node without the data role writes no row to the register. The
+// servers of an external NATS cluster are not nodes, and nothing measures them
+// but the one leading the register. Those clocks are the operator's to keep, so
+// NTP runs on every node and every server, not only on the machines the alarm
 // watches (docs/guides/deployment.md).
 //
 // AN HOUR: NTP keeps every machine within milliseconds, so a node an hour off
